@@ -59,10 +59,10 @@ const ADAPTER_NAME = "OpenCode";
 const OPENCODE_DOCS_URL = "https://opencode.ai/docs/cli/";
 /**
  * The remediation for a missing or refused opencode: the managed install of
- * the max-tested build and its pin, as the Go refusals word it
- * (`OpenCodeManagedInstall` in opencode_preflight.go). A global install of
- * the latest build would be refused again by the version policy once it is
- * newer than max-tested.
+ * the build Nightgauge is tested up to and its pin, as the Go refusals word it
+ * (`OpenCodeManagedInstall` in opencode_preflight.go). Any newer build works
+ * too: a version above the tested one is never refused or warned about
+ * (ADR-022 § 20, 2026-09-25 amendment).
  */
 const OPENCODE_INSTALL_CMD =
   `npm i --prefix ~/.nightgauge/tools/opencode opencode-ai@${ADAPTER_COMPAT.opencode.maxTested}, ` +

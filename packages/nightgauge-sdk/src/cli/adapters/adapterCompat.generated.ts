@@ -7,7 +7,8 @@
  * This is the SDK's view of what Nightgauge knows about each coding CLI's
  * supported versions: the oldest version anything in the tree was verified
  * against (`minVersion`), the newest version anyone tested
- * (`maxTested`), and whether falling below the floor is a warning or
+ * (`maxTested`, informational "tested up to" data: a newer version is
+ * never refused or warned about), and whether falling below the floor is a warning or
  * disables the adapter (`floorPolicy`). Go's twin of this data is
  * internal/adaptercompat.Manifest, embedded from the same manifests.
  *

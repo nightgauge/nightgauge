@@ -42,6 +42,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **A harness newer than the tested version is never refused or warned
+  about (#2147).** Nightgauge no longer blocks, gates, degrades or warns
+  because OpenCode, Claude Code or any other CLI is newer than the version it
+  was tested against. An OpenCode binary above `max_tested` now dispatches
+  exactly like a tested one: the refusal of a dispatch to a model server you
+  run, the self-test before the first stage, and the stderr warning are gone.
+  `nightgauge doctor` shows the version Nightgauge is tested up to as a note,
+  and a binary that changed since the last dispatch is a note too, not a
+  warning. `docs/ADAPTER_MATRIX.md` lists every adapter's floor and tested-up-to
+  version. Minimum-version floors are unchanged. ADR-022 § 20 records the
+  decision in a dated amendment.
+
 - **Editor-launched stages fetch their stage budget before they spawn
   (#1668).** The extension now resolves a stage's turn, wall-clock and token
   budget from the Go binary (5s timeout) before starting its process, so a

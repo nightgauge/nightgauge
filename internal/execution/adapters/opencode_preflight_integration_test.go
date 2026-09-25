@@ -17,8 +17,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/nightgauge/nightgauge/internal/config"
 )
 
 func init() { openCodeIntegrationBuild = true }
@@ -31,35 +29,6 @@ func realOpenCode(t *testing.T) OpenCodeBinary {
 		t.Skipf("no opencode to probe: %v", err)
 	}
 	return bin
-}
-
-// TestOpenCodeSelfTestPassesOnTheBinary: the self-test a dispatch above
-// max-tested runs passes on the installed binary for a hosted stage's
-// per-run config, and records the pass. `debug config` keeps every key of the
-// config with project config off, and `run --help`, which 1.18.30 prints on
-// stderr, defines every flag BuildCommand emits.
-func TestOpenCodeSelfTestPassesOnTheBinary(t *testing.T) {
-	bin := realOpenCode(t)
-	version, err := OpenCodeVersionOf(context.Background(), bin.Path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m := openCodeManifestForTest(t)
-	home := t.TempDir()
-	t.Setenv("ANTHROPIC_API_KEY", "set-by-the-test")
-	p := OpenCodeVersionPolicy{Binary: bin, Version: version, MinVersion: m.MinVersion, MaxTested: m.MaxTested, AboveMaxTested: true}
-	run := RunOptions{Stage: "feature-dev", Model: "anthropic/claude-sonnet-5", WorktreeDir: t.TempDir()}
-
-	var selfTestErr error
-	captureAdapterStderr(t, func() {
-		selfTestErr = NewOpenCodeAdapter().runOpenCodeSelfTest(context.Background(), home, p, run, config.OpenCodeConfig{})
-	})
-	if selfTestErr != nil {
-		t.Fatalf("the self-test failed on opencode %s (%s): %v", version, bin.Path, selfTestErr)
-	}
-	if entries, _ := os.ReadDir(openCodeSelfTestDir(home)); len(entries) != 1 {
-		t.Errorf("the pass was not recorded: %v", entries)
-	}
 }
 
 // TestOpenCodeProbeIgnoresProjectConfigAboveItOnTheBinary: a probe's

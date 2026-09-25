@@ -69,8 +69,11 @@ type Manifest struct {
 	MinVersionReason string `json:"min_version_reason,omitempty"`
 	FloorPolicy      string `json:"floor_policy"`
 
-	// MaxTested is the newest version anyone verified Nightgauge against.
-	// Empty means none was, and MaxTestedReason must then say why.
+	// MaxTested is the newest version anyone verified Nightgauge against: the
+	// version Nightgauge is "tested up to". It is information, never a
+	// ceiling; no check refuses, degrades or warns about a newer version
+	// (ADR-022 § 20, 2026-09-25 amendment). Empty means none was, and
+	// MaxTestedReason must then say why.
 	MaxTested       string `json:"max_tested"`
 	MaxTestedReason string `json:"max_tested_reason,omitempty"`
 

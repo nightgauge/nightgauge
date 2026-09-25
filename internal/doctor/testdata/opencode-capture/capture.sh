@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Re-captures the OpenCode evidence the doctor's OpenCode checks and the
-# dispatch-time self-test are tested against (ADR-022 § 20).
+# Re-captures the OpenCode evidence the doctor's OpenCode checks are tested
+# against, and how `opencode debug config` treats a config (ADR-022 § 20).
 #
 #   bash internal/doctor/testdata/opencode-capture/capture.sh
 #

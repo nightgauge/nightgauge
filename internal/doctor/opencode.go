@@ -47,7 +47,9 @@ import (
 // OpenCodeHealth is the opencode adapter's section of its doctor row.
 type OpenCodeHealth struct {
 	// MaxTested and FloorPolicy are the compat manifest's; the floor is the
-	// row's MinVersion.
+	// row's MinVersion. MaxTested is the version Nightgauge is tested up to,
+	// reported for information only: a newer opencode is never blocked or
+	// warned about (ADR-022 § 20, 2026-09-25 amendment).
 	MaxTested   string `json:"max_tested"`
 	FloorPolicy string `json:"floor_policy"`
 	// Enabled is whether NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1 is set. While it
@@ -55,8 +57,6 @@ type OpenCodeHealth struct {
 	Enabled bool `json:"enabled"`
 	// Pinned is whether opencode.binary pins the binary.
 	Pinned bool `json:"pinned"`
-	// AboveMaxTested is set when the binary is newer than MaxTested.
-	AboveMaxTested bool `json:"above_max_tested,omitempty"`
 	// LastDispatchVersion is the version the last dispatch on this machine
 	// was checked against, when one was recorded.
 	LastDispatchVersion string `json:"last_dispatch_version,omitempty"`
@@ -242,7 +242,7 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 	m, _ := adaptercompat.Get("opencode")
 	oc := &OpenCodeHealth{MaxTested: m.MaxTested, FloorPolicy: spec.floorPolicy}
 	h.OpenCode = oc
-	h.Notes = append(h.Notes, fmt.Sprintf("version floor %s (%s), max-tested %s, from internal/adaptercompat/manifests/opencode.json",
+	h.Notes = append(h.Notes, fmt.Sprintf("version floor %s (%s), tested up to %s, from internal/adaptercompat/manifests/opencode.json",
 		orUnset(spec.minVersion), orUnset(spec.floorPolicy), orUnset(m.MaxTested)))
 
 	p := probe.opencode
@@ -327,11 +327,7 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 			if policy.BelowFloor {
 				warn(fmt.Sprintf("opencode %s is below the minimum tested version %s", version, policy.MinVersion))
 			}
-			if policy.AboveMaxTested {
-				oc.AboveMaxTested = true
-				checkOpenCodeAboveMaxTested(policy, settings.Model, endpoints, home, block, warn)
-			}
-			checkOpenCodeDrift(p, home, bin, version, oc, warn)
+			checkOpenCodeDrift(p, home, bin, version, oc, &h.Notes, warn)
 			if settings.Model != "" && endpointErr == nil {
 				h.Model = settings.Model
 				if run != nil {
@@ -376,25 +372,11 @@ func orUnset(s string) string {
 	return s
 }
 
-// checkOpenCodeAboveMaxTested reports a binary newer than max-tested as a
-// dispatch meets it: the adapter's refusal when opencode.model runs on a model
-// server the operator runs, and otherwise a warning that a dispatch runs the
-// self-test before its first stage.
-func checkOpenCodeAboveMaxTested(policy adapters.OpenCodeVersionPolicy, model string, endpoints []adapters.OpenCodeEndpoint, home string, block, warn func(string)) {
-	if model != "" {
-		if err := adapters.OpenCodeEndpointAboveMaxTested(policy, model, endpoints, home); err != nil {
-			block(err.Error())
-			return
-		}
-	}
-	warn(fmt.Sprintf("opencode %s is newer than the max-tested %s: a dispatch runs a self-test of its per-run config and run flags on this version before its first stage, and refuses a model server you run",
-		policy.Version, policy.MaxTested))
-}
-
-// checkOpenCodeDrift warns when the binary resolved now is not the version
-// the last dispatch on this machine was checked against, as a PATH install
-// that updated itself is not.
-func checkOpenCodeDrift(p openCodeProbe, home string, bin adapters.OpenCodeBinary, version string, oc *OpenCodeHealth, warn func(string)) {
+// checkOpenCodeDrift notes, for information only, when the binary resolved
+// now is not the version the last dispatch on this machine ran, as a PATH
+// install that updated itself is not. A changed version is never a warning:
+// operators update their harness daily (ADR-022 § 20, 2026-09-25 amendment).
+func checkOpenCodeDrift(p openCodeProbe, home string, bin adapters.OpenCodeBinary, version string, oc *OpenCodeHealth, notes *[]string, warn func(string)) {
 	if home == "" {
 		return
 	}
@@ -414,12 +396,8 @@ func checkOpenCodeDrift(p openCodeProbe, home string, bin adapters.OpenCodeBinar
 	if rec.Binary != bin.Path {
 		where = fmt.Sprintf(" from %s", rec.Binary)
 	}
-	pinAdvice := "pin opencode.binary to a tested build so it cannot change under the pipeline"
-	if bin.Pinned {
-		pinAdvice = "the pinned binary itself changed"
-	}
-	warn(fmt.Sprintf("the opencode the next dispatch runs (%s) is %s, and the last OpenCode dispatch on this machine ran %s%s: the binary changed since, as a PATH install does when OpenCode's TUI updates itself; %s",
-		bin.Path, orUnset(version), rec.Version, where, pinAdvice))
+	*notes = append(*notes, fmt.Sprintf("the opencode the next dispatch runs (%s) is %s; the last OpenCode dispatch on this machine ran %s%s",
+		bin.Path, orUnset(version), rec.Version, where))
 }
 
 // checkOpenCodeCatalog runs `opencode models` under built, the per-run config

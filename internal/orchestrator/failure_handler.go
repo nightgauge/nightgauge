@@ -599,8 +599,8 @@ const (
 	// a tool the stage was NOT allowed, which retries.
 	TerminalKindAdapterPermissionRejected = "adapter_permission_rejected"
 	// TerminalKindAdapterIncompatible: the adapter's binary cannot serve the
-	// dispatch — below the compat manifest's floor, unreadable, or above
-	// max-tested with a failed self-test (#1627, ADR-022 § 20). Mirrors
+	// dispatch — below the compat manifest's floor or unreadable (#1627,
+	// ADR-022 § 20; a newer version is never refused). Mirrors
 	// adapters.OpenCodeIncompatible, the kind the refusal itself carries.
 	TerminalKindAdapterIncompatible = "adapter_incompatible"
 )
@@ -642,7 +642,7 @@ func TerminalKindRemediation(kind string) string {
 			"ask. Change a rule only if the stage should have that tool, never by loosening a rule that guards " +
 			"secret files, " + parkedReleaseStep
 	case TerminalKindAdapterIncompatible:
-		return "the adapter's binary cannot serve this dispatch; install the max-tested version the refusal names " +
+		return "the adapter's binary cannot serve this dispatch; install a version at or above the floor the refusal names " +
 			"or pin the adapter's binary to it, " + parkedReleaseStep
 	}
 	return ""

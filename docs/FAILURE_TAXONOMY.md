@@ -251,7 +251,7 @@ record may carry both fields, neither, or only one.
 | `pr_merge_lookup_failed`         | pr-merge's gate could not establish the PR's state: `gh pr view` failed or was rate-limited on every attempt and the local-git fallback found no merge commit (Issue #1237) — infrastructure; the merge may have landed unseen                                                                                                                                                                                                       |
 | `context_window_exceeded`        | The prompt outgrew the context the model server has the model loaded with (Issue #1631) — read only from the adapter's own failed-request line, never from model text; parked, never retried on the same model and adapter                                                                                                                                                                                                           |
 | `adapter_permission_rejected`    | The adapter auto-rejected a tool the stage's allowed tools grant, #1624's `[adapter-permission-rejected]` marker (Issue #1631) — an `ask` rule: OpenCode's own `.env` read guard, or one in a repository's or the user's OpenCode config; parked whatever tool it names, not retried, not charged to the issue                                                                                                                       |
-| `adapter_incompatible`           | The adapter's binary cannot serve the dispatch: below the compat floor, unreadable, or above max-tested with a failed self-test (Issues #1627, #1631) — parked; pin or install the max-tested build                                                                                                                                                                                                                                  |
+| `adapter_incompatible`           | The adapter's binary cannot serve the dispatch: below the compat floor or unreadable (Issues #1627, #1631; a newer version is never refused) — parked; install a build at or above the floor                                                                                                                                                                                                                                         |
 
 `permission_denied` (Issue #289) is a **harness-fault** kind, distinct from a
 stage failure. The harness rejects certain tool calls outright — the observed
@@ -334,8 +334,8 @@ park held while the fleet runs.
   should have the tool, and never loosen a rule that guards secret files. It
   sits above `permission_denied` (#289), the harness refusing a tool the stage
   was not allowed, which retries with a short backoff.
-- `adapter_incompatible`: install the max-tested build the refusal names and
-  pin the adapter's binary to it. The refusal stamps the kind itself
+- `adapter_incompatible`: install a build at or above the floor (the refusal
+  names the tested one) and pin the adapter's binary to it. The refusal stamps the kind itself
   (`*OpenCodeIncompatibleError`), before anything is spawned.
 
 **A down local server** classifies `network_unavailable` on OpenCode's
@@ -518,13 +518,13 @@ Every kind above is retryable by the autonomous scheduler's graph reconcile —
 that is what recovers a crashed run — with two groups of exceptions: the two
 kinds that halt on purpose and say so, and the three parked kinds (#1631):
 
-| Kind                             | Held for                                    | Released by                                                                                         |
-| -------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `architecture_approval_required` | A human approving a high-impact decision    | The approval label (`approved:architecture` by default) or `.nightgauge/pipeline/approval-<n>.json` |
-| `not_pipeline_actionable`        | A human doing the thing the pipeline cannot | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                   |
-| `context_window_exceeded`        | A larger context, another model, or a split | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
-| `adapter_permission_rejected`    | A changed `ask` rule or issue text          | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
-| `adapter_incompatible`           | The max-tested binary, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
+| Kind                             | Held for                                             | Released by                                                                                         |
+| -------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `architecture_approval_required` | A human approving a high-impact decision             | The approval label (`approved:architecture` by default) or `.nightgauge/pipeline/approval-<n>.json` |
+| `not_pipeline_actionable`        | A human doing the thing the pipeline cannot          | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                   |
+| `context_window_exceeded`        | A larger context, another model, or a split          | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
+| `adapter_permission_rejected`    | A changed `ask` rule or issue text                   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
+| `adapter_incompatible`           | A binary at or above the floor, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
 
 The scheduler records the kind on the `failed` entry (`FailedItem.Kind`) and
 derives the hold from it via `HoldForTerminalKind`, so retryability has one
@@ -1279,7 +1279,7 @@ operators.
 | `credential-failure`          | high     | run record `terminal_failure_kind`              | `git_transport_auth_failed` — a git or forge transport refused the machine's credentials (#878).                        |
 | `context-window-exceeded`     | medium   | run record `terminal_failure_kind`              | The prompt outgrew the model's loaded context. Parked; the remedy is a larger window, another model or a split (#1631). |
 | `adapter-permission-rejected` | high     | run record `terminal_failure_kind`              | The adapter rejected a tool the stage is allowed under an `ask` rule, OpenCode's `.env` read guard included (#1631).    |
-| `adapter-incompatible`        | high     | run record `terminal_failure_kind`              | The adapter's binary cannot serve the dispatch; install and pin the max-tested build (#1631).                           |
+| `adapter-incompatible`        | high     | run record `terminal_failure_kind`              | The adapter's binary cannot serve the dispatch; install and pin a build at or above the floor (#1631).                  |
 | `unknown`                     | low      | fallback                                        | No structured signal or keyword match.                                                                                  |
 
 ### The Record's Kind Is Decided Here, Not Guessed (Issue #1448)

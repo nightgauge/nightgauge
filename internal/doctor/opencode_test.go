@@ -666,7 +666,8 @@ func TestOpenCodeFlagsAnAnthropicOAuthLogin(t *testing.T) {
 
 // TestOpenCodePinnedBinaryVersionAndDrift: opencode.binary pins the binary
 // the row reads its version from, a relative pin is refused and not looked
-// up, and a version other than the last dispatch's is a drift warning.
+// up, and a version other than the last dispatch's is an informational note,
+// never a warning (ADR-022 § 20, 2026-09-25 amendment).
 func TestOpenCodePinnedBinaryVersionAndDrift(t *testing.T) {
 	m := openCodeManifest(t)
 	pin := filepath.Join(t.TempDir(), "opencode")
@@ -691,9 +692,12 @@ func TestOpenCodePinnedBinaryVersionAndDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	h = f.check()
-	warnings := strings.Join(h.Warnings, "\n")
-	if h.OpenCode.LastDispatchVersion != last || !strings.Contains(warnings, "is "+m.MaxTested+", and the last OpenCode dispatch on this machine ran "+last) {
-		t.Errorf("drift %s against %s: last %q, warnings:\n%s", m.MaxTested, last, h.OpenCode.LastDispatchVersion, warnings)
+	notes, warnings := strings.Join(h.Notes, "\n"), strings.Join(h.Warnings, "\n")
+	if h.OpenCode.LastDispatchVersion != last || !strings.Contains(notes, "is "+m.MaxTested+"; the last OpenCode dispatch on this machine ran "+last) {
+		t.Errorf("drift %s against %s: last %q, notes:\n%s", m.MaxTested, last, h.OpenCode.LastDispatchVersion, notes)
+	}
+	if strings.Contains(warnings, "last OpenCode dispatch") {
+		t.Errorf("a changed version warned:\n%s", warnings)
 	}
 	if !h.OK {
 		t.Errorf("drift blocked the row: %s", h.Remediation)
@@ -713,8 +717,9 @@ func TestOpenCodePinnedBinaryVersionAndDrift(t *testing.T) {
 }
 
 // TestOpenCodeRowVersionPolicy: below the floor the row is blocked with the
-// adapter's adapter_incompatible refusal; above max-tested it warns, and
-// blocks only when opencode.model runs on an endpoint.
+// adapter's adapter_incompatible refusal. Above max-tested it neither blocks
+// nor warns, on an endpoint or a hosted model: max-tested is only the version
+// Nightgauge is tested up to (ADR-022 § 20, 2026-09-25 amendment).
 func TestOpenCodeRowVersionPolicy(t *testing.T) {
 	m := openCodeManifest(t)
 	below := newOpenCodeFixture(t, openCodeLMStudio())
@@ -728,8 +733,8 @@ func TestOpenCodeRowVersionPolicy(t *testing.T) {
 	above := strings.Join([]string{parts[0], parts[1], strconv.Itoa(patch + 1)}, ".")
 	local := newOpenCodeFixture(t, openCodeLMStudio())
 	local.probe.version = func(string) (string, error) { return above, nil }
-	if h := local.check(); h.OK || !h.OpenCode.AboveMaxTested || !strings.Contains(h.Remediation, "no endpoint is dispatched above it") {
-		t.Errorf("above max-tested on an endpoint: OK %v, %q", h.OK, h.Remediation)
+	if h := local.check(); !h.OK || !h.VersionOK || mentionsVersionCeiling(h) {
+		t.Errorf("above max-tested on an endpoint: OK %v, %q, warnings %q", h.OK, h.Remediation, h.Warnings)
 	}
 	hostedSettings := openCodeLMStudio()
 	hostedSettings.Model = "anthropic/claude-sonnet-5"
@@ -740,9 +745,24 @@ func TestOpenCodeRowVersionPolicy(t *testing.T) {
 		return "anthropic/claude-sonnet-5\nanthropic/claude-opus-5\n", nil
 	}
 	h := hosted.check()
-	if !h.OK || !strings.Contains(strings.Join(h.Warnings, "\n"), "runs a self-test") {
+	if !h.OK || !h.VersionOK || mentionsVersionCeiling(h) {
 		t.Errorf("above max-tested on a hosted model: OK %v, %q, warnings %q", h.OK, h.Remediation, h.Warnings)
 	}
+	if !strings.Contains(strings.Join(h.Notes, "\n"), "tested up to "+m.MaxTested) {
+		t.Errorf("the row does not note the tested-up-to version: %q", h.Notes)
+	}
+}
+
+// mentionsVersionCeiling reports whether a warning or the remediation treats
+// the version as too new.
+func mentionsVersionCeiling(h AdapterHealth) bool {
+	text := h.Remediation + "\n" + strings.Join(h.Warnings, "\n")
+	for _, s := range []string{"max-tested", "newer than", "self-test"} {
+		if strings.Contains(text, s) {
+			return true
+		}
+	}
+	return false
 }
 
 // TestOpenCodeUnreachableServerIsNotACapHopTarget drives CheckAdapters, the
@@ -883,100 +903,6 @@ func TestOpenCodeProbeRedactsBaseURL(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(h.Warnings, "\n"), "endpoint lmstudio is on another machine and is reached over plain http") {
 		t.Errorf("a plain-http endpoint on another machine did not warn: %q", h.Warnings)
-	}
-}
-
-// debugConfigCase is one case of the captured `debug config` evidence.
-type debugConfigCase struct {
-	name, content string
-	res           adapters.OpenCodeProbeResult
-}
-
-// readDebugConfigCases parses opencode-1.18.30-debug-config-invalid.txt,
-// whose cases capture.sh writes as "==> <field>" sections.
-func readDebugConfigCases(t *testing.T) map[string]debugConfigCase {
-	t.Helper()
-	cases := map[string]debugConfigCase{}
-	var cur *debugConfigCase
-	var section string
-	var stdout, stderr strings.Builder
-	finish := func() {
-		if cur != nil {
-			cur.res.Stdout = []byte(stdout.String())
-			cur.res.Stderr = []byte(stderr.String())
-			cases[cur.name] = *cur
-		}
-		cur, section = nil, ""
-		stdout.Reset()
-		stderr.Reset()
-	}
-	for _, line := range strings.Split(readOpenCodeFixture(t, "debug-config-invalid"), "\n") {
-		if marker, ok := strings.CutPrefix(line, "==> "); ok {
-			field, value, _ := strings.Cut(marker, " ")
-			switch field {
-			case "case":
-				finish()
-				cur = &debugConfigCase{name: value}
-			case "exit":
-				code, err := strconv.Atoi(value)
-				if err != nil || cur == nil {
-					t.Fatalf("malformed exit line %q", line)
-				}
-				cur.res.ExitCode = code
-			case "end":
-				finish()
-			default:
-				section = field
-			}
-			continue
-		}
-		if cur == nil {
-			continue
-		}
-		switch section {
-		case "content":
-			cur.content += line
-		case "stdout":
-			stdout.WriteString(line + "\n")
-		case "stderr":
-			stderr.WriteString(line + "\n")
-		}
-	}
-	finish()
-	return cases
-}
-
-// TestOpenCodeSelfTestEvaluatesTheCapturedDebugConfig holds the self-test's
-// `debug config` check to what opencode 1.18.30 was observed to do: the
-// unchanged per-run config passes; a wrong-typed value exits 1 and fails; an
-// unknown key exits 0, the finding the issue did not expect, and fails
-// because the key is missing from the merged config.
-func TestOpenCodeSelfTestEvaluatesTheCapturedDebugConfig(t *testing.T) {
-	cases := readDebugConfigCases(t)
-	for name, wantExit := range map[string]int{"valid": 0, "unknown-key": 0, "wrong-type": 1} {
-		c, ok := cases[name]
-		if !ok {
-			t.Fatalf("the capture has no %q case", name)
-		}
-		if c.res.ExitCode != wantExit {
-			t.Errorf("%s: captured exit %d, want %d; re-read ADR-022 § 20 if the binary changed", name, c.res.ExitCode, wantExit)
-		}
-	}
-
-	if err := adapters.EvaluateOpenCodeDebugConfig(cases["valid"].content, cases["valid"].res, nil); err != nil {
-		t.Errorf("the unchanged per-run config failed the self-test: %v", err)
-	}
-	unknown := adapters.EvaluateOpenCodeDebugConfig(cases["unknown-key"].content, cases["unknown-key"].res, nil)
-	if unknown == nil || !strings.Contains(unknown.Error(), "nightgauge_unknown_key") {
-		t.Errorf("a dropped key passed the self-test: %v", unknown)
-	}
-	wrong := adapters.EvaluateOpenCodeDebugConfig(cases["wrong-type"].content, cases["wrong-type"].res, nil)
-	if wrong == nil || !strings.Contains(wrong.Error(), "exited 1") || !strings.Contains(wrong.Error(), "Configuration is invalid at OPENCODE_CONFIG_CONTENT") {
-		t.Errorf("a wrong-typed value passed the self-test, or its reason was lost: %v", wrong)
-	}
-	secret := adapters.EvaluateOpenCodeDebugConfig(cases["wrong-type"].content, cases["wrong-type"].res, []string{"OPENCODE_CONFIG_CONTENT"})
-	if secret == nil || strings.Contains(secret.Error(), "at OPENCODE_CONFIG_CONTENT") {
-		t.Errorf("a redacted string reached the self-test's error: %v", secret)
 	}
 }
 

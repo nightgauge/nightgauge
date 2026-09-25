@@ -19,6 +19,11 @@ and this project adheres to
 
 ### Fixed
 
+- **The auto-retro's `adapter_incompatible` advice no longer mentions a
+  max-tested self-test (#2147).** A harness newer than the tested version is
+  never refused, so the advice names only the floor and an unreadable
+  version.
+
 - A cap-recovery adapter hop from the Go scheduler now reaches every pipeline
   stage, not only refinement (#1656).
 

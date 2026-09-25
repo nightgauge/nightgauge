@@ -550,9 +550,8 @@ func OpenCodeConfigInputFor(settings config.OpenCodeConfig, run RunOptions, runR
 		Lookup:    lookup,
 		Discover:  openCodeLocalDiscovery,
 		// BinDir is left empty here deliberately: this constructor is called
-		// directly by tests (and by the self-test's per-run config,
-		// opencode_preflight.go) that need BuildOpenCodeConfig's output to
-		// stay reproducible across machines, which os.Executable() is not (it
+		// directly by tests (and by the doctor's catalog probe) that need
+		// BuildOpenCodeConfig's output to stay reproducible across machines, which os.Executable() is not (it
 		// names whatever binary is running — a `go test` temp binary in a
 		// test process). PrepareOpenCodeRun, the one production path, sets it
 		// from OpenCodeRunRequest.BinDir after this call returns.

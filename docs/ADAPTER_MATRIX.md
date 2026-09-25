@@ -79,6 +79,28 @@ dispatch unless `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set in the process
 environment (ADR-022 § The enable gate). See
 [§ 10. opencode](#10-opencode) for the deep dive.
 
+### Tested up to
+
+Each CLI's compat manifest (`internal/adaptercompat/manifests/<adapter>.json`)
+records the oldest version Nightgauge supports (`min_version`) and the newest
+version it has been verified against (`max_tested`). `max_tested` is
+information only: Nightgauge never refuses, blocks, degrades or warns because
+a CLI is newer than it. Operators update their harnesses daily, and a newer
+version runs exactly like a tested one. Only the floor is enforced, as its
+`floor_policy` says.
+
+| Adapter           | Floor (`min_version`) | Floor policy | Tested up to (`max_tested`) |
+| ----------------- | --------------------- | ------------ | --------------------------- |
+| `claude-headless` | `2.1.223`             | warn         | `2.1.258`                   |
+| `codex`           | `0.111.0`             | warn         | `0.145.0`                   |
+| `copilot`         | none                  | warn         | none captured               |
+| `gemini`          | `0.29.0`              | warn         | none captured               |
+| `grok`            | `1.0.0`               | warn         | `1.0.4`                     |
+| `opencode`        | `1.18.30`             | fail closed  | `1.18.30`                   |
+
+`nightgauge doctor` reports the tested-up-to version as a note on the
+adapter's row, never as a warning.
+
 ### Go Binary Adapter Coverage
 
 The Go binary (`cmd/nightgauge`) has its own adapter layer (`internal/execution/adapters/`).
@@ -160,7 +182,7 @@ connect/sendto/sendmsg/bind/listen attempts across the whole process tree,
 with a hostile parent environment (fake OPENAI_API_KEY/ANTHROPIC_API_KEY/
 XAI_API_KEY values) to prove isolation strips them before spawn.
 
-- **opencode version (pinned max_tested):** 1.18.30
+- **opencode version (tested up to, `max_tested`):** 1.18.30
   (`internal/adaptercompat/manifests/opencode.json`)
 - **CI run:** PASS, 2026-09-20 —
   https://github.com/nightgauge/nightgauge/actions/runs/35514658308
@@ -545,7 +567,7 @@ recorded yet (pending #1659).
 | Auth method            | Per model, at dispatch: `ANTHROPIC_API_KEY` for `anthropic/*`; no credential for a local endpoint; a platform-provider key (`github-copilot`, `gitlab`, `amazon-bedrock`, `google-vertex*`) is refused (ADR-022 § 17) |
 | Prompt delivery        | stdin                                                                                                                                                                                                                 |
 | Default args           | `run --format json --print-logs --log-level ERROR`                                                                                                                                                                    |
-| Min version            | `1.18.30` (fail-closed below floor; above max-tested, hosted dispatch warns and runs a self-test, a declared local endpoint is refused — ADR-022 § 20)                                                                |
+| Min version            | `1.18.30` (fail-closed below floor; tested up to `1.18.30`, and a newer version runs unchanged with no warning — ADR-022 § 20)                                                                                        |
 | `requiresDirectApiKey` | `false`                                                                                                                                                                                                               |
 
 One adapter id reaches every provider: the provider is a property of the
@@ -745,10 +767,10 @@ This document should be updated when:
 5. A gap is resolved (delete the gap section and its Follow-Up row rather than
    leaving a closed entry behind)
 6. OpenCode's compat manifest (`internal/adaptercompat/manifests/opencode.json`)
-   bumps its floor or max-tested version — re-capture
+   bumps its floor or max-tested (tested up to) version — re-capture
    `internal/execution/adapters/testdata/opencode-cli/` and
    `internal/doctor/testdata/opencode-capture/` in the same change, and update
-   § 10's Min version row and ADR-022 § 20
+   § 10's Min version row, the Tested up to table and ADR-022 § 20
 7. OpenCode's capability disposition table (ADR-022 § 15) gains, loses, or
    re-classifies a row — update § 10's disposition table to match, row for
    row
