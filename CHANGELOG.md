@@ -21,6 +21,10 @@ changelog, and the release workflow refuses a tag that does not.
   `ghp_`-shaped placeholder values; both now use non-token-shaped
   placeholders so the secret-shape grep (`ghp_|sk-...|credentialed URL`)
   stays clean.
+- **`docs/CI_CD_RUNBOOK.md` also had `ghp_`-shaped example secret values
+  (#2139).** The `gh secret set ... --body "ghp_..."` examples now use
+  `<your-github-token>`-style placeholders, so the secret-shape grep stays
+  clean across `docs/*.md`.
 
 ### Changed
 

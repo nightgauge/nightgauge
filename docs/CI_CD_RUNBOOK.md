@@ -67,7 +67,7 @@ secret in your CI/CD system. The repository's config files accept only the
 ### GitHub Actions
 
 ```bash
-gh secret set GITHUB_TOKEN_NIGHTGAUGE --body "ghp_xxxxxx"
+gh secret set GITHUB_TOKEN_NIGHTGAUGE --body "<your-github-token>"
 # Or use the GitHub UI: Settings → Secrets and variables → Actions → New repository secret
 ```
 
@@ -144,8 +144,8 @@ github_auth:
 Set both secrets in your CI/CD system:
 
 ```bash
-gh secret set GITHUB_TOKEN_NIGHTGAUGE --body "ghp_acme_token"
-gh secret set GITHUB_TOKEN_PARTNER --body "ghp_partner_token"
+gh secret set GITHUB_TOKEN_NIGHTGAUGE --body "<your-github-token-for-nightgauge>"
+gh secret set GITHUB_TOKEN_PARTNER --body "<your-github-token-for-partner>"
 ```
 
 And reference both in your workflow:
@@ -233,7 +233,7 @@ GitHub recommends rotating PATs every 90 days. When rotating:
 1. Generate a new PAT with the same scopes
 2. Update the secret in your CI/CD system:
    ```bash
-   gh secret set GITHUB_TOKEN_NIGHTGAUGE --body "ghp_new_token"
+   gh secret set GITHUB_TOKEN_NIGHTGAUGE --body "<your-new-github-token>"
    ```
 3. Verify the pipeline still works after rotation
 4. Revoke the old token in GitHub Settings
