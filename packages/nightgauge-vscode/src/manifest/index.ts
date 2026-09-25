@@ -254,6 +254,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(terminal)",
     },
     {
+      command: "nightgauge.setupOpenCode",
+      title: "Nightgauge: Setup OpenCode Skills",
+      icon: "$(terminal)",
+    },
+    {
       command: "nightgauge.setupCodexFromWorkspace",
       title: "Nightgauge: Install Codex Skills from This Workspace (Development)",
       icon: "$(terminal)",

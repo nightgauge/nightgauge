@@ -99,6 +99,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`Nightgauge: Setup OpenCode Skills` installs Nightgauge into your own
+  OpenCode (#1671).** The new `nightgauge.setupOpenCode` command, and a
+  one-time prompt at activation when `opencode` is on PATH, write the same
+  tree as `install-agent-skills.sh --opencode-only --yes` into
+  `${XDG_CONFIG_HOME:-~/.config}/opencode`: the bundled `nightgauge-*` skills,
+  `skills/_shared/` and one `/nightgauge-<name>` command per skill. Nothing is
+  written before you pick `Install`. `Install with Plugin` also copies the
+  careful-gate plugin, now bundled in the VSIX under `dist/opencode-plugin/`;
+  OpenCode then npm-installs `@opencode-ai/plugin` on its next start, so it is
+  opt-in as in the script. Skills come only from the VSIX, never the open
+  folder, and `opencode.json*` and your own files are left untouched.
+
 - **A local model has its own usage plan, `local` (#1665).** OpenCode on an
   LM Studio or Ollama model, and the `lm-studio` and `ollama` adapters, now
   show token counts with no dollar bar instead of "usage unknown". OpenCode on

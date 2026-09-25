@@ -67,4 +67,18 @@ if [ -d "$SHARED_DIR" ]; then
   rsync -a "$SHARED_DIR/" "$SKILLS_DIR/_shared/"
 fi
 
+# 4. Bundle the Nightgauge OpenCode plugin (#1635) so OpenCodeSetupService can
+#    install it from the VSIX, never from a network fetch (#1671). Same two
+#    entries install-agent-skills.sh --opencode-only --with-plugin copies.
+OPENCODE_PLUGIN_SRC="$REPO_ROOT/internal/execution/opencodeplugin/plugin"
+OPENCODE_PLUGIN_DEST="$DIST/opencode-plugin"
+if [ ! -f "$OPENCODE_PLUGIN_SRC/nightgauge.js" ] || [ ! -d "$OPENCODE_PLUGIN_SRC/nightgauge" ]; then
+  echo "OpenCode plugin source $OPENCODE_PLUGIN_SRC is missing." >&2
+  exit 1
+fi
+rm -rf "$OPENCODE_PLUGIN_DEST"
+mkdir -p "$OPENCODE_PLUGIN_DEST"
+cp "$OPENCODE_PLUGIN_SRC/nightgauge.js" "$OPENCODE_PLUGIN_DEST/nightgauge.js"
+rsync -a --delete "$OPENCODE_PLUGIN_SRC/nightgauge/" "$OPENCODE_PLUGIN_DEST/nightgauge/"
+
 echo "Marketplace bundled into dist/ ($(find "$DIST/claude-plugins" "$DIST/skills" -type f 2>/dev/null | wc -l | tr -d ' ') files)"
