@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The stage-budget wall-clock tests no longer fail when two gates run at
+  once (#2123).** Their upper bounds were fixed wall times (6s, 8s, 12s).
+  They are now each stage's timeout less one second. A stage the budget stops
+  still ends at about 1s. A stage it fails to stop runs to the timeout and
+  still fails the test.
+
 - **The adapter docs say which OpenCode version each upstream behaviour was
   seen on (#1980).** Claims about what OpenCode itself does now carry
   `(observed on opencode 1.18.30)`, so a newer release that changes one can be
