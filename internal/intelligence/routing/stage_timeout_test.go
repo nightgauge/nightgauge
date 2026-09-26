@@ -198,3 +198,27 @@ func TestStageTimeoutBase_StageNameParity(t *testing.T) {
 		}
 	}
 }
+
+// A declared self-hosted endpoint id normalizes to "other", so the caller's
+// endpoint resolution decides locality (#2163).
+func TestResolveStageTimeoutLocal_DeclaredEndpoint(t *testing.T) {
+	cases := []struct {
+		name          string
+		adapter       string
+		model         string
+		declaredLocal bool
+		want          time.Duration
+	}{
+		{"declared local endpoint gets the local factor", "opencode", "mtplx/qwen-27b", true, 60 * time.Minute},
+		{"undeclared other key keeps the hosted ceiling", "opencode", "mtplx/qwen-27b", false, 20 * time.Minute},
+		{"lmstudio brand is local without a declaration", "opencode", "lmstudio/qwen-27b", false, 60 * time.Minute},
+		{"a non-opencode adapter ignores the flag", "claude-headless", "sonnet", true, 20 * time.Minute},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ResolveStageTimeoutLocal("issue-pickup", c.adapter, c.model, c.declaredLocal); got != c.want {
+				t.Errorf("ResolveStageTimeoutLocal = %v, want %v", got, c.want)
+			}
+		})
+	}
+}

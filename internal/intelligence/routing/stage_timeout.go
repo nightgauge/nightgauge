@@ -129,6 +129,16 @@ const openCodeLocalTimeoutCap = 4 * time.Hour
 // it is not model- or adapter-scaled — so it acts as an explicit absolute
 // ceiling, and it still wins over the local cap.
 func ResolveStageTimeout(stage, adapter, model string) time.Duration {
+	return ResolveStageTimeoutLocal(stage, adapter, model, false)
+}
+
+// ResolveStageTimeoutLocal is ResolveStageTimeout for a caller that has
+// already resolved the model against the declared opencode endpoints:
+// declaredLocal is true when the model's provider key is a declared endpoint
+// that runs on a server the operator runs (models.IsLocalModel, #2128). A
+// declared id such as mtplx normalizes to "other", so without it a stage on
+// that endpoint got the hosted ceiling and was killed mid-reply (#2163).
+func ResolveStageTimeoutLocal(stage, adapter, model string, declaredLocal bool) time.Duration {
 	if override, ok := stageTimeoutEnvOverride(stage); ok {
 		return override
 	}
@@ -137,7 +147,7 @@ func ResolveStageTimeout(stage, adapter, model string) time.Duration {
 		base = defaultStageTimeout
 	}
 	if adapter == openCodeAdapterName {
-		if provider, _, _ := models.ParseOpenCodeModel(model); models.IsLocalProvider(provider) {
+		if provider, _, _ := models.ParseOpenCodeModel(model); declaredLocal || models.IsLocalProvider(provider) {
 			d := time.Duration(float64(base) * openCodeLocalTimeoutFactor)
 			if d > openCodeLocalTimeoutCap {
 				d = openCodeLocalTimeoutCap

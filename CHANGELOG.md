@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A stage on a declared self-hosted OpenCode endpoint now gets the local
+  stage timeout (#2163).** An endpoint declared under
+  `opencode.endpoints[]` with its own id, such as an MTPLX or vLLM server,
+  was timed like a hosted model because only the `lmstudio` and `ollama`
+  keys counted as local. So issue-pickup was killed at 20 minutes while the
+  local model was still answering. Locality now follows the declared
+  endpoint, as the stage cost already did, and the stage gets 3× its
+  ceiling (issue-pickup: 60 minutes).
+
 - **`nightgauge git fetch` and `branch-create` now work on SSH checkouts
   (#2081).** With `GITHUB_TOKEN` set, a fetch from an `ssh://` or
   `git@github.com:` origin failed with "invalid auth method", which stopped

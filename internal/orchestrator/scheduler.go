@@ -5984,7 +5984,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// Stage-aware + model-aware last-resort context deadline (#73).
 			// Replaces a blind 30-min literal that killed frontier-mode Fable
 			// stages before their own progress-gated hard cap could apply.
-			Timeout:      routing.ResolveStageTimeout(string(stage), adapterName, model),
+			Timeout:      routing.ResolveStageTimeoutLocal(string(stage), adapterName, model, adapterName == "opencode" && execution.OpenCodeDeclaredEndpointLocal(model, workspaceRoot)),
 			CostBudget:   PipelineBudgetCeilingUSD(workspaceRoot),
 			StageBudgets: pipelineStageBudgets(workspaceRoot),
 			SkillPath:    skillData.SkillPath,
