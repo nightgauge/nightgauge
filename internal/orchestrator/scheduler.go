@@ -882,6 +882,11 @@ type Scheduler struct {
 	// deterministic fakes via WithPRCreateRunner.
 	prCreateRunner pmstages.PRCreateRunner
 
+	// issuePickupRunner is the deterministic-first hook for issue-pickup
+	// (#1904). On success the skill is skipped; on punt the LLM path runs and
+	// the atomic-LLM-overrun anomaly can flag it. nil disables the hook.
+	issuePickupRunner IssuePickupRunner
+
 	// recoveryRegistry is the FailureRecovery registry consulted on stage
 	// failure (Issue #3268). When non-nil, the scheduler invokes
 	// TryRecover after stall-rewind doesn't apply and before model
@@ -1263,6 +1268,7 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 		runDefaultAdapter:         cfg.Adapter,
 		prMergeRunner:             pmstages.NewDeterministicRunner(),
 		prCreateRunner:            NewDefaultPRCreateRunner(client),
+		issuePickupRunner:         NewDeterministicIssuePickupRunner(),
 		launchRepo:                launchRepoSlug(cfg.RuntimeConfig),
 	}
 	// Wire FailureRecovery registry (Issue #3268). Reuses the same runners
@@ -6036,6 +6042,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		if !deterministicMerged && !mergeRateLimited && mergeRefusal == nil {
 			deterministicCreated, createRateLimited = s.tryDeterministicPRCreate(ctx, stage, runtime, item, workspaceRoot)
 		}
+		// Deterministic-first hook for issue-pickup (#1904): every adapter
+		// takes it; the skill runs only when it punts.
+		if stage == state.StageIssuePickup && s.tryDeterministicIssuePickup(ctx, stage, runtime, item, workspaceRoot) {
+			deterministicCreated = true
+		}
 		// prStageRateLimited is true when the deterministic pr-merge/pr-create
 		// path declined because GitHub is rate-limited. The LLM path is skipped
 		// (it would re-shell `gh` into the same exhausted bucket); the failure
@@ -7683,11 +7694,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 
-		// source=llm: All Go-scheduler stages run via LLM in this iteration.
-		// Deterministic-first is TypeScript-only (Issue #2614); this field
-		// enables future Go-side deterministic-first tracking.
-		log.Printf("#%d: stage %s complete — model=%s source=llm, tokens: %s, cost: %s",
-			item.Number, stage, model, stageCost.TokenSummary(), stageCost.CostSummary())
+		// source is the execution path the stage took: "deterministic" for
+		// the Go deterministic-first runners (issue-pickup #1904, pr-create,
+		// pr-merge), "llm" otherwise.
+		source := runtime.StageExecutionPath(stage)
+		if source == "" {
+			source = "llm"
+		}
+		log.Printf("#%d: stage %s complete — model=%s source=%s, tokens: %s, cost: %s",
+			item.Number, stage, model, source, stageCost.TokenSummary(), stageCost.CostSummary())
 
 		// Post-stage verification for pr-merge: the skill's exit code is not
 		// sufficient evidence that the PR actually merged. Query GitHub and

@@ -8262,18 +8262,8 @@ func gitBranchCreateCmd() *cobra.Command {
 				}
 			}
 
-			action := "created"
-			baseBranch, err := svc.CurrentBranch()
-			if err != nil {
-				// Worktrees use detached HEAD by design; fall back to repo default.
-				baseBranch, err = svc.DefaultBranch()
-				if err != nil {
-					return err
-				}
-			}
-
 			parentIssue := 0
-			epicBranch := ""
+			var epicTitle func() (string, error)
 
 			if issueNumber != 0 {
 				if owner == "" || repo == "" {
@@ -8297,118 +8287,30 @@ func gitBranchCreateCmd() *cobra.Command {
 						return err
 					}
 				}
-
-				if issue.ParentIssueNumber != 0 {
-					parentIssue = issue.ParentIssueNumber
-
-					if err := svc.Fetch(true); err != nil {
-						return err
+				parentIssue = issue.ParentIssueNumber
+				epicTitle = func() (string, error) {
+					if issueSvc == nil {
+						client, clientErr := clientFromConfig()
+						if clientErr != nil {
+							return "", clientErr
+						}
+						issueSvc = gh.NewIssueService(client)
 					}
-
-					epicBranch, err = svc.FindEpicBranch(parentIssue)
-					if err != nil {
-						if issueSvc == nil {
-							client, clientErr := clientFromConfig()
-							if clientErr != nil {
-								return clientErr
-							}
-							issueSvc = gh.NewIssueService(client)
-						}
-						epic, epicErr := issueSvc.GetIssueWithRelations(cmd.Context(), owner, repo, parentIssue, gh.NoRelations)
-						if epicErr != nil {
-							return epicErr
-						}
-
-						epicBranch, err = gitpkg.GenerateBranchSlug("epic", parentIssue, epic.Title)
-						if err != nil {
-							return err
-						}
-						defaultBranch, defaultErr := svc.DefaultBranch()
-						if defaultErr != nil {
-							return defaultErr
-						}
-
-						localExists, localErr := svc.LocalBranchExists(epicBranch)
-						if localErr != nil {
-							return localErr
-						}
-						if !localExists {
-							if err := svc.BranchCreateFrom(epicBranch, defaultBranch); err != nil {
-								return err
-							}
-						} else if err := svc.Checkout(epicBranch); err != nil {
-							return err
-						}
-
-						if err := svc.PushBranch(epicBranch); err != nil {
-							return err
-						}
+					epic, epicErr := issueSvc.GetIssueWithRelations(cmd.Context(), owner, repo, parentIssue, gh.NoRelations)
+					if epicErr != nil {
+						return "", epicErr
 					}
-
-					baseBranch = epicBranch
+					return epic.Title, nil
 				}
 			}
 
-			// Resolve the per-issue branch. The REMOTE is authoritative: when a
-			// prior run already pushed feat/<N>-..., a re-run MUST continue from
-			// that pushed tip. Otherwise a stale, diverged local branch (left by
-			// the earlier run) gets checked out as-is, the next push is rejected
-			// as non-fast-forward, the force-push safety hook blocks the
-			// overwrite, and pr-create dead-ends with no PR (#3881). So we check
-			// the remote FIRST and reset the local ref to origin/<branch> even
-			// when a stale local ref exists — never blindly check it out.
-			remoteExists, err := svc.RemoteBranchExists(branchName)
+			// One implementation shared with the scheduler's deterministic
+			// issue-pickup runner (#1904).
+			res, err := svc.EnsureIssueBranch(branchName, parentIssue, epicTitle)
 			if err != nil {
 				return err
 			}
-			localExists, err := svc.LocalBranchExists(branchName)
-			if err != nil {
-				return err
-			}
-
-			switch {
-			case remoteExists:
-				if err := svc.Fetch(true); err != nil {
-					return err
-				}
-				if err := svc.ResetLocalBranchToRemote(branchName); err != nil {
-					// #1499: the reset is refused when another worktree has the
-					// branch checked out, because moving the ref alone would
-					// leave that tree reporting the whole delta as phantom dirt
-					// — which is what tripped three concurrent slots' worktree
-					// containment on 2026-09-04..06. Say which checkout holds it
-					// rather than returning a bare go-git error; the operator's
-					// next move is to look there, not here.
-					var held *gitpkg.BranchHeldByWorktreeError
-					if errors.As(err, &held) {
-						return fmt.Errorf(
-							"cannot reuse remote branch %s: %w — that checkout must move its own tree "+
-								"(git -C %s pull --ff-only), or the run must use a different branch",
-							branchName, err, held.Worktree)
-					}
-					return err
-				}
-				if err := svc.Checkout(branchName); err != nil {
-					return err
-				}
-				action = "reused-remote"
-			case localExists:
-				if err := svc.Checkout(branchName); err != nil {
-					return err
-				}
-				action = "already-exists"
-			case parentIssue != 0:
-				if err := svc.BranchCreateFrom(branchName, baseBranch); err != nil {
-					return err
-				}
-			default:
-				// Always use the resolved base. In a detached pipeline worktree,
-				// BranchCreate would branch from the detached checkout even though
-				// DefaultBranch above successfully resolved origin's base branch.
-				if err := svc.BranchCreateFrom(branchName, baseBranch); err != nil {
-					return err
-				}
-			}
+			baseBranch, action, epicBranch := res.BaseBranch, res.Action, res.EpicBranch
 
 			if outputJSON {
 				payload := map[string]interface{}{

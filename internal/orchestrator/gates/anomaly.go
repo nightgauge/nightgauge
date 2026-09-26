@@ -58,13 +58,17 @@ func (a Anomaly) ToState() state.Anomaly {
 // predicate that names the deterministic path that should have matched —
 // surfaced in the Anomaly record and in dashboard output.
 //
-// Today: pr-merge (deterministic-first runner from #3259) and pr-create
-// (deterministic-first runner from #3264 / Wave 2 #4). To add a new
+// Today: pr-merge (deterministic-first runner from #3259), pr-create
+// (deterministic-first runner from #3264 / Wave 2 #4) and issue-pickup
+// (deterministic Go runner from #1904). To add a new
 // atomic-eligible stage, append an entry here and a row to
 // docs/PIPELINE_ANOMALIES.md.
 var atomicEligibleStages = map[state.PipelineStage]string{
 	state.StagePRMerge:  "deterministic gh pr merge available",
 	state.StagePRCreate: "deterministic gh pr create available",
+	// #1904: issue fetch + shared branch derivation + branch-create + atomic
+	// issue-{N}.json write, all in Go with no model.
+	state.StageIssuePickup: "deterministic issue fetch, branch-create and issue context write available",
 }
 
 // IsAtomicEligible reports whether the given stage has a deterministic
@@ -82,7 +86,7 @@ func IsAtomicEligible(stage state.PipelineStage) bool {
 //
 // All four conditions must hold:
 //
-//   - stage is atomic-eligible (pr-merge / pr-create today)
+//   - stage is atomic-eligible (pr-merge / pr-create / issue-pickup today)
 //   - executionPath == "llm" (the LLM path ran instead of the deterministic one)
 //   - gatePassed is true (the work shipped — failures are already on the
 //     failure path, no need for an anomaly to amplify them)

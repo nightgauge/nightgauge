@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **issue-pickup runs without a model on the Go scheduler, for every adapter
+  (#1904).** A Go runner now reads the issue, derives the branch name with the
+  same function `nightgauge git branch-create --issue` uses, creates and pushes
+  the branch through the same code, and writes `issue-{N}.json` atomically, so
+  `branch` is always a string and the file is never observable empty. Routing
+  comes from the deterministic routing decision the scheduler already applies.
+  The skill runs only when the runner punts, and that run is now flagged by the
+  `atomic_llm_overrun` anomaly (see `docs/PIPELINE_ANOMALIES.md`). The skill's
+  step 8.2 writes through a temp file and `mv` instead of a truncating redirect.
 - **OpenCode stages now record the model that served them, however long the
   session (#2165).** After any stage of more than a few dozen steps, the usage
   fold printed a drift line ending in

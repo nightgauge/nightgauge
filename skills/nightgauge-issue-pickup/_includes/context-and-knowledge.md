@@ -137,7 +137,10 @@ jq -n \
     dependency_analysis: null,
     knowledge_path: null,
     created_at: $created_at
-  }' > "$CONTEXT_FILE"
+  }' > "$CONTEXT_FILE.tmp.$$"
+# Atomic write: a plain redirect truncates the file before jq writes it, so a
+# concurrent reader (the gate, loadFeatureBranch) could see it empty (#1904).
+mv "$CONTEXT_FILE.tmp.$$" "$CONTEXT_FILE"
 
 jq -e '.branch != "" and .title != ""' "$CONTEXT_FILE" > /dev/null && \
   echo "Context written: $CONTEXT_FILE (branch=$BRANCH_NAME)" || \
