@@ -46,6 +46,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **An OpenCode stage no longer ends silently when its context compacts**
+  (#2180). The plugin disabled OpenCode's continue turn after every
+  compaction, so a stage that compacted mid-task exited 0 with its
+  deliverable unwritten (#1659 leg 1 run 12: feature-planning, no plan). A
+  session now resumes after its first two compactions and ends at the third,
+  which keeps a compact/continue loop bounded (35 loop steps in the pinned
+  fixture, against 311+ unbounded). A no-op failure after compaction names
+  the compaction count in its reason.
+
 - **A stage the route skips no longer costs the next stage its deterministic
   arm** (#1968): a docs-only or config-only route skips feature-validate, and
   pr-create then punted `missing-validate-context` to the LLM. The scheduler

@@ -152,3 +152,43 @@ func TestStageContextProbeRecordsEachAttempt(t *testing.T) {
 		})
 	}
 }
+
+// TestStageContextProbeCompactionNote: a no-op failure names this attempt's
+// compactions (#2180), counting only the lines appended since the probe
+// began, and says nothing for an attempt that did not compact or has no
+// events file.
+func TestStageContextProbeCompactionNote(t *testing.T) {
+	const compaction = `{"v":1,"ts":"t","kind":"compaction","session_id":"s","child":false,"detail":{}}` + "\n"
+	runID, err := runstate.NewRunID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputFile := filepath.Join(t.TempDir(), "plan.json")
+	eventsPath, ok := opencodeplugin.EventsPath(outputFile, runID)
+	if !ok {
+		t.Fatal("events path disabled for an absolute output file")
+	}
+	appendLines := func(n int) {
+		f, err := os.OpenFile(eventsPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if _, err := f.WriteString(strings.Repeat(compaction, n)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	appendLines(1) // an earlier attempt's
+	probe := beginStageContext("opencode", outputFile, runID)
+	if note := probe.compactionNote(); note != "" {
+		t.Errorf("before any compaction: note = %q, want empty", note)
+	}
+	appendLines(3)
+	if note := probe.compactionNote(); !strings.Contains(note, "after 3 context compaction(s)") {
+		t.Errorf("note = %q, want it to name this attempt's 3 compactions", note)
+	}
+	if note := beginStageContext("claude", outputFile, runID).compactionNote(); note != "" {
+		t.Errorf("claude attempt: note = %q, want empty", note)
+	}
+}

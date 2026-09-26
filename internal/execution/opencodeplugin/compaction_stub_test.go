@@ -355,8 +355,6 @@ func exportSanitized(t *testing.T, result compactionStubResult) string {
 	return string(out)
 }
 
-const continueMarker = "Continue if you have next steps"
-
 // TestCompactionAutocontinueSuppressionAgainstRealOpenCode is #1641's own
 // compaction_stub_test.go verification bullet: opencode 1.18.30 against the
 // #1618 stub, limit.context 12000, steps cap 8; the run exits within budget,
@@ -501,7 +499,16 @@ func TestPermissionAskEventAgainstRealOpenCode(t *testing.T) {
 // this test exists for: TestCompactionAutocontinueSuppressionRedGreen's
 // negative control (autocontinue suppression removed) logged 311+ loop steps
 // in the same fixture, over 20x this bound.
-const loopStepsWantMax = 16
+//
+// #2180 lets a session's first compactionContinueMax compactions resume the
+// task (session.js COMPACTION_CONTINUE_MAX). The fixture then compacts three
+// times, resumes after the first two and ends at the third, measured on the
+// pinned binary at 35 loop steps. The bound is that plus headroom: still
+// under a sixth of the unbounded negative control's 311+.
+const loopStepsWantMax = 40
+
+// compactionContinueMax mirrors session.js COMPACTION_CONTINUE_MAX.
+const compactionContinueMax = 2
 
 // assertCompactionStubGreen is the green-path assertion set, factored out so
 // the red/green procedure (below) can run it against both the fixed and the
@@ -541,8 +548,8 @@ func assertCompactionStubGreen(t *testing.T, result compactionStubResult) {
 			stopVerifies++
 		}
 	}
-	if compactions != 1 {
-		t.Errorf("got %d compaction events, want exactly 1: %+v", compactions, events)
+	if compactions != compactionContinueMax+1 {
+		t.Errorf("got %d compaction events, want exactly %d (resumed after %d, ended at the next): %+v", compactions, compactionContinueMax+1, compactionContinueMax, events)
 	}
 	if idles != 1 {
 		t.Errorf("got %d idle events, want exactly 1: %+v", idles, events)
@@ -551,13 +558,11 @@ func assertCompactionStubGreen(t *testing.T, result compactionStubResult) {
 		t.Errorf("got %d stop_verify events, want exactly 1: %+v", stopVerifies, events)
 	}
 
-	if strings.Contains(result.stderr, continueMarker) {
-		t.Errorf("stderr contains the synthetic continue marker %q; autocontinue was not suppressed", continueMarker)
-	}
-
 	exported := exportSanitized(t, result)
-	if strings.Contains(exported, continueMarker) {
-		t.Errorf("`opencode export --sanitize` contains the synthetic continue marker %q; autocontinue was not suppressed", continueMarker)
+	// --sanitize redacts every part's text, so the continue turns are
+	// counted by their synthetic flag: the fixture's only synthetic parts.
+	if n := strings.Count(exported, `"synthetic": true`); n != compactionContinueMax {
+		t.Errorf("`opencode export --sanitize` holds %d synthetic continue turns, want exactly %d: the first %d compactions resume the task and the next ends the session", n, compactionContinueMax, compactionContinueMax)
 	}
 }
 
