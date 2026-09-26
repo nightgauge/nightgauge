@@ -130,3 +130,21 @@ func TestAnomaly_ToState(t *testing.T) {
 		t.Errorf("ToState lost fields: %#v", got)
 	}
 }
+
+// #1904: issue-pickup has a deterministic Go runner, so an LLM run of it is
+// flagged exactly like pr-create's and pr-merge's.
+func TestDetectAtomicLLMOverrun_IssuePickupLLMPath_Anomaly(t *testing.T) {
+	if !IsAtomicEligible(state.StageIssuePickup) {
+		t.Fatal("issue-pickup must be atomic-eligible")
+	}
+	got := DetectAtomicLLMOverrun(state.StageIssuePickup, "llm", 0.30, true, 0.01)
+	if got == nil {
+		t.Fatal("expected anomaly when issue-pickup runs via the LLM")
+	}
+	if got.Stage != string(state.StageIssuePickup) || got.DeterministicPredicate == "" {
+		t.Errorf("unexpected anomaly: %#v", got)
+	}
+	if DetectAtomicLLMOverrun(state.StageIssuePickup, "deterministic", 0.30, true, 0.01) != nil {
+		t.Error("deterministic issue-pickup must not produce an anomaly")
+	}
+}
