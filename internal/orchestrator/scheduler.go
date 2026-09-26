@@ -8544,6 +8544,18 @@ func schedulerSkippableStages(skip []string) map[state.PipelineStage]bool {
 	return out
 }
 
+// routeSkippedStageNames returns the stages routing skipped on this run, as
+// recorded by runtime.SkipStage (#1968).
+func routeSkippedStageNames(runtime *state.RuntimeState) []string {
+	var out []string
+	for _, st := range []state.PipelineStage{state.StageFeaturePlanning, state.StageFeatureValidate} {
+		if runtime.IsStageSkipped(st) {
+			out = append(out, string(st))
+		}
+	}
+	return out
+}
+
 // loadLatestRetro reads the most recent retro file for an issue and returns
 // a summary of findings for injection into escalated retry context.
 func loadLatestRetro(workspaceRoot string, issueNumber int, failedStage string) string {
@@ -10268,7 +10280,11 @@ func (s *Scheduler) tryDeterministicPRCreate(
 	stageWS := stageWorkspace(runtime, workspaceRoot)
 	// #1247 — see tryDeterministicPRMerge.
 	phases := s.newDeterministicPhaseReporter(runtime, item.Repo, item.Number)
-	detResult, detErr := s.prCreateRunner.Run(pmstages.WithPhaseReporter(ctx, phases), item.Number, item.Repo, stageWS)
+	// #1968: tell the runner which stages this run's route skipped, so a
+	// route-skipped feature-validate is treated as satisfied rather than as a
+	// missing-validate-context punt.
+	detCtx := pmstages.WithRouteSkippedStages(pmstages.WithPhaseReporter(ctx, phases), routeSkippedStageNames(runtime))
+	detResult, detErr := s.prCreateRunner.Run(detCtx, item.Number, item.Repo, stageWS)
 	// The commit owner (#1179) runs inside the runner, before its create/punt
 	// decision, so its outcome is reported on EVERY path — including the punt
 	// that the trivial route takes when routing skipped feature-validate.

@@ -16,6 +16,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A stage the route skips no longer costs the next stage its deterministic
+  arm** (#1968): a docs-only or config-only route skips feature-validate, and
+  pr-create then punted `missing-validate-context` to the LLM. The scheduler
+  now tells the pr-create runner which stages the route skipped; a
+  route-skipped validate is treated as satisfied (reason
+  `rich-context: validate-skipped-by-route`, stated in the PR body), while a
+  validate context that is merely missing still punts and dev-reported build
+  or test failures still punt. A test checks every routing skip list against
+  the deterministic arms' preconditions.
+- **`branch-merged-check.sh` keeps a branch an open PR targets as its base, and
+  an `epic/<N>-…` branch while issue N is open** (#2175): a fresh epic branch's
+  tip is an ancestor of main, so it read SAFE-DELETE and was deleted under a
+  live sub-issue run. Both guards run before any SAFE-DELETE, for local and
+  remote-only refs; an epic branch whose issue state cannot be looked up is
+  UNKNOWN.
 - **The deterministic issue-pickup runner checks out the branch in the run's
   worktree, not the primary checkout** (#2170): the hook ran before the first
   stage dispatch provisioned the worktree, so it fell back to the workspace root

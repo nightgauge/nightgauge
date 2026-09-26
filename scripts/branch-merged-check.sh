@@ -68,9 +68,9 @@ case "$1" in -h | --help) usage ;; esac
 BASE_DEFAULT="origin/main"
 
 # ---------------------------------------------------------------------------
-# PR index: "<state>\t<headRefName>\t<headRefOid>\t<number>", fetched once for
-# open AND merged PRs. Open ones mark a branch in use; merged ones prove a
-# branch already landed. Empty when NO_PR=1, gh is missing, unauthenticated, or
+# PR index: "<state>\t<headRefName>\t<headRefOid>\t<number>\t<baseRefName>",
+# fetched once for open AND merged PRs. Open ones mark a branch in use (as head
+# OR as base, #2175); merged ones prove a branch already landed. Empty when NO_PR=1, gh is missing, unauthenticated, or
 # the remote is not a forge we can query — classification stays content-only.
 # ---------------------------------------------------------------------------
 PR_INDEX=""
@@ -78,9 +78,9 @@ build_pr_index() {
   [ "${NO_PR:-0}" = "1" ] && return 0
   command -v gh >/dev/null 2>&1 || return 0
   PR_INDEX=$(gh pr list --state all --limit 500 \
-    --json state,headRefName,headRefOid,number \
+    --json state,headRefName,headRefOid,number,baseRefName \
     --jq '.[] | select(.state=="OPEN" or .state=="MERGED")
-          | "\(.state)\t\(.headRefName)\t\(.headRefOid)\t\(.number)"' 2>/dev/null) || PR_INDEX=""
+          | "\(.state)\t\(.headRefName)\t\(.headRefOid)\t\(.number)\t\(.baseRefName)"' 2>/dev/null) || PR_INDEX=""
 }
 
 # open_pr_for <branch> -> prints the PR number if an OPEN PR uses this branch
@@ -88,6 +88,26 @@ open_pr_for() {
   [ -n "$PR_INDEX" ] || return 1
   printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" \
     '$1=="OPEN" && $2==b {print $4; found=1; exit} END{exit !found}'
+}
+
+# open_pr_based_on <branch> -> prints the PR number if an OPEN PR targets this
+# branch as its BASE (#2175). Deleting a base branch breaks every PR stacked on
+# it, and a pipeline epic branch is exactly that base.
+open_pr_based_on() {
+  [ -n "$PR_INDEX" ] || return 1
+  printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" \
+    '$1=="OPEN" && $5==b {print $4; found=1; exit} END{exit !found}'
+}
+
+# epic_issue_state <N> -> prints the issue's state (OPEN/CLOSED); non-zero and
+# no output when the forge cannot be asked (NO_PR=1, no gh, lookup failure).
+epic_issue_state() {
+  [ "${NO_PR:-0}" = "1" ] && return 1
+  command -v gh >/dev/null 2>&1 || return 1
+  local st
+  st=$(gh issue view "$1" --json state --jq .state 2>/dev/null) || return 1
+  [ -n "$st" ] || return 1
+  printf '%s' "$st"
 }
 
 # merged_pr_for <branch> -> prints "<sha>\t<number>" if a merged PR used it
@@ -236,6 +256,38 @@ classify() {
     echo "KEEP         open PR #$pr_num — deleting this branch would close it"
     return 1
   fi
+
+  # An OPEN PR whose BASE is this branch (#2175): deleting it breaks that PR.
+  # Like the worktree guard, this must precede every SAFE-DELETE — and unlike
+  # it, it applies to a remote-only ref too, because a stacked PR's base
+  # usually exists only on the remote.
+  if pr_num=$(open_pr_based_on "$branch"); then
+    echo "KEEP         ${remote_note}open PR #$pr_num targets this branch as its base — deleting it would break that PR"
+    return 1
+  fi
+
+  # A pipeline epic branch (`epic/<N>-…`) is the base every sub-issue branch
+  # of epic N is cut from and merges into (#2175). Freshly created it has no
+  # commits of its own, so its tip IS an ancestor of base and the rule below
+  # would call it SAFE-DELETE while a sub-issue run — whose feature branch may
+  # be pushed with no PR yet — still depends on it. KEEP while issue N is
+  # open; refuse (UNKNOWN) when the forge cannot say.
+  case "$branch" in
+  epic/*)
+    local epic_num="${branch#epic/}" epic_state
+    epic_num="${epic_num%%-*}"
+    if [[ "$epic_num" =~ ^[0-9]+$ ]]; then
+      if ! epic_state=$(epic_issue_state "$epic_num"); then
+        echo "UNKNOWN      ${remote_note}epic branch for issue #$epic_num — cannot confirm the issue is closed (forge lookup unavailable)"
+        return 2
+      fi
+      if [ "$epic_state" = "OPEN" ]; then
+        echo "KEEP         ${remote_note}epic branch for open issue #$epic_num — sub-issue runs build on it"
+        return 1
+      fi
+    fi
+    ;;
+  esac
 
   # Cheapest positive case: the branch tip is already contained in base, so
   # base has every commit it has. This is what `git branch -d` accepts, and it

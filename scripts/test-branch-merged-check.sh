@@ -114,7 +114,8 @@ squash_merge_to_main() {
 }
 
 # install_fake_gh puts a scripted `gh` first on PATH. It answers `pr list`
-# with one line built from FAKE_PR_* env vars (nothing at all if
+# with one line built from FAKE_PR_* env vars (FAKE_PR_BASE is the base
+# branch, default main), `issue view` with FAKE_ISSUE_STATE (fails if unset), (nothing at all if
 # FAKE_PR_STATE is unset — an unauthenticated/no-PR forge) and
 # `api repos/{owner}/{repo}/commits/<sha>` with FAKE_PR_PARENTS, one SHA per
 # line, when <sha> matches FAKE_PR_SHA.
@@ -125,8 +126,13 @@ install_fake_gh() {
 #!/usr/bin/env bash
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   if [ -n "${FAKE_PR_STATE:-}" ]; then
-    printf '%s\t%s\t%s\t%s\n' "$FAKE_PR_STATE" "$FAKE_PR_BRANCH" "$FAKE_PR_SHA" "$FAKE_PR_NUM"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$FAKE_PR_STATE" "$FAKE_PR_BRANCH" "$FAKE_PR_SHA" "$FAKE_PR_NUM" "${FAKE_PR_BASE:-main}"
   fi
+  exit 0
+fi
+if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
+  [ -n "${FAKE_ISSUE_STATE:-}" ] || exit 1
+  printf '%s\n' "$FAKE_ISSUE_STATE"
   exit 0
 fi
 if [ "$1" = "api" ]; then
@@ -380,6 +386,53 @@ fi
 expect 2 "a remote-only branch sharing the base's own short name refuses to compare it to itself" \
   "base branch's own name" \
   -- run_in "$root" env NO_PR=1 "$SCRIPT" release origin/release
+
+# ── (n) an open PR whose BASE is the branch is KEEP (#2175) ───────────────
+# The live repro: a fresh epic branch (tip == main, an ancestor) that a
+# feature branch targets as its base. Local and remote-only.
+new_fixture
+root="$TMP/clone"
+git_in "$root" push -q origin main:stack/2175-base
+git_in "$root" fetch -q origin
+install_fake_gh
+expect 1 "remote-only branch that an open PR targets as base is KEEP" \
+  "targets this branch as its base" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" \
+  FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=feat/2176-x FAKE_PR_SHA=deadbeef FAKE_PR_NUM=2177 \
+  FAKE_PR_BASE=stack/2175-base "$SCRIPT" stack/2175-base origin/main
+git_in "$root" branch -q stack/2175-base origin/stack/2175-base
+expect 1 "local branch that an open PR targets as base is KEEP" \
+  "targets this branch as its base" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" \
+  FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=feat/2176-x FAKE_PR_SHA=deadbeef FAKE_PR_NUM=2177 \
+  FAKE_PR_BASE=stack/2175-base "$SCRIPT" stack/2175-base origin/main
+expect 0 "the same ancestor branch with no PR based on it is still SAFE-DELETE" \
+  "ancestor" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" \
+  FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=feat/2176-x FAKE_PR_SHA=deadbeef FAKE_PR_NUM=2177 \
+  FAKE_PR_BASE=main "$SCRIPT" stack/2175-base origin/main
+
+# ── (o) an epic/<N>-… branch is KEEP while issue N is open (#2175) ─────────
+new_fixture
+root="$TMP/clone"
+git_in "$root" push -q origin main:epic/2085-doctor
+git_in "$root" fetch -q origin
+expect 1 "remote-only epic branch with its issue open is KEEP" \
+  "epic branch for open issue #2085" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_ISSUE_STATE=OPEN \
+  "$SCRIPT" epic/2085-doctor origin/main
+expect 0 "remote-only epic branch with its issue closed falls through to SAFE-DELETE" \
+  "ancestor" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_ISSUE_STATE=CLOSED \
+  "$SCRIPT" epic/2085-doctor origin/main
+expect 2 "epic branch whose issue state cannot be looked up is UNKNOWN" \
+  "cannot confirm the issue is closed" \
+  -- run_in "$root" env NO_PR=1 "$SCRIPT" epic/2085-doctor origin/main
+git_in "$root" branch -q epic/2085-doctor origin/epic/2085-doctor
+expect 1 "local epic branch with its issue open is KEEP" \
+  "epic branch for open issue #2085" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_ISSUE_STATE=OPEN \
+  "$SCRIPT" epic/2085-doctor origin/main
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then

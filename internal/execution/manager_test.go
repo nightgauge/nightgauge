@@ -752,7 +752,11 @@ func TestRunStage_GracefulStopExitZeroIsReportedCancelled(t *testing.T) {
 		return err == nil
 	})
 
-	graceful, err := m.CancelWithGrace(key, 5*time.Second)
+	// The grace bounds a broken trap, not speed: under the full local gate's
+	// load (every package's go test and -race at once, #1983) reaping a trapped
+	// shell overran a 5s grace (6.39s, twice on 2026-09-26) while passing in
+	// ~0.5s otherwise. A trap that never exits still fails, after 30s.
+	graceful, err := m.CancelWithGrace(key, 30*time.Second)
 	if err != nil {
 		t.Fatalf("CancelWithGrace: %v", err)
 	}
