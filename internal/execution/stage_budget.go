@@ -112,6 +112,14 @@ func pricedStageCost(adapter, model string) config.StageCost {
 // self_hosted declaration, else its kind or base URL, and never an Ollama
 // cloud model). A config that cannot be read declares nothing here; the
 // dispatch's own preparation refuses it later.
+// OpenCodeDeclaredEndpointLocal reports whether model runs on a declared
+// opencode endpoint that is local; false when the key is not a declared
+// endpoint. The stage timeout reads it (#2163).
+func OpenCodeDeclaredEndpointLocal(model, worktreeDir string) bool {
+	local, declared := openCodeDeclaredEndpointLocality(model, worktreeDir)
+	return declared && local
+}
+
 func openCodeDeclaredEndpointLocality(model, worktreeDir string) (local, declared bool) {
 	key, _, ok := strings.Cut(model, "/")
 	if !ok || key == "" {

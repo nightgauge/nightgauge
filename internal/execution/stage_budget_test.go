@@ -517,3 +517,39 @@ func TestStageCost(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenCodeDeclaredEndpointLocal: the stage timeout's locality (#2163)
+// follows the declared endpoint, like the stage cost.
+func TestOpenCodeDeclaredEndpointLocal(t *testing.T) {
+	isolateOpenCodeHome(t)
+	writeOpenCodeMachineConfig(t, `opencode:
+  endpoints:
+    - id: mtplx
+      provider: openai-compatible
+      base_url: http://127.0.0.1:8000/v1
+      self_hosted: true
+      limit:
+        context: 262144
+        output: 32000
+    - id: litellm
+      provider: openai-compatible
+      base_url: http://127.0.0.1:4001/v1
+      self_hosted: false
+      limit:
+        context: 131072
+        output: 8192
+`)
+	for _, tc := range []struct {
+		model string
+		want  bool
+	}{
+		{"mtplx/qwen-27b", true},
+		{"litellm/claude-sonnet-5", false},
+		{"mystery/some-model", false},
+		{"sonnet", false},
+	} {
+		if got := OpenCodeDeclaredEndpointLocal(tc.model, ""); got != tc.want {
+			t.Errorf("OpenCodeDeclaredEndpointLocal(%q) = %v, want %v", tc.model, got, tc.want)
+		}
+	}
+}
