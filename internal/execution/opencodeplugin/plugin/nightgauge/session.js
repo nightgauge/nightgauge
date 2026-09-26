@@ -1,6 +1,6 @@
 // session.js gives an OpenCode stage the same session-lifecycle coverage
 // Claude Code's hooks give a stage (#1641): compaction context re-injection,
-// post-compaction auto-continue suppression, idle stop-verification,
+// a bounded post-compaction auto-continue (#2180), idle stop-verification,
 // skill-usage telemetry and a rate-limited permission-ask notification. Every
 // export here is OPTIONAL from nightgauge.js's point of view
 // (optionalHooks): a missing or throwing function here degrades that one
@@ -348,21 +348,37 @@ export async function sessionCompacting(ctx, input, output) {
   output.context.push(stdout);
 }
 
-// compactionAutocontinue always disables the synthetic "Continue if you have
-// next steps..." user turn opencode 1.18.30 otherwise adds once a
-// compaction succeeds (ADR-022): the session ends at idle instead, and
-// unfinished work surfaces through the existing Go stage gates and #1643's
-// resume/retry path, never as a silent continuation a $0 local run could
-// loop on for hours with every USD guardrail inert. #1625's declared steps
-// cap is NOT itself a hard stop underneath this on 1.18.30 — a step at or
-// past the cap still executes a tool call rather than ending the turn (only
-// an extra assistant nudge message is added); ADR-022's "Session-lifecycle
-// events plugin" amendment measures this directly (13 loop steps against a
-// declared cap of 8). So this suppression, not the steps cap, is what
-// actually bounds a compacted session's runtime. There is nothing to spawn
-// here, only a value to set, so this cannot itself hang or fail.
+// COMPACTION_CONTINUE_MAX is how many synthetic "Continue if you have next
+// steps..." turns one session may take after a successful compaction
+// (#2180). opencode adds that turn once a compaction succeeds; without it a
+// one-shot `opencode run` ends at idle, and a stage that compacted mid-task
+// exits 0 with its deliverable unwritten (leg 1 run 12: feature-planning
+// compacted at 100k tokens and ended with no plan). Always suppressing it
+// (ADR-022, #1641) guarded against a $0 local run looping on
+// compact/continue for hours: the negative control logged 311+ loop steps
+// with no bound at all. A per-session cap keeps both: the task resumes after
+// each of the first COMPACTION_CONTINUE_MAX compactions, and a session that
+// needs more ends at idle exactly as before, where the Go stage gates, the
+// turn and wall-clock budgets and #2176's stall watchdog take over.
+export const COMPACTION_CONTINUE_MAX = 2;
+
+// compactionContinues counts the continue turns each session was allowed.
+const compactionContinues = new Map();
+
+// compactionAutocontinue allows the continue turn for a session's first
+// COMPACTION_CONTINUE_MAX compactions and disables it after that. There is
+// nothing to spawn here, only a value to set, so this cannot itself hang or
+// fail.
 export async function compactionAutocontinue(ctx, input, output) {
-  if (output) output.enabled = false;
+  if (!output) return;
+  const sessionID = (input && input.sessionID) || "";
+  const used = compactionContinues.get(sessionID) || 0;
+  if (used >= COMPACTION_CONTINUE_MAX) {
+    output.enabled = false;
+    return;
+  }
+  compactionContinues.set(sessionID, used + 1);
+  output.enabled = true;
 }
 
 // shouldNotify enforces the per-session, per-60s notify throttle: the first

@@ -202,6 +202,22 @@ func beginStageContext(adapterName, outputFile, runID string) stageContextProbe 
 	return p
 }
 
+// compactionNote names the context compactions of an OpenCode attempt that
+// ended with no state change (#2180). A session that compacted more often
+// than the plugin resumes it (session.js COMPACTION_CONTINUE_MAX) ends at
+// idle with its task unfinished; the note tells that apart from a model that
+// simply stopped. It is empty for any other attempt.
+func (p stageContextProbe) compactionNote() string {
+	if !p.eventsOK {
+		return ""
+	}
+	n := max(openCodeCompactionCount(p.eventsPath)-p.compactionsBefore, 0)
+	if n == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (after %d context compaction(s): the session ended at idle once it had compacted more often than the plugin resumes it, or the model stopped after a resume)", n)
+}
+
 // record replaces the stage's context entry with this attempt's: the
 // result's peak, the dispatch window and the compaction delta for a session
 // attempt, and an empty entry, which clears the stage's, for an attempt that
@@ -6434,7 +6450,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					// classifies as pr_merge_unmerged — its matcher runs
 					// first and the gate reason phrasing is preserved here).
 					if gateRes.Kind == gates.KindNoOp {
-						err = fmt.Errorf("premature turn end: stage exited 0 with no state change (gate no-op): %s", gateRes.Reason)
+						err = fmt.Errorf("premature turn end: stage exited 0 with no state change (gate no-op): %s%s", gateRes.Reason, ctxProbe.compactionNote())
 					} else {
 						err = fmt.Errorf("stage gate failed: %s", gateRes.Reason)
 					}

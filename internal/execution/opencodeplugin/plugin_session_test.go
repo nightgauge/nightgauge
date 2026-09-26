@@ -217,30 +217,41 @@ func TestSessionCompactingSkipsWithoutBin(t *testing.T) {
 
 // --- experimental.compaction.autocontinue ---
 
-// TestCompactionAutocontinueAlwaysDisables: whatever output.enabled starts
-// as, this hook sets it to false, unconditionally and without spawning
-// anything.
-func TestCompactionAutocontinueAlwaysDisables(t *testing.T) {
+// TestCompactionAutocontinueBoundedPerSession: a session's first two
+// compactions keep the synthetic continue turn, so a stage that compacted
+// mid-task resumes it (#2180); the third and later are disabled, so a
+// compact/continue loop still ends. Each session counts on its own, and the
+// hook never spawns anything.
+func TestCompactionAutocontinueBoundedPerSession(t *testing.T) {
 	node := requireNode(t)
 	root := t.TempDir()
 
-	calls := []sessionCall{{
-		Fn:     "compactionAutocontinue",
-		Input:  map[string]any{"sessionID": "ses_1", "overflow": false},
-		Output: map[string]any{"enabled": true},
-	}}
+	call := func(session string) sessionCall {
+		return sessionCall{
+			Fn:     "compactionAutocontinue",
+			Input:  map[string]any{"sessionID": session, "overflow": false},
+			Output: map[string]any{"enabled": true},
+		}
+	}
+	calls := []sessionCall{call("ses_1"), call("ses_1"), call("ses_1"), call("ses_2"), call("ses_1")}
+	want := []bool{true, true, false, true, false}
 	results := runSessionHarness(t, node, root, calls, nil)
-	if results[0].Threw {
-		t.Fatalf("compactionAutocontinue threw: %s", results[0].Message)
+	if len(results) != len(calls) {
+		t.Fatalf("got %d results, want %d", len(results), len(calls))
 	}
-	var output struct {
-		Enabled bool `json:"enabled"`
-	}
-	if err := json.Unmarshal(results[0].Output, &output); err != nil {
-		t.Fatal(err)
-	}
-	if output.Enabled {
-		t.Error("output.enabled is still true; want the synthetic continue turn disabled")
+	for i, r := range results {
+		if r.Threw {
+			t.Fatalf("call %d: compactionAutocontinue threw: %s", i, r.Message)
+		}
+		var output struct {
+			Enabled bool `json:"enabled"`
+		}
+		if err := json.Unmarshal(r.Output, &output); err != nil {
+			t.Fatal(err)
+		}
+		if output.Enabled != want[i] {
+			t.Errorf("call %d: output.enabled = %v, want %v", i, output.Enabled, want[i])
+		}
 	}
 }
 

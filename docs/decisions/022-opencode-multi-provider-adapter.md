@@ -3192,6 +3192,27 @@ issue's notes, this records what was built.
   stage's history record. With no healthy endpoint left the stage fails with
   the environmental kind, naming the endpoint ids tried.
 
+## A compacted session resumes, a bounded number of times (amendment 2026-09-26, #2180)
+
+The session-lifecycle plugin disabled OpenCode's synthetic "Continue if you
+have next steps" turn after every compaction, and said that unfinished work
+would surface through the stage gates and #1643's resume path. For a stage
+that compacts in the middle of its task, nothing resumes it. In #1659 leg 1
+run 12, feature-planning compacted at about 100k tokens, the summary step
+ended the session, `opencode run` exited 0 with no plan written, and the gate
+failed the stage as `premature_turn_end`.
+
+**Decision.** `compactionAutocontinue` allows the continue turn for a
+session's first `COMPACTION_CONTINUE_MAX` (2) compactions and disables it
+after that. The runaway this suppression existed for stays bounded. Against
+`compaction_stub_test.go`'s fixture on the pinned 1.18.30, the run compacts
+three times, resumes after the first two, ends at the third, and logs 35 loop
+steps, against 311+ with no bound. The test now asserts those three
+compactions and two synthetic turns, and a loop-step bound of 40. A no-op
+failure of an attempt that compacted names its compaction count in the
+reason. The stage's turn and wall-clock budgets and #2176's stall watchdog
+still bound a resumed session.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special
