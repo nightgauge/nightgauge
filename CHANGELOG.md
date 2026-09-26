@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **OpenCode stages now record the model that served them, however long the
+  session (#2165).** After any stage of more than a few dozen steps, the usage
+  fold printed a drift line ending in
+  `exporting the session failed: the export is not the JSON this parser reads`,
+  and the record only assumed the dispatched model. OpenCode prints a session
+  export in one write and exits at once, and through a pipe only the first
+  64 KiB arrived, on opencode 1.18.30 and 1.18.32 alike. The fold's `opencode`
+  processes now print into an unnamed temporary file, so the export arrives
+  whole, and a long subagent session's usage is no longer marked partial.
+
 - **A stage on a declared self-hosted OpenCode endpoint now gets the local
   stage timeout (#2163).** An endpoint declared under
   `opencode.endpoints[]` with its own id, such as an MTPLX or vLLM server,

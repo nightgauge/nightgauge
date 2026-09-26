@@ -152,8 +152,8 @@ esac
 // so after exit every descendant session of the stage's own session is
 // exported and its info.tokens and info.cost are added: here two children
 // and a grandchild, while a session of another stage in the same run root is
-// not. The exports stay in memory: nothing is written under the run's root or
-// the stage's directory.
+// not. No export is kept: nothing is written under the run's root or the
+// stage's directory.
 func TestOpenCodeChildUsageFold(t *testing.T) {
 	const parent = "ses_fixture0000000000000000001"
 	fakeDir := t.TempDir()
@@ -232,6 +232,57 @@ esac
 	}
 	if after := treeListing(t, runDir); strings.Join(after, "\n") != strings.Join(before, "\n") {
 		t.Errorf("the fold wrote under the run's root:\nbefore %q\nafter  %q", before, after)
+	}
+}
+
+// TestOpenCodeFoldReadsAnExportLongerThanAPipe: OpenCode prints an export
+// with a single write and calls process.exit() at once, and its runtime
+// writes only what stdout takes without blocking. Into a pipe that is 64 KiB,
+// and the rest is dropped at the exit, so the export of every real stage came
+// back cut short and the served model fell back to the dispatched one
+// (#2165). The fake does the same with one non-blocking write of a 3 MiB
+// export: both the stage's own export and a subagent's are read whole. The
+// helper's output file never has a name once opencode starts, so none is
+// left in TMPDIR.
+func TestOpenCodeFoldReadsAnExportLongerThanAPipe(t *testing.T) {
+	if _, err := exec.LookPath("perl"); err != nil {
+		t.Fatalf("perl makes the fake's single non-blocking write: %v", err)
+	}
+	tmp := t.TempDir()
+	t.Setenv("TMPDIR", tmp)
+	const parent = "ses_fixture0000000000000000001"
+	dir := t.TempDir()
+	parts := strings.TrimSuffix(strings.Repeat(`{"type":"text","text":"[redacted:text:prt_x]"},`, 1<<16), ",")
+	long := strings.Replace(sessionExport(1000, 100, 10, 50, 5, 0.5, "lmstudio", "qwen/qwen3.8-27b"),
+		`"parts":[]`, `"parts":[`+parts+`]`, 1)
+	if len(long) < 2<<20 {
+		t.Fatalf("the export is %d bytes, not the 3 MiB this case needs", len(long))
+	}
+	exportFile := filepath.Join(dir, "export.json")
+	if err := os.WriteFile(exportFile, []byte(long), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bin := writeFakeOpenCode(t, fmt.Sprintf(`case "$1" in
+--version) echo 1.18.32 ;;
+db) echo '[{"id":"ses_childLong","parent_id":"%s"}]' ;;
+export) exec perl -MFcntl -MPOSIX -e 'open(my $f, "<", $ARGV[0]) or die; local $/; my $b = <$f>;
+  fcntl(STDOUT, F_SETFL, fcntl(STDOUT, F_GETFL, 0) | O_NONBLOCK) or die;
+  syswrite(STDOUT, $b); POSIX::_exit(0)' %q ;;
+esac
+`, parent, exportFile))
+	stream := &OpenCodeStream{SessionID: parent}
+	res := testFold(bin, dir).run(context.Background(), stream, "ollama/qwen3-coder:30b")
+	if want := (OpenCodeServedModel{"lm-studio", "lm-studio/qwen/qwen3.8-27b", "ollama/qwen3-coder:30b", "lmstudio"}); res.served != want {
+		t.Errorf("served = %+v, want the export's %+v", res.served, want)
+	}
+	if res.children.Input != 1000 || res.children.Output != 100 || res.childCost != 0.5 {
+		t.Errorf("children input/output/cost = %d/%d/%v, want the subagent export's 1000/100/0.5", res.children.Input, res.children.Output, res.childCost)
+	}
+	if markers := stream.DriftMarkers(); res.partial || len(markers) != 0 {
+		t.Errorf("partial = %v, drift = %q; want a complete fold", res.partial, markers)
+	}
+	if left := treeListing(t, tmp); len(left) != 1 {
+		t.Errorf("the fold left files in TMPDIR: %q", left[1:])
 	}
 }
 

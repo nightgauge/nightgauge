@@ -8,8 +8,9 @@
 // process group under a timeout, from the run's own root directory, with
 // --pure, and with only the variables that point it at the run's root
 // (openCodeHelperEnv): it reads the run's session database, loads no plugin,
-// and holds no credential. A failure never fails the stage: it marks usage
-// partial and leaves a drift marker.
+// and holds no credential. Its stdout is an unnamed file, never a pipe, which
+// would cut a long export short (helper). A failure never fails the stage: it
+// marks usage partial and leaves a drift marker.
 package execution
 
 import (
@@ -862,7 +863,7 @@ func (f openCodeFold) descendants(ctx context.Context, session string) ([]string
 }
 
 // sessionUsage reads a session's info.tokens and info.cost from its sanitized
-// export, and nothing else of it. The export is held in memory only.
+// export, and nothing else of it. Nothing of the export is kept.
 func (f openCodeFold) sessionUsage(ctx context.Context, session string) (OpenCodeTokens, float64, error) {
 	out, err := f.helper(ctx, openCodeExportArgs(session)...)
 	if err != nil {
@@ -934,7 +935,17 @@ var errHelperTimedOut = errors.New("timed out and was killed")
 // helper runs one opencode process: in its own process group, which is
 // killed whole when the timeout fires or the process exits leaving children;
 // with stdin closed; with the fold's environment (openCodeHelperEnv) and
-// directory (the run's root); its output held in memory only, and capped.
+// directory (the run's root); its output read into memory, and capped.
+//
+// Its stdout is an unnamed temporary file, never a pipe (#2165). OpenCode
+// prints an export or a query result with a single write and then calls
+// process.exit(). Into a pipe, its runtime writes only what the pipe accepts
+// at once (64 KiB on macOS) and drops the rest at that exit, so the export of
+// any session longer than that arrived cut short and failed to parse, on
+// 1.18.30 and 1.18.32 alike. A write to a regular file is complete before the
+// process exits. The file is unlinked before the process starts, so nothing
+// of the output outlives this call under any name, and nothing is written
+// under the run's root.
 func (f openCodeFold) helper(ctx context.Context, args ...string) ([]byte, error) {
 	timeout := f.timeout
 	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < timeout {
@@ -942,6 +953,14 @@ func (f openCodeFold) helper(ctx context.Context, args ...string) ([]byte, error
 	}
 	if timeout <= 0 {
 		return nil, fmt.Errorf("opencode %s: the fold's time budget is spent", args[0])
+	}
+	out, err := os.CreateTemp("", "nightgauge-opencode-fold-*")
+	if err != nil {
+		return nil, fmt.Errorf("opencode %s: create its output file: %w", args[0], err)
+	}
+	defer out.Close()
+	if err := os.Remove(out.Name()); err != nil {
+		return nil, fmt.Errorf("opencode %s: unlink its output file: %w", args[0], err)
 	}
 	hctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -951,37 +970,27 @@ func (f openCodeFold) helper(ctx context.Context, args ...string) ([]byte, error
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = time.Second
-	out := &cappedBuffer{max: openCodeHelperMaxOutput}
 	cmd.Stdout = out
-	err := cmd.Run()
+	err = cmd.Run()
 	if cmd.Process != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
+	info, statErr := out.Stat()
 	switch {
 	case errors.Is(hctx.Err(), context.DeadlineExceeded):
 		return nil, fmt.Errorf("opencode %s %w after %s", args[0], errHelperTimedOut, timeout.Round(time.Millisecond))
-	case out.overflow:
-		return nil, fmt.Errorf("opencode %s printed more than %d bytes", args[0], out.max)
+	case statErr != nil:
+		return nil, fmt.Errorf("opencode %s: read its output: %w", args[0], statErr)
+	case info.Size() > openCodeHelperMaxOutput:
+		return nil, fmt.Errorf("opencode %s printed more than %d bytes", args[0], openCodeHelperMaxOutput)
 	case err != nil:
 		return nil, fmt.Errorf("opencode %s: %w", args[0], err)
 	}
-	return out.Bytes(), nil
-}
-
-// cappedBuffer keeps at most max bytes and notes that more arrived.
-type cappedBuffer struct {
-	bytes.Buffer
-	max      int
-	overflow bool
-}
-
-func (b *cappedBuffer) Write(p []byte) (int, error) {
-	if room := b.max - b.Len(); len(p) > room {
-		b.overflow = true
-		if room > 0 {
-			b.Buffer.Write(p[:room])
-		}
-		return len(p), nil
+	// The process shares the file's offset, so the output is read from its
+	// start rather than from where the process left the offset.
+	printed := make([]byte, info.Size())
+	if _, err := out.ReadAt(printed, 0); err != nil {
+		return nil, fmt.Errorf("opencode %s: read its output: %w", args[0], err)
 	}
-	return b.Buffer.Write(p)
+	return printed, nil
 }
