@@ -212,6 +212,11 @@ type RunResult struct {
 	// not have the shape it was written against, each prefixed
 	// "[opencode-drift]". They are never success evidence.
 	DriftMarkers []string
+	// RecoverableExit is true when the CLI exited non-zero but every error
+	// the stream showed was one the session recovered from (#2168), such as
+	// a rejected tool call followed by further completed steps. The
+	// scheduler then runs the stage's post-condition gate, which decides.
+	RecoverableExit bool
 
 	// Cancelled is true when execution.Manager itself requested this exit —
 	// CancelWithGrace/StopExecution SIGTERM'd the process and it left

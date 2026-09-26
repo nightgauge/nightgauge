@@ -1849,3 +1849,36 @@ func TestOpenCodeSharedExpectations(t *testing.T) {
 		})
 	}
 }
+
+// TestOpenCodeStreamRejectionRecovery (#2168): a rejection followed by a
+// completed call and a finished step is recovered; one with no completed
+// call after it, or no finished step after that call, is terminal.
+func TestOpenCodeStreamRejectionRecovery(t *testing.T) {
+	ev := openCodeSyntheticEvent
+	for _, tc := range []struct {
+		name        string
+		lines       []string
+		terminal    bool
+		recovered   int
+		recoverable bool
+	}{
+		{"run-9 shape", strings.Split(strings.TrimSpace(openCodeRun9Stream()), "\n"), false, 1, true},
+		{"rejection last", []string{ev("step_start", "", "", ""), ev("tool_use", "bash", "error", openCodeRejectedToolError), ev("step_finish", "", "tool-calls", "")}, true, 0, false},
+		{"completed call but its step never finished", []string{ev("step_start", "", "", ""), ev("tool_use", "bash", "error", openCodeRejectedToolError), ev("step_finish", "", "tool-calls", ""), ev("tool_use", "bash", "completed", "")}, true, 0, false},
+		{"recovered then rejected again", append(strings.Split(strings.TrimSpace(openCodeRun9Stream()), "\n"), ev("tool_use", "edit", "error", openCodeRejectedToolError)), true, 1, false},
+		{"no rejection", []string{ev("step_start", "", "", ""), ev("step_finish", "", "stop", "")}, false, 0, true},
+	} {
+		acc := &TokenAccumulator{}
+		for _, l := range tc.lines {
+			acc.ParseOpenCodeStreamLine(l)
+		}
+		s := acc.OpenCode()
+		if s.TerminalRejection() != tc.terminal || s.RecoveredRejections != tc.recovered || s.RecoverableExit() != tc.recoverable {
+			t.Errorf("%s: terminal=%v recovered=%d recoverable=%v, want %v %d %v", tc.name,
+				s.TerminalRejection(), s.RecoveredRejections, s.RecoverableExit(), tc.terminal, tc.recovered, tc.recoverable)
+		}
+		if tc.name == "recovered then rejected again" && s.RejectedTool != "edit" {
+			t.Errorf("%s: RejectedTool = %q, want the terminal rejection's own tool", tc.name, s.RejectedTool)
+		}
+	}
+}

@@ -1792,3 +1792,88 @@ func TestRunRecordEndpointLabelNoHost(t *testing.T) {
 		t.Errorf("result.Stderr does not show where the address was redacted: %q", res.Stderr)
 	}
 }
+
+// openCodeSyntheticEvent builds one synthetic `opencode run --format json`
+// line for the #2168 tests. The shape follows the captured fixtures; nothing
+// here comes from a real run.
+func openCodeSyntheticEvent(kind, tool, status, errText string) string {
+	const sid = "ses_synthetic2168"
+	switch kind {
+	case "step_start":
+		return `{"type":"step_start","sessionID":"` + sid + `","part":{"type":"step-start"}}`
+	case "step_finish":
+		return `{"type":"step_finish","sessionID":"` + sid + `","part":{"type":"step-finish","reason":"` + status + `","cost":0,"tokens":{"input":10,"output":5,"reasoning":0,"cache":{"read":0,"write":0}}}}`
+	case "text":
+		return `{"type":"text","sessionID":"` + sid + `","part":{"type":"text","text":"done"}}`
+	}
+	errJSON, _ := json.Marshal(errText)
+	return `{"type":"tool_use","sessionID":"` + sid + `","part":{"type":"tool","tool":"` + tool + `","state":{"status":"` + status + `","error":` + string(errJSON) + `}}}`
+}
+
+// openCodeRun9Stream is the #1659 leg 1 run 9 shape (#2168): an early bash
+// call rejected, the model continuing with completed calls over several
+// steps, and a final text step. Stream errors live on stderr.
+func openCodeRun9Stream() string {
+	lines := []string{
+		openCodeSyntheticEvent("step_start", "", "", ""),
+		openCodeSyntheticEvent("tool_use", "bash", "error", openCodeRejectedToolError),
+		openCodeSyntheticEvent("step_finish", "", "tool-calls", ""),
+		openCodeSyntheticEvent("step_start", "", "", ""),
+		openCodeSyntheticEvent("tool_use", "bash", "completed", ""),
+		openCodeSyntheticEvent("step_finish", "", "tool-calls", ""),
+		openCodeSyntheticEvent("step_start", "", "", ""),
+		openCodeSyntheticEvent("tool_use", "write", "completed", ""),
+		openCodeSyntheticEvent("step_finish", "", "tool-calls", ""),
+		openCodeSyntheticEvent("step_start", "", "", ""),
+		openCodeSyntheticEvent("text", "", "", ""),
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
+const openCodeRun9Stderr = `level=ERROR message="stream error" error.error.message="synthetic GPU fault" error.error.type=server_error
+level=ERROR message="stream error" error.error.message="synthetic GPU fault" error.error.type=server_error
+`
+
+// TestOpenCodeRecoveredRejectionIsNotTerminal (#2168): an early rejected
+// call the session recovered from, recovered stream errors and exit 1 carry
+// no permission marker and are marked recoverable, so the scheduler lets the
+// post-condition gate decide.
+func TestOpenCodeRecoveredRejectionIsNotTerminal(t *testing.T) {
+	result, _ := openCodeStageRun(t, openCodeRun9Stream(), openCodeRun9Stderr, 1, []string{"Bash"}, nil)
+	if strings.Contains(result.Stderr, PermissionRejectedMarker) || strings.Contains(result.Stderr, PermissionDeniedMarker) {
+		t.Errorf("a recovered rejection must not classify a permission failure; stderr = %q", result.Stderr)
+	}
+	if result.ExitCode != 1 {
+		t.Errorf("exit code = %d, want the process's own 1", result.ExitCode)
+	}
+	if !result.RecoverableExit {
+		t.Error("exit 1 with only recovered errors must be marked RecoverableExit")
+	}
+}
+
+// TestOpenCodeTerminalRejectionStaysTerminal (#2168): a rejection that is
+// the session's last tool activity still classifies
+// adapter_permission_rejected, and the exit is not recoverable.
+func TestOpenCodeTerminalRejectionStaysTerminal(t *testing.T) {
+	lines := []string{
+		openCodeSyntheticEvent("step_start", "", "", ""),
+		openCodeSyntheticEvent("tool_use", "bash", "completed", ""),
+		openCodeSyntheticEvent("step_finish", "", "tool-calls", ""),
+		openCodeSyntheticEvent("step_start", "", "", ""),
+		openCodeSyntheticEvent("tool_use", "bash", "error", openCodeRejectedToolError),
+		openCodeSyntheticEvent("step_finish", "", "tool-calls", ""),
+	}
+	stream := strings.Join(lines, "\n") + "\n"
+	for _, exit := range []int{0, 1} {
+		result, _ := openCodeStageRun(t, stream, "", exit, []string{"Bash"}, nil)
+		if want := PermissionRejectedMarker + " tool=bash\n"; !strings.HasSuffix(result.Stderr, want) {
+			t.Errorf("exit %d: stderr = %q, want it to end with %q", exit, result.Stderr, want)
+		}
+		if result.ExitCode == 0 {
+			t.Errorf("exit %d: a terminal rejection must not read as success", exit)
+		}
+		if result.RecoverableExit {
+			t.Errorf("exit %d: a terminal rejection must not be recoverable", exit)
+		}
+	}
+}
