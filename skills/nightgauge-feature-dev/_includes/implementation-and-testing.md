@@ -62,11 +62,10 @@ writing the signal file; the skill only reacts to it.
 
 ### Step 3.1: Read Existing Files
 
-For each file to modify (from plan):
-
-1. Read current content
-2. Understand existing patterns
-3. Identify insertion points
+For each file to modify (from plan), read only the range around the
+insertion point the plan names (offset/limit), not the whole file. Widen the
+read only when that range does not show the patterns you need. Do not re-read
+a range you have already read in this session.
 
 ### Step 3.2: Analyze File Dependencies
 

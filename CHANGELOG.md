@@ -55,6 +55,21 @@ changelog, and the release workflow refuses a tag that does not.
   fixture, against 311+ unbounded). A no-op failure after compaction names
   the compaction count in its reason.
 
+- **feature-dev starts from the plan instead of re-exploring the code**
+  (#2181). In #1659 leg 1 run 11 feature-dev had the plan only by path and
+  spent 50 minutes re-reading files the plan had summarised. Its prompt now
+  carries a Planning hand-off: the plan's text (up to 24 KB) and the
+  planning context's files to modify, create and read, as quoted data. The
+  skill no longer tells it to pre-read `files_to_read` or whole files to
+  modify; it reads only the ranges it edits.
+
+- **feature-dev's inferred phases no longer run ahead of the work** (#2181).
+  A status move or build made while the skill validated its environment
+  advanced the stage to sync-project-status and reported thirteen phases
+  passed with no file changed. The testing, write-dev-context and
+  sync-project-status rules now fire only after an implementation edit, in
+  Go and in the SDK.
+
 - **A stage the route skips no longer costs the next stage its deterministic
   arm** (#1968): a docs-only or config-only route skips feature-validate, and
   pr-create then punted `missing-validate-context` to the LLM. The scheduler

@@ -66,6 +66,14 @@ func TestPhaseInferer_Monotonic(t *testing.T) {
 func TestPhaseInferer_DevContextWriteIsNotImplementation(t *testing.T) {
 	inf := NewPhaseInferer("feature-dev")
 	inf.Start()
+	// Before any implementation edit it is not implementation, and not yet
+	// write-dev-context either (#2181).
+	if m, _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": ".nightgauge/pipeline/dev-42.json"}); ok {
+		t.Fatalf("dev-context write before implementation advanced to %s/%d", m.Name, m.Index)
+	}
+	if _, _, ok := inf.ObserveToolUse("Edit", map[string]any{"file_path": "src/feature.ts"}); !ok {
+		t.Fatal("an implementation edit did not advance")
+	}
 	m, _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": ".nightgauge/pipeline/dev-42.json"})
 	if !ok {
 		t.Fatal("expected advancement")
@@ -282,5 +290,38 @@ func TestPhaseInferer_OpenCodeFixtureAdvancesOnEdit(t *testing.T) {
 	}
 	if inf.cursor != 8 {
 		t.Fatalf("cursor after the fixture = %d, want 8", inf.cursor)
+	}
+}
+
+// TestPhaseInferer_LatePhasesWaitForImplementation: a status move and a build
+// made while feature-dev validates its environment do not advance it past
+// implementation (#2181). In #1659 leg 1 run 11 a phase-1 `move-status`
+// jumped the stage to sync-project-status and reported thirteen phases passed
+// with no file changed.
+func TestPhaseInferer_LatePhasesWaitForImplementation(t *testing.T) {
+	inf := NewPhaseInferer("feature-dev")
+	inf.Start()
+	if _, _, ok := inf.ObserveToolUse("Read", map[string]any{"file_path": "PLAN.md"}); !ok {
+		t.Fatal("a read did not reach read-planning-context")
+	}
+	for _, c := range []struct {
+		tool  string
+		input map[string]any
+	}{
+		{"Bash", map[string]any{"command": "nightgauge project move-status 42 'In Progress'"}},
+		{"Bash", map[string]any{"command": "go build ./..."}},
+		{"Write", map[string]any{"file_path": ".nightgauge/pipeline/dev-42.json"}},
+	} {
+		if m, passed, ok := inf.ObserveToolUse(c.tool, c.input); ok {
+			t.Fatalf("%s %v before any implementation edit advanced to %s/%d (passing %d phases)", c.tool, c.input, m.Name, m.Index, len(passed))
+		}
+	}
+	m, _, ok := inf.ObserveToolUse("Edit", map[string]any{"file_path": "internal/github/client.go"})
+	if !ok || m.Index != 8 {
+		t.Fatalf("an implementation edit did not reach implementation: %+v %v", m, ok)
+	}
+	m, _, ok = inf.ObserveToolUse("Bash", map[string]any{"command": "nightgauge project move-status 42 Done"})
+	if !ok || m.Index != 15 {
+		t.Fatalf("a status move after implementation did not reach sync-project-status: %+v %v", m, ok)
 	}
 }

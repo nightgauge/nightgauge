@@ -45,6 +45,11 @@ describe("createPhaseInference — feature-dev", () => {
   it("does NOT treat a .nightgauge bookkeeping write as implementation", () => {
     const inf = createPhaseInference("feature-dev");
     inf.start();
+    // Before any implementation edit it advances nothing (#2181).
+    expect(
+      inf.observeToolUse("Write", { file_path: ".nightgauge/pipeline/dev-3760.json" })
+    ).toBeNull();
+    inf.observeToolUse("Write", { file_path: "src/foo.ts" }); // implementation
     const m =
       inf.observeToolUse("Write", {
         file_path: ".nightgauge/pipeline/dev-3760.json",
@@ -66,9 +71,20 @@ describe("createPhaseInference — feature-dev", () => {
     expect(m?.name).toBe("testing");
   });
 
+  it("does not advance past implementation on an early status move or build (#2181)", () => {
+    const inf = createPhaseInference("feature-dev");
+    inf.start();
+    inf.observeToolUse("Read", { file_path: "PLAN.md" });
+    expect(
+      inf.observeToolUse("Bash", { command: "nightgauge project move-status 3760" })
+    ).toBeNull();
+    expect(inf.observeToolUse("Bash", { command: "go build ./..." })).toBeNull();
+  });
+
   it("advances to sync-project-status on a move-status command", () => {
     const inf = createPhaseInference("feature-dev");
     inf.start();
+    inf.observeToolUse("Write", { file_path: "src/foo.ts" }); // implementation
     const m =
       inf.observeToolUse("Bash", { command: "nightgauge project move-status 3760" })?.marker ??
       null;
