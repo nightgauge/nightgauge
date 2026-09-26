@@ -323,7 +323,8 @@ content may have been revised by `/nightgauge-feature-planning`.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-# Always re-read the plan file directly — do not rely on planning-{N}.json approach field
+# The plan file is authoritative over planning-{N}.json approach field. When the prompt
+# quotes it in a Planning hand-off section, use that copy instead of reading it again.
 PLAN_FILE=$(jq -r '.plan_file' ".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json" 2>/dev/null)
 if [ -z "$PLAN_FILE" ] || [ ! -f "$PLAN_FILE" ]; then
   PLAN_FILE=$(ls .nightgauge/plans/${ISSUE_NUMBER}-*.md 2>/dev/null | head -1)

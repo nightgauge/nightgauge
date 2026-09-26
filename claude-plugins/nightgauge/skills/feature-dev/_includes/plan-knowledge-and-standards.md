@@ -17,14 +17,15 @@ Loading).
 
 ### Step 1.0: Pre-load Context Files
 
-If `files_to_read` is present in the planning context, read all listed files
-before beginning implementation. This provides the agent with full context for
-imports, patterns, and types without mid-implementation discovery.
+feature-planning already explored the code. When the prompt carries a
+**Planning hand-off** section, it quotes the plan and the planning context's
+file lists: start from those targets, and do not re-read the plan or the
+planning context from disk (#2181).
 
-For each file in `files_to_read`:
-
-1. Read the file content
-2. Note key exports, types, and patterns
+Do not pre-read `files_to_read` end to end. Read a listed file only when you
+are about to edit it or the plan does not record what you need, and then read
+only the relevant range (offset/limit). On a local model every whole-file
+read is carried in every later request, so a speculative read costs minutes.
 
 If a listed file does not exist, log a warning and continue — the file may have
 been renamed or removed since planning.

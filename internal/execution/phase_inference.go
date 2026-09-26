@@ -51,6 +51,13 @@ var (
 type inferenceRule struct {
 	index int
 	match func(toolName string, input map[string]any) bool
+	// after, when set, is the phase the run must already have reached for
+	// this rule to fire. A late phase's tool call also happens early: the
+	// skill moves the issue's status (`gh project`) and builds (`go build`)
+	// while it validates its environment, so without this a status move
+	// made in phase 1 advanced the stage to sync-project-status and marked
+	// every phase between as passed with no file changed (#2181).
+	after int
 }
 
 func inputStr(input map[string]any, key string) string {
@@ -82,13 +89,15 @@ func stageRules(stage string) []inferenceRule {
 				}
 				return path != "" && !pipelinePathRe.MatchString(path) && !devContextRe.MatchString(path)
 			}},
-			{index: 9, match: func(name string, input map[string]any) bool {
+			// Tests, the dev handoff and the status sync each count only once
+			// an implementation edit has been seen (after: 8).
+			{index: 9, after: 8, match: func(name string, input map[string]any) bool {
 				return name == "Bash" && testBuildRe.MatchString(inputStr(input, "command"))
 			}},
-			{index: 14, match: func(name string, input map[string]any) bool {
+			{index: 14, after: 8, match: func(name string, input map[string]any) bool {
 				return editToolRe.MatchString(name) && devContextRe.MatchString(inputStr(input, "file_path"))
 			}},
-			{index: 15, match: func(name string, input map[string]any) bool {
+			{index: 15, after: 8, match: func(name string, input map[string]any) bool {
 				return name == "Bash" && statusSyncRe.MatchString(inputStr(input, "command"))
 			}},
 		}
@@ -230,7 +239,7 @@ func (p *PhaseInferer) ObserveToolUse(toolName string, input map[string]any) (*P
 	}
 	best := -1
 	for _, r := range p.rules {
-		if r.index > best && r.index > p.cursor && r.match(toolName, input) {
+		if r.index > best && r.index > p.cursor && (r.after == 0 || p.cursor >= r.after) && r.match(toolName, input) {
 			best = r.index
 		}
 	}

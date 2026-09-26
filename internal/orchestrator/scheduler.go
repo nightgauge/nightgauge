@@ -5723,6 +5723,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 
+		// Planning hand-off (#2181): feature-dev starts from the plan's text
+		// and file lists instead of re-reading what planning summarised. ""
+		// (no-op) when planning was fast-tracked or its plan is unreadable.
+		if stage == state.StageFeatureDev && effectiveContextType == "planning" {
+			prompt += renderPlanHandoffForPrompt(ws, item.Number)
+		}
+
 		// Determine output context file path (worktree-rooted). contextFile
 		// (input) was already resolved above alongside effectiveContextType.
 		var outputFile string

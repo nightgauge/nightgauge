@@ -39,6 +39,14 @@ interface PhaseInferenceRule {
   index: number;
   /** Predicate over an observed tool call. Returns true when this phase is reached. */
   match: (toolName: string, toolInput: unknown) => boolean;
+  /**
+   * The phase the run must already have reached for this rule to fire. A late
+   * phase's tool call also happens early (a status move or build while the
+   * skill validates its environment), so without it a phase-1 status move
+   * jumped feature-dev to sync-project-status with no file changed (#2181).
+   * Mirrors the Go rule's `after`.
+   */
+  after?: number;
 }
 
 /** Safely read a string field from an unknown tool-input object. */
@@ -169,18 +177,21 @@ const STAGE_RULES: Partial<Record<ExecutionStage, PhaseInferenceRule[]>> = {
     // Running the test/build suite → testing.
     {
       index: 9,
+      after: 8,
       match: (name, input) =>
         name === "Bash" && isTestOrBuildCommand(inputString(input, "command")),
     },
     // Writing the downstream dev context handoff → write-dev-context.
     {
       index: 14,
+      after: 8,
       match: (name, input) =>
         EDIT_TOOLS.has(name) && isDevContextPath(inputString(input, "file_path")),
     },
     // Syncing project board status → sync-project-status.
     {
       index: 15,
+      after: 8,
       match: (name, input) => name === "Bash" && isStatusSyncCommand(inputString(input, "command")),
     },
   ],
@@ -364,7 +375,12 @@ export function createPhaseInference(stage: string): PhaseInference {
       if (!enabled || !rules) return null;
       let best = -1;
       for (const rule of rules) {
-        if (rule.index > best && rule.index > cursor && rule.match(toolName, toolInput)) {
+        if (
+          rule.index > best &&
+          rule.index > cursor &&
+          (rule.after === undefined || cursor >= rule.after) &&
+          rule.match(toolName, toolInput)
+        ) {
           best = rule.index;
         }
       }
