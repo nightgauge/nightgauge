@@ -688,10 +688,12 @@ type sigtermTrapAdapter struct{ ready string }
 
 func (sigtermTrapAdapter) Name() string { return "sigterm-trap-fake" }
 
-// The ready file is written only once the trap is installed, so the test can
-// wait for it instead of guessing how long sh takes to reach the builtin.
+// The ready file is written only once the trap is installed AND the background
+// sleep is in the process group, so the test can wait for it instead of guessing
+// how long sh takes. Writing it before `sleep 30 &` let a group SIGTERM land
+// before the fork: the late sleep missed it and held the pipes past the grace.
 func (a sigtermTrapAdapter) BuildCommand(adapters.RunOptions) (string, []string, map[string]string) {
-	return "sh", []string{"-c", `trap "echo received SIGTERM >&2; exit 0" TERM; : > "$0"; sleep 30 & wait`, a.ready}, nil
+	return "sh", []string{"-c", `trap "echo received SIGTERM >&2; exit 0" TERM; sleep 30 & : > "$0"; wait`, a.ready}, nil
 }
 
 func (sigtermTrapAdapter) UsesStdin() bool { return false }
