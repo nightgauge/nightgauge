@@ -494,6 +494,7 @@ export type HistoryStageDetail = z.infer<typeof HistoryStageDetailSchema>;
  *  - `issue_closed` — issue was already closed when pipeline started; non-failure (#3661)
  *  - `api_overloaded` — Anthropic API returned 529 "Overloaded"; transient, no pause (#3835)
  *  - `github_quota_low` — GitHub API rate-limit bucket below headroom at pipeline-start; transient, cooldown until reset (#3896)
+ *  - `model_stream_stalled` — a model request never answered past its endpoint's header/chunk timeout; transient, no pause (#2176)
  *  - `api_connection_lost` — Anthropic API transport drop (socket close / DNS blip mid-stage); transient, no pause (#4002)
  *  - `github_network_outage` — api.github.com unreachable at pipeline-start; transient, short global cooldown (#4002)
  *  - `github_rate_limited` — GitHub throttled a `gh` call mid-stage (secondary rate limit, emptied primary bucket, or 429); transient, short per-issue backoff, no global cooldown (#1391)
@@ -539,6 +540,7 @@ export const TerminalFailureKindSchema = z.enum([
   "issue_closed", // Issue #3661 — issue already closed when pipeline started (non-failure)
   "api_overloaded", // Issue #3835 — Anthropic 529 "Overloaded"; transient, retried without queue pause
   "github_quota_low", // Issue #3896 — GitHub API quota below headroom at pipeline-start; transient, cooldown until reset
+  "model_stream_stalled", // Issue #2176 — model request never answered; transient, retried without queue pause
   "api_connection_lost", // Issue #4002 — Anthropic API transport drop (socket close / DNS blip); transient, retried without queue pause
   "github_network_outage", // Issue #4002 — api.github.com unreachable at pipeline-start; transient, short global cooldown
   "github_rate_limited", // Issue #1391 — GitHub throttled a `gh` call mid-stage (secondary rate limit / emptied primary bucket / 429); transient, short per-issue backoff, no global cooldown

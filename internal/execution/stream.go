@@ -186,8 +186,9 @@ type TokenAccumulator struct {
 	// PeakStepInputTokens is the largest prompt one model step sent: its
 	// input plus its cache-read and cache-write tokens. The summed pools grow
 	// with every turn, so only this says how close a stage came to its
-	// context window. Only the opencode parser sees per-step usage; 0 means
-	// not observed.
+	// context window. The opencode parser and the Claude stream-json
+	// parser's assistant turns (#2178) see per-step usage; 0 means not
+	// observed.
 	PeakStepInputTokens int
 
 	// openCode is the opencode parser's per-run state (OpenCode).
@@ -276,6 +277,13 @@ func (acc *TokenAccumulator) addTurnUsage(id string, usage *TokenUsage) {
 	)
 	acc.turnTotal.CacheReadInput += raiseMax(&turn.CacheReadInput, usage.CacheReadInput)
 	acc.turns[id] = turn
+	// One turn's prompt is its input plus what it read from and wrote to the
+	// cache (#2178): the per-step size the opencode parser already records,
+	// so a claude-headless stage's peak context lands in the stage record
+	// too.
+	if prompt := turn.InputTokens + turn.CacheReadInput + turn.CacheCreationInput; prompt > acc.PeakStepInputTokens {
+		acc.PeakStepInputTokens = prompt
+	}
 	acc.updateFromUsage(&acc.turnTotal)
 }
 

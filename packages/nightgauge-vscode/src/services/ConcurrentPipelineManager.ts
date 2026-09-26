@@ -84,6 +84,10 @@ const HALT_SKIP_ENVIRONMENTAL: ReadonlySet<string> = new Set([
   // upstream-provider state, exactly like the quota and network entries beside
   // it, and nothing about the issue is at fault.
   "github_rate_limited",
+  // #2176 — a model request went silent past its endpoint's timeout and the
+  // Go manager stopped the stage. Go routes it with api_connection_lost:
+  // short per-issue backoff, no lifetime-cap increment, no pause.
+  "model_stream_stalled",
 ]);
 const HALT_SKIP_TRANSIENT_STALL: ReadonlySet<string> = new Set(["stall_kill"]);
 

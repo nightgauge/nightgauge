@@ -91,6 +91,20 @@ func (c *Classifier) Classify(stage string, exitCode int, stderr string) Classif
 		}
 	}
 
+	// A model request that never answered (#2176): execution.Manager's
+	// idle-stream watchdog marker. Checked before the stage-timeout marker and
+	// the network ladder. One request wedged, not the server or the issue, so
+	// a fresh dispatch is expected to succeed.
+	if strings.Contains(lower, "[model-stream-stalled]") {
+		return Classification{
+			Category:    CatTransient,
+			Severity:    SevLow,
+			Retryable:   true,
+			MaxRetries:  3,
+			Description: "model request stalled past the endpoint's header/chunk timeout — will retry",
+		}
+	}
+
 	// A stage stopped at its own stage timeout (#2171): execution.Manager's
 	// marker. Checked before the network ladder, whose bare `timeout` would
 	// otherwise call it a network error, and before the auth ladder. The stage

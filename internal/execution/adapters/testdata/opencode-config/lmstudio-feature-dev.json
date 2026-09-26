@@ -96,8 +96,8 @@
     "preserve_recent_tokens": 15000
   },
   "tool_output": {
-    "max_lines": 1000,
-    "max_bytes": 32768
+    "max_lines": 400,
+    "max_bytes": 8192
   },
   "share": "disabled",
   "autoupdate": false,

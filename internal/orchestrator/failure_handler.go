@@ -160,6 +160,14 @@ const (
 	// NO queue pause. A seconds-long Wi-Fi/DNS blip must not halt the
 	// autonomous queue and page the operator. Issue #4002.
 	TerminalKindApiConnectionLost = "api_connection_lost"
+	// TerminalKindModelStreamStalled is set when execution.Manager's
+	// idle-stream watchdog stops a stage whose model request went silent past
+	// its endpoint's header/chunk timeout while no tool ran (#2176). Distinct
+	// from stall_kill, a stage that stopped emitting while tools ran. The
+	// model server answers a fresh request, so it is retried like
+	// api_connection_lost: short escalating backoff, no lifetime-cap
+	// increment, no queue pause.
+	TerminalKindModelStreamStalled = "model_stream_stalled"
 	// TerminalKindGitHubNetworkOutage is set when the pipeline-start
 	// preflight cannot reach api.github.com at all (`gh auth status` exits
 	// non-zero with a connectivity error — DNS down, no route). The

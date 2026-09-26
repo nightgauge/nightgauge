@@ -14,6 +14,36 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- **Stage context is bounded by what the stage needs, not by the model's
+  restraint** (#2178). In #1659 leg 1 run 11, 74% of an OpenCode
+  feature-planning stage's context was tool output. Four changes:
+  - **Skill includes are supplied, not read.** A full stage render now
+    appends, once, every skill `_includes/` file a phase says to read now, and
+    points those directives at the appended copy. Includes are taken in
+    directive order up to 64 KB (`skillrender.DefaultIncludeBudget`); the rest,
+    and every include a phase reads only when needed, stay reads. This applies
+    to every adapter, so claude-headless benefits too. The compact profile is
+    unchanged, and so is `SKILL.md` on disk for interactive hosts.
+  - **Tighter tool-output bounds on a declared endpoint.** OpenCode's own
+    `tool_output` cut drops from 1000 lines / 32 KB to 400 lines / 8 KB for a
+    stage on a declared (local) endpoint; hosted models keep the old bounds.
+    A `read` is capped at 400 lines on a declared endpoint and 2000 hosted.
+    The Nightgauge plugin gives a read with no limit, or a larger one, the cap,
+    and OpenCode's read then reports the offset to continue from.
+    `opencode.tool_output` (`max_lines`, `max_bytes`, `read_max_lines`, and
+    `stages.<stage>` overrides) sets both on the machine tier.
+  - **The `task` tool is no longer offered to an OpenCode stage.** `gates.js`
+    refuses every task call (#1748), so the permission map now denies it
+    whatever the skill grants, and OpenCode drops it from the tool list. A
+    granted task also made OpenCode's truncation notice tell the model to
+    delegate to it.
+  - **A claude-headless stage records its peak context.** The Claude
+    stream parser now records the largest single turn's prompt, as the
+    OpenCode parser already did, so the stage record's
+    `peak_step_input_tokens` covers both adapters.
+
 ### Fixed
 
 - **A stage the route skips no longer costs the next stage its deterministic
@@ -48,6 +78,19 @@ changelog, and the release workflow refuses a tag that does not.
   `rule=""` and skipped feature-planning and feature-validate with nothing
   recording why. No matched rule now runs the full stage list and logs
   `no change rule matched`; a matched rule such as `docs-only` skips as before.
+
+- **A model request that never answers no longer hangs an OpenCode stage**
+  (#2176). OpenCode 1.18.32 does read the endpoint's `headerTimeout` and
+  `chunkTimeout` (milliseconds, as the per-run config writes them), but clears
+  the header timer once headers arrive and arms the chunk timer only for a
+  `text/event-stream` response, reset by any bytes, so a server that answers
+  headers and then holds the body passes both. The manager now stops a stage
+  dispatched to a declared endpoint once it has printed no JSON event, and its
+  session database shows no part update and no running tool, for longer than
+  the endpoint's larger timeout. The stage ends with a
+  `[model-stream-stalled]` notice naming the endpoint and the idle time, and
+  classifies as the new retryable `model_stream_stalled` kind (short backoff,
+  no lifetime-cap increment), distinct from `stall_kill`.
 
 - **Execution hygiene: a timed-out stage is classified, an interrupted run
   leaves no child, a failed run keeps its OpenCode transcript, and the local

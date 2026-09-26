@@ -81,6 +81,21 @@
       "signal": ""
     },
     {
+      "input": "[model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[MODEL-STREAM-STALLED]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -2616,6 +2631,11 @@
       "signal": ""
     },
     {
+      "input": "network unavailable: extended github connectivity loss | [model-stream-stalled]",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | stream idle timeout",
       "kind": "network_unavailable",
       "signal": ""
@@ -2841,6 +2861,11 @@
       "signal": ""
     },
     {
+      "input": "adapter_incompatible | [model-stream-stalled]",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "adapter_incompatible | stream idle timeout",
       "kind": "adapter_incompatible",
       "signal": ""
@@ -3061,6 +3086,236 @@
       "signal": ""
     },
     {
+      "input": "[model-stream-stalled] | network unavailable: extended github connectivity loss",
+      "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | adapter_incompatible",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | stream idle timeout",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | overloaded",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | socket connection was closed",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [rate-limit-quota-exhausted]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [adapter-auth-failed]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | ai_apicallerror context_length_exceeded",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | not_found_error model",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | pipeline-start-failure issue-closed",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [blocked-dependency]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | architecture approval required",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | github-quota-low",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | github-network-outage",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | secondary rate limit",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [pr-merge-unmerged",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [stage:worktree-containment]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [not-pipeline-actionable]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [dev-produced-no-changes]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [dev-handoff-missing]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [dev-step-cap-reached]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [dev-step-progress-unproven]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | invalid auth method",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | premature turn end",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | worktree_uncommitted",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | budget_ceiling_hit",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [runaway-progress-exceeded]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [runaway-ceiling-exceeded]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [cost-cap-exceeded]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | stage-no-output-timeout",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [stall-killed]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | pipeline_budget_exceeded",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | schema validation",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [no-changes-produced]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [validation-failed]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [validation-inconclusive]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [branch-forked]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [commit-orphaned]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [adapter-permission-rejected]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | [permission-denied]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | stage_context_unreadable",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | dev_build_verification_missing",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | dev_build_verification_failed",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | dev_tests_failed",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | pr_merge_lookup_failed",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | subagent crash",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "stream idle timeout | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -3068,6 +3323,11 @@
     {
       "input": "stream idle timeout | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "stream idle timeout | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -3296,6 +3556,11 @@
       "signal": ""
     },
     {
+      "input": "overloaded | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "overloaded | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -3518,6 +3783,11 @@
     {
       "input": "socket connection was closed | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "socket connection was closed | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -3746,6 +4016,11 @@
       "signal": ""
     },
     {
+      "input": "[rate-limit-quota-exhausted] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[rate-limit-quota-exhausted] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -3968,6 +4243,11 @@
     {
       "input": "[adapter-auth-failed] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-auth-failed] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -4196,6 +4476,11 @@
       "signal": ""
     },
     {
+      "input": "ai_apicallerror context_length_exceeded | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "ai_apicallerror context_length_exceeded | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -4418,6 +4703,11 @@
     {
       "input": "not_found_error model | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -4646,6 +4936,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline-start-failure issue-closed | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "pipeline-start-failure issue-closed | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -4868,6 +5163,11 @@
     {
       "input": "[blocked-dependency] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -5096,6 +5396,11 @@
       "signal": ""
     },
     {
+      "input": "architecture approval required | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "architecture approval required | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -5318,6 +5623,11 @@
     {
       "input": "github-quota-low | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "github-quota-low | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -5546,6 +5856,11 @@
       "signal": ""
     },
     {
+      "input": "github-network-outage | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "github-network-outage | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -5768,6 +6083,11 @@
     {
       "input": "secondary rate limit | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "secondary rate limit | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -5996,6 +6316,11 @@
       "signal": ""
     },
     {
+      "input": "[pr-merge-unmerged | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[pr-merge-unmerged | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -6218,6 +6543,11 @@
     {
       "input": "[stage:worktree-containment] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -6446,6 +6776,11 @@
       "signal": ""
     },
     {
+      "input": "[not-pipeline-actionable] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[not-pipeline-actionable] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -6668,6 +7003,11 @@
     {
       "input": "[dev-produced-no-changes] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -6896,6 +7236,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-handoff-missing] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[dev-handoff-missing] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -7118,6 +7463,11 @@
     {
       "input": "[dev-step-cap-reached] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -7346,6 +7696,11 @@
       "signal": ""
     },
     {
+      "input": "[dev-step-progress-unproven] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[dev-step-progress-unproven] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -7568,6 +7923,11 @@
     {
       "input": "invalid auth method | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -7796,6 +8156,11 @@
       "signal": ""
     },
     {
+      "input": "premature turn end | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "premature turn end | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -8018,6 +8383,11 @@
     {
       "input": "worktree_uncommitted | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -8246,6 +8616,11 @@
       "signal": ""
     },
     {
+      "input": "budget_ceiling_hit | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "budget_ceiling_hit | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -8468,6 +8843,11 @@
     {
       "input": "[runaway-progress-exceeded] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -8696,6 +9076,11 @@
       "signal": ""
     },
     {
+      "input": "[runaway-ceiling-exceeded] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[runaway-ceiling-exceeded] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -8918,6 +9303,11 @@
     {
       "input": "[cost-cap-exceeded] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -9146,6 +9536,11 @@
       "signal": ""
     },
     {
+      "input": "stage-no-output-timeout | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "stage-no-output-timeout | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -9368,6 +9763,11 @@
     {
       "input": "[stall-killed] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[stall-killed] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -9596,6 +9996,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -9818,6 +10223,11 @@
     {
       "input": "schema validation | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -10046,6 +10456,11 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -10268,6 +10683,11 @@
     {
       "input": "[validation-failed] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -10496,6 +10916,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -10718,6 +11143,11 @@
     {
       "input": "[branch-forked] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -10946,6 +11376,11 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -11168,6 +11603,11 @@
     {
       "input": "[adapter-permission-rejected] | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -11396,6 +11836,11 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -11618,6 +12063,11 @@
     {
       "input": "stage_context_unreadable | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -11846,6 +12296,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_missing | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -12068,6 +12523,11 @@
     {
       "input": "dev_build_verification_failed | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {
@@ -12296,6 +12756,11 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "dev_tests_failed | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -12521,6 +12986,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | stream idle timeout",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
@@ -12743,6 +13213,11 @@
     {
       "input": "subagent crash | adapter_incompatible",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | [model-stream-stalled]",
+      "kind": "model_stream_stalled",
       "signal": ""
     },
     {

@@ -561,6 +561,7 @@ const TERMINAL_KIND_CATEGORY: Record<TerminalFailureKind, RetroFailureCategory> 
   // when it clears, and there is nothing in the repo to fix.
   network_unavailable: "infrastructure-outage",
   api_connection_lost: "infrastructure-outage",
+  model_stream_stalled: "infrastructure-outage",
   api_overloaded: "infrastructure-outage",
   github_network_outage: "infrastructure-outage",
   stream_idle_timeout: "infrastructure-outage",

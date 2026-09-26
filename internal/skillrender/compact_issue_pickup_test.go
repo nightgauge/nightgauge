@@ -36,10 +36,13 @@ var compactReadDirectiveRE = regexp.MustCompile("(?i)\\bread `([^`]+\\.md)`")
 // render (no profile) and the compact one. It fails when the compact request
 // fell back to full, because every assertion after it would then be checking
 // the full render against itself.
+// The full render supplies no includes (IncludeBudget -1): the parity checks
+// compare the skill bodies, whose include directives the compact profile keeps
+// as reads (#2178).
 func renderStagePair(t *testing.T, stage string) (full, compact *Result) {
 	t.Helper()
 	root := realSkillsRoot(t)
-	full = mustRender(t, Options{Stage: stage, SkillsRoots: []string{root}})
+	full = mustRender(t, Options{Stage: stage, SkillsRoots: []string{root}, IncludeBudget: -1})
 	compact = mustRender(t, Options{Stage: stage, SkillsRoots: []string{root}, Profile: ProfileCompact})
 	if compact.Profile != ProfileCompact {
 		t.Fatalf("stage %q rendered without its compact profile (warnings: %v)", stage, compact.Warnings)

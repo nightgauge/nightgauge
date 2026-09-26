@@ -201,6 +201,17 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "why": "The adapter's binary cannot serve the dispatch (#1627, ADR-022 § 20): opencode below the compat manifest's floor, or a version that could not be read. A version above max-tested is never refused (ADR-022 § 20, 2026-09-25 amendment). `*OpenCodeIncompatibleError` stamps its kind first — `adapter_incompatible: \u003creason\u003e. \u003cremediation\u003e` — and execution.Manager wraps it as `dispatch refused for adapter \"opencode\": …`. Before this rule every such refusal satisfied only the `exit ` fallback, so a refusal that no retry can clear was booked subagent_crash and retried. Second in the ladder, above everything that reads free text: the reason quotes a failed self-test's probe output and the binary's path, either of which can carry a word a generic rule below keys on, and the stamp is the adapter's own verdict."
     },
     {
+      "id": "model-stream-stalled",
+      "kind": "model_stream_stalled",
+      "signal": false,
+      "clauses": [
+        [
+          "[model-stream-stalled]"
+        ]
+      ],
+      "why": "execution.Manager's idle-stream watchdog (#2176): a stage dispatched to a declared model endpoint printed no stream event and its session database showed no progress for longer than the endpoint's header/chunk timeout while no tool ran, so the model request was abandoned and the stage stopped. OpenCode's own headerTimeout/chunkTimeout do not cover a server that answers the headers and then holds the body. Retryable: the server answers a fresh request (#1659 leg 1 run 10); one request wedged. Above stream-idle-timeout and the stall rules, whose `timeout` and `stall` wordings the notice also carries, because the marker is the manager's own verdict. Not a signal: only the Go manager dispatches opencode."
+    },
+    {
       "id": "stream-idle-timeout",
       "kind": "stream_idle_timeout",
       "signal": true,

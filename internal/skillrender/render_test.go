@@ -1257,8 +1257,11 @@ func TestClaudeCodexGeminiRendersUnchanged(t *testing.T) {
 			if err != nil {
 				t.Fatalf("read golden capture: %v", err)
 			}
+			// IncludeBudget -1: these captures pin the overlay cascade, not the
+			// supplied includes appended after it (#2178, TestSupplyPhaseIncludes).
 			res := mustRender(t, Options{
 				Stage: tt.stage, Model: tt.model, Adapter: tt.adapter, SkillsRoots: []string{root},
+				IncludeBudget: -1,
 			})
 			got := strings.ReplaceAll(res.Content, repoRoot, placeholder)
 			if got != string(want) {

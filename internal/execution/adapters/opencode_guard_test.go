@@ -235,12 +235,14 @@ func TestOpenCodePermissionMap(t *testing.T) {
 				t.Fatalf("%s/SKILL.md allowed-tools = %v, want exactly %v; this test's scalar-permission assertions below assume this set", name, tools, wantTools)
 			}
 
-			for _, allowedKey := range []string{"glob", "grep", "list", "task"} {
+			for _, allowedKey := range []string{"glob", "grep", "list"} {
 				if permission[allowedKey] != openCodeAllow {
 					t.Errorf("permission[%q] = %v, want %q", allowedKey, permission[allowedKey], openCodeAllow)
 				}
 			}
-			for _, deniedKey := range []string{"webfetch", "websearch", "skill", "todowrite"} {
+			// task is denied though every stage grants it: gates.js refuses
+			// every task call, so it is not offered at all (#2178, #1748).
+			for _, deniedKey := range []string{"task", "webfetch", "websearch", "skill", "todowrite"} {
 				if permission[deniedKey] != openCodeDeny {
 					t.Errorf("permission[%q] = %v, want %q", deniedKey, permission[deniedKey], openCodeDeny)
 				}

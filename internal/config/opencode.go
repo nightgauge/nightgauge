@@ -84,6 +84,34 @@ type OpenCodeConfig struct {
 	// or any OpenAI-compatible server. Each becomes its own OpenCode
 	// provider block, keyed by its id.
 	Endpoints []OpenCodeEndpointConfig `yaml:"endpoints,omitempty" json:"endpoints,omitempty"`
+
+	// ToolOutput bounds what one tool call returns into a stage's context
+	// (#2178). Unset values keep the adapter's defaults, which are tighter
+	// for a stage on a declared local endpoint than for a hosted model.
+	ToolOutput OpenCodeToolOutput `yaml:"tool_output,omitempty" json:"tool_output,omitempty"`
+}
+
+// OpenCodeToolOutputBounds caps one tool call's output. Zero keeps the
+// default.
+type OpenCodeToolOutputBounds struct {
+	// MaxLines and MaxBytes are OpenCode's own tool_output thresholds: output
+	// above either is cut to a preview with a truncation notice, and the
+	// full text is saved to a file. They do not apply to read, which pages
+	// on its own.
+	MaxLines int `yaml:"max_lines,omitempty" json:"max_lines,omitempty"`
+	MaxBytes int `yaml:"max_bytes,omitempty" json:"max_bytes,omitempty"`
+	// ReadMaxLines is the most lines one read returns. A read that names no
+	// limit, or a larger one, is given this limit, and OpenCode's read
+	// reports the next offset to page from.
+	ReadMaxLines int `yaml:"read_max_lines,omitempty" json:"read_max_lines,omitempty"`
+}
+
+// OpenCodeToolOutput is the machine-wide bounds plus per-stage overrides,
+// keyed by stage name (feature-planning, feature-dev, ...). A stage entry's
+// set values win over the machine-wide ones.
+type OpenCodeToolOutput struct {
+	OpenCodeToolOutputBounds `yaml:",inline" json:",inline"`
+	Stages                   map[string]OpenCodeToolOutputBounds `yaml:"stages,omitempty" json:"stages,omitempty"`
 }
 
 // OpenCodeLimit is a model server's token limits.

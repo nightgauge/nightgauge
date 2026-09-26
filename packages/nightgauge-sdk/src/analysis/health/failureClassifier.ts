@@ -225,6 +225,7 @@ export type TerminalFailureKind =
   | "issue_closed" // Issue #3661 — issue already closed when pipeline started (non-failure)
   | "api_overloaded" // Issue #3835 — Anthropic 529 "Overloaded"; transient, retried without queue pause
   | "github_quota_low" // Issue #3896 — GitHub API quota below headroom at pipeline-start; transient, cooldown until reset
+  | "model_stream_stalled" // Issue #2176 — model request never answered past the endpoint's header/chunk timeout; transient, retried without queue pause
   | "api_connection_lost" // Issue #4002 — Anthropic API transport drop (socket close / DNS blip); transient, retried without queue pause
   | "github_network_outage" // Issue #4002 — api.github.com unreachable at pipeline-start; transient, short global cooldown
   | "github_rate_limited" // Issue #1391 — GitHub throttled a `gh` call mid-stage (secondary rate limit / emptied primary bucket / 429); transient, short per-issue backoff, no global cooldown
@@ -288,6 +289,7 @@ export const ALL_TERMINAL_FAILURE_KINDS: readonly TerminalFailureKind[] = [
   "api_overloaded",
   "github_quota_low",
   "api_connection_lost",
+  "model_stream_stalled",
   "github_network_outage",
   "github_rate_limited",
   "model_unavailable",
