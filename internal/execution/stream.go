@@ -842,8 +842,38 @@ type OpenCodeStream struct {
 	// matching" amendment), so this is the only source for every dispatch
 	// under a generated permission map.
 	RejectedTool string
+	// RecoveredRejections counts rejected tool calls the session recovered
+	// from (#2168): a later tool call completed and its step finished, so the
+	// rejection did not end the run. Only a rejection that is still open when
+	// the stream ends is terminal (TerminalRejection).
+	RecoveredRejections int
+	// LastEventError is true when the stream's last event was an "error"
+	// event: the session ended on an error, not a finished step.
+	LastEventError bool
+
+	// openRejections counts rejections not yet followed by recovery;
+	// completedSinceRejection is set by a completed tool call after one and
+	// turns into recovery at the next step_finish.
+	openRejections          int
+	completedSinceRejection bool
 
 	drift driftLog
+}
+
+// TerminalRejection reports whether a rejected tool call ended the session
+// (#2168): it was the last tool activity, or no later step finished after a
+// tool call that completed. Only this classifies adapter_permission_rejected;
+// a recovered rejection is a warning.
+func (s *OpenCodeStream) TerminalRejection() bool {
+	return s.openRejections > 0
+}
+
+// RecoverableExit reports whether a non-zero exit carried only errors the
+// session recovered from (#2168): at least one step finished, no rejection
+// is still open, and the stream did not end on an error event. Such an exit
+// is handed to the stage's post-condition gate, which decides.
+func (s *OpenCodeStream) RecoverableExit() bool {
+	return s.StepFinishes > 0 && !s.TerminalRejection() && !s.LastEventError
 }
 
 // OpenCode returns the accumulator's opencode stream state.
@@ -906,17 +936,29 @@ func (acc *TokenAccumulator) ParseOpenCodeStreamLine(line string) (*StreamEvent,
 		s.Drift("unknown event type %s", quotedEventType(ev.Type))
 		return event, false
 	}
+	s.LastEventError = ev.Type == "error"
 	switch ev.Type {
 	case "tool_use":
 		if ev.Part != nil && ev.Part.State != nil && ev.Part.State.Status == "error" &&
 			openCodeIsRejectedToolError(ev.Part.State.Error) {
 			s.RejectedToolCalls++
-			if s.RejectedTool == "" && ev.Part.Tool != "" {
+			// RejectedTool names the first rejection of the currently open
+			// run of rejections: after a recovery it is the next one's tool.
+			if s.openRejections == 0 {
 				s.RejectedTool = ev.Part.Tool
 			}
+			s.openRejections++
+			s.completedSinceRejection = false
+		} else if s.openRejections > 0 && ev.Part != nil && ev.Part.State != nil && ev.Part.State.Status == "completed" {
+			s.completedSinceRejection = true
 		}
 	case "step_finish":
 		s.StepFinishes++
+		if s.completedSinceRejection {
+			s.RecoveredRejections += s.openRejections
+			s.openRejections = 0
+			s.completedSinceRejection = false
+		}
 		if ev.Part == nil || ev.Part.Reason == nil {
 			s.Drift("a step_finish event has no part.reason")
 		} else {

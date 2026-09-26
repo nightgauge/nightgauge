@@ -253,6 +253,8 @@ record may carry both fields, neither, or only one.
 | `adapter_permission_rejected`    | The adapter auto-rejected a tool the stage's allowed tools grant, #1624's `[adapter-permission-rejected]` marker (Issue #1631) — an `ask` rule: OpenCode's own `.env` read guard, or one in a repository's or the user's OpenCode config; parked whatever tool it names, not retried, not charged to the issue                                                                                                                       |
 | `adapter_incompatible`           | The adapter's binary cannot serve the dispatch: below the compat floor or unreadable (Issues #1627, #1631; a newer version is never refused) — parked; install a build at or above the floor                                                                                                                                                                                                                                         |
 
+A rejected tool call the session recovered from (a later call completed and its step finished) is a warning, not `adapter_permission_rejected`: only a rejection still open when the session ends classifies it. A non-zero OpenCode exit whose only errors were recovered is handed to the stage's post-condition gate, which decides (Issue #2168).
+
 `permission_denied` (Issue #289) is a **harness-fault** kind, distinct from a
 stage failure. The harness rejects certain tool calls outright — the observed
 trigger is a stage reaching for a foreground `sleep` wait loop

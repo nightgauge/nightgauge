@@ -234,7 +234,11 @@ type StageRunResult struct {
 	// could tell apart from a genuine crash. It classifies to
 	// TerminalKindOperatorStop, which is exempt from the issue's lifetime
 	// failure cap (#1487).
-	Cancelled          bool
+	Cancelled bool
+	// RecoverableExit carries adapters.RunResult.RecoverableExit (#2168): a
+	// non-zero exit whose only errors the session recovered from. The
+	// scheduler hands such a stage to its post-condition gate.
+	RecoverableExit    bool
 	InputTokens        int
 	OutputTokens       int
 	CacheReadTokens    int     // Cache read input tokens (billed at lower rate)
@@ -703,9 +707,10 @@ func cliRunResultToStageResult(result *adapters.RunResult) *StageRunResult {
 	return &StageRunResult{
 		ExitCode: result.ExitCode,
 		// Carried, not re-derived — see StageRunResult.Cancelled (#564/#1487).
-		Cancelled:    result.Cancelled,
-		InputTokens:  result.InputTokens,
-		OutputTokens: result.OutputTokens,
+		Cancelled:       result.Cancelled,
+		RecoverableExit: result.RecoverableExit,
+		InputTokens:     result.InputTokens,
+		OutputTokens:    result.OutputTokens,
 		// The cache pools the adapter stream measured (#1651): dropping them
 		// here recorded every Go-direct stage's cache reads as 0.
 		CacheReadTokens:     result.CacheReadTokens,
@@ -6215,6 +6220,17 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			runtime.RecordStageModel(stage, servedModel)
 		}
 
+		// #2168: a non-zero exit whose only errors the session recovered from
+		// (a rejected tool call followed by completed steps, a retried stream
+		// error) does not fail the stage by itself. The post-condition gate
+		// below decides: a failed gate still fails the stage. Only a stage
+		// that has a gate is handed over; without one the exit code stands.
+		if recoveredExitDefersToGate(err, exitCode, result, s.stageGates[stage]) {
+			log.Printf("#%d: stage %s exited %d with only recovered errors — deferring to the post-condition gate (#2168); recovered errors: %s",
+				item.Number, stage, exitCode, result.ErrorText)
+			exitCode = 0
+		}
+
 		// Record tokens with budget enforcer
 		s.budgetEngine.RecordStageTokens(string(stage), inputTokens, outputTokens)
 
@@ -10393,4 +10409,13 @@ func (a *schedulerPRCreateAdapter) ListOpenPRsForBranch(ctx context.Context, own
 		out = append(out, pmstages.CreatedPR{Number: pr.Number, URL: pr.URL, NodeID: pr.NodeID})
 	}
 	return out, nil
+}
+
+// recoveredExitDefersToGate reports whether a stage's non-zero exit is handed
+// to its post-condition gate instead of failing the stage (#2168): the runner
+// returned no error, the adapter marked the exit recoverable (every error it
+// saw was one the session recovered from), the stage was not cancelled, and
+// the stage has a gate to decide. Without a gate the exit code stands.
+func recoveredExitDefersToGate(err error, exitCode int, result *StageRunResult, gate gates.StageGate) bool {
+	return err == nil && exitCode != 0 && result != nil && result.RecoverableExit && !result.Cancelled && gate != nil
 }

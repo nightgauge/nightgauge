@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **An OpenCode stage that finished is no longer failed by a rejection it
+  recovered from** (#2168): a rejected tool call followed by a completed call
+  and a finished step is a warning, not `adapter_permission_rejected`; only a
+  rejection still open when the session ends classifies it. A non-zero exit with
+  only recovered errors now runs the stage's post-condition gate, which decides.
+
 - **issue-pickup runs without a model on the Go scheduler, for every adapter
   (#1904).** A Go runner now reads the issue, derives the branch name with the
   same function `nightgauge git branch-create --issue` uses, creates and pushes

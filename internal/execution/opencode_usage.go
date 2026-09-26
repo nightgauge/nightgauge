@@ -479,6 +479,10 @@ func (r *openCodeRun) observeStderr(start, end string) (string, stderrLine) {
 // openCodeOutcome is what finish learned, applied to the RunResult.
 type openCodeOutcome struct {
 	exitedZero bool
+	// recoverableExit is set when the process exited non-zero with only
+	// errors the session recovered from (#2168); the scheduler then lets the
+	// stage's post-condition gate decide.
+	recoverableExit bool
 	// marker is the classification marker, or empty.
 	marker  string
 	version string
@@ -538,7 +542,14 @@ func (r *openCodeRun) finish(ctx context.Context, exit openCodeExit, acc *TokenA
 		r.stream.Drift("an auto-reject notice on stderr did not end with %q", openCodeAutoRejectEnd)
 	}
 	marker := r.marker
-	if r.stream.RejectedToolCalls > 0 && marker == "" {
+	if r.stream.RejectedToolCalls > 0 && !r.stream.TerminalRejection() {
+		// Every rejected call was recovered from (#2168): a later tool call
+		// completed and its step finished. The rejection did not end the
+		// run, so it is a warning, not adapter_permission_rejected, and a
+		// stderr notice for it decides nothing either.
+		fmt.Fprintf(os.Stderr, "[opencode-recovered] %d rejected tool call(s) recovered from; not classified as a permission rejection\n", r.stream.RecoveredRejections)
+		marker = ""
+	} else if r.stream.RejectedToolCalls > 0 && marker == "" {
 		// OpenCode rejected the stage's own tool call, and stderr did not say
 		// which permission: a "deny" match (this map's only rejection shape,
 		// ADR-022 § 9) never prints the "auto-rejecting" notice a stderr-only
@@ -561,14 +572,15 @@ func (r *openCodeRun) finish(ctx context.Context, exit openCodeExit, acc *TokenA
 		endpoint = res.served.Key
 	}
 	return openCodeOutcome{
-		exitedZero: exit.exitCode == 0,
-		marker:     marker,
-		version:    res.version,
-		served:     res.served,
-		endpoint:   endpoint,
-		cost:       r.stream.ReportedCostUSD + res.childCost,
-		partial:    res.partial,
-		drift:      r.stream.DriftMarkers(),
+		exitedZero:      exit.exitCode == 0,
+		recoverableExit: exit.exitCode > 0 && !exit.stopped && marker == "" && r.stream.RecoverableExit(),
+		marker:          marker,
+		version:         res.version,
+		served:          res.served,
+		endpoint:        endpoint,
+		cost:            r.stream.ReportedCostUSD + res.childCost,
+		partial:         res.partial,
+		drift:           r.stream.DriftMarkers(),
 	}
 }
 
@@ -609,6 +621,7 @@ func (o openCodeOutcome) apply(result *adapters.RunResult) {
 	result.AdapterReportedCostUSD = o.cost
 	result.UsagePartial = o.partial
 	result.DriftMarkers = o.drift
+	result.RecoverableExit = o.recoverableExit
 	if o.marker == "" {
 		return
 	}

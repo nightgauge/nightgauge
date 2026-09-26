@@ -226,3 +226,31 @@ func TestScheduler_GatePass_DoesNotErrorOut(t *testing.T) {
 		t.Errorf("StageGateResults not recorded as passed: %#v", got)
 	}
 }
+
+// TestRecoveredExitDefersToGate pins #2168: a non-zero exit the adapter
+// marked recoverable is handed to the stage's post-condition gate; any other
+// non-zero exit, a cancelled stage, or a stage without a gate is not.
+func TestRecoveredExitDefersToGate(t *testing.T) {
+	gate := &stubGate{name: "issue-pickup", passed: true}
+	recoverable := &StageRunResult{ExitCode: 1, RecoverableExit: true}
+	for _, tc := range []struct {
+		name     string
+		err      error
+		exitCode int
+		result   *StageRunResult
+		gate     gates.StageGate
+		want     bool
+	}{
+		{"run-9 shape: recovered errors, exit 1, gate present", nil, 1, recoverable, gate, true},
+		{"terminal failure", nil, 1, &StageRunResult{ExitCode: 1}, gate, false},
+		{"no gate registered", nil, 1, recoverable, nil, false},
+		{"runner error", errors.New("boom"), 1, recoverable, gate, false},
+		{"cancelled", nil, 1, &StageRunResult{ExitCode: 1, RecoverableExit: true, Cancelled: true}, gate, false},
+		{"exit 0 already", nil, 0, recoverable, gate, false},
+		{"nil result", nil, 1, nil, gate, false},
+	} {
+		if got := recoveredExitDefersToGate(tc.err, tc.exitCode, tc.result, tc.gate); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

@@ -1029,6 +1029,8 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 		if costCap.settle(tokenAcc, unread) {
 			fmt.Fprintf(os.Stderr, "%s#%d %s: %s\n", opts.Repo, opts.IssueNumber, opts.Stage, costCap.notice())
 			keepStderr([]byte(costCap.notice()))
+			// A cost-cap trip is its own failure, never a recovered one.
+			openCodeDone.recoverableExit = false
 		}
 	}
 	result := runResultFromAccumulator(string(stdoutBuf), string(stderrBuf), tokenAcc, modelTracker)
