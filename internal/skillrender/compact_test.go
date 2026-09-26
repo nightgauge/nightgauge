@@ -37,7 +37,7 @@ func TestCompactProfile_NoFlagAndFullAreByteIdentical(t *testing.T) {
 func TestCompactProfile_ComposesForPrMerge(t *testing.T) {
 	root := realSkillsRoot(t)
 	compact := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}, Profile: ProfileCompact})
-	full := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}})
+	full := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}, IncludeBudget: -1})
 
 	if compact.Profile != ProfileCompact {
 		t.Errorf("Profile = %q, want %q", compact.Profile, ProfileCompact)
@@ -109,7 +109,7 @@ func stagesWithCompactProfile(t *testing.T) map[string]string {
 func TestCompactMarkerParity(t *testing.T) {
 	for stage, root := range stagesWithCompactProfile(t) {
 		t.Run(stage, func(t *testing.T) {
-			full := mustRender(t, Options{Stage: stage, SkillsRoots: []string{root}})
+			full := mustRender(t, Options{Stage: stage, SkillsRoots: []string{root}, IncludeBudget: -1})
 			compact := mustRender(t, Options{Stage: stage, SkillsRoots: []string{root}, Profile: ProfileCompact})
 			if compact.Profile != ProfileCompact {
 				t.Fatalf("stage %q has no compact profile; remove it from stagesWithCompactProfile or add _profiles/compact.md", stage)
@@ -163,7 +163,7 @@ printf '<!-- phase:start name="a" index=0 total=2 stage="feature-dev" -->\n'
 `+"```"+`
 `)
 
-	full := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{root}})
+	full := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{root}, IncludeBudget: -1})
 	compact := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{root}, Profile: ProfileCompact})
 
 	fullMarkers := CompactionMarkers(full.Content)
@@ -266,7 +266,7 @@ func TestCompactPrMerge_FitsBudgetAndKeepsDenyRules(t *testing.T) {
 // "compact"; with no profile it decides "refuse".
 func TestDecideProfile_CompactWhenAvailable(t *testing.T) {
 	root := realSkillsRoot(t)
-	full := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}})
+	full := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}, IncludeBudget: -1})
 	compact := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}, Profile: ProfileCompact})
 
 	decision, fit := DecideProfile("pr-merge", full.Content, 32768, true, compact.Content)

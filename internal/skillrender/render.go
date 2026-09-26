@@ -115,6 +115,11 @@ type Options struct {
 	Profile string
 	// Warn receives non-fatal diagnostics (unreadable fragments). nil discards.
 	Warn func(string)
+	// IncludeBudget bounds the bytes of skill `_includes/` files a full
+	// render supplies inline (SupplyPhaseIncludes, #2178). Zero uses
+	// DefaultIncludeBudget; a negative value supplies none, leaving every
+	// read directive as written.
+	IncludeBudget int
 }
 
 // Fragment is one overlay file that contributed to the composed block.
@@ -158,7 +163,11 @@ type Result struct {
 	Fragments         []Fragment `json:"fragments"`
 	InjectionSite     string     `json:"injection_site"`
 	WholeFile         string     `json:"whole_file_override,omitempty"`
-	Warnings          []string   `json:"warnings"`
+	// SuppliedIncludes are the skill `_includes/` files the render appended
+	// in full, in order, so the model does not spend a read on each
+	// (SupplyPhaseIncludes, #2178).
+	SuppliedIncludes []string `json:"supplied_includes,omitempty"`
+	Warnings         []string `json:"warnings"`
 
 	// Content is the composed skill text. Excluded from --json (it goes to
 	// stdout) so the envelope stays readable.
@@ -447,8 +456,93 @@ func Render(opts Options) (*Result, error) {
 	// and so the injection point is computed against the directives that are
 	// still present — expansion erases them.
 	body = ExpandIncludes(body, skillDir)
+	if res.Profile != ProfileCompact {
+		body, res.SuppliedIncludes = SupplyPhaseIncludes(body, skillDir, opts.IncludeBudget)
+	}
 	res.Content = RewriteSkillRelativePaths(body, opts.Stage, skillDir)
 	return res, nil
+}
+
+// DefaultIncludeBudget is how many bytes of `_includes/` files a full render
+// supplies inline when Options.IncludeBudget is zero. It holds every include
+// feature-planning (46 KB), issue-pickup (50 KB) and pr-create (40 KB)
+// direct a phase to read; the larger feature-dev, feature-validate and
+// pr-merge sets are supplied in directive order until it is spent, and the
+// rest stay reads.
+const DefaultIncludeBudget = 64 * 1024
+
+// SuppliedIncludesHeading titles the block SupplyPhaseIncludes appends.
+const SuppliedIncludesHeading = "## Supplied includes"
+
+// phaseIncludeDirectiveRE matches a directive telling the model to read one
+// of the skill's own `_includes/` files now: "Read `_includes/x.md` (same
+// directory as this SKILL.md) now ...", including the forms that wrap over
+// a blockquote line. A directive without "now" ("Read `_includes/x.md` when needed")
+// is on demand and is left alone.
+var phaseIncludeDirectiveRE = regexp.MustCompile("Read `_includes/([A-Za-z0-9._-]+\\.md)`([\\s>]+\\(same[\\s>]+directory[\\s>]+as[\\s>]+this[\\s>]+SKILL\\.md\\))?[\\s>]+now")
+
+// SupplyPhaseIncludes appends, once, every `_includes/` file a phase
+// directive tells the model to read now, and rewrites those directives to
+// point at the appended copy (#2178). On OpenCode each such read was a tool
+// call whose result, line-numbered, stayed in context for the rest of the
+// stage (in #1659 leg 1 run 11, 52 KB of feature-planning's context), and a
+// capped read would page a large include over several calls. Supplying them
+// in the prompt costs the same text once, in the stable prefix, on every
+// adapter.
+//
+// Includes are taken in the order their first directive appears; one that
+// does not fit in the remaining budget is skipped (its directives stay
+// reads) and the next is tried, so the result is deterministic. A missing
+// or unreadable include is left as a read directive. The SKILL.md on disk is
+// unchanged: an interactive host that loads it directly still reads each
+// include when its phase says to.
+func SupplyPhaseIncludes(body, skillDir string, budget int) (string, []string) {
+	if budget < 0 {
+		return body, nil
+	}
+	if budget == 0 {
+		budget = DefaultIncludeBudget
+	}
+	var names []string
+	seen := map[string]bool{}
+	for _, m := range phaseIncludeDirectiveRE.FindAllStringSubmatch(body, -1) {
+		if !seen[m[1]] {
+			seen[m[1]] = true
+			names = append(names, m[1])
+		}
+	}
+	supplied := map[string]string{}
+	var order []string
+	remaining := budget
+	for _, name := range names {
+		data, err := os.ReadFile(filepath.Join(skillDir, "_includes", name))
+		if err != nil || len(data) > remaining {
+			continue
+		}
+		remaining -= len(data)
+		supplied[name] = string(data)
+		order = append(order, name)
+	}
+	if len(order) == 0 {
+		return body, nil
+	}
+	body = phaseIncludeDirectiveRE.ReplaceAllStringFunc(body, func(match string) string {
+		name := phaseIncludeDirectiveRE.FindStringSubmatch(match)[1]
+		if _, ok := supplied[name]; !ok {
+			return match
+		}
+		return "Follow `_includes/" + name + "` (supplied in full under \"" + strings.TrimPrefix(SuppliedIncludesHeading, "## ") + "\" at the end of this prompt; do not read it from disk) now"
+	})
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(body, "\n"))
+	b.WriteString("\n\n---\n\n" + SuppliedIncludesHeading + "\n\n")
+	b.WriteString("These files are supplied in full at dispatch. Where a phase says to follow one, use this copy; reading the file again only repeats it.\n")
+	for _, name := range order {
+		b.WriteString("\n### `_includes/" + name + "`\n\n")
+		b.WriteString(strings.TrimRight(supplied[name], "\n"))
+		b.WriteString("\n")
+	}
+	return b.String(), order
 }
 
 func readFragment(path string, warn func(string)) (string, bool) {

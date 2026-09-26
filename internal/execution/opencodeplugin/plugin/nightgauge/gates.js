@@ -235,6 +235,27 @@ function gateCwd(ctx) {
 // sanitize-prompt pass would let a `task` call proceed past this check. See
 // the #1640 PR description for that reading, recorded as a deviation rather
 // than a silent relaxation of TestNodeHarnessDeniesTask's contract.
+// READ_MAX_LINES_ENV is opencodeplugin.EnvReadMaxLines (plugin.go): the
+// most lines one read returns (#2178), set per stage by the Go side.
+const READ_MAX_LINES_ENV = "NIGHTGAUGE_OPENCODE_READ_MAX_LINES";
+
+// capReadLimit gives a read that names no limit, or a larger one, the
+// stage's read cap. opencode 1.18.32 passes this hook's output.args object
+// to the tool's execute unchanged, so setting a field on it is what the read
+// runs with; its read tool then ends a capped result with "(Showing lines
+// A-B of N. Use offset=B+1 to continue.)", the visible marker the model
+// pages from. 1.18.32 has no config key for read's default limit (2000
+// lines), and its tool_output thresholds skip read. An unset, non-numeric or
+// non-positive cap leaves the read as the model asked.
+export function capReadLimit(output) {
+  const cap = Number.parseInt(process.env[READ_MAX_LINES_ENV] || "", 10);
+  if (!Number.isInteger(cap) || cap <= 0) return;
+  if (!output || typeof output.args !== "object" || output.args === null) return;
+  const asked = output.args.limit;
+  if (typeof asked === "number" && Number.isFinite(asked) && asked > 0 && asked <= cap) return;
+  output.args.limit = cap;
+}
+
 export async function toolExecuteBefore(ctx, input, output) {
   if (!input) return;
   if (input.tool === "task") {
@@ -295,6 +316,7 @@ export async function toolExecuteBefore(ctx, input, output) {
       tool_input: { file_path: filePath },
     };
     runGateVerb(["hook", "external-directory-gate"], payload, cwd, EXTERNAL_DIRECTORY_MARKER);
+    capReadLimit(output);
     return;
   }
 

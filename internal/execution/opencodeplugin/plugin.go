@@ -150,6 +150,9 @@ const (
 	EnvNonce      = "NIGHTGAUGE_OPENCODE_PLUGIN_NONCE"
 	EnvSentinel   = "NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL"
 	EnvPluginPath = "NIGHTGAUGE_OPENCODE_PLUGIN_PATH"
+	// EnvReadMaxLines is the most lines one read returns (#2178): gates.js
+	// gives a read that names no limit, or a larger one, this limit.
+	EnvReadMaxLines = "NIGHTGAUGE_OPENCODE_READ_MAX_LINES"
 	// EnvOperatorInstallRisk names, when set, the operator-owned OpenCode
 	// config directory ($HOME/.opencode, or an inherited OPENCODE_CONFIG_DIR)
 	// this run's config puts at risk of OpenCode's own @opencode-ai/plugin

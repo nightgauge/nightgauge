@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
@@ -126,10 +128,60 @@ const openCodeMinTimeout = time.Second
 
 // Tool output above either cap is written to a file and the model gets a
 // preview, so one command's output cannot fill a local model's window.
+// OpenCode 1.18.32 reads these from the config's tool_output block (its
+// Truncate service; defaults 2000 lines and 51200 bytes) and applies them to
+// every tool's output except read, which reports truncated itself and so is
+// skipped by the wrapper. Read is bounded by openCodeReadMaxLines instead,
+// through the Nightgauge plugin (gates.js), because 1.18.32 has no config
+// key for read's default limit (hard-coded 2000 lines, 50 KB).
+//
+// A stage on a declared local endpoint gets the tighter set (#2178): a
+// local model's tokenizer spends about 50% more tokens on the same bytes
+// than Claude's, its window is smaller, and in #1659 leg 1 run 11
+// feature-planning's tool results were 74% of its context. The operator can
+// override both sets per machine and per stage (config.OpenCodeToolOutput).
 const (
 	openCodeToolOutputMaxLines = 1000
 	openCodeToolOutputMaxBytes = 32 * 1024
+	openCodeReadMaxLines       = 2000
+
+	openCodeLocalToolOutputMaxLines = 400
+	openCodeLocalToolOutputMaxBytes = 8 * 1024
+	openCodeLocalReadMaxLines       = 400
 )
+
+// openCodeToolOutputBounds resolves one stage's bounds: the default for its
+// endpoint kind, then the machine-wide settings, then the stage's own.
+func openCodeToolOutputBounds(settings config.OpenCodeToolOutput, stage string, local bool) config.OpenCodeToolOutputBounds {
+	b := config.OpenCodeToolOutputBounds{
+		MaxLines:     openCodeToolOutputMaxLines,
+		MaxBytes:     openCodeToolOutputMaxBytes,
+		ReadMaxLines: openCodeReadMaxLines,
+	}
+	if local {
+		b = config.OpenCodeToolOutputBounds{
+			MaxLines:     openCodeLocalToolOutputMaxLines,
+			MaxBytes:     openCodeLocalToolOutputMaxBytes,
+			ReadMaxLines: openCodeLocalReadMaxLines,
+		}
+	}
+	overlay := func(o config.OpenCodeToolOutputBounds) {
+		if o.MaxLines > 0 {
+			b.MaxLines = o.MaxLines
+		}
+		if o.MaxBytes > 0 {
+			b.MaxBytes = o.MaxBytes
+		}
+		if o.ReadMaxLines > 0 {
+			b.ReadMaxLines = o.ReadMaxLines
+		}
+	}
+	overlay(settings.OpenCodeToolOutputBounds)
+	if o, ok := settings.Stages[stage]; ok {
+		overlay(o)
+	}
+	return b
+}
 
 // Compaction settings. tail_turns keeps the stage prompt's turn and the one
 // after it verbatim. preserve_recent_tokens takes the bounds opencode 1.18.30
@@ -498,6 +550,9 @@ type OpenCodeConfigInput struct {
 	Run RunOptions
 	// Endpoints are the model servers the operator runs (OpenCodeEndpoints).
 	Endpoints []OpenCodeEndpoint
+	// ToolOutput is the machine tier's tool-output bounds (#2178); its zero
+	// value keeps the defaults.
+	ToolOutput config.OpenCodeToolOutput
 	// Snapshot, LSP and Formatter are ADR-022 § 12's settings.
 	Snapshot  bool
 	LSP       bool
@@ -541,14 +596,15 @@ func OpenCodeConfigInputFor(settings config.OpenCodeConfig, run RunOptions, runR
 		return *v
 	}
 	return OpenCodeConfigInput{
-		Run:       run,
-		Endpoints: endpoints,
-		Snapshot:  orDefault(settings.Snapshot, false),
-		LSP:       orDefault(settings.LSP, true),
-		Formatter: orDefault(settings.Formatter, true),
-		RunRoot:   runRoot,
-		Lookup:    lookup,
-		Discover:  openCodeLocalDiscovery,
+		Run:        run,
+		Endpoints:  endpoints,
+		ToolOutput: settings.ToolOutput,
+		Snapshot:   orDefault(settings.Snapshot, false),
+		LSP:        orDefault(settings.LSP, true),
+		Formatter:  orDefault(settings.Formatter, true),
+		RunRoot:    runRoot,
+		Lookup:     lookup,
+		Discover:   openCodeLocalDiscovery,
 		// BinDir is left empty here deliberately: this constructor is called
 		// directly by tests (and by the doctor's catalog probe) that need
 		// BuildOpenCodeConfig's output to stay reproducible across machines, which os.Executable() is not (it
@@ -614,6 +670,10 @@ type OpenCodeRunConfig struct {
 	// such as a context limit clamped to the server's loaded window.
 	// PrepareOpenCodeRun prints each on stderr.
 	Warnings []string
+	// ReadMaxLines is the most lines one read returns (#2178).
+	// PrepareOpenCodeRun hands it to the Nightgauge plugin in
+	// opencodeplugin.EnvReadMaxLines.
+	ReadMaxLines int
 }
 
 // The JSON shape of OPENCODE_CONFIG_CONTENT. Every key is one opencode
@@ -820,6 +880,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	built := OpenCodeRunConfig{NonLoopback: true}
 	providers := map[string]any{}
 	var known *config.OpenCodeLimit // the dispatched model's limits, when Nightgauge knows them
+	onEndpoint := false             // the stage runs on a declared (operator-run) endpoint
 	_, catalogKey := openCodeCatalogEnv[key]
 	switch ep, declared := findOpenCodeEndpoint(in.Endpoints, key); {
 	case declared:
@@ -851,6 +912,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 		built.Files = map[string]string{file: ep.BaseURL}
 		built.NonLoopback = ep.NonLoopback
 		known = &limit
+		onEndpoint = true
 
 		// Every other declared endpoint also gets a complete provider block,
 		// keyed by its own id, so a future dispatch can name any of them on
@@ -949,6 +1011,8 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	for _, name := range openCodePinnedModeAgents {
 		modes[name] = agents[name]
 	}
+	bounds := openCodeToolOutputBounds(in.ToolOutput, in.Run.Stage, onEndpoint)
+	built.ReadMaxLines = bounds.ReadMaxLines
 	cfg := openCodeConfigJSON{
 		Model:            model,
 		SmallModel:       model,
@@ -959,7 +1023,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 		Mode:             modes,
 		SubagentDepth:    openCodeSubagentDepth,
 		Compaction:       openCodeCompaction(known),
-		ToolOutput:       openCodeToolOutputJSON{MaxLines: openCodeToolOutputMaxLines, MaxBytes: openCodeToolOutputMaxBytes},
+		ToolOutput:       openCodeToolOutputJSON{MaxLines: bounds.MaxLines, MaxBytes: bounds.MaxBytes},
 		Share:            "disabled",
 		Autoupdate:       false,
 		Snapshot:         in.Snapshot,
@@ -1579,6 +1643,7 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 		return nil, err
 	}
 	env[openCodeConfigContentEnvVar] = built.Content
+	env[opencodeplugin.EnvReadMaxLines] = strconv.Itoa(built.ReadMaxLines)
 	reportOpenCodeRepository(os.Stderr, input.Repository)
 	return &OpenCodeRun{
 		SchemaVersion: OpenCodeConfigSchemaVersion,

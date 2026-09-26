@@ -5205,21 +5205,32 @@ Execution Adapter when the adapter is `opencode`. It lists the models
 `opencode:` block to the machine tier and never writes it to a project or
 local file. It leaves the block's other keys as they are.
 
-| Key                            | Tier    | Description                                                                                                                                                         |
-| ------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `opencode.binary`              | Machine | Absolute path of the opencode binary to spawn; unset runs the `opencode` on PATH                                                                                    |
-| `opencode.inherit_user_config` | Machine | Layer your own OpenCode config into runs (default `false`)                                                                                                          |
-| `opencode.model`               | Machine | `<provider>/<model>` used when a caller names no model                                                                                                              |
-| `opencode.provider`            | Machine | `lm-studio` or `ollama`; the endpoint id becomes `lmstudio` or `ollama`                                                                                             |
-| `opencode.base_url`            | Machine | `http`/`https` URL of the model server, no user name or password                                                                                                    |
-| `opencode.limit.context`       | Machine | Context limit; overrides the discovered window, clamped to the loaded window                                                                                        |
-| `opencode.limit.output`        | Machine | Output limit; overrides the discovered or derived value                                                                                                             |
-| `opencode.timeouts.header`     | Machine | Wait for the first response byte (default `3m`)                                                                                                                     |
-| `opencode.timeouts.chunk`      | Machine | Wait between streamed chunks (default `3m`)                                                                                                                         |
-| `opencode.snapshot`            | Machine | OpenCode snapshots (default `false`)                                                                                                                                |
-| `opencode.lsp`                 | Machine | OpenCode LSP (default `true`)                                                                                                                                       |
-| `opencode.formatter`           | Machine | OpenCode formatter (default `true`)                                                                                                                                 |
-| `opencode.endpoints[]`         | Machine | Named model servers: `id`, `provider`, `base_url`, `allow_lan`, `limit`, `timeouts`, `api_key_env`, `self_hosted`, `max_concurrency`, `models[]` (`id`, `variants`) |
+| Key                                   | Tier    | Description                                                                                                                                                         |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `opencode.binary`                     | Machine | Absolute path of the opencode binary to spawn; unset runs the `opencode` on PATH                                                                                    |
+| `opencode.inherit_user_config`        | Machine | Layer your own OpenCode config into runs (default `false`)                                                                                                          |
+| `opencode.model`                      | Machine | `<provider>/<model>` used when a caller names no model                                                                                                              |
+| `opencode.provider`                   | Machine | `lm-studio` or `ollama`; the endpoint id becomes `lmstudio` or `ollama`                                                                                             |
+| `opencode.base_url`                   | Machine | `http`/`https` URL of the model server, no user name or password                                                                                                    |
+| `opencode.limit.context`              | Machine | Context limit; overrides the discovered window, clamped to the loaded window                                                                                        |
+| `opencode.limit.output`               | Machine | Output limit; overrides the discovered or derived value                                                                                                             |
+| `opencode.timeouts.header`            | Machine | Wait for the first response byte (default `3m`)                                                                                                                     |
+| `opencode.timeouts.chunk`             | Machine | Wait between streamed chunks (default `3m`)                                                                                                                         |
+| `opencode.snapshot`                   | Machine | OpenCode snapshots (default `false`)                                                                                                                                |
+| `opencode.lsp`                        | Machine | OpenCode LSP (default `true`)                                                                                                                                       |
+| `opencode.formatter`                  | Machine | OpenCode formatter (default `true`)                                                                                                                                 |
+| `opencode.endpoints[]`                | Machine | Named model servers: `id`, `provider`, `base_url`, `allow_lan`, `limit`, `timeouts`, `api_key_env`, `self_hosted`, `max_concurrency`, `models[]` (`id`, `variants`) |
+| `opencode.tool_output.max_lines`      | Machine | Lines of one tool call's output before OpenCode cuts it to a preview with a truncation notice (default `400` on a declared endpoint, `1000` hosted; not read)       |
+| `opencode.tool_output.max_bytes`      | Machine | Bytes of one tool call's output before the same cut (default `8192` on a declared endpoint, `32768` hosted; not read)                                               |
+| `opencode.tool_output.read_max_lines` | Machine | Most lines one `read` returns; a read asking for more pages from the offset it reports (default `400` on a declared endpoint, `2000` hosted)                        |
+| `opencode.tool_output.stages.<stage>` | Machine | Per-stage overrides of the three keys above, such as `stages.feature-dev.read_max_lines`                                                                            |
+
+`opencode.tool_output` bounds what one tool call adds to a stage's context.
+A stage on a declared endpoint gets the tighter defaults, because a local
+model's window is smaller and its tokenizer spends more tokens on the same
+text. Every pipeline stage prompt also carries, once, the skill `_includes/`
+files its phases direct it to follow (up to 64 KB), so the model does not
+spend tool calls reading them; this applies to every adapter.
 
 When more than one endpoint lists the same model id under `models`, a stage
 whose model names any of them can run on any of them. The scheduler picks a

@@ -912,14 +912,20 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 	)
 	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeAliasConfigDenyPatterns(opts.WorktreeDir)...)
 	return &openCodePermissionJSON{
-		Wildcard:          openCodeDeny,
-		Read:              openCodeReadPermission(grants["read"]),
-		Edit:              openCodeEditPermission(grants["edit"], editDenyDirPatterns),
-		Glob:              openCodeScalarPermission(grants["glob"]),
-		Grep:              openCodeScalarPermission(grants["grep"]),
-		List:              openCodeScalarPermission(grants["list"]),
-		Bash:              openCodeBashPermission(grants["bash"]),
-		Task:              openCodeScalarPermission(grants["task"]),
+		Wildcard: openCodeDeny,
+		Read:     openCodeReadPermission(grants["read"]),
+		Edit:     openCodeEditPermission(grants["edit"], editDenyDirPatterns),
+		Glob:     openCodeScalarPermission(grants["glob"]),
+		Grep:     openCodeScalarPermission(grants["grep"]),
+		List:     openCodeScalarPermission(grants["list"]),
+		Bash:     openCodeBashPermission(grants["bash"]),
+		// task is denied whatever the stage grants: gates.js refuses every
+		// task call (ADR-022 AC9, #1748), and OpenCode drops a tool whose
+		// permission is a bare deny from the tool list it offers the model,
+		// so no step is spent on a guaranteed refusal. A granted task also
+		// made OpenCode's own truncation notice tell the model to delegate
+		// to the Task tool (#2178).
+		Task:              openCodeDeny,
 		WebFetch:          openCodeScalarPermission(grants["webfetch"]),
 		WebSearch:         openCodeScalarPermission(grants["websearch"]),
 		Skill:             openCodeScalarPermission(grants["skill"]),
