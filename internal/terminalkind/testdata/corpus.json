@@ -87,6 +87,15 @@
       "rationale": "The marker skillRunner stamps when an idle stall coincides with a quota-exhausted rate_limit_event. The kill is stall-SHAPED — the text says `idle` and `forcibly terminating` — so it must be claimed before the stall-kill heuristics or the fleet retries in 30 minutes against a bucket that resets hours later. This row is the reason the rate-limit block outranks stall_kill on every ladder."
     },
     {
+      "id": "synthetic-model-stream-stalled",
+      "input": "exit -1: [model-stream-stalled] endpoint mtplx: no stream event and no session progress for 20m0s, past the endpoint's 20m0s header/chunk timeout, while no tool ran; the model request was abandoned and the stage stopped",
+      "expected": "model_stream_stalled",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/execution/model_stream_watchdog.go modelStreamWatchdog.notice",
+      "rationale": "The manager's idle-stream watchdog notice (#2176). It carries `stream`, `timeout` and `stage stopped`, so without its own rule above them it would read as stream_idle_timeout (Anthropic's wording) or a stall; the marker claims it first."
+    },
+    {
       "id": "synthetic-stage-timeout",
       "input": "exit -1: [stage-timeout] stage stopped at its stage timeout of 30m0s after 30m0s elapsed",
       "expected": "stall_kill",

@@ -525,6 +525,21 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	stageBudget := newStageBudgetEnforcer(budget, StreamFormatForAdapter(adapter.Name()), opts.Timeout)
 	stageBudget.arm(cmd.Process, execution.done)
 
+	// Idle-stream watchdog (#2176): a stage dispatched to a declared model
+	// endpoint is stopped once neither its stream nor its session database
+	// has moved for longer than the endpoint's header/chunk timeout while no
+	// tool ran, whatever OpenCode's own timeouts did. Found through the
+	// optional StreamIdleBound hook; independent of the stage timeout.
+	var streamWatch *modelStreamWatchdog
+	if h, ok := adapter.(interface {
+		StreamIdleBound(adapters.RunOptions) (string, time.Duration, string, bool)
+	}); ok {
+		if endpoint, bound, sessionDB, armed := h.StreamIdleBound(runOpts); armed {
+			streamWatch = newModelStreamWatchdog(endpoint, bound, sessionDB)
+			streamWatch.arm(cmd.Process, execution.done)
+		}
+	}
+
 	if opts.Runtime != nil {
 		opts.Runtime.SetProcess(cmd.Process.Pid, worktreeDir)
 		// PUBLISH THE LIVE CHILD (#555). SetProcess only writes memory, and the
@@ -738,6 +753,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 		inferer := NewPhaseInferer(opts.Stage)
 		started := false
 		eachLine(stdout, "stdout", func(raw []byte) {
+			streamWatch.observe(raw)
 			line := redactOut(raw)
 			stdoutBuf = append(stdoutBuf, line...)
 			stdoutBuf = append(stdoutBuf, '\n')
@@ -896,6 +912,11 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	if costCap != nil && costCap.fired {
 		keepStderr([]byte(costCap.notice()))
 	}
+	// So does a stage the idle-stream watchdog stopped (#2176).
+	streamStalled := streamWatch.hasFired()
+	if streamStalled {
+		keepStderr([]byte(streamWatch.notice()))
+	}
 	// Nightgauge OpenCode plugin handshake, exit check (#1635): re-stat the
 	// sentinel now the run has ended. Its mtime must precede the first
 	// tool_use this stream observed — a step_start check alone cannot see a
@@ -986,7 +1007,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 		execErr:     execCtx.Err(),
 		parentErr:   ctx.Err(),
 		stopped:     execution.stopRequested.Load(),
-		otherMarker: handshakeFailure != "" || stageBudget.notice() != "" || (costCap != nil && costCap.fired),
+		otherMarker: handshakeFailure != "" || stageBudget.notice() != "" || (costCap != nil && costCap.fired) || streamStalled,
 		timeout:     opts.Timeout,
 		elapsed:     time.Since(stageStartedAt),
 	}); notice != "" {
@@ -1121,6 +1142,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	// So did a stage stopped at its stage timeout, even when it trapped the
 	// signal and exited 0 (#2171).
 	if stageTimedOut && result.ExitCode == 0 {
+		result.ExitCode = 1
+	}
+	// And a stage the idle-stream watchdog stopped (#2176).
+	if streamStalled && result.ExitCode == 0 {
 		result.ExitCode = 1
 	}
 

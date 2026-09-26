@@ -49,6 +49,19 @@ changelog, and the release workflow refuses a tag that does not.
   recording why. No matched rule now runs the full stage list and logs
   `no change rule matched`; a matched rule such as `docs-only` skips as before.
 
+- **A model request that never answers no longer hangs an OpenCode stage**
+  (#2176). OpenCode 1.18.32 does read the endpoint's `headerTimeout` and
+  `chunkTimeout` (milliseconds, as the per-run config writes them), but clears
+  the header timer once headers arrive and arms the chunk timer only for a
+  `text/event-stream` response, reset by any bytes, so a server that answers
+  headers and then holds the body passes both. The manager now stops a stage
+  dispatched to a declared endpoint once it has printed no JSON event, and its
+  session database shows no part update and no running tool, for longer than
+  the endpoint's larger timeout. The stage ends with a
+  `[model-stream-stalled]` notice naming the endpoint and the idle time, and
+  classifies as the new retryable `model_stream_stalled` kind (short backoff,
+  no lifetime-cap increment), distinct from `stall_kill`.
+
 - **Execution hygiene: a timed-out stage is classified, an interrupted run
   leaves no child, a failed run keeps its OpenCode transcript, and the local
   gate stops dirtying a tracked file** (#2171). A stage stopped by its stage

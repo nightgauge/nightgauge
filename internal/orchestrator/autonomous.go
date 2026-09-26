@@ -5280,13 +5280,20 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 		// it, which is the wrong clock for a secondary throttle (the primary
 		// bucket can be full while it is active) and a reset a secondary limit
 		// never publishes. Exponential backoff converges without needing one.
+		//
+		// model_stream_stalled (#2176) is the local-endpoint sibling: one
+		// model request went silent past its endpoint's timeout while the
+		// server still answers fresh requests.
 		if terminalFailureKind == TerminalKindApiOverloaded ||
 			terminalFailureKind == TerminalKindApiConnectionLost ||
+			terminalFailureKind == TerminalKindModelStreamStalled ||
 			terminalFailureKind == TerminalKindGitHubRateLimited {
 			label := "api-overloaded (Anthropic 529, transient)"
 			switch terminalFailureKind {
 			case TerminalKindApiConnectionLost:
 				label = "api-connection-lost (Anthropic transport drop, transient)"
+			case TerminalKindModelStreamStalled:
+				label = "model-stream-stalled (model request never answered, transient)"
 			case TerminalKindGitHubRateLimited:
 				label = "github-rate-limited (GitHub API throttle mid-stage, transient)"
 			}

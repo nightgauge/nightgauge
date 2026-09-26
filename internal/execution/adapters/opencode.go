@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -788,4 +789,41 @@ func (a *OpenCodeAdapter) RedactedLiterals(opts RunOptions) []string {
 		}
 	}
 	return values
+}
+
+// StreamIdleBound is the manager's idle-stream watchdog bound for a stage
+// dispatched to a declared endpoint (#2176): the endpoint's id, the larger of
+// its header and chunk timeouts, and the directory of the run's session
+// database. ok is false for a hosted model, a run with no per-run root, or a
+// config that no longer resolves; no watchdog is armed then.
+func (a *OpenCodeAdapter) StreamIdleBound(opts RunOptions) (endpoint string, bound time.Duration, sessionDB string, ok bool) {
+	if opts.RunRoot == nil || len(opts.RunRoot.Endpoints) == 0 {
+		return "", 0, "", false
+	}
+	model, err := OpenCodeModelArg(opts.Model)
+	if err != nil {
+		return "", 0, "", false
+	}
+	provider, _, _ := strings.Cut(model, "/")
+	if !slices.Contains(opts.RunRoot.Endpoints, provider) {
+		return "", 0, "", false
+	}
+	settings, err := a.loadSettings(opts.WorktreeDir)
+	if err != nil {
+		return "", 0, "", false
+	}
+	endpoints, err := OpenCodeEndpoints(settings)
+	if err != nil {
+		return "", 0, "", false
+	}
+	ep, found := findOpenCodeEndpoint(endpoints, provider)
+	if !found {
+		return "", 0, "", false
+	}
+	return ep.ID, max(ep.HeaderTimeout, ep.ChunkTimeout), OpenCodeSessionDBDir(opts.RunRoot.Dir), true
+}
+
+// OpenCodeSessionDBDir is where a per-run root keeps opencode.db.
+func OpenCodeSessionDBDir(root string) string {
+	return filepath.Join(root, "data", "opencode")
 }
