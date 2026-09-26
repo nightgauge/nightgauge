@@ -713,23 +713,24 @@ func (s *Service) DefaultBranch() (string, error) {
 	return "", fmt.Errorf("cannot determine default branch: no origin/HEAD, main, or master ref found")
 }
 
-// Fetch fetches from remote with optional prune.
+// Fetch fetches from origin, pruning remote-tracking branches origin no
+// longer carries when prune is set.
+//
+// It shells out, like PushBranch (#878) and BranchDeleteRemote (#1921). On
+// go-git it sent the *http.BasicAuth NewService builds from GITHUB_TOKEN, which
+// go-git rejects against an SSH remote with "invalid auth method" before it
+// connects (#2081), and without a token go-git dialled SSH itself, ignoring
+// GIT_SSH_COMMAND, insteadOf rewrites and ~/.ssh/config. git resolves
+// credentials the way the machine already does. The prune refspec is explicit,
+// so nothing depends on the remote's configured fetch refspec.
 func (s *Service) Fetch(prune bool) error {
-	opts := &gogit.FetchOptions{
-		RemoteName: "origin",
-		Auth:       s.auth,
-	}
+	args := []string{"fetch", "origin"}
 	if prune {
-		opts.RefSpecs = []config.RefSpec{
-			config.RefSpec("+refs/heads/*:refs/remotes/origin/*"),
-		}
-		opts.Prune = true
+		args = []string{"fetch", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"}
 	}
-
-	if err := s.repo.Fetch(opts); err != nil && err != gogit.NoErrAlreadyUpToDate {
+	if _, err := s.gitExec(args...); err != nil {
 		return fmt.Errorf("fetch: %w", err)
 	}
-
 	return nil
 }
 
