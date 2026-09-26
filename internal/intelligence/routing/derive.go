@@ -127,6 +127,14 @@ func Derive(in DeriveInput) Decision {
 			if validOverrideRoute(r.OverrideRoute) {
 				route = strings.ToLower(strings.TrimSpace(r.OverrideRoute))
 			}
+		} else {
+			// No rule matched (#1968): that is an ABSENT classification, not a
+			// trivial one. The complexity-derived list used to stand here, so
+			// a small code change (complexity <= 2) skipped feature-planning
+			// and feature-validate under rule="" with nothing recording why,
+			// and feature-dev paid for the discovery planning would have done.
+			// Only a named, matched rule may skip a stage.
+			skip = []string{}
 		}
 	}
 

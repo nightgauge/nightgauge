@@ -401,6 +401,11 @@ func (s *Scheduler) tryDeterministicIssuePickup(
 		return false
 	}
 
+	dir, reason := s.runWorktree(runtime, item)
+	if reason != "" {
+		return punt(reason)
+	}
+
 	owner, repo := s.linkRepoFor(item.Repo)
 	issues := s.issueServiceFor(ctx, owner, repo)
 	if issues == nil {
@@ -421,7 +426,7 @@ func (s *Scheduler) tryDeterministicIssuePickup(
 	parent := iss.ParentIssueNumber
 	in := IssuePickupInput{
 		Issue:    iss,
-		Dir:      stageWorkspace(runtime, workspaceRoot),
+		Dir:      dir,
 		Routing:  decision,
 		DevModel: devModel,
 		EpicTitle: func() (string, error) {
@@ -441,4 +446,45 @@ func (s *Scheduler) tryDeterministicIssuePickup(
 	log.Printf("#%d: issue-pickup deterministic path: branch %s (%s, base %s, pushed=%t, %dms)",
 		item.Number, res.Branch, res.Action, res.BaseBranch, res.Pushed, res.DurationMs)
 	return true
+}
+
+// runWorktree resolves the run's worktree, provisioning it when this is the
+// first stage, or returns a reason there is none. The deterministic
+// issue-pickup runner creates and checks out the branch in it, and the stage
+// prompt's context paths are rooted in it.
+//
+// The hook runs BEFORE the first stage dispatch, and the run's worktree is
+// provisioned inside that dispatch (execution.Manager.RunStage), so at pickup
+// runtime.WorktreeDir is still empty and stageWorkspace falls back to the
+// workspace root — the operator's primary checkout. Checking the branch out
+// there switched the primary checkout off main mid-run and left the worktree
+// the later stages use on a detached HEAD (#2170). So the worktree is
+// provisioned here, through the same EnsureWorktree RunStage reuses, and
+// stamped on the runtime.
+//
+// The same gap rooted the first stages' prompt context paths
+// (.nightgauge/pipeline/issue-{N}.json) in the primary checkout, so the
+// scheduler also calls this before it builds a prompt.
+//
+// Without a Go-side adapter (IPC mode) the extension owns the worktree and
+// the Go side cannot name it; the hook punts to the skill rather than mutate
+// the primary checkout.
+func (s *Scheduler) runWorktree(runtime *state.RuntimeState, item types.BoardItem) (string, string) {
+	if runtime != nil && runtime.WorktreeDir != "" {
+		return runtime.WorktreeDir, ""
+	}
+	if s.execMgr == nil || !s.execMgr.HasAdapter() {
+		return "", "no-run-worktree"
+	}
+	dir, err := s.execMgr.EnsureWorktree(item.Repo, item.Number)
+	if dir != "" && runtime != nil {
+		runtime.SetWorktree(dir)
+	}
+	if err != nil {
+		return "", fmt.Sprintf("worktree-setup: %v", err)
+	}
+	if dir == "" {
+		return "", "no-run-worktree"
+	}
+	return dir, ""
 }

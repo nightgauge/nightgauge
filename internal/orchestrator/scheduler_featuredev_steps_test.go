@@ -36,16 +36,22 @@ type steppedPipelineRunner struct {
 func (r *steppedPipelineRunner) HonoursPrompt() bool { return true }
 
 func (r *steppedPipelineRunner) RunStage(_ context.Context, p StageRunParams) (*StageRunResult, error) {
+	// Work where the stage runs: the run's worktree once it is provisioned
+	// (#2170 provisions it before the first stage), else the root.
+	root := r.root
+	if p.Runtime != nil && p.Runtime.WorktreeDir != "" {
+		root = p.Runtime.WorktreeDir
+	}
 	switch p.Stage {
 	case state.StageFeatureDev:
 		r.mu.Lock()
 		r.devCalls++
 		k := r.devCalls
 		r.mu.Unlock()
-		if err := os.WriteFile(filepath.Join(r.root, fmt.Sprintf("step%d.go", k)), []byte("package x\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("step%d.go", k)), []byte("package x\n"), 0o644); err != nil {
 			return nil, err
 		}
-		plan := filepath.Join(r.root, "docs", "plan.md")
+		plan := filepath.Join(root, "docs", "plan.md")
 		body, _ := os.ReadFile(plan)
 		_ = os.WriteFile(plan, []byte(strings.Replace(string(body), "- [ ]", "- [x]", 1)), 0o644)
 		return &StageRunResult{InputTokens: 1000 * k, OutputTokens: 100 * k, CacheReadTokens: 10 * k}, nil
@@ -58,7 +64,7 @@ func (r *steppedPipelineRunner) RunStage(_ context.Context, p StageRunParams) (*
 		"ok":             true,
 	}
 	if p.Stage == state.StageFeaturePlanning {
-		plan := filepath.Join(r.root, "docs", "plan.md")
+		plan := filepath.Join(root, "docs", "plan.md")
 		_ = os.MkdirAll(filepath.Dir(plan), 0o755)
 		_ = os.WriteFile(plan, []byte("# Plan\n- [ ] First\n- [ ] Second\n- [ ] Third\n"), 0o644)
 		payload["plan_file"] = "docs/plan.md"

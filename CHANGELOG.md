@@ -16,6 +16,24 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The deterministic issue-pickup runner checks out the branch in the run's
+  worktree, not the primary checkout** (#2170): the hook ran before the first
+  stage dispatch provisioned the worktree, so it fell back to the workspace root
+  and switched the operator's checkout off `main`. The scheduler now provisions
+  and stamps the run's worktree before it builds a stage prompt and before the
+  hook runs, and the hook punts to the skill when no Go-side worktree exists
+  (IPC mode). The same gap rooted the first stages' pipeline context paths
+  (`.nightgauge/pipeline/issue-{N}.json`) in the primary checkout; they now
+  point into the worktree. `knowledge_path` stays at the canonical root, by
+  design (#1205). The stage-complete log line prints `model=none` for a
+  deterministic stage.
+
+- **Routing skips a stage only when a named change rule matched** (#1968): a
+  small code change that matched no rule was classified `trivial` under
+  `rule=""` and skipped feature-planning and feature-validate with nothing
+  recording why. No matched rule now runs the full stage list and logs
+  `no change rule matched`; a matched rule such as `docs-only` skips as before.
+
 - **An OpenCode stage that finished is no longer failed by a rejection it
   recovered from** (#2168): a rejected tool call followed by a completed call
   and a finished step is a warning, not `adapter_permission_rejected`; only a
