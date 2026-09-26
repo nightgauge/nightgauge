@@ -772,6 +772,9 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
           "[stall-killed]"
         ],
         [
+          "[stage-timeout]"
+        ],
+        [
           "stall-killed"
         ],
         [
@@ -793,7 +796,7 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
           "hard cap"
         ]
       ],
-      "why": "Stall-kill markers (#3207) as PipelineBridge writes them into the IPC stage result, plus the auto-mode wordings. All three real phrasings differ by a word, so a matcher written for one leaves the others unclassified — which is exactly what had happened to the SDK mirror, on the most common failure this machine produces (#306)."
+      "why": "`[stage-timeout]` is execution.Manager's notice for a stage its own stage timeout stopped (#2171). Stall-kill markers (#3207) as PipelineBridge writes them into the IPC stage result, plus the auto-mode wordings. All three real phrasings differ by a word, so a matcher written for one leaves the others unclassified — which is exactly what had happened to the SDK mirror, on the most common failure this machine produces (#306)."
     },
     {
       "id": "budget-enforcer",

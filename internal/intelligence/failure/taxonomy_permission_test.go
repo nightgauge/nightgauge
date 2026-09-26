@@ -40,3 +40,14 @@ func TestNonAuthFailuresAreNotPermission(t *testing.T) {
 		}
 	}
 }
+
+// TestStageTimeoutIsResourceNotNetworkOrPermission pins #2171 item 1: the
+// stage-timeout notice is a resource limit, not the network ladder's bare
+// `timeout` and never the auth ladder.
+func TestStageTimeoutIsResourceNotNetworkOrPermission(t *testing.T) {
+	got := NewClassifier().Classify("issue-pickup", -1,
+		"exit -1: [stage-timeout] stage stopped at its stage timeout of 30m0s after 30m0s elapsed")
+	if got.Category != CatResource {
+		t.Fatalf("Category = %q, want %q", got.Category, CatResource)
+	}
+}

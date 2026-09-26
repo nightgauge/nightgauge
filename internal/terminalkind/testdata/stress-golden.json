@@ -1826,6 +1826,21 @@
       "signal": ""
     },
     {
+      "input": "[stage-timeout]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [stage-timeout]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
+      "input": "[STAGE-TIMEOUT]",
+      "kind": "stall_kill",
+      "signal": ""
+    },
+    {
       "input": "stall-killed",
       "kind": "stall_kill",
       "signal": ""

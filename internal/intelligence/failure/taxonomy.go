@@ -91,6 +91,20 @@ func (c *Classifier) Classify(stage string, exitCode int, stderr string) Classif
 		}
 	}
 
+	// A stage stopped at its own stage timeout (#2171): execution.Manager's
+	// marker. Checked before the network ladder, whose bare `timeout` would
+	// otherwise call it a network error, and before the auth ladder. The stage
+	// ran out of time, a resource limit; the same input fails the same way.
+	if strings.Contains(lower, "[stage-timeout]") {
+		return Classification{
+			Category:    CatResource,
+			Severity:    SevMedium,
+			Retryable:   false,
+			Escalate:    true,
+			Description: "stage stopped at its stage timeout",
+		}
+	}
+
 	// Issue size gate — not retryable, requires human decomposition
 	if containsAny(lower, "issue too large", "size gate: rejected", "oversized scope", "scope exceeds threshold", "decomposition required") {
 		return Classification{

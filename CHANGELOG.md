@@ -34,6 +34,19 @@ changelog, and the release workflow refuses a tag that does not.
   recording why. No matched rule now runs the full stage list and logs
   `no change rule matched`; a matched rule such as `docs-only` skips as before.
 
+- **Execution hygiene: a timed-out stage is classified, an interrupted run
+  leaves no child, a failed run keeps its OpenCode transcript, and the local
+  gate stops dirtying a tracked file** (#2171). A stage stopped by its stage
+  timeout ends with a `[stage-timeout]` notice naming the timeout and elapsed
+  time and classifies as `stall_kill`, not `subagent_crash` `exit -1: <nil>`.
+  SIGINT or SIGTERM to `nightgauge run` now stops every stage's process group
+  and waits for it before exiting. A failed run's `opencode.db*` and `log/` are
+  copied, owner-only, to `~/.nightgauge/opencode/evidence/<run id>` before its
+  per-run root is deleted, swept after seven days, and the log line names the
+  path. `internal/orchestrator/.nightgauge/logs/github-api.jsonl` is no longer
+  tracked; that package's tests point the API ledger at a temp file and fail if
+  anything writes `.nightgauge/` into the source tree.
+
 - **An OpenCode stage that finished is no longer failed by a rejection it
   recovered from** (#2168): a rejected tool call followed by a completed call
   and a finished step is a warning, not `adapter_permission_rejected`; only a

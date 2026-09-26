@@ -134,6 +134,17 @@
       }
     },
     {
+      "name": "opencode-failure-evidence",
+      "note": "#2171: a failed run's OpenCode session database and logs are copied out of its per-run root, owner-only, into ~/.nightgauge/opencode/evidence/<run id> before the root is deleted, and the log line names the path.",
+      "go": {
+        "file": "internal/orchestrator/scheduler.go",
+        "anchor": "s.execMgr.PreserveOpenCodeFailureEvidence(runtime.RunID"
+      },
+      "extension": {
+        "pathSpecific": "Go-only, like opencode-run-root-cleanup: only a Go run creates the per-run root this preserves from (#2171)."
+      }
+    },
+    {
       "name": "merged-branch-cleanup",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
@@ -316,7 +327,7 @@
         "delete a successor's worktree.",
         "",
         "EVERY behavior in this manifest, accounted for. This list is exhaustive by construction: if you add a",
-        "behavior row above, add its disposition here, and keep the section counts summing to 25. TestForceClearAccountingIsExhaustive fails when a name is missing. (25 behaviors + this row.)",
+        "behavior row above, add its disposition here, and keep the section counts summing to 26. TestForceClearAccountingIsExhaustive fails when a name is missing. (26 behaviors + this row.)",
         "",
         "PERFORMED (3):",
         "  queue-item-completion       \u2014 completeQueueItem releases the dequeue's `processing` mark, on BOTH",
@@ -458,10 +469,11 @@
         "NOT APPLICABLE \u2014 Go-only by design (1):",
         "  lifecycle-decision-trace    \u2014 ADR 013 / #179; the extension path emits no trace on either funnel.",
         "",
-        "NOT APPLICABLE \u2014 Go-only until #1648 (1):",
+        "NOT APPLICABLE \u2014 Go-only until #1648 (2):",
         "  opencode-run-root-cleanup   \u2014 only the Go manager dispatches opencode, so only a Go run has an OpenCode",
         "                                per-run root to delete, and the Go terminal defer deletes it. An",
         "                                extension-path dispatch, force-cleared or settled, created none.",
+        "  opencode-failure-evidence   \u2014 preserves from that same root before the Go defer deletes it (#2171).",
         "",
         "KNOWN EXPOSURE \u2014 Go-side late settlement, deliberately not fixed here. ADR-017 step 3 changed what",
         "crosses the wire but NOT what the server does with it: every call a run makes now carries its run id,",
@@ -555,7 +567,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "bf51ec65da2b79d7becfef4d038ceb1839de48a65374de937f30706859c04226"
+      "sha256": "db2f934f65451bc1f71fd18b183d4e426f54270a9e2c7f04049cb9cf630c5b0d"
     },
     {
       "id": "extension-runSlotPipeline-finally",
