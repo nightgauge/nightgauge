@@ -1681,7 +1681,13 @@ removal.
   `opencode export <session> --sanitize --pure`, at most 64 sessions, each
   process in its own process group under a 10 s timeout. The stage's own
   export is read only for its assistant messages' `providerID` and `modelID`
-  (§ 1). Exports are held in memory, and nothing else from one is kept;
+  (§ 1). Each process prints into a temporary file that is unlinked before
+  it starts, never into a pipe: OpenCode prints an export with a single
+  write and then calls `process.exit()`, and into a pipe its runtime writes
+  only what the pipe takes at once (64 KiB on macOS) and drops the rest, so
+  the export of any stage longer than that was cut short and its served
+  model went unread (#2165, observed on 1.18.30 and 1.18.32 alike). An export
+  is read from that file into memory, and nothing else from one is kept;
   `--sanitize` was observed to redact prompts, replies and tool input while
   keeping those fields. A failed read marks the stage's usage partial; it
   fails the stage only when that leaves its cost budget unverified (§ 3).
