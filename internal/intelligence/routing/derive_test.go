@@ -331,15 +331,39 @@ func TestDerive_FoundationOverride(t *testing.T) {
 	if got.SuggestedRoute != "trivial" {
 		t.Errorf("SuggestedRoute = %q, want trivial", got.SuggestedRoute)
 	}
-	wantSkips := map[string]bool{"feature-planning": true, "feature-validate": true}
-	for _, s := range got.SkipStages {
-		if !wantSkips[s] {
-			t.Errorf("unexpected skip stage: %s", s)
-		}
-		delete(wantSkips, s)
+	// No change rule matched a chore, so nothing is skipped (#1968): only a
+	// named, matched rule may skip a stage.
+	if got.MatchedChangeRule != "" || len(got.SkipStages) != 0 {
+		t.Errorf("rule=%q SkipStages=%v, want no rule and no skips", got.MatchedChangeRule, got.SkipStages)
 	}
-	if len(wantSkips) > 0 {
-		t.Errorf("missing skip stages: %v", wantSkips)
+}
+
+// #1968: a small code change that matched no change rule used to skip
+// feature-planning and feature-validate under rule="". It now runs every stage.
+func TestDerive_NoMatchedRuleSkipsNothing(t *testing.T) {
+	for _, labels := range [][]string{
+		{"component:go-binary", "type:feature", "size:S"},
+		{"type:bug", "size:XS"},
+		{"type:spike", "component:go-binary", "size:XS"},
+	} {
+		got := Derive(DeriveInput{Title: "the api ledger records which identity", Labels: labels})
+		if got.MatchedChangeRule != "" {
+			t.Fatalf("%v: precondition: matched rule %q, want none", labels, got.MatchedChangeRule)
+		}
+		if len(got.SkipStages) != 0 {
+			t.Errorf("%v: SkipStages = %v with rule=\"\", want none", labels, got.SkipStages)
+		}
+	}
+}
+
+// #1968: a matched rule still skips what it names.
+func TestDerive_MatchedDocsRuleStillSkips(t *testing.T) {
+	got := Derive(DeriveInput{Title: "update CONTRIBUTING.md", Labels: []string{"type:docs", "size:S"}})
+	if got.MatchedChangeRule == "" {
+		t.Fatalf("precondition: a docs change should match a built-in rule")
+	}
+	if len(got.SkipStages) == 0 {
+		t.Errorf("rule %q matched but SkipStages is empty", got.MatchedChangeRule)
 	}
 }
 

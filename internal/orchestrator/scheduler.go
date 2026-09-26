@@ -5141,6 +5141,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// least Opus for a risk_high issue, applied with the minimum_model floors
 	// so the performance mode's ceiling still caps it.
 	modelFloors = raiseRiskFloors(modelFloors, routingDecision)
+	if routingDecision.MatchedChangeRule == "" && !routingDecision.RiskHigh {
+		// Distinguishable from a matched rule (#1968): no rule matched, so the
+		// route skips nothing.
+		log.Printf("#%d: routing %q: no change rule matched — running the full stage list",
+			item.Number, routingDecision.SuggestedRoute)
+	}
 	if skips := schedulerSkippableStages(routingDecision.SkipStages); len(skips) > 0 {
 		kept := make([]state.PipelineStage, 0, len(stages))
 		for _, st := range stages {
@@ -5662,6 +5668,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// Reuses prereqCtxType/prereqCtxOK computed above (#49) — the same
 		// effectivePrereqContextType result feeds both the prerequisite gate
 		// and the prompt's Invocation Context block.
+		//
+		// Provision the run's worktree before the paths are rooted (#2170):
+		// RunStage creates it only at dispatch, so the first stages' context
+		// paths fell back to the primary checkout. A failure here is left to
+		// RunStage, which reports it as the stage's worktree-setup error.
+		_, _ = s.runWorktree(runtime, item)
 		ws := stageWorkspace(runtime, workspaceRoot)
 		var contextFile string
 		if prereqCtxOK {
@@ -7718,7 +7730,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			source = "llm"
 		}
 		log.Printf("#%d: stage %s complete — model=%s source=%s, tokens: %s, cost: %s",
-			item.Number, stage, model, source, stageCost.TokenSummary(), stageCost.CostSummary())
+			item.Number, stage, completionLogModel(model, source), source, stageCost.TokenSummary(), stageCost.CostSummary())
 
 		// Post-stage verification for pr-merge: the skill's exit code is not
 		// sufficient evidence that the PR actually merged. Query GitHub and
@@ -10418,4 +10430,13 @@ func (a *schedulerPRCreateAdapter) ListOpenPRsForBranch(ctx context.Context, own
 // the stage has a gate to decide. Without a gate the exit code stands.
 func recoveredExitDefersToGate(err error, exitCode int, result *StageRunResult, gate gates.StageGate) bool {
 	return err == nil && exitCode != 0 && result != nil && result.RecoverableExit && !result.Cancelled && gate != nil
+}
+
+// completionLogModel is the model the stage-complete log line names: "none"
+// when a deterministic runner did the work, since no model ran.
+func completionLogModel(model, source string) string {
+	if source == "deterministic" {
+		return "none"
+	}
+	return model
 }

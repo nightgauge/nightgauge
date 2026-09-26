@@ -42,15 +42,13 @@ func TestIsHighRisk(t *testing.T) {
 // even for a trivially small (complexity ≤ 2) change that would otherwise route
 // trivial and skip feature-planning + feature-validate.
 func TestRiskFloorInvariant_Derive(t *testing.T) {
-	// Baseline: tiny code change with no risk label → trivial + skips.
+	// Baseline: tiny docs change with no risk label → a matched rule skips
+	// (#1968: only a matched rule may skip).
 	baseline := Derive(DeriveInput{
 		Title:     "tweak copy",
-		Labels:    []string{"type:feature", "size:XS"},
+		Labels:    []string{"type:docs", "size:XS"},
 		BoardSize: "XS",
 	})
-	if baseline.SuggestedRoute != "trivial" {
-		t.Fatalf("precondition: baseline route = %q, want trivial", baseline.SuggestedRoute)
-	}
 	if len(baseline.SkipStages) == 0 {
 		t.Fatalf("precondition: baseline should skip stages, got none")
 	}
@@ -61,7 +59,7 @@ func TestRiskFloorInvariant_Derive(t *testing.T) {
 	// Same tiny change, now touching a high-risk area → forced extensive, no skips.
 	highRisk := Derive(DeriveInput{
 		Title:     "tweak copy",
-		Labels:    []string{"type:feature", "size:XS", "component:security"},
+		Labels:    []string{"type:docs", "size:XS", "component:security"},
 		BoardSize: "XS",
 	})
 	if !highRisk.RiskHigh {

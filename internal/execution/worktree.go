@@ -14,6 +14,18 @@ import (
 	"github.com/nightgauge/nightgauge/internal/gitworktree"
 )
 
+// EnsureWorktree provisions (or reuses) the run's isolated worktree before any
+// stage is dispatched, with ensureWorktree's error contract: the path is
+// non-empty iff the worktree exists on disk.
+//
+// A caller that mutates git state ahead of RunStage needs it: the
+// deterministic issue-pickup hook runs before the first dispatch, so without
+// it the run's worktree did not exist yet and the branch was checked out in
+// the primary checkout instead (#2170).
+func (m *Manager) EnsureWorktree(repo string, issueNumber int) (string, error) {
+	return m.ensureWorktree(repo, issueNumber)
+}
+
 // ensureWorktree creates a git worktree for isolated execution.
 // Path: {workspaceRoot}/.nightgauge/worktrees/{repo}-issue-{N}/ — derived by
 // worktreePath, the same function CleanupWorktree tears down with. The
