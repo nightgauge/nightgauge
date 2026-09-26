@@ -210,7 +210,7 @@ func (m *Manager) HasAdapter() bool {
 }
 
 // RunStage executes a single pipeline stage for an issue.
-func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.RunResult, error) {
+func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult *adapters.RunResult, stageErr error) {
 	m.mu.Lock()
 	adapter := m.adapter
 	m.mu.Unlock()
@@ -231,6 +231,9 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 
 	execCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
+	// When the stage started, for the elapsed time a stage-timeout notice
+	// names (#2171).
+	stageStartedAt := time.Now()
 
 	// Create or reuse worktree
 	worktreeDir, err := m.ensureWorktree(opts.Repo, opts.IssueNumber)
@@ -370,6 +373,10 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 			}
 			id = minted
 			defer func() {
+				// A failed stage keeps its session database and logs (#2171).
+				if stageErr != nil || stageResult == nil || stageResult.ExitCode != 0 {
+					m.PreserveOpenCodeFailureEvidence(id, fmt.Sprintf("%s#%d %s", opts.Repo, opts.IssueNumber, opts.Stage))
+				}
 				if err := m.CleanupOpenCodeRunRoot(id); err != nil {
 					fmt.Fprintf(os.Stderr, "[opencode] could not delete the per-run root of a dispatch with no run identity: %v\n", err)
 				}
@@ -511,6 +518,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	m.mu.Lock()
 	m.running[execKey] = execution
 	m.mu.Unlock()
+	trackLiveStage(execution)
 
 	// The wall clock runs from the spawn. It is the smaller of the stage
 	// budget and opts.Timeout; nothing extends it.
@@ -956,6 +964,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// keeps the window a concurrent CancelWithGrace could still be blocked in
 	// its own Process.Wait() as short as possible.
 	close(execution.done)
+	untrackLiveStage(execution)
 	// The stage is reaped, so its wall clock stops here, not when its output
 	// closed: a child that closes stdout and stderr and keeps running is
 	// still bounded (#1652).
@@ -965,6 +974,23 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	// the budget-enforcer terminal rule classifies.
 	stageBudget.settle(cmd.Process.Pid)
 	if notice := stageBudget.notice(); notice != "" {
+		fmt.Fprintf(os.Stderr, "%s: %s\n", stageLabel, notice)
+		keepStderr([]byte(notice))
+	}
+	// A stage its own stage timeout stopped ends its stderr with the marker
+	// the stall_kill terminal rule classifies (#2171). Without it the deadline
+	// kill left stderr silent and the stage was recorded as `exit -1: <nil>`,
+	// a subagent_crash.
+	stageTimedOut := false
+	if notice := stageTimeoutNotice(stageTimeoutEvidence{
+		execErr:     execCtx.Err(),
+		parentErr:   ctx.Err(),
+		stopped:     execution.stopRequested.Load(),
+		otherMarker: handshakeFailure != "" || stageBudget.notice() != "" || (costCap != nil && costCap.fired),
+		timeout:     opts.Timeout,
+		elapsed:     time.Since(stageStartedAt),
+	}); notice != "" {
+		stageTimedOut = true
 		fmt.Fprintf(os.Stderr, "%s: %s\n", stageLabel, notice)
 		keepStderr([]byte(notice))
 	}
@@ -1092,12 +1118,44 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (*adapters.Ru
 	if handshakeFailure != "" && result.ExitCode == 0 {
 		result.ExitCode = 1
 	}
+	// So did a stage stopped at its stage timeout, even when it trapped the
+	// signal and exited 0 (#2171).
+	if stageTimedOut && result.ExitCode == 0 {
+		result.ExitCode = 1
+	}
 
 	if opts.Streamer != nil {
 		opts.Streamer.OnComplete(*result)
 	}
 
 	return result, nil
+}
+
+// stageTimeoutMarker is the token the stall_kill terminal rule matches for a
+// stage stopped by its own stage timeout (#2171).
+const stageTimeoutMarker = "[stage-timeout]"
+
+// stageTimeoutEvidence is what stageTimeoutNotice decides from, read after the
+// stage is reaped.
+type stageTimeoutEvidence struct {
+	execErr     error // the stage context's own error
+	parentErr   error // the caller's context error: its cancel is not the stage timeout
+	stopped     bool  // the operator stopped the stage
+	otherMarker bool  // a more specific stop (budget, cost cap, handshake) already explains it
+	timeout     time.Duration
+	elapsed     time.Duration
+}
+
+// stageTimeoutNotice returns the failure line for a stage its stage timeout
+// stopped, or "" when the stage ended any other way (#2171). Only the stage
+// context's own deadline counts: a cancelled parent, an operator stop, or a
+// stop another enforcer already marked is not a stage timeout.
+func stageTimeoutNotice(e stageTimeoutEvidence) string {
+	if !errors.Is(e.execErr, context.DeadlineExceeded) || e.parentErr != nil || e.stopped || e.otherMarker {
+		return ""
+	}
+	return fmt.Sprintf("%s stage stopped at its stage timeout of %s after %s elapsed",
+		stageTimeoutMarker, e.timeout, e.elapsed.Round(time.Second))
 }
 
 // stoppedStageExited reports whether cmd.Wait's error is only the stop's own
@@ -1894,6 +1952,33 @@ func (m *Manager) CleanupOpenCodeRunRoot(runID string) error {
 		return fmt.Errorf("opencode run root: %w", err)
 	}
 	return adapters.RemoveOpenCodeRunRoot(home, runID)
+}
+
+// PreserveOpenCodeRunEvidence keeps a failed run's OpenCode session database
+// and logs before its per-run root is deleted (#2171), and returns where they
+// went, or "" when there was nothing to keep. A run with no identity has no
+// root.
+func (m *Manager) PreserveOpenCodeRunEvidence(runID string) (string, error) {
+	if runID == "" {
+		return "", nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("opencode run evidence: %w", err)
+	}
+	return adapters.PreserveOpenCodeRunEvidence(home, runID, time.Now())
+}
+
+// PreserveOpenCodeFailureEvidence is PreserveOpenCodeRunEvidence with its outcome
+// logged, naming the path, for a failure that is about to lose its root.
+func (m *Manager) PreserveOpenCodeFailureEvidence(runID, label string) {
+	dir, err := m.PreserveOpenCodeRunEvidence(runID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[opencode] %s failed; could not preserve its session database and logs: %v\n", label, err)
+	}
+	if dir != "" {
+		fmt.Fprintf(os.Stderr, "[opencode] %s failed; session database and logs preserved at %s\n", label, dir)
+	}
 }
 
 // ExecutionInfo is a summary of a running execution (safe for serialization).

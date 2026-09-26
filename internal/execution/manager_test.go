@@ -684,12 +684,14 @@ func TestRunStage_DoesNotCreateASnapshotForARunThatHasNone(t *testing.T) {
 // exercises this cheaply: they all shell out to a vendor binary that isn't
 // present in CI, so the fake is the only way to pin the trap-and-exit-0 race
 // against CancelWithGrace deterministically.
-type sigtermTrapAdapter struct{}
+type sigtermTrapAdapter struct{ ready string }
 
 func (sigtermTrapAdapter) Name() string { return "sigterm-trap-fake" }
 
-func (sigtermTrapAdapter) BuildCommand(adapters.RunOptions) (string, []string, map[string]string) {
-	return "sh", []string{"-c", `trap "echo received SIGTERM >&2; exit 0" TERM; sleep 30`}, nil
+// The ready file is written only once the trap is installed, so the test can
+// wait for it instead of guessing how long sh takes to reach the builtin.
+func (a sigtermTrapAdapter) BuildCommand(adapters.RunOptions) (string, []string, map[string]string) {
+	return "sh", []string{"-c", `trap "echo received SIGTERM >&2; exit 0" TERM; : > "$0"; sleep 30 & wait`, a.ready}, nil
 }
 
 func (sigtermTrapAdapter) UsesStdin() bool { return false }
@@ -709,7 +711,8 @@ func TestRunStage_GracefulStopExitZeroIsReportedCancelled(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	m := NewManager(root, sigtermTrapAdapter{})
+	ready := filepath.Join(root, "trap-ready")
+	m := NewManager(root, sigtermTrapAdapter{ready: ready})
 	key := "nightgauge/nightgauge#564"
 
 	resultCh := make(chan *adapters.RunResult, 1)
@@ -738,13 +741,14 @@ func TestRunStage_GracefulStopExitZeroIsReportedCancelled(t *testing.T) {
 		return ok
 	})
 	// Registration happens right after cmd.Start(), which only forks+execs —
-	// the shell itself needs a moment to actually reach the `trap` builtin.
-	// A SIGTERM that lands before then hits sh's default (uncaught)
-	// disposition and kills it by signal instead of running the trap, which
-	// would surface as ExitCode == -1, not the graceful ExitCode == 0 this
-	// test exists to pin. Same startup-race guard as
-	// TestCancelWithGrace_ForceKill_WhenProcessIgnoresSIGTERM's sleep.
-	time.Sleep(50 * time.Millisecond)
+	// the shell itself needs a moment to reach the `trap` builtin, and a
+	// SIGTERM that lands before then kills it by signal (ExitCode -1). A fixed
+	// 50ms sleep lost that race under -race load (#2171); wait for the file
+	// the shell writes after installing the trap instead.
+	pollUntil(t, "the fake CLI to install its SIGTERM trap", 30*time.Second, func() bool {
+		_, err := os.Stat(ready)
+		return err == nil
+	})
 
 	graceful, err := m.CancelWithGrace(key, 5*time.Second)
 	if err != nil {

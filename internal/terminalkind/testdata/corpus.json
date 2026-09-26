@@ -87,6 +87,15 @@
       "rationale": "The marker skillRunner stamps when an idle stall coincides with a quota-exhausted rate_limit_event. The kill is stall-SHAPED — the text says `idle` and `forcibly terminating` — so it must be claimed before the stall-kill heuristics or the fleet retries in 30 minutes against a bucket that resets hours later. This row is the reason the rate-limit block outranks stall_kill on every ladder."
     },
     {
+      "id": "synthetic-stage-timeout",
+      "input": "exit -1: [stage-timeout] stage stopped at its stage timeout of 30m0s after 30m0s elapsed",
+      "expected": "stall_kill",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/execution/manager.go stageTimeoutNotice",
+      "rationale": "execution.Manager's own stage-timeout notice (#2171), prefixed the way terminalFailureReason renders it. Before it existed the deadline kill left stderr silent and the stage recorded `exit -1: <nil>`, a subagent_crash; the marker is claimed by stall_kill, the existing wall-clock kind, well before the bare `exit ` rule."
+    },
+    {
       "id": "captured-stall-idle-threshold",
       "input": "Stage exceeded stall idle threshold (12m 0s without output) — forcibly terminating process after 18m 0s (idle for 13m 22s).",
       "expected": "stall_kill",

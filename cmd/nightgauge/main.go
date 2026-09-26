@@ -4250,6 +4250,12 @@ func runCmd() *cobra.Command {
   nightgauge run --project 5              # Pick next ready issue and run
   nightgauge run --auto --project 5       # Run continuously`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// SIGINT/SIGTERM cancel the run and stop every stage's process
+			// group before the command returns (#2171).
+			sigCtx, shutdown := withStageShutdown(cmd.Context())
+			defer shutdown()
+			cmd.SetContext(sigCtx)
+
 			// Accept issue number as positional arg or flag
 			if len(args) > 0 && issueNumber == 0 {
 				num, err := strconv.Atoi(args[0])

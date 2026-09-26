@@ -121,6 +121,11 @@ answer-log-*.md
 
 # Nested .nightgauge directories (should never exist in packages/)
 packages/**/.nightgauge/
+# ...nor in Go package directories, where `go test` runs with the package
+# as its cwd: a committed internal/orchestrator/.nightgauge/ let the GitHub API
+# ledger write into the source tree on every run (#2171).
+internal/**/.nightgauge/
+cmd/**/.nightgauge/
 # ...except the VSCode host smoke tier's committed fixture (#745). It is inert
 # test data, copied into a throwaway temp workspace mid-run — never runtime
 # state, and never read from this location by the extension.

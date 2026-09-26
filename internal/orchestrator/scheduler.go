@@ -4864,6 +4864,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// too, with the session database and transcripts in it (ADR-022
 			// § 22). Unlike the worktree nothing in it is worth keeping for
 			// inspection: the stage's output is already captured.
+			// A failed run keeps its session database and logs first (#2171).
+			if !pipelineSuccess {
+				s.execMgr.PreserveOpenCodeFailureEvidence(runtime.RunID, fmt.Sprintf("#%d", item.Number))
+			}
 			if err := s.execMgr.CleanupOpenCodeRunRoot(runtime.RunID); err != nil {
 				log.Printf("#%d: opencode per-run root cleanup failed: %v", item.Number, err)
 			}

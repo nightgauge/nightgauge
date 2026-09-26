@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -50,7 +51,25 @@ func TestMain(m *testing.M) {
 	// Never publish the endpoint slot ledger into the real home (#1679); a
 	// test that checks publication points it at its own temp dir.
 	openCodeEndpointSlotsPath = func() string { return "" }
+	// The GitHub API ledger resolves its default path against the cwd, which
+	// for this binary is the package directory in the source tree (#2171): a
+	// committed internal/orchestrator/.nightgauge/logs/github-api.jsonl
+	// satisfied the ledger's workspace guard and every run rewrote it. Point it
+	// at a temp file, and fail the run if anything created a .nightgauge here.
+	ledgerDir, err := os.MkdirTemp("", "orchestrator-api-ledger-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain: %v\n", err)
+		os.Exit(1)
+	}
+	os.Setenv("NIGHTGAUGE_GITHUB_API_LOG", filepath.Join(ledgerDir, "github-api.jsonl"))
 	code := m.Run()
+	os.RemoveAll(ledgerDir)
+	if _, err := os.Stat(".nightgauge"); err == nil {
+		fmt.Fprintln(os.Stderr, "\nFAIL: a test wrote .nightgauge/ into the source tree (internal/orchestrator); use t.TempDir() (#2171)")
+		if code == 0 {
+			code = 1
+		}
+	}
 	if calls := unstubbedGhCalls(); len(calls) > 0 {
 		fmt.Fprintf(os.Stderr,
 			"\nFAIL: %d unstubbed gh call(s) reached the reconcile paths:\n  gh %s\n\n"+
