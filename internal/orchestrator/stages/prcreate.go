@@ -45,7 +45,10 @@ const (
 // allowed — these constants name the canonical buckets so telemetry queries
 // can group them.
 const (
-	ReasonRichContext            = "rich-context"
+	ReasonRichContext = "rich-context"
+	// ReasonValidateSkippedByRoute: created without validate-{N}.json because
+	// the run's route skipped feature-validate (#1968). The PR body says so.
+	ReasonValidateSkippedByRoute = "rich-context: validate-skipped-by-route"
 	ReasonAlreadyExists          = "pr-already-exists"
 	ReasonMissingDevContext      = "missing-dev-context"
 	ReasonMissingValidateContext = "missing-validate-context"
@@ -119,12 +122,16 @@ type PRCreateSnapshot struct {
 	DeadCodeScanDev string
 
 	// Validate fields (from validate-{N}.json)
-	HasValidate           bool
-	ValidationStatus      string // "passed" | "failed" | "partial" | "skipped"
-	ValidateErrorCategory string
-	BuildPassed           bool
-	UnitTestsPassed       bool
-	IntegrationPassed     bool
+	HasValidate bool
+	// ValidateSkippedByRoute is set when routing skipped feature-validate on
+	// this run (#1968): a missing validate context is then expected, not a
+	// gap, and dev-reported build/test failures still punt.
+	ValidateSkippedByRoute bool
+	ValidationStatus       string // "passed" | "failed" | "partial" | "skipped"
+	ValidateErrorCategory  string
+	BuildPassed            bool
+	UnitTestsPassed        bool
+	IntegrationPassed      bool
 	// UnverifiedDeliverable is set when the run built a test suite it never
 	// executed (#152). It rides in the PR body so the gap is visible where a
 	// reviewer actually looks, rather than only in prose inside a JSON
@@ -158,6 +165,8 @@ type PRCreateDecision struct {
 //	BatchPresent                               → Punt (batch-mode)
 //	IssueType == "spike"                       → Punt (spike-issue)
 //	Branch == BaseBranch                       → Punt (branch-is-base)
+//	!HasValidate && ValidateSkippedByRoute     → dev-only checks, then Create
+//	                                             (rich-context: validate-skipped-by-route)
 //	!HasValidate                               → Punt (missing-validate-context)
 //	ValidationStatus ∉ {passed, passed_unverified} → Punt (validation-not-passed)
 //	ValidateErrorCategory != ""                → Punt (validate-error-category)
@@ -179,6 +188,17 @@ func DecideCreate(snap PRCreateSnapshot) PRCreateDecision {
 	}
 	if snap.Branch == "" || snap.Branch == snap.BaseBranch {
 		return PRCreateDecision{Punt: true, Reason: ReasonBranchIsBase}
+	}
+	if !snap.HasValidate && snap.ValidateSkippedByRoute {
+		// The route deliberately skipped validation (#1968). Hold the floor the
+		// dev stage itself reports: a failed build or failing tests still punt.
+		if snap.BuildStatus == "failed" || snap.TestsFailed > 0 {
+			return PRCreateDecision{Punt: true, Reason: fmt.Sprintf("%s: dev-reported-failure", ReasonValidationNotPassed)}
+		}
+		if len(snap.FilesCreated)+len(snap.FilesModified)+len(snap.FilesDeleted) == 0 {
+			return PRCreateDecision{Punt: true, Reason: ReasonNoChanges}
+		}
+		return PRCreateDecision{ShouldCreate: true, Reason: ReasonValidateSkippedByRoute}
 	}
 	if !snap.HasValidate {
 		return PRCreateDecision{Punt: true, Reason: ReasonMissingValidateContext}
@@ -331,6 +351,9 @@ func RenderBody(snap PRCreateSnapshot) string {
 
 	// Validation
 	b.WriteString("## Validation\n\n")
+	if !snap.HasValidate && snap.ValidateSkippedByRoute {
+		b.WriteString("- feature-validate: skipped by the route (routing skip list); results below are feature-dev's own\n")
+	}
 	b.WriteString(fmt.Sprintf("- Build: %s\n", buildLabel(snap.BuildPassed, snap.BuildStatus)))
 	b.WriteString(fmt.Sprintf("- Unit tests: %s (%d passed, %d failed)\n",
 		passLabel(snap.UnitTestsPassed), snap.TestsPassed, snap.TestsFailed))
@@ -518,6 +541,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonContextInvalidJSON}, nil)
 	}
 	snap.IssueNumber = issueNumber
+	snap.ValidateSkippedByRoute = routeSkippedStage(ctx, "feature-validate")
 	ph.complete("load-context")
 
 	// Own the commit BEFORE deciding anything (#1179). Placement is the whole
@@ -586,7 +610,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	// pr-create idempotent on the branch: if origin already has it, the work is
 	// on the remote and the PR can be opened from it. Only punt when the branch
 	// is genuinely absent (or existence can't be determined).
-	createReason := ReasonRichContext
+	createReason := decision.Reason
 	if pushErr := r.git.PushBranch(ctx, workdir, snap.Branch); pushErr != nil {
 		exists, existsErr := r.git.RemoteBranchExists(ctx, workdir, snap.Branch)
 		if existsErr != nil || !exists {

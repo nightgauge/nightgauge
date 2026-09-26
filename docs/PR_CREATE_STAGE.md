@@ -45,10 +45,9 @@ The owner is now `stages.DecideCommit` +
 **head of `Run`** — before `DecideCreate` and before the client-wiring check.
 Placement is the fix:
 
-- Before `DecideCreate`, so a punt still commits. The trivial route punts with
-  `missing-validate-context` (no `validate-{N}.json` exists when the stage was
-  skipped) and the LLM skill opens the PR — from a branch that now carries the
-  work.
+- Before `DecideCreate`, so a punt still commits and the LLM skill, when it
+  runs, opens the PR from a branch that carries the work. (A route that skips
+  feature-validate no longer punts for that reason: see the decision matrix.)
 - Before the `prClient == nil` check, so an unwired GitHub client cannot
   silently disable it.
 - Inside the runner rather than the scheduler, so the Go scheduler and the
@@ -104,7 +103,8 @@ wins):
 | `dev-batch-{E}.json` present                   | Punt   | `batch-mode`                   |
 | `issue.type == "spike"`                        | Punt   | `spike-issue`                  |
 | Branch missing or equal to base branch         | Punt   | `branch-is-base`               |
-| `validate-{N}.json` missing                    | Punt   | `missing-validate-context`     |
+| `validate-{N}.json` missing, route skipped feature-validate, dev build/tests not failed, files changed | Create | `rich-context: validate-skipped-by-route` |
+| `validate-{N}.json` missing (not route-skipped) | Punt  | `missing-validate-context`     |
 | `validation_status` not passed/unverified      | Punt   | `validation-not-passed: <s>`   |
 | `errorCategory != ""`                          | Punt   | `validate-error-category: <c>` |
 | Any `dead_code_warnings[].severity == "error"` | Punt   | `dead-code-blocked`            |
@@ -191,7 +191,8 @@ byte-equal output across calls.
 | Reason                        | Cause                                                      | What happens |
 | ----------------------------- | ---------------------------------------------------------- | ------------ |
 | `missing-dev-context`         | `dev-{N}.json` missing or unparseable                      | Punt → LLM   |
-| `missing-validate-context`    | `validate-{N}.json` missing                                | Punt → LLM   |
+| `missing-validate-context`    | `validate-{N}.json` missing and the route did not skip it  | Punt → LLM   |
+| `rich-context: validate-skipped-by-route` | Route skipped feature-validate (#1968); the PR body says so | Create |
 | `validation-not-passed: <s>`  | Validation reported `failed` / `partial` / `skipped`       | Punt → LLM   |
 | `validate-error-category: ↩`  | Hard-gate failure category recorded by feature-validate    | Punt → LLM   |
 | `dead-code-blocked`           | Any error-severity dead-code warning                       | Punt → LLM   |
