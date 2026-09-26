@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`nightgauge git fetch` and `branch-create` now work on SSH checkouts
+  (#2081).** With `GITHUB_TOKEN` set, a fetch from an `ssh://` or
+  `git@github.com:` origin failed with "invalid auth method", which stopped
+  `branch-create` for every sub-issue of an epic and every re-run whose
+  branch was already on origin. The fetch now goes through `git`, which uses
+  the machine's own SSH agent, credential helper and `insteadOf` rewrites.
+
 - **A pipeline stage on the opencode adapter now runs `opencode.model` (#2160).**
   The routing handed every stage a tier such as `sonnet`, which the opencode
   adapter refuses because it names no provider, so `nightgauge run --adapter
