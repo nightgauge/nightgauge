@@ -567,9 +567,15 @@ type pullRequestListNode struct {
 type createPullRequestMutation struct {
 	CreatePullRequest struct {
 		PullRequest struct {
-			ID     graphql.ID
-			Number graphql.Int
-			URL    graphql.String
+			ID         graphql.ID
+			Number     graphql.Int
+			URL        graphql.String
+			Repository struct {
+				Name  graphql.String
+				Owner struct {
+					Login graphql.String
+				}
+			}
 		}
 	} `graphql:"createPullRequest(input: $input)"`
 }
