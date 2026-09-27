@@ -96,6 +96,11 @@ context pressure), continue without pattern context as above.
 
 ## Phase 3: Documentation-First Analysis
 
+**Exploration budget (#2186).** Everything in this file counts against
+SKILL.md's exploration budget of **12 reads**. Batch discovery into one
+`grep`/listing pass, read whole relevant ranges once rather than in small
+slices, and when the budget is spent stop exploring and write the plan.
+
 ### Greenfield Detection (#1319)
 
 Before reading docs, check if this is a greenfield repo:
