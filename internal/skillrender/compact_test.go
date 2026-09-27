@@ -288,3 +288,23 @@ func TestDecideProfile_CompactWhenAvailable(t *testing.T) {
 		t.Errorf("DecideProfile for a render that already fits = %v, want %v", decision3, DecisionFits)
 	}
 }
+
+// TestDecideProfileFor_LocalPrefersCompact (#2186): a local-endpoint dispatch
+// picks the compact profile even when the full render fits; a hosted one
+// keeps the full render; no compact profile keeps the full render.
+func TestDecideProfileFor_LocalPrefersCompact(t *testing.T) {
+	root := realSkillsRoot(t)
+	full := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}, IncludeBudget: -1})
+	compact := mustRender(t, Options{Stage: "pr-merge", SkillsRoots: []string{root}, Profile: ProfileCompact})
+
+	decision, fit := DecideProfileFor("pr-merge", full.Content, 262144, true, compact.Content, true)
+	if decision != DecisionCompactLocal || !fit.Fits || fit.EstimatedTokens != Estimate(compact.Content) {
+		t.Errorf("local dispatch with a fitting full render = %v %+v, want %v on the compact verdict", decision, fit, DecisionCompactLocal)
+	}
+	if d, _ := DecideProfileFor("pr-merge", full.Content, 262144, true, compact.Content, false); d != DecisionFits {
+		t.Errorf("hosted dispatch = %v, want %v", d, DecisionFits)
+	}
+	if d, _ := DecideProfileFor("pr-merge", full.Content, 262144, false, "", true); d != DecisionFits {
+		t.Errorf("local dispatch without a compact profile = %v, want %v", d, DecisionFits)
+	}
+}

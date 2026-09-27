@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 )
@@ -48,4 +49,25 @@ func renderProfileName(r *skillrender.Result) string {
 		return skillrender.ProfileCompact
 	}
 	return "full"
+}
+
+// isLocalDispatch reports whether model, dispatched on adapter, runs on a
+// self-hosted/local endpoint (#2186): a declared opencode endpoint that is
+// local, or an opencode provider key that is itself local (lm-studio,
+// ollama, excluding Ollama cloud models). The render-profile choice prefers
+// compact for such a dispatch. Same locality rule as the stage timeout.
+func isLocalDispatch(adapter, model, workspaceRoot string) bool {
+	if adapter != "opencode" {
+		return false
+	}
+	return execution.OpenCodeDeclaredEndpointLocal(model, workspaceRoot) || models.IsLocalModel(adapter, model, nil)
+}
+
+// profileReasonSuffix renders a non-empty profile reason for the
+// context-budget log line: ", reason local_endpoint".
+func profileReasonSuffix(reason string) string {
+	if reason == "" {
+		return ""
+	}
+	return ", reason " + reason
 }

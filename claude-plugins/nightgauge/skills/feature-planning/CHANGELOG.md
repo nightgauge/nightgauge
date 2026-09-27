@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- **Exploration budget (#2186).** Planning's exploration (Phases 2.5-3.7) is
+  bounded at 12 reads: batch discovery into one `grep`/listing pass, read
+  whole ranges once, and write the plan when the budget is spent. On a slow
+  local model each extra read costs minutes of prefill and decode.
+
 ### Fixed
 
 - **Every shell block derives the pipeline identifiers it reads (#1932).** Each

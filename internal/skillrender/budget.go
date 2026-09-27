@@ -146,6 +146,11 @@ const (
 	// DecisionRefuse means the full render did not fit and either no compact
 	// profile exists or the compact render does not fit either.
 	DecisionRefuse ProfileDecision = "refuse"
+	// DecisionCompactLocal means the dispatch runs on a self-hosted/local
+	// endpoint, a compact profile exists and it fits, so compact is chosen
+	// even though the full render may fit too (#2186): on a local model the
+	// prefill cost of a larger prompt matters more than window fit.
+	DecisionCompactLocal ProfileDecision = "compact-local"
 )
 
 // DecideProfile checks fullContent against window first; only when it does
@@ -160,6 +165,21 @@ const (
 // full result for DecisionFits and DecisionRefuse-with-no-compact-profile,
 // otherwise the compact result.
 func DecideProfile(stage string, fullContent string, window int, hasCompactProfile bool, compactContent string) (ProfileDecision, FitResult) {
+	return DecideProfileFor(stage, fullContent, window, hasCompactProfile, compactContent, false)
+}
+
+// DecideProfileFor is DecideProfile with the dispatch's locality (#2186):
+// when preferCompact is true (the model runs on a self-hosted/local endpoint)
+// and the stage has a compact profile that fits, the compact profile is
+// chosen first, as DecisionCompactLocal, whether or not the full render also
+// fits. A compact profile that does not fit falls back to DecideProfile's
+// ordinary order.
+func DecideProfileFor(stage string, fullContent string, window int, hasCompactProfile bool, compactContent string, preferCompact bool) (ProfileDecision, FitResult) {
+	if preferCompact && hasCompactProfile {
+		if compact := Fit(stage, compactContent, window); compact.Fits {
+			return DecisionCompactLocal, compact
+		}
+	}
 	full := Fit(stage, fullContent, window)
 	if full.Fits {
 		return DecisionFits, full

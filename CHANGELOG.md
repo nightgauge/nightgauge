@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Feature-planning's exploration is bounded on slow local models** (#2186).
+  A dispatch on a self-hosted/local OpenCode endpoint now prefers the stage's
+  compact profile even when the full render fits, because prefill cost
+  matters more than window fit there. The context-budget log line and the
+  stage-start trace (`skill_profile_reason`: `local_endpoint` or `window`)
+  record why. feature-planning's instructions set an exploration budget of 12
+  reads: batch discovery into one `grep`/listing pass, read whole ranges once,
+  and write the plan when the budget is spent.
+
 - **Stage context is bounded by what the stage needs, not by the model's
   restraint** (#2178). In #1659 leg 1 run 11, 74% of an OpenCode
   feature-planning stage's context was tool output. Four changes:

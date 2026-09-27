@@ -214,6 +214,13 @@ printf '<!-- phase:start name="documentation-analysis" index=6 total=14 stage="f
 Greenfield detection, parallel/sequential doc gathering — see the supporting
 file (`pattern-and-docs.md`).
 
+**Exploration budget (#2186).** Exploration across Phases 2.5-3.7 is bounded
+at **12 reads** (file reads, `grep` or listing calls, doc fetches). Batch
+discovery into one `grep`/listing pass instead of many narrow ones. Read each
+whole relevant range once, not many small slices of the same file. When the
+budget is spent, stop exploring and write the plan with what you have; name
+any open question in the plan instead of reading further.
+
 ### Phase 3.5: Knowledge Base Read
 
 ```bash

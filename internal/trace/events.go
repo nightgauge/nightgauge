@@ -194,6 +194,11 @@ type StageStartPayload struct {
 	// when the full render did not fit the model's window and the stage's
 	// compact profile did (ADR 023 Q3/Q5).
 	SkillProfile string `json:"skill_profile,omitempty"`
+	// SkillProfileReason says why SkillProfile was chosen: "window" when the
+	// full render did not fit, "local_endpoint" when the model runs on a
+	// self-hosted/local endpoint and compact was preferred (#2186). Empty
+	// for a full render.
+	SkillProfileReason string `json:"skill_profile_reason,omitempty"`
 }
 
 // StageExitPayload summarizes a stage exit. Full forensics (signal, stderr

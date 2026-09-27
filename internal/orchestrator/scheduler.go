@@ -5575,10 +5575,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// ADR 023 Q3/Q5 order: the full render when it fits; else the
 		// stage's compact profile when it has one and it fits; else the
 		// one-hop re-route, else refusal.
+		skillProfileReason := ""
 		if skillData.ContextWindow > 0 {
 			fit := skillrender.Fit(string(stage), skillData.Content, skillData.ContextWindow)
 			compactNote := ""
-			if !fit.Fits {
+			// A self-hosted/local endpoint prefers the compact profile even
+			// when the full render fits (#2186): prefill on a local model
+			// costs far more wall clock than window fit suggests.
+			localDispatch := isLocalDispatch(windowAdapter, model, workspaceRoot)
+			if !fit.Fits || localDispatch {
 				compactData, compactErr := skillrender.Render(skillrender.Options{
 					Stage:       string(stage),
 					Model:       model,
@@ -5592,8 +5597,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				if hasCompact {
 					compactContent = compactData.Content
 				}
-				decision, decided := skillrender.DecideProfile(string(stage), skillData.Content, skillData.ContextWindow, hasCompact, compactContent)
-				if decision == skillrender.DecisionCompact {
+				decision, decided := skillrender.DecideProfileFor(string(stage), skillData.Content, skillData.ContextWindow, hasCompact, compactContent, localDispatch)
+				if decision == skillrender.DecisionCompactLocal {
+					log.Printf("#%d: stage %s context budget: local endpoint — dispatching the compact profile (reason local_endpoint, estimated %d tokens; full render estimated %d, fits=%v)",
+						item.Number, stage, decided.EstimatedTokens, fit.EstimatedTokens, fit.Fits)
+					compactData.ContextWindow = skillData.ContextWindow
+					skillData = compactData
+					fit = decided
+					skillProfileReason = "local_endpoint"
+				} else if decision == skillrender.DecisionCompact {
 					log.Printf("#%d: stage %s context budget: full render estimated %d tokens against a %d-token budget (window %d) — dispatching the compact profile (estimated %d tokens)",
 						item.Number, stage, fit.EstimatedTokens, fit.Budget, fit.Window, decided.EstimatedTokens)
 					// The compact render resolved the same descriptor; a
@@ -5601,7 +5613,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					compactData.ContextWindow = skillData.ContextWindow
 					skillData = compactData
 					fit = decided
-				} else if hasCompact {
+					skillProfileReason = "window"
+				} else if hasCompact && !fit.Fits {
 					compactNote = fmt.Sprintf("; its compact profile estimated %d tokens and does not fit either", decided.EstimatedTokens)
 					log.Printf("#%d: stage %s context budget: the compact profile does not fit either (estimated %d tokens against %d)",
 						item.Number, stage, decided.EstimatedTokens, decided.Budget)
@@ -5658,8 +5671,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					return
 				}
 			} else {
-				log.Printf("#%d: stage %s context budget: fits (profile %s, estimated %d tokens, budget %d, window %d, share %.2f)",
-					item.Number, stage, renderProfileName(skillData), fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
+				log.Printf("#%d: stage %s context budget: fits (profile %s%s, estimated %d tokens, budget %d, window %d, share %.2f)",
+					item.Number, stage, renderProfileName(skillData), profileReasonSuffix(skillProfileReason), fit.EstimatedTokens, fit.Budget, fit.Window, fit.Share)
 			}
 		} else {
 			log.Printf("#%d: stage %s context budget: unknown-window branch (no resolved model descriptor) — dispatching unchecked", item.Number, stage)
@@ -5941,10 +5954,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 
 		// Trace the stage boundary with its dispatch context (#179).
 		tracer.Emit(trace.KindStageStart, string(stage), trace.StageStartPayload{
-			Model:           model,
-			PerformanceMode: string(stagePerfMode),
-			EscalatedRetry:  s.retryEngine.CurrentModel(string(stage)) != "",
-			SkillProfile:    renderProfileName(skillData),
+			Model:              model,
+			PerformanceMode:    string(stagePerfMode),
+			EscalatedRetry:     s.retryEngine.CurrentModel(string(stage)) != "",
+			SkillProfile:       renderProfileName(skillData),
+			SkillProfileReason: skillProfileReason,
 		})
 
 		if s.onStageStart != nil {
