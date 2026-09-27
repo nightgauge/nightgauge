@@ -9,7 +9,7 @@ description: Deterministic post-creation gate that verifies every issue created 
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.2.0"
+  version: "1.2.1"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
@@ -71,7 +71,8 @@ Output flags: `--json`, `--no-audit-trail`, `--allow-closed`.
 
 ### Phase 1: Parse Arguments and Resolve Targets
 
-Distinguish invocation mode from `$ARGUMENTS`:
+Distinguish invocation mode from the skill arguments (the text after the
+skill name):
 
 ```bash
 MODE=""

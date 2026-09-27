@@ -2,6 +2,12 @@
 
 All notable changes to this skill are documented here.
 
+## [1.3.2] - 2026-09-27
+
+### Changed
+
+- Description states the skill is user-invoked (#2195).
+
 ## [1.3.0]
 
 ### Changed

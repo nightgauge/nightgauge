@@ -44,6 +44,27 @@ and this project adheres to
   `docs/AGENT_GUIDANCE.md` (#1604).
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.
 
+## [5.1.0] - 2026-09-27
+
+### Added
+
+- Minimal tier (`--tier minimal`) for small repositories: `AGENTS.md` with the
+  routing section inline plus `CLAUDE.md`, no `docs/`; the check runs with
+  `--routing AGENTS.md --docs-index none` (#2197).
+
+### Changed
+
+- Phase 5 no longer hand-rolls board fields or a `config.yaml` heredoc; it
+  points to `/nightgauge:repo-init` (`project ensure-fields`, `config init`),
+  and Phase 0 states the repo-init-first onboarding order (#2196).
+- Description and Invocation state the skill is user-invoked (#2195).
+
+### Fixed
+
+- CONFIGURATION.md links use `/blob/main/` (#2203).
+- Prose no longer names the literal arguments variable, which rendered as an
+  empty code span when invoked without arguments (#2207).
+
 ## [4.5.0] - 2026-03-07
 
 ### Added

@@ -4,11 +4,12 @@ description: Make any repository AI-ready with a tool-neutral AGENTS.md, a thin
   CLAUDE.md adapter, focused docs and a CI conformance check, migrating
   repositories that use the older CLAUDE.md-first layout. Use when setting up a
   new project, when a repository is missing or has outdated AI configuration
-  files, or to verify conformance with `/smart-setup verify`.
+  files, or to verify conformance with `/smart-setup verify`. Run after
+  repo-init. User-invoked: the user types `/nightgauge:smart-setup`.
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "5.0.0"
+  version: "5.1.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 ---
@@ -35,12 +36,16 @@ It has two modes:
 
 ## Invocation
 
-| Tool           | Command                                          |
-| -------------- | ------------------------------------------------ |
-| Claude Code    | `/smart-setup` or `/smart-setup verify` (plugin) |
-| OpenAI Codex   | `$smart-setup` or `$smart-setup verify`          |
-| GitHub Copilot | Invoke via Agent Skills                          |
-| Cursor         | Invoke via Agent Skills                          |
+User-invoked: in Claude Code the skill carries `disable-model-invocation`, so
+an agent cannot start it; the user types the slash command. An agent asked in
+prose to run it should give the user the command below.
+
+| Tool           | Command                                                                |
+| -------------- | ---------------------------------------------------------------------- |
+| Claude Code    | `/nightgauge:smart-setup` or `/nightgauge:smart-setup verify` (plugin) |
+| OpenAI Codex   | `$smart-setup` or `$smart-setup verify`                                |
+| GitHub Copilot | Invoke via Agent Skills                                                |
+| Cursor         | Invoke via Agent Skills                                                |
 
 ## Supporting files (load on demand)
 
@@ -99,13 +104,14 @@ This prevents AI hallucination and preserves tribal knowledge.
 
 ## Arguments
 
-This skill supports inline arguments via `$ARGUMENTS`:
+This skill accepts inline arguments (the text typed after the skill name):
 
 ```bash
 # Setup with default settings
 /smart-setup
 
 # Specify configuration level
+/smart-setup --tier minimal
 /smart-setup --tier essential
 /smart-setup --tier standard
 /smart-setup --tier advanced
@@ -114,8 +120,7 @@ This skill supports inline arguments via `$ARGUMENTS`:
 /smart-setup verify
 ```
 
-The `$ARGUMENTS` variable contains everything after the skill name. When it
-starts with `verify`, skip to [Verify Mode](#verify-mode).
+When the text after the skill name starts with `verify`, skip to [Verify Mode](#verify-mode).
 
 ## Instruction Architecture
 
@@ -147,6 +152,8 @@ Therefore:
    under a heading that names Claude Code — no commands, rules or routing.
 4. **Routing lives in `docs/AGENT_GUIDANCE.md`** under the heading
    `## Documentation routing`, linked from the docs index (`docs/README.md`).
+   In the **Minimal** tier the routing section lives inline in `AGENTS.md`
+   instead, and the check runs with `--routing AGENTS.md --docs-index none`.
 5. **Instruction files are regular files** — no symlinks, no imports from
    outside the repository.
 6. **Enforcement is deterministic** — `scripts/check-agent-guidance.sh` runs in
@@ -155,6 +162,25 @@ Therefore:
 ## IMPORTANT: Tiered Approach
 
 This setup uses a **tiered approach** to avoid creating unnecessary files:
+
+### Tier 0: Minimal (small repositories)
+
+For a small repository (a single-purpose CLI or library, roughly under a few
+thousand lines, one maintainer) the `docs/` set below is more documentation
+than code. Offer Minimal as the recommendation when Step 0.1 finds a small
+repository with no existing `docs/`:
+
+- `AGENTS.md` — the complete contract, with a `## Documentation routing`
+  heading and table inline (routes to `README.md` and source paths) and a line
+  naming where decisions go (for example `docs/decisions/`, created when the
+  first decision is recorded)
+- `CLAUDE.md` — line 1 `@AGENTS.md`, when Claude Code is selected
+- `scripts/check-agent-guidance.sh` plus the `agent guidance` CI job, run with
+  `--routing AGENTS.md --docs-index none` (and `--require-claude yes` when
+  Claude Code is selected)
+
+No `docs/` files are created. Graduate to Essential when the repository grows:
+move the routing section to `docs/AGENT_GUIDANCE.md` and drop the two flags.
 
 ### Tier 1: Essential (Default)
 
@@ -188,8 +214,9 @@ These are the minimum files every AI-ready repository needs:
 - `scripts/check-agent-guidance.sh` - byte-identical copy of the bundled check
 - `.github/workflows/agent-guidance.yml` - CI job named `agent guidance`
 
-> **Note**: Tier 1 files are created regardless of whether user selects
-> Essential, Standard, or Advanced. Higher tiers ADD to Tier 1, not replace it.
+> **Note**: Tier 1 files are created for Essential, Standard and Advanced.
+> Higher tiers ADD to Tier 1, not replace it. Minimal (Tier 0) is the only
+> tier that skips `docs/`.
 
 ### Tier 2: Tool-Specific (Based on User's Tools)
 
@@ -227,6 +254,11 @@ Never create `.cursorrules`, `.windsurfrules` or `GEMINI.md` copies of
 ## Workflow
 
 ### Phase 0: Auto-Detect + Ask (2 Questions Max)
+
+> **Onboarding order:** run `/nightgauge:repo-init` first (board, labels,
+> fields and `.nightgauge/config.yaml`), then this skill (agent guidance docs).
+> If `.nightgauge/config.yaml` is missing, say so and recommend
+> `/nightgauge:repo-init` before or after this run; Phase 5 never creates it.
 
 #### Step 0.1: Silent Auto-Detection (No User Interaction)
 
@@ -316,6 +348,10 @@ Store results internally for Phase 1 reporting.
       "multiSelect": false,
       "options": [
         {
+          "label": "Minimal",
+          "description": "Small repos: AGENTS.md with inline routing, CLAUDE.md if selected, CI check; no docs/"
+        },
+        {
           "label": "Essential (Recommended)",
           "description": "AGENTS.md, CLAUDE.md if selected, core docs, CI check"
         },
@@ -354,7 +390,7 @@ Generated: [YYYY-MM-DD]
 ## Configuration Choices
 
 - **AI Tools**: [user's selection]
-- **Config Level**: [Essential/Standard/Advanced]
+- **Config Level**: [Minimal/Essential/Standard/Advanced]
 - **Version Control**: [Git/TFS/etc.]
 - **CLAUDE.md**: [Yes/No]
 - **Instruction model detected**: [NONE/OLD/NEW]
@@ -489,6 +525,10 @@ file below uses its template.**
 - `OLD` — **HARD GATE: run Phase 4M from `_includes/migration.md` instead of
   the additive merge.** It produces a migration plan and proposed diff; the
   steps below are applied inside it.
+
+**Minimal tier:** skip steps 1–3; write the `## Documentation routing`
+section into root `AGENTS.md` (step 4) and install the check with
+`--routing AGENTS.md --docs-index none` (step 7).
 
 **Generation order** (later files reference earlier ones):
 
@@ -792,327 +832,25 @@ overwriting.
 
 ---
 
-## Phase 5: Project Validation (Optional)
+## Phase 5: Project Board and Pipeline Config (delegated to repo-init)
 
-This phase validates GitHub Project board integration for the repository. It
-ensures the target project has required fields and optionally creates
-`.nightgauge/config.yaml` with project configuration.
+Smart Setup does **not** configure the GitHub Project board or write
+`.nightgauge/config.yaml`. That is `repo-init`'s job, and it covers the parts a
+hand-rolled step misses: creating a board when none exists, labels, board
+fields (`nightgauge project ensure-fields`), linking the repository, standard
+views, delete-branch-on-merge, and a complete `config.yaml` (owner,
+`project.owner`, field IDs and options) from `nightgauge config init`.
 
-> **Skip Condition**: If user declines project integration in Step 5.2, skip to
-> Phase 6.
+1. If `.nightgauge/config.yaml` exists, run `nightgauge doctor` and report its
+   `project` result; change nothing here.
+2. Otherwise tell the user the next step is `/nightgauge:repo-init` (it is
+   user-invoked: the user types the slash command). Do not hand-write
+   `config.yaml` — a partial config fails the doctor `project` check.
 
-### Step 5.1: Check for Existing Configuration
-
-```bash
-# Check if .nightgauge/config.yaml exists
-CONFIG_FILE=".nightgauge/config.yaml"
-if [ -f "$CONFIG_FILE" ]; then
-  PROJECT_NUMBER=$(grep -E "^project:" -A5 "$CONFIG_FILE" | grep "number:" | awk '{print $2}')
-  if [ -n "$PROJECT_NUMBER" ]; then
-    echo "Found existing project configuration: Project #$PROJECT_NUMBER"
-  fi
-else
-  echo "No nightgauge configuration found"
-fi
-```
-
-### Step 5.2: Ask About Project Integration
-
-```json
-{
-  "questions": [
-    {
-      "question": "Do you want to enable GitHub Project board integration?",
-      "header": "Project",
-      "multiSelect": false,
-      "options": [
-        {
-          "label": "Yes (Recommended)",
-          "description": "Validate project fields and create .nightgauge/config.yaml for roadmap tracking"
-        },
-        {
-          "label": "No",
-          "description": "Skip project integration for now (can add later)"
-        }
-      ]
-    }
-  ]
-}
-```
-
-**If "No"**: Skip to Phase 6.
-
-**If "Yes"**: Continue to Step 5.3.
-
-### Step 5.3: Get Project Number
-
-If no existing `.nightgauge/config.yaml` with project config:
-
-```json
-{
-  "questions": [
-    {
-      "question": "What is your GitHub Project number? (Find it in the URL: /orgs/OWNER/projects/NUMBER)",
-      "header": "Project #",
-      "multiSelect": false,
-      "options": [
-        {
-          "label": "Enter number",
-          "description": "The numeric project ID from your project board URL"
-        }
-      ]
-    }
-  ]
-}
-```
-
-### Step 5.4: Discover Project Fields
-
-Use the `nightgauge forge` CLI to discover existing project fields
-(deterministic, not AI interpretation):
-
-```bash
-# Get repository owner
-OWNER=$(nightgauge forge repo view --repo "$REPO" --json | jq -r '.owner')
-
-# List all project fields (forge GraphQL passthrough)
-nightgauge forge graphql -f query='
-  query($org: String!, $number: Int!) {
-    organization(login: $org) {
-      projectV2(number: $number) {
-        fields(first: 50) {
-          nodes {
-            ... on ProjectV2Field { id name dataType }
-            ... on ProjectV2SingleSelectField { id name dataType options { id name } }
-            ... on ProjectV2IterationField { id name dataType }
-          }
-        }
-      }
-    }
-  }' -F org="$OWNER" -F number="$PROJECT_NUMBER"
-```
-
-Parse the JSON response to build a field inventory.
-
-### Step 5.5: Validate Required Fields
-
-Check for these required fields (used by Nightgauge pipeline):
-
-| Field       | Type          | Required Options (for SINGLE_SELECT)         |
-| ----------- | ------------- | -------------------------------------------- |
-| Status      | SINGLE_SELECT | Backlog, Ready, In progress, In review, Done |
-| Priority    | SINGLE_SELECT | P0, P1, P2, P3                               |
-| Size        | SINGLE_SELECT | XS, S, M, L, XL                              |
-| Start date  | DATE          | N/A                                          |
-| Target date | DATE          | N/A                                          |
-| Estimate    | NUMBER        | N/A                                          |
-| Sprint      | ITERATION     | N/A (optional)                               |
-
-For each field, check:
-
-1. Field exists with correct name
-2. Field has correct type
-3. For SINGLE_SELECT fields, required options exist
-
-### Step 5.6: Report Missing Fields
-
-For each missing field, provide actionable fix commands:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  PROJECT FIELD VALIDATION                                        │
-└─────────────────────────────────────────────────────────────────┘
-
-Project: #10 (nightgauge)
-
-✅ Status - SINGLE_SELECT with required options
-✅ Priority - SINGLE_SELECT with P0, P1, P2
-❌ Size - MISSING
-
-To create the Size field:
-
-  nightgauge forge graphql -f query='
-    mutation {
-      createProjectV2Field(input: {
-        projectId: "PROJECT_ID"
-        dataType: SINGLE_SELECT
-        name: "Size"
-      }) { projectV2Field { ... on ProjectV2Field { id } } }
-    }'
-
-Then add options:
-
-  nightgauge forge graphql -f query='
-    mutation {
-      updateProjectV2Field(input: {
-        projectId: "PROJECT_ID"
-        fieldId: "FIELD_ID"
-        singleSelectOptions: [
-          {name: "XS", color: GRAY}
-          {name: "S", color: BLUE}
-          {name: "M", color: GREEN}
-          {name: "L", color: YELLOW}
-          {name: "XL", color: RED}
-        ]
-      }) { field { id } }
-    }'
-
-✅ Start date - DATE
-✅ Target date - DATE
-⚠️ Sprint - ITERATION (optional, not configured)
-
-Summary: 5/6 required fields present. Fix Size field to enable full pipeline.
-```
-
-**If all required fields present:**
-
-```
-✅ Project #10 is roadmap-ready! All required fields configured.
-```
-
-### Step 5.7: Offer to Add Repository to Project
-
-If repository is not already linked to the project:
-
-```json
-{
-  "questions": [
-    {
-      "question": "Add this repository to Project #10?",
-      "header": "Link Repo",
-      "multiSelect": false,
-      "options": [
-        {
-          "label": "Yes (Recommended)",
-          "description": "Link repo so issues can be added to project board"
-        },
-        {
-          "label": "No",
-          "description": "Skip for now (can link manually later)"
-        }
-      ]
-    }
-  ]
-}
-```
-
-If "Yes":
-
-```bash
-# `forge repo view` carries no node id: read it from GraphQL.
-REPO_ID=$(nightgauge forge graphql \
-  -f query='query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { id } }' \
-  -f owner="${REPO%%/*}" -f name="${REPO#*/}" | jq -r '.data.repository.id')
-PROJECT_ID=$(nightgauge forge graphql -f query='
-  query($org: String!, $number: Int!) {
-    organization(login: $org) { projectV2(number: $number) { id } }
-  }' -F org="$OWNER" -F number="$PROJECT_NUMBER" | jq -r '.data.organization.projectV2.id')
-
-nightgauge forge graphql -f query='
-  mutation($p: ID!, $r: ID!) {
-    linkProjectV2ToRepository(input: { projectId: $p, repositoryId: $r }) {
-      repository { id }
-    }
-  }' -F p="$PROJECT_ID" -F r="$REPO_ID"
-```
-
-### Step 5.8: Create or Update .nightgauge/config.yaml
-
-If `.nightgauge/config.yaml` doesn't exist or lacks project config, offer
-to create it:
-
-```json
-{
-  "questions": [
-    {
-      "question": "Create .nightgauge/config.yaml with project configuration?",
-      "header": "Config",
-      "multiSelect": false,
-      "options": [
-        {
-          "label": "Yes (Recommended)",
-          "description": "Enables Nightgauge pipeline commands (/issue-pickup, /pr-create, etc.)"
-        },
-        {
-          "label": "No",
-          "description": "Skip config file creation"
-        }
-      ]
-    }
-  ]
-}
-```
-
-**Template for .nightgauge/config.yaml:**
-
-```yaml
-# Nightgauge Configuration
-# See: https://github.com/nightgauge/nightgauge/docs/CONFIGURATION.md
-
-project:
-  # GitHub Project number (from URL: /orgs/OWNER/projects/NUMBER)
-  number: <PROJECT_NUMBER>
-
-  # GraphQL IDs (discovered during validation)
-  # These enable deterministic field updates without API lookups
-  id: "<PROJECT_GLOBAL_ID>"
-  status_field_id: "<STATUS_FIELD_ID>"
-  priority_field_id: "<PRIORITY_FIELD_ID>"
-  size_field_id: "<SIZE_FIELD_ID>"
-
-  # Optional: Sprint/Iteration support
-  sprint:
-    enabled: false
-    field_name: "Sprint"
-    auto_assign: false
-
-# Pipeline configuration
-pipeline:
-  auto_fix: true # Auto-fix linting issues during feature development
-
-# Sanitization (prompt injection protection)
-sanitization:
-  mode: warn # warn (default: log + allow), block, disabled
-```
-
-**Gitignore Entry for Local Config:**
-
-When creating or updating `.gitignore`, add the local config override file:
-
-```gitignore
-# Nightgauge - local developer config (personal overrides)
-.nightgauge/config.local.yaml
-```
-
-> **Note**: `.nightgauge/config.local.yaml` allows individual developers to
-> override project settings without affecting the shared config. See
-> [docs/CONFIGURATION.md](https://github.com/nightgauge/nightgauge/docs/CONFIGURATION.md#local-config-override)
-> for details.
-
-**Field ID Discovery**: Use the field data from Step 5.4 to populate the IDs:
-
-```bash
-# Extract field IDs from the field-list response (forge GraphQL passthrough)
-nightgauge forge graphql -f query='
-  query($org: String!, $number: Int!) {
-    organization(login: $org) {
-      projectV2(number: $number) {
-        fields(first: 50) {
-          nodes {
-            ... on ProjectV2Field { id name }
-            ... on ProjectV2SingleSelectField { id name }
-            ... on ProjectV2IterationField { id name }
-          }
-        }
-      }
-    }
-  }' -F org="$OWNER" -F number="$PROJECT_NUMBER" | \
-  jq '{
-    status_field_id: (.data.organization.projectV2.fields.nodes[] | select(.name == "Status") | .id),
-    priority_field_id: (.data.organization.projectV2.fields.nodes[] | select(.name == "Priority") | .id),
-    size_field_id: (.data.organization.projectV2.fields.nodes[] | select(.name == "Size") | .id)
-  }'
-```
+Configuration reference:
+[docs/CONFIGURATION.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md),
+including the
+[local config override](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md#local-config-override).
 
 ---
 
