@@ -207,7 +207,10 @@ func Locate(stage string, roots []string) (string, error) {
 			tried = append(tried, candidate)
 		}
 	}
-	return "", fmt.Errorf("SKILL.md not found for stage %q (tried %s)", stage, strings.Join(tried, ", "))
+	return "", fmt.Errorf("SKILL.md not found for stage %q (searched roots %s; tried %s). "+
+		"Fix: install the bundle layout <prefix>/bin/nightgauge beside <prefix>/skills/, "+
+		"or set %s to a directory containing %s/SKILL.md",
+		stage, strings.Join(roots, ", "), strings.Join(tried, ", "), SkillsRootEnv, dir)
 }
 
 // opencodeHostAdapter is the one adapter whose model string is not a plain
@@ -758,18 +761,34 @@ func FilterHeadlessTools(tools []string) []string {
 // The objection above is answered rather than ignored: the bundle root is
 // appended ONLY when it resolves to a real directory, so the returned list
 // never contains a root that cannot match.
+//
+// THE OPERATOR CAN NAME A THIRD SOURCE (#2220). A binary built with `go build`
+// or `go install` into any other location has no skills tree beside it, so the
+// Go-direct path worked only inside this repository or from the extension
+// bundle. SkillsRootEnv names a skills tree explicitly; it is searched after
+// the workspace (a checkout's own skills still win) and before the bundle (an
+// explicit choice beats an inferred one). Unlike the bundle arm it is listed
+// even when it does not resolve: the operator asked for it, and a typo must
+// show up in the not-found error's search list rather than vanish.
 func DefaultRoots(workspaceRoot string) []string {
 	exe, err := os.Executable()
 	if err != nil {
 		exe = ""
 	}
-	return defaultRoots(workspaceRoot, exe)
+	return defaultRoots(workspaceRoot, exe, os.Getenv(SkillsRootEnv))
 }
 
-// defaultRoots is DefaultRoots with the executable path injected, so the
-// bundle arm is testable without a real bundle on disk.
-func defaultRoots(workspaceRoot, exe string) []string {
+// SkillsRootEnv is the environment variable naming an explicit skills tree:
+// a directory containing nightgauge-issue-pickup/SKILL.md and its siblings.
+const SkillsRootEnv = "NIGHTGAUGE_SKILLS_ROOT"
+
+// defaultRoots is DefaultRoots with the executable path and the override
+// injected, so every arm is testable without a real bundle or environment.
+func defaultRoots(workspaceRoot, exe, override string) []string {
 	roots := []string{filepath.Join(workspaceRoot, "skills")}
+	if override = strings.TrimSpace(override); override != "" {
+		roots = append(roots, override)
+	}
 	if bundle := bundleSkillsRoot(exe); bundle != "" {
 		roots = append(roots, bundle)
 	}
@@ -780,9 +799,11 @@ func defaultRoots(workspaceRoot, exe string) []string {
 // "" when there is not one — a plain `go build` output, or a binary installed
 // somewhere without the bundle layout, both of which must keep working.
 //
-// The layout is fixed by the extension's packaging: `<bundle>/dist/bin/nightgauge`
-// and `<bundle>/dist/skills/`, so the tree is the executable's grandparent plus
-// "skills". Symlinks are resolved first — a binary reached through a symlink
+// The layout is `<prefix>/bin/nightgauge` beside `<prefix>/skills/`: the
+// extension packages it with prefix `<bundle>/dist`, and a hand install (for
+// example `~/.local/share/<name>/bin` + `~/.local/share/<name>/skills`) uses
+// the same shape, so the tree is the executable's grandparent plus "skills".
+// Symlinks are resolved first — a binary reached through a symlink
 // (a PATH shim, Homebrew) would otherwise compute the root from the link's
 // directory instead of the real bundle's.
 func bundleSkillsRoot(exe string) string {

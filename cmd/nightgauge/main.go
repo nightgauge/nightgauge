@@ -12139,7 +12139,7 @@ func modelAccuracyAlternate(modelAccuracy *float64) string {
 // wrong with this workspace's local state?"), even though the detection shape
 // is inverted.
 var doctorCheckOrder = []string{
-	"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "github_api_budget", "config", "project",
+	"binary", "skills", "gh", "github_auth", "api_user", "scopes", "rate_limit", "github_api_budget", "config", "project",
 	"complexity_model", "ai_adapter",
 	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
 	"serve_lease", "ledger_daemon_coverage", "tracked_secrets", "ci_machine_credentials",

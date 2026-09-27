@@ -201,6 +201,13 @@ func RunDoctorWithConfigError(ctx context.Context, cfg *config.Config, cfgErr er
 		}
 	}
 
+	// --- skills (warning): can this binary render every stage? (#2220) ---
+	skillsCheck, skillsWarning := checkSkillsRoot(cwd)
+	result.Checks["skills"] = skillsCheck
+	if skillsWarning != "" {
+		warnings = append(warnings, skillsWarning)
+	}
+
 	// --- gh (warning) ---
 	ghCheck := checkGH()
 	result.Checks["gh"] = ghCheck

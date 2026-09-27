@@ -16,6 +16,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`NIGHTGAUGE_SKILLS_ROOT` and a `skills` doctor check** (#2220). A
+  Go-direct or OpenCode run outside the core repository failed in seconds with
+  `SKILL.md not found for stage "issue-pickup"` unless the binary sat beside a
+  `skills/` tree. `NIGHTGAUGE_SKILLS_ROOT` now names a skills tree explicitly,
+  searched after the workspace's own `skills/` and before the
+  `<prefix>/bin/nightgauge` + `<prefix>/skills/` layout. The not-found error
+  lists every root searched and names both fixes, and `nightgauge doctor`
+  warns, with the roots searched, when the running binary cannot locate every
+  stage's `SKILL.md`.
+
 - **Merge-queue-aware merges** (#2214). When a PR's base branch requires
   GitHub's merge queue, the deterministic pr-merge stage enqueues it with
   `enqueuePullRequest` and waits for the queue's outcome instead of punting to
