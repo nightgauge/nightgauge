@@ -5,7 +5,7 @@ description: Claim a GitHub issue, extract requirements, and set up the developm
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.21.1"
+  version: "1.21.2"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 context: fork
@@ -59,7 +59,7 @@ This skill starts the development pipeline by:
 /nightgauge-issue-pickup --label "ready-for-dev"
 ```
 
-The `$ARGUMENTS` variable contains everything after the skill name.
+The skill arguments are everything typed after the skill name.
 
 ### Flags
 
@@ -124,29 +124,29 @@ any other output for that phase.
 
 **This check MUST happen FIRST, before any other workflow logic.**
 
-Parse `$ARGUMENTS` immediately:
+Parse the skill arguments immediately:
 
 ```bash
-# $ARGUMENTS contains everything after the skill name
-# Example: "/nightgauge:issue-pickup 42" → $ARGUMENTS = "42"
-# Example: "/nightgauge:issue-pickup -i" → $ARGUMENTS = "-i"
-# Example: "/nightgauge:issue-pickup" → $ARGUMENTS = ""
+# The arguments are everything after the skill name
+# Example: "/nightgauge:issue-pickup 42" → arguments "42"
+# Example: "/nightgauge:issue-pickup -i" → arguments "-i"
+# Example: "/nightgauge:issue-pickup" → no arguments
 ```
 
 **Decision tree:**
 
-1. **If `$ARGUMENTS` contains a number** (e.g., "42", "123"):
+1. **If the arguments contain a number** (e.g., "42", "123"):
    - This is the issue number provided by the user
    - **SKIP Phase 2 entirely** - do NOT ask for issue selection
    - **Proceed directly to Phase 3** with this issue number
 
-2. **If `$ARGUMENTS` contains `-i` or `--interactive`**:
+2. **If the arguments contain `-i` or `--interactive`**:
    - Use Interactive Mode (Phase 2, Step 2.5)
 
-3. **If `$ARGUMENTS` is empty or contains only `--label`**:
+3. **If the arguments are empty or contain only `--label`**:
    - Use auto-selection (Phase 2)
 
-| Command                                    | $ARGUMENTS          | Action                          |
+| Command                                    | Arguments           | Action                          |
 | ------------------------------------------ | ------------------- | ------------------------------- |
 | `/nightgauge:issue-pickup 42`              | `"42"`              | Skip to Phase 3 with issue #42  |
 | `/nightgauge:issue-pickup 123 --label bug` | `"123 --label bug"` | Skip to Phase 3 with issue #123 |
@@ -203,7 +203,7 @@ printf '<!-- phase:start name="issue-selection" index=1 total=14 stage="issue-pi
 
 #### Step 2.1: Parse Arguments
 
-Check `$ARGUMENTS` for issue number, `-i`/`--interactive` flag, or `--label`.
+Check the skill arguments for issue number, `-i`/`--interactive` flag, or `--label`.
 
 **DEFAULT BEHAVIOR**: When no issue number and no `-i` flag is provided, the
 skill MUST use auto-selection mode. Interactive mode is ONLY used when

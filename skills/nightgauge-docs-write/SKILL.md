@@ -8,7 +8,7 @@ description: >
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.1.0"
+  version: "1.1.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 ---
@@ -105,7 +105,7 @@ context.
 #### Step 0.1: Parse Provided Arguments
 
 Extract `--target`, `--section`, `--source`, `--dry-run`, and `--knowledge` from
-`$ARGUMENTS`.
+the skill arguments (the text after the skill name).
 
 ```bash
 KNOWLEDGE_MODE=false

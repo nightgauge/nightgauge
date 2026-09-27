@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 // packageJSON is the minimal subset of package.json fields the setup verb
@@ -19,6 +20,7 @@ type packageJSON struct {
 	} `json:"engines"`
 	Dependencies    map[string]string `json:"dependencies"`
 	DevDependencies map[string]string `json:"devDependencies"`
+	Scripts         map[string]string `json:"scripts"`
 }
 
 // defaultNodeVersion is used when package.json lacks an engines.node entry or
@@ -37,7 +39,7 @@ var nodeVersionRe = regexp.MustCompile(`(\d+)`)
 // warning string. Hard errors only for unreadable files we cannot recover
 // from.
 func readPackageJSON(workdir string) (DetectedDeps, []string, error) {
-	det := DetectedDeps{NodeVersion: defaultNodeVersion}
+	det := DetectedDeps{NodeVersion: defaultNodeVersion, Scripts: []string{}}
 	warnings := []string{}
 
 	path := filepath.Join(workdir, "package.json")
@@ -73,6 +75,12 @@ func readPackageJSON(workdir string) (DetectedDeps, []string, error) {
 	}
 	if hasDep(pkg, "prettier") {
 		det.HasPrettier = true
+	}
+
+	for _, name := range gateScripts {
+		if strings.TrimSpace(pkg.Scripts[name]) != "" {
+			det.Scripts = append(det.Scripts, name)
+		}
 	}
 
 	return det, warnings, nil

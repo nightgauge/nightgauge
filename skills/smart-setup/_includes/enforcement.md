@@ -45,13 +45,14 @@ and a local edit makes the next upgrade a merge.
 
 ## Choose the flags
 
-| Flag                          | Value for this repository                                               |
-| ----------------------------- | ----------------------------------------------------------------------- |
-| `--workspace-block forbidden` | Always. Downstream projects never carry the Nightgauge workspace block. |
-| `--routing <path>`            | Only when the routing document is not `docs/AGENT_GUIDANCE.md`          |
-| `--docs-index <path\|none>`   | Only when the index is not `docs/README.md`; `none` if routing is index |
-| `--require-claude yes`        | When Claude Code is a selected tool                                     |
-| `--agents-max-lines` etc.     | Leave at the defaults unless the team decides otherwise                 |
+| Flag                                    | Value for this repository                                               |
+| --------------------------------------- | ----------------------------------------------------------------------- |
+| `--workspace-block forbidden`           | Always. Downstream projects never carry the Nightgauge workspace block. |
+| `--routing <path>`                      | Only when the routing document is not `docs/AGENT_GUIDANCE.md`          |
+| `--docs-index <path\|none>`             | Only when the index is not `docs/README.md`; `none` if routing is index |
+| `--require-claude yes`                  | When Claude Code is a selected tool                                     |
+| `--routing AGENTS.md --docs-index none` | Minimal tier: routing lives inline in `AGENTS.md`, no `docs/`           |
+| `--agents-max-lines` etc.               | Leave at the defaults unless the team decides otherwise                 |
 
 Run it once locally with the chosen flags; it must exit `0` before the change
 is proposed.

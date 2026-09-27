@@ -76,9 +76,10 @@ func TestRepoCheckAutoMergeCmd_Structure(t *testing.T) {
 			t.Errorf("missing --%s flag", name)
 		}
 	}
-	// MarkFlagRequired sets an annotation on the flag — verify it's present on --repo.
-	if ann := cmd.Flags().Lookup("repo").Annotations["cobra_annotation_bash_completion_one_required_flag"]; len(ann) == 0 {
-		t.Error("--repo must be marked required")
+	// --repo is resolved flag > config > origin > error in PersistentPreRunE
+	// (#2198), not via MarkFlagRequired (cobra validates that before backfill).
+	if cmd.Annotations[repoRequiredAnnotation] != "true" {
+		t.Error("--repo must be registered via requiredRepoNameFlag")
 	}
 }
 

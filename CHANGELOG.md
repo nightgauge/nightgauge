@@ -25,6 +25,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **`--owner`/`--repo` no longer default to `nightgauge`** (#2198). Every
+  verb that targets a GitHub repository now resolves them as: explicit flag,
+  then `.nightgauge/config.yaml`, then the current checkout's `origin`
+  remote, else it fails with an error naming the missing flag. Previously,
+  onboarding verbs such as `label ensure` run before `config.yaml` existed
+  silently targeted `nightgauge/nightgauge`. `queue add --repo` now also
+  accepts a bare repository name, and the `repo` verbs no longer require
+  `--repo` when it can be resolved.
+
 - **The planning exploration budget counts shell exploration by default**
   (#2190). On a budgeted feature-planning stage a `bash` call now counts
   unless it clearly writes (a redirect to a file, `tee`, `mkdir`, `cp`, `mv`,
@@ -96,7 +105,40 @@ changelog, and the release workflow refuses a tag that does not.
   table drops rows 001 and 012–014, which had no file, corrects row 002, and
   adds 003, 005, 006 and 009–011. `scripts/check-decisions-index.sh` fails
   lint when the table and the directory disagree.
+- **`doctor` no longer reports core's own automations in consumer repos**
+  (#2199). The built-in cadence entries are scoped: `release-workflow` only
+  when the workspace repo is `nightgauge/nightgauge`, `autonomous-loop` only
+  where autonomous mode is configured or has run. A repo with neither and no
+  `automations.cadence` reports `scheduled_automations` as "none registered".
+- **`doctor` `orphaned_processes` is scoped to this workspace** (#2200).
+  nightgauge processes whose cwd and `--workdir`/`--workspace` flags all
+  resolve outside this repo and its worktrees are counted as "in other
+  workspaces" and are never reported or given terminate advice. An unclaimed
+  process with live child processes (for example a `nohup`'d `nightgauge run`
+  driving an adapter) counts as working, not orphaned.
+- **`doctor` no longer calls an unversioned build "stale"** (#2201). A `dev`
+  build is reported as "unversioned build (cannot compare)" at info level, and
+  `NIGHTGAUGE_BINARY_ISOLATED=1` declares a deliberately isolated binary. A
+  plain `go build` now reports `dev+<vcs revision>` from `nightgauge version`.
+- **A fresh clone passes `doctor`'s `complexity_model` check** (#2202). The
+  model is per-checkout learned state and stays gitignored; its deterministic
+  baseline is installed on first use, so absence is reported, not warned.
+- **`doctor`'s `config` row names the loaded files and warns without a
+  repository config** (#2205), with a `/nightgauge:repo-init` remedy, instead
+  of passing on built-in defaults or a user-global file.
+- **`setup scaffold-tooling --select ci` builds the workflow from the
+  repository instead of a fixed template** (#2206). It emits one
+  `npm run <script>` step per gate script that `package.json` defines
+  (`typecheck`, `lint`, `test`, `build`) with no appended arguments, so
+  `typecheck` now runs and `npm test -- --run` is gone; the JSON output lists
+  them in `ci_steps`. Every `uses:` ref is pinned to a full commit SHA with the
+  tag in a comment, so organizations enforcing SHA pinning no longer reject the
+  workflow with `startup_failure`. A new `--runs-on` flag sets the runner
+  (default `ubuntu-latest`), and the verb reads the repository's Actions
+  policy when the token allows and warns when it would reject the workflow.
 
+- **A self-hosted `ci.yml` warns that the repository needs runner-group
+  access** (#2209). Without it the job stays queued with no error.
 - **The stall watchdog no longer stops a slow local model mid-reply**
   (#2184). OpenCode never writes a streaming delta to its session database
   and prints a part only when it completes, so the #2176 watchdog read a

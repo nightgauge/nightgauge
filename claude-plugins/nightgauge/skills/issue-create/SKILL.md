@@ -3,10 +3,11 @@ name: issue-create
 description: Create well-structured GitHub issues with SDLC metadata, project board sync,
   and optional parent/child linking. Use when filing a new issue or epic that the
   pipeline will pick up, so it lands board-ready with correct labels and links.
+  User-invoked: the user types `/nightgauge:issue-create`.
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.25.0"
+  version: "1.25.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 disable-model-invocation: true
@@ -20,7 +21,7 @@ pipeline.
 ## Outcomes
 
 - Creates issue with complete SDLC metadata
-- Ensures consistent labels for type, priority, size, and status
+- Ensures a consistent type label; priority, size and status as board fields
 - Assigns milestone when required by repo workflow
 - Optionally links to parent issue/epic
 - Adds created issue to the GitHub Project board via deterministic hook
@@ -39,17 +40,18 @@ Each created issue must include:
 - Milestone when required by team process
 - A clear issue intent: implementation or spike
 
-Use repository label conventions documented in `docs/ISSUE_TO_PR_WORKFLOW.md`
-when present. If label docs are missing, infer from existing repo labels using
+Use the target repository's own label conventions when it documents them. If label docs are missing, infer from existing repo labels using
 `nightgauge label list --json`.
 
 ## References
 
-- Configuration: `docs/CONFIGURATION.md`
-- Project board behavior: `docs/PROJECT_SETUP.md`
-- Issue quality expectations: `docs/ISSUE_TO_PR_WORKFLOW.md` and
-  `CONTRIBUTING.md`
-- Context and pipeline expectations: `docs/CONTEXT_ARCHITECTURE.md`
+Core Nightgauge docs (not files in the target repository):
+
+- Configuration: [CONFIGURATION.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md)
+- Project board behavior: [PROJECT_SETUP.md](https://github.com/nightgauge/nightgauge/blob/main/docs/PROJECT_SETUP.md)
+- Issue quality expectations: [ISSUE_TO_PR_WORKFLOW.md](https://github.com/nightgauge/nightgauge/blob/main/docs/ISSUE_TO_PR_WORKFLOW.md) and
+  [CONTRIBUTING.md](https://github.com/nightgauge/nightgauge/blob/main/CONTRIBUTING.md)
+- Context and pipeline expectations: [CONTEXT_ARCHITECTURE.md](https://github.com/nightgauge/nightgauge/blob/main/docs/CONTEXT_ARCHITECTURE.md)
 
 Do not inline large label taxonomies or template text in this skill.
 
@@ -204,7 +206,7 @@ Return the issue number/URL, final metadata, parent-link status, knowledge path,
 
 ### Phase 6: Terminal Audit Pass (Mandatory)
 
-**Gate**: Runs UNCONDITIONALLY after Phase 5 unless `--no-audit`. Invoke `/nightgauge:issue-audit --manifest <path>`; its exit code is authoritative (0 READY, 1 NEEDS FIXES, 2 failure) and propagates.
+**Gate**: Runs UNCONDITIONALLY after Phase 5 unless `--no-audit`. Invoke the model-invocable `nightgauge:issue-audit` skill (Skill tool, arguments `--manifest <path>`); its result is authoritative (0 READY, 1 NEEDS FIXES, 2 failure) and propagates.
 
 > **Read `_includes/board-and-audit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 

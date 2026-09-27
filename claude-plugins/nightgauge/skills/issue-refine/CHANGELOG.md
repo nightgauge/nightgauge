@@ -19,6 +19,14 @@ All notable changes to this skill are documented here.
 
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.
 
+## [1.0.3] - 2026-09-27
+
+### Fixed
+
+- Prose refers to "the skill arguments" instead of the literal arguments
+  variable, which Claude Code substitutes at load and rendered as an empty
+  code span when invoked without arguments (#2207).
+
 ## [1.0.0] — 2026-04-07
 
 ### Added

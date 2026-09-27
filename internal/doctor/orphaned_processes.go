@@ -431,8 +431,12 @@ type processScan struct {
 	Owned   int
 	// Recent counts unowned processes below staleProcessAge — seen, and
 	// deliberately not reported.
-	Recent  int
-	Orphans []runningProcess
+	Recent int
+	// Busy counts unowned, old processes that still have live children.
+	Busy int
+	// Elsewhere counts nightgauge processes running in other workspaces.
+	Elsewhere int
+	Orphans   []runningProcess
 }
 
 // classifyProcesses splits nightgauge processes into sidecar-owned runs,
@@ -447,9 +451,31 @@ type processScan struct {
 // carrier exists to surface. Every process is now claimed by a sidecar or
 // reported.
 func classifyProcesses(procs []runningProcess, claimed map[int]bool, self int) processScan {
+	return classifyProcessesScoped(procs, claimed, self, processScope{})
+}
+
+// processScope narrows the orphan classification to the workspace doctor is
+// run for (#2200). The zero value applies no narrowing.
+type processScope struct {
+	// Elsewhere marks nightgauge processes whose cwd and directory flags all
+	// resolve OUTSIDE this workspace. They belong to another workspace's
+	// operator: counted, never reported, never given terminate advice.
+	Elsewhere map[int]bool
+	// Busy marks processes with at least one live child process. A running
+	// stage drives an adapter subprocess, so a parent with children is doing
+	// work — a nohup'd `nightgauge run` has no sidecar claim but is not an
+	// orphan. Orphaned means idle and old, not merely unclaimed.
+	Busy map[int]bool
+}
+
+func classifyProcessesScoped(procs []runningProcess, claimed map[int]bool, self int, scope processScope) processScan {
 	var scan processScan
 	for _, p := range procs {
 		if !p.isNightgauge() || p.PID == self {
+			continue
+		}
+		if scope.Elsewhere[p.PID] {
+			scan.Elsewhere++
 			continue
 		}
 		scan.Scanned++
@@ -458,6 +484,8 @@ func classifyProcesses(procs []runningProcess, claimed map[int]bool, self int) p
 			scan.Owned++
 		case p.Age < staleProcessAge:
 			scan.Recent++
+		case scope.Busy[p.PID]:
+			scan.Busy++
 		default:
 			scan.Orphans = append(scan.Orphans, p)
 		}
@@ -511,7 +539,7 @@ func processTableReport(startDir, raw string, claimed map[int]bool, staleServe m
 		return unverifiableProcessScan(fmt.Errorf(
 			"the process table parsed, but the cwd-inside-worktree half could not run: `git worktree list` failed, or the process cwd source (lsof/proc) was unavailable"))
 	}
-	return orphanedProcessReport(procs, claimed, staleServe, fc)
+	return orphanedProcessReportScoped(procs, claimed, staleServe, fc, buildProcessScope(startDir, procs))
 }
 
 // listsPID reports whether pid appears in the parsed table.
@@ -547,13 +575,23 @@ func unverifiableProcessScan(cause error) (CheckItem, string) {
 // report says nothing about it — the same "this half answers nothing" shape
 // classifyProcesses already has for an empty claimed map.
 func orphanedProcessReport(procs []runningProcess, claimed map[int]bool, staleServe map[int]string, fc *foreignCwdScan) (CheckItem, string) {
-	scan := classifyProcesses(procs, claimed, os.Getpid())
+	return orphanedProcessReportScoped(procs, claimed, staleServe, fc, processScope{})
+}
+
+func orphanedProcessReportScoped(procs []runningProcess, claimed map[int]bool, staleServe map[int]string, fc *foreignCwdScan, scope processScope) (CheckItem, string) {
+	scan := classifyProcessesScoped(procs, claimed, os.Getpid(), scope)
 	var holders []foreignCwdHolder
 	if fc != nil {
 		holders = classifyForeignCwdHolders(procs, fc.Cwds, fc.RepoRoots, fc.ActiveByRepo, os.Getpid())
 	}
 	detail := fmt.Sprintf("%d nightgauge process(es): %d owned, %d recent, %d orphaned",
 		scan.Scanned, scan.Owned, scan.Recent, len(scan.Orphans))
+	if scan.Busy > 0 {
+		detail += fmt.Sprintf(", %d unclaimed but working (live child processes)", scan.Busy)
+	}
+	if scan.Elsewhere > 0 {
+		detail += fmt.Sprintf("; %d nightgauge process(es) in other workspaces (not evaluated)", scan.Elsewhere)
+	}
 	if len(holders) > 0 {
 		detail += fmt.Sprintf(", %d with cwd inside a worktree", len(holders))
 	}
@@ -923,4 +961,149 @@ func parseLsofCwd(raw string) (map[int]string, bool) {
 		}
 	}
 	return cwds, true
+}
+
+// --- Workspace scoping and liveness (#2200) ---
+
+// dirFlags are argv flags whose value names the directory a nightgauge
+// process works on, in addition to its cwd.
+var dirFlags = []string{"--workdir", "--workspace", "--repo-path", "--cwd"}
+
+// processDirs returns the directories a process works in: its cwd plus any
+// directory flag value in its argv.
+func processDirs(p runningProcess, cwd string) []string {
+	var dirs []string
+	if cwd != "" {
+		dirs = append(dirs, cwd)
+	}
+	fields := strings.Fields(p.Command)
+	for i, f := range fields {
+		for _, flag := range dirFlags {
+			switch {
+			case f == flag && i+1 < len(fields):
+				dirs = append(dirs, fields[i+1])
+			case strings.HasPrefix(f, flag+"="):
+				dirs = append(dirs, strings.TrimPrefix(f, flag+"="))
+			}
+		}
+	}
+	return dirs
+}
+
+// pathWithin reports whether path is root or below it.
+func pathWithin(path, root string) bool {
+	path, root = filepath.Clean(path), filepath.Clean(root)
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// classifyProcessScope computes the scope from already-gathered facts: roots
+// are this workspace's directories, cwds maps pid to cwd, and parents maps pid
+// to parent pid (nil when unknown). A nightgauge process none of whose
+// directories is known is kept IN scope — unknown is not evidence of elsewhere.
+func classifyProcessScope(procs []runningProcess, roots []string, cwds map[int]string, parents map[int]int) processScope {
+	scope := processScope{Elsewhere: map[int]bool{}, Busy: map[int]bool{}}
+	for _, ppid := range parents {
+		if ppid > 1 {
+			scope.Busy[ppid] = true
+		}
+	}
+	if len(roots) == 0 {
+		return scope
+	}
+	for _, p := range procs {
+		if !p.isNightgauge() {
+			continue
+		}
+		dirs := processDirs(p, cwds[p.PID])
+		if len(dirs) == 0 {
+			continue
+		}
+		inside := false
+		for _, d := range dirs {
+			for _, r := range roots {
+				if pathWithin(d, r) {
+					inside = true
+				}
+			}
+		}
+		if !inside {
+			scope.Elsewhere[p.PID] = true
+		}
+	}
+	return scope
+}
+
+// workspaceDirs returns this workspace's directories: the repo toplevel (or
+// startDir outside git) and every worktree git has registered for it, since
+// pipeline worktrees may live outside the checkout.
+func workspaceDirs(startDir string) []string {
+	abs, err := filepath.Abs(startDir)
+	if err != nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), psTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "git", "-C", abs, "worktree", "list", "--porcelain").Output()
+	if err != nil {
+		return []string{abs}
+	}
+	var roots []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if wt, ok := strings.CutPrefix(line, "worktree "); ok && wt != "" {
+			roots = append(roots, filepath.Clean(wt))
+			if resolved, err := filepath.EvalSymlinks(wt); err == nil && resolved != filepath.Clean(wt) {
+				roots = append(roots, resolved)
+			}
+		}
+	}
+	if len(roots) == 0 {
+		return []string{abs}
+	}
+	return roots
+}
+
+// processParents returns pid -> ppid for the whole table, or nil when ps
+// could not answer (liveness then gives no exemption).
+func processParents() map[int]int {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), psTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "ps", "-axo", "pid=,ppid=").Output()
+	if err != nil {
+		return nil
+	}
+	parents := map[int]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		pid, err1 := strconv.Atoi(f[0])
+		ppid, err2 := strconv.Atoi(f[1])
+		if err1 == nil && err2 == nil {
+			parents[pid] = ppid
+		}
+	}
+	return parents
+}
+
+// buildProcessScope gathers the OS facts classifyProcessScope needs. A cwd
+// source that cannot answer leaves every process without a cwd, which keeps it
+// IN scope: the scan then reports exactly what it did before #2200 rather than
+// hiding anything.
+func buildProcessScope(startDir string, procs []runningProcess) processScope {
+	var pids []int
+	for _, p := range procs {
+		if p.isNightgauge() && p.PID != os.Getpid() {
+			pids = append(pids, p.PID)
+		}
+	}
+	cwds, _ := lookupCwds(pids)
+	return classifyProcessScope(procs, workspaceDirs(startDir), cwds, processParents())
 }

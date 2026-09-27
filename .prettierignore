@@ -50,3 +50,6 @@ internal/execution/adapters/testdata/opencode-config-schema/opencode-config.sche
 
 # Clean-install gate run directories
 .clean-install-e2e/
+# The scaffolded ci.yml golden (#2206) is the template's exact output: the test
+# compares bytes, so reformatting it (quote style) would break the golden.
+internal/setup/testdata/ci_gate_scripts.golden.yml

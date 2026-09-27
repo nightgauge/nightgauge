@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"runtime/debug"
+	"testing"
+)
 
 func TestEffectiveVersionPrefersLinkerValue(t *testing.T) {
 	original := version
@@ -19,5 +22,18 @@ func TestEffectiveVersionDevelopmentFallback(t *testing.T) {
 	version = "dev"
 	if got := effectiveVersion(); got != "dev" {
 		t.Fatalf("effectiveVersion() = %q, want dev for a local test build", got)
+	}
+}
+
+func TestDevVersionFromVCS(t *testing.T) {
+	if got := devVersionFromVCS(nil); got != "dev" {
+		t.Fatalf("no VCS info = %q, want dev", got)
+	}
+	got := devVersionFromVCS([]debug.BuildSetting{
+		{Key: "vcs.revision", Value: "57f00c5e0123456789abcdef"},
+		{Key: "vcs.modified", Value: "true"},
+	})
+	if got != "dev+57f00c5e0123-dirty" {
+		t.Fatalf("devVersionFromVCS = %q", got)
 	}
 }

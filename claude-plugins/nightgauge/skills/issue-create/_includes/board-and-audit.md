@@ -328,7 +328,7 @@ enabling it.
 **Gate**: Runs after every successful issue (or epic + sub-issues) creation,
 once Phase 4.8's cross-repo audit has passed (or has been skipped because
 the workspace is single-repo). The manifest is the strict-mode contract
-read by `/nightgauge:issue-audit --manifest <path>` in Phase 6.
+read by the `nightgauge:issue-audit` skill (`--manifest <path>`) in Phase 6.
 
 ```bash
 TS=$(date -u +%Y%m%dT%H%M%SZ)
@@ -392,30 +392,22 @@ CRITICAL and will fail this gate (#711). That is the point: the bodies were
 authored moments ago against the same table the audit checks. If this fires,
 the Phase 2 authoring rules were not followed — do not reach for `--no-audit`.
 
-```bash
-if [ "${NO_AUDIT:-false}" = "true" ]; then
-  echo "Terminal audit skipped (--no-audit)."
-else
-  echo "=== Terminal audit: /nightgauge:issue-audit --manifest $MANIFEST_PATH ==="
-  # Invoke the audit skill via the slash-command surface. The audit's exit
-  # code propagates: 0 READY, 1 NEEDS FIXES (CRITICAL findings remain),
-  # 2 skill-level failure.
-  AUDIT_EXIT=0
-  /nightgauge:issue-audit --manifest "$MANIFEST_PATH" || AUDIT_EXIT=$?
+How to run it — the audit is a skill, not a binary verb, so it cannot be
+called from a Bash block:
 
-  if [ "$AUDIT_EXIT" -ne 0 ]; then
-    echo ""
-    echo "ERROR: terminal audit reported NEEDS FIXES (exit=$AUDIT_EXIT)."
-    echo "Review the report at: .nightgauge/pipeline/issue-audit-*.md"
-    echo "Run the audit with --fix to attempt auto-repair, then re-run this skill."
-    echo "NOTE: MISSING_REQUIRED_HEADING has no repair primitive — --fix will not"
-    echo "      touch it. Fix the issue body to match the per-type heading table"
-    echo "      in Phase 2 (item 3), then re-run."
-    exit "$AUDIT_EXIT"
-  fi
-  echo "Terminal audit: READY"
-fi
-```
+- **Claude Code**: invoke the `nightgauge:issue-audit` skill with the Skill
+  tool, arguments `--manifest <MANIFEST_PATH>`. It is model-invocable
+  (`metadata.chainable: true`, listed in the model invocation policy precisely
+  because this phase chains into it).
+- **Other runtimes**: load `nightgauge-issue-audit/SKILL.md` (sibling skill
+  directory) and follow it with the same arguments.
+
+The audit's result is authoritative: READY (exit 0) continues; NEEDS FIXES
+(exit 1: CRITICAL findings remain) or a skill-level failure (exit 2) stops this
+skill with that status. On NEEDS FIXES, point the user at the report
+(`.nightgauge/pipeline/issue-audit-*.md`), offer the audit's `--fix` run, then
+re-run. `MISSING_REQUIRED_HEADING` has no repair primitive — `--fix` will not
+touch it; fix the body to match the Phase 2 per-type heading table instead.
 
 The `--no-audit` opt-out exists for callers that already chained audit
 themselves (e.g. autonomous orchestrator runs that batch many creations
