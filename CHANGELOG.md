@@ -38,6 +38,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Workspace rule: batch merges, never serialize them.** Related or small
+  changes go in one PR with a `Closes #N` per issue, and every green PR goes
+  into the merge queue rather than being hand-merged one after another.
+
 - **The planning exploration budget no longer refuses knowledge-base reads**
   (#2193). The OpenCode adapter hands the plugin the workspace's
   `.nightgauge/knowledge` directory (`NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR`), and

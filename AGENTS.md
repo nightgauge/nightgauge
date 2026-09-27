@@ -46,6 +46,14 @@ the SHA-256 of the lines between the markers.
   Green checks are the go signal: merge instead of stopping to ask.
   Dependabot PRs are no exception: merge a green one without waiting for a
   human review, and fix a red one like any other failing change.
+- **Batch merges; never serialize them.** CI is slow, and before the merge
+  queue each merge made every other open PR update and re-run it. Fold related
+  or small changes (fixes from one finding pass, a follow-up to an open PR)
+  into one PR with a `Closes #N` line per issue instead of one PR each. On a
+  queue-protected branch `gh pr merge N --squash` enqueues: put every green PR
+  in the queue, which tests up to three together and merges them in one CI
+  run. Never hand-merge PRs one after another or ask other sessions to pause
+  merges to keep a PR from falling behind.
 - Never dismiss a failing test as flaky without root-causing it.
 - **After merge**, run `scripts/post-merge-check.sh <merge-sha>` and read its
   exit code without a pipe: `0` green; `1` red, so fix `main` now and never
@@ -84,7 +92,7 @@ the SHA-256 of the lines between the markers.
 - Instruction files are regular files. Never symlink them and never import
   across repositories.
 
-<!-- nightgauge-workspace-rules:end sha256=5f2ca419b173dd0dff272c891f0933a534a7e60f878094f2310ba7f045962298 -->
+<!-- nightgauge-workspace-rules:end sha256=cbd4051990bfe4944f1cb82c65a1c43bb4b6f4b0dd43301deff66996a4752045 -->
 
 ## Repository operating contract
 
