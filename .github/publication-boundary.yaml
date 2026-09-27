@@ -342,6 +342,7 @@ deny:
       - "docs/decisions/002-codex-output-schema-evaluation.md"
       - "docs/decisions/003-codex-adapter-feature-parity.md"
       - "docs/decisions/004-adaptive-stall-recovery.md"
+      - "docs/decisions/005-workspace-knowledge-graph.md"
       - "docs/decisions/006-forge-abstraction.md"
       - "docs/decisions/007-slash-command-skill-invocation-contract.md"
       - "docs/decisions/008-skill-forge-cli.md"

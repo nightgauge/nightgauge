@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -106,15 +107,22 @@ func TestCancelWithGrace_ForceKill_WhenProcessIgnoresSIGTERM(t *testing.T) {
 	// Spawn a shell process that ignores SIGTERM so we can exercise the SIGKILL path.
 	// The while loop prevents the shell from exec-optimizing the last command,
 	// which would discard the trap and cause the process to exit on SIGTERM.
-	cmd := exec.Command("sh", "-c", "trap '' TERM; while true; do sleep 1; done")
+	// The shell prints "ready" only after "trap '' TERM" has run, and the test
+	// blocks on that line before sending SIGTERM. A fixed sleep here raced on a
+	// loaded machine: SIGTERM arrived before the trap and the process exited
+	// gracefully, failing the assertion below.
+	cmd := exec.Command("sh", "-c", "trap '' TERM; echo ready; while true; do sleep 1; done")
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("failed to start test process: %v", err)
 	}
-
-	// Wait for the shell to fully start and execute "trap '' TERM" before we
-	// send SIGTERM. Without this pause there is a startup race: SIGTERM arrives
-	// before the trap is set up and the process exits immediately.
-	time.Sleep(50 * time.Millisecond)
+	if line, err := bufio.NewReader(stdout).ReadString('\n'); err != nil || line != "ready\n" {
+		_ = cmd.Process.Kill()
+		t.Fatalf("test process did not report its TERM trap: %q, %v", line, err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ex := &Execution{
