@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/nightgauge/nightgauge/internal/config"
 	"os"
 	"path/filepath"
 	"strings"
@@ -227,5 +228,30 @@ func TestCadenceScope_AutonomousFromStateFile(t *testing.T) {
 	}
 	if !cadenceScope(nil, root).Autonomous {
 		t.Error("a workspace whose autonomous loop has run must keep autonomous-loop in scope")
+	}
+}
+
+// TestCadenceScope_AutonomousHonoursEnabledRepos is #2218: a machine-wide
+// autonomous block limited to other repos must not put autonomous-loop in
+// scope for this one.
+func TestCadenceScope_AutonomousHonoursEnabledRepos(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled []string
+		want    bool
+	}{
+		{"other repo only", []string{"nightgauge"}, false},
+		{"empty list means every repo", nil, true},
+		{"short name expanded against owner", []string{"tiny"}, true},
+		{"qualified name, case-insensitive", []string{"ACME/Tiny"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.Config{Owner: "acme", DefaultRepo: "tiny",
+				Autonomous: &config.AutonomousConfig{EnabledRepos: tt.enabled}}
+			if got := cadenceScope(cfg, t.TempDir()).Autonomous; got != tt.want {
+				t.Errorf("Autonomous = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
