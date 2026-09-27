@@ -1345,6 +1345,12 @@ type PipelineConfig struct {
 	// ResolveStageBudget.
 	StageBudgets map[string]StageBudget `yaml:"stage_budgets,omitempty" json:"stageBudgets,omitempty"`
 
+	// MergeQueue is the pipeline.merge_queue: block (#2214) — how long the
+	// deterministic pr-merge path waits for GitHub's merge queue to merge a PR
+	// it enqueued on a queue-protected base branch. Resolve with
+	// ResolveMergeQueueWaitTimeout.
+	MergeQueue *MergeQueueConfig `yaml:"merge_queue,omitempty" json:"mergeQueue,omitempty"`
+
 	// FeatureDevSubSessions is pipeline.feature_dev_sub_sessions (#1651):
 	// false opts out of running feature-dev as one bounded session per plan
 	// step on small context windows. nil means the default, which is on.
@@ -1438,6 +1444,31 @@ func (p *PipelineConfig) ResolveHistoryRetentionDays() int {
 		return DefaultHistoryRetentionDays
 	}
 	return p.Logs.HistoryRetentionDays
+}
+
+// MergeQueueConfig is the pipeline.merge_queue: block (#2214).
+//
+//	pipeline:
+//	  merge_queue:
+//	    wait_timeout: 90m
+type MergeQueueConfig struct {
+	// WaitTimeout bounds the wait for a queued PR to merge. It must cover a
+	// full CI run on the merge-group commit plus queue latency. 0/absent →
+	// DefaultMergeQueueWaitTimeout.
+	WaitTimeout YAMLDuration `yaml:"wait_timeout,omitempty" json:"waitTimeout,omitempty"`
+}
+
+// DefaultMergeQueueWaitTimeout is the merge-queue wait budget when
+// pipeline.merge_queue.wait_timeout is unset (#2214).
+const DefaultMergeQueueWaitTimeout = 90 * time.Minute
+
+// ResolveMergeQueueWaitTimeout returns pipeline.merge_queue.wait_timeout, or
+// DefaultMergeQueueWaitTimeout when unset or non-positive.
+func (p *PipelineConfig) ResolveMergeQueueWaitTimeout() time.Duration {
+	if p == nil || p.MergeQueue == nil || p.MergeQueue.WaitTimeout.Duration() <= 0 {
+		return DefaultMergeQueueWaitTimeout
+	}
+	return p.MergeQueue.WaitTimeout.Duration()
 }
 
 // TokenBudgetCeilingConfig is the pipeline.token_budget_ceiling: block.

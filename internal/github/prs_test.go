@@ -514,13 +514,17 @@ func TestPRService_CreateEpicPR_ListPRsError(t *testing.T) {
 
 // --- MergeEpicPR Tests ---
 
+// noMergeQueueResponse answers MergePRWithStrategy's merge-queue detection
+// read (#2214) for a base branch without a queue.
+const noMergeQueueResponse = `{"data":{"node":{"id":"EPIC_PR_ID","number":5,"state":"OPEN","baseRefName":"main","isMergeQueueEnabled":false,"isInMergeQueue":false,"mergeCommit":null,"mergeQueueEntry":null}}}`
+
 func TestPRService_MergeEpicPR_Success(t *testing.T) {
 	// MergePRWithStrategy("MERGE") + DeleteBranch(ref found + deleted)
 	mergeResponse := `{"data":{"mergePullRequest":{"pullRequest":{"id":"EPIC_PR_ID","state":"MERGED"}}}}`
 	refQueryResponse := `{"data":{"repository":{"ref":{"id":"REF_NODE_ID"}}}}`
 	deleteResponse := `{"data":{"deleteRef":{"clientMutationId":null}}}`
 
-	client, cleanup := mockGraphQLServer(t, mergeResponse, refQueryResponse, deleteResponse)
+	client, cleanup := mockGraphQLServer(t, noMergeQueueResponse, mergeResponse, refQueryResponse, deleteResponse)
 	defer cleanup()
 
 	svc := NewPRService(client)
@@ -535,7 +539,7 @@ func TestPRService_MergeEpicPR_DeleteBranchFailureIsNonFatal(t *testing.T) {
 	// Simulate branch already gone (idempotent path)
 	refNotFoundResponse := `{"data":{"repository":{"ref":null}}}`
 
-	client, cleanup := mockGraphQLServer(t, mergeResponse, refNotFoundResponse)
+	client, cleanup := mockGraphQLServer(t, noMergeQueueResponse, mergeResponse, refNotFoundResponse)
 	defer cleanup()
 
 	svc := NewPRService(client)

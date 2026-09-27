@@ -717,6 +717,11 @@ export const PipelineConfigSchema = z.object({
    */
   stall_idle_ms: z.number().int().min(0).optional(),
   /**
+   * Merge-queue wait for the deterministic pr-merge stage (#2214):
+   * `wait_timeout` is a Go duration string (default "90m").
+   */
+  merge_queue: z.object({ wait_timeout: z.string().optional() }).optional(),
+  /**
    * Idle budget (ms) allowed after ANY rate-limit signal before the quota
    * fast-fail kills the stage. Applies even to a soft `allowed_warning` that
    * precedes the CLI hanging on a later hard-limited request. Capped below the

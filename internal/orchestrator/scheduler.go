@@ -1287,7 +1287,7 @@ func NewScheduler(client *gh.Client, cfg SchedulerConfig) *Scheduler {
 		trustedAuthorAssociations: cfg.TrustedAuthorAssociations,
 		adapterExplicit:           cfg.AdapterExplicit,
 		runDefaultAdapter:         cfg.Adapter,
-		prMergeRunner:             pmstages.NewDeterministicRunner(),
+		prMergeRunner:             newPRMergeRunner(cfg.RuntimeConfig),
 		prCreateRunner:            NewDefaultPRCreateRunner(client),
 		issuePickupRunner:         NewDeterministicIssuePickupRunner(),
 		launchRepo:                launchRepoSlug(cfg.RuntimeConfig),
@@ -1521,6 +1521,19 @@ func (s *Scheduler) WithRepoRootsResolver(fn func() []string) {
 
 // launchRepoSlug returns the "owner/repo" the launch root's own config names,
 // or "" when no config was loaded or it does not name both halves.
+// newPRMergeRunner builds the deterministic pr-merge runner with the
+// configured merge-queue wait budget (pipeline.merge_queue.wait_timeout,
+// #2214).
+func newPRMergeRunner(cfg *config.Config) *pmstages.DeterministicRunner {
+	r := pmstages.NewDeterministicRunner()
+	var p *config.PipelineConfig
+	if cfg != nil {
+		p = cfg.Pipeline
+	}
+	r.SetMergeQueueWaitTimeout(p.ResolveMergeQueueWaitTimeout())
+	return r
+}
+
 func launchRepoSlug(cfg *config.Config) string {
 	if cfg == nil || cfg.Owner == "" || cfg.DefaultRepo == "" {
 		return ""
@@ -10188,7 +10201,10 @@ func (s *Scheduler) tryDeterministicPRMerge(
 		return false, detResult.PRState, true, nil
 	}
 	if detErr == nil && detResult.Path == pmstages.PathRefused {
-		// A refusal is a gate, not a punt: no LLM fallback (issue 1675).
+		// A refusal is a gate, not a punt: no LLM fallback (issue 1675). A
+		// merge-queue failure or expired queue wait (#2214) arrives here too:
+		// the failing merge-group checks are in the reason, and the stage
+		// failure routes through the normal CI-failure handling and retro.
 		runtime.RecordExecutionPath(stage, "deterministic")
 		runtime.RecordStagePuntReason(stage, detResult.Reason)
 		log.Printf("#%d: pr-merge refused (PR #%d): %s", item.Number, detResult.PRNumber, detResult.Reason)

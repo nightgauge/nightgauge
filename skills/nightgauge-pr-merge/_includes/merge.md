@@ -661,6 +661,13 @@ fi
 # Epic → main merges are handled by Go binary: nightgauge pr create (default: --merge)
 ```
 
+**Merge queue (#2214)**: when the base branch requires GitHub's merge queue,
+`nightgauge pr merge` enqueues the PR and waits for the queue's outcome; the
+queue's own merge method applies and the strategy above is ignored. A failed
+merge group returns a non-zero exit naming the failing merge-group checks —
+treat it as a CI failure. Never enqueue by other means: `gh pr merge --auto`
+stays blocked for agents.
+
 #### Step 6.3: Execute Merge
 
 ```bash

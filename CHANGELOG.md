@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Merge-queue-aware merges** (#2214). When a PR's base branch requires
+  GitHub's merge queue, the deterministic pr-merge stage enqueues it with
+  `enqueuePullRequest` and waits for the queue's outcome instead of punting to
+  the LLM skill after a short eventual-consistency window. A merged PR reports
+  `merged`; a PR the queue removes fails the stage with
+  `merge-queue-failed: …` naming the failing merge-group checks, and never
+  falls back to the skill. The wait is `pipeline.merge_queue.wait_timeout`
+  (default `90m`). `nightgauge pr merge`, `forge pr merge`, the IPC `pr.merge`
+  method and epic merges enqueue and wait the same way rather than failing on
+  GitHub's direct-merge rejection. Branches without a queue are unchanged.
+
 - **Pipeline-created PRs are stamped** (#1479). Every PR/MR the pipeline opens
   ends with `<!-- nightgauge:pipeline stage=pr-create issue=N run=<id> -->`
   (deterministic `RenderBody` and the pr-create skill's `PR_BODY` alike), and
