@@ -213,6 +213,12 @@ func (s *PRService) CreatePR(ctx context.Context, repoID, title, body, headRef, 
 		"source_branch": headRef,
 		"target_branch": baseRef,
 	}
+	// Pipeline stamp (#1479): parity with the GitHub adapter. GitLab creates a
+	// label named in `labels` that does not yet exist, so no ensure step is
+	// needed.
+	if forge.HasPipelineMarker(body) {
+		payload["labels"] = forge.PipelineCreatedLabel
+	}
 
 	var raw rawGitLabMR
 	if _, err := s.client.do(ctx, "POST", full, payload, &raw, "create MR"); err != nil {

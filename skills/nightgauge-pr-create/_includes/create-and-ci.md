@@ -118,10 +118,26 @@ The skill handles:
 
 Part of #PARENT
 Closes #N
+
+<!-- nightgauge:pipeline stage=pr-create issue=N run=RUN_ID -->
 ```
 
 For standalone issues (no epic parent), omit the `Part of` line. For epic
 sub-issues, include BOTH lines so the sub-issue auto-closes on merge.
+
+**Always end `PR_BODY` (and `BATCH_PR_BODY`) with the pipeline stamp** (#1479),
+byte-for-byte in this form, as the last line:
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+PR_BODY="${PR_BODY}
+
+<!-- nightgauge:pipeline stage=pr-create issue=${ISSUE_NUMBER} run=${NIGHTGAUGE_RUN_ID:--} -->"
+```
+
+`nightgauge pr create` applies the `pipeline:created` label to any PR whose
+body carries this footer, so omitting it makes the PR indistinguishable from an
+interactive one. Format contract: `docs/PR_CREATE_STAGE.md` § Pipeline stamp.
 
 When a single PR delivers **more than one** of an epic's sub-issue deliverables
 (an epic-umbrella PR), enumerate a `Closes #sub` line for **every** sub whose

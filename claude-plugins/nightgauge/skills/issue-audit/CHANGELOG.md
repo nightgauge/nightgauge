@@ -8,6 +8,14 @@ this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-09-27
+
+### Fixed
+
+- Prose refers to "the skill arguments" instead of the literal arguments
+  variable, which Claude Code substitutes at load and rendered as an empty
+  code span when invoked without arguments (#2207).
+
 ## [1.2.0] - 2026-08-29
 
 ### Changed

@@ -28,12 +28,21 @@ func checkComplexityModel(workspaceRoot string) (CheckItem, string) {
 		return CheckItem{OK: true, Detail: modelPath}, ""
 	}
 
-	remediation := fmt.Sprintf("complexity model missing at %s — run `nightgauge outcome init` from the workspace root", modelPath)
+	if os.IsNotExist(err) {
+		// #2202: the model is per-checkout learned state and is gitignored,
+		// so every fresh clone lacks it. That is not a fault: its starting
+		// point is a deterministic baseline, which every writer (outcome
+		// recording, the SDK's ComplexityModelService) installs on first use
+		// and every reader falls back to. Report it, do not warn.
+		return CheckItem{OK: true, Detail: fmt.Sprintf("not yet created at %s — the deterministic baseline is bootstrapped automatically on first outcome record (or run `nightgauge outcome init`)", modelPath)}, ""
+	}
+
+	var remediation string
 	if err == nil && info.Mode()&os.ModeSymlink != 0 {
 		remediation = fmt.Sprintf("complexity model is a symlink at %s — replace it with a regular workspace file before running `nightgauge outcome init`", modelPath)
 	} else if err == nil {
 		remediation = fmt.Sprintf("complexity model path is not a regular file at %s — remove the conflicting path, then run `nightgauge outcome init`", modelPath)
-	} else if !os.IsNotExist(err) {
+	} else {
 		remediation = fmt.Sprintf("complexity model could not be inspected at %s: %v", modelPath, err)
 	}
 	return CheckItem{OK: false, Error: remediation}, remediation

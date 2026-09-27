@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -666,5 +667,69 @@ func TestPRService_IteratePRs_YieldsThenEOF(t *testing.T) {
 	}
 	if _, err := it.Next(context.Background()); err == nil {
 		t.Error("expected EOF")
+	}
+}
+
+// --- Pipeline stamp (#1479) ---
+
+const stampedCreateResponse = `{"data":{"createPullRequest":{"pullRequest":{
+	"id":"PR_NODE","number":21,"url":"https://github.com/o/r/pull/21",
+	"repository":{"name":"r","owner":{"login":"o"}}
+}}}}`
+
+func TestPRService_CreatePR_StampedBodyGetsPipelineLabel(t *testing.T) {
+	body := "## Summary\n\nCloses #7\n\n" + forge.PipelineMarker("pr-create", 7, "run-1") + "\n"
+	rest := map[string]string{
+		"GET /repos/o/r/labels": `[{"node_id":"LA_PIPE","name":"pipeline:created","description":"d","color":"5319e7"}]`,
+	}
+	client, seen, cleanup := mockForgeServerRecording(t, rest,
+		stampedCreateResponse,
+		`{"data":{"addLabelsToLabelable":{"labelable":{"__typename":"PullRequest"}}}}`)
+	defer cleanup()
+
+	pr, err := NewPRService(client).CreatePR(context.Background(), "REPO_ID", "t", body, "feat/x", "main")
+	if err != nil {
+		t.Fatalf("CreatePR: %v", err)
+	}
+	if len(pr.Labels) != 1 || pr.Labels[0] != forge.PipelineCreatedLabel {
+		t.Errorf("Labels = %v, want [%s]", pr.Labels, forge.PipelineCreatedLabel)
+	}
+	want := []string{"POST /graphql", "GET /repos/o/r/labels", "POST /graphql"}
+	if strings.Join(*seen, ",") != strings.Join(want, ",") {
+		t.Errorf("calls = %v, want %v", *seen, want)
+	}
+}
+
+func TestPRService_CreatePR_CreatesMissingPipelineLabel(t *testing.T) {
+	body := forge.PipelineMarker("pr-create", 7, "") + "\n"
+	rest := map[string]string{
+		"GET /repos/o/r/labels": `[]`,
+		"GET /repos/o/r":        restRepoIDFixture,
+	}
+	client, seen, cleanup := mockForgeServerRecording(t, rest,
+		stampedCreateResponse,
+		`{"data":{"createLabel":{"label":{"id":"LA_NEW","name":"pipeline:created","description":"d","color":"5319e7"}}}}`,
+		`{"data":{"addLabelsToLabelable":{"labelable":{"__typename":"PullRequest"}}}}`)
+	defer cleanup()
+
+	pr, err := NewPRService(client).CreatePR(context.Background(), "REPO_ID", "t", body, "feat/x", "main")
+	if err != nil {
+		t.Fatalf("CreatePR: %v", err)
+	}
+	if len(pr.Labels) != 1 || pr.Labels[0] != forge.PipelineCreatedLabel {
+		t.Errorf("Labels = %v, want [%s]; calls=%v", pr.Labels, forge.PipelineCreatedLabel, *seen)
+	}
+}
+
+func TestPRService_CreatePR_UnstampedBodyIsNotLabelled(t *testing.T) {
+	client, seen, cleanup := mockForgeServerRecording(t, nil, stampedCreateResponse)
+	defer cleanup()
+
+	pr, err := NewPRService(client).CreatePR(context.Background(), "REPO_ID", "t", "plain body", "feat/x", "main")
+	if err != nil {
+		t.Fatalf("CreatePR: %v", err)
+	}
+	if len(pr.Labels) != 0 || len(*seen) != 1 {
+		t.Errorf("interactive PR must not be labelled: labels=%v calls=%v", pr.Labels, *seen)
 	}
 }

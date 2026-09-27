@@ -196,3 +196,8 @@ jobs:
         run: bash scripts/test-check-md-links.sh
       - name: Markdown link check (docs cross-references)
         run: bash scripts/check-md-links.sh
+      # The Active Decisions table drifted from docs/decisions/ both ways (#1476).
+      - name: Decisions index self-test
+        run: bash scripts/test-check-decisions-index.sh
+      - name: Decisions index matches docs/decisions
+        run: bash scripts/check-decisions-index.sh

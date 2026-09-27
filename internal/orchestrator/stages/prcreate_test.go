@@ -252,6 +252,21 @@ func TestRenderBody_PartOfWhenParent(t *testing.T) {
 	}
 }
 
+// #1479: every pipeline body ends with the deterministic stamp footer.
+func TestRenderBody_PipelineStampFooter(t *testing.T) {
+	s := richSnap()
+	s.RunID = "run-123"
+	body := RenderBody(s)
+	want := "Closes #42\n\n<!-- nightgauge:pipeline stage=pr-create issue=42 run=run-123 -->\n"
+	if !strings.HasSuffix(body, want) {
+		t.Errorf("body must end with the pipeline stamp %q, got %q", want, body)
+	}
+	s.RunID = ""
+	if !strings.HasSuffix(RenderBody(s), "<!-- nightgauge:pipeline stage=pr-create issue=42 run=- -->\n") {
+		t.Errorf("empty RunID must render run=-, got %q", RenderBody(s))
+	}
+}
+
 func TestRenderBody_OmitsPartOfWhenStandalone(t *testing.T) {
 	body := RenderBody(richSnap())
 	if strings.Contains(body, "Part of #") {
@@ -297,6 +312,7 @@ type fakePRClient struct {
 	createCalls    int
 	listCalls      int
 	getRepoIDCalls int
+	lastBody       string
 }
 
 func (f *fakePRClient) GetRepoID(_ context.Context, _, _ string) (string, error) {
@@ -310,8 +326,9 @@ func (f *fakePRClient) GetRepoID(_ context.Context, _, _ string) (string, error)
 	return f.repoID, nil
 }
 
-func (f *fakePRClient) CreatePR(_ context.Context, _, _, _, _, _ string) (*CreatedPR, error) {
+func (f *fakePRClient) CreatePR(_ context.Context, _, _, body, _, _ string) (*CreatedPR, error) {
 	f.createCalls++
+	f.lastBody = body
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
@@ -418,6 +435,9 @@ func TestRunner_RichContext_CreatesPR(t *testing.T) {
 	}
 	if res.PRNumber != 99 || res.PRURL == "" {
 		t.Errorf("missing PR fields: %+v", res)
+	}
+	if !strings.Contains(prc.lastBody, "<!-- nightgauge:pipeline stage=pr-create issue=42 ") {
+		t.Errorf("body handed to CreatePR must carry the pipeline stamp (#1479), got %q", prc.lastBody)
 	}
 	if res.Title == "" || res.Body == "" {
 		t.Errorf("title/body should be populated: %+v", res)

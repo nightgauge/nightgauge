@@ -66,10 +66,9 @@ func repoSettingsCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
-	cmd.Flags().StringVar(&repo, "repo", "", "Repository name")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
+	requiredRepoNameFlag(cmd, &repo, "Repository name")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
-	_ = cmd.MarkFlagRequired("repo")
 
 	return cmd
 }
@@ -131,11 +130,10 @@ Use --force to skip the confirmation prompt (e.g., in CI or automated contexts).
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
-	cmd.Flags().StringVar(&repo, "repo", "", "Repository name")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
+	requiredRepoNameFlag(cmd, &repo, "Repository name")
 	cmd.Flags().BoolVar(&force, "force", false, "Skip confirmation prompt")
 	cmd.Flags().BoolVar(&outJSON, "json", false, "Output as JSON")
-	_ = cmd.MarkFlagRequired("repo")
 
 	return cmd
 }
@@ -247,10 +245,9 @@ semantics — it does not model branch protection rules.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
-	cmd.Flags().StringVar(&repo, "repo", "", "Repository name")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
+	requiredRepoNameFlag(cmd, &repo, "Repository name")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
-	_ = cmd.MarkFlagRequired("repo")
 
 	return cmd
 }
@@ -304,10 +301,9 @@ onboarding (nightgauge repo-init).`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
-	cmd.Flags().StringVar(&repo, "repo", "", "Repository name")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
+	requiredRepoNameFlag(cmd, &repo, "Repository name")
 	cmd.Flags().BoolVar(&outJSON, "json", false, "Output as JSON")
-	_ = cmd.MarkFlagRequired("repo")
 
 	return cmd
 }

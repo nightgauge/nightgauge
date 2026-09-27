@@ -13,7 +13,7 @@ import (
 func newRunTargetCmd(ownerChanged bool) *cobra.Command {
 	cmd := &cobra.Command{Use: "run"}
 	var owner string
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
+	ownerFlag(cmd, &owner, "GitHub organization")
 	if ownerChanged {
 		if err := cmd.Flags().Set("owner", "nightgauge"); err != nil {
 			panic(err)

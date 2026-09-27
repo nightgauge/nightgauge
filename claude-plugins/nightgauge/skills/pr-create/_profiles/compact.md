@@ -91,6 +91,9 @@ fanned out. Detail: Read
   When a single PR delivers more than one of an epic's sub-issue
   deliverables, enumerate `Closes #sub` for **each** sub whose work is in the
   diff — do NOT rely on `Closes #epic` alone.
+- **Pipeline stamp is mandatory (#1479).** `PR_BODY` must end with
+  `<!-- nightgauge:pipeline stage=pr-create issue=${ISSUE_NUMBER} run=${NIGHTGAUGE_RUN_ID:--} -->`
+  as its last line; `nightgauge pr create` labels such PRs `pipeline:created`.
 - See also the cross-cutting gotchas: Read `skills/_shared/GOTCHAS.md`.
 
 ## Workflow

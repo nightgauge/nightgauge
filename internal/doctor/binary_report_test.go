@@ -336,3 +336,39 @@ func TestRunDoctor_NotFoundKeepsBundleInventory(t *testing.T) {
 		t.Error("a genuinely unresolved binary must still carry install instructions")
 	}
 }
+
+// TestRunDoctor_CrossStepDevBuildIsUnversionedNotStale is #2201: a plain `go
+// build` reports `dev` and cannot be ordered against a release bundle, so it
+// is info ("unversioned"), never "stale".
+func TestRunDoctor_CrossStepDevBuildIsUnversionedNotStale(t *testing.T) {
+	for _, dev := range []string{"nightgauge dev", "nightgauge dev+57f00c5e0123"} {
+		t.Run(dev, func(t *testing.T) {
+			setupCrossStepVersionBinaries(t, dev, "nightgauge v0.4.8-16-gd8d5adde", true)
+			result := RunDoctor(context.Background(), nil, nil, nil)
+			check := result.Checks["binary"]
+			if !check.OK {
+				t.Fatalf("a dev build must be info, got %q", check.Error)
+			}
+			if !strings.Contains(check.Detail, "unversioned") {
+				t.Errorf("detail must say unversioned, got %q", check.Detail)
+			}
+			for _, w := range result.Warnings {
+				if strings.Contains(w, "stale binary") {
+					t.Errorf("dev build reported as stale: %q", w)
+				}
+			}
+		})
+	}
+}
+
+// TestRunDoctor_CrossStepIsolationEnvDowngradesToInfo covers the declared
+// isolation escape hatch (#2201).
+func TestRunDoctor_CrossStepIsolationEnvDowngradesToInfo(t *testing.T) {
+	setupCrossStepVersionBinaries(t, "nightgauge v0.1.0", "nightgauge v0.2.0", true)
+	t.Setenv(binaryIsolatedEnv, "1")
+	result := RunDoctor(context.Background(), nil, nil, nil)
+	check := result.Checks["binary"]
+	if !check.OK || !strings.Contains(check.Detail, "intentionally isolated") {
+		t.Fatalf("isolation must downgrade to info, got OK=%v detail=%q err=%q", check.OK, check.Detail, check.Error)
+	}
+}
