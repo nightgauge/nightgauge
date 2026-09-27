@@ -121,7 +121,23 @@ Cross-reference:
 - Codex runtime details:
   [../configs/codex/README.md](../configs/codex/README.md)
 
-### Smart Setup Command (Claude Code)
+### Onboarding a Repository (Claude Code)
+
+Run the onboarding skills in this order, in the repository being onboarded:
+
+1. `/nightgauge:repo-init` — board, labels, fields, repository link and
+   `.nightgauge/config.yaml`
+2. `/nightgauge:smart-setup` — `AGENTS.md`, `CLAUDE.md`, routing and the
+   `agent guidance` CI check (`/nightgauge:smart-setup --tier minimal` for a
+   small repository)
+3. `/nightgauge:issue-create` — file the first issues
+
+**You type these slash commands yourself.** The onboarding skills are
+user-invoked (`disable-model-invocation`, see the model invocation policy in
+[.claude/rules/skills.md](../.claude/rules/skills.md#model-invocation-policy)):
+they are not in the agent's skill list, so asking an agent in prose to "run
+smart-setup" cannot start them. An agent asked to onboard a repository should
+reply with the command for you to type, not follow the skill file by hand.
 
 Make any repository AI-ready:
 

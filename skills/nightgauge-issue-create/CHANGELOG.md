@@ -6,6 +6,17 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [1.25.1] - 2026-09-27
+
+### Fixed
+
+- Outcomes: only the type is a label; priority, size and status are board
+  fields (#2204).
+- References are absolute links to the core Nightgauge docs (#2204).
+- Phase 6 invokes the model-invocable `nightgauge:issue-audit` skill through
+  the Skill tool instead of a slash command inside a Bash block (#2204).
+- Description states the skill is user-invoked (#2195).
+
 ## [1.25.0] - 2026-09-23
 
 ### Added

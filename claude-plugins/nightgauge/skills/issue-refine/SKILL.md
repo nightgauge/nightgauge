@@ -7,7 +7,7 @@ description: Analyze a raw GitHub issue and rewrite it with structured sections,
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.0.2"
+  version: "1.0.3"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Glob Grep Bash
 disable-model-invocation: true
@@ -48,8 +48,8 @@ pipeline-ready issue by:
 /nightgauge:issue-refine
 ```
 
-The `$ARGUMENTS` variable contains everything after the skill name (the issue
-number). If omitted, the issue number is inferred from the current branch.
+The skill arguments (the text after the skill name) are the issue
+number. If omitted, the issue number is inferred from the current branch.
 
 ## Philosophy
 

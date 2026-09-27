@@ -42,13 +42,13 @@ any other output for that phase.
 ### CRITICAL: Argument Check (Before Any Other Phase)
 
 **This check MUST happen FIRST, before any other workflow logic.** Parse
-`$ARGUMENTS` immediately:
+the skill arguments immediately:
 
-1. **If `$ARGUMENTS` contains a number** (e.g., "42", "123"): this is the issue
+1. **If the arguments contain a number** (e.g., "42", "123"): this is the issue
    number — **SKIP Phase 2 entirely** and **proceed directly to Phase 3**.
-2. **If `$ARGUMENTS` contains `-i` or `--interactive`**: use Interactive Mode
+2. **If the arguments contain `-i` or `--interactive`**: use Interactive Mode
    (Phase 2).
-3. **If `$ARGUMENTS` is empty or contains only `--label`**: use auto-selection
+3. **If the arguments are empty or contain only `--label`**: use auto-selection
    (Phase 2).
 
 ---

@@ -339,3 +339,34 @@ func findFirst(findings []SkillAntiPattern, check string) SkillAntiPattern {
 	}
 	return SkillAntiPattern{}
 }
+
+// --- Check F: literal $ARGUMENTS in prose (#2207) ---
+
+func TestAntiPatterns_LiteralArguments_FlagsProseInlineCode(t *testing.T) {
+	root := t.TempDir()
+	writeSkillFile(t, root, "demo/SKILL.md",
+		"# demo\n\nThis skill supports inline arguments via `$ARGUMENTS`:\n")
+	writeSkillFile(t, root, "demo/_profiles/compact.md",
+		"# demo\n\n1. If `$ARGUMENTS` contains a number, use it.\n")
+
+	res := run(t, root)
+	if got := countByCheck(res.Findings, CheckLiteralArguments); got != 2 {
+		t.Fatalf("literal_arguments_in_prose findings = %d, want 2: %+v", got, res.Findings)
+	}
+	f := findFirst(res.Findings, CheckLiteralArguments)
+	if f.Line != 3 {
+		t.Errorf("line = %d, want 3", f.Line)
+	}
+}
+
+func TestAntiPatterns_LiteralArguments_FencedAndBareUsesAreClean(t *testing.T) {
+	root := t.TempDir()
+	writeSkillFile(t, root, "demo/SKILL.md",
+		"# demo\n\nParse the skill arguments.\n\n```bash\n"+
+			"echo \"`$ARGUMENTS`\"\nISSUE=\"$ARGUMENTS\"\n```\n")
+
+	res := run(t, root)
+	if got := countByCheck(res.Findings, CheckLiteralArguments); got != 0 {
+		t.Fatalf("literal_arguments_in_prose findings = %d, want 0: %+v", got, res.Findings)
+	}
+}

@@ -399,6 +399,11 @@ mechanically-detectable authoring anti-patterns Anthropic warns against
                     cross-platform and use '/'.
   missing_toc       a supporting file over the line threshold lacks a
                     '## Contents' heading (the established _includes/ convention).
+  literal_arguments_in_prose
+                    a backticked $ARGUMENTS outside a fenced block in a
+                    SKILL.md, supporting file or render profile. Claude Code
+                    substitutes it at load, so with no arguments the prose
+                    reads as an empty code span (#2207).
 
 The four judgment-based anti-patterns (time-sensitive info, inconsistent
 terminology, options-without-default, magic numbers) are NOT mechanizable

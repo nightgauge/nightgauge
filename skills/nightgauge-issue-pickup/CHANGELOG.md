@@ -46,6 +46,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.
 
+## [1.21.2] - 2026-09-27
+
+### Fixed
+
+- Prose refers to "the skill arguments" instead of the literal arguments
+  variable, which Claude Code substitutes at load and rendered as an empty
+  code span when invoked without arguments (#2207).
+
 ## [1.9.0] - 2026-02
 
 ### Fixed

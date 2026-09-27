@@ -8,10 +8,11 @@ description: Prime a new GitHub repository and project board for the Nightgauge 
   projects (org-preferred) before creating new ones. Validates token scopes
   upfront. Idempotent — safe to re-run at any time. Use once when onboarding a
   fresh repository for the pipeline, or to fill gaps and refresh field IDs.
+  User-invoked: the user types `/nightgauge:repo-init`.
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.3.1"
+  version: "1.3.2"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Bash AskUserQuestion
 ---

@@ -6,7 +6,7 @@ description: Verify and update documentation to match current codebase - detect 
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.7.0"
+  version: "1.7.1"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
 disable-model-invocation: true
@@ -42,7 +42,7 @@ drift, deprecated references, and inconsistencies between docs and code.
 
 ## Arguments
 
-This skill supports inline arguments via `$ARGUMENTS`:
+This skill accepts inline arguments (the text typed after the skill name):
 
 ```bash
 # Audit a specific path
@@ -54,8 +54,6 @@ This skill supports inline arguments via `$ARGUMENTS`:
 # Combined
 /update-docs docs/ --audit-only
 ```
-
-The `$ARGUMENTS` variable contains everything after the skill name.
 
 ## What It Does
 
