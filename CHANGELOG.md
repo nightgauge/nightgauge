@@ -91,6 +91,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The OpenCode install-risk stage-cap test survives a heavily loaded machine**
+  (#2212). `TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext`
+  asserted a 7-second ceiling against a 10-second watchdog, and setup alone
+  took 12 s while a local model server and other gates shared the machine.
+  It now uses a 60-second watchdog and a 30-second ceiling, so it still tells
+  the stage cap from the watchdog and still finishes in about 4 s.
+
 - **The decisions index matches `docs/decisions/`** (#1475, #1476). ADR-005,
   the workspace knowledge graph contract that `internal/graph` and
   `internal/capabilities` cite by decision number, now exists as
