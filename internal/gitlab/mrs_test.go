@@ -316,3 +316,31 @@ func TestEpicHelpers_ReturnUnsupported(t *testing.T) {
 		t.Errorf("MergeEpicPR: want ErrUnsupported, got %v", err)
 	}
 }
+
+// #1479: a stamped MR body carries the pipeline:created label; an unstamped
+// one does not.
+func TestCreatePR_StampedBodyGetsPipelineLabel(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		want       any
+	}{
+		{"stamped", "MR body\n\n" + forge.PipelineMarker("pr-create", 7, "run-1") + "\n", forge.PipelineCreatedLabel},
+		{"unstamped", "MR body", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := newStubServer(t)
+			srv.handle("POST", "/api/v4/projects/o%2Fr/merge_requests", 201, sampleMRJSON)
+			svc := NewPRService(NewClient(srv.srv.URL, "tok"))
+			if _, err := svc.CreatePR(context.Background(), "o/r", "t", tc.body, "feat/x", "main"); err != nil {
+				t.Fatalf("CreatePR: %v", err)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(srv.lastBody, &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body["labels"] != tc.want {
+				t.Errorf("labels = %v, want %v", body["labels"], tc.want)
+			}
+		})
+	}
+}

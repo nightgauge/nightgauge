@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -212,14 +213,53 @@ func (s *PRService) CreatePR(ctx context.Context, repoID, title, body, headRef, 
 		return nil, fmt.Errorf("create PR: %w", err)
 	}
 
-	return &types.PullRequest{
-		NodeID:  fmt.Sprintf("%v", m.CreatePullRequest.PullRequest.ID),
-		Number:  int(m.CreatePullRequest.PullRequest.Number),
-		URL:     string(m.CreatePullRequest.PullRequest.URL),
+	created := m.CreatePullRequest.PullRequest
+	pr := &types.PullRequest{
+		NodeID:  fmt.Sprintf("%v", created.ID),
+		Number:  int(created.Number),
+		URL:     string(created.URL),
 		Title:   title,
 		HeadRef: headRef,
 		BaseRef: baseRef,
-	}, nil
+	}
+
+	// Pipeline stamp (#1479): a body carrying the pipeline footer gets the
+	// pipeline:created label. The PR already exists, so a labelling failure is
+	// logged, not returned — failing here would make the caller retry a create
+	// that succeeded.
+	if forge.HasPipelineMarker(body) {
+		owner, repo := string(created.Repository.Owner.Login), string(created.Repository.Name)
+		if err := s.applyPipelineLabel(ctx, owner, repo, pr.NodeID); err != nil {
+			log.Printf("warning: PR #%d created but %q label not applied: %v", pr.Number, forge.PipelineCreatedLabel, err)
+		} else {
+			pr.Labels = append(pr.Labels, forge.PipelineCreatedLabel)
+		}
+	}
+	return pr, nil
+}
+
+// applyPipelineLabel ensures the pipeline:created label exists on owner/repo
+// (LabelService.Create is idempotent by name) and adds it to the PR.
+func (s *PRService) applyPipelineLabel(ctx context.Context, owner, repo, prNodeID string) error {
+	if owner == "" || repo == "" {
+		return fmt.Errorf("createPullRequest response did not name the repository")
+	}
+	label, err := NewLabelService(s.client, owner, repo).Create(ctx,
+		forge.PipelineCreatedLabel, forge.PipelineCreatedLabelDescription, forge.PipelineCreatedLabelColor)
+	if err != nil {
+		return err
+	}
+	var m addLabelsMutation
+	input := map[string]interface{}{
+		"input": AddLabelsToLabelableInput{
+			LabelableID: graphql.ID(prNodeID),
+			LabelIDs:    []graphql.ID{graphql.ID(label.ID)},
+		},
+	}
+	if err := s.client.mutate(ctx, &m, input); err != nil {
+		return fmt.Errorf("add label: %w", err)
+	}
+	return nil
 }
 
 // UpdatePR patches the documented attributes of a pull request identified

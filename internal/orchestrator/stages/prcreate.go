@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -22,6 +23,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
@@ -148,6 +150,9 @@ type PRCreateSnapshot struct {
 
 	// Pipeline metadata
 	BatchPresent bool
+	// RunID is the pipeline run id stamped into the PR footer (#1479). Read
+	// from NIGHTGAUGE_RUN_ID by defaultReadCreateContext; empty renders "-".
+	RunID string
 }
 
 // PRCreateDecision is the output of the pure decision rule.
@@ -310,6 +315,7 @@ func stripTitlePrefix(title string) string {
 //	## Validation    (always)
 //	## Knowledge     (only when KnowledgeSection is non-empty)
 //	closing keywords (Closes #N; "Part of #PARENT" when NativeParent > 0)
+//	pipeline stamp   (always; forge.PipelineMarker, see docs/PR_CREATE_STAGE.md)
 //
 // Output is byte-equal across repeated calls on identical input.
 func RenderBody(snap PRCreateSnapshot) string {
@@ -401,6 +407,13 @@ func RenderBody(snap PRCreateSnapshot) string {
 		b.WriteString(fmt.Sprintf("Part of #%d\n", snap.NativeParent))
 	}
 	b.WriteString(fmt.Sprintf("Closes #%d\n", snap.IssueNumber))
+
+	// Pipeline stamp (#1479) — always last, so a reviewer never sees it and
+	// tooling finds it at a fixed position. forge.CreatePR adapters apply the
+	// pipeline:created label when they see it.
+	b.WriteString("\n")
+	b.WriteString(forge.PipelineMarker("pr-create", snap.IssueNumber, snap.RunID))
+	b.WriteString("\n")
 
 	return b.String()
 }
@@ -804,7 +817,7 @@ func pipelineContextPath(workdir, name string) string {
 // validate-{N}.json sets HasValidate=false. Missing issue-{N}.json is
 // tolerated — the snapshot keeps zero-values.
 func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot, error) {
-	snap := PRCreateSnapshot{}
+	snap := PRCreateSnapshot{RunID: os.Getenv("NIGHTGAUGE_RUN_ID")}
 
 	// dev-batch-{E}.json — when present, force batch mode regardless of other fields.
 	batchPath := pipelineContextPath(workdir, fmt.Sprintf("dev-batch-%d.json", issueNumber))

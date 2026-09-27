@@ -179,12 +179,52 @@ Deleted:
 
 Part of #<PARENT>                         (only when issue.native_parent > 0)
 Closes #<N>
+
+<!-- nightgauge:pipeline stage=pr-create issue=<N> run=<run-id> -->
 ```
 
 `RenderTitle` and `RenderBody` are pure functions over `PRCreateSnapshot` —
 no `time.Now`, no map iteration, no environment reads, sorted file lists.
 The deterministic-property test calls each function 100× and asserts
-byte-equal output across calls.
+byte-equal output across calls. (The run id is read from
+`NIGHTGAUGE_RUN_ID` by the context loader, not by `RenderBody`.)
+
+### Pipeline stamp (#1479)
+
+Every PR or MR the pipeline opens carries two machine-readable marks, so
+pipeline-driven merges can be told apart from interactively-authored ones:
+
+1. **Footer.** The last line of the body is an HTML comment (invisible when
+   rendered):
+
+   ```
+   <!-- nightgauge:pipeline stage=<stage> issue=<N> run=<run-id> -->
+   ```
+
+   - `stage` is the stage that opened the PR (`pr-create`).
+   - `issue` is the decimal issue number the PR closes.
+   - `run` is the pipeline run id (`NIGHTGAUGE_RUN_ID`), or `-` when none is
+     known. Empty values render as `-`; whitespace and `--` inside a value
+     become `_`.
+
+   Both the deterministic path (`RenderBody`) and the LLM path (the
+   `nightgauge-pr-create` skill's `PR_BODY` template) emit it. The format is
+   produced by `forge.PipelineMarker` (`internal/forge/pipeline_marker.go`).
+
+2. **Label `pipeline:created`.** The forge adapters' `CreatePR` apply it to any
+   PR whose body contains the footer prefix `<!-- nightgauge:pipeline `. On
+   GitHub the label is created on first use (`LabelService.Create` is
+   idempotent by name) and then added; a labelling failure is logged but does
+   not fail the create, because the PR already exists. On GitLab the label is
+   sent with the MR create request, and GitLab creates it if absent.
+
+**Stability contract.** External tooling may rely on: the prefix
+`<!-- nightgauge:pipeline `, the space-separated `key=value` grammar, the keys
+`stage`, `issue` and `run`, and the label name `pipeline:created`. New keys may
+be appended before ` -->`; parsers must ignore unknown keys. Removing or
+renaming a key, the prefix or the label is a breaking change and needs a
+`### Changed` changelog entry and a deprecation window of at least one minor
+release.
 
 ### Failure modes
 

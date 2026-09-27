@@ -14,6 +14,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **Pipeline-created PRs are stamped** (#1479). Every PR/MR the pipeline opens
+  ends with `<!-- nightgauge:pipeline stage=pr-create issue=N run=<id> -->`
+  (deterministic `RenderBody` and the pr-create skill's `PR_BODY` alike), and
+  the GitHub and GitLab `CreatePR` adapters apply a `pipeline:created` label to
+  any body carrying that footer, creating the label on first use. The format
+  and its stability contract are in `docs/PR_CREATE_STAGE.md` § Pipeline stamp.
+
 ### Changed
 
 - **`--owner`/`--repo` no longer default to `nightgauge`** (#2198). Every
