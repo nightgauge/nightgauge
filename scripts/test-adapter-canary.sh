@@ -598,14 +598,23 @@ check "the daily schedule still runs the canary" \
 DECIDE_RUN="$(yq -r '.jobs["changed"].steps[] | select(.name == "Decide") | .run' "$WORKFLOW")"
 check "the changed job's decide step no longer carries a push branch" \
   sh -c '! echo "$1" | grep -q "= \"push\""' _ "$DECIDE_RUN"
+# #2218 moved the base SHA into the step's env so a merge_group diffs the
+# queue's base the same way; the run script diffs "$BASE_SHA" (#2228).
+DECIDE_BASE_SHA="$(yq -r '.jobs["changed"].steps[] | select(.name == "Decide") | .env.BASE_SHA' "$WORKFLOW")"
 check "the changed job's decide step still diffs a pull_request against its base" \
-  str_contains "$DECIDE_RUN" 'github.event.pull_request.base.sha'
+  sh -c 'case "$1" in *github.event.pull_request.base.sha*) ;; *) exit 1 ;; esac
+    case "$2" in *"git diff --name-only \"\$BASE_SHA\" HEAD"*) ;; *) exit 1 ;; esac' \
+  _ "$DECIDE_BASE_SHA" "$DECIDE_RUN"
+check "the changed job's decide step diffs a merge_group against the queue base" \
+  str_contains "$DECIDE_BASE_SHA" 'github.event.merge_group.base_sha'
 
 # A pull_request that changes a manifest runs the canary at that manifest's
 # own max_tested, not at npm's `latest`; everything else runs `latest`.
 VERSION_MODE_EXPR="$(yq -r '.env.VERSION_MODE' "$WORKFLOW")"
 check "VERSION_MODE is pinned for a pull_request" \
-  str_contains "$VERSION_MODE_EXPR" "event_name == 'pull_request' && 'pinned'"
+  sh -c 'case "$1" in *"event_name == '"'"'pull_request'"'"'"*"&& '"'"'pinned'"'"'"*) ;; *) exit 1 ;; esac' _ "$VERSION_MODE_EXPR"
+check "VERSION_MODE is pinned for a merge_group" \
+  str_contains "$VERSION_MODE_EXPR" "event_name == 'merge_group') && 'pinned'"
 
 check "the report job still excludes pull_request" \
   str_contains "$REPORT_IF" "event_name != 'pull_request'"

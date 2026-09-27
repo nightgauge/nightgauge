@@ -107,6 +107,8 @@ the SHA-256 of the lines between the markers.
   `bash scripts/ci-local.sh`: run it exactly once, after focused checks pass.
   It is the gate, not the iteration loop. The ordered requirements live in
   [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md#pre-submission-validation-critical).
+  Prerequisites in a fresh worktree: `npm ci`, mikefarah `yq`, and a `python3`
+  with `.github/requirements-ci.txt` installed (a venv on `PATH` works).
 - **Concurrent `scripts/ci-local.sh` runs are supported — do not serialise on
   the gate.** Branches are written in parallel and each one gates itself; only
   merges serialise. The gate's heavy concurrent steps draw on a MACHINE-WIDE
