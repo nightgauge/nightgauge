@@ -796,7 +796,7 @@ func openCodeSkillDir(opts RunOptions) string {
 // own source (the core repo editing its skills/), which the stage may change
 // like any other file, and it needs no external_directory entry.
 func openCodeReadOnlySkillsRoot(opts RunOptions) string {
-	root := opencodeallow.SkillsRoot(openCodeAllowOptions(opts))
+	root := opencodeallow.SkillsRootOf(opts.SkillPath)
 	if root == "" || opencodeallow.InsideWorktree(opts.WorktreeDir, root) {
 		return ""
 	}
@@ -859,6 +859,8 @@ func openCodeAllowOptions(opts RunOptions) opencodeallow.Options {
 		// The run's knowledge base (#2194): allow-listed for read AND write,
 		// the one external root the edit map does not deny.
 		KnowledgeDir: opts.KnowledgeDir,
+		// The skills tree the render resolved, read-only (#2191).
+		SkillsRoot: openCodeReadOnlySkillsRoot(opts),
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/models"
+	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
 
 // The per-run OpenCode config (ADR-022 § 7, § 8, § 10, § 12, § 15, § 17).
@@ -1686,6 +1687,11 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	env[opencodeplugin.EnvExplorationBudget] = strconv.Itoa(built.ExplorationBudget)
 	if req.KnowledgeDir != "" {
 		env[opencodeplugin.EnvKnowledgeDir] = req.KnowledgeDir
+	}
+	// The dispatch-time external-directory gate admits the same read-only
+	// skills tree the permission map does (#2191).
+	if root := openCodeReadOnlySkillsRoot(req.Run); root != "" {
+		env[opencodeallow.EnvSkillsRoot] = root
 	}
 	reportOpenCodeRepository(os.Stderr, input.Repository)
 	return &OpenCodeRun{

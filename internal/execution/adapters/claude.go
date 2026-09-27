@@ -98,6 +98,9 @@ func (a *ClaudeAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 	if opts.OutputFile != "" {
 		env["NIGHTGAUGE_OUTPUT_FILE"] = opts.OutputFile
 	}
+	if opts.KnowledgeDir != "" {
+		env[KnowledgeDirEnvVar] = opts.KnowledgeDir
+	}
 	if opts.TargetRepo != "" {
 		env["NIGHTGAUGE_TARGET_REPO"] = opts.TargetRepo
 	}

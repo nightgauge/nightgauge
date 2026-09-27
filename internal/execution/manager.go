@@ -395,14 +395,6 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	}
 
 	cmdName, args, env := adapter.BuildCommand(runOpts)
-	// Every adapter's stage learns the run's one knowledge base (#2194), so a
-	// skill never has to guess it from its worktree cwd.
-	if runOpts.KnowledgeDir != "" {
-		if env == nil {
-			env = map[string]string{}
-		}
-		env[adapters.KnowledgeDirEnvVar] = runOpts.KnowledgeDir
-	}
 
 	// Prepare OS command
 	cmd := exec.CommandContext(execCtx, cmdName, args...)

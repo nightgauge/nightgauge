@@ -11,8 +11,8 @@ func TestSkillsRoot(t *testing.T) {
 		{"/b/skills/nightgauge-feature-dev.md", "/b/skills"},
 		{"", ""},
 	} {
-		if got := SkillsRoot(Options{SkillPath: tc.skill}); got != tc.want {
-			t.Errorf("SkillsRoot(%q) = %q, want %q", tc.skill, got, tc.want)
+		if got := SkillsRootOf(tc.skill); got != tc.want {
+			t.Errorf("SkillsRootOf(%q) = %q, want %q", tc.skill, got, tc.want)
 		}
 	}
 }
@@ -24,6 +24,7 @@ func TestRootsFromEnv_SkillsRootAndKnowledgeBase(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_CONTEXT_FILE", "")
 	t.Setenv("NIGHTGAUGE_OUTPUT_FILE", "")
 	t.Setenv(EnvKnowledgeDir, "/main/.nightgauge/knowledge")
+	t.Setenv(EnvSkillsRoot, "/prefix/skills")
 	roots := RootsFromEnv("/main/.nightgauge/worktrees/x")
 	has := func(r string) bool {
 		for _, x := range roots {
