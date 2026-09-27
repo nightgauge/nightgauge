@@ -46,6 +46,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The stall watchdog no longer stops a slow local model mid-reply**
+  (#2184). OpenCode never writes a streaming delta to its session database
+  and prints a part only when it completes, so the #2176 watchdog read a
+  model slowly writing a long reasoning block as a dead request (#1659 leg 1
+  run 13: about 1 token/s at 86k context, stopped after 20 minutes). The
+  plugin now touches a heartbeat beside `opencode.db` on every part delta or
+  update, and the watchdog counts it as progress. A request that streams
+  nothing is still stopped.
+
 - **An OpenCode stage no longer ends silently when its context compacts**
   (#2180). The plugin disabled OpenCode's continue turn after every
   compaction, so a stage that compacted mid-task exited 0 with its

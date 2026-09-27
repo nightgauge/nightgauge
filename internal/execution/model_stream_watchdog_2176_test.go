@@ -254,3 +254,39 @@ func TestReadSessionProgress(t *testing.T) {
 		t.Fatal("no database: want an error")
 	}
 }
+
+// TestReadSessionProgress_StreamHeartbeat: the plugin's stream heartbeat
+// counts as progress (#2184), newer than the database's last part update or
+// with no database yet; an old heartbeat does not hide a stall.
+func TestReadSessionProgress_StreamHeartbeat(t *testing.T) {
+	dir := t.TempDir()
+	hb := filepath.Join(dir, streamHeartbeatFile)
+	if err := os.WriteFile(hb, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	beat := time.Now().Add(-3 * time.Second).Truncate(time.Second)
+	if err := os.Chtimes(hb, beat, beat); err != nil {
+		t.Fatal(err)
+	}
+	p, err := readSessionProgress(dir)
+	if err != nil {
+		t.Fatalf("heartbeat with no database: %v", err)
+	}
+	if !p.lastUpdate.Equal(beat) {
+		t.Fatalf("lastUpdate = %v, want the heartbeat's %v", p.lastUpdate, beat)
+	}
+
+	w := newModelStreamWatchdog("lms-local", time.Minute, dir)
+	w.lastEvent.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+	if w.check(time.Now()) {
+		t.Fatal("a heartbeat 3s old was read as a stall")
+	}
+	old := time.Now().Add(-5 * time.Minute)
+	if err := os.Chtimes(hb, old, old); err != nil {
+		t.Fatal(err)
+	}
+	w.lastEvent.Store(time.Now().Add(-2 * time.Minute).UnixNano())
+	if !w.check(time.Now()) {
+		t.Fatal("a heartbeat older than the bound hid a stall")
+	}
+}

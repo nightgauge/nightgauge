@@ -179,6 +179,29 @@ func (w *modelStreamWatchdog) notice() string {
 // readSessionProgress reads the run's OpenCode session database read-only:
 // the latest part update, and whether a tool call is pending or running.
 func readSessionProgress(dir string) (sessionProgress, error) {
+	p, err := readSessionDBProgress(dir)
+	// The plugin's stream heartbeat (#2184) is progress too: a streaming
+	// delta is never written to the database.
+	if info, statErr := os.Stat(filepath.Join(dir, streamHeartbeatFile)); statErr == nil {
+		if info.ModTime().After(p.lastUpdate) {
+			p.lastUpdate = info.ModTime()
+		}
+		return p, nil
+	}
+	return p, err
+}
+
+// streamHeartbeatFile is the file the OpenCode plugin touches beside
+// opencode.db whenever a part streams or updates (#2184). OpenCode 1.18.32
+// publishes a streaming delta only on its bus and never writes it to the
+// session database, and `opencode run --format json` prints a part only when
+// it completes, so without it a model slowly writing a long reasoning block
+// (#1659 leg 1 run 13: about 1 token/s at 86k context) read as a dead request
+// and was stopped. Mirrors session.js STREAM_HEARTBEAT_FILE byte for byte.
+const streamHeartbeatFile = "nightgauge-stream.heartbeat"
+
+// readSessionDBProgress reads opencode.db read-only.
+func readSessionDBProgress(dir string) (sessionProgress, error) {
 	path := filepath.Join(dir, "opencode.db")
 	if _, err := os.Stat(path); err != nil {
 		return sessionProgress{}, err

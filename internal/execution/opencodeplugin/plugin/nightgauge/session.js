@@ -272,6 +272,47 @@ function eventsPath() {
   return path.join(path.dirname(outputFile), `opencode-events-${runID}.jsonl`);
 }
 
+// STREAM_HEARTBEAT_FILE is touched in the run's OpenCode data directory
+// (XDG_DATA_HOME/opencode, beside opencode.db) whenever a part streams or
+// updates (#2184). OpenCode 1.18.32 publishes a streaming delta only on its
+// bus and never writes it to the session database, and `opencode run
+// --format json` prints a part only when it completes, so the manager's stall
+// watchdog (#2176) could not tell a model slowly writing a long reasoning
+// block from a dead request. The watchdog reads this file's mtime as
+// progress. Mirrors execution.streamHeartbeatFile byte for byte.
+export const STREAM_HEARTBEAT_FILE = "nightgauge-stream.heartbeat";
+
+// STREAM_HEARTBEAT_INTERVAL_MS throttles the touch: one write per interval
+// however fast tokens arrive.
+const STREAM_HEARTBEAT_INTERVAL_MS = 5000;
+
+let lastHeartbeatAt = 0;
+
+// streamHeartbeat touches the heartbeat file, at most once per interval. A
+// missing XDG_DATA_HOME or a write failure is swallowed: the watchdog then
+// falls back to what it read before.
+export function streamHeartbeat(now = Date.now()) {
+  if (now - lastHeartbeatAt < STREAM_HEARTBEAT_INTERVAL_MS) return false;
+  const dataHome = process.env.XDG_DATA_HOME;
+  if (!dataHome || dataHome[0] !== "/") return false;
+  lastHeartbeatAt = now;
+  try {
+    const dir = path.join(dataHome, "opencode");
+    fs.mkdirSync(dir, { recursive: true });
+    const target = path.join(dir, STREAM_HEARTBEAT_FILE);
+    const t = new Date(now);
+    try {
+      fs.utimesSync(target, t, t);
+    } catch {
+      fs.writeFileSync(target, "");
+      fs.utimesSync(target, t, t);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // appendEvent writes one JSONL line: {v, ts, kind, session_id, child,
 // detail}. detail must hold only ids, counts and verdict codes — never
 // transcript, summary, tool output or prompt text (the file's own retention
@@ -452,6 +493,10 @@ export async function event(ctx, input) {
   const evt = input && input.event;
   if (!evt || typeof evt.type !== "string") return;
   const props = evt.properties || {};
+
+  if (evt.type === "message.part.delta" || evt.type === "message.part.updated") {
+    streamHeartbeat();
+  }
 
   if (evt.type === "session.created" || evt.type === "session.updated") {
     trackSessionParentage(props);

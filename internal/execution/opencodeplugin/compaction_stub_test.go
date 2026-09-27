@@ -558,6 +558,14 @@ func assertCompactionStubGreen(t *testing.T, result compactionStubResult) {
 		t.Errorf("got %d stop_verify events, want exactly 1: %+v", stopVerifies, events)
 	}
 
+	// The stub streams every reply, so the plugin's event hook saw part
+	// deltas and touched the stream heartbeat the stall watchdog reads
+	// (#2184). Proves the real binary delivers message.part.delta to it.
+	hb := filepath.Join(result.home.home, ".data", "opencode", "nightgauge-stream.heartbeat")
+	if _, err := os.Stat(hb); err != nil {
+		t.Errorf("no stream heartbeat at %s after a streamed run: %v", hb, err)
+	}
+
 	exported := exportSanitized(t, result)
 	// --sanitize redacts every part's text, so the continue turns are
 	// counted by their synthetic flag: the fixture's only synthetic parts.
