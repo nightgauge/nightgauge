@@ -77,6 +77,7 @@ exit code can be ignored because telemetry must never fail a user-facing op.`,
 				}
 				workdir = wd
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			ev := telemetry.Event{
 				Type:         et,

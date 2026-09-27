@@ -39,6 +39,7 @@ and CLI display identical numbers (#3600).`,
 				}
 				workdir = wd
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 			if windowDays <= 0 {
 				windowDays = 7
 			}

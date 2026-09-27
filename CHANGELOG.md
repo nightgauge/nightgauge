@@ -139,6 +139,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Rendered skills and the knowledge base are reachable from pipeline
+  worktrees** (#2191, #2194). Under OpenCode the external-directory gate
+  refused reads of `skills/_shared/…` that a rendered skill points at, and in
+  a consumer repository the whole skills tree (the bundle beside the binary)
+  was out of reach. The permission map now grants the skills tree the render
+  resolved (workspace, `NIGHTGAUGE_SKILLS_ROOT` or bundle) read-only. The
+  knowledge base is now one directory per run, the main checkout's
+  `.nightgauge/knowledge`: every `knowledge` verb resolves to it from a
+  worktree, `knowledge scaffold --json` reports absolute paths, stages get it
+  as `NIGHTGAUGE_KNOWLEDGE_DIR`, OpenCode allows it for read and write, and
+  the Claude adapters add it with `--add-dir`. PRD, decisions and lessons
+  written during a run no longer vanish with the worktree.
+
 - **CI runs the adapter-canary regression suite** (#2229). It ran only in
   `scripts/ci-local.sh`, so a workflow change could break it with no CI signal.
 

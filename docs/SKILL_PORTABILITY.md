@@ -199,10 +199,24 @@ How the `opencode` adapter
   the prompt (`nightgauge skill render`); OpenCode's own Claude-skill and
   Claude-prompt discovery is switched off, so the operator's `~/.claude`
   skills never load.
-- **`_includes` access.** A skill's `Read` of `_includes/…` lands outside the
-  worktree, so it depends on the per-run `external_directory` allow-list,
-  which grants the `NIGHTGAUGE_SKILL_DIR` directory read-only (both its given
-  and symlink-resolved path forms), with a matching `edit` deny.
+- **`_includes` and `_shared` access.** A rendered skill's read directives
+  are absolute paths into the skills tree the render resolved
+  (`<workspace>/skills`, `$NIGHTGAUGE_SKILLS_ROOT`, or the bundle's
+  `<prefix>/skills`), which lies outside the worktree. The per-run
+  `external_directory` allow-list grants that whole tree read-only (both its
+  given and symlink-resolved path forms), with a matching `edit` deny, so
+  `_includes/…` and `skills/_shared/…` resolve for the core repository and
+  for a consumer repository whose skills live only in the bundle (#2191).
+  The tree is allow-listed in place rather than copied into the worktree: a
+  copy would land in the consumer's working tree as untracked files a stage
+  could commit, and would drift from the binary that rendered the prompt.
+- **Knowledge base access.** Every run has one knowledge base: the main
+  checkout's `.nightgauge/knowledge`, resolved from the worktree through
+  `git rev-parse --git-common-dir` (#2194). Stages receive it as
+  `NIGHTGAUGE_KNOWLEDGE_DIR`; OpenCode's `external_directory` allow-list
+  grants it read and write (the only external root without an `edit` deny),
+  and the Claude adapters pass it as `--add-dir`. The skills tree is never a
+  Claude working directory, so it stays read-only there too.
 - **Hooks map to the Nightgauge OpenCode plugin.** Claude `PreToolUse` gates
   run as the plugin's `tool.execute.before` handler; completion checks are Go
   StageGates, as for every non-Claude host. A tool the plugin cannot map is

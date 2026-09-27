@@ -55,6 +55,8 @@ func (a *ClaudeSdkAdapter) BuildCommand(opts RunOptions) (string, []string, map[
 		args = append(args, "--allowedTools", toolList)
 	}
 
+	args = append(args, claudeKnowledgeDirArgs(opts)...)
+
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}
@@ -98,6 +100,9 @@ func (a *ClaudeSdkAdapter) BuildCommand(opts RunOptions) (string, []string, map[
 	}
 	if opts.OutputFile != "" {
 		env["NIGHTGAUGE_OUTPUT_FILE"] = opts.OutputFile
+	}
+	if opts.KnowledgeDir != "" {
+		env[KnowledgeDirEnvVar] = opts.KnowledgeDir
 	}
 	if opts.TargetRepo != "" {
 		env["NIGHTGAUGE_TARGET_REPO"] = opts.TargetRepo

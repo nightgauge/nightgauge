@@ -69,6 +69,16 @@ is gone; there is one path, not two.
 `nightgauge knowledge scaffold` remains for manual use and canonicalizes its
 root the same way, so it is safe to run from inside a worktree.
 
+**One knowledge base per run (#2194).** Every `nightgauge knowledge` verb
+(recall, scaffold, record-outcome, stamp, render, validate, …) resolves its
+root to the main checkout through `git rev-parse --git-common-dir`, so a verb
+run from a `.nightgauge/worktrees/<…>` worktree reads and writes the same tree
+the sidebar and retro read, and nothing is lost when the worktree is removed.
+`knowledge scaffold --json` reports `knowledge_path`, `prd_path` and
+`decisions_path` as absolute paths for the same reason. A stage is handed the
+directory as `NIGHTGAUGE_KNOWLEDGE_DIR`; the OpenCode adapter allow-lists it
+for read and write and the Claude adapters add it with `--add-dir`.
+
 **Benefits:**
 
 - Preserves intent and context across pipeline sessions (no conversation history

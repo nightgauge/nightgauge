@@ -23,6 +23,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/models"
+	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
 
 // The per-run OpenCode config (ADR-022 § 7, § 8, § 10, § 12, § 15, § 17).
@@ -1447,7 +1448,9 @@ type OpenCodeRunRequest struct {
 	BinDir string
 	// KnowledgeDir is the absolute knowledge-base directory (#2193), handed
 	// to the plugin in opencodeplugin.EnvKnowledgeDir so the exploration
-	// budget exempts its reads. "" sets nothing.
+	// budget exempts its reads, and allow-listed for read and write in the
+	// permission map (#2194). Run.KnowledgeDir, when set, takes precedence.
+	// "" sets nothing.
 	KnowledgeDir string
 }
 
@@ -1608,6 +1611,14 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	if req.Lookup == nil {
 		return nil, errors.New("opencode: no inherited environment to prepare the run against")
 	}
+	// One knowledge base per run (#2194): the dispatch's own (the manager's
+	// runKnowledgeDir) wins; a caller that names only a workspace root gets
+	// that root's. The permission map's external_directory allow-list and
+	// the plugin's env both read it from here, so they cannot disagree.
+	if req.Run.KnowledgeDir == "" {
+		req.Run.KnowledgeDir = req.KnowledgeDir
+	}
+	req.KnowledgeDir = req.Run.KnowledgeDir
 	// OpenCode resolves each {env:NAME} of its config in the environment it is
 	// spawned with, so every value is checked there: the isolation variables
 	// the run sets over what this process inherited, less what the spawn
@@ -1676,6 +1687,11 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	env[opencodeplugin.EnvExplorationBudget] = strconv.Itoa(built.ExplorationBudget)
 	if req.KnowledgeDir != "" {
 		env[opencodeplugin.EnvKnowledgeDir] = req.KnowledgeDir
+	}
+	// The dispatch-time external-directory gate admits the same read-only
+	// skills tree the permission map does (#2191).
+	if root := openCodeReadOnlySkillsRoot(req.Run); root != "" {
+		env[opencodeallow.EnvSkillsRoot] = root
 	}
 	reportOpenCodeRepository(os.Stderr, input.Repository)
 	return &OpenCodeRun{

@@ -830,14 +830,8 @@ func OpenCodeSessionDBDir(root string) string {
 }
 
 // openCodeKnowledgeDir is the knowledge base of the workspace rooted at
-// workspaceRoot (#2193): its .nightgauge/knowledge, absolute. "" for no root.
+// workspaceRoot (#2193): its MAIN checkout's .nightgauge/knowledge, absolute
+// (config.KnowledgeBaseDir, #2194). "" for no root.
 func openCodeKnowledgeDir(workspaceRoot string) string {
-	if workspaceRoot == "" {
-		return ""
-	}
-	abs, err := filepath.Abs(filepath.Join(workspaceRoot, ".nightgauge", "knowledge"))
-	if err != nil {
-		return ""
-	}
-	return abs
+	return config.KnowledgeBaseDir(workspaceRoot)
 }

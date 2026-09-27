@@ -48,6 +48,8 @@ func (a *ClaudeAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 		args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, ","))
 	}
 
+	args = append(args, claudeKnowledgeDirArgs(opts)...)
+
 	if opts.Model != "" {
 		args = append(args, "--model", opts.Model)
 	}
@@ -96,6 +98,9 @@ func (a *ClaudeAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 	if opts.OutputFile != "" {
 		env["NIGHTGAUGE_OUTPUT_FILE"] = opts.OutputFile
 	}
+	if opts.KnowledgeDir != "" {
+		env[KnowledgeDirEnvVar] = opts.KnowledgeDir
+	}
 	if opts.TargetRepo != "" {
 		env["NIGHTGAUGE_TARGET_REPO"] = opts.TargetRepo
 	}
@@ -109,4 +114,21 @@ func (a *ClaudeAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 	}
 
 	return cmd, args, env
+}
+
+// KnowledgeDirEnvVar is the variable every stage is handed the run's
+// canonical knowledge base in (RunOptions.KnowledgeDir, #2194).
+const KnowledgeDirEnvVar = "NIGHTGAUGE_KNOWLEDGE_DIR"
+
+// claudeKnowledgeDirArgs makes the run's knowledge base a Claude Code working
+// directory (#2194). A stage runs in a worktree, and Claude Code confines
+// edits to its working directories, so the PRD/decisions/lessons writes into
+// the main checkout's .nightgauge/knowledge need it added. Only that
+// directory is added: the skills tree a rendered skill reads from stays
+// outside, reachable by the stage's Read grant but never writable.
+func claudeKnowledgeDirArgs(opts RunOptions) []string {
+	if opts.KnowledgeDir == "" {
+		return nil
+	}
+	return []string{"--add-dir", opts.KnowledgeDir}
 }

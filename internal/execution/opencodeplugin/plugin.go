@@ -25,6 +25,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
 
 //go:embed plugin
@@ -158,8 +160,10 @@ const (
 	EnvExplorationBudget = "NIGHTGAUGE_OPENCODE_EXPLORATION_BUDGET"
 	// EnvKnowledgeDir is the absolute knowledge-base directory (the
 	// workspace root's .nightgauge/knowledge), whose reads the exploration
-	// budget never counts (#2193). Unset when the caller names no workspace.
-	EnvKnowledgeDir = "NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR"
+	// budget never counts (#2193) and the external-directory gate admits
+	// (#2194). Unset when the caller names no workspace. Defined in
+	// opencodeallow, the leaf both this package and internal/hooks read.
+	EnvKnowledgeDir = opencodeallow.EnvKnowledgeDir
 	// EnvOperatorInstallRisk names, when set, the operator-owned OpenCode
 	// config directory ($HOME/.opencode, or an inherited OPENCODE_CONFIG_DIR)
 	// this run's config puts at risk of OpenCode's own @opencode-ai/plugin

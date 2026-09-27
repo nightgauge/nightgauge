@@ -53,6 +53,7 @@ summary. When no candidates qualify the section is omitted entirely.`,
 				}
 				workdir = wd
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			start := time.Now()
 			result, err := graduation.Candidates(workdir, issueNumber, graduation.Options{MinScore: minScore})

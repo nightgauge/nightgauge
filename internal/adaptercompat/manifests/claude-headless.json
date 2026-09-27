@@ -14,6 +14,7 @@
   "install": { "npm": "@anthropic-ai/claude-code" },
   "managed_install": "",
   "required_flags": [
+    "--add-dir",
     "--allowedTools",
     "--max-budget-usd",
     "--max-tokens",

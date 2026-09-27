@@ -43,10 +43,16 @@ type RunOptions struct {
 	WorktreeDir string // Working directory for the execution
 	ContextFile string // Path to context JSON from previous stage
 	OutputFile  string // Path for output context JSON
-	IssueNumber int
-	Repo        string
-	Stage       string
-	Model       string // Optional model override
+	// KnowledgeDir is the run's canonical knowledge base: the main
+	// checkout's absolute .nightgauge/knowledge (config.KnowledgeBaseDir,
+	// #2194), never the worktree's. Adapters make it reachable for read and
+	// write (OpenCode's external_directory allow-list, Claude's --add-dir)
+	// and export it as NIGHTGAUGE_KNOWLEDGE_DIR. "" when unknown.
+	KnowledgeDir string
+	IssueNumber  int
+	Repo         string
+	Stage        string
+	Model        string // Optional model override
 	// Effort is the effort half of the dispatch envelope (#581/#606), an
 	// EFFORT_LEVELS rung or "" (no explicit effort — the model's declared
 	// default rules). Threaded from the scheduler's wire resolution so a

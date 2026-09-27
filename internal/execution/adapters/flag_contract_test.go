@@ -130,14 +130,15 @@ func expandOptions[T any](in []RunOptions, values []T, set func(*RunOptions, T))
 // plus flagContractFixedFields below, to every field RunOptions declares.
 func flagContractOptions(models, prompts []string) []RunOptions {
 	opts := []RunOptions{{
-		SkillPath:   "/skills/feature-dev/SKILL.md",
-		ContextFile: "/ctx/in.json",
-		OutputFile:  "/ctx/out.json",
-		IssueNumber: 1617,
-		Repo:        "nightgauge/nightgauge",
-		Stage:       "feature-dev",
-		TargetRepo:  "nightgauge/nightgauge",
-		RunID:       "0199a8b2-0000-7000-8000-000000001617",
+		SkillPath:    "/skills/feature-dev/SKILL.md",
+		ContextFile:  "/ctx/in.json",
+		OutputFile:   "/ctx/out.json",
+		IssueNumber:  1617,
+		Repo:         "nightgauge/nightgauge",
+		Stage:        "feature-dev",
+		TargetRepo:   "nightgauge/nightgauge",
+		RunID:        "0199a8b2-0000-7000-8000-000000001617",
+		KnowledgeDir: "/main/.nightgauge/knowledge",
 	}}
 	opts = expandOptions(opts, models, func(o *RunOptions, v string) { o.Model = v })
 	opts = expandOptions(opts, []string{"", "high"}, func(o *RunOptions, v string) { o.Effort = v })
@@ -189,6 +190,8 @@ var flagContractVariedFields = map[string]bool{
 var flagContractFixedFields = map[string]bool{
 	"SkillPath": true, "ContextFile": true, "OutputFile": true, "IssueNumber": true,
 	"Repo": true, "Stage": true, "TargetRepo": true, "RunID": true,
+	// KnowledgeDir gates Claude's --add-dir; it is a path, set once.
+	"KnowledgeDir": true,
 }
 
 // flagContractUnrepresentableFields are RunOptions fields this contract

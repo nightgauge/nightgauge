@@ -109,6 +109,7 @@ is rejected and nothing is written.
 					return fmt.Errorf("get working directory: %w", err)
 				}
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			entryPath, err := okf.ResolveEntryPath(args[0], workdir)
 			if err != nil {

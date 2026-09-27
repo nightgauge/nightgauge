@@ -412,6 +412,29 @@ func MainCheckoutRoot(dir string) string {
 	return filepath.Dir(filepath.Clean(commonDir))
 }
 
+// KnowledgeBaseDir is the one canonical knowledge-base directory for a run
+// whose workspace or worktree is dir (#2194): the MAIN checkout's
+// .nightgauge/knowledge, absolute. A pipeline stage runs in a linked worktree
+// under .nightgauge/worktrees/, and a knowledge base read or written relative
+// to that worktree is a different, gitignored tree that is deleted with it.
+// The main checkout is found by `git rev-parse --git-common-dir`
+// (MainCheckoutRoot); a dir outside any git checkout keeps dir itself. "" for
+// an empty dir.
+func KnowledgeBaseDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	root := dir
+	if canonical := MainCheckoutRoot(dir); canonical != "" {
+		root = canonical
+	}
+	abs, err := filepath.Abs(filepath.Join(root, ".nightgauge", "knowledge"))
+	if err != nil {
+		return ""
+	}
+	return abs
+}
+
 // ProjectMappingMismatch is one repo whose workspace-manifest project_number
 // (Source A) disagrees with the runtime-resolved project_number (Source B).
 type ProjectMappingMismatch struct {
