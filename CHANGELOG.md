@@ -121,6 +121,8 @@ changelog, and the release workflow refuses a tag that does not.
   (default `ubuntu-latest`), and the verb reads the repository's Actions
   policy when the token allows and warns when it would reject the workflow.
 
+- **A self-hosted `ci.yml` warns that the repository needs runner-group
+  access** (#2209). Without it the job stays queued with no error.
 - **The stall watchdog no longer stops a slow local model mid-reply**
   (#2184). OpenCode never writes a streaming delta to its session database
   and prints a part only when it completes, so the #2176 watchdog read a
