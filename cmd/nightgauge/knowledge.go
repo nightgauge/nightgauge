@@ -80,6 +80,7 @@ func knowledgeRecallCmd() *cobra.Command {
 					return fmt.Errorf("get working directory: %w", err)
 				}
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			// Load config for BM25 params and telemetry.
 			cfg, loadErr := config.Load(workdir)
@@ -194,6 +195,7 @@ func knowledgeReindexCmd() *cobra.Command {
 				}
 				workdir = wd
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			start := time.Now()
 			idx, err := knowledge.BuildMetadataIndex(workdir)
@@ -292,6 +294,7 @@ Valid types: ` + strings.Join(validTypes, ", "),
 					return fmt.Errorf("get working directory: %w", err)
 				}
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			start := time.Now()
 			result, err := knowledge.ScaffoldRepoTopic(workdir, topicType, slug)
@@ -411,6 +414,7 @@ See docs/KNOWLEDGE_BASE.md#graduation-workflow for the full workflow.`,
 				}
 				workdir = wd
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			decisionsPath, err := knowledge.FindDecisionsPath(workdir, issueNumber)
 			if err != nil {
@@ -589,9 +593,7 @@ func knowledgeScaffoldCmd() *cobra.Command {
 			//
 			// Applied whether or not --workdir was passed: a caller handing us its
 			// own cwd has exactly the same problem as one that let us read it.
-			if root := config.MainCheckoutRoot(workdir); root != "" {
-				workdir = root
-			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			start := time.Now()
 			result, err := knowledge.ScaffoldWithConfig(workdir, issueNumber, title, criteria, knowledgeEnabled, workspaceScoped)
@@ -607,6 +609,13 @@ func knowledgeScaffoldCmd() *cobra.Command {
 				DurationMs:  time.Since(start).Milliseconds(),
 				Status:      "success",
 			})
+
+			// The JSON a skill reads knowledge_path from is ABSOLUTE (#2194).
+			// The paths are relative to the main checkout, but the skill runs
+			// in a worktree: a relative knowledge_path resolved against its
+			// cwd named the worktree's own, gitignored tree, so the PRD and
+			// decisions written through it vanished with the worktree.
+			result = absoluteScaffoldResult(workdir, result)
 
 			if outputJSON {
 				enc := json.NewEncoder(os.Stdout)
@@ -665,6 +674,7 @@ func knowledgePruneCmd() *cobra.Command {
 					return fmt.Errorf("get working directory: %w", err)
 				}
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			start := time.Now()
 			pruned, err := knowledge.PruneEmpty(workdir, dryRun)
@@ -749,6 +759,7 @@ func knowledgeIndexCmd() *cobra.Command {
 					return fmt.Errorf("get working directory: %w", err)
 				}
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 			if limit <= 0 {
 				limit = 20
 			}
@@ -876,9 +887,7 @@ func knowledgeWorkspaceCreateCmd() *cobra.Command {
 			// Canonicalize before walking up (#1205): on the scheduler path the
 			// cwd is the run's worktree, and a worktree placed outside the main
 			// checkout never reaches the workspace marker at all.
-			if root := config.MainCheckoutRoot(startDir); root != "" {
-				startDir = root
-			}
+			startDir = canonicalKnowledgeRoot(startDir)
 
 			wsRoot, err := workspace.DetectWorkspaceRoot(startDir)
 			if err != nil {
@@ -970,6 +979,7 @@ Workspace root is detected by walking up from --workdir (or CWD) looking for
 					return fmt.Errorf("get working directory: %w", err)
 				}
 			}
+			startDir = canonicalKnowledgeRoot(startDir)
 
 			wsRoot, err := workspace.DetectWorkspaceRoot(startDir)
 			if err != nil {
@@ -1034,6 +1044,7 @@ func knowledgeRenderCmd() *cobra.Command {
 					return fmt.Errorf("get working directory: %w", err)
 				}
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			absPath := filePath
 			if !filepath.IsAbs(absPath) {
@@ -1108,6 +1119,7 @@ entries — matches the no-op semantics of the bash dictionary loop it replaces.
 				}
 				workdir = wd
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			start := time.Now()
 
@@ -1173,6 +1185,7 @@ func knowledgeStatsCmd() *cobra.Command {
 					return fmt.Errorf("get working directory: %w", err)
 				}
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 			// Defensively guard against negative day counts; explicit 0 is
 			// allowed and means "any read is fresh" — flags ADRs with no
 			// reads at all.
@@ -1443,6 +1456,7 @@ outcome block already exists.`,
 					return fmt.Errorf("get working directory: %w", err)
 				}
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			if prURL != "" {
 				if _, err := okf.ValidateSource(prURL, workdir); err != nil {
@@ -1565,6 +1579,7 @@ To disable the decisions gate: set knowledge.require_decisions: false in .nightg
 					return fmt.Errorf("get working directory: %w", err)
 				}
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			if len(args) == 0 {
 				if !conformance {
@@ -1752,4 +1767,31 @@ func repairConformance(root string, result *knowledge.ConformanceResult) ([]stri
 		repaired = append(repaired, v.Path)
 	}
 	return repaired, nil
+}
+
+// canonicalKnowledgeRoot is the root every `knowledge` verb reads and writes
+// the knowledge base under (#1205, #2194): the main checkout of dir, resolved
+// through git's common dir, so a verb run from a pipeline worktree (the
+// stage's cwd) reaches the one knowledge base that survives the worktree's
+// removal. A dir outside any git checkout is returned unchanged.
+func canonicalKnowledgeRoot(dir string) string {
+	if root := config.MainCheckoutRoot(dir); root != "" {
+		return root
+	}
+	return dir
+}
+
+// absoluteScaffoldResult rewrites result's root-relative paths to absolute
+// ones under root, so knowledge_path means the same directory from any cwd.
+func absoluteScaffoldResult(root string, result knowledge.ScaffoldResult) knowledge.ScaffoldResult {
+	abs := func(p string) string {
+		if p == "" || filepath.IsAbs(p) {
+			return p
+		}
+		return filepath.Join(root, p)
+	}
+	result.KnowledgePath = abs(result.KnowledgePath)
+	result.PRDPath = abs(result.PRDPath)
+	result.DecisionsPath = abs(result.DecisionsPath)
+	return result
 }

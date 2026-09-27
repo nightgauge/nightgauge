@@ -17,6 +17,9 @@ scaffolded `PRD.md` to pre-load issue-derived requirements before producing the
 plan. This avoids re-deriving content that issue-pickup already extracted and
 ensures the plan builds on it rather than replacing it.
 
+`knowledge_path` is absolute and names the main checkout's knowledge base,
+not the worktree's (#2194); read it as given, never relative to the cwd.
+
 **No-op when `knowledge_path` is null or unset** — silently skip to Phase 4.
 
 ```bash

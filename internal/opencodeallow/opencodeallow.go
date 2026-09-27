@@ -45,6 +45,37 @@ type Options struct {
 	ContextFile string
 	// OutputFile is the output context JSON path.
 	OutputFile string
+	// KnowledgeDir is the run's canonical knowledge base (the main checkout's
+	// .nightgauge/knowledge, #2194). It is the one allow-listed root a stage
+	// may also WRITE: PRD, decisions and lessons land there so they survive
+	// the worktree's removal. "" adds nothing.
+	KnowledgeDir string
+}
+
+// EnvKnowledgeDir is the variable the OpenCode adapter exports the run's
+// knowledge base in (#2193), read back by RootsFromEnv and by the plugin's
+// exploration budget.
+const EnvKnowledgeDir = "NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR"
+
+// SkillsRoot is the skills tree the dispatched skill was located in
+// (#2191): the directory CONTAINING the skill directories, which a render
+// resolved from <workspace>/skills, $NIGHTGAUGE_SKILLS_ROOT or the bundle's
+// <prefix>/skills. A rendered skill's read directives are rewritten to
+// absolute paths into this whole tree (skills/_shared/..., sibling
+// includes), not only the stage's own directory, so this is what a read must
+// reach. skillrender.Locate matches <root>/<dir>/SKILL.md or <root>/<dir>.md,
+// so it is the skill's grandparent for a SKILL.md and its parent otherwise.
+// "" when opts names no skill. The tree is read-only: the adapter denies
+// edits under it.
+func SkillsRoot(opts Options) string {
+	if opts.SkillPath == "" {
+		return ""
+	}
+	dir := filepath.Dir(opts.SkillPath)
+	if filepath.Base(opts.SkillPath) == "SKILL.md" {
+		return filepath.Dir(dir)
+	}
+	return dir
 }
 
 // SkillDir is opts.SkillPath's own directory (NIGHTGAUGE_SKILL_DIR), or ""
@@ -83,13 +114,17 @@ func InsideWorktree(worktree, dir string) bool {
 }
 
 // Roots returns the resolved directories a read outside the worktree is
-// allowed to touch: NIGHTGAUGE_SKILL_DIR, the context/output file
+// allowed to touch: the skills tree the skill was rendered from (SkillsRoot,
+// #2191), the run's knowledge base (#2194), the context/output file
 // directories (when outside the worktree), and the /tmp, /private/tmp
 // scratch roots.
 func Roots(opts Options) []string {
 	var roots []string
-	if dir := SkillDir(opts); dir != "" {
+	if dir := SkillsRoot(opts); dir != "" {
 		roots = append(roots, dir)
+	}
+	if opts.KnowledgeDir != "" {
+		roots = append(roots, filepath.Clean(opts.KnowledgeDir))
 	}
 	addOutsideWorktree := func(file string) {
 		if file == "" {
@@ -107,8 +142,8 @@ func Roots(opts Options) []string {
 	return roots
 }
 
-// RootsFromEnv rebuilds Options' three allow-list-relevant fields (skill
-// dir, context file, output file) from the env vars manager.go/adapters set
+// RootsFromEnv rebuilds Options' allow-list-relevant fields (skill dir,
+// context file, output file, knowledge base) from the env vars manager.go/adapters set
 // on every OpenCode child process (NIGHTGAUGE_SKILL_DIR,
 // NIGHTGAUGE_CONTEXT_FILE, NIGHTGAUGE_OUTPUT_FILE), then calls Roots.
 // worktreeDir is passed explicitly (the hook payload's own "cwd", not an env
@@ -118,9 +153,19 @@ func RootsFromEnv(worktreeDir string) []string {
 		WorktreeDir: worktreeDir,
 		ContextFile: os.Getenv("NIGHTGAUGE_CONTEXT_FILE"),
 		OutputFile:  os.Getenv("NIGHTGAUGE_OUTPUT_FILE"),
+		// The adapter exports it only as an absolute path; anything else
+		// would widen the allow-list relative to the gate's cwd.
+		KnowledgeDir: absOrEmpty(os.Getenv(EnvKnowledgeDir)),
 	}
 	if skillDir := os.Getenv("NIGHTGAUGE_SKILL_DIR"); skillDir != "" {
 		opts.SkillPath = filepath.Join(skillDir, "SKILL.md")
 	}
 	return Roots(opts)
+}
+
+func absOrEmpty(p string) string {
+	if !filepath.IsAbs(p) {
+		return ""
+	}
+	return p
 }

@@ -428,7 +428,10 @@ Minimal required skeleton:
   after the stage exits (#1011). It is listed here because the skeleton above
   contains it, not because the stage writes it.
 - `knowledge_path`: Copied from `issue-{N}.json` when knowledge scaffolding is
-  enabled. Omit (or `null`) when absent. Written by Phase 5.5.
+  enabled. Omit (or `null`) when absent. Written by Phase 5.5. Always an
+  ABSOLUTE path into the main checkout's `.nightgauge/knowledge` (the stage's
+  cwd is a worktree; `$NIGHTGAUGE_KNOWLEDGE_DIR` names the same knowledge
+  base), so writes through it survive the worktree's removal.
 - `knowledge_entries`: Array of `.md` filenames in the knowledge directory.
   Written by Phase 5.5. `[]` when knowledge is not enabled.
 - `cross_repo_knowledge`: Array populated by Phase 3.5.1 when sibling repos with

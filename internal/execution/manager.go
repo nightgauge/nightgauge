@@ -294,6 +294,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 
 	// Build command from adapter
 	runOpts := buildRunOptions(opts, worktreeDir)
+	runOpts.KnowledgeDir = runKnowledgeDir(m.workspaceRoot, worktreeDir)
 
 	// Stage budgets (#1652, ADR-023 Q8): the stage's turn, wall-clock and
 	// token ceilings, enforced on the stream below. A model no USD cap can
@@ -394,6 +395,14 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	}
 
 	cmdName, args, env := adapter.BuildCommand(runOpts)
+	// Every adapter's stage learns the run's one knowledge base (#2194), so a
+	// skill never has to guess it from its worktree cwd.
+	if runOpts.KnowledgeDir != "" {
+		if env == nil {
+			env = map[string]string{}
+		}
+		env[adapters.KnowledgeDirEnvVar] = runOpts.KnowledgeDir
+	}
 
 	// Prepare OS command
 	cmd := exec.CommandContext(execCtx, cmdName, args...)
@@ -1744,6 +1753,18 @@ func buildRunOptions(opts StageOptions, worktreeDir string) adapters.RunOptions 
 		RunID:           runID,
 		ResumeSessionID: opts.ResumeSessionID,
 	}
+}
+
+// runKnowledgeDir is the run's canonical knowledge base (#2194): the main
+// checkout of the manager's workspace root, which is where the Go pickup path
+// scaffolds and stamps knowledge_path (scaffoldKnowledgeAtPickup), resolved
+// through git's common dir so a worktree-rooted manager lands there too. With
+// no workspace root it is resolved from the stage's worktree instead.
+func runKnowledgeDir(workspaceRoot, worktreeDir string) string {
+	if workspaceRoot != "" {
+		return config.KnowledgeBaseDir(workspaceRoot)
+	}
+	return config.KnowledgeBaseDir(worktreeDir)
 }
 
 // composeStageEnv builds the environment a stage subprocess actually receives:

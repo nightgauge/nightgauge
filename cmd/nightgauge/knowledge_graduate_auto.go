@@ -42,6 +42,7 @@ func runGraduateAuto(cmd *cobra.Command, issueNumber int, opts autoCLIOptions) e
 		}
 		opts.Workdir = wd
 	}
+	opts.Workdir = canonicalKnowledgeRoot(opts.Workdir)
 
 	// In --dry-run mode the orchestrator does not touch git or the forge, so
 	// skip opening either. This lets the dry-run path work in non-git

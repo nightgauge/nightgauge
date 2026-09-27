@@ -788,6 +788,21 @@ func openCodeSkillDir(opts RunOptions) string {
 	return filepath.Dir(opts.SkillPath)
 }
 
+// openCodeReadOnlySkillsRoot is the skills tree the skill was rendered from
+// (opencodeallow.SkillsRoot, #2191) when it lies outside the worktree: the
+// external_directory allow-list admits it so the rendered skill's absolute
+// read directives resolve, and the edit map denies it so that admission is
+// read-only. A tree inside the worktree is "" here: it is the repository's
+// own source (the core repo editing its skills/), which the stage may change
+// like any other file, and it needs no external_directory entry.
+func openCodeReadOnlySkillsRoot(opts RunOptions) string {
+	root := opencodeallow.SkillsRoot(openCodeAllowOptions(opts))
+	if root == "" || opencodeallow.InsideWorktree(opts.WorktreeDir, root) {
+		return ""
+	}
+	return root
+}
+
 // openCodeExternalDirectoryAllowList is ADR-022 § "external_directory
 // allow-list": the worktree in each of its forms (ADR-022's 2026-09-22
 // amendment, #1651), NIGHTGAUGE_SKILL_DIR, the context and output file dirs
@@ -841,6 +856,9 @@ func openCodeAllowOptions(opts RunOptions) opencodeallow.Options {
 		WorktreeDir: opts.WorktreeDir,
 		ContextFile: opts.ContextFile,
 		OutputFile:  opts.OutputFile,
+		// The run's knowledge base (#2194): allow-listed for read AND write,
+		// the one external root the edit map does not deny.
+		KnowledgeDir: opts.KnowledgeDir,
 	}
 }
 
@@ -910,6 +928,7 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, openCodeSkillDir(opts)),
 		openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, binDir)...,
 	)
+	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeRelativeDirPatterns(opts.WorktreeDir, openCodeReadOnlySkillsRoot(opts))...)
 	editDenyDirPatterns = append(editDenyDirPatterns, openCodeWorktreeAliasConfigDenyPatterns(opts.WorktreeDir)...)
 	return &openCodePermissionJSON{
 		Wildcard: openCodeDeny,

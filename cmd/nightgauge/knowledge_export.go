@@ -78,6 +78,7 @@ that would fail an external consumer's own check fails here first.`,
 					return fmt.Errorf("get working directory: %w", err)
 				}
 			}
+			workdir = canonicalKnowledgeRoot(workdir)
 
 			bundleRoot := okf.KnowledgeRoot(workdir)
 			if _, err := os.Stat(bundleRoot); err != nil {

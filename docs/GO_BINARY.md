@@ -7570,7 +7570,10 @@ nightgauge knowledge graduate <issue> --section <docs#anchor> --adr ADR-NNN [--j
 **scaffold** creates `.nightgauge/knowledge/features/{N}-{slug}/` with
 `PRD.md` and `decisions.md` template files. Idempotent — safe to re-run;
 returns `"skipped": true` when the directory already exists. `--criteria` is
-repeatable to inject acceptance criteria into `PRD.md`.
+repeatable to inject acceptance criteria into `PRD.md`. The directory is
+always created in the main checkout, even when run from a pipeline worktree,
+and `--json` reports `knowledge_path`, `prd_path` and `decisions_path` as
+absolute paths (#2194). Every `knowledge` verb resolves its root the same way.
 
 `--knowledge-enabled` defaults to `true`, matching the `knowledge.enabled`
 config default (ADR-020). When `--knowledge-enabled false` is passed, the
