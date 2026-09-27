@@ -202,6 +202,9 @@ func RunScaffoldTooling(ctx context.Context, opts ScaffoldToolingOptions) (*Scaf
 			if len(det.Scripts) == 0 {
 				result.Warnings = append(result.Warnings, "ci: package.json defines none of the gate scripts (typecheck, lint, test, build) — ci.yml only installs dependencies")
 			}
+			if w := selfHostedRunnerWarning(runsOn); w != "" {
+				result.Warnings = append(result.Warnings, w)
+			}
 			if opts.PolicyProbe != nil {
 				result.Warnings = append(result.Warnings, probePolicy(ctx, opts.PolicyProbe, workdir)...)
 			}
@@ -386,4 +389,14 @@ func writeIfAbsent(workdir, key, target string, probes []string, data []byte, dr
 		return FileOutcome{Key: key, Path: target, Outcome: OutcomeError, Reason: err.Error()}
 	}
 	return FileOutcome{Key: key, Path: target, Outcome: OutcomeCreated, Bytes: len(data)}
+}
+
+// selfHostedRunnerWarning reminds the caller that a self-hosted runner only
+// picks up jobs from repositories its runner group allows. A new repository is
+// not in the group by default, and GitHub leaves the job queued with no error.
+func selfHostedRunnerWarning(runsOn string) string {
+	if !strings.Contains(runsOn, "self-hosted") {
+		return ""
+	}
+	return "ci: runs-on " + runsOn + " — make sure this repository is in a runner group whose runners carry that label; otherwise jobs stay queued with no error"
 }

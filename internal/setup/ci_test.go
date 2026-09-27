@@ -178,3 +178,12 @@ func containsWarning(ws []string, sub string) bool {
 	}
 	return false
 }
+
+func TestSelfHostedRunnerWarning(t *testing.T) {
+	if w := selfHostedRunnerWarning("ubuntu-latest"); w != "" {
+		t.Fatalf("hosted runner warned: %q", w)
+	}
+	if w := selfHostedRunnerWarning("self-hosted"); !strings.Contains(w, "runner group") {
+		t.Fatalf("self-hosted warning missing runner group hint: %q", w)
+	}
+}
