@@ -128,7 +128,13 @@ func TestOpenCodeOperatorInstallRiskBoundedAndClassified(t *testing.T) {
 	})
 	elapsed := time.Since(started)
 
-	if elapsed > 5*time.Second {
+	// The ceiling separates "the watchdog ended it" from "the fake's 30s sleep
+	// or the 30s stage timeout ended it"; it is not a latency budget. RunStage's
+	// wall time also includes provisioning before the spawn and teardown after
+	// the kill, about 1.4s on an idle machine, and both grow with host load: a
+	// 5s ceiling failed at 6.7s under a loaded full `go test -race ./...`. The
+	// classification asserted below is what proves the watchdog fired.
+	if elapsed > 15*time.Second {
 		t.Fatalf("RunStage took %s; the 500ms watchdog bound must kill the stage long before the fake's 30s sleep or the stage's own 30s timeout", elapsed)
 	}
 

@@ -49,6 +49,8 @@ Generated VSCode contributions in sync
 @types/vscode <= engines.vscode
 Link-check gate regression suite
 Markdown link check
+Decisions index regression suite
+Decisions index matches docs/decisions
 Agent-guidance gate regression suite
 Agent-guidance architecture
 Smart Setup bundles the canonical agent-guidance check
