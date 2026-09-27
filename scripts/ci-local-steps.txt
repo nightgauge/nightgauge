@@ -39,6 +39,7 @@ nonexistent-workflow-reference gate
 Proposal-artifact validator regression suite
 CLA gate regression suite
 Cache-boundary measurement smoke
+Build SDK types (for the test-tree typecheck)
 VSCode test-tree typecheck
 ESLint
 Prettier format:check

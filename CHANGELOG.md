@@ -139,6 +139,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`scripts/ci-local.sh` passes in a fresh worktree** (#2228). The VSCode
+  test-tree typecheck resolved `@nightgauge/sdk` from a `dist/` that only an
+  earlier build had left behind, so a fresh `git worktree` failed with TS2307;
+  the gate now builds the SDK first, as `ci.yml` does. The adapter-canary suite
+  still asserted the pre-merge-queue `adapter-canary.yml` (a literal
+  `pull_request.base.sha` in the decide script, `pull_request && 'pinned'`);
+  it now reads the step's `BASE_SHA` env and also pins the `merge_group`
+  branch. That suite runs in no CI workflow, which is why only the local gate
+  saw it.
+
 - **The workspace merge rule names `nightgauge pr merge N`** (#2225). On core
   `main`, `gh pr merge --squash` cannot join the merge queue because auto-merge
   is disabled; `nightgauge pr merge` enqueues and waits (#2214).

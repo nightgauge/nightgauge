@@ -1401,6 +1401,12 @@ run_step "Cache-boundary measurement smoke" bash scripts/test-measure-cache-boun
 # the TS parser for tests without a `project` — so nothing typechecked tests/**
 # or the Playwright fixtures. A type-only import could name an export that no
 # longer exists and the suite stayed green.
+# The test tree resolves `@nightgauge/sdk` through the SDK's built dist/**
+# declarations. A fresh worktree has no dist/, so build the SDK first exactly
+# as ci.yml's "Build SDK types" step does; before #2228 this passed only in a
+# checkout where an earlier build had left dist/ behind.
+run_step "Build SDK types (for the test-tree typecheck)" \
+  npm run build --workspace=@nightgauge/sdk
 run_step "VSCode test-tree typecheck" npm run typecheck:tests -w nightgauge-vscode
 
 # 5. ESLint
