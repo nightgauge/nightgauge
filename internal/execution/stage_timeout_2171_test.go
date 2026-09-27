@@ -37,7 +37,12 @@ func TestRunStage_StageTimeoutIsClassifiedAsTimeout(t *testing.T) {
 		Repo:        "nightgauge/nightgauge",
 		IssueNumber: 2171,
 		Stage:       "issue-pickup",
-		Timeout:     2 * time.Second,
+		// The stage timeout also covers RunStage's pre-spawn setup
+		// (worktree, provisioning). Under a loaded -race run that setup
+		// alone took over 2s, so the deadline fired before `sh` started
+		// ("start sh: context deadline exceeded"). 8s leaves setup room and
+		// still stops the 30s sleep.
+		Timeout: 8 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("RunStage err = %v", err)
@@ -45,7 +50,7 @@ func TestRunStage_StageTimeoutIsClassifiedAsTimeout(t *testing.T) {
 	if result.ExitCode == 0 {
 		t.Fatal("ExitCode = 0, want a failure for a stage stopped at its timeout")
 	}
-	if !strings.Contains(result.Stderr, "[stage-timeout]") || !strings.Contains(result.Stderr, "stage timeout of 2s") ||
+	if !strings.Contains(result.Stderr, "[stage-timeout]") || !strings.Contains(result.Stderr, "stage timeout of 8s") ||
 		!strings.Contains(result.Stderr, "elapsed") {
 		t.Fatalf("stderr = %q, want the stage-timeout notice naming the timeout and elapsed time", result.Stderr)
 	}
