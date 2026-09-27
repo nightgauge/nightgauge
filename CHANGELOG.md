@@ -129,6 +129,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Docs: a `git worktree` build gets no VCS stamp** (#2224). `dev+<rev>`
+  (#2201) appears only for builds in a regular clone. ADAPTER_DOCTOR.md shows
+  the `-ldflags "-X main.version=..."` form for worktree builds.
+
 - **`project resolve --repo nightgauge/nightgauge` works in a fresh clone** (#2223).
   The committed `.nightgauge/config.yaml` now declares board 3.
 
