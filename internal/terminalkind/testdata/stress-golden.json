@@ -81,6 +81,21 @@
       "signal": ""
     },
     {
+      "input": "is experimental and does not dispatch by default",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: is experimental and does not dispatch by default",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "IS EXPERIMENTAL AND DOES NOT DISPATCH BY DEFAULT",
+      "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
       "input": "[model-stream-stalled]",
       "kind": "model_stream_stalled",
       "signal": ""

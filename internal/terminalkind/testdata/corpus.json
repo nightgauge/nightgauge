@@ -1702,6 +1702,15 @@
       "rationale": "A version-policy refusal cannot succeed on retry — the same binary is refused the same way — and before #1631 it satisfied only the `exit ` fallback, so it was booked subagent_crash and retried. The refusal stamps its own kind first, and that stamp is the one term the rule reads, so the reason's paths and the remediation's command cannot steer it."
     },
     {
+      "id": "adapter-experimental-gate-closed",
+      "input": "exit 0: dispatch refused for adapter \"opencode\": adapter \"opencode\" is experimental and does not dispatch by default: these controls are not enforced yet: failure classification, output redaction, project-config tamper gate, permission map, safety plugin, endpoint policy, stage limits, subagent cost. To dispatch anyway, set NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1 in the environment that runs nightgauge (it is read from the environment only, so no config file can set it); otherwise choose another agentic adapter with --adapter or NIGHTGAUGE_ADAPTER. See docs/decisions/022-opencode-multi-provider-adapter.md",
+      "expected": "adapter_incompatible",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "adapters.openCodeGate with NIGHTGAUGE_EXPERIMENTAL_OPENCODE unset, wrapped by execution.Manager as `dispatch refused for adapter %q: %w`; the same text a dogfooding run (`nightgauge run 3 --adapter opencode`, nightgauge-dogfooding) printed.",
+      "rationale": "The enable gate is read from the operator's environment only, so a retry is refused identically. It was booked subagent_crash through the `exit ` fallback; it belongs with the other adapter refusals no retry can clear."
+    },
+    {
       "id": "adapter-permission-rejected-marker",
       "input": "[adapter-permission-rejected] tool=bash",
       "expected": "adapter_permission_rejected",

@@ -196,9 +196,12 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
       "clauses": [
         [
           "adapter_incompatible"
+        ],
+        [
+          "is experimental and does not dispatch by default"
         ]
       ],
-      "why": "The adapter's binary cannot serve the dispatch (#1627, ADR-022 § 20): opencode below the compat manifest's floor, or a version that could not be read. A version above max-tested is never refused (ADR-022 § 20, 2026-09-25 amendment). `*OpenCodeIncompatibleError` stamps its kind first — `adapter_incompatible: \u003creason\u003e. \u003cremediation\u003e` — and execution.Manager wraps it as `dispatch refused for adapter \"opencode\": …`. Before this rule every such refusal satisfied only the `exit ` fallback, so a refusal that no retry can clear was booked subagent_crash and retried. Second in the ladder, above everything that reads free text: the reason quotes a failed self-test's probe output and the binary's path, either of which can carry a word a generic rule below keys on, and the stamp is the adapter's own verdict."
+      "why": "The adapter's binary cannot serve the dispatch (#1627, ADR-022 § 20): opencode below the compat manifest's floor, or a version that could not be read. A version above max-tested is never refused (ADR-022 § 20, 2026-09-25 amendment). `*OpenCodeIncompatibleError` stamps its kind first — `adapter_incompatible: \u003creason\u003e. \u003cremediation\u003e` — and execution.Manager wraps it as `dispatch refused for adapter \"opencode\": …`. Before this rule every such refusal satisfied only the `exit ` fallback, so a refusal that no retry can clear was booked subagent_crash and retried. Second in the ladder, above everything that reads free text: the reason quotes a failed self-test's probe output and the binary's path, either of which can carry a word a generic rule below keys on, and the stamp is the adapter's own verdict. The second clause is opencode's experimental enable gate refusing because NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1 is not set (openCodeGate): only the operator's environment can clear it, so no retry helps, and before this clause it too fell to the `exit ` fallback as subagent_crash (dogfooding session 2)."
     },
     {
       "id": "model-stream-stalled",
