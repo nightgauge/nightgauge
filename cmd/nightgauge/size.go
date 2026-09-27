@@ -74,8 +74,8 @@ func sizePredictCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	cmd.Flags().StringVar(&repo, "repo", "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }

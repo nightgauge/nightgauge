@@ -577,6 +577,95 @@ func repoNameFlag(cmd *cobra.Command, p *string, def, desc string) {
 	cmd.Annotations[repoBackfillAnnotation] = "true"
 }
 
+// ownerRequiredAnnotation / repoRequiredAnnotation mark a command whose
+// --owner (ownerFlag) or --repo (requiredRepoNameFlag) must resolve to a
+// concrete value before it runs. Resolution order: explicit flag >
+// .nightgauge/config.yaml > the cwd's git origin remote > a clear error.
+// There is deliberately no hardcoded default: a "nightgauge" default made
+// onboarding verbs run before config.yaml existed silently target the core
+// repo (#2198).
+const (
+	ownerRequiredAnnotation = "nightgauge/owner-required"
+	repoRequiredAnnotation  = "nightgauge/repo-required"
+)
+
+// ownerFlag registers a --owner flag with no default that PersistentPreRunE
+// resolves from config.yaml, then the git origin remote, else errors.
+func ownerFlag(cmd *cobra.Command, p *string, desc string) {
+	cmd.Flags().StringVar(p, "owner", "", desc+" (default: config.yaml owner, else the git origin remote)")
+	if cmd.Annotations == nil {
+		cmd.Annotations = map[string]string{}
+	}
+	cmd.Annotations[ownerRequiredAnnotation] = "true"
+}
+
+// requiredRepoNameFlag is repoNameFlag with no default and a required
+// resolution: config.yaml default_repo, then the git origin remote, else an
+// error naming the missing flag.
+func requiredRepoNameFlag(cmd *cobra.Command, p *string, desc string) {
+	repoNameFlag(cmd, p, "", desc+" (default: config.yaml default_repo, else the git origin remote)")
+	cmd.Annotations[repoRequiredAnnotation] = "true"
+}
+
+// originSlugFn is swapped in tests.
+var originSlugFn = gh.OriginSlug
+
+func flagValue(cmd *cobra.Command, name string) (string, bool) {
+	f := cmd.Flags().Lookup(name)
+	if f == nil {
+		return "", false
+	}
+	return f.Value.String(), true
+}
+
+// resolveTargetFlags applies the flag > config > git origin > error chain
+// for the --owner/--repo flags of cmd. cfg may be nil (no config.yaml).
+func resolveTargetFlags(cmd *cobra.Command, cfg *config.Config, workdir string) error {
+	flags := cmd.Flags()
+	if cfg != nil {
+		if !flags.Changed("owner") && cfg.Owner != "" {
+			_ = flags.Set("owner", cfg.Owner) // cobra flag.Set never errors for known flags
+		}
+		if !flags.Changed("repo") && cfg.DefaultRepo != "" && cmd.Annotations[repoBackfillAnnotation] == "true" {
+			_ = flags.Set("repo", cfg.DefaultRepo)
+		}
+	}
+
+	missing := func() []string {
+		var m []string
+		if v, ok := flagValue(cmd, "owner"); ok && v == "" && cmd.Annotations[ownerRequiredAnnotation] == "true" {
+			m = append(m, "--owner")
+		}
+		if v, ok := flagValue(cmd, "repo"); ok && v == "" && cmd.Annotations[repoRequiredAnnotation] == "true" {
+			m = append(m, "--repo")
+		}
+		return m
+	}
+	if len(missing()) == 0 {
+		return nil
+	}
+	if workdir != "" {
+		if o, r, ok := originSlugFn(workdir); ok {
+			owner, _ := flagValue(cmd, "owner")
+			if owner == "" && cmd.Annotations[ownerRequiredAnnotation] == "true" {
+				_ = flags.Set("owner", o)
+				owner = o
+			}
+			// Borrow the origin's repo name only when the owner matches the
+			// origin's: pairing another owner with this checkout's name
+			// would invent a repository.
+			if v, has := flagValue(cmd, "repo"); has && v == "" && cmd.Annotations[repoRequiredAnnotation] == "true" &&
+				(owner == "" || strings.EqualFold(owner, o)) {
+				_ = flags.Set("repo", r)
+			}
+		}
+	}
+	if m := missing(); len(m) > 0 {
+		return fmt.Errorf("%s required: not given, not set in .nightgauge/config.yaml, and no GitHub origin remote to infer it from", strings.Join(m, " and "))
+	}
+	return nil
+}
+
 func rootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "nightgauge",
@@ -606,17 +695,20 @@ func rootCmd() *cobra.Command {
 
 		workdir, err := os.Getwd()
 		if err != nil {
-			return nil // not fatal — use hardcoded defaults
+			workdir = ""
 		}
-		cfg, err := config.Load(workdir)
-		if err != nil || cfg == nil {
-			return nil // no config — use hardcoded defaults silently
+		var cfg *config.Config
+		if workdir != "" {
+			if c, lerr := config.Load(workdir); lerr == nil {
+				cfg = c
+			}
 		}
-		if !cmd.Flags().Changed("owner") && cfg.Owner != "" {
-			_ = cmd.Flags().Set("owner", cfg.Owner) // cobra flag.Set never errors for known flags
+		// flag > config.yaml > git origin > error (#2198).
+		if err := resolveTargetFlags(cmd, cfg, workdir); err != nil {
+			return err
 		}
-		if !cmd.Flags().Changed("repo") && cfg.DefaultRepo != "" && cmd.Annotations[repoBackfillAnnotation] == "true" {
-			_ = cmd.Flags().Set("repo", cfg.DefaultRepo) // cobra flag.Set never errors for known flags
+		if cfg == nil {
+			return nil
 		}
 		if !cmd.Flags().Changed("project") && cfg.ProjectNumber != 0 {
 			_ = cmd.Flags().Set("project", fmt.Sprintf("%d", cfg.ProjectNumber)) // cobra flag.Set never errors for known flags
@@ -784,7 +876,7 @@ func boardListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
+	ownerFlag(cmd, &owner, "GitHub organization")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().StringVar(&status, "status", "", "Filter by status (e.g. Ready, 'In Progress')")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
@@ -955,8 +1047,8 @@ func issueViewCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository name")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository name")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -1042,8 +1134,8 @@ func issueListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository name")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository name")
 	cmd.Flags().IntVar(&epic, "epic", 0, "Filter by epic issue number")
 	cmd.Flags().StringVar(&search, "search", "", "Search issues by keyword")
 	cmd.Flags().IntVar(&limit, "limit", 10, "Max results for search (default 10)")
@@ -1136,8 +1228,8 @@ func issueCreateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().StringVar(&title, "title", "", "Issue title (required)")
 	cmd.Flags().StringVar(&body, "body", "", "Issue body")
 	cmd.Flags().StringSliceVar(&labels, "labels", nil, "Label names to apply, comma-separated (e.g. type:bug,component:sdk). Unknown names fail before anything is created.")
@@ -1193,8 +1285,8 @@ func issueCloseCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -1260,8 +1352,8 @@ func issueEditCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().StringVar(&body, "body", "", "Replace issue body with this content")
 	cmd.Flags().StringVar(&appendBody, "append-body", "", "Append to existing issue body")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
@@ -1312,8 +1404,8 @@ func issueSyncLabelsCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -1437,8 +1529,8 @@ func issueCreateSubCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().StringVar(&title, "title", "", "Sub-issue title (required)")
 	cmd.Flags().StringVar(&body, "body", "", "Sub-issue body")
 	cmd.Flags().StringSliceVar(&labels, "labels", nil, "Label names to apply, comma-separated (e.g. type:bug,component:sdk). Unknown names fail before anything is created.")
@@ -1497,8 +1589,8 @@ func issueLinkSubCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -1554,8 +1646,8 @@ Uses issue numbers — node ID resolution is handled internally.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -1609,8 +1701,8 @@ func issueRemoveBlockedByCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -1658,8 +1750,8 @@ func issueListUnrefinedCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository name")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository name")
 	cmd.Flags().IntVar(&limit, "limit", 10, "Maximum number of issues to return (0 = no limit)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -1708,8 +1800,8 @@ func issueMarkRefinedCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository name")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository name")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -1763,8 +1855,8 @@ func issueHasLabelCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository name")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository name")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -1915,8 +2007,8 @@ issue number 0 — useful for tests.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	cmd.Flags().StringVar(&sizeFlag, "size", "", "Override size (XS|S|M|L|XL)")
@@ -2072,8 +2164,8 @@ apply step is skipped unless --apply-default is also passed.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&apply, "apply", false, "Add the inferred label to the issue")
 	cmd.Flags().BoolVar(&applyDefault, "apply-default", false, "When --apply is set, also apply when source == default (otherwise skipped)")
@@ -2161,8 +2253,8 @@ fence-toggle approach in internal/docs/checklinks.go.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	cmd.Flags().StringVar(&bodyFlag, "body", "", "Override issue body (offline mode, or skip GitHub fetch online)")
 	return cmd
@@ -2288,8 +2380,8 @@ Offline mode (number 0): pass --body; the rewritten body is printed, never sent.
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	cmd.Flags().StringVar(&bodyFlag, "body", "", "Override issue body (offline mode, or skip GitHub fetch online)")
 	cmd.Flags().BoolVar(&listOnly, "list", false, "List criteria (index, text, checked) without writing")
@@ -2427,8 +2519,8 @@ func epicValidateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -2490,8 +2582,8 @@ func epicAssessCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -2648,8 +2740,8 @@ func epicCheckCompletionCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&sweep, "sweep", false, "Check all open epics")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -2734,8 +2826,8 @@ func epicPlanWavesCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().StringVar(&subIssues, "sub-issues", "", "Comma-separated issue numbers to plan waves for (required)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -2796,8 +2888,8 @@ func epicCheckLifecycleCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 5, "Project board number")
 	cmd.Flags().BoolVar(&sweep, "sweep", false, "Check all open epics and issues")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
@@ -2872,8 +2964,8 @@ If sub-issues remain open, reports progress and exits without action.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -2921,8 +3013,8 @@ func epicSyncClosedToDoneCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -2978,8 +3070,8 @@ func epicTransitionStatusCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -3026,8 +3118,8 @@ func epicSummaryCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -3077,8 +3169,8 @@ func epicSummaryTierCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -3149,8 +3241,8 @@ Returns a summary with checked, closed, and skipped counts.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 
@@ -3221,8 +3313,8 @@ This is idempotent: if the epic branch already exists, the command exits success
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -3500,8 +3592,8 @@ func projectAddCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().StringVar(&status, "status", "", "Set Status field after add (Backlog, Ready, In progress, In review, Done). Atomic: non-zero exit if status assignment fails.")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
@@ -3584,8 +3676,8 @@ The board's own casing ("In progress", "In review") is accepted and normalized.`
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	cmd.SetFlagErrorFunc(statusFlagErrorFunc("sync-status"))
@@ -3654,7 +3746,7 @@ common case at merge time.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization (project owner)")
+	ownerFlag(cmd, &owner, "GitHub organization (project owner)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	_ = cmd.MarkFlagRequired("project") // cobra MarkFlagRequired never errors for known flags
@@ -3706,8 +3798,8 @@ func projectSyncIterationCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -3761,8 +3853,8 @@ func projectSetHoursCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -3833,8 +3925,8 @@ Override via project.size_to_estimate in .nightgauge/config.yaml.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -3958,8 +4050,8 @@ This is the fallback for when 'project add' does not set fields automatically
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().StringVar(&priority, "priority", "", "Priority value (P0, P1, P2, P3)")
 	cmd.Flags().StringVar(&size, "size", "", "Size value (XS, S, M, L, XL)")
@@ -4015,8 +4107,8 @@ func projectUpdateEstimatesCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -4081,8 +4173,8 @@ The board's own casing ("In progress", "In review") is accepted and normalized.`
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	cmd.SetFlagErrorFunc(statusFlagErrorFunc("move-status"))
@@ -4165,7 +4257,7 @@ func projectDriftCheckCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
+	ownerFlag(cmd, &owner, "GitHub organization")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&fix, "fix", false, "Fix detected drift (update board fields to match labels)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
@@ -4232,7 +4324,7 @@ Safe to run multiple times — idempotent.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
 	cmd.Flags().IntVar(&projectNumber, "number", 0, "Project board number (required)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -4425,7 +4517,7 @@ func runCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
+	ownerFlag(cmd, &owner, "GitHub organization")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	cmd.Flags().BoolVar(&auto, "auto", false, "Run continuously, polling for ready items")
 	cmd.Flags().IntVar(&pollSeconds, "poll", 30, "Poll interval in seconds (with --auto)")
@@ -4578,6 +4670,9 @@ func queueAddCmd() *cobra.Command {
 				return err
 			}
 
+			if !strings.Contains(repo, "/") {
+				repo = owner + "/" + repo
+			}
 			// Parse owner/repo from the --repo flag ("owner/repo" format).
 			parts := strings.SplitN(repo, "/", 2)
 			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
@@ -4629,8 +4724,8 @@ func queueAddCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&repo, "repo", "nightgauge/nightgauge", "Repository for queued issues")
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository for queued issues (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	return cmd
 }
@@ -4663,7 +4758,7 @@ func queueListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
+	ownerFlag(cmd, &owner, "GitHub organization")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	return cmd
 }
@@ -4695,7 +4790,7 @@ func queueRunCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
+	ownerFlag(cmd, &owner, "GitHub organization")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	return cmd
 }
@@ -4728,7 +4823,7 @@ func queueRemoveCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
+	ownerFlag(cmd, &owner, "GitHub organization")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	return cmd
 }
@@ -4754,7 +4849,7 @@ func queueClearCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
+	ownerFlag(cmd, &owner, "GitHub organization")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number")
 	return cmd
 }
@@ -6283,8 +6378,8 @@ func hookCheckDepsCmd() *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&checkOnly, "check-only", false, "Exit non-zero if issue has open blockers")
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "Repository owner")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository name")
+	ownerFlag(cmd, &owner, "Repository owner")
+	requiredRepoNameFlag(cmd, &repo, "Repository name")
 
 	return cmd
 }
@@ -6943,8 +7038,8 @@ func prCreateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().StringVar(&title, "title", "", "PR title (required)")
 	cmd.Flags().StringVar(&body, "body", "", "PR body")
 	cmd.Flags().StringVar(&head, "head", "", "Head branch (required)")
@@ -6997,8 +7092,8 @@ func prViewCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -7143,8 +7238,8 @@ func prMergeCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().StringVar(&strategy, "strategy", "squash", "Merge strategy: squash, merge, or rebase")
 	cmd.Flags().BoolVar(&deleteBranch, "delete-branch", true, "Delete head branch after merge (pass --delete-branch=false to preserve)")
 	cmd.Flags().IntVar(&issueNumber, "issue", 0, "Issue number for blockedBy pre-merge guard")
@@ -7217,8 +7312,8 @@ func prCIWaitCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&timeoutSec, "timeout", 600, "Timeout in seconds")
 	cmd.Flags().IntVar(&pollSecs, "poll", 30, "Poll interval in seconds")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
@@ -7358,8 +7453,8 @@ func prRulesetPrecheckCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&autoSatisfy, "auto-satisfy", false, "Attempt to auto-satisfy detected blockers")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -7609,8 +7704,8 @@ func ciChecksCompleteCmd() *cobra.Command {
 	}
 	markCouldNotRunExit(cmd)
 
-	cmd.Flags().StringVar(&opts.owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &opts.repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &opts.owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &opts.repo, "Repository (owner/name or name)")
 	cmd.Flags().StringVar(&opts.branch, "branch", "", "Branch to resolve required checks against (default: repo's default branch)")
 	cmd.Flags().BoolVar(&opts.outputJSON, "json", false, "Output result as JSON")
 	cmd.Flags().IntVar(&timeoutMins, "timeout", 0, "Wall-clock budget in minutes (0 = a single read, matching --main-check-wait 0)")
@@ -8083,8 +8178,8 @@ func ciWaitCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().IntVar(&timeoutMins, "timeout", 30, "Timeout in minutes")
 	cmd.Flags().IntVar(&timeoutSecs, "timeout-secs", 0, "Timeout in seconds — overrides --timeout when > 0. Fits one bounded chunk inside a ~2-minute agent tool budget (#187)")
 	cmd.Flags().IntVar(&pollSecs, "poll", 30, "Poll interval in seconds")
@@ -8138,8 +8233,8 @@ func ciLogsCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -8824,8 +8919,8 @@ such as wip/ are never candidates.`,
 
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be deleted without deleting")
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	return cmd
 }
 
@@ -8941,8 +9036,8 @@ func labelListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository name (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
+	requiredRepoNameFlag(cmd, &repo, "Repository name (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -8988,8 +9083,8 @@ func labelCreateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository name (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
+	requiredRepoNameFlag(cmd, &repo, "Repository name (owner/name or name)")
 	cmd.Flags().StringVar(&name, "name", "", "Label name (required)")
 	cmd.Flags().StringVar(&description, "description", "", "Label description")
 	cmd.Flags().StringVar(&color, "color", "", "Hex color without # (default: cccccc)")
@@ -9074,8 +9169,8 @@ scripts.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository name (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
+	requiredRepoNameFlag(cmd, &repo, "Repository name (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
 }
@@ -9136,8 +9231,8 @@ omitted.`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository name (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
+	requiredRepoNameFlag(cmd, &repo, "Repository name (owner/name or name)")
 	cmd.Flags().StringVar(&name, "name", "", "Current label name (required)")
 	cmd.Flags().StringVar(&newName, "new-name", "", "New label name (required)")
 	cmd.Flags().StringVar(&description, "description", "", "New description (unchanged when omitted)")
@@ -9184,8 +9279,8 @@ func labelDeleteCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository name (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
+	requiredRepoNameFlag(cmd, &repo, "Repository name (owner/name or name)")
 	cmd.Flags().StringVar(&labelID, "label-id", "", "Label node ID (required)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -9237,7 +9332,7 @@ func projectViewListCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number (required)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
@@ -9300,7 +9395,7 @@ func projectViewCreateCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user")
+	ownerFlag(cmd, &owner, "GitHub organization or user")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number (required)")
 	cmd.Flags().StringVar(&name, "name", "", "View name (required)")
 	cmd.Flags().StringVar(&layout, "layout", "", "View layout: board, table, or roadmap (required)")
@@ -9402,7 +9497,7 @@ Outputs: number, owner, owner_type, id, title, url`,
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization or user login")
+	ownerFlag(cmd, &owner, "GitHub organization or user login")
 	cmd.Flags().Int("number", 0, "Project board number")
 	cmd.Flags().StringVar(&repo, "repo", "", "Repository (owner/name or name) to resolve the project board for")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
@@ -9806,8 +9901,8 @@ func auditCreateIssuesCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&inputFile, "input-file", "", "Path to synthesis report JSON (required)")
 	cmd.Flags().StringVar(&configFile, "config", ".nightgauge/config.yaml", "Config file path")
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Default repository for issue creation")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Default repository for issue creation")
 	cmd.Flags().IntVar(&projectNumber, "project", 5, "Project board number")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Show what would be created without making changes")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output result as JSON")
@@ -9939,8 +10034,8 @@ func auditLifecycleCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/repo or bare name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/repo or bare name)")
 	cmd.Flags().IntVar(&projectNumber, "project", 5, "Project board number")
 	cmd.Flags().BoolVar(&fix, "fix", false, "Auto-fix detected issues")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output findings as JSON")
