@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **`--owner`/`--repo` no longer default to `nightgauge`** (#2198). Every
+  verb that targets a GitHub repository now resolves them as: explicit flag,
+  then `.nightgauge/config.yaml`, then the current checkout's `origin`
+  remote, else it fails with an error naming the missing flag. Previously,
+  onboarding verbs such as `label ensure` run before `config.yaml` existed
+  silently targeted `nightgauge/nightgauge`. `queue add --repo` now also
+  accepts a bare repository name, and the `repo` verbs no longer require
+  `--repo` when it can be resolved.
+
 - **The planning exploration budget counts shell exploration by default**
   (#2190). On a budgeted feature-planning stage a `bash` call now counts
   unless it clearly writes (a redirect to a file, `tee`, `mkdir`, `cp`, `mv`,

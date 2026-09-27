@@ -64,8 +64,8 @@ investigations, and only this distinguishes them.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub organization")
-	repoNameFlag(cmd, &repo, "nightgauge", "Repository (owner/name or name)")
+	ownerFlag(cmd, &owner, "GitHub organization")
+	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().StringVar(&workflow, "workflow", "", "Workflow file name or path, e.g. e2e.yml (required)")
 	cmd.Flags().StringVar(&branch, "branch", "", "Restrict to one branch (default: any)")
 	cmd.Flags().IntVar(&limit, "limit", 50, "How many completed runs to examine")
