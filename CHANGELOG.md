@@ -73,6 +73,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The decisions index matches `docs/decisions/`** (#1475, #1476). ADR-005,
+  the workspace knowledge graph contract that `internal/graph` and
+  `internal/capabilities` cite by decision number, now exists as
+  `docs/decisions/005-workspace-knowledge-graph.md`. The Active Decisions
+  table drops rows 001 and 012–014, which had no file, corrects row 002, and
+  adds 003, 005, 006 and 009–011. `scripts/check-decisions-index.sh` fails
+  lint when the table and the directory disagree.
+
 - **The stall watchdog no longer stops a slow local model mid-reply**
   (#2184). OpenCode never writes a streaming delta to its session database
   and prints a part only when it completes, so the #2176 watchdog read a

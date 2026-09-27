@@ -343,6 +343,8 @@ REQUIRED_FILES=(
   packages/nightgauge-vscode/scripts/check-engine-types.mjs
   scripts/check-md-links.sh
   scripts/test-check-md-links.sh
+  scripts/check-decisions-index.sh
+  scripts/test-check-decisions-index.sh
   scripts/check-agent-guidance.sh
   skills/smart-setup/scripts/check-agent-guidance.sh
   scripts/test-agent-guidance-check.sh
@@ -1439,6 +1441,8 @@ run_step "@types/vscode <= engines.vscode" \
 #     no longer failing on a dead internal link.
 run_group "Link-check gate regression suite" bash scripts/test-check-md-links.sh
 run_group "Markdown link check" bash scripts/check-md-links.sh
+run_group "Decisions index regression suite" bash scripts/test-check-decisions-index.sh
+run_group "Decisions index matches docs/decisions" bash scripts/check-decisions-index.sh
 run_group "Agent-guidance gate regression suite" \
   bash scripts/test-agent-guidance-check.sh
 run_group "Agent-guidance architecture" \
