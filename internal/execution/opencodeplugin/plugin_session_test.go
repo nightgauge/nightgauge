@@ -1104,3 +1104,38 @@ func initGitRepoOnBranch(t *testing.T, branch string) string {
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
+
+// TestEventStreamHeartbeat: a streaming part delta touches the heartbeat file
+// in XDG_DATA_HOME/opencode that the stall watchdog reads (#2184); a burst
+// of deltas writes it once per interval, and an unrelated event writes
+// nothing.
+func TestEventStreamHeartbeat(t *testing.T) {
+	node := requireNode(t)
+	root := t.TempDir()
+	dataHome := t.TempDir()
+	hb := filepath.Join(dataHome, "opencode", "nightgauge-stream.heartbeat")
+
+	other := sessionCall{Fn: "event", Input: map[string]any{"event": map[string]any{"type": "file.edited", "properties": map[string]any{}}}}
+	runSessionHarness(t, node, root, []sessionCall{other}, map[string]string{"XDG_DATA_HOME": dataHome})
+	if _, err := os.Stat(hb); err == nil {
+		t.Fatal("an unrelated event wrote the heartbeat")
+	}
+
+	delta := sessionCall{Fn: "event", Input: map[string]any{"event": map[string]any{
+		"type":       "message.part.delta",
+		"properties": map[string]any{"sessionID": "ses_1", "field": "text", "delta": "x"},
+	}}}
+	results := runSessionHarness(t, node, root, []sessionCall{delta, delta, delta}, map[string]string{"XDG_DATA_HOME": dataHome})
+	for i, r := range results {
+		if r.Threw {
+			t.Fatalf("call %d threw: %s", i, r.Message)
+		}
+	}
+	info, err := os.Stat(hb)
+	if err != nil {
+		t.Fatalf("a part delta did not write the heartbeat: %v", err)
+	}
+	if age := time.Since(info.ModTime()); age > time.Minute {
+		t.Errorf("heartbeat mtime is %v old, want it just written", age)
+	}
+}
