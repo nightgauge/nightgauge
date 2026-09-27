@@ -226,6 +226,13 @@ export const OPENCODE_PLUGIN_SENTINEL_ENV = "NIGHTGAUGE_OPENCODE_PLUGIN_SENTINEL
 export const OPENCODE_READ_MAX_LINES_ENV = "NIGHTGAUGE_OPENCODE_READ_MAX_LINES";
 
 /**
+ * `NIGHTGAUGE_OPENCODE_EXPLORATION_BUDGET` (`opencodeplugin.EnvExplorationBudget`)
+ * is the stage's exploration-call budget gates.js enforces (#2188). Its value
+ * is a count, so forwarding it carries no leak.
+ */
+export const OPENCODE_EXPLORATION_BUDGET_ENV = "NIGHTGAUGE_OPENCODE_EXPLORATION_BUDGET";
+
+/**
  * `OPENCODE_DISABLE_PROJECT_CONFIG` is set by `InstallNightgaugePlugin`
  * itself (opencode.go, literal at the call site, not one of
  * `opencodeplugin`'s exported `Env*` constants), not by the blanket
@@ -280,6 +287,7 @@ const OPENCODE_RUN_ENV_NAMES: ReadonlySet<string> = new Set<string>([
   OPENCODE_PLUGIN_NONCE_ENV,
   OPENCODE_PLUGIN_SENTINEL_ENV,
   OPENCODE_READ_MAX_LINES_ENV,
+  OPENCODE_EXPLORATION_BUDGET_ENV,
 ]);
 
 /**
