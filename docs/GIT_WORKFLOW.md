@@ -164,6 +164,12 @@ operator being awake to answer. Merge, then run the post-merge verification
 below. A real failure is still surfaced rather than merged around — this removes
 a redundant confirmation, not the judgement.
 
+**Dependabot PRs follow the same rule.** A green dependency bump is merged with
+`gh pr merge --squash` like any other pull request, without waiting for a human
+review: the required checks are the review. A red one is a failing change: fix
+the code or the pin in that pull request (or a follow-up that supersedes it),
+never leave it open for someone to look at.
+
 **Never dismiss a failing test as "flaky" without root-causing it.** Re-running
 until a check turns green converts a real signal into noise: a nondeterministic
 test is a defect in the test or in the code it covers, and the rerun that

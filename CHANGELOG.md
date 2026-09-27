@@ -38,6 +38,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **The planning exploration budget no longer refuses knowledge-base reads**
+  (#2193). The OpenCode adapter hands the plugin the workspace's
+  `.nightgauge/knowledge` directory (`NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR`), and
+  reads under it, or under any `.nightgauge/knowledge/` directory, are exempt,
+  so feature-planning's knowledge-base phase can read the main checkout's PRD
+  and decisions from a pipeline worktree.
+
 - **`--owner`/`--repo` no longer default to `nightgauge`** (#2198). Every
   verb that targets a GitHub repository now resolves them as: explicit flag,
   then `.nightgauge/config.yaml`, then the current checkout's `origin`
@@ -55,6 +62,11 @@ changelog, and the release workflow refuses a tag that does not.
   there without permissions, secrets or a checkout. The ruleset is unchanged;
   see `docs/GIT_WORKFLOW.md` § Merge queue readiness. The pipeline's own merge
   path must enqueue before the queue is enabled (#2214).
+
+- **Dependabot PRs merge on green** (workspace rule). The workspace-rules block
+  in `AGENTS.md` and `docs/GIT_WORKFLOW.md` now say it outright: a green
+  Dependabot pull request is merged like any other, without waiting for a human
+  review, and a red one is fixed like any failing change.
 
 - **The planning exploration budget counts shell exploration by default**
   (#2190). On a budgeted feature-planning stage a `bash` call now counts

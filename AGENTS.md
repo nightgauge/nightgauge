@@ -44,6 +44,8 @@ the SHA-256 of the lines between the markers.
 - **Merge** with `gh pr merge --squash` once required checks are green. Never
   `--auto`. `--admin` bypasses the entire ruleset and is an emergency hatch.
   Green checks are the go signal: merge instead of stopping to ask.
+  Dependabot PRs are no exception: merge a green one without waiting for a
+  human review, and fix a red one like any other failing change.
 - Never dismiss a failing test as flaky without root-causing it.
 - **After merge**, run `scripts/post-merge-check.sh <merge-sha>` and read its
   exit code without a pipe: `0` green; `1` red, so fix `main` now and never
@@ -82,7 +84,7 @@ the SHA-256 of the lines between the markers.
 - Instruction files are regular files. Never symlink them and never import
   across repositories.
 
-<!-- nightgauge-workspace-rules:end sha256=31ef89af7ea5177c92587f1330dc2a9f882880f932e4d114f08e0f0c7e429df1 -->
+<!-- nightgauge-workspace-rules:end sha256=5f2ca419b173dd0dff272c891f0933a534a7e60f878094f2310ba7f045962298 -->
 
 ## Repository operating contract
 
