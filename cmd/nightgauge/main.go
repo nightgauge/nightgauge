@@ -96,7 +96,37 @@ func effectiveVersion() string {
 	if info, ok := debug.ReadBuildInfo(); ok && info.Main.Version != "" && info.Main.Version != "(devel)" {
 		return strings.TrimPrefix(info.Main.Version, "v")
 	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		return devVersionFromVCS(info.Settings)
+	}
 	return "dev"
+}
+
+// devVersionFromVCS labels a plain `go build` binary (#2201) with the VCS
+// revision Go stamps into it, as "dev+<rev12>[-dirty]", so two unstamped
+// builds can be told apart. It keeps the "dev" prefix: the build still has no
+// release version and doctor must not order it against one.
+func devVersionFromVCS(settings []debug.BuildSetting) string {
+	var rev string
+	dirty := false
+	for _, s := range settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if rev == "" {
+		return "dev"
+	}
+	if len(rev) > 12 {
+		rev = rev[:12]
+	}
+	if dirty {
+		rev += "-dirty"
+	}
+	return "dev+" + rev
 }
 
 // Action Center agent-registration bridge cadences (#341). The platform agent

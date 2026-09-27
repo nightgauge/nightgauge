@@ -9,17 +9,20 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
 
-func TestCheckComplexityModel_MissingUsesSupportedInitializer(t *testing.T) {
+// TestCheckComplexityModel_MissingIsBootstrappedNotAWarning is #2202: the
+// model is gitignored learned state, so a fresh clone never has it; the
+// deterministic baseline is installed on first use, so absence is healthy.
+func TestCheckComplexityModel_MissingIsBootstrappedNotAWarning(t *testing.T) {
 	root := t.TempDir()
 	check, warning := checkComplexityModel(root)
-	if check.OK {
-		t.Fatal("missing complexity model reported healthy")
+	if !check.OK || warning != "" {
+		t.Fatalf("missing complexity model on a fresh clone must pass, got %+v / %q", check, warning)
 	}
-	if !strings.Contains(check.Error, "nightgauge outcome init") || warning != check.Error {
-		t.Fatalf("missing-model remediation = %q, warning = %q", check.Error, warning)
+	if !strings.Contains(check.Detail, "bootstrapped automatically") || !strings.Contains(check.Detail, "nightgauge outcome init") {
+		t.Fatalf("detail must explain the bootstrap, got %q", check.Detail)
 	}
-	if strings.Contains(check.Error, "size calibrate") {
-		t.Fatalf("remediation references nonexistent command: %q", check.Error)
+	if strings.Contains(check.Detail, "size calibrate") {
+		t.Fatalf("detail references nonexistent command: %q", check.Detail)
 	}
 }
 

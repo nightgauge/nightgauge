@@ -99,8 +99,8 @@ func splitOwnerRepoSlug(slug string) (string, string, bool) {
 
 // evaluateCadence runs every registered automation's probe and returns the
 // verdicts, most-stale first.
-func evaluateCadence(ctx context.Context, probes map[cadence.EvidenceKind]cadenceProbe, declared []cadence.ConfigAutomation, now time.Time) ([]cadence.Verdict, []error) {
-	registry, cfgErrs := cadence.Merge(declared)
+func evaluateCadence(ctx context.Context, probes map[cadence.EvidenceKind]cadenceProbe, scope cadence.Scope, declared []cadence.ConfigAutomation, now time.Time) ([]cadence.Verdict, []error) {
+	registry, cfgErrs := cadence.Merge(scope, declared)
 	verdicts := make([]cadence.Verdict, 0, len(registry))
 	for _, a := range registry {
 		probe, ok := probes[a.Kind]
@@ -142,8 +142,11 @@ func evaluateCadence(ctx context.Context, probes map[cadence.EvidenceKind]cadenc
 // stopped. This notices the CLASS — anything registered whose evidence has gone
 // quiet — which is what makes registering a new scheduled workflow the only
 // work required to have its silence noticed.
-func checkScheduledAutomations(ctx context.Context, probes map[cadence.EvidenceKind]cadenceProbe, declared []cadence.ConfigAutomation, now time.Time) (CheckItem, string) {
-	verdicts, cfgErrs := evaluateCadence(ctx, probes, declared, now)
+func checkScheduledAutomations(ctx context.Context, probes map[cadence.EvidenceKind]cadenceProbe, scope cadence.Scope, declared []cadence.ConfigAutomation, now time.Time) (CheckItem, string) {
+	verdicts, cfgErrs := evaluateCadence(ctx, probes, scope, declared, now)
+	if len(verdicts) == 0 && len(cfgErrs) == 0 {
+		return CheckItem{OK: true, Detail: "none registered (declare repo automations under automations.cadence)"}, ""
+	}
 
 	var never, stale, unknown []string
 	for _, v := range verdicts {

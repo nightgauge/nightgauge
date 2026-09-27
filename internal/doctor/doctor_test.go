@@ -109,6 +109,9 @@ func TestRunDoctor_ValidConfig_NilClient(t *testing.T) {
 		Owner:         "nightgauge",
 		ProjectNumber: 42,
 	}
+	repo := t.TempDir()
+	writeRepoConfig(t, repo)
+	t.Chdir(repo)
 	result := RunDoctor(ctx, cfg, nil, nil)
 
 	if result.ExitCode != 2 {
@@ -591,4 +594,45 @@ func checkKeys(r DoctorResult) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func writeRepoConfig(t *testing.T, root string) {
+	t.Helper()
+	dir := filepath.Join(root, ".nightgauge")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), []byte("project:\n  owner: nightgauge\n  number: 42\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestRunDoctor_ConfigWithoutRepoFileWarns is #2205: a loaded config (defaults
+// or a user-global file) in a repository with no .nightgauge/config.yaml must
+// warn with the repo-init remedy and name what was loaded.
+func TestRunDoctor_ConfigWithoutRepoFileWarns(t *testing.T) {
+	t.Chdir(t.TempDir())
+	result := RunDoctor(context.Background(), config.DefaultConfig(), nil, nil)
+	check := result.Checks["config"]
+	if check.OK {
+		t.Fatalf("config passed with no repository config: %+v", check)
+	}
+	if !strings.Contains(check.Error, "repo-init") || !strings.Contains(check.Error, "loaded:") {
+		t.Errorf("config warning must name repo-init and the loaded files, got %q", check.Error)
+	}
+	if containsString(result.FailedChecks, "config") {
+		t.Error("a missing repository config is a warning, not a required failure")
+	}
+}
+
+// TestRunDoctor_ConfigNamesLoadedFiles: with a repository file, the row names it.
+func TestRunDoctor_ConfigNamesLoadedFiles(t *testing.T) {
+	repo := t.TempDir()
+	writeRepoConfig(t, repo)
+	t.Chdir(repo)
+	result := RunDoctor(context.Background(), &config.Config{Owner: "o", ProjectNumber: 1}, nil, nil)
+	check := result.Checks["config"]
+	if !check.OK || !strings.Contains(check.Detail, filepath.Join(".nightgauge", "config.yaml")) {
+		t.Fatalf("config row must pass and name the repository file, got %+v", check)
+	}
 }
