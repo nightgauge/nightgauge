@@ -41,18 +41,19 @@ the SHA-256 of the lines between the markers.
   when `github_auth.app` is configured, on the installation's own quota.
 - Use a feature branch and a pull request; never push to `main`. Run this
   repository's complete local gate, defined in this file, once before pushing.
-- **Merge** with `gh pr merge --squash` once required checks are green. Never
-  `--auto`. `--admin` bypasses the entire ruleset and is an emergency hatch.
+- **Merge** with `nightgauge pr merge N` once required checks are green: it
+  squash-merges directly, or on a merge-queue branch enqueues and waits for
+  the queue's result. `gh pr merge` cannot enqueue here (auto-merge is off).
+  Never `--auto`. `--admin` bypasses the entire ruleset and is an emergency hatch.
   Green checks are the go signal: merge instead of stopping to ask.
   Dependabot PRs are no exception: merge a green one without waiting for a
   human review, and fix a red one like any other failing change.
 - **Batch merges; never serialize them.** CI is slow, and before the merge
   queue each merge made every other open PR update and re-run it. Fold related
   or small changes (fixes from one finding pass, a follow-up to an open PR)
-  into one PR with a `Closes #N` line per issue instead of one PR each. On a
-  queue-protected branch `gh pr merge N --squash` enqueues: put every green PR
-  in the queue, which tests up to three together and merges them in one CI
-  run. Never hand-merge PRs one after another or ask other sessions to pause
+  into one PR with a `Closes #N` line per issue instead of one PR each. Put
+  every green PR in the merge queue where one exists (`nightgauge pr merge N`);
+  it tests up to three together and merges them in one CI run. Never hand-merge PRs one after another or ask other sessions to pause
   merges to keep a PR from falling behind.
 - Never dismiss a failing test as flaky without root-causing it.
 - **After merge**, run `scripts/post-merge-check.sh <merge-sha>` and read its
@@ -92,7 +93,7 @@ the SHA-256 of the lines between the markers.
 - Instruction files are regular files. Never symlink them and never import
   across repositories.
 
-<!-- nightgauge-workspace-rules:end sha256=cbd4051990bfe4944f1cb82c65a1c43bb4b6f4b0dd43301deff66996a4752045 -->
+<!-- nightgauge-workspace-rules:end sha256=297793a6dd0ea919b1280db8798c0a5ff751f0c9ff5739880a989a6e40d8ef1f -->
 
 ## Repository operating contract
 

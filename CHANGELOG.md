@@ -129,6 +129,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The workspace merge rule names `nightgauge pr merge N`** (#2225). On core
+  `main`, `gh pr merge --squash` cannot join the merge queue because auto-merge
+  is disabled; `nightgauge pr merge` enqueues and waits (#2214).
+
 - **Docs: a `git worktree` build gets no VCS stamp** (#2224). `dev+<rev>`
   (#2201) appears only for builds in a regular clone. ADAPTER_DOCTOR.md shows
   the `-ldflags "-X main.version=..."` form for worktree builds.
