@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **The planning exploration budget counts shell exploration by default**
+  (#2190). On a budgeted feature-planning stage a `bash` call now counts
+  unless it clearly writes (a redirect to a file, `tee`, `mkdir`, `cp`, `mv`,
+  a heredoc into a file) or only prints phase markers (`echo`, `printf`,
+  `cd`, `true`); command substitution, loops, `jq` and `python -c` count.
+  Only `skills/_shared/`, `_includes/`, `*feature-planning/` and the
+  worktree's `.nightgauge/` are exempt, so skill sources under exploration
+  in the core repository count.
+
 - **The feature-planning exploration budget is enforced on OpenCode** (#2188).
   On a local/self-hosted endpoint the Nightgauge OpenCode plugin counts
   feature-planning's exploration calls (`read`, `grep`, `glob`, `list`, and

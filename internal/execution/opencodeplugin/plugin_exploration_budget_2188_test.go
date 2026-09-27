@@ -37,19 +37,23 @@ func TestExplorationBudget2188(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := [][]any{
-		{"read", map[string]any{"filePath": "internal/a.go"}},                                // 1
-		{"read", map[string]any{"filePath": "skills/_shared/GOTCHAS.md"}},                    // exempt
-		{"read", map[string]any{"filePath": "/home/u/.claude/plugins/ng/skills/x/SKILL.md"}}, // exempt
-		{"read", map[string]any{"filePath": ".nightgauge/pipeline/ctx.json"}},                // exempt
-		{"bash", map[string]any{"command": "ls internal | head -5"}},                         // 2
-		{"write", map[string]any{"filePath": ".nightgauge/plans/p.md"}},                      // not exploration
-		{"bash", map[string]any{"command": "go test ./..."}},                                 // not exploration
-		{"bash", map[string]any{"command": "cat a.go > b.go"}},                               // writes: not exploration
-		{"grep", map[string]any{"pattern": "foo"}},                                           // 3
-		{"read", map[string]any{"filePath": "internal/b.go"}},                                // refused
-		{"bash", map[string]any{"command": "sed -n 1,20p a.go"}},                             // refused
-		{"read", map[string]any{"filePath": "skills/x/SKILL.md"}},                            // exempt still
-		{"edit", map[string]any{"filePath": "a.go"}},                                         // allowed
+		{"read", map[string]any{"filePath": "internal/a.go"}},                                    // 1
+		{"read", map[string]any{"filePath": "skills/_shared/GOTCHAS.md"}},                        // exempt
+		{"read", map[string]any{"filePath": "/home/u/.claude/plugins/ng/skills/_includes/x.md"}}, // exempt
+		{"read", map[string]any{"filePath": "skills/nightgauge-feature-planning/SKILL.md"}},      // exempt
+		{"read", map[string]any{"filePath": ".nightgauge/pipeline/ctx.json"}},                    // exempt
+		{"write", map[string]any{"filePath": ".nightgauge/plans/p.md"}},                          // not exploration
+		{"bash", map[string]any{"command": "cat a.go > b.go"}},                                   // write
+		{"bash", map[string]any{"command": "mkdir -p .nightgauge/plans"}},                        // write
+		{"bash", map[string]any{"command": "cat <<'EOF' > .nightgauge/plans/p.md\nplan\nEOF"}},   // heredoc write
+		{"bash", map[string]any{"command": "echo \"=== phase ===\"; true"}},                      // marker
+		{"bash", map[string]any{"command": "KB=$(jq -r .x cfg.json); echo \"$KB\" 2>/dev/null"}}, // 2
+		{"bash", map[string]any{"command": "for f in internal/*.go; do head -3 $f; done"}},       // 3
+		{"read", map[string]any{"filePath": "skills/nightgauge-dev/SKILL.md"}},                   // refused: source, not exempt
+		{"bash", map[string]any{"command": "echo \"=== x ===\"; grep -n foo a.go"}},              // refused
+		{"read", map[string]any{"filePath": "skills/_shared/SELF_ASSESSMENT.md"}},                // exempt still
+		{"edit", map[string]any{"filePath": "a.go"}},                                             // allowed
+		{"bash", map[string]any{"command": "python3 -c 'print(1)' >/dev/null"}},                  // refused: /dev/null is not a write
 	}
 	raw, _ := json.Marshal(calls)
 	run := func(budget string) []string {
@@ -78,7 +82,7 @@ func TestExplorationBudget2188(t *testing.T) {
 	refusal := "[nightgauge-gate:exploration-budget] exploration budget of 3 reads spent; write the plan now to .nightgauge/plans/ and planning-42.json"
 	for i := range calls {
 		want := "ok"
-		if i == 9 || i == 10 {
+		if i == 12 || i == 13 || i == 16 {
 			want = refusal
 		}
 		if got[i] != want {
