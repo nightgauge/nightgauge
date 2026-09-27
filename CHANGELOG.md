@@ -41,6 +41,11 @@ changelog, and the release workflow refuses a tag that does not.
   accepts a bare repository name, and the `repo` verbs no longer require
   `--repo` when it can be resolved.
 
+- **Dependabot PRs merge on green** (workspace rule). The workspace-rules block
+  in `AGENTS.md` and `docs/GIT_WORKFLOW.md` now say it outright: a green
+  Dependabot pull request is merged like any other, without waiting for a human
+  review, and a red one is fixed like any failing change.
+
 - **The planning exploration budget counts shell exploration by default**
   (#2190). On a budgeted feature-planning stage a `bash` call now counts
   unless it clearly writes (a redirect to a file, `tee`, `mkdir`, `cp`, `mv`,
