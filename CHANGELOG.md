@@ -26,6 +26,8 @@ changelog, and the release workflow refuses a tag that does not.
   (default `90m`). `nightgauge pr merge`, `forge pr merge`, the IPC `pr.merge`
   method and epic merges enqueue and wait the same way rather than failing on
   GitHub's direct-merge rejection. Branches without a queue are unchanged.
+  The `pr-stage merge` verb's default `--timeout` now covers the queue wait
+  (`wait_timeout` + 10m) instead of cutting it short at 20 minutes.
 
 - **Pipeline-created PRs are stamped** (#1479). Every PR/MR the pipeline opens
   ends with `<!-- nightgauge:pipeline stage=pr-create issue=N run=<id> -->`
