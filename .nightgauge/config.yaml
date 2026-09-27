@@ -10,6 +10,7 @@ repo: nightgauge
 project:
   owner: nightgauge
   repo: nightgauge
+  number: 3
 
 pr:
   admin_merge: false

@@ -129,6 +129,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`project resolve --repo nightgauge/nightgauge` works in a fresh clone** (#2223).
+  The committed `.nightgauge/config.yaml` now declares board 3.
+
 - **`doctor` honours `autonomous.enabled_repos` for the autonomous-loop cadence**
   (#2218). A machine-wide autonomous block limited to other repositories no
   longer makes every repo on the machine warn that the loop "never ran".
