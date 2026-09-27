@@ -139,6 +139,9 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **CI runs the adapter-canary regression suite** (#2229). It ran only in
+  `scripts/ci-local.sh`, so a workflow change could break it with no CI signal.
+
 - **`scripts/ci-local.sh` passes in a fresh worktree** (#2228). The VSCode
   test-tree typecheck resolved `@nightgauge/sdk` from a `dist/` that only an
   earlier build had left behind, so a fresh `git worktree` failed with TS2307;
