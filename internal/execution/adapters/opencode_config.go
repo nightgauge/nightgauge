@@ -183,6 +183,25 @@ func openCodeToolOutputBounds(settings config.OpenCodeToolOutput, stage string, 
 	return b
 }
 
+// openCodePlanningExplorationBudget is feature-planning's default
+// exploration budget on a local endpoint (#2188): #2186 stated 12 reads in
+// the skill, and in live run 16 a local model ignored it for 70 minutes.
+const openCodePlanningExplorationBudget = 12
+
+// openCodeExplorationBudget resolves one stage's exploration budget: 0 (off)
+// for every stage but feature-planning and for a hosted dispatch; else the
+// operator's planning_exploration_budget when set (0 turns it off), else
+// the default.
+func openCodeExplorationBudget(settings config.OpenCodeToolOutput, stage string, local bool) int {
+	if stage != "feature-planning" || !local {
+		return 0
+	}
+	if v := settings.PlanningExplorationBudget; v != nil {
+		return max(*v, 0)
+	}
+	return openCodePlanningExplorationBudget
+}
+
 // Compaction settings. tail_turns keeps the stage prompt's turn and the one
 // after it verbatim. preserve_recent_tokens takes the bounds opencode 1.18.30
 // applies to its own default (between 2000 and 15000, and at most a quarter
@@ -674,6 +693,10 @@ type OpenCodeRunConfig struct {
 	// PrepareOpenCodeRun hands it to the Nightgauge plugin in
 	// opencodeplugin.EnvReadMaxLines.
 	ReadMaxLines int
+	// ExplorationBudget is how many exploration tool calls the stage may
+	// make (#2188), 0 for none; PrepareOpenCodeRun hands it to the plugin in
+	// opencodeplugin.EnvExplorationBudget.
+	ExplorationBudget int
 }
 
 // The JSON shape of OPENCODE_CONFIG_CONTENT. Every key is one opencode
@@ -1013,6 +1036,8 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	}
 	bounds := openCodeToolOutputBounds(in.ToolOutput, in.Run.Stage, onEndpoint)
 	built.ReadMaxLines = bounds.ReadMaxLines
+	built.ExplorationBudget = openCodeExplorationBudget(in.ToolOutput, in.Run.Stage,
+		onEndpoint || models.IsLocalModel("opencode", model, nil))
 	cfg := openCodeConfigJSON{
 		Model:            model,
 		SmallModel:       model,
@@ -1644,6 +1669,7 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	}
 	env[openCodeConfigContentEnvVar] = built.Content
 	env[opencodeplugin.EnvReadMaxLines] = strconv.Itoa(built.ReadMaxLines)
+	env[opencodeplugin.EnvExplorationBudget] = strconv.Itoa(built.ExplorationBudget)
 	reportOpenCodeRepository(os.Stderr, input.Repository)
 	return &OpenCodeRun{
 		SchemaVersion: OpenCodeConfigSchemaVersion,

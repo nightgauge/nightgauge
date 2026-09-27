@@ -46,6 +46,7 @@
 // Model-authored command text and tool arguments reach every verb only as
 // stdin JSON, on a fixed argv, never on a shell command line.
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 
 const SPAWN_TIMEOUT_MS = 5000;
 
@@ -256,6 +257,149 @@ export function capReadLimit(output) {
   output.args.limit = cap;
 }
 
+// EXPLORATION_BUDGET_ENV is opencodeplugin.EnvExplorationBudget (plugin.go):
+// how many exploration tool calls the stage may make (#2188), set by the Go
+// side for feature-planning on a local endpoint only. 0 or unset is off.
+const EXPLORATION_BUDGET_ENV = "NIGHTGAUGE_OPENCODE_EXPLORATION_BUDGET";
+
+// EXPLORATION_BUDGET_MARKER prefixes the refusal of an exploration call
+// past the budget.
+const EXPLORATION_BUDGET_MARKER = "[nightgauge-gate:exploration-budget]";
+
+// READ_ONLY_COMMANDS are the bash commands that only read. A bash call
+// counts as exploration when every command in its pipeline/list is one of
+// these and it redirects nothing to a file.
+const READ_ONLY_COMMANDS = new Set([
+  "ls",
+  "cat",
+  "grep",
+  "egrep",
+  "rg",
+  "find",
+  "head",
+  "tail",
+  "wc",
+  "tree",
+  "file",
+  "stat",
+  "less",
+  "more",
+  "sed",
+  "awk",
+  "cut",
+  "sort",
+  "uniq",
+  "pwd",
+  "echo",
+  "git",
+]);
+const READ_ONLY_GIT = new Set([
+  "grep",
+  "log",
+  "show",
+  "ls-files",
+  "diff",
+  "status",
+  "blame",
+  "ls-tree",
+]);
+
+// explorationCount is this process's count of budgeted calls. One opencode
+// process runs one stage, so the count is the stage's.
+let explorationCount = 0;
+
+// resetExplorationCount is for tests only.
+export function resetExplorationCount() {
+  explorationCount = 0;
+}
+
+// isExemptPath reports whether p is skill-directed or pipeline context:
+// any path with a "skills" segment, or one under the worktree's own
+// .nightgauge/ directory. Such reads do not count against the budget.
+export function isExemptPath(p, cwd) {
+  if (typeof p !== "string" || p === "") return false;
+  const abs = path.resolve(cwd, p);
+  if (abs.split(path.sep).includes("skills")) return true;
+  const rel = path.relative(cwd, abs);
+  if (rel.startsWith("..") || path.isAbsolute(rel)) return false;
+  return rel.split(path.sep)[0] === ".nightgauge";
+}
+
+// readOnlyBashPaths returns the path-like arguments of a read-only bash
+// command, or null when the command may write or run something else.
+function readOnlyBashPaths(command) {
+  if (typeof command !== "string" || command.trim() === "") return null;
+  if (/[`]|\$\(|(^|[^0-9&])>(?!&)|>>/.test(command.replace(/2>\s*\/dev\/null|2>&1/g, "")))
+    return null;
+  const paths = [];
+  for (const seg of command.split(/\|\||&&|[|;\n]/)) {
+    const words = seg
+      .trim()
+      .split(/\s+/)
+      .filter((w) => w !== "");
+    if (words.length === 0) continue;
+    let i = 0;
+    while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
+    if (words[i] === "cd") continue;
+    const cmd = words[i];
+    if (!READ_ONLY_COMMANDS.has(cmd)) return null;
+    const rest = words.slice(i + 1);
+    if (cmd === "sed" && !rest.includes("-n")) return null;
+    if (cmd === "sed" && rest.some((w) => /^-i/.test(w))) return null;
+    if (cmd === "find" && rest.some((w) => /^-(exec|execdir|delete|ok|fprint)/.test(w)))
+      return null;
+    if (cmd === "git") {
+      const sub = rest.find((w) => !w.startsWith("-"));
+      if (!READ_ONLY_GIT.has(sub)) return null;
+    }
+    for (const w of rest) {
+      const t = w.replace(/^['"]|['"]$/g, "");
+      if (!t.startsWith("-") && (t.includes("/") || t.startsWith("."))) paths.push(t);
+    }
+  }
+  return paths;
+}
+
+// explorationTarget returns the paths an exploration call reads, or null
+// when the call is not exploration (a write, an edit, a mutating command).
+function explorationTarget(tool, args) {
+  switch (tool) {
+    case "read":
+      return [args.filePath];
+    case "grep":
+    case "glob":
+    case "list":
+      return [typeof args.path === "string" && args.path !== "" ? args.path : "."];
+    case "bash":
+      return readOnlyBashPaths(args.command);
+    default:
+      return null;
+  }
+}
+
+// enforceExplorationBudget counts exploration calls against the stage's
+// budget (#2188) and, once the budget is spent, refuses further ones with
+// an error telling the model to write the plan. A call whose every target
+// is a skill file or .nightgauge/ context is exempt. Writes, edits and any
+// non-read command are never counted or refused.
+export function enforceExplorationBudget(ctx, input, output) {
+  const budget = Number.parseInt(process.env[EXPLORATION_BUDGET_ENV] || "", 10);
+  if (!Number.isInteger(budget) || budget <= 0) return;
+  if (!input) return;
+  const args = output && output.args && typeof output.args === "object" ? output.args : {};
+  const targets = explorationTarget(input.tool, args);
+  if (targets === null) return;
+  const cwd = gateCwd(ctx);
+  if (targets.length > 0 && targets.every((t) => isExemptPath(t, cwd))) return;
+  if (explorationCount >= budget) {
+    const issue = process.env.NIGHTGAUGE_ISSUE_NUMBER || "{N}";
+    throw new Error(
+      `${EXPLORATION_BUDGET_MARKER} exploration budget of ${budget} reads spent; write the plan now to .nightgauge/plans/ and planning-${issue}.json`
+    );
+  }
+  explorationCount++;
+}
+
 export async function toolExecuteBefore(ctx, input, output) {
   if (!input) return;
   if (input.tool === "task") {
@@ -274,6 +418,7 @@ export async function toolExecuteBefore(ctx, input, output) {
     throw new Error(`${UNKNOWN_TOOL_MARKER} ${input.tool}`);
   }
   const kind = TOOL_CLASSIFICATION[input.tool];
+  enforceExplorationBudget(ctx, input, output);
   if (kind === "passthrough" || kind === "task") return;
 
   const cwd = gateCwd(ctx);
