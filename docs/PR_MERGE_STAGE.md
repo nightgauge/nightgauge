@@ -174,8 +174,9 @@ the sole MERGED authority.
 ### Merge-queue-protected base branches (#2214)
 
 When the PR's base branch requires GitHub's merge queue, a direct merge is not
-possible: `gh pr merge --squash` only enqueues (and exits 0), and GraphQL
-`mergePullRequest` is rejected. The runner therefore:
+possible: GraphQL `mergePullRequest` is rejected, and `gh pr merge --squash`
+enqueues only through auto-merge, which fails where auto-merge is disabled (as
+on core, #2225). The runner therefore:
 
 1. **Detects** the queue once per run from `PullRequest.isMergeQueueEnabled`
    (read with `gh api graphql` from the run's worktree). A failed read keeps
