@@ -204,6 +204,18 @@ fail_open_case "push event on a docs-only diff still runs heavy" \
   classify "$PUSH_REPO" push "$PUSH_BASE" "$PUSH_HEAD"
 fail_open_case "workflow_dispatch runs heavy" \
   classify "$PUSH_REPO" workflow_dispatch "$PUSH_BASE" "$PUSH_HEAD"
+fail_open_case "merge_group with no base SHA runs heavy" \
+  classify "$PUSH_REPO" merge_group "" "$PUSH_HEAD"
+
+# A merge-queue run classifies the group's diff exactly like a pull request:
+# merge_group.base_sha..head_sha of a docs-only group is docs_only.
+mg_out="$(classify "$PUSH_REPO" merge_group "$PUSH_BASE" "$PUSH_HEAD")"
+if printf '%s\n' "$mg_out" | grep -qx 'change_class=docs_only' &&
+  printf '%s\n' "$mg_out" | grep -qx 'run_heavy=false'; then
+  ok "merge_group docs-only group → change_class=docs_only run_heavy=false"
+else
+  bad "merge_group docs-only group" "want docs_only/false; got: $(printf '%s' "$mg_out" | tr '\n' ' ')"
+fi
 fail_open_case "unset event runs heavy" \
   classify "$PUSH_REPO" "" "$PUSH_BASE" "$PUSH_HEAD"
 fail_open_case "missing base SHA runs heavy" \

@@ -10,6 +10,10 @@ name: CI
 on:
   pull_request:
     branches: [main]
+  # Merge queue: the queue runs every required check on the temporary
+  # gh-readonly-queue/main/* merge-group commit before it lands on main.
+  merge_group:
+    types: [checks_requested]
   # workflow_dispatch is the remedy post-merge verification names when a merge
   # commit's tree was never tested (a ruleset bypass): dispatching on main puts
   # the required checks on main's head (#2055).
@@ -66,12 +70,14 @@ jobs:
       # commits — not the branch name, not the PR title. Any other event (this
       # workflow runs on pull_request only since #2055) has no pull_request
       # payload, the SHAs are empty, and the script forces the full suite.
+      # merge_group runs classify merge_group.base_sha..head_sha: the group's
+      # cumulative diff against main.
       - name: Classify the pull request diff
         id: classify
         env:
           NG_EVENT_NAME: ${{ github.event_name }}
-          NG_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          NG_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          NG_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          NG_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: bash scripts/ci-change-class.sh
 
   go:
