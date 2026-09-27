@@ -91,6 +91,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`doctor` honours `autonomous.enabled_repos` for the autonomous-loop cadence**
+  (#2218). A machine-wide autonomous block limited to other repositories no
+  longer makes every repo on the machine warn that the loop "never ran".
+
 - **The OpenCode install-risk stage-cap test survives a heavily loaded machine**
   (#2212). `TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext`
   asserted a 7-second ceiling against a 10-second watchdog, and setup alone
