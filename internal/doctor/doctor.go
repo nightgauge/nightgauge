@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,6 +62,51 @@ func doctorOwner(cfg *config.Config) string {
 		return ""
 	}
 	return cfg.Owner
+}
+
+// loadedConfigFiles lists the config files config.Load reads for
+// workspaceRoot, in precedence order, and whether a repository-level file
+// (.nightgauge/config.yaml or the legacy config.json) is among them. Without a
+// repository file config.Load returns built-in defaults.
+func loadedConfigFiles(workspaceRoot string) ([]string, bool) {
+	exists := func(p string) bool {
+		info, err := os.Stat(p)
+		return err == nil && info.Mode().IsRegular()
+	}
+	project := config.ProjectConfigPath(workspaceRoot)
+	if !exists(project) {
+		legacy := filepath.Join(workspaceRoot, ".nightgauge", "config.json")
+		if exists(legacy) {
+			return []string{legacy}, true
+		}
+		return nil, false
+	}
+	var files []string
+	if machine, err := config.MachineConfigPath(); err == nil && exists(machine) {
+		files = append(files, machine)
+	}
+	files = append(files, project)
+	if local := config.LocalConfigPath(workspaceRoot); exists(local) {
+		files = append(files, local)
+	}
+	return files, true
+}
+
+// cadenceScope scopes the built-in cadence registry to this workspace (#2199):
+// core's own release workflow only in the core repo, and the autonomous loop
+// only where autonomous mode is configured or has ever run.
+func cadenceScope(cfg *config.Config, workspaceRoot string) cadence.Scope {
+	scope := cadence.Scope{}
+	if owner, repo := doctorOwner(cfg), doctorRepo(cfg); owner != "" && repo != "" {
+		scope.Repo = owner + "/" + repo
+	}
+	if cfg != nil && cfg.Autonomous != nil {
+		scope.Autonomous = true
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, ".nightgauge", "autonomous", "state.json")); err == nil {
+		scope.Autonomous = true
+	}
+	return scope
 }
 
 func doctorRepo(cfg *config.Config) string {
@@ -247,7 +293,20 @@ func RunDoctorWithConfigError(ctx context.Context, cfg *config.Config, cfgErr er
 		warnings = append(warnings, "no .nightgauge/config.yaml — run `nightgauge repo-init` to configure")
 		warnings = append(warnings, "project number not set — run `nightgauge repo-init`")
 	} else {
-		result.Checks["config"] = CheckItem{OK: true, Detail: "configuration loaded"}
+		// #2205: name the files actually loaded, and never pass on defaults or
+		// a user-global file when this repository was never onboarded.
+		loaded, hasRepoConfig := loadedConfigFiles(cwd)
+		loadedDesc := "built-in defaults only"
+		if len(loaded) > 0 {
+			loadedDesc = strings.Join(loaded, ", ")
+		}
+		if hasRepoConfig {
+			result.Checks["config"] = CheckItem{OK: true, Detail: "configuration loaded from " + loadedDesc}
+		} else {
+			msg := "no repository config (.nightgauge/config.yaml) — run /nightgauge:repo-init (or `nightgauge repo-init`); loaded: " + loadedDesc
+			result.Checks["config"] = CheckItem{OK: false, Detail: "loaded: " + loadedDesc, Error: msg}
+			warnings = append(warnings, msg)
+		}
 
 		// project — required when config exists
 		if cfg.ProjectNumber == 0 || cfg.Owner == "" {
@@ -505,7 +564,7 @@ func RunDoctorWithConfigError(ctx context.Context, cfg *config.Config, cfgErr er
 	scheduled, scheduledWarning := checkScheduledAutomations(ctx, map[cadence.EvidenceKind]cadenceProbe{
 		cadence.EvidenceAutonomousState: autonomousStateEvidence(cwd),
 		cadence.EvidenceWorkflowRun:     workflowRunEvidence(client, doctorOwner(cfg), doctorRepo(cfg)),
-	}, declaredCadence, now)
+	}, cadenceScope(cfg, cwd), declaredCadence, now)
 	result.Checks["scheduled_automations"] = scheduled
 	if scheduledWarning != "" {
 		warnings = append(warnings, scheduledWarning)
@@ -627,6 +686,18 @@ func RunDoctorWithConfigError(ctx context.Context, cfg *config.Config, cfgErr er
 // observed by the environment that ran `doctor` in the first place. A
 // diverging bundle is likewise a warning: a binary that mostly works beats a
 // hook that hard-fails.
+// binaryIsolatedEnv declares that the PATH-resolved binary deliberately
+// differs from the VSCode extension bundle (for example an isolated dogfood
+// build), downgrading the cross-step version mismatch to info (#2201).
+const binaryIsolatedEnv = "NIGHTGAUGE_BINARY_ISOLATED"
+
+// isUnversionedBuild reports whether a `nightgauge version` first line names
+// a build with no release version ("dev" or "dev+<vcs revision>").
+func isUnversionedBuild(versionLine string) bool {
+	v := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(versionLine), "nightgauge"))
+	return v == "dev" || strings.HasPrefix(v, "dev+")
+}
+
 func checkBinary() (CheckItem, bool) {
 	resolved := ResolveBinary()
 	if resolved.Path == "" {
@@ -655,7 +726,15 @@ func checkBinary() (CheckItem, bool) {
 		recordedVersion := binaryVersion(scan.SelectedPath)
 		if recordedVersion != "" {
 			detail += fmt.Sprintf("; recorded VSCode bundle binary %s reports version %s", scan.SelectedPath, recordedVersion)
-			if resolvedVersion != "" && resolvedVersion != recordedVersion {
+			switch {
+			case resolvedVersion == "" || resolvedVersion == recordedVersion:
+			case isUnversionedBuild(resolvedVersion) || isUnversionedBuild(recordedVersion):
+				// #2201: a plain `go build` stamps no release version, so
+				// "stale" is a claim nothing here can back. Say so, as info.
+				detail += "; unversioned build (cannot compare with the recorded bundle)"
+			case os.Getenv(binaryIsolatedEnv) != "":
+				detail += fmt.Sprintf("; differs from the recorded bundle, intentionally isolated (%s set)", binaryIsolatedEnv)
+			default:
 				crossStepWarning = fmt.Sprintf(
 					"stale binary: hooks resolve %s via %s, reporting version %s; the recorded VSCode extension bundle binary %s reports version %s",
 					resolved.Path, resolved.Step, resolvedVersion, scan.SelectedPath, recordedVersion,

@@ -80,6 +80,27 @@ changelog, and the release workflow refuses a tag that does not.
   table drops rows 001 and 012–014, which had no file, corrects row 002, and
   adds 003, 005, 006 and 009–011. `scripts/check-decisions-index.sh` fails
   lint when the table and the directory disagree.
+- **`doctor` no longer reports core's own automations in consumer repos**
+  (#2199). The built-in cadence entries are scoped: `release-workflow` only
+  when the workspace repo is `nightgauge/nightgauge`, `autonomous-loop` only
+  where autonomous mode is configured or has run. A repo with neither and no
+  `automations.cadence` reports `scheduled_automations` as "none registered".
+- **`doctor` `orphaned_processes` is scoped to this workspace** (#2200).
+  nightgauge processes whose cwd and `--workdir`/`--workspace` flags all
+  resolve outside this repo and its worktrees are counted as "in other
+  workspaces" and are never reported or given terminate advice. An unclaimed
+  process with live child processes (for example a `nohup`'d `nightgauge run`
+  driving an adapter) counts as working, not orphaned.
+- **`doctor` no longer calls an unversioned build "stale"** (#2201). A `dev`
+  build is reported as "unversioned build (cannot compare)" at info level, and
+  `NIGHTGAUGE_BINARY_ISOLATED=1` declares a deliberately isolated binary. A
+  plain `go build` now reports `dev+<vcs revision>` from `nightgauge version`.
+- **A fresh clone passes `doctor`'s `complexity_model` check** (#2202). The
+  model is per-checkout learned state and stays gitignored; its deterministic
+  baseline is installed on first use, so absence is reported, not warned.
+- **`doctor`'s `config` row names the loaded files and warns without a
+  repository config** (#2205), with a `/nightgauge:repo-init` remedy, instead
+  of passing on built-in defaults or a user-global file.
 
 - **The stall watchdog no longer stops a slow local model mid-reply**
   (#2184). OpenCode never writes a streaming delta to its session database

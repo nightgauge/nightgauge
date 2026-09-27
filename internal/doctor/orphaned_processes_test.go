@@ -1201,3 +1201,73 @@ func ownServeRegistryWalk(src string) []string {
 	}
 	return found
 }
+
+// TestOrphanedProcesses_OtherWorkspaceIsNotEvaluated is #2200's verification:
+// a long-running `nightgauge run` whose cwd is another workspace must not be
+// reported (or given terminate advice) by doctor run for this workspace.
+func TestOrphanedProcesses_OtherWorkspaceIsNotEvaluated(t *testing.T) {
+	procs := parseRows(t,
+		derivedRow(t, os.Getpid(), "00:01", "doctor --json"),
+		derivedRow(t, 4242, "03:00:00", "run --issue 2087 --adapter opencode"),
+	)
+	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/other/ws"}, nil)
+	item, warning := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)
+	if !item.OK || warning != "" {
+		t.Fatalf("process in another workspace was reported: item=%+v warning=%q", item, warning)
+	}
+	if !strings.Contains(item.Detail, "1 nightgauge process(es) in other workspaces") {
+		t.Errorf("detail should count the other-workspace process as info: %q", item.Detail)
+	}
+
+	// The same process, in THIS workspace, is still an orphan.
+	scope = classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/this/ws/sub"}, nil)
+	if item, _ := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope); item.OK {
+		t.Error("an idle, unclaimed three-hour run in this workspace must still be reported")
+	}
+}
+
+// TestOrphanedProcesses_WorkdirFlagScopesTheProcess covers argv scoping: a
+// process whose cwd is elsewhere but whose --workdir names this workspace is
+// in scope.
+func TestOrphanedProcesses_WorkdirFlagScopesTheProcess(t *testing.T) {
+	procs := parseRows(t,
+		derivedRow(t, os.Getpid(), "00:01", "doctor --json"),
+		derivedRow(t, 4242, "03:00:00", "run --issue 1 --workdir /this/ws"),
+		derivedRow(t, 4243, "03:00:00", "run --issue 2 --workdir=/other/ws"),
+	)
+	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/", 4243: "/other/ws"}, nil)
+	if scope.Elsewhere[4242] || !scope.Elsewhere[4243] {
+		t.Fatalf("Elsewhere = %v, want only 4243", scope.Elsewhere)
+	}
+}
+
+// TestOrphanedProcesses_NohupLiveRunIsNotAnOrphan: a live pipeline run started
+// with nohup has no sidecar claim and has been reparented, but it is driving
+// an adapter child process — it is working, not orphaned.
+func TestOrphanedProcesses_NohupLiveRunIsNotAnOrphan(t *testing.T) {
+	procs := parseRows(t,
+		derivedRow(t, os.Getpid(), "00:01", "doctor --json"),
+		derivedRow(t, 4242, "03:00:00", "run --issue 7 --adapter opencode"),
+	)
+	parents := map[int]int{4242: 1, 5000: 4242}
+	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/this/ws"}, parents)
+	item, warning := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)
+	if !item.OK || warning != "" {
+		t.Fatalf("a live nohup'd run with a child process was reported as orphaned: %+v %q", item, warning)
+	}
+	if !strings.Contains(item.Detail, "unclaimed but working") {
+		t.Errorf("detail should name the working process: %q", item.Detail)
+	}
+}
+
+func TestPathWithin(t *testing.T) {
+	cases := map[[2]string]bool{
+		{"/a/b", "/a/b"}: true, {"/a/b/c", "/a/b"}: true,
+		{"/a/bc", "/a/b"}: false, {"/a", "/a/b"}: false,
+	}
+	for c, want := range cases {
+		if got := pathWithin(c[0], c[1]); got != want {
+			t.Errorf("pathWithin(%q, %q) = %v, want %v", c[0], c[1], got, want)
+		}
+	}
+}

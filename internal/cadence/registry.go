@@ -63,6 +63,43 @@ func ByID(id string) (Automation, bool) {
 	return Automation{}, false
 }
 
+// CoreRepo is the repository whose own automations Registry() describes.
+const CoreRepo = "nightgauge/nightgauge"
+
+// Scope describes the workspace a registry is being built for (#2199).
+//
+// The built-in entries describe THIS repository's automations, so a consumer
+// repo must not inherit them: release-workflow applies only when the workspace
+// repo is CoreRepo, and autonomous-loop only when autonomous mode is in use for
+// the workspace. Without this, every consumer repo reported "NEVER RAN" for a
+// release.yml it does not have and could never reach healthy.
+type Scope struct {
+	// Repo is the workspace's "owner/name" slug ("" when unknown).
+	Repo string
+	// Autonomous reports whether autonomous mode is configured or has ever
+	// run in this workspace.
+	Autonomous bool
+}
+
+// BuiltinsFor returns the built-in entries that apply to scope.
+func BuiltinsFor(scope Scope) []Automation {
+	var out []Automation
+	isCore := strings.EqualFold(strings.TrimSpace(scope.Repo), CoreRepo)
+	for _, a := range Registry() {
+		switch a.Kind {
+		case EvidenceAutonomousState:
+			if scope.Autonomous {
+				out = append(out, a)
+			}
+		default:
+			if isCore {
+				out = append(out, a)
+			}
+		}
+	}
+	return out
+}
+
 // ConfigAutomation is one operator-declared entry, as it appears under
 // `automations.cadence` in config.yaml.
 //
@@ -80,7 +117,7 @@ type ConfigAutomation struct {
 	Remedy       string `yaml:"remedy,omitempty" json:"remedy,omitempty"`
 }
 
-// Merge returns the built-in registry plus the operator's declared entries.
+// Merge returns the built-in entries that apply to scope (see BuiltinsFor) plus the operator's declared entries.
 //
 // Invalid entries are RETURNED AS ERRORS, not skipped. A silently-dropped entry
 // is an automation the operator believes is watched and is not — the precise
@@ -88,8 +125,8 @@ type ConfigAutomation struct {
 //
 // An operator entry may override a built-in of the same id, so a workspace can
 // correct an interval without forking the registry.
-func Merge(declared []ConfigAutomation) ([]Automation, []error) {
-	out := Registry()
+func Merge(scope Scope, declared []ConfigAutomation) ([]Automation, []error) {
+	out := BuiltinsFor(scope)
 	var errs []error
 
 	for _, d := range declared {
