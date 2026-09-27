@@ -33,9 +33,11 @@ import (
 //     rate-limit, unexpected error). Scheduler falls through to the existing
 //     LLM skill path.
 //   - PathRefused — the runner refused the merge for a reason no LLM retry may
-//     override (generated steering on the PR head, issue 1675). The scheduler
-//     fails the stage instead of falling through to the LLM skill, which could
-//     otherwise merge the same head.
+//     override (generated steering on the PR head, issue 1675), or a merge
+//     queue it enqueued the PR in reported a failure or outlived its budget
+//     (#2214). The scheduler fails the stage instead of falling through to the
+//     LLM skill, which could otherwise merge the same head or spend tokens
+//     babysitting a queue.
 type PRMergePath string
 
 const (
@@ -106,6 +108,22 @@ const (
 	// generated, per-stage content that must never reach the default branch
 	// (issue 1675). Never merged and never handed to the LLM path.
 	ReasonGeneratedSteering = "generated-steering-committed"
+	// ReasonMergeQueueMerged is recorded (with PathMerged) when the base
+	// branch requires a merge queue and the runner enqueued the PR and then
+	// observed the queue merge it (#2214).
+	ReasonMergeQueueMerged = "merge-queue: merged"
+	// ReasonMergeQueueFailed is recorded (with PathRefused) when the queue
+	// removed the PR — its merge group failed, it became unmergeable, or it
+	// was closed. The reason names the failing merge-group checks so CI
+	// failure handling and retro can act; the LLM skill is never invoked for
+	// a queue outcome.
+	ReasonMergeQueueFailed = "merge-queue-failed"
+	// ReasonMergeQueueTimeout is recorded (with PathRefused) when the PR was
+	// still queued when the merge-queue wait budget expired.
+	ReasonMergeQueueTimeout = "merge-queue-timeout"
+	// ReasonMergeQueueEnqueueFailed is recorded (with PathRefused) when the
+	// enqueuePullRequest mutation itself failed.
+	ReasonMergeQueueEnqueueFailed = "merge-queue-enqueue-failed"
 )
 
 // CI-wait budget for the deterministic pr-merge path (Issue #297). When the
@@ -171,6 +189,18 @@ type PRStatusCheckRow struct {
 type ghClient interface {
 	View(ctx context.Context, prNumber int) (PRViewSnapshot, error)
 	Merge(ctx context.Context, prNumber int) error
+}
+
+// mergeQueueClient is implemented by ghClients that can see and drive
+// GitHub's merge queue (#2214). A client without it keeps the direct-merge
+// path, which is exactly the behaviour on a branch without a queue.
+type mergeQueueClient interface {
+	// MergeQueueStatus reports whether the PR's base branch requires a merge
+	// queue and where the PR stands in it.
+	MergeQueueStatus(ctx context.Context, prNumber int) (github.MergeQueueStatus, error)
+	// EnqueueAndWait enqueues the PR (unless already queued) and waits for the
+	// queue's outcome: nil on MERGED, *github.MergeQueueError otherwise.
+	EnqueueAndWait(ctx context.Context, status github.MergeQueueStatus, opts github.MergeQueueWaitOptions) (github.MergeQueueStatus, error)
 }
 
 // MergeDecision is the output of the pure decision rule. The shell-out
@@ -305,6 +335,16 @@ type DeterministicRunner struct {
 	// repairs it from a local worktree when one exists (issue 1675).
 	// Injectable for tests; nil disables the gate.
 	steeringGate func(ctx context.Context, workdir, headRef string) (codexprovision.PRHeadVerdict, error)
+	// queueWait bounds the merge-queue wait (#2214): sized for a full CI run
+	// on the merge-group commit, not for eventual consistency. Configured by
+	// pipeline.merge_queue.wait_timeout.
+	queueWait github.MergeQueueWaitOptions
+}
+
+// SetMergeQueueWaitTimeout sets the merge-queue wait budget (#2214). A
+// non-positive value keeps github.DefaultMergeQueueWaitTimeout.
+func (r *DeterministicRunner) SetMergeQueueWaitTimeout(d time.Duration) {
+	r.queueWait.Timeout = d
 }
 
 // NewDeterministicRunner builds a runner using a real `gh`-backed client.
@@ -392,6 +432,18 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 	if refused := r.refuseGeneratedSteering(ctx, workdir, prNumber, snap); refused != nil {
 		ph.supersedeInFlight()
 		return finish(*refused, nil)
+	}
+
+	// Merge-queue detection (#2214), once per Run. A read failure keeps the
+	// direct path: a branch without a queue must behave exactly as before.
+	mq, queueStatus := r.detectMergeQueue(ctx, gh, prNumber, snap)
+	if mq != nil && queueStatus.InQueue {
+		// A previous attempt already enqueued this PR: the queue owns the
+		// merge now, so resume the wait rather than re-deciding it.
+		ph.complete("ci-gate")
+		ph.skip("freshness-check")
+		ph.start("merge")
+		return finish(r.awaitMergeQueue(ctx, ph, mq, prNumber, snap, queueStatus), nil)
 	}
 
 	// Bounded mergeability wait (#1933). GitHub computes `mergeable`
@@ -551,6 +603,13 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		return finish(*refused, nil)
 	}
 
+	// Queue-protected base (#2214): a direct merge would only enqueue (gh)
+	// or be rejected (GraphQL), so enqueue and wait for the queue's verdict.
+	if mq != nil {
+		ph.start("merge")
+		return finish(r.awaitMergeQueue(ctx, ph, mq, prNumber, snap, queueStatus), nil)
+	}
+
 	// Issue the merge. Idempotent at the GitHub level: re-issuing on an
 	// already-merged PR returns a benign error which we tolerate (the
 	// re-poll below confirms MERGED).
@@ -623,6 +682,76 @@ func (r *DeterministicRunner) Run(ctx context.Context, issueNumber int, _ string
 		PRState:  postSnap.State,
 		Reason:   ReasonMergeECTimeout,
 	}, nil)
+}
+
+// detectMergeQueue reports whether the PR's base branch requires a merge
+// queue (#2214). It returns a nil client when the ghClient cannot drive a
+// queue, the PR is not OPEN, detection failed, or no queue is required — all
+// of which keep today's direct-merge path.
+func (r *DeterministicRunner) detectMergeQueue(ctx context.Context, gh ghClient, prNumber int, snap PRViewSnapshot) (mergeQueueClient, github.MergeQueueStatus) {
+	mq, ok := gh.(mergeQueueClient)
+	if !ok || snap.State != "OPEN" {
+		return nil, github.MergeQueueStatus{}
+	}
+	st, err := mq.MergeQueueStatus(ctx, prNumber)
+	if err != nil {
+		log.Printf("pr-merge: merge-queue detection failed for PR #%d, using the direct merge path: %v", prNumber, err)
+		return nil, github.MergeQueueStatus{}
+	}
+	if !st.QueueRequired && !st.InQueue {
+		return nil, github.MergeQueueStatus{}
+	}
+	return mq, st
+}
+
+// awaitMergeQueue enqueues the PR (unless already queued) and waits for the
+// queue's outcome (#2214). MERGED → PathMerged. Every other outcome is
+// PathRefused: a failed merge group is a CI failure on the merge-group
+// commit, and a queue wait is never handed to the LLM skill.
+func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmitter, mq mergeQueueClient, prNumber int, snap PRViewSnapshot, st github.MergeQueueStatus) PRMergeResult {
+	log.Printf("pr-merge: PR #%d targets %s, which requires a merge queue — enqueueing and waiting up to %s",
+		prNumber, st.BaseRef, r.queueWaitTimeout())
+	final, err := mq.EnqueueAndWait(ctx, st, r.queueWait)
+	if err == nil && final.State == "MERGED" {
+		ph.complete("merge")
+		ph.skipOffPath()
+		return PRMergeResult{
+			Path:        PathMerged,
+			PRNumber:    prNumber,
+			PRState:     "MERGED",
+			Reason:      ReasonMergeQueueMerged,
+			HeadRefName: snap.HeadRefName,
+		}
+	}
+	ph.supersedeInFlight()
+	state := final.State
+	if state == "" {
+		state = snap.State
+	}
+	res := PRMergeResult{Path: PathRefused, PRNumber: prNumber, PRState: state}
+	var qe *github.MergeQueueError
+	switch {
+	case err == nil:
+		res.Reason = fmt.Sprintf("%s: queue wait ended in state %s", ReasonMergeQueueFailed, final.State)
+	case isRateLimitErr(err):
+		// Rate limits defer, exactly as on the direct path.
+		res.Path = PathPunt
+		res.Reason = ReasonRateLimited
+	case errors.As(err, &qe) && qe.Kind == github.MergeQueueTimeout:
+		res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueTimeout, truncateErr(err, 300))
+	case errors.As(err, &qe):
+		res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueFailed, truncateErr(err, 500))
+	default:
+		res.Reason = fmt.Sprintf("%s: %s", ReasonMergeQueueEnqueueFailed, truncateErr(err, 300))
+	}
+	return res
+}
+
+func (r *DeterministicRunner) queueWaitTimeout() time.Duration {
+	if r.queueWait.Timeout > 0 {
+		return r.queueWait.Timeout
+	}
+	return github.DefaultMergeQueueWaitTimeout
 }
 
 // refuseGeneratedSteering is the steering gate (issue 1675). It returns a
@@ -1060,6 +1189,48 @@ func (c *execGhClient) Merge(ctx context.Context, prNumber int) error {
 		return normalizeGhError(err)
 	}
 	return nil
+}
+
+// MergeQueueStatus implements mergeQueueClient over `gh api graphql`, with
+// the repository resolved by gh from the working directory.
+func (c *execGhClient) MergeQueueStatus(ctx context.Context, prNumber int) (github.MergeQueueStatus, error) {
+	return github.NewMergeQueue(c.graphQL).StatusByNumber(ctx, "{owner}", "{repo}", prNumber)
+}
+
+// EnqueueAndWait implements mergeQueueClient: the GraphQL enqueuePullRequest
+// mutation, then a bounded poll of the PR's queue entry (#2214).
+func (c *execGhClient) EnqueueAndWait(ctx context.Context, st github.MergeQueueStatus, opts github.MergeQueueWaitOptions) (github.MergeQueueStatus, error) {
+	return github.NewMergeQueue(c.graphQL).EnqueueAndWait(ctx, st, opts)
+}
+
+// graphQL is the github.GraphQLDoer for `gh api graphql`. String variables
+// travel as -f (raw) except gh's {owner}/{repo} placeholders, which need -F
+// to be substituted; integers travel as -F so they stay typed.
+func (c *execGhClient) graphQL(ctx context.Context, query string, vars map[string]any) ([]byte, error) {
+	args := []string{"api", "graphql", "-f", "query=" + query}
+	for k, v := range vars {
+		switch val := v.(type) {
+		case int:
+			args = append(args, "-F", fmt.Sprintf("%s=%d", k, val))
+		case string:
+			if val == "{owner}" || val == "{repo}" {
+				args = append(args, "-F", k+"="+val)
+			} else {
+				args = append(args, "-f", k+"="+val)
+			}
+		default:
+			args = append(args, "-f", fmt.Sprintf("%s=%v", k, val))
+		}
+	}
+	out, err := github.RunGhSubprocess(ctx, c.workdir, args...)
+	if err != nil {
+		// gh prints the GraphQL error body on stdout; keep it for classification.
+		if len(out) > 0 {
+			return nil, fmt.Errorf("%w: %s", normalizeGhError(err), strings.TrimSpace(string(out)))
+		}
+		return nil, normalizeGhError(err)
+	}
+	return out, nil
 }
 
 // normalizeGhError attaches captured stderr (when present) to the returned

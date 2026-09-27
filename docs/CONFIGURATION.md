@@ -3574,6 +3574,23 @@ export NIGHTGAUGE_PIPELINE_MAX_ESCALATIONS_PER_STAGE=0 # Disable escalation
 
 ---
 
+#### pipeline.merge_queue
+
+How long the deterministic pr-merge stage waits for GitHub's merge queue when
+the PR's base branch requires one (#2214). The runner enqueues the PR and polls
+until the queue merges it or removes it; see
+[PR_MERGE_STAGE.md](PR_MERGE_STAGE.md#merge-queue-protected-base-branches-2214).
+
+| Option         | Type     | Default | Description                                                           |
+| -------------- | -------- | ------- | --------------------------------------------------------------------- |
+| `wait_timeout` | duration | `90m`   | Budget for a queued PR to merge; must cover a full merge-group CI run |
+
+```yaml
+pipeline:
+  merge_queue:
+    wait_timeout: 2h
+```
+
 #### pipeline.logs
 
 Pipeline execution log retention settings. Logs are stored in

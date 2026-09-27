@@ -8,6 +8,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Merge-queue-protected base branches (#2214).** Step 6.2 documents that
+  `nightgauge pr merge` enqueues and waits when the base branch requires a
+  merge queue, and that a failed merge group is a CI failure.
+
 ### Fixed
 
 - **Every shell block derives the pipeline identifiers it reads (#1932).** Each

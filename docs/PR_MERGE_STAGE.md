@@ -171,6 +171,42 @@ with `merge-ec-timeout` rather than self-reporting `merged` (#4070). It never
 claims a merge it did not observe; the canonical `verifyPRMerged` checkpoint is
 the sole MERGED authority.
 
+### Merge-queue-protected base branches (#2214)
+
+When the PR's base branch requires GitHub's merge queue, a direct merge is not
+possible: `gh pr merge --squash` only enqueues (and exits 0), and GraphQL
+`mergePullRequest` is rejected. The runner therefore:
+
+1. **Detects** the queue once per run from `PullRequest.isMergeQueueEnabled`
+   (read with `gh api graphql` from the run's worktree). A failed read keeps
+   the direct path, so a repository without a queue behaves exactly as before.
+2. **Enqueues** with the GraphQL `enqueuePullRequest` mutation, after every
+   pre-merge gate above has passed. A PR that an earlier attempt already
+   enqueued is not re-enqueued; the runner resumes the wait.
+3. **Waits** for the queue's outcome, polling `state`, `isInMergeQueue` and
+   `mergeQueueEntry { state headCommit }` every 30 s for up to
+   `pipeline.merge_queue.wait_timeout` (default `90m`) — a budget sized for a
+   full CI run on the merge-group commit, not the eventual-consistency budget.
+4. **Classifies** the outcome. `MERGED` → `Path: "merged"`, reason
+   `merge-queue: merged`. Removal from the queue, an `UNMERGEABLE` entry or a
+   closed PR → `Path: "refused"`, reason `merge-queue-failed: …` naming the
+   failing check runs and statuses on the merge-group commit. An expired
+   budget → `merge-queue-timeout: …`. None of these fall through to the LLM
+   skill: the scheduler fails the stage, and the failure reason carries the
+   failing merge-group checks for CI-failure handling and retro. A rate limit
+   still defers exactly as below.
+
+Enqueueing is done only by this Go code (and by `PRService.MergePRWithStrategy`,
+which `nightgauge pr merge`, `forge pr merge`, the IPC `pr.merge` method and the
+epic merge use — it detects, enqueues and waits the same way, ignoring the
+requested strategy because the queue's merge method applies). Agents remain
+barred from `gh pr merge --auto`.
+
+Post-merge verification (#2055) needs no change: the commit a queue lands is
+the merge-group commit, whose tree differs from the PR head's, so the
+tree-mismatch rule applies and the verdict rests on the required checks the
+`merge_group` run reported on that commit.
+
 ### Rate limits
 
 A `429` / `rate limit exceeded` error from `gh pr view` or `gh pr merge` is
@@ -196,20 +232,23 @@ LLM path.
 
 ### Failure modes
 
-| Reason                         | Cause                                                                           | What happens               |
-| ------------------------------ | ------------------------------------------------------------------------------- | -------------------------- |
-| `no-pr-context-file`           | `pr-{N}.json` missing (pr-create did not write it)                              | Punt → LLM                 |
-| `pr-context-invalid-json`      | Corrupted pr-{N}.json                                                           | Punt → LLM                 |
-| `pr-context-missing-pr-number` | pr-{N}.json present but `pr_number` is empty/zero                               | Punt → LLM                 |
-| `gh-unavailable`               | `gh` CLI not on PATH                                                            | Punt → LLM                 |
-| `rate-limited`                 | GitHub or `gh` rate limit                                                       | Defer → cooldown (ADR-006) |
-| `unexpected-error: …`          | Anything else from `gh`                                                         | Punt → LLM                 |
-| `merge-call-failed: …`         | Pre-flight passed but `gh pr merge` returned non-zero                           | Punt → LLM                 |
-| `not-mergeable`                | `mergeable != MERGEABLE`                                                        | Punt → LLM                 |
-| `dirty-merge-state`            | `mergeStateStatus != CLEAN`                                                     | Punt → LLM                 |
-| `failed-ci-checks: <name>`     | At least one `FAILURE` or `ERROR` check                                         | Punt → LLM                 |
-| `review-not-approved: …`       | `REVIEW_REQUIRED` or `CHANGES_REQUESTED`                                        | Punt → LLM                 |
-| `merge-ec-timeout: …`          | Merge call succeeded but post-merge re-fetch errored or never observed `MERGED` | Punt → LLM (see #4070)     |
+| Reason                          | Cause                                                                           | What happens               |
+| ------------------------------- | ------------------------------------------------------------------------------- | -------------------------- |
+| `no-pr-context-file`            | `pr-{N}.json` missing (pr-create did not write it)                              | Punt → LLM                 |
+| `pr-context-invalid-json`       | Corrupted pr-{N}.json                                                           | Punt → LLM                 |
+| `pr-context-missing-pr-number`  | pr-{N}.json present but `pr_number` is empty/zero                               | Punt → LLM                 |
+| `gh-unavailable`                | `gh` CLI not on PATH                                                            | Punt → LLM                 |
+| `rate-limited`                  | GitHub or `gh` rate limit                                                       | Defer → cooldown (ADR-006) |
+| `unexpected-error: …`           | Anything else from `gh`                                                         | Punt → LLM                 |
+| `merge-call-failed: …`          | Pre-flight passed but `gh pr merge` returned non-zero                           | Punt → LLM                 |
+| `not-mergeable`                 | `mergeable != MERGEABLE`                                                        | Punt → LLM                 |
+| `dirty-merge-state`             | `mergeStateStatus != CLEAN`                                                     | Punt → LLM                 |
+| `failed-ci-checks: <name>`      | At least one `FAILURE` or `ERROR` check                                         | Punt → LLM                 |
+| `review-not-approved: …`        | `REVIEW_REQUIRED` or `CHANGES_REQUESTED`                                        | Punt → LLM                 |
+| `merge-ec-timeout: …`           | Merge call succeeded but post-merge re-fetch errored or never observed `MERGED` | Punt → LLM (see #4070)     |
+| `merge-queue-failed: …`         | Queued PR removed from the merge queue (failed group, unmergeable, closed)      | Stage fails, no LLM        |
+| `merge-queue-timeout: …`        | Queued PR not merged within `pipeline.merge_queue.wait_timeout`                 | Stage fails, no LLM        |
+| `merge-queue-enqueue-failed: …` | `enqueuePullRequest` returned an error                                          | Stage fails, no LLM        |
 
 > **#4070 — no self-reported merge on post-verify failure.** The deterministic
 > runner used to return `PathMerged` when the post-merge re-fetch _errored_

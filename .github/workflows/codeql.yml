@@ -16,6 +16,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Merge queue (required check): runs on the gh-readonly-queue/main/* commit.
+  merge_group:
+    types: [checks_requested]
   schedule:
     # Weekly, Monday 08:17 UTC — an off-peak, non-round minute to avoid the
     # top-of-hour scheduling stampede.

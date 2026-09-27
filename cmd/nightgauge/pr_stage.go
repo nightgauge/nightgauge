@@ -257,6 +257,9 @@ caller DEFERS instead of running the LLM into an exhausted bucket (#3976).`,
 			}
 			authenticatePrStageGh(workspace)
 
+			if !cmd.Flags().Changed("timeout") {
+				timeoutSec = prMergeDefaultTimeoutSec(workspace)
+			}
 			ctx, cancel := prStageContext(cmd, timeoutSec)
 			defer cancel()
 
@@ -289,7 +292,7 @@ caller DEFERS instead of running the LLM into an exhausted bucket (#3976).`,
 	cmd.Flags().StringVar(&repo, "repo", "", "Target repository as owner/name (informational; merge reads pr-{N}.json)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Workspace/worktree root (default: cwd)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Emit JSON instead of human output")
-	cmd.Flags().IntVar(&timeoutSec, "timeout", 1200, "Overall timeout in seconds (0 = no CLI timeout; bounds the CI-wait)")
+	cmd.Flags().IntVar(&timeoutSec, "timeout", prMergeCITimeoutSec, "Overall timeout in seconds (0 = no CLI timeout). When unset, raised to cover pipeline.merge_queue.wait_timeout plus 10m (#2214)")
 	return cmd
 }
 
@@ -319,4 +322,23 @@ func prStageContext(cmd *cobra.Command, timeoutSec int) (context.Context, contex
 		return base, func() {}
 	}
 	return context.WithTimeout(base, time.Duration(timeoutSec)*time.Second)
+}
+
+// prMergeCITimeoutSec is the pr-merge verb's default ceiling for a CI wait.
+const prMergeCITimeoutSec = 1200
+
+// prMergeDefaultTimeoutSec returns the pr-merge verb's default --timeout. A
+// merge-queue wait (#2214) runs up to pipeline.merge_queue.wait_timeout, so the
+// CLI ceiling must not cut it short at the plain CI-wait default: it is the
+// larger of the two, with ten minutes' margin over the queue wait.
+func prMergeDefaultTimeoutSec(workspace string) int {
+	var pipeline *config.PipelineConfig
+	if cfg, err := config.Load(workspace); err == nil && cfg != nil {
+		pipeline = cfg.Pipeline
+	}
+	queue := int((pipeline.ResolveMergeQueueWaitTimeout() + 10*time.Minute).Seconds())
+	if queue > prMergeCITimeoutSec {
+		return queue
+	}
+	return prMergeCITimeoutSec
 }

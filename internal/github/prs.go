@@ -18,6 +18,9 @@ import (
 // PRService provides pull request operations.
 type PRService struct {
 	client *Client
+	// QueueWait bounds the merge-queue wait of MergePRWithStrategy on a base
+	// branch that requires a merge queue (#2214). Zero fields take defaults.
+	QueueWait MergeQueueWaitOptions
 }
 
 // NewPRService creates a PR service.
@@ -351,7 +354,29 @@ func (s *PRService) MergePR(ctx context.Context, prID string) error {
 // MergePRWithStrategy merges a pull request with the specified merge method.
 // Valid strategies: "SQUASH", "MERGE", "REBASE".
 // Returns the merge commit SHA (empty string if unavailable) and any error.
+//
+// On a base branch that requires a merge queue (#2214) a direct merge is
+// rejected, so the PR is enqueued instead and the call waits — bounded by
+// s.QueueWait — for the queue to merge it. The queue's own merge method then
+// applies and strategy is ignored. A failed or expired queue attempt returns a
+// *MergeQueueError naming the failing merge-group checks.
 func (s *PRService) MergePRWithStrategy(ctx context.Context, prID string, strategy string) (string, error) {
+	mq := NewMergeQueue(s.client.queryRaw)
+	if st, err := mq.StatusByID(ctx, prID); err != nil {
+		// Detection is best-effort: a failed read must not change the merge
+		// behaviour of a branch without a queue.
+		log.Printf("merge PR: merge-queue detection failed for %s, merging directly: %v", prID, err)
+	} else if st.QueueRequired && st.State == "OPEN" {
+		if strategy != "" && strategy != "SQUASH" {
+			log.Printf("merge PR #%d: base %s requires a merge queue; the queue's merge method applies instead of %s", st.Number, st.BaseRef, strategy)
+		}
+		final, err := mq.EnqueueAndWait(ctx, st, s.QueueWait)
+		if err != nil {
+			return "", fmt.Errorf("merge PR #%d via merge queue: %w", st.Number, err)
+		}
+		return final.MergeCommitOID, nil
+	}
+
 	var m mergePullRequestMutation
 	input := map[string]interface{}{
 		"input": MergePullRequestInput{

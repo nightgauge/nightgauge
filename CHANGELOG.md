@@ -16,6 +16,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Merge-queue-aware merges** (#2214). When a PR's base branch requires
+  GitHub's merge queue, the deterministic pr-merge stage enqueues it with
+  `enqueuePullRequest` and waits for the queue's outcome instead of punting to
+  the LLM skill after a short eventual-consistency window. A merged PR reports
+  `merged`; a PR the queue removes fails the stage with
+  `merge-queue-failed: …` naming the failing merge-group checks, and never
+  falls back to the skill. The wait is `pipeline.merge_queue.wait_timeout`
+  (default `90m`). `nightgauge pr merge`, `forge pr merge`, the IPC `pr.merge`
+  method and epic merges enqueue and wait the same way rather than failing on
+  GitHub's direct-merge rejection. Branches without a queue are unchanged.
+  The `pr-stage merge` verb's default `--timeout` now covers the queue wait
+  (`wait_timeout` + 10m) instead of cutting it short at 20 minutes.
+
 - **Pipeline-created PRs are stamped** (#1479). Every PR/MR the pipeline opens
   ends with `<!-- nightgauge:pipeline stage=pr-create issue=N run=<id> -->`
   (deterministic `RenderBody` and the pr-create skill's `PR_BODY` alike), and
@@ -40,6 +53,15 @@ changelog, and the release workflow refuses a tag that does not.
   silently targeted `nightgauge/nightgauge`. `queue add --repo` now also
   accepts a bare repository name, and the `repo` verbs no longer require
   `--repo` when it can be resolved.
+- **Required checks run on `merge_group`, so `main` can use a merge queue.**
+  Every workflow that produces a required status check on `main` now also
+  triggers on `merge_group` and reports its context on the queue's
+  `gh-readonly-queue/main/*` commit. `ci.yml`'s change-class gate and
+  `adapter-canary.yml` diff `merge_group.base_sha` against the group commit,
+  and a new `merge_group`-only `cla-merge-queue.yml` reports the `cla` context
+  there without permissions, secrets or a checkout. The ruleset is unchanged;
+  see `docs/GIT_WORKFLOW.md` § Merge queue readiness. The pipeline's own merge
+  path must enqueue before the queue is enabled (#2214).
 
 - **Dependabot PRs merge on green** (workspace rule). The workspace-rules block
   in `AGENTS.md` and `docs/GIT_WORKFLOW.md` now say it outright: a green
@@ -102,6 +124,10 @@ changelog, and the release workflow refuses a tag that does not.
     `peak_step_input_tokens` covers both adapters.
 
 ### Fixed
+
+- **`doctor` honours `autonomous.enabled_repos` for the autonomous-loop cadence**
+  (#2218). A machine-wide autonomous block limited to other repositories no
+  longer makes every repo on the machine warn that the loop "never ran".
 
 - **The OpenCode install-risk stage-cap test survives a heavily loaded machine**
   (#2212). `TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext`

@@ -101,12 +101,28 @@ func cadenceScope(cfg *config.Config, workspaceRoot string) cadence.Scope {
 		scope.Repo = owner + "/" + repo
 	}
 	if cfg != nil && cfg.Autonomous != nil {
-		scope.Autonomous = true
+		scope.Autonomous = autonomousCovers(cfg.Autonomous.ResolvedEnabledRepos(doctorOwner(cfg)), scope.Repo)
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, ".nightgauge", "autonomous", "state.json")); err == nil {
 		scope.Autonomous = true
 	}
 	return scope
+}
+
+// autonomousCovers reports whether autonomous mode scans repo. An empty
+// enabled_repos list means every configured repo; otherwise the repo must be
+// listed (#2218). A machine-wide autonomous block limited to other repos must
+// not register the autonomous-loop cadence here.
+func autonomousCovers(enabled []string, repo string) bool {
+	if len(enabled) == 0 {
+		return true
+	}
+	for _, r := range enabled {
+		if repo != "" && strings.EqualFold(r, repo) {
+			return true
+		}
+	}
+	return false
 }
 
 func doctorRepo(cfg *config.Config) string {
