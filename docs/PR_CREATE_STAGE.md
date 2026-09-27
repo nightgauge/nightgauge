@@ -210,6 +210,7 @@ pipeline-driven merges can be told apart from interactively-authored ones:
    Both the deterministic path (`RenderBody`) and the LLM path (the
    `nightgauge-pr-create` skill's `PR_BODY` template) emit it. The format is
    produced by `forge.PipelineMarker` (`internal/forge/pipeline_marker.go`).
+
 2. **Label `pipeline:created`.** The forge adapters' `CreatePR` apply it to any
    PR whose body contains the footer prefix `<!-- nightgauge:pipeline `. On
    GitHub the label is created on first use (`LabelService.Create` is
