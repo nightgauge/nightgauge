@@ -428,6 +428,16 @@ expansion, resolution, and composition. Supplying no `--skills-root` is an
 error rather than a guessed default — guessing is how an agent ends up reading
 a stale `~/.codex/skills` copy (#196).
 
+**The Go-direct path (`nightgauge run`, the scheduler) has no host to ask**, so
+it searches, in order: `<workspace>/skills`, then `$NIGHTGAUGE_SKILLS_ROOT` when
+set, then `<prefix>/skills` beside a binary installed as
+`<prefix>/bin/nightgauge` (the extension's `dist/` layout, or a hand install
+such as `~/.local/share/<name>/{bin,skills}`). A plain `go build` binary
+anywhere else finds no skills outside this repository: set
+`NIGHTGAUGE_SKILLS_ROOT` or use the prefix layout (#2220). `nightgauge doctor`
+reports the `skills` check: whether this binary can locate every stage's
+`SKILL.md`, and the roots it searched.
+
 **Resolution cascade** (ADR 016 §2, as amended by #582), general to specific,
 shared before skill-specific — provider, then the concrete id. The band
 segment was retired with the band vocabulary (#582); band names remain valid

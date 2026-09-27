@@ -39,7 +39,7 @@ func TestDefaultRootsAppendsTheBundleTree(t *testing.T) {
 	exe := fakeBundle(t, true)
 	bundleSkills := filepath.Join(filepath.Dir(filepath.Dir(exe)), "skills")
 
-	roots := defaultRoots("/repo", exe)
+	roots := defaultRoots("/repo", exe, "")
 
 	if len(roots) != 2 {
 		t.Fatalf("roots = %v, want the workspace tree and the bundle tree", roots)
@@ -63,7 +63,7 @@ func TestDefaultRootsAppendsTheBundleTree(t *testing.T) {
 func TestDefaultRootsOmitsAMissingBundleTree(t *testing.T) {
 	exe := fakeBundle(t, false)
 
-	roots := defaultRoots("/repo", exe)
+	roots := defaultRoots("/repo", exe, "")
 
 	if len(roots) != 1 {
 		t.Fatalf("roots = %v, want only the workspace tree when no bundle exists", roots)
@@ -73,7 +73,7 @@ func TestDefaultRootsOmitsAMissingBundleTree(t *testing.T) {
 // TestDefaultRootsSurvivesAnUnknownExecutable pins the degenerate arm:
 // os.Executable can fail, and a render must still search the workspace.
 func TestDefaultRootsSurvivesAnUnknownExecutable(t *testing.T) {
-	roots := defaultRoots("/repo", "")
+	roots := defaultRoots("/repo", "", "")
 
 	if len(roots) != 1 || roots[0] != filepath.Join("/repo", "skills") {
 		t.Fatalf("roots = %v, want just the workspace tree", roots)
@@ -113,7 +113,7 @@ func TestGoAndTypeScriptAgreeOnSkillRootOrder(t *testing.T) {
 
 	// Go must produce the same two, in the same order.
 	exe := fakeBundle(t, true)
-	roots := defaultRoots("/repo", exe)
+	roots := defaultRoots("/repo", exe, "")
 	if len(roots) != 2 {
 		t.Fatalf("Go roots = %v, want 2 to match the TypeScript host", roots)
 	}
@@ -137,4 +137,89 @@ func between(t *testing.T, s, start, end string) string {
 		t.Fatalf("end marker %q not found after %q", end, start)
 	}
 	return rest[:j]
+}
+
+// TestDefaultRootsOrderWithOverride pins #2220's order: the workspace tree
+// first, the operator's NIGHTGAUGE_SKILLS_ROOT second, the bundle last.
+func TestDefaultRootsOrderWithOverride(t *testing.T) {
+	exe := fakeBundle(t, true)
+	override := t.TempDir()
+
+	roots := defaultRoots("/repo", exe, override)
+
+	if len(roots) != 3 {
+		t.Fatalf("roots = %v, want workspace, override, bundle", roots)
+	}
+	if roots[0] != filepath.Join("/repo", "skills") {
+		t.Errorf("roots[0] = %q, want the workspace tree", roots[0])
+	}
+	if roots[1] != override {
+		t.Errorf("roots[1] = %q, want the override %q", roots[1], override)
+	}
+	if !strings.HasSuffix(roots[2], filepath.Join("dist", "skills")) {
+		t.Errorf("roots[2] = %q, want the bundle tree", roots[2])
+	}
+}
+
+// TestDefaultRootsKeepsAMissingOverride: an explicit override is listed even
+// when it does not exist, so a typo shows in the not-found error.
+func TestDefaultRootsKeepsAMissingOverride(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "nope")
+	roots := defaultRoots("/repo", "", "  "+missing+" ")
+	if len(roots) != 2 || roots[1] != missing {
+		t.Fatalf("roots = %v, want the workspace tree and %q", roots, missing)
+	}
+	if got := defaultRoots("/repo", "", "   "); len(got) != 1 {
+		t.Fatalf("blank override: roots = %v, want only the workspace tree", got)
+	}
+}
+
+// TestDefaultRootsReadsTheEnvOverride proves the exported entry point reads
+// NIGHTGAUGE_SKILLS_ROOT and that Locate resolves a stage through it — the
+// exact failure #2220 reported from a repository without skills/.
+func TestDefaultRootsReadsTheEnvOverride(t *testing.T) {
+	override := t.TempDir()
+	skillDir := filepath.Join(override, StageSkillDirs["issue-pickup"])
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("# pickup\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(SkillsRootEnv, override)
+
+	workspace := t.TempDir() // a repository with no skills/ tree
+	roots := DefaultRoots(workspace)
+	if len(roots) < 2 || roots[1] != override {
+		t.Fatalf("DefaultRoots = %v, want %q second", roots, override)
+	}
+	path, err := Locate("issue-pickup", roots)
+	if err != nil {
+		t.Fatalf("Locate through %s: %v", SkillsRootEnv, err)
+	}
+	if !strings.HasPrefix(path, override) && !strings.Contains(path, filepath.Base(override)) {
+		t.Errorf("path = %q, want it under the override %q", path, override)
+	}
+}
+
+// TestLocateErrorNamesRootsAndFixes pins the not-found text: every searched
+// root, and both remedies (bundle layout, NIGHTGAUGE_SKILLS_ROOT).
+func TestLocateErrorNamesRootsAndFixes(t *testing.T) {
+	a, b := t.TempDir(), t.TempDir()
+	_, err := Locate("issue-pickup", []string{a, b})
+	if err == nil {
+		t.Fatal("Locate succeeded over empty roots")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		`SKILL.md not found for stage "issue-pickup"`,
+		"searched roots " + a + ", " + b,
+		"<prefix>/bin/nightgauge beside <prefix>/skills/",
+		SkillsRootEnv,
+		"nightgauge-issue-pickup/SKILL.md",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q lacks %q", msg, want)
+		}
+	}
 }
