@@ -734,7 +734,7 @@ func (r *DeterministicRunner) awaitMergeQueue(ctx context.Context, ph *phaseEmit
 	case err == nil:
 		res.Reason = fmt.Sprintf("%s: queue wait ended in state %s", ReasonMergeQueueFailed, final.State)
 	case isRateLimitErr(err):
-		// Rate limits defer, exactly as on the direct path (#3976).
+		// Rate limits defer, exactly as on the direct path.
 		res.Path = PathPunt
 		res.Reason = ReasonRateLimited
 	case errors.As(err, &qe) && qe.Kind == github.MergeQueueTimeout:
