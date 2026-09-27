@@ -38,6 +38,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Workspace rule: batch merges, never serialize them.** Related or small
+  changes go in one PR with a `Closes #N` per issue, and every green PR goes
+  into the merge queue rather than being hand-merged one after another.
+
 - **The planning exploration budget no longer refuses knowledge-base reads**
   (#2193). The OpenCode adapter hands the plugin the workspace's
   `.nightgauge/knowledge` directory (`NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR`), and
@@ -124,6 +128,10 @@ changelog, and the release workflow refuses a tag that does not.
     `peak_step_input_tokens` covers both adapters.
 
 ### Fixed
+
+- **Docs: a `git worktree` build gets no VCS stamp** (#2224). `dev+<rev>`
+  (#2201) appears only for builds in a regular clone. ADAPTER_DOCTOR.md shows
+  the `-ldflags "-X main.version=..."` form for worktree builds.
 
 - **`doctor` honours `autonomous.enabled_repos` for the autonomous-loop cadence**
   (#2218). A machine-wide autonomous block limited to other repositories no
