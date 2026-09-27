@@ -1,11 +1,13 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -796,10 +798,15 @@ func TestProcessTableReport_ATableWithoutThisProcessIsUnverifiable(t *testing.T)
 
 func TestProcessTableReport_ATableContainingThisProcessIsRead(t *testing.T) {
 	// The other side of the rule: a table that DOES list us is reported on.
+	// The aged row must be hermetic under workspace scoping (#2200): a PID
+	// that is not running (so no real cwd or child processes are read for it)
+	// and a --workdir inside this test's workspace. os.Getpid()+1 was a live
+	// neighbouring process on Linux runners, whose cwd put it "elsewhere".
+	ws := t.TempDir()
 	raw := derivedRow(t, os.Getpid(), "10:00", "doctor --json") + "\n" +
-		derivedRow(t, os.Getpid()+1, "05-00:00:00", "autonomous run --dry-run") + "\n"
+		derivedRow(t, unusedPID(t), "05-00:00:00", "autonomous run --dry-run --workdir "+ws) + "\n"
 
-	item, _ := processTableReport(t.TempDir(), raw, map[int]bool{}, nil)
+	item, _ := processTableReport(ws, raw, map[int]bool{}, nil)
 
 	if strings.Contains(item.Error, "unverifiable") {
 		t.Fatalf("a table containing this process was rejected: %q", item.Error)
@@ -1270,4 +1277,17 @@ func TestPathWithin(t *testing.T) {
 			t.Errorf("pathWithin(%q, %q) = %v, want %v", c[0], c[1], got, want)
 		}
 	}
+}
+
+// unusedPID returns a PID with no running process, searching down from a value
+// below every platform's pid_max (macOS caps PIDs at 99998).
+func unusedPID(t *testing.T) int {
+	t.Helper()
+	for pid := 99990; pid > 50000; pid-- {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return pid
+		}
+	}
+	t.Skip("no unused PID found")
+	return 0
 }
