@@ -556,6 +556,7 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 		ManagedConfigFiles: a.managedConfig,
 		McpForge:           OpenCodeMcpForge(req.WorkspaceRoot),
 		BinDir:             OpenCodeBinDir(),
+		KnowledgeDir:       openCodeKnowledgeDir(req.WorkspaceRoot),
 	})
 	if err != nil {
 		return nil, err
@@ -826,4 +827,17 @@ func (a *OpenCodeAdapter) StreamIdleBound(opts RunOptions) (endpoint string, bou
 // OpenCodeSessionDBDir is where a per-run root keeps opencode.db.
 func OpenCodeSessionDBDir(root string) string {
 	return filepath.Join(root, "data", "opencode")
+}
+
+// openCodeKnowledgeDir is the knowledge base of the workspace rooted at
+// workspaceRoot (#2193): its .nightgauge/knowledge, absolute. "" for no root.
+func openCodeKnowledgeDir(workspaceRoot string) string {
+	if workspaceRoot == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(filepath.Join(workspaceRoot, ".nightgauge", "knowledge"))
+	if err != nil {
+		return ""
+	}
+	return abs
 }

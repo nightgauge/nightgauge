@@ -25,6 +25,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **The planning exploration budget no longer refuses knowledge-base reads**
+  (#2193). The OpenCode adapter hands the plugin the workspace's
+  `.nightgauge/knowledge` directory (`NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR`), and
+  reads under it, or under any `.nightgauge/knowledge/` directory, are exempt,
+  so feature-planning's knowledge-base phase can read the main checkout's PRD
+  and decisions from a pipeline worktree.
+
 - **`--owner`/`--repo` no longer default to `nightgauge`** (#2198). Every
   verb that targets a GitHub repository now resolves them as: explicit flag,
   then `.nightgauge/config.yaml`, then the current checkout's `origin`

@@ -233,6 +233,13 @@ export const OPENCODE_READ_MAX_LINES_ENV = "NIGHTGAUGE_OPENCODE_READ_MAX_LINES";
 export const OPENCODE_EXPLORATION_BUDGET_ENV = "NIGHTGAUGE_OPENCODE_EXPLORATION_BUDGET";
 
 /**
+ * `NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR` (`opencodeplugin.EnvKnowledgeDir`) is
+ * the knowledge-base directory the exploration budget exempts (#2193). Its
+ * value is a local path, so forwarding it carries no leak.
+ */
+export const OPENCODE_KNOWLEDGE_DIR_ENV = "NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR";
+
+/**
  * `OPENCODE_DISABLE_PROJECT_CONFIG` is set by `InstallNightgaugePlugin`
  * itself (opencode.go, literal at the call site, not one of
  * `opencodeplugin`'s exported `Env*` constants), not by the blanket
@@ -288,6 +295,7 @@ const OPENCODE_RUN_ENV_NAMES: ReadonlySet<string> = new Set<string>([
   OPENCODE_PLUGIN_SENTINEL_ENV,
   OPENCODE_READ_MAX_LINES_ENV,
   OPENCODE_EXPLORATION_BUDGET_ENV,
+  OPENCODE_KNOWLEDGE_DIR_ENV,
 ]);
 
 /**

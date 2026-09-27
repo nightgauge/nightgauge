@@ -1445,6 +1445,10 @@ type OpenCodeRunRequest struct {
 	// byte-for-byte comparison holds; "" (a caller, typically a test, that
 	// does not set it) adds no NIGHTGAUGE_BIN entry to the allow-list.
 	BinDir string
+	// KnowledgeDir is the absolute knowledge-base directory (#2193), handed
+	// to the plugin in opencodeplugin.EnvKnowledgeDir so the exploration
+	// budget exempts its reads. "" sets nothing.
+	KnowledgeDir string
 }
 
 // OpenCodeRun is everything an opencode spawn is given besides its argv and
@@ -1670,6 +1674,9 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	env[openCodeConfigContentEnvVar] = built.Content
 	env[opencodeplugin.EnvReadMaxLines] = strconv.Itoa(built.ReadMaxLines)
 	env[opencodeplugin.EnvExplorationBudget] = strconv.Itoa(built.ExplorationBudget)
+	if req.KnowledgeDir != "" {
+		env[opencodeplugin.EnvKnowledgeDir] = req.KnowledgeDir
+	}
 	reportOpenCodeRepository(os.Stderr, input.Repository)
 	return &OpenCodeRun{
 		SchemaVersion: OpenCodeConfigSchemaVersion,

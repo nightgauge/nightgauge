@@ -262,6 +262,10 @@ export function capReadLimit(output) {
 // side for feature-planning on a local endpoint only. 0 or unset is off.
 const EXPLORATION_BUDGET_ENV = "NIGHTGAUGE_OPENCODE_EXPLORATION_BUDGET";
 
+// KNOWLEDGE_DIR_ENV is opencodeplugin.EnvKnowledgeDir (plugin.go): the
+// absolute knowledge-base directory, whose reads never count (#2193).
+const KNOWLEDGE_DIR_ENV = "NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR";
+
 // EXPLORATION_BUDGET_MARKER prefixes the refusal of an exploration call
 // past the budget.
 const EXPLORATION_BUDGET_MARKER = "[nightgauge-gate:exploration-budget]";
@@ -285,15 +289,22 @@ export function resetExplorationCount() {
 
 // isExemptPath reports whether p is skill-directed or pipeline context
 // (#2190): a path through a skills/_shared/, _includes/ or *feature-planning/
-// directory, or one under the worktree's own .nightgauge/ directory. Other
+// directory, one under a .nightgauge/knowledge/ directory or the configured
+// knowledge base (#2193), or one under the worktree's own .nightgauge/. Other
 // skill sources (skills/nightgauge-*/ in the core repository) are code under
 // exploration and count.
 export function isExemptPath(p, cwd) {
   if (typeof p !== "string" || p === "") return false;
   const abs = path.resolve(cwd, p);
+  const knowledge = process.env[KNOWLEDGE_DIR_ENV];
+  if (typeof knowledge === "string" && path.isAbsolute(knowledge)) {
+    const k = path.relative(path.resolve(knowledge), abs);
+    if (k === "" || (!k.startsWith("..") && !path.isAbsolute(k))) return true;
+  }
   const segs = abs.split(path.sep);
   const dirs = segs.slice(0, -1);
   for (let i = 0; i < dirs.length; i++) {
+    if (dirs[i] === ".nightgauge" && dirs[i + 1] === "knowledge") return true;
     if (dirs[i] === "_includes" || dirs[i].endsWith("feature-planning")) return true;
     if (dirs[i] === "skills" && dirs[i + 1] === "_shared") return true;
   }
