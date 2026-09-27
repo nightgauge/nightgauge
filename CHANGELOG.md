@@ -73,6 +73,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`setup scaffold-tooling --select ci` builds the workflow from the
+  repository instead of a fixed template** (#2206). It emits one
+  `npm run <script>` step per gate script that `package.json` defines
+  (`typecheck`, `lint`, `test`, `build`) with no appended arguments, so
+  `typecheck` now runs and `npm test -- --run` is gone; the JSON output lists
+  them in `ci_steps`. Every `uses:` ref is pinned to a full commit SHA with the
+  tag in a comment, so organizations enforcing SHA pinning no longer reject the
+  workflow with `startup_failure`. A new `--runs-on` flag sets the runner
+  (default `ubuntu-latest`), and the verb reads the repository's Actions
+  policy when the token allows and warns when it would reject the workflow.
+
 - **The stall watchdog no longer stops a slow local model mid-reply**
   (#2184). OpenCode never writes a streaming delta to its session database
   and prints a part only when it completes, so the #2176 watchdog read a

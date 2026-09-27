@@ -681,28 +681,32 @@ Replaces the heredoc-based config emission in
 
 ```bash
 # Emit any combination of tsconfig, vitest, eslint, prettier, ci.yml
-nightgauge setup scaffold-tooling --workdir . [--select KEYS] [--dry-run] [--json]
+nightgauge setup scaffold-tooling --workdir . [--select KEYS] [--runs-on LABEL] [--no-policy-check] [--dry-run] [--json]
 ```
 
 **Key flags:**
 
-| Flag        | Meaning                                                                         |
-| ----------- | ------------------------------------------------------------------------------- |
-| `--workdir` | Project root (default: CWD)                                                     |
-| `--select`  | Comma-list: `tsconfig`, `vitest`, `eslint`, `prettier`, `ci`. Empty = all five. |
-| `--dry-run` | Report outcomes with `bytes` set to template length but write nothing.          |
-| `--json`    | Stable v1 JSON schema (parsed by `smart-setup` Phase 4.5).                      |
+| Flag                | Meaning                                                                                   |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| `--workdir`         | Project root (default: CWD)                                                               |
+| `--select`          | Comma-list: `tsconfig`, `vitest`, `eslint`, `prettier`, `ci`. Empty = all five.           |
+| `--runs-on`         | Runner label written to `ci.yml` `runs-on` (default `ubuntu-latest`), e.g. `self-hosted`. |
+| `--no-policy-check` | Skip reading the repository's GitHub Actions policy.                                      |
+| `--dry-run`         | Report outcomes with `bytes` set to template length but write nothing.                    |
+| `--json`            | Stable v1 JSON schema (parsed by `smart-setup` Phase 4.5).                                |
 
 **Stable JSON schema (v1):**
 
-| Field      | Type     | Notes                                                                                               |
-| ---------- | -------- | --------------------------------------------------------------------------------------------------- |
-| `v`        | int      | Always 1; bumping requires field-rename or enum addition.                                           |
-| `workdir`  | string   | Absolute path that was scanned.                                                                     |
-| `selected` | string[] | Requested template keys after normalization (canonical order).                                      |
-| `detected` | object   | `package_json_found`, `node_version`, `has_typescript`, `has_vitest`, `has_eslint`, `has_prettier`. |
-| `outcomes` | object[] | One entry per requested key with `key`, `path`, `outcome`, `reason`, `bytes`.                       |
-| `warnings` | string[] | Non-fatal scan warnings (missing/malformed package.json, etc.).                                     |
+| Field      | Type     | Notes                                                                                                                                                   |
+| ---------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `v`        | int      | Always 1; bumping requires field-rename or enum addition.                                                                                               |
+| `workdir`  | string   | Absolute path that was scanned.                                                                                                                         |
+| `selected` | string[] | Requested template keys after normalization (canonical order).                                                                                          |
+| `detected` | object   | `package_json_found`, `node_version`, `has_typescript`, `has_vitest`, `has_eslint`, `has_prettier`, `scripts` (gate scripts present in `package.json`). |
+| `outcomes` | object[] | One entry per requested key with `key`, `path`, `outcome`, `reason`, `bytes`.                                                                           |
+| `ci_steps` | string[] | Gate scripts that became `npm run <script>` steps in `ci.yml`, in step order (empty when `ci` is not selected).                                         |
+| `runs_on`  | string   | Runner label written to `ci.yml` (empty when `ci` is not selected).                                                                                     |
+| `warnings` | string[] | Non-fatal scan warnings (missing/malformed package.json, etc.).                                                                                         |
 
 **Closed enums:**
 
@@ -719,10 +723,29 @@ target. When any probe matches, the outcome is
 
 **Template provenance:** `tsconfig.json`, `vitest.config.ts`,
 `eslint.config.js`, and `.prettierrc` are byte-for-byte copies of the
-SKILL.md Phase 4.5 heredocs. Only `ci.yml.tmpl` takes a substitution —
-the Node major version, rendered through Go `text/template` with custom
-`<% %>` delimiters so GitHub Actions `${{ ... }}` expressions survive
-verbatim.
+SKILL.md Phase 4.5 heredocs. `ci.yml.tmpl` is rendered through Go
+`text/template` with custom `<% %>` delimiters so GitHub Actions
+`${{ ... }}` expressions survive verbatim. It is generated from the
+repository rather than fixed:
+
+- One step per gate script that exists in `package.json` — `typecheck`,
+  `lint`, `test`, `build`, in that order — each run as `npm run <script>`
+  with no appended arguments. Missing scripts get no step; `ci_steps`
+  reports what was emitted.
+- The Node major version comes from `engines.node` (default `20`) and the
+  runner from `--runs-on`.
+- Every `uses:` ref is pinned to a full 40-character commit SHA with the
+  release tag as a trailing comment (`# v7.0.1`), so organizations with
+  `sha_pinning_required` accept the workflow. The pins live in
+  `internal/setup/ci.go`.
+
+**Actions policy check:** when `ci` is selected, the verb runs
+`gh api repos/{owner}/{repo}/actions/permissions` (and
+`.../permissions/selected-actions` when `allowed_actions` is `selected`)
+and adds a warning when Actions is disabled or `allowed_actions` would
+reject the pinned actions. The check is best-effort: when `gh`, the
+remote, or the token's access is missing, it adds a "not checked"
+warning and the verb still succeeds.
 
 **Exit codes:**
 
@@ -734,8 +757,8 @@ verbatim.
 **Examples:**
 
 ```bash
-# Scaffold only the CI workflow into a fresh repo
-nightgauge setup scaffold-tooling --workdir . --select ci --json | jq '.outcomes[]'
+# Scaffold only the CI workflow into a fresh repo, on a self-hosted runner
+nightgauge setup scaffold-tooling --workdir . --select ci --runs-on self-hosted --json | jq '.ci_steps, .outcomes[]'
 
 # Dry-run all five templates (reports intended writes, touches nothing)
 nightgauge setup scaffold-tooling --workdir . --dry-run --json | jq '.outcomes[].outcome'
