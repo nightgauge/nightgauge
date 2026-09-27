@@ -1,11 +1,13 @@
 package doctor
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -796,10 +798,15 @@ func TestProcessTableReport_ATableWithoutThisProcessIsUnverifiable(t *testing.T)
 
 func TestProcessTableReport_ATableContainingThisProcessIsRead(t *testing.T) {
 	// The other side of the rule: a table that DOES list us is reported on.
+	// The aged row must be hermetic under workspace scoping (#2200): a PID
+	// that is not running (so no real cwd or child processes are read for it)
+	// and a --workdir inside this test's workspace. os.Getpid()+1 was a live
+	// neighbouring process on Linux runners, whose cwd put it "elsewhere".
+	ws := t.TempDir()
 	raw := derivedRow(t, os.Getpid(), "10:00", "doctor --json") + "\n" +
-		derivedRow(t, os.Getpid()+1, "05-00:00:00", "autonomous run --dry-run") + "\n"
+		derivedRow(t, unusedPID(t), "05-00:00:00", "autonomous run --dry-run --workdir "+ws) + "\n"
 
-	item, _ := processTableReport(t.TempDir(), raw, map[int]bool{}, nil)
+	item, _ := processTableReport(ws, raw, map[int]bool{}, nil)
 
 	if strings.Contains(item.Error, "unverifiable") {
 		t.Fatalf("a table containing this process was rejected: %q", item.Error)
@@ -1200,4 +1207,87 @@ func ownServeRegistryWalk(src string) []string {
 		}
 	}
 	return found
+}
+
+// TestOrphanedProcesses_OtherWorkspaceIsNotEvaluated is #2200's verification:
+// a long-running `nightgauge run` whose cwd is another workspace must not be
+// reported (or given terminate advice) by doctor run for this workspace.
+func TestOrphanedProcesses_OtherWorkspaceIsNotEvaluated(t *testing.T) {
+	procs := parseRows(t,
+		derivedRow(t, os.Getpid(), "00:01", "doctor --json"),
+		derivedRow(t, 4242, "03:00:00", "run --issue 2087 --adapter opencode"),
+	)
+	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/other/ws"}, nil)
+	item, warning := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)
+	if !item.OK || warning != "" {
+		t.Fatalf("process in another workspace was reported: item=%+v warning=%q", item, warning)
+	}
+	if !strings.Contains(item.Detail, "1 nightgauge process(es) in other workspaces") {
+		t.Errorf("detail should count the other-workspace process as info: %q", item.Detail)
+	}
+
+	// The same process, in THIS workspace, is still an orphan.
+	scope = classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/this/ws/sub"}, nil)
+	if item, _ := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope); item.OK {
+		t.Error("an idle, unclaimed three-hour run in this workspace must still be reported")
+	}
+}
+
+// TestOrphanedProcesses_WorkdirFlagScopesTheProcess covers argv scoping: a
+// process whose cwd is elsewhere but whose --workdir names this workspace is
+// in scope.
+func TestOrphanedProcesses_WorkdirFlagScopesTheProcess(t *testing.T) {
+	procs := parseRows(t,
+		derivedRow(t, os.Getpid(), "00:01", "doctor --json"),
+		derivedRow(t, 4242, "03:00:00", "run --issue 1 --workdir /this/ws"),
+		derivedRow(t, 4243, "03:00:00", "run --issue 2 --workdir=/other/ws"),
+	)
+	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/", 4243: "/other/ws"}, nil)
+	if scope.Elsewhere[4242] || !scope.Elsewhere[4243] {
+		t.Fatalf("Elsewhere = %v, want only 4243", scope.Elsewhere)
+	}
+}
+
+// TestOrphanedProcesses_NohupLiveRunIsNotAnOrphan: a live pipeline run started
+// with nohup has no sidecar claim and has been reparented, but it is driving
+// an adapter child process — it is working, not orphaned.
+func TestOrphanedProcesses_NohupLiveRunIsNotAnOrphan(t *testing.T) {
+	procs := parseRows(t,
+		derivedRow(t, os.Getpid(), "00:01", "doctor --json"),
+		derivedRow(t, 4242, "03:00:00", "run --issue 7 --adapter opencode"),
+	)
+	parents := map[int]int{4242: 1, 5000: 4242}
+	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/this/ws"}, parents)
+	item, warning := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)
+	if !item.OK || warning != "" {
+		t.Fatalf("a live nohup'd run with a child process was reported as orphaned: %+v %q", item, warning)
+	}
+	if !strings.Contains(item.Detail, "unclaimed but working") {
+		t.Errorf("detail should name the working process: %q", item.Detail)
+	}
+}
+
+func TestPathWithin(t *testing.T) {
+	cases := map[[2]string]bool{
+		{"/a/b", "/a/b"}: true, {"/a/b/c", "/a/b"}: true,
+		{"/a/bc", "/a/b"}: false, {"/a", "/a/b"}: false,
+	}
+	for c, want := range cases {
+		if got := pathWithin(c[0], c[1]); got != want {
+			t.Errorf("pathWithin(%q, %q) = %v, want %v", c[0], c[1], got, want)
+		}
+	}
+}
+
+// unusedPID returns a PID with no running process, searching down from a value
+// below every platform's pid_max (macOS caps PIDs at 99998).
+func unusedPID(t *testing.T) int {
+	t.Helper()
+	for pid := 99990; pid > 50000; pid-- {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			return pid
+		}
+	}
+	t.Skip("no unused PID found")
+	return 0
 }

@@ -388,3 +388,9 @@ func parseOriginSlug(remote string) (owner, name string, ok bool) {
 	}
 	return owner, name, true
 }
+
+// OriginSlug reads owner/name from the `origin` remote of the repository at
+// dir. ok is false when there is no origin or it is not a forge URL.
+func OriginSlug(dir string) (owner, name string, ok bool) {
+	return originSlug(dir)
+}

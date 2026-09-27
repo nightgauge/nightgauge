@@ -54,6 +54,12 @@ const (
 	// on a background job dies on a rejected tool call instead of using the
 	// harness's backgrounded-command + completion-notification idiom (#289).
 	CheckSleepWaitLoop = "sleep_wait_loop"
+	// CheckLiteralArguments flags a backticked `$ARGUMENTS` in skill prose.
+	// Claude Code substitutes $ARGUMENTS when the skill loads, so prose that
+	// names the variable ("inline arguments via `$ARGUMENTS`") renders as an
+	// empty code span when the skill is invoked without arguments (#2207).
+	// Fenced code blocks are exempt: substitution there is intended.
+	CheckLiteralArguments = "literal_arguments_in_prose"
 )
 
 // SkillAntiPatternsResult is the stable JSON output schema for
@@ -99,6 +105,12 @@ var includeDirectiveRE = regexp.MustCompile(`<!--\s*include:\s*[^\s]+\.md`)
 // (\n \t \d \w \s \. \( etc.) are excluded because the segment to the LEFT of
 // the backslash must be a path-directory word or a filename word, not empty.
 var backslashPathRE = regexp.MustCompile(`(?:skills|src|docs|packages|internal|cmd|scripts|tests|node_modules)\\[A-Za-z0-9_.]+|[A-Za-z0-9_]+\\[A-Za-z0-9_]+\.(?:md|go|ts|js|tsx|jsx|sh|json|ya?ml|py)`)
+
+// literalArgumentsRE matches `$ARGUMENTS` as an inline code span.
+var literalArgumentsRE = regexp.MustCompile("`\\$ARGUMENTS`")
+
+// fenceRE matches a fenced code block delimiter line.
+var fenceRE = regexp.MustCompile("^\\s*(```|~~~)")
 
 // tocHeadingRE matches a Contents / Table of Contents heading at H1 or H2
 // (the established supporting-file convention opens with '## Contents').
@@ -169,7 +181,7 @@ func RunSkillAntiPatternsCheck(_ context.Context, opts SkillAntiPatternsOptions)
 	// missing TOC (Check C). Only files ending in exactly ".md" are walked —
 	// editor backups like SKILL.md.bak are skipped by extension.
 	skillsDir := filepath.Join(root, "skills")
-	var skillMDs, supportingMDs []string
+	var skillMDs, supportingMDs, profileMDs []string
 	walkErr := filepath.WalkDir(skillsDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil // skip unreadable subtrees, do not abort the walk
@@ -185,6 +197,8 @@ func RunSkillAntiPatternsCheck(_ context.Context, opts SkillAntiPatternsOptions)
 		switch {
 		case base == "SKILL.md":
 			skillMDs = append(skillMDs, path)
+		case filepath.Base(dir) == "_profiles":
+			profileMDs = append(profileMDs, path)
 		case strings.Contains(dir, string(filepath.Separator)+"_includes") ||
 			strings.HasSuffix(dir, string(filepath.Separator)+"_shared") ||
 			filepath.Base(dir) == "_shared":
@@ -197,7 +211,33 @@ func RunSkillAntiPatternsCheck(_ context.Context, opts SkillAntiPatternsOptions)
 	}
 	sort.Strings(skillMDs)
 	sort.Strings(supportingMDs)
-	result.FilesChecked = len(skillMDs) + len(supportingMDs)
+	sort.Strings(profileMDs)
+	result.FilesChecked = len(skillMDs) + len(supportingMDs) + len(profileMDs)
+
+	// Check F (literal $ARGUMENTS in prose) applies to every file that is
+	// loaded as skill text: SKILL.md, supporting files and render profiles.
+	for _, path := range append(append(append([]string{}, skillMDs...), supportingMDs...), profileMDs...) {
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			continue // reported by the checks below
+		}
+		rel := relOrAbs(root, path)
+		inFence := false
+		for i, line := range strings.Split(string(data), "\n") {
+			if fenceRE.MatchString(line) {
+				inFence = !inFence
+				continue
+			}
+			if !inFence && literalArgumentsRE.MatchString(line) {
+				result.Findings = append(result.Findings, SkillAntiPattern{
+					Check: CheckLiteralArguments,
+					File:  rel,
+					Line:  i + 1,
+					Match: trimMatch(line),
+				})
+			}
+		}
+	}
 
 	// Checks B (backslash paths) and D (admin merge bypass) apply to ALL
 	// skill + supporting .md files.

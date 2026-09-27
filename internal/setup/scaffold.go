@@ -39,7 +39,14 @@ type ScaffoldToolingResult struct {
 	Selected []string      `json:"selected"` // requested template keys (post-normalize)
 	Detected DetectedDeps  `json:"detected"` // dep + version detection report
 	Outcomes []FileOutcome `json:"outcomes"` // one entry per requested template
-	Warnings []string      `json:"warnings"` // non-fatal issues
+	// CISteps lists the package.json scripts that became `npm run <script>`
+	// steps in the emitted ci.yml, in step order. Empty when ci is not
+	// selected or no gate script exists.
+	CISteps []string `json:"ci_steps"`
+	// RunsOn is the runner label written into ci.yml (empty when ci is not
+	// selected).
+	RunsOn   string   `json:"runs_on"`
+	Warnings []string `json:"warnings"` // non-fatal issues
 }
 
 // DetectedDeps records what the package.json scan found. Populated even when
@@ -51,6 +58,9 @@ type DetectedDeps struct {
 	HasVitest        bool   `json:"has_vitest"`
 	HasESLint        bool   `json:"has_eslint"`
 	HasPrettier      bool   `json:"has_prettier"`
+	// Scripts lists the gate scripts (typecheck, lint, test, build) defined
+	// in package.json, in CI step order.
+	Scripts []string `json:"scripts"`
 }
 
 // FileOutcome records the result of one template emission.
@@ -110,7 +120,18 @@ type ScaffoldToolingOptions struct {
 	// DryRun reports outcomes with Bytes set to template length but does not
 	// write any files.
 	DryRun bool
+	// RunsOn is the runner label for the emitted ci.yml. Empty means
+	// DefaultRunsOn.
+	RunsOn string
+	// PolicyProbe, when set, is asked for the repository's GitHub Actions
+	// policy so the verb can warn when the emitted workflow would be
+	// rejected. It is best-effort: an error (no token access, no remote)
+	// only produces an informational warning.
+	PolicyProbe func(ctx context.Context, workdir string) (*ActionsPolicy, error)
 }
+
+// DefaultRunsOn is the runner used when ScaffoldToolingOptions.RunsOn is empty.
+const DefaultRunsOn = "ubuntu-latest"
 
 // RunScaffoldTooling resolves workdir, detects dependencies via
 // package.json, and emits each selected template under workdir. Existing
@@ -157,15 +178,37 @@ func RunScaffoldTooling(ctx context.Context, opts ScaffoldToolingOptions) (*Scaf
 		Selected: selected,
 		Detected: det,
 		Outcomes: []FileOutcome{},
+		CISteps:  []string{},
 		Warnings: warnings,
+	}
+
+	runsOn := strings.TrimSpace(opts.RunsOn)
+	if runsOn == "" {
+		runsOn = DefaultRunsOn
+	}
+	if strings.ContainsAny(runsOn, "\n\r#") {
+		return nil, fmt.Errorf("invalid --runs-on value %q", opts.RunsOn)
 	}
 
 	for _, key := range selected {
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
-		oc := emitTemplate(workdir, key, det, opts.DryRun)
+		oc := emitTemplate(workdir, key, det, runsOn, opts.DryRun)
 		result.Outcomes = append(result.Outcomes, oc)
+		if key == TemplateKeyCI {
+			result.RunsOn = runsOn
+			result.CISteps = append([]string{}, det.Scripts...)
+			if len(det.Scripts) == 0 {
+				result.Warnings = append(result.Warnings, "ci: package.json defines none of the gate scripts (typecheck, lint, test, build) — ci.yml only installs dependencies")
+			}
+			if w := selfHostedRunnerWarning(runsOn); w != "" {
+				result.Warnings = append(result.Warnings, w)
+			}
+			if opts.PolicyProbe != nil {
+				result.Warnings = append(result.Warnings, probePolicy(ctx, opts.PolicyProbe, workdir)...)
+			}
+		}
 	}
 
 	return result, nil
@@ -212,7 +255,7 @@ func canonicalIndex(key string) int {
 
 // emitTemplate dispatches a single template key to its concrete emit
 // function.
-func emitTemplate(workdir, key string, det DetectedDeps, dryRun bool) FileOutcome {
+func emitTemplate(workdir, key string, det DetectedDeps, runsOn string, dryRun bool) FileOutcome {
 	switch key {
 	case TemplateKeyTsconfig:
 		return emitTsconfig(workdir, dryRun)
@@ -223,7 +266,7 @@ func emitTemplate(workdir, key string, det DetectedDeps, dryRun bool) FileOutcom
 	case TemplateKeyPrettier:
 		return emitPrettier(workdir, det, dryRun)
 	case TemplateKeyCI:
-		return emitCI(workdir, det, dryRun)
+		return emitCI(workdir, det, runsOn, dryRun)
 	}
 	// normalizeSelect prevents this; defensive fallthrough.
 	return FileOutcome{Key: key, Outcome: OutcomeError, Reason: "internal: unknown template key"}
@@ -281,7 +324,7 @@ func emitPrettier(workdir string, det DetectedDeps, dryRun bool) FileOutcome {
 	return writeIfAbsent(workdir, TemplateKeyPrettier, target, probes, data, dryRun, "prettier config already exists")
 }
 
-func emitCI(workdir string, det DetectedDeps, dryRun bool) FileOutcome {
+func emitCI(workdir string, det DetectedDeps, runsOn string, dryRun bool) FileOutcome {
 	target := ".github/workflows/ci.yml"
 	tmplBytes, err := templatesFS.ReadFile("templates/ci.yml.tmpl")
 	if err != nil {
@@ -294,7 +337,7 @@ func emitCI(workdir string, det DetectedDeps, dryRun bool) FileOutcome {
 		return FileOutcome{Key: TemplateKeyCI, Path: target, Outcome: OutcomeError, Reason: fmt.Sprintf("parse ci template: %v", err)}
 	}
 	var buf strings.Builder
-	if err := tmpl.Execute(&buf, struct{ NodeVersion string }{NodeVersion: det.NodeVersion}); err != nil {
+	if err := tmpl.Execute(&buf, newCITemplateData(det, runsOn)); err != nil {
 		return FileOutcome{Key: TemplateKeyCI, Path: target, Outcome: OutcomeError, Reason: fmt.Sprintf("render ci template: %v", err)}
 	}
 	data := []byte(buf.String())
@@ -346,4 +389,14 @@ func writeIfAbsent(workdir, key, target string, probes []string, data []byte, dr
 		return FileOutcome{Key: key, Path: target, Outcome: OutcomeError, Reason: err.Error()}
 	}
 	return FileOutcome{Key: key, Path: target, Outcome: OutcomeCreated, Bytes: len(data)}
+}
+
+// selfHostedRunnerWarning reminds the caller that a self-hosted runner only
+// picks up jobs from repositories its runner group allows. A new repository is
+// not in the group by default, and GitHub leaves the job queued with no error.
+func selfHostedRunnerWarning(runsOn string) string {
+	if !strings.Contains(runsOn, "self-hosted") {
+		return ""
+	}
+	return "ci: runs-on " + runsOn + " — make sure this repository is in a runner group whose runners carry that label; otherwise jobs stay queued with no error"
 }

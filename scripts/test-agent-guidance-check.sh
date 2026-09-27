@@ -154,6 +154,35 @@ expect_pass "valid fixture passes under the strictest flags" $STRICT
 valid_fixture
 printf '# Docs\n' >"$FIX/docs/README.md"
 expect_pass "--docs-index none accepts a routing file that is its own index" --docs-index none
+# Minimal tier (#2197): AGENTS.md is the routing file, no docs/ at all.
+minimal_fixture() {
+  rm -rf "$FIX"
+  mkdir -p "$FIX"
+  cat >"$FIX/AGENTS.md" <<'EOF'
+# Tiny CLI
+
+Local gate: `make test`.
+
+## Documentation routing
+
+| Topic | Primary doc |
+| ----- | ----------- |
+| Usage | README.md   |
+
+Decisions: record the first one as an ADR under docs/decisions/.
+EOF
+  printf '@AGENTS.md\n' >"$FIX/CLAUDE.md"
+  printf '# Tiny CLI\n' >"$FIX/README.md"
+}
+minimal_fixture
+expect_pass "minimal tier: --routing AGENTS.md --docs-index none passes without docs/" \
+  --routing AGENTS.md --docs-index none --require-claude yes
+minimal_fixture
+expect_fail "minimal tier: default flags still require docs/AGENT_GUIDANCE.md" \
+  "routing file missing: docs/AGENT_GUIDANCE.md"
+minimal_fixture
+expect_fail "minimal tier: default flags still require docs/README.md" \
+  "docs index missing: docs/README.md"
 valid_fixture
 rm -f "$FIX/CLAUDE.md"
 expect_pass "--require-claude auto accepts a repository without CLAUDE.md"

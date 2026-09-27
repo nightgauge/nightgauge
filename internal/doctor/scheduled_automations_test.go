@@ -13,6 +13,9 @@ import (
 	"github.com/nightgauge/nightgauge/internal/cadence"
 )
 
+// coreScope is the core repo with autonomous mode in use: every built-in applies.
+var coreScope = cadence.Scope{Repo: cadence.CoreRepo, Autonomous: true}
+
 var testNow = time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 
 // fixedProbes answers every automation the same way, so a test can drive the
@@ -29,7 +32,7 @@ func fixedProbes(e cadence.Evidence) map[cadence.EvidenceKind]cadenceProbe {
 // whose evidence is beyond the threshold must be reported.
 func TestScheduledAutomations_ReportsStale(t *testing.T) {
 	item, warning := checkScheduledAutomations(context.Background(),
-		fixedProbes(cadence.Evidence{EverRan: true, Newest: testNow.AddDate(0, 0, -400)}), nil, testNow)
+		fixedProbes(cadence.Evidence{EverRan: true, Newest: testNow.AddDate(0, 0, -400)}), coreScope, nil, testNow)
 
 	if item.OK {
 		t.Error("every automation 400 days stale reported OK")
@@ -47,7 +50,7 @@ func TestScheduledAutomations_ReportsStale(t *testing.T) {
 func TestScheduledAutomations_FreshIsNotAFinding(t *testing.T) {
 	// Inside 3x the shortest registered interval (1h) — recent enough for all.
 	item, warning := checkScheduledAutomations(context.Background(),
-		fixedProbes(cadence.Evidence{EverRan: true, Newest: testNow.Add(-1 * time.Minute)}), nil, testNow)
+		fixedProbes(cadence.Evidence{EverRan: true, Newest: testNow.Add(-1 * time.Minute)}), coreScope, nil, testNow)
 
 	if !item.OK {
 		t.Errorf("all-fresh automations reported a finding: %s", item.Error)
@@ -72,7 +75,7 @@ func TestScheduledAutomations_SeparatesNeverRanFromStopped(t *testing.T) {
 		},
 	}
 
-	item, warning := checkScheduledAutomations(context.Background(), probes, nil, testNow)
+	item, warning := checkScheduledAutomations(context.Background(), probes, coreScope, nil, testNow)
 	if item.OK {
 		t.Fatal("a stopped loop and three never-run workflows reported OK")
 	}
@@ -98,7 +101,7 @@ func TestScheduledAutomations_SeparatesNeverRanFromStopped(t *testing.T) {
 // direction at the arm level.
 func TestScheduledAutomations_ProbeErrorIsNotHealthy(t *testing.T) {
 	item, warning := checkScheduledAutomations(context.Background(),
-		fixedProbes(cadence.Evidence{Err: errors.New("api unreachable")}), nil, testNow)
+		fixedProbes(cadence.Evidence{Err: errors.New("api unreachable")}), coreScope, nil, testNow)
 
 	if item.OK {
 		t.Error("automations whose freshness could not be determined reported OK — " +
@@ -114,7 +117,7 @@ func TestScheduledAutomations_ProbeErrorIsNotHealthy(t *testing.T) {
 // it would mean adding an automation makes the check WEAKER.
 func TestScheduledAutomations_MissingProbeIsUnverifiable(t *testing.T) {
 	item, warning := checkScheduledAutomations(context.Background(),
-		map[cadence.EvidenceKind]cadenceProbe{}, nil, testNow)
+		map[cadence.EvidenceKind]cadenceProbe{}, coreScope, nil, testNow)
 
 	if item.OK {
 		t.Error("no probes registered and the arm still reported OK")
@@ -193,5 +196,36 @@ func TestWorkflowRunEvidence_NoClientIsAnError(t *testing.T) {
 		cadence.Automation{ID: "x", Workflow: "ci.yml"})
 	if got.Err == nil {
 		t.Error("no GitHub client must be an error, not a healthy verdict")
+	}
+}
+
+// TestScheduledAutomations_ConsumerRepoHasNoBuiltins is #2199: a consumer repo
+// with no automations.cadence and autonomous mode off must not inherit core's
+// own release workflow or autonomous loop.
+func TestScheduledAutomations_ConsumerRepoHasNoBuiltins(t *testing.T) {
+	item, warning := checkScheduledAutomations(context.Background(),
+		fixedProbes(cadence.Evidence{EverRan: false}), cadence.Scope{Repo: "acme/tiny"}, nil, testNow)
+	if !item.OK || warning != "" {
+		t.Fatalf("consumer repo reported a finding: item=%+v warning=%q", item, warning)
+	}
+	if !strings.Contains(item.Detail, "none registered") {
+		t.Errorf("detail = %q, want \"none registered\"", item.Detail)
+	}
+}
+
+func TestCadenceScope_AutonomousFromStateFile(t *testing.T) {
+	root := t.TempDir()
+	if got := cadenceScope(nil, root); got.Autonomous || got.Repo != "" {
+		t.Fatalf("empty workspace scope = %+v", got)
+	}
+	dir := filepath.Join(root, ".nightgauge", "autonomous")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !cadenceScope(nil, root).Autonomous {
+		t.Error("a workspace whose autonomous loop has run must keep autonomous-loop in scope")
 	}
 }

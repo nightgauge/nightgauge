@@ -109,8 +109,8 @@ func spikeMaterializeCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&owner, "owner", "nightgauge", "GitHub repository owner (defaults to config)")
-	cmd.Flags().StringVar(&repo, "repo", "nightgauge", "GitHub repository name (defaults to config)")
+	ownerFlag(cmd, &owner, "GitHub repository owner (defaults to config)")
+	requiredRepoNameFlag(cmd, &repo, "GitHub repository name (defaults to config)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number (defaults to config)")
 	cmd.Flags().StringVar(&artifactPath, "artifact-path", "", "Override the artifact path (default: docs/spikes/<N>-*.md)")
 	cmd.Flags().StringVar(&workdir, "workdir", "", "Working directory (default: cwd)")

@@ -182,11 +182,13 @@ func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(home, ".opencode", "bin"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	_, pidFile := installOpenCodeFakeSilent(t, 30*time.Second)
+	_, pidFile := installOpenCodeFakeSilent(t, 120*time.Second)
 	// A watchdog bound far longer than the stage timeout below: without the
 	// execCtx-deadline cap, the watchdog would still be waiting when this
-	// test's own assertions run.
-	withShortOperatorInstallWaitBound(t, 10*time.Second)
+	// test's own assertions run. The margins are wide (60s bound, 30s
+	// threshold) so a heavily loaded machine, where setup alone can take
+	// 10s+, still tells the 3s cap from the watchdog (#2212).
+	withShortOperatorInstallWaitBound(t, 60*time.Second)
 
 	workspace := openCodeWorkspace(t)
 	m := NewManager(workspace, adapters.NewOpenCodeAdapter())
@@ -198,10 +200,10 @@ func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 
 	opts := openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", runtime)
 	// Leave enough headroom for pre-dispatch probes under full-suite load while
-	// keeping the stage deadline well below the watchdog's 10-second bound.
+	// keeping the stage deadline well below the watchdog's 60-second bound.
 	opts.Timeout = 3 * time.Second
 
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
 
 	started := time.Now()
@@ -211,8 +213,8 @@ func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 	})
 	elapsed := time.Since(started)
 
-	if elapsed > 7*time.Second {
-		t.Fatalf("RunStage took %s; a 3s stage timeout must cap the watchdog's 10s bound, not the other way round", elapsed)
+	if elapsed > 30*time.Second {
+		t.Fatalf("RunStage took %s; a 3s stage timeout must cap the watchdog's 60s bound, not the other way round", elapsed)
 	}
 
 	combined := stderr

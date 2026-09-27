@@ -333,6 +333,13 @@ produce no cross-step finding. The comparison uses complete command output
 rather than trying to order versions; a different build is actionable even
 when version ordering would be ambiguous.
 
+Two cases are info, not "stale" (#2201). A build with no release version
+(`nightgauge dev`, or `dev+<vcs revision>` from a plain `go build`) cannot be
+compared, so the detail says "unversioned build (cannot compare)". And setting
+`NIGHTGAUGE_BINARY_ISOLATED=1` declares that the PATH binary is deliberately
+isolated from the extension bundle (for example a dogfood build that must not
+touch a live run), so a mismatch is noted in the detail instead of warned.
+
 #### The install record is the selection authority (#356)
 
 Step 5 does not rank version numbers, and neither does this check. VSCode

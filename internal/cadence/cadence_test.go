@@ -152,7 +152,7 @@ func TestRegistry_CoversThisRepositorysOwnAutomations(t *testing.T) {
 // TestMerge_AddsDeclaredAutomations covers the path a workspace actually uses
 // to register a sibling repo's cron.
 func TestMerge_AddsDeclaredAutomations(t *testing.T) {
-	got, errs := Merge([]ConfigAutomation{{
+	got, errs := Merge(coreScope, []ConfigAutomation{{
 		ID: "sibling-smoke", Interval: "24h", Repo: "acme/widget",
 		Workflow: "smoke.yml", TriggerEvent: "schedule",
 	}})
@@ -185,7 +185,7 @@ func TestMerge_AddsDeclaredAutomations(t *testing.T) {
 // TestMerge_AcceptsDayIntervals — a weekly cron is the common case and nobody
 // writes it as 168h.
 func TestMerge_AcceptsDayIntervals(t *testing.T) {
-	got, errs := Merge([]ConfigAutomation{{
+	got, errs := Merge(coreScope, []ConfigAutomation{{
 		ID: "weekly", Interval: "7d", Workflow: "w.yml",
 	}})
 	if len(errs) != 0 {
@@ -214,7 +214,7 @@ func TestMerge_RejectsMalformedEntriesLoudly(t *testing.T) {
 		{"negative interval", ConfigAutomation{ID: "x", Interval: "-24h", Workflow: "w.yml"}},
 	}
 	for _, c := range cases {
-		got, errs := Merge([]ConfigAutomation{c.entry})
+		got, errs := Merge(coreScope, []ConfigAutomation{c.entry})
 		if len(errs) == 0 {
 			t.Errorf("%s: accepted silently — the operator would believe it is watched", c.name)
 		}
@@ -227,7 +227,7 @@ func TestMerge_RejectsMalformedEntriesLoudly(t *testing.T) {
 // TestMerge_DeclaredEntryOverridesABuiltIn lets a workspace correct an interval
 // without forking the registry.
 func TestMerge_DeclaredEntryOverridesABuiltIn(t *testing.T) {
-	got, errs := Merge([]ConfigAutomation{{
+	got, errs := Merge(coreScope, []ConfigAutomation{{
 		ID: "release-workflow", Interval: "30d", Workflow: "release.yml",
 	}})
 	if len(errs) != 0 {
@@ -255,7 +255,7 @@ func TestMerge_DeclaredEntryOverridesABuiltIn(t *testing.T) {
 func TestRegistry_CronBackedAutomationsRequireAScheduleEvent(t *testing.T) {
 	// A config-declared cron must be able to demand a schedule event, or a
 	// workspace cannot express the distinction at all.
-	got, errs := Merge([]ConfigAutomation{{
+	got, errs := Merge(coreScope, []ConfigAutomation{{
 		ID: "weekly-audit", Interval: "7d", Workflow: "audit.yml", TriggerEvent: "schedule",
 	}})
 	if len(errs) != 0 {
@@ -301,5 +301,24 @@ func TestRoundAge_ReadsAsAnOperatorWouldWriteIt(t *testing.T) {
 		if got := roundAge(c.in); got != c.want {
 			t.Errorf("roundAge(%v) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+var coreScope = Scope{Repo: CoreRepo, Autonomous: true}
+
+// TestMerge_ConsumerRepoGetsNoBuiltins is #2199's verification: core's own
+// automations are not inherited by a consumer repo.
+func TestMerge_ConsumerRepoGetsNoBuiltins(t *testing.T) {
+	got, errs := Merge(Scope{Repo: "acme/tiny"}, nil)
+	if len(errs) != 0 || len(got) != 0 {
+		t.Fatalf("Merge for consumer repo = %+v, %v; want empty", got, errs)
+	}
+	got, _ = Merge(Scope{Repo: "acme/tiny", Autonomous: true}, nil)
+	if len(got) != 1 || got[0].ID != "autonomous-loop" {
+		t.Fatalf("autonomous consumer repo = %+v; want only autonomous-loop", got)
+	}
+	got, _ = Merge(Scope{Repo: "Nightgauge/Nightgauge"}, nil)
+	if len(got) != 1 || got[0].ID != "release-workflow" {
+		t.Fatalf("core repo without autonomous = %+v; want only release-workflow", got)
 	}
 }
