@@ -1,0 +1,31 @@
+name: CLA (merge queue)
+
+# Merge-queue pass-through for the required `cla` context.
+#
+# The CLA decision belongs to the pull request: cla.yml (pull_request_target +
+# issue_comment) runs cla-check.mjs, which posts the `cla` commit status on the
+# PR head, and the ruleset will not let a PR enter the merge queue until that
+# status passes. The merge-group commit (gh-readonly-queue/main/*) carries no
+# new signal to evaluate, but every required context must report on it, so
+# this workflow reports `cla` there.
+#
+# It lives in its own file, triggered ONLY by merge_group, on purpose: a
+# merge_group-only job inside cla.yml would appear as a SKIPPED check run named
+# `cla` on every pull request, and GitHub counts a skipped check run as a
+# passing required check. That would satisfy `cla` without a signature.
+#
+# No permissions, no secrets, no checkout: it executes no repository code.
+on:
+  merge_group:
+    types: [checks_requested]
+
+permissions: {}
+
+jobs:
+  cla:
+    name: cla
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: CLA already verified on every pull request in this group
+        run: echo "cla is decided on each pull request before it can enter the queue; ${GITHUB_REF} passes through."

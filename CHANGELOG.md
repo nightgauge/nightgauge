@@ -25,6 +25,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Required checks run on `merge_group`, so `main` can use a merge queue.**
+  Every workflow that produces a required status check on `main` now also
+  triggers on `merge_group` and reports its context on the queue's
+  `gh-readonly-queue/main/*` commit. `ci.yml`'s change-class gate and
+  `adapter-canary.yml` diff `merge_group.base_sha` against the group commit,
+  and a new `merge_group`-only `cla-merge-queue.yml` reports the `cla` context
+  there without permissions, secrets or a checkout. The ruleset is unchanged;
+  see `docs/GIT_WORKFLOW.md` § Merge queue readiness. The pipeline's own merge
+  path must enqueue before the queue is enabled (#2214).
+
 - **The planning exploration budget counts shell exploration by default**
   (#2190). On a budgeted feature-planning stage a `bash` call now counts
   unless it clearly writes (a redirect to a file, `tee`, `mkdir`, `cp`, `mv`,

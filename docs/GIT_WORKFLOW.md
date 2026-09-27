@@ -236,6 +236,40 @@ repository defaults to the checkout's `origin` remote; pass `--repo
 <owner/repo>` to check another. The script contains nothing specific to this
 repository, so every workspace repository carries a byte-identical copy.
 
+#### Merge queue readiness
+
+Every workflow that produces a required check on `main` also runs on
+`merge_group` (`types: [checks_requested]`), so `main` can require GitHub's
+merge queue instead of the strict up-to-date policy. In the queue the required
+checks run on the temporary `gh-readonly-queue/main/*` commit, which is the
+commit that then lands on `main`:
+
+- `ci.yml`'s change-class gate classifies `merge_group.base_sha..head_sha`, the
+  group's cumulative diff against `main`, exactly as it classifies a pull
+  request's base and head.
+- `adapter-canary.yml` treats `merge_group` like `pull_request`: pinned CLI
+  versions, the manifest diff against `merge_group.base_sha`, and never the
+  drift-issue `report` job.
+- `cla` is decided on the pull request (a PR cannot enter the queue without a
+  passing `cla`), so `cla-merge-queue.yml` only reports the `cla` context on the
+  group commit. It is a separate, `merge_group`-only workflow with no
+  permissions, no secrets and no checkout. It must not live in `cla.yml`: a
+  skipped job named `cla` on a pull request would count as a passing `cla`.
+- Concurrency groups key non-PR runs on `github.run_id`, so queue runs never
+  cancel each other.
+
+Post-merge verification needs no change for a queued merge. The landed commit
+is the group commit, so when its tree differs from the PR head's (another PR
+landed first), the fallback rule above applies and finds every required check
+on the merge commit itself, from its `merge_group` run.
+
+The pipeline's own merge path (`pr-merge` stage: `gh pr merge --squash`, and
+the GraphQL `mergePullRequest` callers) predates the queue. A direct merge is
+rejected on a queue-protected branch, and an enqueued PR is not `MERGED` until
+the group's checks pass, so enabling the queue requires the pipeline to enqueue
+and wait. See [PR_MERGE_STAGE.md](PR_MERGE_STAGE.md) and #2214
+before switching the ruleset.
+
 #### Why this is a script (#1038)
 
 The idiom here used to be a one-liner that counted non-green check-runs and

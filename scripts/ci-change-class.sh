@@ -40,8 +40,8 @@
 # ambient environment instead, and classified a diff it should have refused to
 # fast-track. The workflow always passes NG_EVENT_NAME explicitly.
 #   NG_EVENT_NAME    event name (github.event_name)
-#   NG_BASE_SHA      base commit of the PR (github.event.pull_request.base.sha)
-#   NG_HEAD_SHA      head commit of the PR (github.event.pull_request.head.sha)
+#   NG_BASE_SHA      base commit (pull_request.base.sha, or merge_group.base_sha)
+#   NG_HEAD_SHA      head commit (pull_request.head.sha, or merge_group.head_sha)
 #   NIGHTGAUGE_BIN   optional prebuilt binary; built from ./cmd/nightgauge if unset
 #   GITHUB_OUTPUT    where to write outputs; stdout when unset (local runs/tests)
 #
@@ -94,8 +94,11 @@ event="${NG_EVENT_NAME:-}"
 base="${NG_BASE_SHA:-}"
 head="${NG_HEAD_SHA:-}"
 
-if [ "$event" != "pull_request" ]; then
-  fail_open "event=${event:-<unset>} is not a pull_request — running the full suite (merge-skew / environment-drift coverage)"
+# merge_group is classified exactly like pull_request: its base/head are the
+# queue's base (main) and the temporary merge-group commit, so the diff is the
+# cumulative change of every PR in the group, which is what lands on main.
+if [ "$event" != "pull_request" ] && [ "$event" != "merge_group" ]; then
+  fail_open "event=${event:-<unset>} is not a pull_request or merge_group — running the full suite (merge-skew / environment-drift coverage)"
 fi
 
 [ -n "$base" ] || fail_open "no base SHA supplied — running the full suite"
