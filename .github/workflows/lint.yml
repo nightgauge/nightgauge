@@ -107,6 +107,11 @@ jobs:
         run: bash scripts/test-marketplace-channel.sh
       - name: Release channel verification regression suite
         run: bash scripts/test-verify-release-channels.sh
+      # adapter-canary.yml's own regression suite (#2229). It ran only in
+      # scripts/ci-local.sh, so the merge-queue change to adapter-canary.yml
+      # (#2217) broke two of its assertions without any CI signal (#2228).
+      - name: Adapter canary regression suite
+        run: bash scripts/test-adapter-canary.sh
       - name: Nonexistent-workflow-reference gate
         run: python3 scripts/check-workflow-refs.py
       # Proves the gate below still FAILS CLOSED rather than passing vacuously
