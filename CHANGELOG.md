@@ -16,6 +16,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **The planning exploration budget no longer refuses knowledge-base reads**
+  (#2193). The OpenCode adapter hands the plugin the workspace's
+  `.nightgauge/knowledge` directory (`NIGHTGAUGE_OPENCODE_KNOWLEDGE_DIR`), and
+  reads under it, or under any `.nightgauge/knowledge/` directory, are exempt,
+  so feature-planning's knowledge-base phase can read the main checkout's PRD
+  and decisions from a pipeline worktree.
+
 - **The planning exploration budget counts shell exploration by default**
   (#2190). On a budgeted feature-planning stage a `bash` call now counts
   unless it clearly writes (a redirect to a file, `tee`, `mkdir`, `cp`, `mv`,

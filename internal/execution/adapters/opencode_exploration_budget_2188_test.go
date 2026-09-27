@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -51,5 +52,16 @@ func TestOpenCodeConfigCarriesExplorationBudget2188(t *testing.T) {
 		if built.ExplorationBudget != want {
 			t.Errorf("%s: ExplorationBudget = %d, want %d", stage, built.ExplorationBudget, want)
 		}
+	}
+}
+
+// TestOpenCodeKnowledgeDir2193 proves the plugin is handed the workspace
+// root's knowledge base, absolute, and nothing for no root.
+func TestOpenCodeKnowledgeDir2193(t *testing.T) {
+	if got := openCodeKnowledgeDir(""); got != "" {
+		t.Errorf("no root: %q", got)
+	}
+	if got, want := openCodeKnowledgeDir("/w/repo"), filepath.Join("/w/repo", ".nightgauge", "knowledge"); got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

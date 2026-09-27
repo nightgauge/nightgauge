@@ -97,3 +97,46 @@ func TestExplorationBudget2188(t *testing.T) {
 		}
 	}
 }
+
+// TestExplorationBudgetExemptsKnowledgeBase2193 proves knowledge-base reads
+// outside the worktree (the main checkout's .nightgauge/knowledge, run 18)
+// and under the configured knowledge directory are never counted or refused.
+func TestExplorationBudgetExemptsKnowledgeBase2193(t *testing.T) {
+	node := requireNode(t)
+	entry, err := Write(filepath.Join(t.TempDir(), "plugin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	gates := filepath.Join(filepath.Dir(entry), "nightgauge", "gates.js")
+	driver := filepath.Join(t.TempDir(), "driver.mjs")
+	if err := os.WriteFile(driver, []byte(budgetDriver), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	calls := [][]any{
+		{"read", map[string]any{"filePath": "internal/a.go"}}, // 1: spends the budget
+		{"read", map[string]any{"filePath": "/Users/u/Repositories/nightgauge/nightgauge/.nightgauge/knowledge/features/2087-doctor/PRD.md"}},
+		{"read", map[string]any{"filePath": "/Users/u/Repositories/nightgauge/nightgauge/.nightgauge/knowledge/features/2087-doctor/decisions.md"}},
+		{"bash", map[string]any{"command": "cat /Users/u/Repositories/nightgauge/nightgauge/.nightgauge/knowledge/INDEX.md"}},
+		{"read", map[string]any{"filePath": "/kb/custom/features/2087/PRD.md"}},
+		{"read", map[string]any{"filePath": "/kb/other/PRD.md"}},          // refused
+		{"read", map[string]any{"filePath": "/elsewhere/knowledge/x.md"}}, // refused
+	}
+	raw, _ := json.Marshal(calls)
+	cmd := exec.Command(node, driver)
+	cmd.Env = append(removeEnv(removeEnv(os.Environ(), EnvExplorationBudget), EnvKnowledgeDir),
+		"NG_GATES_PATH="+gates, "NG_CALLS="+string(raw), EnvExplorationBudget+"=1", EnvKnowledgeDir+"=/kb/custom")
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("driver output %q: %v", out, err)
+	}
+	for i, r := range got {
+		refused := r != "ok"
+		if want := i >= 5; refused != want {
+			t.Errorf("call %d %v: got %q, refused want %v", i, calls[i], r, want)
+		}
+	}
+}
