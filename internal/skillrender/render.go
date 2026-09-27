@@ -120,6 +120,11 @@ type Options struct {
 	// DefaultIncludeBudget; a negative value supplies none, leaving every
 	// read directive as written.
 	IncludeBudget int
+	// SupplyIncludes makes a compact render supply its phase includes the
+	// way a full render always does. Off by default: a compact profile must
+	// fit windows the supplied bytes would overflow, so only a caller that
+	// re-checks the fit (the scheduler's local-endpoint branch) sets it.
+	SupplyIncludes bool
 }
 
 // Fragment is one overlay file that contributed to the composed block.
@@ -459,7 +464,7 @@ func Render(opts Options) (*Result, error) {
 	// and so the injection point is computed against the directives that are
 	// still present — expansion erases them.
 	body = ExpandIncludes(body, skillDir)
-	if res.Profile != ProfileCompact {
+	if res.Profile != ProfileCompact || opts.SupplyIncludes {
 		body, res.SuppliedIncludes = SupplyPhaseIncludes(body, skillDir, opts.IncludeBudget)
 	}
 	res.Content = RewriteSkillRelativePaths(body, opts.Stage, skillDir)

@@ -91,6 +91,29 @@ func TestPlanningPromptSuppliesItsIncludesWithinBudget2178(t *testing.T) {
 	}
 }
 
+// TestCompactSupplyIncludesOptIn: a compact render with SupplyIncludes set
+// supplies the same planning includes a full render does, leaves no
+// read-now directive for them, and still fits a local 131072-token window,
+// which is the check the scheduler's local-endpoint branch makes before
+// using it.
+func TestCompactSupplyIncludesOptIn(t *testing.T) {
+	root := realSkillsRoot(t)
+	res := mustRender(t, Options{Stage: "feature-planning", SkillsRoots: []string{root}, Profile: ProfileCompact, SupplyIncludes: true})
+	if res.Profile != ProfileCompact {
+		t.Fatalf("Profile = %q, want compact", res.Profile)
+	}
+	want := []string{"feedback-and-context.md", "pattern-and-docs.md", "knowledge-recall.md", "plan-and-enrichment.md"}
+	if strings.Join(res.SuppliedIncludes, ",") != strings.Join(want, ",") {
+		t.Errorf("supplied = %v, want %v", res.SuppliedIncludes, want)
+	}
+	if m := phaseReadNowRE.FindString(res.Content); m != "" {
+		t.Errorf("a phase still directs a read of a supplied include: %q", m)
+	}
+	if fit := Fit("feature-planning", res.Content, 131072); !fit.Fits {
+		t.Errorf("compact+includes does not fit a 131072 window: %+v", fit)
+	}
+}
+
 // TestEveryStageSuppliesWithinDefaultBudget2178 bounds what the default
 // budget adds to each pipeline stage's prompt.
 func TestEveryStageSuppliesWithinDefaultBudget2178(t *testing.T) {
