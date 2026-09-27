@@ -266,43 +266,13 @@ const EXPLORATION_BUDGET_ENV = "NIGHTGAUGE_OPENCODE_EXPLORATION_BUDGET";
 // past the budget.
 const EXPLORATION_BUDGET_MARKER = "[nightgauge-gate:exploration-budget]";
 
-// READ_ONLY_COMMANDS are the bash commands that only read. A bash call
-// counts as exploration when every command in its pipeline/list is one of
-// these and it redirects nothing to a file.
-const READ_ONLY_COMMANDS = new Set([
-  "ls",
-  "cat",
-  "grep",
-  "egrep",
-  "rg",
-  "find",
-  "head",
-  "tail",
-  "wc",
-  "tree",
-  "file",
-  "stat",
-  "less",
-  "more",
-  "sed",
-  "awk",
-  "cut",
-  "sort",
-  "uniq",
-  "pwd",
-  "echo",
-  "git",
-]);
-const READ_ONLY_GIT = new Set([
-  "grep",
-  "log",
-  "show",
-  "ls-files",
-  "diff",
-  "status",
-  "blame",
-  "ls-tree",
-]);
+// WRITE_COMMANDS mark a bash call as a write (#2190): a call that runs one
+// of these is never counted against the exploration budget.
+const WRITE_COMMANDS = new Set(["tee", "mkdir", "cp", "mv"]);
+
+// MARKER_COMMANDS only print or move the shell (#2190): a bash call whose
+// every command is one of these is phase-marker output, not exploration.
+const MARKER_COMMANDS = new Set(["printf", "echo", "cd", "true", ":"]);
 
 // explorationCount is this process's count of budgeted calls. One opencode
 // process runs one stage, so the count is the stage's.
@@ -313,48 +283,72 @@ export function resetExplorationCount() {
   explorationCount = 0;
 }
 
-// isExemptPath reports whether p is skill-directed or pipeline context:
-// any path with a "skills" segment, or one under the worktree's own
-// .nightgauge/ directory. Such reads do not count against the budget.
+// isExemptPath reports whether p is skill-directed or pipeline context
+// (#2190): a path through a skills/_shared/, _includes/ or *feature-planning/
+// directory, or one under the worktree's own .nightgauge/ directory. Other
+// skill sources (skills/nightgauge-*/ in the core repository) are code under
+// exploration and count.
 export function isExemptPath(p, cwd) {
   if (typeof p !== "string" || p === "") return false;
   const abs = path.resolve(cwd, p);
-  if (abs.split(path.sep).includes("skills")) return true;
+  const segs = abs.split(path.sep);
+  const dirs = segs.slice(0, -1);
+  for (let i = 0; i < dirs.length; i++) {
+    if (dirs[i] === "_includes" || dirs[i].endsWith("feature-planning")) return true;
+    if (dirs[i] === "skills" && dirs[i + 1] === "_shared") return true;
+  }
   const rel = path.relative(cwd, abs);
   if (rel.startsWith("..") || path.isAbsolute(rel)) return false;
   return rel.split(path.sep)[0] === ".nightgauge";
 }
 
-// readOnlyBashPaths returns the path-like arguments of a read-only bash
-// command, or null when the command may write or run something else.
-function readOnlyBashPaths(command) {
-  if (typeof command !== "string" || command.trim() === "") return null;
-  if (/[`]|\$\(|(^|[^0-9&])>(?!&)|>>/.test(command.replace(/2>\s*\/dev\/null|2>&1/g, "")))
-    return null;
-  const paths = [];
+// bashWritesFile reports whether command clearly writes a file: a redirect
+// to a path other than /dev/null (a heredoc into a file included), or a
+// tee, mkdir, cp or mv.
+function bashWritesFile(command, segments) {
+  const stripped = command.replace(/[0-9&]?>>?\s*\/dev\/null|[0-9]?>&[0-9-]/g, "");
+  if (/>>?\s*[^\s&|;]/.test(stripped)) return true;
+  return segments.some((words) => WRITE_COMMANDS.has(words[0]));
+}
+
+// bashSegments splits command into its commands' words, skipping leading
+// VAR=value assignments.
+function bashSegments(command) {
+  const out = [];
   for (const seg of command.split(/\|\||&&|[|;\n]/)) {
     const words = seg
       .trim()
       .split(/\s+/)
       .filter((w) => w !== "");
-    if (words.length === 0) continue;
     let i = 0;
     while (i < words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[i])) i++;
-    if (words[i] === "cd") continue;
-    const cmd = words[i];
-    if (!READ_ONLY_COMMANDS.has(cmd)) return null;
-    const rest = words.slice(i + 1);
-    if (cmd === "sed" && !rest.includes("-n")) return null;
-    if (cmd === "sed" && rest.some((w) => /^-i/.test(w))) return null;
-    if (cmd === "find" && rest.some((w) => /^-(exec|execdir|delete|ok|fprint)/.test(w)))
-      return null;
-    if (cmd === "git") {
-      const sub = rest.find((w) => !w.startsWith("-"));
-      if (!READ_ONLY_GIT.has(sub)) return null;
-    }
-    for (const w of rest) {
-      const t = w.replace(/^['"]|['"]$/g, "");
-      if (!t.startsWith("-") && (t.includes("/") || t.startsWith("."))) paths.push(t);
+    if (i < words.length) out.push(words.slice(i));
+  }
+  return out;
+}
+
+// bashExplorationPaths returns the path-like arguments of a bash call that
+// counts as exploration, or null when it is clearly not exploration (#2190):
+// a write, or only phase-marker output. Anything uncertain (command
+// substitution, loops, jq, python -c, ...) counts.
+function bashExplorationPaths(command) {
+  if (typeof command !== "string" || command.trim() === "") return null;
+  const segments = bashSegments(command);
+  if (segments.length === 0) return null;
+  if (bashWritesFile(command, segments)) return null;
+  if (
+    !/[`]|\$\(/.test(command) &&
+    segments.every(
+      (w) =>
+        MARKER_COMMANDS.has(w[0]) && (w[0] === "cd" || !w.slice(1).some((a) => a.includes("/")))
+    )
+  )
+    return null;
+  const paths = [];
+  for (const words of segments) {
+    for (const w of words.slice(1)) {
+      const t = w.replace(/^['"]+|['"]+$/g, "");
+      if (!t.startsWith("-") && t.includes("/")) paths.push(t);
     }
   }
   return paths;
@@ -371,7 +365,7 @@ function explorationTarget(tool, args) {
     case "list":
       return [typeof args.path === "string" && args.path !== "" ? args.path : "."];
     case "bash":
-      return readOnlyBashPaths(args.command);
+      return bashExplorationPaths(args.command);
     default:
       return null;
   }
