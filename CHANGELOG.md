@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **The feature-planning exploration budget is enforced on OpenCode** (#2188).
+  On a local/self-hosted endpoint the Nightgauge OpenCode plugin counts
+  feature-planning's exploration calls (`read`, `grep`, `glob`, `list`, and
+  read-only `bash` such as `ls`, `cat`, `rg`, `find`, `sed -n`) and, past the
+  budget, refuses more with an error telling the model to write the plan.
+  Reads of skill files and `.nightgauge/` context are not counted; writes and
+  edits are never refused. The budget is 12 by default and set with
+  `opencode.tool_output.planning_exploration_budget` (`0` turns it off).
+
 - **Feature-planning's exploration is bounded on slow local models** (#2186).
   A dispatch on a self-hosted/local OpenCode endpoint now prefers the stage's
   compact profile even when the full render fits, because prefill cost

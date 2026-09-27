@@ -153,6 +153,9 @@ const (
 	// EnvReadMaxLines is the most lines one read returns (#2178): gates.js
 	// gives a read that names no limit, or a larger one, this limit.
 	EnvReadMaxLines = "NIGHTGAUGE_OPENCODE_READ_MAX_LINES"
+	// EnvExplorationBudget is how many exploration tool calls the stage may
+	// make before gates.js refuses more (#2188); 0 or unset is no budget.
+	EnvExplorationBudget = "NIGHTGAUGE_OPENCODE_EXPLORATION_BUDGET"
 	// EnvOperatorInstallRisk names, when set, the operator-owned OpenCode
 	// config directory ($HOME/.opencode, or an inherited OPENCODE_CONFIG_DIR)
 	// this run's config puts at risk of OpenCode's own @opencode-ai/plugin

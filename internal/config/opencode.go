@@ -112,6 +112,12 @@ type OpenCodeToolOutputBounds struct {
 type OpenCodeToolOutput struct {
 	OpenCodeToolOutputBounds `yaml:",inline" json:",inline"`
 	Stages                   map[string]OpenCodeToolOutputBounds `yaml:"stages,omitempty" json:"stages,omitempty"`
+	// PlanningExplorationBudget is how many exploration tool calls (read,
+	// grep, glob, list, read-only bash) feature-planning may make on a local
+	// or self-hosted endpoint before the Nightgauge plugin refuses more
+	// (#2188). Unset keeps the default (12); 0 turns the budget off. Reads
+	// of skill files and .nightgauge/ pipeline context do not count.
+	PlanningExplorationBudget *int `yaml:"planning_exploration_budget,omitempty" json:"planning_exploration_budget,omitempty"`
 }
 
 // OpenCodeLimit is a model server's token limits.
