@@ -8,6 +8,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- Phase 4.5's CI scaffold runs the repository's own gate scripts
+  (`npm run typecheck|lint|test|build`, whichever exist), pins actions to
+  commit SHAs, and takes `--runs-on`; the summary prints the emitted steps
+  (issue 2206).
+
 ### Added
 
 - The generated `docs/AGENT_GUIDANCE.md` has a `## Decisions and knowledge`

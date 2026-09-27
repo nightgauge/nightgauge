@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build-and-test:
-    runs-on: <%.RunsOn%>
+    runs-on: self-hosted
     timeout-minutes: 15
 
     permissions:
@@ -20,18 +20,22 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@<%.CheckoutSHA%> # <%.CheckoutTag%>
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Node.js
-        uses: actions/setup-node@<%.SetupNodeSHA%> # <%.SetupNodeTag%>
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: '<%.NodeVersion%>'
+          node-version: '22'
           cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
-<%- range .Steps%>
 
-      - name: <%.Name%>
-        run: npm run <%.Script%>
-<%- end%>
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build

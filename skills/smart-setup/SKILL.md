@@ -730,8 +730,14 @@ fi
 **If user confirms**, dispatch the selection to the deterministic
 `nightgauge setup scaffold-tooling` Go verb. The verb owns brownfield-
 safety (`[ ! -f ]` skip), Node-version detection from `package.json`
-`engines.node`, devDep probing for vitest/eslint/prettier, and byte-for-
-byte template emission — see
+`engines.node`, devDep probing for vitest/eslint/prettier, and template
+emission. The CI workflow gets one `npm run <script>` step per gate script
+the repository's `package.json` defines (`typecheck`, `lint`, `test`,
+`build`) with no appended arguments, SHA-pinned `uses:` refs, and the
+runner from `--runs-on` (pass `--runs-on self-hosted` when the
+organization's private repositories must use self-hosted runners). The
+verb warns when the repository's Actions policy would reject the workflow
+— see
 [docs/GO_BINARY.md → Setup Operations](../../docs/GO_BINARY.md#setup-operations)
 for the schema, exit codes, and template provenance.
 
@@ -770,6 +776,7 @@ else
           else
             "  ✗ \(.path) — \(.outcome)\(if .reason != "" then ": " + .reason else "" end)"
           end),
+        (if .runs_on != "" then "  ci: runs-on=\(.runs_on) steps=\(.ci_steps | join(","))" else empty end),
         (.warnings[]? | "  ! \(.)")
       '
 
