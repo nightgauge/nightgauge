@@ -167,6 +167,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **An auto-recovery commit can no longer land on the default branch or sweep
+  in an operator's uncommitted edits (#1907).** The uncommitted-work rescue
+  now refuses the repository's primary checkout, a detached `HEAD`, and the
+  default branch, and names the dirty paths it left untouched. A run that
+  failed before getting its own worktree used to fall back to the operator's
+  checkout, commit their unrelated changes onto `main`, and rely on branch
+  protection to stop the push.
+
 - **A stage can no longer escape its stage budget or cost cap** (#2016). A
   stdout line over 1 MiB, such as a huge tool output, stopped the Claude,
   Codex, Gemini, Grok and Copilot readers for the rest of the stage, so no

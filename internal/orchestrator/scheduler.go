@@ -4027,6 +4027,15 @@ func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 	if hasUnmergedIndex(worktreePath) {
 		return outcome, fmt.Errorf("worktree has an unmerged index (a merge or rebase is stopped at a conflict) — refusing to stage it, which would collapse the conflict stages and commit conflict markers")
 	}
+	// A recovery commit may only land on the run's own feature branch in the
+	// run's own linked worktree (#1907). The fallback that resolved a run with
+	// no recorded worktree to the operator's primary checkout committed that
+	// operator's unrelated uncommitted edits straight onto `main`; only the
+	// forge's branch protection stopped the push. Both properties are checked
+	// here, at the single commit point, so no caller can route around them.
+	if err := recoveryCommitTargetRefusal(worktreePath); err != nil {
+		return outcome, err
+	}
 	// Read the tree BEFORE staging: `git add -A` collapses the distinction
 	// this rescue turns on. A staged deletion and an untracked scaffold look
 	// alike in the index, and only one of them is work.
@@ -4127,6 +4136,53 @@ func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 		log.Printf("#%d: recovery commit push failed (non-fatal): %v", issueNumber, err)
 	}
 	return outcome, nil
+}
+
+// recoveryCommitTargetRefusal returns a non-nil error when worktreePath is not
+// a tree the pipeline may commit a rescue into (#1907):
+//
+//   - the repository's primary checkout. Pipeline runs get a dedicated linked
+//     worktree, so everything uncommitted in one is the run's own work; the
+//     primary checkout is shared with the operator, whose unrelated edits a
+//     rescue there cannot tell apart from the stage's and would sweep in. The
+//     refusal names the dirty paths so the operator sees what was left alone.
+//   - a detached HEAD or the default branch. A recovery commit belongs on the
+//     run's feature branch; without one there is nowhere safe to put it.
+func recoveryCommitTargetRefusal(worktreePath string) error {
+	gitDir, errA := exec.Command("git", "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-dir").Output()
+	commonDir, errB := exec.Command("git", "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if errA != nil || errB != nil {
+		return fmt.Errorf("cannot resolve the git directory of %s — refusing a recovery commit", worktreePath)
+	}
+	if filepath.Clean(strings.TrimSpace(string(gitDir))) == filepath.Clean(strings.TrimSpace(string(commonDir))) {
+		return fmt.Errorf("%s is the repository's primary checkout, not a pipeline worktree — refusing a recovery commit that could absorb the operator's uncommitted changes; dirty paths left untouched: %s",
+			worktreePath, strings.Join(dirtyPaths(worktreePath), ", "))
+	}
+	branch, err := exec.Command("git", "-C", worktreePath, "symbolic-ref", "--quiet", "--short", "HEAD").Output()
+	if err != nil {
+		return fmt.Errorf("HEAD in %s is detached — refusing a recovery commit that no feature branch would carry", worktreePath)
+	}
+	name := strings.TrimSpace(string(branch))
+	if name == execution.DetectDefaultBranch(worktreePath) || name == "main" || name == "master" {
+		return fmt.Errorf("HEAD in %s is on the default branch %q — refusing a recovery commit; it belongs on the run's feature branch", worktreePath, name)
+	}
+	return nil
+}
+
+// dirtyPaths lists the paths `git status --porcelain` reports, for naming in a
+// refusal. Best-effort: nil when git cannot answer.
+func dirtyPaths(worktreePath string) []string {
+	out, err := exec.Command("git", "-C", worktreePath, "status", "--porcelain", "--untracked-files=all").Output()
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if len(line) > 3 {
+			paths = append(paths, line[3:])
+		}
+	}
+	return paths
 }
 
 // schedulerTerminalOutcome derives the terminal outcome string the Go

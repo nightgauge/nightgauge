@@ -34,7 +34,11 @@ func recoverRepo(t *testing.T) string {
 	}
 	run("add", ".")
 	run("commit", "-m", "base")
-	return dir
+	// A rescue refuses the primary checkout and the default branch (#1907):
+	// hand it a linked worktree on a feature branch, as a pipeline run would.
+	wt := filepath.Join(t.TempDir(), "run")
+	run("worktree", "add", "-b", "fix/test-run", wt)
+	return wt
 }
 
 func runRecover(t *testing.T, args ...string) (string, error) {
