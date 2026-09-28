@@ -373,6 +373,8 @@ export interface TokenEfficiencyConfig {
     cacheMissRateThreshold?: number;
     toolCallsPercentile?: number;
     contextUtilizationMinimum?: number;
+    /** Median utilization at/above which a stage is flagged as near its context window (#2017). */
+    contextNearWindowThreshold?: number;
   };
   minSamplesForOutliers?: number;
   dateRange?: { since?: string; until?: string };

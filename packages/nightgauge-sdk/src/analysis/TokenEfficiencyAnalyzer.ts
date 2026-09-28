@@ -40,6 +40,7 @@ interface ResolvedThresholds {
   cacheMissRateThreshold: number;
   toolCallsPercentile: number;
   contextUtilizationMinimum: number;
+  contextNearWindowThreshold: number;
 }
 
 const DEFAULT_THRESHOLDS: ResolvedThresholds = {
@@ -48,6 +49,7 @@ const DEFAULT_THRESHOLDS: ResolvedThresholds = {
   cacheMissRateThreshold: 0.5,
   toolCallsPercentile: 90,
   contextUtilizationMinimum: 0.3,
+  contextNearWindowThreshold: 0.8,
 };
 
 const DEFAULT_MIN_SAMPLES = 5;
@@ -63,9 +65,6 @@ const ESTIMATED_TOKENS_PER_FILE_READ = 500;
 
 /** Estimated token overhead per tool call (request/response framing) */
 const ESTIMATED_TOKENS_PER_TOOL_CALL = 200;
-
-/** Discount factor for context utilization savings (conservative estimate) */
-const UTILIZATION_SAVINGS_FACTOR = 0.5;
 
 /** Input-to-output ratio above which context over-injection is likely */
 const HIGH_INPUT_OUTPUT_RATIO = 10;
@@ -95,6 +94,9 @@ export class TokenEfficiencyAnalyzer {
       contextUtilizationMinimum:
         config?.thresholds?.contextUtilizationMinimum ??
         DEFAULT_THRESHOLDS.contextUtilizationMinimum,
+      contextNearWindowThreshold:
+        config?.thresholds?.contextNearWindowThreshold ??
+        DEFAULT_THRESHOLDS.contextNearWindowThreshold,
     };
     this.minSamplesForOutliers = config?.minSamplesForOutliers ?? DEFAULT_MIN_SAMPLES;
     this.defaultCostRate = config?.defaultCostRate ?? DEFAULT_COST_RATE;
@@ -494,7 +496,19 @@ export class TokenEfficiencyAnalyzer {
   }
 
   /**
-   * Category 5: Flag stages using very little of available context window.
+   * Category 5: Context window utilization signals (Issue #2017).
+   *
+   * Two independent, informational-only signals, neither of which books
+   * `wastedTokens` or `estimatedSavingsUsd` (a stage using little of a large
+   * hosted window is not waste — most OpenCode stages sit far below 30%
+   * utilization by design, e.g. 12k of a 131k window):
+   *
+   * - Near-window: a stage group whose *median* utilization is at or above
+   *   `contextNearWindowThreshold` (default 0.8) is running close to the
+   *   model's context limit and risks truncation or a mid-run failure.
+   * - Low utilization: a stage group whose *mean* utilization is below
+   *   `contextUtilizationMinimum` (default 0.3) is reported for visibility
+   *   only; it no longer contributes to `overallEfficiencyScore`.
    */
   detectContextWindowUtilization(records: ExecutionHistoryRecord[]): WastePattern[] {
     const extended = records.filter(
@@ -515,52 +529,70 @@ export class TokenEfficiencyAnalyzer {
 
     const patterns: WastePattern[] = [];
     const minUtilization = this.thresholds.contextUtilizationMinimum;
+    const nearWindowThreshold = this.thresholds.contextNearWindowThreshold;
 
     for (const [stage, stageRecords] of stageGroups) {
-      const avgUtilization =
-        stageRecords.reduce((sum, r) => sum + (r.contextWindowUtilization ?? 0), 0) /
-        stageRecords.length;
+      const utilizations = stageRecords.map((r) => r.contextWindowUtilization ?? 0);
+      const avgUtilization = utilizations.reduce((sum, u) => sum + u, 0) / utilizations.length;
+      const medianUtilization = TokenEfficiencyAnalyzer.percentile(utilizations, 50);
+      const model = TokenEfficiencyAnalyzer.mostCommonModel(stageRecords);
 
-      if (avgUtilization >= minUtilization) continue;
+      if (medianUtilization >= nearWindowThreshold) {
+        patterns.push({
+          category: "context-window-utilization",
+          severity:
+            medianUtilization >= 0.95 ? "critical" : medianUtilization >= 0.9 ? "high" : "medium",
+          title: `${stage} running near its context window limit on ${model ?? "an unknown model"}`,
+          description: `Median context window utilization is ${(medianUtilization * 100).toFixed(1)}% (threshold: ${(nearWindowThreshold * 100).toFixed(0)}%) across ${stageRecords.length} records for ${stage} on ${model ?? "an unknown model"}.`,
+          affectedStages: [stage],
+          wastedTokens: 0,
+          estimatedSavingsUsd: 0,
+          recommendation:
+            "This stage is close to its context window limit. Consider a model with a larger window, trimming the prompt, or splitting the stage's work.",
+          evidence: {
+            medianUtilization: Math.round(medianUtilization * 1000) / 1000,
+            avgUtilization: Math.round(avgUtilization * 1000) / 1000,
+            recordCount: stageRecords.length,
+            model,
+          },
+          action: {
+            type: "info-only",
+            configPath: "",
+            suggestedValue: null,
+            label: "Review context window headroom",
+          },
+        });
+      }
 
-      // Low utilization on expensive models is higher severity
-      const avgCost = stageRecords.reduce((sum, r) => sum + r.costUsd, 0) / stageRecords.length;
+      if (avgUtilization < minUtilization) {
+        const avgCost = stageRecords.reduce((sum, r) => sum + r.costUsd, 0) / stageRecords.length;
 
-      // Waste = using an expensive model slot when a cheaper one would suffice
-      // Estimated savings: if avg utilization is 15% on a $0.50 stage,
-      // a proportionally cheaper model could save ~50%
-      const potentialSavingsRatio = 1 - avgUtilization / minUtilization;
-      const totalCost = stageRecords.reduce((sum, r) => sum + r.costUsd, 0);
-      const savingsUsd =
-        totalCost * Math.max(0, potentialSavingsRatio) * UTILIZATION_SAVINGS_FACTOR;
-      const wastedTokens = Math.round(
-        stageRecords.reduce((sum, r) => sum + r.inputTokens, 0) * (1 - avgUtilization)
-      );
-
-      patterns.push({
-        category: "context-window-utilization",
-        severity: TokenEfficiencyAnalyzer.classifySeverity(1 - avgUtilization, savingsUsd),
-        title: `Low context window utilization in ${stage}`,
-        description: `Average context window utilization is ${(avgUtilization * 100).toFixed(1)}% (minimum: ${(minUtilization * 100).toFixed(0)}%) across ${stageRecords.length} records.`,
-        affectedStages: [stage],
-        wastedTokens,
-        estimatedSavingsUsd: savingsUsd,
-        recommendation:
-          avgCost > EXPENSIVE_MODEL_COST_THRESHOLD
-            ? "Low utilization on an expensive model. Consider using a smaller, cheaper model for this stage."
-            : "Low context utilization detected. This stage may benefit from a smaller model.",
-        evidence: {
-          avgUtilization: Math.round(avgUtilization * 1000) / 1000,
-          avgCostUsd: Math.round(avgCost * 10000) / 10000,
-          recordCount: stageRecords.length,
-        },
-        action: {
-          type: "info-only",
-          configPath: "",
-          suggestedValue: null,
-          label: "Review model selection",
-        },
-      });
+        patterns.push({
+          category: "context-window-utilization",
+          severity: "info",
+          title: `Low context window utilization in ${stage}`,
+          description: `Average context window utilization is ${(avgUtilization * 100).toFixed(1)}% (minimum: ${(minUtilization * 100).toFixed(0)}%) across ${stageRecords.length} records. Informational only — a small prompt against a large window is not waste.`,
+          affectedStages: [stage],
+          wastedTokens: 0,
+          estimatedSavingsUsd: 0,
+          recommendation:
+            avgCost > EXPENSIVE_MODEL_COST_THRESHOLD
+              ? "Low utilization on an expensive model. Consider using a smaller, cheaper model for this stage."
+              : "Low context utilization detected. This stage may benefit from a smaller model.",
+          evidence: {
+            avgUtilization: Math.round(avgUtilization * 1000) / 1000,
+            avgCostUsd: Math.round(avgCost * 10000) / 10000,
+            recordCount: stageRecords.length,
+            model,
+          },
+          action: {
+            type: "info-only",
+            configPath: "",
+            suggestedValue: null,
+            label: "Review model selection",
+          },
+        });
+      }
     }
 
     return patterns;
@@ -656,6 +688,27 @@ export class TokenEfficiencyAnalyzer {
     if (lower === upper) return sorted[lower];
     const weight = index - lower;
     return sorted[lower] * (1 - weight) + sorted[upper] * weight;
+  }
+
+  /**
+   * Return the most frequently occurring `model` value across records, or
+   * undefined when none carry a model (Issue #2017 near-window naming).
+   */
+  static mostCommonModel(records: ExecutionHistoryRecord[]): string | undefined {
+    const counts = new Map<string, number>();
+    for (const r of records) {
+      if (!r.model) continue;
+      counts.set(r.model, (counts.get(r.model) ?? 0) + 1);
+    }
+    let best: string | undefined;
+    let bestCount = 0;
+    for (const [model, count] of counts) {
+      if (count > bestCount) {
+        best = model;
+        bestCount = count;
+      }
+    }
+    return best;
   }
 
   /**
