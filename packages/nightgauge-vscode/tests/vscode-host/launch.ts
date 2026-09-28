@@ -30,6 +30,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { downloadAndUnzipVSCode, runTests } from "@vscode/test-electron";
 import { ACQUIRE_ATTEMPTS, acquireVSCode } from "../launcher/acquireVSCode";
+import { buildInventory, parseLog } from "../../demo/ipc-inventory";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = path.resolve(here, "..", "..");
@@ -37,6 +38,19 @@ const packageRoot = path.resolve(here, "..", "..");
 const EXTENSION_BUNDLE = path.join(packageRoot, "dist", "extension.cjs");
 const TESTS_BUNDLE = path.join(packageRoot, "out", "vscode-host", "index.host.cjs");
 const FIXTURE_SOURCE = path.join(packageRoot, "tests", "fixtures", "vscode-host", "populated");
+/**
+ * The backend this tier runs against: the demo-mode logging stub (#2103),
+ * wired in through the same `nightgauge.backend.binaryPath` seam a user
+ * would use. It answers every request with `null`, touches no network and
+ * logs each request, so the tier is deterministic and the log doubles as the
+ * inventory of IPC methods the extension calls.
+ */
+const IPC_STUB = path.join(packageRoot, "demo", "ipc-stub.cjs");
+const IPC_INVENTORY = path.join(packageRoot, "demo", "ipc-inventory.json");
+const GENERATED_CLIENT = path.join(packageRoot, "src", "services", "IpcClient.generated.ts");
+const MANUAL_CLIENT = path.join(packageRoot, "src", "services", "IpcClient.ts");
+/** `--write-ipc-inventory` regenerates demo/ipc-inventory.json from this run. */
+const WRITE_INVENTORY = process.argv.includes("--write-ipc-inventory");
 
 function requireFile(file: string, remedy: string): void {
   if (!fs.existsSync(file)) {
@@ -55,15 +69,21 @@ async function main(): Promise<void> {
     "Run `npm run -w nightgauge-vscode build:host-tests` first (the `test:host` script does this for you)."
   );
   requireFile(FIXTURE_SOURCE, "The committed populated fixture is missing from the tree.");
+  requireFile(IPC_STUB, "The demo IPC stub is missing from the tree.");
 
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-host-"));
   const workspace = path.join(scratch, "workspace");
   const userDataDir = path.join(scratch, "user-data");
   const extensionsDir = path.join(scratch, "extensions");
   const transcript = path.join(scratch, "transcript.txt");
-  for (const dir of [workspace, userDataDir, extensionsDir]) {
+  const ipcLog = path.join(scratch, "ipc-stub.jsonl");
+  for (const dir of [workspace, userDataDir, extensionsDir, path.join(userDataDir, "User")]) {
     fs.mkdirSync(dir, { recursive: true });
   }
+  fs.writeFileSync(
+    path.join(userDataDir, "User", "settings.json"),
+    JSON.stringify({ "nightgauge.backend.binaryPath": IPC_STUB }, null, 2)
+  );
 
   console.log(`VSCode host smoke tier: workspace ${workspace}`);
 
@@ -100,6 +120,9 @@ async function main(): Promise<void> {
         // the developer's real machine-state root (ADR-024 § 8).
         NIGHTGAUGE_STATE_HOME: path.join(scratch, "state"),
         NIGHTGAUGE_SKIP_AUTH_PREFLIGHT: "1",
+        // Read by the stub (inherited through the extension host) and by the
+        // in-host harness, which writes a marker line before each case.
+        NIGHTGAUGE_DEMO_IPC_LOG: ipcLog,
       },
       launchArgs: [
         workspace,
@@ -144,6 +167,28 @@ async function main(): Promise<void> {
         "running the smoke tier — treat this as a failure, not a pass."
     );
     exitCode = 1;
+  }
+
+  if (WRITE_INVENTORY) {
+    if (exitCode !== 0 || !fs.existsSync(ipcLog)) {
+      console.error("ERROR: not writing the IPC inventory from a failed or log-less run.");
+      exitCode = 1;
+    } else {
+      const inventory = buildInventory(
+        parseLog(fs.readFileSync(ipcLog, "utf8")),
+        fs.readFileSync(GENERATED_CLIENT, "utf8"),
+        fs.readFileSync(MANUAL_CLIENT, "utf8"),
+        [
+          [workspace, "<workspace>"],
+          [scratch, "<scratch>"],
+          [os.homedir(), "<home>"],
+        ]
+      );
+      fs.writeFileSync(IPC_INVENTORY, `${JSON.stringify(inventory, null, 2)}\n`);
+      console.log(
+        `Wrote ${path.relative(packageRoot, IPC_INVENTORY)}: ${inventory.methods.length} methods`
+      );
+    }
   }
 
   process.exit(exitCode);

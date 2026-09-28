@@ -23,6 +23,7 @@ vitest.config.ts
 tsconfig.test.json
 tsconfig.playwright.json
 scripts/**
+demo/**
 *.vsix
 
 # Runtime/test state is never part of a distributable extension. Tests may

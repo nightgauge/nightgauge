@@ -1,0 +1,221 @@
+{
+  "description": "IPC methods the VS Code extension calls at activation, while resolving each tree view and while opening each dashboard tab, recorded against demo/ipc-stub.cjs by the vscode-host tier. Regenerate: npm run -w nightgauge-vscode demo:inventory",
+  "protocolVersion": 2,
+  "methods": [
+    {
+      "method": "attention.list",
+      "resultType": "AttentionListResult",
+      "client": "generated",
+      "surfaces": [
+        "activation > activate() resolves against the fixture workspace"
+      ],
+      "sampleParams": {
+        "includeTerminal": false
+      },
+      "paramsShape": {
+        "includeTerminal": "boolean"
+      }
+    },
+    {
+      "method": "audit.getRetentionConfig",
+      "resultType": "RetentionConfig",
+      "client": "generated",
+      "surfaces": [
+        "ipc inventory > dashboard tab audit"
+      ],
+      "sampleParams": null,
+      "paramsShape": null
+    },
+    {
+      "method": "autonomous.status",
+      "resultType": "AutonomousStatusResult",
+      "client": "generated",
+      "surfaces": [
+        "tree views (empty workspace) > nightgauge.repositoriesView resolves children on an empty workspace",
+        "tree views (populated workspace) > nightgauge.repositoriesView resolves children on a populated workspace",
+        "ipc inventory > tree view nightgauge.repositoriesView"
+      ],
+      "sampleParams": null,
+      "paramsShape": null
+    },
+    {
+      "method": "config.getProjectConfig",
+      "resultType": "ConfigGetProjectResult",
+      "client": "generated",
+      "surfaces": [
+        "activation > activate() resolves against the fixture workspace",
+        "activation > deferred startup work settles without a new unhandled rejection",
+        "webviews > Dashboard creates, renders, and disposes",
+        "webviews > SettingsPanel creates, renders, and disposes",
+        "ipc inventory > tree view nightgauge.pipelineView",
+        "ipc inventory > tree view nightgauge.repositoriesView",
+        "ipc inventory > dashboard opens"
+      ],
+      "sampleParams": {
+        "root": "<workspace>"
+      },
+      "paramsShape": {
+        "root": "string"
+      }
+    },
+    {
+      "method": "config.tierAudit",
+      "resultType": "ConfigTierAuditResult",
+      "client": "generated",
+      "surfaces": [
+        "webviews > SettingsPanel creates, renders, and disposes",
+        "ipc inventory > tree view nightgauge.pipelineView"
+      ],
+      "sampleParams": {},
+      "paramsShape": {}
+    },
+    {
+      "method": "forge.list",
+      "resultType": "ForgeListResult",
+      "client": "generated",
+      "surfaces": [
+        "webviews > SettingsPanel creates, renders, and disposes",
+        "ipc inventory > tree view nightgauge.pipelineView"
+      ],
+      "sampleParams": null,
+      "paramsShape": null
+    },
+    {
+      "method": "git.cleanupMergedBranches",
+      "resultType": "GitCleanupMergedBranchesResult",
+      "client": "generated",
+      "surfaces": [
+        "activation > deferred startup work settles without a new unhandled rejection"
+      ],
+      "sampleParams": {},
+      "paramsShape": {}
+    },
+    {
+      "method": "git.root",
+      "resultType": "{ root: string }",
+      "client": "generated",
+      "surfaces": [
+        "activation > activate() resolves against the fixture workspace"
+      ],
+      "sampleParams": {
+        "workDir": "<workspace>"
+      },
+      "paramsShape": {
+        "workDir": "string"
+      }
+    },
+    {
+      "method": "knowledge.metrics",
+      "resultType": "KnowledgeMetricsResult",
+      "client": "generated",
+      "surfaces": [
+        "webviews > AdapterDoctorPanel creates, renders, and disposes",
+        "webviews > ApprovalDialog creates, renders, and disposes"
+      ],
+      "sampleParams": {
+        "windowDays": 7,
+        "staleDays": 30
+      },
+      "paramsShape": {
+        "staleDays": "number",
+        "windowDays": "number"
+      }
+    },
+    {
+      "method": "pipeline.getMaxConcurrent",
+      "resultType": "PipelineMaxConcurrentResult",
+      "client": "generated",
+      "surfaces": [
+        "activation > activate() resolves against the fixture workspace"
+      ],
+      "sampleParams": null,
+      "paramsShape": null
+    },
+    {
+      "method": "platform.healthCheck",
+      "resultType": "HealthResponse",
+      "client": "generated",
+      "surfaces": [
+        "activation > activate() resolves against the fixture workspace"
+      ],
+      "sampleParams": null,
+      "paramsShape": null
+    },
+    {
+      "method": "platform.setSessionToken",
+      "resultType": "StatusOK",
+      "client": "generated",
+      "surfaces": [
+        "activation > activate() resolves against the fixture workspace"
+      ],
+      "sampleParams": {
+        "token": ""
+      },
+      "paramsShape": {
+        "token": "string"
+      }
+    },
+    {
+      "method": "pr.list",
+      "resultType": "PullRequestDetail[]",
+      "client": "manual",
+      "surfaces": [
+        "ipc inventory > dashboard tab dependencies"
+      ],
+      "sampleParams": {
+        "owner": "nightgauge",
+        "repo": "nightgauge",
+        "state": "OPEN"
+      },
+      "paramsShape": {
+        "owner": "string",
+        "repo": "string",
+        "state": "string"
+      }
+    },
+    {
+      "method": "queue.list",
+      "resultType": "IpcQueueState",
+      "client": "generated",
+      "surfaces": [
+        "activation > activate() resolves against the fixture workspace"
+      ],
+      "sampleParams": null,
+      "paramsShape": null
+    },
+    {
+      "method": "workspace.repoList",
+      "resultType": "WorkspaceRepoListResult",
+      "client": "generated",
+      "surfaces": [
+        "webviews > SettingsPanel creates, renders, and disposes"
+      ],
+      "sampleParams": {
+        "folders": [
+          "<workspace>"
+        ]
+      },
+      "paramsShape": {
+        "folders": [
+          "string"
+        ]
+      }
+    },
+    {
+      "method": "workspace.setRoot",
+      "resultType": "WorkspaceSetRootResult",
+      "client": "generated",
+      "surfaces": [
+        "activation > deferred startup work settles without a new unhandled rejection",
+        "webviews > SettingsPanel creates, renders, and disposes",
+        "ipc inventory > tree view nightgauge.pipelineView"
+      ],
+      "sampleParams": {
+        "root": "<workspace>"
+      },
+      "paramsShape": {
+        "root": "string"
+      }
+    }
+  ]
+}

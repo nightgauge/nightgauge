@@ -195,6 +195,17 @@ opens a throwaway empty folder as the workspace, and inside that window:
   empty workspace and then after copying
   `tests/fixtures/vscode-host/populated/` into it.
 
+The tier's backend is the demo-mode logging stub
+`packages/nightgauge-vscode/demo/ipc-stub.cjs` (#2103), set through
+`nightgauge.backend.binaryPath`. It answers every IPC request with `null`,
+makes no network call and logs each request; the harness writes a marker
+before each case, and an `ipc inventory` suite drives every tree view and
+dashboard tab and fails on any error notification. `npm run -w
+nightgauge-vscode demo:inventory` runs the tier and rewrites
+`demo/ipc-inventory.json`: each method the UI called, the cases it was
+called during, a redacted sample of its params and the result type the typed
+client declares.
+
 Three implementation notes that are load-bearing rather than incidental:
 
 1. **No Mocha.** `@vscode/test-cli` would bring it, and with it a high-severity
