@@ -28,6 +28,18 @@ export interface CapturedPanel {
   panel: vscode.WebviewPanel;
   createdAt: number;
   disposed: boolean;
+  /**
+   * Listeners the extension registered with `webview.onDidReceiveMessage`.
+   * Calling them is how a case plays the webview's side of the protocol
+   * (a tab click, a refresh button) without scripting the webview's DOM.
+   */
+  messageListeners: Array<(message: unknown) => unknown>;
+}
+
+export interface CapturedNotification {
+  severity: "error" | "warning" | "information";
+  message: string;
+  at: number;
 }
 
 export interface CapturedTreeDataProvider {
@@ -52,6 +64,7 @@ const panels: CapturedPanel[] = [];
 const treeProviders: CapturedTreeDataProvider[] = [];
 const outputLines: OutputChannelLine[] = [];
 const faults: ProcessFault[] = [];
+const notifications: CapturedNotification[] = [];
 
 let installed = false;
 
@@ -73,6 +86,21 @@ export function installObservers(): void {
   patch("createTreeView", wrapCreateTreeView);
   patch("registerTreeDataProvider", wrapRegisterTreeDataProvider);
   patch("createOutputChannel", wrapCreateOutputChannel);
+  patch("showErrorMessage", (original) => wrapNotification("error", original));
+  patch("showWarningMessage", (original) => wrapNotification("warning", original));
+  patch("showInformationMessage", (original) => wrapNotification("information", original));
+}
+
+/**
+ * Record every notification toast. The original is still called, so the
+ * toast appears exactly as it would for a user; its first argument is the
+ * message in every overload.
+ */
+function wrapNotification<F>(severity: CapturedNotification["severity"], original: F): F {
+  return function patchedNotification(this: unknown, ...args: unknown[]): unknown {
+    notifications.push({ severity, message: String(args[0]), at: Date.now() });
+    return (original as unknown as (...a: unknown[]) => unknown).apply(this, args);
+  } as unknown as F;
 }
 
 /**
@@ -134,6 +162,17 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
       panel,
       createdAt: Date.now(),
       disposed: false,
+      messageListeners: [],
+    };
+    const webview = panel.webview;
+    const subscribe = webview.onDidReceiveMessage.bind(webview);
+    (webview as { onDidReceiveMessage: unknown }).onDidReceiveMessage = (
+      listener: (message: unknown) => unknown,
+      thisArg?: unknown,
+      disposables?: vscode.Disposable[]
+    ) => {
+      record.messageListeners.push(thisArg ? listener.bind(thisArg) : listener);
+      return subscribe(listener, thisArg, disposables);
     };
     panel.onDidDispose(() => {
       record.disposed = true;
@@ -241,6 +280,10 @@ export function allOutputLines(): readonly OutputChannelLine[] {
 
 export function processFaults(): readonly ProcessFault[] {
   return faults;
+}
+
+export function notificationsSince(since: number): CapturedNotification[] {
+  return notifications.filter((entry) => entry.at >= since);
 }
 
 /** Panels created while `body` ran, in creation order. */

@@ -25,6 +25,7 @@ import "./suites/activation.suite.js";
 import "./suites/commands.suite.js";
 import "./suites/treeviews.suite.js";
 import "./suites/webviews.suite.js";
+import "./suites/ipc-inventory.suite.js";
 
 // Module scope, not inside run(): the suite bodies above only *register*
 // cases, so nothing has touched the VSCode API yet, and the patches are in
@@ -38,6 +39,7 @@ const REQUIRED_SUITES = [
   "tree views (empty workspace)",
   "tree views (populated workspace)",
   "webviews",
+  "ipc inventory",
 ];
 
 export async function run(): Promise<void> {
@@ -62,7 +64,7 @@ export async function run(): Promise<void> {
     throw new Error("Zero cases registered — refusing to report success.");
   }
 
-  const results = await runRegisteredCases(log);
+  const results = await runRegisteredCases(log, undefined, markIpcLog);
 
   const passed = results.filter((entry) => entry.status === "pass");
   const failed = results.filter((entry) => entry.status === "fail");
@@ -102,6 +104,17 @@ export async function run(): Promise<void> {
     throw new Error(
       `VSCode host smoke tier: ${failed.length} failing case(s), ${faults.length} process fault(s).`
     );
+  }
+}
+
+/**
+ * Attribute the stub's subsequent log lines to the case about to run, so the
+ * IPC inventory can say which surface called which method (#2103).
+ */
+function markIpcLog(suiteName: string, caseName: string): void {
+  const ipcLog = process.env.NIGHTGAUGE_DEMO_IPC_LOG;
+  if (ipcLog) {
+    fs.appendFileSync(ipcLog, `${JSON.stringify({ marker: `${suiteName} > ${caseName}` })}\n`);
   }
 }
 

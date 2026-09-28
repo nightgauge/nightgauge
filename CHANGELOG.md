@@ -31,6 +31,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **A logging IPC stub and an inventory of the IPC methods the extension
+  calls** (#2103). `packages/nightgauge-vscode/demo/ipc-stub.cjs` stands in
+  for `nightgauge serve`: it announces the current protocol version, answers
+  every request with `null` and logs it, with no network, process or
+  credential access. The VS Code host smoke tier now runs against it through
+  `nightgauge.backend.binaryPath`, opens every tree view and dashboard tab,
+  and fails on an error notification. `npm run -w nightgauge-vscode
+demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
+  starting point for demo mode's scripted backend.
+
 - **The GitHub API ledger records which identity spent each request.** Each
   record carries `identity` (`app:<slug>`, `user:<login>` or `unknown`), taken
   from the credential's owner and never from the token. `nightgauge api-usage`

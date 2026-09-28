@@ -95,7 +95,8 @@ export function registeredSuiteNames(): string[] {
  */
 export async function runRegisteredCases(
   log: (line: string) => void,
-  perCaseTimeoutMs = 30_000
+  perCaseTimeoutMs = 30_000,
+  onCaseStart: (suiteName: string, caseName: string) => void = () => undefined
 ): Promise<CaseResult[]> {
   const results: CaseResult[] = [];
   let lastSuite: string | undefined;
@@ -118,6 +119,7 @@ export async function runRegisteredCases(
       continue;
     }
 
+    onCaseStart(entry.suite, entry.name);
     const startedAt = Date.now();
     try {
       await withTimeout(entry.fn(), perCaseTimeoutMs, `${entry.suite} > ${entry.name}`);
