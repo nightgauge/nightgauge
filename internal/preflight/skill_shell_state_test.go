@@ -21,7 +21,7 @@ func fence(body string) string { return "```bash\n" + body + "\n```\n" }
 // that only an earlier phase assigned.
 func TestSkillShellState_ReadWithoutDerivationFails(t *testing.T) {
 	root := t.TempDir()
-	writeSkillFile(t, root, "nightgauge-feature-validate/_includes/build-and-tests.md",
+	writeSkillFile(t, root, "nightgauge-feature-validate/_includes/build-verification.md",
 		"## Record\n\n"+fence(`nightgauge gate record-metric --issue "$ISSUE_NUMBER" --gate lint --result pass`))
 
 	res := runShellState(t, root)
@@ -32,7 +32,7 @@ func TestSkillShellState_ReadWithoutDerivationFails(t *testing.T) {
 	if f.Check != CheckUnderivedIdentifier || f.Identifier != "ISSUE_NUMBER" || f.Line != 4 {
 		t.Errorf("finding = %+v, want underived_identifier ISSUE_NUMBER at line 4", f)
 	}
-	if f.File != "skills/nightgauge-feature-validate/_includes/build-and-tests.md" {
+	if f.File != "skills/nightgauge-feature-validate/_includes/build-verification.md" {
 		t.Errorf("file = %q", f.File)
 	}
 }

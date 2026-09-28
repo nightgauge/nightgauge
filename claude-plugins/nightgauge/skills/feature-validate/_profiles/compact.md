@@ -144,7 +144,7 @@ Best-effort: if `FRESHNESS_CHECK_FAILED=true`, log a warning and continue — pr
 printf '<!-- phase:start name="build-verification" index=7 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/build-and-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** **Hard gate** (see Gotchas): build failure fails validation with `errorCategory: "build-failed"` and a captured stderr tail.
+> **Read `_includes/build-verification.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** **Hard gate** (see Gotchas): build failure fails validation with `errorCategory: "build-failed"` and a captured stderr tail.
 
 ### Phase 1.6: Dead Code Detection (CONFIGURABLE GATE)
 
@@ -152,7 +152,7 @@ printf '<!-- phase:start name="build-verification" index=7 total=23 stage="featu
 printf '<!-- phase:start name="dead-code-detection" index=8 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/build-and-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** When `validation.dead_code=gate` (default), current-issue error-severity dead-code findings block validation.
+> **Read `_includes/dead-code.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** When `validation.dead_code=gate` (default), current-issue error-severity dead-code findings block validation.
 
 ### Phase 1.7: Baseline Comparison for Test Failures
 
@@ -160,7 +160,7 @@ printf '<!-- phase:start name="dead-code-detection" index=8 total=23 stage="feat
 printf '<!-- phase:start name="baseline-comparison" index=9 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/build-and-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Identify pre-existing failures (already failing on main) so the Ralph Loop skips them; runs ONLY when tests fail, skipped when dev context shows all passed.
+> **Read `_includes/baseline-comparison.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Identify pre-existing failures (already failing on main) so the Ralph Loop skips them; runs ONLY when tests fail, skipped when dev context shows all passed.
 
 Before waiting on any long external process, Read `skills/_shared/LONG_RUNNING_PROCESSES.md` and follow it.
 
@@ -170,7 +170,7 @@ Before waiting on any long external process, Read `skills/_shared/LONG_RUNNING_P
 printf '<!-- phase:start name="run-tests" index=10 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/build-and-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run integration and E2E tests (dev does NOT); do not re-run unit tests the dev context confirms passed. Failures → record in context; Ralph Loop auto-fix if enabled. On a fix issue that touched a test file, Step 2.2.5 also proves the new assertion can go red — revert the fix from a COPY and confirm the test FAILS; green there means the test is decoration. Step 2.5 then closes the phase with `nightgauge gate check-test-execution`: a suite the configured test command structurally cannot reach has never been executed by anything, so a passing run says nothing about it (#1261). Silent in any repo that excludes nothing.
+> **Read `_includes/run-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Run integration and E2E tests (dev does NOT); do not re-run unit tests the dev context confirms passed. Failures → record in context; Ralph Loop auto-fix if enabled. On a fix issue that touched a test file, Step 2.2.5 also proves the new assertion can go red — revert the fix from a COPY and confirm the test FAILS; green there means the test is decoration. Step 2.5 then closes the phase with `nightgauge gate check-test-execution`: a suite the configured test command structurally cannot reach has never been executed by anything, so a passing run says nothing about it (#1261). Silent in any repo that excludes nothing.
 
 ### Phase 2.4: Mobile MCP E2E Tests (Agent-Driven)
 
@@ -178,7 +178,7 @@ printf '<!-- phase:start name="run-tests" index=10 total=23 stage="feature-valid
 printf '<!-- phase:start name="mobile-mcp-tests" index=11 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/build-and-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Build the debug APK, boot the `Pixel_9_Pro` emulator, run every `test/mobile_mcp/specs/*.md` spec via mobile-mcp tools with screenshot/result-JSON evidence, stop the emulator. Config: `validation.mobile_mcp_tests` (default `"strict"` — spec failures block PR creation); zero-overhead skip when no runnable specs or no `flutter`/`adb`/`emulator` toolchain.
+> **Read `_includes/mobile-mcp-tests.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Build the debug APK, boot the `Pixel_9_Pro` emulator, run every `test/mobile_mcp/specs/*.md` spec via mobile-mcp tools with screenshot/result-JSON evidence, stop the emulator. Config: `validation.mobile_mcp_tests` (default `"strict"` — spec failures block PR creation); zero-overhead skip when no runnable specs or no `flutter`/`adb`/`emulator` toolchain.
 
 ### Phase 2.45: Web UI Verification Gate (verify-ui)
 

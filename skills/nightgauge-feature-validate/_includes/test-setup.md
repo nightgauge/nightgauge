@@ -25,7 +25,7 @@ TEST_CMD_SOURCE=$(printf '%s\n' "$TESTCMD_DETECT" | jq -r '.source' 2>/dev/null 
 UNIT_TEST_FRAMEWORK=$(printf '%s\n' "$TESTCMD_DETECT" | jq -r '.framework' 2>/dev/null || echo "")
 ```
 
-`$TEST_CMD` is what every later phase invokes (`build-and-tests.md:307,437,440`)
+`$TEST_CMD` is what every later phase invokes (`baseline-comparison.md:56`, `run-tests.md:94,97`)
 — this is the only place it is assigned. The binary applies this precedence,
 **preferring the repo's declared command over an inferred framework binary**:
 
