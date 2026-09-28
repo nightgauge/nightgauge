@@ -100,7 +100,7 @@ if [ "$BUILD_RAN" = "true" ] && [ "$BUILD_PASSED" = "false" ]; then
 fi
 
 # Minimum duration check — detect suspiciously fast builds that may indicate
-# the deterministic build didn't actually run (LLM rubber stamp, Issue #3041).
+# the deterministic build didn't actually run (LLM rubber stamp, issue 3041).
 MINIMUM_DURATION_FLAGGED=false
 MINIMUM_DURATION_ACTUAL_MS=${BUILD_DURATION_MS:-0}
 MINIMUM_DURATION_P10_MS=0

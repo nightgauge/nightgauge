@@ -134,7 +134,7 @@ fi
 >    the browser-integration project only half done. Declare the pid and the
 >    log, poll with a bounded loop, and the wait is read as work.
 
-### Step 2.1: Run Integration and E2E Tests (Strict Gate — #2909)
+### Step 2.1: Run Integration and E2E Tests (Strict Gate — issue 2909)
 
 Run integration tests (`npm run test:integration` or `pytest tests/integration`)
 and E2E tests (playwright or cypress) if configured. Parse output for pass/fail
@@ -153,7 +153,7 @@ counts.
 
 Integration-test behavior is gated by the `IntegrationTestGate` module
 (`@nightgauge/sdk`). The gate enforces the invariant from
-issue #2909: **if CI runs integration tests, they must run locally or the stage
+issue 2909: **if CI runs integration tests, they must run locally or the stage
 fails — it never silently passes on a skipped suite.**
 
 Modes (`validation.integration_tests`, default `strict`):
@@ -162,7 +162,7 @@ Modes (`validation.integration_tests`, default `strict`):
   failures (docker unavailable, postgres unreachable, missing env vars) fail
   the stage with `VALIDATION_STATUS=failed` and a feedback signal.
 - `best_effort` — attempt to run; if services are unavailable, record a
-  warning but let PR creation proceed (legacy pre-#2909 behavior).
+  warning but let PR creation proceed (legacy pre-issue 2909 behavior).
 - `off` — skip the integration-test gate entirely.
 
 ```bash
@@ -264,7 +264,7 @@ After integration tests complete, collect pass/fail status into variables for
 the validate context (written in Phase 6). No separate gate metric recording
 needed — all results are captured in `validate-{N}.json`.
 
-> **Why strict is the default**: prior to #2909, feature-validate would pass
+> **Why strict is the default**: prior to issue 2909, feature-validate would pass
 > when `test:integration` was configured but locally unrunnable (no docker,
 > no postgres). Those PRs then failed CI's integration check immediately.
 > Strict mode forces a clear local signal before publishing a PR.
