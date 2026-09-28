@@ -424,6 +424,16 @@ opencode` failed at issue-pickup before any model was called. A stage whose
   does, so a key-protected server no longer reports HTTP 401. The
   `endpoints[]` block is now documented in `SETTINGS_ARCHITECTURE.md`.
 
+- **`spike validate <path>` no longer silently discards its positional
+  argument and blames the artifact for it (#1981).** The command declared no
+  `Args` constraint, so cobra accepted and dropped a positional path, then
+  read (empty) stdin and reported the artifact as missing its fenced yaml
+  recommendations block — a false contract violation. A positional path is
+  now an alias for `--body-file` (the two are mutually exclusive), matching
+  `spike materialize`'s shape. An unsupplied body (empty stdin, no path, no
+  `--body-file`) is now reported as "no body supplied" rather than a
+  contract error.
+
 ### Security
 
 - **The daemon socket moved out of the working tree** (#2039). `nightgauge
