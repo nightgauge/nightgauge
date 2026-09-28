@@ -6752,6 +6752,31 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 
+		// Protected paths (#1970). Runs after every stage, whatever its exit
+		// and after both reconciles, so neither a clean exit, a disabled gate
+		// nor a reconcile-to-success can let a stage's change to the
+		// publication-boundary allowlist through. A hit fails the stage.
+		if pp := gates.CheckProtectedPaths(stageWorkspace(runtime, workspaceRoot)); !pp.Passed {
+			runtime.AppendStageGateResult(stage, pp.ToStageGateResult())
+			tracer.Emit(trace.KindGateResult, string(stage), trace.GateResultPayload{
+				GateName:   pp.GateName,
+				Source:     "protected_paths",
+				Passed:     false,
+				ResultKind: string(pp.Kind),
+				Reason:     pp.Reason,
+				Evidence:   pp.Evidence,
+				DurationMs: pp.DurationMs,
+				Trigger:    "post_stage",
+			})
+			log.Printf("#%d: stage %s %s", item.Number, stage, pp.Reason)
+			err = fmt.Errorf("stage gate failed: %s", pp.Reason)
+			exitCode = 2
+			gateRan = true
+			gateRes = pp
+			reconciledNonTerminal = false
+			reconciledArm = reconcileNone
+		}
+
 		// Persist state to disk after each stage completes
 		if persistErr := persistPipelineState(runtime, workspaceRoot); persistErr != nil {
 			log.Printf("#%d: failed to persist state: %v", item.Number, persistErr)

@@ -444,6 +444,16 @@ opencode` failed at issue-pickup before any model was called. A stage whose
 
 ### Security
 
+- **The pipeline can no longer widen the publication-boundary allowlist that
+  gates its own output** (#1970). After every stage the orchestrator checks the
+  stage workspace (working tree, index, assume-unchanged bits and commits since
+  the base branch) and fails the stage if `.github/publication-boundary.yaml`
+  changed; `NIGHTGAUGE_DISABLE_GATES` does not turn this off. The PreToolUse
+  gate also refuses an Edit or Write to the file inside a pipeline stage. In CI,
+  a pull request that changes the allowlist must change nothing else, so an
+  exception is reviewed apart from the content it lets through, and the file
+  has an explicit CODEOWNERS entry.
+
 - **The daemon socket moved out of the working tree** (#2039). `nightgauge
 serve` now listens on `<RUNTIME>/<key>.sock`, where `RUNTIME` is
   `NIGHTGAUGE_RUNTIME_DIR`, else `$XDG_RUNTIME_DIR/nightgauge`, else

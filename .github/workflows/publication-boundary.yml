@@ -82,6 +82,19 @@ jobs:
         #   - the guard itself being unable to run (missing/malformed manifest)
         run: python3 scripts/publication-boundary-check.py
 
+      - name: The allowlist changes alone
+        # #1970: the pipeline twice added an allowlist exception in the same
+        # change as the content it let through. An allowlist change is its own
+        # pull request so approving it is a deliberate act. A merge group has
+        # already had each of its pull requests checked, so this runs on PRs.
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash scripts/check-boundary-allowlist-isolation.sh "$BASE_SHA" HEAD
+
+      - name: Prove the allowlist-isolation check still fails closed
+        run: bash scripts/test-check-boundary-allowlist-isolation.sh
+
       - name: Prove the hermeticity assertions still catch what they scope out
         # The hermeticity step below attributes dirt to the paths the SUITE
         # writes, instead of demanding that global `git status` and

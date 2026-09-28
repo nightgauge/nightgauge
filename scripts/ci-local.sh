@@ -325,6 +325,8 @@ REQUIRED_FILES=(
   scripts/test-publication-boundary-erosion.py
   scripts/test-publication-boundary-attribution.sh
   scripts/test-publication-boundary-hermeticity.sh
+  scripts/check-boundary-allowlist-isolation.sh
+  scripts/test-check-boundary-allowlist-isolation.sh
   scripts/check-band-vocabulary.py
   scripts/test-band-vocabulary-check.sh
   scripts/check-visibility-prose.py
@@ -1356,6 +1358,10 @@ run_step "Publication boundary attribution" \
 
 run_step "Publication boundary suite hermeticity" \
   bash scripts/test-publication-boundary-hermeticity.sh
+
+# 5b-ii. Allowlist-isolation check (#1970): the allowlist changes alone.
+run_step "Publication boundary allowlist isolation" \
+  bash scripts/test-check-boundary-allowlist-isolation.sh
 
 # 5c. Band-vocabulary reintroduction gate (#582) — fails on hand-inlined band
 #     closed sets / regex alternations in production source, outside the
