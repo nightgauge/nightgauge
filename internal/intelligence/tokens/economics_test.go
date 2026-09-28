@@ -150,9 +150,11 @@ func TestCalculateCostFor_PinsRun01a007d5Regression(t *testing.T) {
 	if !claudeStamped {
 		t.Fatal("claude/sonnet should resolve to a stamped cost")
 	}
-	const wantClaude = 2.8989 // 484709*3/1e6 + 96317*15/1e6, matches run 01a007d5's stamped figure
+	// 484709*2/1e6 + 96317*10/1e6: the sonnet band's $2/$10 card. Run
+	// 01a007d5 stamped $2.8989 at the since-cancelled $3/$15 Sonnet 5 card.
+	const wantClaude = 1.932588
 	if diff := claudeCost - wantClaude; diff > 1e-3 || diff < -1e-3 {
-		t.Errorf("claude/sonnet cost = %.6f, want ~%.6f (anthropic sonnet rates, unchanged)", claudeCost, wantClaude)
+		t.Errorf("claude/sonnet cost = %.6f, want ~%.6f (anthropic sonnet rates)", claudeCost, wantClaude)
 	}
 }
 
@@ -281,8 +283,8 @@ func TestCalculateCostForOpenCodeLocal(t *testing.T) {
 func TestCalculateCostForOpenCodeCloudPriced(t *testing.T) {
 	counts := TokenCounts{Input: 1_000_000, Output: 1_000_000}
 	want, wantStamped := CalculateCostFor("claude", "claude-sonnet-5", counts)
-	if !wantStamped || want != 18.0 {
-		t.Fatalf("CalculateCostFor(claude, claude-sonnet-5) = (%v, %v), want the registry's $3 + $15 per MTok", want, wantStamped)
+	if !wantStamped || want != 12.0 {
+		t.Fatalf("CalculateCostFor(claude, claude-sonnet-5) = (%v, %v), want the registry's $2 + $10 per MTok", want, wantStamped)
 	}
 	for _, model := range []string{"anthropic/claude-sonnet-5", "claude-sonnet-5"} {
 		got, stamped := CalculateCostFor("opencode", model, counts)

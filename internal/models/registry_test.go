@@ -150,8 +150,8 @@ func TestTierResolutionPrefersCurrentModel(t *testing.T) {
 	if !ok {
 		t.Fatal("sonnet tier did not resolve")
 	}
-	if got.ID != "claude-sonnet-5" {
-		t.Errorf("sonnet tier resolved to %q, want claude-sonnet-5 (current, not deprecated 4.6)", got.ID)
+	if got.ID != "claude-sonnet-5-5" {
+		t.Errorf("sonnet tier resolved to %q, want claude-sonnet-5-5 (current, not deprecated 5)", got.ID)
 	}
 	if got.Deprecated {
 		t.Error("tier resolution returned a deprecated model")
@@ -179,7 +179,7 @@ func TestResolveProviderTierBands(t *testing.T) {
 		{"xai", "sonnet", "grok-4.6"},
 		{"xai", "opus", "grok-4.6"},
 		{"xai", "fable", "grok-4.6"},
-		{"anthropic", "sonnet", "claude-sonnet-5"},
+		{"anthropic", "sonnet", "claude-sonnet-5-5"},
 		// Fable 5.1 is the band leader; 5 is deprecated behind it (#1274).
 		// Removing the `deprecated` flag from claude-fable-5 makes the
 		// one-leader-per-band check in TestBandUniquenessAcrossProviders fail.

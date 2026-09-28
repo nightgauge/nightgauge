@@ -498,7 +498,7 @@ func TestOpenCodeStageCostRecorded(t *testing.T) {
 	}{
 		{"lmstudio/qwen/qwen3.8-27b", "lm-studio/qwen/qwen3.8-27b", true, 0},
 		{"openai/gpt-9-preview", "openai/gpt-9-preview", false, 0},
-		{"anthropic/claude-sonnet-5", "claude-sonnet-5", true, (3089*3.0 + 14*15.0) / 1e6},
+		{"anthropic/claude-sonnet-5", "claude-sonnet-5", true, (3089*2.0 + 14*10.0) / 1e6},
 	} {
 		t.Run(tc.model, func(t *testing.T) {
 			res := runCostStage(t, costStage{model: tc.model, run: `cat "$STEPS"`}).result

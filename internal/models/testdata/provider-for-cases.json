@@ -299,14 +299,14 @@
       "adapter": "opencode",
       "band_or_id": "sonnet",
       "configured_model": "anthropic/claude-opus-5",
-      "model": "anthropic/claude-sonnet-5"
+      "model": "anthropic/claude-sonnet-5-5"
     },
     {
       "name": "the configured model's own band",
       "adapter": "opencode",
       "band_or_id": "sonnet",
       "configured_model": "anthropic/claude-sonnet-5",
-      "model": "anthropic/claude-sonnet-5"
+      "model": "anthropic/claude-sonnet-5-5"
     },
     {
       "name": "openai opus",

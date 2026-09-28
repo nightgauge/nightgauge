@@ -127,7 +127,7 @@ describe("capability discipline (spike §4.3)", () => {
 
 describe("resolveBandEnvelope — the band-input query", () => {
   it("resolves a band to its dispatch envelope for a provider", () => {
-    expect(resolveBandEnvelope("anthropic", "sonnet")?.modelId).toBe("claude-sonnet-5");
+    expect(resolveBandEnvelope("anthropic", "sonnet")?.modelId).toBe("claude-sonnet-5-5");
     expect(resolveBandEnvelope("xai", "sonnet")).toEqual({
       band: "sonnet",
       modelId: "grok-4.6",

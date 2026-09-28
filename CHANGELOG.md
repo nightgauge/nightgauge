@@ -31,6 +31,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Claude Sonnet 5.5 now serves the `sonnet` band.** `claude-sonnet-5-5` is
+  registered ($2/$10 per MTok, 1M context, 128K output, `low`–`max` effort,
+  default `high`) and every stage routed to `sonnet`, on the Claude CLI and
+  the API alike, now runs it. `claude-sonnet-5` is deprecated with
+  `claude-sonnet-5-5` as its replacement and stays pinnable by id. Thinking is
+  adaptive and on by default; it can be turned off only at `high` effort or
+  below. The live judge's default model is now `claude-sonnet-5-5`.
+
 - **`NIGHTGAUGE_SKILLS_ROOT` and a `skills` doctor check** (#2220). A
   Go-direct or OpenCode run outside the core repository failed in seconds with
   `SKILL.md not found for stage "issue-pickup"` unless the binary sat beside a
@@ -198,6 +206,12 @@ changelog, and the release workflow refuses a tag that does not.
   re-enters at the recorded stage rather than at `issue-pickup`. `nightgauge run
 state` now defaults to the main checkout's record, so it reports the same
   state from a run's worktree.
+
+- **Sonnet 5 stages are priced at $2/$10 per MTok, not $3/$15.** The
+  announced Sonnet 5 price increase was cancelled, so the registry's $3/$15
+  card (with its cache pools) overstated every Sonnet 5 stage's cost by half.
+  Sonnet 5 now carries the standard $2 input, $10 output, $2.50 5-minute cache
+  write, $4 1-hour cache write and $0.20 cache read rates.
 
 - **A stage can no longer escape its stage budget or cost cap** (#2016). A
   stdout line over 1 MiB, such as a huge tool output, stopped the Claude,
