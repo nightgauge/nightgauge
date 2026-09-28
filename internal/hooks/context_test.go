@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -126,4 +127,40 @@ func containsSubstr(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestStageArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(rel, body string) {
+		t.Helper()
+		p := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(".nightgauge/pipeline/issue-3.json", "{}")
+	mustWrite(".nightgauge/pipeline/planning-3.json", "{}")
+	mustWrite(".nightgauge/pipeline/dev-3.json", "") // empty: not written yet
+	mustWrite(".nightgauge/pipeline/planning-4.json", "{}")
+	mustWrite(".nightgauge/plans/3-fix-usage.md", "# plan")
+
+	got := stageArtifacts(dir, "3")
+	want := []string{
+		filepath.Join(".nightgauge", "pipeline", "issue-3.json"),
+		filepath.Join(".nightgauge", "pipeline", "planning-3.json"),
+		filepath.Join(".nightgauge", "plans", "3-fix-usage.md"),
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("stageArtifacts = %v, want %v", got, want)
+	}
+	if stageArtifacts(dir, "") != nil {
+		t.Error("no issue number should list nothing")
+	}
+	msg := buildContextMessage(ContextResult{StageArtifacts: got})
+	if !strings.Contains(msg, "planning-3.json") || !strings.Contains(msg, "Resume after the last phase") {
+		t.Errorf("message = %q", msg)
+	}
 }

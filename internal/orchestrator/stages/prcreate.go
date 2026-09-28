@@ -74,12 +74,15 @@ const (
 
 // PRCreateResult is the outcome of a single Run invocation.
 type PRCreateResult struct {
-	Path       PRCreatePath
-	PRNumber   int
-	PRURL      string
-	Title      string // rendered title (set on CreatePathCreated; useful for telemetry)
-	Body       string // rendered body  (set on CreatePathCreated; useful for telemetry)
-	Reason     string
+	Path     PRCreatePath
+	PRNumber int
+	PRURL    string
+	Title    string // rendered title (set on CreatePathCreated; useful for telemetry)
+	Body     string // rendered body  (set on CreatePathCreated; useful for telemetry)
+	Reason   string
+	// Detail explains a punt Reason when one value cannot, such as which
+	// context file failed to parse and why for context-invalid-json.
+	Detail     string
 	DurationMs int64
 
 	// Commit-owner outcome (#1179). Populated on EVERY path — punt included —
@@ -551,7 +554,7 @@ func (r *DeterministicPRCreateRunner) Run(ctx context.Context, issueNumber int, 
 	snap, err := r.readContext(workdir, issueNumber)
 	if err != nil {
 		ph.supersedeInFlight()
-		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonContextInvalidJSON}, nil)
+		return finish(PRCreateResult{Path: CreatePathPunt, Reason: ReasonContextInvalidJSON, Detail: err.Error()}, nil)
 	}
 	snap.IssueNumber = issueNumber
 	snap.ValidateSkippedByRoute = routeSkippedStage(ctx, "feature-validate")

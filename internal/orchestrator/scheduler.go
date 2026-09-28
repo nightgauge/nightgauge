@@ -5612,6 +5612,24 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				}
 				decision, decided := skillrender.DecideProfileFor(string(stage), skillData.Content, skillData.ContextWindow, hasCompact, compactContent, localDispatch)
 				if decision == skillrender.DecisionCompactLocal {
+					// Supply the compact profile's phase includes when they
+					// still fit: on a local endpoint each include left as a
+					// "Read ... now" directive costs a model turn of minutes.
+					supplied, supErr := skillrender.Render(skillrender.Options{
+						Stage:          string(stage),
+						Model:          model,
+						Adapter:        adapterName,
+						SkillsRoots:    skillrender.DefaultRoots(workspaceRoot),
+						Profile:        skillrender.ProfileCompact,
+						SupplyIncludes: true,
+						Warn:           func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
+					})
+					if supErr == nil && supplied.Profile == skillrender.ProfileCompact && len(supplied.SuppliedIncludes) > 0 {
+						if supFit := skillrender.Fit(string(stage), supplied.Content, skillData.ContextWindow); supFit.Fits {
+							compactData, decided = supplied, supFit
+							log.Printf("#%d: stage %s context budget: compact profile supplies its includes %v", item.Number, stage, supplied.SuppliedIncludes)
+						}
+					}
 					log.Printf("#%d: stage %s context budget: local endpoint — dispatching the compact profile (reason local_endpoint, estimated %d tokens; full render estimated %d, fits=%v)",
 						item.Number, stage, decided.EstimatedTokens, fit.EstimatedTokens, fit.Fits)
 					compactData.ContextWindow = skillData.ContextWindow
@@ -10389,8 +10407,13 @@ func (s *Scheduler) tryDeterministicPRCreate(
 		log.Printf("#%d: pr-create deterministic path errored — falling through to LLM: %v",
 			item.Number, detErr)
 	} else {
-		log.Printf("#%d: pr-create deterministic path punted (%s) — falling through to LLM",
-			item.Number, detResult.Reason)
+		if detResult.Detail != "" {
+			log.Printf("#%d: pr-create deterministic path punted (%s: %s) — falling through to LLM",
+				item.Number, detResult.Reason, detResult.Detail)
+		} else {
+			log.Printf("#%d: pr-create deterministic path punted (%s) — falling through to LLM",
+				item.Number, detResult.Reason)
+		}
 	}
 	runtime.RecordStagePuntReason(stage, puntReason)
 	s.emitStagePunt(ctx, runtime, stage, item.Number, puntReason)

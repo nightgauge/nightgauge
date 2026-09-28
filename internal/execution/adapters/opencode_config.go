@@ -790,6 +790,9 @@ type openCodeModelJSON struct {
 	// inspects its contents, including which entries are disabled. #1643's
 	// --variant mapping reads it.
 	Variants []string `json:"variants,omitempty"`
+	// Options is merged into every request body for the model: the
+	// operator's request_options for the dispatched stage.
+	Options map[string]any `json:"options,omitempty"`
 }
 
 type openCodeModelProviderJSON struct {
@@ -930,6 +933,7 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 					Limit:    openCodeLimitJSON{Context: limit.Context, Input: limit.Context, Output: limit.Output},
 					ToolCall: true,
 					Variants: openCodeDeclaredVariants(ep.Models, modelID),
+					Options:  openCodeRequestOptions(ep.Models, modelID, in.Run.Stage),
 				},
 			},
 		}
@@ -1303,6 +1307,42 @@ func openCodeDeclaredVariants(models []config.OpenCodeEndpointModel, modelID str
 		if m.ID == modelID {
 			return m.Variants
 		}
+	}
+	return nil
+}
+
+// openCodeReservedRequestKeys are request-body fields request_options may
+// not set: the ones that choose what is sent and where the answer goes.
+var openCodeReservedRequestKeys = map[string]bool{
+	"model": true, "messages": true, "tools": true, "tool_choice": true,
+	"stream": true, "stream_options": true, "baseURL": true, "apiKey": true,
+}
+
+// openCodeRequestOptions resolves the dispatched model's request options for
+// one stage: the model's request_options, then the stage's own entry key by
+// key. Reserved keys are dropped, so request_options can tune a request but
+// never redirect one. nil when the operator set none.
+func openCodeRequestOptions(models []config.OpenCodeEndpointModel, modelID, stage string) map[string]any {
+	for _, m := range models {
+		if m.ID != modelID {
+			continue
+		}
+		out := map[string]any{}
+		for k, v := range m.RequestOptions {
+			out[k] = v
+		}
+		for k, v := range m.StageRequestOptions[stage] {
+			out[k] = v
+		}
+		for k := range out {
+			if openCodeReservedRequestKeys[k] {
+				delete(out, k)
+			}
+		}
+		if len(out) == 0 {
+			return nil
+		}
+		return out
 	}
 	return nil
 }

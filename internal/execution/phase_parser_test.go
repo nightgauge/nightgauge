@@ -57,6 +57,18 @@ func TestParsePhaseMarker(t *testing.T) {
 			want:   &PhaseMarker{Name: "quality-review", Index: 8, Total: 14, Stage: "feature-validate"},
 			wantOK: true,
 		},
+		{
+			name:   "json-escaped in a streamed tool result",
+			line:   `{"type":"tool_use","part":{"state":{"output":"<!-- phase:start name=\"produce-plan\" index=9 total=14 stage=\"feature-planning\" -->\n"}}}`,
+			want:   &PhaseMarker{Name: "produce-plan", Index: 9, Total: 14, Stage: "feature-planning"},
+			wantOK: true,
+		},
+		{
+			name:   "json-escaped with Go's html escaping",
+			line:   `{"text":"<!-- phase:start name=\"implementation\" index=6 total=14 stage=\"feature-dev\" -->"}`,
+			want:   &PhaseMarker{Name: "implementation", Index: 6, Total: 14, Stage: "feature-dev"},
+			wantOK: true,
+		},
 	}
 
 	for _, tc := range tests {

@@ -20,6 +20,13 @@ ensures the plan builds on it rather than replacing it.
 `knowledge_path` is absolute and names the main checkout's knowledge base,
 not the worktree's (#2194); read it as given, never relative to the cwd.
 
+**A retry finds an earlier attempt's drafts here.** The knowledge base lives
+in the main checkout, so a `PRD.md` filled past its scaffold, or `Proposed`
+ADRs in `decisions.md`, with `status: draft`, may be a failed or unmerged
+earlier run's work. Treat them as a hypothesis: reuse what the code and the
+issue confirm, and where your plan differs, the plan wins and Phase 5.5
+updates the drafts to match it. Do not rework a sound plan to fit them.
+
 **No-op when `knowledge_path` is null or unset** — silently skip to Phase 4.
 
 ```bash
