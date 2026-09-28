@@ -15,8 +15,8 @@ type PhaseMarker struct {
 
 // phaseStartRe also matches a marker inside a JSON string, the form a
 // streaming adapter (opencode, claude stream-json) prints a model's `printf`
-// of one in: quotes escaped as \" and, from a Go encoder, < and > as \u003c
-// and \u003e. Without that, a JSON-streamed marker was never seen and the
+// of one in: quotes escaped with a backslash and, from a Go encoder, < and >
+// as their JSON unicode escapes. Without that, a JSON-streamed marker was never seen and the
 // stage log showed only inferred phases.
 var phaseStartRe = regexp.MustCompile(
 	`(?:<|\\u003c)!--\s*phase:start\s+name=\\?"([^"\\]+)\\?"\s+index=(\d+)\s+total=(\d+)\s+stage=\\?"([^"\\]+)\\?"\s*--(?:>|\\u003e)`,
