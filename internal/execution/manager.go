@@ -3,7 +3,6 @@
 package execution
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -719,21 +718,19 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 				wrapped(b)
 			}
 		}(onLine)
-		if openCode != nil {
-			_ = forEachLine(r, streamLineLimit, onLine, func(head, tail []byte) {
-				firstOutputOnce.Do(func() { close(firstOutput) })
+		// Every adapter reads through forEachLine, which drops an oversized
+		// line and keeps reading (#2016). bufio.Scanner stopped at the first
+		// line over streamLineLimit, so one huge tool output ended all turn
+		// and token counting and the stage escaped its budget.
+		_ = forEachLine(r, streamLineLimit, onLine, func(head, tail []byte) {
+			firstOutputOnce.Do(func() { close(firstOutput) })
+			if openCode != nil {
 				openCode.stream.Drift("dropped a %s line longer than the %d-byte line limit", name, streamLineLimit)
-				if onOversize != nil {
-					onOversize(head, tail)
-				}
-			})
-			return
-		}
-		scanner := bufio.NewScanner(r)
-		scanner.Buffer(make([]byte, 0, 64*1024), streamLineLimit)
-		for scanner.Scan() {
-			onLine(scanner.Bytes())
-		}
+			}
+			if onOversize != nil {
+				onOversize(head, tail)
+			}
+		})
 	}
 	keepStderr := func(line []byte) {
 		line = redactOut(line)

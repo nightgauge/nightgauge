@@ -139,6 +139,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A stage can no longer escape its stage budget or cost cap** (#2016). A
+  stdout line over 1 MiB, such as a huge tool output, stopped the Claude,
+  Codex, Gemini, Grok and Copilot readers for the rest of the stage, so no
+  further turns or tokens were counted; every adapter now drops the oversized
+  line and keeps reading, as OpenCode already did. A stamped
+  `stage_budget_exceeded:` or `[cost-cap-exceeded]` stop now classifies as
+  `budget_exceeded` even when stderr also carries a retryable signature
+  (`overloaded`, an API connection error, or an `AI_APICallError` connection
+  line), instead of being retried as a transient fault.
+
 - **Rendered skills and the knowledge base are reachable from pipeline
   worktrees** (#2191, #2194). Under OpenCode the external-directory gate
   refused reads of `skills/_shared/…` that a rendered skill points at, and in

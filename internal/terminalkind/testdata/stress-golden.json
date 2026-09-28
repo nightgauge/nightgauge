@@ -26,6 +26,36 @@
       "signal": ""
     },
     {
+      "input": "stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "STAGE_BUDGET_EXCEEDED:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "exit 1: [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "[COST-CAP-EXCEEDED]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -1781,21 +1811,6 @@
       "signal": ""
     },
     {
-      "input": "[cost-cap-exceeded]",
-      "kind": "budget_exceeded",
-      "signal": ""
-    },
-    {
-      "input": "exit 1: [cost-cap-exceeded]",
-      "kind": "budget_exceeded",
-      "signal": ""
-    },
-    {
-      "input": "[COST-CAP-EXCEEDED]",
-      "kind": "budget_exceeded",
-      "signal": ""
-    },
-    {
       "input": "cost-cap-exceeded",
       "kind": "budget_exceeded",
       "signal": ""
@@ -2641,6 +2656,246 @@
       "signal": ""
     },
     {
+      "input": "stage_budget_exceeded: | network unavailable: extended github connectivity loss",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | adapter_incompatible",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [model-stream-stalled]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | stream idle timeout",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | overloaded",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | socket connection was closed",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [rate-limit-quota-exhausted]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [adapter-auth-failed]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | ai_apicallerror context_length_exceeded",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | not_found_error model",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | pipeline-start-failure issue-closed",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [blocked-dependency]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | architecture approval required",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | github-quota-low",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | github-network-outage",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | secondary rate limit",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [pr-merge-unmerged",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [stage:worktree-containment]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [not-pipeline-actionable]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [dev-produced-no-changes]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [dev-handoff-missing]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [dev-step-cap-reached]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [dev-step-progress-unproven]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | invalid auth method",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | premature turn end",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | worktree_uncommitted",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | budget_ceiling_hit",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [runaway-progress-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [runaway-ceiling-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [cost-cap-exceeded]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | stage-no-output-timeout",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [stall-killed]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | pipeline_budget_exceeded",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | schema validation",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [no-changes-produced]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [validation-failed]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [validation-inconclusive]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [branch-forked]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [commit-orphaned]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [adapter-permission-rejected]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | [permission-denied]",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | stage_context_unreadable",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | dev_build_verification_missing",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | dev_build_verification_failed",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | dev_tests_failed",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | pr_merge_lookup_failed",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage_budget_exceeded: | subagent crash",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "network unavailable: extended github connectivity loss | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "network unavailable: extended github connectivity loss | adapter_incompatible",
       "kind": "network_unavailable",
       "signal": ""
@@ -2782,7 +3037,7 @@
     },
     {
       "input": "network unavailable: extended github connectivity loss | [cost-cap-exceeded]",
-      "kind": "network_unavailable",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -2868,6 +3123,11 @@
     {
       "input": "network unavailable: extended github connectivity loss | subagent crash",
       "kind": "network_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "adapter_incompatible | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -3012,7 +3272,7 @@
     },
     {
       "input": "adapter_incompatible | [cost-cap-exceeded]",
-      "kind": "adapter_incompatible",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -3098,6 +3358,11 @@
     {
       "input": "adapter_incompatible | subagent crash",
       "kind": "adapter_incompatible",
+      "signal": ""
+    },
+    {
+      "input": "[model-stream-stalled] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -3242,7 +3507,7 @@
     },
     {
       "input": "[model-stream-stalled] | [cost-cap-exceeded]",
-      "kind": "model_stream_stalled",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -3328,6 +3593,11 @@
     {
       "input": "[model-stream-stalled] | subagent crash",
       "kind": "model_stream_stalled",
+      "signal": ""
+    },
+    {
+      "input": "stream idle timeout | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -3472,8 +3742,8 @@
     },
     {
       "input": "stream idle timeout | [cost-cap-exceeded]",
-      "kind": "stream_idle_timeout",
-      "signal": "stream_idle_timeout"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "stream idle timeout | stage-no-output-timeout",
@@ -3559,6 +3829,11 @@
       "input": "stream idle timeout | subagent crash",
       "kind": "stream_idle_timeout",
       "signal": "stream_idle_timeout"
+    },
+    {
+      "input": "overloaded | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "overloaded | network unavailable: extended github connectivity loss",
@@ -3702,8 +3977,8 @@
     },
     {
       "input": "overloaded | [cost-cap-exceeded]",
-      "kind": "api_overloaded",
-      "signal": "api_overloaded"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "overloaded | stage-no-output-timeout",
@@ -3789,6 +4064,11 @@
       "input": "overloaded | subagent crash",
       "kind": "api_overloaded",
       "signal": "api_overloaded"
+    },
+    {
+      "input": "socket connection was closed | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "socket connection was closed | network unavailable: extended github connectivity loss",
@@ -3932,8 +4212,8 @@
     },
     {
       "input": "socket connection was closed | [cost-cap-exceeded]",
-      "kind": "api_connection_lost",
-      "signal": "api_connection_lost"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "socket connection was closed | stage-no-output-timeout",
@@ -4019,6 +4299,11 @@
       "input": "socket connection was closed | subagent crash",
       "kind": "api_connection_lost",
       "signal": "api_connection_lost"
+    },
+    {
+      "input": "[rate-limit-quota-exhausted] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[rate-limit-quota-exhausted] | network unavailable: extended github connectivity loss",
@@ -4162,8 +4447,8 @@
     },
     {
       "input": "[rate-limit-quota-exhausted] | [cost-cap-exceeded]",
-      "kind": "rate_limit_quota_exhausted",
-      "signal": "rate_limit_quota_exhausted"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[rate-limit-quota-exhausted] | stage-no-output-timeout",
@@ -4249,6 +4534,11 @@
       "input": "[rate-limit-quota-exhausted] | subagent crash",
       "kind": "rate_limit_quota_exhausted",
       "signal": "rate_limit_quota_exhausted"
+    },
+    {
+      "input": "[adapter-auth-failed] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[adapter-auth-failed] | network unavailable: extended github connectivity loss",
@@ -4392,8 +4682,8 @@
     },
     {
       "input": "[adapter-auth-failed] | [cost-cap-exceeded]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[adapter-auth-failed] | stage-no-output-timeout",
@@ -4479,6 +4769,11 @@
       "input": "[adapter-auth-failed] | subagent crash",
       "kind": "adapter_auth_failed",
       "signal": "adapter_auth_failed"
+    },
+    {
+      "input": "ai_apicallerror context_length_exceeded | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "ai_apicallerror context_length_exceeded | network unavailable: extended github connectivity loss",
@@ -4622,7 +4917,7 @@
     },
     {
       "input": "ai_apicallerror context_length_exceeded | [cost-cap-exceeded]",
-      "kind": "context_window_exceeded",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -4708,6 +5003,11 @@
     {
       "input": "ai_apicallerror context_length_exceeded | subagent crash",
       "kind": "context_window_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "not_found_error model | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -4852,7 +5152,7 @@
     },
     {
       "input": "not_found_error model | [cost-cap-exceeded]",
-      "kind": "model_unavailable",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -4938,6 +5238,11 @@
     {
       "input": "not_found_error model | subagent crash",
       "kind": "model_unavailable",
+      "signal": ""
+    },
+    {
+      "input": "pipeline-start-failure issue-closed | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -5082,7 +5387,7 @@
     },
     {
       "input": "pipeline-start-failure issue-closed | [cost-cap-exceeded]",
-      "kind": "issue_closed",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -5168,6 +5473,11 @@
     {
       "input": "pipeline-start-failure issue-closed | subagent crash",
       "kind": "issue_closed",
+      "signal": ""
+    },
+    {
+      "input": "[blocked-dependency] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -5312,7 +5622,7 @@
     },
     {
       "input": "[blocked-dependency] | [cost-cap-exceeded]",
-      "kind": "blocked_dependency",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -5398,6 +5708,11 @@
     {
       "input": "[blocked-dependency] | subagent crash",
       "kind": "blocked_dependency",
+      "signal": ""
+    },
+    {
+      "input": "architecture approval required | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -5542,8 +5857,8 @@
     },
     {
       "input": "architecture approval required | [cost-cap-exceeded]",
-      "kind": "architecture_approval_required",
-      "signal": "architecture_approval_required"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "architecture approval required | stage-no-output-timeout",
@@ -5629,6 +5944,11 @@
       "input": "architecture approval required | subagent crash",
       "kind": "architecture_approval_required",
       "signal": "architecture_approval_required"
+    },
+    {
+      "input": "github-quota-low | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "github-quota-low | network unavailable: extended github connectivity loss",
@@ -5772,8 +6092,8 @@
     },
     {
       "input": "github-quota-low | [cost-cap-exceeded]",
-      "kind": "github_quota_low",
-      "signal": "github_quota_low"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "github-quota-low | stage-no-output-timeout",
@@ -5859,6 +6179,11 @@
       "input": "github-quota-low | subagent crash",
       "kind": "github_quota_low",
       "signal": "github_quota_low"
+    },
+    {
+      "input": "github-network-outage | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "github-network-outage | network unavailable: extended github connectivity loss",
@@ -6002,8 +6327,8 @@
     },
     {
       "input": "github-network-outage | [cost-cap-exceeded]",
-      "kind": "github_network_outage",
-      "signal": "github_network_outage"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "github-network-outage | stage-no-output-timeout",
@@ -6089,6 +6414,11 @@
       "input": "github-network-outage | subagent crash",
       "kind": "github_network_outage",
       "signal": "github_network_outage"
+    },
+    {
+      "input": "secondary rate limit | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "secondary rate limit | network unavailable: extended github connectivity loss",
@@ -6232,7 +6562,7 @@
     },
     {
       "input": "secondary rate limit | [cost-cap-exceeded]",
-      "kind": "github_rate_limited",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -6318,6 +6648,11 @@
     {
       "input": "secondary rate limit | subagent crash",
       "kind": "github_rate_limited",
+      "signal": ""
+    },
+    {
+      "input": "[pr-merge-unmerged | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -6462,7 +6797,7 @@
     },
     {
       "input": "[pr-merge-unmerged | [cost-cap-exceeded]",
-      "kind": "pr_merge_unmerged",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -6548,6 +6883,11 @@
     {
       "input": "[pr-merge-unmerged | subagent crash",
       "kind": "pr_merge_unmerged",
+      "signal": ""
+    },
+    {
+      "input": "[stage:worktree-containment] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -6692,7 +7032,7 @@
     },
     {
       "input": "[stage:worktree-containment] | [cost-cap-exceeded]",
-      "kind": "containment_breach",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -6778,6 +7118,11 @@
     {
       "input": "[stage:worktree-containment] | subagent crash",
       "kind": "containment_breach",
+      "signal": ""
+    },
+    {
+      "input": "[not-pipeline-actionable] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -6922,7 +7267,7 @@
     },
     {
       "input": "[not-pipeline-actionable] | [cost-cap-exceeded]",
-      "kind": "not_pipeline_actionable",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -7008,6 +7353,11 @@
     {
       "input": "[not-pipeline-actionable] | subagent crash",
       "kind": "not_pipeline_actionable",
+      "signal": ""
+    },
+    {
+      "input": "[dev-produced-no-changes] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -7152,7 +7502,7 @@
     },
     {
       "input": "[dev-produced-no-changes] | [cost-cap-exceeded]",
-      "kind": "dev_produced_no_changes",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -7238,6 +7588,11 @@
     {
       "input": "[dev-produced-no-changes] | subagent crash",
       "kind": "dev_produced_no_changes",
+      "signal": ""
+    },
+    {
+      "input": "[dev-handoff-missing] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -7382,7 +7737,7 @@
     },
     {
       "input": "[dev-handoff-missing] | [cost-cap-exceeded]",
-      "kind": "dev_handoff_missing",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -7468,6 +7823,11 @@
     {
       "input": "[dev-handoff-missing] | subagent crash",
       "kind": "dev_handoff_missing",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-cap-reached] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -7612,7 +7972,7 @@
     },
     {
       "input": "[dev-step-cap-reached] | [cost-cap-exceeded]",
-      "kind": "dev_step_cap_reached",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -7698,6 +8058,11 @@
     {
       "input": "[dev-step-cap-reached] | subagent crash",
       "kind": "dev_step_cap_reached",
+      "signal": ""
+    },
+    {
+      "input": "[dev-step-progress-unproven] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -7842,7 +8207,7 @@
     },
     {
       "input": "[dev-step-progress-unproven] | [cost-cap-exceeded]",
-      "kind": "dev_step_progress_unproven",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -7928,6 +8293,11 @@
     {
       "input": "[dev-step-progress-unproven] | subagent crash",
       "kind": "dev_step_progress_unproven",
+      "signal": ""
+    },
+    {
+      "input": "invalid auth method | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -8072,7 +8442,7 @@
     },
     {
       "input": "invalid auth method | [cost-cap-exceeded]",
-      "kind": "git_transport_auth_failed",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -8158,6 +8528,11 @@
     {
       "input": "invalid auth method | subagent crash",
       "kind": "git_transport_auth_failed",
+      "signal": ""
+    },
+    {
+      "input": "premature turn end | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -8302,7 +8677,7 @@
     },
     {
       "input": "premature turn end | [cost-cap-exceeded]",
-      "kind": "premature_turn_end",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -8388,6 +8763,11 @@
     {
       "input": "premature turn end | subagent crash",
       "kind": "premature_turn_end",
+      "signal": ""
+    },
+    {
+      "input": "worktree_uncommitted | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -8532,7 +8912,7 @@
     },
     {
       "input": "worktree_uncommitted | [cost-cap-exceeded]",
-      "kind": "worktree_uncommitted",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -8618,6 +8998,11 @@
     {
       "input": "worktree_uncommitted | subagent crash",
       "kind": "worktree_uncommitted",
+      "signal": ""
+    },
+    {
+      "input": "budget_ceiling_hit | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -8762,7 +9147,7 @@
     },
     {
       "input": "budget_ceiling_hit | [cost-cap-exceeded]",
-      "kind": "budget_ceiling_hit",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -8848,6 +9233,11 @@
     {
       "input": "budget_ceiling_hit | subagent crash",
       "kind": "budget_ceiling_hit",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-progress-exceeded] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -8992,7 +9382,7 @@
     },
     {
       "input": "[runaway-progress-exceeded] | [cost-cap-exceeded]",
-      "kind": "runaway_progress",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -9078,6 +9468,11 @@
     {
       "input": "[runaway-progress-exceeded] | subagent crash",
       "kind": "runaway_progress",
+      "signal": ""
+    },
+    {
+      "input": "[runaway-ceiling-exceeded] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -9222,7 +9617,7 @@
     },
     {
       "input": "[runaway-ceiling-exceeded] | [cost-cap-exceeded]",
-      "kind": "stall_kill",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -9311,148 +9706,153 @@
       "signal": ""
     },
     {
+      "input": "[cost-cap-exceeded] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "[cost-cap-exceeded] | network unavailable: extended github connectivity loss",
-      "kind": "network_unavailable",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | adapter_incompatible",
-      "kind": "adapter_incompatible",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [model-stream-stalled]",
-      "kind": "model_stream_stalled",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | stream idle timeout",
-      "kind": "stream_idle_timeout",
-      "signal": "stream_idle_timeout"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | overloaded",
-      "kind": "api_overloaded",
-      "signal": "api_overloaded"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | socket connection was closed",
-      "kind": "api_connection_lost",
-      "signal": "api_connection_lost"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [rate-limit-quota-exhausted]",
-      "kind": "rate_limit_quota_exhausted",
-      "signal": "rate_limit_quota_exhausted"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [adapter-auth-failed]",
-      "kind": "adapter_auth_failed",
-      "signal": "adapter_auth_failed"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | ai_apicallerror context_length_exceeded",
-      "kind": "context_window_exceeded",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | not_found_error model",
-      "kind": "model_unavailable",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | pipeline-start-failure issue-closed",
-      "kind": "issue_closed",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [blocked-dependency]",
-      "kind": "blocked_dependency",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | architecture approval required",
-      "kind": "architecture_approval_required",
-      "signal": "architecture_approval_required"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | github-quota-low",
-      "kind": "github_quota_low",
-      "signal": "github_quota_low"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | github-network-outage",
-      "kind": "github_network_outage",
-      "signal": "github_network_outage"
+      "kind": "budget_exceeded",
+      "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | secondary rate limit",
-      "kind": "github_rate_limited",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [pr-merge-unmerged",
-      "kind": "pr_merge_unmerged",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [stage:worktree-containment]",
-      "kind": "containment_breach",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [not-pipeline-actionable]",
-      "kind": "not_pipeline_actionable",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [dev-produced-no-changes]",
-      "kind": "dev_produced_no_changes",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [dev-handoff-missing]",
-      "kind": "dev_handoff_missing",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [dev-step-cap-reached]",
-      "kind": "dev_step_cap_reached",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [dev-step-progress-unproven]",
-      "kind": "dev_step_progress_unproven",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | invalid auth method",
-      "kind": "git_transport_auth_failed",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | premature turn end",
-      "kind": "premature_turn_end",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | worktree_uncommitted",
-      "kind": "worktree_uncommitted",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | budget_ceiling_hit",
-      "kind": "budget_ceiling_hit",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [runaway-progress-exceeded]",
-      "kind": "runaway_progress",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
       "input": "[cost-cap-exceeded] | [runaway-ceiling-exceeded]",
-      "kind": "stall_kill",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -9537,6 +9937,11 @@
     },
     {
       "input": "[cost-cap-exceeded] | subagent crash",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "stage-no-output-timeout | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -9771,6 +10176,11 @@
       "signal": ""
     },
     {
+      "input": "[stall-killed] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "[stall-killed] | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -10001,6 +10411,11 @@
       "signal": ""
     },
     {
+      "input": "pipeline_budget_exceeded | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "pipeline_budget_exceeded | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -10227,6 +10642,11 @@
     },
     {
       "input": "pipeline_budget_exceeded | subagent crash",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
+      "input": "schema validation | stage_budget_exceeded:",
       "kind": "budget_exceeded",
       "signal": ""
     },
@@ -10461,6 +10881,11 @@
       "signal": ""
     },
     {
+      "input": "[no-changes-produced] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "[no-changes-produced] | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -10688,6 +11113,11 @@
     {
       "input": "[no-changes-produced] | subagent crash",
       "kind": "no_changes_produced",
+      "signal": ""
+    },
+    {
+      "input": "[validation-failed] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -10921,6 +11351,11 @@
       "signal": ""
     },
     {
+      "input": "[validation-inconclusive] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "[validation-inconclusive] | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -11148,6 +11583,11 @@
     {
       "input": "[validation-inconclusive] | subagent crash",
       "kind": "validation_inconclusive",
+      "signal": ""
+    },
+    {
+      "input": "[branch-forked] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -11381,6 +11821,11 @@
       "signal": ""
     },
     {
+      "input": "[commit-orphaned] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "[commit-orphaned] | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -11608,6 +12053,11 @@
     {
       "input": "[commit-orphaned] | subagent crash",
       "kind": "commit_orphaned",
+      "signal": ""
+    },
+    {
+      "input": "[adapter-permission-rejected] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -11841,6 +12291,11 @@
       "signal": ""
     },
     {
+      "input": "[permission-denied] | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "[permission-denied] | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -12068,6 +12523,11 @@
     {
       "input": "[permission-denied] | subagent crash",
       "kind": "permission_denied",
+      "signal": ""
+    },
+    {
+      "input": "stage_context_unreadable | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -12301,6 +12761,11 @@
       "signal": ""
     },
     {
+      "input": "dev_build_verification_missing | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "dev_build_verification_missing | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -12528,6 +12993,11 @@
     {
       "input": "dev_build_verification_missing | subagent crash",
       "kind": "dev_build_verification_missing",
+      "signal": ""
+    },
+    {
+      "input": "dev_build_verification_failed | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {
@@ -12761,6 +13231,11 @@
       "signal": ""
     },
     {
+      "input": "dev_tests_failed | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "dev_tests_failed | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -12991,6 +13466,11 @@
       "signal": ""
     },
     {
+      "input": "pr_merge_lookup_failed | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
+      "signal": ""
+    },
+    {
       "input": "pr_merge_lookup_failed | network unavailable: extended github connectivity loss",
       "kind": "network_unavailable",
       "signal": ""
@@ -13218,6 +13698,11 @@
     {
       "input": "pr_merge_lookup_failed | subagent crash",
       "kind": "pr_merge_lookup_failed",
+      "signal": ""
+    },
+    {
+      "input": "subagent crash | stage_budget_exceeded:",
+      "kind": "budget_exceeded",
       "signal": ""
     },
     {

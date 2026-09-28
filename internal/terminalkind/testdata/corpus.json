@@ -1772,6 +1772,69 @@
       "source": "synthetic",
       "producer": "A reason that joins two stages' tails (a stage's error and its tail, or a composed first-cause reason): one opencode stage rejected `read` under OpenCode's default `.env` guard, another rejected `bash` under an `ask` rule in an opencode.json, each ending in #1624's marker.",
       "rationale": "The permission a marker names is the model's tool choice and never changes the kind: whichever marker comes first, the reason parks as adapter_permission_rejected."
+    },
+    {
+      "id": "order-stage-budget-beats-overloaded",
+      "input": "API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n[stage-budget] stage_budget_exceeded:turns observed=41 limit=40: the stage reached its turn budget and was stopped (pipeline.stage_budgets, docs/GUARDRAILS_AND_BUDGETS.md)",
+      "expected": "budget_exceeded",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/execution/stage_budget.go StageBudgetNotice",
+      "rationale": "ORDERING ROW (#2016). The manager stopped the stage at its stage budget, and the CLI printed a retryable signature while it was being killed. The stop is the operator's limit, not a transient API fault: classified as the retryable kind it is retried and spends the budget again."
+    },
+    {
+      "id": "order-cost-cap-beats-overloaded",
+      "input": "API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n[cost-cap-exceeded] Stage feature-dev terminated: cost $2.10 exceeded the configured cap ($2.00)",
+      "expected": "budget_exceeded",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/execution/opencode_cost_watchdog.go",
+      "rationale": "ORDERING ROW (#2016). The cost watchdog stopped the stage and killing it mid-request left a retryable signature on stderr. A deliberate cap stop must not be retried as a transient fault and spend the cap again."
+    },
+    {
+      "id": "order-stage-budget-beats-api-connection-closed",
+      "input": "API Error: Connection error. The socket connection was closed unexpectedly\n[stage-budget] stage_budget_exceeded:turns observed=41 limit=40: the stage reached its turn budget and was stopped (pipeline.stage_budgets, docs/GUARDRAILS_AND_BUDGETS.md)",
+      "expected": "budget_exceeded",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/execution/stage_budget.go StageBudgetNotice",
+      "rationale": "ORDERING ROW (#2016). The manager stopped the stage at its stage budget, and the CLI printed a retryable signature while it was being killed. The stop is the operator's limit, not a transient API fault: classified as the retryable kind it is retried and spends the budget again."
+    },
+    {
+      "id": "order-cost-cap-beats-api-connection-closed",
+      "input": "API Error: Connection error. The socket connection was closed unexpectedly\n[cost-cap-exceeded] Stage feature-dev terminated: cost $2.10 exceeded the configured cap ($2.00)",
+      "expected": "budget_exceeded",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/execution/opencode_cost_watchdog.go",
+      "rationale": "ORDERING ROW (#2016). The cost watchdog stopped the stage and killing it mid-request left a retryable signature on stderr. A deliberate cap stop must not be retried as a transient fault and spend the cap again."
+    },
+    {
+      "id": "order-stage-budget-beats-ai-apicallerror",
+      "input": "AI_APICallError: Cannot connect to API: Unable to connect. Is the computer able to access the url?\n[stage-budget] stage_budget_exceeded:turns observed=41 limit=40: the stage reached its turn budget and was stopped (pipeline.stage_budgets, docs/GUARDRAILS_AND_BUDGETS.md)",
+      "expected": "budget_exceeded",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/execution/stage_budget.go StageBudgetNotice",
+      "rationale": "ORDERING ROW (#2016). The manager stopped the stage at its stage budget, and the CLI printed a retryable signature while it was being killed. The stop is the operator's limit, not a transient API fault: classified as the retryable kind it is retried and spends the budget again."
+    },
+    {
+      "id": "order-cost-cap-beats-ai-apicallerror",
+      "input": "AI_APICallError: Cannot connect to API: Unable to connect. Is the computer able to access the url?\n[cost-cap-exceeded] Stage feature-dev terminated: cost $2.10 exceeded the configured cap ($2.00)",
+      "expected": "budget_exceeded",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "internal/execution/opencode_cost_watchdog.go",
+      "rationale": "ORDERING ROW (#2016). The cost watchdog stopped the stage and killing it mid-request left a retryable signature on stderr. A deliberate cap stop must not be retried as a transient fault and spend the cap again."
+    },
+    {
+      "id": "cost-cap-bare-wording",
+      "input": "Stage feature-dev terminated: cost-cap-exceeded after 26m 45s",
+      "expected": "budget_exceeded",
+      "expected_signal": "",
+      "source": "synthetic",
+      "producer": "cost-cap circuit breaker (unstamped wording)",
+      "rationale": "The cost-cap wording without the bracketed stamp. stamped-stage-stop claims only the stamped marker, so the bare wording keeps its original precedence: below the retryable API rules and above the stall rules."
     }
   ]
 }

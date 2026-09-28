@@ -607,7 +607,9 @@ func TestRuleFiresIgnoresPrecedence(t *testing.T) {
 		{"[cost-cap-exceeded] Stage feature-dev terminated: cost cap exceeded", true, "budget_exceeded"},
 		{"COST CAP EXCEEDED after 12m", true, "budget_exceeded"},
 		// Claimed by api-overloaded for the RECORD, but the cost cap still fired.
-		{"API Error: Overloaded — [cost-cap-exceeded] stage stopped", true, "api_overloaded"},
+		{"API Error: Overloaded — cost cap exceeded, stage stopped", true, "api_overloaded"},
+		// The stamped marker outranks the retryable signature (#2016).
+		{"API Error: Overloaded — [cost-cap-exceeded] stage stopped", true, "budget_exceeded"},
 		{"exit 1: schema validation failed", false, "validation_error"},
 	}
 	for _, c := range cases {
