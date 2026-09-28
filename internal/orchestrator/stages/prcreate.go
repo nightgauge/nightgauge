@@ -910,10 +910,7 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 			DeadCodeWarnings []struct {
 				Severity string `json:"severity"`
 			} `json:"dead_code_warnings"`
-			ManualChecklist []struct {
-				Item     string `json:"item"`
-				Verified bool   `json:"verified"`
-			} `json:"manual_checklist"`
+			ManualChecklist json.RawMessage `json:"manual_checklist"`
 		}
 		if jsonErr := json.Unmarshal(data, &raw); jsonErr != nil {
 			return snap, fmt.Errorf("parse validate context: %w", jsonErr)
@@ -937,12 +934,7 @@ func defaultReadCreateContext(workdir string, issueNumber int) (PRCreateSnapshot
 				break
 			}
 		}
-		for _, c := range raw.ManualChecklist {
-			if !c.Verified {
-				snap.ManualChecklistOpen = true
-				break
-			}
-		}
+		snap.ManualChecklistOpen = manualChecklistOpen(raw.ManualChecklist)
 	}
 
 	// planning-{N}.json — picks up knowledge_path when not already set.
@@ -1119,3 +1111,69 @@ var (
 	mkdirAll        = osMkdirAll
 	writeFileAtomic = osWriteFileAtomic
 )
+
+// manualChecklistOpen reports whether any manual_checklist entry is not
+// verified. Agents write the checklist in several shapes, which the SDK's
+// ValidateContextSchema normalizes (packages/nightgauge-sdk/src/context/
+// schemas/validate.ts); this reader accepts the same ones, so a checklist
+// the SDK reads as verified is not punted here:
+//
+//	[{"item": "...", "verified": true}]      canonical
+//	[{"item": "...", "status": "passed"}]    status string (alt: done, checked)
+//	[{"description": "...", "done": true}]   alt keys
+//	{"check X": true}                        record form
+//	["check X"]                              plain strings: unverified
+//
+// A status string counts as verified only when it says so (passed, verified,
+// done, ...); "failed" or "pending" is open. An absent or null checklist has
+// nothing open. A shape it cannot read counts as open, so the LLM path decides.
+func manualChecklistOpen(raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return false
+	}
+	var list []any
+	if err := json.Unmarshal(raw, &list); err == nil {
+		for _, entry := range list {
+			if !checklistEntryVerified(entry) {
+				return true
+			}
+		}
+		return false
+	}
+	var record map[string]any
+	if err := json.Unmarshal(raw, &record); err == nil {
+		for _, v := range record {
+			if !checklistValueVerified(v) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
+func checklistEntryVerified(entry any) bool {
+	obj, ok := entry.(map[string]any)
+	if !ok {
+		return false // a plain string is an unchecked item
+	}
+	for _, key := range []string{"verified", "done", "checked", "status"} {
+		if v, present := obj[key]; present && v != nil {
+			return checklistValueVerified(v)
+		}
+	}
+	return false
+}
+
+func checklistValueVerified(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		switch strings.ToLower(strings.TrimSpace(t)) {
+		case "passed", "pass", "verified", "done", "complete", "completed", "checked", "ok", "yes", "true", "auto-passed":
+			return true
+		}
+	}
+	return false
+}

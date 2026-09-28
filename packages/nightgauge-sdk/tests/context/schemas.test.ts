@@ -685,6 +685,31 @@ describe("Context Schemas", () => {
       }
     });
 
+    it("should read a manual_checklist status string strictly", () => {
+      const statusChecklist = {
+        schema_version: "1.2",
+        issue_number: 42,
+        validation_status: "passed",
+        manual_checklist: [
+          { item: "unknown unit exits 2", status: "passed", evidence: "exit 2" },
+          { item: "valid conversion", status: "failed" },
+          { item: "help on stdout", status: "pending" },
+        ],
+        project_type: "generic",
+        created_at: "2026-02-10T13:30:00Z",
+      };
+
+      const result = ValidateContextSchema.safeParse(statusChecklist);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.manual_checklist).toEqual([
+          { item: "unknown unit exits 2", verified: true },
+          { item: "valid conversion", verified: false },
+          { item: "help on stdout", verified: false },
+        ]);
+      }
+    });
+
     it("should coerce manual_checklist from string array", () => {
       const stringChecklist = {
         schema_version: "1.2",
