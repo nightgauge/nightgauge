@@ -11,10 +11,10 @@ require (
 	github.com/shurcooL/graphql v0.0.0-20240915155400-7ee5256398cf
 	github.com/spf13/cobra v1.10.2
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/crypto v0.56.0
+	golang.org/x/crypto v0.57.0
 	golang.org/x/oauth2 v0.37.0
 	golang.org/x/sys v0.48.0
-	golang.org/x/term v0.45.0
+	golang.org/x/term v0.46.0
 	golang.org/x/time v0.16.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.59.0
@@ -46,8 +46,8 @@ require (
 	github.com/skeema/knownhosts v1.3.1 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
-	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
+	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	modernc.org/libc v1.75.7 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
