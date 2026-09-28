@@ -4991,16 +4991,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// sides asymmetric. Reporting "cleaned up feature branch" for
 				// that state told the reader the opposite of the WARN printed
 				// two lines above it.
-				localGone, err := s.execMgr.CleanupBranchAndRemoteIfMerged(item.Repo, branchName)
-				switch {
-				case err != nil:
+				res, err := s.execMgr.CleanupBranchAndRemoteIfMerged(item.Repo, branchName)
+				if err != nil {
 					log.Printf("#%d: branch cleanup failed for %s: %v", item.Number, branchName, err)
-				case localGone:
-					log.Printf("#%d: cleaned up feature branch %s", item.Number, branchName)
-				default:
-					log.Printf("#%d: feature branch %s was NOT removed locally — see the branch cleanup line above. "+
-						"origin's copy is already gone, so the local ref is now the only copy",
-						item.Number, branchName)
+				} else {
+					log.Printf("#%d: %s", item.Number, describeShippedBranchCleanup(branchName, res))
 				}
 			case loadPrUrl(stageWorkspace(runtime, workspaceRoot), item.Number) != "":
 				log.Printf("#%d: run failed but PR exists — keeping origin/%s (the PR holds the work), dropping local ref only",
@@ -10616,4 +10611,23 @@ func completionLogModel(model, source string) string {
 		return "none"
 	}
 	return model
+}
+
+// describeShippedBranchCleanup states what the shipped-run branch cleanup
+// observed and did (#1901). It never claims a copy survived that was not seen,
+// nor that a copy is "the only one" unless the other was observed gone.
+func describeShippedBranchCleanup(branch string, res execution.ShippedBranchCleanup) string {
+	switch {
+	case res.AlreadyGone():
+		return fmt.Sprintf("feature branch %s already gone locally and on origin — nothing to clean up", branch)
+	case res.Declined:
+		return fmt.Sprintf("feature branch %s kept (%s) — the merged-content gate declined; "+
+			"see the branch cleanup line above", branch, strings.Join(res.Survivors(), " and "))
+	}
+	survivors := res.Survivors()
+	if len(survivors) == 0 {
+		return fmt.Sprintf("cleaned up feature branch %s", branch)
+	}
+	return fmt.Sprintf("feature branch %s only partly cleaned up — still present: %s; "+
+		"see the branch cleanup line above", branch, strings.Join(survivors, " and "))
 }

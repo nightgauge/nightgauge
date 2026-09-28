@@ -25,7 +25,7 @@ func TestBranchNameForIssue_ComposesFromLabelsAndTitle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("branchNameForIssue: %v", err)
 	}
-	if name != "fix/1911-fixoutcome-model-still-fails" {
+	if name != "fix/1911-fix-outcome-model-still-fails" {
 		t.Errorf("name = %q", name)
 	}
 }

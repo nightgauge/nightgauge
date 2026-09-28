@@ -175,6 +175,19 @@ changelog, and the release workflow refuses a tag that does not.
   checkout, commit their unrelated changes onto `main`, and rely on branch
   protection to stop the push.
 
+- **One issue, one branch, across dispatches** (#1901). The branch slug and
+  the knowledge-directory slug now come from one function with one 50-character
+  bound (`internal/issueslug`); the branch keeps only its extra rule of dropping
+  a leading copy of the issue's own number. Punctuation now separates words in
+  branch names (`fix(outcome)` gives `fix-outcome`, not `fixoutcome`), matching
+  the knowledge directory. A re-dispatch that finds an existing local or origin
+  branch for the same issue under another name continues on it instead of
+  creating a second one, and refuses with the branch names when an issue
+  already has several. The shipped-run cleanup now observes which copies exist
+  before judging and deleting, judges origin's copy when the local ref is
+  already gone, and logs what happened: it no longer reports a deleted or
+  already-absent branch as "NOT removed locally" or as "the only copy".
+
 - **A stage can no longer escape its stage budget or cost cap** (#2016). A
   stdout line over 1 MiB, such as a huge tool output, stopped the Claude,
   Codex, Gemini, Grok and Copilot readers for the rest of the stage, so no
