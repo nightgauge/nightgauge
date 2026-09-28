@@ -11445,7 +11445,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // when validation FAILS — on a hard-gate failure it writes
         // validation_status:"failed" (+ an errorCategory) and deliberately
         // leaves the code uncommitted "on disk for retry" rather than exiting
-        // non-zero (build-and-tests.md: "does not exit 1 — control must reach
+        // non-zero (mobile-mcp-tests.md: "does not exit 1 — control must reach
         // the context write"). The orchestrator, not the skill, owns the halt.
         // Without this gate the legacy TS path advanced a failed validation
         // straight into pr-create, which then found no commit to push and

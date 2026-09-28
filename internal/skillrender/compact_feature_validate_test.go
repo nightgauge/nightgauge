@@ -242,3 +242,29 @@ func TestCompactFeatureValidate_ReadDirectivesAreAbsoluteAndExist(t *testing.T) 
 func TestCompactFeatureValidate_CodeBlocksAreVerbatim(t *testing.T) {
 	assertProfileCodeBlocksAreVerbatim(t, "feature-validate")
 }
+
+// TestCompactFeatureValidate_SuppliesBuildAndTestIncludes: the build/test
+// procedure used to be one 1,115-line include too large for the supply
+// budget, so a local compact run re-read it in 400-line pages at every
+// build/test phase. Split per phase, the compact render the scheduler's
+// local-endpoint branch uses (ProfileCompact + SupplyIncludes) supplies each
+// of them, leaves no read-now directive for them, and still fits.
+func TestCompactFeatureValidate_SuppliesBuildAndTestIncludes(t *testing.T) {
+	root := realSkillsRoot(t)
+	res := mustRender(t, Options{Stage: "feature-validate", SkillsRoots: []string{root}, Profile: ProfileCompact, SupplyIncludes: true})
+	supplied := map[string]bool{}
+	for _, n := range res.SuppliedIncludes {
+		supplied[n] = true
+	}
+	for _, n := range []string{"build-verification.md", "dead-code.md", "baseline-comparison.md", "run-tests.md"} {
+		if !supplied[n] {
+			t.Errorf("%s not supplied; supplied = %v", n, res.SuppliedIncludes)
+		}
+		if strings.Contains(res.Content, "_includes/"+n+"` (same directory as this SKILL.md) now") {
+			t.Errorf("a phase still directs a read of supplied %s", n)
+		}
+	}
+	if fit := Fit("feature-validate", res.Content, 81920); !fit.Fits {
+		t.Errorf("compact+includes does not fit an 81920 window: %+v", fit)
+	}
+}
