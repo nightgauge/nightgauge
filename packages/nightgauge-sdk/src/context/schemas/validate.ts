@@ -224,6 +224,31 @@ const VerifyUiSchema = z.object({
   skipped_reason: optionalString(),
 });
 
+/**
+ * Whether a manual_checklist flag says the item was verified. A boolean is
+ * read as-is; a status string counts only when it says so ("passed",
+ * "verified", "done", ...), so "failed" or "pending" stays unverified. Kept in
+ * step with pr-create's Go reader (internal/orchestrator/stages/prcreate.go,
+ * checklistValueVerified).
+ */
+const VERIFIED_CHECKLIST_STATUSES = new Set([
+  "passed",
+  "pass",
+  "verified",
+  "done",
+  "complete",
+  "completed",
+  "checked",
+  "ok",
+  "yes",
+  "true",
+  "auto-passed",
+]);
+function checklistValueVerified(value: unknown): boolean {
+  if (typeof value === "string") return VERIFIED_CHECKLIST_STATUSES.has(value.trim().toLowerCase());
+  return value === true;
+}
+
 export const ValidateContextSchema = z
   .object({
     schema_version: z.string().regex(/^\d+\.\d+$/),
@@ -379,8 +404,8 @@ export const ValidateContextSchema = z
               const obj = entry as Record<string, unknown>;
               // Normalize alt keys: description→item, done/status/checked→verified
               const item = (obj.item ?? obj.description ?? obj.text ?? obj.name ?? "") as string;
-              const verified = Boolean(
-                obj.verified ?? obj.done ?? obj.status ?? obj.checked ?? false
+              const verified = checklistValueVerified(
+                obj.verified ?? obj.done ?? obj.checked ?? obj.status ?? false
               );
               return { item: String(item), verified };
             }
@@ -391,7 +416,7 @@ export const ValidateContextSchema = z
         if (typeof val === "object") {
           return Object.entries(val as Record<string, unknown>).map(([key, value]) => ({
             item: key,
-            verified: Boolean(value),
+            verified: checklistValueVerified(value),
           }));
         }
         return val;
