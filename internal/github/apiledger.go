@@ -115,7 +115,73 @@ type APILedgerRecord struct {
 	Cached     bool  `json:"cached,omitempty"`
 	DurationMs int64 `json:"duration_ms"`
 	PID        int   `json:"pid"`
+	// Identity names whose rate-limit bucket the request spent (#2087):
+	// "app:<slug>" for a GitHub App installation, "user:<login>" for a
+	// personal token, "unknown" when the owner was not resolved. A label
+	// derived from the credential's owner, never the token or any part of it.
+	// Records written before the field existed decode it as "", which every
+	// reader treats as "unknown"; old files are never rewritten.
+	Identity string `json:"identity,omitempty"`
 }
+
+// UnknownLedgerIdentity is the identity label for a request whose credential
+// owner was not resolved, and for records written before #2087.
+const UnknownLedgerIdentity = "unknown"
+
+// LedgerIdentity normalises a stored identity label for reading: an empty
+// value (an old record) reads as UnknownLedgerIdentity.
+func LedgerIdentity(label string) string {
+	if strings.TrimSpace(label) == "" {
+		return UnknownLedgerIdentity
+	}
+	return label
+}
+
+// UserLedgerIdentity labels a personal token by its owner's login.
+func UserLedgerIdentity(login string) string {
+	return ledgerIdentityLabel("user:", login)
+}
+
+// appLedgerIdentity labels an App installation by the App's slug, or by its
+// installation id when no slug is configured.
+func appLedgerIdentity(creds *AppCredentials) string {
+	if creds == nil {
+		return ""
+	}
+	if creds.Slug != "" {
+		return ledgerIdentityLabel("app:", creds.Slug)
+	}
+	return "app:installation-" + strconv.FormatInt(creds.InstallationID, 10)
+}
+
+// ledgerIdentityLabel builds prefix+name, refusing anything that is not a
+// plain GitHub login or slug. A token can never pass: token prefixes carry an
+// underscore (gh[pousr]_, github_pat_), which logins and slugs never contain.
+func ledgerIdentityLabel(prefix, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > 100 {
+		return ""
+	}
+	for _, ch := range name {
+		ok := ch == '-' || ch == '[' || ch == ']' ||
+			(ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9')
+		if !ok {
+			return ""
+		}
+	}
+	return prefix + name
+}
+
+// atomicString is a string safe to read from the transport while an auth
+// lookup sets it.
+type atomicString struct{ v atomic.Value }
+
+func (a *atomicString) Load() string {
+	s, _ := a.v.Load().(string)
+	return s
+}
+
+func (a *atomicString) Store(s string) { a.v.Store(s) }
 
 // apiLedger appends request records to a rolling JSONL file. A nil *apiLedger
 // is a no-op, so the disabled path costs one nil check per request.

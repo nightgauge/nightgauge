@@ -4809,6 +4809,7 @@ computes hit rates. Output is deterministically sorted by gate name.
 nightgauge api-usage --since 1h              # the ledger is already recording
 nightgauge api-usage --by op --top 5 --json
 nightgauge api-usage --since 1h --resource graphql   # just the pool that runs out
+nightgauge api-usage --since 1h --identity user:octocat  # one identity's bucket
 nightgauge doctor                            # the `github_api_budget` arm
 ```
 
@@ -4828,6 +4829,7 @@ GraphQL for the ETag layer (#486). Each JSONL record carries:
 | `kind` | The resource GitHub billed, from `X-RateLimit-Resource` — its truth, not our guess from the URL |
 | `cost` | Points billed: the drop in `X-RateLimit-Remaining` since this process's previous call on that resource |
 | `caller` | The first stack frame outside `internal/github` — the code an operator can delete or throttle |
+| `identity` | Whose bucket paid: `app:<slug>`, `user:<login>` or `unknown` — the credential owner, never the token (#2087). Records written before the field read as `unknown` |
 | `op` | GraphQL operation name, or the first selected field for the anonymous documents the struct client sends |
 | `cached` | The request was answered `304` from the ETag cache: free |
 

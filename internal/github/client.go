@@ -123,6 +123,12 @@ type Client struct {
 	// answers from it instead.
 	app *AppCredentials
 
+	// ledgerIdentity labels whose rate-limit bucket this client spends, for
+	// the API ledger (#2087): "app:<slug>", "user:<login>", or "" (read as
+	// "unknown"). Set from the resolved credential's owner, never the token;
+	// a user label is also learned the first time GET /user answers.
+	ledgerIdentity atomicString
+
 	// restProjects404 remembers, per board, until when its REST projects
 	// endpoints are skipped after a 404 (board_rest.go).
 	restProjects404 map[string]time.Time
@@ -485,7 +491,7 @@ func newClientFromChain(cfg TokenResolver, owner string, forUser func(string) (s
 		if err != nil {
 			return nil, fmt.Errorf("no GitHub token available for configured github_user %q (tried config and gh auth token --user; ambient GITHUB_TOKEN is intentionally NOT used for a configured identity): %w", user, err)
 		}
-		return withMachineTracker(NewClientWithToken(tok)), nil
+		return withMachineTracker(NewClientWithToken(tok).WithLedgerIdentity(UserLedgerIdentity(user))), nil
 	}
 
 	// 3b. No github_user configured — ambient GITHUB_TOKEN env var first.
@@ -609,6 +615,16 @@ func newClientWithSource(src oauth2.TokenSource, identity string) *Client {
 	return c
 }
 
+// WithLedgerIdentity labels the rate-limit bucket this client spends for the
+// API ledger. label must come from UserLedgerIdentity; an empty label leaves
+// the client reading as "unknown".
+func (c *Client) WithLedgerIdentity(label string) *Client {
+	if c != nil && label != "" {
+		c.ledgerIdentity.Store(label)
+	}
+	return c
+}
+
 // appClient returns a client authenticated as owner's GitHub App, or nil when
 // none is configured or it cannot mint a token — in which case the chain
 // continues with the personal tiers and says so on stderr (#1955).
@@ -631,6 +647,7 @@ func appClient(cfg TokenResolver, owner string) *Client {
 	slot := "app:" + strconv.FormatInt(creds.InstallationID, 10)
 	c := newClientWithSource(oauth2.ReuseTokenSource(first, appTokenSource{creds: creds}), slot)
 	c.app = creds
+	c.ledgerIdentity.Store(appLedgerIdentity(creds))
 	if path, err := DefaultSharedTrackerPath(); err == nil {
 		c = c.WithRateLimitTracker(NewSharedRateLimitTracker(path), slot).WithRateLimitWait()
 	}
@@ -976,6 +993,9 @@ func (t *rateLimitHeaderTransport) RoundTrip(req *http.Request) (*http.Response,
 			Op:     ledgerGraphQLOp(req),
 			Caller: ledgerCaller(),
 			PID:    os.Getpid(),
+		}
+		if t.client != nil {
+			ledgerRec.Identity = t.client.ledgerIdentity.Load()
 		}
 	}
 

@@ -33,6 +33,9 @@ type apiUsageRecord struct {
 	Remaining   int    `json:"remaining"`
 	Cached      bool   `json:"cached"`
 	DurationMs  int64  `json:"duration_ms"`
+	// Identity is whose bucket paid (#2087). Absent in older files; read
+	// through github.LedgerIdentity so those count as "unknown".
+	Identity string `json:"identity"`
 }
 
 // apiUsageGroup is one row of the report: a caller, operation, or resource
@@ -56,6 +59,7 @@ func apiUsageCmd() *cobra.Command {
 		top      int
 		asJSON   bool
 		budget   bool
+		identity string
 	)
 	cmd := &cobra.Command{
 		Use:   "api-usage",
@@ -81,7 +85,8 @@ the ledger off; set it to a path to write somewhere other than the default
 		Example: `  nightgauge api-usage
   nightgauge api-usage --since 30m --by op
   nightgauge api-usage --by resource --json
-  nightgauge api-usage --since 1h --resource graphql   # just the pool that runs out`,
+  nightgauge api-usage --since 1h --resource graphql   # just the pool that runs out
+  nightgauge api-usage --since 1h --identity app:my-app # one identity's bucket`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if budget && (since <= 0 || since > time.Hour) {
 				// The GraphQL quota resets on a rolling hour, not on whatever
@@ -97,6 +102,7 @@ the ledger off; set it to a path to write somewhere other than the default
 			if err != nil {
 				return err
 			}
+			recs = filterAPIUsageIdentity(recs, identity)
 			if budget {
 				printAPIBudget(cmd.OutOrStdout(), recs, since)
 				return nil
@@ -125,6 +131,11 @@ the ledger off; set it to a path to write somewhere other than the default
 					// more than an order of magnitude on a normal window.
 					payload["resource"] = resource
 				}
+				if identity != "" {
+					payload["identity"] = identity
+				}
+				byIdentity, _, _ := groupAPIUsage(recs, "identity")
+				payload["by_identity"] = byIdentity
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(payload)
 			}
 			printAPIUsage(cmd.OutOrStdout(), recs, groups, total, unattributed, byWhat, top, since)
@@ -133,7 +144,10 @@ the ledger off; set it to a path to write somewhere other than the default
 	}
 	cmd.Flags().StringVar(&path, "file", "", "Read one specific ledger file (default: the rolling set at .nightgauge/logs/github-api.jsonl)")
 	cmd.Flags().DurationVar(&since, "since", 0, "Only records newer than this (e.g. 30m, 2h)")
-	cmd.Flags().StringVar(&byWhat, "by", "caller", "Group by: caller, op, resource, path")
+	cmd.Flags().StringVar(&byWhat, "by", "caller", "Group by: caller, op, resource, path, identity")
+	cmd.Flags().StringVar(&identity, "identity", "",
+		"Only records spent by this identity (app:<slug>, user:<login>, or unknown — "+
+			"which includes records written before the ledger recorded identity)")
 	cmd.Flags().StringVar(&resource, "resource", "",
 		"Only records billed to this rate-limit pool (e.g. graphql, core). "+
 			"graphql includes graphql_mutation — they share one quota")
@@ -261,6 +275,23 @@ func filterAPIUsageResource(recs []apiUsageRecord, resource string) []apiUsageRe
 	return out
 }
 
+// filterAPIUsageIdentity keeps only records spent by one identity. App
+// installations and personal tokens draw separate buckets (#2087), so this is
+// the filter that answers "how much of MY quota is the pipeline using?".
+func filterAPIUsageIdentity(recs []apiUsageRecord, identity string) []apiUsageRecord {
+	identity = strings.TrimSpace(identity)
+	if identity == "" {
+		return recs
+	}
+	out := recs[:0:0]
+	for _, r := range recs {
+		if github.LedgerIdentity(r.Identity) == identity {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 // attributionWindow is how recently this process must have observed the
 // rate-limit counter for a cost delta to belong to the call that observed it.
 //
@@ -350,6 +381,8 @@ func apiUsageKey(r apiUsageRecord, by string) string {
 		return "unknown"
 	case "path":
 		return r.Method + " " + r.Path
+	case "identity":
+		return github.LedgerIdentity(r.Identity)
 	default:
 		if r.Caller != "" {
 			return r.Caller
@@ -383,6 +416,7 @@ func toLedgerRecords(recs []apiUsageRecord) []github.APILedgerRecord {
 			Cost:      r.Cost,
 			Remaining: r.Remaining,
 			Cached:    r.Cached,
+			Identity:  r.Identity,
 		}
 	}
 	return out
@@ -426,9 +460,11 @@ func printAPIBudget(w io.Writer, recs []apiUsageRecord, since time.Duration) {
 
 	fmt.Fprintf(w, "  Spent%s:      %d pts\n", sinceSuffix(since), lw.Points)
 	if lw.Exhausted {
-		fmt.Fprintf(w, "  Remaining (observed): 0 pts — GitHub reported this pool EXHAUSTED\n\n")
+		fmt.Fprintf(w, "  Remaining (observed): 0 pts — GitHub reported this pool EXHAUSTED for %s\n\n",
+			lw.ExhaustedIdentity)
 	} else {
-		fmt.Fprintf(w, "  Remaining (observed): %d pts\n\n", remaining)
+		fmt.Fprintf(w, "  Remaining (observed): %d pts (lowest bucket: %s)\n\n", remaining,
+			github.LedgerIdentity(lw.LowWaterIdentity))
 	}
 	fmt.Fprintf(w, "  A ProjectV2 board read costs ~%d pts per %d-item page.\n",
 		github.BoardReadPointsPerPage, github.BoardReadItemsPerPage)
@@ -461,6 +497,11 @@ func printAPIUsage(w io.Writer, recs []apiUsageRecord, groups []apiUsageGroup, t
 	fmt.Fprintf(w, "By resource:\n")
 	for _, g := range byResource {
 		fmt.Fprintf(w, "  %-18s %6d pts  %5d calls\n", g.Key, g.Points, g.Calls)
+	}
+	byIdentity, _, _ := groupAPIUsage(recs, "identity")
+	fmt.Fprintf(w, "\nBy identity:\n")
+	for _, g := range byIdentity {
+		fmt.Fprintf(w, "  %-28s %6d pts  %5d calls\n", g.Key, g.Points, g.Calls)
 	}
 	if gets > 0 {
 		fmt.Fprintf(w, "\nConditional GETs served from cache: %d/%d (%.0f%% free)\n",

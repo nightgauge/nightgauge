@@ -84,11 +84,11 @@ func checkGitHubAPIBudget(workspaceRoot string, now time.Time) (CheckItem, strin
 	switch {
 	case w.Exhausted:
 		msg := fmt.Sprintf(
-			"github-api-budget-exhausted: the %s quota hit ZERO %s. Every board read, sweep and "+
+			"github-api-budget-exhausted: the %s quota of identity %s hit ZERO %s. Every board read, sweep and "+
 				"PR check failed for the rest of that window — which presents as an idle queue, not "+
 				"as an error. Top spender(s): %s. Run `nightgauge api-usage --since 1h` for the full "+
 				"breakdown",
-			w.ExhaustedResource, exhaustedWhen(w, now), topCallerList(w))
+			w.ExhaustedResource, w.ExhaustedIdentity, exhaustedWhen(w, now), topCallerList(w))
 		return CheckItem{OK: false, Detail: detail, Error: msg}, msg
 
 	case w.OverIdleBudget():
@@ -127,7 +127,8 @@ func remainingSuffix(w github.LedgerWindow) string {
 	if w.LowWaterRemaining < 0 {
 		return ""
 	}
-	return fmt.Sprintf(", low water %d remaining", w.LowWaterRemaining)
+	return fmt.Sprintf(", low water %d remaining on %s", w.LowWaterRemaining,
+		github.LedgerIdentity(w.LowWaterIdentity))
 }
 
 func exhaustedWhen(w github.LedgerWindow, now time.Time) string {
