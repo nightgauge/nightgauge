@@ -25,25 +25,30 @@ import (
 	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
-// gitInitRepo initializes a git repository at dir with an identity configured
-// and a single initial commit so HEAD is valid. Returns nothing — fails the
-// test on any git error.
+// gitInitRepo makes dir a pipeline-shaped run tree: a LINKED worktree on a
+// feature branch of a fresh repository whose primary checkout lives elsewhere,
+// with an identity configured and a seed commit so HEAD is valid. A recovery
+// commit refuses the primary checkout and the default branch (#1907), so the
+// fixture mirrors what a real run hands the rescue. dir must be empty.
 func gitInitRepo(t *testing.T, dir string) {
 	t.Helper()
-	gittest.Run(t, dir, "init")
-	gittest.Run(t, dir, "config", "user.email", "test@nightgauge.dev")
-	gittest.Run(t, dir, "config", "user.name", "Nightgauge Test")
-	gittest.Run(t, dir, "config", "commit.gpgsign", "false")
-	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("seed\n"), 0o644); err != nil {
+	primary := t.TempDir()
+	gittest.Run(t, primary, "init")
+	gittest.Run(t, primary, "checkout", "-b", "main")
+	gittest.Run(t, primary, "config", "user.email", "test@nightgauge.dev")
+	gittest.Run(t, primary, "config", "user.name", "Nightgauge Test")
+	gittest.Run(t, primary, "config", "commit.gpgsign", "false")
+	if err := os.WriteFile(filepath.Join(primary, "README.md"), []byte("seed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	// Mirror production: .nightgauge/ holds transient pipeline state and
 	// is gitignored, so recovery commits only ever capture real source files.
-	if err := os.WriteFile(filepath.Join(dir, ".gitignore"), []byte(".nightgauge/\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(primary, ".gitignore"), []byte(".nightgauge/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gittest.Run(t, dir, "add", "-A")
-	gittest.Run(t, dir, "commit", "-m", "chore: seed commit")
+	gittest.Run(t, primary, "add", "-A")
+	gittest.Run(t, primary, "commit", "-m", "chore: seed commit")
+	gittest.Run(t, primary, "worktree", "add", "-b", "fix/test-run", dir)
 }
 
 // gitLog returns the one-line commit subjects in the repo at dir, newest first.

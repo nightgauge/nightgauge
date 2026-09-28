@@ -8374,6 +8374,9 @@ func gitBranchCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// A re-dispatch may continue on the issue's existing branch
+			// under an earlier name (#1901); report the branch actually used.
+			branchName = res.Branch
 			baseBranch, action, epicBranch := res.BaseBranch, res.Action, res.EpicBranch
 
 			if outputJSON {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 )
 
 // GateDecision is the result of evaluating a workflow gate.
@@ -220,6 +221,22 @@ func evaluateFileGate(rawInput json.RawMessage) GateDecision {
 	// Gate 2: Protect git internals
 	if strings.Contains(filePath, ".git/") || strings.Contains(filePath, ".git\\") {
 		return Block("Modifying .git internals blocked.")
+	}
+
+	// Gate 3: a pipeline stage may not edit the controls that gate its own
+	// output (#1970). This is the early, cheap refusal; the orchestrator's
+	// post-stage gates.CheckProtectedPaths is the enforcement, since a shell
+	// command can write the file without an Edit/Write call.
+	if os.Getenv("NIGHTGAUGE_STAGE") != "" {
+		slashed := filepath.ToSlash(filePath)
+		for _, p := range gates.PipelineProtectedPaths {
+			if slashed == p || strings.HasSuffix(slashed, "/"+p) {
+				return Block(fmt.Sprintf("Pipeline stages may not modify %s (#1970): it is the "+
+					"allowlist of the gate that checks this stage's output. Leave it unchanged "+
+					"and report the path that needs an exception; a human changes the allowlist "+
+					"in a separate pull request.", p))
+			}
+		}
 	}
 
 	return Allow()

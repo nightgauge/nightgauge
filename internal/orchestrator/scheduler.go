@@ -4027,6 +4027,15 @@ func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 	if hasUnmergedIndex(worktreePath) {
 		return outcome, fmt.Errorf("worktree has an unmerged index (a merge or rebase is stopped at a conflict) — refusing to stage it, which would collapse the conflict stages and commit conflict markers")
 	}
+	// A recovery commit may only land on the run's own feature branch in the
+	// run's own linked worktree (#1907). The fallback that resolved a run with
+	// no recorded worktree to the operator's primary checkout committed that
+	// operator's unrelated uncommitted edits straight onto `main`; only the
+	// forge's branch protection stopped the push. Both properties are checked
+	// here, at the single commit point, so no caller can route around them.
+	if err := recoveryCommitTargetRefusal(worktreePath); err != nil {
+		return outcome, err
+	}
 	// Read the tree BEFORE staging: `git add -A` collapses the distinction
 	// this rescue turns on. A staged deletion and an untracked scaffold look
 	// alike in the index, and only one of them is work.
@@ -4127,6 +4136,53 @@ func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 		log.Printf("#%d: recovery commit push failed (non-fatal): %v", issueNumber, err)
 	}
 	return outcome, nil
+}
+
+// recoveryCommitTargetRefusal returns a non-nil error when worktreePath is not
+// a tree the pipeline may commit a rescue into (#1907):
+//
+//   - the repository's primary checkout. Pipeline runs get a dedicated linked
+//     worktree, so everything uncommitted in one is the run's own work; the
+//     primary checkout is shared with the operator, whose unrelated edits a
+//     rescue there cannot tell apart from the stage's and would sweep in. The
+//     refusal names the dirty paths so the operator sees what was left alone.
+//   - a detached HEAD or the default branch. A recovery commit belongs on the
+//     run's feature branch; without one there is nowhere safe to put it.
+func recoveryCommitTargetRefusal(worktreePath string) error {
+	gitDir, errA := exec.Command("git", "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-dir").Output()
+	commonDir, errB := exec.Command("git", "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if errA != nil || errB != nil {
+		return fmt.Errorf("cannot resolve the git directory of %s — refusing a recovery commit", worktreePath)
+	}
+	if filepath.Clean(strings.TrimSpace(string(gitDir))) == filepath.Clean(strings.TrimSpace(string(commonDir))) {
+		return fmt.Errorf("%s is the repository's primary checkout, not a pipeline worktree — refusing a recovery commit that could absorb the operator's uncommitted changes; dirty paths left untouched: %s",
+			worktreePath, strings.Join(dirtyPaths(worktreePath), ", "))
+	}
+	branch, err := exec.Command("git", "-C", worktreePath, "symbolic-ref", "--quiet", "--short", "HEAD").Output()
+	if err != nil {
+		return fmt.Errorf("HEAD in %s is detached — refusing a recovery commit that no feature branch would carry", worktreePath)
+	}
+	name := strings.TrimSpace(string(branch))
+	if name == execution.DetectDefaultBranch(worktreePath) || name == "main" || name == "master" {
+		return fmt.Errorf("HEAD in %s is on the default branch %q — refusing a recovery commit; it belongs on the run's feature branch", worktreePath, name)
+	}
+	return nil
+}
+
+// dirtyPaths lists the paths `git status --porcelain` reports, for naming in a
+// refusal. Best-effort: nil when git cannot answer.
+func dirtyPaths(worktreePath string) []string {
+	out, err := exec.Command("git", "-C", worktreePath, "status", "--porcelain", "--untracked-files=all").Output()
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
+		if len(line) > 3 {
+			paths = append(paths, line[3:])
+		}
+	}
+	return paths
 }
 
 // schedulerTerminalOutcome derives the terminal outcome string the Go
@@ -4935,16 +4991,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// sides asymmetric. Reporting "cleaned up feature branch" for
 				// that state told the reader the opposite of the WARN printed
 				// two lines above it.
-				localGone, err := s.execMgr.CleanupBranchAndRemoteIfMerged(item.Repo, branchName)
-				switch {
-				case err != nil:
+				res, err := s.execMgr.CleanupBranchAndRemoteIfMerged(item.Repo, branchName)
+				if err != nil {
 					log.Printf("#%d: branch cleanup failed for %s: %v", item.Number, branchName, err)
-				case localGone:
-					log.Printf("#%d: cleaned up feature branch %s", item.Number, branchName)
-				default:
-					log.Printf("#%d: feature branch %s was NOT removed locally — see the branch cleanup line above. "+
-						"origin's copy is already gone, so the local ref is now the only copy",
-						item.Number, branchName)
+				} else {
+					log.Printf("#%d: %s", item.Number, describeShippedBranchCleanup(branchName, res))
 				}
 			case loadPrUrl(stageWorkspace(runtime, workspaceRoot), item.Number) != "":
 				log.Printf("#%d: run failed but PR exists — keeping origin/%s (the PR holds the work), dropping local ref only",
@@ -5234,7 +5285,23 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// is every normal completion.
 	reconciledArm := reconcileNone
 
-	stageIdx := 0
+	// Durable run-state (#1964): record the run as running — or resume the
+	// paused/interrupted attempt of this issue and re-enter at its recorded
+	// stage — and book the terminal transition when the run returns. The
+	// defer runs before the terminal defer above (LIFO), after every return
+	// path below has settled pipelineSuccess.
+	lifecycle, resumeFrom := beginRunLifecycle(workspaceRoot, item.Number,
+		resolveFeatureBranch(runtime, workspaceRoot, item.Number))
+	defer func() { lifecycle.finish(ctx, pipelineSuccess) }()
+
+	stageIdx := resumeStageIndex(stages, resumeFrom)
+	if stageIdx > 0 {
+		log.Printf("#%d: resuming at %s — skipping %v, completed by an earlier attempt of this run",
+			item.Number, stages[stageIdx], stages[:stageIdx])
+		if b := resolveFeatureBranch(runtime, workspaceRoot, item.Number); b != "" {
+			runtime.SetBranch(b)
+		}
+	}
 	// Endpoint-aware OpenCode dispatch (#1679): the slot a stage holds on a
 	// declared endpoint, the endpoints it has lost, and how often it has
 	// failed over. Reset whenever the loop moves to another stage.
@@ -5266,6 +5333,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			return
 		default:
 		}
+
+		lifecycle.stage(stage, runtime.FeatureBranch())
 
 		// For merge stage, acquire the per-repo lock; for any other stage, drop a
 		// lock still held from a prior pr-merge iteration that rewound away.
@@ -6694,6 +6763,31 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					})
 				}
 			}
+		}
+
+		// Protected paths (#1970). Runs after every stage, whatever its exit
+		// and after both reconciles, so neither a clean exit, a disabled gate
+		// nor a reconcile-to-success can let a stage's change to the
+		// publication-boundary allowlist through. A hit fails the stage.
+		if pp := gates.CheckProtectedPaths(stageWorkspace(runtime, workspaceRoot)); !pp.Passed {
+			runtime.AppendStageGateResult(stage, pp.ToStageGateResult())
+			tracer.Emit(trace.KindGateResult, string(stage), trace.GateResultPayload{
+				GateName:   pp.GateName,
+				Source:     "protected_paths",
+				Passed:     false,
+				ResultKind: string(pp.Kind),
+				Reason:     pp.Reason,
+				Evidence:   pp.Evidence,
+				DurationMs: pp.DurationMs,
+				Trigger:    "post_stage",
+			})
+			log.Printf("#%d: stage %s %s", item.Number, stage, pp.Reason)
+			err = fmt.Errorf("stage gate failed: %s", pp.Reason)
+			exitCode = 2
+			gateRan = true
+			gateRes = pp
+			reconciledNonTerminal = false
+			reconciledArm = reconcileNone
 		}
 
 		// Persist state to disk after each stage completes
@@ -10544,4 +10638,23 @@ func completionLogModel(model, source string) string {
 		return "none"
 	}
 	return model
+}
+
+// describeShippedBranchCleanup states what the shipped-run branch cleanup
+// observed and did (#1901). It never claims a copy survived that was not seen,
+// nor that a copy is "the only one" unless the other was observed gone.
+func describeShippedBranchCleanup(branch string, res execution.ShippedBranchCleanup) string {
+	switch {
+	case res.AlreadyGone():
+		return fmt.Sprintf("feature branch %s already gone locally and on origin — nothing to clean up", branch)
+	case res.Declined:
+		return fmt.Sprintf("feature branch %s kept (%s) — the merged-content gate declined; "+
+			"see the branch cleanup line above", branch, strings.Join(res.Survivors(), " and "))
+	}
+	survivors := res.Survivors()
+	if len(survivors) == 0 {
+		return fmt.Sprintf("cleaned up feature branch %s", branch)
+	}
+	return fmt.Sprintf("feature branch %s only partly cleaned up — still present: %s; "+
+		"see the branch cleanup line above", branch, strings.Join(survivors, " and "))
 }

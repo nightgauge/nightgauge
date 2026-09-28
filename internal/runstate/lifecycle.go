@@ -135,6 +135,7 @@ func MarkPaused(baseDir, reason string, resumeFrom *Stage) (*RunState, error) {
 	t := true
 	rs.Recoverable = &t
 	rs.RecoveryActions = []string{"resume", "restart", "discard"}
+	rs.CurrentStage = nil
 	rs.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := Save(baseDir, rs); err != nil {
 		return nil, err
@@ -156,6 +157,7 @@ func MarkCompleted(baseDir string) (*RunState, error) {
 	f := false
 	rs.Recoverable = &f
 	rs.RecoveryActions = nil
+	rs.CurrentStage = nil
 	rs.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := Save(baseDir, rs); err != nil {
 		return nil, err
@@ -183,6 +185,7 @@ func MarkAborted(baseDir, reason string, recoverable bool) (*RunState, error) {
 	} else {
 		rs.RecoveryActions = []string{"discard"}
 	}
+	rs.CurrentStage = nil
 	rs.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := Save(baseDir, rs); err != nil {
 		return nil, err
@@ -206,6 +209,7 @@ func MarkDiscarded(baseDir, reason string) (*RunState, error) {
 	f := false
 	rs.Recoverable = &f
 	rs.RecoveryActions = nil
+	rs.CurrentStage = nil
 	rs.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := Save(baseDir, rs); err != nil {
 		return nil, err
@@ -259,6 +263,38 @@ func MarkStageComplete(baseDir string, stage Stage) (*RunState, error) {
 	rs.CompletedStages = append(rs.CompletedStages, stage)
 	if next := nextStage(stage); next != nil {
 		rs.ResumeFromStage = next
+	}
+	rs.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := Save(baseDir, rs); err != nil {
+		return nil, err
+	}
+	return rs, nil
+}
+
+// MarkStageStarted records that a running run has entered `stage`: it sets
+// current_stage, moves resume_from_stage to the same stage (so an interruption
+// re-enters the stage that was executing) and stamps the latest attempt's
+// last_stage. A non-empty branch refreshes the recorded value, because the
+// feature branch is only named once issue-pickup has run.
+func MarkStageStarted(baseDir string, stage Stage, branch string) (*RunState, error) {
+	rs, err := requireExisting(baseDir)
+	if err != nil {
+		return nil, err
+	}
+	if rs.State != StateRunning {
+		return nil, fmt.Errorf("cannot start stage %s in state %s; only a running run advances", stage, rs.State)
+	}
+	if !IsStage(string(stage)) {
+		return nil, fmt.Errorf("unknown pipeline stage %q", stage)
+	}
+	cur, resume, last := stage, stage, stage
+	rs.CurrentStage = &cur
+	rs.ResumeFromStage = &resume
+	if a := len(rs.Attempts); a > 0 {
+		rs.Attempts[a-1].LastStage = &last
+	}
+	if branch != "" {
+		rs.Branch = branch
 	}
 	rs.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := Save(baseDir, rs); err != nil {

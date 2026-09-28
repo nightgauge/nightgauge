@@ -219,6 +219,7 @@ func TestTransportAndProvenanceValuesMatchSpikeInventory(t *testing.T) {
 		"claude-opus-5-5":           declaredBoth,
 		"claude-opus-5":             declaredBoth,
 		"claude-opus-4-8":           declaredBoth,
+		"claude-sonnet-5-5":         declaredBoth,
 		"claude-sonnet-5":           declaredBoth,
 		"claude-haiku-4-5-20251001": declaredBoth,
 		"claude-fable-5-1":          declaredBoth,

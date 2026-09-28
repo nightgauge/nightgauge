@@ -31,6 +31,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Claude Sonnet 5.5 now serves the `sonnet` band.** `claude-sonnet-5-5` is
+  registered ($2/$10 per MTok, 1M context, 128K output, `low`–`max` effort,
+  default `high`) and every stage routed to `sonnet`, on the Claude CLI and
+  the API alike, now runs it. `claude-sonnet-5` is deprecated with
+  `claude-sonnet-5-5` as its replacement and stays pinnable by id. Thinking is
+  adaptive and on by default; it can be turned off only at `high` effort or
+  below. The live judge's default model is now `claude-sonnet-5-5`. Through the
+  OpenCode adapter, `anthropic/claude-sonnet-5-5` is refused until OpenCode's
+  bundled catalog lists it; pin `anthropic/claude-sonnet-5` there meanwhile.
+
 - **`NIGHTGAUGE_SKILLS_ROOT` and a `skills` doctor check** (#2220). A
   Go-direct or OpenCode run outside the core repository failed in seconds with
   `SKILL.md not found for stage "issue-pickup"` unless the binary sat beside a
@@ -166,6 +176,44 @@ changelog, and the release workflow refuses a tag that does not.
   `remote.notifyOnPipelineRun` config keys.
 
 ### Fixed
+
+- **An auto-recovery commit can no longer land on the default branch or sweep
+  in an operator's uncommitted edits (#1907).** The uncommitted-work rescue
+  now refuses the repository's primary checkout, a detached `HEAD`, and the
+  default branch, and names the dirty paths it left untouched. A run that
+  failed before getting its own worktree used to fall back to the operator's
+  checkout, commit their unrelated changes onto `main`, and rely on branch
+  protection to stop the push.
+
+- **One issue, one branch, across dispatches** (#1901). The branch slug and
+  the knowledge-directory slug now come from one function with one 50-character
+  bound (`internal/issueslug`); the branch keeps only its extra rule of dropping
+  a leading copy of the issue's own number. Punctuation now separates words in
+  branch names (`fix(outcome)` gives `fix-outcome`, not `fixoutcome`), matching
+  the knowledge directory. A re-dispatch that finds an existing local or origin
+  branch for the same issue under another name continues on it instead of
+  creating a second one, and refuses with the branch names when an issue
+  already has several. The shipped-run cleanup now observes which copies exist
+  before judging and deleting, judges origin's copy when the local ref is
+  already gone, and logs what happened: it no longer reports a deleted or
+  already-absent branch as "NOT removed locally" or as "the only copy".
+
+- **`nightgauge run` now writes `.nightgauge/pipeline/run-state.json`, so an
+  interrupted run resumes instead of restarting** (#1964). The orchestrator
+  records the run as `running` when its stage loop starts, updates
+  `current_stage` and `resume_from_stage` on every stage it enters, marks it
+  `completed` on success, `paused` when the run is cancelled (including
+  SIGTERM/SIGINT), and `aborted` on failure. Re-invoking a paused run, or one
+  whose process died without recording a stop, resumes the same run and
+  re-enters at the recorded stage rather than at `issue-pickup`. `nightgauge run
+state` now defaults to the main checkout's record, so it reports the same
+  state from a run's worktree.
+
+- **Sonnet 5 stages are priced at $2/$10 per MTok, not $3/$15.** The
+  announced Sonnet 5 price increase was cancelled, so the registry's $3/$15
+  card (with its cache pools) overstated every Sonnet 5 stage's cost by half.
+  Sonnet 5 now carries the standard $2 input, $10 output, $2.50 5-minute cache
+  write, $4 1-hour cache write and $0.20 cache read rates.
 
 - **A stage can no longer escape its stage budget or cost cap** (#2016). A
   stdout line over 1 MiB, such as a huge tool output, stopped the Claude,
@@ -424,7 +472,27 @@ opencode` failed at issue-pickup before any model was called. A stage whose
   does, so a key-protected server no longer reports HTTP 401. The
   `endpoints[]` block is now documented in `SETTINGS_ARCHITECTURE.md`.
 
+- **`spike validate <path>` no longer silently discards its positional
+  argument and blames the artifact for it (#1981).** The command declared no
+  `Args` constraint, so cobra accepted and dropped a positional path, then
+  read (empty) stdin and reported the artifact as missing its fenced yaml
+  recommendations block — a false contract violation. A positional path is
+  now an alias for `--body-file` (the two are mutually exclusive), matching
+  `spike materialize`'s shape. An unsupplied body (empty stdin, no path, no
+  `--body-file`) is now reported as "no body supplied" rather than a
+  contract error.
+
 ### Security
+
+- **The pipeline can no longer widen the publication-boundary allowlist that
+  gates its own output** (#1970). After every stage the orchestrator checks the
+  stage workspace (working tree, index, assume-unchanged bits and commits since
+  the base branch) and fails the stage if `.github/publication-boundary.yaml`
+  changed; `NIGHTGAUGE_DISABLE_GATES` does not turn this off. The PreToolUse
+  gate also refuses an Edit or Write to the file inside a pipeline stage. In CI,
+  a pull request that changes the allowlist must change nothing else, so an
+  exception is reviewed apart from the content it lets through, and the file
+  has an explicit CODEOWNERS entry.
 
 - **The daemon socket moved out of the working tree** (#2039). `nightgauge
 serve` now listens on `<RUNTIME>/<key>.sock`, where `RUNTIME` is

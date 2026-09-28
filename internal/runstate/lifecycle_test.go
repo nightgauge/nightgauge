@@ -278,3 +278,31 @@ func contains(slice []string, s string) bool {
 func readFileExists(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
+
+func TestMarkStageStarted_TracksCurrentStageAndClearsOnPause(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := MarkRunning(dir, MarkRunningOptions{IssueNumber: 5, Branch: "issue-5"}); err != nil {
+		t.Fatal(err)
+	}
+	rs, err := MarkStageStarted(dir, StageFeatureDev, "fix/5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *rs.CurrentStage != StageFeatureDev || *rs.ResumeFromStage != StageFeatureDev ||
+		*rs.Attempts[0].LastStage != StageFeatureDev || rs.Branch != "fix/5" {
+		t.Fatalf("unexpected record: %+v", rs)
+	}
+	if _, err := MarkStageStarted(dir, Stage("spike-materialize"), ""); err == nil {
+		t.Fatal("unknown stage accepted")
+	}
+	rs, err = MarkPaused(dir, "stop", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rs.CurrentStage != nil || *rs.ResumeFromStage != StageFeatureDev {
+		t.Fatalf("paused record: current=%v resume=%v", rs.CurrentStage, *rs.ResumeFromStage)
+	}
+	if _, err := MarkStageStarted(dir, StagePRCreate, ""); err == nil {
+		t.Fatal("stage advance accepted on a paused run")
+	}
+}

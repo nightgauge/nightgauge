@@ -119,44 +119,80 @@ func spikeMaterializeCmd() *cobra.Command {
 	return cmd
 }
 
-// spikeValidateCmd implements `nightgauge spike validate`.
-// It reads a spike issue body from --body-file or stdin and validates it
-// against the spike contract: yaml recommendations block, schema, Path
-// declaration, and artifact path. See docs/SPIKE_CONTRACT.md.
+// spikeValidateCmd implements `nightgauge spike validate [path]`.
+// It reads a spike issue body from a positional path, --body-file, or stdin
+// (in that order of precedence is an error if both a path and --body-file are
+// given) and validates it against the spike contract: yaml recommendations
+// block, schema, Path declaration, and artifact path. See
+// docs/SPIKE_CONTRACT.md.
 func spikeValidateCmd() *cobra.Command {
 	var bodyFile string
 	cmd := &cobra.Command{
-		Use:   "validate",
+		Use:   "validate [path]",
 		Short: "Validate a spike issue body before creation",
-		Long: `Validates a spike issue body string (read from --body-file or stdin)
-against the spike contract: checks for a yaml recommendations block,
-validates the schema, and enforces a Path A/B/C declaration.
+		Long: `Validates a spike issue body string against the spike contract: checks for
+a yaml recommendations block, validates the schema, and enforces a Path
+A/B/C declaration.
+
+The body is read from the positional path argument, --body-file, or stdin,
+in that order; a positional path is an alias for --body-file and the two
+are mutually exclusive. If no body is supplied at all (empty stdin, no
+path, no --body-file), the command reports "no body supplied" rather than
+a contract violation.
 
 Exit 0: valid. Exit 1: invalid (prints human-readable error).
 
 See docs/SPIKE_CONTRACT.md for the full contract.`,
+		Args:         cobra.MaximumNArgs(1),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			path := bodyFile
+			if len(args) == 1 {
+				if bodyFile != "" {
+					return fmt.Errorf("cannot use both a positional path and --body-file")
+				}
+				path = args[0]
+			}
+
 			var data []byte
 			var err error
-			if bodyFile != "" {
-				data, err = os.ReadFile(bodyFile)
+			if path != "" {
+				data, err = os.ReadFile(path)
+				if err != nil {
+					return fmt.Errorf("read body: %w", err)
+				}
 			} else {
 				data, err = io.ReadAll(cmd.InOrStdin())
+				if err != nil {
+					return fmt.Errorf("read body: %w", err)
+				}
 			}
-			if err != nil {
-				return fmt.Errorf("read body: %w", err)
-			}
-			if err := spikepkg.ValidateBody(string(data)); err != nil {
-				fmt.Fprintf(os.Stderr, "spike validate: %v\n\nSee docs/SPIKE_CONTRACT.md for remediation.\n", err)
+
+			ok, msg := runSpikeValidate(string(data))
+			if !ok {
+				fmt.Fprintln(os.Stderr, msg)
 				os.Exit(1)
 			}
-			fmt.Println("spike validate: OK")
+			fmt.Println(msg)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&bodyFile, "body-file", "", "Path to file containing the spike issue body (default: stdin)")
 	return cmd
+}
+
+// runSpikeValidate validates a spike issue body and reports whether it is
+// valid. It distinguishes "no body was supplied at all" from "the supplied
+// body fails the spike contract" so that an empty read (e.g. unpiped stdin)
+// never reads as a contract violation on the artifact.
+func runSpikeValidate(body string) (ok bool, message string) {
+	if len(strings.TrimSpace(body)) == 0 {
+		return false, "spike validate: no body supplied\n\nPass a path, --body-file, or pipe a body on stdin."
+	}
+	if err := spikepkg.ValidateBody(body); err != nil {
+		return false, fmt.Sprintf("spike validate: %v\n\nSee docs/SPIKE_CONTRACT.md for remediation.", err)
+	}
+	return true, "spike validate: OK"
 }
 
 func renderMaterializeHuman(res *spikepkg.MaterializeResult, path string) {

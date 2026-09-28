@@ -29,7 +29,7 @@ import type { EvalJudge, EvalJudgeVerdict, JudgeDimensionScore } from "./quality
 import type { EvalRubric, EvalTask, QualityDimensionName } from "./modelEvalSchemas.js";
 
 /** Default grader model — strong judgment, cheaper than Opus. Never the SUT. */
-export const DEFAULT_JUDGE_MODEL = "claude-sonnet-5";
+export const DEFAULT_JUDGE_MODEL = "claude-sonnet-5-5";
 
 /** 3 min — grading is a single reasoning turn over embedded source, not a crawl. */
 const DEFAULT_JUDGE_TIMEOUT_MS = 180_000;

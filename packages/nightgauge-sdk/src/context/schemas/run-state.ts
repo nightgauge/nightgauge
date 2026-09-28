@@ -124,6 +124,9 @@ export const RunStateSchema = z
      *  next run should start. When state === "running", this is the stage
      *  currently executing. */
     resume_from_stage: RunStageSchema.nullish(),
+    /** Stage a `running` run is executing, written by the Go orchestrator on
+     *  every stage advance. Cleared on every transition out of `running`. */
+    current_stage: RunStageSchema.nullish(),
     /** Absolute path to the orchestrator-managed worktree (when used). Stop
      *  preserves the worktree; discard removes it. */
     worktree_path: z.string().nullish(),

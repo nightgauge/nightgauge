@@ -2,6 +2,7 @@ package hooks
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -449,5 +450,33 @@ func TestGateFileGatesNotAffectedByMode(t *testing.T) {
 		if result.Decision != "block" {
 			t.Errorf("mode %q: expected block for editing .git/config, got allow", mode)
 		}
+	}
+}
+
+// #1970: a pipeline stage may not edit the publication-boundary allowlist;
+// an interactive session (no NIGHTGAUGE_STAGE) may.
+func TestGateBlocksBoundaryAllowlistInPipelineStage(t *testing.T) {
+	for _, fp := range []string{
+		"/project/.github/publication-boundary.yaml",
+		".github/publication-boundary.yaml",
+	} {
+		input := makeGateInput("Edit", FileToolInput{FilePath: fp})
+
+		t.Setenv("NIGHTGAUGE_STAGE", "")
+		if r := EvaluateGate(input, config.SanitizationModeBlock); r.Decision != "allow" {
+			t.Errorf("interactive edit of %q blocked: %s", fp, r.Reason)
+		}
+
+		t.Setenv("NIGHTGAUGE_STAGE", "feature-dev")
+		if r := EvaluateGate(input, config.SanitizationModeBlock); r.Decision != "block" ||
+			!strings.Contains(r.Reason, "#1970") {
+			t.Errorf("pipeline edit of %q: got %s %q, want block citing #1970", fp, r.Decision, r.Reason)
+		}
+	}
+
+	t.Setenv("NIGHTGAUGE_STAGE", "feature-dev")
+	other := makeGateInput("Write", FileToolInput{FilePath: "/project/.github/other-publication-boundary.yaml"})
+	if r := EvaluateGate(other, config.SanitizationModeBlock); r.Decision != "allow" {
+		t.Errorf("unrelated file blocked: %s", r.Reason)
 	}
 }

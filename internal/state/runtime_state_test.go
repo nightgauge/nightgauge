@@ -161,9 +161,9 @@ func TestCompleteStage_AdapterAwarePricing_GrokVsClaude(t *testing.T) {
 	if claudeStage.CostUnstamped {
 		t.Fatal("claude/sonnet should resolve to a stamped cost")
 	}
-	const wantClaude = 2.8989
+	const wantClaude = 1.932588 // 484709*2/1e6 + 96317*10/1e6 (sonnet band $2/$10)
 	if diff := claudeStage.CostUSD - wantClaude; diff > 1e-3 || diff < -1e-3 {
-		t.Errorf("claude stage CostUSD = %.6f, want ~%.6f (anthropic sonnet rates, unchanged)", claudeStage.CostUSD, wantClaude)
+		t.Errorf("claude stage CostUSD = %.6f, want ~%.6f (anthropic sonnet rates)", claudeStage.CostUSD, wantClaude)
 	}
 }
 

@@ -48,18 +48,22 @@ describe("model registry — integrity", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("seeds the current Claude Code models including Sonnet 5", () => {
+  it("seeds the current Claude Code models including Sonnet 5.5", () => {
     const ids = new Set(MODEL_REGISTRY.map((m) => m.id));
     for (const id of [
       "claude-opus-4-8",
       "claude-sonnet-5",
+      "claude-sonnet-5-5",
       "claude-haiku-4-5-20251001",
       "claude-fable-5",
       "claude-fable-5-1",
     ]) {
       expect(ids.has(id)).toBe(true);
     }
-    expect(getModelDescriptor("claude-sonnet-5")?.deprecated).toBeUndefined();
+    expect(getModelDescriptor("claude-sonnet-5-5")?.deprecated).toBeUndefined();
+    expect(getModelDescriptor("sonnet", "anthropic")?.id).toBe("claude-sonnet-5-5");
+    expect(getModelDescriptor("claude-sonnet-5")?.deprecated).toBe(true);
+    expect(getModelDescriptor("claude-sonnet-5")?.replacement).toBe("claude-sonnet-5-5");
   });
 
   it("claude-fable-5-1 leads the fable band; 5 is deprecated behind it (#1274)", () => {
@@ -320,7 +324,8 @@ describe("model registry — cost computation (parity with prior hardcoded rates
   const M = 1_000_000;
   const cases: Array<[string, number]> = [
     ["claude-haiku-4-5-20251001", 1.0 + 5.0],
-    ["claude-sonnet-5", 3.0 + 15.0],
+    ["claude-sonnet-5", 2.0 + 10.0],
+    ["claude-sonnet-5-5", 2.0 + 10.0],
     ["claude-sonnet-4-6", 3.0 + 15.0],
     ["claude-opus-4-8", 5.0 + 25.0],
     ["claude-fable-5", 10.0 + 50.0],
@@ -403,10 +408,10 @@ describe("model registry — per-(provider, band) rates (regression guard)", () 
         cacheCreationPerMillion: 1.25,
       },
       sonnet: {
-        inputPerMillion: 3.0,
-        outputPerMillion: 15.0,
-        cacheReadPerMillion: 0.3,
-        cacheCreationPerMillion: 3.75,
+        inputPerMillion: 2.0,
+        outputPerMillion: 10.0,
+        cacheReadPerMillion: 0.2,
+        cacheCreationPerMillion: 2.5,
       },
       opus: {
         inputPerMillion: 4.0,

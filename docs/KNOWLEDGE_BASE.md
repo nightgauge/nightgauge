@@ -7,6 +7,11 @@ integrates with the pipeline.
 > **Implementation source**: All schemas, templates, and slug algorithms in this
 > document are derived directly from
 > `packages/nightgauge-sdk/src/services/KnowledgeService.ts`.
+> The Go side derives the issue-tier `{slug}` in `internal/issueslug`, the same
+> function that names the issue's feature branch, so `{N}-{slug}` matches the
+> branch's `<prefix>/{N}-{slug}` except when the title opens with its own issue
+> number, which the branch drops. Directories are located by their `{N}-`
+> prefix, never by recomputing the slug.
 
 ---
 

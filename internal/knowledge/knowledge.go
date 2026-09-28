@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/issueslug"
 	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
 )
@@ -176,7 +177,7 @@ func Scaffold(workspaceRoot string, issueNumber int, title string, acceptanceCri
 	if len(eventWriter) > 0 {
 		w = eventWriter[0]
 	}
-	slug := generateSlug(title)
+	slug := issueslug.Of(title)
 	dirName := fmt.Sprintf("%d-%s", issueNumber, slug)
 	knowledgePath := filepath.Join(workspaceRoot, ".nightgauge", "knowledge", "features", dirName)
 
@@ -927,21 +928,6 @@ func generateRepoTopicTemplate(topicType RepoTopicType, slug string) (string, er
 		return "", err
 	}
 	return fm + "\n" + fmt.Sprintf(spec.body, slug), nil
-}
-
-// generateSlug converts a title to a URL-safe kebab-case slug ≤50 chars.
-// Matches KnowledgeService.generateSlug() exactly.
-var nonAlphanumRe = regexp.MustCompile(`[^a-z0-9]+`)
-
-func generateSlug(title string) string {
-	s := strings.ToLower(title)
-	s = nonAlphanumRe.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	if len(s) > 50 {
-		s = s[:50]
-	}
-	s = strings.TrimRight(s, "-")
-	return s
 }
 
 // generatePRD produces PRD.md content matching KnowledgeService.renderPrdBody().

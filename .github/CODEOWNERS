@@ -4,3 +4,8 @@
 # requires zero approving reviews — single maintainer — and gates merges on
 # its 14 required status checks instead.
 * @nightgauge/maintainers
+
+# The publication-boundary allowlist gates the pipeline's own output, so the
+# pipeline may not change it (#1970). An allowlist change is its own pull
+# request (scripts/check-boundary-allowlist-isolation.sh) routed to maintainers.
+/.github/publication-boundary.yaml @nightgauge/maintainers

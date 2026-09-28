@@ -13,7 +13,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
+	"github.com/nightgauge/nightgauge/internal/issueslug"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
@@ -1460,41 +1460,11 @@ func ComposeBranchName(labels []string, number int, title string) (string, error
 // characters the slug drops) is an error, never `<prefix>/<number>-`. That name
 // was pushed to origin once, from an issue fetch that came back without its
 // title (#1915). Refusing here covers every caller, including future ones.
+//
+// The slug itself comes from issueslug.ForIssue — the one derivation, with the
+// one length bound, that the knowledge scaffold also uses (#1901).
 func GenerateBranchSlug(prefix string, number int, title string) (string, error) {
-	slug := strings.ToLower(title)
-	slug = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			return r
-		}
-		if r == ' ' || r == '-' || r == '_' {
-			return '-'
-		}
-		return -1
-	}, slug)
-
-	// Collapse multiple dashes
-	for strings.Contains(slug, "--") {
-		slug = strings.ReplaceAll(slug, "--", "-")
-	}
-	slug = strings.Trim(slug, "-")
-
-	// Drop a leading duplicate of this issue's own number, before truncation
-	// so the budget below is spent on words rather than on a repeat.
-	if own := strconv.Itoa(number); strings.HasPrefix(slug, own) {
-		rest := slug[len(own):]
-		if strings.HasPrefix(rest, "-") {
-			slug = strings.TrimLeft(rest, "-")
-		} else if rest == "" {
-			slug = ""
-		}
-	}
-
-	// Truncate to reasonable length
-	if len(slug) > 50 {
-		slug = slug[:50]
-		slug = strings.TrimRight(slug, "-")
-	}
-
+	slug := issueslug.ForIssue(number, title)
 	if slug == "" {
 		return "", fmt.Errorf("cannot name a branch for #%d: title %q leaves no slug", number, title)
 	}

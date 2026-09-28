@@ -29,6 +29,7 @@ Publication boundary derived ceiling
 Publication boundary ceiling lag and erosion
 Publication boundary attribution
 Publication boundary suite hermeticity
+Publication boundary allowlist isolation
 band-vocabulary reintroduction gate
 Band-vocabulary gate regression suite
 visibility-prose reintroduction gate

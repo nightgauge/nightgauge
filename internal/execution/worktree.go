@@ -551,18 +551,116 @@ func (m *Manager) branchMergedIntoDefault(repo, branchName string) bool {
 	return true
 }
 
-// CleanupBranchAndRemoteIfMerged is CleanupBranch (local + remote delete)
-// gated by the same content-diff merged check as CleanupBranchIfMerged. Used
-// by the scheduler's shipped-run path (#106): pipelineSuccess already implies
-// the PR merged, but this gate is the load-bearing safety net rather than
-// trusting outcome classification alone before an irreversible `git branch -D`
-// / `git push --delete`.
-func (m *Manager) CleanupBranchAndRemoteIfMerged(repo, branchName string) (bool, error) {
+// ShippedBranchCleanup reports what CleanupBranchAndRemoteIfMerged found and
+// did, so the caller logs what HAPPENED (#1561, #1901). Every field is
+// observed, never inferred: before #1901 the caller received one bool and read
+// "false" as "the local delete failed after origin's copy was removed", when
+// the usual cause was that the merged gate declined — or that both copies were
+// already gone and the gate had no ref to diff.
+type ShippedBranchCleanup struct {
+	// LocalBefore / RemoteBefore: which copies existed when cleanup began.
+	LocalBefore, RemoteBefore bool
+	// Declined is true when the content-diff gate refused; nothing was deleted.
+	Declined bool
+	// LocalDeleted / RemoteDeleted: which copies this call removed.
+	LocalDeleted, RemoteDeleted bool
+}
+
+// AlreadyGone reports that neither copy existed, so there was nothing to do.
+func (c ShippedBranchCleanup) AlreadyGone() bool { return !c.LocalBefore && !c.RemoteBefore }
+
+// Survivors lists the copies still standing after cleanup ("local", "origin").
+func (c ShippedBranchCleanup) Survivors() []string {
+	var out []string
+	if c.LocalBefore && !c.LocalDeleted {
+		out = append(out, "local")
+	}
+	if c.RemoteBefore && !c.RemoteDeleted {
+		out = append(out, "origin")
+	}
+	return out
+}
+
+// CleanupBranchAndRemoteIfMerged deletes a shipped run's branch, local and
+// origin copies, gated by the same content-diff merged check as
+// CleanupBranchIfMerged. Used by the scheduler's shipped-run path (#106):
+// pipelineSuccess already implies the PR merged, but this gate is the
+// load-bearing safety net rather than trusting outcome classification alone
+// before an irreversible `git branch -D` / `git push --delete`.
+//
+// Order (#1901): observe which copies exist, THEN judge, THEN delete. The gate
+// judges the local ref, or origin's copy when only that remains (a merge
+// with --delete-branch removes origin's; a worktree reclaim may have removed
+// the local one). When neither exists there is nothing to judge or delete, and
+// the result says so rather than surfacing a content-diff failure.
+func (m *Manager) CleanupBranchAndRemoteIfMerged(repo, branchName string) (ShippedBranchCleanup, error) {
+	var res ShippedBranchCleanup
 	if branchName == "" || branchName == "main" || branchName == "master" {
-		return false, nil
+		return res, nil
 	}
-	if merged := m.branchMergedIntoDefault(repo, branchName); !merged {
-		return false, nil
+	repoRoot := m.repoRoot(repo)
+
+	res.LocalBefore = gitRefExists(repoRoot, "refs/heads/"+branchName)
+	remoteExists, err := remoteBranchExists(repoRoot, branchName)
+	if err != nil {
+		return res, fmt.Errorf("probe origin/%s: %w", branchName, err)
 	}
-	return m.CleanupBranch(repo, branchName)
+	res.RemoteBefore = remoteExists
+	if res.AlreadyGone() {
+		return res, nil
+	}
+
+	judged := branchName
+	if !res.LocalBefore {
+		if err := fetchOriginBranch(repoRoot, branchName); err != nil {
+			return res, fmt.Errorf("fetch origin/%s to judge it: %w", branchName, err)
+		}
+		judged = "refs/remotes/origin/" + branchName
+	}
+	if merged := m.branchMergedIntoDefault(repo, judged); !merged {
+		res.Declined = true
+		return res, nil
+	}
+
+	if res.RemoteBefore {
+		del := exec.Command("git", "push", "origin", "--delete", branchName)
+		del.Dir = repoRoot
+		if out, err := del.CombinedOutput(); err != nil {
+			log.Printf("[WARN] branch cleanup: git push origin --delete %s failed (%v): %s",
+				branchName, err, strings.TrimSpace(string(out)))
+		} else {
+			res.RemoteDeleted = true
+		}
+	}
+	if res.LocalBefore {
+		gone, err := m.CleanupLocalBranch(repo, branchName)
+		if err != nil {
+			return res, err
+		}
+		res.LocalDeleted = gone
+	} else {
+		prune := exec.Command("git", "remote", "prune", "origin")
+		prune.Dir = repoRoot
+		_ = prune.Run()
+	}
+	return res, nil
+}
+
+// gitRefExists reports whether ref resolves in repoRoot.
+func gitRefExists(repoRoot, ref string) bool {
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", ref)
+	cmd.Dir = repoRoot
+	return cmd.Run() == nil
+}
+
+// remoteBranchExists asks origin itself, not the remote-tracking ref, which a
+// merge's --delete-branch leaves stale.
+func remoteBranchExists(repoRoot, branch string) (bool, error) {
+	cmd := exec.Command("git", "ls-remote", "--heads", "origin", "refs/heads/"+branch)
+	cmd.Dir = repoRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(out)) != "", nil
 }

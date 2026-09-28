@@ -378,6 +378,14 @@ integration-test environments that cannot satisfy a gate's external
 dependencies (e.g., the IPC E2E tests run without real `gh` access, so they
 disable `pr-create,pr-merge`). In production the var should be unset.
 
+The protected-path check is not a registry gate, so this variable cannot
+disable it. After every stage, whatever its exit, `gates.CheckProtectedPaths`
+fails the stage if the workspace changed a path in
+`gates.PipelineProtectedPaths` — today `.github/publication-boundary.yaml`, the
+allowlist of the gate that checks the pipeline's own output (#1970). A human
+changes that file in a pull request that changes nothing else; CI enforces the
+isolation with `scripts/check-boundary-allowlist-isolation.sh`.
+
 ## Adding a new stage gate
 
 1. **Implement `StageGate`** — add `internal/orchestrator/gates/<stage>_gate.go`.

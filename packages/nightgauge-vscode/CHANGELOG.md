@@ -9,6 +9,16 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- Stages routed to the `sonnet` band now run Claude Sonnet 5.5
+  (`claude-sonnet-5-5`), priced at $2/$10 per MTok.
+
+### Fixed
+
+- Stage cost for Claude Sonnet 5 is now priced at $2/$10 per MTok instead of
+  $3/$15, because the announced price increase was cancelled.
+
 ### Changed
 
 - The extension's own diagnostic logs — the "Nightgauge" output channel's disk
