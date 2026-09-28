@@ -268,3 +268,19 @@ func parseBoolishOrDefault(s string, defaultVal bool) bool {
 	}
 	return defaultVal
 }
+
+// RetryInPlaceOnTimeout reports whether a stall-kill should re-run the killed
+// stage itself instead of rewinding to feature-planning. It holds for one
+// case: feature-validate stopped at its wall-clock stage timeout
+// (`[stage-timeout]`, which terminalkind books as stall_kill) after
+// feature-dev finished and wrote its handoff. That stage was slow, not
+// stuck, and the plan and implementation it was checking already passed
+// their gates; rewinding to planning re-runs hours of finished work on a
+// local model. A genuine stall, or a timeout in feature-dev, still rewinds.
+func RetryInPlaceOnTimeout(killedStage state.PipelineStage, errorText, workspaceRoot string, issueNumber int) bool {
+	if killedStage != state.StageFeatureValidate || !strings.Contains(errorText, "[stage-timeout]") {
+		return false
+	}
+	fi, err := os.Stat(pipelineStatePath(workspaceRoot, fmt.Sprintf("dev-%d.json", issueNumber)))
+	return err == nil && fi.Size() > 0
+}

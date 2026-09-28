@@ -7022,6 +7022,15 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				}
 
 				if stallRetryCount == 0 &&
+					GetAdaptiveStallRecoveryEnabled(workspaceRoot) &&
+					RetryInPlaceOnTimeout(stage, stallErrMsg, workspaceRoot, item.Number) {
+					stallRetryCount++
+					log.Printf("#%d: %s — %s hit its stage timeout after feature-dev finished; retrying %s in place rather than rewinding to feature-planning",
+						item.Number, StallRetriedOutcome, stage, stage)
+					continue // retry the same stage; the plan and implementation already passed their gates
+				}
+
+				if stallRetryCount == 0 &&
 					CanRewindFromStage(stage) &&
 					GetAdaptiveStallRecoveryEnabled(workspaceRoot) {
 
