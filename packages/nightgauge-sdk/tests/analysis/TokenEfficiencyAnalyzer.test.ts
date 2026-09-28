@@ -5,6 +5,41 @@ import type {
   ExecutionHistoryRecord,
   ExecutionHistoryRecordExtended,
 } from "../../src/analysis/types.js";
+import {
+  flattenRunRecords,
+  type HistoryRunRecordInput,
+} from "../../src/analysis/health/executionHistoryFeeder.js";
+
+// Records that have gone through the ExecutionHistoryReader-equivalent
+// mapper (#2017): builds a wire-shaped run record and flattens it via
+// `flattenRunRecords`, the same path production history takes, instead of
+// hand-crafting analyzer-shaped objects.
+function makeUtilizationRunRecord(
+  issueNumber: number,
+  utilization: number,
+  overrides: { stage?: string; model?: string; costUsd?: number } = {}
+): HistoryRunRecordInput {
+  const stage = overrides.stage ?? "feature-dev";
+  return {
+    record_type: "run",
+    issue_number: issueNumber,
+    started_at: "2026-01-15T12:00:00Z",
+    stages: {
+      [stage]: {
+        status: "complete",
+        started_at: "2026-01-15T12:00:00Z",
+        duration_ms: 5000,
+        model_selection: { model: overrides.model ?? "sonnet", source: "scheduler" },
+        context_window_utilization: utilization,
+      },
+    },
+    tokens: {
+      per_stage: {
+        [stage]: { input: 1000, output: 500, cost_usd: overrides.costUsd ?? 0.1 },
+      },
+    },
+  };
+}
 
 // --- Test data factories ---
 
@@ -479,27 +514,23 @@ describe("TokenEfficiencyAnalyzer", () => {
     });
   });
 
-  describe("detectContextWindowUtilization", () => {
-    it("flags stages with low utilization on expensive models", () => {
+  describe("detectContextWindowUtilization (#2017)", () => {
+    it("flags low utilization on expensive models as informational, booking no wasted tokens", () => {
       const analyzer = new TokenEfficiencyAnalyzer();
-      const records = [
-        makeExtendedRecord({
-          stage: "feature-dev",
-          contextWindowUtilization: 0.1,
-          costUsd: 0.5,
-        }),
-        makeExtendedRecord({
-          stage: "feature-dev",
-          contextWindowUtilization: 0.15,
-          costUsd: 0.4,
-        }),
-      ];
+      const records = flattenRunRecords([
+        makeUtilizationRunRecord(1, 0.1, { costUsd: 0.5 }),
+        makeUtilizationRunRecord(2, 0.15, { costUsd: 0.4 }),
+      ]);
 
       const patterns = analyzer.detectContextWindowUtilization(records);
 
-      expect(patterns.length).toBeGreaterThanOrEqual(1);
+      expect(patterns).toHaveLength(1);
       expect(patterns[0].category).toBe("context-window-utilization");
+      expect(patterns[0].severity).toBe("info");
       expect(patterns[0].recommendation).toContain("expensive model");
+      // A small prompt against a large window is not waste (#2017).
+      expect(patterns[0].wastedTokens).toBe(0);
+      expect(patterns[0].estimatedSavingsUsd).toBe(0);
     });
 
     it("returns empty when contextWindowUtilization is missing", () => {
@@ -510,18 +541,12 @@ describe("TokenEfficiencyAnalyzer", () => {
       expect(patterns).toHaveLength(0);
     });
 
-    it("returns empty when utilization is above threshold", () => {
+    it("returns empty when utilization stays between the low and near-window thresholds", () => {
       const analyzer = new TokenEfficiencyAnalyzer();
-      const records = [
-        makeExtendedRecord({
-          stage: "feature-dev",
-          contextWindowUtilization: 0.8,
-        }),
-        makeExtendedRecord({
-          stage: "feature-dev",
-          contextWindowUtilization: 0.7,
-        }),
-      ];
+      const records = flattenRunRecords([
+        makeUtilizationRunRecord(1, 0.8 - 0.1),
+        makeUtilizationRunRecord(2, 0.7 - 0.1),
+      ]);
 
       const patterns = analyzer.detectContextWindowUtilization(records);
       expect(patterns).toHaveLength(0);
@@ -529,23 +554,49 @@ describe("TokenEfficiencyAnalyzer", () => {
 
     it("uses generic message for low-cost models", () => {
       const analyzer = new TokenEfficiencyAnalyzer();
-      const records = [
-        makeExtendedRecord({
-          stage: "feature-dev",
-          contextWindowUtilization: 0.1,
-          costUsd: 0.01,
-        }),
-        makeExtendedRecord({
-          stage: "feature-dev",
-          contextWindowUtilization: 0.15,
-          costUsd: 0.02,
-        }),
-      ];
+      const records = flattenRunRecords([
+        makeUtilizationRunRecord(1, 0.1, { costUsd: 0.01 }),
+        makeUtilizationRunRecord(2, 0.15, { costUsd: 0.02 }),
+      ]);
 
       const patterns = analyzer.detectContextWindowUtilization(records);
-      expect(patterns.length).toBeGreaterThanOrEqual(1);
+      expect(patterns).toHaveLength(1);
       expect(patterns[0].recommendation).toContain("smaller model");
       expect(patterns[0].recommendation).not.toContain("expensive model");
+    });
+
+    it("flags a stage group whose median utilization is at or above the near-window threshold, naming the stage and model", () => {
+      const analyzer = new TokenEfficiencyAnalyzer();
+      const records = flattenRunRecords([
+        makeUtilizationRunRecord(1, 0.85, { model: "opus" }),
+        makeUtilizationRunRecord(2, 0.9, { model: "opus" }),
+        makeUtilizationRunRecord(3, 0.95, { model: "opus" }),
+      ]);
+
+      const patterns = analyzer.detectContextWindowUtilization(records);
+
+      expect(patterns).toHaveLength(1);
+      expect(patterns[0].category).toBe("context-window-utilization");
+      expect(patterns[0].title).toContain("feature-dev");
+      expect(patterns[0].title).toContain("opus");
+      expect(patterns[0].evidence.model).toBe("opus");
+      expect(patterns[0].evidence.medianUtilization).toBe(0.9);
+      // Near-window is a risk signal, not waste — no tokens/savings booked.
+      expect(patterns[0].wastedTokens).toBe(0);
+      expect(patterns[0].estimatedSavingsUsd).toBe(0);
+    });
+
+    it("respects a configured contextNearWindowThreshold", () => {
+      const analyzer = new TokenEfficiencyAnalyzer({
+        thresholds: { contextNearWindowThreshold: 0.95 },
+      });
+      const records = flattenRunRecords([
+        makeUtilizationRunRecord(1, 0.85),
+        makeUtilizationRunRecord(2, 0.9),
+      ]);
+
+      const patterns = analyzer.detectContextWindowUtilization(records);
+      expect(patterns).toHaveLength(0);
     });
   });
 

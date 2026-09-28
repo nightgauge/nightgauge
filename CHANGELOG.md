@@ -149,6 +149,19 @@ changelog, and the release workflow refuses a tag that does not.
   (`overloaded`, an API connection error, or an `AI_APICallError` connection
   line), instead of being retried as a transient fault.
 
+- **`TokenEfficiencyAnalyzer` no longer books low context-window utilization
+  as waste, and adds a near-window pattern** (#2017). #1653 fed
+  `context_window_utilization` into the analyzer for the first time, but it
+  only flagged utilization below `contextUtilizationMinimum` (default 0.3) as
+  `wastedTokens`. Most OpenCode stages on hosted windows sit far below 0.3 by
+  design (12k of a 131k window is 0.09), so a correctly small prompt against a
+  large window was booking ~91% of its input as waste and dragging down
+  `overallEfficiencyScore`. Low utilization is now informational only — zero
+  `wastedTokens` / `estimatedSavingsUsd` — and a new near-window pattern flags
+  a stage group whose _median_ utilization is at or above
+  `contextNearWindowThreshold` (default 0.8), naming the stage and model
+  running close to its context limit.
+
 - **Rendered skills and the knowledge base are reachable from pipeline
   worktrees** (#2191, #2194). Under OpenCode the external-directory gate
   refused reads of `skills/_shared/…` that a rendered skill points at, and in
