@@ -1329,6 +1329,7 @@
         },
         "nightgauge.dashboardUrl": {
           "type": "string",
+          "scope": "machine",
           "default": "https://dashboard.nightgauge.dev",
           "description": "Base URL for the Nightgauge web dashboard. Deep-link commands append route paths to this value.",
           "order": 5
@@ -1530,6 +1531,7 @@
         },
         "nightgauge.plugins.marketplaceUrl": {
           "type": "string",
+          "scope": "machine",
           "default": "https://github.com/nightgauge/nightgauge.git",
           "description": "Git URL for the Nightgauge plugin marketplace"
         },
@@ -1693,6 +1695,7 @@
         },
         "nightgauge.backend.binaryPath": {
           "type": "string",
+          "scope": "machine",
           "default": "",
           "description": "Path to nightgauge Go binary. Leave empty to search PATH."
         },

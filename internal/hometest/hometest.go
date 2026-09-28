@@ -67,8 +67,22 @@ func Isolate() (cleanup func()) {
 		fmt.Fprintf(os.Stderr, "hometest: could not set NIGHTGAUGE_STATE_HOME: %v\n", err)
 		os.Exit(1)
 	}
+	// The daemon socket's runtime root (ADR-024 § 10) is shared per user, so a
+	// test daemon must not bind in the operator's. It gets its own short
+	// directory: a socket path under the isolated HOME can pass sun_path.
+	runDir, err := os.MkdirTemp("", "ngrt")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "hometest: could not create an isolated runtime dir: %v\n", err)
+		os.Exit(1)
+	}
+	if err := os.Setenv("NIGHTGAUGE_RUNTIME_DIR", runDir); err != nil {
+		fmt.Fprintf(os.Stderr, "hometest: could not set NIGHTGAUGE_RUNTIME_DIR: %v\n", err)
+		os.Exit(1)
+	}
+	// A suite run from inside a daemon's child inherits that daemon's socket.
+	_ = os.Unsetenv("NIGHTGAUGE_DAEMON_SOCKET")
 	Home = dir
-	return func() { _ = os.RemoveAll(dir) }
+	return func() { _ = os.RemoveAll(dir); _ = os.RemoveAll(runDir) }
 }
 
 // RealPath is a path inside the home Isolate replaced, for an assertion that

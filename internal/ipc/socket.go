@@ -11,6 +11,8 @@ package ipc
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // ErrSocketInUse reports that a LIVE daemon is already accepting on the
@@ -40,12 +44,69 @@ var ErrSocketInUse = errors.New("ipc: a live daemon is already listening on the 
 // startup forever.
 const bindProbeTimeout = 250 * time.Millisecond
 
-// DaemonSocketPath returns the workspace-scoped Unix socket path a co-located
-// `nightgauge serve` daemon listens on. Cross-machine/cross-workspace
-// discovery is explicitly out of scope (#263) — this is scoped to the same
-// `.nightgauge/` directory as every other workspace-local state file.
-func DaemonSocketPath(workspaceRoot string) string {
-	return filepath.Join(workspaceRoot, ".nightgauge", "daemon.sock")
+// EnvDaemonSocket names the socket of the daemon that spawned this process.
+// `nightgauge serve` exports it to every child, so a stage running in a
+// pipeline worktree reaches the daemon that started it (ADR-024 § 10).
+const EnvDaemonSocket = "NIGHTGAUGE_DAEMON_SOCKET"
+
+// maxSocketPathLen keeps the path under every platform's sun_path limit
+// (104 bytes on macOS, 108 on Linux).
+const maxSocketPathLen = 100
+
+// socketKeyLen is the number of hex characters of the workspace hash.
+const socketKeyLen = 12
+
+// ErrSocketPathTooLong reports a resolved socket path past maxSocketPathLen.
+// With the default runtime roots it cannot happen; only a long
+// NIGHTGAUGE_RUNTIME_DIR or XDG_RUNTIME_DIR produces it.
+var ErrSocketPathTooLong = errors.New("ipc: daemon socket path is too long")
+
+// DaemonSocketPath returns the Unix socket path the `nightgauge serve` daemon
+// for workspaceRoot listens on (ADR-024 § 10, #2039):
+// <RUNTIME>/<key>.sock, where RUNTIME is layout.RuntimeDir and <key> is the
+// first 12 hex characters of the SHA-256 of the canonical workspace root.
+// The socket never lives in the working tree, so the checkout's depth, a
+// cloud-synced folder or a bind mount cannot stop the daemon from binding.
+//
+// It returns an error, never a truncated path, when the result would exceed
+// 100 bytes. Nothing is created; BindSocket creates and verifies the
+// directory.
+func DaemonSocketPath(workspaceRoot string) (string, error) {
+	dir, err := layout.RuntimeDir()
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, SocketKey(workspaceRoot)+".sock")
+	if len(path) > maxSocketPathLen {
+		return "", fmt.Errorf("%w: %s is %d bytes (limit %d); set %s to a shorter directory",
+			ErrSocketPathTooLong, path, len(path), maxSocketPathLen, layout.EnvRuntimeDir)
+	}
+	return path, nil
+}
+
+// ClientSocketPath is the socket a CLI client dials for workspaceRoot:
+// NIGHTGAUGE_DAEMON_SOCKET when the process was spawned by a daemon,
+// otherwise DaemonSocketPath.
+func ClientSocketPath(workspaceRoot string) (string, error) {
+	if v := os.Getenv(EnvDaemonSocket); v != "" && filepath.IsAbs(v) {
+		return v, nil
+	}
+	return DaemonSocketPath(workspaceRoot)
+}
+
+// SocketKey is the socket file's stem for workspaceRoot: the first 12 hex
+// characters of the SHA-256 of the root made absolute, cleaned and, when it
+// exists, symlink-resolved, so two spellings of one directory share a daemon.
+func SocketKey(workspaceRoot string) string {
+	root := workspaceRoot
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil {
+		root = resolved
+	}
+	sum := sha256.Sum256([]byte(filepath.Clean(root)))
+	return hex.EncodeToString(sum[:])[:socketKeyLen]
 }
 
 // ListenSocket binds a Unix domain socket at path and serves request/response
@@ -111,17 +172,20 @@ func (s *Server) BindSocket(path string) (net.Listener, error) {
 	// window can still both bind, and closing THAT race is the serve lease's
 	// job (#1349), not this function's. What it closes is the common and
 	// entirely silent case: a second daemon starting while the first is up.
+	//
+	// The directory is verified BEFORE the probe: a directory another local
+	// user created or can write is where a planted socket would intercept
+	// IPC, so the daemon refuses to start rather than dial or bind there
+	// (ADR-024 § 10).
+	if err := layout.EnsureRuntimeDir(filepath.Dir(path)); err != nil {
+		return nil, fmt.Errorf("ipc: socket dir: %w", err)
+	}
+
 	if c, err := net.DialTimeout("unix", path, bindProbeTimeout); err == nil {
 		c.Close()
 		return nil, fmt.Errorf("%w: %s", ErrSocketInUse, path)
 	}
 	_ = os.Remove(path)
-
-	if dir := filepath.Dir(path); dir != "" {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, fmt.Errorf("ipc: create socket dir: %w", err)
-		}
-	}
 
 	ln, err := net.Listen("unix", path)
 	if err != nil {

@@ -26,7 +26,10 @@ func startTestDaemon(t *testing.T, dir string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	sockPath := ipc.DaemonSocketPath(dir)
+	sockPath, err := ipc.DaemonSocketPath(dir)
+	if err != nil {
+		t.Fatalf("socket path: %v", err)
+	}
 	// BindSocket is the readiness signal (#1158): it returns only once the
 	// kernel is accepting on sockPath, so callers may dial immediately.
 	ln, err := srv.BindSocket(sockPath)
@@ -272,8 +275,8 @@ func TestAttentionListRootCommand_ExplicitRepoStillFilters(t *testing.T) {
 
 // shortTempDir returns a short-path temp dir. Unix domain sockets have a
 // ~104-byte sun_path limit (macOS) — t.TempDir() embeds the full test name,
-// which is too long once ".nightgauge/daemon.sock" is appended for a test
-// with a long name. Used only by tests that dial a daemon socket.
+// which was too long for a socket path under the workspace; kept short
+// for the workspace files these tests write. Used only by tests that dial a daemon socket.
 func shortTempDir(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "ngsock")

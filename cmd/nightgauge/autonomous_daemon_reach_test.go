@@ -48,7 +48,7 @@ func TestAutonomousVerbsReachTheDaemon(t *testing.T) {
 			if !strings.Contains(body, tc.method) {
 				t.Errorf("%s does not call %s — %s", tc.fn, tc.method, tc.why)
 			}
-			if !strings.Contains(body, "ipc.DialClient") {
+			if !strings.Contains(body, "ipc.DialDaemon") {
 				t.Errorf("%s never dials the daemon socket — %s", tc.fn, tc.why)
 			}
 		})

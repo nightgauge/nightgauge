@@ -42,7 +42,7 @@ const daemonDialTimeout = 300 * time.Millisecond
 // for workspace root. Used by both attentionResolveCmd (to route the call)
 // and printAttentionDetail (to annotate option executability).
 func dialDaemonProbe(ctx context.Context, root string) bool {
-	c, err := ipc.DialClient(ctx, ipc.DaemonSocketPath(root), daemonDialTimeout)
+	c, err := ipc.DialDaemon(ctx, root, daemonDialTimeout)
 	if err != nil {
 		return false
 	}
@@ -313,7 +313,7 @@ func attentionResolveCmd() *cobra.Command {
 			// Client.Call turns the deadline into a socket deadline.
 			ctx, cancel := attentionCLIContext(cmd)
 			defer cancel()
-			if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(root), daemonDialTimeout); dialErr == nil {
+			if client, dialErr := ipc.DialDaemon(ctx, root, daemonDialTimeout); dialErr == nil {
 				defer client.Close()
 				var res ipc.AttentionResolveResult
 				callErr := client.Call(ctx, "attention.resolve", ipc.AttentionResolveParams{

@@ -1989,7 +1989,7 @@ daemon that is never coming back.
 #### The socket is a separate endpoint from the lease (#1429)
 
 The lease decides who _schedules_. It does not decide who owns
-`.nightgauge/daemon.sock`, and until #1429 nothing did: `BindSocket` unlinked
+the daemon socket, and until #1429 nothing did: `BindSocket` unlinked
 the path unconditionally before listening, so a second `serve` took it from a
 live first one. `unlink()` detaches the name from the listening socket's inode
 — the first daemon kept accepting on an inode nothing could name, and every
@@ -2757,9 +2757,14 @@ nightgauge attention sweep --repo octocat/acme-web --strict
 
 **CLI `resolve`/`show` reach a co-located daemon over a workspace-scoped Unix
 socket when one is running (#263).** `nightgauge serve` additionally listens
-on `.nightgauge/daemon.sock` (mode `0600`, workspace-root-scoped — matching
-every other local `.nightgauge/` state file) alongside its existing stdio
-JSON-RPC loop for the VSCode extension. A standalone terminal `attention
+on `<RUNTIME>/<key>.sock` (mode `0600`; ADR-024 § 10, #2039) alongside its
+existing stdio JSON-RPC loop for the VSCode extension. `RUNTIME` is
+`NIGHTGAUGE_RUNTIME_DIR`, else `$XDG_RUNTIME_DIR/nightgauge`, else
+`<os.TempDir()>/nightgauge-<uid>`; `<key>` is the first 12 hex characters of
+the SHA-256 of the canonical workspace root. The directory must be a 0700,
+non-symlink directory owned by the current user or the socket is not bound.
+`serve` exports `NIGHTGAUGE_DAEMON_SOCKET` to its children, which dial it in
+preference to the computed path. A standalone terminal `attention
 resolve` first dials that socket with a short (300ms) timeout:
 
 - **Daemon reachable**: the call runs through the daemon's full
