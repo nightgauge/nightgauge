@@ -1,12 +1,37 @@
 package ipc
 
 import (
+	"context"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 	"time"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
+
+// callMethod is a test helper that dispatches a method via the IPC server and
+// unmarshals the result into v.
+func callMethod(t *testing.T, s *Server, method string, params interface{}, v interface{}) {
+	t.Helper()
+	raw, _ := json.Marshal(params)
+	handler, ok := s.methods[method]
+	if !ok {
+		t.Fatalf("method %q not registered", method)
+	}
+	result, err := handler(context.Background(), raw)
+	if err != nil {
+		t.Fatalf("%s handler error: %v", method, err)
+	}
+	// Round-trip through JSON to fill v
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("marshal result: %v", err)
+	}
+	if err := json.Unmarshal(data, v); err != nil {
+		t.Fatalf("unmarshal into target: %v", err)
+	}
+}
 
 // TestWorkflowQuotaState_NoSignals verifies the bridge is safe and inert when
 // neither a rate-limit tracker reading nor a dispatch cooldown is available:

@@ -239,11 +239,6 @@ ready_to_ship:
   # It posts the command; it never runs it.
   enabled: true
 
-remote_commands:
-  # The polling loop that lets a dashboard drive a local daemon. Inert without
-  # a platform; costs GitHub API quota while a platform is configured.
-  enabled: true
-
 ui:
   core:
     codex:

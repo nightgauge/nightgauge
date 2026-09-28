@@ -2,7 +2,7 @@
  * StallStatusBarItem — VSCode status bar item showing persistent stall indicator.
  *
  * Displays elapsed time when a pipeline stage exceeds its stall threshold.
- * Priority 95 — left of RemoteCommandStatusBarItem (96).
+ * Priority 95.
  * Clicking opens the output panel via the `nightgauge.showOutputWindow` command.
  *
  * Updates elapsed time every 30s via an internal ticker, matching the stall
@@ -44,7 +44,7 @@ export class StallStatusBarItem implements vscode.Disposable {
   constructor() {
     this.item = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
-      95 // Priority: left of RemoteCommandStatusBarItem (96)
+      95 // Priority
     );
     this.item.command = "nightgauge.showOutputWindow";
     // Start hidden — shown only when a stall is detected

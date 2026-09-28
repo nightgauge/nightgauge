@@ -137,6 +137,19 @@ changelog, and the release workflow refuses a tag that does not.
     OpenCode parser already did, so the stage record's
     `peak_step_input_tokens` covers both adapters.
 
+### Removed
+
+- **The remote command poller and its executor** (#2113). `nightgauge serve`
+  polled `GET /v1/commands/pending` every five seconds and dispatched results
+  to handlers for `pipeline.run`, `pipeline.cancel`, `pipeline.status` and
+  `config.reload`. The hosted service never served that route and never emits
+  those command types; agent commands arrive only on the stream
+  `GET /v1/agents/{agentId}/commands`, which is unchanged. Removed: the poller,
+  the `/v1/commands/{id}/ack` call, the `internal/executor` package, the
+  `remote.getCommandHistory` and `remote.getPollingStatus` IPC methods, the
+  extension's remote-command status bar item, and the `remote_commands` and
+  `remote.notifyOnPipelineRun` config keys.
+
 ### Fixed
 
 - **A stage can no longer escape its stage budget or cost cap** (#2016). A

@@ -865,26 +865,6 @@ export interface PullRequestDetail {
   createdAt?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Remote command types (matches Go internal/ipc/protocol.go Remote* structs)
-// ---------------------------------------------------------------------------
-
-/** A single entry from remote.getCommandHistory. */
-export interface RemoteCommandHistoryEntry {
-  id: string;
-  type: string;
-  status: "success" | "failure" | "pending";
-  receivedAt: string;
-  completedAt?: string;
-  durationMs?: number;
-  error?: string;
-}
-
-/** Result from remote.getCommandHistory. */
-export interface RemoteGetCommandHistoryResult {
-  commands: RemoteCommandHistoryEntry[];
-}
-
 /**
  * Result from agent.acknowledgeCommand — runId assigned by the platform. Empty
  * for a `rejected` ack, which starts no run (#1656).
@@ -901,14 +881,6 @@ export interface AgentAcknowledgeCommandResult {
 export interface QueueValidatePinResult {
   ok: boolean;
   reason?: string;
-}
-
-/** Result from remote.getPollingStatus. */
-export interface RemotePollingStatus {
-  active: boolean;
-  lastPolledAt?: string;
-  pendingCount: number;
-  errorCount: number;
 }
 
 /** Result from epic.readContext — raw epic context JSON. */

@@ -9,6 +9,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Removed
+
+- The remote-command status bar item and the `remote.notifyOnPipelineRun`
+  setting. They reported a command poller that never received a command
+  (#2113).
+
 ### Security
 
 - `nightgauge.backend.binaryPath`, `nightgauge.plugins.marketplaceUrl` and

@@ -164,13 +164,6 @@ var contractCallSites = []callSite{
 		_, err := NewBillingService(c).CreatePortalSession(ctx)
 		return err
 	}},
-	{api.OpCommandsAck, func(ctx context.Context, c *Client) error {
-		return NewCommandService(c).AcknowledgeCommand(ctx, "cmd-1", CommandResult{Status: "success"})
-	}},
-	{api.OpCommandsPending, func(ctx context.Context, c *Client) error {
-		_, err := NewCommandService(c).PollCommands(ctx)
-		return err
-	}},
 	{api.OpPipelineIngestEvent, func(ctx context.Context, c *Client) error {
 		return NewAnalyticsService(c).emitPipelineEventSync(ctx, PipelineEvent{
 			RunID:     "run-1",
@@ -545,20 +538,15 @@ func TestOpaqueAndAbsentCredentialsArePassedThrough(t *testing.T) {
 // TestOperationUpstreamDriftIsKnown freezes the set of operations this binary
 // calls that the platform's OpenAPI document does not declare.
 //
-// These are live findings, not decoration: the flat /v1/commands/* pair is
-// absent entirely while agent command delivery lives under
-// /v1/agents/{agentId}/commands. Freezing the set means a NEW undeclared route
-// cannot be added quietly, and fixing one of these requires deleting its entry
-// here — which is the visible acknowledgement that was missing before.
+// Freezing the set means a NEW undeclared route cannot be added quietly, and
+// fixing one requires deleting its entry here: the visible acknowledgement.
 //
-// audit.verifyIntegrity was the third entry until #822 moved the call to
-// /v1/audit/integrity, the path the platform actually mounts. Its deletion
-// from this list is that fix's acknowledgement.
+// The set is empty. audit.verifyIntegrity left it when #822 moved the call to
+// /v1/audit/integrity. The flat /v1/commands/* pair left it when #2113 removed
+// the poller and ack that called routes the hosted service never served; agent
+// command delivery lives under /v1/agents/{agentId}/commands.
 func TestOperationUpstreamDriftIsKnown(t *testing.T) {
-	known := []string{
-		"commands.ack",
-		"commands.listPending",
-	}
+	var known []string
 
 	var got []string
 	for _, op := range api.Operations {
