@@ -85,4 +85,19 @@ type OpenCodeEndpointModel struct {
 	// inspect its contents, including which entries are disabled. #1643
 	// reads it for its --variant mapping.
 	Variants []string `yaml:"variants,omitempty" json:"variants,omitempty"`
+
+	// RequestOptions are extra fields OpenCode merges into every request
+	// body for this model (its model-entry options, which OpenCode 1.18.32
+	// forwards verbatim to an openai-compatible server). This is how an
+	// operator caps a reasoning model's thinking: mlx-vlm/oMLX read
+	// thinking_budget, vLLM and llama.cpp read chat_template_kwargs. The
+	// server's own default budget is not applied to OpenCode's requests,
+	// and an uncapped Qwen step was measured at 11k tokens (~25 min at
+	// 7.6 tok/s) on nightgauge-dogfooding#3.
+	RequestOptions map[string]any `yaml:"request_options,omitempty" json:"request_options,omitempty"`
+
+	// StageRequestOptions overrides RequestOptions per stage, key by key:
+	// Qwen recommends a 4096 thinking budget for function calling and 8192
+	// for coding and agent tasks, so planning and implementation differ.
+	StageRequestOptions map[string]map[string]any `yaml:"stage_request_options,omitempty" json:"stage_request_options,omitempty"`
 }
