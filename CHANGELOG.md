@@ -177,6 +177,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A sanitization warning no longer creates `.nightgauge/logs/` in whatever
+  directory the command ran from.** The Bash gate's warn-mode log resolves the
+  hook's cwd to the main checkout and writes to that clone's logs directory,
+  the file the extension's firewall view reads. A command run from a
+  subdirectory used to leave a stray `sanitization.log` inside the source tree,
+  where the Go test guard for `.nightgauge/` writes then failed the package.
+
 - **Every dispatched run now works in its own linked worktree, fast-tracked or
   not (#2258).** A run with no Go-side adapter, such as a trivial or
   docs-only fast-track route driven over IPC, used to dispatch every stage in

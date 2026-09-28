@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 )
 
@@ -138,7 +139,7 @@ func evaluateBashGate(input GateInput, mode config.SanitizationMode, pushGate *c
 		if match := sanitizeMatch(segments); match != nil {
 			switch mode {
 			case config.SanitizationModeWarn:
-				logWarnEvent(match, cmd)
+				logWarnEvent(match, cmd, input.Cwd)
 				return Allow()
 			default: // block
 				return Block(fmt.Sprintf("Command blocked by sanitization (%s): %s", match.Category, match.Pattern))
@@ -179,9 +180,26 @@ func sanitizeMatch(segments []Segment) *PatternMatch {
 	return nil
 }
 
-// logWarnEvent writes a single NDJSON line to .nightgauge/logs/sanitization.log.
-func logWarnEvent(match *PatternMatch, command string) {
-	logDir := ".nightgauge/logs"
+// logWarnEvent appends a single NDJSON line to the clone's sanitization.log,
+// the file the extension's SanitizationLogService reads. The directory is
+// resolved from the hook's cwd to the main checkout, never taken relative to
+// the process's working directory: a command run from a subdirectory used to
+// create a stray .nightgauge/logs/ inside the source tree. Outside a git work
+// tree there is no clone to log to, so the event is reported on stderr only.
+func logWarnEvent(match *PatternMatch, command, cwd string) {
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	root := config.MainCheckoutRoot(cwd)
+	if root == "" {
+		fmt.Fprintf(os.Stderr, "warn: sanitization (%s) not logged: %s is not in a git work tree\n", match.Category, cwd)
+		return
+	}
+	logDir, err := layout.CloneLogsDir(root)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warn: failed to resolve sanitization log: %v\n", err)
+		return
+	}
 	_ = os.MkdirAll(logDir, 0o755)
 
 	logPath := filepath.Join(logDir, "sanitization.log")

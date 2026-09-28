@@ -354,6 +354,7 @@ func TestGateSanitizationBlocks(t *testing.T) {
 }
 
 func TestGateWarnModeAllowsWithLog(t *testing.T) {
+	t.Chdir(t.TempDir()) // warn mode logs to the cwd's clone; keep it out of this checkout
 	// In warn mode, sanitization pattern matches should allow (not block)
 	dangerous := []string{
 		"rm -rf /",
@@ -370,6 +371,7 @@ func TestGateWarnModeAllowsWithLog(t *testing.T) {
 }
 
 func TestGateWarnModeStillBlocksNonSanitizationGates(t *testing.T) {
+	t.Chdir(t.TempDir()) // warn mode logs to the cwd's clone; keep it out of this checkout
 	// Non-sanitization gates (push to main, force push, etc.) should still block
 	// regardless of sanitization mode
 	cases := []struct {
@@ -431,6 +433,7 @@ func TestGateDisabledModeStillBlocksNonSanitizationGates(t *testing.T) {
 }
 
 func TestGateFileGatesNotAffectedByMode(t *testing.T) {
+	t.Chdir(t.TempDir()) // warn mode logs to the cwd's clone; keep it out of this checkout
 	// File gates (sensitive files, git internals) should block regardless of mode
 	modes := []config.SanitizationMode{
 		config.SanitizationModeWarn,
