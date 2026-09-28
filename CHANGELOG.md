@@ -184,6 +184,18 @@ changelog, and the release workflow refuses a tag that does not.
   worktree before the first stage and dispatches each stage there. If the
   worktree cannot be created, the run is refused instead of falling back to
   the primary checkout.
+
+- **`nightgauge git branch-cleanup` deletes on merged content, not on issue
+  state** (#2259). A branch, local or origin-only, is deleted only when the
+  same proof as `scripts/branch-merged-check.sh` holds: its tip is an ancestor
+  of the default branch, its own files are identical there, or a merged PR's
+  head is (or has as a parent) the branch tip. A closed issue no longer
+  authorizes deleting unmerged work. Branches that fail the proof, are held
+  by a worktree, back an open PR, or are epic branches of an open issue are
+  kept and reported with a reason (`action: "kept"`, plus a `verdict` field).
+  Each half is deleted only while it still points at the judged SHA (origin via
+  `--force-with-lease`), so a push landing after the judgment keeps the branch.
+
 - **An auto-recovery commit can no longer land on the default branch or sweep
   in an operator's uncommitted edits (#1907).** The uncommitted-work rescue
   now refuses the repository's primary checkout, a detached `HEAD`, and the

@@ -39,7 +39,7 @@ func TestGitBranchCleanup_PrefixAllowlist(t *testing.T) {
 	}
 }
 
-// #593 — cleanupClosedIssueBranch classification. -----------------------
+// #593 — cleanupMergedBranch classification. -----------------------
 
 // branchCleanupFixture builds an origin+clone git pair with an initial commit
 // on main, ready for a branch to be created and cleaned up against.
@@ -110,9 +110,9 @@ func TestCleanupClosedIssueBranch_DeletesLocalAndRemote(t *testing.T) {
 	gitIn(t, root, "push", "-u", "origin", branch)
 	gitIn(t, root, "checkout", "main")
 
-	action, reason, err := cleanupClosedIssueBranch(svc, branch)
+	action, reason, err := cleanupMergedBranch(svc, branch, currentTips(t, svc, branch))
 	if err != nil {
-		t.Fatalf("cleanupClosedIssueBranch: %v", err)
+		t.Fatalf("cleanupMergedBranch: %v", err)
 	}
 	if action != "deleted" {
 		t.Fatalf("action = %q (reason=%q), want %q", action, reason, "deleted")
@@ -141,9 +141,9 @@ func TestCleanupClosedIssueBranch_AbsentRemoteIsSuccess(t *testing.T) {
 	gitIn(t, root, "checkout", "main")
 	// Deliberately never pushed — the remote branch never existed.
 
-	action, reason, err := cleanupClosedIssueBranch(svc, branch)
+	action, reason, err := cleanupMergedBranch(svc, branch, currentTips(t, svc, branch))
 	if err != nil {
-		t.Fatalf("cleanupClosedIssueBranch: %v", err)
+		t.Fatalf("cleanupMergedBranch: %v", err)
 	}
 	if action != "deleted" {
 		t.Fatalf("action = %q (reason=%q), want %q", action, reason, "deleted")
@@ -159,12 +159,12 @@ func TestCleanupClosedIssueBranch_SkipsWorktreeHeldBranch(t *testing.T) {
 	wt := filepath.Join(root, ".worktrees", "issue-603")
 	gitIn(t, root, "worktree", "add", wt, "-b", branch, "main")
 
-	action, reason, err := cleanupClosedIssueBranch(svc, branch)
+	action, reason, err := cleanupMergedBranch(svc, branch, currentTips(t, svc, branch))
 	if err != nil {
-		t.Fatalf("cleanupClosedIssueBranch: %v", err)
+		t.Fatalf("cleanupMergedBranch: %v", err)
 	}
-	if action != "skipped" {
-		t.Fatalf("action = %q (reason=%q), want %q", action, reason, "skipped")
+	if action != "kept" {
+		t.Fatalf("action = %q (reason=%q), want %q", action, reason, "kept")
 	}
 	if !strings.Contains(reason, "worktree") {
 		t.Errorf("reason = %q, want it to name the worktree", reason)
@@ -176,7 +176,7 @@ func TestCleanupClosedIssueBranch_SkipsWorktreeHeldBranch(t *testing.T) {
 
 func TestCleanupClosedIssueBranch_RefusesProtectedBranch(t *testing.T) {
 	svc, _ := branchCleanupFixture(t)
-	action, _, err := cleanupClosedIssueBranch(svc, "main")
+	action, _, err := cleanupMergedBranch(svc, "main", currentTips(t, svc, "main"))
 	if err == nil {
 		t.Fatal("expected an error refusing to delete main")
 	}

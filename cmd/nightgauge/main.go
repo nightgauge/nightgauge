@@ -8694,13 +8694,18 @@ func gitBranchCleanupCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "branch-cleanup",
-		Short: "Delete stale local and remote branches for closed issues",
+		Short: "Delete local and remote pipeline branches whose content is proven merged",
 		Long: `Scans local and remote-only issue-numbered pipeline branches
-(feat/, fix/, docs/, chore/, refactor/, test/, epic/), extracts the issue
-number, checks if the issue is CLOSED on GitHub, and deletes both local
-and remote branches for closed issues. Protected branches (main, master)
-are never deleted. The current branch is never deleted. Operator prefixes
-such as wip/ are never candidates.`,
+(feat/, fix/, docs/, chore/, refactor/, test/, epic/) and deletes a branch,
+locally and on origin, only when its content is proven merged into the
+default branch — the same proof as scripts/branch-merged-check.sh: the tip
+is an ancestor of the default branch, the branch's own files are identical
+there, or a merged PR's head is (or has as a parent) the branch tip.
+Issue state never authorizes a deletion. Branches that fail the proof, are
+checked out in a worktree, back an open PR, or are epic branches of an open
+issue are kept and reported with the reason. Protected branches (main,
+master) and the current branch are never deleted. Operator prefixes such as
+wip/ are never candidates.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			svc, err := openGitService()
 			if err != nil {
@@ -8712,126 +8717,70 @@ such as wip/ are never candidates.`,
 				return fmt.Errorf("create GitHub client: %w", err)
 			}
 			issueSvc := gh.NewIssueService(client)
-
+			prSvc := gh.NewPRService(client)
 			o, r := splitRepo(owner, repo)
+			ctx := context.Background()
 
-			// Repo-wide, deliberately, and repo-wide even when this command is
-			// invoked from inside a linked worktree — ListLocalBranches resolves
-			// the common store, so the sweep sees the same set `git branch
-			// --list` would show from anywhere in the repository (#541c).
-			//
-			// What makes that safe is NOT a narrower list. A candidate list is a
-			// snapshot, and a worktree can claim a branch after it was taken; a
-			// second definition of "deletable" sitting here would also be free to
-			// drift from the one that actually deletes, which is how #541
-			// happened. Both protections therefore live at the point of deletion,
-			// in cleanupClosedIssueBranch -> gitpkg.BranchCleanup: shape via
-			// IsCleanupCandidate below, occupancy via BranchCleanup's refusal of
-			// BOTH halves. Nothing enumerated here is deleted without passing
-			// them.
+			// Refresh tracking refs so an origin-only branch is judged at its
+			// live tip; the proof itself re-checks with ls-remote.
+			_ = svc.Fetch(false)
+
+			defaultBranch, err := svc.DefaultBranch()
+			if err != nil {
+				return err
+			}
+
+			// Repo-wide, deliberately (#541c). Occupancy is still re-checked at
+			// the point of deletion by gitpkg.BranchCleanupPinned.
 			branches, err := svc.ListLocalBranches()
 			if err != nil {
 				return fmt.Errorf("list local branches: %w", err)
 			}
-
-			// Also get remote branches to catch remote-only stragglers
-			remoteBranches, _ := svc.ListRemoteBranches()
-			// Merge remote-only branches into the set
+			remoteBranches, err := svc.ListRemoteBranches()
+			if err != nil {
+				return fmt.Errorf("list remote branches: %w", err)
+			}
 			localSet := make(map[string]bool)
 			for _, b := range branches {
 				localSet[b] = true
 			}
 			for _, b := range remoteBranches {
-				if !localSet[b] && gitpkg.IsCleanupCandidate(b) {
+				if !localSet[b] {
 					branches = append(branches, b)
 				}
 			}
-
-			// Get current branch to protect it
 			currentBranch, _ := svc.CurrentBranch()
 
-			type cleanupResult struct {
-				Branch      string `json:"branch"`
-				IssueNumber int    `json:"issueNumber"`
-				IssueState  string `json:"issueState"`
-				Action      string `json:"action"` // "deleted", "skipped", "protected", "error"
-				// Reason explains a "skipped" action beyond IssueState — set
-				// when a worktree still holds the branch (#593). Empty for the
-				// pre-existing "issue not CLOSED yet" skip, which IssueState
-				// already explains.
-				Reason string `json:"reason,omitempty"`
-				Error  string `json:"error,omitempty"`
+			// Open PRs mark a branch in use as head OR base. Without that list
+			// the proof cannot rule out closing or breaking a PR, so a failure
+			// aborts instead of degrading.
+			openPRs, err := prSvc.ListPRs(ctx, o, r, "OPEN", "")
+			if err != nil {
+				return fmt.Errorf("list open PRs: %w", err)
 			}
-			var results []cleanupResult
+			in := gitpkg.MergedProofInputs{
+				Base:        "origin/" + defaultBranch,
+				OpenPRHeads: map[string]int{},
+				OpenPRBases: map[string]int{},
+				EpicIssueState: func(n int) (string, error) {
+					issue, err := issueSvc.GetIssueWithRelations(ctx, o, r, n, gh.NoRelations)
+					if err != nil {
+						return "", err
+					}
+					return issue.State, nil
+				},
+				MergedPR: gh.NewMergedPRLookup(ctx, prSvc, o, r),
+			}
+			for _, pr := range openPRs {
+				in.OpenPRHeads[pr.HeadRef] = pr.Number
+				in.OpenPRBases[pr.BaseRef] = pr.Number
+			}
+
+			results := runBranchCleanup(svc, branches, currentBranch, defaultBranch, in, dryRun)
 			deleted := 0
-
-			ctx := context.Background()
-			for _, branch := range branches {
-				if branch == "main" || branch == "master" || branch == currentBranch {
-					continue
-				}
-
-				if !gitpkg.IsCleanupCandidate(branch) {
-					continue // not a pipeline issue-numbered branch
-				}
-
-				issueNum, ok := gitpkg.ParseIssueNumberFromBranch(branch)
-				if !ok || issueNum == 0 {
-					continue
-				}
-
-				// Check issue state
-				issue, err := issueSvc.GetIssueWithRelations(ctx, o, r, issueNum, gh.NoRelations)
-				if err != nil {
-					results = append(results, cleanupResult{
-						Branch: branch, IssueNumber: issueNum,
-						Action: "error", Error: err.Error(),
-					})
-					continue
-				}
-
-				if issue.State != "CLOSED" {
-					results = append(results, cleanupResult{
-						Branch: branch, IssueNumber: issueNum,
-						IssueState: issue.State, Action: "skipped",
-					})
-					continue
-				}
-
-				if dryRun {
-					results = append(results, cleanupResult{
-						Branch: branch, IssueNumber: issueNum,
-						IssueState: "CLOSED", Action: "would_delete",
-					})
-					if !outputJSON {
-						fmt.Printf("  would delete: %s (issue #%d CLOSED)\n", branch, issueNum)
-					}
-					continue
-				}
-
-				// Delete both local and remote
-				action, reason, cleanupErr := cleanupClosedIssueBranch(svc, branch)
-				errMsg := ""
-				if cleanupErr != nil {
-					errMsg = cleanupErr.Error()
-				}
-				if action == "deleted" {
+			for _, res := range results {
+				if res.Action == "deleted" {
 					deleted++
-				}
-
-				results = append(results, cleanupResult{
-					Branch: branch, IssueNumber: issueNum,
-					IssueState: "CLOSED", Action: action, Reason: reason, Error: errMsg,
-				})
-				if !outputJSON {
-					switch action {
-					case "error":
-						fmt.Printf("  error: %s — %v\n", branch, cleanupErr)
-					case "skipped":
-						fmt.Printf("  skipped: %s (%s)\n", branch, reason)
-					default:
-						fmt.Printf("  deleted: %s (issue #%d CLOSED)\n", branch, issueNum)
-					}
 				}
 			}
 
@@ -8843,11 +8792,22 @@ such as wip/ are never candidates.`,
 					"branches": results,
 				})
 			}
-
+			for _, res := range results {
+				switch res.Action {
+				case "error":
+					fmt.Printf("  error: %s — %s\n", res.Branch, res.Error)
+				case "deleted":
+					fmt.Printf("  deleted: %s (%s)\n", res.Branch, res.Reason)
+				case "would_delete":
+					fmt.Printf("  would delete: %s (%s)\n", res.Branch, res.Reason)
+				default:
+					fmt.Printf("  kept: %s (%s)\n", res.Branch, res.Reason)
+				}
+			}
 			if deleted == 0 && !dryRun {
-				fmt.Println("No stale branches found.")
+				fmt.Println("No merged branches found.")
 			} else if !dryRun {
-				fmt.Printf("Cleaned up %d stale branch(es).\n", deleted)
+				fmt.Printf("Cleaned up %d merged branch(es).\n", deleted)
 			}
 			return nil
 		},
@@ -8860,8 +8820,66 @@ such as wip/ are never candidates.`,
 	return cmd
 }
 
-// cleanupClosedIssueBranch deletes branch's local and remote refs by calling
-// gitpkg.BranchCleanup, and maps that method's three outcomes onto the sweep's
+// branchCleanupResult is one branch's outcome in `git branch-cleanup`.
+type branchCleanupResult struct {
+	Branch      string `json:"branch"`
+	IssueNumber int    `json:"issueNumber"`
+	// Verdict is the merged-content proof: SAFE-DELETE, KEEP or UNKNOWN.
+	Verdict string `json:"verdict"`
+	// Action is "deleted", "would_delete", "kept" or "error".
+	Action string `json:"action"`
+	// Reason explains the verdict, or why a SAFE-DELETE was still kept.
+	Reason     string `json:"reason"`
+	RemoteOnly bool   `json:"remoteOnly,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// runBranchCleanup judges every candidate with gitpkg.ProveBranchMerged and
+// deletes only SAFE-DELETE verdicts (#2259). Issue state is not consulted:
+// a closed issue can leave unmerged work on its branch, and a merged branch
+// can belong to an open issue.
+func runBranchCleanup(svc *gitpkg.Service, branches []string, currentBranch, defaultBranch string,
+	in gitpkg.MergedProofInputs, dryRun bool) []branchCleanupResult {
+	var results []branchCleanupResult
+	for _, branch := range branches {
+		if branch == "main" || branch == "master" || branch == defaultBranch || branch == currentBranch {
+			continue
+		}
+		if !gitpkg.IsCleanupCandidate(branch) {
+			continue // not a pipeline issue-numbered branch
+		}
+		issueNum, ok := gitpkg.ParseIssueNumberFromBranch(branch)
+		if !ok || issueNum == 0 {
+			continue
+		}
+
+		proof := svc.ProveBranchMerged(branch, in)
+		res := branchCleanupResult{
+			Branch: branch, IssueNumber: issueNum, Verdict: string(proof.Verdict),
+			Reason: proof.Reason, RemoteOnly: proof.RemoteOnly,
+		}
+		switch {
+		case proof.Verdict != gitpkg.VerdictSafeDelete:
+			res.Action = "kept"
+		case dryRun:
+			res.Action = "would_delete"
+		default:
+			action, reason, err := cleanupMergedBranch(svc, branch, proof)
+			res.Action = action
+			if reason != "" {
+				res.Reason = reason
+			}
+			if err != nil {
+				res.Error = err.Error()
+			}
+		}
+		results = append(results, res)
+	}
+	return results
+}
+
+// cleanupMergedBranch deletes branch's local and remote refs by calling
+// gitpkg.BranchCleanupPinned (pinned to the judged SHAs, #2259), and maps its outcomes onto the sweep's
 // action vocabulary. It sequences nothing itself, and that is the point (#541
 // AC5).
 //
@@ -8891,12 +8909,19 @@ such as wip/ are never candidates.`,
 // point of deletion, where a worktree that appears after any candidate list
 // was built still cannot get past it.
 //
-// action is one of "deleted", "skipped" (reason is set, err is nil), or
+// action is one of "deleted", "kept" (reason is set, err is nil), or
 // "error" (reason is empty, err carries the detail).
-func cleanupClosedIssueBranch(svc *gitpkg.Service, branch string) (action, reason string, err error) {
-	cleanupErr := svc.BranchCleanup(branch)
+func cleanupMergedBranch(svc *gitpkg.Service, branch string, proof gitpkg.MergedProof) (action, reason string, err error) {
+	cleanupErr := svc.BranchCleanupPinned(branch, proof.LocalTip, proof.OriginTip)
 	if cleanupErr == nil {
 		return "deleted", "", nil
+	}
+
+	// A push or commit landed after the proof: the judged content is no longer
+	// the whole branch, so keep it (#2259).
+	var moved *gitpkg.BranchMovedError
+	if errors.As(cleanupErr, &moved) {
+		return "kept", moved.Error(), nil
 	}
 
 	// Occupancy is not a failure: the branch is in active use, not stale, so
@@ -8904,11 +8929,11 @@ func cleanupClosedIssueBranch(svc *gitpkg.Service, branch string) (action, reaso
 	var held *gitpkg.BranchHeldByWorktreeError
 	if errors.As(cleanupErr, &held) {
 		if held.Worktree != "" {
-			return "skipped", fmt.Sprintf("held by worktree %s", held.Worktree), nil
+			return "kept", fmt.Sprintf("held by worktree %s", held.Worktree), nil
 		}
 		// git refused but the worktree listing could not name the holder —
 		// the mid-rebase `detached` case above.
-		return "skipped", "held by a worktree", nil
+		return "kept", "held by a worktree", nil
 	}
 
 	return "error", "", cleanupErr
