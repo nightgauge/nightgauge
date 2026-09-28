@@ -37,7 +37,9 @@ changelog, and the release workflow refuses a tag that does not.
   the API alike, now runs it. `claude-sonnet-5` is deprecated with
   `claude-sonnet-5-5` as its replacement and stays pinnable by id. Thinking is
   adaptive and on by default; it can be turned off only at `high` effort or
-  below. The live judge's default model is now `claude-sonnet-5-5`.
+  below. The live judge's default model is now `claude-sonnet-5-5`. Through the
+  OpenCode adapter, `anthropic/claude-sonnet-5-5` is refused until OpenCode's
+  bundled catalog lists it; pin `anthropic/claude-sonnet-5` there meanwhile.
 
 - **`NIGHTGAUGE_SKILLS_ROOT` and a `skills` doctor check** (#2220). A
   Go-direct or OpenCode run outside the core repository failed in seconds with

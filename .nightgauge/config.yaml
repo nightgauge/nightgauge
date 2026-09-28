@@ -36,6 +36,10 @@ model_routing:
   mode: automatic
   effort_auto: true
   confidence_threshold: 0.7
+  # Planning is judgment work: Anthropic positions Opus for it and Sonnet for
+  # well-scoped implementation. Implementation keeps the router's own table.
+  minimum_model:
+    feature-planning: opus
 
 human_in_the_loop:
   auto_accept_stages: false
