@@ -883,8 +883,11 @@ export function deactivate(): void {
 
   logger?.info(
     "Deactivating Nightgauge extension — " +
-      `persistent logs in ${RELATIVE_CLONE_LOGS_DIR}/ ` +
-      "(go-backend.log, ipc-client.log, autonomous-exits.jsonl)"
+      `persistent pipeline logs in ${RELATIVE_CLONE_LOGS_DIR}/ ` +
+      "(go-backend.log, autonomous-exits.jsonl); " +
+      "extension-only logs in " +
+      `${extensionContext?.logUri.fsPath ?? "the extension's logUri"} ` +
+      "(ipc-client.log) (#2030)"
   );
 
   // Stop heartbeat before deregister to prevent race with fire-and-forget DELETE

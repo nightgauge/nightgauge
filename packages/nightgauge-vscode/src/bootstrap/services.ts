@@ -129,6 +129,7 @@ import { ApproveCommandHandler } from "../services/ApproveCommandHandler";
 import { RejectCommandHandler } from "../services/RejectCommandHandler";
 import { AgentRegistrationService } from "../services/AgentRegistrationService";
 import { IpcClient } from "../services/IpcClient";
+import { IpcClientBase } from "../services/IpcClientBase";
 import { setStageBudgetResolver } from "../utils/stageBudget";
 import { SecretStorageService, SECRET_KEYS } from "../services/SecretStorageService";
 import { getGlobalConfigPath } from "../utils/globalConfigResolver";
@@ -476,6 +477,11 @@ export async function initializeServices(
 
   // Initialize SecretStorageService for secure API key management (Issue #1056)
   SecretStorageService.initialize(context.secrets);
+
+  // #2030: the IPC transport log (`ipc-client.log`) is extension-only — no Go
+  // reader consumes it — so it is written under `context.logUri`, never the
+  // workspace, per ADR-024 § 2. Set before any IpcClient instance can log.
+  IpcClientBase.setExtensionLogDir(context.logUri.fsPath);
 
   // Initialize NotifierStatusTracker for live notifier send-outcome tracking (#3379)
   NotifierStatusTracker.initialize();
@@ -3158,8 +3164,10 @@ export async function initializeServices(
           // #1051: give the Nightgauge output channel a durable sink too.
           // Without this the channel's stream — extension lifecycle, config
           // resolution, board sync, gate results, auto-cleanup — exists only in
-          // the panel and is lost when the window closes.
-          installLogDiskSink(workspaceRootForLogs, logsConfig);
+          // the panel and is lost when the window closes. #2030: this stream
+          // is extension-only (no Go reader), so it lands under
+          // `context.logUri`, never under the workspace's `cloneLogsDir(root)`.
+          installLogDiskSink(context.logUri.fsPath);
           logger.debug("Disk logging configured", { logsConfig });
 
           // Wire pr.auto_merge to orchestrator deferMerge setting
@@ -3177,7 +3185,7 @@ export async function initializeServices(
         } else {
           // Use defaults if no config
           outputWindow.setLogConfig(workspaceRootForLogs);
-          installLogDiskSink(workspaceRootForLogs);
+          installLogDiskSink(context.logUri.fsPath);
           logger.debug("Disk logging configured with defaults");
         }
         yamlService.dispose();

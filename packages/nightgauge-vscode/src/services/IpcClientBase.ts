@@ -11,7 +11,6 @@
  * @see internal/ipc/protocol.go — Go-side protocol definition
  */
 
-import { cloneLogsDir } from "../utils/cloneLayout";
 import { ChildProcess, spawn } from "child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -1662,6 +1661,21 @@ export abstract class IpcClientBase implements vscode.Disposable {
    */
   private static readonly lastTransportErrors = new Map<string, TransportErrorSnapshot>();
 
+  /**
+   * `ExtensionContext.logUri.fsPath`, set once at activation (#2030). The
+   * transport log (`ipc-client.log`) is extension-only — no Go reader
+   * consumes it — so per ADR-024 § 2 it lives here instead of under the
+   * workspace's `cloneLogsDir(root)`. Null (the pre-activation / test
+   * default) disables persistent transport logging; the output channel still
+   * captures the same content.
+   */
+  private static extensionLogDir: string | null = null;
+
+  /** Set the extension-only log directory. Call once during activation. */
+  static setExtensionLogDir(logDirPath: string): void {
+    IpcClientBase.extensionLogDir = logDirPath;
+  }
+
   /** Read-only snapshot of the last transport error observed per IPC method. */
   static getLastTransportErrors(): ReadonlyMap<string, TransportErrorSnapshot> {
     return IpcClientBase.lastTransportErrors;
@@ -2626,21 +2640,17 @@ export abstract class IpcClientBase implements vscode.Disposable {
 
   /**
    * Write a log line to the persistent IPC log file.
-   * The file is created lazily in cloneLogsDir(root)/ipc-client.log
-   * and survives extension reloads / output channel disposal.
+   *
+   * Extension-only (#2030): no Go reader consumes this raw transport log, so
+   * per ADR-024 § 2 it is created lazily at `<extensionLogDir>/ipc-client.log`
+   * — `ExtensionContext.logUri`, set once via {@link setExtensionLogDir} —
+   * and never under the workspace. It survives extension reloads / output
+   * channel disposal for the lifetime of that directory.
    */
   private writeToLogFile(line: string): void {
-    if (!this.logFileStream && this.workspaceRoot) {
+    if (!this.logFileStream && IpcClientBase.extensionLogDir) {
       try {
-        // Skip persistent logging in uninitialized repos. Creating
-        // cloneLogsDir(root)/ here would re-spawn the scaffolding we
-        // intentionally avoid before /nightgauge:repo-init has run —
-        // the output channel still captures the same content.
-        const configPath = path.join(this.workspaceRoot, ".nightgauge", "config.yaml");
-        if (!fs.existsSync(configPath)) {
-          return;
-        }
-        const logDir = cloneLogsDir(this.workspaceRoot);
+        const logDir = IpcClientBase.extensionLogDir;
         fs.mkdirSync(logDir, { recursive: true });
         const logPath = path.join(logDir, "ipc-client.log");
 

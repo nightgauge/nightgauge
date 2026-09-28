@@ -10,6 +10,10 @@
  *
  * Neither surface alone can reconstruct a run. That is what made post-hoc
  * diagnosis depend on a human watching a panel live.
+ *
+ * #2030 — the channel's stream is extension-only (no Go reader consumes it),
+ * so its durable sink moved from `cloneLogsDir(root)` (workspace) to
+ * `ExtensionContext.logUri`, via `LogFileWriter.appendToExtensionLog`.
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
@@ -29,10 +33,10 @@ vi.mock("vscode", () => ({
   },
 }));
 
-const appendToLog = vi.fn().mockResolvedValue(undefined);
+const appendToExtensionLog = vi.fn().mockResolvedValue(undefined);
 vi.mock("../../src/utils/log-file-writer", () => ({
   LogFileWriter: {
-    appendToLog: (...args: unknown[]) => appendToLog(...args),
+    appendToExtensionLog: (...args: unknown[]) => appendToExtensionLog(...args),
   },
 }));
 
@@ -46,9 +50,11 @@ import {
 /** The sink is fire-and-forget behind a dynamic import; let the microtasks run. */
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-describe("Logger disk sink (#1051)", () => {
+describe("Logger disk sink (#1051, relocated to logUri by #2030)", () => {
+  const fakeLogUri = "/fake/ext/logUri";
+
   beforeEach(() => {
-    appendToLog.mockClear();
+    appendToExtensionLog.mockClear();
     resetMainChannelForTests();
   });
 
@@ -57,18 +63,17 @@ describe("Logger disk sink (#1051)", () => {
   });
 
   it("writes info output to disk once a sink is installed", async () => {
-    installLogDiskSink("/repo");
+    installLogDiskSink(fakeLogUri);
     const log = new Logger("Nightgauge");
 
     log.info("Auto-cleanup: deleted 1 stale local branch(es)", { branches: ["docs/x"] });
     await flush();
 
-    expect(appendToLog).toHaveBeenCalledTimes(1);
-    const [root, issueNumber, level, , body] = appendToLog.mock.calls[0];
-    expect(root).toBe("/repo");
-    // null issue number keeps these in a daily file rather than growing the
-    // 50k-line per-issue run logs, and leaves readEntriesForIssue untouched.
-    expect(issueNumber).toBeNull();
+    expect(appendToExtensionLog).toHaveBeenCalledTimes(1);
+    const [logDirPath, level, body] = appendToExtensionLog.mock.calls[0];
+    // Extension-only lifecycle content lands under the extension's own
+    // logUri, never the workspace (#2030).
+    expect(logDirPath).toBe(fakeLogUri);
     expect(level).toBe("INFO");
     expect(body).toContain("Auto-cleanup: deleted 1 stale local branch(es)");
   });
@@ -80,50 +85,50 @@ describe("Logger disk sink (#1051)", () => {
     log.warn("a warning");
     await flush();
 
-    expect(appendToLog).not.toHaveBeenCalled();
+    expect(appendToExtensionLog).not.toHaveBeenCalled();
   });
 
   it("excludes DEBUG by default and includes it when asked", async () => {
-    installLogDiskSink("/repo");
+    installLogDiskSink(fakeLogUri);
     const log = new Logger("Nightgauge");
 
     log.debug("noisy internal detail");
     await flush();
-    expect(appendToLog).not.toHaveBeenCalled();
+    expect(appendToExtensionLog).not.toHaveBeenCalled();
 
-    installLogDiskSink("/repo", undefined, { debug: true });
+    installLogDiskSink(fakeLogUri, { debug: true });
     log.debug("noisy internal detail");
     await flush();
-    expect(appendToLog).toHaveBeenCalledTimes(1);
+    expect(appendToExtensionLog).toHaveBeenCalledTimes(1);
   });
 
   it("redacts secrets on the path to disk", async () => {
-    installLogDiskSink("/repo");
+    installLogDiskSink(fakeLogUri);
     const log = new Logger("Nightgauge");
 
     log.info("token in hand", { token: "ghp_abcdefghijklmnopqrstuvwxyz0123456789" });
     await flush();
 
-    const body = appendToLog.mock.calls[0][4] as string;
+    const body = appendToExtensionLog.mock.calls[0][2] as string;
     expect(body).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
   });
 
   it("captures output from a prefixed channel — the path board sync uses", async () => {
-    installLogDiskSink("/repo");
+    installLogDiskSink(fakeLogUri);
     const channel = getPrefixedMainChannel("pipeline");
 
     channel.appendLine("[ProjectBoardService] Config loaded via IPC: project=6");
     await flush();
 
-    expect(appendToLog).toHaveBeenCalledTimes(1);
-    const body = appendToLog.mock.calls[0][4] as string;
+    expect(appendToExtensionLog).toHaveBeenCalledTimes(1);
+    const body = appendToExtensionLog.mock.calls[0][2] as string;
     expect(body).toContain("[pipeline]");
     expect(body).toContain("ProjectBoardService");
   });
 
   it("does not let a disk failure escape into the caller", async () => {
-    appendToLog.mockRejectedValueOnce(new Error("disk full"));
-    installLogDiskSink("/repo");
+    appendToExtensionLog.mockRejectedValueOnce(new Error("disk full"));
+    installLogDiskSink(fakeLogUri);
     const log = new Logger("Nightgauge");
 
     // Logging must never be able to fail the thing it is observing.
