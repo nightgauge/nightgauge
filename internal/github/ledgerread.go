@@ -202,6 +202,12 @@ type LedgerWindow struct {
 	// LowWaterRemaining is the smallest remaining GraphQL budget observed, or
 	// -1 when no record in the window carried one.
 	LowWaterRemaining int `json:"low_water_remaining"`
+	// LowWaterIdentity names the identity whose GraphQL bucket reported
+	// LowWaterRemaining (#2087): App installations and personal tokens have
+	// separate buckets, so "which one is under pressure" is part of the
+	// evidence. ExhaustedIdentity is the same for the exhaustion.
+	LowWaterIdentity  string `json:"low_water_identity,omitempty"`
+	ExhaustedIdentity string `json:"exhausted_identity,omitempty"`
 }
 
 // GraphQLResource is the X-RateLimit-Resource value GitHub bills GraphQL
@@ -290,12 +296,15 @@ func SummarizeWindow(recs []APILedgerRecord, since, until time.Time) LedgerWindo
 				// records indefinitely.
 				if r.HeaderObserved || r.Remaining > 0 || r.Cost > 0 {
 					w.LowWaterRemaining = r.Remaining
+					w.LowWaterIdentity = LedgerIdentity(r.Identity)
 				}
 			}
 			if (r.HeaderObserved || r.Cost > 0) && r.Remaining == 0 && !w.Exhausted {
 				w.Exhausted = true
 				w.ExhaustedResource = resource
+				w.ExhaustedIdentity = LedgerIdentity(r.Identity)
 				w.LowWaterRemaining = 0
+				w.LowWaterIdentity = w.ExhaustedIdentity
 				if err == nil {
 					w.ExhaustedAt = ts
 				}

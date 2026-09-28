@@ -383,3 +383,54 @@ func TestGroupAPIUsageFirstCallHasNoBaseline(t *testing.T) {
 		t.Errorf("calls = %d, want 1 — the call still happened", groups[0].Calls)
 	}
 }
+
+// #2087: the report separates the App installation's spend from the personal
+// token's, and records written before the field existed read as unknown.
+func TestAPIUsageByIdentity(t *testing.T) {
+	path := writeLedger(t,
+		`{"ts":"2026-01-01T00:00:00Z","kind":"graphql","cost":10,"since_prev_ms":100,"identity":"app:nightgauge-pipeline"}`,
+		`{"ts":"2026-01-01T00:00:01Z","kind":"graphql","cost":20,"since_prev_ms":100,"identity":"app:nightgauge-pipeline"}`,
+		`{"ts":"2026-01-01T00:00:02Z","kind":"core","cost":3,"since_prev_ms":100,"identity":"user:octocat"}`,
+		`{"ts":"2026-01-01T00:00:03Z","kind":"core","cost":1,"since_prev_ms":100}`,
+	)
+	run := func(args ...string) string {
+		cmd := apiUsageCmd()
+		var buf bytes.Buffer
+		cmd.SetOut(&buf)
+		cmd.SetArgs(append([]string{"--file", path}, args...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatalf("api-usage %v: %v", args, err)
+		}
+		return buf.String()
+	}
+
+	out := run()
+	if !strings.Contains(out, "By identity:") {
+		t.Fatalf("no By identity section: %q", out)
+	}
+	section := out[strings.Index(out, "By identity:"):]
+	section = section[:strings.Index(section, "\n\n")]
+	rows := map[string]string{}
+	for _, line := range strings.Split(section, "\n")[1:] {
+		f := strings.Fields(line)
+		rows[f[0]] = strings.Join(f[1:], " ")
+	}
+	for id, want := range map[string]string{
+		"app:nightgauge-pipeline": "30 pts 2 calls",
+		"user:octocat":            "3 pts 1 calls",
+		"unknown":                 "1 pts 1 calls",
+	} {
+		if rows[id] != want {
+			t.Errorf("identity %s = %q, want %q in:\n%s", id, rows[id], want, out)
+		}
+	}
+
+	out = run("--identity", "user:octocat")
+	if !strings.Contains(out, "1 requests") || strings.Contains(out, "app:nightgauge-pipeline") {
+		t.Errorf("--identity user:octocat did not filter:\n%s", out)
+	}
+	out = run("--identity", "unknown")
+	if !strings.Contains(out, "1 requests") {
+		t.Errorf("--identity unknown did not select the pre-#2087 record:\n%s", out)
+	}
+}

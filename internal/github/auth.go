@@ -151,6 +151,9 @@ func (c *Client) getCurrentUserLogin(ctx context.Context) (string, error) {
 	if err := json.Unmarshal(body, &u); err != nil {
 		return "", fmt.Errorf("decode /user response: %w", err)
 	}
+	if u.Login != "" && c.ledgerIdentity.Load() == "" {
+		c.ledgerIdentity.Store(UserLedgerIdentity(u.Login))
+	}
 	return u.Login, nil
 }
 

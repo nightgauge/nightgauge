@@ -31,6 +31,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The GitHub API ledger records which identity spent each request.** Each
+  record carries `identity` (`app:<slug>`, `user:<login>` or `unknown`), taken
+  from the credential's owner and never from the token. `nightgauge api-usage`
+  prints a "By identity" section and accepts `--identity <x>`; the `doctor`
+  budget finding and `api-usage --budget` name the identity whose bucket is
+  lowest. Ledger files written before this read as `unknown`. (#2087)
+
 - **Claude Sonnet 5.5 now serves the `sonnet` band.** `claude-sonnet-5-5` is
   registered ($2/$10 per MTok, 1M context, 128K output, `low`–`max` effort,
   default `high`) and every stage routed to `sonnet`, on the Claude CLI and
