@@ -151,6 +151,10 @@ git clone --quiet --local --no-checkout "$src_git" "$copy"
 git -C "$copy" checkout --quiet "$head_sha"
 branch="$(git -C "$worktree" rev-parse --abbrev-ref HEAD)"
 [ "$branch" != "HEAD" ] && git -C "$copy" checkout --quiet -B "$branch"
+# origin reads as the source's own remote (GitHub), so `git ls-remote` and
+# fetches see what the pipeline would; only pushes are disabled.
+src_origin="$(git -C "$worktree" remote get-url origin 2>/dev/null || true)"
+[ -n "$src_origin" ] && git -C "$copy" remote set-url origin "$src_origin"
 git -C "$copy" remote set-url --push origin "replay-push-disabled://$label"
 rsync -a --exclude .git --exclude node_modules "$worktree"/ "$copy"/
 
