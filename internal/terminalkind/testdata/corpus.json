@@ -1707,7 +1707,7 @@
       "expected": "adapter_incompatible",
       "expected_signal": "",
       "source": "synthetic",
-      "producer": "adapters.openCodeGate with NIGHTGAUGE_EXPERIMENTAL_OPENCODE unset, wrapped by execution.Manager as `dispatch refused for adapter %q: %w`; the same text a dogfooding run (`nightgauge run 3 --adapter opencode`, nightgauge-dogfooding) printed.",
+      "producer": "adapters.openCodeGate with NIGHTGAUGE_EXPERIMENTAL_OPENCODE unset, wrapped by execution.Manager as `dispatch refused for adapter %q: %w`; the same text a dogfooding run (`nightgauge run N --adapter opencode`) printed.",
       "rationale": "The enable gate is read from the operator's environment only, so a retry is refused identically. It was booked subagent_crash through the `exit ` fallback; it belongs with the other adapter refusals no retry can clear."
     },
     {

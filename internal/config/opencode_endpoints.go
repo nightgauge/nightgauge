@@ -93,7 +93,7 @@ type OpenCodeEndpointModel struct {
 	// thinking_budget, vLLM and llama.cpp read chat_template_kwargs. The
 	// server's own default budget is not applied to OpenCode's requests,
 	// and an uncapped Qwen step was measured at 11k tokens (~25 min at
-	// 7.6 tok/s) on nightgauge-dogfooding#3.
+	// 7.6 tok/s) in a local dogfooding run.
 	RequestOptions map[string]any `yaml:"request_options,omitempty" json:"request_options,omitempty"`
 
 	// StageRequestOptions overrides RequestOptions per stage, key by key:
