@@ -2,18 +2,17 @@ package hooks
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // A warn-mode match from a command run in a subdirectory logs to the clone's
 // logs directory, never to a .nightgauge/ created under the subdirectory.
 func TestLogWarnEventResolvesTheCloneLogsDir(t *testing.T) {
 	root := t.TempDir()
-	if out, err := exec.Command("git", "-C", root, "init", "-q").CombinedOutput(); err != nil {
-		t.Fatalf("git init: %v: %s", err, out)
-	}
+	gittest.InitRepo(t, root)
 	sub := filepath.Join(root, "internal", "pkg")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
