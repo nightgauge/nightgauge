@@ -113,6 +113,7 @@
     },
     {
       "name": "worktree-cleanup",
+      "note": "#2258: Go keeps the run's worktree when the run was paused by cancellation, because run-state resumes it at the interrupted stage and that stage's inputs live in the worktree. The extension already keeps it through cleanupSlot's preserveWorktree argument, so it owes nothing.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.execMgr.CleanupWorktree(item.Repo, item.Number)"
@@ -567,7 +568,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "f384da657c5097254aea9b328ec3bd3d476b466d067fdff3dcb28fa75d54cb48"
+      "sha256": "f8a836e027804a4178094dc88197758596c88f78e31609d1d2d26923f2a6d101"
     },
     {
       "id": "extension-runSlotPipeline-finally",

@@ -1560,6 +1560,16 @@ const (
 	DefaultStageMaxTokens        = 25_000_000
 )
 
+// The hard maxima for a stage no USD cap can bind (zero-cost or unpriced,
+// #2257). A configured ceiling above one is clamped to it and the clamp is
+// logged: pipeline.stage_budgets lives in a tracked file a stage can edit, so
+// a very large positive value must not stand in for the refused -1.
+const (
+	ZeroCostStageMaxTurnsCeiling     = 1_000
+	ZeroCostStageMaxWallClockCeiling = 12 * time.Hour
+	ZeroCostStageMaxTokensCeiling    = 100_000_000
+)
+
 // ResolvedStageBudget is the stage budget a dispatch runs under. A positive
 // field is a ceiling; StageBudgetUnlimited means none. Warnings holds the
 // lines to log for this dispatch.
@@ -1610,9 +1620,9 @@ func ResolveStageBudget(budgets map[string]StageBudget, stage string, cost Stage
 		turnsDefault = DefaultZeroCostStageMaxTurns
 	}
 	f := stageBudgetField{warnings: &out.Warnings, stage: stage, cost: cost}
-	out.MaxTurns = int(f.resolve("max_turns", int64(own.MaxTurns), int64(base.MaxTurns), int64(turnsDefault)))
-	out.MaxWallClock = time.Duration(f.resolve("max_wall_clock", int64(own.MaxWallClock), int64(base.MaxWallClock), int64(DefaultStageMaxWallClock)))
-	out.MaxTokens = int(f.resolve("max_tokens", int64(own.MaxTokens), int64(base.MaxTokens), int64(DefaultStageMaxTokens)))
+	out.MaxTurns = int(f.resolve("max_turns", int64(own.MaxTurns), int64(base.MaxTurns), int64(turnsDefault), ZeroCostStageMaxTurnsCeiling))
+	out.MaxWallClock = time.Duration(f.resolve("max_wall_clock", int64(own.MaxWallClock), int64(base.MaxWallClock), int64(DefaultStageMaxWallClock), int64(ZeroCostStageMaxWallClockCeiling)))
+	out.MaxTokens = int(f.resolve("max_tokens", int64(own.MaxTokens), int64(base.MaxTokens), int64(DefaultStageMaxTokens), ZeroCostStageMaxTokensCeiling))
 	return out
 }
 
@@ -1628,8 +1638,9 @@ type stageBudgetField struct {
 // bind the stage; where none can, it is refused. Any other negative value is
 // invalid. A refused or invalid value is warned about and falls through to
 // the next source, so a stage entry's refused -1 still gets the default
-// entry's limit.
-func (f stageBudgetField) resolve(key string, own, base, builtin int64) int64 {
+// entry's limit. Where no USD cap can bind the stage, a positive value above
+// hardMax is clamped to hardMax, with a warning (#2257).
+func (f stageBudgetField) resolve(key string, own, base, builtin, hardMax int64) int64 {
 	for _, src := range []struct {
 		v    int64
 		from string
@@ -1638,6 +1649,11 @@ func (f stageBudgetField) resolve(key string, own, base, builtin int64) int64 {
 		switch {
 		case v == 0:
 			continue
+		case v > 0 && f.cost != StagePriced && v > hardMax:
+			*f.warnings = append(*f.warnings, fmt.Sprintf(
+				"pipeline.%s.%s is %s, clamped to %s: no USD cap can stop the stage, so its ceiling has a hard maximum",
+				src.from, key, formatStageBudgetValue(key, v), formatStageBudgetValue(key, hardMax)))
+			return hardMax
 		case v > 0:
 			return v
 		case v == StageBudgetUnlimited && f.cost == StagePriced:

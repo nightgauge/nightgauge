@@ -177,6 +177,32 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A sanitization warning no longer creates `.nightgauge/logs/` in whatever
+  directory the command ran from.** The Bash gate's warn-mode log resolves the
+  hook's cwd to the main checkout and writes to that clone's logs directory,
+  the file the extension's firewall view reads. A command run from a
+  subdirectory used to leave a stray `sanitization.log` inside the source tree,
+  where the Go test guard for `.nightgauge/` writes then failed the package.
+
+- **Every dispatched run now works in its own linked worktree, fast-tracked or
+  not (#2258).** A run with no Go-side adapter, such as a trivial or
+  docs-only fast-track route driven over IPC, used to dispatch every stage in
+  the operator's primary checkout. The scheduler now provisions the run's
+  worktree before the first stage and dispatches each stage there. If the
+  worktree cannot be created, the run is refused instead of falling back to
+  the primary checkout.
+
+- **`nightgauge git branch-cleanup` deletes on merged content, not on issue
+  state** (#2259). A branch, local or origin-only, is deleted only when the
+  same proof as `scripts/branch-merged-check.sh` holds: its tip is an ancestor
+  of the default branch, its own files are identical there, or a merged PR's
+  head is (or has as a parent) the branch tip. A closed issue no longer
+  authorizes deleting unmerged work. Branches that fail the proof, are held
+  by a worktree, back an open PR, or are epic branches of an open issue are
+  kept and reported with a reason (`action: "kept"`, plus a `verdict` field).
+  Each half is deleted only while it still points at the judged SHA (origin via
+  `--force-with-lease`), so a push landing after the judgment keeps the branch.
+
 - **An auto-recovery commit can no longer land on the default branch or sweep
   in an operator's uncommitted edits (#1907).** The uncommitted-work rescue
   now refuses the repository's primary checkout, a detached `HEAD`, and the
@@ -483,6 +509,12 @@ opencode` failed at issue-pickup before any model was called. A stage whose
   contract error.
 
 ### Security
+
+- A stage can no longer raise the budgets of the stages after it. `pipeline.stage_budgets`
+  is read once at run start into a snapshot every stage of the run uses, so an edit to the
+  tracked config during the run has no effect. On a stage no USD cap can bind (zero-cost or
+  unpriced), a configured ceiling above the hard maximum (1,000 turns, 12h wall clock, 100M
+  tokens) is clamped to it and the clamp is logged (#2257).
 
 - **The pipeline can no longer widen the publication-boundary allowlist that
   gates its own output** (#1970). After every stage the orchestrator checks the

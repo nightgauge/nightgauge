@@ -86,16 +86,24 @@ func TestRunWorktree_ProvisionsWorktreeAndLeavesPrimaryAlone(t *testing.T) {
 	}
 }
 
-// Without a Go-side adapter (IPC mode) the extension owns the worktree; the
-// hook must punt rather than fall back to the primary checkout.
-func TestRunWorktree_PuntsWithoutARunWorktree(t *testing.T) {
+// Without a Go-side adapter (IPC mode) the run still gets its own linked
+// worktree (#2258): that mode used to punt, and the scheduler then dispatched
+// every stage — a docs-only fast-track route among them — in the primary
+// checkout.
+func TestRunWorktree_ProvisionsWithoutAnAdapter(t *testing.T) {
 	root := pickupRepo(t)
 	s := &Scheduler{execMgr: execution.NewManager(root, nil)}
 	rt := state.NewRuntimeState("acme/app", 1904, "item-1904", "run-2170")
 
 	dir, reason := s.runWorktree(rt, types.BoardItem{Repo: "acme/app", Number: 1904})
-	if reason == "" || dir != "" {
-		t.Fatalf("runWorktree = (%q, %q), want a punt", dir, reason)
+	if reason != "" || dir == "" || dir == root {
+		t.Fatalf("runWorktree = (%q, %q), want a linked worktree other than %q", dir, reason, root)
+	}
+	if rt.WorktreeDir != dir {
+		t.Errorf("runtime.WorktreeDir = %q, want %q", rt.WorktreeDir, dir)
+	}
+	if err := recoveryCommitTargetRefusal(dir); err == nil || !strings.Contains(err.Error(), "detached") {
+		t.Errorf("worktree %s is not a linked worktree: %v", dir, err)
 	}
 	if got := headOf(t, root); got != "main" {
 		t.Errorf("primary checkout HEAD = %q, want main", got)

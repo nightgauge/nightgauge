@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -4138,6 +4139,17 @@ func RecoverUncommittedWork(worktreePath string, issueNumber int, stage string) 
 	return outcome, nil
 }
 
+// isGitWorkTree reports whether dir exists and lies inside a git work tree.
+// A missing dir answers true so the caller still reaches EnsureWorktree, whose
+// "repo root not found" error names the fault.
+func isGitWorkTree(dir string) bool {
+	if _, err := os.Stat(dir); err != nil {
+		return true
+	}
+	out, err := exec.Command("git", "-C", dir, "rev-parse", "--is-inside-work-tree").Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
 // recoveryCommitTargetRefusal returns a non-nil error when worktreePath is not
 // a tree the pipeline may commit a rescue into (#1907):
 //
@@ -4382,8 +4394,9 @@ func PipelineBudgetCeilingUSD(workspaceRoot string) float64 {
 }
 
 // pipelineStageBudgets reads pipeline.stage_budgets (#1652) through the tier
-// merge. nil, the built-in defaults, when the workspace sets none or its
-// config cannot be read.
+// merge into a copy the caller owns. nil, the built-in defaults, when the
+// workspace sets none or its config cannot be read. runPipeline calls it once
+// per run (#2257); a stage must never trigger a re-read.
 func pipelineStageBudgets(workspaceRoot string) map[string]config.StageBudget {
 	if workspaceRoot == "" {
 		return nil
@@ -4392,7 +4405,7 @@ func pipelineStageBudgets(workspaceRoot string) map[string]config.StageBudget {
 	if err != nil || cfg == nil || cfg.Pipeline == nil {
 		return nil
 	}
-	return cfg.Pipeline.StageBudgets
+	return maps.Clone(cfg.Pipeline.StageBudgets)
 }
 
 func maxFloat64(a, b float64) float64 {
@@ -4600,6 +4613,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// mid-pipeline loses phase counts on already-completed stages.
 	s.registerRuntime(runtime)
 	defer s.unregisterRuntime(runtime.RunID)
+
+	// Stage budgets are read once, here, into a snapshot every stage of this
+	// run dispatches under (#2257). The config is a tracked file inside the
+	// checkout the stages write to, so a re-read per stage would let one
+	// stage raise the ceilings of the stages that follow it.
+	stageBudgets := pipelineStageBudgets(workspaceRoot)
 
 	// Reset orchestration engines for this pipeline run
 	s.retryEngine.Reset()
@@ -4941,8 +4960,13 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// itself preserves a worktree with uncommitted tracked changes (logs
 		// SkipDirty and returns without removing), so a failed run a developer
 		// still needs to inspect is never silently destroyed here.
+		//
+		// Except a run paused by cancellation (#2258): run-state resumes it at
+		// the interrupted stage, and that stage's inputs live in this worktree.
 		if s.execMgr != nil {
-			if err := s.execMgr.CleanupWorktree(item.Repo, item.Number); err != nil {
+			if !pipelineSuccess && ctx.Err() != nil {
+				log.Printf("#%d: run paused — keeping its worktree for the resume", item.Number)
+			} else if err := s.execMgr.CleanupWorktree(item.Repo, item.Number); err != nil {
 				log.Printf("#%d: worktree cleanup failed: %v", item.Number, err)
 			}
 			// The run's OpenCode per-run root goes at every terminal outcome
@@ -5302,6 +5326,26 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			runtime.SetBranch(b)
 		}
 	}
+	// Every dispatched run works in its own linked worktree (#2258). The run
+	// worktree used to be provisioned lazily, inside the first dispatch or the
+	// deterministic issue-pickup hook, and only when a Go-side adapter was
+	// configured. A run with no adapter (IPC mode) — observed on a trivial /
+	// docs-only fast-track route (#1907) — never got one: every stage was
+	// dispatched with the workspace root as its working directory, so it ran
+	// in, and its recovery committed into, the operator's primary checkout.
+	// Provision it once, here, before any stage runs, and refuse the run when
+	// that fails rather than fall back to the primary checkout. A repo root
+	// that is not a git work tree is no checkout at all, so there is nothing to
+	// isolate and nothing a worktree could be added from.
+	if stageIdx < len(stages) && s.execMgr != nil && isGitWorkTree(s.execMgr.RepoRoot(item.Repo)) {
+		if _, reason := s.runWorktree(runtime, item); reason != "" {
+			terminalFailureKind, workRecovered = s.refusePreDispatch(item, runtime, workspaceRoot, stages[stageIdx], tracer,
+				"run-worktree-preflight",
+				fmt.Sprintf("run worktree unavailable (%s) — refusing to run stages in the primary checkout %s", reason, workspaceRoot))
+			return
+		}
+	}
+
 	// Endpoint-aware OpenCode dispatch (#1679): the slot a stage holds on a
 	// declared endpoint, the endpoints it has lost, and how often it has
 	// failed over. Reset whenever the loop moves to another stage.
@@ -6150,12 +6194,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// stages before their own progress-gated hard cap could apply.
 			Timeout:      routing.ResolveStageTimeoutLocal(string(stage), adapterName, model, adapterName == "opencode" && execution.OpenCodeDeclaredEndpointLocal(model, workspaceRoot)),
 			CostBudget:   PipelineBudgetCeilingUSD(workspaceRoot),
-			StageBudgets: pipelineStageBudgets(workspaceRoot),
+			StageBudgets: stageBudgets,
 			SkillPath:    skillData.SkillPath,
 			ContextFile:  contextFile,
 			OutputFile:   outputFile,
 			TargetRepo:   item.Repo,
-			WorktreePath: workspaceRoot, // Working directory for Claude CLI (IPC mode)
+			WorktreePath: stageWorkspace(runtime, workspaceRoot), // the run's linked worktree (#2258)
 			Runtime:      runtime,
 			// The run identity this dispatch is booked under (ADR-017 step 0b).
 			// Guaranteed non-empty: the run-identity preflight above refuses the

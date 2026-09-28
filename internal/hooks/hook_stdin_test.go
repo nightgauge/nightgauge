@@ -144,6 +144,7 @@ func TestNotifyMessageFromHook(t *testing.T) {
 // run. Its patterns appear verbatim in legitimate orchestration prompts, so
 // defaulting to block would trade a dead guard for one that blocks real work.
 func TestEvaluateSanitizePrompt_WarnModeDoesNotBlock(t *testing.T) {
+	t.Chdir(t.TempDir()) // warn mode logs to the cwd's clone; keep it out of this checkout
 	// logWarnEvent writes under the process directory; keep the repo clean.
 	t.Chdir(t.TempDir())
 

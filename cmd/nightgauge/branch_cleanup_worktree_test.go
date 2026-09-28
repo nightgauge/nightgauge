@@ -169,7 +169,7 @@ func (r cleanupSweepRepo) remoteRefExists(t *testing.T, branch string) bool {
 // occupancy pre-check in front to make that order safe. A mid-rebase worktree
 // defeats the pre-check without any race (see setupCleanupSweepRepo), so the sweep
 // deleted origin's ref, THEN had `git branch -D` refused, matched "used by
-// worktree" in the refusal text and returned "skipped" with a nil error.
+// worktree" in the refusal text and returned "skipped" (now "kept") with a nil error.
 //
 // Net effect: a live run lost the branch its PR is opened from and the branch a
 // re-run's ResetLocalBranchToRemote fetches to recover state, and the sweep
@@ -185,12 +185,12 @@ func TestCleanupClosedIssueBranch_MidRebaseWorktreeKeepsLocalAndRemoteRefs(t *te
 		t.Fatalf("fixture: origin must carry %s before the sweep runs", branch)
 	}
 
-	action, reason, err := cleanupClosedIssueBranch(svc, branch)
+	action, reason, err := cleanupMergedBranch(svc, branch, currentTips(t, svc, branch))
 	if err != nil {
-		t.Fatalf("cleanupClosedIssueBranch(%s) err = %v, want nil", branch, err)
+		t.Fatalf("cleanupMergedBranch(%s) err = %v, want nil", branch, err)
 	}
-	if action != "skipped" {
-		t.Errorf("action = %q (reason=%q), want %q", action, reason, "skipped")
+	if action != "kept" {
+		t.Errorf("action = %q (reason=%q), want %q", action, reason, "kept")
 	}
 	if !strings.Contains(reason, "worktree") {
 		t.Errorf("reason = %q, want it to say a worktree holds the branch", reason)
@@ -218,7 +218,7 @@ type cleanupSweepOutcome struct {
 // strictly more branches than the command ever can. A branch that survives this
 // walk survives the command. What it does share exactly is the part under test
 // — the enumeration (ListLocalBranches plus remote-only stragglers), the shape
-// filter (IsCleanupCandidate) and the deletion step (cleanupClosedIssueBranch).
+// filter (IsCleanupCandidate) and the deletion step (cleanupMergedBranch).
 func walkCleanupSweep(t *testing.T, svc *gitpkg.Service) (enumerated []string, outcomes map[string]cleanupSweepOutcome) {
 	t.Helper()
 
@@ -251,7 +251,7 @@ func walkCleanupSweep(t *testing.T, svc *gitpkg.Service) (enumerated []string, o
 		if n, ok := gitpkg.ParseIssueNumberFromBranch(b); !ok || n == 0 {
 			continue
 		}
-		action, reason, _ := cleanupClosedIssueBranch(svc, b)
+		action, reason, _ := cleanupMergedBranch(svc, b, currentTips(t, svc, b))
 		outcomes[b] = cleanupSweepOutcome{action: action, reason: reason}
 	}
 	return enumerated, outcomes
@@ -277,8 +277,8 @@ func TestGitBranchCleanupSweep_FromLinkedWorktreeAndFromPrimary(t *testing.T) {
 	// wip/704-operator is absent because IsCleanupCandidate never offers an
 	// operator prefix to the deletion path; main is absent for the same reason.
 	wantActions := map[string]string{
-		"fix/701-live":     "skipped", // held by an ordinary linked worktree
-		"fix/702-rebasing": "skipped", // held by a MID-REBASE linked worktree
+		"fix/701-live":     "kept",    // held by an ordinary linked worktree
+		"fix/702-rebasing": "kept",    // held by a MID-REBASE linked worktree
 		"fix/703-stale":    "deleted", // held by nothing: genuinely stale
 	}
 

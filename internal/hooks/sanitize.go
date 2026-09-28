@@ -172,7 +172,7 @@ func EvaluateSanitizeText(text string, mode config.SanitizationMode) GateDecisio
 	}
 
 	if mode == config.SanitizationModeWarn {
-		logWarnEvent(match, text)
+		logWarnEvent(match, text, "")
 		return Allow()
 	}
 	return Block("Prompt injection detected: " + match.Pattern)

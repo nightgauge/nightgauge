@@ -196,12 +196,18 @@ func TestPlannerRoutingDecision_KeepsTheStartingSkipSet(t *testing.T) {
 type plannerSizingRunner struct {
 	runIDCapturingRunner
 	root string
+	// devIssueContext is the issue context as feature-dev's dispatch sees it,
+	// read from the run's worktree before the run removes it (#2258).
+	devIssueContext []byte
 }
 
 func (r *plannerSizingRunner) RunStage(ctx context.Context, params StageRunParams) (*StageRunResult, error) {
 	// The base runner writes a generic payload to the stage's OutputFile —
 	// for these two stages that IS the file below — so write after it.
 	out, err := r.runIDCapturingRunner.RunStage(ctx, params)
+	if params.Stage == state.StageFeatureDev {
+		r.devIssueContext, _ = os.ReadFile(resolveIssueContextPath(r.root, params.WorktreePath, params.Repo, params.IssueNumber))
+	}
 	dirs := []string{r.root}
 	if params.WorktreePath != "" && params.WorktreePath != r.root {
 		dirs = append(dirs, params.WorktreePath)
@@ -279,12 +285,7 @@ func TestRunPipeline_PlannerSizeReachesFeatureDevDispatch(t *testing.T) {
 	var ctxDoc struct {
 		Routing map[string]any `json:"routing"`
 	}
-	path := resolveIssueContextPath(root, snap.WorktreeDir, "nightgauge/nightgauge", issue)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read issue context: %v", err)
-	}
-	if err := json.Unmarshal(data, &ctxDoc); err != nil {
+	if err := json.Unmarshal(runner.devIssueContext, &ctxDoc); err != nil {
 		t.Fatal(err)
 	}
 	if ctxDoc.Routing["suggested_route"] != "extensive" || ctxDoc.Routing["complexity_score"] != float64(5) {
