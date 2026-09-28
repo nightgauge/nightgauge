@@ -93,6 +93,13 @@ from in feature-dev. See [docs/SPIKE_CONTRACT.md](../../docs/SPIKE_CONTRACT.md).
   (`internal/hooks/context.go`/`stop.go`) counts `- [ ]` / `- [x]` lines to
   report plan completion; a step written as prose or a numbered list is
   invisible to it.
+- **Size the task list to the issue: each checkbox runs as its own
+  feature-dev session** on a small-context model, and every session pays a
+  fixed setup cost. Aim for XS: 1–2 tasks, S: 2–3, M: at most 5. Make each
+  task one coherent change with its tests (one module and its test file),
+  not one edit: an import, a removed cast or a rename belongs to the task
+  that needs it, and "run the tests" or "run the local gate" is never a
+  task of its own, since every task already verifies its change.
 - See also the cross-cutting gotchas in
   [`_shared/GOTCHAS.md`](../_shared/GOTCHAS.md).
 
