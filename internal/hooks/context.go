@@ -16,7 +16,13 @@ type ContextResult struct {
 	LastCommit       string `json:"last_commit,omitempty"`
 	UncommittedCount int    `json:"uncommitted_changes,omitempty"`
 	PlanProgress     string `json:"plan_progress,omitempty"`
-	Message          string `json:"message,omitempty"`
+	// StageArtifacts are the issue's pipeline handoff files already on disk
+	// in the worktree. Injected on compaction so a multi-phase stage resumes
+	// after its last finished phase instead of starting over: a local model
+	// whose planning stage compacted at phase 12 went back to phase 5 and
+	// rewrote a plan it had already written.
+	StageArtifacts []string `json:"stage_artifacts,omitempty"`
+	Message        string   `json:"message,omitempty"`
 }
 
 // EvaluateContext gathers session context from the working directory.
@@ -44,6 +50,8 @@ func EvaluateContext(workdir string) ContextResult {
 
 	// Get plan progress
 	result.PlanProgress = getPlanProgress(workdir)
+
+	result.StageArtifacts = stageArtifacts(workdir, result.IssueNumber)
 
 	// Build human-readable message
 	result.Message = buildContextMessage(result)
@@ -111,6 +119,28 @@ func getPlanProgress(workdir string) string {
 	return fmt.Sprintf("%d/%d tasks (%.0f%%)", status.Complete, status.Total, pct)
 }
 
+// stageArtifacts lists the issue's pipeline handoff files present under the
+// worktree's .nightgauge/ (paths relative to workdir), in pipeline order.
+func stageArtifacts(workdir, issue string) []string {
+	if issue == "" {
+		return nil
+	}
+	var found []string
+	for _, name := range []string{"issue", "ac-reconcile", "planning", "dev", "validate", "pr"} {
+		rel := filepath.Join(".nightgauge", "pipeline", name+"-"+issue+".json")
+		if fi, err := os.Stat(filepath.Join(workdir, rel)); err == nil && fi.Size() > 0 {
+			found = append(found, rel)
+		}
+	}
+	plans, _ := filepath.Glob(filepath.Join(workdir, ".nightgauge", "plans", issue+"-*.md"))
+	for _, p := range plans {
+		if rel, err := filepath.Rel(workdir, p); err == nil {
+			found = append(found, rel)
+		}
+	}
+	return found
+}
+
 // buildContextMessage creates a human-readable context summary.
 func buildContextMessage(ctx ContextResult) string {
 	var parts []string
@@ -129,6 +159,10 @@ func buildContextMessage(ctx ContextResult) string {
 	}
 	if ctx.PlanProgress != "" {
 		parts = append(parts, fmt.Sprintf("Plan progress: %s", ctx.PlanProgress))
+	}
+	if len(ctx.StageArtifacts) > 0 {
+		parts = append(parts, fmt.Sprintf("Already written: %s. Resume after the last phase whose output is here; read these files rather than redoing the phases that produced them.",
+			strings.Join(ctx.StageArtifacts, ", ")))
 	}
 
 	if len(parts) == 0 {
