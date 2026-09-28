@@ -10,8 +10,6 @@ import { redactSecrets } from "./redaction";
 /**
  * Log levels for structured logging
  */
-import type { LogFileConfig } from "./log-file-writer";
-
 export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR";
 
 /**
@@ -48,48 +46,41 @@ export function resetMainChannelForTests(): void {
 }
 
 /**
- * Durable sink for the `Nightgauge` output channel (#1051).
+ * Durable sink for the `Nightgauge` output channel (#1051, relocated by #2030).
  *
  * The channel and the per-issue session log are TWO DISJOINT STREAMS, and only
  * one of them survives the window closing. The session log carries stage
  * execution detail — skillRunner, model reasoning, the raw agent stream, hook
- * events — while the channel carries extension lifecycle, config resolution,
- * board sync, gate results and auto-cleanup. Neither alone can reconstruct a
- * run, and everything the channel holds was memory-only: `Logger`'s single sink
- * is `channel.appendLine`, and `LogFileWriter.appendToLog` had exactly one
- * caller, in the output-window view.
+ * events — a Go reader consumes (`cmd/nightgauge logs scan-failures`), and
+ * stays under `cloneLogsDir(root)`. The channel carries extension lifecycle,
+ * config resolution, board sync, gate results and auto-cleanup: no Go reader
+ * consumes it, so per ADR-024 § 2 ("Extension-only logs") it is written under
+ * `ExtensionContext.logUri`, never into the workspace (Issue #2030).
  *
  * Default OFF so nothing changes until a host installs it, which keeps existing
  * suites hermetic — several mock only `vscode`.
  */
 let diskSink: {
-  root: string;
-  config?: Partial<LogFileConfig>;
+  logDirPath: string;
   debug: boolean;
 } | null = null;
 
 /**
  * Route channel output to disk as well. Idempotent; call once during activation.
  *
- * DEBUG is excluded unless explicitly requested: session logs already reach 50k+
- * lines and DEBUG is the bulk of the channel's volume.
+ * @param logDirPath - Absolute filesystem path of `context.logUri` (#2030);
+ *   never a workspace-relative path.
+ *
+ * DEBUG is excluded unless explicitly requested: the log already carries a lot
+ * of volume and DEBUG is the bulk of it.
  */
-export function installLogDiskSink(
-  root: string,
-  config?: Partial<LogFileConfig>,
-  opts?: { debug?: boolean }
-): void {
-  diskSink = { root, config, debug: opts?.debug ?? false };
+export function installLogDiskSink(logDirPath: string, opts?: { debug?: boolean }): void {
+  diskSink = { logDirPath, debug: opts?.debug ?? false };
 }
 
 /**
  * Fire-and-forget append. Never throws and never blocks a log call: logging must
  * not be able to fail the thing it is observing.
- *
- * `issueNumber` is null on purpose, so these land in a daily
- * `YYYY-MM-DD_session.log` rather than growing the per-issue run logs. That also
- * leaves `readEntriesForIssue` — which filters on `_<issue>_session.log` —
- * untouched.
  */
 function toDisk(level: LogLevel, body: string): void {
   const sink = diskSink;
@@ -98,7 +89,7 @@ function toDisk(level: LogLevel, body: string): void {
   void (async () => {
     try {
       const { LogFileWriter } = await import("./log-file-writer");
-      await LogFileWriter.appendToLog(sink.root, null, level, null, body, sink.config);
+      await LogFileWriter.appendToExtensionLog(sink.logDirPath, level, body);
     } catch {
       // Logging must never surface an error of its own.
     }

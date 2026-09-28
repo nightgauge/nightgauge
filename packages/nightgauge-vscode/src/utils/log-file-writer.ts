@@ -163,6 +163,45 @@ export class LogFileWriter {
   }
 
   /**
+   * Append a line to an extension-only log file under `ExtensionContext.logUri`
+   * (ADR-024 § 2, "Extension-only logs"). Never resolves through
+   * {@link cloneLogsDir} and never writes into the workspace: the caller passes
+   * the already-resolved `logUri.fsPath`, a directory VS Code owns, rotates
+   * with its own session lifecycle, and exposes through "Open Extension Logs
+   * Folder" — no Go reader consumes it (Issue #2030).
+   *
+   * @param logDirPath - Absolute filesystem path of `context.logUri`
+   * @param level - Log level (INFO, DEBUG, WARNING, ERROR, etc.)
+   * @param message - Log message content
+   * @param filename - Log file name within `logDirPath` (default: `extension.log`)
+   */
+  static async appendToExtensionLog(
+    logDirPath: string,
+    level: string,
+    message: string,
+    filename = "extension.log"
+  ): Promise<void> {
+    if (typeof logDirPath !== "string" || logDirPath.trim() === "") {
+      return;
+    }
+
+    const logPath = path.join(logDirPath, filename);
+    const timestamp = new Date().toISOString();
+    // Same redaction choke point as appendToLog — a lifecycle line can still
+    // echo a token (#170).
+    const safeMessage = redactSecrets(message);
+    const line = `[${timestamp}] [${level.toUpperCase()}] ${safeMessage}\n`;
+
+    try {
+      await fs.mkdir(logDirPath, { recursive: true });
+      await fs.appendFile(logPath, line, "utf-8");
+    } catch (error) {
+      // Log warning but don't throw - disk logging is non-critical
+      console.warn(`[Nightgauge] Failed to write to extension log file: ${error}`);
+    }
+  }
+
+  /**
    * Generate the log filename for the current session
    *
    * Format: {YYYY-MM-DD}_{issue-number}_session.log

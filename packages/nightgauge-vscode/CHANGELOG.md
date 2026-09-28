@@ -9,6 +9,16 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- The extension's own diagnostic logs — the "Nightgauge" output channel's disk
+  sink and the IPC transport log (`ipc-client.log`) — now write under VS
+  Code's per-extension `logUri` directory (visible through "Open Extension
+  Logs Folder") instead of the workspace's `.nightgauge/logs/`. Neither is
+  read by the Go binary, so nothing changes for pipeline session logs or the
+  sanitization log, which still land under the shared per-clone log directory
+  (#2030).
+
 ### Removed
 
 - The remote-command status bar item and the `remote.notifyOnPipelineRun`

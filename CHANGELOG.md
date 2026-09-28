@@ -14,6 +14,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- **Extension-only logs move to `ExtensionContext.logUri`, out of the
+  workspace** (#2030). The extension's own diagnostic lines — its "Nightgauge"
+  output channel (lifecycle, config resolution, board sync, gate results,
+  auto-cleanup) and its raw IPC transport log (`ipc-client.log`) — write under
+  VS Code's per-extension `logUri` directory now, which VS Code rotates with
+  its own session lifecycle and exposes through "Open Extension Logs Folder".
+  Neither is consumed by a Go reader, so per
+  [ADR-024](docs/decisions/024-data-and-state-layout.md) § 2 they no longer
+  land under the workspace's `.nightgauge/logs/`. Per-issue pipeline session
+  logs and the sanitization log are unaffected: a Go reader
+  (`nightgauge logs scan-failures`, `internal/hooks`) still consumes them, so
+  they stay under `cloneLogsDir(root)` via the one shared helper.
+
 ### Added
 
 - **`NIGHTGAUGE_SKILLS_ROOT` and a `skills` doctor check** (#2220). A

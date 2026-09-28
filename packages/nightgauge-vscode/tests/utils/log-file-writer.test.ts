@@ -205,6 +205,81 @@ describe("LogFileWriter", () => {
     });
   });
 
+  describe("appendToExtensionLog() — extension-only logs (Issue #2030)", () => {
+    const fakeLogUri = "/fake/extension/logUri";
+
+    it("writes under the given logUri directory, not the workspace", async () => {
+      await LogFileWriter.appendToExtensionLog(fakeLogUri, "INFO", "extension lifecycle message");
+
+      expect(fs.mkdir).toHaveBeenCalledWith(fakeLogUri, { recursive: true });
+      expect(fs.appendFile).toHaveBeenCalledWith(
+        `${fakeLogUri}/extension.log`,
+        expect.stringMatching(/\[\d{4}-\d{2}-\d{2}T.+\] \[INFO\] extension lifecycle message\n/),
+        "utf-8"
+      );
+
+      // No write lands under the fixture workspace's .nightgauge/logs.
+      for (const call of vi.mocked(fs.mkdir).mock.calls) {
+        expect(String(call[0])).not.toContain(".nightgauge/logs");
+      }
+      for (const call of vi.mocked(fs.appendFile).mock.calls) {
+        expect(String(call[0])).not.toContain(".nightgauge/logs");
+      }
+    });
+
+    it("uppercases the log level", async () => {
+      await LogFileWriter.appendToExtensionLog(fakeLogUri, "warn", "a warning");
+
+      expect(fs.appendFile).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.stringContaining("[WARN]"),
+        "utf-8"
+      );
+    });
+
+    it("redacts secrets before writing to disk", async () => {
+      const gitlabPat = "glpat-" + "N3FwABCDEFGHIJKLMNOP";
+      await LogFileWriter.appendToExtensionLog(fakeLogUri, "INFO", `token in hand: ${gitlabPat}`);
+
+      const written = vi.mocked(fs.appendFile).mock.calls[0]?.[1] as string;
+      expect(written).not.toContain(gitlabPat);
+      expect(written).toContain("[REDACTED");
+    });
+
+    it("accepts a custom filename", async () => {
+      await LogFileWriter.appendToExtensionLog(fakeLogUri, "INFO", "line", "ipc-client.log");
+
+      expect(fs.appendFile).toHaveBeenCalledWith(
+        `${fakeLogUri}/ipc-client.log`,
+        expect.any(String),
+        "utf-8"
+      );
+    });
+
+    it("does nothing for an empty log directory path", async () => {
+      await LogFileWriter.appendToExtensionLog("", "INFO", "line");
+
+      expect(fs.mkdir).not.toHaveBeenCalled();
+      expect(fs.appendFile).not.toHaveBeenCalled();
+    });
+
+    it("handles a write failure gracefully", async () => {
+      const error = new Error("ENOSPC: no space left on device");
+      vi.mocked(fs.appendFile).mockRejectedValue(error);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      await expect(
+        LogFileWriter.appendToExtensionLog(fakeLogUri, "INFO", "line")
+      ).resolves.toBeUndefined();
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("[Nightgauge] Failed to write to extension log file")
+      );
+
+      warnSpy.mockRestore();
+    });
+  });
+
   describe("getLogPath()", () => {
     it("should return full path with default config", () => {
       const today = new Date().toISOString().split("T")[0];
