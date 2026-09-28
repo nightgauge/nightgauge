@@ -171,6 +171,52 @@ func TestStageBudgetClaudeTurnsStopAtTheLimit(t *testing.T) {
 	}
 }
 
+// TestStageBudgetTurnsSurviveAnOversizedStdoutLine: a stdout line over the
+// 1 MiB line limit, such as a huge tool output, is dropped and reading goes
+// on, so the turns after it are still counted and the turn budget trips
+// (#2016). bufio.Scanner used to stop reading at that line for every adapter
+// but OpenCode, and the stage then escaped its budget.
+func TestStageBudgetTurnsSurviveAnOversizedStdoutLine(t *testing.T) {
+	dir := claudeTurnsFixture(t, 12)
+	big := filepath.Join(t.TempDir(), "big")
+	if err := os.WriteFile(big, []byte(strings.Repeat("x", streamLineLimit+4096)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	adapter := &budgetFakeAdapter{
+		name:   "claude-budget-fake",
+		script: fmt.Sprintf(`cat %q; for f in %q/turn*; do cat "$f"; sleep 0.15; done; cat %q/result`, big, dir, dir),
+	}
+	out := runBudgetStage(t, adapter, map[string]config.StageBudget{"feature-dev": {MaxTurns: 5}}, 30*time.Second)
+
+	b := out.result.StageBudgetExceeded
+	if b == nil || b.Dimension != StageBudgetTurns || b.Observed != 5 || b.Limit != 5 {
+		t.Fatalf("StageBudgetExceeded = %+v, want turns observed 5 limit 5: counting stopped at the oversized line\nstderr:\n%s", b, out.result.Stderr)
+	}
+}
+
+// TestStageStopStampsOutrankRetryableSignatures: a stage the manager stopped
+// at a stage budget or the cost cap classifies as budget_exceeded even when
+// the CLI printed a retryable signature while it was being killed (#2016).
+func TestStageStopStampsOutrankRetryableSignatures(t *testing.T) {
+	stamps := []string{
+		StageBudgetNotice(adapters.StageBudgetBreach{Dimension: StageBudgetTurns, Observed: 5, Limit: 5}),
+		CostCapExceededMarker + " Stage feature-dev terminated: cost $2.10 exceeded the configured cap ($2.00)",
+	}
+	signatures := []string{
+		`API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+		"API Error: Connection error. The socket connection was closed unexpectedly",
+		"AI_APICallError: Cannot connect to API: Unable to connect. Is the computer able to access the url?",
+	}
+	for _, stamp := range stamps {
+		for _, sig := range signatures {
+			text := sig + "\n" + stamp
+			if kind := terminalkind.Classify(text); kind != "budget_exceeded" {
+				t.Errorf("%q classifies as %q, want budget_exceeded", text, kind)
+			}
+		}
+	}
+}
+
 // openCodeStepsFixture writes the research capture's tool-using step
 // (step_start, tool_use, a step_finish whose reason is tool-calls), which a
 // test's fake replays once per step. When

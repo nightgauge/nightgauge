@@ -175,6 +175,20 @@ export const TERMINAL_KIND_TABLE: TerminalKindTable = {
   ],
   "rules": [
     {
+      "id": "stamped-stage-stop",
+      "kind": "budget_exceeded",
+      "signal": false,
+      "clauses": [
+        [
+          "stage_budget_exceeded:"
+        ],
+        [
+          "[cost-cap-exceeded]"
+        ]
+      ],
+      "why": "The two markers the execution manager stamps on stderr when IT stopped the stage: a #1652 stage budget (`[stage-budget] stage_budget_exceeded:\u003cdimension\u003e`, internal/execution/stage_budget.go) and the OpenCode cost watchdog (`[cost-cap-exceeded]`). First in the ladder because the stop is the manager's own decision and the rest of stderr is whatever the CLI printed while it was being killed: an `overloaded` retry notice, an `API Error ... connection closed`, or an `AI_APICallError` connection line OpenCode prints when killed mid-request. Ordered below those rules, the stop was classified as a retryable kind and retried, spending the budget again (#2016). Only the stamped forms are here; the bare wordings stay in cost-cap-exceeded and budget-enforcer at their existing precedence."
+    },
+    {
       "id": "network-unavailable",
       "kind": "network_unavailable",
       "signal": false,
