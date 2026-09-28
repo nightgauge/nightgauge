@@ -35,6 +35,9 @@
 # written without writing it; reads pass through. The stage can still write
 # the main checkout's knowledge base (knowledge_path is absolute).
 #
+# The summary's peak_context_tokens (the largest prompt any turn sent) is the
+# number a stage's context budget is set from; a compaction is a stage defect.
+#
 # Output: $OUT/<label>-<timestamp>/ holds the copy (wt/), prompt.md,
 # events.jsonl, stderr.log, blocked.log and summary.json; the summary line is
 # also appended to $OUT/results.jsonl.
@@ -47,7 +50,7 @@ summarize() {
 import json, re, subprocess, sys
 run_dir = sys.argv[1]
 meta = json.load(open(f"{run_dir}/meta.json"))
-turns = out_tok = compactions = 0
+turns = out_tok = compactions = peak_ctx = 0
 cost = None
 last_phase = ""
 marker = re.compile(r'phase:start name=\\?"([^"\\]+)\\?" index=(\d+) total=(\d+)')
@@ -59,7 +62,14 @@ for line in open(f"{run_dir}/events.jsonl", errors="replace"):
     part = ev.get("part") or {}
     if part.get("type") == "step-finish":  # opencode: one per model turn
         turns += 1
-        out_tok += (part.get("tokens") or {}).get("output", 0) or 0
+        tok = part.get("tokens") or {}
+        out_tok += tok.get("output", 0) or 0
+        cache = tok.get("cache") or {}
+        peak_ctx = max(peak_ctx, (tok.get("input") or 0) + (cache.get("read") or 0) + (cache.get("write") or 0))
+    if ev.get("type") == "assistant":  # claude stream-json: per-turn usage
+        u = (ev.get("message") or {}).get("usage") or {}
+        peak_ctx = max(peak_ctx, (u.get("input_tokens") or 0) + (u.get("cache_read_input_tokens") or 0)
+                       + (u.get("cache_creation_input_tokens") or 0))
     if ev.get("type") == "result":  # claude stream-json: the run's totals
         turns = ev.get("num_turns", turns)
         out_tok = (ev.get("usage") or {}).get("output_tokens", out_tok)
@@ -74,7 +84,7 @@ try:
     blocked = sum(1 for _ in open(f"{run_dir}/blocked.log"))
 except OSError:
     blocked = 0
-summary = dict(meta, turns=turns, output_tokens=out_tok, compactions=compactions,
+summary = dict(meta, turns=turns, output_tokens=out_tok, peak_context_tokens=peak_ctx, compactions=compactions,
                last_phase=last_phase, changed_files=len([c for c in changed if c.strip()]),
                blocked_writes=blocked, run_dir=run_dir)
 if cost is not None:
