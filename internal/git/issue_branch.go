@@ -44,8 +44,12 @@ func (s *Service) EnsureIssueBranch(branchName string, parentIssue int, epicTitl
 	res.Branch = branchName
 
 	baseBranch, err := s.CurrentBranch()
-	if err != nil {
-		// Worktrees use detached HEAD by design; fall back to repo default.
+	// Worktrees use detached HEAD by design; fall back to repo default. A
+	// branch is also never its own base: pickup runs in the issue's worktree
+	// (#2170), which on a re-run is already on the issue branch, so the
+	// current branch would record the feature branch as its own base and
+	// pr-create would later target it against itself.
+	if err != nil || baseBranch == branchName {
 		baseBranch, err = s.DefaultBranch()
 		if err != nil {
 			return res, err
