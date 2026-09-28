@@ -484,6 +484,12 @@ opencode` failed at issue-pickup before any model was called. A stage whose
 
 ### Security
 
+- A stage can no longer raise the budgets of the stages after it. `pipeline.stage_budgets`
+  is read once at run start into a snapshot every stage of the run uses, so an edit to the
+  tracked config during the run has no effect. On a stage no USD cap can bind (zero-cost or
+  unpriced), a configured ceiling above the hard maximum (1,000 turns, 12h wall clock, 100M
+  tokens) is clamped to it and the clamp is logged (#2257).
+
 - **The pipeline can no longer widen the publication-boundary allowlist that
   gates its own output** (#1970). After every stage the orchestrator checks the
   stage workspace (working tree, index, assume-unchanged bits and commits since

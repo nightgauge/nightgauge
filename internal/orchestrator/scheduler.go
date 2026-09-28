@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -4382,8 +4383,9 @@ func PipelineBudgetCeilingUSD(workspaceRoot string) float64 {
 }
 
 // pipelineStageBudgets reads pipeline.stage_budgets (#1652) through the tier
-// merge. nil, the built-in defaults, when the workspace sets none or its
-// config cannot be read.
+// merge into a copy the caller owns. nil, the built-in defaults, when the
+// workspace sets none or its config cannot be read. runPipeline calls it once
+// per run (#2257); a stage must never trigger a re-read.
 func pipelineStageBudgets(workspaceRoot string) map[string]config.StageBudget {
 	if workspaceRoot == "" {
 		return nil
@@ -4392,7 +4394,7 @@ func pipelineStageBudgets(workspaceRoot string) map[string]config.StageBudget {
 	if err != nil || cfg == nil || cfg.Pipeline == nil {
 		return nil
 	}
-	return cfg.Pipeline.StageBudgets
+	return maps.Clone(cfg.Pipeline.StageBudgets)
 }
 
 func maxFloat64(a, b float64) float64 {
@@ -4600,6 +4602,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// mid-pipeline loses phase counts on already-completed stages.
 	s.registerRuntime(runtime)
 	defer s.unregisterRuntime(runtime.RunID)
+
+	// Stage budgets are read once, here, into a snapshot every stage of this
+	// run dispatches under (#2257). The config is a tracked file inside the
+	// checkout the stages write to, so a re-read per stage would let one
+	// stage raise the ceilings of the stages that follow it.
+	stageBudgets := pipelineStageBudgets(workspaceRoot)
 
 	// Reset orchestration engines for this pipeline run
 	s.retryEngine.Reset()
@@ -6150,7 +6158,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// stages before their own progress-gated hard cap could apply.
 			Timeout:      routing.ResolveStageTimeoutLocal(string(stage), adapterName, model, adapterName == "opencode" && execution.OpenCodeDeclaredEndpointLocal(model, workspaceRoot)),
 			CostBudget:   PipelineBudgetCeilingUSD(workspaceRoot),
-			StageBudgets: pipelineStageBudgets(workspaceRoot),
+			StageBudgets: stageBudgets,
 			SkillPath:    skillData.SkillPath,
 			ContextFile:  contextFile,
 			OutputFile:   outputFile,
