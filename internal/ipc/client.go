@@ -19,6 +19,17 @@ type Client struct {
 	conn net.Conn
 }
 
+// DialDaemon dials the daemon serving workspaceRoot at ClientSocketPath.
+// A path that cannot be resolved is returned as a dial error, so callers
+// fall back exactly as they do when no daemon is running.
+func DialDaemon(ctx context.Context, workspaceRoot string, timeout time.Duration) (*Client, error) {
+	path, err := ClientSocketPath(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	return DialClient(ctx, path, timeout)
+}
+
 // DialClient dials the daemon socket at socketPath with the given timeout.
 // A short timeout is appropriate: this is a same-host, same-filesystem local
 // socket, so no daemon means ENOENT/ECONNREFUSED returns near-instantly —

@@ -5474,8 +5474,20 @@ func serveCmd() *cobra.Command {
 			// `attention resolve`. A listen failure is logged, never
 			// fatal — the existing stdio daemon must keep working even if
 			// the socket cannot bind (e.g. a read-only .nightgauge mount).
+			//
+			// The socket lives in the per-user runtime directory, never the
+			// working tree (ADR-024 § 10, #2039). Its path is exported to every
+			// child so a stage in a pipeline worktree reaches THIS daemon.
+			socketPath, socketErr := ipc.DaemonSocketPath(workspaceRoot)
+			if socketErr == nil {
+				_ = os.Setenv(ipc.EnvDaemonSocket, socketPath)
+			}
 			go func() {
-				switch err := server.ListenSocket(ctx, ipc.DaemonSocketPath(workspaceRoot)); {
+				if socketErr != nil {
+					log.Printf("ipc: socket listener not started: %v", socketErr)
+					return
+				}
+				switch err := server.ListenSocket(ctx, socketPath); {
 				case err == nil:
 				case errors.Is(err, ipc.ErrSocketInUse):
 					// Expected whenever a second VS Code window opens the same
@@ -11166,7 +11178,7 @@ func shortRepoName(repo string) string {
 // which is not an error: a workspace with no `serve` running has no window to
 // reload and no slots to lose, and the CLI must not turn that into a failure.
 func runningPipelinesForWorkspace(ctx context.Context, workdir string) (ipc.RunningPipelinesResult, bool) {
-	client, err := ipc.DialClient(ctx, ipc.DaemonSocketPath(workdir), daemonDialTimeout)
+	client, err := ipc.DialDaemon(ctx, workdir, daemonDialTimeout)
 	if err != nil {
 		return ipc.RunningPipelinesResult{}, false
 	}
@@ -11195,7 +11207,7 @@ func autonomousStatusCmd() *cobra.Command {
 			// `stop` reporting a stop it never delivered. The file stays the
 			// answer when nothing is listening, which is the only case where it
 			// is the best one available.
-			if client, dialErr := ipc.DialClient(cmd.Context(), ipc.DaemonSocketPath(workdir), daemonDialTimeout); dialErr == nil {
+			if client, dialErr := ipc.DialDaemon(cmd.Context(), workdir, daemonDialTimeout); dialErr == nil {
 				defer client.Close()
 				var res orchestrator.AutonomousState
 				if callErr := client.Call(cmd.Context(), "autonomous.status", nil, &res); callErr == nil {
@@ -11526,7 +11538,7 @@ func autonomousResumeCmd() *cobra.Command {
 			ctx := context.Background()
 
 			// Live daemon: resume the scheduler that is actually running.
-			if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(workdir), daemonDialTimeout); dialErr == nil {
+			if client, dialErr := ipc.DialDaemon(ctx, workdir, daemonDialTimeout); dialErr == nil {
 				defer client.Close()
 				var status orchestrator.AutonomousState
 				if err := client.Call(ctx, "autonomous.resume", map[string]any{}, &status); err != nil {
@@ -11620,7 +11632,7 @@ func autonomousClearFailuresCmd() *cobra.Command {
 			}
 
 			// Live daemon: clear on the scheduler that is actually running.
-			if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(workdir), daemonDialTimeout); dialErr == nil {
+			if client, dialErr := ipc.DialDaemon(ctx, workdir, daemonDialTimeout); dialErr == nil {
 				defer client.Close()
 				var res ipc.AutonomousClearIssueFailuresResult
 				if err := client.Call(ctx, "autonomous.clearIssueFailures", ipc.AutonomousClearIssueFailuresParams{Key: key}, &res); err != nil {
@@ -11706,7 +11718,7 @@ func autonomousStartCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workdir, _ := os.Getwd()
 
-			client, dialErr := ipc.DialClient(cmd.Context(), ipc.DaemonSocketPath(workdir), daemonDialTimeout)
+			client, dialErr := ipc.DialDaemon(cmd.Context(), workdir, daemonDialTimeout)
 			if dialErr != nil {
 				return fmt.Errorf("no daemon is listening in %s, so there is no scheduler to start: %w\n"+
 					"Start a daemon (`nightgauge serve`, or open the VS Code extension), "+
@@ -11751,7 +11763,7 @@ func autonomousStopCmd() *cobra.Command {
 			// written" while the fleet kept dispatching for another ninety
 			// minutes. The file path stays for the no-daemon case, where it is
 			// the only thing that can carry the signal.
-			if client, dialErr := ipc.DialClient(cmd.Context(), ipc.DaemonSocketPath(workdir), daemonDialTimeout); dialErr == nil {
+			if client, dialErr := ipc.DialDaemon(cmd.Context(), workdir, daemonDialTimeout); dialErr == nil {
 				defer client.Close()
 				var res orchestrator.AutonomousState
 				if err := client.Call(cmd.Context(), "autonomous.stop", nil, &res); err != nil {

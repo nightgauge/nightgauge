@@ -17,11 +17,9 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
-// daemonWorkspace returns a temp workspace whose DAEMON SOCKET PATH fits.
-// t.TempDir() embeds the test name, and these names run well past the
-// sockaddr_un sun_path limit (104 bytes on macOS, 108 on Linux) once
-// ".nightgauge/daemon.sock" is appended — which surfaces only as a listener
-// that never comes up, not as an obvious error.
+// daemonWorkspace returns a temp workspace for a test daemon. Its socket is
+// placed in the runtime directory TestMain isolates (ADR-024 § 10), so the
+// workspace path's length no longer matters.
 func daemonWorkspace(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "ngd")
@@ -29,9 +27,6 @@ func daemonWorkspace(t *testing.T) string {
 		t.Fatalf("temp workspace: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	if n := len(ipc.DaemonSocketPath(dir)); n > 100 {
-		t.Skipf("socket path is %d bytes, past the sun_path limit — TMPDIR is too deep for this test", n)
-	}
 	return dir
 }
 
@@ -45,9 +40,9 @@ func startGateRecordDaemon(t *testing.T, workspace string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	sock := ipc.DaemonSocketPath(workspace)
-	if err := os.MkdirAll(filepath.Dir(sock), 0o700); err != nil {
-		t.Fatalf("create socket dir: %v", err)
+	sock, err := ipc.DaemonSocketPath(workspace)
+	if err != nil {
+		t.Fatalf("socket path: %v", err)
 	}
 	// BindSocket is the readiness signal (#1158): once it returns the kernel
 	// is accepting on sock, so the first DialClient below cannot be refused.
@@ -64,7 +59,7 @@ func seedRun(t *testing.T, workspace string, issue int) string {
 	t.Helper()
 	runID := "01a02f24-498e-7364-bb8a-c96fa3739900"
 
-	c, err := ipc.DialClient(context.Background(), ipc.DaemonSocketPath(workspace), time.Second)
+	c, err := ipc.DialDaemon(context.Background(), workspace, time.Second)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -151,7 +146,7 @@ func TestRecordGateResult_FallsBackToTheDirectWriteWithNoDaemon(t *testing.T) {
 	}
 
 	// No daemon on this workspace's socket.
-	if _, err := ipc.DialClient(context.Background(), ipc.DaemonSocketPath(workspace), 100*time.Millisecond); err == nil {
+	if _, err := ipc.DialDaemon(context.Background(), workspace, 100*time.Millisecond); err == nil {
 		t.Fatal("a daemon is reachable; this test cannot exercise the fallback")
 	}
 
@@ -185,7 +180,7 @@ func TestRecordGateResult_DoesNotWriteDirectlyWhenTheDaemonRefuses(t *testing.T)
 
 	// Close the run: its terminal claim seals and removes the snapshot, and the
 	// id lands in closedRuns.
-	c, err := ipc.DialClient(context.Background(), ipc.DaemonSocketPath(workspace), time.Second)
+	c, err := ipc.DialDaemon(context.Background(), workspace, time.Second)
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
@@ -318,7 +313,7 @@ func TestRecordGateResult_ReachesTheDaemonWhenItServesADifferentRoot(t *testing.
 		t.Fatal(err)
 	}
 
-	if _, err := os.Stat(ipc.DaemonSocketPath(repo)); err == nil {
+	if p, _ := ipc.DaemonSocketPath(repo); func() bool { _, err := os.Stat(p); return err == nil }() {
 		t.Fatal("fixture is wrong: the sibling repo must not have a daemon socket")
 	}
 

@@ -20,7 +20,7 @@ func newSocketTestServer(t *testing.T) (*Server, string) {
 	s := &Server{autonomousScheduler: as, writer: io.Discard, methods: make(map[string]Handler)}
 	s.methods["attention.list"] = s.handleAttentionList
 
-	sockPath := filepath.Join(t.TempDir(), "daemon.sock")
+	sockPath := filepath.Join(shortSocketDir(t), "daemon.sock")
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
@@ -58,7 +58,7 @@ func TestDialClientRoundTrip(t *testing.T) {
 }
 
 func TestDialClientNoDaemonFailsPromptly(t *testing.T) {
-	sockPath := filepath.Join(t.TempDir(), "no-daemon.sock")
+	sockPath := filepath.Join(shortSocketDir(t), "no-daemon.sock")
 
 	start := time.Now()
 	_, err := DialClient(context.Background(), sockPath, 300*time.Millisecond)

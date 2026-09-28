@@ -304,7 +304,7 @@ func renderGateHuman(stage string, r gates.GateResult) {
 // repo root would make every gate false-negate. But this function used
 // `workspace` for BOTH the daemon socket path and the direct-write state dir.
 // The daemon listens only at serve's own workspace root, so the dial at
-// `<worktree>/.nightgauge/daemon.sock` always failed, and the fallback then
+// the `<worktree>` socket always failed, and the fallback then
 // wrote into `<worktree>/.nightgauge/pipeline`, which holds stage context files
 // but never a `runtime-{issue}-{runID}.json` — so the append took its
 // load-or-skip branch and returned without writing. The record was created
@@ -321,7 +321,7 @@ func renderGateHuman(stage string, r gates.GateResult) {
 // [gate-not-invoked] still fired. The daemon does not listen at the run's repo
 // root — it listens at the workspace root `nightgauge serve` was started with,
 // and in a multi-repo workspace those are different directories. Measured on a
-// live run: the socket existed at <workspace>/.nightgauge/daemon.sock while the
+// live run: the socket existed for <workspace> while the
 // run executed in a sibling repo, which had no socket at all.
 //
 // The fallback file write is not a substitute, and that is the load-bearing
@@ -361,7 +361,7 @@ func recordGateResult(
 	}
 
 	if runID != "" {
-		if client, dialErr := ipc.DialClient(ctx, ipc.DaemonSocketPath(daemonRoot), daemonDialTimeout); dialErr == nil {
+		if client, dialErr := ipc.DialDaemon(ctx, daemonRoot, daemonDialTimeout); dialErr == nil {
 			defer client.Close()
 			params := ipc.PipelineRecordStageGateResultParams{
 				IssueNumber: issueNumber,

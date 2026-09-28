@@ -383,6 +383,24 @@ opencode` failed at issue-pickup before any model was called. A stage whose
   does, so a key-protected server no longer reports HTTP 401. The
   `endpoints[]` block is now documented in `SETTINGS_ARCHITECTURE.md`.
 
+### Security
+
+- **The daemon socket moved out of the working tree** (#2039). `nightgauge
+serve` now listens on `<RUNTIME>/<key>.sock`, where `RUNTIME` is
+  `NIGHTGAUGE_RUNTIME_DIR`, else `$XDG_RUNTIME_DIR/nightgauge`, else
+  `<tmp>/nightgauge-<uid>`, and `<key>` is a 12-character hash of the
+  workspace root. A deeply nested checkout, a cloud-synced folder or a bind
+  mount no longer stops the daemon from binding, and no socket file appears in
+  the repository. The directory is created 0700 and must be a non-symlink
+  directory owned by you; otherwise the socket is not bound. Children of the
+  daemon receive `NIGHTGAUGE_DAEMON_SOCKET` and dial the daemon that started
+  them.
+- **Local-path and URL settings are machine scope** (#2044).
+  `nightgauge.backend.binaryPath`, `nightgauge.plugins.marketplaceUrl` and
+  `nightgauge.dashboardUrl` are now read only from user settings, so a
+  committed `.vscode/settings.json` cannot choose the binary the extension
+  runs or where it fetches plugins from.
+
 ## [0.4.8] - 2026-09-25
 
 ### Security

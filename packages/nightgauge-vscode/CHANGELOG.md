@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Security
+
+- `nightgauge.backend.binaryPath`, `nightgauge.plugins.marketplaceUrl` and
+  `nightgauge.dashboardUrl` are now machine-scoped: a value in a workspace's
+  `.vscode/settings.json` is ignored, so a repository cannot choose which
+  binary the extension runs. Set them in your user settings (#2044).
+
 ## [0.4.8] - 2026-09-25
 
 ### Security
