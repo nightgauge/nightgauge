@@ -256,9 +256,3 @@ func (c *Client) checkHealth(ctx context.Context) {
 func (c *Client) API() *api.ClientWithResponses {
 	return c.api
 }
-
-// FetchCommands retrieves pending remote commands by delegating to CommandService.
-// This satisfies the CommandFetcher interface for use with CommandPoller.
-func (c *Client) FetchCommands(ctx context.Context) ([]PendingCommand, error) {
-	return NewCommandService(c).PollCommands(ctx)
-}

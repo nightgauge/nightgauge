@@ -174,8 +174,6 @@ import { getConcurrentPipelineConfig, getPerformanceMode } from "../utils/nightg
 import { hasCustomStageOverrides } from "../utils/customStageModels";
 import { migrateSuperchargeToPerformanceMode } from "../utils/migratePerformanceMode";
 import { KnowledgeDocumentLinkProvider } from "../views/KnowledgeDocumentLinkProvider";
-import { RemoteCommandStatusBarItem } from "../platform/RemoteCommandStatusBarItem";
-import { RemoteCommandStatusService } from "../services/RemoteCommandStatusService";
 import { PipelineConnectivityStatusItem } from "../views/PipelineConnectivityStatusItem";
 import { getRepoIdentity } from "../utils/configPathResolver";
 
@@ -4411,19 +4409,6 @@ export async function initializeServices(
   // offline. Click → quick pick for cancel-vs-wait.
   const pipelineConnectivityStatusItem = new PipelineConnectivityStatusItem();
   context.subscriptions.push(pipelineConnectivityStatusItem);
-
-  // Initialize remote command status indicator (Issue #2170)
-  const remoteStatusBarItem = new RemoteCommandStatusBarItem();
-  context.subscriptions.push(remoteStatusBarItem);
-  if (ipcClient) {
-    const remoteCommandStatusService = new RemoteCommandStatusService(
-      ipcClient,
-      remoteStatusBarItem,
-      configBridge
-    );
-    remoteCommandStatusService.start();
-    context.subscriptions.push(remoteCommandStatusService);
-  }
 
   // Initialize platform quota service for tier quota display (Issue #1479, #2091 IPC migration)
   let platformQuotaService: PlatformQuotaService | null = null;

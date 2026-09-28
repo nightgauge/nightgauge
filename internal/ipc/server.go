@@ -21,7 +21,6 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
-	"github.com/nightgauge/nightgauge/internal/executor"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
@@ -120,7 +119,6 @@ type Server struct {
 	auditRetentionSvc *platform.AuditRetentionService
 	teamSvc           *platform.TeamService
 	billingSvc        *platform.BillingService
-	commandExecutor   *executor.CommandExecutor
 
 	// workspaceRoot is the CURRENT root, and it is MUTABLE: workspace.setRoot
 	// re-points it on a multi-repo workspace switch, from a handler goroutine,
@@ -805,14 +803,6 @@ func (s *Server) launchRootPath() string {
 	return s.launchRoot
 }
 
-// WithCommandExecutor attaches a CommandExecutor to the IPC server.
-// The polling loop retrieves it via CommandExecutor() to dispatch polled commands.
-func WithCommandExecutor(e *executor.CommandExecutor) ServerOption {
-	return func(s *Server) {
-		s.commandExecutor = e
-	}
-}
-
 // WithRateLimitTracker injects a SharedRateLimitTracker (primarily for tests
 // that need a non-default path or a stubbed tracker).
 func WithRateLimitTracker(t *gh.SharedRateLimitTracker) ServerOption {
@@ -935,13 +925,6 @@ func (s *Server) SetAutonomousScheduler(as *orchestrator.AutonomousScheduler) {
 			})
 		})
 	}
-}
-
-// CommandExecutor returns the CommandExecutor attached to this server.
-// The polling loop (#2163) calls this to dispatch each PendingCommand returned
-// by CommandService.PollCommands().
-func (s *Server) CommandExecutor() *executor.CommandExecutor {
-	return s.commandExecutor
 }
 
 // clientForUser returns a GitHub client authenticated as the given user.
@@ -5038,53 +5021,6 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 		return map[string]string{"status": "ok"}, nil
-	}
-
-	// --- Remote command methods ---
-
-	//ipc:method remoteGetCommandHistory params:RemoteGetCommandHistoryParams result:RemoteGetCommandHistoryResult
-	s.methods["remote.getCommandHistory"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.commandExecutor == nil {
-			return RemoteGetCommandHistoryResult{Commands: []RemoteCommandHistoryEntry{}}, nil
-		}
-		entries := s.commandExecutor.GetCommandHistory()
-		result := RemoteGetCommandHistoryResult{
-			Commands: make([]RemoteCommandHistoryEntry, len(entries)),
-		}
-		for i, e := range entries {
-			entry := RemoteCommandHistoryEntry{
-				ID:         e.ID,
-				Type:       e.Type,
-				Status:     e.Status,
-				ReceivedAt: e.ReceivedAt.UTC().Format(time.RFC3339),
-				DurationMs: e.DurationMs,
-				Error:      e.Error,
-			}
-			if e.CompletedAt != nil {
-				s := e.CompletedAt.UTC().Format(time.RFC3339)
-				entry.CompletedAt = &s
-			}
-			result.Commands[i] = entry
-		}
-		return result, nil
-	}
-
-	//ipc:method remoteGetPollingStatus params:RemoteGetPollingStatusParams result:RemotePollingStatus
-	s.methods["remote.getPollingStatus"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.commandExecutor == nil {
-			return RemotePollingStatus{Active: false}, nil
-		}
-		ps := s.commandExecutor.GetPollingStatus()
-		result := RemotePollingStatus{
-			Active:       ps.Active,
-			PendingCount: ps.PendingCount,
-			ErrorCount:   ps.ErrorCount,
-		}
-		if ps.LastPolledAt != nil {
-			s := ps.LastPolledAt.UTC().Format(time.RFC3339)
-			result.LastPolledAt = &s
-		}
-		return result, nil
 	}
 
 	// --- autonomous scheduler methods ---

@@ -34,7 +34,6 @@ import (
 	"github.com/nightgauge/nightgauge/internal/doctor"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
-	"github.com/nightgauge/nightgauge/internal/executor"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
@@ -63,7 +62,6 @@ import (
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/scaffold"
 	"github.com/nightgauge/nightgauge/internal/scan"
-	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/telemetrynotice"
 	"github.com/nightgauge/nightgauge/internal/validation"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -5159,33 +5157,6 @@ func serveCmd() *cobra.Command {
 				opts = append(opts, ipc.WithAuthService(authSvc))
 			}
 
-			// Start command polling if platform is configured and license key present
-			var cmdExec *executor.CommandExecutor
-			if platformClient != nil && cfg != nil && licenseKey != "" {
-				rcCfg := platform.DefaultCommandPollerConfig()
-				if cfg.RemoteCommands != nil {
-					if cfg.RemoteCommands.PollInterval > 0 {
-						rcCfg.PollInterval = cfg.RemoteCommands.PollInterval
-					}
-					if cfg.RemoteCommands.MaxBackoff > 0 {
-						rcCfg.MaxBackoff = cfg.RemoteCommands.MaxBackoff
-					}
-				}
-				if cfg.RemoteCommands.IsEnabled() {
-					stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
-					localStateSvc := state.NewLocalStateService(stateDir)
-					cmdExec = executor.NewWithHandlers(executor.Deps{
-						StateSvc: localStateSvc,
-					})
-					cmdSvc := platform.NewCommandService(platformClient)
-					adapter := platform.NewExecutorAdapter(cmdExec, cmdSvc.AcknowledgeCommand)
-					poller := platform.NewCommandPoller(platformClient, adapter, rcCfg)
-					poller.Start(context.Background())
-				} else {
-					fmt.Fprintf(os.Stderr, "[debug] command polling disabled via config\n")
-				}
-			}
-
 			// Wire the inbound webhook receiver's reloader option BEFORE
 			// constructing the IPC server, so notifications.reloadTokens
 			// has a target to invoke. The actual *Server is built after
@@ -5319,19 +5290,6 @@ func serveCmd() *cobra.Command {
 					telemetrySvc := platform.NewTelemetryService(platformClient)
 					sched.WithTelemetryService(telemetrySvc, telemetryEnabled)
 					telemetrySvc.StartAutoFlush(context.Background())
-				}
-
-				// Wire Scheduler and IssueGetter into the remote command executor
-				// (cmdExec was created before sched was available above).
-				if cmdExec != nil {
-					stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
-					localStateSvc := state.NewLocalStateService(stateDir)
-					issueSvc := gh.NewIssueService(client)
-					cmdExec.UpdateDeps(executor.Deps{
-						Scheduler:   &schedulerAdapter{sched: sched},
-						StateSvc:    localStateSvc,
-						IssueGetter: &issueGetterAdapter{svc: issueSvc},
-					})
 				}
 
 				server.SetScheduler(sched)
@@ -5610,43 +5568,6 @@ func serveCmd() *cobra.Command {
 	cmd.Flags().MarkHidden("github-graphql-url") //nolint:errcheck
 
 	return cmd
-}
-
-// schedulerAdapter adapts orchestrator.Scheduler to executor.SchedulerIface.
-// Required because executor.QueueEntry and orchestrator.QueueEntry are identical
-// structs in different packages (to avoid import cycles).
-type schedulerAdapter struct {
-	sched *orchestrator.Scheduler
-}
-
-func (a *schedulerAdapter) QueueAdd(entries ...executor.QueueEntry) {
-	oEntries := make([]orchestrator.QueueEntry, len(entries))
-	for i, e := range entries {
-		oEntries[i] = orchestrator.QueueEntry{
-			Repo:        e.Repo,
-			IssueNumber: e.IssueNumber,
-			Priority:    e.Priority,
-			RemoteRunID: e.RemoteRunID,
-		}
-	}
-	a.sched.QueueAdd(oEntries...)
-}
-
-// issueGetterAdapter adapts github.IssueService to executor.IssueGetterIface.
-type issueGetterAdapter struct {
-	svc *gh.IssueService
-}
-
-func (a *issueGetterAdapter) GetIssue(ctx context.Context, owner, repo string, number int) (interface{}, error) {
-	// pipeline.run only checks that the issue exists, so no list is read.
-	issue, err := a.svc.GetIssueWithRelations(ctx, owner, repo, number, gh.NoRelations)
-	if err != nil {
-		return nil, err
-	}
-	if issue == nil {
-		return nil, nil
-	}
-	return issue, nil
 }
 
 // --- health command ---

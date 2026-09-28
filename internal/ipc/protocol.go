@@ -1298,40 +1298,6 @@ type TreeUpdateEvent struct {
 	NewStatus     string `json:"newStatus,omitempty"`
 }
 
-// --- Remote command methods ---
-
-// RemoteGetCommandHistoryParams are parameters for remote.getCommandHistory.
-// (no fields — Go reads from its own in-memory store)
-type RemoteGetCommandHistoryParams struct{}
-
-// RemoteCommandHistoryEntry is a single entry returned by remote.getCommandHistory.
-type RemoteCommandHistoryEntry struct {
-	ID          string  `json:"id"`
-	Type        string  `json:"type"`
-	Status      string  `json:"status"` // "success" | "failure" | "pending"
-	ReceivedAt  string  `json:"receivedAt"`
-	CompletedAt *string `json:"completedAt,omitempty"`
-	DurationMs  int64   `json:"durationMs,omitempty"`
-	Error       string  `json:"error,omitempty"`
-}
-
-// RemoteGetCommandHistoryResult is the result for remote.getCommandHistory.
-type RemoteGetCommandHistoryResult struct {
-	Commands []RemoteCommandHistoryEntry `json:"commands"`
-}
-
-// RemoteGetPollingStatusParams are parameters for remote.getPollingStatus.
-// (no fields — Go reads from its own polling state)
-type RemoteGetPollingStatusParams struct{}
-
-// RemotePollingStatus is the result for remote.getPollingStatus.
-type RemotePollingStatus struct {
-	Active       bool    `json:"active"`
-	LastPolledAt *string `json:"lastPolledAt,omitempty"`
-	PendingCount int     `json:"pendingCount"`
-	ErrorCount   int     `json:"errorCount"`
-}
-
 // --- Agent command methods ---
 
 // AgentAcknowledgeCommandParams are parameters for agent.acknowledgeCommand.

@@ -159,9 +159,8 @@ func (c *AttentionCommandConsumer) Consume(ctx context.Context, cmd PendingComma
 	return outcome, nil
 }
 
-// Execute satisfies platform.CommandExecutor so the consumer can drive the shared
-// CommandPoller loop. The poller never treats a returned error as fatal; Consume
-// already acknowledges and logs, so Execute always returns nil.
+// Execute drives Consume from the agent-command stream loop. Consume already
+// acknowledges and logs, so Execute always returns nil.
 func (c *AttentionCommandConsumer) Execute(ctx context.Context, cmd PendingCommand) error {
 	_, _ = c.Consume(ctx, cmd)
 	return nil

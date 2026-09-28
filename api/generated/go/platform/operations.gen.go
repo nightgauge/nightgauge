@@ -222,24 +222,6 @@ var OpBillingPortalSession = Operation{
 	Upstream: UpstreamDeclared,
 }
 
-// OpCommandsAck is POST /v1/commands/{commandId}/ack.
-var OpCommandsAck = Operation{
-	ID:       "commands.ack",
-	Method:   "POST",
-	Path:     "/v1/commands/{commandId}/ack",
-	Security: SecurityPipeline,
-	Upstream: UpstreamUndeclared,
-}
-
-// OpCommandsPending is GET /v1/commands/pending.
-var OpCommandsPending = Operation{
-	ID:       "commands.listPending",
-	Method:   "GET",
-	Path:     "/v1/commands/pending",
-	Security: SecurityPipeline,
-	Upstream: UpstreamUndeclared,
-}
-
 // OpPipelineIngestEvent is POST /v1/pipelines/events.
 var OpPipelineIngestEvent = Operation{
 	ID:       "pipeline-ingestEvent",
@@ -288,8 +270,6 @@ var Operations = []Operation{
 	OpAuditRetentionGet,
 	OpAuditRetentionUpdate,
 	OpBillingPortalSession,
-	OpCommandsAck,
-	OpCommandsPending,
 	OpPipelineIngestEvent,
 	OpQueueSync,
 	OpTelemetryIngestPipelineRun,

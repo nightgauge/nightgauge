@@ -17,25 +17,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// RemoteCommandsConfig holds remote command polling settings.
-type RemoteCommandsConfig struct {
-	// PollInterval is the base interval between command polls. Default: 5s.
-	PollInterval time.Duration `yaml:"poll_interval" json:"pollInterval,omitempty"`
-	// MaxBackoff is the maximum backoff interval on errors. Default: 60s.
-	MaxBackoff time.Duration `yaml:"max_backoff" json:"maxBackoff,omitempty"`
-	// Enabled controls whether command polling is active. Defaults to true
-	// when platform credentials are configured.
-	Enabled *bool `yaml:"enabled" json:"enabled,omitempty"`
-}
-
-// IsEnabled returns true unless explicitly disabled.
-func (r *RemoteCommandsConfig) IsEnabled() bool {
-	if r == nil || r.Enabled == nil {
-		return true
-	}
-	return *r.Enabled
-}
-
 // TelemetryConfig holds platform telemetry settings.
 type TelemetryConfig struct {
 	// Enabled controls whether the Go scheduler pushes run records to the platform.
@@ -904,7 +885,6 @@ type Config struct {
 	Telemetry *TelemetryConfig `json:"telemetry,omitempty" yaml:"telemetry,omitempty"`
 
 	// Remote command polling settings
-	RemoteCommands *RemoteCommandsConfig `json:"remoteCommands,omitempty" yaml:"remote_commands,omitempty"`
 
 	// Agent teams scaling settings
 	AgentTeams *AgentTeamsConfig `json:"agentTeams,omitempty" yaml:"agent_teams,omitempty"`
@@ -2126,7 +2106,6 @@ type yamlConfigNested struct {
 		LicenseKey string           `yaml:"license_key,omitempty"`
 		Telemetry  *TelemetryConfig `yaml:"telemetry,omitempty"`
 	} `yaml:"platform,omitempty"`
-	RemoteCommands   *RemoteCommandsConfig        `yaml:"remote_commands,omitempty"`
 	AgentTeams       *AgentTeamsConfig            `yaml:"agent_teams,omitempty"`
 	Autonomous       *AutonomousConfig            `yaml:"autonomous,omitempty"`
 	ReadyToShip      *ReadyToShipConfig           `yaml:"ready_to_ship,omitempty"`
@@ -2164,7 +2143,6 @@ type yamlConfigFlat struct {
 	Hooks            *HooksConfig                 `yaml:"hooks,omitempty"`
 	FeedbackLoop     *FeedbackLoopConfig          `yaml:"feedback_loop,omitempty"`
 	Telemetry        *TelemetryConfig             `yaml:"telemetry,omitempty"`
-	RemoteCommands   *RemoteCommandsConfig        `yaml:"remote_commands,omitempty"`
 	AgentTeams       *AgentTeamsConfig            `yaml:"agent_teams,omitempty"`
 	Autonomous       *AutonomousConfig            `yaml:"autonomous,omitempty"`
 	ReadyToShip      *ReadyToShipConfig           `yaml:"ready_to_ship,omitempty"`
@@ -2369,7 +2347,6 @@ func parseYAMLNested(data []byte) (*Config, error) {
 	cfg.PlatformEnabled = nested.Platform.Enabled
 	cfg.PlatformURL = nested.Platform.APIURL
 	cfg.LicenseKey = nested.Platform.LicenseKey
-	cfg.RemoteCommands = nested.RemoteCommands
 	cfg.AgentTeams = nested.AgentTeams
 	cfg.Autonomous = nested.Autonomous
 	cfg.ReadyToShip = nested.ReadyToShip
@@ -2474,7 +2451,6 @@ func parseYAMLFlat(data []byte) (*Config, error) {
 	cfg.Hooks = flat.Hooks
 	cfg.FeedbackLoop = flat.FeedbackLoop
 	cfg.Telemetry = flat.Telemetry
-	cfg.RemoteCommands = flat.RemoteCommands
 	cfg.AgentTeams = flat.AgentTeams
 	cfg.Autonomous = flat.Autonomous
 	cfg.ReadyToShip = flat.ReadyToShip

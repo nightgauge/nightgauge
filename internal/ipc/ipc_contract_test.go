@@ -163,9 +163,6 @@ var contractTestedMethods = map[string]bool{
 	"project.setHours":      true,
 	"project.syncIteration": true,
 	"project.syncStatus":    true,
-	// Remote
-	"remote.getCommandHistory": true,
-	"remote.getPollingStatus":  true,
 	// Workspace
 	"workspace.setRoot":                true,
 	"workspace.registerRepo":           true,
@@ -1347,23 +1344,6 @@ func TestContract_Project(t *testing.T) {
 			"repo": "test-repo", "issueNumber": 1,
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "project.addItem")
-	})
-}
-
-// ─── Remote ────────────────────────────────────────────────────────────────
-
-func TestContract_Remote(t *testing.T) {
-	h := newIpcTestHarness(t)
-	h.awaitReady()
-
-	t.Run("remote.getCommandHistory/registered", func(t *testing.T) {
-		id := h.sendRequest("remote.getCommandHistory", nil)
-		assertMethodRegistered(t, h.readResponseFor(id, nil), "remote.getCommandHistory")
-	})
-
-	t.Run("remote.getPollingStatus/registered", func(t *testing.T) {
-		id := h.sendRequest("remote.getPollingStatus", nil)
-		assertMethodRegistered(t, h.readResponseFor(id, nil), "remote.getPollingStatus")
 	})
 }
 

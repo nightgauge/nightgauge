@@ -41,12 +41,11 @@ type renderView struct {
 	// max_concurrent, default_branch or worktree_base — the settings most
 	// likely to be tuned. PipelineExec below is `pipeline_executor`, a
 	// different key, which is what made the omission easy to miss.
-	Pipeline       *PipelineConfig         `yaml:"pipeline,omitempty"`
-	RemoteCommands *RemoteCommandsConfig   `yaml:"remote_commands,omitempty"`
-	AgentTeams     *AgentTeamsConfig       `yaml:"agent_teams,omitempty"`
-	Autonomous     *AutonomousConfig       `yaml:"autonomous,omitempty"`
-	Knowledge      *KnowledgeConfig        `yaml:"knowledge,omitempty"`
-	PipelineExec   *PipelineExecutorConfig `yaml:"pipeline_executor,omitempty"`
+	Pipeline     *PipelineConfig         `yaml:"pipeline,omitempty"`
+	AgentTeams   *AgentTeamsConfig       `yaml:"agent_teams,omitempty"`
+	Autonomous   *AutonomousConfig       `yaml:"autonomous,omitempty"`
+	Knowledge    *KnowledgeConfig        `yaml:"knowledge,omitempty"`
+	PipelineExec *PipelineExecutorConfig `yaml:"pipeline_executor,omitempty"`
 }
 
 type renderProject struct {
@@ -92,19 +91,18 @@ func toRenderView(cfg *Config) renderView {
 			Repo:           cfg.DefaultRepo,
 			SizeToEstimate: cfg.SizeToEstimate,
 		},
-		GitHubUser:     cfg.GitHubUser,
-		GitHubAuth:     safeGitHubAuth,
-		LogLevel:       cfg.LogLevel,
-		APIKey:         redactConfigSecret(cfg.APIKey),
-		Sanitization:   cfg.Sanitization,
-		Hooks:          cfg.Hooks,
-		FeedbackLoop:   cfg.FeedbackLoop,
-		RemoteCommands: cfg.RemoteCommands,
-		AgentTeams:     cfg.AgentTeams,
-		Autonomous:     cfg.Autonomous,
-		Knowledge:      cfg.Knowledge,
-		PipelineExec:   cfg.PipelineExecutor,
-		Pipeline:       cfg.Pipeline,
+		GitHubUser:   cfg.GitHubUser,
+		GitHubAuth:   safeGitHubAuth,
+		LogLevel:     cfg.LogLevel,
+		APIKey:       redactConfigSecret(cfg.APIKey),
+		Sanitization: cfg.Sanitization,
+		Hooks:        cfg.Hooks,
+		FeedbackLoop: cfg.FeedbackLoop,
+		AgentTeams:   cfg.AgentTeams,
+		Autonomous:   cfg.Autonomous,
+		Knowledge:    cfg.Knowledge,
+		PipelineExec: cfg.PipelineExecutor,
+		Pipeline:     cfg.Pipeline,
 	}
 	// api_url / license_key mirror the on-disk platform: block (#333) — render
 	// them nested, matching the schema the VSCode extension actually writes,

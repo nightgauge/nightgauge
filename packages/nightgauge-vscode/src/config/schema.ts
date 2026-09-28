@@ -3366,18 +3366,6 @@ export type AuditConfigSection = z.infer<typeof AuditConfigSectionSchema>;
  * Use mergeWithDefaults() to apply defaults after validation.
  */
 /**
- * Remote command IPC bridge configuration (Issue #2170).
- *
- * Controls the VSCode extension's behaviour when remote commands are received
- * via the Go binary's command polling loop.
- */
-export const RemoteConfigSchema = z.object({
-  /** Show a VSCode notification when a remote pipeline.run command is received. */
-  notifyOnPipelineRun: z.boolean().default(true),
-});
-export type RemoteConfig = z.infer<typeof RemoteConfigSchema>;
-
-/**
  * GitHub auth config for multi-identity workspaces.
  * Maps org/owner names to gh CLI usernames for token resolution.
  *
@@ -3764,7 +3752,6 @@ export const NightgaugeConfigSchema = z.object({
   audit: AuditConfigSectionSchema.optional(),
 
   // Remote command IPC bridge settings (Issue #2170)
-  remote: RemoteConfigSchema.optional(),
 
   // Autonomous scheduler settings (Issue #2536)
   autonomous: AutonomousConfigSchema.optional(),

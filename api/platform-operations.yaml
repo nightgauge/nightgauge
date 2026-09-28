@@ -186,24 +186,6 @@ operations:
     security: user_jwt
     upstream: declared
 
-  # DRIFT: the platform exposes agent command delivery at
-  # GET /v1/agents/{agentId}/commands and POST /v1/agents/{agentId}/commands/
-  # {commandId}/ack. The flat /v1/commands/* pair below is called by
-  # CommandService and is absent from the document entirely.
-  - id: commands.ack
-    go_name: OpCommandsAck
-    method: POST
-    path: /v1/commands/{commandId}/ack
-    security: pipeline
-    upstream: undeclared
-
-  - id: commands.listPending
-    go_name: OpCommandsPending
-    method: GET
-    path: /v1/commands/pending
-    security: pipeline
-    upstream: undeclared
-
   - id: pipeline-ingestEvent
     go_name: OpPipelineIngestEvent
     method: POST

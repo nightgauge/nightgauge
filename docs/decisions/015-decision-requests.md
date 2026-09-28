@@ -400,8 +400,7 @@ Binding per surface:
   pipeline directly: it rides the existing agent-command envelope. The platform
   publishes a resolve `PendingCommand` on the agent command stream
   (`GET /v1/agents/{agentId}/commands`, consumed by
-  `AgentCommandStreamService` via a new `CommandHandler`, with the poll
-  fallback `internal/platform/commands.go` `PollCommands`); the single writer
+  `AgentCommandStreamService` via a new `CommandHandler`); the single writer
   executes it and acknowledges via `agent.acknowledgeCommand`
   (`POST /v1/agents/{agentId}/commands/{id}/ack`). This is the same
   dashboard-trigger→`remoteRunId` ack path (#3557/#3551) the `TriggerCommandHandler`

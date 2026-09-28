@@ -83,8 +83,6 @@ import type {
   QueueValidatePinResult,
   RateLimitInfo,
   RecordStageExitResult,
-  RemoteGetCommandHistoryResult,
-  RemotePollingStatus,
   RetentionConfig,
   RunningPipelinesResult,
   StatusCounts,
@@ -769,19 +767,6 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async notificationsCheckAuthorization(mattermostUserId: string, commandType: string, repoSlug?: string, channelId?: string, args?: string): Promise<CheckAuthorizationResult> {
     return this.call<CheckAuthorizationResult>('notifications.checkAuthorization', { mattermostUserId, commandType, repoSlug, channelId, args });
-  }
-
-
-  // -------------------------------------------------------------------------
-  // Remote
-  // -------------------------------------------------------------------------
-
-  async remoteGetCommandHistory(): Promise<RemoteGetCommandHistoryResult> {
-    return this.call<RemoteGetCommandHistoryResult>('remote.getCommandHistory');
-  }
-
-  async remoteGetPollingStatus(): Promise<RemotePollingStatus> {
-    return this.call<RemotePollingStatus>('remote.getPollingStatus');
   }
 
 
