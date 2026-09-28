@@ -466,14 +466,14 @@ func (s *Scheduler) tryDeterministicIssuePickup(
 // (.nightgauge/pipeline/issue-{N}.json) in the primary checkout, so the
 // scheduler also calls this before it builds a prompt.
 //
-// Without a Go-side adapter (IPC mode) the extension owns the worktree and
-// the Go side cannot name it; the hook punts to the skill rather than mutate
-// the primary checkout.
+// Provisioning needs no adapter: IPC mode gets the same worktree, and the
+// scheduler provisions it before the first stage of every run (#2258), so a
+// fast-tracked route never runs in the primary checkout.
 func (s *Scheduler) runWorktree(runtime *state.RuntimeState, item types.BoardItem) (string, string) {
 	if runtime != nil && runtime.WorktreeDir != "" {
 		return runtime.WorktreeDir, ""
 	}
-	if s.execMgr == nil || !s.execMgr.HasAdapter() {
+	if s.execMgr == nil {
 		return "", "no-run-worktree"
 	}
 	dir, err := s.execMgr.EnsureWorktree(item.Repo, item.Number)

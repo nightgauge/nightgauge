@@ -177,6 +177,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Every dispatched run now works in its own linked worktree, fast-tracked or
+  not (#2258).** A run with no Go-side adapter, such as a trivial or
+  docs-only fast-track route driven over IPC, used to dispatch every stage in
+  the operator's primary checkout. The scheduler now provisions the run's
+  worktree before the first stage and dispatches each stage there. If the
+  worktree cannot be created, the run is refused instead of falling back to
+  the primary checkout.
 - **An auto-recovery commit can no longer land on the default branch or sweep
   in an operator's uncommitted edits (#1907).** The uncommitted-work rescue
   now refuses the repository's primary checkout, a detached `HEAD`, and the
