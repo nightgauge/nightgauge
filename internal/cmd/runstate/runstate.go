@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/spf13/cobra"
 )
@@ -36,7 +39,29 @@ func resolveBaseDir(cmd *cobra.Command) string {
 	if v, _ := cmd.Flags().GetString("dir"); v != "" {
 		return v
 	}
-	return defaultBaseDir
+	return mainCheckoutBaseDir()
+}
+
+// mainCheckoutBaseDir is the default --dir: the pipeline state directory of
+// the repository's MAIN checkout, which is where the orchestrator writes
+// run-state.json (#1964). Resolving through git's common directory makes
+// `run state get` from a run's worktree read the same record as the main
+// checkout. Outside a git repository it falls back to the cwd-relative
+// .nightgauge/pipeline.
+func mainCheckoutBaseDir() string {
+	out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
+	if err != nil {
+		return defaultBaseDir
+	}
+	common := strings.TrimSpace(string(out))
+	if filepath.Base(common) != ".git" {
+		return defaultBaseDir // bare repository: no checkout owns the state
+	}
+	dir, err := layout.PipelineStateDir(filepath.Dir(common))
+	if err != nil {
+		return defaultBaseDir
+	}
+	return dir
 }
 
 func getCmd() *cobra.Command {
@@ -61,7 +86,7 @@ func getCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().String("dir", "", "override base directory (default .nightgauge/pipeline)")
+	cmd.Flags().String("dir", "", "override base directory (default: the main checkout's .nightgauge/pipeline)")
 	return cmd
 }
 
@@ -234,7 +259,7 @@ no context, no run-state) returns kind=orphaned with choices=[restart, manual-pi
 // temp dir between flag-parse and exec.
 func AbsoluteDir(dir string) string {
 	if dir == "" {
-		dir = defaultBaseDir
+		dir = mainCheckoutBaseDir()
 	}
 	if filepath.IsAbs(dir) {
 		return dir

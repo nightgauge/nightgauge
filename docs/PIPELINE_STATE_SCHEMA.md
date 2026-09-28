@@ -128,7 +128,8 @@ files. It is **not** a context handoff file — it is a durable replay log:
 | `run_id`            | UUID v7                                                          | Time-ordered (sortable). Stable across pause/resume; new run = new id. |
 | `attempt_number`    | `number` ≥ 1                                                     | Incremented on resume.                                                 |
 | `completed_stages`  | `Stage[]`                                                        | Pure log of successful per-stage renames.                              |
-| `resume_from_stage` | `Stage` \| `null`                                                | First stage NOT in `completed_stages`.                                 |
+| `resume_from_stage` | `Stage` \| `null`                                                | Stage the next attempt enters: the executing stage while `running`.    |
+| `current_stage`     | `Stage` \| `null`                                                | Stage a `running` run is executing; cleared when it leaves `running`.  |
 | `worktree_path`     | absolute `string` \| `null`                                      | Stop preserves; discard removes.                                       |
 | `branch`            | `string`                                                         | Feature branch attached to the run.                                    |
 | `created_at`        | RFC 3339                                                         |                                                                        |

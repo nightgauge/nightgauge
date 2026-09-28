@@ -82,6 +82,10 @@ type RunState struct {
 	AttemptNumber   int       `json:"attempt_number"`
 	CompletedStages []Stage   `json:"completed_stages"`
 	ResumeFromStage *Stage    `json:"resume_from_stage,omitempty"`
+	// CurrentStage is the stage a live (`running`) run is executing. It is
+	// cleared on every transition out of `running`; a paused run names its
+	// re-entry point in ResumeFromStage instead.
+	CurrentStage    *Stage    `json:"current_stage,omitempty"`
 	WorktreePath    *string   `json:"worktree_path,omitempty"`
 	Branch          string    `json:"branch"`
 	CreatedAt       string    `json:"created_at"`
@@ -155,6 +159,12 @@ func splitMajorMinor(v string) (int, int, bool) {
 // (typically .nightgauge/pipeline).
 func Path(baseDir string) string {
 	return filepath.Join(baseDir, FileName)
+}
+
+// IsStage reports whether s names one of the canonical pipeline stages that
+// run-state.json may record.
+func IsStage(s string) bool {
+	return hasStage(stageOrder, Stage(s))
 }
 
 // nextStage returns the stage following `s`, or nil at end-of-pipeline.

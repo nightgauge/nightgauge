@@ -5285,7 +5285,23 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// is every normal completion.
 	reconciledArm := reconcileNone
 
-	stageIdx := 0
+	// Durable run-state (#1964): record the run as running — or resume the
+	// paused/interrupted attempt of this issue and re-enter at its recorded
+	// stage — and book the terminal transition when the run returns. The
+	// defer runs before the terminal defer above (LIFO), after every return
+	// path below has settled pipelineSuccess.
+	lifecycle, resumeFrom := beginRunLifecycle(workspaceRoot, item.Number,
+		resolveFeatureBranch(runtime, workspaceRoot, item.Number))
+	defer func() { lifecycle.finish(ctx, pipelineSuccess) }()
+
+	stageIdx := resumeStageIndex(stages, resumeFrom)
+	if stageIdx > 0 {
+		log.Printf("#%d: resuming at %s — skipping %v, completed by an earlier attempt of this run",
+			item.Number, stages[stageIdx], stages[:stageIdx])
+		if b := resolveFeatureBranch(runtime, workspaceRoot, item.Number); b != "" {
+			runtime.SetBranch(b)
+		}
+	}
 	// Endpoint-aware OpenCode dispatch (#1679): the slot a stage holds on a
 	// declared endpoint, the endpoints it has lost, and how often it has
 	// failed over. Reset whenever the loop moves to another stage.
@@ -5317,6 +5333,8 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			return
 		default:
 		}
+
+		lifecycle.stage(stage, runtime.FeatureBranch())
 
 		// For merge stage, acquire the per-repo lock; for any other stage, drop a
 		// lock still held from a prior pr-merge iteration that rewound away.

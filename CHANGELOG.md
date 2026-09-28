@@ -188,6 +188,17 @@ changelog, and the release workflow refuses a tag that does not.
   already gone, and logs what happened: it no longer reports a deleted or
   already-absent branch as "NOT removed locally" or as "the only copy".
 
+- **`nightgauge run` now writes `.nightgauge/pipeline/run-state.json`, so an
+  interrupted run resumes instead of restarting** (#1964). The orchestrator
+  records the run as `running` when its stage loop starts, updates
+  `current_stage` and `resume_from_stage` on every stage it enters, marks it
+  `completed` on success, `paused` when the run is cancelled (including
+  SIGTERM/SIGINT), and `aborted` on failure. Re-invoking a paused run, or one
+  whose process died without recording a stop, resumes the same run and
+  re-enters at the recorded stage rather than at `issue-pickup`. `nightgauge run
+  state` now defaults to the main checkout's record, so it reports the same
+  state from a run's worktree.
+
 - **A stage can no longer escape its stage budget or cost cap** (#2016). A
   stdout line over 1 MiB, such as a huge tool output, stopped the Claude,
   Codex, Gemini, Grok and Copilot readers for the rest of the stage, so no
