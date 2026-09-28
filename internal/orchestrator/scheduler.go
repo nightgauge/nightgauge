@@ -10407,8 +10407,13 @@ func (s *Scheduler) tryDeterministicPRCreate(
 		log.Printf("#%d: pr-create deterministic path errored — falling through to LLM: %v",
 			item.Number, detErr)
 	} else {
-		log.Printf("#%d: pr-create deterministic path punted (%s) — falling through to LLM",
-			item.Number, detResult.Reason)
+		if detResult.Detail != "" {
+			log.Printf("#%d: pr-create deterministic path punted (%s: %s) — falling through to LLM",
+				item.Number, detResult.Reason, detResult.Detail)
+		} else {
+			log.Printf("#%d: pr-create deterministic path punted (%s) — falling through to LLM",
+				item.Number, detResult.Reason)
+		}
 	}
 	runtime.RecordStagePuntReason(stage, puntReason)
 	s.emitStagePunt(ctx, runtime, stage, item.Number, puntReason)
