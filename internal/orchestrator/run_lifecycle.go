@@ -33,7 +33,7 @@ var runLifecycleMu sync.Mutex
 // that run's record. Every write failure is logged and never fails the run.
 //
 // worktree_path is deliberately not recorded: the failure-cleanup rescue
-// (loadWorktreePath, #3542) reads it to choose where uncommitted work is
+// (loadWorktreePath) reads it to choose where uncommitted work is
 // recovered from, and that choice is not this change's to move.
 type runLifecycle struct {
 	baseDir string

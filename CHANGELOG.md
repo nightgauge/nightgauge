@@ -196,7 +196,7 @@ changelog, and the release workflow refuses a tag that does not.
   SIGTERM/SIGINT), and `aborted` on failure. Re-invoking a paused run, or one
   whose process died without recording a stop, resumes the same run and
   re-enters at the recorded stage rather than at `issue-pickup`. `nightgauge run
-  state` now defaults to the main checkout's record, so it reports the same
+state` now defaults to the main checkout's record, so it reports the same
   state from a run's worktree.
 
 - **A stage can no longer escape its stage budget or cost cap** (#2016). A
