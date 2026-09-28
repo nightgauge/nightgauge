@@ -4,10 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
+	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/spf13/cobra"
 )
 
@@ -55,6 +58,10 @@ func skillRenderCmd() *cobra.Command {
 		includeContent bool
 		contextWindow  int
 		profile        string
+		supplyIncludes bool
+		issue          int
+		contextType    string
+		contextFile    string
 	)
 	cmd := &cobra.Command{
 		Use:   "render",
@@ -126,6 +133,9 @@ and the frontmatter tool lists renders once rather than twice.`,
 				Adapter:     adapter,
 				SkillsRoots: roots,
 				Profile:     profile,
+				// The scheduler sets this for a compact render on a local
+				// endpoint when the supplied render still fits (#2234).
+				SupplyIncludes: supplyIncludes,
 				// Warnings go to stderr so they never corrupt piped stdout,
 				// which is the composed prompt a caller feeds to an agent.
 				Warn: func(msg string) { fmt.Fprintln(os.Stderr, "warning:", msg) },
@@ -141,6 +151,16 @@ and the frontmatter tool lists renders once rather than twice.`,
 			if contextWindow > 0 {
 				f := skillrender.Fit(stage, res.Content, contextWindow)
 				fit = &f
+			}
+
+			// --issue wraps the render in the invocation context the
+			// scheduler appends before dispatch (execution.BuildPrompt), so
+			// stdout is the exact stage prompt: what a stage replay feeds a
+			// model. The fit above is computed on the skill alone, as the
+			// scheduler computes it.
+			if issue > 0 {
+				res.Content = execution.BuildPrompt(state.PipelineStage(stage), res.Content, issue,
+					filepath.Dir(res.SkillPath), contextType, contextFile)
 			}
 
 			if jsonOutput {
@@ -181,6 +201,10 @@ and the frontmatter tool lists renders once rather than twice.`,
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Emit the provenance envelope instead of the composed text")
 	cmd.Flags().BoolVar(&includeContent, "include-content", false, "With --json, carry the composed text in the envelope's \"content\" field (one spawn instead of two)")
 	cmd.Flags().IntVar(&contextWindow, "context-window", 0, "Model context window in tokens; when > 0, checks the render fits the stage's ADR-023 share and exits non-zero when it does not (0: no check, byte-identical to today)")
+	cmd.Flags().BoolVar(&supplyIncludes, "supply-includes", false, "Supply a compact render's phase includes inline, as the scheduler does for a local endpoint when the result still fits (full renders always supply them)")
+	cmd.Flags().IntVar(&issue, "issue", 0, "Wrap the render in the scheduler's invocation context for this issue (execution.BuildPrompt): stdout is then the exact stage prompt")
+	cmd.Flags().StringVar(&contextType, "context-type", "", "With --issue, the stage's input context type (e.g. planning, dev)")
+	cmd.Flags().StringVar(&contextFile, "context-file", "", "With --issue, the stage's input context file path")
 	cmd.Flags().StringVar(&profile, "profile", "", "Render profile: \"full\" (default, omitting the flag is identical) or \"compact\" (ADR 023 §Q5, #1654). A stage with no compact profile falls back to full, with a warning.")
 	return cmd
 }
