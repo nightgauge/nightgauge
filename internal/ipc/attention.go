@@ -422,6 +422,12 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 	case attention.VerbIssueApproveArchitecture:
 		return s.approveArchitecture(ctx, key, repo, owner, name, issue)
 
+	case attention.VerbDoctorApplyRemedy:
+		return attention.ExecuteDoctorApplyRemedy(ctx, sweep.DoctorRemedies{WorkspaceRoot: s.workspaceRootPath()}, req, opt)
+
+	case attention.VerbDoctorRecheck:
+		return attention.ExecuteDoctorRecheck(ctx, sweep.DoctorRemedies{WorkspaceRoot: s.workspaceRootPath()}, req, opt)
+
 	case attention.VerbProjectSyncStatus:
 		// Not producer-emitted in E1; the extension surface (#325) supplies full
 		// project config for this path. Kept registry-gated for future use.
