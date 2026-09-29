@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/hometest"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/runstate"
@@ -21,6 +22,9 @@ import (
 // #1426. See internal/hometest.
 func TestMain(m *testing.M) {
 	cleanup := hometest.Isolate()
+	// Commands under test commit with a plain `git`, which inherits
+	// os.Environ(): neutralise ambient git config such as commit.gpgsign (#2283).
+	gittest.IsolateProcess()
 	// No test here reads or writes the operator's OS keychain: go-keyring's
 	// in-memory provider stands in for it (internal/keychain).
 	keyring.MockInit()

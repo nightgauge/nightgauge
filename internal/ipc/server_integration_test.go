@@ -32,6 +32,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
 	"github.com/nightgauge/nightgauge/internal/doctor"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // binaryPath is set by TestMain after building the binary.
@@ -47,6 +48,9 @@ var ipcTestHome string
 // TestMain builds the real binary once before running any integration tests.
 // The binary is placed in a temp directory and cleaned up after the suite.
 func TestMain(m *testing.M) {
+	// Handlers under test commit with a plain `git`, which inherits
+	// os.Environ(): neutralise ambient git config such as commit.gpgsign (#2283).
+	gittest.IsolateProcess()
 	goExe := filepath.Join(runtime.GOROOT(), "bin", "go")
 
 	dir, err := os.MkdirTemp("", "nightgauge-ipc-smoke-*")
