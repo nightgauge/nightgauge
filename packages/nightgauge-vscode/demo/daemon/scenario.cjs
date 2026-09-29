@@ -310,5 +310,6 @@ module.exports = {
   createPlayer,
   loadScenario,
   rebaseState,
+  rebaseValue,
   relativeToStart,
 };

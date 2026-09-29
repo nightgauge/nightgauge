@@ -21,8 +21,10 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { redateWorkspace } from "../../demo/workspace-dates";
 
 /** Absolute path of the (temp) folder VSCode opened as the workspace. */
 export function workspaceRoot(): string {
@@ -70,17 +72,29 @@ export function materializePopulatedFixture(): void {
   }
 }
 
+/** One instant per window, so every copy of the demo workspace is dated alike. */
+const DEMO_EPOCH_MS = Date.now();
+
 /**
  * Copy the committed demo workspace (`demo/workspace/`, #2107) over the open
- * workspace folder. Used by the demo-fixture suite, which runs last, so the
- * smaller `populated` fixture the earlier suites saw is not disturbed.
+ * workspace folder, re-dated to this window's start as `npm run demo` does
+ * (#2285). Used by the demo-fixture suite, which runs last, so the smaller
+ * `populated` fixture the earlier suites saw is not disturbed.
  */
 export function materializeDemoWorkspace(): void {
   const source = process.env.NIGHTGAUGE_HOST_DEMO_WORKSPACE;
   if (!source || !fs.existsSync(source)) {
     throw new Error(`NIGHTGAUGE_HOST_DEMO_WORKSPACE is unset or missing: ${source}`);
   }
-  copyTree(source, workspaceRoot());
+  // Re-date a staged copy, not the open folder, which may hold other files.
+  const staged = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-demo-workspace-"));
+  try {
+    copyTree(source, staged);
+    redateWorkspace(staged, DEMO_EPOCH_MS);
+    copyTree(staged, workspaceRoot());
+  } finally {
+    fs.rmSync(staged, { recursive: true, force: true });
+  }
 }
 
 function copyTree(from: string, to: string): void {

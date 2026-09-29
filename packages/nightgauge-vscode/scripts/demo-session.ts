@@ -16,7 +16,9 @@
  * workspace copy, and the machine-tier config and state roots the extension
  * would otherwise read from the operator's home. The operator's own VS Code
  * profile and settings are never opened. The profile is reused between runs;
- * the workspace is copied fresh each time, so every run starts identically.
+ * the workspace is copied fresh each time, so every run starts identically,
+ * and its dates are moved to the launch (`demo/workspace-dates.ts`, #2285), so
+ * its history falls inside the Audit Trail's default seven days.
  *
  * VS Code is the build `@vscode/test-electron` downloads and caches (as the
  * `vscode-host` tier uses), or the executable named by `--code`. It is started
@@ -46,6 +48,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { redateWorkspace } from "../demo/workspace-dates";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PACKAGE_ROOT = path.resolve(here, "..");
@@ -183,13 +186,18 @@ export function planDemoSession(options: DemoSessionOptions): DemoSessionPlan {
 }
 
 /**
- * Lay the session out on disk: a fresh workspace copy, the demo profile's
- * settings merged over whatever that profile already holds, no stale start
- * signal, and an empty event log.
+ * Lay the session out on disk: a fresh workspace copy re-dated to `epochMs`
+ * (the launch, by default), the demo profile's settings merged over whatever
+ * that profile already holds, no stale start signal, and an empty event log.
  */
-export function prepareDemoSession(plan: DemoSessionPlan, workspaceSource: string): void {
+export function prepareDemoSession(
+  plan: DemoSessionPlan,
+  workspaceSource: string,
+  epochMs: number = Date.now()
+): void {
   fs.rmSync(plan.workspace, { recursive: true, force: true });
   fs.cpSync(workspaceSource, plan.workspace, { recursive: true });
+  redateWorkspace(plan.workspace, epochMs);
   fs.mkdirSync(plan.extensionsDir, { recursive: true });
   fs.mkdirSync(path.dirname(plan.settingsFile), { recursive: true });
   let existing: Record<string, unknown> = {};

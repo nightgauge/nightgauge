@@ -442,6 +442,13 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
   daemon's answers. Without demo mode a missing token blocks exactly as before.
   The demo seeds a week of trend rows in percent, the units the Trends tab plots.
 
+- **`npm run demo` opens with its history inside the Audit Trail's default
+  range** (#2285). The demo workspace is dated January 2026 and the tab opens
+  on the last seven days, so it read "No Local Events". The session's copy is
+  now re-dated to the launch with the helper the demo daemon rebases scenario
+  state with: every event keeps its order and spacing, and run history files
+  are renamed to their new days.
+
 - **The Audit Trail tab shows local run history when `platform.enabled` is
   false** (#2107). It showed "No Access" to every user without a platform
   session, and with a stored session it still called the platform. With the

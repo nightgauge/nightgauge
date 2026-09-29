@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { DEMO_WORKSPACE_NOW, HISTORY_DIR } from "../../demo/workspace-dates";
 import {
   DEMO_DAEMON,
   DEMO_WORKSPACE,
@@ -17,6 +18,8 @@ import {
   prepareDemoSession,
   sessionEnv,
 } from "../../scripts/demo-session";
+import { getDefaultAuditFilters } from "../../src/services/AuditLogService";
+import { LocalAuditFallbackService } from "../../src/services/LocalAuditFallbackService";
 
 let home: string;
 beforeEach(() => {
@@ -130,15 +133,19 @@ describe("preparing a demo session", () => {
 
   it("starts every run from the same workspace and an empty event log", () => {
     const p = plan(["--wait-for-start"]);
-    prepareDemoSession(p, DEMO_WORKSPACE);
+    const epoch = Date.parse("2026-09-29T12:00:00.000Z");
+    prepareDemoSession(p, DEMO_WORKSPACE, epoch);
     const first = snapshot(p.workspace);
     // A run changes the workspace, logs events and signals the start.
     fs.writeFileSync(path.join(p.workspace, "scratch.txt"), "left over");
     fs.writeFileSync(p.eventLog, '{"at":0}\n');
     fs.writeFileSync(p.startFile!, "");
-    prepareDemoSession(p, DEMO_WORKSPACE);
+    prepareDemoSession(p, DEMO_WORKSPACE, epoch);
     expect(snapshot(p.workspace)).toEqual(first);
-    expect(first).toEqual(snapshot(DEMO_WORKSPACE));
+    // The same files, less the history ones, which are named by their day.
+    const notHistory = (files: Record<string, string>) =>
+      Object.keys(files).filter((f) => !f.startsWith(HISTORY_DIR));
+    expect(notHistory(first)).toEqual(notHistory(snapshot(DEMO_WORKSPACE)));
     expect(fs.readFileSync(p.eventLog, "utf8")).toBe("");
     expect(fs.existsSync(p.startFile!)).toBe(false);
   });
@@ -151,5 +158,98 @@ describe("preparing a demo session", () => {
     const settings = JSON.parse(fs.readFileSync(p.settingsFile, "utf8"));
     expect(settings["editor.fontSize"]).toBe(18);
     expect(settings["nightgauge.backend.binaryPath"]).toBe(DEMO_DAEMON);
+  });
+});
+
+/** Every run record in a workspace's history, oldest file first, in file order. */
+function historyRecords(root: string): Array<{ file: string; recorded_at: string }> {
+  const dir = path.join(root, HISTORY_DIR);
+  return fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith(".jsonl"))
+    .sort()
+    .flatMap((file) =>
+      fs
+        .readFileSync(path.join(dir, file), "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => ({ file, ...(JSON.parse(line) as { recorded_at: string }) }))
+    );
+}
+
+/** Every ISO-8601 UTC timestamp string anywhere in the workspace's JSON files. */
+function timestamps(root: string): string[] {
+  const out: string[] = [];
+  const walk = (value: unknown): void => {
+    if (Array.isArray(value)) value.forEach(walk);
+    else if (value && typeof value === "object") Object.values(value).forEach(walk);
+    else if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(value)) {
+      out.push(value);
+    }
+  };
+  for (const [file, text] of Object.entries(snapshot(root))) {
+    if (file.endsWith(".jsonl"))
+      text
+        .split("\n")
+        .filter(Boolean)
+        .forEach((l) => walk(JSON.parse(l)));
+    else if (file.endsWith(".json")) walk(JSON.parse(text));
+  }
+  return out;
+}
+
+describe("demo workspace dates (#2285)", () => {
+  it("puts the newest history event inside the Audit Trail's default range", async () => {
+    const p = plan();
+    prepareDemoSession(p, DEMO_WORKSPACE);
+    const filters = getDefaultAuditFilters();
+    const newest = historyRecords(p.workspace)
+      .map((r) => Date.parse(r.recorded_at))
+      .reduce((a, b) => Math.max(a, b));
+    expect(newest).toBeGreaterThanOrEqual(Date.parse(filters.dateFrom));
+    expect(newest).toBeLessThanOrEqual(Date.parse(filters.dateTo));
+
+    // What the tab reads with the platform off: every seeded run is in range.
+    const audit = await new LocalAuditFallbackService(p.workspace).buildLocalAuditData(filters);
+    expect(audit.entries.length).toBe(historyRecords(DEMO_WORKSPACE).length);
+    expect(audit.entries.length).toBeGreaterThan(0);
+  });
+
+  it("keeps every event's order and spacing, moved by one offset", () => {
+    const p = plan();
+    const epoch = Date.parse("2026-09-29T12:00:00.000Z");
+    prepareDemoSession(p, DEMO_WORKSPACE, epoch);
+    const offset = epoch - Date.parse(DEMO_WORKSPACE_NOW);
+    const source = historyRecords(DEMO_WORKSPACE).map((r) => Date.parse(r.recorded_at));
+    const redated = historyRecords(p.workspace).map((r) => Date.parse(r.recorded_at));
+    expect(redated).toEqual(source.map((t) => t + offset));
+    expect(timestamps(p.workspace)).toEqual(
+      expect.arrayContaining(
+        timestamps(DEMO_WORKSPACE).map((t) => new Date(Date.parse(t) + offset).toISOString())
+      )
+    );
+  });
+
+  it("files each run under its re-dated day, as the history writer names files", () => {
+    const p = plan();
+    prepareDemoSession(p, DEMO_WORKSPACE, Date.parse("2026-09-29T02:00:00.000Z"));
+    const records = historyRecords(p.workspace);
+    expect(records.length).toBe(historyRecords(DEMO_WORKSPACE).length);
+    for (const record of records) {
+      expect(record.file).toBe(`${record.recorded_at.slice(0, 10)}.jsonl`);
+    }
+  });
+
+  it("dates nothing after the session start", () => {
+    const scenario = JSON.parse(fs.readFileSync(REFERENCE_SCENARIO, "utf8")) as {
+      state: { now: string };
+    };
+    expect(DEMO_WORKSPACE_NOW).toBe(scenario.state.now);
+    const p = plan();
+    const epoch = Date.parse("2026-09-29T12:00:00.000Z");
+    prepareDemoSession(p, DEMO_WORKSPACE, epoch);
+    const stamps = timestamps(p.workspace).map((t) => Date.parse(t));
+    expect(stamps.length).toBeGreaterThan(0);
+    expect(Math.max(...stamps)).toBeLessThanOrEqual(epoch);
   });
 });
