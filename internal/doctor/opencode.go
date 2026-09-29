@@ -32,9 +32,12 @@ import (
 // Anthropic, and whether the binary changed since the last dispatch.
 //
 // A blocking finding makes the row not OK, which is also what cap recovery
-// reads (orchestrator.AdapterUsableForCapHop calls CheckAdapters): the
-// remediation of each is joined into the row's. Every other finding is a
-// warning, which degrades the doctor's verdict without failing the adapter.
+// reads (orchestrator.AdapterUsableForCapHop reads the adapter findings): the
+// remediation of each is joined into the row's, and the row's Code is the
+// first one's, so a refused opencode.binary pin or an invalid machine-tier
+// block is never reported as a binary missing from PATH (#1741). Every other
+// finding is a warning, which degrades the doctor's verdict without failing
+// the adapter.
 //
 // The version policy, the binary pin, the probe spawns, the machine config
 // refusals and the endpoint readiness probe are the adapter's own functions
@@ -248,12 +251,19 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 	p := probe.opencode
 	if p.getenv == nil || p.getenv(adapters.ExperimentalOpenCodeEnvVar) != "1" {
 		h.Remediation = openCodeGateRemediation
+		h.Code = codeOpenCodeGate
 		return h
 	}
 	oc.Enabled = true
 
 	var blocking []string
-	block := func(s string) { blocking = append(blocking, s) }
+	blockAs := func(code, s string) {
+		if len(blocking) == 0 {
+			h.Code = code
+		}
+		blocking = append(blocking, s)
+	}
+	block := func(s string) { blockAs(codeAdapterRefused, s) }
 	warn := func(s string) { h.Warnings = append(h.Warnings, s) }
 
 	home, homeErr := p.home()
@@ -263,7 +273,7 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 	}
 	settings, settingsErr := p.settings()
 	if settingsErr != nil {
-		block(settingsErr.Error())
+		blockAs(codeOpenCodeConfig, settingsErr.Error())
 	}
 
 	if home != "" {
@@ -288,7 +298,7 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 
 	endpoints, endpointErr := adapters.OpenCodeEndpoints(settings)
 	if endpointErr != nil {
-		block(endpointErr.Error())
+		blockAs(codeOpenCodeConfig, endpointErr.Error())
 	}
 	oc.Offline = openCodeOfflinePosture(settings.Model, endpoints)
 	h.Notes = append(h.Notes, oc.Offline)
@@ -312,16 +322,19 @@ func checkOpenCode(name string, spec adapterSpec, probe adapterProbe) AdapterHea
 
 	oc.Pinned = settings.Binary != ""
 	bin, binErr := adapters.ResolveOpenCodeBinary(settings.Binary, p.lookPath)
-	if binErr != nil {
-		block(binErr.Error())
-	} else {
+	switch {
+	case binErr != nil && oc.Pinned:
+		blockAs(codeOpenCodePin, binErr.Error())
+	case binErr != nil:
+		blockAs(codeAdapterNotInstalled, binErr.Error())
+	default:
 		h.Installed = true
 		h.Path = bin.Path
 		version, versionErr := p.version(bin.Path)
 		h.Version = version
 		policy, policyErr := adapters.CheckOpenCodeVersion(bin, version, versionErr, home)
 		if policyErr != nil {
-			block(policyErr.Error())
+			blockAs(codeAdapterBelowFloor, policyErr.Error())
 		} else {
 			h.VersionOK = !policy.BelowFloor
 			if policy.BelowFloor {
@@ -480,7 +493,7 @@ func checkOpenCodeCatalog(h *AdapterHealth, p openCodeProbe, bin adapters.OpenCo
 
 // openCodeInheritedConfigCaveat says why, with opencode.inherit_user_config
 // on, what the catalog probe lists is not what a dispatch finds.
-const openCodeInheritedConfigCaveat = "but opencode.inherit_user_config is on, so a dispatch also reads your own OpenCode config (your OpenCode config directory and ~/.opencode), which the probe leaves out, as it reads none of your OpenCode state"
+const openCodeInheritedConfigCaveat = "but opencode.inherit_user_config is on, so a dispatch also reads your own OpenCode config (" + adapters.OpenCodeInheritedConfigFiles + " of your OpenCode config directory and of ~/.opencode; " + adapters.OpenCodeInheritedConfigNotLoaded + "), which the probe leaves out, as it reads none of your OpenCode state"
 
 // openCodePerRunConfig builds the per-run config a dispatch of model would
 // get, into a root that is never created, and returns the adapter's refusal

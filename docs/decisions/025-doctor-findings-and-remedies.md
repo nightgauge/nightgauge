@@ -119,6 +119,25 @@ Totals: 29 checks (the epic's "28" predates `ci_machine_credentials`): 12 blocke
 codes; they append codes and never renumber. Adapter health (`--adapters`, #2092) receives codes
 from `NGD100` upward.
 
+Adapter health is the `adapters` check. `--adapters` selects the adapters it probes; each adapter
+that is not usable is one finding, and a usable one may carry an advisory. None is a blocker, as
+PREFLIGHT runs inside an agent session where an adapter is already running.
+
+| Code   | Check      | Severity | Note                                                       |
+| ------ | ---------- | -------- | ---------------------------------------------------------- |
+| NGD100 | `adapters` | warning  | CLI not on PATH; remedy names install and login commands   |
+| NGD101 | `adapters` | warning  | Below its version floor; `info` while still usable         |
+| NGD102 | `adapters` | warning  | SDK adapter API key unset; names the variable, not a value |
+| NGD103 | `adapters` | warning  | Unknown or retired adapter name                            |
+| NGD104 | `adapters` | warning  | Compat manifests failed to load; floors not enforced       |
+| NGD105 | `adapters` | warning  | Registry-served model missing from the CLI catalog         |
+| NGD106 | `adapters` | warning  | Provider rejected the probed model (usable adapter)        |
+| NGD107 | `adapters` | warning  | OpenCode experimental gate closed                          |
+| NGD108 | `adapters` | warning  | OpenCode machine-tier `opencode:` block refused (#1741)    |
+| NGD109 | `adapters` | warning  | OpenCode `opencode.binary` pin refused (#1741)             |
+| NGD110 | `adapters` | warning  | A dispatch would be refused for another reason             |
+| NGD111 | `adapters` | warning  | Usable, with warnings                                      |
+
 Rejected: keeping two levels (required/optional). It is what makes housekeeping look like a
 real failure today.
 

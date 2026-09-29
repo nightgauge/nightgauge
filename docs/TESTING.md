@@ -195,16 +195,33 @@ opens a throwaway empty folder as the workspace, and inside that window:
   empty workspace and then after copying
   `tests/fixtures/vscode-host/populated/` into it.
 
-The tier's backend is the demo-mode logging stub
-`packages/nightgauge-vscode/demo/ipc-stub.cjs` (#2103), set through
-`nightgauge.backend.binaryPath`. It answers every IPC request with `null`,
-makes no network call and logs each request; the harness writes a marker
-before each case, and an `ipc inventory` suite drives every tree view and
-dashboard tab and fails on any error notification. `npm run -w
-nightgauge-vscode demo:inventory` runs the tier and rewrites
-`demo/ipc-inventory.json`: each method the UI called, the cases it was
-called during, a redacted sample of its params and the result type the typed
-client declares.
+The tier's backend is the demo daemon
+`packages/nightgauge-vscode/demo/ipc-stub.cjs` (#2103, #2105, ADR-026), set
+through `nightgauge.backend.binaryPath`. It answers each IPC request from
+in-memory demo state, makes no network call and logs each request with
+whether it had an answer; the harness writes a marker before each case, and an
+`ipc inventory` suite drives every tree view and dashboard tab and fails on any
+error notification.
+
+The launcher opens two windows. The main window runs every suite but demo
+mode. The demo window activates on a copy of `demo/workspace/` and plays
+`demo/scenarios/reference.json`: a setting cannot carry arguments, so the
+scenario reaches the daemon through the environment
+(`NIGHTGAUGE_DEMO_SCENARIO`, `NIGHTGAUGE_DEMO_SPEED`,
+`NIGHTGAUGE_DEMO_START_FILE`, `NIGHTGAUGE_DEMO_EVENT_LOG`; the daemon's header
+lists them). Its `demo mode` suite checks the seeded Repositories counts,
+Pipeline queue and Overview board summary, then creates the start file and
+records the Pipeline tree's running stage and every dashboard tab switch as
+they happen, so a slow machine delays the checkpoints without hiding one.
+
+After both windows the launcher runs the demo drift guard (#2109): it fails,
+naming the method, when the extension called a method the daemon does not
+answer or that `demo/ipc-inventory.json` does not list, or when a protocol
+version differs. `npm run -w nightgauge-vscode demo:inventory` runs the tier
+and rewrites `demo/ipc-inventory.json`: each method the UI called, the cases
+it was called during, a redacted sample of its params and the result type the
+typed client declares. `npm run -w nightgauge-vscode demo` opens a demo
+session of its own (#2110); `scripts/demo-session.ts` documents its options.
 
 Three implementation notes that are load-bearing rather than incidental:
 

@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
@@ -61,6 +62,11 @@ type AdapterHealth struct {
 	CatalogWarning string `json:"catalog_warning,omitempty"`
 	OK             bool   `json:"ok"` // adapter is usable for its kind's primary requirement
 	Remediation    string `json:"remediation,omitempty"`
+	// Code is the ADR-025 code of the condition that makes the adapter not
+	// usable, set exactly when OK is false (native_adapters.go). It keeps the
+	// cause distinct: a refused opencode.binary pin or machine config is not
+	// a binary missing from PATH (#1741).
+	Code string `json:"code,omitempty"`
 	// Warnings are findings that do not make the adapter unusable but that
 	// the operator should act on. Each degrades the doctor's verdict.
 	Warnings []string `json:"warnings,omitempty"`
@@ -138,6 +144,7 @@ type adapterSpec struct {
 	minVersion  string      // "" when no floor is enforced
 	floorPolicy string      // the manifest's floor_policy (adaptercompat.FloorWarn or FloorFailClosed)
 	apiKeyEnvs  []string    // kindSDK: any one present satisfies "configured"
+	login       string      // kindCLI: the CLI's own login command, when it has one
 	mcp         bool        // codex: provisions an MCP managed block in config.toml
 	// usableBelowFloor (kindCLI) reports a CLI below minVersion (VersionOK
 	// false, a remediation naming the floor) and leaves it usable. It is
@@ -183,12 +190,12 @@ var adapterSpecs = map[string]adapterSpec{
 	// below it is reported and stays usable (usableBelowFloor).
 	"claude-headless": {binary: "claude", kind: kindCLI,
 		minVersion: compatMinVersion("claude-headless"), floorPolicy: compatFloorPolicy("claude-headless"),
-		usableBelowFloor:  true,
+		usableBelowFloor: true, login: "claude auth login",
 		catalogSkipReason: claudeNoCatalogReason, modelProbeBand: models.BandFable, modelProbeArgs: claudeModelProbeArgs},
 	"claude-sdk": {kind: kindSDK, apiKeyEnvs: []string{"ANTHROPIC_API_KEY"}},
 	"codex": {binary: "codex", kind: kindCLI,
 		minVersion: compatMinVersion("codex"), floorPolicy: compatFloorPolicy("codex"),
-		mcp: true, catalogSkipReason: codexNoCatalogReason},
+		mcp: true, login: "codex login", catalogSkipReason: codexNoCatalogReason},
 	"gemini": {binary: "gemini", kind: kindCLI,
 		minVersion: compatMinVersion("gemini"), floorPolicy: compatFloorPolicy("gemini"),
 		catalogSkipReason: geminiNoCatalogReason},
@@ -198,6 +205,7 @@ var adapterSpecs = map[string]adapterSpec{
 		catalogSkipReason: copilotNoCatalogReason},
 	"grok": {binary: "grok", kind: kindCLI,
 		minVersion: compatMinVersion("grok"), floorPolicy: compatFloorPolicy("grok"),
+		login:       "grok login",
 		catalogArgs: []string{"models"}, catalogParser: parseGrokCatalog},
 	// opencode is one adapter over many providers, so its row is its own
 	// (checkOpenCode, opencode.go): the catalog probe runs `opencode models`
@@ -428,8 +436,11 @@ func CheckAdapters(names []string) []AdapterHealth {
 	return checkAdaptersWithProbe(names, probe)
 }
 
+// checkAdaptersWithProbe probes the adapters concurrently, so `--adapters
+// all` costs its slowest probe rather than the sum of them, and returns the
+// rows in the requested order.
 func checkAdaptersWithProbe(names []string, probe adapterProbe) []AdapterHealth {
-	out := make([]AdapterHealth, 0, len(names)+1)
+	var out []AdapterHealth
 	if err := loadCompatManifests(); err != nil {
 		// The error names the manifest file and the field. Every CLI floor is
 		// unset while it stands, which is why it leads the report.
@@ -437,12 +448,20 @@ func checkAdaptersWithProbe(names []string, probe adapterProbe) []AdapterHealth 
 			Adapter:     compatManifestRowName,
 			OK:          false,
 			Remediation: "Version floors are not enforced: " + err.Error(),
+			Code:        codeAdapterCompat,
 		})
 	}
-	for _, name := range names {
-		out = append(out, checkAdapter(name, probe))
+	rows := make([]AdapterHealth, len(names))
+	var wg sync.WaitGroup
+	for i, name := range names {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rows[i] = checkAdapter(name, probe)
+		}()
 	}
-	return out
+	wg.Wait()
+	return append(out, rows...)
 }
 
 func checkAdapter(name string, probe adapterProbe) AdapterHealth {
@@ -452,11 +471,13 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 	if err := config.RetiredAdapterError(name, "--adapters"); err != nil {
 		h.OK = false
 		h.Remediation = err.Error()
+		h.Code = codeAdapterUnknown
 		return h
 	}
 	if !ok {
 		h.OK = false
 		h.Remediation = "Unknown adapter; valid: " + strings.Join(AllAdapterNames(), ", ") + "."
+		h.Code = codeAdapterUnknown
 		return h
 	}
 	if canonical == "opencode" {
@@ -491,6 +512,12 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 		// above report the floor on an adapter that still runs.
 		usableBelowFloor := spec.usableBelowFloor && spec.floorPolicy == adaptercompat.FloorWarn
 		h.OK = h.Installed && (h.VersionOK || usableBelowFloor)
+		switch {
+		case !h.Installed:
+			h.Code = codeAdapterNotInstalled
+		case !h.OK:
+			h.Code = codeAdapterBelowFloor
+		}
 		// The deeper probes run on every usable CLI, one below a floor it
 		// stays usable under included. An adapter that is not usable is
 		// already reported for that reason and gets no second complaint.
@@ -510,6 +537,7 @@ func checkAdapter(name string, probe adapterProbe) AdapterHealth {
 		h.OK = h.Installed
 		if !h.OK {
 			h.Remediation = "Set one of: " + strings.Join(spec.apiKeyEnvs, ", ") + "."
+			h.Code = codeAdapterKeyUnset
 		}
 
 	}
@@ -564,6 +592,7 @@ func applyCatalogProbe(h *AdapterHealth, spec adapterSpec, canonical string, pro
 
 	if len(missing) > 0 {
 		h.OK = false
+		h.Code = codeAdapterCatalogDrift
 		h.Remediation = "provider " + provider + " model(s) " + strings.Join(missing, ", ") +
 			" are declared transports." + models.TransportCLI + ".served=true in the registry, but `" + cmdLabel +
 			"` does not list them — confirm with `" + cmdLabel + "`, then correct the registry's transports." +

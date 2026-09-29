@@ -188,6 +188,29 @@ function rebaseState(rawState, epochMs) {
 }
 
 /**
+ * Copy `value` with every ISO timestamp replaced by its offset from
+ * `epochMs` (`"T+1500ms"`, `"T-3600000ms"`) and every calendar date by its
+ * day offset (`"D-2"`). The event log (#2110) records payloads this way, so
+ * two runs of one scenario compare byte-for-byte whatever the wall clock.
+ */
+function relativeToStart(value, epochMs) {
+  if (Array.isArray(value)) return value.map((v) => relativeToStart(v, epochMs));
+  if (isObject(value)) {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) out[key] = relativeToStart(item, epochMs);
+    return out;
+  }
+  if (typeof value !== "string") return value;
+  const sign = (n) => (n < 0 ? `${n}` : `+${n}`);
+  if (ISO.test(value)) return `T${sign(Date.parse(value) - epochMs)}ms`;
+  if (DATE.test(value)) {
+    const startDay = Date.parse(`${new Date(epochMs).toISOString().slice(0, 10)}T00:00:00.000Z`);
+    return `D${sign(Math.round((Date.parse(`${value}T00:00:00.000Z`) - startDay) / DAY_MS))}`;
+  }
+  return value;
+}
+
+/**
  * The player. `daemon` is `createDaemon(...)`; `schedule(fn, delayMs)` is
  * `setTimeout` in production and a recorder in tests. `onDone` runs after
  * the last step.
@@ -280,4 +303,12 @@ function createPlayer({ daemon, steps, epochMs, speed = 1, schedule, log, onDone
   return { start, apply };
 }
 
-module.exports = { KINDS, NOW_TOKEN, UI_ACTIONS, createPlayer, loadScenario, rebaseState };
+module.exports = {
+  KINDS,
+  NOW_TOKEN,
+  UI_ACTIONS,
+  createPlayer,
+  loadScenario,
+  rebaseState,
+  relativeToStart,
+};

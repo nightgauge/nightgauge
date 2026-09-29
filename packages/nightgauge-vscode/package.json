@@ -1768,6 +1768,7 @@
     "pretest:host": "bash scripts/check-test-collection.sh && bash scripts/check-test-runner-coverage.sh && tsc -p tests/vscode-host --noEmit",
     "test:host": "npm run build:host-tests && tsx tests/vscode-host/launch.ts",
     "mock-server": "tsx src/mocks/start-server.ts",
+    "demo": "tsx scripts/demo-session.ts",
     "demo:inventory": "npm run build:host-tests && tsx tests/vscode-host/launch.ts --write-ipc-inventory"
   },
   "dependencies": {

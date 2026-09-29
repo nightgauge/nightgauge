@@ -543,7 +543,12 @@ jobs:
   # VSCode extension host smoke tier (tests/vscode-host/**, #745). Launches a
   # real, headless VSCode, activates the extension against a throwaway
   # workspace, reconciles contributed against registered commands, opens all
-  # twelve webview panels and resolves all seven tree views.
+  # twelve webview panels and resolves all seven tree views. A second window
+  # plays the reference demo scenario against the demo daemon, and the demo
+  # drift guard (#2109) fails the job when the extension calls an IPC method
+  # the daemon does not answer. It runs on every PR the change class does not
+  # fast-track as docs-only, so on every change to packages/nightgauge-vscode/
+  # or internal/ipc/ source.
   #
   # Its own job for the same reason `playwright` is: a third runner with its
   # own collection rules and its own OS prerequisites. `vscode` runs vitest

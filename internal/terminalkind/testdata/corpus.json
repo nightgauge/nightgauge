@@ -1717,7 +1717,7 @@
       "expected_signal": "",
       "source": "synthetic",
       "producer": "The marker internal/execution/opencode_usage.go appends as the last line of an opencode stage's stderr when OpenCode auto-rejected a permission the stage's allowed tools grant (#1624, ADR-022 § 9).",
-      "rationale": "The marker alone, as #1631's verification names it. It means an `ask` rule rejected a tool the stage is allowed, for any permission but `read`: a repository's or the user's opencode.json, since Nightgauge generates no permission map yet (#1638). The next attempt meets that rule unchanged, so it parks without a retry and without charging the issue."
+      "rationale": "The marker alone, as #1631's verification names it. It means an `ask` rule rejected a tool the stage is allowed, for any permission but `read`: a repository's or the user's opencode.json, since the permission map Nightgauge generates (#1815) holds only `allow` and `deny`. The next attempt meets that rule unchanged, so it parks without a retry and without charging the issue."
     },
     {
       "id": "adapter-permission-rejected-as-the-stage-reports-it",

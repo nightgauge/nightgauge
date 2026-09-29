@@ -87,7 +87,8 @@ export function registeredSuiteNames(): string[] {
 }
 
 /**
- * Execute everything registered, in declaration order, serially.
+ * Execute everything registered in the suites `runsSuite` selects, in
+ * declaration order, serially.
  *
  * Serial by design: these cases open real editor UI in one shared window, so
  * running them concurrently would make "did opening X create a panel"
@@ -96,12 +97,13 @@ export function registeredSuiteNames(): string[] {
 export async function runRegisteredCases(
   log: (line: string) => void,
   perCaseTimeoutMs = 30_000,
-  onCaseStart: (suiteName: string, caseName: string) => void = () => undefined
+  onCaseStart: (suiteName: string, caseName: string) => void = () => undefined,
+  runsSuite: (suiteName: string) => boolean = () => true
 ): Promise<CaseResult[]> {
   const results: CaseResult[] = [];
   let lastSuite: string | undefined;
 
-  for (const entry of registry) {
+  for (const entry of registry.filter((candidate) => runsSuite(candidate.suite))) {
     if (entry.suite !== lastSuite) {
       log(`\n  ${entry.suite}`);
       lastSuite = entry.suite;

@@ -109,6 +109,28 @@ func MachineConfigDir() (string, error) {
 	return filepath.Dir(path), nil
 }
 
+// MachineConfigFile names the machine-tier config file Load reads, for a
+// message that tells the operator where to put a value: MachineConfigPath, or
+// the Linux legacy file when only it exists (the fallback
+// readMachineConfigBytes takes). It follows NIGHTGAUGE_CONFIG_HOME and
+// XDG_CONFIG_HOME, so a refusal never sends the operator to a file this
+// process does not read. When the home directory cannot be resolved it
+// returns ~/.nightgauge/config.yaml, the macOS default, as a hint.
+func MachineConfigFile() string {
+	path, err := machineConfigPathFn()
+	if err != nil {
+		return filepath.Join("~", ".nightgauge", "config.yaml")
+	}
+	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
+		if legacy := legacyMachineConfigPath(); legacy != "" && legacy != path {
+			if _, legacyErr := os.Stat(legacy); legacyErr == nil {
+				return legacy
+			}
+		}
+	}
+	return path
+}
+
 // SwapMachineConfigPathForTest replaces the resolver used by Load and
 // MachineConfigPath with the supplied function. Returns a cleanup that
 // restores the previous resolver. Intended only for tests in external

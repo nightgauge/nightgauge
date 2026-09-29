@@ -55,6 +55,28 @@ export interface GoAdapterHealth {
   model_ok?: boolean;
   ok: boolean;
   remediation?: string;
+  /**
+   * Findings that leave the adapter usable but that the operator should act
+   * on. Each one degrades the Go doctor's verdict: a row with `ok: true` and a
+   * warning still makes `nightgauge doctor` exit 1.
+   */
+  warnings?: string[];
+  /** Facts a reader of the row needs; they never change the verdict. */
+  notes?: string[];
+  /** The opencode row's own section; absent on every other row. */
+  opencode?: GoOpenCodeHealth;
+}
+
+/**
+ * The part of the Go `opencode` section the panel reads. While `enabled` is
+ * false the Go doctor runs no other OpenCode check, so the row's
+ * `installed: false` says nothing about PATH.
+ */
+export interface GoOpenCodeHealth {
+  enabled: boolean;
+  max_tested?: string;
+  floor_policy?: string;
+  pinned?: boolean;
 }
 
 interface GoDoctorResult {
@@ -220,6 +242,12 @@ export function mergeAdapterRows(
 
     const installed = binaryResolved ? (g?.installed ?? false) : false;
     const versionOk = binaryResolved ? (g?.version_ok ?? true) : true;
+    // The Go warnings and notes are shown whatever `ok` says: a usable row's
+    // warnings are what make the CLI exit 1, so hiding them showed OpenCode
+    // as ready while `nightgauge doctor --adapters opencode` failed.
+    const warnings = binaryResolved ? dedupe(g?.warnings ?? []) : [];
+    const notes = binaryResolved ? dedupe(g?.notes ?? []) : [];
+    const gated = binaryResolved && g?.opencode !== undefined && !g.opencode.enabled;
 
     // Readiness:
     //  - Go present → honor Go's own ok bit (install/version for CLI/SDK)
@@ -256,6 +284,9 @@ export function mergeAdapterRows(
       authOk,
       authReason,
       remediations: dedupe(remediations),
+      warnings,
+      notes,
+      gated,
       ok,
     };
   });
@@ -276,7 +307,7 @@ export function finalizeStageRows(
     const row = rowByAdapter.get(r.sdkAdapter);
     let status: StageResolutionRow["status"];
     if (!row) status = "unknown";
-    else if (row.ok) status = "ok";
+    else if (row.ok) status = row.warnings.length > 0 ? "warn" : "ok";
     else if (!binaryResolved && !row.authOk) status = "error";
     else status = row.authOk ? "warn" : "error";
 

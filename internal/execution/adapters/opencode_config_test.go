@@ -192,7 +192,7 @@ func TestOpenCodeConfigRefusesAnUnresolvedLimit(t *testing.T) {
 			if err == nil {
 				t.Fatalf("a config was built with limit %+v and nothing discovered: %s", tc.limit, built.Content)
 			}
-			for _, want := range []string{tc.key, "endpoint lmstudio", "the server refused the connection", "never", "~/.nightgauge/config.yaml"} {
+			for _, want := range []string{tc.key, "endpoint lmstudio", "the server refused the connection", "never", config.MachineConfigFile()} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("the refusal does not say %q: %v", want, err)
 				}

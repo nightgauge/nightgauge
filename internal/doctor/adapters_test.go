@@ -1,6 +1,8 @@
 package doctor
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"go/ast"
 	"go/parser"
@@ -1216,5 +1218,229 @@ func TestCheckAIAdapterAvailable_ShortCircuits(t *testing.T) {
 
 	if len(lookedUp) != 1 || lookedUp[0] != "claude" {
 		t.Errorf("expected exactly one lookup (claude), got %v", lookedUp)
+	}
+}
+
+// adapterFindingsFor runs the adapter check's finding builder over rows from
+// a fake probe.
+func adapterFindingsFor(t *testing.T, names []string, probe adapterProbe) []Finding {
+	t.Helper()
+	return adapterHealthFindings(checkAdaptersWithProbe(names, probe))
+}
+
+// findingFor returns the one finding of code for adapter, failing the test
+// when there is not exactly one.
+func findingFor(t *testing.T, fs []Finding, adapter, code string) Finding {
+	t.Helper()
+	var hits []Finding
+	for _, f := range fs {
+		if f.Evidence["adapter"] == adapter && f.Code == code {
+			hits = append(hits, f)
+		}
+	}
+	if len(hits) != 1 {
+		t.Fatalf("want one %s finding for %s, got %d: %s", code, adapter, len(hits), findingsText(fs))
+	}
+	return hits[0]
+}
+
+// remedyText is every remedy's summary, preview and steps.
+func remedyText(f Finding) string {
+	var parts []string
+	for _, r := range f.Remedies {
+		parts = append(parts, r.Summary, r.Preview)
+		parts = append(parts, r.Steps...)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// TestAdapterFindings_MissingCLINamesTheInstallCommand (#2092): a CLI that is
+// not on PATH is one warning whose remedy names the install command from the
+// adapter's compat manifest and the CLI's login command.
+func TestAdapterFindings_MissingCLINamesTheInstallCommand(t *testing.T) {
+	fs := adapterFindingsFor(t, []string{"codex"}, fakeProbe{codex: t.TempDir()}.toProbe())
+	f := findingFor(t, fs, "codex", codeAdapterNotInstalled)
+	if f.Check != adaptersCheck || f.Severity != SeverityWarning {
+		t.Errorf("check %q severity %q, want the adapters check at warning", f.Check, f.Severity)
+	}
+	if !strings.Contains(f.Title, "codex CLI not found on PATH") {
+		t.Errorf("title %q does not name the missing CLI", f.Title)
+	}
+	if f.Cause == "" || f.Evidence["usable"] != "false" {
+		t.Errorf("cause %q usable %q; want the probe's cause on an unusable adapter", f.Cause, f.Evidence["usable"])
+	}
+	text := remedyText(f)
+	for _, want := range []string{"npm install -g @openai/codex", "codex login"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("remedy does not name %q:\n%s", want, text)
+		}
+	}
+	if len(f.Remedies) != 1 || f.Remedies[0].Kind != RemedyManual || f.Remedies[0].Verify != adaptersCheck {
+		t.Errorf("remedies %+v; want one manual remedy verified by the adapters check", f.Remedies)
+	}
+	if f.Docs != DocsAnchor(codeAdapterNotInstalled) || f.Fingerprint != Fingerprint(codeAdapterNotInstalled, adaptersCheck, "codex") {
+		t.Errorf("docs %q fingerprint %q; want the code's anchor and an adapter-keyed fingerprint", f.Docs, f.Fingerprint)
+	}
+}
+
+// TestAdapterFindings_MissingKeyNamesTheVariableNeverItsValue (#2092,
+// security constraint): an SDK adapter with no key is one warning whose
+// remedy names the variable; a key that is set is reported present, and its
+// value appears nowhere in a row or a finding, remedies included.
+func TestAdapterFindings_MissingKeyNamesTheVariableNeverItsValue(t *testing.T) {
+	const secret = "sk-ant-api03-sentinel-value-2092-never-printed"
+	probe := fakeProbe{env: map[string]string{"ANTHROPIC_API_KEY": secret}}.toProbe()
+	health := checkAdaptersWithProbe([]string{"claude-sdk", "gemini-sdk"}, probe)
+	fs := adapterHealthFindings(health)
+
+	for _, f := range fs {
+		if f.Evidence["adapter"] == "claude-sdk" {
+			t.Errorf("claude-sdk has its key set and must raise no finding, got %s", findingsText([]Finding{f}))
+		}
+	}
+	f := findingFor(t, fs, "gemini-sdk", codeAdapterKeyUnset)
+	text := remedyText(f)
+	for _, want := range []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"} {
+		if !strings.Contains(text, want) || !strings.Contains(f.Title, want) {
+			t.Errorf("title %q or remedy %q does not name %s", f.Title, text, want)
+		}
+	}
+	if f.Evidence["api_key_vars"] != "GEMINI_API_KEY, GOOGLE_API_KEY" {
+		t.Errorf("api_key_vars = %q, want the variable names", f.Evidence["api_key_vars"])
+	}
+
+	out, err := json.Marshal(struct {
+		Health   []AdapterHealth
+		Findings []Finding
+	}{health, fs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), secret) {
+		t.Errorf("an API key's value leaked into the adapter report: %s", out)
+	}
+}
+
+// TestAdapterFindings_OneFindingPerUnusableAdapter: each unusable adapter is
+// one warning coded by its cause, a usable one raises none, and none is ever a
+// blocker, which would halt PREFLIGHT inside a running agent session.
+func TestAdapterFindings_OneFindingPerUnusableAdapter(t *testing.T) {
+	fp := fakeProbe{
+		paths:    map[string]string{"codex": "/bin/codex", "gemini": "/bin/gemini"},
+		versions: map[string]string{"/bin/codex": "codex 0.145.0\n", "/bin/gemini": "gemini 0.0.1\n"},
+		codex:    t.TempDir(),
+	}
+	names := []string{"codex", "gemini", "copilot", "claude-sdk", "nonesuch"}
+	fs := adapterFindingsFor(t, names, fp.toProbe())
+	want := map[string]string{
+		"gemini":     codeAdapterBelowFloor,
+		"copilot":    codeAdapterNotInstalled,
+		"claude-sdk": codeAdapterKeyUnset,
+		"nonesuch":   codeAdapterUnknown,
+	}
+	if len(fs) != len(want) {
+		t.Fatalf("want %d findings, got %d: %s", len(want), len(fs), findingsText(fs))
+	}
+	for adapter, code := range want {
+		f := findingFor(t, fs, adapter, code)
+		if f.Severity != SeverityWarning {
+			t.Errorf("%s: severity %q, want warning", adapter, f.Severity)
+		}
+	}
+	for _, f := range fs {
+		if f.Severity == SeverityBlocker {
+			t.Errorf("an adapter finding is a blocker: %s", findingsText([]Finding{f}))
+		}
+	}
+}
+
+// TestAdapterFindings_CauseIsTheProbesOwn (#1741): the cause of an unusable
+// adapter's finding is the probe's remediation, never a generic "not ready",
+// and AdapterUnusable, which cap recovery reads, returns it for that adapter
+// alone.
+func TestAdapterFindings_CauseIsTheProbesOwn(t *testing.T) {
+	fp := fakeProbe{
+		paths:    map[string]string{"codex": "/bin/codex"},
+		versions: map[string]string{"/bin/codex": "codex 0.110.0\n"},
+		codex:    t.TempDir(),
+	}
+	health := checkAdaptersWithProbe([]string{"codex"}, fp.toProbe())
+	fs := adapterHealthFindings(health)
+	f := findingFor(t, fs, "codex", codeAdapterBelowFloor)
+	if f.Cause != health[len(health)-1].Remediation || !strings.Contains(f.Cause, "0.111.0") {
+		t.Errorf("cause %q, want the row's remediation naming the floor", f.Cause)
+	}
+	if reason, unusable := AdapterUnusable(fs, "codex"); !unusable || reason != f.Cause {
+		t.Errorf("AdapterUnusable(codex) = %q, %v; want the finding's cause", reason, unusable)
+	}
+	if _, unusable := AdapterUnusable(fs, "claude-headless"); unusable {
+		t.Error("AdapterUnusable read codex's finding as claude-headless's")
+	}
+}
+
+// TestAdapterFindings_CompatRowIsNotTheAdaptersVerdict (#1712): a compat
+// manifest load failure is its own finding, keyed to the compat-manifests
+// row, and never read as the requested adapter's verdict.
+func TestAdapterFindings_CompatRowIsNotTheAdaptersVerdict(t *testing.T) {
+	restore := SwapCompatManifestLoadForTest(errors.New("manifest boom"))
+	defer restore()
+	fp := fakeProbe{paths: map[string]string{"claude": "/opt/claude"}, versions: map[string]string{"/opt/claude": "2.1.233\n"}}
+	fs := adapterFindingsFor(t, []string{"claude-headless"}, fp.toProbe())
+	f := findingFor(t, fs, compatManifestRowName, codeAdapterCompat)
+	if !strings.Contains(f.Cause, "manifest boom") {
+		t.Errorf("cause %q does not carry the load error", f.Cause)
+	}
+	if _, unusable := AdapterUnusable(fs, "claude-headless"); unusable {
+		t.Errorf("the compat-manifests finding was read as claude-headless's verdict: %s", findingsText(fs))
+	}
+}
+
+// TestAdapterFindings_UsableAdvisories: a usable claude below its warn floor
+// is info, not a warning, and a model the provider rejects is a warning whose
+// remedy names the login command.
+func TestAdapterFindings_UsableAdvisories(t *testing.T) {
+	fp := fakeProbe{
+		paths:    map[string]string{"claude": "/opt/claude"},
+		versions: map[string]string{"/opt/claude": "2.1.100 (Claude Code)\n"},
+		modelProbe: func(string, []string) (string, error) {
+			return "Invalid API key · Please run /login", errors.New("exit status 1")
+		},
+	}
+	fs := adapterFindingsFor(t, []string{"claude-headless"}, fp.toProbe())
+	floor := findingFor(t, fs, "claude-headless", codeAdapterBelowFloor)
+	if floor.Severity != SeverityInfo || floor.Evidence["usable"] != "true" {
+		t.Errorf("below-floor claude: severity %q usable %q, want info on a usable adapter", floor.Severity, floor.Evidence["usable"])
+	}
+	model := findingFor(t, fs, "claude-headless", codeAdapterModelRejected)
+	if model.Severity != SeverityWarning || !strings.Contains(remedyText(model), "claude auth login") {
+		t.Errorf("model rejection: severity %q remedy %q; want a warning naming `claude auth login`", model.Severity, remedyText(model))
+	}
+	if _, unusable := AdapterUnusable(fs, "claude-headless"); unusable {
+		t.Error("an advisory finding made a usable adapter unusable")
+	}
+}
+
+// TestAdapterFindings_RegisteredGroup: adapter health is a registered check
+// in the adapters group, and a run that requests no adapters reports none.
+func TestAdapterFindings_RegisteredGroup(t *testing.T) {
+	var found bool
+	for _, c := range DefaultRegistry().Checks() {
+		if c.ID == adaptersCheck {
+			found = true
+			if c.Group != "adapters" || c.Code != codeAdapterNotInstalled {
+				t.Errorf("adapters check group %q code %q", c.Group, c.Code)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no adapters check is registered")
+	}
+	env := &Env{}
+	for _, c := range DefaultRegistry().Checks() {
+		if c.ID == adaptersCheck {
+			if fs := c.Run(context.Background(), env); len(fs) != 0 || env.adapter != nil {
+				t.Errorf("no --adapters: findings %s, rows %+v; want none", findingsText(fs), env.adapter)
+			}
+		}
 	}
 }

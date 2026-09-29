@@ -74,13 +74,10 @@ suite("demo workspace", () => {
       "the Dashboard panel"
     );
     try {
-      // Twice: a refresh computes the health widget in parallel with the
-      // history backfill, so the first one sees no history and the second
-      // is the one that reads the seeded runs.
-      for (let pass = 0; pass < 2; pass++) {
-        for (const listener of dashboard.messageListeners) {
-          await listener({ type: "refresh" });
-        }
+      // One refresh: it loads history before computing the health widget, so
+      // the first pass already reads the seeded runs.
+      for (const listener of dashboard.messageListeners) {
+        await listener({ type: "refresh" });
       }
       for (const [tab, populated] of FILE_BACKED_TABS) {
         for (const listener of dashboard.messageListeners) {

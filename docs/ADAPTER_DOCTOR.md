@@ -28,13 +28,19 @@ adapter the pipeline resolves to (per stage + the global default):
   nightgauge managed MCP block.
 - **How to fix** — a concrete remediation per failure (e.g. ``Run `codex
 login`.``), merged from the Go binary's install/version hints and the SDK's
-  per-adapter `suggestedFix`.
+  per-adapter `suggestedFix`. The Go row's `warnings` are listed there too,
+  and its `notes` beneath them. A row that is usable but carries a warning is
+  marked `!` rather than `✓`, matching the Go doctor, which exits 1 on it.
+- **The OpenCode gate** — while `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is not set
+  the Go doctor runs no OpenCode check, so the OpenCode row reads "not checked:
+  experimental gate closed" rather than "not on PATH".
 
 A second table shows **per-stage resolution**: which adapter + model each of the
 six executable stages resolves to (`issue-pickup` … `pr-merge`), the resolution
 source (env / stage-config / global-config / default), and — for Codex — the
 concrete model the tier maps to (e.g. `opus → gpt-5.5`). Each stage is flagged
-`ok` / `warn` / `error` based on the resolved adapter's health.
+`ok` / `warn` / `error` based on the resolved adapter's health; a usable
+adapter with warnings flags its stages `warn`.
 
 "Re-run checks" recomputes the report in place.
 

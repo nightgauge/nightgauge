@@ -683,20 +683,28 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 		riskDir := operatorInstallRisk
 		go func() {
 			defer close(operatorInstallWatchdogDone)
+			var end operatorInstallWatchdogEnd
+			if observe := operatorInstallWatchdogObserver; observe != nil {
+				defer func() { observe(true, bound, end) }()
+			}
 			deadline := time.After(bound)
 			ticker := time.NewTicker(openCodeOperatorInstallPollInterval)
 			defer ticker.Stop()
 			for {
 				select {
 				case <-firstOutput:
+					end = operatorInstallWatchdogEndOutput
 					return
 				case <-stopOperatorInstallWatchdog:
+					end = operatorInstallWatchdogEndStopped
 					return
 				case <-ticker.C:
 					if opencodeplugin.OperatorInstallSatisfied(riskDir) {
+						end = operatorInstallWatchdogEndSatisfied
 						return
 					}
 				case <-deadline:
+					end = operatorInstallWatchdogEndTimedOut
 					operatorInstallTimedOut.Store(true)
 					killProcessTreeUntilGone(cmd.Process, openCodeHandshakeKillWindow)
 					return
@@ -704,6 +712,9 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 			}
 		}()
 	} else {
+		if observe := operatorInstallWatchdogObserver; observe != nil && openCode != nil {
+			observe(false, 0, operatorInstallWatchdogEndNone)
+		}
 		close(operatorInstallWatchdogDone)
 	}
 	eachLine := func(r io.Reader, name string, onLine func([]byte), onOversize func(head, tail []byte)) {
@@ -1563,6 +1574,48 @@ func operatorInstallStallClassified(e operatorInstallStallEvidence) bool {
 // watchdog waits. A variable, not a constant, so a test can shorten it the
 // same way openCodeOperatorInstallWaitBound already is.
 var openCodeOperatorInstallPollInterval = 1500 * time.Millisecond
+
+// operatorInstallWatchdogEnd names what ended an armed operator-install-risk
+// watchdog.
+type operatorInstallWatchdogEnd int
+
+const (
+	// operatorInstallWatchdogEndNone: the watchdog never armed.
+	operatorInstallWatchdogEndNone operatorInstallWatchdogEnd = iota
+	// operatorInstallWatchdogEndOutput: the child's first line arrived.
+	operatorInstallWatchdogEndOutput
+	// operatorInstallWatchdogEndStopped: the readers finished (the child
+	// exited or was killed by something else) and RunStage stopped it.
+	operatorInstallWatchdogEndStopped
+	// operatorInstallWatchdogEndSatisfied: the directory became satisfied.
+	operatorInstallWatchdogEndSatisfied
+	// operatorInstallWatchdogEndTimedOut: the bound fired and the watchdog
+	// killed the stage.
+	operatorInstallWatchdogEndTimedOut
+)
+
+func (e operatorInstallWatchdogEnd) String() string {
+	switch e {
+	case operatorInstallWatchdogEndOutput:
+		return "output"
+	case operatorInstallWatchdogEndStopped:
+		return "stopped"
+	case operatorInstallWatchdogEndSatisfied:
+		return "satisfied"
+	case operatorInstallWatchdogEndTimedOut:
+		return "timed out"
+	}
+	return "never armed"
+}
+
+// operatorInstallWatchdogObserver is a test seam, nil in production. When
+// set, every OpenCode RunStage reports once whether the operator-install-risk
+// watchdog armed, the bound it armed with (after the stage-deadline cap), and
+// what ended it (#2269). An armed watchdog reports from its own goroutine,
+// before RunStage stops waiting for it. Tests assert the mechanism through it
+// instead of a wall-clock ceiling over the whole RunStage, which a loaded
+// machine can exceed with no watchdog involved at all.
+var operatorInstallWatchdogObserver func(armed bool, bound time.Duration, end operatorInstallWatchdogEnd)
 
 // killProcessTreeUntilGone repeatedly signals proc's whole process group
 // with SIGKILL, spaced a short interval apart, for the full window — it

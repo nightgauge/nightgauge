@@ -39,7 +39,7 @@ func rowWarn(item CheckItem, warning string) legacyOutcome {
 	return o
 }
 
-// builtinChecks is filled by the blocks below, in source order.
+// builtinChecks is filled by each check group's init, in file order.
 var builtinChecks []Check
 
 // legacy registers a pre-registry check through the adapter.
@@ -124,35 +124,4 @@ func (e *Env) recordItem(id string, item CheckItem) {
 		e.items = map[string]CheckItem{}
 	}
 	e.items[id] = item
-}
-
-// ---------------------------------------------------------------------------
-// #2092 — adapter health
-// ---------------------------------------------------------------------------
-
-func init() {
-	// Per-adapter health, only when --adapters names adapters. An
-	// unhealthy adapter is a warning, never a blocker.
-	legacy("adapters", "Adapter health", "adapters", "NGD100", SeverityWarning, 30*time.Second, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			if len(env.Adapters) == 0 {
-				return legacyOutcome{}
-			}
-			health := CheckAdapters(env.Adapters)
-			env.setAdapters(health)
-			o := legacyRow(CheckItem{OK: true, Detail: fmt.Sprintf("%d adapter(s) checked", len(health))})
-			for _, a := range health {
-				if !a.OK {
-					detail := a.Remediation
-					if detail == "" {
-						detail = "adapter not ready"
-					}
-					o.warnings = append(o.warnings, fmt.Sprintf("adapter %q not ready: %s", a.Adapter, detail))
-				}
-				for _, w := range a.Warnings {
-					o.warnings = append(o.warnings, fmt.Sprintf("adapter %q: %s", a.Adapter, w))
-				}
-			}
-			return o
-		})
 }

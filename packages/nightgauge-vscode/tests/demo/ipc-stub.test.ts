@@ -10,8 +10,10 @@ import { describe, expect, it } from "vitest";
 import {
   BEFORE_FIRST_CASE,
   buildInventory,
+  driftProblems,
   parseLog,
   protocolVersionFromClient,
+  protocolVersionFromDaemon,
   resultTypesFromClient,
   type IpcInventory,
 } from "../../demo/ipc-inventory";
@@ -76,7 +78,14 @@ describe("demo daemon module graph is inert", () => {
       envReads.push(...[...source.matchAll(/process\.env\.(\w+)/g)].map((m) => m[1]));
       expect(source, file).not.toMatch(/process\.env\[/);
     }
-    expect(envReads).toEqual(["NIGHTGAUGE_DEMO_IPC_LOG"]);
+    // The request log, plus the scenario channel a binaryPath launch needs.
+    expect(envReads.sort()).toEqual([
+      "NIGHTGAUGE_DEMO_EVENT_LOG",
+      "NIGHTGAUGE_DEMO_IPC_LOG",
+      "NIGHTGAUGE_DEMO_SCENARIO",
+      "NIGHTGAUGE_DEMO_SPEED",
+      "NIGHTGAUGE_DEMO_START_FILE",
+    ]);
   });
 
   it("announces the protocol version the extension expects", () => {
@@ -112,8 +121,105 @@ describe("demo/ipc-stub.cjs protocol", () => {
     expect(entry.method).toBe("board.list");
     expect(entry.params).toEqual({ owner: "o", token: "<redacted>" });
     expect(entry.paramsShape).toEqual({ owner: "string", token: "string" });
+    expect(entry.answered).toBe(true);
     expect(typeof entry.ts).toBe("string");
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fails a one-shot CLI subcommand at once instead of serving", async () => {
+    const proc = spawn(process.execPath, [STUB, "worktree", "sweep", "--json"], {
+      env: { PATH: process.env.PATH, NIGHTGAUGE_DEMO_IPC_LOG: path.join(os.tmpdir(), "x.jsonl") },
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (c: Buffer) => (stdout += c.toString()));
+    proc.stderr.on("data", (c: Buffer) => (stderr += c.toString()));
+    const code = await new Promise((resolve) => proc.on("exit", resolve));
+    expect(code).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toMatch(/"worktree" is not available in demo mode/);
+  });
+});
+
+/** Send `methods` to a fresh daemon and return its request log. */
+async function logFor(methods: string[]): Promise<ReturnType<typeof parseLog>> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ipc-drift-test-"));
+  const log = path.join(dir, "log.jsonl");
+  const proc = spawn(process.execPath, [STUB, "serve"], {
+    env: { PATH: process.env.PATH, NIGHTGAUGE_DEMO_IPC_LOG: log },
+  });
+  methods.forEach((method, i) => proc.stdin.write(JSON.stringify({ id: i + 1, method }) + "\n"));
+  proc.stdin.end();
+  await new Promise((resolve) => proc.on("exit", resolve));
+  const entries = parseLog(fs.readFileSync(log, "utf8"));
+  fs.rmSync(dir, { recursive: true, force: true });
+  return entries;
+}
+
+describe("drift guard (#2109)", () => {
+  const version = protocolVersionFromClient(GENERATED);
+  const committed = JSON.parse(fs.readFileSync(INVENTORY, "utf8")) as IpcInventory;
+
+  it("passes when the daemon answers every method the extension called", async () => {
+    const entries = await logFor(committed.methods.map((m) => m.method));
+    expect(
+      driftProblems({
+        entries,
+        inventory: committed,
+        clientProtocolVersion: version,
+        daemonProtocolVersion: protocolVersionFromDaemon(graph.get(DAEMON) ?? ""),
+      })
+    ).toEqual([]);
+  });
+
+  it("names a method the daemon does not answer, and passes once it is gone", async () => {
+    // Stands in for the extension calling a method nobody taught the daemon.
+    const entries = await logFor(["board.list", "demo.unregisteredMethod"]);
+    expect(entries.find((e) => e.method === "demo.unregisteredMethod")?.answered).toBe(false);
+    const inventory = {
+      ...committed,
+      methods: [
+        ...committed.methods,
+        { ...committed.methods[0], method: "demo.unregisteredMethod" },
+      ],
+    };
+    const inputs = { clientProtocolVersion: version, daemonProtocolVersion: version };
+    const problems = driftProblems({ ...inputs, entries, inventory });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(
+      /called demo\.unregisteredMethod, which the demo daemon does not answer/
+    );
+    expect(
+      driftProblems({
+        ...inputs,
+        entries: entries.filter((e) => e.method !== "demo.unregisteredMethod"),
+        inventory,
+      })
+    ).toEqual([]);
+  });
+
+  it("names a called method the committed inventory does not list", () => {
+    const problems = driftProblems({
+      entries: [{ method: "board.counts", answered: true }],
+      inventory: { ...committed, methods: [] },
+      clientProtocolVersion: version,
+      daemonProtocolVersion: version,
+    });
+    expect(problems).toEqual([
+      expect.stringMatching(/board\.counts, which demo\/ipc-inventory\.json does not list/),
+    ]);
+  });
+
+  it("names a protocol version that differs from the extension's", () => {
+    const problems = driftProblems({
+      entries: [],
+      inventory: { ...committed, protocolVersion: version + 1 },
+      clientProtocolVersion: version,
+      daemonProtocolVersion: version - 1,
+    });
+    expect(problems).toHaveLength(2);
+    expect(problems.join("\n")).toMatch(/inventory.*records protocol/);
+    expect(problems.join("\n")).toMatch(/daemon announces protocol/);
   });
 });
 

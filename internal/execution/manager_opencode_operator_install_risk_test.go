@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -79,6 +80,48 @@ func withShortOperatorInstallPollInterval(t *testing.T, interval time.Duration) 
 	t.Cleanup(func() { openCodeOperatorInstallPollInterval = prev })
 }
 
+// operatorInstallWatchdogObservation is one report through
+// operatorInstallWatchdogObserver.
+type operatorInstallWatchdogObservation struct {
+	armed bool
+	bound time.Duration
+	end   operatorInstallWatchdogEnd
+}
+
+// observeOperatorInstallWatchdog records what the operator-install-risk
+// watchdog did during the test's RunStage, and calls onEnd (when non-nil)
+// from the watchdog's own goroutine the moment it ends (#2269). The tests
+// here assert that mechanism, not RunStage's wall time: spawning the fake,
+// git, provisioning and teardown all sit inside RunStage, and on a loaded
+// machine they alone outgrow any ceiling tight enough to tell "the watchdog
+// waited" from "the machine is slow". The returned function yields the
+// single report RunStage made; it is only valid once RunStage has returned,
+// which it does only after the watchdog has reported.
+func observeOperatorInstallWatchdog(t *testing.T, onEnd func(operatorInstallWatchdogEnd)) func() operatorInstallWatchdogObservation {
+	t.Helper()
+	var mu sync.Mutex
+	var seen []operatorInstallWatchdogObservation
+	prev := operatorInstallWatchdogObserver
+	operatorInstallWatchdogObserver = func(armed bool, bound time.Duration, end operatorInstallWatchdogEnd) {
+		mu.Lock()
+		seen = append(seen, operatorInstallWatchdogObservation{armed: armed, bound: bound, end: end})
+		mu.Unlock()
+		if onEnd != nil {
+			onEnd(end)
+		}
+	}
+	t.Cleanup(func() { operatorInstallWatchdogObserver = prev })
+	return func() operatorInstallWatchdogObservation {
+		t.Helper()
+		mu.Lock()
+		defer mu.Unlock()
+		if len(seen) != 1 {
+			t.Fatalf("RunStage reported the operator-install-risk watchdog %d times, want exactly once: %+v", len(seen), seen)
+		}
+		return seen[0]
+	}
+}
+
 // TestOpenCodeOperatorInstallRiskBoundedAndClassified is the round 6 AC's
 // manager test: a fake opencode that produces no output at all, dispatched
 // with a pre-existing, unsatisfied $HOME/.opencode (the shape the official
@@ -87,9 +130,9 @@ func withShortOperatorInstallPollInterval(t *testing.T, interval time.Duration) 
 // under the shortened watchdog bound, names the risk directory and #1787,
 // classifies as adapter_incompatible, and reaps the whole process group.
 // Deleting the watchdog (or the killProcessTreeUntilGone call it makes)
-// turns this red: the fake sleeps 30s longer than the bound, so a RunStage
-// that took anywhere near that long, or whose stderr carries no
-// adapter_incompatible marker, means the watchdog did not run.
+// turns this red: the watchdog must report that its own 500ms bound fired,
+// the stderr must carry the adapter_incompatible marker, and the fake's
+// process group must be gone although the fake sleeps 30s.
 //
 // #1787 gave a non-inheriting run its own per-run HOME, so a dispatch never
 // reads the operator's real $HOME/.opencode at all unless
@@ -106,6 +149,8 @@ func TestOpenCodeOperatorInstallRiskBoundedAndClassified(t *testing.T) {
 	_, pidFile := installOpenCodeFakeSilent(t, 30*time.Second)
 	withShortOperatorInstallWaitBound(t, 500*time.Millisecond)
 
+	watchdog := observeOperatorInstallWatchdog(t, nil)
+
 	workspace := openCodeWorkspace(t)
 	m := NewManager(workspace, adapters.NewOpenCodeAdapter())
 
@@ -121,21 +166,17 @@ func TestOpenCodeOperatorInstallRiskBoundedAndClassified(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 
-	started := time.Now()
 	var result *adapters.RunResult
 	stderr := captureStderr(t, func() {
 		result, err = m.RunStage(ctx, openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", runtime))
 	})
-	elapsed := time.Since(started)
 
-	// The ceiling separates "the watchdog ended it" from "the fake's 30s sleep
-	// or the 30s stage timeout ended it"; it is not a latency budget. RunStage's
-	// wall time also includes provisioning before the spawn and teardown after
-	// the kill, about 1.4s on an idle machine, and both grow with host load: a
-	// 5s ceiling failed at 6.7s under a loaded full `go test -race ./...`. The
-	// classification asserted below is what proves the watchdog fired.
-	if elapsed > 15*time.Second {
-		t.Fatalf("RunStage took %s; the 500ms watchdog bound must kill the stage long before the fake's 30s sleep or the stage's own 30s timeout", elapsed)
+	// The watchdog's own report, not RunStage's wall time, separates "the
+	// watchdog ended it" from "the fake's 30s sleep or the 30s stage timeout
+	// ended it" (#2269): wall time includes provisioning and teardown, which
+	// grow with host load.
+	if got := watchdog(); !got.armed || got.bound != 500*time.Millisecond || got.end != operatorInstallWatchdogEndTimedOut {
+		t.Fatalf("watchdog armed=%t bound=%s end=%s; want armed with the 500ms bound and ended by it timing out", got.armed, got.bound, got.end)
 	}
 
 	combined := stderr
@@ -184,11 +225,9 @@ func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 	}
 	_, pidFile := installOpenCodeFakeSilent(t, 120*time.Second)
 	// A watchdog bound far longer than the stage timeout below: without the
-	// execCtx-deadline cap, the watchdog would still be waiting when this
-	// test's own assertions run. The margins are wide (60s bound, 30s
-	// threshold) so a heavily loaded machine, where setup alone can take
-	// 10s+, still tells the 3s cap from the watchdog (#2212).
+	// execCtx-deadline cap, the watchdog would arm with the full 60s.
 	withShortOperatorInstallWaitBound(t, 60*time.Second)
+	watchdog := observeOperatorInstallWatchdog(t, nil)
 
 	workspace := openCodeWorkspace(t)
 	m := NewManager(workspace, adapters.NewOpenCodeAdapter())
@@ -199,22 +238,31 @@ func TestOpenCodeOperatorInstallRiskBoundByRemainingStageContext(t *testing.T) {
 	runtime := &state.RuntimeState{RunID: runID}
 
 	opts := openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", runtime)
-	// Leave enough headroom for pre-dispatch probes under full-suite load while
-	// keeping the stage deadline well below the watchdog's 60-second bound.
-	opts.Timeout = 3 * time.Second
+	// The stage deadline starts before the pre-dispatch probes and
+	// provisioning, so it has to outlast them on a loaded machine, or the
+	// fake never spawns and the watchdog never arms. The 3s this replaced
+	// left no room for that (#2269). 10s still sits far below the 60s bound
+	// the capped bound below is compared against.
+	opts.Timeout = 10 * time.Second
 
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
 
-	started := time.Now()
 	var result *adapters.RunResult
 	stderr := captureStderr(t, func() {
 		result, err = m.RunStage(ctx, opts)
 	})
-	elapsed := time.Since(started)
 
-	if elapsed > 30*time.Second {
-		t.Fatalf("RunStage took %s; a 3s stage timeout must cap the watchdog's 60s bound, not the other way round", elapsed)
+	// The mechanism, not the wall clock (#2269): the watchdog armed with a
+	// bound no longer than the stage's own timeout, never the 60s it was
+	// configured with. Either the watchdog's capped bound or the stage
+	// deadline's own kill may end the stall first (#1954); both classify.
+	got := watchdog()
+	if !got.armed || got.bound > opts.Timeout {
+		t.Fatalf("watchdog armed=%t bound=%s; want armed with a bound capped at the %s stage timeout, not its configured 60s", got.armed, got.bound, opts.Timeout)
+	}
+	if got.end != operatorInstallWatchdogEndTimedOut && got.end != operatorInstallWatchdogEndStopped {
+		t.Errorf("watchdog ended by %s; a silent fake can only end at the capped bound or the stage deadline", got.end)
 	}
 
 	combined := stderr
@@ -356,8 +404,13 @@ func TestOperatorInstallStallClassified(t *testing.T) {
 // this test's own assertion is that the watchdog's OWN, more specific
 // marker text (naming the operator directory / #1787) is absent, not that
 // the stage passes.
+//
+// opencode.inherit_user_config is on so the watchdog really arms: without
+// it, #1787's per-run HOME keeps $HOME/.opencode out of reach and this test
+// would pass without the watchdog ever running (#2269).
 func TestOpenCodeOperatorInstallRiskDoesNotMisclassifyAFastFailure(t *testing.T) {
 	home := isolateOpenCodeHome(t)
+	writeOpenCodeMachineConfig(t, openCodeMachineConfigInherited)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	if err := os.MkdirAll(filepath.Join(home, ".opencode", "bin"), 0o700); err != nil {
 		t.Fatal(err)
@@ -385,30 +438,37 @@ exit 7
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	// Bound and budget are a load-tolerant pair. Under the ci-local.sh
-	// 4-way load, spawning the fake and tearing its group down has been
-	// observed at ~3s all by itself, so a budget that sits near the bound
-	// makes the assertion a scheduler lottery (#1836). At a 10s bound the
-	// regression path — watchdog waits out the FULL bound, ~10s — stays far
-	// above the 5s budget, while the healthy path stays far below it even
-	// loaded. The marker-text check below remains the load-invariant half.
-	withShortOperatorInstallWaitBound(t, 10*time.Second)
+	// A bound longer than the stage timeout, so it is capped at the stage
+	// deadline: the healthy path never comes near it however loaded the
+	// machine is, and a watchdog that failed to stand down could only end by
+	// timing out, which the observation below reports. A RunStage wall-time
+	// ceiling cannot make that distinction: spawning the fake and tearing
+	// its group down alone has taken 3s to 9s under load (#1836, #2269).
+	withShortOperatorInstallWaitBound(t, 60*time.Second)
+	watchdog := observeOperatorInstallWatchdog(t, nil)
 
 	workspace := openCodeWorkspace(t)
 	m := NewManager(workspace, adapters.NewOpenCodeAdapter())
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	started := time.Now()
 	var result *adapters.RunResult
 	var err error
 	stderr := captureStderr(t, func() {
 		result, err = m.RunStage(ctx, openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", nil))
 	})
-	elapsed := time.Since(started)
 
-	if elapsed > 5*time.Second {
-		t.Fatalf("RunStage took %s; a process that exits immediately must not wait out any part of the watchdog bound", elapsed)
+	// The watchdog armed and stood down without waiting out any part of its
+	// bound: on the fake's first line, or when RunStage stopped it after the
+	// fake exited. Both are closed within moments of each other here, so
+	// which one its select saw first is the scheduler's choice, not a
+	// property of the watchdog.
+	got := watchdog()
+	if !got.armed {
+		t.Fatal("the operator-install-risk watchdog never armed, so this test proved nothing about it")
+	}
+	if got.end != operatorInstallWatchdogEndOutput && got.end != operatorInstallWatchdogEndStopped {
+		t.Fatalf("watchdog ended by %s; a process that exits immediately must stand it down, not wait out its bound", got.end)
 	}
 	combined := stderr
 	if result != nil {
@@ -430,15 +490,17 @@ exit 7
 // lockfile shape depsdata/opencode-ai-plugin-1.18.30.tar.gz's own
 // package-lock.json takes — depsdata/README.md), standing in for OpenCode's
 // own real install completing in the background — no registry ever touched
-// — then stays silent — no step_start, nothing at all — for sleep,
-// comfortably longer than the shortened watchdog bound any test here sets,
-// before finally printing one harmless, non-NDJSON line and exiting 0. Never
+// — then stays silent — no step_start, nothing at all — until release
+// exists (or about 20s pass), before finally printing one harmless,
+// non-NDJSON line and exiting 0. Waiting on release rather than a fixed
+// sleep lets a test hold the child silent exactly until the watchdog has
+// stood down, whatever the machine's load (#2269). Never
 // emitting a step_start/tool_use-shaped line keeps the PRE-EXISTING plugin
 // handshake check out of this test's own assertions: VerifyNotLate is a
 // no-op when no tool call was ever observed (firstToolUse.IsZero()), so any
 // classified failure recorded here can only be the operator-install-risk
 // watchdog's own.
-func installOpenCodeFakeSatisfiesThenSilent(t *testing.T, operatorDir string, sleep time.Duration) {
+func installOpenCodeFakeSatisfiesThenSilent(t *testing.T, operatorDir, release string) {
 	t.Helper()
 	dir := t.TempDir()
 	script := fmt.Sprintf(`#!/bin/sh
@@ -446,14 +508,15 @@ func installOpenCodeFakeSatisfiesThenSilent(t *testing.T, operatorDir string, sl
 mkdir -p %q
 printf '{"dependencies":{"@opencode-ai/plugin":"%s"}}' > %q
 printf '{"packages":{"":{"dependencies":{"@opencode-ai/plugin":"%s"}}}}' > %q
-sleep %d
+i=0
+while [ ! -e %q ] && [ $i -lt 400 ]; do sleep 0.05; i=$((i+1)); done
 echo not-json-output
 `,
 		openCodeFakeVersion,
 		filepath.Join(operatorDir, "node_modules"),
 		opencodeplugin.DepsVersion, filepath.Join(operatorDir, "package.json"),
 		opencodeplugin.DepsVersion, filepath.Join(operatorDir, "package-lock.json"),
-		int(sleep.Seconds()),
+		release,
 	)
 	if err := os.WriteFile(filepath.Join(dir, "opencode"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
@@ -487,43 +550,55 @@ echo not-json-output
 // opencodeplugin.OperatorInstallSatisfied actually reads INTO the directory
 // (standing in for OpenCode's own real install completing
 // in the background — never a registry request) partway through, then stays
-// silent for far longer than the shortened bound before ever printing a
-// byte. Round 7's code stands down only on first output, so it would kill
-// this stage well before the fake's sleep ends — this test is red against
-// it. Round 8 also polls, read-only, whether the directory has become
-// satisfied, and stands down the instant it has, so the stage here must run
-// to completion, never killed by this watchdog.
+// silent until the watchdog has stood down. Round 7's code stands down only
+// on first output, so its watchdog could never report standing down on
+// satisfaction, and the silent fake would only speak after its own ~20s
+// wait — this test is red against it. Round 8 also polls, read-only,
+// whether the directory has become satisfied, and stands down the instant
+// it has, so the stage here must run to completion, never killed by this
+// watchdog.
+//
+// The fake is held silent until the watchdog reports, not for a fixed
+// sleep against a short bound: on a loaded machine the fake's own file
+// writes could outlast a 500ms bound, and RunStage's wall time says nothing
+// about which of the watchdog's exits fired (#2269). The bound is capped at
+// the stage deadline, so only an unsatisfied, silent directory could ever
+// reach it.
+//
+// opencode.inherit_user_config is on so the watchdog really arms: without
+// it, #1787's per-run HOME keeps $HOME/.opencode out of reach.
 func TestOpenCodeOperatorInstallRiskStandsDownWhenDirectoryBecomesSatisfied(t *testing.T) {
 	home := isolateOpenCodeHome(t)
+	writeOpenCodeMachineConfig(t, openCodeMachineConfigInherited)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	operatorOpenCode := filepath.Join(home, ".opencode")
 	if err := os.MkdirAll(filepath.Join(operatorOpenCode, "bin"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	sleep := 2 * time.Second
-	installOpenCodeFakeSatisfiesThenSilent(t, operatorOpenCode, sleep)
-	withShortOperatorInstallWaitBound(t, 500*time.Millisecond)
+	release := filepath.Join(t.TempDir(), "release")
+	installOpenCodeFakeSatisfiesThenSilent(t, operatorOpenCode, release)
+	withShortOperatorInstallWaitBound(t, 60*time.Second)
 	withShortOperatorInstallPollInterval(t, 100*time.Millisecond)
+	watchdog := observeOperatorInstallWatchdog(t, func(operatorInstallWatchdogEnd) {
+		// Whatever ended the watchdog, let the fake finish; the assertion
+		// below says whether it was the satisfaction poll.
+		_ = os.WriteFile(release, nil, 0o600)
+	})
 
 	workspace := openCodeWorkspace(t)
 	m := NewManager(workspace, adapters.NewOpenCodeAdapter())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	started := time.Now()
 	var result *adapters.RunResult
 	var err error
 	stderr := captureStderr(t, func() {
 		result, err = m.RunStage(ctx, openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", nil))
 	})
-	elapsed := time.Since(started)
 
-	if elapsed < sleep {
-		t.Errorf("RunStage took only %s, less than the fake's own %s sleep: it was killed before the directory became satisfied", elapsed, sleep)
-	}
-	if elapsed > sleep+5*time.Second {
-		t.Fatalf("RunStage took %s; well past the fake's own %s sleep plus generous headroom", elapsed, sleep)
+	if got := watchdog(); !got.armed || got.end != operatorInstallWatchdogEndSatisfied {
+		t.Fatalf("watchdog armed=%t end=%s; want armed for the unsatisfied directory and stood down by it becoming satisfied", got.armed, got.end)
 	}
 	combined := stderr
 	if result != nil {
@@ -545,11 +620,16 @@ func TestOpenCodeOperatorInstallRiskStandsDownWhenDirectoryBecomesSatisfied(t *t
 // for a slow first model token, e.g. a local model prefilling a large
 // prompt) is never mistaken for a hung install and never killed. Round 7's
 // code armed the watchdog for a satisfied directory too (it dropped round
-// 6's exemption entirely) and stood down only on first output, so it would
-// kill this stage well before the fake's sleep ends — this test is red
-// against it.
+// 6's exemption entirely), so its watchdog reports arming — this test is
+// red against it.
+//
+// opencode.inherit_user_config is on, so it is the directory's being
+// satisfied that keeps the watchdog unarmed: without the setting, #1787's
+// per-run HOME keeps $HOME/.opencode out of reach whatever it holds, and
+// this test would pass however the satisfied check behaved (#2269).
 func TestOpenCodeOperatorInstallRiskNeverArmsForAnAlreadySatisfiedDirectory(t *testing.T) {
 	home := isolateOpenCodeHome(t)
+	writeOpenCodeMachineConfig(t, openCodeMachineConfigInherited)
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	operatorOpenCode := filepath.Join(home, ".opencode")
 	// The full four-file archive (a superset of what OperatorInstallSatisfied
@@ -557,33 +637,36 @@ func TestOpenCodeOperatorInstallRiskNeverArmsForAnAlreadySatisfiedDirectory(t *t
 	// operator already ran opencode themselves" — never written by
 	// production code for an operator-owned directory (opencode_plugin_deps.go's
 	// operatorInstallRisk doc comment).
-	if err := opencodeplugin.WriteDependencies(operatorOpenCode); err != nil {
-		t.Fatal(err)
+	//
+	// With the inherit setting the run also points OPENCODE_CONFIG_DIR at the
+	// operator's own XDG OpenCode directory, which operatorInstallRisk checks
+	// the same way, so an operator who already ran opencode has both.
+	for _, dir := range []string{operatorOpenCode, filepath.Join(home, ".config", "opencode")} {
+		if err := opencodeplugin.WriteDependencies(dir); err != nil {
+			t.Fatal(err)
+		}
 	}
-	sleep := 2 * time.Second
-	installOpenCodeFakeSlowButHarmless(t, sleep)
+	installOpenCodeFakeSlowButHarmless(t, time.Second)
 	withShortOperatorInstallWaitBound(t, 500*time.Millisecond)
 	withShortOperatorInstallPollInterval(t, 100*time.Millisecond)
+	watchdog := observeOperatorInstallWatchdog(t, nil)
 
 	workspace := openCodeWorkspace(t)
 	m := NewManager(workspace, adapters.NewOpenCodeAdapter())
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	started := time.Now()
 	var result *adapters.RunResult
 	var err error
 	stderr := captureStderr(t, func() {
 		result, err = m.RunStage(ctx, openCodeStageOptions("lmstudio/qwen/qwen3.8-27b", nil))
 	})
-	elapsed := time.Since(started)
 
-	if elapsed < sleep {
-		t.Errorf("RunStage took only %s, less than the fake's own %s sleep: a satisfied directory must never arm the watchdog at all", elapsed, sleep)
-	}
-	if elapsed > sleep+5*time.Second {
-		t.Fatalf("RunStage took %s; well past the fake's own %s sleep plus generous headroom", elapsed, sleep)
+	// The watchdog's own report, not RunStage's wall time (#2269): a
+	// satisfied directory must never arm it.
+	if got := watchdog(); got.armed {
+		t.Fatalf("watchdog armed (bound %s, ended by %s) for an already-satisfied directory; it must never arm at all", got.bound, got.end)
 	}
 	combined := stderr
 	if result != nil {

@@ -21,6 +21,11 @@ and this project adheres to
 
 ### Fixed
 
+- The dashboard's first Refresh now shows health metrics when run history
+  exists, instead of "Run your first pipeline" until a second Refresh.
+- The Adapter Doctor shows each adapter's warnings and notes from
+  `nightgauge doctor`, marks a usable adapter with warnings `!`, and no longer
+  reports a gated OpenCode as "not on PATH".
 - Stage cost for Claude Sonnet 5 is now priced at $2/$10 per MTok instead of
   $3/$15, because the announced price increase was cancelled.
 

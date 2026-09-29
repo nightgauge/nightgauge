@@ -410,11 +410,12 @@ func openCodeVariantsForModel(settings config.OpenCodeConfig, model string) []st
 // and the prompt goes on stdin (UsesStdin). The adapter never emits --auto,
 // --yolo, --dangerously-skip-permissions, --share or --mdns: approval comes
 // from a permission map that only allows or denies (ADR-022 § 9), sessions are
-// never shared, and nothing binds a discoverable listener. MaxTurns and
-// MaxTokens, which OpenCode has no flag for, reach it through the per-run
-// config as the steps cap and the endpoint's output limit
-// (BuildOpenCodeConfig); Effort, AllowedTools and CostBudget are not mapped
-// yet, and ADR-022 names the change that maps each.
+// never shared, and nothing binds a discoverable listener. MaxTurns,
+// MaxTokens and AllowedTools, which OpenCode has no flag for, reach it through
+// the per-run config as the steps cap, the endpoint's output limit and the
+// permission map (BuildOpenCodeConfig); Effort becomes --variant below, for a
+// model that declares that variant; CostBudget is the manager's cost
+// watchdog, since OpenCode takes no cost cap (ADR-022 § The command).
 //
 // The environment includes opts.RunRoot's, which points OpenCode at the
 // run's own root and carries the per-run config as OPENCODE_CONFIG_CONTENT

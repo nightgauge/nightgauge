@@ -271,11 +271,14 @@ write target** for any non-ephemeral key. File:
 The `opencode` adapter builds each run's OpenCode config from this block
 ([ADR-022](decisions/022-opencode-multi-provider-adapter.md) § 7), and
 `nightgauge opencode config` prints the same config for the SDK path. It lives
-in `~/.nightgauge/config.yaml` and nowhere else: the loader
-(`config.LoadOpenCodeConfig`) reads the machine file alone, never the
-checkout's `config.local.yaml`, and refuses a dispatch whose committed project
-config declares `opencode:`, naming the machine file. An unknown key in the
-block is an error.
+in the machine-tier config file and nowhere else: `$NIGHTGAUGE_CONFIG_HOME/config.yaml`
+when that variable is set, else `$XDG_CONFIG_HOME/nightgauge/config.yaml`, else
+the platform default (`~/.nightgauge/config.yaml` on macOS,
+`~/.config/nightgauge/config.yaml` on Linux). The loader
+(`config.LoadOpenCodeConfig`) reads that file alone, never the checkout's
+`config.local.yaml`, and refuses a dispatch whose committed project config
+declares `opencode:`. Every OpenCode refusal that says where to set a key names
+the file as resolved on that machine. An unknown key in the block is an error.
 
 ```yaml
 opencode:
@@ -325,6 +328,15 @@ opencode:
   config still can: a hosted model's limits, and the server and model of a
   hosted provider other than `anthropic`.
 
+  With this on, a dispatch reads what OpenCode loads from a config
+  directory, from your XDG OpenCode config directory
+  (`$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`) and from
+  `~/.opencode`: `opencode.json`, `opencode.jsonc`, and the `agent`,
+  `command`, `mode`, `plugin`, `tool` and `skill` directories. It does not
+  read `config.json`, the legacy TOML `config` file or the global
+  `AGENTS.md` there, because OpenCode loads none of them from a config
+  directory. A managed OpenCode config on the machine is read as well.
+
   Nightgauge never writes into your own OpenCode config directory
   (`~/.opencode`, or your XDG OpenCode config directory once this is on) —
   see [ADR-022 § "Nightgauge OpenCode
@@ -335,8 +347,11 @@ opencode:
   while: a dispatch touching either directory bounds that wait and fails the
   stage `adapter_incompatible` rather than hanging, naming the directory.
 
-- Timeouts are durations such as `3m`; a bare number is read as nanoseconds
-  and refused.
+- Timeouts are durations with a unit, such as `3m`. An unquoted bare number
+  such as `180000` is not a duration: the loader fails with
+  `invalid duration "180000": time: missing unit`, and the whole `opencode:`
+  block fails to load until it is fixed. A duration under a second, such as
+  `500ms`, is refused as a unit mistake.
 
 #### Several servers, or any OpenAI-compatible server: `endpoints[]`
 

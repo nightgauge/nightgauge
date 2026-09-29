@@ -1471,11 +1471,12 @@ start writing.
 is supplied by the caller, and each caller must answer "is my set authoritative
 for the runs whose directories I am about to delete?"
 
-| Caller                            | In-flight source                                                                          |
-| --------------------------------- | ----------------------------------------------------------------------------------------- |
-| Autonomous reconcile              | `state.Running` — authoritative for the runs this process dispatched.                     |
-| `nightgauge worktree sweep`       | `state.ActiveIssuesFromSnapshots`, per root — the machine-wide snapshot scan (see below). |
-| `nightgauge doctor` (report-only) | None, by design: substitutes `staleWorktreeAge` and never removes anything.               |
+| Caller                                              | In-flight source                                                                                             |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Autonomous reconcile                                | `state.Running` — authoritative for the runs this process dispatched.                                        |
+| `nightgauge worktree sweep`                         | `state.ActiveIssuesFromSnapshots`, per root — the machine-wide snapshot scan (see below).                    |
+| `nightgauge doctor` (scan)                          | None, by design: substitutes `staleWorktreeAge` and never removes anything.                                  |
+| `nightgauge doctor --fix` (`worktree.sweep` remedy) | `state.ActiveIssuesFromSnapshots`, per root, re-read at apply time; removes only the finding's own worktree. |
 
 **The CLI's in-flight set comes from the runtime snapshots** (#410). Before that
 it passed nothing, so `active-run` was structurally unreachable from the command
@@ -5755,6 +5756,27 @@ Per adapter the doctor reports:
 For `codex`, an `mcp` sub-object reports whether `$CODEX_HOME/config.toml` exists
 and whether the nightgauge MCP managed block is present.
 
+Every row can also carry:
+
+| Field      | Meaning                                                                                                          |
+| ---------- | ---------------------------------------------------------------------------------------------------------------- |
+| `warnings` | Findings that leave the adapter usable but that the operator should act on; each one is also a report warning     |
+| `notes`    | Facts a reader of the row needs, such as the directories a run uses; they never change the verdict               |
+| `opencode` | The `opencode` row's own section, absent on every other row (below)                                              |
+
+A row's `warnings` degrade the verdict on their own: a row with `ok: true` and
+one warning still makes the run exit 1. The `opencode` section reports
+`enabled` (whether `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is set), `max_tested`
+and `floor_policy` from the compat manifest, `pinned` (whether
+`opencode.binary` pins the binary), `last_dispatch_version`, the run's `dirs`,
+the `offline` posture, the `endpoints` readiness by endpoint id, and the
+`stored_logins` OpenCode holds, by source and never their content. While
+`enabled` is `false` no other OpenCode check runs, so `installed: false` on
+that row says nothing about whether `opencode` is on `PATH`; the remediation
+names the gate. The warnings the `opencode` row reports include a stored
+subscription or OAuth login and a context limit clamped to the window a model
+server has loaded.
+
 #### CLI catalog drift detection (#551, #604)
 
 `cli`-kind adapters that wire a catalog probe (grok, via `grok models`) get an
@@ -7532,17 +7554,29 @@ and when a pipeline run whose stages shared a root ends, as the Go scheduler
 deletes the root at every terminal outcome (ADR-022 § 22).
 
 It exits 1, with nothing on stdout, wherever the adapter refuses a dispatch
-before spawning: without `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1`, a model that is
-not `<provider>/<model>`, an `anthropic/` model while `ANTHROPIC_API_KEY` is
-unset, an `anthropic/` model OpenCode's bundled catalog does not list or one
-of its fast-mode entries (such as `anthropic/claude-opus-5-fast`, whose served
-model the per-run config cannot pin), a model on a forge or cloud platform
-provider (such as
-`github-copilot/*`), a provider key that is neither a declared endpoint nor
-one OpenCode knows, an endpoint limit that is 0 or missing, a `base_url` that
-is not `http`/`https` or carries credentials, an `opencode:` block in the
-worktree's committed config, and, unless `opencode.inherit_user_config` is on,
-a `~/.opencode` holding config or managed OpenCode config on the machine.
+before spawning:
+
+- **Worktree:** an `opencode:` block in the worktree's committed config.
+- **Credentials:** an `anthropic/` model while `ANTHROPIC_API_KEY` is unset,
+  or while it holds a value OpenCode cannot paste into its config text; a
+  model on a forge or cloud platform provider (such as `github-copilot/*`).
+- **Gate:** `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` is not set.
+- **Binary and version policy (ADR-022 § 20):** an `opencode.binary` pin
+  that is not an absolute path, or that names something that cannot be run,
+  is not a file or is not executable; no pin and no `opencode` on `PATH`; a
+  version that cannot be read, or one below the manifest's `fail_closed`
+  floor. Each names the managed install as its remedy. A version newer than
+  the manifest's `max_tested` is never refused or warned about.
+- **Model:** a model that is not `<provider>/<model>`; an `anthropic/` model
+  OpenCode's bundled catalog does not list, or one of its fast-mode entries
+  (such as `anthropic/claude-opus-5-fast`, whose served model the per-run
+  config cannot pin); a provider key that is neither a declared endpoint nor
+  one OpenCode knows.
+- **Endpoints:** an endpoint limit that is 0 or missing; a `base_url` that is
+  not `http`/`https` or carries credentials.
+- **Machine config:** unless `opencode.inherit_user_config` is on, managed
+  OpenCode config on the machine. A populated `~/.opencode` is no longer
+  refused: a run that does not inherit gets its own `HOME`.
 
 ### knowledge — Knowledge Base Operations
 

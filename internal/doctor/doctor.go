@@ -243,8 +243,9 @@ func ExitCodeFor(s Summary) int {
 	}
 }
 
-// RedactFinding passes a finding's text and evidence through the shared
-// config redactor (ADR-025 § 8).
+// RedactFinding passes a finding's text, evidence and remedy text through the
+// shared config redactor (ADR-025 § 8). It returns a copy; the input's
+// remedies are not modified.
 func RedactFinding(f Finding) Finding {
 	f.Title = config.RedactSecretString(f.Title)
 	f.Cause = config.RedactSecretString(f.Cause)
@@ -252,9 +253,11 @@ func RedactFinding(f Finding) Finding {
 	if f.Evidence == nil {
 		f.Evidence = map[string]string{}
 	}
-	if f.Remedies == nil {
-		f.Remedies = []Remedy{}
+	remedies := make([]Remedy, len(f.Remedies))
+	for i, r := range f.Remedies {
+		remedies[i] = redactRemedy(r)
 	}
+	f.Remedies = remedies
 	return f
 }
 

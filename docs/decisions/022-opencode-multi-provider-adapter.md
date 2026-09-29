@@ -302,11 +302,13 @@ that choice for the operator, the implicit crossing § Endpoints forbids for
 failover. #1614 resolves a band only against a provider the operator
 configured (§ 7).
 
-`RunOptions` fields OpenCode has no flag for are not mapped yet, and each has
-an owner: `AllowedTools` becomes the permission map (#1638), `Effort` becomes
-`--variant` (#1643), `MaxTurns` becomes a steps cap and `MaxTokens` becomes
-provider limits in the per-run config (#1625), and `CostBudget` becomes the
-USD watchdog (#1630).
+The `RunOptions` fields OpenCode has no flag of its own for are mapped
+elsewhere: `AllowedTools` becomes the permission map in the per-run config
+(#1638), `Effort` becomes `--variant` for a model that declares that variant
+(#1643), `MaxTurns` becomes a steps cap and `MaxTokens` becomes the
+endpoint's output limit in the per-run config (#1625), and `CostBudget` is
+enforced by the manager's USD watchdog, since OpenCode takes no cost cap
+(#1630).
 
 ### 1. Provider derivation and normalization
 
@@ -1036,7 +1038,9 @@ reports it `non_loopback: true`, as it does every hosted provider's model.
   below); a repository's `opencode.json` can still add a server of its own,
   which OpenCode starts beside these, until the tamper gate closes that route
   (#1638), and until then the tamper-gate warning line says so.
-- **`--pure` is never passed.** It would also drop the Nightgauge plugin.
+- **`--pure` is never passed to the stage's `opencode run`.** It would also
+  drop the Nightgauge plugin. The processes that read a stage's usage after it
+  exits are another matter: `db` and `export` run with `--pure` (§ 22).
   Plugins are controlled by the per-run `plugin` list (the Nightgauge plugin
   and nothing else) and `OPENCODE_DISABLE_DEFAULT_PLUGINS=1`. Observed by
   #1632, the per-run list controls them only while project config is
@@ -1395,7 +1399,14 @@ of stored logins, and a run reads neither:
 This is not a pending default. A pipeline run is automated work billed per
 token against a key the operator can audit and revoke per machine, and
 reversing it takes a superseding ADR. Every other hosted provider likewise
-authenticates with its own API-key variable from the environment.
+authenticates with its own API-key variable from the environment, with one
+exception: OpenCode's own hosted providers, `opencode` and `opencode-go`, read
+`OPENCODE_API_KEY`, which is withheld with every other inherited `OPENCODE_*`
+variable (§ 8). A dispatch to one of their models therefore runs with no key.
+It is not refused before spawn, because OpenCode serves some of those models
+with no key and Nightgauge cannot tell them apart; a model that needs the key
+fails provider authentication after spawn, and a 401 classifies as
+`adapter_auth_failed`.
 
 **Platform providers are refused** (#1625). The forge tokens and the cloud
 platform credentials stay in every run for the stage's tools (§ 8), and
@@ -1696,10 +1707,12 @@ removal.
   `.opencode/` it writes there and installs that config's dependencies, and it
   loads that directory's plugins, which a stage can write into its worktree
   with the edit tool alone. Every process the parser starts (`--version`,
-  `db`, `export`) therefore runs from the run's root, never the worktree, with
-  `--pure`, and with only `PATH`, `HOME`, `TMPDIR`, the four XDG variables
-  and the `OPENCODE_DISABLE_*` switches in its environment: no forge token,
-  provider key or server password. A stage the operator stopped starts none of
+  `db`, `export`) therefore runs from the run's root, never the worktree, and
+  with only `PATH`, `HOME`, `TMPDIR`, the four XDG variables and the
+  `OPENCODE_DISABLE_*` switches in its environment: no forge token, provider
+  key or server password. `db` and `export` also run with `--pure`;
+  `--version` runs without it, since it only prints the binary's version and
+  its result is cached per binary path and modification time. A stage the operator stopped starts none of
   them; its usage is the stream's, marked partial.
 - **Stderr.** `--print-logs --log-level ERROR` limits OpenCode's log to
   errors. Every line the child prints, stderr and stdout alike, is redacted of
@@ -1964,8 +1977,11 @@ What changes:
   retried, and a retry would let the model, or issue text that asks for the
   file, loop the issue. The remediation names the guard, asks whether the
   issue text sent the stage there, and never loosens a rule that guards
-  secret files. Nightgauge generates no permission map yet (#1638), so the
-  guard is OpenCode's default and nothing Nightgauge writes changes it.
+  secret files. When this was written Nightgauge generated no permission map
+  (#1638), so the guard was OpenCode's default. The map #1815 shipped holds
+  only `allow` and `deny` and denies `*.env` and `*.env.*` in its own
+  backstop, so an `ask` that rejects a granted tool now comes from OpenCode
+  config outside the map.
 
 ## Canary tooling corrections (amendment 2026-09-14, round 4)
 

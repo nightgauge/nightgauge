@@ -147,10 +147,7 @@ type OpenCodeTimeouts struct {
 // Unknown keys inside the block are an error, so a misspelled key is reported
 // rather than read as missing.
 func LoadOpenCodeConfig(worktreeDir string) (OpenCodeConfig, error) {
-	machinePath, pathErr := machineConfigPathFn()
-	if pathErr != nil {
-		machinePath = filepath.Join("~", ".nightgauge", "config.yaml")
-	}
+	machinePath := MachineConfigFile()
 	if worktreeDir != "" {
 		project := filepath.Join(worktreeDir, ".nightgauge", "config.yaml")
 		data, err := os.ReadFile(project)

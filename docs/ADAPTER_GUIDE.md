@@ -630,8 +630,10 @@ there is no bare-id fallback. The `<provider>` is the first path segment,
 split on the first `/`: `lmstudio/qwen/qwen3.8-27b` is provider key
 `lmstudio`, model `qwen/qwen3.8-27b`; `anthropic/claude-sonnet-5` is provider
 key `anthropic`, model `claude-sonnet-5`. A local model server is declared as
-a named endpoint in the machine tier (`~/.nightgauge/config.yaml`, never the
-committed project config):
+a named endpoint in the machine-tier config file (`~/.nightgauge/config.yaml`
+on macOS; see
+[SETTINGS_ARCHITECTURE.md § The `opencode` block](SETTINGS_ARCHITECTURE.md#the-opencode-block)
+for how the path resolves), never in the committed project config:
 
 ```yaml
 opencode:
@@ -656,6 +658,19 @@ stripped before the environment this ADR sets is added — including
 holds is never available to a dispatch. A subscription or OAuth login is
 never used for `anthropic/*`; the only credential is `ANTHROPIC_API_KEY`.
 
+**`OPENCODE_API_KEY` is withheld too, so `opencode/` and `opencode-go/`
+models get no key.** OpenCode's own hosted providers, `opencode` and
+`opencode-go`, read their key from `OPENCODE_API_KEY`. Because every inherited
+`OPENCODE_*` variable is withheld, a dispatch to `-m opencode/<model>` or
+`-m opencode-go/<model>` never receives it: these are the only hosted
+providers whose own API-key variable a run does not get (ADR-022 § 17). The
+dispatch is not refused, because OpenCode serves some of these providers'
+models with no key, and Nightgauge cannot tell those from the paid ones before
+spawn. A model that needs the key fails provider authentication after spawn,
+with OpenCode's own error; a 401 classifies as `adapter_auth_failed`. Dispatch a paid model through a
+provider with a key variable of its own, such as `anthropic/*` with
+`ANTHROPIC_API_KEY`.
+
 **Headless permission semantics.** OpenCode auto-rejects a permission that
 resolves to `ask`: the tool call fails, the run ends after that step, and the
 process **exits 0** — a silent stop that looks like success (observed on opencode 1.18.30). Nightgauge's
@@ -679,12 +694,13 @@ its hidden aliases (observed on opencode 1.18.30) are never emitted; approval is
 
 **Troubleshooting:**
 
-| Problem                                   | Solution                                                                            |
-| ----------------------------------------- | ----------------------------------------------------------------------------------- |
-| Dispatch refused, gate not enabled        | Set `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` where the pipeline runs                    |
-| `anthropic/*` refused                     | Set `ANTHROPIC_API_KEY`; a subscription or OAuth login is never accepted here       |
-| Stage fails on an auto-rejected tool call | Widen the stage's allowed tools so the permission map generates `allow`, not `deny` |
-| CLI not found                             | `npm install -g opencode-ai`, or pin `opencode.binary` to an absolute path          |
+| Problem                                    | Solution                                                                            |
+| ------------------------------------------ | ----------------------------------------------------------------------------------- |
+| Dispatch refused, gate not enabled         | Set `NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1` where the pipeline runs                    |
+| `anthropic/*` refused                      | Set `ANTHROPIC_API_KEY`; a subscription or OAuth login is never accepted here       |
+| `opencode/*` or `opencode-go/*` auth fails | `OPENCODE_API_KEY` is always withheld; use a provider with its own key variable     |
+| Stage fails on an auto-rejected tool call  | Widen the stage's allowed tools so the permission map generates `allow`, not `deny` |
+| CLI not found                              | `npm install -g opencode-ai`, or pin `opencode.binary` to an absolute path          |
 
 **Environment Variables:**
 
@@ -693,6 +709,7 @@ its hidden aliases (observed on opencode 1.18.30) are never emitted; approval is
 | `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` | Must be exactly `1` to allow any dispatch                                   |
 | `NIGHTGAUGE_MODEL`                 | The `<provider>/<model>` this dispatch sends on `-m`                        |
 | `ANTHROPIC_API_KEY`                | Required for any `anthropic/*` model; no other Anthropic credential is read |
+| `OPENCODE_API_KEY`                 | Never passed to a dispatch, like every inherited `OPENCODE_*` variable      |
 
 Step-by-step LM Studio and Ollama setup:
 [MULTI_BACKEND_SETUP.md § Local models through OpenCode](MULTI_BACKEND_SETUP.md#local-models-through-opencode-agentic).

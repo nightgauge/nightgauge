@@ -74,7 +74,9 @@ export class TelemetryStore {
    * This is the recovery path when the index is missing, corrupt, or stale.
    */
   async rebuildIndex(): Promise<HistoryIndex> {
-    const allRecords = await ExecutionHistoryReader.readAll(this.workspaceRoot);
+    // Fresh: a rebuild runs because the files changed, so a cached listing
+    // from before the change would be written back as a current index (#2274).
+    const allRecords = await ExecutionHistoryReader.readAll(this.workspaceRoot, { fresh: true });
     // Collapse duplicate run records for a run to the single richest one before
     // projecting to index entries, so rebuilding from the append-only JSONL
     // source of truth yields exactly one entry per run (Issue #313).

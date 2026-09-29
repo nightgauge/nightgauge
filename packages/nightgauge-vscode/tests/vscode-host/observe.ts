@@ -34,6 +34,14 @@ export interface CapturedPanel {
    * (a tab click, a refresh button) without scripting the webview's DOM.
    */
   messageListeners: Array<(message: unknown) => unknown>;
+  /** Every message the extension posted to the webview, in order. */
+  posted: unknown[];
+  /**
+   * Every message the real webview sent the extension, in order. Calls a
+   * case makes through `messageListeners` are not recorded here, so this is
+   * the webview's own side of the protocol (a tab it actually activated).
+   */
+  received: unknown[];
 }
 
 export interface CapturedNotification {
@@ -165,6 +173,8 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
       createdAt: Date.now(),
       disposed: false,
       messageListeners: [],
+      posted: [],
+      received: [],
     };
     const webview = panel.webview;
     const subscribe = webview.onDidReceiveMessage.bind(webview);
@@ -173,8 +183,21 @@ function wrapCreateWebviewPanel(original: CreateWebviewPanel): CreateWebviewPane
       thisArg?: unknown,
       disposables?: vscode.Disposable[]
     ) => {
-      record.messageListeners.push(thisArg ? listener.bind(thisArg) : listener);
-      return subscribe(listener, thisArg, disposables);
+      const bound = thisArg ? listener.bind(thisArg) : listener;
+      record.messageListeners.push(bound);
+      return subscribe(
+        (message: unknown) => {
+          record.received.push(message);
+          return bound(message);
+        },
+        undefined,
+        disposables
+      );
+    };
+    const post = webview.postMessage.bind(webview);
+    (webview as { postMessage: unknown }).postMessage = (message: unknown) => {
+      record.posted.push(message);
+      return post(message);
     };
     panel.onDidDispose(() => {
       record.disposed = true;
