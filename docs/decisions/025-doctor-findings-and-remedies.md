@@ -85,11 +85,11 @@ follows. `NGD000` is reserved for "check could not complete" (timeout or interna
 | NGD006 | `scopes`                 | blocker      | Required OAuth scopes missing             |
 | NGD007 | `rate_limit`             | warning      | Rate limit low                            |
 | NGD008 | `github_api_budget`      | warning      | Ledger budget near exhaustion             |
-| NGD009 | `github_identity`        | blocker      | Never printed today                       |
+| NGD009 | `github_identity`        | info         | Identity summary (#2091)                  |
 | NGD010 | `config`                 | blocker      | `.nightgauge/config.yaml` invalid         |
 | NGD011 | `project`                | blocker      | Project owner or number missing           |
 | NGD012 | `project_mapping`        | blocker      | Never printed today                       |
-| NGD013 | `board_population`       | warning      | Never printed today                       |
+| NGD013 | `board_population`       | blocker      | Failed or empty board read (#2091)        |
 | NGD014 | `complexity_model`       | warning      | Remedy: `outcome init`                    |
 | NGD015 | `ai_adapter`             | warning      | Zero usable adapters                      |
 | NGD016 | `compose_orphans`        | housekeeping |                                           |
@@ -101,7 +101,7 @@ follows. `NGD000` is reserved for "check could not complete" (timeout or interna
 | NGD022 | `serve_lease`            | warning      | A stale lease blocks `serve`              |
 | NGD023 | `ledger_daemon_coverage` | warning      |                                           |
 | NGD024 | `tracked_secrets`        | blocker      | Credential committed under `.nightgauge/` |
-| NGD025 | `ci_machine_credentials` | warning      | Machine-tier credential on a CI host      |
+| NGD025 | `ci_machine_credentials` | blocker      | Machine-tier credential on a CI host      |
 | NGD026 | `survival_backlog`       | info         |                                           |
 | NGD027 | `survival_coverage`      | info         |                                           |
 | NGD028 | `corpus_calibration`     | info         |                                           |
@@ -110,9 +110,12 @@ follows. `NGD000` is reserved for "check could not complete" (timeout or interna
 | NGD031 | `scheduled_automations`  | warning      | Status unverifiable (#2090)               |
 | NGD032 | `orphaned_processes`     | housekeeping | Non-nightgauge cwd in a worktree (#2089)  |
 | NGD033 | `complexity_model`       | info         | Model not yet created (#2090)             |
+| NGD034 | `scopes`                 | warning      | `read:org` missing (#2091)                |
+| NGD035 | `github_identity`        | warning      | App commit identity unset (#2091)         |
 
-Totals: 29 checks (the epic's "28" predates `ci_machine_credentials`): 11 blocker, 11 warning,
-6 housekeeping, 3 info. The migration sub-issues (#2089–#2092) may split a check into further
+Totals: 29 checks (the epic's "28" predates `ci_machine_credentials`): 12 blocker, 9 warning,
+6 housekeeping, 4 info, after #2091 set `github_identity` to info and `board_population` and
+`ci_machine_credentials` to blocker. The migration sub-issues (#2089–#2092) may split a check into further
 codes; they append codes and never renumber. Adapter health (`--adapters`, #2092) receives codes
 from `NGD100` upward.
 

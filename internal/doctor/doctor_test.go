@@ -2,6 +2,9 @@ package doctor
 
 import (
 	"context"
+	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -9,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 )
 
 // TestRunDoctor_NilClient verifies that a nil GitHub client causes required auth
@@ -30,7 +34,7 @@ func TestRunDoctor_NilClient(t *testing.T) {
 		t.Errorf("expected schema version V=%d, got %d", SchemaVersion, result.V)
 	}
 
-	authCheck, ok := result.Checks["github_auth"]
+	authCheck, ok := resultItemOK(result, "github_auth")
 	if !ok {
 		t.Fatal("expected github_auth check to be present")
 	}
@@ -42,10 +46,10 @@ func TestRunDoctor_NilClient(t *testing.T) {
 	}
 
 	// api_user and scopes should both be skipped (not OK)
-	if result.Checks["api_user"].OK {
+	if resultItem(result, "api_user").OK {
 		t.Error("expected api_user.OK=false when client is nil")
 	}
-	if result.Checks["scopes"].OK {
+	if resultItem(result, "scopes").OK {
 		t.Error("expected scopes.OK=false when client is nil")
 	}
 
@@ -78,7 +82,7 @@ func TestRunDoctor_NilConfig_NilClient(t *testing.T) {
 	}
 
 	// config check should be present and not-ok (fresh repo)
-	configCheck, ok := result.Checks["config"]
+	configCheck, ok := resultItemOK(result, "config")
 	if !ok {
 		t.Fatal("expected config check to be present")
 	}
@@ -86,17 +90,16 @@ func TestRunDoctor_NilConfig_NilClient(t *testing.T) {
 		t.Error("expected config.OK=false when cfg is nil")
 	}
 
-	// Config absence must appear as a warning (not a hard error) so the exit
-	// code is driven by auth failure, not by missing config.yaml.
+	// Config absence is a blocker (ADR-025, #2091) with the repo-init remedy.
 	hasConfigWarning := false
-	for _, w := range result.Warnings {
+	for _, w := range result.Errors {
 		if strings.Contains(w, "config") || strings.Contains(w, "repo-init") {
 			hasConfigWarning = true
 			break
 		}
 	}
 	if !hasConfigWarning {
-		t.Errorf("expected a config-related warning when cfg is nil, got warnings: %v", result.Warnings)
+		t.Errorf("expected a config-related error when cfg is nil, got errors: %v", result.Errors)
 	}
 }
 
@@ -119,7 +122,7 @@ func TestRunDoctor_ValidConfig_NilClient(t *testing.T) {
 	}
 
 	// project check should pass since cfg has all required fields
-	projectCheck, ok := result.Checks["project"]
+	projectCheck, ok := resultItemOK(result, "project")
 	if !ok {
 		t.Fatal("expected project check to be present")
 	}
@@ -131,7 +134,7 @@ func TestRunDoctor_ValidConfig_NilClient(t *testing.T) {
 	}
 
 	// config check should pass
-	configCheck, ok := result.Checks["config"]
+	configCheck, ok := resultItemOK(result, "config")
 	if !ok {
 		t.Fatal("expected config check to be present")
 	}
@@ -162,7 +165,7 @@ func TestRunDoctor_MissingProject(t *testing.T) {
 				t.Errorf("expected ExitCode 2, got %d", result.ExitCode)
 			}
 
-			projectCheck, ok := result.Checks["project"]
+			projectCheck, ok := resultItemOK(result, "project")
 			if !ok {
 				t.Fatal("expected project check to be present")
 			}
@@ -207,7 +210,7 @@ func TestRunDoctor_BinaryNotInPath(t *testing.T) {
 	ctx := context.Background()
 	result := RunDoctor(ctx, nil, nil, nil)
 
-	binaryCheck := result.Checks["binary"]
+	binaryCheck := resultItem(result, "binary")
 	if binaryCheck.OK {
 		t.Skip("nightgauge still found with empty PATH (hard-coded path) — skipping")
 	}
@@ -220,16 +223,16 @@ func TestRunDoctor_BinaryNotInPath(t *testing.T) {
 		t.Errorf("expected InstallInstructions to mention 'go install', got: %q", result.InstallInstructions)
 	}
 
-	// Binary failure appears in Warnings (not Errors — it is a warning-level check)
+	// A binary the hooks cannot resolve is a blocker (ADR-025 NGD001, #2091).
 	hasBinaryWarning := false
-	for _, w := range result.Warnings {
+	for _, w := range result.Errors {
 		if strings.Contains(w, "nightgauge") || strings.Contains(w, "binary") || strings.Contains(w, "PATH") {
 			hasBinaryWarning = true
 			break
 		}
 	}
 	if !hasBinaryWarning {
-		t.Errorf("expected binary warning in result.Warnings, got: %v", result.Warnings)
+		t.Errorf("expected binary error in result.Errors, got: %v", result.Errors)
 	}
 }
 
@@ -252,7 +255,7 @@ func TestRunDoctor_BinaryOffPathResolvable_Degraded(t *testing.T) {
 	ctx := context.Background()
 	result := RunDoctor(ctx, cfg, nil, nil)
 
-	binaryCheck := result.Checks["binary"]
+	binaryCheck := resultItem(result, "binary")
 	if !binaryCheck.OK {
 		t.Fatalf("expected binary.OK=true when resolvable via NIGHTGAUGE_BIN, got: %s", binaryCheck.Error)
 	}
@@ -380,7 +383,7 @@ repositories:
 	if result.ExitCode != 2 {
 		t.Fatalf("expected ExitCode 2 on project mapping mismatch, got %d (errors=%v)", result.ExitCode, result.Errors)
 	}
-	check, ok := result.Checks["project_mapping"]
+	check, ok := resultItemOK(result, "project_mapping")
 	if !ok {
 		t.Fatal("expected project_mapping check to be present")
 	}
@@ -425,7 +428,7 @@ repositories:
 
 	result := RunDoctor(context.Background(), cfg, nil, nil)
 
-	check, ok := result.Checks["project_mapping"]
+	check, ok := resultItemOK(result, "project_mapping")
 	if !ok {
 		t.Fatal("expected project_mapping check to be present")
 	}
@@ -442,9 +445,6 @@ func TestDoctorResult_Schema(t *testing.T) {
 
 	if result.V != SchemaVersion {
 		t.Errorf("expected schema version V=%d, got %d", SchemaVersion, result.V)
-	}
-	if result.Checks == nil {
-		t.Fatal("expected non-nil Checks map")
 	}
 
 	// These check keys must always be present. The leak carriers are in the
@@ -524,7 +524,7 @@ func TestRunDoctor_NoUsableAdapterDegradesButNeverBreaks(t *testing.T) {
 
 	result := RunDoctor(ctx, nil, nil, nil)
 
-	item, ok := result.Checks["ai_adapter"]
+	item, ok := resultItemOK(result, "ai_adapter")
 	if !ok {
 		t.Fatal("expected an ai_adapter row on the DEFAULT run, with no --adapters passed")
 	}
@@ -569,7 +569,7 @@ func TestRunDoctor_UsableAdapterAddsNoWarning(t *testing.T) {
 
 	result := RunDoctor(ctx, nil, nil, nil)
 
-	item, ok := result.Checks["ai_adapter"]
+	item, ok := resultItemOK(result, "ai_adapter")
 	if !ok {
 		t.Fatal("expected an ai_adapter row")
 	}
@@ -618,21 +618,22 @@ func writeRepoConfig(t *testing.T, root string) {
 	}
 }
 
-// TestRunDoctor_ConfigWithoutRepoFileWarns is #2205: a loaded config (defaults
-// or a user-global file) in a repository with no .nightgauge/config.yaml must
-// warn with the repo-init remedy and name what was loaded.
-func TestRunDoctor_ConfigWithoutRepoFileWarns(t *testing.T) {
+// TestRunDoctor_ConfigWithoutRepoFileBlocks is #2205 under ADR-025 (#2091): a
+// loaded config (defaults or a user-global file) in a repository with no
+// .nightgauge/config.yaml is a blocker offering the confirm repo-init remedy
+// and naming what was loaded.
+func TestRunDoctor_ConfigWithoutRepoFileBlocks(t *testing.T) {
 	t.Chdir(t.TempDir())
 	result := RunDoctor(context.Background(), config.DefaultConfig(), nil, nil)
-	check := result.Checks["config"]
+	check := resultItem(result, "config")
 	if check.OK {
 		t.Fatalf("config passed with no repository config: %+v", check)
 	}
 	if !strings.Contains(check.Error, "repo-init") || !strings.Contains(check.Error, "loaded:") {
 		t.Errorf("config warning must name repo-init and the loaded files, got %q", check.Error)
 	}
-	if containsString(result.FailedChecks, "config") {
-		t.Error("a missing repository config is a warning, not a required failure")
+	if !containsString(result.FailedChecks, "config") {
+		t.Error("a missing repository config is a blocker")
 	}
 }
 
@@ -642,7 +643,7 @@ func TestRunDoctor_ConfigNamesLoadedFiles(t *testing.T) {
 	writeRepoConfig(t, repo)
 	t.Chdir(repo)
 	result := RunDoctor(context.Background(), &config.Config{Owner: "o", ProjectNumber: 1}, nil, nil)
-	check := result.Checks["config"]
+	check := resultItem(result, "config")
 	if !check.OK || !strings.Contains(check.Detail, filepath.Join(".nightgauge", "config.yaml")) {
 		t.Fatalf("config row must pass and name the repository file, got %+v", check)
 	}
@@ -657,3 +658,117 @@ func hasResult(r DoctorResult, id string) bool {
 	}
 	return false
 }
+
+// runRegistered runs one registered check against env.
+func runRegistered(t *testing.T, id string, env *Env) []Finding {
+	t.Helper()
+	for _, c := range DefaultRegistry().Checks() {
+		if c.ID == id {
+			return c.Run(context.Background(), env)
+		}
+	}
+	t.Fatalf("check %s is not registered", id)
+	return nil
+}
+
+type statusTransport int
+
+func (s statusTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return &http.Response{StatusCode: int(s), Status: http.StatusText(int(s)), Request: r,
+		Header: http.Header{"Content-Type": {"application/json"}},
+		Body:   io.NopCloser(strings.NewReader(`{"message":"Bad credentials"}`))}, nil
+}
+
+func onlyFinding(t *testing.T, fs []Finding, code string, sev Severity) Finding {
+	t.Helper()
+	if len(fs) != 1 || fs[0].Code != code || fs[0].Severity != sev {
+		t.Fatalf("want one %s %s finding, got %s", sev, code, findingsText(fs))
+	}
+	if fs[0].Fingerprint == "" || fs[0].Docs != DocsAnchor(code) || fs[0].Cause == "" {
+		t.Errorf("finding lacks fingerprint, docs or cause: %+v", fs[0])
+	}
+	return fs[0]
+}
+
+// TestGitHubFindings pins the #2091 severities and remedies.
+func TestGitHubFindings(t *testing.T) {
+	t.Run("401 is an auth blocker", func(t *testing.T) {
+		client := gh.NewClientWithHTTPClient(&http.Client{Transport: statusTransport(http.StatusUnauthorized)})
+		f := onlyFinding(t, runRegistered(t, "github_auth", &Env{Client: client}), "NGD004", SeverityBlocker)
+		if f.Evidence["http_status"] != "401" || f.Remedies[0].Kind != RemedyManual {
+			t.Errorf("want http_status=401 and a manual remedy, got %+v", f)
+		}
+	})
+	t.Run("no client is an auth blocker", func(t *testing.T) {
+		onlyFinding(t, runRegistered(t, "github_auth", &Env{}), "NGD004", SeverityBlocker)
+	})
+	t.Run("missing config offers confirm repo-init", func(t *testing.T) {
+		for _, fs := range [][]Finding{
+			first(configFindings(nil, nil, "/w")),
+			first(configFindings(config.DefaultConfig(), nil, t.TempDir())),
+			first(projectFindings(&config.Config{Owner: "o"}, "/w")),
+		} {
+			f := onlyFinding(t, fs, fs[0].Code, SeverityBlocker)
+			r := f.Remedies[len(f.Remedies)-1]
+			if r.Kind != RemedyConfirm || r.Verb != verbRepoInit || !strings.Contains(r.Preview, "nightgauge repo-init") {
+				t.Errorf("%s: want a confirm repo-init remedy with a preview, got %+v", f.Code, r)
+			}
+		}
+	})
+	t.Run("failed board read is a blocker", func(t *testing.T) {
+		cfg := &config.Config{Owner: "o", DefaultRepo: "r", ProjectNumber: 7}
+		fs, _ := boardPopulationFindings(cfg, boardPopulation{}, errors.New("list open items on project 7: forbidden"))
+		onlyFinding(t, fs, "NGD013", SeverityBlocker)
+	})
+	t.Run("budget pressure warns", func(t *testing.T) {
+		fs, _ := rateLimitFindings(&gh.RateLimitInfo{Remaining: 10, Limit: 5000}, nil)
+		onlyFinding(t, fs, "NGD007", SeverityWarning)
+	})
+	t.Run("identity summary is info", func(t *testing.T) {
+		fs, _ := githubIdentityFindings(nil, &gh.RateLimitInfo{Limit: 5000})
+		f := onlyFinding(t, fs, "NGD009", SeverityInfo)
+		if f.Evidence["kind"] != "personal_token" || f.Evidence["graphql_ceiling_per_hour"] != "5000" {
+			t.Errorf("identity evidence = %v", f.Evidence)
+		}
+	})
+	t.Run("stale binary remedy", func(t *testing.T) {
+		p := binaryProbe{found: true, resolved: ResolvedBinary{Path: "/a/bin/nightgauge", Step: StepRepoBin},
+			resolvedVersion: "nightgauge v0.1.0", recordedPath: "/b/nightgauge", recordedVersion: "nightgauge v0.2.0",
+			stale: "stale binary: diverges"}
+		checkout := t.TempDir()
+		writeFile := func(name, body string) {
+			if err := os.WriteFile(filepath.Join(checkout, name), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		writeFile("go.mod", "module github.com/nightgauge/nightgauge\n\ngo 1.22\n")
+		writeFile("Makefile", "all:\n\nbuild-cli:\n\tgo build\n")
+		if err := os.Mkdir(filepath.Join(checkout, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		root := sourceCheckoutRoot(checkout)
+		if root != checkout {
+			t.Fatalf("sourceCheckoutRoot = %q, want %q", root, checkout)
+		}
+		fs, _ := binaryFindings(p, root)
+		f := onlyFinding(t, fs, "NGD001", SeverityWarning)
+		for _, k := range []string{"resolved_path", "resolved_version", "recorded_path", "recorded_version"} {
+			if f.Evidence[k] == "" {
+				t.Errorf("evidence lacks %s: %v", k, f.Evidence)
+			}
+		}
+		if r := f.Remedies[0]; r.Kind != RemedyAuto || r.Verb != verbBuildCLI || !strings.Contains(r.Preview, "make build-cli") {
+			t.Errorf("in the checkout the remedy is auto make build-cli, got %+v", r)
+		}
+		fs, _ = binaryFindings(p, sourceCheckoutRoot(t.TempDir()))
+		if r := fs[0].Remedies[0]; r.Kind != RemedyManual || !strings.Contains(strings.Join(r.Steps, " "), installCommand) {
+			t.Errorf("outside the checkout the remedy is manual install, got %+v", r)
+		}
+		if fs, _ := binaryFindings(binaryProbe{found: true, detail: "ok"}, ""); len(fs) != 0 {
+			t.Errorf("a binary that does not diverge now must not warn: %s", findingsText(fs))
+		}
+		onlyFinding(t, first(binaryFindings(binaryProbe{}, "")), "NGD001", SeverityBlocker)
+	})
+}
+
+func first(fs []Finding, _ string) []Finding { return fs }

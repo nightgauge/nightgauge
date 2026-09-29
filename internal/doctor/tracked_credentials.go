@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -78,18 +79,25 @@ func gitTrackedNightgaugeFiles(dir string) (root string, files []string, ok bool
 	return root, files, true, nil
 }
 
-// checkTrackedCredentials scans the tracked files under .nightgauge/ for
-// credential shapes. The warning string is empty when nothing was found.
-// A finding is a warning, not a required failure: the environment still runs,
-// and the remedy (rotation, history rewrite) is the operator's, never doctor's.
-func checkTrackedCredentials(dir string) (CheckItem, string) {
+// trackedScan is what one pass over the tracked files under .nightgauge/ found.
+type trackedScan struct {
+	inRepo   bool // false: dir is not inside a git work tree
+	err      error
+	scanned  int
+	skipped  []string
+	findings []SecretFinding
+}
+
+// scanTrackedCredentials scans the tracked files under .nightgauge/ for
+// credential shapes. Each SecretFinding carries only the pattern's redacted
+// prefix, never the matched value.
+func scanTrackedCredentials(dir string) trackedScan {
 	root, files, ok, err := trackedFileLister(dir)
 	if !ok {
-		return CheckItem{OK: true, Detail: "skipped: not inside a git work tree"}, ""
+		return trackedScan{}
 	}
 	if err != nil {
-		return CheckItem{OK: false, Error: "could not list tracked files: " + err.Error()},
-			"tracked_secrets: could not list tracked files under .nightgauge/"
+		return trackedScan{inRepo: true, err: err}
 	}
 
 	// The real root, so a tracked path that resolves outside it (through a
@@ -99,38 +107,54 @@ func checkTrackedCredentials(dir string) (CheckItem, string) {
 		realRoot = root
 	}
 
-	var findings []SecretFinding
-	var skipped []string
+	scan := trackedScan{inRepo: true}
 	for _, rel := range files {
 		fileFindings, note := scanTrackedFile(realRoot, filepath.Join(root, filepath.FromSlash(rel)), rel)
-		findings = append(findings, fileFindings...)
+		scan.findings = append(scan.findings, fileFindings...)
 		if note != "" {
-			skipped = append(skipped, rel+" ("+note+")")
+			scan.skipped = append(scan.skipped, rel+" ("+note+")")
 		}
 	}
+	scan.scanned = len(files) - len(scan.skipped)
+	return scan
+}
 
+// trackedCredentialFindings reports one blocker per credential committed under
+// .nightgauge/. Evidence carries the path, line, pattern name and redacted
+// prefix only. The remedy is manual: doctor never rotates a key or rewrites
+// history.
+func trackedCredentialFindings(dir string) ([]Finding, string) {
+	const check, code = trackedCredentialsCheck, "NGD024"
+	scan := scanTrackedCredentials(dir)
+	if !scan.inRepo {
+		return nil, "skipped: not inside a git work tree"
+	}
+	if scan.err != nil {
+		return []Finding{unverifiableFinding(check, code, SeverityWarning, "tracked_secrets",
+			"could not list tracked files under .nightgauge/: "+scan.err.Error())}, "could not list tracked files"
+	}
 	skipNote := ""
-	if len(skipped) > 0 {
-		skipNote = fmt.Sprintf("; skipped %d file(s): %s", len(skipped), strings.Join(capList(skipped), ", "))
+	if len(scan.skipped) > 0 {
+		skipNote = fmt.Sprintf("; skipped %d file(s): %s", len(scan.skipped), strings.Join(capList(scan.skipped), ", "))
 	}
-	if len(findings) == 0 {
-		return CheckItem{
-			OK:     true,
-			Detail: fmt.Sprintf("no tracked credentials (%d tracked file(s) under .nightgauge/ scanned%s)", len(files)-len(skipped), skipNote),
-		}, ""
+	if len(scan.findings) == 0 {
+		return nil, fmt.Sprintf("no tracked credentials (%d tracked file(s) under .nightgauge/ scanned%s)", scan.scanned, skipNote)
 	}
-
-	locations := make([]string, 0, len(findings))
-	for _, f := range findings {
-		locations = append(locations, fmt.Sprintf("%s:%d %s %s", f.Path, f.Line, f.Pattern, f.Redacted))
+	out := make([]Finding, 0, len(scan.findings))
+	for _, f := range scan.findings {
+		out = append(out, newFinding(check, code, SeverityBlocker,
+			fmt.Sprintf("tracked_secrets: %s credential committed at %s:%d", f.Pattern, f.Path, f.Line),
+			"a credential is committed under .nightgauge/. Treat it as leaked: rotate it at its issuer "+
+				"and remove it from the repository's history. Deleting the line alone leaves it in history; doctor changes nothing",
+			map[string]string{"path": f.Path, "line": strconv.Itoa(f.Line), "pattern": f.Pattern, "redacted": f.Redacted},
+			[]string{f.Path, f.Pattern, f.Redacted},
+			manualRemedy("rotate", "Rotate the credential, then remove it from the repository and its history", check,
+				"Rotate the "+f.Pattern+" credential at its issuer now; assume it is compromised",
+				"Stop tracking the file: `git rm --cached "+f.Path+"` (or delete the line), and commit",
+				"Remove it from history with a coordinated rewrite (for example `git filter-repo`), "+
+					"then have every clone re-fetch; doctor never rewrites history")))
 	}
-	msg := fmt.Sprintf("%d tracked credential(s) under .nightgauge/: %s%s. "+
-		"Treat each as leaked: (1) rotate it at its issuer now; (2) remove it from the "+
-		"repository's history (a history rewrite, coordinated with every clone). "+
-		"Deleting the line alone leaves it in history; doctor changes nothing",
-		len(findings), strings.Join(capList(locations), ", "), skipNote)
-	return CheckItem{OK: false, Error: msg, Findings: findings},
-		fmt.Sprintf("tracked_secrets: %d credential(s) committed under .nightgauge/ — rotate them and remove them from history", len(findings))
+	return out, fmt.Sprintf("%d tracked credential(s) under .nightgauge/%s", len(scan.findings), skipNote)
 }
 
 // scanTrackedFile returns the findings in one tracked file, or a note saying

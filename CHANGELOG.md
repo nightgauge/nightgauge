@@ -35,6 +35,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Doctor's GitHub, config and credential checks emit coded findings**
+  (#2091). `binary`, `skills`, `gh`, `github_auth`, `api_user`, `scopes`,
+  `rate_limit`, `github_identity`, `github_api_budget`, `config`, `project`,
+  `project_mapping`, `board_population`, `ai_adapter`,
+  `ledger_daemon_coverage`, `tracked_secrets` and `ci_machine_credentials` now
+  report ADR-025 findings with causes, redacted evidence and declared
+  remedies. A missing repository config, a missing binary and a failed or
+  empty board read are now blockers (exit 2), as are a committed credential
+  and a machine-file credential on a CI host; the GitHub identity is reported
+  as an info finding. Missing config or project offers a confirm
+  `nightgauge repo-init` remedy, a stale binary offers `make build-cli` inside
+  the source checkout, and credential findings carry only redacted prefixes
+  and key names with manual rotation and history-removal steps. New codes:
+  `NGD034` (`read:org` missing) and `NGD035` (App commit identity unset).
+
 - **`nightgauge doctor` reports each leaked object and learning gap as its own
   finding, with a declared fix** (#2089, #2090). Leaked worktrees, compose
   orphans, stranded branches, pipeline stashes, preserved WIP refs, orphaned
