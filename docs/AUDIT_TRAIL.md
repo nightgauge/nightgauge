@@ -158,9 +158,10 @@ auditor does not go looking for events that never arrive.
 Pipeline and stage lifecycle events are audit-log events — the orchestrator
 enqueues them through the same `AuditEventClient`, and they are submitted to
 the same endpoint as every other action. The Audit Log Viewer can also fall
-back to _local_ pipeline telemetry when the platform is unreachable; that
-fallback is a convenience view, clearly labelled in the UI, and is not the
-audit log.
+back to _local_ pipeline telemetry when the platform is unreachable, and shows
+only that telemetry when `platform.enabled` is false (it never asks the
+platform then, even with a stored session). Either way it is a convenience
+view, clearly labelled in the UI, and is not the audit log.
 
 #### Authentication (Platform)
 
