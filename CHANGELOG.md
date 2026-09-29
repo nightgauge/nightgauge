@@ -155,6 +155,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **`nightgauge doctor --fix --yes` restarts a stopped autonomous loop through
+  the daemon** (#2090). A stopped `autonomous-loop` (`NGD029`) now offers a
+  `confirm` restart that asks the daemon serving the workspace to start its
+  scheduler. It uses the same `autonomous.start` call as `nightgauge
+autonomous start` and the extension's Start button. The remedy re-reads the
+  loop's state and the daemon just before acting and refuses if either
+  changed. It then waits up to 30 seconds for the loop to scan and reports
+  `fixed` only when `scheduled_automations` no longer reports it. With no
+  daemon listening, the finding lists the manual start steps instead, so
+  `--fix --yes` no longer reports the restart as `blocked` (exit 4). A stopped
+  scheduled workflow is restarted by hand, since only GitHub's scheduler can
+  start it.
+
 - **`nightgauge doctor --adapters` reports each unusable adapter as a coded
   finding** (#2092). Adapter health is now the `adapters` check group: each
   adapter that is not usable is one warning coded by its cause (`NGD100`–`NGD111`),

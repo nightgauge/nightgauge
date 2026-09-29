@@ -60,6 +60,7 @@ func init() {
 			return scheduledAutomationFindings(ctx, map[cadence.EvidenceKind]cadenceProbe{
 				cadence.EvidenceAutonomousState: autonomousStateEvidence(env.Cwd),
 				cadence.EvidenceWorkflowRun:     workflowRunEvidence(env.Client, doctorOwner(env.Cfg), doctorRepo(env.Cfg)),
-			}, cadenceScope(env.Cfg, env.Cwd), declared, pauses, env.Now)
+			}, cadenceScope(env.Cfg, env.Cwd), declared, pauses,
+				func() error { return autonomousRestartable(ctx, env.Cwd) }, env.Now)
 		})
 }

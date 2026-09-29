@@ -152,11 +152,28 @@ const (
 //
 // A stopped automation the operator recorded as intentionally paused (see
 // automation_pause.go) is still reported, as info, until it is resumed.
-func scheduledAutomationFindings(ctx context.Context, probes map[cadence.EvidenceKind]cadenceProbe, scope cadence.Scope, declared []cadence.ConfigAutomation, pauses map[string]AutomationPause, now time.Time) ([]Finding, string) {
+//
+// restartable reports whether the autonomous loop can be restarted from doctor
+// now (nil error): only then is the confirm restart offered. It is asked at
+// most once per scan, and only when the loop has stopped. A nil func means
+// no entry point, and the manual start steps are offered instead.
+func scheduledAutomationFindings(ctx context.Context, probes map[cadence.EvidenceKind]cadenceProbe, scope cadence.Scope, declared []cadence.ConfigAutomation, pauses map[string]AutomationPause, restartable func() error, now time.Time) ([]Finding, string) {
 	const check = "scheduled_automations"
 	verdicts, cfgErrs := evaluateCadence(ctx, probes, scope, declared, now)
 	if len(verdicts) == 0 && len(cfgErrs) == 0 {
 		return nil, "none registered (declare repo automations under automations.cadence)"
+	}
+	var restartErr error
+	restartAsked := false
+	restartRemedyFor := func(a cadence.Automation) Remedy {
+		if a.Kind == cadence.EvidenceAutonomousState && !restartAsked {
+			restartAsked = true
+			restartErr = errNoAutonomousStarter
+			if restartable != nil {
+				restartErr = restartable()
+			}
+		}
+		return restartRemedy(a, restartErr)
 	}
 
 	var out []Finding
@@ -201,7 +218,7 @@ func scheduledAutomationFindings(ctx context.Context, probes map[cadence.Evidenc
 					fmt.Sprintf("scheduled automation %s is paused (stopped: %s)", a.ID, v.Detail),
 					"the operator recorded this automation as intentionally paused; it is reported until it is resumed",
 					ev, identity,
-					restartRemedy(a),
+					restartRemedyFor(a),
 					manualRemedy("resume", "Resume watching it as a live automation", check,
 						fmt.Sprintf("Run `nightgauge doctor automation resume %s`", a.ID))))
 				continue
@@ -210,7 +227,7 @@ func scheduledAutomationFindings(ctx context.Context, probes map[cadence.Evidenc
 			out = append(out, newFinding(check, codeAutomationStopped, SeverityWarning, title,
 				"it ran before and has since stopped producing evidence: usually a process that died or a credential that expired",
 				ev, identity,
-				restartRemedy(a),
+				restartRemedyFor(a),
 				manualRemedy("pause", "Mark it as intentionally paused", check,
 					fmt.Sprintf("Run `nightgauge doctor automation pause %s --reason \"<why>\"`", a.ID),
 					"The finding stays visible as info until `nightgauge doctor automation resume` is run")))
@@ -245,23 +262,29 @@ func scheduledAutomationFindings(ctx context.Context, probes map[cadence.Evidenc
 }
 
 // restartRemedy restarts a stopped automation through the entry point that
-// normally schedules it: the autonomous scheduler for the loop, a workflow
-// dispatch for a workflow.
-func restartRemedy(a cadence.Automation) Remedy {
-	r := Remedy{ID: "restart", Kind: RemedyConfirm, Verb: verbAutomationRestart, Verify: "scheduled_automations"}
-	switch a.Kind {
-	case cadence.EvidenceAutonomousState:
-		r.Summary = "Restart the autonomous scheduler"
-		r.Preview = fmt.Sprintf("start the autonomous scheduler for this workspace (%s), the entry point that normally runs %s", "nightgauge serve", a.ID)
-	default:
-		repo := a.Repo
-		if repo == "" {
-			repo = "this repository"
+// normally starts it (#2090). For the autonomous loop that is the daemon's
+// scheduler start, offered as a confirm remedy on the automation.restart verb
+// when restartErr is nil, and as manual start steps otherwise. A workflow is
+// normally started by GitHub's own scheduler, which doctor cannot invoke: a
+// workflow_dispatch is a different trigger, and it would make a dead cron look
+// alive to the probe that filters on the schedule event. Its restart is manual.
+func restartRemedy(a cadence.Automation, restartErr error) Remedy {
+	const check = "scheduled_automations"
+	if a.Kind == cadence.EvidenceAutonomousState {
+		if restartErr == nil {
+			return Remedy{ID: "restart", Kind: RemedyConfirm, Verb: verbAutomationRestart, Verify: check,
+				Summary: "Restart the autonomous scheduler through the running daemon",
+				Preview: fmt.Sprintf("ask the daemon serving this workspace to start its autonomous scheduler "+
+					"(the entry point `nightgauge autonomous start` and the extension's Start use), "+
+					"then wait up to %s for %s to record a scan", restartWait, a.ID)}
 		}
-		r.Summary = fmt.Sprintf("Dispatch workflow %s", a.Workflow)
-		r.Preview = fmt.Sprintf("dispatch workflow %s in %s (workflow_dispatch); a broken schedule still needs its trigger fixed", a.Workflow, repo)
+		return manualRemedy("restart", "Start the autonomous scheduler", check, manualStartSteps(restartErr)...)
 	}
-	return r
+	steps := []string{
+		fmt.Sprintf("Check whether GitHub disabled the schedule: `gh workflow view %s`; re-enable it with `gh workflow enable %s`", a.Workflow, a.Workflow),
+	}
+	return manualRemedy("restart", fmt.Sprintf("Restore the schedule of workflow %s", a.Workflow), check,
+		append(steps, automationRemedySteps(a)...)...)
 }
 
 func automationRemedySteps(a cadence.Automation) []string {

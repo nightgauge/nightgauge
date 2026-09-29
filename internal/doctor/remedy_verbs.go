@@ -27,10 +27,10 @@ import (
 // Precondition, and acts through the same Go code the matching CLI command
 // uses. Nothing here builds a shell string.
 //
-// Declared verbs deliberately left unregistered, so the engine fails closed
-// on them: `automation.restart` (starting a daemon or dispatching a workflow
-// from doctor is a later sibling's decision) and `repo.init` (interactive by
-// nature; the interactive CLI owns it).
+// A declared verb deliberately left unregistered, so the engine fails closed
+// on it: `repo.init` (interactive by nature; the interactive CLI owns it).
+// `automation.restart` is registered (automation_restart.go) and reaches the
+// autonomous scheduler only through the daemon's own start method.
 
 // verbDeps are the process-level effects a verb has, injectable for tests.
 type verbDeps struct {
@@ -82,6 +82,7 @@ func builtinVerbs(env *Env, deps verbDeps) *VerbRegistry {
 	must(verbSurvivalSweep, v.survivalPrecondition, v.survivalApply)
 	must(verbBuildCLI, v.buildCLIPrecondition, v.buildCLIApply)
 	must(verbGHAuthRefresh, v.authRefreshPrecondition, v.authRefreshApply)
+	must(verbAutomationRestart, v.restartPrecondition, v.restartApply)
 	return reg
 }
 
