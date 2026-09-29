@@ -31,7 +31,6 @@ package sweep
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -422,21 +421,10 @@ func doctorCardBody(f doctor.Finding, manual []doctor.Remedy) string {
 	return b.String()
 }
 
-// allowedDoctorLink applies ADR-025 § 8's link allowlist: https on
-// github.com, docs.github.com or nightgauge.dev. Finding text can derive from
-// repository content, so any other link is shown as text and never offered as
-// the card's URL.
-func allowedDoctorLink(raw string) bool {
-	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Scheme != "https" || u.User != nil {
-		return false
-	}
-	switch u.Hostname() {
-	case "github.com", "docs.github.com", "nightgauge.dev":
-		return u.Port() == ""
-	}
-	return false
-}
+// allowedDoctorLink applies ADR-025 § 8's link allowlist (doctor.AllowedLink).
+// Finding text can derive from repository content, so any other link is shown
+// as text and never offered as the card's URL.
+func allowedDoctorLink(raw string) bool { return doctor.AllowedLink(raw) }
 
 // DoctorRemedies implements attention.DoctorRemedyRunner over the doctor
 // remedy engine for one workspace root. It is what the doctor card verbs
