@@ -22,6 +22,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/github"
 )
 
 // Defaults recorded by ADR-024 § 11.
@@ -37,12 +39,15 @@ const (
 // another process, and "written in the last hour" is the portable stand-in.
 const RecentWindow = time.Hour
 
-// LiveFiles are the logs a long-lived process holds open for its whole life:
-// `serve`'s go-backend.log and the GitHub request ledger. Each bounds itself
-// (go-backend.log is truncated at 5 MB on serve start, the ledger rotates at
-// 5 MB into one numbered backup), so retention never deletes them; the
-// ledger's rotated backup (github-api.jsonl.1) is an ordinary prunable file.
-var LiveFiles = []string{"go-backend.log", "github-api.jsonl"}
+// LiveFiles are the logs a long-lived process holds open at now: `serve`'s
+// go-backend.log (truncated at 5 MB on serve start) and the current UTC day's
+// GitHub request ledger segment, github-api-YYYY-MM-DD.jsonl. Retention never
+// deletes them. Earlier segments, every size backup (*.1) and a pre-segment
+// github-api.jsonl are ordinary prunable files: the ledger is written in
+// dated segments precisely so whole-file pruning can bound it.
+func LiveFiles(now time.Time) []string {
+	return []string{"go-backend.log", github.LedgerSegmentName(now)}
+}
 
 // Policy is the pair of caps applied to each log directory.
 type Policy struct {
@@ -67,7 +72,7 @@ type Options struct {
 	// time.Now().
 	Now time.Time
 	// Open names files (base names) that a writer holds open. They are never
-	// deleted. Nil means LiveFiles.
+	// deleted. Nil means LiveFiles(Now).
 	Open []string
 	// Recent is the recency guard: files modified within it are kept. Zero
 	// means RecentWindow; a negative value disables the guard (tests only).
@@ -170,7 +175,7 @@ func Prune(dir string, opts Options) (Result, error) {
 	}
 	open := opts.Open
 	if open == nil {
-		open = LiveFiles
+		open = LiveFiles(now)
 	}
 	openSet := make(map[string]bool, len(open))
 	for _, n := range open {

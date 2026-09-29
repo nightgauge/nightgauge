@@ -380,8 +380,12 @@ func TestLedgerWritesIntoAnExistingWorkspace(t *testing.T) {
 		t.Fatal("no ledger opened inside a real workspace")
 	}
 	t.Cleanup(l.close)
-	if _, err := os.Stat(filepath.Join(dir, ".nightgauge", "logs", "github-api.jsonl")); err != nil {
-		t.Errorf("ledger file not created inside the workspace: %v", err)
+	seg := filepath.Join(dir, ".nightgauge", "logs", LedgerSegmentName(time.Now()))
+	if _, err := os.Stat(seg); err != nil {
+		t.Errorf("today's ledger segment not created inside the workspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".nightgauge", "logs", "github-api.jsonl")); !os.IsNotExist(err) {
+		t.Errorf("the pre-segment github-api.jsonl was written: %v", err)
 	}
 }
 

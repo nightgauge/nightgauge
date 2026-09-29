@@ -607,9 +607,11 @@ github:
 
 It is on by default because an exhausted GraphQL quota is never reproducible on
 demand, so an opt-in instrument is reliably switched off during the only hours
-that matter. The file is bounded — `.nightgauge/logs/github-api.jsonl`, 5 MB
-with one rotated backup, gitignored — and the disabled path costs one nil check
-per request.
+that matter. The ledger is bounded: it is written as one
+`.nightgauge/logs/github-api-YYYY-MM-DD.jsonl` segment per UTC day (5 MB with
+one rotated backup within a day, gitignored), and log retention deletes whole
+old segments under `pipeline.logs.max_size_mb` and `pipeline.logs.max_age_days`.
+The disabled path costs one nil check per request.
 
 `NIGHTGAUGE_GITHUB_API_LOG` overrides this setting in **both** directions, as
 `NIGHTGAUGE_*` overrides do everywhere: `0` switches the ledger off even when

@@ -3554,8 +3554,9 @@ and a maximum file age, set by machine-tier `pipeline.logs.max_size_mb`
 the age cap go first, then the oldest files until the directory is under the
 size cap.
 
-Never deleted: the live files `go-backend.log` and `github-api.jsonl` (each
-bounds itself at 5 MB; the ledger's rotated `github-api.jsonl.1` is prunable),
+Never deleted: the live files `go-backend.log` and the current UTC day's ledger
+segment `github-api-YYYY-MM-DD.jsonl` (earlier segments, size backups and a
+pre-segment `github-api.jsonl` are prunable),
 files written in the last hour, files of a run that is not terminal (running,
 queued, paused or parked; every issue-keyed file when the run state cannot be
 read), dot files, symlinks, subdirectories, and anything outside the resolved
@@ -4889,8 +4890,8 @@ It is therefore **on by default**, bounded rather than unbounded:
 
 | | |
 | --- | --- |
-| File | `.nightgauge/logs/github-api.jsonl`, gitignored with the other logs |
-| Bound | 5 MB, one numbered backup (`.jsonl.1`) — ~20k requests, days of idle traffic |
+| File | `.nightgauge/logs/github-api-YYYY-MM-DD.jsonl`, one segment per UTC day, gitignored with the other logs |
+| Bound | Log retention (200 MB and 30 days per log directory) deletes whole old segments; within a day each segment rotates at 5 MB into one numbered backup (`.jsonl.1`) |
 | Off switch | `github.api_ledger.enabled: false`, or `NIGHTGAUGE_GITHUB_API_LOG=0` |
 | Override | `NIGHTGAUGE_GITHUB_API_LOG=<path>` writes elsewhere; env wins over config in both directions |
 
@@ -4905,12 +4906,16 @@ is how a script asks for the same thing, and it includes `graphql_mutation`
 because mutations bill to the same pool. The human report prints an unfiltered
 per-resource table instead, which is honest because it labels each pool.
 
-**Read the rolling SET, not the live file.** The window anyone opens this report
+**Read the whole SET, not the live file.** The window anyone opens this report
 for is the busy one, and a busy hour is the hour that rotates: a reader that
-opens only `github-api.jsonl` reports a sudden collapse in spending at exactly
+opens only the day's segment reports a sudden collapse in spending at exactly
 the moment spending was heaviest. `api-usage` without `--file` reads the set
-(`github.LedgerFiles`); `--file` reads one named file, which is the archaeology
-case.
+(`github.LedgerFiles`): a pre-segment `github-api.jsonl` and its backup, if
+any, then every dated segment in the window with its backup. A segment log
+retention deleted is absent from the set, so a window reaching past it reports
+fewer records, never an error. `--file` reads one named file, which is the
+archaeology case. An explicit `NIGHTGAUGE_GITHUB_API_LOG=<path>` is written as
+named, without dated segments.
 
 Rotation is safe across the several nightgauge processes that share one
 workspace ledger. The writer sizes the **path**, not its open handle, so a

@@ -26,8 +26,12 @@ changelog, and the release workflow refuses a tag that does not.
   only, and never a live file, a file written in the last hour, or a file of a
   run that is not terminal. `nightgauge doctor` reports each directory's size
   and the caps, and flags a directory over its cap (`NGD043`).
-  `nightgauge logs scan-failures` and `nightgauge api-usage` report a pruned
-  range as absent rather than as an error.
+  The GitHub request ledger is now written as one
+  `github-api-YYYY-MM-DD.jsonl` segment per UTC day so retention can drop whole
+  old days; only the current day's segment is kept as a live file, and a
+  pre-segment `github-api.jsonl` is still read until retention ages it out.
+  `nightgauge logs scan-failures`, `nightgauge api-usage` and doctor's ledger
+  checks report a pruned range as absent rather than as an error.
 
 - **`docs/DOCTOR.md` is the doctor reference** (#2100). It has one section per
   finding code (`NGD000`–`NGD042`, `NGD100`–`NGD111`) with its cause and

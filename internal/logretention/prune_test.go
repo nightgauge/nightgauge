@@ -97,24 +97,37 @@ func TestPruneSizeAndAge(t *testing.T) {
 }
 
 // TestPruneDefaultOpenSetIsLiveFiles: with no explicit Open list the live
-// writers' files are still never deleted.
+// writers' files are never deleted: go-backend.log and only the current day's
+// ledger segment. Earlier segments, size backups and the pre-segment ledger
+// are prunable, which is what bounds the ledger.
 func TestPruneDefaultOpenSetIsLiveFiles(t *testing.T) {
 	dir := t.TempDir()
-	var paths []string
-	for _, n := range LiveFiles {
-		paths = append(paths, fixture(t, dir, n, 1000, 100*day))
+	var live []string
+	for _, n := range LiveFiles(testNow) {
+		live = append(live, fixture(t, dir, n, 1000, 100*day))
 	}
-	rotated := fixture(t, dir, "github-api.jsonl.1", 1000, 100*day)
+	if filepath.Base(live[1]) != "github-api-2026-09-29.jsonl" {
+		t.Fatalf("today's ledger segment = %s", filepath.Base(live[1]))
+	}
+	var prunable []string
+	for _, n := range []string{
+		"github-api-2026-09-28.jsonl", "github-api-2026-09-29.jsonl.1",
+		"github-api.jsonl", "github-api.jsonl.1",
+	} {
+		prunable = append(prunable, fixture(t, dir, n, 1000, 100*day))
+	}
 	if _, err := Prune(dir, Options{Policy: Policy{MaxBytes: 1, MaxAge: day}, Now: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range paths {
+	for _, p := range live {
 		if !exists(p) {
 			t.Errorf("%s was deleted", filepath.Base(p))
 		}
 	}
-	if exists(rotated) {
-		t.Error("the ledger's rotated backup is prunable and should be gone")
+	for _, p := range prunable {
+		if exists(p) {
+			t.Errorf("%s is prunable and should be gone", filepath.Base(p))
+		}
 	}
 }
 
