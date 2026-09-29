@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/doctor"
@@ -68,7 +71,8 @@ func (s *scriptedDoctor) scan(context.Context, string) ([]doctor.CheckResult, er
 func doctorSweeper(t *testing.T, scans ...func() ([]doctor.CheckResult, error)) (*Sweeper, *attention.Store) {
 	t.Helper()
 	script := &scriptedDoctor{scans: scans}
-	p := &Doctor{Scan: script.scan, PrimaryRepo: func(string) string { return "" }}
+	// No reuse: each sweep here scripts its own scan.
+	p := &Doctor{Scan: script.scan, PrimaryRepo: func(string) string { return "" }, cache: newDoctorScanCache(0)}
 	return coverageSweeper(t, p)
 }
 
@@ -356,5 +360,174 @@ func TestDoctorVerbs_RemedyThatDoesNotVerifyKeepsTheCard(t *testing.T) {
 	err := attention.ExecuteDoctorApplyRemedy(context.Background(), runner, req, req.Options[0])
 	if !errors.Is(err, attention.ErrDoctorFindingStillPresent) {
 		t.Fatalf("applyRemedy = %v, want still present", err)
+	}
+}
+
+// --- the rescan interval -------------------------------------------------------
+
+type fakeDoctorClock struct{ t time.Time }
+
+func (c *fakeDoctorClock) now() time.Time { return c.t }
+
+func cachedDoctor(scan func(context.Context, string) ([]doctor.CheckResult, error)) (*Doctor, *doctorScanCache, *fakeDoctorClock) {
+	clock := &fakeDoctorClock{t: time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)}
+	cache := newDoctorScanCache(DoctorRescanInterval)
+	cache.now = clock.now
+	return &Doctor{Scan: scan, PrimaryRepo: func(string) string { return doctorTestRepo }, cache: cache}, cache, clock
+}
+
+func TestDoctorProducer_ReusesTheScanWithinTheRescanInterval(t *testing.T) {
+	scans := 0
+	p, _, clock := cachedDoctor(func(context.Context, string) ([]doctor.CheckResult, error) {
+		scans++
+		return doctorResults(fxBlocker), nil
+	})
+	in := WorkspaceInput{WorkspaceRoot: t.TempDir()}
+	for i := 0; i < 3; i++ {
+		reqs, err := p.Evaluate(context.Background(), in)
+		if err != nil || len(reqs) != 1 {
+			t.Fatalf("sweep %d = %d cards, %v; want the cached blocker", i, len(reqs), err)
+		}
+		clock.t = clock.t.Add(DoctorRescanInterval / 3)
+	}
+	if scans != 1 {
+		t.Fatalf("scans within the interval = %d, want 1", scans)
+	}
+	clock.t = clock.t.Add(DoctorRescanInterval)
+	if _, err := p.Evaluate(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if scans != 2 {
+		t.Fatalf("scans after the interval = %d, want 2", scans)
+	}
+	// Another workspace root has a scan of its own.
+	if _, err := p.Evaluate(context.Background(), WorkspaceInput{WorkspaceRoot: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+	if scans != 3 {
+		t.Fatalf("a second root reused the first root's scan (scans = %d)", scans)
+	}
+}
+
+func TestDoctorProducer_FailedOrCancelledScanIsNotCached(t *testing.T) {
+	scans := 0
+	var fail error
+	p, _, _ := cachedDoctor(func(context.Context, string) ([]doctor.CheckResult, error) {
+		scans++
+		return doctorResults(fxBlocker), fail
+	})
+	in := WorkspaceInput{WorkspaceRoot: t.TempDir()}
+	fail = errors.New("config unreadable")
+	if _, err := p.Evaluate(context.Background(), in); err == nil {
+		t.Fatal("a failed scan was reported as an observation")
+	}
+	fail = nil
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := p.Evaluate(ctx, in); err == nil {
+		t.Fatal("a cancelled scan was reported as an observation")
+	}
+	if _, err := p.Evaluate(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if scans != 3 {
+		t.Fatalf("scans = %d, want 3: neither the failed nor the cancelled scan may be reused", scans)
+	}
+}
+
+type doctorVerbExecutor struct{ runner attention.DoctorRemedyRunner }
+
+func (e doctorVerbExecutor) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest, opt attention.Option) error {
+	if opt.Verb == attention.VerbDoctorRecheck {
+		return attention.ExecuteDoctorRecheck(ctx, e.runner, req, opt)
+	}
+	return attention.ExecuteDoctorApplyRemedy(ctx, e.runner, req, opt)
+}
+
+// The operator fixes the condition by hand and re-checks: the card resolves,
+// and the next sweep, still inside the rescan interval, scans again rather
+// than raising the card anew from the scan taken before the fix.
+func TestDoctorProducer_RecheckThatClearsAFindingIsNotReRaised(t *testing.T) {
+	w := &leaseWorld{stale: true}
+	scans := 0
+	p, cache, clock := cachedDoctor(func(ctx context.Context, root string) ([]doctor.CheckResult, error) {
+		scans++
+		return w.fixer(root).Scan(ctx), nil
+	})
+	sw, store := coverageSweeper(t, p)
+	sweepDoctor(t, sw)
+	cards := openDoctorCards(t, store)
+	card, ok := cards[attention.DoctorCardKey(fxBlocker.Check, fxBlocker.Fingerprint)]
+	if !ok || len(cards) != 1 {
+		t.Fatalf("first sweep cards = %v, want the blocker", cards)
+	}
+
+	w.stale = false // fixed by hand
+	runner := DoctorRemedies{WorkspaceRoot: sw.WorkspaceRoot, NewFixer: w.fixer, cache: cache}
+	if _, err := store.Resolve(context.Background(), card.ID, "recheck", "operator@test", "", "",
+		doctorVerbExecutor{runner: runner}); err != nil {
+		t.Fatalf("resolve via recheck: %v", err)
+	}
+
+	clock.t = clock.t.Add(time.Minute) // well inside the interval
+	sweepDoctor(t, sw)
+	if scans != 2 {
+		t.Fatalf("scans = %d, want 2: the recheck must drop the cached scan", scans)
+	}
+	if open := openDoctorCards(t, store); len(open) != 0 {
+		t.Fatalf("the cleared finding was raised again: %v", open)
+	}
+}
+
+func TestSwapDoctorScanForTest_ResetsTheCache(t *testing.T) {
+	root := t.TempDir()
+	calls := 0
+	restore := SwapDoctorScanForTest(func(context.Context, string) ([]doctor.CheckResult, error) {
+		calls++
+		return nil, nil
+	})
+	defer restore()
+	p := &Doctor{PrimaryRepo: func(string) string { return doctorTestRepo }}
+	in := WorkspaceInput{WorkspaceRoot: root}
+	for i := 0; i < 2; i++ {
+		if _, err := p.Evaluate(context.Background(), in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("scans = %d, want 1 through the process-wide cache", calls)
+	}
+	ResetDoctorScanCacheForTest()
+	if _, err := p.Evaluate(context.Background(), in); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("scans after a reset = %d, want 2", calls)
+	}
+}
+
+// Concurrent sweeps of one root (the CLI and the daemon in one process) share
+// one scan.
+func TestDoctorProducer_ConcurrentSweepsShareOneScan(t *testing.T) {
+	var scans atomic.Int32
+	p, _, _ := cachedDoctor(func(context.Context, string) ([]doctor.CheckResult, error) {
+		scans.Add(1)
+		time.Sleep(20 * time.Millisecond)
+		return doctorResults(fxBlocker), nil
+	})
+	in := WorkspaceInput{WorkspaceRoot: t.TempDir()}
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if reqs, err := p.Evaluate(context.Background(), in); err != nil || len(reqs) != 1 {
+				t.Errorf("concurrent sweep = %d cards, %v", len(reqs), err)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := scans.Load(); n != 1 {
+		t.Fatalf("scans = %d, want 1", n)
 	}
 }

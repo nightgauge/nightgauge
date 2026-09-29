@@ -32,8 +32,11 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -53,6 +56,10 @@ type Doctor struct {
 	// PrimaryRepo is a seam for tests. Nil reads the primary repository from
 	// the workspace config.
 	PrimaryRepo func(workspaceRoot string) string
+
+	// cache is where the producer keeps its last successful scan. Nil uses
+	// the process-wide cache the doctor verbs invalidate.
+	cache *doctorScanCache
 }
 
 func init() { Default.RegisterWorkspace(&Doctor{}) }
@@ -74,7 +81,11 @@ func (p *Doctor) Evaluate(ctx context.Context, in WorkspaceInput) ([]attention.D
 	if scan == nil {
 		scan = doctorScan
 	}
-	results, err := scan(ctx, root)
+	cache := p.cache
+	if cache == nil {
+		cache = defaultDoctorScanCache
+	}
+	results, err := cache.scan(ctx, root, scan)
 	if err != nil {
 		return nil, fmt.Errorf("doctor: scan failed: %w", err)
 	}
@@ -176,6 +187,97 @@ func scanDoctor(ctx context.Context, root string) ([]doctor.CheckResult, error) 
 	return newDoctorFixer(root).Scan(ctx), nil
 }
 
+// DoctorRescanInterval is how long the doctor producer reuses its last
+// successful scan of a workspace before it runs the doctor again.
+//
+// The daemon may sweep about once a minute (SweepMinGap), and a full doctor
+// scan is not free: the GitHub checks spend API quota (a board read among
+// them) and the hygiene checks walk the process table and every worktree.
+// Doctor conditions are configuration and machine state that change on the
+// scale of an operator's session, not of a minute, so ten minutes keeps cards
+// current without the doctor becoming one of the workspace's biggest API
+// spenders. A card action never waits for it: doctor.applyRemedy and
+// doctor.recheck re-run the owning check live and drop the cached scan, so a
+// fixed card is not raised again from a stale one.
+const DoctorRescanInterval = 10 * time.Minute
+
+// doctorScanCache holds the last successful scan per workspace root. One
+// process-wide instance is shared by every sweep in the process (the CLI and
+// the daemon alike) and by the doctor verbs, which invalidate it.
+type doctorScanCache struct {
+	interval time.Duration // <= 0 never reuses a scan
+	now      func() time.Time
+
+	mu      sync.Mutex
+	entries map[string]*doctorScanEntry
+}
+
+// doctorScanEntry is one root's cached scan. Its own mutex serializes scans
+// of that root, so concurrent sweeps share one scan instead of each running
+// the doctor, while other roots are not held up.
+type doctorScanEntry struct {
+	mu      sync.Mutex
+	results []doctor.CheckResult
+	at      time.Time
+	valid   bool
+}
+
+func newDoctorScanCache(interval time.Duration) *doctorScanCache {
+	return &doctorScanCache{interval: interval, now: time.Now, entries: map[string]*doctorScanEntry{}}
+}
+
+var defaultDoctorScanCache = newDoctorScanCache(DoctorRescanInterval)
+
+func doctorCacheKey(root string) string { return filepath.Clean(strings.TrimSpace(root)) }
+
+func (c *doctorScanCache) entry(root string) *doctorScanEntry {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := doctorCacheKey(root)
+	e, ok := c.entries[key]
+	if !ok {
+		e = &doctorScanEntry{}
+		c.entries[key] = e
+	}
+	return e
+}
+
+// scan returns the cached scan of root while it is younger than the interval,
+// and otherwise runs scan. Only a successful, uncancelled scan is cached: an
+// error or a scan cut short by the sweep deadline is returned as it is and
+// the next sweep scans again.
+func (c *doctorScanCache) scan(ctx context.Context, root string,
+	scan func(context.Context, string) ([]doctor.CheckResult, error)) ([]doctor.CheckResult, error) {
+	e := c.entry(root)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if c.interval > 0 && e.valid && c.now().Sub(e.at) < c.interval {
+		return append([]doctor.CheckResult(nil), e.results...), nil
+	}
+	results, err := scan(ctx, root)
+	if err != nil || ctx.Err() != nil {
+		e.valid = false
+		return results, err
+	}
+	e.results, e.at, e.valid = results, c.now(), true
+	return append([]doctor.CheckResult(nil), results...), nil
+}
+
+// invalidate drops root's cached scan, so the next sweep runs the doctor.
+func (c *doctorScanCache) invalidate(root string) {
+	e := c.entry(root)
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.results, e.valid = nil, false
+}
+
+// reset drops every cached scan.
+func (c *doctorScanCache) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries = map[string]*doctorScanEntry{}
+}
+
 // doctorScan is the registered producer's scan. Only SwapDoctorScanForTest
 // changes it.
 var doctorScan = scanDoctor
@@ -184,11 +286,22 @@ var doctorScan = scanDoctor
 // and returns the restore function. A package whose tests drive the default
 // sweep registry calls it from TestMain, so no test runs the real doctor
 // against the host (its binaries, credentials and GitHub).
+//
+// Swapping and restoring both reset the process-wide scan cache, so a scan
+// cached by one implementation is never served for the other.
 func SwapDoctorScanForTest(scan func(ctx context.Context, workspaceRoot string) ([]doctor.CheckResult, error)) func() {
 	prev := doctorScan
 	doctorScan = scan
-	return func() { doctorScan = prev }
+	defaultDoctorScanCache.reset()
+	return func() {
+		doctorScan = prev
+		defaultDoctorScanCache.reset()
+	}
 }
+
+// ResetDoctorScanCacheForTest drops every cached doctor scan, for a test that
+// needs the next sweep to scan again.
+func ResetDoctorScanCacheForTest() { defaultDoctorScanCache.reset() }
 
 // doctorCard builds the standing card for one blocker or warning finding.
 // Everything operator-facing is redacted first. ok is false for a finding
@@ -333,6 +446,21 @@ type DoctorRemedies struct {
 	// NewFixer is a seam for tests. Nil builds the engine the way the doctor
 	// producer's scan does.
 	NewFixer func(workspaceRoot string) *doctor.Fixer
+
+	// cache is the scan cache the verbs invalidate. Nil uses the process-wide
+	// one the registered producer reads.
+	cache *doctorScanCache
+}
+
+// forget drops the producer's cached scan of this root. A verb that ran the
+// engine may have changed what the doctor reports, and the next sweep must
+// not re-raise a card the operator just cleared from a scan taken before.
+func (d DoctorRemedies) forget() {
+	c := d.cache
+	if c == nil {
+		c = defaultDoctorScanCache
+	}
+	c.invalidate(d.WorkspaceRoot)
 }
 
 var _ attention.DoctorRemedyRunner = DoctorRemedies{}
@@ -355,6 +483,7 @@ func (d DoctorRemedies) ApplyRemedy(ctx context.Context, check, fingerprint, rem
 	if err != nil {
 		return attention.DoctorRemedyOutcome{}, err
 	}
+	defer d.forget()
 	res := fx.ApplyFingerprint(ctx, check, fingerprint, remedyID, true)
 	return attention.DoctorRemedyOutcome{Outcome: string(res.Outcome), Detail: res.Detail}, nil
 }
@@ -365,6 +494,7 @@ func (d DoctorRemedies) Recheck(ctx context.Context, check, fingerprint string) 
 	if err != nil {
 		return false, err
 	}
+	defer d.forget()
 	res, ok := fx.Recheck(ctx, check)
 	if !ok {
 		return false, fmt.Errorf("check %q is not registered", check)
