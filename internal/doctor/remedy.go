@@ -199,8 +199,13 @@ type FixOptions struct {
 	// Yes consents to every confirm remedy.
 	Yes bool
 	// Consent, when set, is asked about each confirm remedy Yes does not
-	// already cover (interactive consent).
+	// already cover (interactive consent). It receives redacted copies, and
+	// the remedy's Preview is the verb's live preview.
 	Consent func(Finding, Remedy) bool
+	// ConsentAuto extends Consent to auto remedies, so the interactive CLI
+	// can let the operator skip a safe remedy too. It has no effect without
+	// Consent.
+	ConsentAuto bool
 	// Only restricts the pass to findings whose code or check ID is listed.
 	Only []string
 	// Severities restricts the pass to findings of these severities.
@@ -355,9 +360,18 @@ func (fx *Fixer) decide(ctx context.Context, f Finding, opts FixOptions) FixResu
 		}
 		return newFixResult(f, &rem, ActionPreviewed, "", preview, detail)
 	}
-	if rem.Kind == RemedyConfirm && !opts.Yes && (opts.Consent == nil || !opts.Consent(f, rem)) {
-		return newFixResult(f, &rem, ActionAwaitingConsent, OutcomeSkipped, preview,
-			"a confirm remedy: not applied without --yes or interactive consent")
+	askConfirm := rem.Kind == RemedyConfirm && !opts.Yes
+	askAuto := rem.Kind == RemedyAuto && opts.ConsentAuto && opts.Consent != nil
+	if askConfirm || askAuto {
+		shown := rem
+		shown.Preview = preview
+		if opts.Consent == nil || !opts.Consent(RedactFinding(f), redactRemedy(shown)) {
+			detail := "a confirm remedy: not applied without --yes or interactive consent"
+			if askAuto {
+				detail = "declined interactively"
+			}
+			return newFixResult(f, &rem, ActionAwaitingConsent, OutcomeSkipped, preview, detail)
+		}
 	}
 	return fx.apply(ctx, f, rem, verb, registered, preview)
 }

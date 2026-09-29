@@ -16,6 +16,22 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Plain `nightgauge doctor` on a terminal is a guided repair session**
+  (#2095). While the checks run it shows live progress, then a summary by
+  severity with blockers first and housekeeping collapsed to one line. It then
+  walks each finding that has a remedy: `[f]ix`, `[s]kip`, `[d]etails`,
+  `[o]pen`, `[a]ll safe` and `[q]uit`. A `confirm` remedy shows its preview
+  and asks again before it applies. After each fix the view shows the verified
+  result. A `manual` remedy lists numbered steps and waits on `[c]heck again`,
+  which re-runs only that check. The session ends with a report of fixed,
+  still present, skipped, not attempted and needs-you findings, and the exit
+  code is the post-repair state. Ctrl-C stops between remedies, never during
+  one. `[o]pen` opens only `https` links on the ADR-025 allowlist, passing
+  the URL to the OS opener as a single argument. `doctor --fix` on a terminal
+  now asks before each `confirm` remedy. With `--json`, the new
+  `--no-interactive`, or no terminal, doctor never prompts or reads stdin, and
+  its output is unchanged.
+
 - **`nightgauge doctor --fix` applies remedies and verifies each one**
   (#2093). A closed Go verb registry executes the remedies doctor findings
   declare: `auto` remedies apply, `confirm` remedies only with `--yes`, and

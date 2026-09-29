@@ -12092,6 +12092,7 @@ func doctorCmd() *cobra.Command {
 	var jsonOutput bool
 	var adaptersFlag string
 	var fixFlags doctorFixFlags
+	var noInteractive bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Verify the full environment is healthy for pipeline operations",
@@ -12136,7 +12137,14 @@ verified by re-running its check: FIXED only when the finding is gone.
 --dry-run prints every preview and changes nothing. --only and --severity
 narrow the pass. --history prints the local fix log. Under --fix the exit
 code is the state after verification, except 3 (conflict: nothing was
-overwritten) and 4 (blocked: a precondition failed at apply time).`,
+overwritten) and 4 (blocked: a precondition failed at apply time).
+
+On a terminal, plain doctor is a guided repair session: live check
+progress, a severity summary, then each finding with a remedy offered as
+[f]ix [s]kip [d]etails [o]pen [a]ll safe [q]uit, and a before/after
+report. --fix on a terminal asks before each confirm remedy. With
+--json, --no-interactive, or no terminal, doctor never prompts and never
+reads stdin; --fix without --yes then applies only auto remedies.`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fixOpts, err := fixFlags.options()
@@ -12159,37 +12167,27 @@ overwritten) and 4 (blocked: a precondition failed at apply time).`,
 			}
 
 			adapters := parseAdaptersFlag(adaptersFlag)
-			if fixFlags.active() {
-				fx, logErr := doctor.NewFixer(cfg, cfgErr, client, adapters)
-				if logErr != nil {
-					fmt.Fprintf(os.Stderr, "warning: the fix log is unavailable, applied remedies will not be recorded: %v\n", logErr)
-				}
-				if code := runDoctorFix(cmd.Context(), os.Stdout, fx, fixOpts, jsonOutput); code != 0 {
-					os.Exit(code)
-				}
-				return nil
+			deps := doctorDeps{
+				scan: func(ctx context.Context) doctor.DoctorResult {
+					return doctor.RunDoctorWithConfigError(ctx, cfg, cfgErr, client, adapters)
+				},
+				newFixer: func() *doctor.Fixer {
+					fx, logErr := doctor.NewFixer(cfg, cfgErr, client, adapters)
+					if logErr != nil {
+						fmt.Fprintf(os.Stderr, "warning: the fix log is unavailable, applied remedies will not be recorded: %v\n", logErr)
+					}
+					return fx
+				},
 			}
-			result := doctor.RunDoctorWithConfigError(cmd.Context(), cfg, cfgErr, client, adapters)
-
-			if jsonOutput {
-				if err := printJSON(result); err != nil {
-					fmt.Fprintf(os.Stderr, "warning: failed to encode JSON output: %v\n", err)
-				}
-				if result.ExitCode != 0 {
-					os.Exit(result.ExitCode)
-				}
-				return nil
-			}
-
-			renderDoctorHuman(os.Stdout, result, doctor.ColorEnabled(os.Stdout))
-
-			if result.ExitCode != 0 {
-				os.Exit(result.ExitCode)
+			inv := doctorInvocation{fix: fixFlags, opts: fixOpts, json: jsonOutput, noInteractive: noInteractive}
+			if code := runDoctorCommand(cmd.Context(), stdioDoctorTerm(), inv, deps); code != 0 {
+				os.Exit(code)
 			}
 			return nil
 		},
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
+	cmd.Flags().BoolVar(&noInteractive, "no-interactive", false, "Print the list report and never prompt, even on a terminal")
 	cmd.Flags().StringVar(&adaptersFlag, "adapters", "", "Comma-separated adapters to health-check (e.g. codex,claude); 'all' checks every adapter")
 	addDoctorFixFlags(cmd, &fixFlags)
 	cmd.AddCommand(doctorAutomationCmd())
