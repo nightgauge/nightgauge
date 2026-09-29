@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/nightgauge/nightgauge/internal/logretention"
 )
 
 // writeLog writes a session log fixture under workdir/.nightgauge/logs/.
@@ -242,5 +246,75 @@ func TestFailurePatternsMatchSkillSource(t *testing.T) {
 		if FailurePatterns[i] != p {
 			t.Errorf("FailurePatterns[%d] = %q, want %q", i, FailurePatterns[i], p)
 		}
+	}
+}
+
+// TestScan_AfterRetentionPrune (#2029): after log retention deletes old
+// session logs, a --since range reaching back past them is absent, not an
+// error: no warning, the surviving logs still scan, and OldestLogDate names
+// the earliest log left.
+func TestScan_AfterRetentionPrune(t *testing.T) {
+	dir := t.TempDir()
+	logs := filepath.Join(dir, ".nightgauge", "logs")
+	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
+	for _, f := range []struct {
+		name string
+		age  time.Duration
+	}{
+		{"2026-07-01_11_session.log", 90 * 24 * time.Hour},
+		{"2026-08-01_12_session.log", 59 * 24 * time.Hour},
+		{"2026-09-20_13_session.log", 9 * 24 * time.Hour},
+	} {
+		writeLog(t, dir, f.name, []string{"build failed with rc=2"})
+		mt := now.Add(-f.age)
+		if err := os.Chtimes(filepath.Join(logs, f.name), mt, mt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := logretention.Prune(logs, logretention.Options{
+		Policy:   logretention.Policy{MaxAge: 30 * 24 * time.Hour},
+		Now:      now,
+		InFlight: func(int) bool { return false },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Deleted) != 2 {
+		t.Fatalf("prune deleted %d files, want 2", len(res.Deleted))
+	}
+
+	got, err := Scan(Options{Workdir: dir, Since: "2026-06-01"})
+	if err != nil {
+		t.Fatalf("Scan after prune: %v", err)
+	}
+	if len(got.Warnings) != 0 {
+		t.Errorf("warnings after prune = %v, want none", got.Warnings)
+	}
+	if got.LogFilesScanned != 1 || got.FilesWithSignals != 1 {
+		t.Errorf("scanned=%d signals=%d, want 1 and 1", got.LogFilesScanned, got.FilesWithSignals)
+	}
+	if got.OldestLogDate != "2026-09-20" {
+		t.Errorf("OldestLogDate = %q, want 2026-09-20", got.OldestLogDate)
+	}
+}
+
+// TestScan_LogVanishedMidScan: a log deleted between the listing and the
+// open (a dangling entry stands in for the race) is skipped silently.
+func TestScan_LogVanishedMidScan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need privileges on Windows")
+	}
+	dir := t.TempDir()
+	writeLog(t, dir, "2026-09-20_13_session.log", []string{"ok"})
+	logs := filepath.Join(dir, ".nightgauge", "logs")
+	if err := os.Symlink(filepath.Join(logs, "gone"), filepath.Join(logs, "2026-09-01_9_session.log")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Scan(Options{Workdir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Warnings) != 0 || got.LogFilesScanned != 1 {
+		t.Errorf("warnings=%v scanned=%d, want none and 1", got.Warnings, got.LogFilesScanned)
 	}
 }

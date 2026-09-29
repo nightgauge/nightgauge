@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/logretention"
 )
 
 func writeLedger(t *testing.T, lines ...string) string {
@@ -432,5 +434,47 @@ func TestAPIUsageByIdentity(t *testing.T) {
 	out = run("--identity", "unknown")
 	if !strings.Contains(out, "1 requests") {
 		t.Errorf("--identity unknown did not select the pre-#2087 record:\n%s", out)
+	}
+}
+
+// TestReadAPIUsageAfterRetentionPrune (#2029): log retention deletes the
+// ledger's old rotated backup and keeps the live file; the default rolling-set
+// read reports the surviving records and treats the pruned range as absent.
+func TestReadAPIUsageAfterRetentionPrune(t *testing.T) {
+	root := t.TempDir()
+	logs := filepath.Join(root, ".nightgauge", "logs")
+	if err := os.MkdirAll(logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	live := filepath.Join(logs, "github-api.jsonl")
+	backup := live + ".1"
+	recent := time.Now().Add(-5 * time.Minute).UTC().Format(time.RFC3339Nano)
+	if err := os.WriteFile(live, []byte(`{"ts":"`+recent+`","kind":"graphql","cost":17,"caller":"new"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backup, []byte(`{"ts":"2026-01-01T00:00:00Z","kind":"graphql","cost":9,"caller":"old"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-60 * 24 * time.Hour)
+	for _, p := range []string{live, backup} {
+		if err := os.Chtimes(p, old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := logretention.Prune(logs, logretention.Options{Policy: logretention.DefaultPolicy()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Deleted) != 1 || res.Deleted[0].Name != "github-api.jsonl.1" {
+		t.Fatalf("pruned %+v, want only the rotated backup", res.Deleted)
+	}
+
+	t.Chdir(root)
+	recs, err := readAPIUsage("", 0)
+	if err != nil {
+		t.Fatalf("readAPIUsage after prune: %v", err)
+	}
+	if len(recs) != 1 || recs[0].Caller != "new" {
+		t.Fatalf("got %+v, want the live file's one record", recs)
 	}
 }

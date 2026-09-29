@@ -1360,9 +1360,11 @@ type PipelineConfig struct {
 	// Logs holds the pipeline.logs: block — currently just
 	// history_retention_days, the ONE knob shared by the VSCode extension's
 	// execution-history cleanup and the Go writer's own prune pass (#674).
-	// The other pipeline.logs.* keys (retain, dir, max_age_days, max_count,
-	// max_entry_chars) govern the VSCode-only disk session log and have no Go
-	// consumer, so they are deliberately not modeled here.
+	// The other pipeline.logs.* keys (retain, dir, max_count, max_entry_chars)
+	// govern the VSCode-only disk session log and have no Go consumer, so they
+	// are deliberately not modeled here. max_size_mb and max_age_days are the
+	// machine-tier log retention caps (ADR-024 § 11); internal/logretention
+	// reads them from the machine file alone, never through this struct.
 	Logs *PipelineLogsConfig `yaml:"logs,omitempty" json:"logs,omitempty"`
 }
 

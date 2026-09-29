@@ -2,7 +2,9 @@ package scanfailures
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -66,6 +68,11 @@ type Options struct {
 // the consolidated Result. Missing logs directory is treated as zero matches
 // (matches the existing Python behavior). Per-file IO errors are recorded as
 // warnings; only structural errors (e.g., unreadable workdir) fail.
+//
+// Log retention (#2029) deletes whole session logs by age and size, so a
+// --since range can reach back past the oldest log still on disk. That range
+// is reported as absent: no error, no warning, and OldestLogDate names the
+// earliest date actually scanned.
 func Scan(opts Options) (Result, error) {
 	workdir := opts.Workdir
 	if workdir == "" {
@@ -120,8 +127,16 @@ func Scan(opts Options) (Result, error) {
 			}
 		}
 
-		result.LogFilesScanned++
 		matches, err := scanFile(filepath.Join(logsDir, name))
+		if errors.Is(err, fs.ErrNotExist) {
+			// Pruned by log retention (#2029) between the listing and the
+			// open: the range is absent, not unreadable.
+			continue
+		}
+		result.LogFilesScanned++
+		if date != "" && (result.OldestLogDate == "" || date < result.OldestLogDate) {
+			result.OldestLogDate = date
+		}
 		if err != nil {
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("log %s: %v", name, err))

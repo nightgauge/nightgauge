@@ -175,7 +175,8 @@ func readAPIUsage(path string, since time.Duration) ([]apiUsageRecord, error) {
 	// collapse in spending at precisely the moment spending was heavy enough
 	// to rotate, which is the one window anybody opens this report for.
 	var files []string
-	if path != "" {
+	explicit := path != ""
+	if explicit {
 		files = []string{path}
 	} else {
 		wd, err := os.Getwd()
@@ -193,8 +194,11 @@ func readAPIUsage(path string, since time.Duration) ([]apiUsageRecord, error) {
 	for _, file := range files {
 		recs, err := readAPIUsageFile(file, cutoff)
 		if err != nil {
-			if os.IsNotExist(err) && len(files) > 1 {
-				continue // rotated away between listing and opening
+			if os.IsNotExist(err) && !explicit {
+				// Rotated away or pruned by log retention (#2029) between
+				// listing and opening: that range is absent, not an error.
+				// Zero surviving records report as an empty window.
+				continue
 			}
 			return nil, err
 		}

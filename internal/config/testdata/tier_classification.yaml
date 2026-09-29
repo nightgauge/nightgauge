@@ -40,5 +40,7 @@ keys:
   autonomous.enabled_repos: machine
   autonomous.allow_self_repo: machine
   autonomous.repositories.*: machine
+  pipeline.logs.max_size_mb: machine
+  pipeline.logs.max_age_days: machine
   # Runtime tier — VSCode memento (not in YAML files; enforcement pending #3313 Phase 3)
   pipeline.max_concurrent: runtime

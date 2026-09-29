@@ -521,6 +521,8 @@ func TestMachineTierKeysSnapshot(t *testing.T) {
 		"ui.core.auth_provider",
 		"platform",
 		"pipeline.max_concurrent",
+		"pipeline.logs.max_size_mb",
+		"pipeline.logs.max_age_days",
 	}
 	if len(MachineTierKeys) != len(want) {
 		t.Fatalf("MachineTierKeys length = %d, want %d (%v)", len(MachineTierKeys), len(want), MachineTierKeys)

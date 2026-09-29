@@ -16,6 +16,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Nightgauge logs are bounded by size and age** (#2029, ADR-024 § 11). Each
+  log directory (the clone's `.nightgauge/logs/` and the machine state `logs/`)
+  is held to 200 MB and 30 days by default, set by machine-tier
+  `pipeline.logs.max_size_mb` and `pipeline.logs.max_age_days`. Retention runs
+  at `nightgauge serve` start and daily while it runs, and at CLI start when the
+  last prune is over a day old; `nightgauge logs prune` runs it on demand. It
+  deletes whole regular files, oldest first, inside the resolved directory
+  only, and never a live file, a file written in the last hour, or a file of a
+  run that is not terminal. `nightgauge doctor` reports each directory's size
+  and the caps, and flags a directory over its cap (`NGD043`).
+  `nightgauge logs scan-failures` and `nightgauge api-usage` report a pruned
+  range as absent rather than as an error.
+
 - **`docs/DOCTOR.md` is the doctor reference** (#2100). It has one section per
   finding code (`NGD000`–`NGD042`, `NGD100`–`NGD111`) with its cause and
   remedies. Every finding's `docs` link points there. It also covers the guided

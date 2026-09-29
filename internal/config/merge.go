@@ -63,6 +63,11 @@ var MachineTierKeys = []string{
 	// docs/DEPRECATIONS.md) — adding it as a machine-tier key would steer
 	// users toward a setting they should be removing entirely.
 	"pipeline.max_concurrent",
+	// Log retention caps (ADR-024 § 11, #2029): how much disk a machine gives
+	// its logs is a property of the machine, read by internal/logretention
+	// from this tier alone.
+	"pipeline.logs.max_size_mb",
+	"pipeline.logs.max_age_days",
 }
 
 // machineConfigPathFn lets tests override the resolved machine-tier

@@ -3528,9 +3528,14 @@ existing Python parser's behavior).
       ]
     }
   ],
-  "warnings": []
+  "warnings": [],
+  "oldest_log_date": "2026-04-02"
 }
 ```
+
+`oldest_log_date` is the date of the earliest log scanned. Log retention deletes
+whole session logs, so a `--since` range that reaches back past it is absent:
+reported with no error and no warning.
 
 The 16-pattern set is the source of truth in
 `internal/cmd/scanfailures/scanner.go` (`var FailurePatterns`). Failure
@@ -3539,6 +3544,33 @@ _classification_ (bucketing into one of 7 categories) is owned separately by
 `scripts/retro/classifiers/failure_classifier.py`.
 
 Used by `skills/nightgauge-retro/SKILL.md` Phase 2.3.
+
+#### `logs prune`
+
+Applies log retention now (ADR-024 § 11). Each log directory (the clone's
+`.nightgauge/logs/` and the machine state `logs/`) is held to a total size cap
+and a maximum file age, set by machine-tier `pipeline.logs.max_size_mb`
+(default 200) and `pipeline.logs.max_age_days` (default 30). Files older than
+the age cap go first, then the oldest files until the directory is under the
+size cap.
+
+Never deleted: the live files `go-backend.log` and `github-api.jsonl` (each
+bounds itself at 5 MB; the ledger's rotated `github-api.jsonl.1` is prunable),
+files written in the last hour, files of a run that is not terminal (running,
+queued, paused or parked; every issue-keyed file when the run state cannot be
+read), dot files, symlinks, subdirectories, and anything outside the resolved
+directory. A log directory that is itself a symlink is refused. When only such
+files remain over the cap, pruning stops and `nightgauge doctor` reports the
+directory (`NGD043`).
+
+The same prune runs at `nightgauge serve` start and daily while it runs, and at
+CLI start when the last prune (the mtime of `logs/.last-prune`) is over a day
+old.
+
+```bash
+nightgauge logs prune --dry-run
+nightgauge logs prune --workdir /path/to/repo --json
+```
 
 ---
 

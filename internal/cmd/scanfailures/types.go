@@ -55,4 +55,9 @@ type Result struct {
 	FilesWithSignals int              `json:"files_with_signals"`
 	LogSignals       []LogFileSignals `json:"log_signals"`
 	Warnings         []string         `json:"warnings"`
+	// OldestLogDate is the date prefix of the earliest session log scanned.
+	// Anything the filters asked for before it is absent: never written, or
+	// pruned by log retention (#2029). Additive in v1; empty when nothing was
+	// scanned.
+	OldestLogDate string `json:"oldest_log_date,omitempty"`
 }
