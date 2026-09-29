@@ -15,7 +15,8 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 		VerbAutonomousComplete, VerbAutonomousClearIssueFailures, VerbProjectSyncStatus,
 		VerbIssueClose, VerbBudgetRaiseCeiling, VerbRunRetryWithEscalation,
 		VerbIssueApproveArchitecture, VerbDependabotEnableAlerts,
-		VerbWorkspaceAddRepo, VerbBlockedFindingClear, VerbPRUpdateBranch, VerbNoop,
+		VerbWorkspaceAddRepo, VerbBlockedFindingClear, VerbPRUpdateBranch,
+		VerbDoctorApplyRemedy, VerbDoctorRecheck, VerbNoop,
 	}
 	for _, v := range registered {
 		if !IsRegisteredVerb(v) {
@@ -88,10 +89,11 @@ func TestRegistryIsClosedAllowlist(t *testing.T) {
 }
 
 func TestIsCLIExecutableVerb(t *testing.T) {
-	local := []string{VerbNoop, VerbBudgetRaiseCeiling, VerbRunRetryWithEscalation}
+	local := []string{VerbNoop, VerbBudgetRaiseCeiling, VerbRunRetryWithEscalation,
+		VerbDoctorApplyRemedy, VerbDoctorRecheck}
 	for _, v := range local {
 		if !IsCLIExecutableVerb(v) {
-			t.Errorf("verb %q should be CLI-executable (local 3-verb subset)", v)
+			t.Errorf("verb %q should be CLI-executable (local subset)", v)
 		}
 	}
 
@@ -544,5 +546,153 @@ func TestExecuteUpdatePRBranch_FailsLoudlyRatherThanSilentlySucceeding(t *testin
 		behindCard("acme/web", 7), updateBranchOpt, []string{"acme/web"})
 	if !errors.Is(err, boom) {
 		t.Errorf("error = %v, want the forge failure", err)
+	}
+}
+
+// --- doctor.applyRemedy and doctor.recheck (ADR-025 § 7) --------------------
+
+func TestVerbAllowlistIncludesDoctorVerbs(t *testing.T) {
+	for _, v := range []string{VerbDoctorApplyRemedy, VerbDoctorRecheck} {
+		if !IsRegisteredVerb(v) {
+			t.Errorf("%q must be registered", v)
+		}
+		if !IsCLIExecutableVerb(v) {
+			t.Errorf("%q must be CLI-executable", v)
+		}
+	}
+	// Nothing generic or adjacent to the remedy engine is reachable by
+	// guessing: a card can apply a declared remedy or re-check, and nothing else.
+	for _, v := range []string{"doctor.applyRemedy ", "doctor.fix", "doctor.run", "doctor.exec",
+		"doctor.applyVerb", "doctor.apply", "remedy.apply", "unknown.verb"} {
+		if IsRegisteredVerb(v) {
+			t.Errorf("verb %q must NOT be registered", v)
+		}
+	}
+	req := doctorCardReq()
+	req.Options = append(req.Options, Option{ID: "rogue", Verb: "doctor.fix"})
+	if _, err := ValidateOption(req, "rogue"); err == nil {
+		t.Error("an option naming an unregistered doctor verb validated")
+	}
+	if _, err := ValidateOption(req, "apply-release"); err != nil {
+		t.Errorf("the declared apply option was rejected: %v", err)
+	}
+}
+
+const testDoctorFP = "0123456789abcdef"
+
+func doctorCardReq() *DecisionRequest {
+	return &DecisionRequest{
+		ID:             "dr_doc",
+		Producer:       DoctorProducer,
+		IdempotencyKey: DoctorCardKey("serve_lease", testDoctorFP),
+		Options: []Option{
+			{ID: "apply-release", Verb: VerbDoctorApplyRemedy,
+				Args: map[string]any{DoctorOptionArgFingerprint: testDoctorFP, DoctorOptionArgRemedyID: "release"}},
+			{ID: "recheck", Verb: VerbDoctorRecheck, Args: map[string]any{DoctorOptionArgFingerprint: testDoctorFP}},
+		},
+	}
+}
+
+type recordingDoctor struct {
+	applied, rechecked []string
+	outcome            string
+	present            bool
+	err                error
+}
+
+func (d *recordingDoctor) ApplyRemedy(_ context.Context, check, fp, remedyID string) (DoctorRemedyOutcome, error) {
+	d.applied = append(d.applied, check+"/"+fp+"/"+remedyID)
+	return DoctorRemedyOutcome{Outcome: d.outcome, Detail: "detail"}, d.err
+}
+
+func (d *recordingDoctor) Recheck(_ context.Context, check, fp string) (bool, error) {
+	d.rechecked = append(d.rechecked, check+"/"+fp)
+	return d.present, d.err
+}
+
+func TestParseDoctorCardKey(t *testing.T) {
+	check, fp, ok := ParseDoctorCardKey(DoctorCardKey("serve_lease", testDoctorFP))
+	if !ok || check != "serve_lease" || fp != testDoctorFP {
+		t.Fatalf("round trip = %q %q %v", check, fp, ok)
+	}
+	for _, key := range []string{"", "doctor:", "doctor:serve_lease", "api-budget:serve_lease:" + testDoctorFP,
+		"doctor:../x:" + testDoctorFP, "doctor:serve_lease:XYZ", "doctor:serve_lease:" + testDoctorFP + ":extra"} {
+		if _, _, ok := ParseDoctorCardKey(key); ok {
+			t.Errorf("ParseDoctorCardKey(%q) accepted a malformed key", key)
+		}
+	}
+}
+
+// The target comes from the persisted card: the engine is called with the
+// card's own check and fingerprint.
+func TestExecuteDoctorApplyRemedy_AppliesTheDeclaredRemedy(t *testing.T) {
+	for outcome, wantErr := range map[string]bool{"fixed": false, "stale": false, "still-present": true,
+		"blocked": true, "conflict": true, "skipped": true} {
+		d := &recordingDoctor{outcome: outcome}
+		req := doctorCardReq()
+		err := ExecuteDoctorApplyRemedy(context.Background(), d, req, req.Options[0])
+		if (err != nil) != wantErr {
+			t.Errorf("outcome %s: err = %v, want error %v", outcome, err, wantErr)
+		}
+		if want := []string{"serve_lease/" + testDoctorFP + "/release"}; !reflect.DeepEqual(d.applied, want) {
+			t.Errorf("outcome %s: applied %v, want %v", outcome, d.applied, want)
+		}
+	}
+}
+
+func TestExecuteDoctorApplyRemedy_Refusals(t *testing.T) {
+	cases := map[string]func(*DecisionRequest, *Option){
+		"wrong verb":         func(_ *DecisionRequest, o *Option) { o.Verb = VerbDoctorRecheck },
+		"foreign producer":   func(r *DecisionRequest, _ *Option) { r.Producer = "human-gate" },
+		"malformed key":      func(r *DecisionRequest, _ *Option) { r.IdempotencyKey = "doctor:nope" },
+		"extra arg":          func(_ *DecisionRequest, o *Option) { o.Args["verb"] = "shell.exec" },
+		"missing remedy":     func(_ *DecisionRequest, o *Option) { delete(o.Args, DoctorOptionArgRemedyID) },
+		"foreign fp":         func(_ *DecisionRequest, o *Option) { o.Args[DoctorOptionArgFingerprint] = "fedcba9876543210" },
+		"non-string fp":      func(_ *DecisionRequest, o *Option) { o.Args[DoctorOptionArgFingerprint] = 7 },
+		"malformed remedyId": func(_ *DecisionRequest, o *Option) { o.Args[DoctorOptionArgRemedyID] = "../../etc" },
+	}
+	for name, mutate := range cases {
+		d := &recordingDoctor{outcome: "fixed"}
+		req := doctorCardReq()
+		opt := req.Options[0]
+		opt.Args = map[string]any{}
+		for k, v := range req.Options[0].Args {
+			opt.Args[k] = v
+		}
+		mutate(req, &opt)
+		if err := ExecuteDoctorApplyRemedy(context.Background(), d, req, opt); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+		if len(d.applied) != 0 {
+			t.Errorf("%s: the remedy engine was called", name)
+		}
+	}
+	req := doctorCardReq()
+	if err := ExecuteDoctorApplyRemedy(context.Background(), nil, req, req.Options[0]); err == nil {
+		t.Error("a surface without the remedy engine succeeded silently")
+	}
+}
+
+func TestExecuteDoctorRecheck(t *testing.T) {
+	req := doctorCardReq()
+	gone := &recordingDoctor{}
+	if err := ExecuteDoctorRecheck(context.Background(), gone, req, req.Options[1]); err != nil {
+		t.Fatalf("recheck of a cleared finding: %v", err)
+	}
+	if want := []string{"serve_lease/" + testDoctorFP}; !reflect.DeepEqual(gone.rechecked, want) {
+		t.Fatalf("rechecked %v, want %v", gone.rechecked, want)
+	}
+	present := &recordingDoctor{present: true}
+	if err := ExecuteDoctorRecheck(context.Background(), present, req, req.Options[1]); !errors.Is(err, ErrDoctorFindingStillPresent) {
+		t.Fatalf("recheck of a present finding = %v, want still present", err)
+	}
+	failing := &recordingDoctor{err: errors.New("check did not complete")}
+	if err := ExecuteDoctorRecheck(context.Background(), failing, req, req.Options[1]); err == nil {
+		t.Fatal("a recheck that could not run resolved the card")
+	}
+	// The remedy ID is not a recheck argument.
+	if err := ExecuteDoctorRecheck(context.Background(), gone, req, Option{ID: "recheck", Verb: VerbDoctorRecheck,
+		Args: map[string]any{DoctorOptionArgFingerprint: testDoctorFP, DoctorOptionArgRemedyID: "release"}}); err == nil {
+		t.Fatal("recheck accepted a remedy ID")
 	}
 }

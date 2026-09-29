@@ -4942,16 +4942,11 @@ therefore surfaced where an operator already looks:
   busy pipeline from a runaway sweep. The reading comes from the Go
   aggregation, not a second TypeScript one, so the two surfaces cannot
   disagree about what was spent.
-- **An Action Center `fyi` card** (`api-budget` producer, workspace-scoped)
-  when a window was exhausted in the last six hours, naming the top spender.
-  Workspace-scoped because one token has one quota and every repo spends out of
-  it; carding a repo would blame whichever one was swept first. It ships a
-  dismiss and no repair verb — no bounded, deterministic action fixes "a caller
-  is too expensive", and a button that silently does nothing is worse than none.
-
-An exhausted window is the state that most needs a card and the state in which
-every producer that could raise one has just lost its ability to call the API.
-This producer answers from disk, which is the only reason it can speak at all.
+- **An Action Center `fyi` card** from the doctor producer (ADR-025 § 7):
+  the `github_api_budget` warning above, carded with the same threshold, so
+  the doctor and the Action Center cannot disagree about one window. The card
+  resolves when a later sweep no longer reports it. The check answers from the
+  ledger on disk, which is why it can speak while the API is exhausted.
 
 Reading it back, grouped by caller, is what turned #842 from a theory into a
 worklist:

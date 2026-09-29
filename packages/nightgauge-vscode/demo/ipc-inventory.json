@@ -152,6 +152,21 @@
       "paramsShape": {}
     },
     {
+      "method": "doctor.run",
+      "resultType": "DoctorRunResult",
+      "client": "generated",
+      "surfaces": [
+        "webviews > DoctorPanel creates, renders, and disposes",
+        "demo mode > the Pipeline tree's active stage walks every stage in order"
+      ],
+      "sampleParams": {
+        "adapters": ["claude-headless"]
+      },
+      "paramsShape": {
+        "adapters": ["string"]
+      }
+    },
+    {
       "method": "forge.list",
       "resultType": "ForgeListResult",
       "client": "generated",

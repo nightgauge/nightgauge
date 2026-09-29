@@ -155,7 +155,12 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 func RunDoctorWithConfigError(ctx context.Context, cfg *config.Config, cfgErr error, client *gh.Client, adapters []string) DoctorResult {
 	cwd, _ := os.Getwd()
 	env := &Env{Cfg: cfg, CfgErr: cfgErr, Client: client, Cwd: cwd, Now: time.Now(), Adapters: adapters}
-	results := Runner{}.Run(ctx, DefaultRegistry(), env)
+	return runRegistry(ctx, DefaultRegistry(), env)
+}
+
+// runRegistry runs reg in env and builds the JSON v2 result.
+func runRegistry(ctx context.Context, reg *Registry, env *Env) DoctorResult {
+	results := Runner{}.Run(ctx, reg, env)
 	res := BuildResult(results)
 	env.mu.Lock()
 	res.InstallInstructions = env.install

@@ -20,6 +20,7 @@ import (
 	platformapi "github.com/nightgauge/nightgauge/api/generated/go/platform"
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/doctor"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/internal/forge"
@@ -78,6 +79,15 @@ type Server struct {
 	methods   map[string]Handler
 	execMgr   *execution.Manager
 	scheduler *orchestrator.Scheduler
+
+	// doctorMu serializes the doctor.* methods; doctorFixer holds the current
+	// scan and is set only by a full scan (internal/ipc/doctor.go).
+	// newDoctorFixer and doctorFixLogPath are test seams; nil means the real
+	// engine and the machine-state fix log.
+	doctorMu         sync.Mutex
+	doctorFixer      *doctor.Fixer
+	newDoctorFixer   func(root string, adapters []string) (*doctor.Fixer, error)
+	doctorFixLogPath func() (string, error)
 
 	// validateRemotePin decides a remote run request's adapter and model
 	// (#1656): orchestrator.ValidateRemotePin with this machine's deps. A
@@ -5372,6 +5382,21 @@ func (s *Server) registerMethods() {
 	// sweep only on a yes; the timer alone sweeps unconditionally.
 	//ipc:method boardChanged params:BoardChangedParams result:BoardChangedResult
 	s.methods["board.changed"] = s.handleBoardChanged
+
+	// --- Doctor (ADR-025): the remedy engine behind `doctor --fix` ---
+	// doctor.run streams `doctor.progress` events; see internal/ipc/doctor.go.
+
+	//ipc:method doctorRun params:DoctorRunParams result:DoctorRunResult
+	s.methods["doctor.run"] = s.handleDoctorRun
+
+	//ipc:method doctorApplyRemedy params:DoctorApplyRemedyParams result:DoctorApplyRemedyResult
+	s.methods["doctor.applyRemedy"] = s.handleDoctorApplyRemedy
+
+	//ipc:method doctorRecheck params:DoctorRecheckParams result:DoctorRecheckResult
+	s.methods["doctor.recheck"] = s.handleDoctorRecheck
+
+	//ipc:method doctorHistory params:DoctorHistoryParams result:DoctorHistoryResult
+	s.methods["doctor.history"] = s.handleDoctorHistory
 
 	//ipc:method issueRemoveBlockedBy params:IssueRemoveBlockedByParams result:void
 	s.methods["issue.removeBlockedBy"] = s.handleIssueRemoveBlockedBy

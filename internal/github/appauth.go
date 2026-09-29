@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -146,9 +148,21 @@ func parseAppPrivateKey(pemBytes []byte) (*rsa.PrivateKey, error) {
 }
 
 // cachedAppToken is the on-disk shape of a minted installation token.
+// Permissions is what GitHub granted the token at mint time; only its hash,
+// PermissionsHash, is written to the cache, so a later change to the
+// installation's permissions (an org accepting a new one) can be detected and
+// the token re-minted without the operator deleting the file (#2094).
 type cachedAppToken struct {
-	Token     string    `json:"token"`
-	ExpiresAt time.Time `json:"expires_at"`
+	Token           string         `json:"token"`
+	ExpiresAt       time.Time      `json:"expires_at"`
+	Permissions     AppPermissions `json:"permissions,omitempty"`
+	PermissionsHash string         `json:"permissions_hash"`
+}
+
+// cacheRecord is the entry written to disk: the token, its expiry and the
+// hash of its permissions, never the permission map itself.
+func (c *cachedAppToken) cacheRecord() cachedAppToken {
+	return cachedAppToken{Token: c.Token, ExpiresAt: c.ExpiresAt, PermissionsHash: c.PermissionsHash}
 }
 
 // appTokenCachePath is where installation's token is cached between
@@ -176,7 +190,10 @@ func appInstallationToken(ctx context.Context, creds *AppCredentials, now func()
 	if pathErr == nil {
 		if data, err := os.ReadFile(path); err == nil {
 			var c cachedAppToken
-			if json.Unmarshal(data, &c) == nil && c.Token != "" && c.ExpiresAt.Sub(now()) > appTokenRefreshMargin {
+			// An entry without a permissions hash predates #2094 and cannot be
+			// compared with the installation, so it is re-minted.
+			if json.Unmarshal(data, &c) == nil && c.Token != "" && c.PermissionsHash != "" &&
+				c.ExpiresAt.Sub(now()) > appTokenRefreshMargin {
 				return &oauth2.Token{AccessToken: c.Token, Expiry: c.ExpiresAt.Add(-appTokenRefreshMargin)}, nil
 			}
 		}
@@ -187,7 +204,7 @@ func appInstallationToken(ctx context.Context, creds *AppCredentials, now func()
 		return nil, err
 	}
 	if pathErr == nil {
-		if data, mErr := json.Marshal(tok); mErr == nil {
+		if data, mErr := json.Marshal(tok.cacheRecord()); mErr == nil {
 			_ = writeFileAtomic0600(path, data)
 		}
 	}
@@ -229,6 +246,7 @@ func mintInstallationToken(ctx context.Context, creds *AppCredentials, now time.
 	if err := json.Unmarshal(body, &out); err != nil || out.Token == "" {
 		return nil, fmt.Errorf("mint installation token for %s: response carried no token", creds)
 	}
+	out.PermissionsHash = PermissionsHash(out.Permissions)
 	return &out, nil
 }
 
@@ -266,6 +284,89 @@ func (s appTokenSource) Token() (*oauth2.Token, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	return appInstallationToken(ctx, s.creds, time.Now)
+}
+
+// appReuseSource hands out one installation token until it expires, like
+// oauth2.ReuseTokenSource, and can be told to drop it: a token minted before
+// the installation's permissions changed keeps the old permissions for its
+// whole life, so after SyncAppTokenPermissions discards the cached copy the
+// in-process copy must go too.
+type appReuseSource struct {
+	mu  sync.Mutex
+	tok *oauth2.Token
+	src oauth2.TokenSource
+}
+
+func newAppReuseSource(first *oauth2.Token, creds *AppCredentials) *appReuseSource {
+	return &appReuseSource{tok: first, src: appTokenSource{creds: creds}}
+}
+
+func (s *appReuseSource) Token() (*oauth2.Token, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tok.Valid() {
+		return s.tok, nil
+	}
+	t, err := s.src.Token()
+	if err != nil {
+		return nil, err
+	}
+	s.tok = t
+	return t, nil
+}
+
+func (s *appReuseSource) reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tok = nil
+}
+
+// PermissionsHash is a stable digest of a permission map (name=level lines,
+// sorted), truncated to 16 hex characters. An empty or nil map has a hash
+// too, so "minted with no permissions" is distinguishable from "unknown".
+func PermissionsHash(p AppPermissions) string {
+	keys := make([]string, 0, len(p))
+	for k := range p {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, k := range keys {
+		fmt.Fprintf(h, "%s=%s\n", k, p[k])
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
+}
+
+// SyncAppTokenPermissions compares the permissions hash stored with creds'
+// cached installation token against current, the installation's permissions
+// now (GET /app/installations/{id}). On a mismatch the cached token is
+// discarded, so the next request re-mints one carrying the new permissions,
+// and invalidated is true. No cache file is not an error.
+func SyncAppTokenPermissions(creds *AppCredentials, current AppPermissions) (invalidated bool, err error) {
+	if creds == nil {
+		return false, nil
+	}
+	appTokenMu.Lock()
+	defer appTokenMu.Unlock()
+	path, err := appTokenCachePath(creds.InstallationID)
+	if err != nil {
+		return false, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var c cachedAppToken
+	if json.Unmarshal(data, &c) == nil && c.PermissionsHash == PermissionsHash(current) {
+		return false, nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	return true, nil
 }
 
 // AppTokenExpiry reports when the cached installation token for owner's App

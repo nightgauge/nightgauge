@@ -1420,6 +1420,148 @@ export interface AttentionEvent {
   request: AttentionRequestView;
 }
 
+// ---------------------------------------------------------------------------
+// Doctor (ADR-025). Mirrors internal/doctor/finding.go, remedy.go, progress.go
+// and the doctor.* result structs in internal/ipc/protocol.go.
+// ---------------------------------------------------------------------------
+
+/** A finding's severity: blocker (exit 2), warning (exit 1), housekeeping and
+ * info (never change the exit code). */
+export type DoctorSeverity = "blocker" | "warning" | "housekeeping" | "info";
+
+/** auto: applied without a prompt; confirm: needs consent (`confirm: true`);
+ * manual: only the operator can act, so it carries steps and links. */
+export type DoctorRemedyKind = "auto" | "confirm" | "manual";
+
+/** A verified outcome. Empty for a dry run that only previewed the remedy. */
+export type DoctorOutcome =
+  "fixed" | "still-present" | "skipped" | "blocked" | "conflict" | "stale" | "";
+
+/** What the engine did with the remedy. */
+export type DoctorFixAction = "applied" | "previewed" | "awaiting-consent" | "manual" | "no-remedy";
+
+/** One registered fix for a finding. `verb` is a closed Go registry name. */
+export interface DoctorRemedy {
+  id: string;
+  kind: DoctorRemedyKind;
+  summary: string;
+  preview: string;
+  verb: string;
+  reversible: boolean;
+  verify: string;
+  steps?: string[];
+  links?: string[];
+}
+
+/** One coded finding. No finding for a check means the check passed. */
+export interface DoctorFinding {
+  /** "NGD014"; stable, never reused. */
+  code: string;
+  /** Registry ID of the owning check, e.g. "worktree_leaks". */
+  check: string;
+  severity: DoctorSeverity;
+  title: string;
+  cause: string;
+  /** Structured, redacted by the daemon before it leaves the process. */
+  evidence: Record<string, string> | null;
+  /** "docs/DOCTOR.md#ngd014". */
+  docs: string;
+  /** 16 lowercase hex characters, stable across runs. */
+  fingerprint: string;
+  /** May be empty; the first is preferred. */
+  remedies: DoctorRemedy[] | null;
+}
+
+export interface DoctorSummary {
+  blocker: number;
+  warning: number;
+  housekeeping: number;
+  info: number;
+}
+
+/** One adapter's health row (`adapters` in JSON v2, only when requested). */
+export interface DoctorAdapterHealth {
+  adapter: string;
+  kind: string;
+  binary?: string;
+  installed: boolean;
+  path?: string;
+  version?: string;
+  version_ok: boolean;
+  min_version?: string;
+  model?: string;
+  model_ok?: boolean;
+  ok: boolean;
+  remediation?: string;
+  code?: string;
+  warnings?: string[];
+  notes?: string[];
+}
+
+/** Result of doctor.run: `nightgauge doctor --json` v2. */
+export interface DoctorRunResult {
+  v: number;
+  findings: DoctorFinding[] | null;
+  summary: DoctorSummary;
+  healthy: boolean;
+  exit_code: number;
+  failed_checks: string[] | null;
+  errors: string[] | null;
+  warnings: string[] | null;
+  install_instructions: string;
+  adapters?: DoctorAdapterHealth[];
+}
+
+/** Result of doctor.applyRemedy. */
+export interface DoctorApplyRemedyResult {
+  outcome: DoctorOutcome;
+  action: DoctorFixAction;
+  preview: string;
+  detail?: string;
+  /** The re-scanned finding; absent when stale. */
+  finding?: DoctorFinding;
+  remedy?: DoctorRemedy;
+  /** The owning check's new evidence when the finding is still present. */
+  evidence?: Record<string, string>;
+}
+
+/** Result of doctor.recheck: one check's fresh result. */
+export interface DoctorRecheckResult {
+  check: string;
+  title: string;
+  status: "passed" | "failed" | "skipped" | "timeout";
+  detail?: string;
+  findings: DoctorFinding[] | null;
+}
+
+export interface DoctorFixLogEntry {
+  time: string;
+  code: string;
+  check: string;
+  fingerprint: string;
+  remedy: string;
+  verb: string;
+  outcome: DoctorOutcome;
+  detail?: string;
+}
+
+/** Result of doctor.history: the local fix log, oldest first. */
+export interface DoctorHistoryResult {
+  entries: DoctorFixLogEntry[];
+  malformed: number;
+}
+
+/** Payload of the `doctor.progress` event doctor.run streams, in check order. */
+export interface DoctorProgressEvent {
+  index: number;
+  total: number;
+  check: string;
+  title: string;
+  phase: "started" | "finished" | "skipped" | "timeout";
+  status?: "passed" | "failed" | "skipped" | "timeout";
+  findings: number;
+}
+
 /**
  * Bridged quota/cooldown snapshot from workflow.quotaState — Issue #3909.
  *
@@ -2087,6 +2229,19 @@ export abstract class IpcClientBase implements vscode.Disposable {
    * unaffected — this only adds a second, filtered destination for the
    * failures that matter.
    */
+  /**
+   * Methods whose daemon-side work is bounded by timeouts longer than the
+   * default request timeout. doctor.run runs every check (the adapters check
+   * alone may take 90 s) and doctor.applyRemedy and doctor.recheck re-run the
+   * owning check, so the configured `timeoutSeconds` is raised to this floor
+   * for them rather than failing a scan that is still making progress.
+   */
+  private static readonly METHOD_MIN_TIMEOUT_MS: Readonly<Record<string, number>> = {
+    "doctor.run": 150_000,
+    "doctor.applyRemedy": 150_000,
+    "doctor.recheck": 150_000,
+  };
+
   async call<T>(method: string, params?: unknown): Promise<T> {
     try {
       return await this.callInternal<T>(method, params);
@@ -2119,7 +2274,10 @@ export abstract class IpcClientBase implements vscode.Disposable {
     }
 
     return new Promise<T>((resolve, reject) => {
-      const timeoutMs = this.getTimeoutMs();
+      const timeoutMs = Math.max(
+        this.getTimeoutMs(),
+        IpcClientBase.METHOD_MIN_TIMEOUT_MS[method] ?? 0
+      );
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`IPC request ${method} timed out after ${timeoutMs}ms`));

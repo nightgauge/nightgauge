@@ -112,11 +112,19 @@ follows. `NGD000` is reserved for "check could not complete" (timeout or interna
 | NGD033 | `complexity_model`       | info         | Model not yet created (#2090)             |
 | NGD034 | `scopes`                 | warning      | `read:org` missing (#2091)                |
 | NGD035 | `github_identity`        | warning      | App commit identity unset (#2091)         |
+| NGD036 | `github_identity`        | blocker      | App lacks a required permission (#2094)   |
+| NGD037 | `github_identity`        | blocker      | Permission pending acceptance (#2094)     |
+| NGD038 | `github_identity`        | blocker      | App installation suspended (#2094)        |
+| NGD039 | `github_identity`        | warning      | App permissions unverifiable (#2094)      |
+| NGD040 | `board_population`       | blocker      | No such project; lists others (#2094)     |
+| NGD041 | `board_population`       | blocker      | Identity cannot see projects (#2094)      |
+| NGD042 | `board_population`       | blocker      | Project deleted or not shared (#2094)     |
 
 Totals: 29 checks (the epic's "28" predates `ci_machine_credentials`): 12 blocker, 9 warning,
 6 housekeeping, 4 info, after #2091 set `github_identity` to info and `board_population` and
 `ci_machine_credentials` to blocker. The migration sub-issues (#2089–#2092) may split a check into further
-codes; they append codes and never renumber. Adapter health (`--adapters`, #2092) receives codes
+codes; they append codes and never renumber. NGD036 and NGD037 are warnings for the
+Checks and Actions permissions, which degrade the pipeline without stopping it. Adapter health (`--adapters`, #2092) receives codes
 from `NGD100` upward.
 
 Adapter health is the `adapters` check. `--adapters` selects the adapters it probes; each adapter

@@ -137,6 +137,8 @@ type Env struct {
 	rlOnce     sync.Once
 	rl         *gh.RateLimitInfo
 	rlErr      error
+	appOnce    sync.Once
+	app        *appProbe // github_identity.go
 }
 
 // SetDetail records the human-readable detail for a check (shown for a
@@ -178,6 +180,36 @@ func (e *Env) rateLimit(ctx context.Context) (*gh.RateLimitInfo, error) {
 type Runner struct {
 	Workers        int           // 0 means DefaultWorkers
 	DefaultTimeout time.Duration // 0 means DefaultCheckTimeout
+	// Progress, when set, receives each check's start and outcome in
+	// registration order (progress.go).
+	Progress func(CheckProgress)
+	// Observe, when set, receives each check's state changes during Run (the
+	// interactive CLI's live progress view). It is called from worker
+	// goroutines and must be safe for concurrent use.
+	Observe func(CheckEvent)
+}
+
+// CheckEvent is one state change of a check during Runner.Run: Running when a
+// worker starts it, then Result once it finished, was skipped or timed out.
+// Result is the raw, unredacted result.
+type CheckEvent struct {
+	ID      string
+	Title   string
+	Group   string
+	Running bool
+	Result  *CheckResult
+}
+
+func (r Runner) observe(c Check, res *CheckResult) {
+	if r.Observe == nil {
+		return
+	}
+	ev := CheckEvent{ID: c.ID, Title: c.Title, Group: c.Group, Running: res == nil}
+	if res != nil {
+		cp := cloneResult(*res)
+		ev.Result = &cp
+	}
+	r.Observe(ev)
 }
 
 type completion struct {
@@ -201,6 +233,7 @@ func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult 
 	if n == 0 {
 		return results
 	}
+	order := newProgressOrder(r.Progress, checks)
 
 	remaining := make([]int, n)    // unfinished dependencies per check
 	dependents := make([][]int, n) // reverse edges
@@ -220,6 +253,8 @@ func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult 
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
+				order.start(idx)
+				r.observe(checks[idx], nil)
 				done <- completion{idx: idx, result: r.runOne(ctx, checks[idx], env)}
 			}
 		}()
@@ -237,7 +272,9 @@ func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult 
 	var finish func(idx int, res CheckResult)
 	finish = func(idx int, res CheckResult) {
 		results[idx] = res
+		order.finish(idx, res)
 		finished++
+		r.observe(checks[idx], &res)
 		for _, dep := range dependents[idx] {
 			remaining[dep]--
 			if remaining[dep] > 0 {

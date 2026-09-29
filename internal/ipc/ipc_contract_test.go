@@ -102,6 +102,11 @@ var contractTestedMethods = map[string]bool{
 	"attention.mute":        true,
 	"attention.unmute":      true,
 	"attention.sweep":       true,
+	// Doctor (ADR-025)
+	"doctor.run":         true,
+	"doctor.applyRemedy": true,
+	"doctor.recheck":     true,
+	"doctor.history":     true,
 	// Pipeline
 	"pipeline.cancelActiveForNetworkOutage": true,
 	"pipeline.getState":                     true,
@@ -1413,6 +1418,34 @@ func TestContract_Attention(t *testing.T) {
 	t.Run("attention.sweep/registered", func(t *testing.T) {
 		id := h.sendRequest("attention.sweep", map[string]interface{}{"repos": []string{"o/r"}})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.sweep")
+	})
+}
+
+// The doctor.* methods are exercised against a fake registry in
+// doctor_test.go; here each is only proven registered, with params the
+// handler refuses before it would scan the real machine.
+func TestContract_Doctor(t *testing.T) {
+	h := newIpcTestHarness(t)
+	h.awaitReady()
+
+	t.Run("doctor.run/registered", func(t *testing.T) {
+		id := h.sendRequest("doctor.run", map[string]interface{}{"severity": []string{"not-a-severity"}})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "doctor.run")
+	})
+
+	t.Run("doctor.applyRemedy/registered", func(t *testing.T) {
+		id := h.sendRequest("doctor.applyRemedy", map[string]interface{}{"fingerprint": "not-hex", "remedyId": "x"})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "doctor.applyRemedy")
+	})
+
+	t.Run("doctor.recheck/registered", func(t *testing.T) {
+		id := h.sendRequest("doctor.recheck", map[string]interface{}{})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "doctor.recheck")
+	})
+
+	t.Run("doctor.history/registered", func(t *testing.T) {
+		id := h.sendRequest("doctor.history", map[string]interface{}{"limit": -1})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "doctor.history")
 	})
 }
 

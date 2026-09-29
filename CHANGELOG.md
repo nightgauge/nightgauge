@@ -16,6 +16,40 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge doctor` diagnoses GitHub identity and board failures down to
+  the missing permission** (#2094). With a GitHub App configured, doctor reads
+  the App's declared permissions and the installation's granted ones with the
+  App's JWT and reports each gap under its own code: the App lacks a
+  permission (NGD036, linking the App's permission settings), a permission is
+  pending acceptance (NGD037, linking the installation's page), the
+  installation is suspended (NGD038). A board that fails with "Could not
+  resolve to a ProjectV2" is re-diagnosed as the identity being unable to see
+  projects (NGD041), a wrong project number with the owner's projects listed
+  (NGD040), or a deleted project (NGD042); GitHub's message stays in the
+  evidence. A classic token missing a scope gets a `confirm` remedy that runs
+  `gh auth refresh -h github.com -s <scope>` for the account doctor checked.
+  `nightgauge doctor --only <code>` now works without `--fix` and re-runs only
+  the checks owning that code, the "check again" step every manual remedy
+  names. The cached installation token stores a hash of its permissions and is
+  discarded when the installation's permissions change, so
+  `github-app-token-*.json` never needs deleting by hand.
+
+- **Plain `nightgauge doctor` on a terminal is a guided repair session**
+  (#2095). While the checks run it shows live progress, then a summary by
+  severity with blockers first and housekeeping collapsed to one line. It then
+  walks each finding that has a remedy: `[f]ix`, `[s]kip`, `[d]etails`,
+  `[o]pen`, `[a]ll safe` and `[q]uit`. A `confirm` remedy shows its preview
+  and asks again before it applies. After each fix the view shows the verified
+  result. A `manual` remedy lists numbered steps and waits on `[c]heck again`,
+  which re-runs only that check. The session ends with a report of fixed,
+  still present, skipped, not attempted and needs-you findings, and the exit
+  code is the post-repair state. Ctrl-C stops between remedies, never during
+  one. `[o]pen` opens only `https` links on the ADR-025 allowlist, passing
+  the URL to the OS opener as a single argument. `doctor --fix` on a terminal
+  now asks before each `confirm` remedy. With `--json`, the new
+  `--no-interactive`, or no terminal, doctor never prompts or reads stdin, and
+  its output is unchanged.
+
 - **`nightgauge doctor --fix` applies remedies and verifies each one**
   (#2093). A closed Go verb registry executes the remedies doctor findings
   declare: `auto` remedies apply, `confirm` remedies only with `--yes`, and
@@ -33,6 +67,48 @@ changelog, and the release workflow refuses a tag that does not.
   preview and changes nothing; `--only` and `--severity` narrow the pass. Each
   attempted remedy is appended to `<state dir>/doctor/fix-log.jsonl` (0600,
   redacted, no evidence values), and `nightgauge doctor --history` prints it.
+
+- **The daemon exposes the doctor over IPC** (#2096). `doctor.run` scans every
+  check and returns JSON v2, narrowed by `only`, `severity` and `adapters`,
+  while `doctor.progress` notifications stream each check's start and outcome
+  (finished, skipped or timed out) in check order. `doctor.applyRemedy` takes
+  only a `(fingerprint, remedyId)` pair from the current scan: it re-runs the
+  owning check first and answers `stale`, applying nothing, when the
+  fingerprint is gone, and a `confirm` remedy needs `confirm: true`; `dryRun`
+  previews without acting. `doctor.recheck` re-runs one check by check ID or
+  finding code, and `doctor.history` reads the fix log. They drive the same
+  remedy engine as `nightgauge doctor --fix`, over the daemon's existing
+  socket.
+
+- **Doctor findings are standing Action Center cards** (#2097). The attention
+  sweep runs the doctor registry and raises one card per `blocker` or
+  `warning` finding, keyed by its fingerprint; housekeeping and info raise
+  none. The sweep reuses its last successful scan of a workspace for ten
+  minutes, so a sweep every minute does not spend GitHub quota on the doctor
+  each time. A card resolves when a later sweep no longer reports the finding, and
+  a doctor scan that fails, or a check that times out or is skipped, leaves
+  its cards in place. `auto` and `confirm` remedies are card options on the
+  new `doctor.applyRemedy` verb, which takes only the fingerprint and remedy
+  ID, re-runs the check first (a vanished finding is `stale`) and resolves the
+  card only when the finding is verified gone; both card verbs re-run the check
+  live and drop the cached scan, so a fixed card is not raised again. `manual` remedies are the
+  card's steps, and only allowlisted links become the card's link. Every card
+  offers `doctor.recheck`. Both verbs run from the CLI without a daemon. The
+  `api-budget` producer and the board-reachability card of
+  `stranded-ready-items` are removed: the doctor's `github_api_budget`,
+  `board_population` and `project_mapping` checks report those conditions
+  with one threshold each.
+
+- **The VS Code Doctor panel and status bar health item replace the Adapter
+  Doctor** (#2099). `Nightgauge: Run Doctor` opens a panel that runs
+  `doctor.run`, shows each check's progress as it finishes, and renders one
+  card per finding, grouped by severity, with its code, cause and evidence.
+  Fix, Review & fix (a preview, then a confirmation), Open and Check again
+  call the `doctor.*` IPC methods, and a card shows the verified outcome
+  after a fix. Adapter health is the panel's `adapters` group, and the
+  `nightgauge.adapterDoctor` command is removed. A status bar item reads
+  `Nightgauge: ✓ healthy`, `N warnings` or `N blockers`, opens the panel on
+  click, and rescans in the background at most every ten minutes.
 
 - **One command opens a demo session, and CI fails when the demo drifts from
   the extension** (#2105, #2106, #2108, #2109, #2110). `npm run demo` in the
@@ -333,13 +409,9 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
   recomputes them before it re-renders. An index rebuild also no longer reads
   a JSONL listing cached for up to five seconds from before the files changed.
 
-- **The Adapter Doctor panel shows the Go row's warnings and notes, and a gated
-  OpenCode row no longer reads "not on PATH"** (#2111). A usable adapter with
-  a warning is marked `!` and its stages `warn`, matching the CLI, which exits
-  1 on it; while `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` is unset the OpenCode row
-  says it was not checked. `docs/GO_BINARY.md` documents the `warnings`,
-  `notes` and `opencode` fields, the exit-code rule, and the current OpenCode
-  refusals.
+- **`docs/GO_BINARY.md` documents the doctor adapter row's `warnings`,
+  `notes` and `opencode` fields** (#2111), the exit-code rule (a usable
+  adapter's warnings alone exit 1) and the current OpenCode refusals.
 
 - **OpenCode refusals and docs match what the adapter does** (#2111). A refusal
   that says where to set an `opencode:` key names the machine-tier config file

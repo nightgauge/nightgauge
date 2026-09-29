@@ -87,58 +87,6 @@ func TestHumanGate_SkipsTheGraphQLListWithoutOpenPRs(t *testing.T) {
 	}
 }
 
-// countingIssues records which of the two "open work" readers was asked.
-type countingIssues struct {
-	strandedIssues
-	listCalls, countCalls int
-	count                 int
-}
-
-func (i *countingIssues) ListIssues(ctx context.Context, o, r string, l []string) ([]forgetypes.Issue, error) {
-	i.listCalls++
-	return i.strandedIssues.ListIssues(ctx, o, r, l)
-}
-
-func (i *countingIssues) CountOpenIssues(context.Context, string, string) (int, error) {
-	i.countCalls++
-	return i.count, nil
-}
-
-// The board answers reachability on its own when it holds any of the repo's
-// items; the repo's open issues are only counted when it holds none, and then
-// through the cheap counter.
-func TestStrandedReady_BoardFirstThenCountsOpenIssues(t *testing.T) {
-	issues := &countingIssues{count: 3}
-	in := baseStrandedInput()
-	in.Forge = &issuesOverride{
-		ForgeClient: &strandedBoardForge{board: &strandedBoard{openItems: []forgetypes.BoardItem{{Number: 1, Repo: "nightgauge/nightgauge"}}}},
-		issues:      issues,
-	}
-	cov, err := (&StrandedReadyItems{}).boardUnreachable(context.Background(), in)
-	if err != nil || cov != nil {
-		t.Fatalf("reachable board = %+v, %v", cov, err)
-	}
-	if issues.listCalls+issues.countCalls != 0 {
-		t.Fatalf("a reachable board still read the repo's issues (list=%d count=%d)", issues.listCalls, issues.countCalls)
-	}
-
-	in.Forge = &issuesOverride{ForgeClient: &strandedBoardForge{board: &strandedBoard{}}, issues: issues}
-	cov, err = (&StrandedReadyItems{}).boardUnreachable(context.Background(), in)
-	if err != nil || cov == nil || cov.OpenIssues != 3 {
-		t.Fatalf("unreachable board = %+v, %v; want 3 open issues", cov, err)
-	}
-	if issues.countCalls != 1 || issues.listCalls != 0 {
-		t.Fatalf("open work read via list=%d count=%d, want the counter once", issues.listCalls, issues.countCalls)
-	}
-}
-
-type issuesOverride struct {
-	forge.ForgeClient
-	issues forge.IssueService
-}
-
-func (o *issuesOverride) Issues() forge.IssueService { return o.issues }
-
 // deadlineSecurity fails the first call with the caller's own deadline, then
 // answers.
 type deadlineSecurity struct{ calls int }

@@ -46,6 +46,10 @@ import type {
   ConfigTierAuditResult,
   ConfigureForgeInstanceResult,
   CostAnalyticsResult,
+  DoctorApplyRemedyResult,
+  DoctorHistoryResult,
+  DoctorRecheckResult,
+  DoctorRunResult,
   EpicContextResult,
   EpicProgress,
   ExecutionInfo,
@@ -682,6 +686,27 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async diagnosticsRecordStageExit(repo: string, issueNumber: number, stage: string, success: boolean, runId?: string, stageStartedAt?: string, model?: string, exitCode?: unknown, terminalKind?: string, errorText?: string, elapsedMs?: number, idleMsAtExit?: number, inputTokens?: number, outputTokens?: number, cacheReadTokens?: number, cacheCreationTokens?: number, costUsd?: number, signal?: string, signalSource?: string, sessionId?: string, lastBashCommand?: string, lastBashExit?: unknown, recentBash?: unknown[], stopHookErrored?: boolean, stderrTail?: string, gateKind?: string, gateReason?: string, killCeiling?: string, killCeilingValue?: string): Promise<RecordStageExitResult> {
     return this.call<RecordStageExitResult>('diagnostics.recordStageExit', { repo, issueNumber, stage, success, runId, stageStartedAt, model, exitCode, terminalKind, errorText, elapsedMs, idleMsAtExit, inputTokens, outputTokens, cacheReadTokens, cacheCreationTokens, costUsd, signal, signalSource, sessionId, lastBashCommand, lastBashExit, recentBash, stopHookErrored, stderrTail, gateKind, gateReason, killCeiling, killCeilingValue });
+  }
+
+
+  // -------------------------------------------------------------------------
+  // Doctor
+  // -------------------------------------------------------------------------
+
+  async doctorRun(only?: string[], severity?: string[], adapters?: string[]): Promise<DoctorRunResult> {
+    return this.call<DoctorRunResult>('doctor.run', { only, severity, adapters });
+  }
+
+  async doctorApplyRemedy(fingerprint: string, remedyId: string, confirm?: boolean, dryRun?: boolean): Promise<DoctorApplyRemedyResult> {
+    return this.call<DoctorApplyRemedyResult>('doctor.applyRemedy', { fingerprint, remedyId, confirm, dryRun });
+  }
+
+  async doctorRecheck(code?: string, check?: string): Promise<DoctorRecheckResult> {
+    return this.call<DoctorRecheckResult>('doctor.recheck', { code, check });
+  }
+
+  async doctorHistory(limit?: number): Promise<DoctorHistoryResult> {
+    return this.call<DoctorHistoryResult>('doctor.history', { limit });
   }
 
 

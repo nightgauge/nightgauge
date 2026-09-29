@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -152,6 +153,27 @@ const (
 	// branch_protection) are untouched by it.
 	VerbPRUpdateBranch Verb = "pr.updateBranch"
 
+	// VerbDoctorApplyRemedy applies ONE declared remedy of ONE doctor finding
+	// raised as a standing card by the doctor sweep producer (ADR-025 § 7).
+	//
+	// Its arguments are the finding's fingerprint and the remedy ID, and
+	// nothing else: no verb name, command or path. The owning check comes from
+	// the persisted card's idempotency key, and the fingerprint argument must
+	// match it, so a surface can neither retarget the card nor name a remedy
+	// the producer did not declare. The remedy engine then re-runs the check
+	// (a vanished fingerprint is `stale`), applies the remedy's registered Go
+	// verb and verifies it by re-running the check again. Choosing the option
+	// is the operator's consent for a confirm remedy. See
+	// ExecuteDoctorApplyRemedy, the verb's only executor.
+	VerbDoctorApplyRemedy Verb = "doctor.applyRemedy"
+
+	// VerbDoctorRecheck re-runs the check behind ONE doctor card, for a finding
+	// the operator repaired by hand (a manual remedy). It resolves the card only
+	// when the check no longer reports the fingerprint; a finding that is still
+	// present refuses, so the card stays open. Its only argument is the
+	// fingerprint. See ExecuteDoctorRecheck.
+	VerbDoctorRecheck Verb = "doctor.recheck"
+
 	// VerbNoop is the explicit "do nothing but resolve" choice — the registry
 	// binding for the ADR's leave / keep-paused / wait / halt options, where the
 	// operator deliberately declines to mutate the fleet. Registry-gated like any
@@ -177,6 +199,8 @@ var registry = map[Verb]struct{}{
 	VerbWorkspaceAddRepo:             {},
 	VerbBlockedFindingClear:          {},
 	VerbPRUpdateBranch:               {},
+	VerbDoctorApplyRemedy:            {},
+	VerbDoctorRecheck:                {},
 	VerbNoop:                         {},
 }
 
@@ -199,10 +223,16 @@ func IsRegisteredVerb(v string) bool {
 // process would either duplicate that resolution or write an entry with no
 // project number — the `project_number: 0` misroute the writer exists to
 // prevent. It is daemon-executed for the resolver, not for the write.
+//
+// The two doctor verbs are here because the remedy engine they drive is the
+// same one `nightgauge doctor --fix` runs in a plain CLI process: it needs the
+// workspace's config and credential, not a daemon.
 var cliExecutableVerbs = map[Verb]struct{}{
 	VerbNoop:                   {},
 	VerbBudgetRaiseCeiling:     {},
 	VerbRunRetryWithEscalation: {},
+	VerbDoctorApplyRemedy:      {},
+	VerbDoctorRecheck:          {},
 }
 
 // IsCLIExecutableVerb reports whether v can be executed by a standalone CLI
@@ -595,4 +625,163 @@ func ExecuteUpdatePRBranch(ctx context.Context, updater PullRequestBranchUpdater
 		return fmt.Errorf("attention: %s is not available on this surface", VerbPRUpdateBranch)
 	}
 	return updater.UpdatePRBranch(ctx, owner, name, req.Context.PR)
+}
+
+// --- doctor.applyRemedy and doctor.recheck (ADR-025 § 7) --------------------
+
+// DoctorProducer is the producer id of the doctor sweep producer
+// (sweep/doctor.go). It lives here because the doctor verbs refuse a card any
+// other producer raised.
+const DoctorProducer = "doctor"
+
+// DoctorOptionArgFingerprint and DoctorOptionArgRemedyID are the only
+// argument names the doctor verbs accept.
+const (
+	DoctorOptionArgFingerprint = "fingerprint"
+	DoctorOptionArgRemedyID    = "remedyId"
+)
+
+var (
+	doctorCheckPattern       = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+	doctorFingerprintPattern = regexp.MustCompile(`^[0-9a-f]{16}$`)
+	doctorRemedyIDPattern    = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+)
+
+// ErrDoctorFindingStillPresent reports a doctor verb that ran but left the
+// finding in place: a remedy that did not verify, or a re-check that still
+// sees the fingerprint. The card stays open, because the store resolves a
+// card only after its verb returns nil.
+var ErrDoctorFindingStillPresent = errors.New("attention: the doctor finding is still present")
+
+// DoctorCardKey is the idempotency key of the card for one finding: the
+// owning check and the finding's fingerprint. The doctor verbs read the check
+// back from it, so the check never travels as an argument.
+func DoctorCardKey(check, fingerprint string) string {
+	return DoctorProducer + ":" + check + ":" + fingerprint
+}
+
+// ParseDoctorCardKey is DoctorCardKey's inverse. ok is false for a key that
+// does not name a well-formed check and fingerprint.
+func ParseDoctorCardKey(key string) (check, fingerprint string, ok bool) {
+	rest, found := strings.CutPrefix(key, DoctorProducer+":")
+	if !found {
+		return "", "", false
+	}
+	check, fingerprint, found = strings.Cut(rest, ":")
+	if !found || !doctorCheckPattern.MatchString(check) || !doctorFingerprintPattern.MatchString(fingerprint) {
+		return "", "", false
+	}
+	return check, fingerprint, true
+}
+
+// DoctorRemedyOutcome is the remedy engine's verified outcome for one apply,
+// as the doctor package's Outcome string ("fixed", "stale", "still-present",
+// "blocked", "conflict", "skipped") and its redacted detail.
+type DoctorRemedyOutcome struct {
+	Outcome string
+	Detail  string
+}
+
+// DoctorRemedyRunner is the remedy-engine capability the doctor verbs need.
+// The attention package cannot import the doctor package (doctor depends on
+// it), so the sweep package supplies the implementation over doctor.Fixer.
+//
+// ApplyRemedy re-runs the check, returns `stale` when the fingerprint is gone,
+// and otherwise applies and verifies the remedy with the caller's consent
+// (Fixer.ApplyFingerprint with confirmed=true). Recheck reports whether the
+// check still produces the fingerprint; an error means the check could not
+// answer.
+type DoctorRemedyRunner interface {
+	ApplyRemedy(ctx context.Context, check, fingerprint, remedyID string) (DoctorRemedyOutcome, error)
+	Recheck(ctx context.Context, check, fingerprint string) (bool, error)
+}
+
+// doctorCardTarget validates what both doctor verbs share and returns the
+// check and fingerprint the persisted card names. want lists the argument
+// names the verb requires, and the option must carry exactly those.
+func doctorCardTarget(req *DecisionRequest, opt Option, verb string, want ...string) (string, string, error) {
+	if req == nil {
+		return "", "", fmt.Errorf("attention: %s requires the persisted request", verb)
+	}
+	if opt.Verb != verb {
+		return "", "", fmt.Errorf("attention: %s executor invoked for verb %q", verb, opt.Verb)
+	}
+	if req.Producer != DoctorProducer {
+		return "", "", fmt.Errorf("attention: %s refuses a card raised by producer %q", verb, req.Producer)
+	}
+	check, fingerprint, ok := ParseDoctorCardKey(req.IdempotencyKey)
+	if !ok {
+		return "", "", fmt.Errorf("attention: %s: request %s does not name a doctor finding", verb, req.ID)
+	}
+	if len(opt.Args) != len(want) {
+		return "", "", fmt.Errorf("%w: %s takes exactly %s, was given %d argument(s)",
+			ErrVerbArgsNotAccepted, verb, strings.Join(want, " and "), len(opt.Args))
+	}
+	for _, name := range want {
+		if _, ok := opt.Args[name].(string); !ok {
+			return "", "", fmt.Errorf("%w: %s requires the string argument %q", ErrVerbArgsNotAccepted, verb, name)
+		}
+	}
+	if opt.Args[DoctorOptionArgFingerprint] != fingerprint {
+		return "", "", fmt.Errorf("attention: %s: the option's fingerprint does not match request %s", verb, req.ID)
+	}
+	return check, fingerprint, nil
+}
+
+// ExecuteDoctorApplyRemedy is the ONLY implementation of the
+// doctor.applyRemedy verb. It refuses, in order: the wrong verb; a card the
+// doctor producer did not raise; a card key that names no finding; any
+// argument other than exactly the fingerprint and remedy ID; a fingerprint
+// that is not the card's; a malformed remedy ID; and a surface without the
+// remedy engine. It succeeds when the engine verifies the finding gone:
+// `fixed`, or `stale` (the check no longer reports it, so the card is moot).
+// Every other outcome fails, so the card stays open.
+func ExecuteDoctorApplyRemedy(ctx context.Context, runner DoctorRemedyRunner, req *DecisionRequest, opt Option) error {
+	check, fingerprint, err := doctorCardTarget(req, opt, VerbDoctorApplyRemedy,
+		DoctorOptionArgFingerprint, DoctorOptionArgRemedyID)
+	if err != nil {
+		return err
+	}
+	remedyID, _ := opt.Args[DoctorOptionArgRemedyID].(string)
+	if !doctorRemedyIDPattern.MatchString(remedyID) {
+		return fmt.Errorf("%w: %s: malformed remedy ID %q", ErrVerbArgsNotAccepted, VerbDoctorApplyRemedy, remedyID)
+	}
+	if runner == nil {
+		return fmt.Errorf("attention: %s is not available on this surface", VerbDoctorApplyRemedy)
+	}
+	out, err := runner.ApplyRemedy(ctx, check, fingerprint, remedyID)
+	if err != nil {
+		return fmt.Errorf("attention: %s %s/%s: %w", VerbDoctorApplyRemedy, check, remedyID, err)
+	}
+	switch out.Outcome {
+	case "fixed", "stale":
+		return nil
+	case "still-present":
+		return fmt.Errorf("%w: %s %s/%s: %s", ErrDoctorFindingStillPresent, VerbDoctorApplyRemedy, check, remedyID, out.Detail)
+	default:
+		return fmt.Errorf("attention: %s %s/%s was not applied (%s): %s",
+			VerbDoctorApplyRemedy, check, remedyID, out.Outcome, out.Detail)
+	}
+}
+
+// ExecuteDoctorRecheck is the ONLY implementation of the doctor.recheck verb.
+// Its refusals match ExecuteDoctorApplyRemedy's, with the fingerprint as the
+// only argument. It succeeds only when the re-run check no longer reports the
+// fingerprint.
+func ExecuteDoctorRecheck(ctx context.Context, runner DoctorRemedyRunner, req *DecisionRequest, opt Option) error {
+	check, fingerprint, err := doctorCardTarget(req, opt, VerbDoctorRecheck, DoctorOptionArgFingerprint)
+	if err != nil {
+		return err
+	}
+	if runner == nil {
+		return fmt.Errorf("attention: %s is not available on this surface", VerbDoctorRecheck)
+	}
+	present, err := runner.Recheck(ctx, check, fingerprint)
+	if err != nil {
+		return fmt.Errorf("attention: %s %s: %w", VerbDoctorRecheck, check, err)
+	}
+	if present {
+		return fmt.Errorf("%w: %s still reports it", ErrDoctorFindingStillPresent, check)
+	}
+	return nil
 }
