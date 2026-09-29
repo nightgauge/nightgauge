@@ -7,12 +7,14 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/scanfailures"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/logretention"
 	"github.com/spf13/cobra"
 )
 
 // logsCmd is the top-level "logs" command. It exposes deterministic
-// operations over local pipeline session logs in .nightgauge/logs/.
+// operations over local pipeline session logs in the clone's logs directory
+// (layout.CloneLogsDir).
 //
 // Distinct from `nightgauge ci logs <run-id>`, which downloads CI workflow
 // run logs from GitHub. Cobra namespaces subcommands by parent, so the two
@@ -21,7 +23,7 @@ func logsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logs",
 		Short: "Local pipeline session-log operations (scan-failures, prune)",
-		Long: `Deterministic readers over .nightgauge/logs/. Replaces the inline-Python
+		Long: `Deterministic readers over ` + layout.CloneLogsDisplay() + `/. Replaces the inline-Python
 regex scan duplicated in skills/nightgauge-retro/SKILL.md Phase 2.3 with a
 single Go verb that emits a stable JSON schema (audit row B29).
 
@@ -44,7 +46,7 @@ func logsPruneCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "prune",
 		Short: "Apply the log size and age caps now",
-		Long: `Prunes each Nightgauge log directory (the clone's .nightgauge/logs/ and the
+		Long: `Prunes each Nightgauge log directory (the clone's ` + layout.CloneLogsDisplay() + `/ and the
 machine state logs/) to its caps: machine-tier pipeline.logs.max_size_mb
 (default 200) and pipeline.logs.max_age_days (default 30). Oldest files go
 first. Live files (go-backend.log and the current UTC day's ledger segment
@@ -147,7 +149,7 @@ func logsScanFailuresCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "scan-failures",
 		Short: "Scan pipeline session logs for failure-signal patterns",
-		Long: `Walks .nightgauge/logs/*_session.log and emits matched lines using the
+		Long: `Walks ` + layout.CloneLogsDisplay() + `/*_session.log and emits matched lines using the
 canonical 16-pattern regex set (case-insensitive). Replaces ~80 lines of inline
 Python in retro Phase 2.3 (audit row B29). Output schema is stable v1 — field
 names locked after first merge; additive fields allowed.

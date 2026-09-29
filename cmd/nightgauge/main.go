@@ -53,6 +53,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
 	"github.com/nightgauge/nightgauge/internal/intelligence/typeinfer"
 	"github.com/nightgauge/nightgauge/internal/ipc"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/logretention"
 	"github.com/nightgauge/nightgauge/internal/notifications/inbound"
 	"github.com/nightgauge/nightgauge/internal/notifications/inbound/auth"
@@ -4901,11 +4902,16 @@ func versionCmd() *cobra.Command {
 // --- serve command (IPC server) ---
 
 // setupServeLogging configures the Go log package to write to both stderr and
-// a persistent log file at .nightgauge/logs/go-backend.log. The file is
+// a persistent log file, go-backend.log in the clone's logs directory
+// (layout.CloneLogsDir). The file is
 // opened in append mode and rotated (truncated) when it exceeds 5 MB.
 // Returns a closer that should be deferred.
 func setupServeLogging(workspaceRoot string) func() {
-	logDir := filepath.Join(workspaceRoot, ".nightgauge", "logs")
+	logDir, err := cloneDir(layout.CloneLogsDir, workspaceRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cannot resolve log dir: %v\n", err)
+		return func() {}
+	}
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: cannot create log dir %s: %v\n", logDir, err)
 		return func() {}
@@ -6115,7 +6121,7 @@ Output format conforms to Claude Code's canonical Stop hook contract:
 The legacy ` + "`" + `{"ok":...,"reason":...}` + "`" + ` shape was non-conformant and caused
 Claude Code to fire a spurious "stop-hook-error" notification on every stage
 exit (see #3605 retro). The sentinel file at
-.nightgauge/pipeline/stop-hook-status-<N>.json is still written on the
+` + layout.PipelineStateDisplay() + `/stop-hook-status-<N>.json is still written on the
 not-OK path for the Go scheduler's uncommitted-work recovery — that path is
 internal and unaffected by this output-format change.`,
 		SilenceUsage: true,
@@ -13103,7 +13109,7 @@ func pipelineCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pipeline",
 		Short: "Pipeline history operations (aggregate)",
-		Long: `Deterministic readers over .nightgauge/pipeline/history. Replaces the
+		Long: `Deterministic readers over ` + layout.PipelineStateDisplay() + `/history. Replaces the
 inline-Python aggregators duplicated across the pipeline-audit, pipeline-health,
 retro, and continuous-improvement skills with a single Go verb that emits a
 stable JSON schema (audit row B2).`,
@@ -13135,8 +13141,8 @@ func pipelineBatchFailuresCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "batch-failures",
 		Short: "Extract pipeline failure rows from batch-state and history JSONL",
-		Long: `Reads .nightgauge/pipeline/batch-state.json AND
-.nightgauge/pipeline/history/*.jsonl, emitting a stable JSON output that
+		Long: `Reads ` + layout.PipelineStateDisplay() + `/batch-state.json AND
+` + layout.PipelineStateDisplay() + `/history/*.jsonl, emitting a stable JSON output that
 unifies failure rows from both sources plus a context-files fallback. Replaces
 ~150 lines of inline Python in retro Phases 2.1, 2.2, and 2.4 (audit row B29).
 
@@ -13223,7 +13229,7 @@ func pipelineAggregateCmd() *cobra.Command {
 		Use:   "aggregate",
 		Short: "Aggregate per-stage and per-run metrics from JSONL history",
 		Long: `Aggregate per-stage durations, token counts, model usage, and per-run cost
-metrics from .nightgauge/pipeline/history/YYYY-MM-DD.jsonl. Replaces the
+metrics from ` + layout.PipelineStateDisplay() + `/history/YYYY-MM-DD.jsonl. Replaces the
 ~300 lines of inline-Python aggregation in skills/nightgauge-pipeline-audit
 (audit row B2). Output schema is stable v1 — field names locked after first
 merge; additive fields allowed.

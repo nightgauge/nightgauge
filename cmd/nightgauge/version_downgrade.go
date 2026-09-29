@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/versionDowngradeGate"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 )
@@ -158,8 +159,11 @@ type versionDowngradeJSONResult struct {
 // flag. When the file or field is absent, returns (false, nil) — the gate
 // proceeds without bypass.
 func readAllowDowngradeFlag(workdir string, issueNum int) (bool, error) {
-	devPath := filepath.Join(workdir, ".nightgauge", "pipeline", fmt.Sprintf("dev-%d.json", issueNum))
-	data, err := os.ReadFile(devPath)
+	dir, err := cloneDir(layout.PipelineStateDir, workdir)
+	if err != nil {
+		return false, err
+	}
+	data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("dev-%d.json", issueNum)))
 	if err != nil {
 		return false, err
 	}

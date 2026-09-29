@@ -3,6 +3,7 @@ package layout
 import (
 	"errors"
 	"fmt"
+	"path"
 	"path/filepath"
 )
 
@@ -33,6 +34,17 @@ func RetrosDir(root string) (string, error) { return classDir(root, "retros") }
 // CloneLogsDir is the directory of per-clone logs (for example
 // autonomous-exits.jsonl). Today: <root>/.nightgauge/logs.
 func CloneLogsDir(root string) (string, error) { return classDir(root, "logs") }
+
+// PipelineStateDisplay names the pipeline class directory for help and flag
+// text: relative to the repository root, with forward slashes. It moves with
+// PipelineStateDir; TestCloneLayoutDisplay pins the two together.
+func PipelineStateDisplay() string { return displayDir("pipeline") }
+
+// CloneLogsDisplay names the per-clone logs directory for help and flag text,
+// the way PipelineStateDisplay names the pipeline class directory.
+func CloneLogsDisplay() string { return displayDir("logs") }
+
+func displayDir(class string) string { return path.Join(legacyDataDir, class) }
 
 // classDir validates root and joins the class under the per-clone data
 // directory. The error wraps ErrRootNotAbsolute and names the class so a

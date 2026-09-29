@@ -88,7 +88,7 @@ type prStageResultJSON struct {
 
 // resolvePrStageWorkspace resolves the workdir the runner reads context from and
 // runs `gh` in. Defaults to the process cwd. The deterministic runners project
-// issue/dev/validate context from `<workdir>/.nightgauge/pipeline/*-{N}.json`;
+// issue/dev/validate context from `*-{N}.json` in <workdir>'s pipeline state directory;
 // on worktree-isolated dogfood runs those files live ONLY in the worktree (they
 // are gitignored per-worktree local state, #288), so the caller MUST pass the
 // worktree path via --workdir.

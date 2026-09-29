@@ -47,3 +47,29 @@ func TestCloneLayoutResolvers(t *testing.T) {
 		})
 	}
 }
+
+// TestCloneLayoutDisplay pins each display form to its resolver's output, so
+// help text that names a class directory cannot drift from where the class is.
+func TestCloneLayoutDisplay(t *testing.T) {
+	root := t.TempDir()
+	for _, d := range []struct {
+		class   string
+		resolve func(string) (string, error)
+		display string
+	}{
+		{"pipeline", PipelineStateDir, PipelineStateDisplay()},
+		{"logs", CloneLogsDir, CloneLogsDisplay()},
+	} {
+		dir, err := d.resolve(root)
+		if err != nil {
+			t.Fatalf("%s: %v", d.class, err)
+		}
+		rel, err := filepath.Rel(root, dir)
+		if err != nil {
+			t.Fatalf("%s: %v", d.class, err)
+		}
+		if want := filepath.ToSlash(rel); d.display != want {
+			t.Errorf("%s display = %q, want %q (the resolver's path relative to the root)", d.class, d.display, want)
+		}
+	}
+}

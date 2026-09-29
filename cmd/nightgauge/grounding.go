@@ -10,6 +10,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/intelligence/groundingGate"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -118,11 +119,14 @@ type issueContextFacts struct {
 }
 
 // readIssueContextForGrounding reads the grounding-relevant fields from
-// .nightgauge/pipeline/issue-{N}.json. A missing/unparseable file yields
+// issue-{N}.json in the pipeline state directory (layout.PipelineStateDir). A missing/unparseable file yields
 // Present=false (the gate treats that as ungrounded).
 func readIssueContextForGrounding(workdir string, issueNum int) issueContextFacts {
-	path := filepath.Join(workdir, ".nightgauge", "pipeline", fmt.Sprintf("issue-%d.json", issueNum))
-	data, err := os.ReadFile(path)
+	dir, err := cloneDir(layout.PipelineStateDir, workdir)
+	if err != nil {
+		return issueContextFacts{Present: false}
+	}
+	data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("issue-%d.json", issueNum)))
 	if err != nil {
 		return issueContextFacts{Present: false}
 	}

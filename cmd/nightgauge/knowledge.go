@@ -16,6 +16,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/knowledge/recall"
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
 	"github.com/nightgauge/nightgauge/internal/knowledge/workspace"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/pipeline"
 	"github.com/spf13/cobra"
 )
@@ -1106,7 +1107,7 @@ entries — matches the no-op semantics of the bash dictionary loop it replaces.
 		SilenceUsage: true,
 		Example: `  nightgauge knowledge render-pr-section --issue 1234
   nightgauge knowledge render-pr-section --issue 1234 --workdir /path/to/repo
-  nightgauge knowledge render-pr-section --issue 1234 --coverage-map .nightgauge/pipeline/coverage-map-1234.json`,
+  nightgauge knowledge render-pr-section --issue 1234 --coverage-map ` + layout.PipelineStateDisplay() + `/coverage-map-1234.json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if issueNumber <= 0 {
 				return fmt.Errorf("--issue must be a positive integer")

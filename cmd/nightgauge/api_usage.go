@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -48,7 +49,9 @@ type apiUsageGroup struct {
 	Errors int    `json:"errors,omitempty"`
 }
 
-const apiUsageDefaultPath = ".nightgauge/logs/github-api.jsonl"
+// apiLedgerFileName is the ledger's base name inside the clone's logs
+// directory (layout.CloneLogsDir).
+const apiLedgerFileName = "github-api.jsonl"
 
 func apiUsageCmd() *cobra.Command {
 	var (
@@ -80,7 +83,7 @@ which is never reproducible on demand:
 
 Set NIGHTGAUGE_GITHUB_API_LOG=0 (or github.api_ledger.enabled: false) to switch
 the ledger off; set it to a path to write somewhere other than the default
-.nightgauge/logs/github-api.jsonl (written as one github-api-YYYY-MM-DD.jsonl
+` + layout.CloneLogsDisplay() + "/" + apiLedgerFileName + ` (written as one github-api-YYYY-MM-DD.jsonl
 segment per UTC day beside that name, so log retention can drop old days).`,
 		SilenceUsage: true,
 		Example: `  nightgauge api-usage
@@ -143,7 +146,7 @@ segment per UTC day beside that name, so log retention can drop old days).`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&path, "file", "", "Read one specific ledger file (default: every ledger file under .nightgauge/logs/: the dated github-api-YYYY-MM-DD.jsonl segments and any pre-segment github-api.jsonl)")
+	cmd.Flags().StringVar(&path, "file", "", "Read one specific ledger file (default: every ledger file under "+layout.CloneLogsDisplay()+"/: the dated github-api-YYYY-MM-DD.jsonl segments and any pre-segment github-api.jsonl)")
 	cmd.Flags().DurationVar(&since, "since", 0, "Only records newer than this (e.g. 30m, 2h)")
 	cmd.Flags().StringVar(&byWhat, "by", "caller", "Group by: caller, op, resource, path, identity")
 	cmd.Flags().StringVar(&identity, "identity", "",
@@ -186,7 +189,11 @@ func readAPIUsage(path string, since time.Duration) ([]apiUsageRecord, error) {
 		if err != nil {
 			return nil, fmt.Errorf("api-usage: resolve working dir: %w", err)
 		}
-		path = filepath.Join(wd, apiUsageDefaultPath)
+		logs, err := layout.CloneLogsDir(wd)
+		if err != nil {
+			return nil, fmt.Errorf("api-usage: %w", err)
+		}
+		path = filepath.Join(logs, apiLedgerFileName)
 		if len(github.LedgerFiles(path)) == 0 {
 			return nil, fmt.Errorf("api-usage: no ledger at %s (the ledger is on by default; %s=0 switches it off)", path, apiLedgerEnvName)
 		}

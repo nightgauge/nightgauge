@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/ipc"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/spf13/cobra"
@@ -305,7 +305,7 @@ func renderGateHuman(stage string, r gates.GateResult) {
 // `workspace` for BOTH the daemon socket path and the direct-write state dir.
 // The daemon listens only at serve's own workspace root, so the dial at
 // the `<worktree>` socket always failed, and the fallback then
-// wrote into `<worktree>/.nightgauge/pipeline`, which holds stage context files
+// wrote into the worktree's pipeline state directory, which holds stage context files
 // but never a `runtime-{issue}-{runID}.json` — so the append took its
 // load-or-skip branch and returned without writing. The record was created
 // nowhere, on every worktree run.
@@ -386,7 +386,11 @@ func recordGateResult(
 
 	// No daemon reachable (or no run identity to address one with): write
 	// directly, under Decision 5's three rules.
-	stateDir := filepath.Join(recordRoot, ".nightgauge", "pipeline")
+	stateDir, dirErr := cloneDir(layout.PipelineStateDir, recordRoot)
+	if dirErr != nil {
+		fmt.Fprintf(os.Stderr, "gate verify --record: failed to persist gate result: %v\n", dirErr)
+		return
+	}
 	if recErr := state.AppendStageGateResultToDisk(
 		stateDir, issueNumber, state.PipelineStage(stageName), result,
 	); recErr != nil {
