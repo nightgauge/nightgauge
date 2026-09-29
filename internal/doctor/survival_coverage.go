@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"fmt"
+	"strconv"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
@@ -36,46 +37,46 @@ const minMergedRunsForCoverageFinding = 10
 // The discriminator is the outcome corpus: one row per completed run, written
 // by a different mechanism on the same merges. Rows without records means the
 // capture is broken, not that the workspace is new.
-func checkSurvivalCoverage(workspaceRoot string) (CheckItem, string) {
+func survivalCoverageFindings(workspaceRoot string) ([]Finding, string) {
+	const check, code = "survival_coverage", "NGD027"
 	if workspaceRoot == "" {
-		return CheckItem{OK: true, Detail: "survival coverage not checked (no workspace root)"}, ""
+		return nil, "survival coverage not checked (no workspace root)"
 	}
 
 	outcomes, err := learning.NewRecorder(workspaceRoot).LoadAll()
 	if err != nil {
 		// Unreadable is not empty — the same rule the backlog arm follows.
-		msg := fmt.Sprintf("survival coverage unverifiable: %v", err)
-		return CheckItem{OK: false, Detail: "could not read the outcome corpus", Error: msg}, msg
+		return []Finding{unverifiableFinding(check, code, SeverityInfo, "survival coverage", err.Error())},
+			"could not read the outcome corpus"
 	}
 	if len(outcomes) < minMergedRunsForCoverageFinding {
-		return CheckItem{
-			OK: true,
-			Detail: fmt.Sprintf("%d recorded run(s); below the %d-run floor for a coverage finding",
-				len(outcomes), minMergedRunsForCoverageFinding),
-		}, ""
+		return nil, fmt.Sprintf("%d recorded run(s); below the %d-run floor for a coverage finding",
+			len(outcomes), minMergedRunsForCoverageFinding)
 	}
 
 	records, err := survival.NewStore(workspaceRoot).Load()
 	if err != nil {
-		msg := fmt.Sprintf("survival coverage unverifiable: %v", err)
-		return CheckItem{OK: false, Detail: "could not read the survival store", Error: msg}, msg
+		return []Finding{unverifiableFinding(check, code, SeverityInfo, "survival coverage", err.Error())},
+			"could not read the survival store"
 	}
 	if len(records) > 0 {
-		return CheckItem{
-			OK: true,
-			Detail: fmt.Sprintf("survival capture is live: %d record(s) against %d recorded run(s)",
-				len(records), len(outcomes)),
-		}, ""
+		return nil, fmt.Sprintf("survival capture is live: %d record(s) against %d recorded run(s)",
+			len(records), len(outcomes))
 	}
 
-	msg := fmt.Sprintf("survival-capture-never-fired: %d recorded run(s) and ZERO survival records — "+
-		"post-merge capture has never written to this journal, so there is no ground truth about "+
-		"whether merged work survives. Check that the post-merge hook is invoked with --pr (it needs "+
-		"the merge SHA) and with --workdir set to the launch root when the run executes in a worktree",
-		len(outcomes))
-	return CheckItem{
-		OK:     false,
-		Detail: fmt.Sprintf("%d recorded run(s), 0 survival records", len(outcomes)),
-		Error:  msg,
-	}, msg
+	f := newFinding(check, code, SeverityInfo,
+		fmt.Sprintf("survival-capture-never-fired: %d recorded run(s) and ZERO survival records", len(outcomes)),
+		"post-merge capture has never written to the survival journal, so there is no ground truth about whether merged work survives",
+		map[string]string{
+			"recorded_runs":    strconv.Itoa(len(outcomes)),
+			"survival_records": "0",
+			"floor":            strconv.Itoa(minMergedRunsForCoverageFinding),
+		},
+		[]string{workspaceRoot},
+		manualRemedy("explain", "Find why post-merge capture never fires", check,
+			"Run `nightgauge learn report` to see the outcome corpus the capture should mirror",
+			"Check that the post-merge hook is invoked with --pr (it needs the merge SHA)",
+			"When the run executes in a worktree, pass --workdir set to the launch root",
+			"The gap closes when the next merged run writes a survival record"))
+	return []Finding{f}, fmt.Sprintf("%d recorded run(s), 0 survival records", len(outcomes))
 }

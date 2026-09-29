@@ -8,42 +8,75 @@ import (
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
 
-func checkComplexityModel(workspaceRoot string) (CheckItem, string) {
+// Remedy verbs the learning checks declare (ADR-025 § 3).
+const (
+	verbOutcomeInit       = "outcome.init"
+	verbSurvivalSweep     = "survival.sweep"
+	verbAutomationRestart = "automation.restart"
+)
+
+// codeComplexityModelMissing: the model has not been created yet. Info, not a
+// warning (#2202): the model is per-checkout learned state, gitignored, and
+// every writer bootstraps the deterministic baseline on first use.
+const codeComplexityModelMissing = "NGD033"
+
+// complexityModelFindings reports a missing, invalid or unsafe complexity
+// model. A missing or invalid model is repaired by `outcome init` (confirm;
+// the preview names the file it writes). A path that is a symlink or not a
+// regular file is never written through: the remedy is manual.
+func complexityModelFindings(workspaceRoot string) ([]Finding, string) {
+	const check, code = "complexity_model", "NGD014"
 	modelPath := filepath.Join(workspaceRoot, ".nightgauge", "complexity-model.yaml")
 	modelDir := filepath.Dir(modelPath)
+	ev := map[string]string{"path": modelPath}
+	unsafe := func(title, cause string) ([]Finding, string) {
+		return []Finding{newFinding(check, code, SeverityWarning, title, cause, ev, []string{modelPath, "unsafe"},
+			manualRemedy("replace", "Replace the conflicting path with a regular workspace file", check,
+				"Not offered as a fix: doctor never writes through a symlink or over a path it cannot inspect",
+				"Remove or replace "+modelPath+" (or its directory) by hand",
+				"Then run `nightgauge outcome init`"))}, title
+	}
 	if dirInfo, err := os.Lstat(modelDir); err == nil && dirInfo.Mode()&os.ModeSymlink != 0 {
-		warning := fmt.Sprintf("complexity model directory is a symlink at %s — replace it with a directory inside the workspace before running `nightgauge outcome init`", modelDir)
-		return CheckItem{OK: false, Error: warning}, warning
+		return unsafe(fmt.Sprintf("complexity model directory is a symlink at %s", modelDir),
+			"the model directory resolves outside the workspace, so writing the model could land anywhere")
 	} else if err != nil && !os.IsNotExist(err) {
-		warning := fmt.Sprintf("complexity model directory could not be inspected at %s: %v", modelDir, err)
-		return CheckItem{OK: false, Error: warning}, warning
+		return unsafe(fmt.Sprintf("complexity model directory could not be inspected at %s: %v", modelDir, err),
+			"the model directory's state is unknown")
 	}
 
 	info, err := os.Lstat(modelPath)
-	if err == nil && info.Mode().IsRegular() {
-		if validateErr := gh.NewOutcomeService(workspaceRoot).ValidateModel(); validateErr != nil {
-			warning := fmt.Sprintf("complexity model at %s is invalid: %v — repair or remove it, then run `nightgauge outcome init`", modelPath, validateErr)
-			return CheckItem{OK: false, Error: warning}, warning
+	switch {
+	case err == nil && info.Mode().IsRegular():
+		validateErr := gh.NewOutcomeService(workspaceRoot).ValidateModel()
+		if validateErr == nil {
+			return nil, modelPath
 		}
-		return CheckItem{OK: true, Detail: modelPath}, ""
+		ev["error"] = validateErr.Error()
+		return []Finding{newFinding(check, code, SeverityWarning,
+				fmt.Sprintf("complexity model at %s is invalid: %v", modelPath, validateErr),
+				"complexity routing reads this file and falls back blindly while it cannot be parsed",
+				ev, []string{modelPath, "invalid"},
+				Remedy{ID: "init", Kind: RemedyConfirm, Verb: verbOutcomeInit, Verify: check,
+					Summary: "Replace the invalid model with the deterministic baseline (`nightgauge outcome init`)",
+					Preview: fmt.Sprintf("move the invalid %s aside and write the deterministic baseline model to %s", modelPath, modelPath)})},
+			"invalid"
+	case os.IsNotExist(err):
+		title := fmt.Sprintf("complexity model not yet created at %s", modelPath)
+		return []Finding{newFinding(check, codeComplexityModelMissing, SeverityInfo, title,
+				"the model is per-checkout learned state; the deterministic baseline is bootstrapped automatically on the first outcome record",
+				ev, []string{modelPath},
+				Remedy{ID: "init", Kind: RemedyConfirm, Verb: verbOutcomeInit, Verify: check,
+					Summary: "Write the deterministic baseline now (`nightgauge outcome init`)",
+					Preview: fmt.Sprintf("write the deterministic baseline model to %s", modelPath)})},
+			"not yet created"
+	case err == nil && info.Mode()&os.ModeSymlink != 0:
+		return unsafe(fmt.Sprintf("complexity model is a symlink at %s", modelPath),
+			"a symlinked model could be written outside the workspace")
+	case err == nil:
+		return unsafe(fmt.Sprintf("complexity model path is not a regular file at %s", modelPath),
+			"something other than a file occupies the model path")
+	default:
+		return unsafe(fmt.Sprintf("complexity model could not be inspected at %s: %v", modelPath, err),
+			"the model file's state is unknown")
 	}
-
-	if os.IsNotExist(err) {
-		// #2202: the model is per-checkout learned state and is gitignored,
-		// so every fresh clone lacks it. That is not a fault: its starting
-		// point is a deterministic baseline, which every writer (outcome
-		// recording, the SDK's ComplexityModelService) installs on first use
-		// and every reader falls back to. Report it, do not warn.
-		return CheckItem{OK: true, Detail: fmt.Sprintf("not yet created at %s — the deterministic baseline is bootstrapped automatically on first outcome record (or run `nightgauge outcome init`)", modelPath)}, ""
-	}
-
-	var remediation string
-	if err == nil && info.Mode()&os.ModeSymlink != 0 {
-		remediation = fmt.Sprintf("complexity model is a symlink at %s — replace it with a regular workspace file before running `nightgauge outcome init`", modelPath)
-	} else if err == nil {
-		remediation = fmt.Sprintf("complexity model path is not a regular file at %s — remove the conflicting path, then run `nightgauge outcome init`", modelPath)
-	} else {
-		remediation = fmt.Sprintf("complexity model could not be inspected at %s: %v", modelPath, err)
-	}
-	return CheckItem{OK: false, Error: remediation}, remediation
 }

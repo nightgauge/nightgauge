@@ -22,54 +22,62 @@ package doctor
 
 import (
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
-// checkServeLease reports the holder of this workspace's scheduler lease.
+// serveLeaseFindings reports the holder of this workspace's scheduler lease.
 //
 // A FREE lease is a clean result, not an absence of information: it is the
 // answer to "why is nothing running?" for a workspace whose operator expected
 // a daemon. A HELD lease with a fresh heartbeat is equally clean. Only a
-// wedged holder is a finding, because only a wedged holder blocks work while
-// looking, from the outside, exactly like a healthy one.
-func checkServeLease(workspaceRoot string, now time.Time) (CheckItem, string) {
+// wedged holder is a finding (a warning, ADR-025), because only a wedged
+// holder blocks work while looking, from the outside, exactly like a healthy
+// one. Its confirm `serve_lease.reclaim` remedy stops the holder; the lease is
+// released the moment it exits.
+func serveLeaseFindings(workspaceRoot string, now time.Time) ([]Finding, string) {
+	const check, code = "serve_lease", "NGD022"
 	if workspaceRoot == "" {
-		return CheckItem{OK: true, Detail: "serve lease not checked (no workspace root)"}, ""
+		return nil, "serve lease not checked (no workspace root)"
 	}
 
 	holder, held := runstate.InspectServeLease(workspaceRoot)
 	if !held {
-		return CheckItem{OK: true, Detail: "free — no daemon is serving this workspace"}, ""
+		return nil, "free — no daemon is serving this workspace"
 	}
 	if !holder.Known {
 		// The lock is authoritative about the lease being held; the sidecar is
 		// the only source for who holds it. An unreadable record downgrades
 		// what we can say, and must not be reported as a malfunction of the
 		// daemon it failed to describe.
-		return CheckItem{
-			OK:     true,
-			Detail: "held by another process (its claim record could not be read)",
-		}, ""
+		return nil, "held by another process (its claim record could not be read)"
 	}
 
-	detail := fmt.Sprintf("held by pid %d since %s",
-		holder.PID, holder.StartedAt.Format(time.RFC3339))
+	detail := fmt.Sprintf("held by pid %d since %s", holder.PID, holder.StartedAt.Format(time.RFC3339))
 	if !holder.Stale {
-		return CheckItem{OK: true, Detail: detail}, ""
+		return nil, detail
 	}
 
-	msg := fmt.Sprintf(
-		"serve-lease-wedged: pid %d holds this workspace's scheduler lease but has not "+
-			"heartbeat since %s (%s ago, past the %s limit). It is still running, so the lease "+
-			"cannot be reclaimed and every `nightgauge serve` and `nightgauge autonomous run` "+
-			"here is refused — which presents as a workspace where nothing starts. Stop pid %d; "+
-			"the lease is released the moment it exits, however it exits",
-		holder.PID,
-		holder.LastHeartbeatAt.Format(time.RFC3339),
-		now.Sub(holder.LastHeartbeatAt).Round(time.Minute),
-		runstate.ServeLeaseStaleAfter,
-		holder.PID)
-	return CheckItem{OK: false, Detail: detail + " — WEDGED", Error: msg}, msg
+	since := now.Sub(holder.LastHeartbeatAt).Round(time.Minute)
+	ev := map[string]string{
+		"workspace":      workspaceRoot,
+		"pid":            strconv.Itoa(holder.PID),
+		"started_at":     holder.StartedAt.Format(time.RFC3339),
+		"last_heartbeat": holder.LastHeartbeatAt.Format(time.RFC3339),
+		"silent_for":     since.String(),
+		"stale_after":    runstate.ServeLeaseStaleAfter.String(),
+	}
+	f := newFinding(check, code, SeverityWarning,
+		fmt.Sprintf("serve-lease-wedged: pid %d holds this workspace's scheduler lease but has not heartbeat for %s", holder.PID, since),
+		fmt.Sprintf("pid %d is still running, so the lease cannot be reclaimed and every `nightgauge serve` and "+
+			"`nightgauge autonomous run` here is refused — which presents as a workspace where nothing starts. "+
+			"The lease is released the moment it exits, however it exits", holder.PID),
+		ev, []string{workspaceRoot, strconv.Itoa(holder.PID), holder.StartedAt.UTC().Format(time.RFC3339)},
+		Remedy{ID: "reclaim", Kind: RemedyConfirm, Verb: verbServeLeaseReclaim, Verify: check,
+			Summary: fmt.Sprintf("Stop pid %d to release the scheduler lease", holder.PID),
+			Preview: fmt.Sprintf("send SIGTERM to pid %d (serve lease holder for %s since %s, silent for %s); refused unless it still holds this lease and is still stale",
+				holder.PID, workspaceRoot, holder.StartedAt.Format(time.RFC3339), since)})
+	return []Finding{f}, detail + " — WEDGED"
 }

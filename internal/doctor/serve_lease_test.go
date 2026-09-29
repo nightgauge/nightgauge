@@ -124,3 +124,38 @@ func TestServeLeaseUnknownHolderIsNotAFinding(t *testing.T) {
 		t.Errorf("Detail = %q, want it to admit the record is unreadable", item.Detail)
 	}
 }
+
+// A wedged lease is a warning (it blocks serve) with a confirm reclaim remedy.
+func TestHygieneFindings_WedgedServeLease(t *testing.T) {
+	if !flock.Supported {
+		t.Skip("no advisory file lock on this platform")
+	}
+	isolateMachineState(t)
+	root := t.TempDir()
+	now := time.Now()
+	lease, err := runstate.AcquireServeLease(root)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	t.Cleanup(lease.Release)
+	if err := runstate.WriteServeSidecar(root, runstate.ServeSidecar{
+		PID: 4242, StartedAt: now.Add(-5 * time.Hour),
+		LastHeartbeatAt: now.Add(-runstate.ServeLeaseStaleAfter - time.Hour),
+	}); err != nil {
+		t.Fatalf("WriteServeSidecar: %v", err)
+	}
+	fs, _ := serveLeaseFindings(root, now)
+	again, _ := serveLeaseFindings(root, now.Add(time.Minute))
+	if len(fs) != 1 || fs[0].Code != "NGD022" || fs[0].Severity != SeverityWarning {
+		t.Fatalf("want one NGD022 warning, got %s", findingsText(fs))
+	}
+	if fs[0].Evidence["pid"] != "4242" {
+		t.Errorf("evidence does not name the pid: %v", fs[0].Evidence)
+	}
+	if rem := fs[0].Remedies; len(rem) != 1 || rem[0].Kind != RemedyConfirm || rem[0].Verb != verbServeLeaseReclaim {
+		t.Errorf("remedy = %+v, want confirm serve_lease.reclaim", rem)
+	}
+	if len(again) != 1 || again[0].Fingerprint != fs[0].Fingerprint {
+		t.Error("fingerprint changed between runs for the same holder")
+	}
+}

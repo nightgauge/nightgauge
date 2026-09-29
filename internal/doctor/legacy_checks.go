@@ -6,11 +6,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/nightgauge/nightgauge/internal/cadence"
-	"github.com/nightgauge/nightgauge/internal/execution"
-	gh "github.com/nightgauge/nightgauge/internal/github"
-	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 )
 
 // Legacy check adapter (#2088). Every check here still produces a CheckItem
@@ -377,115 +372,6 @@ func init() {
 	legacy(ciMachineCredentialsCheck, "CI machine credentials", "credentials", "NGD025", SeverityWarning, 0, nil,
 		func(ctx context.Context, env *Env) legacyOutcome {
 			return rowWarn(checkCIMachineCredentials(ciGetenv))
-		})
-}
-
-// ---------------------------------------------------------------------------
-// #2089 — workspace-hygiene checks
-// ---------------------------------------------------------------------------
-
-func init() {
-	// Per-issue compose stacks whose worktree no longer exists.
-	legacy("compose_orphans", "Orphaned compose projects", "hygiene", "NGD016", SeverityHousekeeping, 0, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			orphans, determined := findOrphanedComposeProjects(ctx, env.Cwd)
-			switch {
-			case !determined:
-				// Never report "no orphans" from an unreadable worktree set (#280, #323).
-				msg := "orphaned compose projects unverifiable: could not read the active worktree set across the workspace's repo roots — not inside a git repository or workspace, or `git worktree list` failed. Do NOT run `nightgauge cleanup` on this basis; it would tear down live runs' stacks"
-				return rowWarn(CheckItem{OK: false, Detail: "could not determine which issues have an active worktree", Error: msg}, msg)
-			case len(orphans) > 0:
-				names := make([]string, 0, len(orphans))
-				for _, p := range orphans {
-					names = append(names, p.Name)
-				}
-				return rowWarn(CheckItem{OK: false,
-					Detail: fmt.Sprintf("%d orphaned issue-* compose project(s)", len(orphans)),
-					Error:  fmt.Sprintf("orphaned compose projects: %s — run `nightgauge cleanup`", strings.Join(names, ", "))},
-					fmt.Sprintf("orphaned docker compose project(s) detected (%s) — run `nightgauge cleanup`", strings.Join(names, ", ")))
-			}
-			return legacyRow(CheckItem{OK: true, Detail: "no orphaned issue-* compose projects"})
-		})
-	legacy("worktree_leaks", "Leaked worktrees", "hygiene", "NGD017", SeverityHousekeeping, 0, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			return rowWarn(checkLeakedWorktrees(env.Cwd, env.Now, mergedPRDoor(ctx, env.Client)))
-		})
-	// A merged branch whose worktree is already gone (#912).
-	legacy("stranded_branches", "Stranded branches", "hygiene", "NGD018", SeverityHousekeeping, 0, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			return rowWarn(checkStrandedBranches(env.Cwd, mergedPRDoor(ctx, env.Client)))
-		})
-	legacy("pipeline_stashes", "Pipeline stashes", "hygiene", "NGD019", SeverityHousekeeping, 0, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			return rowWarn(checkPipelineStashes(env.Cwd, env.Now))
-		})
-	// Work from a killed stage preserved under a WIP ref (#1105).
-	legacy("preserved_wip", "Preserved WIP refs", "hygiene", "NGD020", SeverityHousekeeping, 0, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			return rowWarn(checkPreservedWip(env.Cwd, env.Now))
-		})
-	// A stage that is never killed leaks itself (#341). Report-only.
-	legacy("orphaned_processes", "Orphaned processes", "hygiene", "NGD021", SeverityHousekeeping, 0, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			return rowWarn(checkOrphanedProcesses(env.Cwd, env.Now))
-		})
-	// The scheduler lease (#1349): a wedged holder blocks every start here.
-	legacy("serve_lease", "Serve lease", "hygiene", "NGD022", SeverityWarning, 0, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			return rowWarn(checkServeLease(env.Cwd, env.Now))
-		})
-}
-
-// mergedPRDoor builds the merged-PR second door from doctor's own client
-// (#916). A nil client yields the closed door and the content test alone.
-func mergedPRDoor(ctx context.Context, client *gh.Client) mergedPRDoorFactory {
-	return func(repoRoot string) execution.MergedPRLookup {
-		lookup := gh.NewMergedPRLookupForRoot(ctx, func() (*gh.Client, error) { return client, nil }, repoRoot)
-		if lookup == nil {
-			return nil
-		}
-		return lookup
-	}
-}
-
-// ---------------------------------------------------------------------------
-// #2090 — learning and automation checks
-// ---------------------------------------------------------------------------
-
-func init() {
-	// Outcome recording bootstraps this file; doctor advertises `outcome init`.
-	legacy("complexity_model", "Complexity model", "learning", "NGD014", SeverityWarning, 0, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			return rowWarn(checkComplexityModel(env.Cwd))
-		})
-	// Absence detectors (#992, #1019, #994, #996): work that should have been
-	// observed by now and was not.
-	legacy("survival_backlog", "Survival backlog", "learning", "NGD026", SeverityInfo, 0, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			window := survival.DefaultWindowDays
-			if env.Cfg != nil {
-				window = env.Cfg.Pipeline.ResolveSurvivalWindowDays()
-			}
-			return rowWarn(checkSurvivalBacklog(env.Cwd, env.Now, window))
-		})
-	legacy("survival_coverage", "Survival coverage", "learning", "NGD027", SeverityInfo, 0, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			return rowWarn(checkSurvivalCoverage(env.Cwd))
-		})
-	legacy("corpus_calibration", "Corpus calibration", "learning", "NGD028", SeverityInfo, 0, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			return rowWarn(checkCorpusCalibration(env.Cwd))
-		})
-	legacy("scheduled_automations", "Scheduled automations", "learning", "NGD029", SeverityWarning, 30*time.Second, nil,
-		func(ctx context.Context, env *Env) legacyOutcome {
-			var declared []cadence.ConfigAutomation
-			if env.Cfg != nil {
-				declared = env.Cfg.Cadence
-			}
-			return rowWarn(checkScheduledAutomations(ctx, map[cadence.EvidenceKind]cadenceProbe{
-				cadence.EvidenceAutonomousState: autonomousStateEvidence(env.Cwd),
-				cadence.EvidenceWorkflowRun:     workflowRunEvidence(env.Client, doctorOwner(env.Cfg), doctorRepo(env.Cfg)),
-			}, cadenceScope(env.Cfg, env.Cwd), declared, env.Now))
 		})
 }
 

@@ -12161,6 +12161,7 @@ Use --json for machine-readable JSON v2 output (skills parse this format).`,
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
 	cmd.Flags().StringVar(&adaptersFlag, "adapters", "", "Comma-separated adapters to health-check (e.g. codex,claude); 'all' checks every adapter")
+	cmd.AddCommand(doctorAutomationCmd())
 	return cmd
 }
 

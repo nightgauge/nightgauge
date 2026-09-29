@@ -38,10 +38,10 @@ func TestScheduledAutomations_ReportsStale(t *testing.T) {
 	if item.OK {
 		t.Error("every automation 400 days stale reported OK")
 	}
-	if !strings.Contains(warning, "scheduled-automation-stale") {
+	if !strings.Contains(warning, codeAutomationStopped) {
 		t.Errorf("warning lacks the stable identifier: %q", warning)
 	}
-	if !strings.Contains(warning, "STOPPED") {
+	if !strings.Contains(warning, codeAutomationStopped) {
 		t.Errorf("warning does not classify the verdict: %q", warning)
 	}
 }
@@ -80,10 +80,10 @@ func TestScheduledAutomations_SeparatesNeverRanFromStopped(t *testing.T) {
 	if item.OK {
 		t.Fatal("a stopped loop and three never-run workflows reported OK")
 	}
-	if !strings.Contains(warning, "NEVER RAN") {
+	if !strings.Contains(warning, codeAutomationNeverRan) {
 		t.Errorf("warning does not name the never-ran class: %q", warning)
 	}
-	if !strings.Contains(warning, "STOPPED") {
+	if !strings.Contains(warning, codeAutomationStopped) {
 		t.Errorf("warning does not name the stopped class: %q", warning)
 	}
 	if !strings.Contains(warning, "autonomous-loop") {
@@ -108,7 +108,7 @@ func TestScheduledAutomations_ProbeErrorIsNotHealthy(t *testing.T) {
 		t.Error("automations whose freshness could not be determined reported OK — " +
 			"'I could not look' must never render as 'it is fine'")
 	}
-	if !strings.Contains(warning, "UNVERIFIABLE") {
+	if !strings.Contains(warning, codeAutomationUnverifiable) {
 		t.Errorf("warning does not name the unverifiable class: %q", warning)
 	}
 }
@@ -123,7 +123,7 @@ func TestScheduledAutomations_MissingProbeIsUnverifiable(t *testing.T) {
 	if item.OK {
 		t.Error("no probes registered and the arm still reported OK")
 	}
-	if !strings.Contains(warning, "UNVERIFIABLE") {
+	if !strings.Contains(warning, codeAutomationUnverifiable) {
 		t.Errorf("an unprobed evidence kind should be unverifiable: %q", warning)
 	}
 }
@@ -253,5 +253,110 @@ func TestCadenceScope_AutonomousHonoursEnabledRepos(t *testing.T) {
 				t.Errorf("Autonomous = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+// byIDProbes answers each automation by its ID.
+func byIDProbes(ev map[string]cadence.Evidence) map[cadence.EvidenceKind]cadenceProbe {
+	p := func(_ context.Context, a cadence.Automation) cadence.Evidence { return ev[a.ID] }
+	return map[cadence.EvidenceKind]cadenceProbe{
+		cadence.EvidenceAutonomousState: p,
+		cadence.EvidenceWorkflowRun:     p,
+	}
+}
+
+// TestAutomationFindings_ThreeDistinctCodes: never ran, stopped 17d ago and
+// unverifiable are three codes with three causes.
+func TestAutomationFindings_ThreeDistinctCodes(t *testing.T) {
+	probes := byIDProbes(map[string]cadence.Evidence{
+		"autonomous-loop":  {EverRan: true, Newest: testNow.AddDate(0, 0, -17)},
+		"release-workflow": {EverRan: false},
+		"nightly":          {Err: errors.New("api unreachable")},
+	})
+	declared := []cadence.ConfigAutomation{{ID: "nightly", Interval: "24h", Workflow: "nightly.yml"}}
+	fs, _ := scheduledAutomationFindings(context.Background(), probes, coreScope, declared, nil, testNow)
+
+	got := map[string]Finding{}
+	for _, f := range fs {
+		got[f.Evidence["automation"]] = f
+	}
+	cases := map[string]string{
+		"release-workflow": codeAutomationNeverRan,
+		"autonomous-loop":  codeAutomationStopped,
+		"nightly":          codeAutomationUnverifiable,
+	}
+	causes := map[string]bool{}
+	for id, code := range cases {
+		f, ok := got[id]
+		if !ok {
+			t.Fatalf("no finding for %s: %s", id, findingsText(fs))
+		}
+		if f.Code != code || f.Severity != SeverityWarning {
+			t.Errorf("%s: %s/%s, want %s warning", id, f.Code, f.Severity, code)
+		}
+		causes[f.Cause] = true
+	}
+	if len(causes) != 3 {
+		t.Errorf("the three conditions share a cause: %v", causes)
+	}
+	stopped := got["autonomous-loop"]
+	if stopped.Evidence["last_ran"] == "" || stopped.Evidence["expected_interval"] == "" {
+		t.Errorf("stopped evidence lacks last-run or cadence: %v", stopped.Evidence)
+	}
+	kinds := map[RemedyKind]bool{}
+	for _, r := range stopped.Remedies {
+		kinds[r.Kind] = true
+		if r.Kind == RemedyConfirm && r.Verb != verbAutomationRestart {
+			t.Errorf("restart remedy verb %q", r.Verb)
+		}
+	}
+	if !kinds[RemedyConfirm] || !kinds[RemedyManual] {
+		t.Errorf("stopped automation remedies = %+v, want confirm restart and manual pause", stopped.Remedies)
+	}
+}
+
+// TestAutomationFindings_PauseTurnsStoppedIntoInfo: a recorded pause makes the
+// stopped finding info (still reported), and removing it restores the warning.
+func TestAutomationFindings_PauseTurnsStoppedIntoInfo(t *testing.T) {
+	root := t.TempDir()
+	probes := byIDProbes(map[string]cadence.Evidence{
+		"autonomous-loop": {EverRan: true, Newest: testNow.AddDate(0, 0, -17)},
+	})
+	scope := cadence.Scope{Autonomous: true}
+	run := func() Finding {
+		t.Helper()
+		pauses, err := LoadAutomationPauses(root)
+		if err != nil {
+			t.Fatalf("load pauses: %v", err)
+		}
+		fs, _ := scheduledAutomationFindings(context.Background(), probes, scope, nil, pauses, testNow)
+		if len(fs) != 1 {
+			t.Fatalf("want one finding, got %s", findingsText(fs))
+		}
+		return fs[0]
+	}
+
+	before := run()
+	if before.Severity != SeverityWarning {
+		t.Fatalf("unpaused stopped automation is %s, want warning", before.Severity)
+	}
+	if err := PauseAutomation(root, "autonomous-loop", "maintenance", testNow); err != nil {
+		t.Fatalf("pause: %v", err)
+	}
+	if info, err := os.Stat(AutomationPausePath(root)); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("pause record missing or not 0600: %v", err)
+	}
+	paused := run()
+	if paused.Severity != SeverityInfo || paused.Code != codeAutomationStopped {
+		t.Errorf("paused finding = %s/%s, want info %s", paused.Code, paused.Severity, codeAutomationStopped)
+	}
+	if paused.Evidence["pause_reason"] != "maintenance" || paused.Fingerprint != before.Fingerprint {
+		t.Errorf("paused finding lost its reason or identity: %+v", paused)
+	}
+	if found, err := ResumeAutomation(root, "autonomous-loop"); err != nil || !found {
+		t.Fatalf("resume: found=%v err=%v", found, err)
+	}
+	if after := run(); after.Severity != SeverityWarning {
+		t.Errorf("resumed automation is %s, want warning", after.Severity)
 	}
 }

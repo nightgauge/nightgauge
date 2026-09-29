@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,9 +24,10 @@ import (
 // record to `unobserved` — a verdict that is explicitly no evidence. Past that
 // point the delay has not postponed the answer, it has destroyed it, so the arm
 // fires BEFORE that line rather than after.
-func checkSurvivalBacklog(workspaceRoot string, now time.Time, windowDays int) (CheckItem, string) {
+func survivalBacklogFindings(workspaceRoot string, now time.Time, windowDays int) ([]Finding, string) {
+	const check, code = "survival_backlog", "NGD026"
 	if workspaceRoot == "" {
-		return CheckItem{OK: true, Detail: "survival backlog not checked (no workspace root)"}, ""
+		return nil, "survival backlog not checked (no workspace root)"
 	}
 	if windowDays <= 0 {
 		windowDays = survival.DefaultWindowDays
@@ -35,16 +37,17 @@ func checkSurvivalBacklog(workspaceRoot string, now time.Time, windowDays int) (
 	pending, err := store.Pending()
 	if err != nil {
 		// Unreadable is not empty. Undetermine rather than report a clean bill.
-		msg := fmt.Sprintf("survival backlog unverifiable: %v", err)
-		return CheckItem{OK: false, Detail: "could not read the survival store", Error: msg}, msg
+		return []Finding{unverifiableFinding(check, code, SeverityInfo, "survival backlog", err.Error())},
+			"could not read the survival store"
 	}
 	if len(pending) == 0 {
-		return CheckItem{OK: true, Detail: "no pending survival records"}, ""
+		return nil, "no pending survival records"
 	}
 
 	window := time.Duration(windowDays) * 24 * time.Hour
 	var overdue []string
 	oldestDays := 0
+	oldestMerged := ""
 	for _, rec := range pending {
 		merged, parseErr := time.Parse(time.RFC3339, rec.MergedAt)
 		if parseErr != nil {
@@ -61,26 +64,36 @@ func checkSurvivalBacklog(workspaceRoot string, now time.Time, windowDays int) (
 		days := int(age.Hours() / 24)
 		if days > oldestDays {
 			oldestDays = days
+			oldestMerged = rec.MergedAt
 		}
 		overdue = append(overdue, fmt.Sprintf("%s#%d (%dd)", rec.Repo, rec.IssueNumber, days))
 	}
 
 	if len(overdue) == 0 {
-		return CheckItem{
-			OK:     true,
-			Detail: fmt.Sprintf("%d pending survival record(s), none past %dd", len(pending), 2*windowDays),
-		}, ""
+		return nil, fmt.Sprintf("%d pending survival record(s), none past %dd", len(pending), 2*windowDays)
 	}
+	count := len(overdue)
 	if len(overdue) > maxLeaksReported {
 		overdue = append(overdue[:maxLeaksReported], fmt.Sprintf("… and %d more", len(overdue)-maxLeaksReported))
 	}
 
-	msg := fmt.Sprintf("survival-backlog-stale: %d record(s) pending past 2x the %dd window (oldest %dd) — "+
-		"they fold to \"unobserved\" and stop being evidence: %s — run `nightgauge survival sweep`",
-		len(overdue), windowDays, oldestDays, strings.Join(overdue, "; "))
-	return CheckItem{
-		OK:     false,
-		Detail: fmt.Sprintf("%d survival record(s) overdue, oldest %dd", len(overdue), oldestDays),
-		Error:  msg,
-	}, msg
+	ev := map[string]string{
+		"overdue":          strconv.Itoa(count),
+		"pending":          strconv.Itoa(len(pending)),
+		"window":           fmt.Sprintf("%dd", windowDays),
+		"threshold":        fmt.Sprintf("%dd", 2*windowDays),
+		"oldest":           days(oldestDays),
+		"oldest_merged":    oldestMerged,
+		"records":          strings.Join(overdue, "; "),
+		"expected_cadence": "survival sweep finalizes records inside the window",
+	}
+	title := fmt.Sprintf("survival-backlog-stale: %d record(s) pending past 2x the %dd window (oldest %dd)",
+		count, windowDays, oldestDays)
+	f := newFinding(check, code, SeverityInfo, title,
+		"nothing has finalized these records; past 2x the window they fold to \"unobserved\" and stop being evidence that merged work survived",
+		ev, []string{workspaceRoot},
+		Remedy{ID: "sweep", Kind: RemedyAuto, Verb: verbSurvivalSweep, Verify: check,
+			Summary: "Finalize pending survival records with `nightgauge survival sweep`",
+			Preview: fmt.Sprintf("finalize %d overdue survival record(s) in %s", count, workspaceRoot)})
+	return []Finding{f}, fmt.Sprintf("%d survival record(s) overdue, oldest %dd", count, oldestDays)
 }

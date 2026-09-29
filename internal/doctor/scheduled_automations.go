@@ -134,67 +134,143 @@ func evaluateCadence(ctx context.Context, probes map[cadence.EvidenceKind]cadenc
 	return verdicts, cfgErrs
 }
 
-// checkScheduledAutomations reports registered automations that have stopped
-// firing, or never fired at all (#996).
+// Codes for scheduled_automations. Never-ran, stopped and unverifiable have
+// different causes and different fixes, so each is its own code: a single
+// "stale" verdict for all three sends the operator to look at the wrong half.
+const (
+	codeAutomationStopped      = "NGD029"
+	codeAutomationNeverRan     = "NGD030"
+	codeAutomationUnverifiable = "NGD031"
+)
+
+// scheduledAutomationFindings reports registered automations that stopped
+// firing, never fired, or cannot be read (#996), one finding per automation.
 //
-// The third absence detector in this package, and the general one: the survival
-// backlog and corpus calibration arms each notice one specific thing having
-// stopped. This notices the CLASS — anything registered whose evidence has gone
-// quiet — which is what makes registering a new scheduled workflow the only
-// work required to have its silence noticed.
-func checkScheduledAutomations(ctx context.Context, probes map[cadence.EvidenceKind]cadenceProbe, scope cadence.Scope, declared []cadence.ConfigAutomation, now time.Time) (CheckItem, string) {
+// The general absence detector: the survival backlog and corpus calibration
+// arms each notice one specific thing having stopped. This notices the CLASS —
+// anything registered whose evidence has gone quiet.
+//
+// A stopped automation the operator recorded as intentionally paused (see
+// automation_pause.go) is still reported, as info, until it is resumed.
+func scheduledAutomationFindings(ctx context.Context, probes map[cadence.EvidenceKind]cadenceProbe, scope cadence.Scope, declared []cadence.ConfigAutomation, pauses map[string]AutomationPause, now time.Time) ([]Finding, string) {
+	const check = "scheduled_automations"
 	verdicts, cfgErrs := evaluateCadence(ctx, probes, scope, declared, now)
 	if len(verdicts) == 0 && len(cfgErrs) == 0 {
-		return CheckItem{OK: true, Detail: "none registered (declare repo automations under automations.cadence)"}, ""
+		return nil, "none registered (declare repo automations under automations.cadence)"
 	}
 
-	var never, stale, unknown []string
+	var out []Finding
+	var never, stale, unknown, paused int
 	for _, v := range verdicts {
-		line := fmt.Sprintf("%s (%s)", v.Automation.ID, v.Detail)
+		a := v.Automation
+		ev := map[string]string{
+			"automation":        a.ID,
+			"description":       a.Description,
+			"expected_interval": a.Interval.String(),
+			"evidence_kind":     string(a.Kind),
+		}
+		if a.Workflow != "" {
+			ev["workflow"] = a.Workflow
+		}
+		if a.Repo != "" {
+			ev["repo"] = a.Repo
+		}
+		if !v.Newest.IsZero() {
+			ev["last_ran"] = v.Newest.UTC().Format(time.RFC3339)
+		}
+		identity := []string{a.ID, a.Repo, a.Workflow}
 		switch v.Status {
 		case cadence.StatusNeverRan:
-			never = append(never, line)
+			never++
+			out = append(out, newFinding(check, codeAutomationNeverRan, SeverityWarning,
+				fmt.Sprintf("scheduled automation %s has never run", a.ID),
+				"no evidence of a run has ever existed: usually a schedule that was never valid (a cron on a branch GitHub does not schedule from, or a trigger that never matched)",
+				ev, identity,
+				manualRemedy("schedule", "Make the schedule valid, then confirm one run", check,
+					automationRemedySteps(a)...)))
 		case cadence.StatusStale:
-			stale = append(stale, line)
+			ev["age"] = v.Age.Round(time.Minute).String()
+			title := fmt.Sprintf("scheduled automation %s stopped: %s", a.ID, v.Detail)
+			if p, ok := pauses[a.ID]; ok {
+				paused++
+				ev["paused_at"] = p.PausedAt.Format(time.RFC3339)
+				if p.Reason != "" {
+					ev["pause_reason"] = p.Reason
+				}
+				out = append(out, newFinding(check, codeAutomationStopped, SeverityInfo,
+					fmt.Sprintf("scheduled automation %s is paused (stopped: %s)", a.ID, v.Detail),
+					"the operator recorded this automation as intentionally paused; it is reported until it is resumed",
+					ev, identity,
+					restartRemedy(a),
+					manualRemedy("resume", "Resume watching it as a live automation", check,
+						fmt.Sprintf("Run `nightgauge doctor automation resume %s`", a.ID))))
+				continue
+			}
+			stale++
+			out = append(out, newFinding(check, codeAutomationStopped, SeverityWarning, title,
+				"it ran before and has since stopped producing evidence: usually a process that died or a credential that expired",
+				ev, identity,
+				restartRemedy(a),
+				manualRemedy("pause", "Mark it as intentionally paused", check,
+					fmt.Sprintf("Run `nightgauge doctor automation pause %s --reason \"<why>\"`", a.ID),
+					"The finding stays visible as info until `nightgauge doctor automation resume` is run")))
 		case cadence.StatusUnknown:
-			unknown = append(unknown, line)
+			unknown++
+			out = append(out, newFinding(check, codeAutomationUnverifiable, SeverityWarning,
+				fmt.Sprintf("scheduled automation %s is unverifiable: %s", a.ID, v.Detail),
+				"its status could not be read, and an automation whose freshness is unknown is not a healthy one",
+				ev, identity,
+				manualRemedy("probe", "Make the automation's evidence readable", check,
+					"Check GitHub authentication (`nightgauge doctor` github checks) for workflow evidence",
+					"Check that .nightgauge/autonomous/state.json is readable for the autonomous loop")))
 		}
 	}
 	// A malformed entry is reported, never dropped. An operator who declared an
 	// automation believes it is watched; silently skipping it reproduces this
 	// package's own failure one level up.
 	for _, e := range cfgErrs {
-		unknown = append(unknown, e.Error())
+		unknown++
+		out = append(out, newFinding(check, codeAutomationUnverifiable, SeverityWarning,
+			"declared automation is invalid: "+e.Error(),
+			"a malformed automations.cadence entry cannot be evaluated, so the automation it names is not watched",
+			map[string]string{"error": e.Error()}, []string{"config", e.Error()},
+			manualRemedy("fix-config", "Correct the automations.cadence entry in .nightgauge/config.yaml", check)))
 	}
+	detail := fmt.Sprintf("%d never ran, %d stopped, %d paused, %d unverifiable (of %d registered)",
+		never, stale, paused, unknown, len(verdicts))
+	if len(out) == 0 {
+		detail = fmt.Sprintf("all %d registered automation(s) are firing on schedule", len(verdicts))
+	}
+	return out, detail
+}
 
-	if len(never) == 0 && len(stale) == 0 && len(unknown) == 0 {
-		return CheckItem{
-			OK:     true,
-			Detail: fmt.Sprintf("all %d registered automation(s) are firing on schedule", len(verdicts)),
-		}, ""
+// restartRemedy restarts a stopped automation through the entry point that
+// normally schedules it: the autonomous scheduler for the loop, a workflow
+// dispatch for a workflow.
+func restartRemedy(a cadence.Automation) Remedy {
+	r := Remedy{ID: "restart", Kind: RemedyConfirm, Verb: verbAutomationRestart, Verify: "scheduled_automations"}
+	switch a.Kind {
+	case cadence.EvidenceAutonomousState:
+		r.Summary = "Restart the autonomous scheduler"
+		r.Preview = fmt.Sprintf("start the autonomous scheduler for this workspace (%s), the entry point that normally runs %s", "nightgauge serve", a.ID)
+	default:
+		repo := a.Repo
+		if repo == "" {
+			repo = "this repository"
+		}
+		r.Summary = fmt.Sprintf("Dispatch workflow %s", a.Workflow)
+		r.Preview = fmt.Sprintf("dispatch workflow %s in %s (workflow_dispatch); a broken schedule still needs its trigger fixed", a.Workflow, repo)
 	}
+	return r
+}
 
-	// NEVER RAN and STALE are reported separately and in that order. They have
-	// different causes — a schedule that was never valid vs. one that stopped —
-	// and different fixes, so a single "stale" verdict for both sends the
-	// operator to look at the wrong half.
-	var parts []string
-	if len(never) > 0 {
-		parts = append(parts, "NEVER RAN: "+strings.Join(never, "; "))
+func automationRemedySteps(a cadence.Automation) []string {
+	steps := []string{}
+	if a.Remedy != "" {
+		steps = append(steps, a.Remedy)
 	}
-	if len(stale) > 0 {
-		parts = append(parts, "STOPPED: "+strings.Join(stale, "; "))
+	if a.Workflow != "" {
+		steps = append(steps, fmt.Sprintf("Check the trigger of %s: a cron fires only from the default branch", a.Workflow))
 	}
-	if len(unknown) > 0 {
-		parts = append(parts, "UNVERIFIABLE: "+strings.Join(unknown, "; "))
-	}
-
-	msg := "scheduled-automation-stale: " + strings.Join(parts, " | ") +
-		" — an automation nobody notices stopping is the failure unattended operation cannot survive"
-	return CheckItem{
-		OK: false,
-		Detail: fmt.Sprintf("%d never ran, %d stopped, %d unverifiable (of %d registered)",
-			len(never), len(stale), len(unknown), len(verdicts)),
-		Error: msg,
-	}, msg
+	return steps
 }

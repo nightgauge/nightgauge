@@ -16,7 +16,7 @@ import (
 func TestRunDoctor_NilClient(t *testing.T) {
 	ctx := context.Background()
 	result := RunDoctor(ctx, nil, nil, nil)
-	if _, ok := result.Checks["complexity_model"]; !ok {
+	if !hasResult(result, "complexity_model") {
 		t.Fatal("expected RunDoctor to emit the complexity_model check")
 	}
 
@@ -593,15 +593,15 @@ func TestRunDoctor_EmitsStrandedBranchesArm(t *testing.T) {
 	ctx := context.Background()
 	result := RunDoctor(ctx, nil, nil, nil)
 
-	if _, ok := result.Checks["stranded_branches"]; !ok {
+	if !hasResult(result, "stranded_branches") {
 		t.Fatalf("stranded_branches missing from doctor's checks; got %v", checkKeys(result))
 	}
 }
 
 func checkKeys(r DoctorResult) []string {
-	keys := make([]string, 0, len(r.Checks))
-	for k := range r.Checks {
-		keys = append(keys, k)
+	keys := make([]string, 0, len(r.Results))
+	for _, res := range r.Results {
+		keys = append(keys, res.ID)
 	}
 	sort.Strings(keys)
 	return keys
@@ -646,4 +646,14 @@ func TestRunDoctor_ConfigNamesLoadedFiles(t *testing.T) {
 	if !check.OK || !strings.Contains(check.Detail, filepath.Join(".nightgauge", "config.yaml")) {
 		t.Fatalf("config row must pass and name the repository file, got %+v", check)
 	}
+}
+
+// hasResult reports whether the run produced a result for check id.
+func hasResult(r DoctorResult, id string) bool {
+	for _, res := range r.Results {
+		if res.ID == id {
+			return true
+		}
+	}
+	return false
 }

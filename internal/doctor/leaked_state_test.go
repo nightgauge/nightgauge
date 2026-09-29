@@ -287,10 +287,11 @@ func TestCheckStrandedBranches_ReportsAMergedBranchNoWorktreeHolds(t *testing.T)
 	if !strings.Contains(item.Error, "fix/912-landed") {
 		t.Errorf("the check does not name the branch: %q", item.Error)
 	}
-	// Report-only is a promise to the operator, so the output has to say so —
-	// otherwise the row reads as something the product already handled.
-	if !strings.Contains(item.Error, "report only") {
-		t.Errorf("the check does not say it deleted nothing: %q", item.Error)
+	// The check deletes nothing itself; the delete it offers is a confirm
+	// remedy whose verb re-derives the merged proof at apply time.
+	if !strings.Contains(item.Error, "[confirm: Delete the merged local branch") ||
+		!strings.Contains(item.Error, "re-derived first") {
+		t.Errorf("the check does not offer a confirm delete that re-derives its proof: %q", item.Error)
 	}
 	if warning == "" {
 		t.Error("a stranded branch must produce a warning, not just a check entry")
@@ -310,13 +311,17 @@ func TestCheckStrandedBranches_KeepsUnmergedWork(t *testing.T) {
 	r.git("-C", path, "commit", "-m", "unlanded work")
 	r.git("worktree", "remove", path)
 
-	item, _ := checkStrandedBranches(r.dir, nil)
+	fs, _ := strandedBranchFindings(r.dir, nil)
 
-	if strings.Contains(item.Error, "feat/919-unlanded") {
-		t.Fatalf("a branch carrying unmerged work was reported as stranded: %q", item.Error)
+	// It is reported, but only ever with a manual remedy: nothing proves it
+	// safe to delete, so no fix is offered.
+	if len(fs) != 1 || fs[0].Evidence["branch"] != "feat/919-unlanded" {
+		t.Fatalf("want one finding for the unmerged branch, got %s", findingsText(fs))
 	}
-	if !item.OK {
-		t.Errorf("nothing is stranded here: %+v", item)
+	for _, rem := range fs[0].Remedies {
+		if rem.Kind != RemedyManual || rem.Verb != "" {
+			t.Errorf("an unmerged branch was offered a %s remedy %q", rem.Kind, rem.Verb)
+		}
 	}
 }
 
@@ -346,5 +351,152 @@ func TestCheckStrandedBranches_UnverifiableIsNeverHealthy(t *testing.T) {
 	}
 	if warning == "" {
 		t.Error("an unverifiable scan must warn")
+	}
+}
+
+// hygieneFixture is one repo holding one leaked worktree, one merged and one
+// unmerged stranded branch, and one pipeline stash on the default branch.
+func hygieneFixture(t *testing.T) *leakRepo {
+	t.Helper()
+	r := newLeakRepo(t)
+	r.strandMergedBranch(912, "fix/912-landed")
+	path := filepath.Join(r.dir, ".worktrees", "issue-919")
+	r.git("worktree", "add", "-q", path, "-b", "feat/919-unlanded", "main")
+	if err := os.WriteFile(filepath.Join(path, "wip.txt"), []byte("not merged anywhere\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	r.git("-C", path, "add", ".")
+	r.git("-C", path, "commit", "-m", "unlanded work")
+	r.git("worktree", "remove", path)
+	r.strandedWorktree(1181)
+	r.write("README", "modified\n")
+	r.git("stash", "push", "-m", reclaim.StashName(reclaim.StashBaseline, 692, "feature-validate"))
+	return r
+}
+
+func hygieneScan(r *leakRepo, now time.Time) []Finding {
+	var all []Finding
+	fs, _ := worktreeLeakFindings(r.dir, now, nil)
+	all = append(all, fs...)
+	fs, _ = strandedBranchFindings(r.dir, nil)
+	all = append(all, fs...)
+	fs, _ = pipelineStashFindings(r.dir, now, nil)
+	return append(all, fs...)
+}
+
+// TestHygieneFindings_FixtureYieldsExactlyTheLeaks: each leaked object is its
+// own finding with its code, housekeeping severity and remedy kind. The
+// unmerged branch's remedy is manual — it cannot be proven safe to delete.
+func TestHygieneFindings_FixtureYieldsExactlyTheLeaks(t *testing.T) {
+	r := hygieneFixture(t)
+	fs := hygieneScan(r, aged())
+
+	type want struct {
+		code, object, verb string
+		kind               RemedyKind
+	}
+	wants := []want{
+		{"NGD017", filepath.Join(r.dir, ".worktrees", "issue-1181"), "", RemedyManual},
+		{"NGD018", "feat/919-unlanded", "", RemedyManual},
+		{"NGD018", "fix/912-landed", verbBranchDelete, RemedyConfirm},
+		{"NGD019", "stash@{0}", verbStashSweep, RemedyAuto},
+	}
+	if len(fs) != len(wants) {
+		t.Fatalf("got %d findings, want %d: %s", len(fs), len(wants), findingsText(fs))
+	}
+	for i, w := range wants {
+		f := fs[i]
+		obj := f.Evidence["branch"]
+		switch f.Code {
+		case "NGD017":
+			obj = f.Evidence["path"]
+		case "NGD019":
+			obj = f.Evidence["stash_ref"]
+		}
+		if f.Code != w.code || obj != w.object {
+			t.Errorf("finding %d = %s %q, want %s %q", i, f.Code, obj, w.code, w.object)
+		}
+		if f.Severity != SeverityHousekeeping {
+			t.Errorf("%s: severity %s, want housekeeping", f.Code, f.Severity)
+		}
+		if len(f.Remedies) == 0 {
+			t.Fatalf("%s %s: no remedy declared", f.Code, obj)
+		}
+		r0 := f.Remedies[0]
+		if r0.Kind != w.kind || r0.Verb != w.verb {
+			t.Errorf("%s %s: remedy %s/%q, want %s/%q", f.Code, obj, r0.Kind, r0.Verb, w.kind, w.verb)
+		}
+		for _, rem := range f.Remedies {
+			if rem.Verify != f.Check {
+				t.Errorf("%s: remedy %s verifies %q, want %q", f.Code, rem.ID, rem.Verify, f.Check)
+			}
+			if rem.Kind != RemedyManual && rem.Preview == "" {
+				t.Errorf("%s: remedy %s has no preview", f.Code, rem.ID)
+			}
+			if rem.Kind == RemedyManual && (rem.Verb != "" || len(rem.Steps) == 0) {
+				t.Errorf("%s: manual remedy %s must carry steps and no verb", f.Code, rem.ID)
+			}
+		}
+	}
+}
+
+// TestHygieneFindings_FingerprintsAreStable: the same objects yield the same
+// fingerprints on a second run, even when their ages have moved.
+func TestHygieneFindings_FingerprintsAreStable(t *testing.T) {
+	r := hygieneFixture(t)
+	first := hygieneScan(r, aged())
+	second := hygieneScan(r, aged().Add(72*time.Hour))
+	if len(first) != len(second) {
+		t.Fatalf("finding count changed between runs: %d vs %d", len(first), len(second))
+	}
+	seen := map[string]bool{}
+	for i := range first {
+		if first[i].Fingerprint != second[i].Fingerprint {
+			t.Errorf("%s: fingerprint %s then %s", first[i].Title, first[i].Fingerprint, second[i].Fingerprint)
+		}
+		if seen[first[i].Fingerprint] {
+			t.Errorf("two objects share fingerprint %s", first[i].Fingerprint)
+		}
+		seen[first[i].Fingerprint] = true
+	}
+}
+
+// TestHygieneFindings_ReclaimableWorktreeIsAuto: a worktree the sweep would
+// reclaim now is offered the auto `worktree sweep` remedy.
+func TestHygieneFindings_ReclaimableWorktreeIsAuto(t *testing.T) {
+	r := newLeakRepo(t)
+	path := filepath.Join(r.dir, ".worktrees", "issue-1182")
+	r.git("worktree", "add", "-q", path, "-b", "fix/1182", "main")
+	r.write("landed.txt", "shipped\n")
+	if err := os.WriteFile(filepath.Join(path, "landed.txt"), []byte("shipped\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	r.git("-C", path, "add", ".")
+	r.git("-C", path, "commit", "-m", "work")
+	r.git("add", ".")
+	r.git("commit", "-m", "squash: fix/1182")
+	r.git("update-ref", "refs/remotes/origin/main", strings.TrimSpace(r.git("rev-parse", "main")))
+
+	fs, _ := worktreeLeakFindings(r.dir, aged(), nil)
+	if len(fs) != 1 {
+		t.Fatalf("want one reclaimable worktree finding, got %s", findingsText(fs))
+	}
+	if rem := fs[0].Remedies[0]; rem.Kind != RemedyAuto || rem.Verb != verbWorktreeSweep {
+		t.Errorf("remedy = %+v, want auto worktree.sweep", rem)
+	}
+}
+
+// TestHygieneFindings_BranchDeleteReDerivesProof: the delete precondition
+// re-derives the merged proof at apply time, and refuses an unmerged branch, a
+// branch a worktree holds, and main.
+func TestHygieneFindings_BranchDeleteReDerivesProof(t *testing.T) {
+	r := hygieneFixture(t)
+	if err := branchDeletePrecondition(r.dir, "fix/912-landed", nil); err != nil {
+		t.Errorf("merged, unheld branch refused: %v", err)
+	}
+	for _, b := range []string{"feat/919-unlanded", "fix/1181", "main", "master", "gone/branch"} {
+		if err := branchDeletePrecondition(r.dir, b, nil); err == nil {
+			t.Errorf("branch %s was allowed", b)
+		}
 	}
 }
