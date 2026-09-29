@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/credshape"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -133,4 +134,29 @@ func RedactYAMLBytes(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("close redacted YAML encoder: %w", err)
 	}
 	return normalizeTrailingNewline(buf.Bytes()), nil
+}
+
+// RedactSecretString replaces every credential-shaped substring of s (GitHub
+// tokens, license keys) with RedactedValue. Doctor findings pass their text
+// through it before any render (ADR-025 § 8).
+func RedactSecretString(s string) string {
+	return credshape.ReplaceAll(s, RedactedValue)
+}
+
+// RedactEvidence returns a redacted copy of structured evidence: a value whose
+// key names a secret (token, api_key, ...) is replaced whole, and every other
+// value has its credential-shaped substrings replaced.
+func RedactEvidence(evidence map[string]string) map[string]string {
+	if evidence == nil {
+		return nil
+	}
+	out := make(map[string]string, len(evidence))
+	for k, v := range evidence {
+		if IsSecretConfigPath(strings.Split(k, ".")) {
+			out[k] = RedactedValue
+			continue
+		}
+		out[k] = RedactSecretString(v)
+	}
+	return out
 }

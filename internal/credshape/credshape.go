@@ -73,3 +73,11 @@ func Contains(s string) bool {
 	}
 	return false
 }
+
+// ReplaceAll returns s with every credential-shaped substring replaced by repl.
+func ReplaceAll(s, repl string) string {
+	for _, p := range patterns {
+		s = p.re.ReplaceAllLiteralString(s, repl)
+	}
+	return s
+}

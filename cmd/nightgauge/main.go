@@ -12083,28 +12083,9 @@ func modelAccuracyAlternate(modelAccuracy *float64) string {
 
 // --- doctor command ---
 
-// doctorCheckOrder is the render order for doctor's named rows. A check that
-// RunDoctor emits but this list omits is computed, JSON-visible, and INVISIBLE
-// in the human output — the shape a reader is most likely to read as "the
-// product does not check that" (#912). Pinned by
-// TestDoctorCheckOrder_CoversEveryEmittedCheck.
-//
-// The leak carriers are listed here so they render as named rows rather than
-// only as anonymous Warnings lines; keys absent from result.Checks
-// (compose_orphans writes nothing when healthy) are skipped at render time.
-//
-// survival_backlog is last and is the odd one out: every other row on that line
-// reports RESIDUE — something that exists and should not. It reports an
-// ABSENCE, work that should have been observed by now and was not (#992). It
-// renders alongside them because the operator's question is the same ("what is
-// wrong with this workspace's local state?"), even though the detection shape
-// is inverted.
-var doctorCheckOrder = []string{
-	"binary", "skills", "gh", "github_auth", "api_user", "scopes", "rate_limit", "github_api_budget", "config", "project",
-	"complexity_model", "ai_adapter",
-	"compose_orphans", "worktree_leaks", "stranded_branches", "pipeline_stashes", "preserved_wip", "orphaned_processes",
-	"serve_lease", "ledger_daemon_coverage", "tracked_secrets", "ci_machine_credentials",
-	"survival_backlog", "survival_coverage", "corpus_calibration", "scheduled_automations",
+// renderDoctorHuman writes the registry-driven, severity-grouped report.
+func renderDoctorHuman(w io.Writer, result doctor.DoctorResult, color bool) {
+	doctor.RenderHuman(w, result, doctor.RenderOptions{Color: color, Adapters: writeAdapterRows})
 }
 
 func doctorCmd() *cobra.Command {
@@ -12137,12 +12118,16 @@ An unhealthy adapter is reported as a warning (degraded), never a hard failure.
 
   nightgauge doctor --adapters codex,claude --json
 
-Exit codes:
-  0  healthy — all required checks pass, no warnings
-  1  degraded — all required checks pass but optional items have warnings
-  2  broken — one or more required checks failed; skills will halt at Phase 0
+Findings are grouped by severity (ADR-025): blocker, warning,
+housekeeping, info. Each carries a stable NGD code documented in
+docs/DOCTOR.md. Output honours NO_COLOR and is plain text when not a TTY.
 
-Use --json for machine-readable output (skills parse this format).`,
+Exit codes:
+  0  healthy — no blocker or warning (housekeeping and info never count)
+  1  degraded — warnings only
+  2  broken — at least one blocker; skills will halt at Phase 0
+
+Use --json for machine-readable JSON v2 output (skills parse this format).`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workdir, _ := os.Getwd()
@@ -12166,67 +12151,7 @@ Use --json for machine-readable output (skills parse this format).`,
 				return nil
 			}
 
-			// Human-readable output
-			fmt.Printf("nightgauge doctor — schema v%d\n\n", result.V)
-			for _, key := range doctorCheckOrder {
-				item, ok := result.Checks[key]
-				if !ok {
-					continue
-				}
-				status := "✓"
-				if !item.OK {
-					status = "✗"
-				}
-				detail := item.Detail
-				if item.Error != "" {
-					detail = item.Error
-				}
-				if detail != "" {
-					// Wide enough for the longest check key
-					// (`orphaned_processes`) so the detail column stays aligned.
-					fmt.Printf("  %s  %-18s  %s\n", status, key, detail)
-				} else {
-					fmt.Printf("  %s  %s\n", status, key)
-				}
-			}
-
-			if len(result.Adapters) > 0 {
-				fmt.Println("\nAdapters:")
-				writeAdapterRows(os.Stdout, result.Adapters)
-			}
-
-			if len(result.Warnings) > 0 {
-				fmt.Println("\nWarnings:")
-				for _, w := range result.Warnings {
-					fmt.Printf("  ⚠  %s\n", w)
-				}
-			}
-			if len(result.Errors) > 0 {
-				fmt.Println("\nErrors:")
-				for _, e := range result.Errors {
-					fmt.Printf("  ✗  %s\n", e)
-				}
-			}
-			if result.InstallInstructions != "" {
-				fmt.Printf("\n%s\n", result.InstallInstructions)
-			}
-
-			fmt.Println()
-			if result.ExitCode == 0 {
-				fmt.Println("Status: healthy — environment ready for pipeline operations")
-			} else if result.ExitCode == 1 {
-				// The generic degraded line asserts "pipeline will run", which
-				// is false in exactly one degraded case: no usable adapter
-				// means no stage can run at all (#862). Saying so beats a
-				// summary that contradicts the row printed just above it.
-				if item, ok := result.Checks["ai_adapter"]; ok && !item.OK {
-					fmt.Println("Status: degraded — no AI coding agent, so no pipeline stage can run; other checks passed")
-				} else {
-					fmt.Println("Status: degraded — pipeline will run but some features may be limited")
-				}
-			} else {
-				fmt.Println("Status: broken — fix the errors above before running pipeline skills")
-			}
+			renderDoctorHuman(os.Stdout, result, doctor.ColorEnabled(os.Stdout))
 
 			if result.ExitCode != 0 {
 				os.Exit(result.ExitCode)

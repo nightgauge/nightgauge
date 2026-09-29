@@ -26,8 +26,8 @@ func TestRunDoctor_NilClient(t *testing.T) {
 	if result.Healthy {
 		t.Error("expected Healthy=false when client is nil")
 	}
-	if result.V != 1 {
-		t.Errorf("expected schema version V=1, got %d", result.V)
+	if result.V != SchemaVersion {
+		t.Errorf("expected schema version V=%d, got %d", SchemaVersion, result.V)
 	}
 
 	authCheck, ok := result.Checks["github_auth"]
@@ -434,14 +434,14 @@ repositories:
 	}
 }
 
-// TestDoctorResult_Schema verifies that DoctorResult always has V=1 and that
-// all expected check keys are present (regression guard for schema stability).
+// TestDoctorResult_Schema verifies that DoctorResult carries the JSON v2
+// version and a result for every expected check (regression guard).
 func TestDoctorResult_Schema(t *testing.T) {
 	ctx := context.Background()
 	result := RunDoctor(ctx, nil, nil, nil)
 
-	if result.V != 1 {
-		t.Errorf("expected schema version V=1, got %d", result.V)
+	if result.V != SchemaVersion {
+		t.Errorf("expected schema version V=%d, got %d", SchemaVersion, result.V)
 	}
 	if result.Checks == nil {
 		t.Fatal("expected non-nil Checks map")
@@ -455,9 +455,20 @@ func TestDoctorResult_Schema(t *testing.T) {
 		"binary", "gh", "github_auth", "api_user", "scopes", "rate_limit", "config", "project",
 		"orphaned_processes",
 	}
+	// With no client the auth-dependent checks are skipped, which is still a
+	// result (an info finding), never an absence.
+	present := map[string]CheckStatus{}
+	for _, r := range result.Results {
+		present[r.ID] = r.Status
+	}
 	for _, key := range expectedKeys {
-		if _, ok := result.Checks[key]; !ok {
-			t.Errorf("expected check key %q to be present in result.Checks", key)
+		if _, ok := present[key]; !ok {
+			t.Errorf("expected a result for check %q", key)
+		}
+	}
+	for _, key := range []string{"api_user", "scopes", "rate_limit", "github_identity"} {
+		if present[key] != StatusSkipped {
+			t.Errorf("check %q = %s, want skipped with no client", key, present[key])
 		}
 	}
 }
