@@ -1,7 +1,9 @@
 // Package doctor provides environment health checks for the nightgauge pipeline.
-// The DoctorResult JSON schema is stable — field names and types must not change
-// after first merge. Skills parse `nightgauge doctor --json` output; any
-// breaking change requires incrementing the V field.
+//
+// Checks are registered in a Registry (registry.go) and emit ADR-025 Findings
+// (finding.go). `nightgauge doctor --json` emits JSON v2: `findings[]` and
+// `summary`, plus the top-level fields skills/_shared/PREFLIGHT.md reads,
+// derived from the findings with unchanged meaning.
 package doctor
 
 import (
@@ -20,37 +22,44 @@ import (
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	gh "github.com/nightgauge/nightgauge/internal/github"
-	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 )
 
-// DoctorResult is the stable JSON output schema for `nightgauge doctor`.
-// Schema version 1 — do not rename or remove fields after first merge.
+// SchemaVersion is the `v` field of `nightgauge doctor --json`.
+const SchemaVersion = 2
+
+// DoctorResult is the JSON v2 output of `nightgauge doctor` (ADR-025 § 5).
+// Healthy, ExitCode, FailedChecks, Errors, Warnings and InstallInstructions
+// are derived from Findings: failed_checks and errors come from blockers,
+// warnings from warnings; housekeeping and info feed neither.
 type DoctorResult struct {
-	V                   int                  `json:"v"`                              // schema version, always 1
-	Healthy             bool                 `json:"healthy"`                        // true when ExitCode < 2
-	ExitCode            int                  `json:"exit_code"`                      // 0=healthy, 1=warnings, 2=broken
-	Checks              map[string]CheckItem `json:"checks"`                         // per-check results keyed by check name
-	Warnings            []string             `json:"warnings"`                       // non-blocking issues
-	Errors              []string             `json:"errors"`                         // blocking issues (ExitCode 2)
-	FailedChecks        []string             `json:"failed_checks,omitempty"`        // check names that contributed to hasRequiredFailure, in order added
-	InstallInstructions string               `json:"install_instructions,omitempty"` // populated when binary check fails
-	// Adapters is the per-adapter health section (Issue #4031), populated only
-	// when the caller requests specific adapters (e.g. `doctor --adapters
-	// codex,claude`). Additive to schema v1 — never populated for the default
-	// environment-only doctor run, so existing parsers are unaffected. An
-	// unhealthy adapter is a warning (ExitCode 1), never a required failure:
-	// an optional adapter being uninstalled must not fail the environment check.
+	V                   int       `json:"v"`
+	Findings            []Finding `json:"findings"`
+	Summary             Summary   `json:"summary"`
+	Healthy             bool      `json:"healthy"`   // true when ExitCode < 2
+	ExitCode            int       `json:"exit_code"` // 0 healthy, 1 warnings, 2 blocker
+	FailedChecks        []string  `json:"failed_checks"`
+	Errors              []string  `json:"errors"`
+	Warnings            []string  `json:"warnings"`
+	InstallInstructions string    `json:"install_instructions"`
+	// Adapters is the per-adapter health section (#4031), populated only when
+	// the caller requests adapters (`doctor --adapters codex,claude`).
 	Adapters []AdapterHealth `json:"adapters,omitempty"`
+
+	// Results is every registered check's outcome in registry order; the
+	// human renderer walks it, so every registered check renders.
+	Results []CheckResult `json:"-"`
+	// Checks keeps the legacy per-check rows for in-process callers until
+	// #2098 deletes CheckItem. It is not part of JSON v2.
+	Checks map[string]CheckItem `json:"-"`
 }
 
-// CheckItem is the result of a single environment check.
+// CheckItem is a legacy check's row, wrapped into Findings by
+// legacy_checks.go. #2098 deletes it.
 type CheckItem struct {
-	OK     bool   `json:"ok"`               // true when this check passed
-	Detail string `json:"detail,omitempty"` // human-readable success detail
-	Error  string `json:"error,omitempty"`  // human-readable failure reason
-	// Findings is the structured form of a tracked_secrets failure (#2024):
-	// path, line and pattern per hit, with the value redacted. Additive to
-	// schema v1 and populated by no other check.
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+	Error  string `json:"error,omitempty"`
+	// Findings is the structured form of a tracked_secrets failure (#2024).
 	Findings []SecretFinding `json:"findings,omitempty"`
 }
 
@@ -158,16 +167,10 @@ const installMsg = "nightgauge is not in PATH.\n" +
 
 // RunDoctor performs a full environment health check and returns a structured result.
 //
-// client may be nil when GitHub authentication failed; all auth-dependent checks
-// will report failure in that case. cfg may be nil for fresh repositories that
-// have not yet run `nightgauge repo-init`; config/project checks are
-// downgraded to warnings rather than required failures in that case.
-//
-// adapters is the optional set of execution adapters to health-check (Issue
-// #4031). When non-empty, result.Adapters is populated with deterministic
-// per-adapter binary/version/MCP facts and each unhealthy adapter adds a
-// warning. When empty/nil, the adapter section is omitted entirely (the
-// default environment-only doctor behavior).
+// client may be nil when GitHub authentication failed; auth-dependent checks
+// are then skipped. cfg may be nil for fresh repositories that have not yet run
+// `nightgauge repo-init`. adapters is the optional set of execution adapters to
+// health-check (#4031).
 func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapters []string) DoctorResult {
 	return RunDoctorWithConfigError(ctx, cfg, nil, client, adapters)
 }
@@ -177,514 +180,109 @@ func RunDoctor(ctx context.Context, cfg *config.Config, client *gh.Client, adapt
 // was refused — for example a plaintext token in the committed file (#2023) —
 // and is reported as a failed config check rather than as a fresh repository.
 func RunDoctorWithConfigError(ctx context.Context, cfg *config.Config, cfgErr error, client *gh.Client, adapters []string) DoctorResult {
-	result := DoctorResult{
-		V:      1,
-		Checks: make(map[string]CheckItem),
-	}
-
-	var warnings []string
-	var errors []string
-	hasRequiredFailure := false
 	cwd, _ := os.Getwd()
+	env := &Env{Cfg: cfg, CfgErr: cfgErr, Client: client, Cwd: cwd, Now: time.Now(), Adapters: adapters}
+	results := Runner{}.Run(ctx, DefaultRegistry(), env)
+	res := BuildResult(results)
+	env.mu.Lock()
+	res.InstallInstructions = env.install
+	res.Adapters = env.adapter
+	res.Checks = make(map[string]CheckItem, len(env.items))
+	for k, v := range env.items {
+		res.Checks[k] = v
+	}
+	env.mu.Unlock()
+	return res
+}
 
-	// --- binary (warning) ---
-	// Self-check: which binary would the hooks resolve from this directory?
-	binaryCheck, binaryResolved := checkBinary()
-	result.Checks["binary"] = binaryCheck
-	if !binaryCheck.OK {
-		// The check's own Error is the warning — "not found" and "found but
-		// superseded" (#356) are different problems with different fixes, and
-		// only the former is solved by installing anything.
-		warnings = append(warnings, binaryCheck.Error)
-		if !binaryResolved {
-			result.InstallInstructions = installMsg
+// DefaultRegistry returns the built-in checks in render order.
+func DefaultRegistry() *Registry {
+	reg := NewRegistry()
+	for _, c := range builtinChecks {
+		reg.MustRegister(c)
+	}
+	return reg
+}
+
+func (e *Env) setInstall(msg string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.install = msg
+}
+
+func (e *Env) setAdapters(h []AdapterHealth) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.adapter = h
+}
+
+// BuildResult derives a JSON v2 result from check results (ADR-025 § 5).
+// Every finding is redacted here, before any surface renders it.
+func BuildResult(results []CheckResult) DoctorResult {
+	res := DoctorResult{
+		V:            SchemaVersion,
+		Findings:     []Finding{},
+		FailedChecks: []string{},
+		Errors:       []string{},
+		Warnings:     []string{},
+		Results:      make([]CheckResult, len(results)),
+	}
+	failed := map[string]bool{}
+	for i, r := range results {
+		for j := range r.Findings {
+			r.Findings[j] = RedactFinding(r.Findings[j])
 		}
-	}
-
-	// --- skills (warning): can this binary render every stage? (#2220) ---
-	skillsCheck, skillsWarning := checkSkillsRoot(cwd)
-	result.Checks["skills"] = skillsCheck
-	if skillsWarning != "" {
-		warnings = append(warnings, skillsWarning)
-	}
-
-	// --- gh (warning) ---
-	ghCheck := checkGH()
-	result.Checks["gh"] = ghCheck
-	if !ghCheck.OK {
-		warnings = append(warnings, "gh CLI not found in PATH; some operations may be degraded")
-	}
-
-	// --- github_auth / api_user / scopes / rate_limit (required unless client nil) ---
-	if client == nil {
-		result.Checks["github_auth"] = CheckItem{
-			OK:    false,
-			Error: "GitHub client could not be created — check GITHUB_TOKEN env var or run `gh auth login`",
-		}
-		result.Checks["api_user"] = CheckItem{OK: false, Error: "skipped: no authenticated client"}
-		result.Checks["scopes"] = CheckItem{OK: false, Error: "skipped: no authenticated client"}
-		result.Checks["rate_limit"] = CheckItem{OK: false, Error: "skipped: no authenticated client"}
-		errors = append(errors, "GitHub authentication failed — set GITHUB_TOKEN or run `gh auth login`")
-		hasRequiredFailure = true
-		result.FailedChecks = append(result.FailedChecks, "github_auth")
-	} else {
-		scopeInfo, err := client.CheckTokenScopes(ctx)
-		if err != nil {
-			result.Checks["github_auth"] = CheckItem{OK: false, Error: fmt.Sprintf("token check failed: %s", err.Error())}
-			result.Checks["api_user"] = CheckItem{OK: false, Error: "skipped: auth check failed"}
-			result.Checks["scopes"] = CheckItem{OK: false, Error: "skipped: auth check failed"}
-			errors = append(errors, fmt.Sprintf("GitHub token check failed: %s", err.Error()))
-			hasRequiredFailure = true
-			result.FailedChecks = append(result.FailedChecks, "github_auth")
-		} else {
-			result.Checks["github_auth"] = CheckItem{OK: true, Detail: fmt.Sprintf("authenticated as %s", scopeInfo.Login)}
-
-			// api_user — required
-			if scopeInfo.Login == "" {
-				result.Checks["api_user"] = CheckItem{OK: false, Error: "GET /user returned empty login"}
-				errors = append(errors, "GitHub API user check failed: empty login")
-				hasRequiredFailure = true
-				result.FailedChecks = append(result.FailedChecks, "api_user")
-			} else {
-				result.Checks["api_user"] = CheckItem{OK: true, Detail: scopeInfo.Login}
-			}
-
-			// scopes — required
-			if !scopeInfo.Valid {
-				scopeErr := fmt.Sprintf("missing required scopes: %s", strings.Join(scopeInfo.MissingScopes, ", "))
-				result.Checks["scopes"] = CheckItem{OK: false, Error: scopeErr}
-				errors = append(errors, scopeErr)
-				hasRequiredFailure = true
-				result.FailedChecks = append(result.FailedChecks, "scopes")
-			} else if !scopeInfo.ScopesAdvertised {
-				result.Checks["scopes"] = CheckItem{OK: true, Detail: "not advertised (fine-grained or App token): permissions are per repository, checked by the operations that need them"}
-			} else {
-				result.Checks["scopes"] = CheckItem{OK: true, Detail: strings.Join(scopeInfo.Scopes, ", ")}
-				if w := readOrgWarning(scopeInfo.Scopes); w != "" {
-					warnings = append(warnings, w)
+		r.Detail = config.RedactSecretString(r.Detail)
+		res.Results[i] = r
+		for _, f := range r.Findings {
+			res.Findings = append(res.Findings, f)
+			switch f.Severity {
+			case SeverityBlocker:
+				res.Errors = append(res.Errors, f.Title)
+				if !failed[f.Check] {
+					failed[f.Check] = true
+					res.FailedChecks = append(res.FailedChecks, f.Check)
 				}
-			}
-		}
-
-		// rate_limit — warning only (never causes ExitCode 2)
-		rl, err := client.GetRateLimit(ctx)
-		if err != nil {
-			result.Checks["rate_limit"] = CheckItem{OK: false, Error: fmt.Sprintf("rate limit check failed: %s", err.Error())}
-			warnings = append(warnings, "could not check GitHub API rate limit")
-		} else {
-			detail := fmt.Sprintf("remaining: %d/%d", rl.Remaining, rl.Limit)
-			if rl.Remaining < rateLimitCritical {
-				result.Checks["rate_limit"] = CheckItem{OK: false, Detail: detail, Error: fmt.Sprintf("API rate limit critically low: %d remaining", rl.Remaining)}
-				warnings = append(warnings, fmt.Sprintf("GitHub API rate limit critically low: %d remaining (operations may fail)", rl.Remaining))
-			} else if rl.Remaining < rateLimitLow {
-				result.Checks["rate_limit"] = CheckItem{OK: true, Detail: fmt.Sprintf("%s (below %d — consider waiting before long pipeline runs)", detail, rateLimitLow)}
-				warnings = append(warnings, fmt.Sprintf("GitHub API rate limit low: %d remaining", rl.Remaining))
-			} else {
-				result.Checks["rate_limit"] = CheckItem{OK: true, Detail: detail}
-			}
-		}
-
-		// github_identity — informational (#1955): which identity pipeline
-		// traffic is billed to, and that identity's hourly ceiling.
-		ceiling := ""
-		if rl != nil {
-			ceiling = fmt.Sprintf(", GraphQL ceiling %d/hr", rl.Limit)
-		}
-		if app := client.App(); app != nil {
-			item := CheckItem{OK: true, Detail: app.String() + ceiling}
-			if _, _, ok := app.CommitIdentity(); !ok {
-				item.Detail += "; commits keep the generic pipeline author until github_auth.app.slug and bot_user_id are set"
-				warnings = append(warnings, "github_auth.app has no slug/bot_user_id: pipeline commits are not attributed to the App")
-			}
-			result.Checks["github_identity"] = item
-		} else {
-			result.Checks["github_identity"] = CheckItem{OK: true, Detail: "personal token (the user's own rate-limit pool)" + ceiling}
-		}
-	}
-
-	// --- config (required; downgraded to warning for fresh/nil config) ---
-	if cfg == nil && cfgErr != nil {
-		loadErr := "configuration failed to load: " + cfgErr.Error()
-		result.Checks["config"] = CheckItem{OK: false, Error: loadErr}
-		result.Checks["project"] = CheckItem{OK: false, Error: "skipped: configuration failed to load"}
-		errors = append(errors, loadErr)
-		hasRequiredFailure = true
-		result.FailedChecks = append(result.FailedChecks, "config")
-	} else if cfg == nil {
-		result.Checks["config"] = CheckItem{OK: false, Detail: "no .nightgauge/config.yaml found (fresh repository)"}
-		result.Checks["project"] = CheckItem{OK: false, Detail: "no configuration (fresh repository)"}
-		warnings = append(warnings, "no .nightgauge/config.yaml — run `nightgauge repo-init` to configure")
-		warnings = append(warnings, "project number not set — run `nightgauge repo-init`")
-	} else {
-		// #2205: name the files actually loaded, and never pass on defaults or
-		// a user-global file when this repository was never onboarded.
-		loaded, hasRepoConfig := loadedConfigFiles(cwd)
-		loadedDesc := "built-in defaults only"
-		if len(loaded) > 0 {
-			loadedDesc = strings.Join(loaded, ", ")
-		}
-		if hasRepoConfig {
-			result.Checks["config"] = CheckItem{OK: true, Detail: "configuration loaded from " + loadedDesc}
-		} else {
-			msg := "no repository config (.nightgauge/config.yaml) — run /nightgauge:repo-init (or `nightgauge repo-init`); loaded: " + loadedDesc
-			result.Checks["config"] = CheckItem{OK: false, Detail: "loaded: " + loadedDesc, Error: msg}
-			warnings = append(warnings, msg)
-		}
-
-		// project — required when config exists
-		if cfg.ProjectNumber == 0 || cfg.Owner == "" {
-			projectErr := "project number or owner not set in .nightgauge/config.yaml"
-			result.Checks["project"] = CheckItem{OK: false, Error: projectErr}
-			errors = append(errors, projectErr)
-			hasRequiredFailure = true
-			result.FailedChecks = append(result.FailedChecks, "project")
-		} else {
-			result.Checks["project"] = CheckItem{OK: true, Detail: fmt.Sprintf("project %d (owner: %s)", cfg.ProjectNumber, cfg.Owner)}
-		}
-	}
-
-	// --- complexity_model (warning) ---
-	// Outcome recording bootstraps this file automatically, while doctor also
-	// advertises the shared explicit initializer used by repository setup.
-	complexityModel, complexityModelWarning := checkComplexityModel(cwd)
-	result.Checks["complexity_model"] = complexityModel
-	if complexityModelWarning != "" {
-		warnings = append(warnings, complexityModelWarning)
-	}
-
-	// --- project_mapping (required when a workspace manifest exists and cfg is loaded) ---
-	// Cross-checks the workspace manifest's repositories[].project_number
-	// (Source A) against the board config.ResolveRepoProject declares for that
-	// same repo (Source B — its own .nightgauge/config.yaml, or an
-	// autonomous.repositories.<repo>.project_number override). A mismatch means
-	// issues get filed against a board the scheduler never polls (#271) —
-	// always a misconfiguration, never a warning-only path.
-	//
-	// A repo no config declares a board for is reported SEPARATELY and as a
-	// warning (#280). It used to be dropped silently, which let this check
-	// report "agree" about repos it never compared — but it is not the same
-	// condition as a disagreement: nothing is misrouted yet, the manifest value
-	// is simply unverified, and the scheduler falls back to the workspace
-	// default board for that repo. Failing hard on it would overstate the
-	// consequence exactly as the old silence understated it.
-	//
-	// Both statements now come from ONE lookup (#313). This check does not
-	// assert anything about the scheduler on its own authority: the scheduler
-	// builds its repo set from the same resolver, and the fallback board named
-	// in the warning is the number that resolver returned.
-	if cfg != nil {
-		if report, mmErr := checkProjectMapping(cfg); mmErr == nil {
-			mismatches := make([]string, 0, len(report.Mismatches))
-			for _, m := range report.Mismatches {
-				mismatches = append(mismatches, m.String())
-			}
-			unverifiable := make([]string, 0, len(report.Unresolvable))
-			for _, u := range report.Unresolvable {
-				unverifiable = append(unverifiable, u.String())
-			}
-			switch {
-			case len(mismatches) > 0:
-				detail := strings.Join(mismatches, "; ")
-				result.Checks["project_mapping"] = CheckItem{OK: false, Error: detail}
-				errors = append(errors, mismatches...)
-				hasRequiredFailure = true
-				result.FailedChecks = append(result.FailedChecks, "project_mapping")
-				// Unverifiable repos still deserve a mention alongside.
-				warnings = append(warnings, unverifiable...)
-			case len(unverifiable) > 0:
-				result.Checks["project_mapping"] = CheckItem{
-					OK:     false,
-					Detail: fmt.Sprintf("%d repo(s) could not be cross-checked", len(unverifiable)),
-					Error:  strings.Join(unverifiable, "; "),
-				}
-				warnings = append(warnings, unverifiable...)
-			default:
-				result.Checks["project_mapping"] = CheckItem{OK: true, Detail: "workspace manifest and runtime config agree"}
-			}
-		}
-		// mmErr != nil means no workspace manifest was found (single-repo mode) — check omitted.
-	}
-
-	// --- board_population (required when config and a client are available) ---
-	// Config agreement is not evidence of reachability (#280). Two config
-	// sources can name the same board perfectly while every one of the repo's
-	// issues lives on a different one — at which point the scheduler polls an
-	// empty board, reports "0 candidates", and every other check here passes.
-	// This is the only check that asks the forge where the work actually is.
-	if cfg != nil && client != nil && cfg.ProjectNumber > 0 && cfg.Owner != "" && cfg.DefaultRepo != "" {
-		switch pop, popErr := checkBoardPopulation(ctx, cfg, client); {
-		case popErr != nil:
-			// "I could not look" is a warning, never a failure and never a
-			// pass — the whole point of this check is that silence must not
-			// read as health.
-			result.Checks["board_population"] = CheckItem{
-				OK:     false,
-				Detail: "could not verify which board holds the repo's issues",
-				Error:  popErr.Error(),
-			}
-			warnings = append(warnings, fmt.Sprintf("board population unverified: %s", popErr.Error()))
-		case pop.OpenIssues > 0 && pop.OnBoard == 0:
-			msg := fmt.Sprintf(
-				"project %d holds 0 of %s/%s's %d open issues — the scheduler polls a board that has none of this repo's work",
-				cfg.ProjectNumber, cfg.Owner, cfg.DefaultRepo, pop.OpenIssues)
-			if len(pop.ElsewhereBoards) > 0 {
-				msg += fmt.Sprintf("; those issues are on project(s) %s", joinInts(pop.ElsewhereBoards))
-			}
-			result.Checks["board_population"] = CheckItem{OK: false, Error: msg}
-			errors = append(errors, msg)
-			hasRequiredFailure = true
-			result.FailedChecks = append(result.FailedChecks, "board_population")
-		default:
-			result.Checks["board_population"] = CheckItem{
-				OK: true,
-				Detail: fmt.Sprintf("project %d holds %d of %d open issues",
-					cfg.ProjectNumber, pop.OnBoard, pop.OpenIssues),
+			case SeverityWarning:
+				res.Warnings = append(res.Warnings, f.Title)
 			}
 		}
 	}
+	sort.SliceStable(res.Findings, func(a, b int) bool {
+		return res.Findings[a].Severity.rank() < res.Findings[b].Severity.rank()
+	})
+	res.Summary = Summarize(res.Findings)
+	res.ExitCode = ExitCodeFor(res.Summary)
+	res.Healthy = res.ExitCode < 2
+	return res
+}
 
-	// --- orphaned docker compose projects (warning only) ---
-	// Issue #3050: per-issue compose stacks (`issue-NNN`) whose worktree no
-	// longer exists indicate a leaked teardown. Surface them so the operator
-	// can run `nightgauge cleanup`. Skipped silently when docker is
-	// unavailable.
-	orphans, orphansDetermined := findOrphanedComposeProjects(ctx, cwd)
+// ExitCodeFor maps a summary to the ADR-025 exit code: 2 for any blocker, 1
+// for warnings only, else 0. Housekeeping and info never change it.
+func ExitCodeFor(s Summary) int {
 	switch {
-	case !orphansDetermined:
-		// Never report "no orphans" from an unreadable worktree set — every
-		// stack looks orphaned then, including a live run's (#280, #323).
-		msg := "orphaned compose projects unverifiable: could not read the active worktree set across the workspace's repo roots — not inside a git repository or workspace, or `git worktree list` failed. Do NOT run `nightgauge cleanup` on this basis; it would tear down live runs' stacks"
-		result.Checks["compose_orphans"] = CheckItem{
-			OK:     false,
-			Detail: "could not determine which issues have an active worktree",
-			Error:  msg,
-		}
-		warnings = append(warnings, msg)
-	case len(orphans) > 0:
-		names := make([]string, 0, len(orphans))
-		for _, p := range orphans {
-			names = append(names, p.Name)
-		}
-		result.Checks["compose_orphans"] = CheckItem{
-			OK:     false,
-			Detail: fmt.Sprintf("%d orphaned issue-* compose project(s)", len(orphans)),
-			Error:  fmt.Sprintf("orphaned compose projects: %s — run `nightgauge cleanup`", strings.Join(names, ", ")),
-		}
-		warnings = append(warnings,
-			fmt.Sprintf("orphaned docker compose project(s) detected (%s) — run `nightgauge cleanup`",
-				strings.Join(names, ", ")))
-	}
-
-	// --- leaked machine state (warning only, #330 / #332) ---
-	// The pipeline creates worktrees and stashes and is supposed to take them
-	// back. When a stage is killed it does not, and before these two checks
-	// nothing reported it: a 2026-08-04 audit found 9 leaked worktrees and 5
-	// leaked stashes, all of them found by hand, the oldest five months old,
-	// and `doctor` had reported none of them. Warning-only by design — a
-	// leaked worktree is untidy, not broken, and a required failure here would
-	// exit 2 on a workspace that runs perfectly well.
-	now := time.Now()
-	// The merged-PR second door, built from doctor's OWN client (#916). nil
-	// client — the offline/unauthenticated case doctor already reports on
-	// above — yields the closed door and the content test alone, exactly as
-	// before. Lazy: no request is issued unless a branch actually fails the
-	// content test.
-	door := func(repoRoot string) execution.MergedPRLookup {
-		lookup := gh.NewMergedPRLookupForRoot(ctx, func() (*gh.Client, error) { return client, nil }, repoRoot)
-		if lookup == nil {
-			return nil
-		}
-		return lookup
-	}
-
-	worktreeLeaks, worktreeWarning := checkLeakedWorktrees(cwd, now, door)
-	result.Checks["worktree_leaks"] = worktreeLeaks
-	if worktreeWarning != "" {
-		warnings = append(warnings, worktreeWarning)
-	}
-
-	// The worktree arm above sees only branches a worktree still holds, so a
-	// merged branch whose worktree is already gone is invisible to it — three
-	// of them sat in the core repo while every check reported green (#912).
-	strandedBranches, strandedWarning := checkStrandedBranches(cwd, door)
-	result.Checks["stranded_branches"] = strandedBranches
-	if strandedWarning != "" {
-		warnings = append(warnings, strandedWarning)
-	}
-
-	stashLeaks, stashWarning := checkPipelineStashes(cwd, now)
-	result.Checks["pipeline_stashes"] = stashLeaks
-	if stashWarning != "" {
-		warnings = append(warnings, stashWarning)
-	}
-
-	// The three arms above scan things that exist on disk or in a listing an
-	// operator can stumble across. A preserved-WIP ref is invisible to all of
-	// them — no worktree, no stash, and after re-dispatch not even a branch —
-	// so work from a killed stage sat unreported and unreclaimed while every
-	// check read green (#1105).
-	preservedWipRefs, wipWarning := checkPreservedWip(cwd, now)
-	result.Checks["preserved_wip"] = preservedWipRefs
-	if wipWarning != "" {
-		warnings = append(warnings, wipWarning)
-	}
-
-	// Every arm above detects RESIDUE — something that exists and should not.
-	// This one detects an ABSENCE: work that should have been observed by now
-	// and was not (#992). A workflow with zero runs has no failed run to
-	// report, and a stopped sweep logs no error, so the whole class was
-	// invisible to a product whose value proposition is unattended operation.
-	survivalWindow := survival.DefaultWindowDays
-	if cfg != nil {
-		survivalWindow = cfg.Pipeline.ResolveSurvivalWindowDays()
-	}
-	survivalBacklog, survivalWarning := checkSurvivalBacklog(cwd, now, survivalWindow)
-	result.Checks["survival_backlog"] = survivalBacklog
-	if survivalWarning != "" {
-		warnings = append(warnings, survivalWarning)
-	}
-
-	// The THIRD absence detector (#1019), and the one that distinguishes an
-	// empty survival journal from a young one. The backlog arm above reads
-	// PENDING records, so it returns a clean bill for a store with nothing in
-	// it — which is precisely what a dead writer produces. This arm keys on the
-	// outcome corpus's row count instead, because that is written by a
-	// different mechanism on the same merges.
-	// The GitHub API budget (#1347). Placed with the other file-backed arms:
-	// it reads the request ledger, which is now written unattended, so this is
-	// the first check in the tree that can report on an outage NOBODY was
-	// watching for at the time it happened.
-	apiBudget, apiBudgetWarning := checkGitHubAPIBudget(cwd, time.Now())
-	result.Checks["github_api_budget"] = apiBudget
-	if apiBudgetWarning != "" {
-		warnings = append(warnings, apiBudgetWarning)
-	}
-
-	survivalCoverage, coverageWarning := checkSurvivalCoverage(cwd)
-	result.Checks["survival_coverage"] = survivalCoverage
-	if coverageWarning != "" {
-		warnings = append(warnings, coverageWarning)
-	}
-
-	// The second absence detector (#994). Same shape as the arm above and for
-	// the same reason: every consumer of the outcome corpus reports an
-	// unmeasurable one as "no data", which is indistinguishable from a young
-	// corpus. Only the row count tells them apart, and nothing was looking at it.
-	corpusCalibration, corpusWarning := checkCorpusCalibration(cwd)
-	result.Checks["corpus_calibration"] = corpusCalibration
-	if corpusWarning != "" {
-		warnings = append(warnings, corpusWarning)
-	}
-
-	// The GENERAL absence detector (#996). The two arms above each notice one
-	// specific thing having stopped; this one notices anything in the cadence
-	// registry going quiet, so registering a new scheduled workflow is the only
-	// work needed to have its silence reported.
-	var declaredCadence []cadence.ConfigAutomation
-	if cfg != nil {
-		declaredCadence = cfg.Cadence
-	}
-	scheduled, scheduledWarning := checkScheduledAutomations(ctx, map[cadence.EvidenceKind]cadenceProbe{
-		cadence.EvidenceAutonomousState: autonomousStateEvidence(cwd),
-		cadence.EvidenceWorkflowRun:     workflowRunEvidence(client, doctorOwner(cfg), doctorRepo(cfg)),
-	}, cadenceScope(cfg, cwd), declaredCadence, now)
-	result.Checks["scheduled_automations"] = scheduled
-	if scheduledWarning != "" {
-		warnings = append(warnings, scheduledWarning)
-	}
-
-	// A killed stage leaks its worktree; a stage that is never killed leaks
-	// ITSELF (#341). Report-only — this check never signals a process.
-	// The scheduler lease (#1349). Placed with the other machine-state arms
-	// because it reads the same claim directory as the orphan scan, but it
-	// asks a workspace-scoped question on a much tighter clock: a wedged
-	// holder blocks every start here while looking, from outside, exactly
-	// like a healthy daemon.
-	serveLease, serveLeaseWarning := checkServeLease(cwd, now)
-	result.Checks["serve_lease"] = serveLease
-	if serveLeaseWarning != "" {
-		warnings = append(warnings, serveLeaseWarning)
-	}
-
-	// The other half of the lease question (#1913): the lease says a daemon is
-	// alive, this says whether its spending is visible.
-	ledgerCoverage, ledgerCoverageWarning := checkLedgerDaemonCoverage(cwd, now)
-	result.Checks["ledger_daemon_coverage"] = ledgerCoverage
-	if ledgerCoverageWarning != "" {
-		warnings = append(warnings, ledgerCoverageWarning)
-	}
-
-	// Credentials committed under .nightgauge/ (#2024). The loader now refuses
-	// a plaintext secret in the config tiers; this reports one that is already
-	// in the repository, in any tracked file there.
-	trackedCreds, trackedCredsWarning := checkTrackedCredentials(cwd)
-	result.Checks[trackedCredentialsCheck] = trackedCreds
-	if trackedCredsWarning != "" {
-		warnings = append(warnings, trackedCredsWarning)
-	}
-
-	// A machine-file credential on a CI host (ADR-024 § 5): a shared runner
-	// would hand it to the next job.
-	ciCreds, ciCredsWarning := checkCIMachineCredentials(ciGetenv)
-	result.Checks[ciMachineCredentialsCheck] = ciCreds
-	if ciCredsWarning != "" {
-		warnings = append(warnings, ciCredsWarning)
-	}
-
-	processLeaks, processWarning := checkOrphanedProcesses(cwd, now)
-	result.Checks["orphaned_processes"] = processLeaks
-	if processWarning != "" {
-		warnings = append(warnings, processWarning)
-	}
-
-	// --- AI adapter availability (#862, always) ---
-	// "Can this machine run a stage at all?" is part of environment health, so
-	// it is asked on every run rather than only when --adapters is passed.
-	// Per-adapter DETAIL stays opt-in below; this row is the one-bit answer.
-	aiAdapter, aiAdapterWarning := checkAIAdapterAvailable(newAdapterProbe())
-	result.Checks["ai_adapter"] = aiAdapter
-	if aiAdapterWarning != "" {
-		warnings = append(warnings, aiAdapterWarning)
-	}
-
-	// --- per-adapter health (Issue #4031, opt-in) ---
-	// Deterministic binary/version/MCP facts for the requested adapters. An
-	// unhealthy adapter is surfaced as a warning (degraded, ExitCode 1) — never
-	// a required failure, since an optional adapter that the operator does not
-	// use being uninstalled must not break the environment health verdict.
-	if len(adapters) > 0 {
-		result.Adapters = CheckAdapters(adapters)
-		for _, a := range result.Adapters {
-			if !a.OK {
-				detail := a.Remediation
-				if detail == "" {
-					detail = "adapter not ready"
-				}
-				warnings = append(warnings, fmt.Sprintf("adapter %q not ready: %s", a.Adapter, detail))
-			}
-			for _, w := range a.Warnings {
-				warnings = append(warnings, fmt.Sprintf("adapter %q: %s", a.Adapter, w))
-			}
-		}
-	}
-
-	// --- compute final health ---
-	result.Warnings = warnings
-	result.Errors = errors
-
-	switch {
-	case hasRequiredFailure:
-		result.Healthy = false
-		result.ExitCode = 2
-	case len(warnings) > 0:
-		result.Healthy = true
-		result.ExitCode = 1
+	case s.Blocker > 0:
+		return 2
+	case s.Warning > 0:
+		return 1
 	default:
-		result.Healthy = true
-		result.ExitCode = 0
+		return 0
 	}
+}
 
-	return result
+// RedactFinding passes a finding's text and evidence through the shared
+// config redactor (ADR-025 § 8).
+func RedactFinding(f Finding) Finding {
+	f.Title = config.RedactSecretString(f.Title)
+	f.Cause = config.RedactSecretString(f.Cause)
+	f.Evidence = config.RedactEvidence(f.Evidence)
+	if f.Evidence == nil {
+		f.Evidence = map[string]string{}
+	}
+	if f.Remedies == nil {
+		f.Remedies = []Remedy{}
+	}
+	return f
 }
 
 // checkBinary reports which binary the HOOKS would resolve from the current

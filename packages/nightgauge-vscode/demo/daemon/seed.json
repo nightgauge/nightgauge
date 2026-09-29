@@ -1,0 +1,170 @@
+{
+  "seed": 1,
+  "state": {
+    "owner": "lanternworks",
+    "projectNumber": 7,
+    "repositories": [
+      { "name": "harbor-api", "role": "service" },
+      { "name": "tide-web", "role": "app" }
+    ],
+    "board": {
+      "Backlog": [
+        {
+          "number": 118,
+          "title": "Rate-limit the tide-report export endpoint",
+          "repo": "harbor-api"
+        },
+        { "number": 121, "title": "Dark theme for the berth calendar", "repo": "tide-web" },
+        { "number": 124, "title": "Archive vessels inactive for a season", "repo": "harbor-api" },
+        { "number": 127, "title": "Keyboard shortcuts for the manifest editor", "repo": "tide-web" }
+      ],
+      "Ready": [
+        {
+          "number": 131,
+          "title": "Paginate the berth search results",
+          "repo": "tide-web",
+          "size": "S"
+        },
+        {
+          "number": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "repo": "harbor-api",
+          "size": "M"
+        },
+        {
+          "number": 135,
+          "title": "Add a tidal-window column to the schedule",
+          "repo": "tide-web",
+          "size": "S"
+        }
+      ],
+      "In Progress": [
+        {
+          "number": 112,
+          "title": "Retry failed harbour-fee webhooks",
+          "repo": "harbor-api",
+          "size": "M"
+        },
+        {
+          "number": 115,
+          "title": "Show crane availability on the dock map",
+          "repo": "tide-web",
+          "size": "M"
+        }
+      ],
+      "In Review": [
+        {
+          "number": 109,
+          "title": "Cache the weather feed for ten minutes",
+          "repo": "harbor-api",
+          "size": "S"
+        }
+      ],
+      "Done": [
+        {
+          "number": 101,
+          "title": "Move berth assignments to the new schema",
+          "repo": "harbor-api",
+          "size": "L"
+        },
+        {
+          "number": 104,
+          "title": "Fix time-zone drift in arrival times",
+          "repo": "tide-web",
+          "size": "S"
+        }
+      ]
+    },
+    "activeRuns": [
+      {
+        "runId": "demo-run-112",
+        "repo": "harbor-api",
+        "issueNumber": 112,
+        "title": "Retry failed harbour-fee webhooks",
+        "stage": "feature-implement",
+        "startedAt": "2026-01-15T09:00:00.000Z"
+      }
+    ],
+    "queue": [
+      {
+        "repo": "harbor-api",
+        "issueNumber": 133,
+        "title": "Validate pilot licence expiry on booking",
+        "priority": 1
+      },
+      {
+        "repo": "tide-web",
+        "issueNumber": 131,
+        "title": "Paginate the berth search results",
+        "priority": 2
+      }
+    ],
+    "attention": [
+      {
+        "id": "att-1",
+        "kind": "approve",
+        "severity": "blocking_run",
+        "title": "Approve the migration plan for #115",
+        "body": "The plan adds a crane_slots table. Approve to continue.",
+        "repo": "tide-web",
+        "issue": 115
+      }
+    ],
+    "history": [
+      {
+        "repo": "harbor-api",
+        "number": 101,
+        "title": "Move berth assignments to the new schema",
+        "outcome": "success",
+        "completedAt": "2026-01-14T16:20:00.000Z",
+        "durationMs": 2460000,
+        "costUsd": "3.42"
+      },
+      {
+        "repo": "tide-web",
+        "number": 104,
+        "title": "Fix time-zone drift in arrival times",
+        "outcome": "success",
+        "completedAt": "2026-01-14T18:05:00.000Z",
+        "durationMs": 1080000,
+        "costUsd": "1.17"
+      },
+      {
+        "repo": "harbor-api",
+        "number": 98,
+        "title": "Split the invoice worker",
+        "outcome": "failed",
+        "completedAt": "2026-01-13T11:40:00.000Z",
+        "durationMs": 1920000,
+        "costUsd": "2.05",
+        "reason": "tests failed after two retries"
+      }
+    ],
+    "knowledge": [
+      {
+        "path": "knowledge/harbor-api/decisions/webhook-retries.md",
+        "kind": "decision",
+        "hits": 6,
+        "snippet": "Retry webhooks with capped exponential backoff."
+      },
+      {
+        "path": "knowledge/tide-web/patterns/map-layers.md",
+        "kind": "pattern",
+        "hits": 3,
+        "snippet": "Each dock-map overlay is its own layer component."
+      }
+    ],
+    "platform": {
+      "costByModel": [
+        { "modelId": "claude-sonnet", "costUsd": "5.10", "tokens": 1820000 },
+        { "modelId": "claude-haiku", "costUsd": "1.54", "tokens": 2410000 }
+      ],
+      "trends": [
+        { "date": "2026-01-12", "successRate": 0.75, "totalRuns": 4, "totalTokens": 1210000 },
+        { "date": "2026-01-13", "successRate": 0.67, "totalRuns": 3, "totalTokens": 980000 },
+        { "date": "2026-01-14", "successRate": 1, "totalRuns": 5, "totalTokens": 2040000 }
+      ]
+    },
+    "now": "2026-01-15T09:30:00.000Z"
+  }
+}

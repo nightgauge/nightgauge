@@ -3,46 +3,111 @@ package main
 import (
 	"bytes"
 	"context"
-	"sort"
+	"encoding/json"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/doctor"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 )
 
-// TestDoctorCheckOrder_CoversEveryEmittedCheck pins the render list against
-// what RunDoctor actually produces (#912).
-//
-// The failure this catches is silent by construction: a new arm added to
-// RunDoctor lands in result.Checks and in --json, its own unit tests pass, and
-// the human `nightgauge doctor` output — the surface an operator actually
-// reads — never mentions it. That reads as "the product does not check for
-// that", which is exactly the invisibility the stranded-branch arm was added
-// to end. Adding the arm and forgetting this list would have reproduced the
-// bug one layer up.
-//
-// Driven off a real RunDoctor call rather than a hand-listed set, so a future
-// arm is covered without anyone remembering to extend the test.
-func TestDoctorCheckOrder_CoversEveryEmittedCheck(t *testing.T) {
-	// nil client/config is enough: every environment-independent arm still
-	// writes its row, which is all this test reads.
-	result := doctor.RunDoctor(context.Background(), nil, nil, nil)
+// TestDoctorRender: the human output is driven by the registry, so every
+// registered check renders — including github_identity, project_mapping and
+// board_population, which the old hand-kept order list never printed (#2088).
+// With NO_COLOR set the output carries no ANSI escape.
+func TestDoctorRender(t *testing.T) {
+	cfg := &config.Config{Owner: "acme", DefaultRepo: "widgets", ProjectNumber: 7}
+	result := doctor.RunDoctor(context.Background(), cfg, nil, nil)
 
-	rendered := make(map[string]bool, len(doctorCheckOrder))
-	for _, key := range doctorCheckOrder {
-		rendered[key] = true
-	}
-
-	var missing []string
-	for key := range result.Checks {
-		if !rendered[key] {
-			missing = append(missing, key)
+	var buf bytes.Buffer
+	renderDoctorHuman(&buf, result, true)
+	out := buf.String()
+	for _, id := range doctor.DefaultRegistry().IDs() {
+		if !strings.Contains(out, " "+id+" ") && !strings.Contains(out, " "+id+"\n") {
+			t.Errorf("registered check %q does not render:\n%s", id, out)
 		}
 	}
-	if len(missing) > 0 {
-		sort.Strings(missing)
-		t.Fatalf("doctor emits %v but the human output never renders them — add them to doctorCheckOrder", missing)
+	for _, label := range []string{"BLOCKER", "NGD004", "Status: broken"} {
+		if !strings.Contains(out, label) {
+			t.Errorf("output lacks %q:\n%s", label, out)
+		}
+	}
+	if !strings.Contains(out, "\x1b[") {
+		t.Error("color requested but no ANSI emitted")
+	}
+
+	t.Setenv("NO_COLOR", "1")
+	buf.Reset()
+	renderDoctorHuman(&buf, result, doctor.ColorEnabled(os.Stdout))
+	if strings.Contains(buf.String(), "\x1b[") {
+		t.Errorf("NO_COLOR output contains ANSI:\n%s", buf.String())
+	}
+}
+
+// TestDoctorJSONPreflightFields runs PREFLIGHT's exact jq expressions against
+// JSON v2 for a blocker fixture and a healthy fixture; they yield what the v1
+// output yielded.
+func TestDoctorJSONPreflightFields(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not installed")
+	}
+	jq := func(t *testing.T, res doctor.DoctorResult, expr string) string {
+		t.Helper()
+		js, err := json.Marshal(res)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("jq", "-r", expr)
+		cmd.Stdin = bytes.NewReader(js)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("jq %s: %v", expr, err)
+		}
+		return strings.TrimRight(string(out), "\n")
+	}
+	authMsg := "GitHub authentication failed — set GITHUB_TOKEN or run `gh auth login`"
+	blocker := doctor.BuildResult([]doctor.CheckResult{
+		{ID: "github_auth", Status: doctor.StatusFailed, Findings: []doctor.Finding{{
+			Code: "NGD004", Check: "github_auth", Severity: doctor.SeverityBlocker, Title: authMsg}}},
+		{ID: "gh", Status: doctor.StatusFailed, Findings: []doctor.Finding{{
+			Code: "NGD003", Check: "gh", Severity: doctor.SeverityWarning, Title: "gh CLI not found in PATH"}}},
+		{ID: "worktree_leaks", Status: doctor.StatusFailed, Findings: []doctor.Finding{{
+			Code: "NGD017", Check: "worktree_leaks", Severity: doctor.SeverityHousekeeping, Title: "1 leaked worktree"}}},
+	})
+	blocker.InstallInstructions = "install me"
+	healthy := doctor.BuildResult([]doctor.CheckResult{{ID: "binary", Status: doctor.StatusPassed}})
+
+	cases := []struct {
+		name string
+		res  doctor.DoctorResult
+		want map[string]string
+	}{
+		{"blocker", blocker, map[string]string{
+			".failed_checks[]? // empty":     "github_auth",
+			".errors[]":                      authMsg,
+			".warnings[]":                    "gh CLI not found in PATH",
+			".install_instructions // empty": "install me",
+			".v, .exit_code, .healthy":       "2\n2\nfalse",
+		}},
+		{"healthy", healthy, map[string]string{
+			".failed_checks[]? // empty":     "",
+			".errors[]":                      "",
+			".warnings[]":                    "",
+			".install_instructions // empty": "",
+			".v, .exit_code, .healthy":       "2\n0\ntrue",
+		}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for expr, want := range c.want {
+				if got := jq(t, c.res, expr); got != want {
+					t.Errorf("jq %q = %q, want %q", expr, got, want)
+				}
+			}
+		})
 	}
 }
 

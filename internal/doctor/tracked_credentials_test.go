@@ -75,7 +75,10 @@ func TestTrackedSecretsCheck(t *testing.T) {
 			t.Errorf("remediation does not name both steps: %s", item.Error)
 		}
 
-		result := DoctorResult{V: 1, Checks: map[string]CheckItem{trackedCredentialsCheck: item}, Warnings: []string{warning}}
+		env := &Env{}
+		findings := adaptLegacy(trackedCredentialsCheck, "NGD024", SeverityBlocker, env,
+			legacyOutcome{item: item, present: true, warnings: []string{warning}})
+		result := BuildResult([]CheckResult{{ID: trackedCredentialsCheck, Status: StatusFailed, Findings: findings}})
 		raw, err := json.Marshal(result)
 		if err != nil {
 			t.Fatal(err)
@@ -83,7 +86,7 @@ func TestTrackedSecretsCheck(t *testing.T) {
 		if strings.Contains(string(raw), fixtureToken) || strings.Contains(string(raw), "0123456789abcdef") {
 			t.Errorf("JSON carries the token: %s", raw)
 		}
-		if !strings.Contains(string(raw), `"line":4`) || !strings.Contains(string(raw), `"path":".nightgauge/config.yaml"`) {
+		if !strings.Contains(string(raw), `.nightgauge/config.yaml:4 github-token ghp_…`) {
 			t.Errorf("JSON lacks the structured finding: %s", raw)
 		}
 	})

@@ -1,36 +1,36 @@
 #!/usr/bin/env node
 /**
- * Logging IPC stub for demo mode (#2103).
+ * Demo daemon entry point (#2105, ADR-026), grown from the #2103 logging stub.
  *
  * A stand-in for `nightgauge serve` that speaks the extension's IPC protocol
- * (line-delimited JSON on stdin/stdout, `src/services/IpcClientBase.ts`) and
- * does nothing else:
+ * (line-delimited JSON on stdin/stdout, `src/services/IpcClientBase.ts`):
  *
  *   - on start it emits `ipc.ready` with the protocol version the extension
- *     expects (`IPC_PROTOCOL_VERSION` in `src/services/IpcClient.generated.ts`);
- *   - it answers every request with an empty result (`null`);
+ *     expects (`IPC_PROTOCOL_VERSION`) and `demo: true`;
+ *   - it answers requests from in-memory demo state (`daemon/daemon.cjs`),
+ *     seeded from `daemon/seed.json` or the `state` of the JSON file named by
+ *     `--scenario <path>`; unknown methods get `null` and a stderr line;
  *   - it appends one JSONL record per request — timestamp, method, params and
  *     a type-only shape of the params — to the file named by
  *     `NIGHTGAUGE_DEMO_IPC_LOG`, or to `ipc-stub.jsonl` in the OS temp dir.
  *
  * Point the extension at it with `nightgauge.backend.binaryPath`. The
- * extension spawns `<binary> serve --workspace <root>`; the arguments are
+ * extension spawns `<binary> serve --workspace <root>`; those arguments are
  * accepted and ignored.
  *
  * Deliberately inert: it makes no network calls, spawns no processes and
  * reads no credentials. The only environment variable it reads is the log
  * path. `tests/demo/ipc-stub.test.ts` asserts the module graph stays that way.
  */
-/* global process */
+/* global process, __dirname */
 "use strict";
 
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
-
-/** Must equal IPC_PROTOCOL_VERSION; a mismatch disconnects the extension. */
-const PROTOCOL_VERSION = 2;
+const { createDaemon } = require("./daemon/daemon.cjs");
+const { createState } = require("./daemon/state.cjs");
 
 const logPath = process.env.NIGHTGAUGE_DEMO_IPC_LOG || path.join(os.tmpdir(), "ipc-stub.jsonl");
 
@@ -90,10 +90,31 @@ function handleLine(line) {
   }
   if (!request || typeof request.method !== "string" || request.id === undefined) return;
   record(request);
-  send({ id: request.id, result: null });
+  daemon.handle(request);
+}
+
+/** The seed state: `--scenario <path>` if given, else the built-in seed. */
+function loadState(argv) {
+  const at = argv.indexOf("--scenario");
+  const file = at >= 0 ? argv[at + 1] : path.join(__dirname, "daemon", "seed.json");
+  if (!file) throw new Error("--scenario needs a path");
+  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  return createState(parsed.state);
+}
+
+let daemon;
+try {
+  daemon = createDaemon({
+    state: loadState(process.argv.slice(2)),
+    send,
+    log: (message) => process.stderr.write(`demo-daemon: ${message}\n`),
+  });
+} catch (err) {
+  process.stderr.write(`demo-daemon: cannot load state: ${err.message}\n`);
+  process.exit(1);
 }
 
 fs.mkdirSync(path.dirname(logPath), { recursive: true });
 readline.createInterface({ input: process.stdin }).on("line", handleLine);
 process.stdin.on("end", () => process.exit(0));
-send({ event: "ipc.ready", data: { protocolVersion: PROTOCOL_VERSION } });
+daemon.ready();
