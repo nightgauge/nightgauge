@@ -178,6 +178,9 @@ func (e *Env) rateLimit(ctx context.Context) (*gh.RateLimitInfo, error) {
 type Runner struct {
 	Workers        int           // 0 means DefaultWorkers
 	DefaultTimeout time.Duration // 0 means DefaultCheckTimeout
+	// Progress, when set, receives each check's start and outcome in
+	// registration order (progress.go).
+	Progress func(CheckProgress)
 }
 
 type completion struct {
@@ -201,6 +204,7 @@ func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult 
 	if n == 0 {
 		return results
 	}
+	order := newProgressOrder(r.Progress, checks)
 
 	remaining := make([]int, n)    // unfinished dependencies per check
 	dependents := make([][]int, n) // reverse edges
@@ -220,6 +224,7 @@ func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult 
 		go func() {
 			defer wg.Done()
 			for idx := range jobs {
+				order.start(idx)
 				done <- completion{idx: idx, result: r.runOne(ctx, checks[idx], env)}
 			}
 		}()
@@ -237,6 +242,7 @@ func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult 
 	var finish func(idx int, res CheckResult)
 	finish = func(idx int, res CheckResult) {
 		results[idx] = res
+		order.finish(idx, res)
 		finished++
 		for _, dep := range dependents[idx] {
 			remaining[dep]--

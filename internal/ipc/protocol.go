@@ -8,6 +8,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/doctor"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -2095,4 +2096,83 @@ type WorkspaceRepoRemoveResult struct {
 	OK           bool   `json:"ok"`
 	KeptComment  bool   `json:"keptComment"`
 	ManifestPath string `json:"manifestPath"`
+}
+
+// --- Doctor (ADR-025) ---
+//
+// The doctor.* methods drive the same remedy engine as `nightgauge doctor
+// --fix` (internal/doctor/remedy.go). doctor.run streams one `doctor.progress`
+// event (a doctor.CheckProgress) per check start and outcome, in check
+// registration order. See internal/ipc/doctor.go.
+
+// DoctorRunParams are parameters for doctor.run.
+type DoctorRunParams struct {
+	// Only restricts the returned findings to these codes (NGD017) or check
+	// IDs (worktree_leaks). Every check still runs.
+	Only []string `json:"only,omitempty"`
+	// Severity restricts the returned findings to these severities.
+	Severity []string `json:"severity,omitempty"`
+	// Adapters are the execution adapters to health-check; "all" checks
+	// every adapter the doctor knows.
+	Adapters []string `json:"adapters,omitempty"`
+}
+
+// DoctorApplyRemedyParams are parameters for doctor.applyRemedy. The pair
+// (fingerprint, remedyId) must come from the current scan; no parameter
+// carries a verb name, a command or a path (ADR-025 section 8).
+type DoctorApplyRemedyParams struct {
+	Fingerprint string `json:"fingerprint"`
+	RemedyID    string `json:"remedyId"`
+	// Confirm is the caller's consent; a confirm-kind remedy is refused
+	// without it.
+	Confirm bool `json:"confirm,omitempty"`
+	// DryRun previews the remedy and changes nothing.
+	DryRun bool `json:"dryRun,omitempty"`
+}
+
+// DoctorApplyRemedyResult is the result of doctor.applyRemedy.
+type DoctorApplyRemedyResult struct {
+	// Outcome is fixed, still-present, skipped, blocked, conflict or stale;
+	// empty for a dry run that previewed the remedy.
+	Outcome doctor.Outcome `json:"outcome"`
+	// Action is what the engine did: applied, previewed, awaiting-consent or
+	// manual.
+	Action  doctor.FixAction `json:"action"`
+	Preview string           `json:"preview"`
+	Detail  string           `json:"detail,omitempty"`
+	// Finding is the re-scanned finding (redacted); absent when stale.
+	Finding *doctor.Finding `json:"finding,omitempty"`
+	Remedy  *doctor.Remedy  `json:"remedy,omitempty"`
+	// Evidence is the owning check's new evidence when the finding is still
+	// present after apply.
+	Evidence map[string]string `json:"evidence,omitempty"`
+}
+
+// DoctorRecheckParams are parameters for doctor.recheck: exactly one of Code
+// or Check.
+type DoctorRecheckParams struct {
+	Code  string `json:"code,omitempty"`
+	Check string `json:"check,omitempty"`
+}
+
+// DoctorRecheckResult is one check's fresh result.
+type DoctorRecheckResult struct {
+	Check    string             `json:"check"`
+	Title    string             `json:"title"`
+	Status   doctor.CheckStatus `json:"status"`
+	Detail   string             `json:"detail,omitempty"`
+	Findings []doctor.Finding   `json:"findings"`
+}
+
+// DoctorHistoryParams are parameters for doctor.history.
+type DoctorHistoryParams struct {
+	// Limit keeps only the newest entries; 0 returns the whole log.
+	Limit int `json:"limit,omitempty"`
+}
+
+// DoctorHistoryResult is the local fix log, oldest first.
+type DoctorHistoryResult struct {
+	Entries []doctor.FixLogEntry `json:"entries"`
+	// Malformed counts log lines that did not parse and were skipped.
+	Malformed int `json:"malformed"`
 }

@@ -686,6 +686,27 @@ export class IpcClientGenerated extends IpcClientBase {
 
 
   // -------------------------------------------------------------------------
+  // Doctor
+  // -------------------------------------------------------------------------
+
+  async doctorRun(only?: string[], severity?: string[], adapters?: string[]): Promise<unknown> {
+    return this.call<unknown>('doctor.run', { only, severity, adapters });
+  }
+
+  async doctorApplyRemedy(fingerprint: string, remedyId: string, confirm?: boolean, dryRun?: boolean): Promise<unknown> {
+    return this.call<unknown>('doctor.applyRemedy', { fingerprint, remedyId, confirm, dryRun });
+  }
+
+  async doctorRecheck(code?: string, check?: string): Promise<unknown> {
+    return this.call<unknown>('doctor.recheck', { code, check });
+  }
+
+  async doctorHistory(limit?: number): Promise<unknown> {
+    return this.call<unknown>('doctor.history', { limit });
+  }
+
+
+  // -------------------------------------------------------------------------
   // Focus
   // -------------------------------------------------------------------------
 
