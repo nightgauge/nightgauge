@@ -81,6 +81,7 @@ func builtinVerbs(env *Env, deps verbDeps) *VerbRegistry {
 	must(verbOutcomeInit, v.outcomeInitPrecondition, v.outcomeInitApply)
 	must(verbSurvivalSweep, v.survivalPrecondition, v.survivalApply)
 	must(verbBuildCLI, v.buildCLIPrecondition, v.buildCLIApply)
+	must(verbGHAuthRefresh, v.authRefreshPrecondition, v.authRefreshApply)
 	return reg
 }
 

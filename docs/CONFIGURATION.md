@@ -767,10 +767,26 @@ github_auth:
   binary's own) are authored as `<slug>[bot]`, unless `GIT_AUTHOR_*` /
   `GIT_COMMITTER_*` are already set. PRs opened with the installation token
   belong to the App automatically.
-- The installation needs Contents, Issues, Pull requests, Projects and Checks
-  (read and write), and Actions (read).
+- The App needs these permissions, and each installation must have accepted
+  them: Repository → Contents, Issues, Pull requests and Checks (read and
+  write), Repository → Actions (read), and, on an organization, Organization →
+  Projects (read and write). A project board read without Organization →
+  Projects fails with "Could not resolve to a ProjectV2".
+- Adding a permission to the App is not enough: GitHub asks every installation
+  to accept it, and until an owner of the account does, tokens do not carry it.
+- The cached token records a hash of the permissions it was minted with. When
+  `nightgauge doctor` sees that the installation's permissions changed, it
+  discards the cached token, so the next request mints one with the new
+  permissions. Never delete `github-app-token-*.json` by hand.
 - `nightgauge doctor` reports the identity in use and its GraphQL ceiling as
-  `github_identity`.
+  `github_identity`. It reads the App's declared permissions and the
+  installation's granted ones with the App's JWT and reports each gap: a
+  permission the App lacks (with a link to the App's permission settings), a
+  permission pending acceptance (with a link to the installation's page), or a
+  suspended installation. A board that cannot be resolved is diagnosed the
+  same way, or as a wrong project number (listing the owner's projects) or a
+  deleted project. Each manual fix ends with `nightgauge doctor --only <code>`,
+  which re-runs just that check.
 
 #### Where a token may live
 

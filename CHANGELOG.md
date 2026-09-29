@@ -16,6 +16,24 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge doctor` diagnoses GitHub identity and board failures down to
+  the missing permission** (#2094). With a GitHub App configured, doctor reads
+  the App's declared permissions and the installation's granted ones with the
+  App's JWT and reports each gap under its own code: the App lacks a
+  permission (NGD036, linking the App's permission settings), a permission is
+  pending acceptance (NGD037, linking the installation's page), the
+  installation is suspended (NGD038). A board that fails with "Could not
+  resolve to a ProjectV2" is re-diagnosed as the identity being unable to see
+  projects (NGD041), a wrong project number with the owner's projects listed
+  (NGD040), or a deleted project (NGD042); GitHub's message stays in the
+  evidence. A classic token missing a scope gets a `confirm` remedy that runs
+  `gh auth refresh -h github.com -s <scope>` for the account doctor checked.
+  `nightgauge doctor --only <code>` now works without `--fix` and re-runs only
+  the checks owning that code, the "check again" step every manual remedy
+  names. The cached installation token stores a hash of its permissions and is
+  discarded when the installation's permissions change, so
+  `github-app-token-*.json` never needs deleting by hand.
+
 - **`nightgauge doctor --fix` applies remedies and verifies each one**
   (#2093). A closed Go verb registry executes the remedies doctor findings
   declare: `auto` remedies apply, `confirm` remedies only with `--yes`, and
