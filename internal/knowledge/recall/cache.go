@@ -2,11 +2,17 @@ package recall
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 const (
@@ -16,8 +22,11 @@ const (
 	// document reads unverified/stable forever — the exact silent wrong
 	// answer lifecycle weighting exists to prevent.
 	cacheVersion = 2
-	cacheDir     = ".nightgauge/knowledge/.recall-cache"
-	cacheFile    = "index.jsonl"
+	// cacheName is this cache's directory under the cache home (ADR-024 § 6):
+	// the index lives at <cache home>/recall/<root-key>/index.jsonl, never in
+	// the working tree.
+	cacheName = "recall"
+	cacheFile = "index.jsonl"
 )
 
 // cacheHeader is the first line of the JSONL cache file.
@@ -48,8 +57,44 @@ type CacheEntry struct {
 	StaleAfter string `json:"stale_after,omitempty"`
 }
 
-func cachePath(workdir string) string {
-	return filepath.Join(workdir, cacheDir, cacheFile)
+// RootKey is the <root-key> the recall cache is filed under: a stable hash of
+// the canonical (absolute, symlink-resolved) repository root. Each linked
+// worktree indexes its own checkout, whose knowledge files differ, and two
+// clones never collide (ADR-024 § 6).
+func RootKey(workdir string) string {
+	root := workdir
+	if abs, err := filepath.Abs(root); err == nil {
+		root = abs
+	}
+	if real, err := filepath.EvalSymlinks(root); err == nil {
+		root = real
+	}
+	sum := sha256.Sum256([]byte(filepath.Clean(root)))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// CachePath is where the recall cache for workdir lives, resolved without
+// creating anything. An error means there is no usable cache home; the index
+// is then rebuilt in memory for the call.
+func CachePath(workdir string) (string, error) {
+	home, err := layout.CacheHomePath()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, cacheName, RootKey(workdir), cacheFile), nil
+}
+
+// InvalidateCache deletes workdir's recall cache so the next BuildIndex does a
+// full scan. A cache that does not exist, or no cache home, is not an error.
+func InvalidateCache(workdir string) error {
+	path, err := CachePath(workdir)
+	if err != nil {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // loadFromCache reads the JSONL cache and validates it against refs — the
@@ -63,7 +108,17 @@ func cachePath(workdir string) string {
 // Returns an error when the cache is missing, corrupt, stale, or its parameters
 // differ from k1/b — in every case the caller falls back to a full scan.
 func loadFromCache(workdir string, k1, b float64, refs []docRef) ([]*Document, error) {
-	path := cachePath(workdir)
+	path, err := CachePath(workdir)
+	if err != nil {
+		return nil, err
+	}
+	// Only a regular file is read: a symlink planted in the cache would
+	// otherwise point the reader anywhere.
+	if info, err := os.Lstat(path); err != nil {
+		return nil, err
+	} else if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("cache %s is not a regular file", path)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -157,19 +212,35 @@ func loadFromCache(workdir string, k1, b float64, refs []docRef) ([]*Document, e
 	return docs, nil
 }
 
-// saveToCache writes docs to the JSONL cache file, overwriting any prior cache.
-func saveToCache(workdir string, docs []*Document, k1, b float64) error {
-	dir := filepath.Join(workdir, cacheDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+// saveToCache writes docs to the JSONL cache file under the cache home,
+// replacing any prior cache. The directories are created 0700 and none of
+// them may be a symlink (layout.CacheDir); the file is written to a temporary
+// name and renamed into place, so a symlink at the cache file's path is
+// replaced, never followed. An error leaves nothing in the working tree.
+func saveToCache(workdir string, docs []*Document, k1, b float64) (err error) {
+	dir, err := layout.CacheDir(cacheName, RootKey(workdir))
+	if err != nil {
 		return fmt.Errorf("create cache dir: %w", err)
 	}
 
-	path := cachePath(workdir)
-	f, err := os.Create(path)
+	f, err := os.CreateTemp(dir, ".index-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create cache file: %w", err)
 	}
-	defer f.Close()
+	tmp := f.Name()
+	defer func() {
+		if cerr := f.Close(); err == nil && cerr != nil {
+			err = fmt.Errorf("close cache file: %w", cerr)
+		}
+		if err == nil {
+			if rerr := os.Rename(tmp, filepath.Join(dir, cacheFile)); rerr != nil {
+				err = fmt.Errorf("install cache file: %w", rerr)
+			}
+		}
+		if err != nil {
+			_ = os.Remove(tmp)
+		}
+	}()
 
 	enc := json.NewEncoder(f)
 

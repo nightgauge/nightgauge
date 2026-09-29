@@ -23,6 +23,7 @@ func TestConditionalStoreDir_HonoursTheOverride(t *testing.T) {
 // inside the repository a daemon happens to run from.
 func TestConditionalStoreDir_IsNeverInsideTheRepository(t *testing.T) {
 	t.Setenv(cacheHomeEnv, "")
+	t.Setenv("XDG_CACHE_HOME", "")
 	dir, err := ConditionalStoreDir()
 	if err != nil {
 		t.Skipf("no user cache directory on this machine: %v", err)

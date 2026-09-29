@@ -121,6 +121,7 @@ func TestRelatedDecisions_TitleQueryBeatsTheDigitQuery(t *testing.T) {
 	mk("111-discord-notifier",
 		"# Decisions\n\nDecision: retry the webhook 742 times before giving up.\n")
 
+	t.Setenv("NIGHTGAUGE_CACHE_HOME", t.TempDir())
 	cfg := &config.KnowledgeConfig{}
 	idx, err := recall.BuildIndex(root, nil, cfg)
 	if err != nil {

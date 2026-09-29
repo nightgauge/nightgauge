@@ -166,6 +166,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Derived caches live in the user cache directory, not the working tree**
+  (#2028). The BM25 recall index moves from
+  `.nightgauge/knowledge/.recall-cache/` to
+  `<cache home>/recall/<root-key>/index.jsonl`, where `<root-key>` is a hash
+  of the canonical checkout root. The cache home is `NIGHTGAUGE_CACHE_HOME`,
+  else `$XDG_CACHE_HOME/nightgauge` on every OS, else
+  `~/.cache/nightgauge` (Linux), `~/Library/Caches/nightgauge` (macOS) or
+  `%LOCALAPPDATA%\nightgauge\cache` (Windows). The resolver PR #2020 added for
+  the GitHub ETag store is now `internal/layout.CacheHome`, and that store
+  uses it too, so on Windows it moves under `nightgauge\cache` and a
+  relative `NIGHTGAUGE_CACHE_HOME` now means "no cache directory". Cache
+  directories are created 0700, no symlink is followed out of the cache home,
+  and with no usable cache home the index is rebuilt in memory for the call
+  and nothing is written. An old `.recall-cache/` in a checkout is no longer
+  read and can be deleted; the layout migration (#2040) removes it.
 - **`nightgauge doctor --fix --yes` restarts a stopped autonomous loop through
   the daemon** (#2090). A stopped `autonomous-loop` (`NGD029`) now offers a
   `confirm` restart that asks the daemon serving the workspace to start its

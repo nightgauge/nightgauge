@@ -348,7 +348,10 @@ func TestIntegration_CacheIsConsulted(t *testing.T) {
 		t.Fatalf("BuildIndex (cold): %v", err)
 	}
 
-	cachePath := filepath.Join(root, ".nightgauge", "knowledge", ".recall-cache", "index.jsonl")
+	cachePath, err := recall.CachePath(root)
+	if err != nil {
+		t.Fatalf("CachePath: %v", err)
+	}
 	before, err := os.ReadFile(cachePath)
 	if err != nil {
 		t.Fatalf("cold build wrote no cache at %s: %v", cachePath, err)

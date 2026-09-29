@@ -1,7 +1,7 @@
 // Package knowledge — persistent metadata index for KB v2 (Issue #2964).
 //
-// This index is distinct from the BM25 recall cache at
-// .nightgauge/knowledge/.recall-cache/index.jsonl. The recall cache is
+// This index is distinct from the BM25 recall cache, which lives under the
+// user cache directory (recall.CachePath, ADR-024 § 6). The recall cache is
 // optimized for BM25 ranking; this index is optimized for backlink and metadata
 // queries (path, title, tags, mtime) issued by VSCode via IPC.
 //
