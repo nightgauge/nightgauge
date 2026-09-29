@@ -20,7 +20,7 @@ import (
 //
 // Every adapter finding is a warning or info, never a blocker:
 // skills/_shared/PREFLIGHT.md halts on exit 2 and runs inside an agent
-// session, so an adapter is already running when it does (#4031).
+// session, so an adapter is already running when it does.
 
 // Adapter codes (ADR-025 § 2: adapter health takes NGD100 upward).
 const (
