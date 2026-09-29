@@ -65,6 +65,7 @@ const treeProviders: CapturedTreeDataProvider[] = [];
 const outputLines: OutputChannelLine[] = [];
 const faults: ProcessFault[] = [];
 const notifications: CapturedNotification[] = [];
+const statusBarItems: vscode.StatusBarItem[] = [];
 
 let installed = false;
 
@@ -86,6 +87,7 @@ export function installObservers(): void {
   patch("createTreeView", wrapCreateTreeView);
   patch("registerTreeDataProvider", wrapRegisterTreeDataProvider);
   patch("createOutputChannel", wrapCreateOutputChannel);
+  patch("createStatusBarItem", wrapCreateStatusBarItem);
   patch("showErrorMessage", (original) => wrapNotification("error", original));
   patch("showWarningMessage", (original) => wrapNotification("warning", original));
   patch("showInformationMessage", (original) => wrapNotification("information", original));
@@ -260,6 +262,21 @@ function wrapCreateOutputChannel(original: CreateOutputChannel): CreateOutputCha
 
     return channel as unknown as ReturnType<CreateOutputChannel>;
   } as CreateOutputChannel;
+}
+
+type CreateStatusBarItem = typeof vscode.window.createStatusBarItem;
+
+/** Record every status bar item, so a suite can read its id, text and state. */
+function wrapCreateStatusBarItem(original: CreateStatusBarItem): CreateStatusBarItem {
+  return function patchedCreateStatusBarItem(this: unknown, ...args: unknown[]) {
+    const item = (original as (...a: unknown[]) => vscode.StatusBarItem).apply(this, args);
+    statusBarItems.push(item);
+    return item;
+  } as CreateStatusBarItem;
+}
+
+export function capturedStatusBarItems(): readonly vscode.StatusBarItem[] {
+  return statusBarItems;
 }
 
 export function capturedPanels(): readonly CapturedPanel[] {

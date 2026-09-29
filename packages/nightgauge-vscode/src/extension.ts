@@ -19,6 +19,7 @@ import { CONTEXT_URI_SCHEME } from "./views";
 import { initializeServices, type ExtensionServices } from "./bootstrap/services";
 import { registerAllCommands } from "./commands/register-all";
 import { IpcClient } from "./services/IpcClient";
+import { DemoModeController } from "./services/DemoModeController";
 import { ProjectEventSubscriber } from "./services/ProjectEventSubscriber";
 import { setProjectEventSubscriber } from "./commands/autonomousCommands";
 import { EventStreamService } from "./services/EventStreamService";
@@ -473,6 +474,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
     });
   }
+
+  // Demo mode (#2108, ADR-026 decisions 4-6): the badge, the UI-step hook and
+  // the platform-services gate, all keyed on the daemon's ipc.ready handshake.
+  context.subscriptions.push(
+    new DemoModeController(
+      IpcClient.getInstance(),
+      {
+        showDashboard: () => dashboard.show(),
+        selectDashboardTab: (tab) => dashboard.selectTab(tab),
+        revealActiveIssue: () => treeProvider.revealActiveIssue(),
+      },
+      {
+        createStatusBarItem: () =>
+          vscode.window.createStatusBarItem(
+            "nightgauge.demoMode",
+            vscode.StatusBarAlignment.Left,
+            1000
+          ),
+        executeCommand: (command, ...args) => vscode.commands.executeCommand(command, ...args),
+        log: (message) => logger.info(message),
+        stopPlatformServices: () => {
+          EventStreamService.resetInstance();
+          ProjectEventSubscriber.getInstanceOrNull()?.disconnect();
+          services?.agentHeartbeatService?.dispose();
+        },
+      }
+    )
+  );
 
   // WorkspaceSyncStatusItem — shows workspace sync state in the status bar.
   const workspaceSyncStatusItem = new WorkspaceSyncStatusItem();

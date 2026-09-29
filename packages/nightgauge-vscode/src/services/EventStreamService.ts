@@ -21,6 +21,7 @@ import type { AuditLogEntry } from "../views/dashboard/DashboardState";
 import type { TokenRefreshManager } from "../platform/TokenRefreshManager";
 import { PlatformSseClient } from "./PlatformSseClient";
 import type { SseStreamStatus } from "./PlatformSseClient";
+import { isDemoMode } from "./DemoModeController";
 
 const LAST_EVENT_ID_KEY = "nightgauge.eventStream.lastEventId";
 
@@ -90,10 +91,13 @@ export class EventStreamService implements vscode.Disposable {
   }
 
   connect(baseUrl: string, token: string): void {
+    // ADR-026 decision 6: no platform SSE while a demo daemon is connected.
+    if (isDemoMode()) return;
     this._sseClient.connect(`${baseUrl}/v1/events/stream`, token);
   }
 
   reconnect(baseUrl: string, token: string): void {
+    if (isDemoMode()) return;
     this._sseClient.reconnect(`${baseUrl}/v1/events/stream`, token);
   }
 

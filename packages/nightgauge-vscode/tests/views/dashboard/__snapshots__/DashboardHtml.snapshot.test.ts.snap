@@ -5901,6 +5901,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
 
       // Allowlist of valid section IDs for incremental updates (Issue #923)
       const VALID_SECTIONS = new Set(['pipeline-progress', 'summary-cards', 'analytics', 'tool-calls', 'pipeline-slots']);
+      const VALID_TAB_IDS = ["overview","pipeline","analytics","history","epics","audit","discovery","cost","health","runs","trends","compliance","dependencies"];
 
       // Slot card click → open per-slot output channel. Delegated so it
       // survives section re-renders without re-binding.
@@ -5950,6 +5951,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > active pipeline state — cu
         } else if (message.type === 'requestScrollPosition') {
           // Extension is about to do a full re-render — report current scroll position
           vscode.postMessage({ type: 'scrollPosition', scrollY: window.scrollY });
+        } else if (message.type === 'activateTab' && VALID_TAB_IDS.indexOf(message.tab) >= 0) {
+          // Demo-mode UI step (#2108): the extension selects a tab. Same path
+          // as a click, so the backend lazy-loads the tab's data.
+          activateTab(message.tab);
+          var prevTabState = vscode.getState() || {};
+          vscode.setState(Object.assign({}, prevTabState, { activeTab: message.tab }));
+          vscode.postMessage({ type: 'selectTab', tab: message.tab });
         } else if (message.type === 'update') {
           location.reload();
         } else if (message.type === 'runDetailLiveUpdate') {
@@ -12660,6 +12668,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
 
       // Allowlist of valid section IDs for incremental updates (Issue #923)
       const VALID_SECTIONS = new Set(['pipeline-progress', 'summary-cards', 'analytics', 'tool-calls', 'pipeline-slots']);
+      const VALID_TAB_IDS = ["overview","pipeline","analytics","history","epics","audit","discovery","cost","health","runs","trends","compliance","dependencies"];
 
       // Slot card click → open per-slot output channel. Delegated so it
       // survives section re-renders without re-binding.
@@ -12709,6 +12718,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > completed run with tool call
         } else if (message.type === 'requestScrollPosition') {
           // Extension is about to do a full re-render — report current scroll position
           vscode.postMessage({ type: 'scrollPosition', scrollY: window.scrollY });
+        } else if (message.type === 'activateTab' && VALID_TAB_IDS.indexOf(message.tab) >= 0) {
+          // Demo-mode UI step (#2108): the extension selects a tab. Same path
+          // as a click, so the backend lazy-loads the tab's data.
+          activateTab(message.tab);
+          var prevTabState = vscode.getState() || {};
+          vscode.setState(Object.assign({}, prevTabState, { activeTab: message.tab }));
+          vscode.postMessage({ type: 'selectTab', tab: message.tab });
         } else if (message.type === 'update') {
           location.reload();
         } else if (message.type === 'runDetailLiveUpdate') {
@@ -19264,6 +19280,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
 
       // Allowlist of valid section IDs for incremental updates (Issue #923)
       const VALID_SECTIONS = new Set(['pipeline-progress', 'summary-cards', 'analytics', 'tool-calls', 'pipeline-slots']);
+      const VALID_TAB_IDS = ["overview","pipeline","analytics","history","epics","audit","discovery","cost","health","runs","trends","compliance","dependencies"];
 
       // Slot card click → open per-slot output channel. Delegated so it
       // survives section re-renders without re-binding.
@@ -19313,6 +19330,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > empty state — no current r
         } else if (message.type === 'requestScrollPosition') {
           // Extension is about to do a full re-render — report current scroll position
           vscode.postMessage({ type: 'scrollPosition', scrollY: window.scrollY });
+        } else if (message.type === 'activateTab' && VALID_TAB_IDS.indexOf(message.tab) >= 0) {
+          // Demo-mode UI step (#2108): the extension selects a tab. Same path
+          // as a click, so the backend lazy-loads the tab's data.
+          activateTab(message.tab);
+          var prevTabState = vscode.getState() || {};
+          vscode.setState(Object.assign({}, prevTabState, { activeTab: message.tab }));
+          vscode.postMessage({ type: 'selectTab', tab: message.tab });
         } else if (message.type === 'update') {
           location.reload();
         } else if (message.type === 'runDetailLiveUpdate') {
@@ -26098,6 +26122,7 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
 
       // Allowlist of valid section IDs for incremental updates (Issue #923)
       const VALID_SECTIONS = new Set(['pipeline-progress', 'summary-cards', 'analytics', 'tool-calls', 'pipeline-slots']);
+      const VALID_TAB_IDS = ["overview","pipeline","analytics","history","epics","audit","discovery","cost","health","runs","trends","compliance","dependencies"];
 
       // Slot card click → open per-slot output channel. Delegated so it
       // survives section re-renders without re-binding.
@@ -26147,6 +26172,13 @@ exports[`getDashboardHtml snapshots (Issue #1242) > pagination controls rendered
         } else if (message.type === 'requestScrollPosition') {
           // Extension is about to do a full re-render — report current scroll position
           vscode.postMessage({ type: 'scrollPosition', scrollY: window.scrollY });
+        } else if (message.type === 'activateTab' && VALID_TAB_IDS.indexOf(message.tab) >= 0) {
+          // Demo-mode UI step (#2108): the extension selects a tab. Same path
+          // as a click, so the backend lazy-loads the tab's data.
+          activateTab(message.tab);
+          var prevTabState = vscode.getState() || {};
+          vscode.setState(Object.assign({}, prevTabState, { activeTab: message.tab }));
+          vscode.postMessage({ type: 'selectTab', tab: message.tab });
         } else if (message.type === 'update') {
           location.reload();
         } else if (message.type === 'runDetailLiveUpdate') {

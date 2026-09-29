@@ -1497,6 +1497,23 @@ export class Dashboard implements vscode.Disposable {
    * If a panel already exists, it will be revealed.
    * Otherwise, a new panel is created.
    */
+  /** The tab the extension host believes is active. */
+  getActiveTab(): string {
+    return this.activeTab;
+  }
+
+  /**
+   * Select a dashboard tab from the extension (demo UI steps, #2108). The
+   * webview activates it the way a click does and reports back `selectTab`,
+   * which lazy-loads the tab's data. Returns false for an unknown tab.
+   */
+  selectTab(tab: string): boolean {
+    if (!(VALID_TABS as readonly string[]).includes(tab)) return false;
+    this.activeTab = tab;
+    void this.panel?.webview.postMessage({ type: "activateTab", tab });
+    return true;
+  }
+
   show(): void {
     // If we already have a panel, reveal it
     if (this.panel) {

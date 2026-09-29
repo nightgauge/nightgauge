@@ -31,6 +31,31 @@ const KINDS = new Set([...MUTATIONS, "event", "ui"]);
 const REFUSED_EVENTS = new Set(["pipeline.runStage", "pipeline.abort"]);
 /** Placeholder a step payload uses for "the scenario clock, now". */
 const NOW_TOKEN = "{{now}}";
+/**
+ * `ui` actions and the targets each accepts (null: no target). Mirrors the
+ * extension's allowlist in src/services/DemoModeController.ts (#2108), which
+ * drops anything else; rejecting here keeps a typo from failing silently.
+ */
+const UI_ACTIONS = {
+  "dashboard.open": null,
+  "dashboard.tab": [
+    "overview",
+    "pipeline",
+    "analytics",
+    "history",
+    "epics",
+    "audit",
+    "discovery",
+    "cost",
+    "health",
+    "runs",
+    "trends",
+    "compliance",
+    "dependencies",
+  ],
+  "view.focus": ["pipeline-tree", "repositories", "attention", "knowledge", "query-results"],
+  "pipeline.expandActiveIssue": null,
+};
 const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const DAY_MS = 86400000;
@@ -93,6 +118,14 @@ function checkStep(step, previousAt) {
       return null;
     case "ui":
       if (typeof step.action !== "string" || !step.action) return 'ui needs an "action"';
+      if (!Object.prototype.hasOwnProperty.call(UI_ACTIONS, step.action)) {
+        return `ui has unknown action "${step.action}"`;
+      }
+      if (UI_ACTIONS[step.action] === null) {
+        if (step.target !== undefined) return `ui ${step.action} takes no "target"`;
+      } else if (!UI_ACTIONS[step.action].includes(step.target)) {
+        return `ui ${step.action} has unknown target "${step.target}"`;
+      }
       return null;
     default:
       return null;
@@ -209,7 +242,12 @@ function createPlayer({ daemon, steps, epochMs, speed = 1, schedule, log, onDone
         daemon.emit(step.method, rebaseValue(step.payload || {}, 0, nowIso));
         return;
       case "ui":
-        // Decision 5: UI cues are for the recording harness, not the extension.
+        // Decision 5: the extension runs it only in demo mode and only from
+        // its own allowlist.
+        daemon.emit("demo.uiStep", {
+          command: step.action,
+          args: step.target === undefined ? {} : { target: step.target },
+        });
         return;
     }
   }
@@ -242,4 +280,4 @@ function createPlayer({ daemon, steps, epochMs, speed = 1, schedule, log, onDone
   return { start, apply };
 }
 
-module.exports = { KINDS, NOW_TOKEN, createPlayer, loadScenario, rebaseState };
+module.exports = { KINDS, NOW_TOKEN, UI_ACTIONS, createPlayer, loadScenario, rebaseState };

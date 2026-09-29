@@ -59,6 +59,7 @@ export class IpcClient extends IpcClientGenerated {
    * unusable for the rest of this activation (ADR-017 § Migration).
    */
   private protocolMismatch: { binary: number; expected: number } | null = null;
+  private _readyPayload: unknown = null;
 
   private constructor() {
     super();
@@ -71,6 +72,7 @@ export class IpcClient extends IpcClientGenerated {
     // later. Warning-and-continuing is exactly that silent lockout, so the
     // client disconnects and says so in a modal instead.
     this.on("ipc.ready", (data) => {
+      this._readyPayload = data;
       const payload = data as { protocolVersion?: number };
       if (
         payload?.protocolVersion !== undefined &&
@@ -83,9 +85,21 @@ export class IpcClient extends IpcClientGenerated {
     // Forward Mattermost slash-command events from the Go inbound
     // receiver (#3376) to the typed event emitter. Consumers subscribe
     // via `onMattermostCommand`.
+    this.onDidChangeStatus((connected) => {
+      if (!connected) this._readyPayload = null;
+    });
+
     this.on("mattermost.command", (data) => {
       this._onMattermostCommand.fire(data as MattermostSlashEvent);
     });
+  }
+
+  /**
+   * The current connection's `ipc.ready` payload, or null when disconnected.
+   * Lets a listener registered after the handshake (demo mode, #2108) read it.
+   */
+  get readyPayload(): unknown {
+    return this._readyPayload;
   }
 
   static getInstance(): IpcClient {

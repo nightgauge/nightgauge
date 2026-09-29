@@ -212,7 +212,7 @@
     {
       "at": 0,
       "kind": "ui",
-      "action": "focus",
+      "action": "view.focus",
       "target": "pipeline-tree"
     },
     {
@@ -282,6 +282,11 @@
           "completedStages": []
         }
       }
+    },
+    {
+      "at": 2000,
+      "kind": "ui",
+      "action": "pipeline.expandActiveIssue"
     },
     {
       "at": 4000,
@@ -356,6 +361,17 @@
           ]
         }
       }
+    },
+    {
+      "at": 5000,
+      "kind": "ui",
+      "action": "dashboard.open"
+    },
+    {
+      "at": 5000,
+      "kind": "ui",
+      "action": "dashboard.tab",
+      "target": "pipeline"
     },
     {
       "at": 7000,
@@ -613,6 +629,12 @@
         "index": 0,
         "total": 3
       }
+    },
+    {
+      "at": 24000,
+      "kind": "ui",
+      "action": "dashboard.tab",
+      "target": "analytics"
     },
     {
       "at": 26000,
@@ -1257,6 +1279,18 @@
         "runId": "demo-run-133",
         "success": true
       }
+    },
+    {
+      "at": 56000,
+      "kind": "ui",
+      "action": "dashboard.tab",
+      "target": "history"
+    },
+    {
+      "at": 56500,
+      "kind": "ui",
+      "action": "dashboard.tab",
+      "target": "overview"
     },
     {
       "at": 57000,

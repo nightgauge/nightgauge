@@ -746,6 +746,7 @@ function getScript(): string {
 
       // Allowlist of valid section IDs for incremental updates (Issue #923)
       const VALID_SECTIONS = new Set(['pipeline-progress', 'summary-cards', 'analytics', 'tool-calls', 'pipeline-slots']);
+      const VALID_TAB_IDS = ${JSON.stringify(VALID_TABS)};
 
       // Slot card click → open per-slot output channel. Delegated so it
       // survives section re-renders without re-binding.
@@ -795,6 +796,13 @@ function getScript(): string {
         } else if (message.type === 'requestScrollPosition') {
           // Extension is about to do a full re-render — report current scroll position
           vscode.postMessage({ type: 'scrollPosition', scrollY: window.scrollY });
+        } else if (message.type === 'activateTab' && VALID_TAB_IDS.indexOf(message.tab) >= 0) {
+          // Demo-mode UI step (#2108): the extension selects a tab. Same path
+          // as a click, so the backend lazy-loads the tab's data.
+          activateTab(message.tab);
+          var prevTabState = vscode.getState() || {};
+          vscode.setState(Object.assign({}, prevTabState, { activeTab: message.tab }));
+          vscode.postMessage({ type: 'selectTab', tab: message.tab });
         } else if (message.type === 'update') {
           location.reload();
         } else if (message.type === 'runDetailLiveUpdate') {

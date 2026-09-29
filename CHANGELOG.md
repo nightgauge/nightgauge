@@ -16,6 +16,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **VS Code shows a "Demo" badge and follows scenario UI steps in demo mode**
+  (#2108). When the connected daemon's `ipc.ready` announces `demo: true`, the
+  extension sets the `nightgauge.demoMode` context key and shows a "Demo"
+  status bar badge for the life of the connection; no setting hides it. The
+  demo daemon now emits `demo.uiStep` for a scenario's `ui` steps, and the
+  extension runs only a fixed allowlist (open the dashboard, switch a
+  dashboard tab, focus a Nightgauge view, expand the active issue); anything
+  else, or any step while not in demo mode, is logged and dropped. In demo
+  mode the platform SSE streams and agent heartbeat never start. The
+  reference scenario switches through four dashboard tabs and expands the
+  active issue.
+
 - **The demo daemon plays scenarios on a deterministic clock** (#2106). A
   scenario JSON (`seed`, `state`, timed `steps`) passed with `--scenario`
   drives board moves, queue changes, attention items, history and pipeline

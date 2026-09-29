@@ -27,6 +27,7 @@ import "./suites/treeviews.suite.js";
 import "./suites/webviews.suite.js";
 import "./suites/ipc-inventory.suite.js";
 import "./suites/demo-fixture.suite.js";
+import "./suites/demo-mode.suite.js";
 
 // Module scope, not inside run(): the suite bodies above only *register*
 // cases, so nothing has touched the VSCode API yet, and the patches are in

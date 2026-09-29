@@ -204,7 +204,7 @@ describe("scenario validation", () => {
     [
       "an unknown kind",
       withSteps([
-        { at: 0, kind: "ui", action: "x" },
+        { at: 0, kind: "ui", action: "dashboard.open" },
         { at: 10, kind: "board.teleport" },
       ]),
       'scenario step 1: unknown kind "board.teleport"',
@@ -212,7 +212,7 @@ describe("scenario validation", () => {
     [
       "a step that goes back in time",
       withSteps([
-        { at: 100, kind: "ui", action: "x" },
+        { at: 100, kind: "ui", action: "dashboard.open" },
         { at: 50, kind: "event", method: "stage.start", payload: {} },
       ]),
       'scenario step 1: "at" 50 is before the previous step\'s 100',
@@ -260,5 +260,37 @@ describe("demo daemon process with a scenario", () => {
     expect(result.code).toBe(1);
     expect(result.stdout).toBe("");
     expect(result.stderr).toMatch(/scenario step 0: board.move has unknown status/);
+  });
+});
+
+describe("ui steps (#2108)", () => {
+  const withSteps = (steps: unknown[]) => ({ ...reference(), steps });
+
+  it("emits demo.uiStep with the action and its target", () => {
+    const { lines } = play(
+      withSteps([
+        { at: 0, kind: "ui", action: "dashboard.tab", target: "history" },
+        { at: 10, kind: "ui", action: "pipeline.expandActiveIssue" },
+      ])
+    );
+    expect(lines).toEqual([
+      '0 {"event":"demo.uiStep","data":{"command":"dashboard.tab","args":{"target":"history"}}}',
+      '10 {"event":"demo.uiStep","data":{"command":"pipeline.expandActiveIssue","args":{}}}',
+    ]);
+  });
+
+  it.each([
+    [{ at: 0, kind: "ui", action: "workbench.action.terminal.new" }, /unknown action/],
+    [{ at: 0, kind: "ui", action: "dashboard.tab", target: "settings" }, /unknown target/],
+    [{ at: 0, kind: "ui", action: "dashboard.open", target: "x" }, /takes no "target"/],
+  ])("rejects %j", (step, message) => {
+    expect(() => loadScenario(withSteps([step]))).toThrow(message);
+  });
+
+  it("the reference switches through four dashboard tabs and expands the active issue", () => {
+    const ui = reference().steps.filter((s) => s.kind === "ui");
+    const tabs = new Set(ui.filter((s) => s.action === "dashboard.tab").map((s) => s.target));
+    expect(tabs.size).toBeGreaterThanOrEqual(4);
+    expect(ui.some((s) => s.action === "pipeline.expandActiveIssue")).toBe(true);
   });
 });

@@ -11,6 +11,11 @@ and this project adheres to
 
 ### Added
 
+- A "Demo" status bar badge appears whenever the extension is connected to
+  the demo daemon, so a recording never passes for a real run. In demo mode
+  scenario UI steps can open the dashboard, switch its tab, focus a
+  Nightgauge view or expand the active issue, and the platform event streams
+  and agent heartbeat stay off.
 - Stages routed to the `sonnet` band now run Claude Sonnet 5.5
   (`claude-sonnet-5-5`), priced at $2/$10 per MTok.
 
