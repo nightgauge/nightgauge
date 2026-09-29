@@ -149,7 +149,7 @@ suite("demo workspace", () => {
         assert.ok(
           panel,
           `The ${tab} tab shows no demo workspace rows:\n${shown
-            .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+            .replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, " ")
             .replace(/<[^>]+>/g, " ")
             .replace(/\s+/g, " ")
             .slice(0, 2000)}`
