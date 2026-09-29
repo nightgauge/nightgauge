@@ -385,7 +385,7 @@ func init() {
 // ---------------------------------------------------------------------------
 
 func init() {
-	// Per-issue compose stacks whose worktree no longer exists (#3050).
+	// Per-issue compose stacks whose worktree no longer exists.
 	legacy("compose_orphans", "Orphaned compose projects", "hygiene", "NGD016", SeverityHousekeeping, 0, nil,
 		func(ctx context.Context, env *Env) legacyOutcome {
 			orphans, determined := findOrphanedComposeProjects(ctx, env.Cwd)
@@ -494,7 +494,7 @@ func init() {
 // ---------------------------------------------------------------------------
 
 func init() {
-	// Per-adapter health (#4031), only when --adapters names adapters. An
+	// Per-adapter health, only when --adapters names adapters. An
 	// unhealthy adapter is a warning, never a blocker.
 	legacy("adapters", "Adapter health", "adapters", "NGD100", SeverityWarning, 30*time.Second, nil,
 		func(ctx context.Context, env *Env) legacyOutcome {
