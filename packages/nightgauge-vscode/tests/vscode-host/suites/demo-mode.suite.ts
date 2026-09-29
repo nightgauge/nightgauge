@@ -88,8 +88,8 @@ function tabPanel(html: string, tab: string): string {
 
 function text(html: string): string {
   return html
-    .replace(/<script[\s\S]*?<\/script>/g, " ")
-    .replace(/<style[\s\S]*?<\/style>/g, " ")
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, " ")
     .replace(/<[^>]+>/g, " ")
     .replace(/&#8635;/g, "↻")
     .replace(/\s+/g, " ");
