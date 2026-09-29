@@ -127,7 +127,6 @@ type Env struct {
 
 	mu      sync.Mutex
 	details map[string]string
-	items   map[string]CheckItem
 	install string
 	adapter []AdapterHealth
 

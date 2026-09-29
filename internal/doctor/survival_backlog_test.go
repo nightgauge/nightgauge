@@ -41,9 +41,10 @@ func TestSurvivalBacklog_ReportsRecordsPastTwiceTheWindow(t *testing.T) {
 	// already folding to "unobserved".
 	seedSurvival(t, root, pendingRec("o/r", 42, now.AddDate(0, 0, -30)))
 
-	item, warning := checkSurvivalBacklog(root, now, 7)
+	fs, _ := survivalBacklogFindings(root, now, 7)
+	warning := findingsText(fs)
 
-	if item.OK {
+	if len(fs) == 0 {
 		t.Error("a record 30d past a 7d window reported OK — this is the exact state the " +
 			"workspace was in for a month with every check green")
 	}
@@ -72,25 +73,27 @@ func TestSurvivalBacklog_FreshRecordIsNotAFinding(t *testing.T) {
 		pendingRec("o/r", 2, now.AddDate(0, 0, -10)), // 10d — past window, under 2x
 	)
 
-	item, warning := checkSurvivalBacklog(root, now, 7)
+	fs, detail := survivalBacklogFindings(root, now, 7)
+	warning := findingsText(fs)
 
-	if !item.OK {
-		t.Errorf("a record still inside 2x the window was reported as a finding: %s", item.Error)
+	if len(fs) != 0 {
+		t.Errorf("a record still inside 2x the window was reported as a finding: %s", warning)
 	}
 	if warning != "" {
 		t.Errorf("unexpected warning for a healthy backlog: %q", warning)
 	}
-	if !strings.Contains(item.Detail, "2") {
-		t.Errorf("detail should report how many are pending, got %q", item.Detail)
+	if !strings.Contains(detail, "2") {
+		t.Errorf("detail should report how many are pending, got %q", detail)
 	}
 }
 
 // TestSurvivalBacklog_EmptyStoreIsHealthy guards the common case: a repo that
 // has never merged anything through the pipeline.
 func TestSurvivalBacklog_EmptyStoreIsHealthy(t *testing.T) {
-	item, warning := checkSurvivalBacklog(t.TempDir(), time.Now(), 7)
-	if !item.OK || warning != "" {
-		t.Errorf("empty store reported a finding: ok=%v warning=%q", item.OK, warning)
+	fs, _ := survivalBacklogFindings(t.TempDir(), time.Now(), 7)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Errorf("empty store reported a finding: findings=%q", warning)
 	}
 }
 
@@ -103,8 +106,9 @@ func TestSurvivalBacklog_UnparseableTimestampIsReported(t *testing.T) {
 	rec.MergedAt = "not-a-timestamp"
 	seedSurvival(t, root, rec)
 
-	item, warning := checkSurvivalBacklog(root, time.Now(), 7)
-	if item.OK {
+	fs, _ := survivalBacklogFindings(root, time.Now(), 7)
+	warning := findingsText(fs)
+	if len(fs) == 0 {
 		t.Error("a record with an unparseable merged_at reported OK — it can never be " +
 			"finalized, so it is permanently stuck")
 	}
@@ -121,12 +125,12 @@ func TestSurvivalBacklog_WindowScalesTheThreshold(t *testing.T) {
 	seedSurvival(t, root, pendingRec("o/r", 5, now.AddDate(0, 0, -20)))
 
 	// 20d is past 2x7=14 → a finding.
-	if item, _ := checkSurvivalBacklog(root, now, 7); item.OK {
+	if fs, _ := survivalBacklogFindings(root, now, 7); len(fs) == 0 {
 		t.Error("20d old should exceed 2x a 7d window")
 	}
 	// 20d is inside 2x30=60 → not a finding.
-	if item, _ := checkSurvivalBacklog(root, now, 30); !item.OK {
-		t.Errorf("20d old should be inside 2x a 30d window: %s", item.Error)
+	if fs, _ := survivalBacklogFindings(root, now, 30); len(fs) != 0 {
+		t.Errorf("20d old should be inside 2x a 30d window: %s", findingsText(fs))
 	}
 }
 

@@ -412,6 +412,11 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
 
 ### Removed
 
+- **The doctor's legacy per-check result rows** (#2098). Every doctor check
+  now reports only ADR-025 findings, so the adapter that wrapped pre-registry
+  `ok`/`detail`/`error` rows into findings is gone. `nightgauge doctor --json`
+  (schema `v: 2`) is unchanged: those rows were never part of it.
+
 - **The remote command poller and its executor** (#2113). `nightgauge serve`
   polled `GET /v1/commands/pending` every five seconds and dispatched results
   to handlers for `pipeline.run`, `pipeline.cancel`, `pipeline.status` and
@@ -424,6 +429,11 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
   `remote.notifyOnPipelineRun` config keys.
 
 ### Fixed
+
+- **A doctor check that crashes names the crash in the human report**
+  (#2098). The `NGD000` finding for a check that panicked carries the panic
+  under `detail`, and the terminal renderer hid every `detail` evidence line
+  to avoid repeating the legacy rows. It now prints it.
 
 - **The Pipeline tree shows a run already in flight when the extension
   connects** (#2105). Run state arrived only as `pipeline.stateChanged`

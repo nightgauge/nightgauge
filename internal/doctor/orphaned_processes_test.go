@@ -348,9 +348,10 @@ func TestStaleServeClaims_NameTheWorkspaceAColdClaimBelongedTo(t *testing.T) {
 	}
 	// …and it reaches the operator, which is the only place attribution counts.
 	procs := parseRows(t, derivedRow(t, 4156, "10-00:00:00", "serve --workspace "+cold))
-	_, warning := asItem(orphanedProcessReport(procs, sidecarPIDs(r.dir, scanClock), stale, nil))
-	if !strings.Contains(warning, cold) {
-		t.Errorf("the orphan report does not name the workspace whose claim went cold: %q", warning)
+	fs, _ := orphanedProcessReport(procs, sidecarPIDs(r.dir, scanClock), stale, nil)
+	text := findingsText(fs)
+	if !strings.Contains(text, cold) {
+		t.Errorf("the orphan report does not name the workspace whose claim went cold: %q", text)
 	}
 }
 
@@ -638,13 +639,14 @@ func TestOrphanedProcessReport_OneFindingPerProcess(t *testing.T) {
 }
 
 func TestOrphanedProcessReport_NamesEvidenceAndRefusesToAct(t *testing.T) {
-	item, _ := asItem(orphanedProcessReport(
+	fs, _ := orphanedProcessReport(
 		parseRows(t, derivedRow(t, 7788, "01-07:12:03", "autonomous run --dry-run")),
-		map[int]bool{}, nil, nil))
+		map[int]bool{}, nil, nil)
+	text := findingsText(fs)
 
 	for _, want := range []string{"7788", "31h", "autonomous run --dry-run", "refused unless it is still a nightgauge binary owned by you"} {
-		if !strings.Contains(item.Error, want) {
-			t.Errorf("the report does not carry %q: %q", want, item.Error)
+		if !strings.Contains(text, want) {
+			t.Errorf("the report does not carry %q: %q", want, text)
 		}
 	}
 }
@@ -661,37 +663,32 @@ func TestOrphanedProcessReport_HealthyPathWritesAnOKEntry(t *testing.T) {
 		t.Fatal("the captured table did not parse")
 	}
 
-	item, warning := asItem(orphanedProcessReport(procs, map[int]bool{capturedServeRow(t).PID: true}, nil, nil))
+	fs, detail := orphanedProcessReport(procs, map[int]bool{capturedServeRow(t).PID: true}, nil, nil)
+	text := findingsText(fs)
 
-	if !item.OK {
-		t.Fatalf("the captured (clean) machine must pass: %+v", item)
+	if len(fs) != 0 {
+		t.Fatalf("the captured (clean) machine must pass: %s", text)
 	}
-	if warning != "" {
-		t.Errorf("unexpected warning: %q", warning)
+	if !strings.Contains(detail, "1 owned") || !strings.Contains(detail, "0 orphaned") {
+		t.Errorf("the healthy detail does not report its counts: %q", detail)
 	}
-	if !strings.Contains(item.Detail, "1 owned") || !strings.Contains(item.Detail, "0 orphaned") {
-		t.Errorf("the healthy detail does not report its counts: %q", item.Detail)
-	}
-	if strings.Contains(item.Detail, "serve") {
-		t.Errorf("the counts still carry a serve-shaped class: %q", item.Detail)
+	if strings.Contains(detail, "serve") {
+		t.Errorf("the counts still carry a serve-shaped class: %q", detail)
 	}
 }
 
 func TestUnverifiableProcessScan_IsNeverHealthy(t *testing.T) {
 	// #296's lesson: "I could not look" must never render as "nothing is wrong".
-	item, warning := asItem(unverifiableProcessScan(fmt.Errorf("exec: \"ps\": executable file not found")))
-
-	if item.OK {
-		t.Fatalf("an unverifiable scan reported healthy: %+v", item)
+	fs, _ := unverifiableProcessScan(fmt.Errorf("exec: \"ps\": executable file not found"))
+	text := findingsText(fs)
+	if len(fs) == 0 {
+		t.Fatalf("an unverifiable scan reported healthy: %s", text)
 	}
-	if !strings.Contains(item.Error, "unverifiable") {
-		t.Errorf("the error does not say the scan could not run: %q", item.Error)
+	if !strings.Contains(text, "unverifiable") {
+		t.Errorf("the error does not say the scan could not run: %q", text)
 	}
-	if !strings.Contains(item.Error, "a scan that never ran") {
-		t.Errorf("the error does not explain what a clean report would assert: %q", item.Error)
-	}
-	if warning == "" {
-		t.Error("an unverifiable scan must warn")
+	if !strings.Contains(text, "a scan that never ran") {
+		t.Errorf("the error does not explain what a clean report would assert: %q", text)
 	}
 }
 
@@ -747,26 +744,21 @@ func TestCheckOrphanedProcesses_RunsAgainstTheRealProcessTable(t *testing.T) {
 	// proves the wiring — enumerate, parse, and reach a verdict on this host.
 	r := newLeakRepo(t)
 
-	item, warning := checkOrphanedProcesses(r.dir, time.Now())
+	fs, detail := orphanedProcessFindings(r.dir, time.Now())
+	text := findingsText(fs)
 
-	if item.Detail == "" && item.Error == "" {
+	if detail == "" && text == "" {
 		t.Fatal("the check reported nothing at all")
 	}
 	// On every platform that HAS `ps`, the scan must actually have been
 	// determined. Without this the suite passes on a permanently-unverifiable
 	// carrier: a `ps` whose columns drift from this parser would ship green,
 	// warning forever in production and failing nothing in CI.
-	if runtime.GOOS != "windows" && strings.Contains(item.Error, "unverifiable") {
-		t.Fatalf("the real process table was not understood on %s — the parser has drifted from this host's ps: %q", runtime.GOOS, item.Error)
+	if runtime.GOOS != "windows" && strings.Contains(text, "unverifiable") {
+		t.Fatalf("the real process table was not understood on %s — the parser has drifted from this host's ps: %q", runtime.GOOS, text)
 	}
-	if item.OK && warning != "" {
-		t.Errorf("a passing check must not warn: %q", warning)
-	}
-	if !item.OK && warning == "" {
-		t.Error("a failing check must warn")
-	}
-	if strings.Contains(item.Error, fmt.Sprintf("%d (", os.Getpid())) {
-		t.Errorf("the check reported itself: %q", item.Error)
+	if strings.Contains(text, fmt.Sprintf("%d (", os.Getpid())) {
+		t.Errorf("the check reported itself: %q", text)
 	}
 }
 
@@ -784,16 +776,13 @@ func TestProcessTableReport_ATableWithoutThisProcessIsUnverifiable(t *testing.T)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			item, warning := asItem(processTableReport(t.TempDir(), tt.raw, map[int]bool{}, nil))
-
-			if item.OK {
-				t.Fatalf("a table that never listed this process reported healthy: %+v", item)
+			fs, _ := processTableReport(t.TempDir(), tt.raw, map[int]bool{}, nil)
+			text := findingsText(fs)
+			if len(fs) == 0 {
+				t.Fatalf("a table that never listed this process reported healthy: %s", text)
 			}
-			if !strings.Contains(item.Error, "unverifiable") {
-				t.Errorf("the error does not say the scan could not be trusted: %q", item.Error)
-			}
-			if warning == "" {
-				t.Error("an unverifiable scan must warn")
+			if !strings.Contains(text, "unverifiable") {
+				t.Errorf("the error does not say the scan could not be trusted: %q", text)
 			}
 		})
 	}
@@ -809,13 +798,14 @@ func TestProcessTableReport_ATableContainingThisProcessIsRead(t *testing.T) {
 	raw := derivedRow(t, os.Getpid(), "10:00", "doctor --json") + "\n" +
 		derivedRow(t, unusedPID(t), "05-00:00:00", "autonomous run --dry-run --workdir "+ws) + "\n"
 
-	item, _ := asItem(processTableReport(ws, raw, map[int]bool{}, nil))
+	fs, _ := processTableReport(ws, raw, map[int]bool{}, nil)
+	text := findingsText(fs)
 
-	if strings.Contains(item.Error, "unverifiable") {
-		t.Fatalf("a table containing this process was rejected: %q", item.Error)
+	if strings.Contains(text, "unverifiable") {
+		t.Fatalf("a table containing this process was rejected: %q", text)
 	}
-	if item.OK {
-		t.Fatalf("the aged unowned process was not reported: %+v", item)
+	if len(fs) == 0 {
+		t.Fatalf("the aged unowned process was not reported: %s", text)
 	}
 }
 
@@ -944,18 +934,16 @@ func TestForeignCwdHolder_Flagged(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	item, warning := asItem(orphanedProcessReport(procs, map[int]bool{}, nil, fc))
+	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	text := findingsText(fs)
 
-	if item.OK {
-		t.Fatalf("a foreign process with cwd inside a live worktree reported healthy: %+v", item)
+	if len(fs) == 0 {
+		t.Fatalf("a foreign process with cwd inside a live worktree reported healthy: %s", text)
 	}
 	for _, want := range []string{"42488", "2h", "/bin/zsh", liveWorktree, "[cwd inside worktree issue-488]"} {
-		if !strings.Contains(item.Error, want) {
-			t.Errorf("the report does not carry %q: %q", want, item.Error)
+		if !strings.Contains(text, want) {
+			t.Errorf("the report does not carry %q: %q", want, text)
 		}
-	}
-	if warning == "" {
-		t.Error("a foreign cwd holder must produce a warning, not just a check entry")
 	}
 }
 
@@ -992,18 +980,19 @@ func TestForeignCwdHolder_StaleWorktree(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	item, _ := asItem(orphanedProcessReport(procs, map[int]bool{}, nil, fc))
+	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	text := findingsText(fs)
 
 	liveTag := "[cwd inside worktree issue-488]"
 	staleTag := "[cwd inside REMOVED worktree issue-489]"
-	if !strings.Contains(item.Error, liveTag) {
-		t.Fatalf("the live-worktree holder was not tagged: %q", item.Error)
+	if !strings.Contains(text, liveTag) {
+		t.Fatalf("the live-worktree holder was not tagged: %q", text)
 	}
-	if !strings.Contains(item.Error, staleTag) {
-		t.Fatalf("the removed-worktree holder was not distinctly tagged REMOVED: %q", item.Error)
+	if !strings.Contains(text, staleTag) {
+		t.Fatalf("the removed-worktree holder was not distinctly tagged REMOVED: %q", text)
 	}
-	if strings.Index(item.Error, staleTag) > strings.Index(item.Error, liveTag) {
-		t.Errorf("the stale (REMOVED) holder must sort before the live one: %q", item.Error)
+	if strings.Index(text, staleTag) > strings.Index(text, liveTag) {
+		t.Errorf("the stale (REMOVED) holder must sort before the live one: %q", text)
 	}
 }
 
@@ -1024,10 +1013,11 @@ func TestForeignCwdHolder_YoungLiveHolderNotFlagged(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	item, warning := asItem(orphanedProcessReport(procs, map[int]bool{}, nil, fc))
+	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	text := findingsText(fs)
 
-	if !item.OK || warning != "" {
-		t.Fatalf("a 3-second-old process in a LIVE worktree was flagged: OK=%v warning=%q", item.OK, warning)
+	if len(fs) != 0 {
+		t.Fatalf("a 3-second-old process in a LIVE worktree was flagged: %s", text)
 	}
 }
 
@@ -1056,10 +1046,11 @@ func TestForeignCwdHolder_CrossRepoIssueNumberIsNotConflated(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	item, _ := asItem(orphanedProcessReport(procs, map[int]bool{}, nil, fc))
+	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	text := findingsText(fs)
 
-	if !strings.Contains(item.Error, "[cwd inside REMOVED worktree issue-488]") {
-		t.Fatalf("repo A's removed issue-488 was reported live because repo B's issue-488 is live: %q", item.Error)
+	if !strings.Contains(text, "[cwd inside REMOVED worktree issue-488]") {
+		t.Fatalf("repo A's removed issue-488 was reported live because repo B's issue-488 is live: %q", text)
 	}
 }
 
@@ -1082,10 +1073,11 @@ func TestForeignCwdHolder_ExtensionWorktreeBaseIsScanned(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	item, _ := asItem(orphanedProcessReport(procs, map[int]bool{}, nil, fc))
+	fs, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	text := findingsText(fs)
 
-	if !strings.Contains(item.Error, "[cwd inside worktree issue-490]") {
-		t.Fatalf("a holder in the VSCode extension's default worktree base was not found: %q", item.Error)
+	if !strings.Contains(text, "[cwd inside worktree issue-490]") {
+		t.Fatalf("a holder in the VSCode extension's default worktree base was not found: %q", text)
 	}
 }
 
@@ -1132,15 +1124,13 @@ func TestBuildForeignCwdScan_UnreadableRepoRootIsUndetermined(t *testing.T) {
 	// is satisfied) but whose cwd half could not run must be unverifiable, not
 	// OK=true.
 	raw := fmt.Sprintf("%d 00:01 nightgauge-doctor-test\n", os.Getpid())
-	item, warning := asItem(processTableReport(r.dir, raw, map[int]bool{}, nil))
-	if item.OK {
-		t.Fatalf("a scan whose cwd half could not run reported healthy: %+v", item)
+	fs, _ := processTableReport(r.dir, raw, map[int]bool{}, nil)
+	text := findingsText(fs)
+	if len(fs) == 0 {
+		t.Fatalf("a scan whose cwd half could not run reported healthy: %s", text)
 	}
-	if !strings.Contains(item.Error, "unverifiable") {
-		t.Errorf("the error does not say the scan could not run: %q", item.Error)
-	}
-	if warning == "" {
-		t.Error("an undetermined cwd-half scan must produce a warning too")
+	if !strings.Contains(text, "unverifiable") {
+		t.Errorf("the error does not say the scan could not run: %q", text)
 	}
 }
 
@@ -1221,17 +1211,18 @@ func TestOrphanedProcesses_OtherWorkspaceIsNotEvaluated(t *testing.T) {
 		derivedRow(t, 4242, "03:00:00", "run --issue 2087 --adapter opencode"),
 	)
 	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/other/ws"}, nil)
-	item, warning := asItem(orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope))
-	if !item.OK || warning != "" {
-		t.Fatalf("process in another workspace was reported: item=%+v warning=%q", item, warning)
+	fs, detail := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)
+	text := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("process in another workspace was reported: %s", text)
 	}
-	if !strings.Contains(item.Detail, "1 nightgauge process(es) in other workspaces") {
-		t.Errorf("detail should count the other-workspace process as info: %q", item.Detail)
+	if !strings.Contains(detail, "1 nightgauge process(es) in other workspaces") {
+		t.Errorf("detail should count the other-workspace process as info: %q", detail)
 	}
 
 	// The same process, in THIS workspace, is still an orphan.
 	scope = classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/this/ws/sub"}, nil)
-	if item, _ := asItem(orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)); item.OK {
+	if fs, _ := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope); len(fs) == 0 {
 		t.Error("an idle, unclaimed three-hour run in this workspace must still be reported")
 	}
 }
@@ -1261,12 +1252,13 @@ func TestOrphanedProcesses_NohupLiveRunIsNotAnOrphan(t *testing.T) {
 	)
 	parents := map[int]int{4242: 1, 5000: 4242}
 	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/this/ws"}, parents)
-	item, warning := asItem(orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope))
-	if !item.OK || warning != "" {
-		t.Fatalf("a live nohup'd run with a child process was reported as orphaned: %+v %q", item, warning)
+	fs, detail := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)
+	text := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("a live nohup'd run with a child process was reported as orphaned: %s", text)
 	}
-	if !strings.Contains(item.Detail, "unclaimed but working") {
-		t.Errorf("detail should name the working process: %q", item.Detail)
+	if !strings.Contains(detail, "unclaimed but working") {
+		t.Errorf("detail should name the working process: %q", detail)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -56,31 +57,27 @@ func TestTrackedSecretsCheck(t *testing.T) {
 		gitIn(t, dir, "add", ".nightgauge/config.yaml")
 		gitIn(t, dir, "commit", "-q", "-m", "fixture")
 
-		item, warning := checkTrackedCredentials(dir)
-		if item.OK {
-			t.Fatalf("check passed with a committed token: %+v", item)
+		fs, _ := trackedCredentialFindings(dir)
+		if len(fs) != 1 {
+			t.Fatalf("findings = %s, want exactly one", findingsText(fs))
 		}
-		if warning == "" {
-			t.Error("no warning for a committed token")
+		f := fs[0]
+		if f.Severity != SeverityBlocker {
+			t.Errorf("severity = %s, want blocker", f.Severity)
 		}
-		if len(item.Findings) != 1 {
-			t.Fatalf("findings = %+v, want exactly one", item.Findings)
+		ev := f.Evidence
+		if ev["path"] != ".nightgauge/config.yaml" || ev["line"] != "4" || ev["pattern"] != "github-token" || ev["redacted"] != "ghp_…" {
+			t.Errorf("evidence = %+v, want .nightgauge/config.yaml:4 github-token ghp_…", ev)
 		}
-		f := item.Findings[0]
-		if f.Path != ".nightgauge/config.yaml" || f.Line != 4 || f.Pattern != "github-token" || f.Redacted != "ghp_…" {
-			t.Errorf("finding = %+v, want .nightgauge/config.yaml:4 github-token ghp_…", f)
+		if !strings.Contains(f.Title, ".nightgauge/config.yaml:4") {
+			t.Errorf("title does not name path:line: %s", f.Title)
 		}
-		if !strings.Contains(item.Error, ".nightgauge/config.yaml:4") {
-			t.Errorf("error does not name path:line: %s", item.Error)
-		}
-		if !strings.Contains(item.Error, "rotate") || !strings.Contains(item.Error, "history") {
-			t.Errorf("remediation does not name both steps: %s", item.Error)
+		text := findingsText(fs)
+		if !strings.Contains(text, "rotate") || !strings.Contains(text, "history") {
+			t.Errorf("remediation does not name both steps: %s", text)
 		}
 
-		env := &Env{}
-		findings := adaptLegacy(trackedCredentialsCheck, "NGD024", SeverityBlocker, env,
-			legacyOutcome{item: item, present: true, warnings: []string{warning}})
-		result := BuildResult([]CheckResult{{ID: trackedCredentialsCheck, Status: StatusFailed, Findings: findings}})
+		result := BuildResult([]CheckResult{{ID: trackedCredentialsCheck, Status: StatusFailed, Findings: fs}})
 		raw, err := json.Marshal(result)
 		if err != nil {
 			t.Fatal(err)
@@ -88,8 +85,13 @@ func TestTrackedSecretsCheck(t *testing.T) {
 		if strings.Contains(string(raw), fixtureToken) || strings.Contains(string(raw), "0123456789abcdef") {
 			t.Errorf("JSON carries the token: %s", raw)
 		}
-		if !strings.Contains(string(raw), `.nightgauge/config.yaml:4 github-token ghp_…`) {
-			t.Errorf("JSON lacks the structured finding: %s", raw)
+		for _, want := range []string{
+			`.nightgauge/config.yaml:4`, `"path":".nightgauge/config.yaml"`, `"line":"4"`,
+			`"pattern":"github-token"`, `"redacted":"ghp_…"`,
+		} {
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("JSON lacks the structured finding's %s: %s", want, raw)
+			}
 		}
 	})
 
@@ -97,12 +99,12 @@ func TestTrackedSecretsCheck(t *testing.T) {
 		dir := newCredentialRepo(t)
 		writeFixture(t, dir, ".nightgauge/config.yaml", body)
 
-		item, warning := checkTrackedCredentials(dir)
-		if !item.OK || warning != "" || len(item.Findings) != 0 {
-			t.Fatalf("untracked file produced a finding: %+v %q", item, warning)
+		fs, detail := trackedCredentialFindings(dir)
+		if len(fs) != 0 {
+			t.Fatalf("untracked file produced a finding: %s", findingsText(fs))
 		}
-		if !strings.Contains(item.Detail, "no tracked credentials") {
-			t.Errorf("detail = %q, want the explicit clean line", item.Detail)
+		if !strings.Contains(detail, "no tracked credentials") {
+			t.Errorf("detail = %q, want the explicit clean line", detail)
 		}
 	})
 
@@ -117,7 +119,7 @@ func TestTrackedSecretsCheck(t *testing.T) {
 			return dir, []string{".nightgauge/config.yaml"}, true, nil
 		}
 		t.Cleanup(func() { trackedFileLister = prev })
-		if item, _ := checkTrackedCredentials(dir); item.OK {
+		if fs, _ := trackedCredentialFindings(dir); len(fs) == 0 {
 			t.Fatal("an all-files lister found nothing; the fixture does not exercise the filter")
 		}
 	})
@@ -142,18 +144,19 @@ func TestTrackedSecretsCheckPatterns(t *testing.T) {
 	gitIn(t, dir, "add", ".")
 	gitIn(t, dir, "commit", "-q", "-m", "fixture")
 
-	item, _ := checkTrackedCredentials(dir)
-	if len(item.Findings) != 7 {
-		t.Fatalf("findings = %d (%+v), want 7", len(item.Findings), item.Findings)
+	fs, _ := trackedCredentialFindings(dir)
+	text := findingsText(fs)
+	if len(fs) != 7 {
+		t.Fatalf("findings = %d (%s), want 7", len(fs), text)
 	}
 	wantRedacted := []string{"gho_…", "ghu_…", "ghs_…", "ghr_…", "github_pat_…", "ib_live_…", "ib_ci_…"}
-	for i, f := range item.Findings {
-		if f.Line != i+1 || f.Redacted != wantRedacted[i] {
-			t.Errorf("finding %d = %+v, want line %d %s", i, f, i+1, wantRedacted[i])
+	for i, f := range fs {
+		if f.Evidence["line"] != strconv.Itoa(i+1) || f.Evidence["redacted"] != wantRedacted[i] {
+			t.Errorf("finding %d evidence = %+v, want line %d %s", i, f.Evidence, i+1, wantRedacted[i])
 		}
 	}
-	if strings.Contains(item.Error, strings.Repeat("a", 36)) {
-		t.Errorf("error carries a matched value: %s", item.Error)
+	if strings.Contains(text, strings.Repeat("a", 36)) {
+		t.Errorf("findings carry a matched value: %s", text)
 	}
 }
 
@@ -167,21 +170,21 @@ func TestTrackedSecretsCheckSkips(t *testing.T) {
 	gitIn(t, dir, "add", ".")
 	gitIn(t, dir, "commit", "-q", "-m", "fixture")
 
-	item, warning := checkTrackedCredentials(dir)
-	if !item.OK || warning != "" {
-		t.Fatalf("skipped files produced a finding: %+v", item)
+	fs, detail := trackedCredentialFindings(dir)
+	if len(fs) != 0 {
+		t.Fatalf("skipped files produced a finding: %s", findingsText(fs))
 	}
 	for _, want := range []string{".nightgauge/blob.bin (binary)", ".nightgauge/big.log (over 1 MiB)"} {
-		if !strings.Contains(item.Detail, want) {
-			t.Errorf("detail lacks %q: %s", want, item.Detail)
+		if !strings.Contains(detail, want) {
+			t.Errorf("detail lacks %q: %s", want, detail)
 		}
 	}
 
 	outside := t.TempDir()
 	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(outside))
-	item, warning = checkTrackedCredentials(outside)
-	if !item.OK || warning != "" || !strings.Contains(item.Detail, "skipped") {
-		t.Errorf("outside a work tree: %+v %q, want a skip", item, warning)
+	fs, detail = trackedCredentialFindings(outside)
+	if len(fs) != 0 || !strings.Contains(detail, "skipped") {
+		t.Errorf("outside a work tree: %s / %q, want a skip", findingsText(fs), detail)
 	}
 }
 
@@ -218,12 +221,12 @@ func TestTrackedSecretsCheckGluedAndEscaping(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	item, _ := checkTrackedCredentials(dir)
-	if len(item.Findings) != 1 || item.Findings[0].Path != ".nightgauge/env.sh" {
-		t.Fatalf("findings = %+v, want only the glued token in env.sh", item.Findings)
+	fs, detail := trackedCredentialFindings(dir)
+	if len(fs) != 1 || fs[0].Evidence["path"] != ".nightgauge/env.sh" {
+		t.Fatalf("findings = %s, want only the glued token in env.sh", findingsText(fs))
 	}
-	if !strings.Contains(item.Error, ".nightgauge/linked/leak.yaml (resolves outside the repository)") {
-		t.Errorf("escaping path not noted: %s", item.Error)
+	if !strings.Contains(detail, ".nightgauge/linked/leak.yaml (resolves outside the repository)") {
+		t.Errorf("escaping path not noted: %s", detail)
 	}
 }
 
@@ -234,8 +237,8 @@ func TestRunDoctorRefusedConfigIsRequiredFailure(t *testing.T) {
 	if result.ExitCode != 2 {
 		t.Errorf("ExitCode = %d, want 2", result.ExitCode)
 	}
-	cfgCheck := resultItem(result, "config")
-	if cfgCheck.OK || !strings.Contains(cfgCheck.Error, "refused") {
+	cfgCheck, _ := checkResult(result, "config")
+	if checkPassed(cfgCheck) || !strings.Contains(findingsText(cfgCheck.Findings), "refused") {
 		t.Errorf("config check = %+v, want a failure carrying the load error", cfgCheck)
 	}
 	found := false

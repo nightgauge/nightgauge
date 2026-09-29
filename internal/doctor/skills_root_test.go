@@ -30,12 +30,12 @@ func TestCheckSkillsRootPassesWhenEveryStageResolves(t *testing.T) {
 	}
 	writeSkills(t, root, all...)
 
-	item, warning := checkSkillsRootIn([]string{filepath.Join(t.TempDir(), "skills"), root})
-	if !item.OK || warning != "" {
-		t.Fatalf("item = %+v, warning = %q; want OK", item, warning)
+	fs, detail := skillsRootFindingsIn([]string{filepath.Join(t.TempDir(), "skills"), root})
+	if len(fs) != 0 {
+		t.Fatalf("findings = %s; want OK", findingsText(fs))
 	}
-	if !strings.Contains(item.Detail, root) {
-		t.Errorf("detail %q does not report the resolving root %q", item.Detail, root)
+	if !strings.Contains(detail, root) {
+		t.Errorf("detail %q does not report the resolving root %q", detail, root)
 	}
 }
 
@@ -47,10 +47,11 @@ func TestCheckSkillsRootWarnsWithRootsAndRemedy(t *testing.T) {
 	b := t.TempDir()
 	writeSkills(t, b, "feature-dev")
 
-	item, warning := checkSkillsRootIn([]string{a, b})
-	if item.OK || warning == "" {
-		t.Fatalf("item = %+v; want a warning", item)
+	fs, detail := skillsRootFindingsIn([]string{a, b})
+	if len(fs) == 0 {
+		t.Fatalf("no finding (detail %q); want a warning", detail)
 	}
+	warning := findingsText(fs)
 	for _, want := range []string{"issue-pickup", a, b, "<prefix>/skills/", skillrender.SkillsRootEnv} {
 		if !strings.Contains(warning, want) {
 			t.Errorf("warning %q lacks %q", warning, want)
@@ -70,9 +71,8 @@ func TestCheckSkillsRootReadsTheEnvOverride(t *testing.T) {
 	writeSkills(t, override, all...)
 	t.Setenv(skillrender.SkillsRootEnv, override)
 
-	item, _ := checkSkillsRoot(t.TempDir())
-	if !item.OK {
-		t.Fatalf("with %s set: %+v", skillrender.SkillsRootEnv, item)
+	if fs, _ := skillsRootFindings(t.TempDir()); len(fs) != 0 {
+		t.Fatalf("with %s set: %s", skillrender.SkillsRootEnv, findingsText(fs))
 	}
 }
 

@@ -96,9 +96,6 @@ func RenderHuman(w io.Writer, res DoctorResult, opts RenderOptions) {
 			}
 			sort.Strings(keys)
 			for _, k := range keys {
-				if k == "detail" {
-					continue // legacy detail duplicates the check row below
-				}
 				fmt.Fprintf(w, "      %s: %s\n", k, firstLine(f.Evidence[k]))
 			}
 			if len(f.Remedies) > 0 {

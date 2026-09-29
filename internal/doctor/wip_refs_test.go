@@ -37,40 +37,34 @@ func TestCheckPreservedWip_ReportsWorkFromAKilledStage(t *testing.T) {
 	r := newLeakRepo(t)
 	preserveWip(r, "feat/338-guest-auth", 338, "feature-validate", 1787939337)
 
-	item, warning := checkPreservedWip(r.dir, time.Now())
-	if item.OK {
+	fs, detail := preservedWipFindings(r.dir, time.Now())
+	if len(fs) == 0 {
 		t.Fatal("doctor reported healthy with a killed stage's only copy of its work unclaimed")
 	}
-	if !strings.Contains(item.Error, "#338") {
-		t.Errorf("the warning does not name the issue, so it cannot be matched to a re-run: %q", item.Error)
+	text := findingsText(fs)
+	if !strings.Contains(text, "#338") {
+		t.Errorf("the warning does not name the issue, so it cannot be matched to a re-run: %q", text)
 	}
-	if !strings.Contains(item.Error, "nightgauge wip list") {
-		t.Errorf("the warning names no remedy: %q", item.Error)
+	if !strings.Contains(text, "nightgauge wip list") {
+		t.Errorf("the warning names no remedy: %q", text)
 	}
-	if warning == "" {
-		t.Error("the arm produced no workspace warning, so nothing reaches doctor's Warnings line")
-	}
-	if !strings.Contains(item.Detail, "1 preserved WIP ref") {
-		t.Errorf("detail = %q, want the count of preserved refs", item.Detail)
+	if !strings.Contains(detail, "1 preserved WIP ref") {
+		t.Errorf("detail = %q, want the count of preserved refs", detail)
 	}
 }
 
 func TestCheckPreservedWip_HealthyRepoPasses(t *testing.T) {
 	r := newLeakRepo(t)
-	item, warning := checkPreservedWip(r.dir, time.Now())
-	if !item.OK {
-		t.Fatalf("a repo with no preserved work must pass: %+v", item)
-	}
-	if warning != "" {
-		t.Errorf("unexpected warning on a clean repo: %q", warning)
+	if fs, detail := preservedWipFindings(r.dir, time.Now()); len(fs) != 0 {
+		t.Fatalf("a repo with no preserved work must pass: %s (%s)", findingsText(fs), detail)
 	}
 }
 
 // Pins the WIRING, not the classifier. Every test above passes while nothing
-// in RunDoctor ever calls checkPreservedWip — which is the same "one writer,
+// in RunDoctor ever calls preservedWipFindings — which is the same "one writer,
 // zero readers" shape one level up, and exactly how a WIP ref stayed
-// unreported for a day. Asserted on presence rather than verdict: the row's OK
-// depends on the machine the test runs on, its existence does not.
+// unreported for a day. Asserted on presence rather than verdict: the check's
+// verdict depends on the machine the test runs on, its existence does not.
 func TestRunDoctor_EmitsPreservedWipArm(t *testing.T) {
 	result := RunDoctor(context.Background(), nil, nil, nil)
 
@@ -82,11 +76,7 @@ func TestRunDoctor_EmitsPreservedWipArm(t *testing.T) {
 func TestCheckPreservedWip_NoRootsIsNeverHealthy(t *testing.T) {
 	// A directory that is not a repo and not a workspace resolves no roots.
 	// "I could not look" must never print as "there is nothing there" (#296).
-	item, warning := checkPreservedWip(t.TempDir(), time.Now())
-	if item.OK {
-		t.Fatal("an unverifiable scan reported healthy")
-	}
-	if warning == "" {
-		t.Error("an unverifiable scan produced no warning")
+	if fs, _ := preservedWipFindings(t.TempDir(), time.Now()); len(fs) == 0 {
+		t.Fatal("an unverifiable scan reported healthy, with no warning")
 	}
 }
