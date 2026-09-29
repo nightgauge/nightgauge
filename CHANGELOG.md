@@ -449,6 +449,14 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
   state with: every event keeps its order and spacing, and run history files
   are renamed to their new days.
 
+- **The dashboard's board summary no longer sticks at zero after an early
+  open** (#2287). A board refresh that ran before the project config resolved,
+  for example while the workspace root was still being set, read no board and
+  recorded it as 0 Ready / 0 In Progress / 0 In Review / 0 Done. Nothing read it
+  again until a manual refresh. The summary now stays loading and reads the real
+  counts as soon as the config resolves. A config that names no project shows
+  as not configured rather than as an empty board.
+
 - **The Audit Trail tab shows local run history when `platform.enabled` is
   false** (#2107). It showed "No Access" to every user without a platform
   session, and with a stored session it still called the platform. With the

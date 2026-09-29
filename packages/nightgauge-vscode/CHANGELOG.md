@@ -38,6 +38,8 @@ and this project adheres to
   extension connected, instead of "No issue active" until its next stage.
 - In demo mode the Runs, Cost and Trends tabs show the demo's data instead of
   asking you to sign in.
+- The Overview's Project Board Summary shows the real counts when the
+  dashboard opens during startup, instead of zeros until you press refresh.
 - The Audit Trail tab shows your local run history when `platform.enabled` is
   false, instead of "No Access", and no longer contacts the platform then.
 - The dashboard's first Refresh now shows health metrics when run history

@@ -378,6 +378,7 @@ export function projectBoardServiceMockModule() {
       this.getSelectedProject = vi.fn(() => null);
       this.setSelectedProject = vi.fn();
       this.onStatusChanged = vi.fn(() => ({ dispose: vi.fn() }));
+      this.onDidResolveConfig = vi.fn(() => ({ dispose: vi.fn() }));
     }),
   };
 }
