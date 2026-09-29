@@ -1,0 +1,15 @@
+{
+  "issue_number": 112,
+  "title": "Retry failed harbour-fee webhooks",
+  "branch": "feat/112-retry-harbour-fee-webhooks",
+  "started_at": "2026-01-15T09:00:00Z",
+  "updated_at": "2026-01-15T09:25:00Z",
+  "stages": {
+    "issue-pickup": { "status": "complete" },
+    "feature-planning": { "status": "complete" },
+    "feature-dev": { "status": "in_progress" },
+    "feature-validate": { "status": "pending" },
+    "pr-create": { "status": "pending" },
+    "pr-merge": { "status": "pending" }
+  }
+}

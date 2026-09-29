@@ -38,6 +38,8 @@ const packageRoot = path.resolve(here, "..", "..");
 const EXTENSION_BUNDLE = path.join(packageRoot, "dist", "extension.cjs");
 const TESTS_BUNDLE = path.join(packageRoot, "out", "vscode-host", "index.host.cjs");
 const FIXTURE_SOURCE = path.join(packageRoot, "tests", "fixtures", "vscode-host", "populated");
+/** The committed demo workspace (#2107), read by the demo-fixture suite. */
+const DEMO_WORKSPACE = path.join(packageRoot, "demo", "workspace");
 /**
  * The backend this tier runs against: the demo-mode logging stub (#2103),
  * wired in through the same `nightgauge.backend.binaryPath` seam a user
@@ -69,6 +71,7 @@ async function main(): Promise<void> {
     "Run `npm run -w nightgauge-vscode build:host-tests` first (the `test:host` script does this for you)."
   );
   requireFile(FIXTURE_SOURCE, "The committed populated fixture is missing from the tree.");
+  requireFile(DEMO_WORKSPACE, "The committed demo workspace is missing from the tree.");
   requireFile(IPC_STUB, "The demo IPC stub is missing from the tree.");
 
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-host-"));
@@ -112,6 +115,7 @@ async function main(): Promise<void> {
       extensionTestsPath: TESTS_BUNDLE,
       extensionTestsEnv: {
         NIGHTGAUGE_HOST_FIXTURE_SOURCE: FIXTURE_SOURCE,
+        NIGHTGAUGE_HOST_DEMO_WORKSPACE: DEMO_WORKSPACE,
         NIGHTGAUGE_HOST_TRANSCRIPT: transcript,
         // Keep the tier off the developer's real machine-tier config, the
         // same way tests/setup.ts does for vitest.
