@@ -105,7 +105,11 @@ follows. `NGD000` is reserved for "check could not complete" (timeout or interna
 | NGD026 | `survival_backlog`       | info         |                                           |
 | NGD027 | `survival_coverage`      | info         |                                           |
 | NGD028 | `corpus_calibration`     | info         |                                           |
-| NGD029 | `scheduled_automations`  | warning      |                                           |
+| NGD029 | `scheduled_automations`  | warning      | Stopped; `info` while a pause is recorded |
+| NGD030 | `scheduled_automations`  | warning      | Never ran (#2090)                         |
+| NGD031 | `scheduled_automations`  | warning      | Status unverifiable (#2090)               |
+| NGD032 | `orphaned_processes`     | housekeeping | Non-nightgauge cwd in a worktree (#2089)  |
+| NGD033 | `complexity_model`       | info         | Model not yet created (#2090)             |
 
 Totals: 29 checks (the epic's "28" predates `ci_machine_credentials`): 11 blocker, 11 warning,
 6 housekeeping, 3 info. The migration sub-issues (#2089–#2092) may split a check into further

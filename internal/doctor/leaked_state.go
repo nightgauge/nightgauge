@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,9 +24,8 @@ import (
 // tooling that cannot see a leak is indistinguishable from a workspace that has
 // none, and the operator has no way to tell which they are looking at.
 //
-// Everything here is warning-only. A leaked worktree is untidy, not broken, and
-// a required failure would make `doctor` exit 2 on a workspace that runs
-// perfectly well — which teaches operators to stop reading its output.
+// Everything here is housekeeping (ADR-025): a leaked worktree is untidy, not
+// broken, and never changes doctor's exit code.
 
 // mergedPRDoorFactory hands a repo root's merged-PR second door to the scans
 // below (#916). Returning nil is the closed door — an unauthenticated or
@@ -48,9 +48,11 @@ const staleWorktreeAge = 24 * time.Hour
 
 // leakedWorktree is one registered worktree that the sweep cannot reclaim.
 type leakedWorktree struct {
-	Path   string
-	Repo   string
-	Reason execution.SkipReason
+	Path     string
+	Repo     string
+	RepoRoot string
+	Branch   string
+	Reason   execution.SkipReason
 	// Blocking names what stood in the way of a SkipDirty verdict, so an
 	// operator can tell "my work is in there" from "the pipeline scaffolded a
 	// README into it" without opening the directory.
@@ -58,9 +60,16 @@ type leakedWorktree struct {
 	Age      time.Duration
 }
 
+// reclaimableWorktree is one worktree the sweep would remove right now.
+type reclaimableWorktree struct {
+	RepoRoot string
+	execution.ReclaimedWorktree
+}
+
 // scanLeakedWorktrees classifies every pipeline worktree across the workspace's
 // repo roots, returning the ones that are registered, stale, and not
-// reclaimable — plus whether the scan was DETERMINED.
+// reclaimable, the ones the sweep would reclaim now, and whether the scan was
+// DETERMINED.
 //
 // determined=false is not "there are no leaks" (#296, #323). With no readable
 // root set the answer is meaningless, and reporting a clean bill of health from
@@ -75,10 +84,10 @@ type leakedWorktree struct {
 // honest substitute is staleWorktreeAge: a run's own worktree is minutes old,
 // and the leaks that mattered were weeks to months old. A run still going after
 // a day is surfaced, which is itself worth an operator's attention.
-func scanLeakedWorktrees(startDir string, now time.Time, door mergedPRDoorFactory) (leaks []leakedWorktree, reclaimable int, determined bool) {
+func scanLeakedWorktrees(startDir string, now time.Time, door mergedPRDoorFactory) (leaks []leakedWorktree, reclaimable []reclaimableWorktree, determined bool) {
 	roots := config.WorkspaceRepoRoots(startDir)
 	if len(roots) == 0 {
-		return nil, 0, false
+		return nil, nil, false
 	}
 
 	for _, root := range roots {
@@ -93,9 +102,11 @@ func scanLeakedWorktrees(startDir string, now time.Time, door mergedPRDoorFactor
 		if err != nil {
 			// One unreadable root undetermines the whole answer: a partial
 			// scan is indistinguishable from a complete one at the call site.
-			return nil, 0, false
+			return nil, nil, false
 		}
-		reclaimable += len(res.Reclaimed)
+		for _, r := range res.Reclaimed {
+			reclaimable = append(reclaimable, reclaimableWorktree{RepoRoot: root, ReclaimedWorktree: r})
+		}
 		for _, s := range res.Skipped {
 			if !isLeakReason(s.Reason) {
 				continue
@@ -105,12 +116,13 @@ func scanLeakedWorktrees(startDir string, now time.Time, door mergedPRDoorFactor
 				continue
 			}
 			leaks = append(leaks, leakedWorktree{
-				Path: s.Path, Repo: filepath.Base(root),
+				Path: s.Path, Repo: filepath.Base(root), RepoRoot: root, Branch: s.Branch,
 				Reason: s.Reason, Blocking: s.Blocking, Age: age,
 			})
 		}
 	}
 	sort.Slice(leaks, func(i, j int) bool { return leaks[i].Age > leaks[j].Age })
+	sort.Slice(reclaimable, func(i, j int) bool { return reclaimable[i].Path < reclaimable[j].Path })
 	return leaks, reclaimable, true
 }
 
@@ -145,72 +157,121 @@ func worktreeAge(path string, now time.Time) time.Duration {
 	return 0
 }
 
-// checkLeakedWorktrees builds the doctor entry for registered-but-stale
-// pipeline worktrees (#332 AC4).
-func checkLeakedWorktrees(startDir string, now time.Time, door mergedPRDoorFactory) (CheckItem, string) {
+// Remedy verbs the hygiene checks declare. They name entries in the closed Go
+// verb registry the remedy engine owns (ADR-025 § 3); they are never shell.
+const (
+	verbWorktreeSweep     = "worktree.sweep"
+	verbStashSweep        = "stash.sweep"
+	verbBranchDelete      = "branch.delete"
+	verbWipPrune          = "wip.prune"
+	verbProcessTerminate  = "process.terminate"
+	verbServeLeaseReclaim = "serve_lease.reclaim"
+	verbComposeCleanup    = "compose.cleanup"
+)
+
+// worktreeLeakFindings reports registered-but-stale pipeline worktrees
+// (#332 AC4): one finding per worktree. A worktree the sweep would reclaim
+// now gets an auto `worktree sweep` remedy; one the sweep refuses gets a
+// manual remedy that says why it was not offered as a fix.
+func worktreeLeakFindings(startDir string, now time.Time, door mergedPRDoorFactory) ([]Finding, string) {
+	const check, code = "worktree_leaks", "NGD017"
 	leaks, reclaimable, determined := scanLeakedWorktrees(startDir, now, door)
 	if !determined {
-		msg := "leaked worktrees unverifiable: could not read the worktree set across the workspace's repo roots — not inside a git repository or workspace, or `git worktree list` failed. A clean report here would be an assertion about a scan that never ran"
-		return CheckItem{OK: false, Detail: "could not scan for leaked worktrees", Error: msg}, msg
+		return []Finding{unverifiableFinding(check, code, SeverityHousekeeping, "leaked worktrees",
+				"could not read the worktree set across the workspace's repo roots — not inside a git repository or workspace, or `git worktree list` failed")},
+			"could not scan for leaked worktrees"
 	}
-	if len(leaks) == 0 && reclaimable == 0 {
-		return CheckItem{OK: true, Detail: "no stale pipeline worktrees"}, ""
+	if len(leaks) == 0 && len(reclaimable) == 0 {
+		return nil, "no stale pipeline worktrees"
 	}
 
-	var parts []string
-	for i, l := range leaks {
-		if i == maxLeaksReported {
-			parts = append(parts, fmt.Sprintf("… and %d more", len(leaks)-maxLeaksReported))
-			break
+	var out []Finding
+	for _, r := range reclaimable {
+		ev := map[string]string{"path": r.Path, "repo_root": r.RepoRoot, "branch": r.Branch, "door": string(r.Door)}
+		out = append(out, newFinding(check, code, SeverityHousekeeping,
+			fmt.Sprintf("reclaimable pipeline worktree %s", r.Path),
+			fmt.Sprintf("the worktree's branch %s carries nothing the default branch lacks (%s), so it is left-over state", r.Branch, r.Door),
+			ev, []string{r.Path},
+			Remedy{ID: "sweep", Kind: RemedyAuto, Verb: verbWorktreeSweep, Verify: check,
+				Summary: "Reclaim merged pipeline worktrees with `nightgauge worktree sweep`",
+				Preview: fmt.Sprintf("remove worktree %s (branch %s, authorized by %s) in %s", r.Path, r.Branch, r.Door, r.RepoRoot)}))
+	}
+	for _, l := range leaks {
+		ev := map[string]string{
+			"path": l.Path, "repo_root": l.RepoRoot, "branch": l.Branch,
+			"reason": string(l.Reason), "age": days(int(l.Age.Hours() / 24)),
 		}
-		entry := fmt.Sprintf("%s (%s, %dd, %s)", l.Path, l.Repo, int(l.Age.Hours()/24), l.Reason)
 		if len(l.Blocking) > 0 {
-			entry += " blocked by: " + strings.Join(l.Blocking, ", ")
+			ev["blocking"] = strings.Join(l.Blocking, ", ")
 		}
-		parts = append(parts, entry)
+		out = append(out, newFinding(check, code, SeverityHousekeeping,
+			fmt.Sprintf("stale pipeline worktree %s (%s, %s)", l.Path, l.Repo, l.Reason),
+			fmt.Sprintf("the sweep cannot reclaim it: %s", leakCause(l)),
+			ev, []string{l.Path},
+			manualRemedy("inspect", "Salvage or discard the worktree by hand", check,
+				fmt.Sprintf("Not offered as a fix: the worktree holds %s the sweep cannot prove is safe to remove", leakWhat(l.Reason)),
+				fmt.Sprintf("Inspect it: git -C %s status && git -C %s log --oneline origin/HEAD..HEAD", l.Path, l.Path),
+				"Land or discard the work, then run `nightgauge worktree sweep`")))
 	}
-	if reclaimable > 0 {
-		parts = append(parts, fmt.Sprintf("%d reclaimable now — run `nightgauge worktree sweep`", reclaimable))
-	}
-	msg := "stale pipeline worktrees: " + strings.Join(parts, "; ")
-	return CheckItem{
-		OK:     false,
-		Detail: fmt.Sprintf("%d stale, %d reclaimable", len(leaks), reclaimable),
-		Error:  msg,
-	}, msg
+	return out, fmt.Sprintf("%d stale, %d reclaimable", len(leaks), len(reclaimable))
 }
 
-// strandedBranch is one merged branch, in one repo, that no worktree holds.
+func leakCause(l leakedWorktree) string {
+	switch l.Reason {
+	case execution.SkipDirty:
+		c := "it has uncommitted changes"
+		if len(l.Blocking) > 0 {
+			c += " (blocked by: " + strings.Join(l.Blocking, ", ") + ")"
+		}
+		return c
+	case execution.SkipUnmergedContent:
+		return "its branch carries commits the default branch does not have and no merged PR covers them"
+	case execution.SkipNoOwnCommits:
+		return "its branch has no commits of its own, so the sweep cannot tell a finished run from one that never committed"
+	default:
+		return string(l.Reason)
+	}
+}
+
+func leakWhat(r execution.SkipReason) string {
+	switch r {
+	case execution.SkipDirty:
+		return "uncommitted changes"
+	case execution.SkipNoOwnCommits:
+		return "a branch with no commits"
+	}
+	return "unlanded work"
+}
+
+// strandedBranch is one local branch, in one repo, that no worktree holds.
 type strandedBranch struct {
-	Repo   string
-	Branch string
+	Repo     string
+	RepoRoot string
+	Branch   string
+	Tip      string
+	Merged   bool
+	BaseRef  string
 }
 
-// checkStrandedBranches builds the doctor entry for merged branches that no
-// worktree holds (#912 AC4) — the leak the worktree arm above structurally
-// cannot see, because it drives off `git worktree list` and these branches
-// have no worktree left.
+// strandedBranchFindings reports local branches no worktree holds (#912 AC4)
+// — the leak the worktree arm above structurally cannot see, because it drives
+// off `git worktree list` and these branches have no worktree left.
 //
-// Report-only, and stated as such in the message: the check names the branches
-// and the command, and deletes nothing. execution.ScanStrandedBranches explains
-// why deleting is not a follow-up but a design decision.
+// A branch merged by the same proof `scripts/branch-merged-check.sh` applies
+// (content already in the base ref, or a merged PR at its head) gets a confirm
+// `branch.delete` remedy; the verb re-derives that proof at apply time. A
+// branch with unique commits and no merged PR cannot be proven safe, so it
+// gets a manual remedy and never an auto or confirm one.
 //
-// This arm does NOT fetch, and does not need the worktree arm's fetch to be
-// correct. A stale origin/<default> makes a just-merged branch read as
-// unmerged content, so the branch is KEPT: staleness costs timeliness, never
-// safety, and the arm never over-reports because of it. (In practice the
-// worktree arm has already fetched every root by the time this runs, so the
-// base ref is current — but nothing here depends on that ordering.)
-//
-// No age threshold, unlike the worktree arms. A branch whose content is
-// already in the default branch cannot become un-merged by waiting, and a
-// merged branch is stranded from the moment its PR lands — there is no
-// "probably from the run that just finished" reading to guard against.
-func checkStrandedBranches(startDir string, door mergedPRDoorFactory) (CheckItem, string) {
+// This arm does NOT fetch. A stale origin/<default> makes a just-merged branch
+// read as unmerged content, so the branch is KEPT behind a manual remedy:
+// staleness costs timeliness, never safety.
+func strandedBranchFindings(startDir string, door mergedPRDoorFactory) ([]Finding, string) {
+	const check, code = "stranded_branches", "NGD018"
 	roots := config.WorkspaceRepoRoots(startDir)
 	if len(roots) == 0 {
-		msg := "stranded branches unverifiable: no repo roots resolved — not inside a git repository or workspace"
-		return CheckItem{OK: false, Detail: "could not scan for stranded branches", Error: msg}, msg
+		return []Finding{unverifiableFinding(check, code, SeverityHousekeeping, "stranded branches",
+			"no repo roots resolved — not inside a git repository or workspace")}, "could not scan for stranded branches"
 	}
 
 	var found []strandedBranch
@@ -218,93 +279,155 @@ func checkStrandedBranches(startDir string, door mergedPRDoorFactory) (CheckItem
 		scan, err := execution.ScanStrandedBranches(execution.StrandedBranchOptions{
 			RepoRoot: root,
 			// #916: without this the report goes quiet on any branch whose
-			// files the default branch has since touched — observed within an
-			// hour of the scan shipping.
+			// files the default branch has since touched.
 			MergedPRLookup: doorFor(door, root),
 		})
 		if err != nil {
-			// One unreadable root undetermines the answer, exactly as in
-			// scanLeakedWorktrees: a partial scan and a complete one print
-			// identically at the call site (#296, #323).
-			msg := fmt.Sprintf("stranded branches unverifiable in %s: %v", root, err)
-			return CheckItem{OK: false, Detail: "could not scan for stranded branches", Error: msg}, msg
+			// One unreadable root undetermines the answer (#296, #323).
+			return []Finding{unverifiableFinding(check, code, SeverityHousekeeping, "stranded branches",
+				fmt.Sprintf("%s: %v", root, err))}, "could not scan for stranded branches"
 		}
 		for _, b := range scan.Stranded {
-			found = append(found, strandedBranch{Repo: filepath.Base(root), Branch: b.Name})
+			found = append(found, strandedBranch{Repo: filepath.Base(root), RepoRoot: root,
+				Branch: b.Name, Tip: b.Tip, Merged: true, BaseRef: scan.BaseRef})
+		}
+		for _, k := range scan.Kept {
+			if k.Reason == execution.KeepUnmergedContent {
+				found = append(found, strandedBranch{Repo: filepath.Base(root), RepoRoot: root,
+					Branch: k.Name, BaseRef: scan.BaseRef})
+			}
 		}
 	}
 	if len(found) == 0 {
-		return CheckItem{OK: true, Detail: "no stranded merged branches"}, ""
+		return nil, "no stranded branches"
 	}
-
 	sort.Slice(found, func(i, j int) bool {
-		if found[i].Repo != found[j].Repo {
-			return found[i].Repo < found[j].Repo
+		if found[i].RepoRoot != found[j].RepoRoot {
+			return found[i].RepoRoot < found[j].RepoRoot
 		}
 		return found[i].Branch < found[j].Branch
 	})
-	names := make([]string, 0, len(found))
-	for i, b := range found {
-		if i == maxLeaksReported {
-			names = append(names, fmt.Sprintf("… and %d more", len(found)-maxLeaksReported))
-			break
+
+	var out []Finding
+	merged := 0
+	for _, b := range found {
+		ev := map[string]string{"repo_root": b.RepoRoot, "branch": b.Branch, "base_ref": b.BaseRef}
+		if b.Tip != "" {
+			ev["tip"] = b.Tip
 		}
-		names = append(names, b.Repo+" "+b.Branch)
+		if b.Merged {
+			merged++
+			out = append(out, newFinding(check, code, SeverityHousekeeping,
+				fmt.Sprintf("merged branch %s in %s is held by no worktree", b.Branch, b.Repo),
+				fmt.Sprintf("its content is already in %s (or a merged PR covers its head) and no worktree holds it, so it is left-over state", b.BaseRef),
+				ev, []string{b.RepoRoot, b.Branch},
+				Remedy{ID: "delete", Kind: RemedyConfirm, Verb: verbBranchDelete, Verify: check,
+					Summary: "Delete the merged local branch",
+					Preview: fmt.Sprintf("delete local branch %s at %s in %s; the merged proof is re-derived first, and a branch checked out in any worktree, main or master is refused", b.Branch, orUnknown(b.Tip), b.RepoRoot)}))
+			continue
+		}
+		out = append(out, newFinding(check, code, SeverityHousekeeping,
+			fmt.Sprintf("unmerged branch %s in %s is held by no worktree", b.Branch, b.Repo),
+			fmt.Sprintf("it carries commits %s does not have and no merged PR covers its head", b.BaseRef),
+			ev, []string{b.RepoRoot, b.Branch},
+			manualRemedy("review", "Land or deliberately discard the branch", check,
+				"Not offered as a fix: the branch has unique commits and no merged PR, so deleting it could lose work",
+				fmt.Sprintf("Inspect it: git -C %s log --oneline %s..%s", b.RepoRoot, b.BaseRef, b.Branch),
+				"Verify with `scripts/branch-merged-check.sh` before deleting anything by hand")))
 	}
-	msg := fmt.Sprintf("merged branches no worktree holds (report only, nothing deleted): %s — verify with `scripts/branch-merged-check.sh` and delete by hand",
-		strings.Join(names, "; "))
-	return CheckItem{
-		OK:     false,
-		Detail: fmt.Sprintf("%d stranded merged branch(es)", len(found)),
-		Error:  msg,
-	}, msg
+	return out, fmt.Sprintf("%d stranded branch(es): %d merged, %d unmerged", len(found), merged, len(found)-merged)
 }
 
-// checkPipelineStashes builds the doctor entry for stashes the pipeline created
-// and never reclaimed (#330 AC3).
+func orUnknown(s string) string {
+	if s == "" {
+		return "(unknown tip)"
+	}
+	return s
+}
+
+// pipelineStashFindings reports stashes the pipeline created and never
+// reclaimed (#330 AC3), one finding per stash, each with its age.
 //
-// Age is the point. Every one of the five stashes the audit found was months
-// old, and none of them was reported by anything — a leak with no age attached
-// reads as "probably from the run that just finished" and gets ignored.
-func checkPipelineStashes(startDir string, now time.Time) (CheckItem, string) {
+// A stash recorded on a branch whose work is already landed (the default
+// branch, or a branch merged and held by no worktree) gets an auto `stash
+// sweep` remedy: the sweep restores it only onto that branch on a clean tree
+// and skips it otherwise. Any other stash cannot be proven safe to restore and
+// gets a manual remedy.
+func pipelineStashFindings(startDir string, now time.Time) ([]Finding, string) {
+	const check, code = "pipeline_stashes", "NGD019"
 	roots := config.WorkspaceRepoRoots(startDir)
 	if len(roots) == 0 {
-		msg := "pipeline stashes unverifiable: no repo roots resolved — not inside a git repository or workspace"
-		return CheckItem{OK: false, Detail: "could not scan for pipeline stashes", Error: msg}, msg
+		return []Finding{unverifiableFinding(check, code, SeverityHousekeeping, "pipeline stashes",
+			"no repo roots resolved — not inside a git repository or workspace")}, "could not scan for pipeline stashes"
 	}
 
-	var found []string
+	var out []Finding
 	oldest := 0
 	for _, root := range roots {
 		entries, err := reclaim.ListStashes(root)
 		if err != nil {
-			// A root that is not a git repository (or a git that failed) is
-			// unreadable, not empty. Undetermine rather than under-report.
-			msg := fmt.Sprintf("pipeline stashes unverifiable in %s: %v", root, err)
-			return CheckItem{OK: false, Detail: "could not read a repo's stash list", Error: msg}, msg
+			// Unreadable is not empty. Undetermine rather than under-report.
+			return []Finding{unverifiableFinding(check, code, SeverityHousekeeping, "pipeline stashes",
+				fmt.Sprintf("%s: %v", root, err))}, "could not read a repo's stash list"
 		}
-		for _, e := range reclaim.PipelineStashes(entries, 0) {
-			days := int(e.Age(now).Hours() / 24)
-			if days > oldest {
-				oldest = days
+		owned := reclaim.PipelineStashes(entries, 0)
+		if len(owned) == 0 {
+			continue
+		}
+		landed := landedBranches(root)
+		for _, e := range owned {
+			age := int(e.Age(now).Hours() / 24)
+			if age > oldest {
+				oldest = age
 			}
-			found = append(found, fmt.Sprintf("%s %s #%d %s (%dd)",
-				filepath.Base(root), e.Ref, e.Issue, e.Stage, days))
+			ev := map[string]string{
+				"repo_root": root, "stash_ref": e.Ref, "message": e.Message,
+				"branch": e.Branch, "issue": strconv.Itoa(e.Issue), "stage": e.Stage, "age": days(age),
+			}
+			// A stash ref shifts as others are removed, so the identity is the
+			// stash's own message and creation time, not stash@{N}.
+			identity := []string{root, e.Message, e.CreatedAt.UTC().Format(time.RFC3339)}
+			title := fmt.Sprintf("pipeline stash %s in %s (issue #%d %s, %s old)", e.Ref, filepath.Base(root), e.Issue, e.Stage, days(age))
+			cause := "a stage stashed work and was killed before it restored it"
+			var rem Remedy
+			if landed[e.Branch] {
+				rem = Remedy{ID: "sweep", Kind: RemedyAuto, Verb: verbStashSweep, Verify: check,
+					Summary: "Restore pipeline stashes with `nightgauge stash sweep`",
+					Preview: fmt.Sprintf("restore %s (%q) onto %s in %s; skipped if that branch is not checked out on a clean tree", e.Ref, e.Message, e.Branch, root)}
+			} else {
+				rem = manualRemedy("review", "Restore or drop the stash by hand", check,
+					fmt.Sprintf("Not offered as a fix: branch %q is not proven merged, so restoring the stash could conflict with unlanded work", e.Branch),
+					fmt.Sprintf("Inspect it: git -C %s stash show -p %s", root, e.Ref),
+					fmt.Sprintf("Restore it on its branch with `nightgauge stash sweep --issue %d`", e.Issue))
+			}
+			out = append(out, newFinding(check, code, SeverityHousekeeping, title, cause, ev, identity, rem))
 		}
 	}
-	if len(found) == 0 {
-		return CheckItem{OK: true, Detail: "no unreclaimed pipeline stashes"}, ""
+	if len(out) == 0 {
+		return nil, "no unreclaimed pipeline stashes"
 	}
-	if len(found) > maxLeaksReported {
-		found = append(found[:maxLeaksReported], fmt.Sprintf("… and %d more", len(found)-maxLeaksReported))
+	return out, fmt.Sprintf("%d pipeline stash(es), oldest %dd", len(out), oldest)
+}
+
+// landedBranches is the set of branches in root whose work is already in the
+// default branch: the default branch itself and every stranded (merged,
+// unheld) branch. Best effort: a failed scan proves nothing, so it yields
+// only what was proven.
+func landedBranches(root string) map[string]bool {
+	landed := map[string]bool{}
+	scan, err := execution.ScanStrandedBranches(execution.StrandedBranchOptions{RepoRoot: root})
+	if err != nil {
+		return landed
 	}
-	msg := fmt.Sprintf("unreclaimed pipeline stashes (oldest %dd): %s — run `nightgauge stash sweep`",
-		oldest, strings.Join(found, "; "))
-	return CheckItem{
-		OK:     false,
-		Detail: fmt.Sprintf("%d pipeline stash(es), oldest %dd", len(found), oldest),
-		Error:  msg,
-	}, msg
+	for _, b := range scan.Stranded {
+		landed[b.Name] = true
+	}
+	for _, k := range scan.Kept {
+		if k.Reason == execution.KeepDefaultBranch || k.Reason == execution.KeepNoOwnCommits {
+			landed[k.Name] = true
+		}
+	}
+	return landed
 }
 
 // doorFor applies the factory, tolerating a nil factory so every caller does

@@ -74,7 +74,7 @@ func TestCheckPreservedWip_HealthyRepoPasses(t *testing.T) {
 func TestRunDoctor_EmitsPreservedWipArm(t *testing.T) {
 	result := RunDoctor(context.Background(), nil, nil, nil)
 
-	if _, ok := result.Checks["preserved_wip"]; !ok {
+	if !hasResult(result, "preserved_wip") {
 		t.Fatalf("preserved_wip missing from doctor's checks; got %v", checkKeys(result))
 	}
 }

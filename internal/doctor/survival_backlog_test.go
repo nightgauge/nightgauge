@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 )
 
@@ -126,5 +127,41 @@ func TestSurvivalBacklog_WindowScalesTheThreshold(t *testing.T) {
 	// 20d is inside 2x30=60 → not a finding.
 	if item, _ := checkSurvivalBacklog(root, now, 30); !item.OK {
 		t.Errorf("20d old should be inside 2x a 30d window: %s", item.Error)
+	}
+}
+
+// TestLearningFindings_Remedies: the backlog offers the auto survival sweep;
+// coverage and calibration are manual and name `nightgauge learn report`.
+func TestLearningFindings_Remedies(t *testing.T) {
+	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	seedSurvival(t, root, pendingRec("o/r", 42, now.AddDate(0, 0, -30)))
+	fs, _ := survivalBacklogFindings(root, now, 7)
+	if len(fs) != 1 || fs[0].Code != "NGD026" || fs[0].Severity != SeverityInfo {
+		t.Fatalf("backlog findings = %s", findingsText(fs))
+	}
+	if r := fs[0].Remedies[0]; r.Kind != RemedyAuto || r.Verb != verbSurvivalSweep {
+		t.Errorf("backlog remedy = %+v, want auto survival.sweep", r)
+	}
+	if fs[0].Evidence["overdue"] != "1" || fs[0].Evidence["window"] != "7d" {
+		t.Errorf("backlog evidence lacks counts or cadence: %v", fs[0].Evidence)
+	}
+
+	corpus := t.TempDir()
+	var rows []learning.Outcome
+	for i := 1; i <= 12; i++ {
+		rows = append(rows, row(i, "", ""))
+	}
+	seedCorpus(t, corpus, rows...)
+	cov, _ := survivalCoverageFindings(corpus)
+	cal, _ := corpusCalibrationFindings(corpus)
+	for name, got := range map[string][]Finding{"survival_coverage": cov, "corpus_calibration": cal} {
+		if len(got) != 1 || got[0].Severity != SeverityInfo {
+			t.Fatalf("%s findings = %s", name, findingsText(got))
+		}
+		r := got[0].Remedies[0]
+		if r.Kind != RemedyManual || !strings.Contains(strings.Join(r.Steps, " "), "nightgauge learn report") {
+			t.Errorf("%s remedy = %+v, want manual naming `nightgauge learn report`", name, r)
+		}
 	}
 }

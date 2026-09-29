@@ -348,7 +348,7 @@ func TestStaleServeClaims_NameTheWorkspaceAColdClaimBelongedTo(t *testing.T) {
 	}
 	// …and it reaches the operator, which is the only place attribution counts.
 	procs := parseRows(t, derivedRow(t, 4156, "10-00:00:00", "serve --workspace "+cold))
-	_, warning := orphanedProcessReport(procs, sidecarPIDs(r.dir, scanClock), stale, nil)
+	_, warning := asItem(orphanedProcessReport(procs, sidecarPIDs(r.dir, scanClock), stale, nil))
 	if !strings.Contains(warning, cold) {
 		t.Errorf("the orphan report does not name the workspace whose claim went cold: %q", warning)
 	}
@@ -609,37 +609,40 @@ func TestClassifyProcesses_AgeFloorBoundary(t *testing.T) {
 	}
 }
 
-func TestOrphanedProcessReport_CapsTheEnumeratedList(t *testing.T) {
+// One finding per orphaned process (ADR-025): each pid is its own object with
+// its own fingerprint, so a card or --fix acts on exactly one process.
+func TestOrphanedProcessReport_OneFindingPerProcess(t *testing.T) {
 	var rows []string
-	for i := 0; i < maxLeaksReported+4; i++ {
+	for i := 0; i < 12; i++ {
 		rows = append(rows, derivedRow(t, 9000+i, "05-00:00:00", "pipeline run --issue 341"))
 	}
 
-	item, warning := orphanedProcessReport(parseRows(t, rows...), map[int]bool{}, nil, nil)
+	fs, detail := orphanedProcessReport(parseRows(t, rows...), map[int]bool{}, nil, nil)
 
-	if item.OK {
-		t.Fatalf("orphans reported as healthy: %+v", item)
+	if len(fs) != 12 {
+		t.Fatalf("got %d findings, want one per orphaned process (12)", len(fs))
 	}
-	if !strings.Contains(item.Error, "… and 4 more") {
-		t.Errorf("the list is not capped: %q", item.Error)
+	seen := map[string]bool{}
+	for _, f := range fs {
+		if f.Code != "NGD021" || f.Severity != SeverityHousekeeping {
+			t.Errorf("finding %s/%s, want NGD021 housekeeping", f.Code, f.Severity)
+		}
+		if seen[f.Fingerprint] {
+			t.Errorf("duplicate fingerprint %s", f.Fingerprint)
+		}
+		seen[f.Fingerprint] = true
 	}
-	if strings.Contains(item.Error, "9008") {
-		t.Errorf("more than %d entries were named: %q", maxLeaksReported, item.Error)
-	}
-	if !strings.Contains(item.Detail, "12 orphaned") {
-		t.Errorf("the counts do not carry the magnitude: %q", item.Detail)
-	}
-	if warning == "" {
-		t.Error("an orphan must produce a warning, not just a check entry")
+	if !strings.Contains(detail, "12 orphaned") {
+		t.Errorf("the counts do not carry the magnitude: %q", detail)
 	}
 }
 
 func TestOrphanedProcessReport_NamesEvidenceAndRefusesToAct(t *testing.T) {
-	item, _ := orphanedProcessReport(
+	item, _ := asItem(orphanedProcessReport(
 		parseRows(t, derivedRow(t, 7788, "01-07:12:03", "autonomous run --dry-run")),
-		map[int]bool{}, nil, nil)
+		map[int]bool{}, nil, nil))
 
-	for _, want := range []string{"7788", "31h", "autonomous run --dry-run", "verify and terminate manually"} {
+	for _, want := range []string{"7788", "31h", "autonomous run --dry-run", "refused unless it is still a nightgauge binary owned by you"} {
 		if !strings.Contains(item.Error, want) {
 			t.Errorf("the report does not carry %q: %q", want, item.Error)
 		}
@@ -658,7 +661,7 @@ func TestOrphanedProcessReport_HealthyPathWritesAnOKEntry(t *testing.T) {
 		t.Fatal("the captured table did not parse")
 	}
 
-	item, warning := orphanedProcessReport(procs, map[int]bool{capturedServeRow(t).PID: true}, nil, nil)
+	item, warning := asItem(orphanedProcessReport(procs, map[int]bool{capturedServeRow(t).PID: true}, nil, nil))
 
 	if !item.OK {
 		t.Fatalf("the captured (clean) machine must pass: %+v", item)
@@ -676,7 +679,7 @@ func TestOrphanedProcessReport_HealthyPathWritesAnOKEntry(t *testing.T) {
 
 func TestUnverifiableProcessScan_IsNeverHealthy(t *testing.T) {
 	// #296's lesson: "I could not look" must never render as "nothing is wrong".
-	item, warning := unverifiableProcessScan(fmt.Errorf("exec: \"ps\": executable file not found"))
+	item, warning := asItem(unverifiableProcessScan(fmt.Errorf("exec: \"ps\": executable file not found")))
 
 	if item.OK {
 		t.Fatalf("an unverifiable scan reported healthy: %+v", item)
@@ -781,7 +784,7 @@ func TestProcessTableReport_ATableWithoutThisProcessIsUnverifiable(t *testing.T)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			item, warning := processTableReport(t.TempDir(), tt.raw, map[int]bool{}, nil)
+			item, warning := asItem(processTableReport(t.TempDir(), tt.raw, map[int]bool{}, nil))
 
 			if item.OK {
 				t.Fatalf("a table that never listed this process reported healthy: %+v", item)
@@ -806,7 +809,7 @@ func TestProcessTableReport_ATableContainingThisProcessIsRead(t *testing.T) {
 	raw := derivedRow(t, os.Getpid(), "10:00", "doctor --json") + "\n" +
 		derivedRow(t, unusedPID(t), "05-00:00:00", "autonomous run --dry-run --workdir "+ws) + "\n"
 
-	item, _ := processTableReport(ws, raw, map[int]bool{}, nil)
+	item, _ := asItem(processTableReport(ws, raw, map[int]bool{}, nil))
 
 	if strings.Contains(item.Error, "unverifiable") {
 		t.Fatalf("a table containing this process was rejected: %q", item.Error)
@@ -941,7 +944,7 @@ func TestForeignCwdHolder_Flagged(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	item, warning := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	item, warning := asItem(orphanedProcessReport(procs, map[int]bool{}, nil, fc))
 
 	if item.OK {
 		t.Fatalf("a foreign process with cwd inside a live worktree reported healthy: %+v", item)
@@ -989,7 +992,7 @@ func TestForeignCwdHolder_StaleWorktree(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	item, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	item, _ := asItem(orphanedProcessReport(procs, map[int]bool{}, nil, fc))
 
 	liveTag := "[cwd inside worktree issue-488]"
 	staleTag := "[cwd inside REMOVED worktree issue-489]"
@@ -1021,7 +1024,7 @@ func TestForeignCwdHolder_YoungLiveHolderNotFlagged(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	item, warning := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	item, warning := asItem(orphanedProcessReport(procs, map[int]bool{}, nil, fc))
 
 	if !item.OK || warning != "" {
 		t.Fatalf("a 3-second-old process in a LIVE worktree was flagged: OK=%v warning=%q", item.OK, warning)
@@ -1053,7 +1056,7 @@ func TestForeignCwdHolder_CrossRepoIssueNumberIsNotConflated(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	item, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	item, _ := asItem(orphanedProcessReport(procs, map[int]bool{}, nil, fc))
 
 	if !strings.Contains(item.Error, "[cwd inside REMOVED worktree issue-488]") {
 		t.Fatalf("repo A's removed issue-488 was reported live because repo B's issue-488 is live: %q", item.Error)
@@ -1079,7 +1082,7 @@ func TestForeignCwdHolder_ExtensionWorktreeBaseIsScanned(t *testing.T) {
 		ActiveByRepo: activeByRepoFixture(t, repoRoots),
 	}
 
-	item, _ := orphanedProcessReport(procs, map[int]bool{}, nil, fc)
+	item, _ := asItem(orphanedProcessReport(procs, map[int]bool{}, nil, fc))
 
 	if !strings.Contains(item.Error, "[cwd inside worktree issue-490]") {
 		t.Fatalf("a holder in the VSCode extension's default worktree base was not found: %q", item.Error)
@@ -1129,7 +1132,7 @@ func TestBuildForeignCwdScan_UnreadableRepoRootIsUndetermined(t *testing.T) {
 	// is satisfied) but whose cwd half could not run must be unverifiable, not
 	// OK=true.
 	raw := fmt.Sprintf("%d 00:01 nightgauge-doctor-test\n", os.Getpid())
-	item, warning := processTableReport(r.dir, raw, map[int]bool{}, nil)
+	item, warning := asItem(processTableReport(r.dir, raw, map[int]bool{}, nil))
 	if item.OK {
 		t.Fatalf("a scan whose cwd half could not run reported healthy: %+v", item)
 	}
@@ -1218,7 +1221,7 @@ func TestOrphanedProcesses_OtherWorkspaceIsNotEvaluated(t *testing.T) {
 		derivedRow(t, 4242, "03:00:00", "run --issue 2087 --adapter opencode"),
 	)
 	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/other/ws"}, nil)
-	item, warning := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)
+	item, warning := asItem(orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope))
 	if !item.OK || warning != "" {
 		t.Fatalf("process in another workspace was reported: item=%+v warning=%q", item, warning)
 	}
@@ -1228,7 +1231,7 @@ func TestOrphanedProcesses_OtherWorkspaceIsNotEvaluated(t *testing.T) {
 
 	// The same process, in THIS workspace, is still an orphan.
 	scope = classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/this/ws/sub"}, nil)
-	if item, _ := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope); item.OK {
+	if item, _ := asItem(orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)); item.OK {
 		t.Error("an idle, unclaimed three-hour run in this workspace must still be reported")
 	}
 }
@@ -1258,7 +1261,7 @@ func TestOrphanedProcesses_NohupLiveRunIsNotAnOrphan(t *testing.T) {
 	)
 	parents := map[int]int{4242: 1, 5000: 4242}
 	scope := classifyProcessScope(procs, []string{"/this/ws"}, map[int]string{4242: "/this/ws"}, parents)
-	item, warning := orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope)
+	item, warning := asItem(orphanedProcessReportScoped(procs, map[int]bool{}, nil, nil, scope))
 	if !item.OK || warning != "" {
 		t.Fatalf("a live nohup'd run with a child process was reported as orphaned: %+v %q", item, warning)
 	}
@@ -1290,4 +1293,36 @@ func unusedPID(t *testing.T) int {
 	}
 	t.Skip("no unused PID found")
 	return 0
+}
+
+// TestOrphanedProcessRemedySafety: terminate re-reads the pid immediately
+// before signalling and refuses one whose command line no longer names a
+// nightgauge binary (the pid may have been reused), or that another user owns,
+// even though the finding named it.
+func TestOrphanedProcessRemedySafety(t *testing.T) {
+	const pid = 987654
+	lookup := func(cmd string, uid int) processLookup {
+		return func(int) (processIdentity, error) { return processIdentity{Command: cmd, UID: uid}, nil }
+	}
+	me := os.Getuid()
+	if me < 0 {
+		t.Skip("no uid on this platform")
+	}
+	if err := terminatePrecondition(pid, lookup("/bin/zsh -l", me)); err == nil {
+		t.Error("a pid whose command is not nightgauge was allowed")
+	}
+	if err := terminatePrecondition(pid, lookup("/usr/local/bin/nightgauge serve", me+1)); err == nil {
+		t.Error("a pid owned by another user was allowed")
+	}
+	if err := terminatePrecondition(pid, func(int) (processIdentity, error) {
+		return processIdentity{}, fmt.Errorf("gone")
+	}); err == nil {
+		t.Error("a pid that could not be re-read was allowed")
+	}
+	if err := terminatePrecondition(os.Getpid(), lookup("/usr/local/bin/nightgauge doctor", me)); err == nil {
+		t.Error("doctor's own pid was allowed")
+	}
+	if err := terminatePrecondition(pid, lookup("/usr/local/bin/nightgauge serve", me)); err != nil {
+		t.Errorf("a matching nightgauge pid owned by this user was refused: %v", err)
+	}
 }

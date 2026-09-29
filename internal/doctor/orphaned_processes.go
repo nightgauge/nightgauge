@@ -29,9 +29,12 @@ import (
 // 31 hours holding a scheduler slot, and every doctor check passed the whole
 // time — none of them enumerated processes, so the leak had no reporter at all.
 //
-// This carrier is REPORT-ONLY. It never signals anything: the operator decides
-// what to terminate, and a health check that kills processes on the strength of
-// an argv string is a far worse failure than the one it is fixing.
+// This carrier is REPORT-ONLY. It never signals anything: each orphan's
+// terminate remedy is declared data that needs the operator's confirmation, and
+// terminatePrecondition (remedy_preconditions.go) re-reads the pid's command
+// and owner immediately before any signal. A health check that kills processes
+// on the strength of an argv string is a far worse failure than the one it is
+// fixing.
 
 // staleProcessAge is how long a nightgauge process may run unclaimed before
 // `doctor` mentions it. Every verb except `serve` and `autonomous run`
@@ -494,14 +497,14 @@ func classifyProcessesScoped(procs []runningProcess, claimed map[int]bool, self 
 	return scan
 }
 
-// checkOrphanedProcesses builds the doctor entry for running nightgauge
-// processes no live sidecar claims (#341).
+// orphanedProcessFindings reports running nightgauge processes no live
+// sidecar claims (#341), one finding per process.
 //
 // now dates the sidecar CLAIMS, not the processes: a process's age comes from
 // `ps`'s own etime column, the only clock that can date a process this scan did
 // not start, but whether a sidecar's claim still counts is a question about
 // wall-clock progress (see staleSidecarClaim).
-func checkOrphanedProcesses(startDir string, now time.Time) (CheckItem, string) {
+func orphanedProcessFindings(startDir string, now time.Time) ([]Finding, string) {
 	raw, err := enumerateProcesses()
 	if err != nil {
 		return unverifiableProcessScan(err)
@@ -510,10 +513,10 @@ func checkOrphanedProcesses(startDir string, now time.Time) (CheckItem, string) 
 }
 
 // processTableReport parses a raw `ps` table and reports on it, or explains why
-// it could not. Split from checkOrphanedProcesses so every route out of a real
+// it could not. Split from orphanedProcessFindings so every route out of a real
 // table — parsed, unparsable, implausible — is reachable from a test without
 // spawning a process.
-func processTableReport(startDir, raw string, claimed map[int]bool, staleServe map[int]string) (CheckItem, string) {
+func processTableReport(startDir, raw string, claimed map[int]bool, staleServe map[int]string) ([]Finding, string) {
 	procs, determined := parseProcessTable(raw)
 	if !determined {
 		return unverifiableProcessScan(fmt.Errorf("`ps` output could not be parsed"))
@@ -532,10 +535,7 @@ func processTableReport(startDir, raw string, claimed map[int]bool, staleServe m
 	if !cwdScanOK {
 		// The mechanism itself did not work — `git worktree list` failed, or
 		// the cwd source (lsof/proc) could not be read. That is a scan that
-		// never ran, not a scan that found nothing, and the two must not
-		// collapse into the same "OK" the process-table half already guards
-		// against above (#296). Distinct from the len(repoRoots)==0 case
-		// inside buildForeignCwdScan, which legitimately has nothing to say.
+		// never ran, not a scan that found nothing (#296).
 		return unverifiableProcessScan(fmt.Errorf(
 			"the process table parsed, but the cwd-inside-worktree half could not run: `git worktree list` failed, or the process cwd source (lsof/proc) was unavailable"))
 	}
@@ -552,33 +552,37 @@ func listsPID(procs []runningProcess, pid int) bool {
 	return false
 }
 
-// unverifiableProcessScan renders the house unverifiable outcome: never OK,
-// never silent, and explicit that a clean report would be a claim about a scan
-// that did not happen (#296, #323).
-func unverifiableProcessScan(cause error) (CheckItem, string) {
-	msg := fmt.Sprintf("orphaned processes unverifiable: could not enumerate running processes (%v) — no `ps` on this platform, or it failed, or its output was not the expected `pid etime command` shape. A clean report here would be an assertion about a scan that never ran", cause)
-	return CheckItem{OK: false, Detail: "could not scan for orphaned nightgauge processes", Error: msg}, msg
+// unverifiableProcessScan renders the house unverifiable outcome: never a
+// pass, never silent, and explicit that a clean report would be a claim about
+// a scan that did not happen (#296, #323).
+func unverifiableProcessScan(cause error) ([]Finding, string) {
+	return []Finding{unverifiableFinding("orphaned_processes", "NGD021", SeverityHousekeeping, "orphaned processes",
+			fmt.Sprintf("could not enumerate running processes (%v) — no `ps` on this platform, or it failed, or its output was not the expected `pid etime command` shape. A clean report here would be an assertion about a scan that never ran", cause))},
+		"could not scan for orphaned nightgauge processes"
 }
 
 // orphanedProcessReport turns a parsed table and the sidecar-claimed PID set
-// into the check entry. Split from checkOrphanedProcesses so the reporting
-// rules are testable against the captured process table.
+// into findings. Split out so the reporting rules are testable against the
+// captured process table.
 //
 // staleServe attributes a reported PID to the workspace whose serve claim went
-// cold on it (see staleServeClaims). It only ever adds a clause to a line that
-// was already going to be printed — an orphan is an orphan whether or not this
-// map knows anything about it.
+// cold on it (see staleServeClaims). It only ever adds evidence to a finding
+// that was already going to be emitted.
 //
 // fc is the second, unrelated half added by #519: foreign (non-nightgauge)
 // processes whose cwd sits inside a pipeline worktree. nil means that half did
-// not run (no worktrees root, or the cwd source was unavailable) and the
-// report says nothing about it — the same "this half answers nothing" shape
-// classifyProcesses already has for an empty claimed map.
-func orphanedProcessReport(procs []runningProcess, claimed map[int]bool, staleServe map[int]string, fc *foreignCwdScan) (CheckItem, string) {
+// not run (no worktrees root, or the cwd source was unavailable).
+func orphanedProcessReport(procs []runningProcess, claimed map[int]bool, staleServe map[int]string, fc *foreignCwdScan) ([]Finding, string) {
 	return orphanedProcessReportScoped(procs, claimed, staleServe, fc, processScope{})
 }
 
-func orphanedProcessReportScoped(procs []runningProcess, claimed map[int]bool, staleServe map[int]string, fc *foreignCwdScan, scope processScope) (CheckItem, string) {
+// codeForeignCwdHolder is a non-nightgauge process whose cwd sits inside a
+// pipeline worktree (#519). Distinct from NGD021: it is not a nightgauge
+// binary, so it is never offered a terminate remedy.
+const codeForeignCwdHolder = "NGD032"
+
+func orphanedProcessReportScoped(procs []runningProcess, claimed map[int]bool, staleServe map[int]string, fc *foreignCwdScan, scope processScope) ([]Finding, string) {
+	const check = "orphaned_processes"
 	scan := classifyProcessesScoped(procs, claimed, os.Getpid(), scope)
 	var holders []foreignCwdHolder
 	if fc != nil {
@@ -595,49 +599,44 @@ func orphanedProcessReportScoped(procs []runningProcess, claimed map[int]bool, s
 	if len(holders) > 0 {
 		detail += fmt.Sprintf(", %d with cwd inside a worktree", len(holders))
 	}
-	if len(scan.Orphans) == 0 && len(holders) == 0 {
-		return CheckItem{OK: true, Detail: detail}, ""
-	}
 
-	var msg string
-	if len(scan.Orphans) > 0 {
-		parts := make([]string, 0, maxLeaksReported+1)
-		for i, p := range scan.Orphans {
-			if i == maxLeaksReported {
-				parts = append(parts, fmt.Sprintf("… and %d more", len(scan.Orphans)-maxLeaksReported))
-				break
-			}
-			part := fmt.Sprintf("%d (%dh): %s", p.PID, int(p.Age.Hours()), p.Command)
-			if ws := staleServe[p.PID]; ws != "" {
-				part += fmt.Sprintf(" [its serve claim for %s stopped making progress]", ws)
-			}
-			parts = append(parts, part)
+	var out []Finding
+	for _, p := range scan.Orphans {
+		hours := int(p.Age.Hours())
+		ev := map[string]string{"pid": strconv.Itoa(p.PID), "command": p.Command, "age": fmt.Sprintf("%dh", hours)}
+		cause := "no live sidecar claims this pid, it has run past the " + staleProcessAge.String() + " floor, and it has no live child process"
+		if ws := staleServe[p.PID]; ws != "" {
+			ev["serve_claim_workspace"] = ws
+			cause += fmt.Sprintf("; its serve claim for %s stopped making progress", ws)
 		}
-		msg = "orphaned nightgauge processes: " + strings.Join(parts, "; ") +
-			" — no live sidecar claims these PIDs; verify and terminate manually"
+		out = append(out, newFinding(check, "NGD021", SeverityHousekeeping,
+			fmt.Sprintf("orphaned nightgauge process %d (%dh): %s", p.PID, hours, p.Command),
+			cause, ev,
+			// The command is part of the identity: a recycled pid running
+			// something else is a different object.
+			[]string{strconv.Itoa(p.PID), p.Command},
+			Remedy{ID: "terminate", Kind: RemedyConfirm, Verb: verbProcessTerminate, Verify: check,
+				Summary: fmt.Sprintf("Terminate orphaned pid %d", p.PID),
+				Preview: fmt.Sprintf("send SIGTERM to pid %d (%s), running %dh; refused unless it is still a nightgauge binary owned by you", p.PID, p.Command, hours)}))
 	}
-	if len(holders) > 0 {
-		parts := make([]string, 0, maxLeaksReported+1)
-		for i, h := range holders {
-			if i == maxLeaksReported {
-				parts = append(parts, fmt.Sprintf("… and %d more", len(holders)-maxLeaksReported))
-				break
-			}
-			tag := fmt.Sprintf("cwd inside worktree issue-%d", h.IssueNumber)
-			if h.Stale {
-				tag = fmt.Sprintf("cwd inside REMOVED worktree issue-%d", h.IssueNumber)
-			}
-			parts = append(parts, fmt.Sprintf("%d (%dh): %s (cwd %s) [%s]", h.PID, int(h.Age.Hours()), h.Command, h.Cwd, tag))
+	for _, h := range holders {
+		tag := fmt.Sprintf("cwd inside worktree issue-%d", h.IssueNumber)
+		if h.Stale {
+			tag = fmt.Sprintf("cwd inside REMOVED worktree issue-%d", h.IssueNumber)
 		}
-		fcMsg := "processes with cwd inside a pipeline worktree: " + strings.Join(parts, "; ") +
-			" — verify and terminate manually"
-		if msg != "" {
-			msg += "; " + fcMsg
-		} else {
-			msg = fcMsg
-		}
+		hours := int(h.Age.Hours())
+		out = append(out, newFinding(check, codeForeignCwdHolder, SeverityHousekeeping,
+			fmt.Sprintf("process %d (%dh): %s (cwd %s) [%s]", h.PID, hours, h.Command, h.Cwd, tag),
+			"a process that is not a nightgauge binary holds its working directory inside a pipeline worktree, which can block the worktree's removal",
+			map[string]string{"pid": strconv.Itoa(h.PID), "command": h.Command, "cwd": h.Cwd,
+				"issue": strconv.Itoa(h.IssueNumber), "worktree_removed": strconv.FormatBool(h.Stale), "age": fmt.Sprintf("%dh", hours)},
+			[]string{strconv.Itoa(h.PID), h.Command, h.Cwd},
+			manualRemedy("verify", "Verify and close the process by hand", check,
+				"Not offered as a fix: doctor only terminates nightgauge binaries, and this process is not one",
+				fmt.Sprintf("Check what it is: ps -o pid,user,etime,command -p %d", h.PID),
+				"Close the shell or editor session that owns it")))
 	}
-	return CheckItem{OK: false, Detail: detail, Error: msg}, msg
+	return out, detail
 }
 
 // --- Foreign cwd holders (#519) ---

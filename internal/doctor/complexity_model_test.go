@@ -11,18 +11,19 @@ import (
 
 // TestCheckComplexityModel_MissingIsBootstrappedNotAWarning is #2202: the
 // model is gitignored learned state, so a fresh clone never has it; the
-// deterministic baseline is installed on first use, so absence is healthy.
+// deterministic baseline is installed on first use. Absence is info only —
+// never a warning — and offers `outcome init`.
 func TestCheckComplexityModel_MissingIsBootstrappedNotAWarning(t *testing.T) {
 	root := t.TempDir()
-	check, warning := checkComplexityModel(root)
-	if !check.OK || warning != "" {
-		t.Fatalf("missing complexity model on a fresh clone must pass, got %+v / %q", check, warning)
+	fs, _ := complexityModelFindings(root)
+	if len(fs) != 1 || fs[0].Severity != SeverityInfo || fs[0].Code != codeComplexityModelMissing {
+		t.Fatalf("missing model must be one info finding, got %s", findingsText(fs))
 	}
-	if !strings.Contains(check.Detail, "bootstrapped automatically") || !strings.Contains(check.Detail, "nightgauge outcome init") {
-		t.Fatalf("detail must explain the bootstrap, got %q", check.Detail)
+	if !strings.Contains(fs[0].Cause, "bootstrapped automatically") {
+		t.Fatalf("cause must explain the bootstrap, got %q", fs[0].Cause)
 	}
-	if strings.Contains(check.Detail, "size calibrate") {
-		t.Fatalf("detail references nonexistent command: %q", check.Detail)
+	if r := fs[0].Remedies; len(r) != 1 || r[0].Verb != verbOutcomeInit || r[0].Kind != RemedyConfirm {
+		t.Fatalf("remedy = %+v, want confirm outcome.init", r)
 	}
 }
 
@@ -96,5 +97,23 @@ func TestCheckComplexityModel_RejectsSymlinkedDirectory(t *testing.T) {
 	check, warning := checkComplexityModel(root)
 	if check.OK || !strings.Contains(warning, "directory is a symlink") {
 		t.Fatalf("symlinked directory check = %+v, warning = %q", check, warning)
+	}
+}
+
+// TestComplexityModelRemedyPreview: the outcome-init remedy's preview names
+// the file it would write, and producing it writes nothing.
+func TestComplexityModelRemedyPreview(t *testing.T) {
+	root := t.TempDir()
+	modelPath := filepath.Join(root, ".nightgauge", "complexity-model.yaml")
+	fs, _ := complexityModelFindings(root)
+	if len(fs) != 1 || len(fs[0].Remedies) == 0 {
+		t.Fatalf("want one finding with a remedy, got %s", findingsText(fs))
+	}
+	rem := fs[0].Remedies[0]
+	if rem.Kind != RemedyConfirm || rem.Verb != verbOutcomeInit || !strings.Contains(rem.Preview, modelPath) {
+		t.Errorf("remedy = %+v, want confirm outcome.init previewing %s", rem, modelPath)
+	}
+	if _, err := os.Stat(modelPath); !os.IsNotExist(err) {
+		t.Errorf("the check wrote %s (stat err %v)", modelPath, err)
 	}
 }
