@@ -34,6 +34,22 @@ changelog, and the release workflow refuses a tag that does not.
   attempted remedy is appended to `<state dir>/doctor/fix-log.jsonl` (0600,
   redacted, no evidence values), and `nightgauge doctor --history` prints it.
 
+- **Doctor findings are standing Action Center cards** (#2097). The attention
+  sweep runs the doctor registry and raises one card per `blocker` or
+  `warning` finding, keyed by its fingerprint; housekeeping and info raise
+  none. A card resolves when a later sweep no longer reports the finding, and
+  a doctor scan that fails, or a check that times out or is skipped, leaves
+  its cards in place. `auto` and `confirm` remedies are card options on the
+  new `doctor.applyRemedy` verb, which takes only the fingerprint and remedy
+  ID, re-runs the check first (a vanished finding is `stale`) and resolves the
+  card only when the finding is verified gone. `manual` remedies are the
+  card's steps, and only allowlisted links become the card's link. Every card
+  offers `doctor.recheck`. Both verbs run from the CLI without a daemon. The
+  `api-budget` producer and the board-reachability card of
+  `stranded-ready-items` are removed: the doctor's `github_api_budget`,
+  `board_population` and `project_mapping` checks report those conditions
+  with one threshold each.
+
 - **One command opens a demo session, and CI fails when the demo drifts from
   the extension** (#2105, #2106, #2108, #2109, #2110). `npm run demo` in the
   extension package opens a VS Code window with a profile of its own, the demo

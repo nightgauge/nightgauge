@@ -425,6 +425,18 @@ func (e cliVerbExecutor) ExecuteVerb(ctx context.Context, req *attention.Decisio
 			return &attention.VerbExecutionError{Verb: opt.Verb, Retryable: false, Err: err}
 		}
 		return nil
+	case attention.VerbDoctorApplyRemedy:
+		// A remedy that did not verify leaves the finding in place; the
+		// operator can retry once whatever blocked it clears.
+		if err := attention.ExecuteDoctorApplyRemedy(ctx, sweep.DoctorRemedies{WorkspaceRoot: e.workspaceRoot}, req, opt); err != nil {
+			return &attention.VerbExecutionError{Verb: opt.Verb, Retryable: true, Err: err}
+		}
+		return nil
+	case attention.VerbDoctorRecheck:
+		if err := attention.ExecuteDoctorRecheck(ctx, sweep.DoctorRemedies{WorkspaceRoot: e.workspaceRoot}, req, opt); err != nil {
+			return &attention.VerbExecutionError{Verb: opt.Verb, Retryable: true, Err: err}
+		}
+		return nil
 	default:
 		// Reached only after attentionResolveCmd's daemon dial already
 		// failed (#263) — a genuinely different, retryable condition (e.g.

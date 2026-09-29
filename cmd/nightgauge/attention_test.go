@@ -432,6 +432,32 @@ func TestCliVerbExecutor_ExpiredContextRejectsWrite(t *testing.T) {
 	}
 }
 
+// The doctor card verbs run in a plain CLI process (ADR-025 § 7): they reach
+// their own executor, which refuses a card the doctor producer did not raise,
+// rather than the "requires the daemon" fallback.
+func TestCliVerbExecutor_DoctorVerbsRunWithoutADaemon(t *testing.T) {
+	exec := cliVerbExecutor{workspaceRoot: t.TempDir()}
+	req := &attention.DecisionRequest{
+		ID:             "dr_doc",
+		Producer:       "human-gate",
+		IdempotencyKey: attention.DoctorCardKey("serve_lease", "0123456789abcdef"),
+	}
+	for _, opt := range []attention.Option{
+		{ID: "apply-release", Verb: attention.VerbDoctorApplyRemedy,
+			Args: map[string]any{"fingerprint": "0123456789abcdef", "remedyId": "release"}},
+		{ID: "recheck", Verb: attention.VerbDoctorRecheck, Args: map[string]any{"fingerprint": "0123456789abcdef"}},
+	} {
+		err := exec.ExecuteVerb(context.Background(), req, opt)
+		var verr *attention.VerbExecutionError
+		if !errors.As(err, &verr) {
+			t.Fatalf("%s: err = %T %v, want a VerbExecutionError", opt.Verb, err, err)
+		}
+		if strings.Contains(err.Error(), "requires the Nightgauge daemon") || !strings.Contains(err.Error(), "refuses a card raised by producer") {
+			t.Errorf("%s did not reach its own executor: %v", opt.Verb, err)
+		}
+	}
+}
+
 // TestAttentionListRootCommand_FilteredToZero covers AC 4: a --repo filter
 // that matches nothing must name the filter and the fleet-wide total, not
 // print the bare "All clear" message used for a genuinely empty store.

@@ -17,6 +17,7 @@ package ipc
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +29,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/attention/sweep"
+	"github.com/nightgauge/nightgauge/internal/doctor"
 )
 
 // binaryPath is set by TestMain after building the binary.
@@ -120,7 +124,15 @@ func TestMain(m *testing.M) {
 	// #1348.
 	os.Setenv("NIGHTGAUGE_GITHUB_RATELIMIT_NO_WAIT", "1")
 
-	os.Exit(m.Run())
+	// The in-process attention sweep runs the default producer registry,
+	// which includes the doctor producer. No test here runs the real doctor
+	// against this host; a test that wants doctor cards scans a fixture.
+	restoreDoctor := sweep.SwapDoctorScanForTest(func(context.Context, string) ([]doctor.CheckResult, error) {
+		return nil, nil
+	})
+	code := m.Run()
+	restoreDoctor()
+	os.Exit(code)
 }
 
 // findRepoRoot walks up from CWD to find the directory containing go.mod.
