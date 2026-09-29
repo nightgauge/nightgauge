@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // Verdict represents the health status of a single improvement loop.
@@ -131,7 +133,7 @@ type assessmentRecord struct {
 }
 
 func analyzeSkillDrift(root string, since time.Time) LoopResult {
-	assessDir := filepath.Join(root, ".nightgauge", "pipeline", "assessments")
+	assessDir := pipelineStatePath(root, "assessments")
 	entries, err := os.ReadDir(assessDir)
 	if err != nil || len(entries) == 0 {
 		return noDataResult("skill-drift", "no assessment records found")
@@ -319,7 +321,7 @@ func recentWindowSize(samples int) int {
 }
 
 func analyzeCalibration(root string, since time.Time) LoopResult {
-	path := filepath.Join(root, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	path := pipelineStatePath(root, "history", "outcomes.jsonl")
 	outcomes, err := readOutcomes(path, since)
 	if err != nil || len(outcomes) == 0 {
 		return noDataResult("calibration", "no outcome records found")
@@ -537,7 +539,7 @@ type gateMetricEntry struct {
 
 func analyzeCostOptimization(root string, since time.Time) LoopResult {
 	// Cost data comes from outcomes (cost per run)
-	outcomePath := filepath.Join(root, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	outcomePath := pipelineStatePath(root, "history", "outcomes.jsonl")
 	costOutcomes, err := readCostOutcomes(outcomePath, since)
 	if err != nil || len(costOutcomes) < 5 {
 		return noDataResult("cost-optimization", "fewer than 5 completed runs in period")
@@ -629,7 +631,7 @@ type reliabilityRecord struct {
 }
 
 func analyzeReliability(root string, since time.Time) LoopResult {
-	path := filepath.Join(root, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	path := pipelineStatePath(root, "history", "outcomes.jsonl")
 	records, err := readReliabilityRecords(path, since)
 	if err != nil || len(records) < 5 {
 		return noDataResult("reliability", "fewer than 5 runs in period")
@@ -730,4 +732,20 @@ func pct(f float64) string {
 
 func fmtFloat(f float64) string {
 	return fmt.Sprintf("%.4f", f)
+}
+
+// pipelineStatePath is elem inside root's pipeline state directory
+// (layout.PipelineStateDir). A relative root is made absolute first, so it
+// names the same file as before; if root cannot be resolved it returns "",
+// which every reader here reports as no data.
+func pipelineStatePath(root string, elem ...string) string {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return ""
+	}
+	dir, err := layout.PipelineStateDir(abs)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(append([]string{dir}, elem...)...)
 }

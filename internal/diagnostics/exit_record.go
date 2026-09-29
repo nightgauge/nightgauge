@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/history"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // ExitRecordTokens is the per-stage token usage snapshot embedded in the
@@ -305,18 +306,35 @@ func truncRunes(s string, maxRunes int) string {
 }
 
 // ExitRecordsDir returns the absolute path to the per-project exit-records
-// directory. The directory itself is not created — WriteStageExitRecord
-// creates it on first append.
+// directory, under rootDir's pipeline state directory
+// (layout.PipelineStateDir). A relative rootDir is made absolute first, so it
+// names the same directory as before. If that fails it returns "": a read
+// finds nothing and a write fails, rather than landing somewhere else. The
+// directory itself is not created — WriteStageExitRecord creates it on first
+// append.
 func ExitRecordsDir(rootDir string) string {
-	return filepath.Join(rootDir, ".nightgauge", "pipeline", "exit-records")
+	abs, err := filepath.Abs(rootDir)
+	if err != nil {
+		return ""
+	}
+	dir, err := layout.PipelineStateDir(abs)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "exit-records")
 }
 
 // DailyFilePath returns the absolute path of the daily JSONL file for the
 // given UTC date. The on-disk filename is always YYYY-MM-DD.jsonl so
-// glob/sort lexicographically equals chronologically.
+// glob/sort lexicographically equals chronologically. It returns "" when
+// ExitRecordsDir cannot resolve rootDir.
 func DailyFilePath(rootDir string, day time.Time) string {
+	dir := ExitRecordsDir(rootDir)
+	if dir == "" {
+		return ""
+	}
 	stamp := day.UTC().Format("2006-01-02")
-	return filepath.Join(ExitRecordsDir(rootDir), stamp+".jsonl")
+	return filepath.Join(dir, stamp+".jsonl")
 }
 
 // WriteStageExitRecord appends one StageExitRecord to today's daily file.

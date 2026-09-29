@@ -25,6 +25,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/issueslug"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
@@ -1073,6 +1074,17 @@ var issueNumberFromWorktreeRE = regexp.MustCompile(`-issue-(\d+)$`)
 // devHandoffFileRE extracts the issue number from a dev handoff filename.
 var devHandoffFileRE = regexp.MustCompile(`^dev-(\d+)\.json$`)
 
+// pipelineStateDir is this checkout's pipeline state directory, resolved
+// through layout.PipelineStateDir. A relative repoPath is made absolute first,
+// so it names the same directory as before.
+func (s *Service) pipelineStateDir() (string, error) {
+	abs, err := filepath.Abs(s.repoPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve repo path %q: %w", s.repoPath, err)
+	}
+	return layout.PipelineStateDir(abs)
+}
+
 // pipelineIssueNumber identifies which issue's handoff describes this checkout,
 // trying every source that carries the number rather than the branch name
 // alone. It reports an error — never a silent empty string — when no source
@@ -1092,10 +1104,14 @@ func (s *Service) pipelineIssueNumber() (string, error) {
 	// Last resort: an unambiguous handoff in this checkout. Two or more and we
 	// cannot say which run produced the dirty tree, so we decline rather than
 	// guess — guessing wrong here commits one run's work under another's name.
-	matches, globErr := filepath.Glob(filepath.Join(s.repoPath, ".nightgauge", "pipeline", "dev-*.json"))
-	if globErr == nil && len(matches) == 1 {
-		if m := devHandoffFileRE.FindStringSubmatch(filepath.Base(matches[0])); m != nil {
-			return m[1], nil
+	var matches []string
+	if pipelineDir, dirErr := s.pipelineStateDir(); dirErr == nil {
+		var globErr error
+		matches, globErr = filepath.Glob(filepath.Join(pipelineDir, "dev-*.json"))
+		if globErr == nil && len(matches) == 1 {
+			if m := devHandoffFileRE.FindStringSubmatch(filepath.Base(matches[0])); m != nil {
+				return m[1], nil
+			}
 		}
 	}
 	return "", fmt.Errorf("cannot identify the pipeline issue for checkout %s (branch %q, %d dev handoff(s) present)",
@@ -1164,7 +1180,11 @@ func (s *Service) preserveUnlandedDeliverable() (preserveVerdict, error) {
 	if err != nil {
 		return preserveUndetermined, err
 	}
-	handoffPath := filepath.Join(s.repoPath, ".nightgauge", "pipeline", fmt.Sprintf("dev-%s.json", issue))
+	pipelineDir, err := s.pipelineStateDir()
+	if err != nil {
+		return preserveUndetermined, err
+	}
+	handoffPath := filepath.Join(pipelineDir, fmt.Sprintf("dev-%s.json", issue))
 	data, err := os.ReadFile(handoffPath)
 	if err != nil {
 		// A dirty tree with no readable handoff is not "nothing to preserve" —

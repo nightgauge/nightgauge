@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // StopResult is the output of stop verification.
@@ -120,7 +122,10 @@ func writeStopHookSentinel(workdir string, result StopResult) {
 	if err != nil {
 		return
 	}
-	pipelineDir := filepath.Join(workdir, ".nightgauge", "pipeline")
+	pipelineDir, err := cloneDir(layout.PipelineStateDir, workdir)
+	if err != nil {
+		return
+	}
 	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
 		return
 	}
@@ -190,8 +195,11 @@ func findPlanFile(workdir string) string {
 	// Try issue-specific plan from branch name
 	issueNum := getIssueNumberFromBranch(workdir)
 	if issueNum != "" {
-		plansDir := filepath.Join(workdir, ".nightgauge", "plans")
-		entries, err := os.ReadDir(plansDir)
+		plansDir, err := cloneDir(layout.PlansDir, workdir)
+		var entries []os.DirEntry
+		if err == nil {
+			entries, err = os.ReadDir(plansDir)
+		}
 		if err == nil {
 			prefix := issueNum + "-"
 			for _, e := range entries {
@@ -203,9 +211,11 @@ func findPlanFile(workdir string) string {
 	}
 
 	// Fallback: PLAN.md in pipeline directory
-	pipelinePlan := filepath.Join(workdir, ".nightgauge", "pipeline", "PLAN.md")
-	if _, err := os.Stat(pipelinePlan); err == nil {
-		return pipelinePlan
+	if pipelineDir, err := cloneDir(layout.PipelineStateDir, workdir); err == nil {
+		pipelinePlan := filepath.Join(pipelineDir, "PLAN.md")
+		if _, err := os.Stat(pipelinePlan); err == nil {
+			return pipelinePlan
+		}
 	}
 
 	// Fallback: PLAN.md in working directory root

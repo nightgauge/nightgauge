@@ -37,8 +37,10 @@ import (
 // opt-in is that the data never exists when it is needed.
 const apiLedgerEnv = "NIGHTGAUGE_GITHUB_API_LOG"
 
-// apiLedgerDefaultPath is used unless apiLedgerEnv names a different file:
-// JSONL beside the other per-workspace logs.
+// apiLedgerFileName is the default ledger's file name, used unless
+// apiLedgerEnv names a different file: JSONL beside the other per-workspace
+// logs, in the workspace's per-clone logs directory (layout.CloneLogsDir; see
+// DefaultLedgerPath).
 //
 // At the default path this is the ledger's BASE name, not the file written:
 // records go to one dated segment per UTC day, github-api-YYYY-MM-DD.jsonl
@@ -48,7 +50,7 @@ const apiLedgerEnv = "NIGHTGAUGE_GITHUB_API_LOG"
 // is a pre-segment ledger: never written again, still read (LedgerFiles) until
 // retention ages it out. An explicit NIGHTGAUGE_GITHUB_API_LOG path is written
 // exactly as named: the operator chose that file.
-const apiLedgerDefaultPath = ".nightgauge/logs/github-api.jsonl"
+const apiLedgerFileName = "github-api.jsonl"
 
 // Each file the ledger writes (the day's segment, or an explicit path) also
 // rotates on size so "always on" cannot become "fills the disk" within a day.
@@ -343,15 +345,19 @@ func openAPILedger() *apiLedger {
 	explicitPath := true
 	// explicitPath==false below means the default path, which is segmented.
 	if path == "" || path == "1" || path == "true" || path == "on" {
-		path = apiLedgerDefaultPath
+		path = ""
 		explicitPath = false
 	}
-	if !filepath.IsAbs(path) {
+	if !explicitPath || !filepath.IsAbs(path) {
 		base, err := ledgerRelativeBase()
 		if err != nil {
 			return nil
 		}
-		path = filepath.Join(base, path)
+		if explicitPath {
+			path = filepath.Join(base, path)
+		} else if path = DefaultLedgerPath(base); path == "" {
+			return nil
+		}
 	}
 	// At the DEFAULT path, the ledger writes into an existing workspace and
 	// never conjures one. An always-on instrument that creates .nightgauge/

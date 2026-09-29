@@ -13,10 +13,8 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/history"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
-
-// traceSubdir is the project-relative directory per-run trace files live in.
-const traceSubdir = ".nightgauge/pipeline/trace"
 
 // tsLayout formats event timestamps as fixed-width RFC3339 with exactly three
 // fractional (millisecond) digits and a literal Z, e.g. 2026-07-17T10:00:49.000Z.
@@ -39,19 +37,35 @@ const tsLayout = "2006-01-02T15:04:05.000Z07:00"
 // platform remain writable.
 var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,128}$`)
 
-// Dir returns the absolute per-project trace directory. Not created here —
-// the writer creates it on first append.
+// Dir returns the absolute per-project trace directory, under rootDir's
+// pipeline state directory (layout.PipelineStateDir). A relative rootDir is
+// made absolute first, so it names the same directory as before; if that
+// fails Dir returns "", which reads as absent. Not created here — the writer
+// creates it on first append.
 func Dir(rootDir string) string {
-	return filepath.Join(rootDir, ".nightgauge", "pipeline", "trace")
+	abs, err := filepath.Abs(rootDir)
+	if err != nil {
+		return ""
+	}
+	dir, err := layout.PipelineStateDir(abs)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "trace")
 }
 
 // FilePath returns the absolute path of the per-run trace JSONL for runID,
-// or an error when the run id fails the path-safety pattern.
+// or an error when the run id fails the path-safety pattern or rootDir
+// cannot be resolved.
 func FilePath(rootDir, runID string) (string, error) {
 	if !runIDPattern.MatchString(runID) {
 		return "", fmt.Errorf("trace: invalid run id %q", runID)
 	}
-	return filepath.Join(Dir(rootDir), runID+".jsonl"), nil
+	dir := Dir(rootDir)
+	if dir == "" {
+		return "", fmt.Errorf("trace: cannot resolve trace directory for root %q", rootDir)
+	}
+	return filepath.Join(dir, runID+".jsonl"), nil
 }
 
 // Writer appends events for one run. Nil-safe: every method no-ops on a nil

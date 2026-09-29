@@ -453,12 +453,11 @@ func terminalTailProtects(snap *RuntimeState, info os.FileInfo, now time.Time) b
 //
 // It delegates to layout.PipelineStateDir, which owns the location (ADR-024).
 // New code calls layout.PipelineStateDir and handles the error; this wrapper
-// keeps its string-only contract for its existing callers (#2033):
+// keeps its string-only contract for its existing callers (#2033, #2035):
 //
-//   - An empty or relative root (layout.ErrRootNotAbsolute) returns the
-//     unvalidated join, exactly as before, so no existing caller changes
-//     behaviour in this behaviour-preserving step.
-//   - Any other resolver error (for example "not a git repository", once the
+//   - An empty or relative root is made absolute against the working
+//     directory first, so it names the same directory it always did.
+//   - Any resolver error (for example "not a git repository", once the
 //     directory moves under the git directory, #2037) returns "". The old
 //     working-tree path would name a directory the data no longer lives in, so
 //     it is never returned for such an error. Every caller treats "" as
@@ -466,13 +465,23 @@ func terminalTailProtects(snap *RuntimeState, info os.FileInfo, now time.Time) b
 //     fails at MkdirAll, and ActiveIssuesFromSnapshots refuses "" with an
 //     error rather than answering "nothing is running".
 func PipelineStateDir(repoRoot string) string {
-	dir, err := layout.PipelineStateDir(repoRoot)
-	switch {
-	case err == nil:
-		return dir
-	case errors.Is(err, layout.ErrRootNotAbsolute):
-		return filepath.Join(repoRoot, ".nightgauge", "pipeline")
-	default:
+	abs, err := filepath.Abs(repoRoot)
+	if err != nil {
 		return ""
 	}
+	dir, err := layout.PipelineStateDir(abs)
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+// pipelineHistoryDir is repoRoot's pipeline history directory, or "" when
+// PipelineStateDir cannot resolve repoRoot.
+func pipelineHistoryDir(repoRoot string) string {
+	dir := PipelineStateDir(repoRoot)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "history")
 }

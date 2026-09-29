@@ -1217,8 +1217,8 @@ func stoppedStageExited(stopped bool, state *os.ProcessState, err error) bool {
 // resolve through the same injected resolver — SetRepoPathResolver installs one
 // into both — so the manager writes the file the scheduler already created
 // rather than a second copy in another repo.
-func (m *Manager) stageStateDir(repo string) string {
-	return filepath.Join(m.RepoRoot(repo), ".nightgauge", "pipeline")
+func (m *Manager) stageStateDir(repo string) (string, error) {
+	return pipelineStateDir(m.RepoRoot(repo))
 }
 
 // publishStageChild flushes the runtime's CURRENT stage-child fact to the run's
@@ -1246,7 +1246,10 @@ func (m *Manager) publishStageChild(repo string, runtime *state.RuntimeState) {
 	if runtime == nil {
 		return
 	}
-	err := runtime.PersistExisting(m.stageStateDir(repo))
+	dir, err := m.stageStateDir(repo)
+	if err == nil {
+		err = runtime.PersistExisting(dir)
+	}
 	switch {
 	case err == nil,
 		errors.Is(err, os.ErrNotExist),

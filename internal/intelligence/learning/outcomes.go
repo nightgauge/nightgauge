@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/actualsize"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -126,10 +127,9 @@ type Recorder struct {
 
 // NewRecorder creates an outcome recorder at the workspace root.
 func NewRecorder(workspaceRoot string) *Recorder {
-	dir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history")
 	return &Recorder{
 		workspaceRoot: workspaceRoot,
-		filePath:      filepath.Join(dir, "outcomes.jsonl"),
+		filePath:      historyFilePath(workspaceRoot, "outcomes.jsonl"),
 	}
 }
 
@@ -185,7 +185,10 @@ func (r *Recorder) actualSizeFromRuntime(outcome Outcome) string {
 	if outcome.CompletedAt.IsZero() {
 		return ""
 	}
-	stateDir := filepath.Join(r.workspaceRoot, ".nightgauge", "pipeline")
+	stateDir := pipelineStateDir(r.workspaceRoot)
+	if stateDir == "" {
+		return ""
+	}
 	runtimes, err := state.FindPersistedStatesForIssue(stateDir, outcome.IssueNumber)
 	if err != nil {
 		return ""
@@ -403,4 +406,30 @@ func splitLines(data []byte) [][]byte {
 		lines = append(lines, data[start:])
 	}
 	return lines
+}
+
+// pipelineStateDir resolves workspaceRoot's pipeline state directory through
+// layout.PipelineStateDir. A relative workspaceRoot is made absolute first, so
+// it names the same directory as before; if that fails it returns "", on which
+// reads find nothing and writes fail.
+func pipelineStateDir(workspaceRoot string) string {
+	abs, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return ""
+	}
+	dir, err := layout.PipelineStateDir(abs)
+	if err != nil {
+		return ""
+	}
+	return dir
+}
+
+// historyFilePath is name inside workspaceRoot's pipeline history directory,
+// or "" when the pipeline state directory cannot be resolved.
+func historyFilePath(workspaceRoot, name string) string {
+	dir := pipelineStateDir(workspaceRoot)
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "history", name)
 }

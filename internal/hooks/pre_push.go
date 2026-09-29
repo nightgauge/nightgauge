@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // PrePushInput holds parameters for the pre-push validation gate.
@@ -337,7 +339,11 @@ func runPrePushStaticChecks(ctx context.Context, runner CmdRunner, workDir strin
 
 // writePrePushContextFile writes the pre-push-{N}.json context file.
 func writePrePushContextFile(workDir string, input PrePushInput, result PrePushResult) string {
-	contextDir := filepath.Join(workDir, ".nightgauge", "pipeline")
+	contextDir, err := cloneDir(layout.PipelineStateDir, workDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to resolve pre-push context directory: %v\n", err)
+		return ""
+	}
 	_ = os.MkdirAll(contextDir, 0o755)
 
 	contextFile := filepath.Join(contextDir, fmt.Sprintf("pre-push-%d.json", input.IssueNumber))
@@ -379,7 +385,11 @@ func writePrePushContextFile(workDir string, input PrePushInput, result PrePushR
 // ReadPrePushContext reads and parses a pre-push-{N}.json context file.
 // Returns nil if the file doesn't exist or can't be parsed.
 func ReadPrePushContext(workDir string, issueNumber int) *PrePushContextFile {
-	contextFile := filepath.Join(workDir, ".nightgauge", "pipeline", fmt.Sprintf("pre-push-%d.json", issueNumber))
+	contextDir, err := cloneDir(layout.PipelineStateDir, workDir)
+	if err != nil {
+		return nil
+	}
+	contextFile := filepath.Join(contextDir, fmt.Sprintf("pre-push-%d.json", issueNumber))
 	data, err := os.ReadFile(contextFile)
 	if err != nil {
 		return nil

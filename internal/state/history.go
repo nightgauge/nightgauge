@@ -944,7 +944,7 @@ type HistoryWriter struct {
 func NewHistoryWriter(workspaceRoot string) *HistoryWriter {
 	return &HistoryWriter{
 		root: workspaceRoot,
-		dir:  filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history"),
+		dir:  pipelineHistoryDir(workspaceRoot),
 	}
 }
 
@@ -1018,6 +1018,9 @@ func (hw *HistoryWriter) WriteV2Record(record V2RunRecord, now time.Time) error 
 // that key is replaced. A skeleton (empty stages) therefore never appends or
 // overwrites once any real record exists.
 func (hw *HistoryWriter) appendAndIndex(record V2RunRecord, now time.Time) error {
+	if hw.dir == "" {
+		return fmt.Errorf("write history entry: pipeline state directory not resolved for %q", hw.root)
+	}
 	// recordV2History attaches the scheduler's prediction after BuildV2Record,
 	// while the extension path derives it before WriteV2Record. Hydrate at the
 	// shared final writer so both paths carry the captured measurement. The

@@ -1027,6 +1027,22 @@ func (s *Server) pipelineStateDir(repo string) string {
 	return state.PipelineStateDir(root)
 }
 
+// workspacePipelineStateDir is the workspace root's pipeline state directory
+// (state.PipelineStateDir), for the wave and epic-context methods that are
+// not scoped to a run's repo. It errors when no workspace root is configured
+// or the directory cannot be resolved, never answering a relative path.
+func (s *Server) workspacePipelineStateDir() (string, error) {
+	root := s.workspaceRootPath()
+	if root == "" {
+		return "", fmt.Errorf("no workspace root configured")
+	}
+	dir := state.PipelineStateDir(root)
+	if dir == "" {
+		return "", fmt.Errorf("cannot resolve the pipeline state directory for workspace root %q", root)
+	}
+	return dir, nil
+}
+
 // invalidateOnAuth401 evicts the cached client for (owner, repo) when a
 // GitHub API call returns an authentication error.
 func (s *Server) invalidateOnAuth401(err error, owner, repo string) {
@@ -4201,18 +4217,17 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if s.workspaceRootPath() == "" {
-			return nil, fmt.Errorf("no workspace root configured")
+		stateDir, err := s.workspacePipelineStateDir()
+		if err != nil {
+			return nil, err
 		}
 		// Read persisted wave status from disk
-		statusPath := filepath.Join(s.workspaceRootPath(), ".nightgauge", "pipeline",
-			fmt.Sprintf("wave-status-%d.json", p.EpicNumber))
+		statusPath := filepath.Join(stateDir, fmt.Sprintf("wave-status-%d.json", p.EpicNumber))
 		data, err := os.ReadFile(statusPath)
 		if err != nil {
 			if os.IsNotExist(err) {
 				// Try wave plan (orchestration may still be running)
-				planPath := filepath.Join(s.workspaceRootPath(), ".nightgauge", "pipeline",
-					fmt.Sprintf("wave-plan-%d.json", p.EpicNumber))
+				planPath := filepath.Join(stateDir, fmt.Sprintf("wave-plan-%d.json", p.EpicNumber))
 				planData, planErr := os.ReadFile(planPath)
 				if planErr != nil {
 					return nil, fmt.Errorf("no wave data for epic #%d", p.EpicNumber)
@@ -4245,11 +4260,11 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if s.workspaceRootPath() == "" {
-			return nil, fmt.Errorf("no workspace root configured")
+		stateDir, err := s.workspacePipelineStateDir()
+		if err != nil {
+			return nil, err
 		}
-		ctxPath := filepath.Join(s.workspaceRootPath(), ".nightgauge", "pipeline",
-			fmt.Sprintf("epic-context-%d.json", p.EpicNumber))
+		ctxPath := filepath.Join(stateDir, fmt.Sprintf("epic-context-%d.json", p.EpicNumber))
 		data, err := os.ReadFile(ctxPath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -4280,11 +4295,10 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if s.workspaceRootPath() == "" {
-			return nil, fmt.Errorf("no workspace root configured")
+		dir, err := s.workspacePipelineStateDir()
+		if err != nil {
+			return nil, err
 		}
-
-		dir := filepath.Join(s.workspaceRootPath(), ".nightgauge", "pipeline")
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return nil, fmt.Errorf("create pipeline dir: %w", err)
 		}

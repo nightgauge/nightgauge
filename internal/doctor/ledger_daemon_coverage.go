@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
@@ -106,7 +105,11 @@ func ledgerDaemonCoverageFindings(workspaceRoot string, now time.Time) ([]Findin
 // pipelineActivitySince reports whether any pipeline state file was written
 // inside the window — the independent evidence that the daemon had work to do.
 func pipelineActivitySince(workspaceRoot string, since time.Time) bool {
-	entries, err := os.ReadDir(filepath.Join(workspaceRoot, ".nightgauge", "pipeline"))
+	dir := pipelineStatePath(workspaceRoot, "")
+	if dir == "" {
+		return false
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false
 	}

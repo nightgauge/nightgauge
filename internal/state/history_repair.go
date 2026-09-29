@@ -152,7 +152,10 @@ func richerThan(a, b V2RunRecord) bool {
 //
 // Non-run records and unparseable lines are always preserved verbatim.
 func RepairHistory(workspaceRoot string, apply bool) (*RepairReport, error) {
-	dir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history")
+	dir := pipelineHistoryDir(workspaceRoot)
+	if dir == "" {
+		return nil, fmt.Errorf("read history dir: pipeline state directory not resolved for %q", workspaceRoot)
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, fmt.Errorf("read history dir: %w", err)

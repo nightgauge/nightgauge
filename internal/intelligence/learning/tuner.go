@@ -65,10 +65,9 @@ type Tuner struct {
 
 // NewTuner creates a tuning optimizer.
 func NewTuner(workspaceRoot string, config TunerConfig) *Tuner {
-	auditDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history")
 	return &Tuner{
 		config:      config,
-		auditPath:   filepath.Join(auditDir, "tuning-audit.jsonl"),
+		auditPath:   historyFilePath(workspaceRoot, "tuning-audit.jsonl"),
 		convergence: make(map[string]int),
 	}
 }

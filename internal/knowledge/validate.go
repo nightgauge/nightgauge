@@ -11,6 +11,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // adrHeaderRe matches ADR block headings of the form "## ADR-NNN: ...".
@@ -119,7 +120,14 @@ func hasValidADRBlocks(decisionsText string) bool {
 // readPlanText reads the plan Markdown for the given issue number.
 // Searches .nightgauge/plans/{N}-*.md and returns the first match.
 func readPlanText(issueNumber int, workspaceRoot string) (string, error) {
-	plansDir := filepath.Join(workspaceRoot, ".nightgauge", "plans")
+	absRoot, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace root %q: %w", workspaceRoot, err)
+	}
+	plansDir, err := layout.PlansDir(absRoot)
+	if err != nil {
+		return "", err
+	}
 	pattern := filepath.Join(plansDir, fmt.Sprintf("%d-*.md", issueNumber))
 	matches, err := filepath.Glob(pattern)
 	if err != nil {

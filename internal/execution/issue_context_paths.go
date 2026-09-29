@@ -12,7 +12,45 @@ import (
 // IssueContextRelPath is where every writer puts a run's issue context,
 // relative to whichever root it considers "the run".
 func IssueContextRelPath(issueNumber int) string {
-	return filepath.Join(".nightgauge", "pipeline", fmt.Sprintf("issue-%d.json", issueNumber))
+	return pipelineStateRelPath(issueContextName(issueNumber))
+}
+
+func issueContextName(issueNumber int) string {
+	return fmt.Sprintf("issue-%d.json", issueNumber)
+}
+
+func planningContextName(issueNumber int) string {
+	return fmt.Sprintf("planning-%d.json", issueNumber)
+}
+
+// pipelineStateDir resolves root's pipeline state directory through
+// layout.PipelineStateDir. A relative root is made absolute first, so it names
+// the same directory it always did.
+func pipelineStateDir(root string) (string, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve root %q: %w", root, err)
+	}
+	return layout.PipelineStateDir(abs)
+}
+
+// pipelineStateRelPath is name's path relative to a repository root, derived
+// from layout.PipelineStateDir (against the filesystem root) so it cannot
+// drift from the resolver.
+func pipelineStateRelPath(name string) string {
+	root, err := filepath.Abs(string(filepath.Separator))
+	if err != nil {
+		return ""
+	}
+	dir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		return ""
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(rel, name)
 }
 
 // IssueContextCandidates returns every path a run's issue-{N}.json may live at,
@@ -44,14 +82,14 @@ func IssueContextRelPath(issueNumber int) string {
 // worktreeDir is the run's actual worktree when the caller knows it, and is
 // tried first; pass "" when unknown. repo may be "owner/name" or a bare name.
 func IssueContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int) []string {
-	return stageContextCandidates(repoRoot, worktreeDir, repo, issueNumber, IssueContextRelPath(issueNumber))
+	return stageContextCandidates(repoRoot, worktreeDir, repo, issueNumber, issueContextName(issueNumber))
 }
 
 // PlanningContextRelPath is where every writer puts a run's planning context,
 // relative to whichever root it considers "the run" — the sibling of
 // IssueContextRelPath, written by the feature-planning stage.
 func PlanningContextRelPath(issueNumber int) string {
-	return filepath.Join(".nightgauge", "pipeline", fmt.Sprintf("planning-%d.json", issueNumber))
+	return pipelineStateRelPath(planningContextName(issueNumber))
 }
 
 // PlanningContextCandidates returns every path a run's planning-{N}.json may
@@ -62,13 +100,15 @@ func PlanningContextRelPath(issueNumber int) string {
 // assessed size, so a half-informed search there would reproduce exactly the
 // size-less records it exists to fix.
 func PlanningContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int) []string {
-	return stageContextCandidates(repoRoot, worktreeDir, repo, issueNumber, PlanningContextRelPath(issueNumber))
+	return stageContextCandidates(repoRoot, worktreeDir, repo, issueNumber, planningContextName(issueNumber))
 }
 
 // stageContextCandidates is the shared root enumeration behind both candidate
 // lists. ONE list of layouts, so a new layout cannot be taught to one reader
-// and not the other.
-func stageContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int, rel string) []string {
+// and not the other. name is the context file's name inside each root's
+// pipeline state directory; a root that directory cannot be resolved for is
+// skipped.
+func stageContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int, name string) []string {
 	roots := make([]string, 0, 5)
 
 	if worktreeDir != "" {
@@ -99,7 +139,11 @@ func stageContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int,
 	paths := make([]string, 0, len(roots))
 	seen := make(map[string]bool, len(roots))
 	for _, root := range roots {
-		p := filepath.Join(root, rel)
+		dir, err := pipelineStateDir(root)
+		if err != nil {
+			continue
+		}
+		p := filepath.Join(dir, name)
 		if seen[p] {
 			continue
 		}

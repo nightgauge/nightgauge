@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // StageContext is the JSON structure passed between pipeline stages.
@@ -64,9 +66,21 @@ func WriteContext(path string, ctx *StageContext) error {
 // issue-<N>/<stage>-context.json that nothing wrote, so the Go scheduler's
 // prerequisite + output validation read phantom paths and failed every
 // worktree-isolated `nightgauge run`.)
+//
+// The directory is workspaceRoot's pipeline state directory
+// (layout.PipelineStateDir). A relative workspaceRoot is made absolute first,
+// so it names the same file as before; if that fails ContextPath returns "",
+// on which every read reports absent and every write fails.
 func ContextPath(workspaceRoot string, issueNumber int, stage string) string {
-	return filepath.Join(workspaceRoot, ".nightgauge", "pipeline",
-		fmt.Sprintf("%s-%d.json", stage, issueNumber))
+	abs, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return ""
+	}
+	dir, err := layout.PipelineStateDir(abs)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, fmt.Sprintf("%s-%d.json", stage, issueNumber))
 }
 
 // Validate checks that a stage context has required fields.

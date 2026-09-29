@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
 )
@@ -141,5 +140,5 @@ func LoadKnowledgeEvents(workspaceRoot string) ([]telemetry.Event, error) {
 // telemetry.Path; this internal helper exists for tests that want to write a
 // fixture without depending on telemetry.
 func knowledgeEventsPathFor(workspaceRoot string) string {
-	return filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history", "knowledge-events.jsonl")
+	return telemetry.Path(workspaceRoot)
 }

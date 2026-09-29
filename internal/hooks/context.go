@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // ContextResult is the output of the context injection hook.
@@ -125,20 +127,41 @@ func stageArtifacts(workdir, issue string) []string {
 	if issue == "" {
 		return nil
 	}
+	absWorkdir, err := filepath.Abs(workdir)
+	if err != nil {
+		return nil
+	}
 	var found []string
-	for _, name := range []string{"issue", "ac-reconcile", "planning", "dev", "validate", "pr"} {
-		rel := filepath.Join(".nightgauge", "pipeline", name+"-"+issue+".json")
-		if fi, err := os.Stat(filepath.Join(workdir, rel)); err == nil && fi.Size() > 0 {
-			found = append(found, rel)
+	if pipelineDir, err := layout.PipelineStateDir(absWorkdir); err == nil {
+		for _, name := range []string{"issue", "ac-reconcile", "planning", "dev", "validate", "pr"} {
+			path := filepath.Join(pipelineDir, name+"-"+issue+".json")
+			if fi, err := os.Stat(path); err == nil && fi.Size() > 0 {
+				if rel, err := filepath.Rel(absWorkdir, path); err == nil {
+					found = append(found, rel)
+				}
+			}
 		}
 	}
-	plans, _ := filepath.Glob(filepath.Join(workdir, ".nightgauge", "plans", issue+"-*.md"))
-	for _, p := range plans {
-		if rel, err := filepath.Rel(workdir, p); err == nil {
-			found = append(found, rel)
+	if plansDir, err := layout.PlansDir(absWorkdir); err == nil {
+		plans, _ := filepath.Glob(filepath.Join(plansDir, issue+"-*.md"))
+		for _, p := range plans {
+			if rel, err := filepath.Rel(absWorkdir, p); err == nil {
+				found = append(found, rel)
+			}
 		}
 	}
 	return found
+}
+
+// cloneDir resolves one per-clone class directory through its layout
+// resolver (layout.PipelineStateDir, layout.PlansDir, ...). A relative root is
+// made absolute first, so it names the same directory as before.
+func cloneDir(resolve func(string) (string, error), root string) (string, error) {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve root %q: %w", root, err)
+	}
+	return resolve(abs)
 }
 
 // buildContextMessage creates a human-readable context summary.

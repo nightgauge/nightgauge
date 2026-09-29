@@ -202,13 +202,17 @@ func logWarnEvent(match *PatternMatch, command, cwd string) {
 	}
 	_ = os.MkdirAll(logDir, 0o755)
 
+	// The log records the commands the hook flagged, so it is private to the
+	// user: mode 0600 (ADR-024 § 11), and a log created 0644 before that is
+	// tightened on the next append.
 	logPath := filepath.Join(logDir, "sanitization.log")
-	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "warn: failed to open sanitization log: %v\n", err)
 		return
 	}
 	defer f.Close()
+	_ = f.Chmod(0o600)
 
 	entry := map[string]string{
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
@@ -687,7 +691,11 @@ func checkPrePushContext() GateDecision {
 		return Allow()
 	}
 
-	return Block(fmt.Sprintf("Pre-push validation failed (status: %s). Fix issues before pushing. See .nightgauge/pipeline/pre-push-%d.json for details.", ctx.OverallStatus, issueNum))
+	details := fmt.Sprintf("pre-push-%d.json", issueNum)
+	if dir, err := cloneDir(layout.PipelineStateDir, workDir); err == nil {
+		details = filepath.Join(dir, details)
+	}
+	return Block(fmt.Sprintf("Pre-push validation failed (status: %s). Fix issues before pushing. See %s for details.", ctx.OverallStatus, details))
 }
 
 // readCurrentBranch reads the current branch name from .git/HEAD without spawning a subprocess.
