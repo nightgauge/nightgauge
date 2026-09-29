@@ -183,6 +183,33 @@ type Runner struct {
 	// Progress, when set, receives each check's start and outcome in
 	// registration order (progress.go).
 	Progress func(CheckProgress)
+	// Observe, when set, receives each check's state changes during Run (the
+	// interactive CLI's live progress view). It is called from worker
+	// goroutines and must be safe for concurrent use.
+	Observe func(CheckEvent)
+}
+
+// CheckEvent is one state change of a check during Runner.Run: Running when a
+// worker starts it, then Result once it finished, was skipped or timed out.
+// Result is the raw, unredacted result.
+type CheckEvent struct {
+	ID      string
+	Title   string
+	Group   string
+	Running bool
+	Result  *CheckResult
+}
+
+func (r Runner) observe(c Check, res *CheckResult) {
+	if r.Observe == nil {
+		return
+	}
+	ev := CheckEvent{ID: c.ID, Title: c.Title, Group: c.Group, Running: res == nil}
+	if res != nil {
+		cp := cloneResult(*res)
+		ev.Result = &cp
+	}
+	r.Observe(ev)
 }
 
 type completion struct {
@@ -227,6 +254,7 @@ func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult 
 			defer wg.Done()
 			for idx := range jobs {
 				order.start(idx)
+				r.observe(checks[idx], nil)
 				done <- completion{idx: idx, result: r.runOne(ctx, checks[idx], env)}
 			}
 		}()
@@ -246,6 +274,7 @@ func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult 
 		results[idx] = res
 		order.finish(idx, res)
 		finished++
+		r.observe(checks[idx], &res)
 		for _, dep := range dependents[idx] {
 			remaining[dep]--
 			if remaining[dep] > 0 {
