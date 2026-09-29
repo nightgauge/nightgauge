@@ -502,18 +502,7 @@ func (fx *Fixer) verifyEnv() *Env {
 
 // finish computes the post-fix doctor state and the exit code.
 func (fx *Fixer) finish(rep FixReport) FixReport {
-	merged := make([]CheckResult, len(fx.results))
-	for i, r := range fx.results {
-		if l, ok := fx.latest[r.ID]; ok {
-			r = l
-		}
-		merged[i] = r
-	}
-	rep.Doctor = BuildResult(cloneResults(merged))
-	fx.Env.mu.Lock()
-	rep.Doctor.InstallInstructions = fx.Env.install
-	rep.Doctor.Adapters = fx.Env.adapter
-	fx.Env.mu.Unlock()
+	rep.Doctor = fx.State(FixOptions{})
 	for _, r := range rep.Results {
 		switch r.Outcome {
 		case OutcomeFixed:

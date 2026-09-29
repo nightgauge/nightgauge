@@ -34,6 +34,18 @@ changelog, and the release workflow refuses a tag that does not.
   attempted remedy is appended to `<state dir>/doctor/fix-log.jsonl` (0600,
   redacted, no evidence values), and `nightgauge doctor --history` prints it.
 
+- **The daemon exposes the doctor over IPC** (#2096). `doctor.run` scans every
+  check and returns JSON v2, narrowed by `only`, `severity` and `adapters`,
+  while `doctor.progress` notifications stream each check's start and outcome
+  (finished, skipped or timed out) in check order. `doctor.applyRemedy` takes
+  only a `(fingerprint, remedyId)` pair from the current scan: it re-runs the
+  owning check first and answers `stale`, applying nothing, when the
+  fingerprint is gone, and a `confirm` remedy needs `confirm: true`; `dryRun`
+  previews without acting. `doctor.recheck` re-runs one check by check ID or
+  finding code, and `doctor.history` reads the fix log. They drive the same
+  remedy engine as `nightgauge doctor --fix`, over the daemon's existing
+  socket.
+
 - **One command opens a demo session, and CI fails when the demo drifts from
   the extension** (#2105, #2106, #2108, #2109, #2110). `npm run demo` in the
   extension package opens a VS Code window with a profile of its own, the demo
