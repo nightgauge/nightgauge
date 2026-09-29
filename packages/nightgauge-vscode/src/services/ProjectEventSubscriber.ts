@@ -15,6 +15,7 @@ import { IpcClient } from "./IpcClient";
 import type { Logger } from "../utils/logger";
 import { PlatformSseClient } from "./PlatformSseClient";
 import type { SseStreamStatus } from "./PlatformSseClient";
+import { isDemoMode } from "./DemoModeController";
 
 const LAST_EVENT_ID_KEY = "nightgauge.projectStream.lastEventId";
 const SSE_WIDENED_INTERVAL_MS = 5 * 60_000; // 5 min — used by autonomousCommands
@@ -143,6 +144,8 @@ export class ProjectEventSubscriber {
   }
 
   connect(platformBaseUrl: string, token: string): void {
+    // ADR-026 decision 6: no platform SSE while a demo daemon is connected.
+    if (isDemoMode()) return;
     this._sseClient.connect(`${platformBaseUrl}/v1/events/project/stream`, token);
   }
 

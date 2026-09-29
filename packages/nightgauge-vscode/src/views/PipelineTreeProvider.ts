@@ -1036,6 +1036,16 @@ export class PipelineTreeProvider
    * This enables the provider to update the view's title property
    * to show queue counts dynamically.
    */
+  /**
+   * Reveal and expand the active issue node (demo UI steps, #2108). Returns
+   * false when there is no active issue or no tree view yet.
+   */
+  async revealActiveIssue(): Promise<boolean> {
+    if (!this.treeView || !this.currentIssue) return false;
+    await this.treeView.reveal(this.currentIssue, { expand: true, select: true, focus: false });
+    return true;
+  }
+
   setTreeView(treeView: vscode.TreeView<BaseTreeItem>): void {
     this.treeView = treeView;
     this.updateViewTitle();

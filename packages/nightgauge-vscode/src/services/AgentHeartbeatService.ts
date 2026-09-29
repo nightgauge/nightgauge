@@ -3,6 +3,7 @@ import type { ITokenStorage } from "../platform/TokenStorage";
 import type { Logger } from "../utils/logger";
 import type { IOnDemandTokenRefresher } from "../platform/TokenRefreshManager";
 import type { ReportedUsage } from "./usage/usageReporting";
+import { isDemoMode } from "./DemoModeController";
 
 /**
  * Supplies the adapter usage report to attach to a beat, or `null` to send
@@ -69,6 +70,8 @@ export class AgentHeartbeatService implements vscode.Disposable {
   /** Call once agentId is available from registration. No-op if already started. */
   start(agentId: string): void {
     if (this.timer !== null || !agentId) return;
+    // ADR-026 decision 6: no heartbeat while a demo daemon is connected.
+    if (isDemoMode()) return;
     this.agentId = agentId;
     this.timer = setInterval(() => {
       void this.sendHeartbeat();
