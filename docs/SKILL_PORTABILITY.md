@@ -260,5 +260,5 @@ holds the line on every PR.
 - `skills/_shared/PREFLIGHT.md` — the canonical discovery cascade
 - `claude-plugins/nightgauge/hooks/lib/guard.sh` — Claude-only sibling
 - [CONFIGURATION.md](CONFIGURATION.md) — model resolution
-- [ADAPTER_DOCTOR.md](ADAPTER_DOCTOR.md) — per-adapter readiness (incl. binary discovery)
+- [DOCTOR.md](DOCTOR.md) — doctor findings, incl. per-adapter readiness and binary discovery
 - #4026 (allowed-tools → Codex sandbox), #4021 (model routing), #3262 (cascade sync)

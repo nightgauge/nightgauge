@@ -49,7 +49,7 @@ posing as a negative, so the generator never emits one.**
 | `context-handoff`         | [CONTEXT_ARCHITECTURE](CONTEXT_ARCHITECTURE.md)                                                                             |
 | `knowledge-base`          | [KNOWLEDGE_BASE](KNOWLEDGE_BASE.md)                                                                                         |
 | `forge-abstraction`       | [FORGE_ABSTRACTION](FORGE_ABSTRACTION.md), [SELF_HOSTED_GITLAB_SETUP](SELF_HOSTED_GITLAB_SETUP.md)                          |
-| `model-adapters`          | [ADAPTER_MATRIX](ADAPTER_MATRIX.md), [ADAPTER_GUIDE](ADAPTER_GUIDE.md), [ADAPTER_DOCTOR](ADAPTER_DOCTOR.md)                 |
+| `model-adapters`          | [ADAPTER_MATRIX](ADAPTER_MATRIX.md), [ADAPTER_GUIDE](ADAPTER_GUIDE.md), [DOCTOR](DOCTOR.md)                                 |
 | `model-evaluation`        | [MODEL_EVALUATION](MODEL_EVALUATION.md), [SKILL_EVALUATION](SKILL_EVALUATION.md)                                            |
 | `guardrails-and-budgets`  | [GUARDRAILS_AND_BUDGETS](GUARDRAILS_AND_BUDGETS.md), [CASCADE_CIRCUIT_BREAKER](CASCADE_CIRCUIT_BREAKER.md)                  |
 | `audit-and-outcomes`      | [AUDIT_TRAIL](AUDIT_TRAIL.md), [OUTCOME_RECORDING](OUTCOME_RECORDING.md), [STAGE_EXIT_DIAGNOSTIC](STAGE_EXIT_DIAGNOSTIC.md) |

@@ -2,6 +2,10 @@
 
 This guide helps resolve common issues when using nightgauge.
 
+Start with `nightgauge doctor`. Every problem it reports carries a code
+(`NGD017`) whose cause and fix are in [DOCTOR.md](DOCTOR.md), and
+`nightgauge doctor --fix` applies the safe fixes and verifies each one.
+
 ## Plugin Installation Issues
 
 ### Claude Code doesn't recognize the plugin
@@ -1105,7 +1109,8 @@ the scaffold, so the skip was permanent.
 **Fixed in #332** on three levels — the sweep classifies untracked bookkeeping
 as exhaust rather than as a blocker, the extension propagates the generated
 `.gitignore` to every repo in the workspace manifest, and `doctor` now reports
-stale worktrees with the paths that blocked them.
+stale worktrees with the paths that blocked them
+([NGD017](DOCTOR.md#ngd017)).
 
 **If you see it on an older binary:** delete the scaffold and re-run the sweep,
 but guard on `git ls-files --error-unmatch <path>` first — `knowledge/README.md`
@@ -1147,7 +1152,8 @@ A restore pops only stashes recorded on the checked-out branch and reports the
 rest as `other-branch`; run it again from the worktree of the branch each
 stash names.
 
-`nightgauge doctor` reports them per repo with age, and a killed stage's
+`nightgauge doctor` reports each one as [NGD019](DOCTOR.md#ngd019), and
+`nightgauge doctor --fix` restores one whose branch has landed. A killed stage's
 stage-exit record names what it stranded in `unreclaimed_stashes`.
 
 **A stash with no marker is never touched by any of this** — that includes
