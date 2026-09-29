@@ -355,16 +355,23 @@ suite("demo mode", () => {
     ).catch(() => undefined);
     assert.deepEqual(activated(), UI_TABS);
     // The webview's own answer: it activated each tab the way a click does.
-    const selected = panel.received
-      .filter(
-        (m): m is { type: string; tab: string } => (m as { type?: unknown }).type === "selectTab"
-      )
-      .map((m) => m.tab)
-      .filter((tab, i, all) => all[i - 1] !== tab);
+    // Its reply to the last activateTab arrives after the post, so wait for it.
+    const selected = () =>
+      panel.received
+        .filter(
+          (m): m is { type: string; tab: string } => (m as { type?: unknown }).type === "selectTab"
+        )
+        .map((m) => m.tab)
+        .filter((tab, i, all) => all[i - 1] !== tab);
+    await waitFor(
+      () => (selected().slice(-UI_TABS.length).join() === UI_TABS.join() ? true : undefined),
+      10_000,
+      "the webview's selectTab reply to each UI step"
+    ).catch(() => undefined);
     assert.deepEqual(
-      selected.slice(-UI_TABS.length),
+      selected().slice(-UI_TABS.length),
       UI_TABS,
-      `webview selectTab: ${selected.join(", ")}`
+      `webview selectTab: ${selected().join(", ")}`
     );
   });
 
