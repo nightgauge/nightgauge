@@ -1,0 +1,16 @@
+{
+  "entries": [
+    {
+      "title": "Evaluate the streaming parser for harbour-fee exports",
+      "score": 0.48,
+      "reason": "below the creation threshold",
+      "created_at": "2026-01-14T06:04:30.000Z"
+    },
+    {
+      "title": "Retire the legacy anchorage-zone lookup table",
+      "score": 0.39,
+      "reason": "waiting on the next minor release",
+      "created_at": "2026-01-10T06:03:00.000Z"
+    }
+  ]
+}

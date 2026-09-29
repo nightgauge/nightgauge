@@ -846,7 +846,7 @@ function getAuditLocalBannerHtml(data: AuditLogData): string {
     <div class="audit-local-banner">
       <span class="audit-local-icon">⚠️</span>
       <span class="audit-local-label">${label}</span>
-      <button class="action-btn" id="auditRetryBtn">Retry</button>
+      ${data.localRetryable === false ? "" : `<button class="action-btn" id="auditRetryBtn">Retry</button>`}
     </div>
   `;
 }

@@ -1,0 +1,25 @@
+{
+  "schema_version": "1",
+  "run_started_at": "2026-01-12T05:00:00.000Z",
+  "triggered_by": "schedule",
+  "mode": "customer",
+  "create_issues": true,
+  "dry_run": false,
+  "status": "completed",
+  "proposals_created": [
+    {
+      "number": 143,
+      "title": "Cache the pilot roster between booking checks",
+      "url": "#"
+    }
+  ],
+  "proposals_backlogged": [
+    {
+      "title": "Split the harbour-fee worker's retry queue by tenant",
+      "score": 0.44,
+      "reason": "needs an owner decision"
+    }
+  ],
+  "completed_at": "2026-01-12T05:12:00.000Z",
+  "error": null
+}

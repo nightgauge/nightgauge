@@ -53,6 +53,7 @@ vi.mock(
 );
 
 import { Dashboard } from "../../src/views/dashboard/Dashboard";
+import { ConfigBridge } from "../../src/services/ConfigBridge";
 import {
   ipcStub,
   resetHarness,
@@ -147,6 +148,13 @@ function stubFetch(status: number, body: unknown) {
 }
 
 describe("arrival: Audit tab (GET /v1/audit-log over HTTPS)", () => {
+  // These cases are a platform user's: with `platform.enabled` false the tab
+  // never asks the platform (the last case, #2107).
+  const platform = () =>
+    ConfigBridge.getInstance().getPlatform as unknown as ReturnType<typeof vi.fn>;
+  beforeEach(() => platform().mockReturnValue({ enabled: true }));
+  afterEach(() => platform().mockReturnValue(undefined));
+
   it("reaches a populated state from a recorded HTTP response", async () => {
     const fetchMock = stubFetch(200, arrivalFixtures.auditLog());
 
@@ -200,6 +208,21 @@ describe("arrival: Audit tab (GET /v1/audit-log over HTTPS)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     const state = (dashboard as unknown as { auditLogData: { hasAccess: boolean } }).auditLogData;
     expect(state.hasAccess).toBe(false);
+  });
+
+  it("platform.enabled false means local telemetry and no request, even signed in", async () => {
+    platform().mockReturnValue({ enabled: false });
+    const fetchMock = stubFetch(200, arrivalFixtures.auditLog());
+
+    await dashboard.refreshAuditLogData();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const state = (
+      dashboard as unknown as { auditLogData: { hasAccess: boolean; isLocalFallback?: boolean } }
+    ).auditLogData;
+    expect(state.hasAccess).toBe(true);
+    expect(state.isLocalFallback).toBe(true);
+    expect(tabText("audit")).toContain("platform communication is off");
   });
 });
 
