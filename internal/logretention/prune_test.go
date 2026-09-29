@@ -273,12 +273,24 @@ func TestRemoveConfinedRefusesSwap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(p); err != nil {
+	// Keep the listed file alive under another name so its inode cannot be
+	// reused by the replacement (Linux reuses a freed inode at once).
+	if err := os.Rename(p, filepath.Join(t.TempDir(), "x.log")); err != nil {
 		t.Fatal(err)
 	}
 	fixture(t, dir, "x.log", 10, day) // a different file at the same name
 	if err := removeConfined(dir, "x.log", listed); err == nil {
 		t.Fatal("a file replaced after listing was deleted")
+	}
+	// A replacement that reuses the inode is still caught when its size or
+	// modification time differs from what was listed.
+	reused, err := os.Lstat(filepath.Join(dir, "x.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture(t, dir, "x.log", 11, day)
+	if err := removeConfined(dir, "x.log", reused); err == nil {
+		t.Fatal("a same-inode file whose size changed after listing was deleted")
 	}
 	if err := removeConfined(dir, "../x.log", listed); err == nil {
 		t.Fatal("a name with a parent reference was accepted")

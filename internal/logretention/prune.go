@@ -332,7 +332,10 @@ func removeConfined(dir, name string, listed fs.FileInfo) error {
 	if !now.Mode().IsRegular() {
 		return fmt.Errorf("refused: %s is no longer a regular file", path)
 	}
-	if !os.SameFile(now, listed) {
+	// Device and inode alone are not identity: Linux hands a freed inode to
+	// the next file created, so a delete-and-recreate at the same name can
+	// match. Size and modification time must match too.
+	if !os.SameFile(now, listed) || now.Size() != listed.Size() || !now.ModTime().Equal(listed.ModTime()) {
 		return fmt.Errorf("refused: %s was replaced after it was listed", path)
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
