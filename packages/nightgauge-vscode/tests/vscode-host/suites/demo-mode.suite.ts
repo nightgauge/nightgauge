@@ -25,6 +25,7 @@ import * as vscode from "vscode";
 import { suite, test } from "../harness.js";
 import { capturedPanels, capturedStatusBarItems, capturedTreeProviders } from "../observe.js";
 import { delay, materializeDemoWorkspace, waitFor, workspaceRoot } from "../fixture.js";
+import { stripScriptBlocks, stripStyleBlocks } from "../html.js";
 import { extension } from "./activation.suite.js";
 
 type Provider = vscode.TreeDataProvider<unknown>;
@@ -89,9 +90,7 @@ function tabPanel(html: string, tab: string): string {
 }
 
 function text(html: string): string {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, " ")
+  return stripStyleBlocks(stripScriptBlocks(html))
     .replace(/<[^>]+>/g, " ")
     .replace(/&#8635;/g, "↻")
     .replace(/\s+/g, " ");

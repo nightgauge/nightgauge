@@ -27,6 +27,7 @@ import * as vscode from "vscode";
 import { suite, test } from "../harness.js";
 import { capturedPanels } from "../observe.js";
 import { materializeDemoWorkspace, waitFor, workspaceRoot } from "../fixture.js";
+import { stripScriptBlocks } from "../html.js";
 
 /**
  * Tab id and a predicate over that tab's panel markup. Each predicate needs
@@ -122,8 +123,7 @@ suite("demo workspace", () => {
         const shown = tabPanel(dashboard.panel.webview.html, tab);
         assert.ok(
           panel,
-          `The ${tab} tab shows no demo workspace rows:\n${shown
-            .replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, " ")
+          `The ${tab} tab shows no demo workspace rows:\n${stripScriptBlocks(shown)
             .replace(/<[^>]+>/g, " ")
             .replace(/\s+/g, " ")
             .slice(0, 2000)}`
