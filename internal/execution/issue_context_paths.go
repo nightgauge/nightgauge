@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // IssueContextRelPath is where every writer puts a run's issue context,
@@ -15,11 +18,13 @@ func IssueContextRelPath(issueNumber int) string {
 // IssueContextCandidates returns every path a run's issue-{N}.json may live at,
 // most-specific first.
 //
-// THERE ARE TWO WORKTREE LAYOUTS AND EVERY PREVIOUS SEARCH KNEW ABOUT ONE (#994).
+// THERE ARE SEVERAL WORKTREE LAYOUTS AND EVERY PREVIOUS SEARCH KNEW ABOUT ONE (#994).
 //
-//   - The Go manager writes `<repoRoot>/.nightgauge/worktrees/{repoName}-issue-N`
-//     (see worktreePath — the leaf carries the repo name so two repos' issue #N
-//     cannot collide in one workspace).
+//   - The Go manager writes `<worktree base>/{repoName}-issue-N`, outside the
+//     working tree (worktreePath, config.ResolveWorktreeBase; ADR-024 § 9). The
+//     leaf carries the repo name so two repos' issue #N cannot collide.
+//   - Before #2038 it wrote `<repoRoot>/.nightgauge/worktrees/{repoName}-issue-N`;
+//     a run that began there keeps that worktree until it ends.
 //   - The VSCode extension writes `<repoRoot>/.worktrees/issue-N`.
 //
 // The scheduler searched neither — it read the plain repo root only — so an
@@ -48,7 +53,7 @@ func PlanningContextRelPath(issueNumber int) string {
 }
 
 // PlanningContextCandidates returns every path a run's planning-{N}.json may
-// live at, most-specific first — the same four roots, in the same order, as
+// live at, most-specific first — the same roots, in the same order, as
 // IssueContextCandidates, and for the same reason: the two dispatch paths use
 // different worktree layouts, and a reader that knows one of them reports
 // "absent" for every run of the other. #1515 reads this file for the planner's
@@ -62,7 +67,7 @@ func PlanningContextCandidates(repoRoot, worktreeDir, repo string, issueNumber i
 // lists. ONE list of layouts, so a new layout cannot be taught to one reader
 // and not the other.
 func stageContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int, rel string) []string {
-	roots := make([]string, 0, 4)
+	roots := make([]string, 0, 5)
 
 	if worktreeDir != "" {
 		roots = append(roots, worktreeDir)
@@ -72,10 +77,15 @@ func stageContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int,
 		if idx := strings.LastIndex(repoName, "/"); idx >= 0 {
 			repoName = repoName[idx+1:]
 		}
-		if repoName != "" {
-			// Go manager layout — must match worktreePath exactly.
-			roots = append(roots, filepath.Join(repoRoot, ".nightgauge", "worktrees",
-				fmt.Sprintf("%s-issue-%d", repoName, issueNumber)))
+		if leaf, err := layout.WorktreeDirName(repoName, issueNumber); repoName != "" && err == nil {
+			// Go manager layout — must match worktreePath exactly. An
+			// unresolvable base (invalid config) only drops this candidate:
+			// the lookup is best-effort and the error surfaces at creation.
+			if base, err := config.ResolveWorktreeBase(repoRoot); err == nil {
+				roots = append(roots, filepath.Join(base, leaf))
+			}
+			// The pre-#2038 in-tree location of the same leaf.
+			roots = append(roots, filepath.Join(repoRoot, LegacyWorktreeBaseRel, leaf))
 		}
 		// VSCode extension layout.
 		roots = append(roots, filepath.Join(repoRoot, ".worktrees",

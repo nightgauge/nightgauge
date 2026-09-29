@@ -529,17 +529,18 @@ func TestReclaimWorktree_LogsWarningOnRemovalFailure(t *testing.T) {
 }
 
 func TestCleanupWorktree_LogsWarningOnRemovalFailure(t *testing.T) {
-	// A worktree directory that EXISTS but that git does not know about (the
-	// root is not a git repo): `git worktree remove` fails, the manual fallback
-	// succeeds and CleanupWorktree returns nil. The only observable signal is
-	// the log line — and this is the population it has to mean something for.
+	// A worktree directory that EXISTS but that git does not know about (a
+	// plain directory, never `git worktree add`ed): `git worktree remove`
+	// fails, the manual fallback succeeds and CleanupWorktree returns nil. The
+	// only observable signal is the log line — and this is the population it
+	// has to mean something for.
 	//
 	// The directory is created deliberately (#400): teardown of a worktree that
 	// was never created returns early and says nothing, so pointing this case at
 	// a missing directory would pin the false alarm instead of the real signal.
-	root := t.TempDir()
+	root := initTestGitRepo(t, "main")
 	m := &Manager{workspaceRoot: root}
-	if err := os.MkdirAll(m.worktreePath("nightgauge/nightgauge", 110), 0o755); err != nil {
+	if err := os.MkdirAll(mustWorktreePath(t, m, "nightgauge/nightgauge", 110), 0o755); err != nil {
 		t.Fatalf("create worktree dir: %v", err)
 	}
 
@@ -841,7 +842,7 @@ func TestCleanupWorktree_RemovesWorktreeHoldingOnlyPipelineExhaust(t *testing.T)
 	// leak is manufactured — one completed run at a time.
 	f := newSweepFixture(t)
 	m := &Manager{workspaceRoot: f.root}
-	wt := m.worktreePath("owner/clone", 1252)
+	wt := mustWorktreePath(t, m, "owner/clone", 1252)
 	run(t, f.root, "git", "worktree", "add", wt, "-b", "fix/1252", "origin/main")
 	f.writeExhaust(wt)
 
@@ -859,7 +860,7 @@ func TestCleanupWorktree_PreservesTrackedBookkeepingChange(t *testing.T) {
 	f.commitToMain(assessment, "{}\n")
 
 	m := &Manager{workspaceRoot: f.root}
-	wt := m.worktreePath("owner/clone", 1253)
+	wt := mustWorktreePath(t, m, "owner/clone", 1253)
 	run(t, f.root, "git", "worktree", "add", wt, "-b", "fix/1253", "origin/main")
 	run(t, wt, "git", "rm", "--cached", "-q", assessment)
 
@@ -1044,4 +1045,32 @@ func assertSkippedDetail(t *testing.T, res WorktreeSweepResult, path string, wan
 		return
 	}
 	t.Errorf("%s not reported as skipped; skipped=%+v", path, res.Skipped)
+}
+
+// TestSweepMergedWorktrees_FindsWorktreeOutsideTree: pipeline worktrees live
+// at the resolved base outside the working tree since #2038. The sweep finds
+// them through `git worktree list`, never by scanning a directory under the
+// repo, so a merged one there is reclaimed like any other.
+func TestSweepMergedWorktrees_FindsWorktreeOutsideTree(t *testing.T) {
+	f := newSweepFixture(t)
+	m := &Manager{workspaceRoot: f.root}
+	wt := mustWorktreePath(t, m, "acme/widget", 2038)
+	if rel, _ := filepath.Rel(f.root, wt); !strings.HasPrefix(rel, "..") {
+		t.Fatalf("precondition: %s must be outside the working tree %s", wt, f.root)
+	}
+	run(t, f.root, "git", "worktree", "add", wt, "-b", "fix/2038-thing", "origin/main")
+	f.commitIn(wt, "fix.txt", "fixed\n")
+	f.squashMergeToMain("fix/2038-thing")
+
+	res, err := SweepMergedWorktrees(WorktreeSweepOptions{RepoRoot: f.root})
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(res.Reclaimed) != 1 || res.Reclaimed[0].IssueNumber != 2038 {
+		t.Fatalf("expected the outside-tree worktree to be reclaimed, got reclaimed=%+v skipped=%+v",
+			res.Reclaimed, res.Skipped)
+	}
+	if _, err := os.Stat(wt); !os.IsNotExist(err) {
+		t.Errorf("worktree directory still on disk at %s", wt)
+	}
 }

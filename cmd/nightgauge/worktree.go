@@ -28,6 +28,7 @@ func worktreeCmd() *cobra.Command {
 	}
 	cmd.AddCommand(worktreeSweepCmd())
 	cmd.AddCommand(worktreeRecoverCmd())
+	cmd.AddCommand(worktreeBaseCmd())
 	return cmd
 }
 

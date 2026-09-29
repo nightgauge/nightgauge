@@ -20,8 +20,14 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "child_process";
+import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
-import { resolveMainRepoRoot } from "../../src/utils/adaptiveBudgetLoader";
+import {
+  resolveMainRepoRoot,
+  resolveMainRepoRootAsync,
+} from "../../src/utils/adaptiveBudgetLoader";
 
 const REPO = path.join(path.sep + "repos", "target");
 
@@ -57,5 +63,43 @@ describe("history root resolution across both worktree layouts (#1017)", () => {
     const worktree = path.join(REPO, ".nightgauge", "worktrees", "target-issue-9");
     expect(resolveMainRepoRoot(worktree)).toBe(REPO);
     expect(resolveMainRepoRoot(worktree)).not.toContain(".nightgauge");
+  });
+});
+
+describe("history root of a Go worktree outside the tree (#2038)", () => {
+  it("asks git for the main checkout when no in-tree marker names it", async () => {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "ng-history-root-")));
+    try {
+      const repo = path.join(tmp, "repo");
+      fs.mkdirSync(repo);
+      const git = (args: string[], cwd: string) =>
+        execFileSync("git", args, { cwd, encoding: "utf-8" });
+      git(["init", "--quiet"], repo);
+      git(
+        [
+          "-c",
+          "user.email=t@t",
+          "-c",
+          "user.name=t",
+          "commit",
+          "--quiet",
+          "--allow-empty",
+          "-m",
+          "x",
+        ],
+        repo
+      );
+      const worktree = path.join(tmp, "state", "worktrees", "0123456789ab", "repo-issue-2038");
+      git(["worktree", "add", "--quiet", "--detach", worktree], repo);
+
+      // The sync form never spawns: before the async lookup it cannot know.
+      expect(resolveMainRepoRoot(worktree)).toBe(worktree);
+      expect(await resolveMainRepoRootAsync(worktree)).toBe(repo);
+      expect(await resolveMainRepoRootAsync(repo)).toBe(repo);
+      // Once cached, the sync form answers too.
+      expect(resolveMainRepoRoot(worktree)).toBe(repo);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

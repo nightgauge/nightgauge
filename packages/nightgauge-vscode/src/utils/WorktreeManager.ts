@@ -75,7 +75,7 @@ export class WorktreeManager {
    * Get the absolute path where a worktree for an issue would live
    */
   getWorktreePath(issueNumber: number): string {
-    return path.join(this.repoRoot, this.worktreeBase, `issue-${issueNumber}`);
+    return path.resolve(this.repoRoot, this.worktreeBase, `issue-${issueNumber}`);
   }
 
   /**
@@ -125,7 +125,7 @@ export class WorktreeManager {
     }
 
     // Ensure the base directory exists
-    const baseDir = path.join(this.repoRoot, this.worktreeBase);
+    const baseDir = path.resolve(this.repoRoot, this.worktreeBase);
     await fs.mkdir(baseDir, { recursive: true });
 
     // Add .worktrees to .gitignore if not already there
@@ -607,7 +607,7 @@ export class WorktreeManager {
       });
 
       const worktrees: WorktreeInfo[] = [];
-      const baseDir = path.join(this.repoRoot, this.worktreeBase);
+      const baseDir = path.resolve(this.repoRoot, this.worktreeBase);
       const entries = stdout.split("\n\n").filter(Boolean);
 
       for (const entry of entries) {
@@ -752,7 +752,7 @@ export class WorktreeManager {
     }
 
     // Check for directories in worktree base that aren't tracked by git
-    const baseDir = path.join(this.repoRoot, this.worktreeBase);
+    const baseDir = path.resolve(this.repoRoot, this.worktreeBase);
     try {
       const entries = await fs.readdir(baseDir, { withFileTypes: true });
       const activeWorktrees = await this.listActive();
@@ -935,6 +935,9 @@ export class WorktreeManager {
    * goes to the repository's info/exclude, which every worktree shares.
    */
   private async ensureGitignore(): Promise<void> {
+    // An absolute base (a machine- or local-tier pipeline.worktree_base,
+    // ADR-024 § 9) is outside the working tree: nothing to ignore.
+    if (path.isAbsolute(this.worktreeBase)) return;
     const base = this.worktreeBase.replace(/^\/+|\/+$/g, "");
     try {
       const content = await fs.readFile(path.join(this.repoRoot, ".gitignore"), "utf-8");

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/config"
 )
 
 // TestWorktreePathDerivation_CreationAndTeardownAgree pins the #400 agreement:
@@ -15,7 +17,7 @@ import (
 //
 // The name shape itself is part of the contract: "{repo}-issue-{N}", not the
 // bare "issue-{N}" the VSCode extension's WorktreeManager uses. Every run in a
-// multi-repo workspace shares one {workspaceRoot}/.nightgauge/worktrees/ root,
+// multi-repo workspace may share one worktree base (pipeline.worktree_base),
 // so the "{repo}-" prefix is what keeps two repos' issue #{N} from colliding —
 // and IssueNumberFromWorktreeDir must still read the issue number back out of
 // it (the single-parser contract).
@@ -43,8 +45,16 @@ func TestWorktreePathDerivation_CreationAndTeardownAgree(t *testing.T) {
 	if got := filepath.Base(created); got != wantBase {
 		t.Fatalf("worktree base name = %q, want %q — the Go execution layout is {repo}-issue-{N}", got, wantBase)
 	}
-	if got, want := filepath.Dir(created), filepath.Join(repoRoot, ".nightgauge", "worktrees"); got != want {
-		t.Fatalf("worktree parent = %q, want %q", got, want)
+	// Outside the working tree, in the resolved base (#2038, ADR-024 § 9).
+	wantParent, err := config.ResolveWorktreeBase(repoRoot)
+	if err != nil {
+		t.Fatalf("ResolveWorktreeBase: %v", err)
+	}
+	if got := filepath.Dir(created); got != wantParent {
+		t.Fatalf("worktree parent = %q, want %q", got, wantParent)
+	}
+	if rel, _ := filepath.Rel(repoRoot, created); !strings.HasPrefix(rel, "..") {
+		t.Fatalf("worktree %q is inside the working tree %q", created, repoRoot)
 	}
 	if n, ok := IssueNumberFromWorktreeDir(wantBase); !ok || n != issue {
 		t.Fatalf("IssueNumberFromWorktreeDir(%q) = (%d, %v), want (%d, true) — the single parser must read "+
@@ -89,8 +99,8 @@ func TestCleanupWorktree_NeverCreatedWorktreeIsSilent(t *testing.T) {
 	m := &Manager{workspaceRoot: repoRoot}
 
 	// Precondition: nothing was ever provisioned for this issue.
-	if _, err := os.Stat(m.worktreePath(repo, issue)); !os.IsNotExist(err) {
-		t.Fatalf("precondition: %s must not exist; stat err = %v", m.worktreePath(repo, issue), err)
+	if _, err := os.Stat(mustWorktreePath(t, m, repo, issue)); !os.IsNotExist(err) {
+		t.Fatalf("precondition: %s must not exist; stat err = %v", mustWorktreePath(t, m, repo, issue), err)
 	}
 
 	logged := captureLog(t, func() {

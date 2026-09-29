@@ -10,8 +10,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
 	"github.com/nightgauge/nightgauge/internal/gitworktree"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // EnsureWorktree provisions (or reuses) the run's isolated worktree before any
@@ -27,13 +29,20 @@ func (m *Manager) EnsureWorktree(repo string, issueNumber int) (string, error) {
 }
 
 // ensureWorktree creates a git worktree for isolated execution.
-// Path: {workspaceRoot}/.nightgauge/worktrees/{repo}-issue-{N}/ — derived by
-// worktreePath, the same function CleanupWorktree tears down with. The
-// "{repo}-" prefix is load-bearing: every run in the workspace shares one
-// worktrees/ root, so two repos' issue #{N} would collide without it. The bare
+// Path: <worktree base>/{repo}-issue-{N}/, outside the working tree (ADR-024
+// § 9) — derived by worktreePath, the same function CleanupWorktree tears
+// down with. The base is pipeline.worktree_base (machine or local tier) or,
+// unset, STATE/worktrees/<repo-key>; config.ResolveWorktreeBase is the one
+// resolver. The "{repo}-" prefix keeps two repos' issue #{N} apart. The bare
 // "issue-{N}" shape belongs to the VSCode extension's WorktreeManager; both are
 // read back by IssueNumberFromWorktreeDir (#400). See
 // docs/GO_BINARY.md#worktree-directory-name-shapes.
+//
+// A worktree a run created before #2038, at the legacy in-tree location
+// <repo>/.nightgauge/worktrees/{repo}-issue-{N}, is reused rather than
+// duplicated: a live worktree cannot be moved under a running stage, and a
+// second worktree for the same issue would fight it for the feature branch.
+// The migration (#2040) moves idle ones.
 //
 // Error contract (#399): on error the returned path is non-empty iff the
 // worktree exists on disk. Provisioning does not end when `git worktree add`
@@ -44,7 +53,18 @@ func (m *Manager) EnsureWorktree(repo string, issueNumber int) (string, error) {
 // path inspected the wrong tree. A non-nil error always means failure,
 // whatever the path: the path only ever names a tree that exists.
 func (m *Manager) ensureWorktree(repo string, issueNumber int) (string, error) {
-	worktreeDir := m.worktreePath(repo, issueNumber)
+	if legacy := m.legacyWorktreePath(repo, issueNumber); legacy != "" {
+		// A real directory only: a symlink planted at the legacy location is
+		// never followed into a worktree.
+		if info, err := os.Lstat(legacy); err == nil && info.IsDir() {
+			return legacy, nil
+		}
+	}
+
+	worktreeDir, err := m.worktreePath(repo, issueNumber)
+	if err != nil {
+		return "", fmt.Errorf("resolve worktree path: %w", err)
+	}
 
 	// Check if worktree already exists
 	if _, err := os.Stat(worktreeDir); err == nil {
@@ -57,9 +77,15 @@ func (m *Manager) ensureWorktree(repo string, issueNumber int) (string, error) {
 		return "", fmt.Errorf("repo root not found: %s", repoRoot)
 	}
 
-	// Create parent directory
-	if err := os.MkdirAll(filepath.Dir(worktreeDir), 0755); err != nil {
+	// Create the base (mode 0700: a worktree holds source code), then prove
+	// containment again: the base now exists, so a symlink planted at any of
+	// its components is evaluated rather than skipped as not-yet-existing.
+	base := filepath.Dir(worktreeDir)
+	if err := layout.EnsureWorktreeBase(base); err != nil {
 		return "", fmt.Errorf("create worktree parent: %w", err)
+	}
+	if err := layout.CheckWorktreeContainment(base, worktreeDir); err != nil {
+		return "", err
 	}
 
 	// Resolve the main repo's current HEAD commit, then create the worktree
@@ -282,9 +308,20 @@ func buildSdkCliInWorktree(worktreeDir string, repoRoot string) error {
 // running — or is paused, cooling down or fully saturated — such a stack is
 // collected by `nightgauge cleanup` and by nothing else.
 func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
-	worktreeDir := m.worktreePath(repo, issueNumber)
 	repoRoot := m.repoRoot(repo)
 	projectName := fmt.Sprintf("issue-%d", issueNumber)
+
+	// The run's worktree is at the resolved location, or at the legacy in-tree
+	// one when the run began before #2038 (see ensureWorktree).
+	worktreeDir, resolveErr := m.worktreePath(repo, issueNumber)
+	if legacy := m.legacyWorktreePath(repo, issueNumber); legacy != "" {
+		if info, err := os.Lstat(legacy); err == nil && info.IsDir() {
+			worktreeDir, resolveErr = legacy, nil
+		}
+	}
+	if resolveErr != nil {
+		return fmt.Errorf("resolve worktree path: %w", resolveErr)
+	}
 
 	if _, err := os.Stat(worktreeDir); os.IsNotExist(err) {
 		_, _ = gitworktree.Remove(repoRoot, worktreeDir)
@@ -367,25 +404,42 @@ func (m *Manager) CleanupWorktree(repo string, issueNumber int) error {
 	})
 }
 
-// worktreePath is the on-disk location of the run's worktree.
+// worktreePath is the on-disk location of the run's worktree:
+// <worktree base>/<repo>-issue-<N>, with the base from
+// config.ResolveWorktreeBase and containment proven by layout.WorktreePath
+// (the path, after symlink evaluation, is a direct child of the base).
 //
-// IT ROOTS AT THE RUN'S TARGET REPO (m.repoRoot), NOT THE LAUNCH ROOT (#882).
-// The leaf already carries the target repo's short name — that qualifier exists
-// so two repos' issue #N cannot collide inside one workspace — and rooting the
-// base at m.workspaceRoot while the leaf named the target repo is precisely how
-// a cross-repo run put `A/.nightgauge/worktrees/B-issue-227/` on disk while B
-// received nothing. The worktree must live under the repo whose git dir it is
-// checked out from, or every consumer that derives repo state from the worktree
-// path (sweeps, reclamation, stage context) reads the wrong repo.
-func (m *Manager) worktreePath(repo string, issueNumber int) string {
-	// Use repo name (without owner) as the directory prefix
-	repoName := repo
-	if idx := strings.LastIndex(repo, "/"); idx >= 0 {
-		repoName = repo[idx+1:]
+// THE BASE IS RESOLVED FOR THE RUN'S TARGET REPO (m.repoRoot), NOT THE LAUNCH
+// ROOT (#882). The leaf carries the target repo's short name and the default
+// base is keyed on the target's git common dir: rooting it at m.workspaceRoot
+// is how a cross-repo run once put B's worktree under A while B received
+// nothing, and every consumer that derives repo state from the worktree reads
+// the wrong repo when that happens.
+func (m *Manager) worktreePath(repo string, issueNumber int) (string, error) {
+	root := m.repoRoot(repo)
+	base, err := config.ResolveWorktreeBase(root)
+	if err != nil {
+		return "", err
 	}
-	return filepath.Join(m.repoRoot(repo), ".nightgauge", "worktrees",
-		fmt.Sprintf("%s-issue-%d", repoName, issueNumber))
+	return layout.WorktreePath(base, repo, issueNumber)
 }
+
+// legacyWorktreePath is where the manager created the run's worktree before
+// #2038: <repoRoot>/.nightgauge/worktrees/<repo>-issue-<N>, inside the working
+// tree. Only read to keep a run that began there on the worktree it already
+// has; nothing is created there. "" when the repo name cannot name a worktree.
+func (m *Manager) legacyWorktreePath(repo string, issueNumber int) string {
+	leaf, err := layout.WorktreeDirName(repo, issueNumber)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(m.repoRoot(repo), LegacyWorktreeBaseRel, leaf)
+}
+
+// LegacyWorktreeBaseRel is the repo-relative directory the Go manager created
+// worktrees in before #2038. Existing worktrees there are reused and reported,
+// never created; the migration (#2040) moves them.
+var LegacyWorktreeBaseRel = filepath.Join(".nightgauge", "worktrees")
 
 func (m *Manager) repoRoot(repo string) string {
 	// Resolve the run's target-repo root via the configured resolver so a

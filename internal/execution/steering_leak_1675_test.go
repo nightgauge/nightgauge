@@ -49,7 +49,7 @@ func TestRunStage_CodexStageCommitNeverPublishesSteering_1675(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("RunStage: %v", err)
 	}
-	wt := m.worktreePath("nightgauge/nightgauge", 1675)
+	wt := mustWorktreePath(t, m, "nightgauge/nightgauge", 1675)
 
 	show := func(ref string) string {
 		out, err := gittest.Command(wt, "show", ref).Output()

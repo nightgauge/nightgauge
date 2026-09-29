@@ -27,7 +27,6 @@ pr:
 
 pipeline:
   budget_preset: conservative
-  worktree_base: .worktrees
   context_schema_repair:
     enabled: false
     max_attempts: 1

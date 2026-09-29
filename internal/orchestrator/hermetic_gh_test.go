@@ -62,8 +62,17 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	os.Setenv("NIGHTGAUGE_GITHUB_API_LOG", filepath.Join(ledgerDir, "github-api.jsonl"))
+	// Pipeline worktrees default to STATE/worktrees/<repo-key> (#2038): keep
+	// every worktree a scheduler test provisions out of the real state root.
+	stateHome, err := os.MkdirTemp("", "orchestrator-state-")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "TestMain: %v\n", err)
+		os.Exit(1)
+	}
+	os.Setenv("NIGHTGAUGE_STATE_HOME", stateHome)
 	code := m.Run()
 	os.RemoveAll(ledgerDir)
+	os.RemoveAll(stateHome)
 	if _, err := os.Stat(".nightgauge"); err == nil {
 		fmt.Fprintln(os.Stderr, "\nFAIL: a test wrote .nightgauge/ into the source tree (internal/orchestrator); use t.TempDir() (#2171)")
 		if code == 0 {

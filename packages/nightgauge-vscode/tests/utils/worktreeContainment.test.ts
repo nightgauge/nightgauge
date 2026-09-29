@@ -707,3 +707,52 @@ describe("parsePorcelainZ", () => {
     expect(parsePorcelainZ("?? src/a file.ts\0")).toEqual([{ code: "??", path: "src/a file.ts" }]);
   });
 });
+
+describe("a pipeline worktree outside the repo root (#2038, ADR-024 § 9)", () => {
+  /** A Go-manager worktree at `STATE/worktrees/<repo-key>/primary-issue-2038`. */
+  let outside: string;
+
+  beforeEach(() => {
+    outside = path.join(tmp, "state", "worktrees", "0123456789ab", "primary-issue-2038");
+    git(["worktree", "add", "--quiet", "-b", "fix/2038", outside, "HEAD"], primary);
+    expect(path.relative(primary, outside).startsWith("..")).toBe(true);
+  });
+
+  it("accepts the stage's own writes there and keeps the main checkout in scope", async () => {
+    const targets = await resolveContainmentTargets(outside, [primary, sibling]);
+    expect(targets).toEqual([primary, sibling]);
+
+    const baseline = await captureContainmentBaseline({
+      stageCwd: outside,
+      repoPaths: [primary, sibling],
+    });
+    fs.writeFileSync(path.join(outside, "src", "handlers.ts"), "export function handle() {}\n//\n");
+    fs.writeFileSync(path.join(outside, "src", "new-thing.ts"), "export const x = 1;\n");
+
+    const report = await detectContainmentBreach({
+      baseline,
+      stage: "feature-dev",
+      issueNumber: 2038,
+    });
+    expect(report.breaches).toEqual([]);
+    expect(report.warnings).toEqual([]);
+  });
+
+  it("still catches a write into the repo's own main checkout", async () => {
+    const baseline = await captureContainmentBaseline({
+      stageCwd: outside,
+      repoPaths: [primary, sibling],
+    });
+    fs.writeFileSync(path.join(primary, "src", "router.ts"), "export const routes = ['leaked'];\n");
+
+    const report = await detectContainmentBreach({
+      baseline,
+      stage: "feature-dev",
+      issueNumber: 2038,
+    });
+    expect(report.breaches.map((b) => b.repoName)).toEqual(["primary"]);
+    expect(report.breaches[0].paths).toEqual(["src/router.ts"]);
+    // Artifacts go to the main checkout, which outlives the worktree.
+    expect(report.artifactDir?.startsWith(path.join(primary, CONTAINMENT_DIR))).toBe(true);
+  });
+});

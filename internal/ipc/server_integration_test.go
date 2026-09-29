@@ -88,6 +88,15 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	defer os.RemoveAll(machineConfigHome)
+
+	// Pipeline worktrees default to STATE/worktrees/<repo-key> (#2038): keep
+	// every worktree a handler provisions out of the real state root.
+	stateHome, err := os.MkdirTemp("", "nightgauge-ipc-state-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "TempDir (state isolation):", err)
+		os.Exit(1)
+	}
+	_ = os.Setenv("NIGHTGAUGE_STATE_HOME", stateHome)
 	os.Setenv("NIGHTGAUGE_CONFIG_HOME", machineConfigHome)
 
 	// Point every spawned `serve` subprocess's $HOME, and its machine-state
@@ -136,6 +145,7 @@ func TestMain(m *testing.M) {
 	})
 	code := m.Run()
 	restoreDoctor()
+	_ = os.RemoveAll(stateHome)
 	os.Exit(code)
 }
 

@@ -1261,9 +1261,16 @@ type UICoreConfig struct {
 }
 
 // PipelineConfig captures the subset of the YAML pipeline: block that the Go
-// binary needs. Other fields (worktree_base, stage_cost_caps, etc.) are owned
-// by the TypeScript side and intentionally not mirrored here.
+// binary needs. Other fields (stage_cost_caps, etc.) are owned by the
+// TypeScript side and intentionally not mirrored here.
 type PipelineConfig struct {
+	// WorktreeBase is pipeline.worktree_base, the directory pipeline worktrees
+	// are created in (ADR-024 § 9). Displayed by `config show`; never read from
+	// here to place a worktree: ResolveWorktreeBase reads it per tier, because
+	// it is a machine- or local-tier key and a value in the committed team file
+	// is an error, which the merged view cannot tell apart.
+	WorktreeBase string `yaml:"worktree_base,omitempty" json:"worktreeBase,omitempty"`
+
 	// StallIdleMs is the absolute idle-kill threshold in milliseconds. When set,
 	// overrides the computed threshold×multiplier value. Mirrors the TypeScript
 	// pipeline.stall_idle_ms field (Issue #3484).

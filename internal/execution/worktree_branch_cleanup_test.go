@@ -136,7 +136,7 @@ func TestCleanupWorktree_PreservesDirtyWorktree(t *testing.T) {
 	// CleanupWorktree resolves its own path via m.worktreePath — create the
 	// worktree there directly rather than via the fixture's ".worktrees/"
 	// helper, which uses a different layout.
-	wt := m.worktreePath("owner/repo", 203)
+	wt := mustWorktreePath(t, m, "owner/repo", 203)
 	run(t, f.root, "git", "worktree", "add", wt, "-b", "fix/203-thing", "origin/main")
 	writeFile(t, filepath.Join(wt, "fix.txt"), "fixed\n")
 	run(t, wt, "git", "add", ".")

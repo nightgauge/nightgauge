@@ -1752,16 +1752,25 @@ The two dispatch paths lay their worktrees out differently, and the scanner sees
 both — often on the same machine, since a repo can be driven by the extension one
 day and the Go scheduler the next:
 
-| Creator                            | Directory                                                |
-| ---------------------------------- | -------------------------------------------------------- |
-| VSCode extension `WorktreeManager` | `{repoRoot}/{worktree_base}/issue-{N}`                   |
-| Go `execution.Manager`             | `{workspaceRoot}/.nightgauge/worktrees/{repo}-issue-{N}` |
+| Creator                              | Directory                                           |
+| ------------------------------------ | --------------------------------------------------- |
+| VSCode extension `WorktreeManager`   | `{repoRoot}/{worktree_base}/issue-{N}`              |
+| Go `execution.Manager`               | `{worktree base}/{repo}-issue-{N}`                  |
+| Go `execution.Manager`, before #2038 | `{repoRoot}/.nightgauge/worktrees/{repo}-issue-{N}` |
+
+The Go worktree base is outside the working tree (ADR-024 § 9):
+`pipeline.worktree_base` from the machine or local config tier, else
+`STATE/worktrees/<repo-key>`, resolved by `config.ResolveWorktreeBase` and printed
+by `nightgauge worktree base`. `layout.WorktreePath` refuses a path that, after
+symlink evaluation, is not directly inside that base. A worktree a run created at
+the pre-#2038 location is reused until the run ends; sweep and reclaim find
+worktrees at either location through `git worktree list`.
 
 **The `{repo}-` prefix is load-bearing, not decoration.** The extension nests its
 worktree base (default `.worktrees`) inside each repo root, so `issue-42` is
-already namespaced by the repo that contains it. The Go layer does the opposite:
-every run in the workspace shares one `{workspaceRoot}/.nightgauge/worktrees/`
-root, so in a multi-repo workspace two repos' issue #42 would land on the same
+already namespaced by the repo that contains it. The Go layer's base can be one
+directory shared by several repositories (a configured `pipeline.worktree_base`),
+so in a multi-repo workspace two repos' issue #42 would land on the same
 directory without the prefix — one run checking out over another's tree. Dropping
 the prefix to "match the extension" reintroduces exactly that collision.
 
@@ -5665,14 +5674,11 @@ nightgauge process, so the argv-basename filter could never have seen them.
   produces nothing at all) is a MECHANISM FAILURE, not "nothing found": it
   routes the whole check through `unverifiableProcessScan` rather than
   reporting clean off a scan that never ran (#296).
-- **Three known worktree bases per repo root**:
-  `.nightgauge/worktrees` (the Go `execution.Manager`'s own default),
-  `.worktrees` (the VSCode extension's default, `WorktreeManager.ts`), and
-  `.claude/worktrees` (Claude Code's own base) — the same three
-  `worktreeContainment.ts`'s `isLinkedWorktree` doc comment names. Best-effort,
-  not authoritative: a workspace-configured `pipeline.worktree_base` is
-  TypeScript-side config this Go binary does not parse, so a custom base is
-  invisible to this scan.
+- **Four known worktree bases per repo root**: the Go `execution.Manager`'s
+  resolved base outside the tree (`pipeline.worktree_base`, else
+  `STATE/worktrees/<repo-key>`, #2038), `.nightgauge/worktrees` (its pre-#2038
+  default), `.worktrees` (the VSCode extension's default, `WorktreeManager.ts`),
+  and `.claude/worktrees` (Claude Code's own base).
 - **Containment is decided lexically, and cwd need not exist.** Only the
   worktree-base directory (e.g. `<repo>/.nightgauge/worktrees`) is resolved
   with `filepath.EvalSymlinks` — it still exists whenever this scan has

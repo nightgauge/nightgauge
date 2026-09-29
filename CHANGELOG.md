@@ -198,6 +198,24 @@ changelog, and the release workflow refuses a tag that does not.
   and with no usable cache home the index is rebuilt in memory for the call
   and nothing is written. An old `.recall-cache/` in a checkout is no longer
   read and can be deleted; the layout migration (#2040) removes it.
+- **Pipeline worktrees are created outside the working tree** (#2038). The Go
+  manager now puts a run's worktree at `<worktree base>/<repo>-issue-<N>`,
+  where the base is `pipeline.worktree_base` or, unset, the machine-state
+  directory keyed per clone (`STATE/worktrees/<repo-key>`,
+  [ADR-024](docs/decisions/024-data-and-state-layout.md) § 9), instead of
+  `<repo>/.nightgauge/worktrees/`, which search, watchers, linters and
+  `git add -A` all traversed. `pipeline.worktree_base` is now a machine- or
+  local-tier key read by the Go binary: a relative value, a value in the
+  committed `.nightgauge/config.yaml`, or one that resolves inside the working
+  tree fails worktree creation with the file, line and fix. A worktree path
+  that resolves, after symlink evaluation, anywhere but directly inside the
+  base is refused. `nightgauge worktree base` prints the resolved base, and the
+  extension's issue-context, Knowledge view, architecture-plan and budget
+  history readers take it from there. Worktrees already under
+  `.nightgauge/worktrees/` are not moved: a run that began there keeps its
+  worktree, and sweep and reclaim still find it through `git worktree list`.
+  This repository's committed `worktree_base: .worktrees` is removed.
+
 - **`nightgauge doctor --fix --yes` restarts a stopped autonomous loop through
   the daemon** (#2090). A stopped `autonomous-loop` (`NGD029`) now offers a
   `confirm` restart that asks the daemon serving the workspace to start its

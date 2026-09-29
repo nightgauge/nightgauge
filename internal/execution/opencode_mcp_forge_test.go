@@ -41,6 +41,14 @@ func TestMain(m *testing.M) {
 	// inherits os.Environ(): without this, a developer's global
 	// commit.gpgsign=true fails those commits (#2283).
 	gittest.IsolateProcess()
+	// Pipeline worktrees default to STATE/worktrees/<repo-key> (#2038): point
+	// STATE at a per-process directory so no test creates a worktree under
+	// the developer's real machine-state root.
+	stateHome, err := os.MkdirTemp("", "ng-exec-state-")
+	if err != nil {
+		panic(err)
+	}
+	_ = os.Setenv("NIGHTGAUGE_STATE_HOME", stateHome)
 	restore := adapters.SwapOpenCodeMcpForgeForTest(openCodeMapForge{err: errors.New("the execution test binary reads no forge")})
 	restoreDiscovery := adapters.SwapOpenCodeLocalDiscoveryForTest(func(adapters.OpenCodeEndpoint, string) (models.LocalDescriptor, error) {
 		return models.LocalDescriptor{}, errors.New("the execution test binary asks no model server")
@@ -54,6 +62,7 @@ func TestMain(m *testing.M) {
 	}
 	restoreDiscovery()
 	restore()
+	_ = os.RemoveAll(stateHome)
 	os.Exit(code)
 }
 

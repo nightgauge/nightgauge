@@ -145,7 +145,7 @@ func TestRunStage_StampsWorktreeOnRuntime_WhenStageFailsBeforeSpawn(t *testing.T
 			issue:        3992,
 			setupRepo:    notAGitRepo,
 			adapter:      &unstartableAdapter{bin: filepath.Join(t.TempDir(), "no-such-agent-cli")},
-			wantErr:      "worktree setup: get current HEAD commit",
+			wantErr:      "worktree setup: resolve worktree path",
 			wantWorktree: false,
 		},
 	}
@@ -177,12 +177,16 @@ func TestRunStage_StampsWorktreeOnRuntime_WhenStageFailsBeforeSpawn(t *testing.T
 				t.Fatalf("RunStage failed at the wrong exit: error %q does not contain %q", err, tc.wantErr)
 			}
 
-			want := m.worktreePath(repo, tc.issue)
+			// Outside a git repository there is no clone to key the default
+			// base on, so the path does not resolve at all (#2038).
+			want, wantErr := m.worktreePath(repo, tc.issue)
 
 			if !tc.wantWorktree {
-				if _, statErr := os.Stat(want); !os.IsNotExist(statErr) {
-					t.Fatalf("precondition: %s must NOT exist — this case fails before creation; stat err = %v",
-						want, statErr)
+				if wantErr == nil {
+					if _, statErr := os.Stat(want); !os.IsNotExist(statErr) {
+						t.Fatalf("precondition: %s must NOT exist — this case fails before creation; stat err = %v",
+							want, statErr)
+					}
 				}
 				if got := rt.Snapshot().WorktreeDir; got != "" {
 					t.Errorf("runtime.WorktreeDir = %q, want \"\" — provisioning failed before the worktree "+
@@ -194,6 +198,9 @@ func TestRunStage_StampsWorktreeOnRuntime_WhenStageFailsBeforeSpawn(t *testing.T
 				return
 			}
 
+			if wantErr != nil {
+				t.Fatalf("worktreePath: %v", wantErr)
+			}
 			if _, statErr := os.Stat(want); statErr != nil {
 				t.Fatalf("precondition: worktree %s must exist on disk after the failed stage: %v", want, statErr)
 			}

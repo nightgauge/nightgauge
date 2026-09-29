@@ -40,11 +40,12 @@ func TestIssueContextCandidates_CoversBothWorktreeLayouts(t *testing.T) {
 // right is worthless: the two must agree byte for byte, or the search misses
 // the file on exactly the runs it was added for.
 func TestIssueContextCandidates_MatchesWorktreePath(t *testing.T) {
-	m := &Manager{workspaceRoot: "/repo"}
-	created := m.worktreePath("acme/widget", 42)
+	root := initTestGitRepo(t, "main")
+	m := &Manager{workspaceRoot: root}
+	created := mustWorktreePath(t, m, "acme/widget", 42)
 	want := filepath.Join(created, IssueContextRelPath(42))
 
-	for _, got := range IssueContextCandidates("/repo", "", "acme/widget", 42) {
+	for _, got := range IssueContextCandidates(root, "", "acme/widget", 42) {
 		if got == want {
 			return
 		}

@@ -55,6 +55,7 @@ import {
   attentionCardUrl,
 } from "../views/attention";
 import { pipelineFileCandidates } from "../utils/issueContextCandidates";
+import { primeWorktreeBase } from "../utils/worktreeLocation";
 import type { Logger } from "../utils/logger";
 
 export interface AttentionCommandDeps {
@@ -303,10 +304,13 @@ const ARCHITECTURE_APPROVAL_PRODUCER = "architecture-approval";
  *
  * `planning-{N}.json` is written by the planning stage into whichever root the
  * run actually used — the extension's `<repo>/.worktrees/issue-N`, the Go
- * manager's `<repo>/.nightgauge/worktrees/<name>-issue-N`, or the repo root
+ * manager's `<worktree base>/<name>-issue-N` outside the working tree (#2038;
+ * `<repo>/.nightgauge/worktrees/<name>-issue-N` before it), or the repo root
  * when the run took no worktree. `pipelineFileCandidates` is the shared list of
  * those layouts (#994/#1206); reading only one of them is how a reader learns
- * to report "no plan" for the majority of runs.
+ * to report "no plan" for the majority of runs. The Go base comes from the
+ * binary: registration starts that lookup for every workspace folder, and each
+ * read re-primes it, so a plan written there is found once the answer arrives.
  *
  * Returns undefined when nothing is on disk — the card still renders, minus the
  * plan section. Never throws.
@@ -315,6 +319,7 @@ export function readArchitecturePlan(request: AttentionRequestView): string | un
   const issue = request.context.issue;
   if (!issue || request.producer !== ARCHITECTURE_APPROVAL_PRODUCER) return undefined;
   const roots = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+  primeWorktreeBase(...roots);
   for (const root of roots) {
     const candidates = pipelineFileCandidates(
       root,
@@ -464,6 +469,7 @@ export function isToastWorthy(evt: AttentionEvent): boolean {
 }
 
 export function registerAttentionCommands(deps: AttentionCommandDeps): vscode.Disposable[] {
+  primeWorktreeBase(...(vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath));
   const { provider, treeView, logger, sweep } = deps;
   const disposables: vscode.Disposable[] = [];
 

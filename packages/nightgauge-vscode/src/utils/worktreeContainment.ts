@@ -391,8 +391,9 @@ async function pathsExplainedByRefMove(
  * mode), `<repo>` IS the stage's own tree and every write to it is legitimate.
  *
  * Asking git rather than pattern-matching `.worktrees/` keeps this correct for
- * every worktree base the pipeline uses (`.worktrees`, `.nightgauge/worktrees`,
- * `.claude/worktrees`) and for any the operator invents.
+ * every worktree base the pipeline uses (`.worktrees`, `.claude/worktrees`, the
+ * Go manager's base outside the working tree since #2038 and its in-tree
+ * `.nightgauge/worktrees` before that) and for any the operator invents.
  */
 async function isLinkedWorktree(stageCwd: string): Promise<boolean> {
   try {
