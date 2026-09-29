@@ -95,22 +95,20 @@ func TestCheckLeakedWorktrees_ReportsAStrandedWorktree(t *testing.T) {
 	r := newLeakRepo(t)
 	wt := r.strandedWorktree(1181)
 
-	item, warning := checkLeakedWorktrees(r.dir, aged(), nil)
+	fs, _ := worktreeLeakFindings(r.dir, aged(), nil)
+	text := findingsText(fs)
 
-	if item.OK {
-		t.Fatalf("a stranded worktree must not read as healthy: %+v", item)
+	if len(fs) == 0 {
+		t.Fatalf("a stranded worktree must not read as healthy: %s", text)
 	}
-	if !strings.Contains(item.Error, wt) {
-		t.Errorf("the check does not name the worktree: %q", item.Error)
+	if !strings.Contains(text, wt) {
+		t.Errorf("the check does not name the worktree: %q", text)
 	}
 	// Naming what blocked it is what turns "uncommitted-changes" from an
 	// unfalsifiable verdict into something an operator can act on without
 	// opening the directory — the step nobody took for nine worktrees.
-	if !strings.Contains(item.Error, "unfinished.txt") {
-		t.Errorf("the check does not name the blocking path: %q", item.Error)
-	}
-	if warning == "" {
-		t.Error("a leak must produce a warning, not just a check entry")
+	if !strings.Contains(text, "unfinished.txt") {
+		t.Errorf("the check does not name the blocking path: %q", text)
 	}
 }
 
@@ -129,23 +127,22 @@ func TestCheckLeakedWorktrees_IgnoresAWorktreeHoldingOnlyExhaust(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	item, _ := checkLeakedWorktrees(r.dir, aged(), nil)
+	fs, _ := worktreeLeakFindings(r.dir, aged(), nil)
+	text := findingsText(fs)
 
-	if strings.Contains(item.Error, "uncommitted-changes") {
-		t.Errorf("pipeline exhaust was reported as a blocker: %q", item.Error)
+	if strings.Contains(text, "uncommitted-changes") {
+		t.Errorf("pipeline exhaust was reported as a blocker: %q", text)
 	}
 }
 
 func TestCheckLeakedWorktrees_HealthyRepoPasses(t *testing.T) {
 	r := newLeakRepo(t)
 
-	item, warning := checkLeakedWorktrees(r.dir, aged(), nil)
+	fs, _ := worktreeLeakFindings(r.dir, aged(), nil)
+	text := findingsText(fs)
 
-	if !item.OK {
-		t.Errorf("a repo with no worktrees must pass: %+v", item)
-	}
-	if warning != "" {
-		t.Errorf("unexpected warning: %q", warning)
+	if len(fs) != 0 {
+		t.Errorf("a repo with no worktrees must pass: %s", text)
 	}
 }
 
@@ -153,16 +150,13 @@ func TestCheckLeakedWorktrees_UnverifiableIsNeverHealthy(t *testing.T) {
 	// Not a git repository and not a workspace, so no roots resolve. #296's
 	// lesson: "I could not look" must never render as "there is nothing wrong",
 	// because the operator cannot tell the two apart from the output.
-	item, warning := checkLeakedWorktrees(t.TempDir(), aged(), nil)
-
-	if item.OK {
-		t.Fatalf("an unverifiable scan reported healthy: %+v", item)
+	fs, _ := worktreeLeakFindings(t.TempDir(), aged(), nil)
+	text := findingsText(fs)
+	if len(fs) == 0 {
+		t.Fatalf("an unverifiable scan reported healthy: %s", text)
 	}
-	if !strings.Contains(item.Error, "unverifiable") {
-		t.Errorf("the error does not say the scan could not run: %q", item.Error)
-	}
-	if warning == "" {
-		t.Error("an unverifiable scan must warn")
+	if !strings.Contains(text, "unverifiable") {
+		t.Errorf("the error does not say the scan could not run: %q", text)
 	}
 }
 
@@ -174,22 +168,19 @@ func TestCheckPipelineStashes_ReportsAnUnreclaimedStashWithItsAge(t *testing.T) 
 	// 45 days on from creation — every stash the audit found was months old,
 	// and an age-less report reads as "probably from the run that just
 	// finished" and gets ignored.
-	item, warning := checkPipelineStashes(r.dir, time.Now().Add(45*24*time.Hour))
-
-	if item.OK {
-		t.Fatalf("an unreclaimed pipeline stash must not read as healthy: %+v", item)
+	fs, detail := pipelineStashFindings(r.dir, time.Now().Add(45*24*time.Hour), nil)
+	text := findingsText(fs)
+	if len(fs) == 0 {
+		t.Fatalf("an unreclaimed pipeline stash must not read as healthy: %s", text)
 	}
-	if !strings.Contains(item.Error, "#692") {
-		t.Errorf("the check does not name the issue: %q", item.Error)
+	if !strings.Contains(text, "#692") {
+		t.Errorf("the check does not name the issue: %q", text)
 	}
-	if !strings.Contains(item.Error, "45d") || !strings.Contains(item.Detail, "oldest 45d") {
-		t.Errorf("the check does not report the stash's age: detail=%q error=%q", item.Detail, item.Error)
+	if !strings.Contains(text, "45d") || !strings.Contains(detail, "oldest 45d") {
+		t.Errorf("the check does not report the stash's age: detail=%q error=%q", detail, text)
 	}
-	if !strings.Contains(item.Error, "nightgauge stash sweep") {
-		t.Errorf("the check does not say how to reclaim it: %q", item.Error)
-	}
-	if warning == "" {
-		t.Error("a leaked stash must produce a warning")
+	if !strings.Contains(text, "nightgauge stash sweep") {
+		t.Errorf("the check does not say how to reclaim it: %q", text)
 	}
 }
 
@@ -198,28 +189,23 @@ func TestCheckPipelineStashes_IgnoresAnOperatorStash(t *testing.T) {
 	r.write("README", "my own work\n")
 	r.git("stash", "push", "-m", "wip before the refactor")
 
-	item, warning := checkPipelineStashes(r.dir, aged())
+	fs, _ := pipelineStashFindings(r.dir, aged(), nil)
+	text := findingsText(fs)
 
-	if !item.OK {
-		t.Fatalf("an operator's stash is not a pipeline leak: %+v", item)
-	}
-	if warning != "" {
-		t.Errorf("unexpected warning about an operator's stash: %q", warning)
+	if len(fs) != 0 {
+		t.Fatalf("an operator's stash is not a pipeline leak: %s", text)
 	}
 }
 
 func TestCheckPipelineStashes_NoRootsIsNeverHealthy(t *testing.T) {
 	// Not a git repository and not a workspace, so no roots resolve at all.
-	item, warning := checkPipelineStashes(t.TempDir(), aged())
-
-	if item.OK {
-		t.Fatalf("a scan with no roots reported healthy: %+v", item)
+	fs, _ := pipelineStashFindings(t.TempDir(), aged(), nil)
+	text := findingsText(fs)
+	if len(fs) == 0 {
+		t.Fatalf("a scan with no roots reported healthy: %s", text)
 	}
-	if !strings.Contains(item.Error, "unverifiable") {
-		t.Errorf("the error does not say the scan could not run: %q", item.Error)
-	}
-	if warning == "" {
-		t.Error("an unverifiable scan must warn")
+	if !strings.Contains(text, "unverifiable") {
+		t.Errorf("the error does not say the scan could not run: %q", text)
 	}
 }
 
@@ -240,16 +226,14 @@ func TestCheckPipelineStashes_UnreadableRootIsNeverHealthy(t *testing.T) {
 			"  - name: primary\n    path: .\n    role: primary\n"+
 			"  - name: broken\n    path: ../not-a-repo\n    role: primary\n")
 
-	item, warning := checkPipelineStashes(r.dir, aged())
+	fs, _ := pipelineStashFindings(r.dir, aged(), nil)
+	text := findingsText(fs)
 
-	if item.OK {
-		t.Fatalf("an unreadable root reported healthy: %+v", item)
+	if len(fs) == 0 {
+		t.Fatalf("an unreadable root reported healthy: %s", text)
 	}
-	if !strings.Contains(item.Error, "unverifiable") {
-		t.Errorf("the error does not say the scan could not run: %q", item.Error)
-	}
-	if warning == "" {
-		t.Error("an unverifiable scan must warn")
+	if !strings.Contains(text, "unverifiable") {
+		t.Errorf("the error does not say the scan could not run: %q", text)
 	}
 }
 
@@ -279,22 +263,20 @@ func TestCheckStrandedBranches_ReportsAMergedBranchNoWorktreeHolds(t *testing.T)
 	r := newLeakRepo(t)
 	r.strandMergedBranch(912, "fix/912-landed")
 
-	item, warning := checkStrandedBranches(r.dir, nil)
+	fs, _ := strandedBranchFindings(r.dir, nil)
+	text := findingsText(fs)
 
-	if item.OK {
-		t.Fatalf("a stranded merged branch must not read as healthy: %+v", item)
+	if len(fs) == 0 {
+		t.Fatalf("a stranded merged branch must not read as healthy: %s", text)
 	}
-	if !strings.Contains(item.Error, "fix/912-landed") {
-		t.Errorf("the check does not name the branch: %q", item.Error)
+	if !strings.Contains(text, "fix/912-landed") {
+		t.Errorf("the check does not name the branch: %q", text)
 	}
 	// The check deletes nothing itself; the delete it offers is a confirm
 	// remedy whose verb re-derives the merged proof at apply time.
-	if !strings.Contains(item.Error, "[confirm: Delete the merged local branch") ||
-		!strings.Contains(item.Error, "re-derived first") {
-		t.Errorf("the check does not offer a confirm delete that re-derives its proof: %q", item.Error)
-	}
-	if warning == "" {
-		t.Error("a stranded branch must produce a warning, not just a check entry")
+	if !strings.Contains(text, "[confirm: Delete the merged local branch") ||
+		!strings.Contains(text, "re-derived first") {
+		t.Errorf("the check does not offer a confirm delete that re-derives its proof: %q", text)
 	}
 }
 
@@ -328,29 +310,24 @@ func TestCheckStrandedBranches_KeepsUnmergedWork(t *testing.T) {
 func TestCheckStrandedBranches_HealthyRepoPasses(t *testing.T) {
 	r := newLeakRepo(t)
 
-	item, warning := checkStrandedBranches(r.dir, nil)
+	fs, _ := strandedBranchFindings(r.dir, nil)
+	text := findingsText(fs)
 
-	if !item.OK {
-		t.Errorf("a repo with only main must pass: %+v", item)
-	}
-	if warning != "" {
-		t.Errorf("unexpected warning: %q", warning)
+	if len(fs) != 0 {
+		t.Errorf("a repo with only main must pass: %s", text)
 	}
 }
 
 func TestCheckStrandedBranches_UnverifiableIsNeverHealthy(t *testing.T) {
 	// #296 again: no roots resolve, so the scan never ran. A clean bill of
 	// health here would be an assertion about nothing.
-	item, warning := checkStrandedBranches(t.TempDir(), nil)
-
-	if item.OK {
-		t.Fatalf("an unverifiable scan reported healthy: %+v", item)
+	fs, _ := strandedBranchFindings(t.TempDir(), nil)
+	text := findingsText(fs)
+	if len(fs) == 0 {
+		t.Fatalf("an unverifiable scan reported healthy: %s", text)
 	}
-	if !strings.Contains(item.Error, "unverifiable") {
-		t.Errorf("the error does not say the scan could not run: %q", item.Error)
-	}
-	if warning == "" {
-		t.Error("an unverifiable scan must warn")
+	if !strings.Contains(text, "unverifiable") {
+		t.Errorf("the error does not say the scan could not run: %q", text)
 	}
 }
 

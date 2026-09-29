@@ -82,6 +82,26 @@ func TestRunnerTimeoutYieldsNGD000(t *testing.T) {
 	}
 }
 
+// TestRunnerPanicDetailRenders: a check that panics yields NGD000 whose
+// evidence carries the panic value, and the human report prints it.
+func TestRunnerPanicDetailRenders(t *testing.T) {
+	reg := NewRegistry()
+	reg.MustRegister(Check{ID: "crashy", Code: "NGD999",
+		Run: func(context.Context, *Env) []Finding { panic("nil map in crashy") }})
+	res := BuildResult(Runner{}.Run(context.Background(), reg, &Env{}))
+	if len(res.Findings) != 1 || res.Findings[0].Code != "NGD000" {
+		t.Fatalf("findings = %+v, want one NGD000", res.Findings)
+	}
+	if got := res.Findings[0].Evidence["detail"]; got != "nil map in crashy" {
+		t.Errorf("evidence detail = %q, want the panic value", got)
+	}
+	var human bytes.Buffer
+	RenderHuman(&human, res, RenderOptions{})
+	if !strings.Contains(human.String(), "detail: nil map in crashy") {
+		t.Errorf("human report omits the panic detail:\n%s", human.String())
+	}
+}
+
 // TestRunnerRunsIndependentChecksConcurrently: two independent 1s checks
 // finish in under 1.5s total.
 func TestRunnerRunsIndependentChecksConcurrently(t *testing.T) {

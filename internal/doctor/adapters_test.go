@@ -1162,20 +1162,24 @@ func equalStrings(a, b []string) bool {
 // the default check list never asked whether a stage could run at all.
 func TestCheckAIAdapterAvailable_ZeroUsable(t *testing.T) {
 	// Nothing on PATH, no API keys, no local model env.
-	item, warning := checkAIAdapterAvailable(fakeProbe{}.toProbe())
+	fs, detail := aiAdapterFindings(fakeProbe{}.toProbe())
 
-	if item.OK {
-		t.Fatalf("expected the check to fail with no usable adapter, got %+v", item)
+	if len(fs) == 0 {
+		t.Fatalf("expected the check to fail with no usable adapter, got %q", detail)
 	}
-	if warning == "" {
-		t.Error("expected a warning so the verdict degrades instead of reading healthy")
+	degrades := false
+	for _, f := range fs {
+		if f.Severity == SeverityBlocker || f.Severity == SeverityWarning {
+			degrades = true
+		}
 	}
-	if item.Error != warning {
-		t.Errorf("row error and warning should be the same text, got %q vs %q", item.Error, warning)
+	if !degrades {
+		t.Error("expected a blocker or warning so the verdict degrades instead of reading healthy")
 	}
+	text := findingsText(fs)
 	for _, want := range []string{"claude", "--adapters all"} {
-		if !strings.Contains(item.Error, want) {
-			t.Errorf("expected remediation to name %q, got %q", want, item.Error)
+		if !strings.Contains(text, want) {
+			t.Errorf("expected remediation to name %q, got %q", want, text)
 		}
 	}
 }
@@ -1186,16 +1190,13 @@ func TestCheckAIAdapterAvailable_ZeroUsable(t *testing.T) {
 func TestCheckAIAdapterAvailable_OneUsableIsEnough(t *testing.T) {
 	fp := fakeProbe{paths: map[string]string{"claude": "/opt/claude"}}
 
-	item, warning := checkAIAdapterAvailable(fp.toProbe())
+	fs, detail := aiAdapterFindings(fp.toProbe())
 
-	if !item.OK {
-		t.Fatalf("expected OK with claude usable, got %+v", item)
+	if len(fs) != 0 {
+		t.Fatalf("a usable adapter must raise no finding, got %q", findingsText(fs))
 	}
-	if warning != "" {
-		t.Errorf("a usable adapter must add no warning, got %q", warning)
-	}
-	if !strings.Contains(item.Detail, "claude") {
-		t.Errorf("expected the detail to name the usable adapter, got %q", item.Detail)
+	if !strings.Contains(detail, "claude") {
+		t.Errorf("expected the detail to name the usable adapter, got %q", detail)
 	}
 }
 
@@ -1212,8 +1213,8 @@ func TestCheckAIAdapterAvailable_ShortCircuits(t *testing.T) {
 		return inner(bin)
 	}
 
-	if item, _ := checkAIAdapterAvailable(probe); !item.OK {
-		t.Fatalf("precondition: expected claude to be usable, got %+v", item)
+	if fs, _ := aiAdapterFindings(probe); len(fs) != 0 {
+		t.Fatalf("precondition: expected claude to be usable, got %q", findingsText(fs))
 	}
 
 	if len(lookedUp) != 1 || lookedUp[0] != "claude" {

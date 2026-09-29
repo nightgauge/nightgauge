@@ -34,8 +34,9 @@ func TestSurvivalCoverage_ReportsAJournalThatWasNeverWritten(t *testing.T) {
 	seedCorpus(t, root, rows...)
 	// No survival records at all — the state the extension merge path produced.
 
-	item, warning := checkSurvivalCoverage(root)
-	if item.OK {
+	fs, _ := survivalCoverageFindings(root)
+	warning := findingsText(fs)
+	if len(fs) == 0 {
 		t.Error("12 recorded runs and zero survival records reported OK — this is the exact " +
 			"state the mandated dogfood path left the journal in")
 	}
@@ -47,11 +48,10 @@ func TestSurvivalCoverage_ReportsAJournalThatWasNeverWritten(t *testing.T) {
 	}
 
 	// The discriminating assertion: the pre-existing arm is green here.
-	backlog, backlogWarning := checkSurvivalBacklog(root, time.Now(), survival.DefaultWindowDays)
-	if !backlog.OK || backlogWarning != "" {
-		t.Errorf("checkSurvivalBacklog should report OK for an EMPTY store — if it does not, "+
-			"the two arms are not measuring different things. got OK=%v warning=%q",
-			backlog.OK, backlogWarning)
+	if backlog, _ := survivalBacklogFindings(root, time.Now(), survival.DefaultWindowDays); len(backlog) != 0 {
+		t.Errorf("survivalBacklogFindings should raise nothing for an EMPTY store — if it does, "+
+			"the two arms are not measuring different things. got %s",
+			findingsText(backlog))
 	}
 }
 
@@ -66,10 +66,11 @@ func TestSurvivalCoverage_IsQuietOnAYoungWorkspace(t *testing.T) {
 	}
 	seedCorpus(t, root, rows...)
 
-	item, warning := checkSurvivalCoverage(root)
-	if !item.OK {
+	fs, _ := survivalCoverageFindings(root)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
 		t.Errorf("3 runs is below the %d-run floor and must not produce a finding: %q",
-			minMergedRunsForCoverageFinding, item.Error)
+			minMergedRunsForCoverageFinding, warning)
 	}
 	if warning != "" {
 		t.Errorf("young workspace produced a warning: %q", warning)
@@ -92,9 +93,10 @@ func TestSurvivalCoverage_IsQuietWhenCaptureIsWorking(t *testing.T) {
 		t.Fatalf("append: %v", err)
 	}
 
-	item, warning := checkSurvivalCoverage(root)
-	if !item.OK {
-		t.Errorf("capture is live (1 record) but the arm fired: %q", item.Error)
+	fs, _ := survivalCoverageFindings(root)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Errorf("capture is live (1 record) but the arm fired: %q", warning)
 	}
 	if warning != "" {
 		t.Errorf("live capture produced a warning: %q", warning)

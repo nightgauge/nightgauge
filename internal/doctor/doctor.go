@@ -45,19 +45,6 @@ type DoctorResult struct {
 	// Results is every registered check's outcome in registry order; the
 	// human renderer walks it, so every registered check renders.
 	Results []CheckResult `json:"-"`
-	// Checks keeps the legacy per-check rows for in-process callers until
-	// #2098 deletes CheckItem. It is not part of JSON v2.
-	Checks map[string]CheckItem `json:"-"`
-}
-
-// CheckItem is a legacy check's row, wrapped into Findings by
-// legacy_checks.go. #2098 deletes it.
-type CheckItem struct {
-	OK     bool   `json:"ok"`
-	Detail string `json:"detail,omitempty"`
-	Error  string `json:"error,omitempty"`
-	// Findings is the structured form of a tracked_secrets failure (#2024).
-	Findings []SecretFinding `json:"findings,omitempty"`
 }
 
 // doctorOwner / doctorRepo are the nil-safe accessors the cadence probes need:
@@ -165,13 +152,12 @@ func runRegistry(ctx context.Context, reg *Registry, env *Env) DoctorResult {
 	env.mu.Lock()
 	res.InstallInstructions = env.install
 	res.Adapters = env.adapter
-	res.Checks = make(map[string]CheckItem, len(env.items))
-	for k, v := range env.items {
-		res.Checks[k] = v
-	}
 	env.mu.Unlock()
 	return res
 }
+
+// builtinChecks is filled by each check group's init, in file order.
+var builtinChecks []Check
 
 // DefaultRegistry returns the built-in checks in render order.
 func DefaultRegistry() *Registry {

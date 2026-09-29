@@ -43,9 +43,10 @@ func TestCorpusCalibration_ReportsAnUnmeasurableCorpus(t *testing.T) {
 	}
 	seedCorpus(t, root, rows...)
 
-	item, warning := checkCorpusCalibration(root)
+	fs, _ := corpusCalibrationFindings(root)
+	warning := findingsText(fs)
 
-	if item.OK {
+	if len(fs) == 0 {
 		t.Error("12 rows with zero measurable model pairs reported OK — this is the exact " +
 			"state the corpus was in for its entire life")
 	}
@@ -69,9 +70,10 @@ func TestCorpusCalibration_OneMeasurablePairIsEnough(t *testing.T) {
 	rows = append(rows, row(12, "sonnet", "sonnet")) // one measurable pair
 	seedCorpus(t, root, rows...)
 
-	item, warning := checkCorpusCalibration(root)
-	if !item.OK {
-		t.Errorf("a corpus with a measurable pair was reported as a finding: %s", item.Error)
+	fs, _ := corpusCalibrationFindings(root)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Errorf("a corpus with a measurable pair was reported as a finding: %s", warning)
 	}
 	if warning != "" {
 		t.Errorf("unexpected warning: %q", warning)
@@ -89,10 +91,11 @@ func TestCorpusCalibration_YoungCorpusIsNotAFinding(t *testing.T) {
 	}
 	seedCorpus(t, root, rows...)
 
-	item, warning := checkCorpusCalibration(root)
-	if !item.OK {
+	fs, _ := corpusCalibrationFindings(root)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
 		t.Errorf("a corpus below the %d-row floor was reported as a finding: %s",
-			minCorpusRowsForCalibrationFinding, item.Error)
+			minCorpusRowsForCalibrationFinding, warning)
 	}
 	if warning != "" {
 		t.Errorf("unexpected warning for a young corpus: %q", warning)
@@ -101,9 +104,10 @@ func TestCorpusCalibration_YoungCorpusIsNotAFinding(t *testing.T) {
 
 // TestCorpusCalibration_EmptyWorkspaceIsHealthy guards the common case.
 func TestCorpusCalibration_EmptyWorkspaceIsHealthy(t *testing.T) {
-	item, warning := checkCorpusCalibration(t.TempDir())
-	if !item.OK || warning != "" {
-		t.Errorf("empty workspace reported a finding: ok=%v warning=%q", item.OK, warning)
+	fs, _ := corpusCalibrationFindings(t.TempDir())
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Errorf("empty workspace reported a finding: findings=%q", warning)
 	}
 }
 
@@ -122,8 +126,8 @@ func TestCorpusCalibration_HalfAPairIsNotAPair(t *testing.T) {
 	}
 	seedCorpus(t, root, rows...)
 
-	item, _ := checkCorpusCalibration(root)
-	if item.OK {
+	fs, _ := corpusCalibrationFindings(root)
+	if len(fs) == 0 {
 		t.Error("12 rows of half-pairs reported OK — Calibrate counts none of them, so " +
 			"the corpus is still unmeasurable")
 	}

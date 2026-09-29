@@ -14,19 +14,21 @@ import (
 // running?", and it was previously unavailable from any command.
 func TestServeLeaseFreeIsReported(t *testing.T) {
 	isolateMachineState(t)
-	item, warning := checkServeLease(t.TempDir(), time.Now())
-	if !item.OK || warning != "" {
-		t.Fatalf("a free lease produced %+v / %q, want a clean result", item, warning)
+	fs, detail := serveLeaseFindings(t.TempDir(), time.Now())
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("a free lease produced %+v / %q, want a clean result", fs, warning)
 	}
-	if !strings.Contains(item.Detail, "free") {
-		t.Errorf("Detail = %q, want it to say the lease is free", item.Detail)
+	if !strings.Contains(detail, "free") {
+		t.Errorf("Detail = %q, want it to say the lease is free", detail)
 	}
 }
 
 func TestServeLeaseNoWorkspaceRoot(t *testing.T) {
-	item, warning := checkServeLease("", time.Now())
-	if !item.OK || warning != "" {
-		t.Errorf("checkServeLease(\"\") = %+v / %q, want a clean skip", item, warning)
+	fs, _ := serveLeaseFindings("", time.Now())
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Errorf("serveLeaseFindings(\"\") = %+v / %q, want a clean skip", fs, warning)
 	}
 }
 
@@ -51,12 +53,13 @@ func TestServeLeaseHealthyHolderIsNotAFinding(t *testing.T) {
 		t.Fatalf("WriteServeSidecar: %v", err)
 	}
 
-	item, warning := checkServeLease(root, now)
-	if !item.OK || warning != "" {
-		t.Fatalf("a healthy holder produced %+v / %q, want a clean result", item, warning)
+	fs, detail := serveLeaseFindings(root, now)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("a healthy holder produced %+v / %q, want a clean result", fs, warning)
 	}
-	if !strings.Contains(item.Detail, "4242") {
-		t.Errorf("Detail = %q, want the holding PID named", item.Detail)
+	if !strings.Contains(detail, "4242") {
+		t.Errorf("Detail = %q, want the holding PID named", detail)
 	}
 }
 
@@ -85,9 +88,10 @@ func TestServeLeaseWedgedHolderIsAFinding(t *testing.T) {
 		t.Fatalf("WriteServeSidecar: %v", err)
 	}
 
-	item, warning := checkServeLease(root, now)
-	if item.OK {
-		t.Fatalf("a wedged holder produced OK: %+v", item)
+	fs, _ := serveLeaseFindings(root, now)
+	warning := findingsText(fs)
+	if len(fs) == 0 {
+		t.Fatalf("a wedged holder produced OK: %+v", fs)
 	}
 	if !strings.Contains(warning, "serve-lease-wedged") {
 		t.Errorf("warning = %q, want the finding id", warning)
@@ -116,12 +120,13 @@ func TestServeLeaseUnknownHolderIsNotAFinding(t *testing.T) {
 	t.Cleanup(lease.Release)
 	// No sidecar written.
 
-	item, warning := checkServeLease(root, time.Now())
-	if !item.OK || warning != "" {
-		t.Fatalf("an unreadable claim produced %+v / %q, want a clean (if vague) result", item, warning)
+	fs, detail := serveLeaseFindings(root, time.Now())
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("an unreadable claim produced %+v / %q, want a clean (if vague) result", fs, warning)
 	}
-	if !strings.Contains(item.Detail, "could not be read") {
-		t.Errorf("Detail = %q, want it to admit the record is unreadable", item.Detail)
+	if !strings.Contains(detail, "could not be read") {
+		t.Errorf("Detail = %q, want it to admit the record is unreadable", detail)
 	}
 }
 

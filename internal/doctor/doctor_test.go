@@ -34,23 +34,22 @@ func TestRunDoctor_NilClient(t *testing.T) {
 		t.Errorf("expected schema version V=%d, got %d", SchemaVersion, result.V)
 	}
 
-	authCheck, ok := resultItemOK(result, "github_auth")
-	if !ok {
+	authCheck, ran := checkResult(result, "github_auth")
+	if !ran {
 		t.Fatal("expected github_auth check to be present")
 	}
-	if authCheck.OK {
-		t.Error("expected github_auth.OK=false when client is nil")
+	if checkPassed(authCheck) {
+		t.Error("expected github_auth not to pass when client is nil")
 	}
-	if authCheck.Error == "" {
-		t.Error("expected non-empty github_auth.Error when client is nil")
+	if len(authCheck.Findings) == 0 {
+		t.Error("expected github_auth to raise a finding when client is nil")
 	}
 
-	// api_user and scopes should both be skipped (not OK)
-	if resultItem(result, "api_user").OK {
-		t.Error("expected api_user.OK=false when client is nil")
-	}
-	if resultItem(result, "scopes").OK {
-		t.Error("expected scopes.OK=false when client is nil")
+	// api_user and scopes should both be skipped (not passed)
+	for _, id := range []string{"api_user", "scopes"} {
+		if r, _ := checkResult(result, id); checkPassed(r) {
+			t.Errorf("expected %s not to pass when client is nil", id)
+		}
 	}
 
 	// At least one error mentioning authentication
@@ -82,12 +81,12 @@ func TestRunDoctor_NilConfig_NilClient(t *testing.T) {
 	}
 
 	// config check should be present and not-ok (fresh repo)
-	configCheck, ok := resultItemOK(result, "config")
-	if !ok {
+	configCheck, ran := checkResult(result, "config")
+	if !ran {
 		t.Fatal("expected config check to be present")
 	}
-	if configCheck.OK {
-		t.Error("expected config.OK=false when cfg is nil")
+	if checkPassed(configCheck) {
+		t.Error("expected config not to pass when cfg is nil")
 	}
 
 	// Config absence is a blocker (ADR-025, #2091) with the repo-init remedy.
@@ -122,24 +121,24 @@ func TestRunDoctor_ValidConfig_NilClient(t *testing.T) {
 	}
 
 	// project check should pass since cfg has all required fields
-	projectCheck, ok := resultItemOK(result, "project")
-	if !ok {
+	projectCheck, ran := checkResult(result, "project")
+	if !ran {
 		t.Fatal("expected project check to be present")
 	}
-	if !projectCheck.OK {
-		t.Errorf("expected project.OK=true with valid cfg, got false: %s", projectCheck.Error)
+	if !checkPassed(projectCheck) {
+		t.Errorf("expected project to pass with valid cfg, got: %s", findingsText(projectCheck.Findings))
 	}
 	if !strings.Contains(projectCheck.Detail, "42") {
 		t.Errorf("expected project detail to mention project number 42, got: %q", projectCheck.Detail)
 	}
 
 	// config check should pass
-	configCheck, ok := resultItemOK(result, "config")
-	if !ok {
+	configCheck, ran := checkResult(result, "config")
+	if !ran {
 		t.Fatal("expected config check to be present")
 	}
-	if !configCheck.OK {
-		t.Errorf("expected config.OK=true with valid cfg, got false: %s", configCheck.Error)
+	if !checkPassed(configCheck) {
+		t.Errorf("expected config to pass with valid cfg, got: %s", findingsText(configCheck.Findings))
 	}
 }
 
@@ -165,15 +164,15 @@ func TestRunDoctor_MissingProject(t *testing.T) {
 				t.Errorf("expected ExitCode 2, got %d", result.ExitCode)
 			}
 
-			projectCheck, ok := resultItemOK(result, "project")
-			if !ok {
+			projectCheck, ran := checkResult(result, "project")
+			if !ran {
 				t.Fatal("expected project check to be present")
 			}
-			if projectCheck.OK {
-				t.Error("expected project.OK=false for incomplete config")
+			if checkPassed(projectCheck) {
+				t.Error("expected project not to pass for incomplete config")
 			}
-			if projectCheck.Error == "" {
-				t.Error("expected non-empty project.Error for incomplete config")
+			if len(projectCheck.Findings) == 0 {
+				t.Error("expected project to raise a finding for incomplete config")
 			}
 
 			// Project error must appear in result.Errors (it is a required check)
@@ -210,8 +209,8 @@ func TestRunDoctor_BinaryNotInPath(t *testing.T) {
 	ctx := context.Background()
 	result := RunDoctor(ctx, nil, nil, nil)
 
-	binaryCheck := resultItem(result, "binary")
-	if binaryCheck.OK {
+	binaryCheck, _ := checkResult(result, "binary")
+	if checkPassed(binaryCheck) {
 		t.Skip("nightgauge still found with empty PATH (hard-coded path) — skipping")
 	}
 
@@ -255,9 +254,9 @@ func TestRunDoctor_BinaryOffPathResolvable_Degraded(t *testing.T) {
 	ctx := context.Background()
 	result := RunDoctor(ctx, cfg, nil, nil)
 
-	binaryCheck := resultItem(result, "binary")
-	if !binaryCheck.OK {
-		t.Fatalf("expected binary.OK=true when resolvable via NIGHTGAUGE_BIN, got: %s", binaryCheck.Error)
+	binaryCheck, _ := checkResult(result, "binary")
+	if !checkPassed(binaryCheck) {
+		t.Fatalf("expected binary to pass when resolvable via NIGHTGAUGE_BIN, got: %s", findingsText(binaryCheck.Findings))
 	}
 	if !strings.Contains(binaryCheck.Detail, "NIGHTGAUGE_BIN") {
 		t.Errorf("expected binary.Detail to mention the resolving step, got: %q", binaryCheck.Detail)
@@ -383,15 +382,15 @@ repositories:
 	if result.ExitCode != 2 {
 		t.Fatalf("expected ExitCode 2 on project mapping mismatch, got %d (errors=%v)", result.ExitCode, result.Errors)
 	}
-	check, ok := resultItemOK(result, "project_mapping")
-	if !ok {
+	check, ran := checkResult(result, "project_mapping")
+	if !ran {
 		t.Fatal("expected project_mapping check to be present")
 	}
-	if check.OK {
-		t.Error("expected project_mapping.OK=false on mismatch")
+	if checkPassed(check) {
+		t.Error("expected project_mapping not to pass on mismatch")
 	}
-	if !strings.Contains(check.Error, "workspace yaml says project 1") || !strings.Contains(check.Error, "runtime config resolves to 4") {
-		t.Errorf("expected mismatch detail naming both project numbers, got: %q", check.Error)
+	if !strings.Contains(findingsText(check.Findings), "workspace yaml says project 1") || !strings.Contains(findingsText(check.Findings), "runtime config resolves to 4") {
+		t.Errorf("expected mismatch detail naming both project numbers, got: %q", findingsText(check.Findings))
 	}
 }
 
@@ -428,12 +427,12 @@ repositories:
 
 	result := RunDoctor(context.Background(), cfg, nil, nil)
 
-	check, ok := resultItemOK(result, "project_mapping")
-	if !ok {
+	check, ran := checkResult(result, "project_mapping")
+	if !ran {
 		t.Fatal("expected project_mapping check to be present")
 	}
-	if !check.OK {
-		t.Errorf("expected project_mapping.OK=true when sources agree, got error: %q", check.Error)
+	if !checkPassed(check) {
+		t.Errorf("expected project_mapping to pass when sources agree, got: %q", findingsText(check.Findings))
 	}
 }
 
@@ -524,11 +523,11 @@ func TestRunDoctor_NoUsableAdapterDegradesButNeverBreaks(t *testing.T) {
 
 	result := RunDoctor(ctx, nil, nil, nil)
 
-	item, ok := resultItemOK(result, "ai_adapter")
-	if !ok {
+	item, ran := checkResult(result, "ai_adapter")
+	if !ran {
 		t.Fatal("expected an ai_adapter row on the DEFAULT run, with no --adapters passed")
 	}
-	if item.OK {
+	if checkPassed(item) {
 		t.Errorf("expected the row to fail with no usable adapter, got %+v", item)
 	}
 	// The invariant is not "exit code != 2" — this scenario already exits 2 on
@@ -569,11 +568,11 @@ func TestRunDoctor_UsableAdapterAddsNoWarning(t *testing.T) {
 
 	result := RunDoctor(ctx, nil, nil, nil)
 
-	item, ok := resultItemOK(result, "ai_adapter")
-	if !ok {
+	item, ran := checkResult(result, "ai_adapter")
+	if !ran {
 		t.Fatal("expected an ai_adapter row")
 	}
-	if !item.OK {
+	if !checkPassed(item) {
 		t.Errorf("expected the row to pass with claude usable, got %+v", item)
 	}
 	for _, w := range result.Warnings {
@@ -625,12 +624,12 @@ func writeRepoConfig(t *testing.T, root string) {
 func TestRunDoctor_ConfigWithoutRepoFileBlocks(t *testing.T) {
 	t.Chdir(t.TempDir())
 	result := RunDoctor(context.Background(), config.DefaultConfig(), nil, nil)
-	check := resultItem(result, "config")
-	if check.OK {
+	check, _ := checkResult(result, "config")
+	if checkPassed(check) {
 		t.Fatalf("config passed with no repository config: %+v", check)
 	}
-	if !strings.Contains(check.Error, "repo-init") || !strings.Contains(check.Error, "loaded:") {
-		t.Errorf("config warning must name repo-init and the loaded files, got %q", check.Error)
+	if !strings.Contains(findingsText(check.Findings), "repo-init") || !strings.Contains(findingsText(check.Findings), "loaded:") {
+		t.Errorf("config warning must name repo-init and the loaded files, got %q", findingsText(check.Findings))
 	}
 	if !containsString(result.FailedChecks, "config") {
 		t.Error("a missing repository config is a blocker")
@@ -643,8 +642,8 @@ func TestRunDoctor_ConfigNamesLoadedFiles(t *testing.T) {
 	writeRepoConfig(t, repo)
 	t.Chdir(repo)
 	result := RunDoctor(context.Background(), &config.Config{Owner: "o", ProjectNumber: 1}, nil, nil)
-	check := resultItem(result, "config")
-	if !check.OK || !strings.Contains(check.Detail, filepath.Join(".nightgauge", "config.yaml")) {
+	check, _ := checkResult(result, "config")
+	if !checkPassed(check) || !strings.Contains(check.Detail, filepath.Join(".nightgauge", "config.yaml")) {
 		t.Fatalf("config row must pass and name the repository file, got %+v", check)
 	}
 }

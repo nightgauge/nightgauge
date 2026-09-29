@@ -35,12 +35,13 @@ func TestCheckComplexityModel_ExistingFileIsHealthy(t *testing.T) {
 	}
 	modelPath := result.Path
 
-	check, warning := checkComplexityModel(root)
-	if !check.OK || warning != "" {
-		t.Fatalf("existing model check = %+v, warning = %q", check, warning)
+	fs, detail := complexityModelFindings(root)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("existing model check = %+v, warning = %q", fs, warning)
 	}
-	if check.Detail != modelPath {
-		t.Errorf("detail = %q, want %q", check.Detail, modelPath)
+	if detail != modelPath {
+		t.Errorf("detail = %q, want %q", detail, modelPath)
 	}
 }
 
@@ -54,10 +55,11 @@ func TestCheckComplexityModel_InvalidFileUsesSupportedRepairGuidance(t *testing.
 		t.Fatal(err)
 	}
 
-	check, warning := checkComplexityModel(root)
-	if check.OK || warning != check.Error || !strings.Contains(warning, "is invalid") ||
+	fs, _ := complexityModelFindings(root)
+	warning := findingsText(fs)
+	if len(fs) == 0 || !strings.Contains(warning, "is invalid") ||
 		!strings.Contains(warning, "nightgauge outcome init") {
-		t.Fatalf("invalid model check = %+v, warning = %q", check, warning)
+		t.Fatalf("invalid model check = %+v, warning = %q", fs, warning)
 	}
 }
 
@@ -81,9 +83,10 @@ func TestCheckComplexityModel_V03xFixtureIsHealthy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	check, warning := checkComplexityModel(root)
-	if !check.OK || warning != "" {
-		t.Fatalf("v0.3.x fixture check = %+v, warning = %q", check, warning)
+	fs, _ := complexityModelFindings(root)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("v0.3.x fixture check = %+v, warning = %q", fs, warning)
 	}
 }
 
@@ -94,9 +97,10 @@ func TestCheckComplexityModel_RejectsSymlinkedDirectory(t *testing.T) {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 
-	check, warning := checkComplexityModel(root)
-	if check.OK || !strings.Contains(warning, "directory is a symlink") {
-		t.Fatalf("symlinked directory check = %+v, warning = %q", check, warning)
+	fs, _ := complexityModelFindings(root)
+	warning := findingsText(fs)
+	if len(fs) == 0 || !strings.Contains(warning, "directory is a symlink") {
+		t.Fatalf("symlinked directory check = %+v, warning = %q", fs, warning)
 	}
 }
 

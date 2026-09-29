@@ -49,9 +49,10 @@ func rec(now time.Time, ago time.Duration, caller string, cost, remaining int) g
 // normal state of a fresh install and must not be reported as a problem — an
 // arm that fires on every fresh install is an arm operators switch off.
 func TestAPIBudgetAbsentLedgerIsNotAFinding(t *testing.T) {
-	item, warning := checkGitHubAPIBudget(t.TempDir(), time.Now())
-	if !item.OK {
-		t.Errorf("OK = false for a workspace with no ledger: %+v", item)
+	fs, _ := apiBudgetFindings(t.TempDir(), time.Now())
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Errorf("findings raised for a workspace with no ledger: %+v", fs)
 	}
 	if warning != "" {
 		t.Errorf("warning = %q, want none", warning)
@@ -59,9 +60,10 @@ func TestAPIBudgetAbsentLedgerIsNotAFinding(t *testing.T) {
 }
 
 func TestAPIBudgetNoWorkspaceRoot(t *testing.T) {
-	item, warning := checkGitHubAPIBudget("", time.Now())
-	if !item.OK || warning != "" {
-		t.Errorf("checkGitHubAPIBudget(\"\") = %+v / %q, want a clean skip", item, warning)
+	fs, _ := apiBudgetFindings("", time.Now())
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Errorf("apiBudgetFindings(\"\") = %+v / %q, want a clean skip", fs, warning)
 	}
 }
 
@@ -73,18 +75,19 @@ func TestAPIBudgetQuietWindowIsGreen(t *testing.T) {
 		rec(now, 40*time.Minute, "boardcache.Refresh", 17, 4983),
 		rec(now, 10*time.Minute, "boardcache.Refresh", 17, 4966),
 	)
-	item, warning := checkGitHubAPIBudget(root, now)
-	if !item.OK {
-		t.Errorf("OK = false on a 34-point hour: %+v", item)
+	fs, detail := apiBudgetFindings(root, now)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Errorf("findings raised on a 34-point hour: %+v", fs)
 	}
 	if warning != "" {
 		t.Errorf("warning = %q on a quiet hour, want none", warning)
 	}
-	if !strings.Contains(item.Detail, "34 GraphQL point") {
-		t.Errorf("Detail = %q, want the point total", item.Detail)
+	if !strings.Contains(detail, "34 GraphQL point") {
+		t.Errorf("Detail = %q, want the point total", detail)
 	}
-	if !strings.Contains(item.Detail, "boardcache.Refresh") {
-		t.Errorf("Detail = %q, want the top caller named", item.Detail)
+	if !strings.Contains(detail, "boardcache.Refresh") {
+		t.Errorf("Detail = %q, want the top caller named", detail)
 	}
 }
 
@@ -98,9 +101,10 @@ func TestAPIBudgetExhaustionIsAFindingThatNamesTheCaller(t *testing.T) {
 		rec(now, 30*time.Minute, "sweep.Producers", 2500, 0),
 		rec(now, 20*time.Minute, "depgraph.Rebuild", 3, 0),
 	)
-	item, warning := checkGitHubAPIBudget(root, now)
-	if item.OK {
-		t.Fatalf("OK = true on an exhausted window: %+v", item)
+	fs, _ := apiBudgetFindings(root, now)
+	warning := findingsText(fs)
+	if len(fs) == 0 {
+		t.Fatalf("no finding on an exhausted window: %+v", fs)
 	}
 	if !strings.Contains(warning, "github-api-budget-exhausted") {
 		t.Errorf("warning = %q, want the exhausted finding id", warning)
@@ -123,9 +127,10 @@ func TestAPIBudgetHighIdleSpendWarns(t *testing.T) {
 		rec(now, 55*time.Minute, "boardcache.Refresh", 1600, 3400),
 		rec(now, 5*time.Minute, "boardcache.Refresh", 1500, 1900),
 	)
-	item, warning := checkGitHubAPIBudget(root, now)
-	if item.OK {
-		t.Fatalf("OK = true at 3100 points/hour: %+v", item)
+	fs, _ := apiBudgetFindings(root, now)
+	warning := findingsText(fs)
+	if len(fs) == 0 {
+		t.Fatalf("no finding at 3100 points/hour: %+v", fs)
 	}
 	if !strings.Contains(warning, "github-api-budget-high") {
 		t.Errorf("warning = %q, want the high-spend finding id", warning)
@@ -144,12 +149,13 @@ func TestAPIBudgetIgnoresRecordsOutsideTheWindow(t *testing.T) {
 		rec(now, 6*time.Hour, "yesterday.Caller", 5000, 0),
 		rec(now, 10*time.Minute, "today.Caller", 17, 4983),
 	)
-	item, warning := checkGitHubAPIBudget(root, now)
-	if !item.OK {
-		t.Fatalf("OK = false: a six-hour-old exhaustion is not this hour's bill: %+v / %q", item, warning)
+	fs, detail := apiBudgetFindings(root, now)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("findings raised: a six-hour-old exhaustion is not this hour's bill: %+v / %q", fs, warning)
 	}
-	if strings.Contains(item.Detail, "yesterday.Caller") {
-		t.Errorf("Detail = %q names a caller from outside the window", item.Detail)
+	if strings.Contains(detail, "yesterday.Caller") {
+		t.Errorf("Detail = %q names a caller from outside the window", detail)
 	}
 }
 

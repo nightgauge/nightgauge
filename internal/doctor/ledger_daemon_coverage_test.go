@@ -63,18 +63,20 @@ func markPipelineActivity(t *testing.T, root string) {
 }
 
 func TestLedgerCoverageNoWorkspaceRoot(t *testing.T) {
-	item, warning := checkLedgerDaemonCoverage("", time.Now())
-	if !item.OK || warning != "" {
-		t.Errorf("checkLedgerDaemonCoverage(\"\") = %+v / %q, want a clean skip", item, warning)
+	fs, _ := ledgerDaemonCoverageFindings("", time.Now())
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Errorf("ledgerDaemonCoverageFindings(\"\") = %+v / %q, want a clean skip", fs, warning)
 	}
 }
 
 // No daemon, nothing to cover.
 func TestLedgerCoverageNoDaemonIsClean(t *testing.T) {
 	isolateMachineState(t)
-	item, warning := checkLedgerDaemonCoverage(t.TempDir(), time.Now())
-	if !item.OK || warning != "" {
-		t.Fatalf("a free lease produced %+v / %q, want a clean result", item, warning)
+	fs, _ := ledgerDaemonCoverageFindings(t.TempDir(), time.Now())
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("a free lease produced %+v / %q, want a clean result", fs, warning)
 	}
 }
 
@@ -90,9 +92,10 @@ func TestLedgerCoverageDaemonRecordsPresent(t *testing.T) {
 		PID: 4242, Kind: "graphql", Status: 200,
 	})
 
-	item, warning := checkLedgerDaemonCoverage(root, now)
-	if !item.OK || warning != "" {
-		t.Fatalf("a covered daemon produced %+v / %q, want a clean result", item, warning)
+	fs, _ := ledgerDaemonCoverageFindings(root, now)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("a covered daemon produced %+v / %q, want a clean result", fs, warning)
 	}
 }
 
@@ -104,9 +107,10 @@ func TestLedgerCoverageActiveDaemonWithNoRecordsIsAFinding(t *testing.T) {
 	heldLease(t, root, 4242, now)
 	markPipelineActivity(t, root)
 
-	item, warning := checkLedgerDaemonCoverage(root, now)
-	if item.OK || warning == "" {
-		t.Fatalf("an uncovered active daemon produced %+v / %q, want a finding", item, warning)
+	fs, _ := ledgerDaemonCoverageFindings(root, now)
+	warning := findingsText(fs)
+	if len(fs) == 0 {
+		t.Fatalf("an uncovered active daemon produced %+v / %q, want a finding", fs, warning)
 	}
 	if !strings.Contains(warning, "4242") {
 		t.Errorf("warning %q does not name the holding pid", warning)
@@ -127,12 +131,13 @@ func TestLedgerCoverageIdleDaemonIsNotAFinding(t *testing.T) {
 	now := time.Now()
 	heldLease(t, root, 4242, now)
 
-	item, warning := checkLedgerDaemonCoverage(root, now)
-	if !item.OK || warning != "" {
-		t.Fatalf("an idle daemon produced %+v / %q, want a clean result", item, warning)
+	fs, detail := ledgerDaemonCoverageFindings(root, now)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("an idle daemon produced %+v / %q, want a clean result", fs, warning)
 	}
-	if !strings.Contains(item.Detail, "idle") {
-		t.Errorf("Detail = %q, want it to say why no finding was raised", item.Detail)
+	if !strings.Contains(detail, "idle") {
+		t.Errorf("Detail = %q, want it to say why no finding was raised", detail)
 	}
 }
 
@@ -149,9 +154,10 @@ func TestLedgerCoverageOtherPidRecordsDoNotCount(t *testing.T) {
 		PID: 9999, Kind: "graphql", Status: 200,
 	})
 
-	item, warning := checkLedgerDaemonCoverage(root, now)
-	if item.OK || warning == "" {
-		t.Fatalf("records from another pid were accepted as coverage: %+v / %q", item, warning)
+	fs, _ := ledgerDaemonCoverageFindings(root, now)
+	warning := findingsText(fs)
+	if len(fs) == 0 {
+		t.Fatalf("records from another pid were accepted as coverage: %+v / %q", fs, warning)
 	}
 }
 
@@ -177,8 +183,9 @@ func TestLedgerCoverageStaleHolderDefersToServeLease(t *testing.T) {
 	}
 	markPipelineActivity(t, root)
 
-	item, warning := checkLedgerDaemonCoverage(root, now)
-	if !item.OK || warning != "" {
-		t.Fatalf("a wedged holder produced %+v / %q, want serve_lease to own it", item, warning)
+	fs, _ := ledgerDaemonCoverageFindings(root, now)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("a wedged holder produced %+v / %q, want serve_lease to own it", fs, warning)
 	}
 }

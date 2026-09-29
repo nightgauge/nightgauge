@@ -32,10 +32,11 @@ func fixedProbes(e cadence.Evidence) map[cadence.EvidenceKind]cadenceProbe {
 // TestScheduledAutomations_ReportsStale is acceptance criterion 5: an entry
 // whose evidence is beyond the threshold must be reported.
 func TestScheduledAutomations_ReportsStale(t *testing.T) {
-	item, warning := checkScheduledAutomations(context.Background(),
-		fixedProbes(cadence.Evidence{EverRan: true, Newest: testNow.AddDate(0, 0, -400)}), coreScope, nil, testNow)
+	fs, _ := scheduledAutomationFindings(context.Background(),
+		fixedProbes(cadence.Evidence{EverRan: true, Newest: testNow.AddDate(0, 0, -400)}), coreScope, nil, nil, nil, testNow)
+	warning := findingsText(fs)
 
-	if item.OK {
+	if len(fs) == 0 {
 		t.Error("every automation 400 days stale reported OK")
 	}
 	if !strings.Contains(warning, codeAutomationStopped) {
@@ -50,11 +51,12 @@ func TestScheduledAutomations_ReportsStale(t *testing.T) {
 // move the timestamp inside the threshold and the arm must go quiet.
 func TestScheduledAutomations_FreshIsNotAFinding(t *testing.T) {
 	// Inside 3x the shortest registered interval (1h) — recent enough for all.
-	item, warning := checkScheduledAutomations(context.Background(),
-		fixedProbes(cadence.Evidence{EverRan: true, Newest: testNow.Add(-1 * time.Minute)}), coreScope, nil, testNow)
+	fs, _ := scheduledAutomationFindings(context.Background(),
+		fixedProbes(cadence.Evidence{EverRan: true, Newest: testNow.Add(-1 * time.Minute)}), coreScope, nil, nil, nil, testNow)
+	warning := findingsText(fs)
 
-	if !item.OK {
-		t.Errorf("all-fresh automations reported a finding: %s", item.Error)
+	if len(fs) != 0 {
+		t.Errorf("all-fresh automations reported a finding: %s", warning)
 	}
 	if warning != "" {
 		t.Errorf("unexpected warning: %q", warning)
@@ -76,8 +78,9 @@ func TestScheduledAutomations_SeparatesNeverRanFromStopped(t *testing.T) {
 		},
 	}
 
-	item, warning := checkScheduledAutomations(context.Background(), probes, coreScope, nil, testNow)
-	if item.OK {
+	fs, _ := scheduledAutomationFindings(context.Background(), probes, coreScope, nil, nil, nil, testNow)
+	warning := findingsText(fs)
+	if len(fs) == 0 {
 		t.Fatal("a stopped loop and three never-run workflows reported OK")
 	}
 	if !strings.Contains(warning, codeAutomationNeverRan) {
@@ -101,10 +104,11 @@ func TestScheduledAutomations_SeparatesNeverRanFromStopped(t *testing.T) {
 // TestScheduledAutomations_ProbeErrorIsNotHealthy guards the fail-closed
 // direction at the arm level.
 func TestScheduledAutomations_ProbeErrorIsNotHealthy(t *testing.T) {
-	item, warning := checkScheduledAutomations(context.Background(),
-		fixedProbes(cadence.Evidence{Err: errors.New("api unreachable")}), coreScope, nil, testNow)
+	fs, _ := scheduledAutomationFindings(context.Background(),
+		fixedProbes(cadence.Evidence{Err: errors.New("api unreachable")}), coreScope, nil, nil, nil, testNow)
+	warning := findingsText(fs)
 
-	if item.OK {
+	if len(fs) == 0 {
 		t.Error("automations whose freshness could not be determined reported OK — " +
 			"'I could not look' must never render as 'it is fine'")
 	}
@@ -117,10 +121,11 @@ func TestScheduledAutomations_ProbeErrorIsNotHealthy(t *testing.T) {
 // registry gains an evidence kind nobody wired a probe for. Silently skipping
 // it would mean adding an automation makes the check WEAKER.
 func TestScheduledAutomations_MissingProbeIsUnverifiable(t *testing.T) {
-	item, warning := checkScheduledAutomations(context.Background(),
-		map[cadence.EvidenceKind]cadenceProbe{}, coreScope, nil, testNow)
+	fs, _ := scheduledAutomationFindings(context.Background(),
+		map[cadence.EvidenceKind]cadenceProbe{}, coreScope, nil, nil, nil, testNow)
+	warning := findingsText(fs)
 
-	if item.OK {
+	if len(fs) == 0 {
 		t.Error("no probes registered and the arm still reported OK")
 	}
 	if !strings.Contains(warning, codeAutomationUnverifiable) {
@@ -204,13 +209,14 @@ func TestWorkflowRunEvidence_NoClientIsAnError(t *testing.T) {
 // with no automations.cadence and autonomous mode off must not inherit core's
 // own release workflow or autonomous loop.
 func TestScheduledAutomations_ConsumerRepoHasNoBuiltins(t *testing.T) {
-	item, warning := checkScheduledAutomations(context.Background(),
-		fixedProbes(cadence.Evidence{EverRan: false}), cadence.Scope{Repo: "acme/tiny"}, nil, testNow)
-	if !item.OK || warning != "" {
-		t.Fatalf("consumer repo reported a finding: item=%+v warning=%q", item, warning)
+	fs, detail := scheduledAutomationFindings(context.Background(),
+		fixedProbes(cadence.Evidence{EverRan: false}), cadence.Scope{Repo: "acme/tiny"}, nil, nil, nil, testNow)
+	warning := findingsText(fs)
+	if len(fs) != 0 {
+		t.Fatalf("consumer repo reported a finding: findings=%+v warning=%q", fs, warning)
 	}
-	if !strings.Contains(item.Detail, "none registered") {
-		t.Errorf("detail = %q, want \"none registered\"", item.Detail)
+	if !strings.Contains(detail, "none registered") {
+		t.Errorf("detail = %q, want \"none registered\"", detail)
 	}
 }
 
