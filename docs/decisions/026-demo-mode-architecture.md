@@ -114,8 +114,18 @@ from the extension, gated on `platform.enabled`; the demo fixture workspace (#21
 `platform.enabled: false`, and in demo mode the extension does not start them regardless. A
 `vscode-host` test runs the demo with outbound HTTP stubbed to throw.
 
+The dashboard's session-token precheck (`checkPlatformTokenState`, #777) passes while
+`isDemoMode()` is true (amended by #2105). That precheck turns a platform tab into "sign in"
+without a round trip when no session token is stored, and the demo profile holds none by design
+(decision 1), so without the amendment the tabs never reach the IPC methods the daemon answers.
+The pass covers every tab behind the one gate: Runs, Cost and Trends, and also Health and
+Compliance. Real users are unaffected: `isDemoMode()` is true only while the connected daemon's
+`ipc.ready` said `demo: true`, the same gate that keeps the SSE stream and heartbeat stopped.
+
 **Rejected: a fake platform HTTP server.** It adds a second fake with its own auth flow for
-three tabs whose data already arrives over IPC.
+three tabs whose data already arrives over IPC. **Rejected: asking the backend instead of the
+local token store.** It changes the path for every real user and brings back the round trip #777
+removed. **Rejected: seeding a fake session token.** It contradicts decision 1.
 
 ## 7. Protocol drift
 
@@ -131,6 +141,7 @@ IPC change until someone noticed.
 ## Consequences
 
 - The demo exercises the shipped extension unchanged except for the badge and the allowlisted
-  UI-step handler (#2108), both inert unless `ipc.ready` says `demo: true`.
+  UI-step handler (#2108) and the platform token precheck's demo pass (#2105), all inert unless
+  `ipc.ready` says `demo: true`.
 - Every new IPC method the UI calls needs a demo answer or CI fails; that cost is the point.
 - The demo cannot show agent output, terminal content or real PRs; those stay out of scope.

@@ -22,9 +22,11 @@ import http from "node:http";
 import https from "node:https";
 import { isDeepStrictEqual } from "node:util";
 import * as vscode from "vscode";
+import { PHASE_REGISTRY, type ExecutionStage } from "@nightgauge/sdk";
 import { suite, test } from "../harness.js";
 import { capturedPanels, capturedStatusBarItems, capturedTreeProviders } from "../observe.js";
 import { delay, materializeDemoWorkspace, waitFor, workspaceRoot } from "../fixture.js";
+import { stripScriptBlocks, stripStyleBlocks } from "../html.js";
 import { extension } from "./activation.suite.js";
 
 type Provider = vscode.TreeDataProvider<unknown>;
@@ -89,9 +91,7 @@ function tabPanel(html: string, tab: string): string {
 }
 
 function text(html: string): string {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, " ")
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style[^>]*>/gi, " ")
+  return stripStyleBlocks(stripScriptBlocks(html))
     .replace(/<[^>]+>/g, " ")
     .replace(/&#8635;/g, "↻")
     .replace(/\s+/g, " ");
@@ -157,6 +157,21 @@ function recordOutboundHttp(): void {
 
 /** Pipeline tree running-stage transitions, recorded as the tree fires changes. */
 const stageTransitions: string[] = [];
+/** The latest description each completed stage of the first run showed (#2289). */
+const completedStageDescriptions = new Map<string, string>();
+
+async function recordCompletedStages(p: Provider, issue: number): Promise<void> {
+  for (const root of await children(p)) {
+    const item = await treeItem(p, root);
+    if (item.contextValue !== "issue" || !labelOf(item).startsWith(`#${issue} - `)) continue;
+    for (const child of await children(p, root)) {
+      const stageItem = await treeItem(p, child);
+      if (stageItem.contextValue !== "stage-complete") continue;
+      const stage = String((child as { stage?: unknown }).stage ?? labelOf(stageItem));
+      completedStageDescriptions.set(stage, String(stageItem.description ?? ""));
+    }
+  }
+}
 
 function startRecordingStages(): void {
   const p = provider("nightgauge.pipelineView");
@@ -168,6 +183,7 @@ function startRecordingStages(): void {
     reading = reading.then(async () => {
       const stage = await runningStage(p, RUN_ISSUE);
       if (stage && stageTransitions.at(-1) !== stage) stageTransitions.push(stage);
+      await recordCompletedStages(p, RUN_ISSUE);
     });
   });
 }
@@ -194,6 +210,11 @@ function scenario(): {
     board: Record<string, SeededItem[]>;
     queue: SeededQueueItem[];
     activeRuns: SeededRun[];
+    history: Array<{ title: string }>;
+    platform: {
+      costByModel: Array<{ modelId: string }>;
+      trends: Array<{ totalRuns: number }>;
+    };
   };
 } {
   const file = process.env.NIGHTGAUGE_DEMO_SCENARIO;
@@ -349,6 +370,37 @@ suite("demo mode", () => {
     assert.match(body, new RegExp(`Up next ${upNext}`), `Overview queue:\n${body.slice(0, 3000)}`);
   });
 
+  test("the Runs, Cost and Trends tabs render the daemon's platform data", async () => {
+    // The demo profile holds no session token (ADR-026 section 1); the
+    // dashboard's token precheck passes in demo mode (section 6, #2105), so
+    // these tabs reach platform.getAnalyticsRuns, getCostAnalytics and
+    // getAnalyticsTrends, which the daemon answers from scenario state.
+    const state = scenario().state;
+    const expected: Record<string, (html: string) => boolean> = {
+      runs: (html) => text(html).includes(state.history[0].title),
+      cost: (html) => html.includes(`>${state.platform.costByModel[0].modelId}<`),
+      trends: (html) => html.includes(`${state.platform.trends[0].totalRuns} runs on `),
+    };
+    await vscode.commands.executeCommand("nightgauge.showDashboard");
+    const panel = await waitFor(dashboard, 5_000, "the Dashboard panel");
+    for (const [tab, populated] of Object.entries(expected)) {
+      for (const listener of panel.messageListeners) {
+        await listener({ type: "selectTab", tab });
+      }
+      const body = () => tabPanel(panel.panel.webview.html, tab);
+      await waitFor(
+        () => (populated(body()) ? true : undefined),
+        15_000,
+        `the ${tab} tab's demo data`
+      ).catch(() => undefined);
+      assert.ok(
+        populated(body()),
+        `The ${tab} tab does not show the daemon's data:\n${text(body()).slice(0, 2000)}`
+      );
+      assert.doesNotMatch(text(body()), /sign-in required/i, `The ${tab} tab asks to sign in`);
+    }
+  });
+
   test("the start signal plays the scenario", async () => {
     const startFile = process.env.NIGHTGAUGE_DEMO_START_FILE;
     assert.ok(startFile, "NIGHTGAUGE_DEMO_START_FILE is unset — the launcher did not wire it");
@@ -375,6 +427,19 @@ suite("demo mode", () => {
       STAGES,
       `Running-stage transitions: ${stageTransitions.join(" -> ") || "(none)"}`
     );
+  });
+
+  test("each completed stage shows its registry phases as N/N, not unreported", () => {
+    // The scenario reports each stage's registry phases by name (#2289). With
+    // names the registry does not know, the tree back-fills every registry
+    // phase as unreported and reads "phases not reported (N)".
+    for (const stage of STAGES) {
+      const registry = PHASE_REGISTRY[stage as ExecutionStage] ?? [];
+      if (registry.length === 0) continue;
+      const shown = completedStageDescriptions.get(stage) ?? "(never shown complete)";
+      const n = registry.length;
+      assert.match(shown, new RegExp(`^${n}/${n} phases`), `${stage}: ${shown}`);
+    }
   });
 
   test("the active dashboard tab follows each UI step", async () => {

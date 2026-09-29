@@ -123,6 +123,9 @@ export type SortBy = "board" | "priority" | "number" | "size" | "dependencies" |
 
 export type SortDirection = "asc" | "desc";
 
+/** Why a board prefetch read nothing without an error (#2287). */
+export type PrefetchSkipReason = "config-unresolved" | "not-configured";
+
 /**
  * Snapshot of the authenticated user's GitHub GraphQL API rate-limit state.
  * Emitted by ProjectBoardService.onRateLimitState whenever a fresh reading
@@ -228,12 +231,28 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     expectedRepo: string | null;
   } | null = null;
   private lastPrefetchError: string | null = null;
+  /**
+   * Why the most recent prefetchAllItems read no board, or null when it read
+   * one (or failed; see lastPrefetchError). `config-unresolved`: the project
+   * config has not loaded yet (its request failed or was superseded by a
+   * workspace-root change), so the board is unknown, not empty.
+   * `not-configured`: the config loaded and names no owner or project (#2287).
+   */
+  private lastPrefetchSkip: PrefetchSkipReason | null = null;
 
   private readonly _onDidChangeTreeData = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
   private readonly _onItemsUpdated = new vscode.EventEmitter<void>();
   readonly onItemsUpdated = this._onItemsUpdated.event;
+
+  /**
+   * Fires each time a config load resolves an owner and a project number, so
+   * a reader whose prefetch was skipped for want of them can read again
+   * (#2287).
+   */
+  private readonly _onDidResolveConfig = new vscode.EventEmitter<void>();
+  readonly onDidResolveConfig = this._onDidResolveConfig.event;
 
   private readonly _onStatusChanged = new vscode.EventEmitter<{
     repoSlug: string;
@@ -308,6 +327,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
   dispose(): void {
     this._onDidChangeTreeData.dispose();
     this._onItemsUpdated.dispose();
+    this._onDidResolveConfig.dispose();
     this._onStatusChanged.dispose();
     this._onRateLimitState.dispose();
     for (const d of this.disposables) d.dispose();
@@ -365,6 +385,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       log(
         `Config loaded via IPC: owner=${this.owner}, repo=${this.repo}, project=${this.projectNumber}`
       );
+      if (this.owner && this.projectNumber) this._onDidResolveConfig.fire();
       // Surface missing config to the user — silent empty views are confusing.
       // But an uninitialized repo is not a misconfigured one: before
       // `/nightgauge:repo-init` runs there is no config.yaml to be missing
@@ -802,10 +823,14 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
     }
     this.lastPrefetchError = null;
     this.lastPrefetchDiagnostics = null;
+    this.lastPrefetchSkip = null;
 
     await this.loadConfig();
     if (!this.owner || !this.projectNumber) {
-      log(`prefetchAllItems: skipped — owner=${this.owner}, project=${this.projectNumber}`);
+      this.lastPrefetchSkip = this.configLoaded ? "not-configured" : "config-unresolved";
+      log(
+        `prefetchAllItems: skipped (${this.lastPrefetchSkip}) — owner=${this.owner}, project=${this.projectNumber}`
+      );
       return;
     }
 
@@ -882,6 +907,14 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
    */
   getLastPrefetchError(): string | null {
     return this.lastPrefetchError;
+  }
+
+  /**
+   * Why the most recent `prefetchAllItems` call read no board, or null when it
+   * read one. A skipped prefetch is not an empty board (#2287).
+   */
+  getLastPrefetchSkip(): PrefetchSkipReason | null {
+    return this.lastPrefetchSkip;
   }
 
   getItemsByStatusFromCache(

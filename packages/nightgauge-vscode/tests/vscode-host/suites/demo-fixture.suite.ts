@@ -9,8 +9,10 @@
  * placeholder cannot satisfy it.
  *
  * Audit Trail reads the local run history while `platform.enabled` is false,
- * as it is in the fixture (ADR-026 section 6). Discovery reads the
- * release-watch and continuous-improvement logs.
+ * as it is in the fixture (ADR-026 section 6), and is read on its default
+ * range, the last seven days: the fixture is re-dated to the window's start as
+ * `npm run demo` re-dates it (#2285). Discovery reads the release-watch and
+ * continuous-improvement logs.
  *
  * Out of scope, because they do not read local files: Runs, Cost, Trends,
  * Health and Compliance (platform data over IPC, answered by the demo daemon,
@@ -25,38 +27,16 @@ import * as vscode from "vscode";
 import { suite, test } from "../harness.js";
 import { capturedPanels } from "../observe.js";
 import { materializeDemoWorkspace, waitFor, workspaceRoot } from "../fixture.js";
+import { stripScriptBlocks } from "../html.js";
 
 /**
- * The Audit Trail's date range, as its filter inputs send it: the seeded
- * history is dated January 2026, and the tab opens on the last seven days.
+ * Tab id and a predicate over that tab's panel markup. Each predicate needs
+ * text only the demo workspace's files can put there: a run title or the
+ * summed cost of the four seeded history records ($8.52). The overview one
+ * also rejects the empty-health placeholder, which shows while history is
+ * unread.
  */
-const AUDIT_RANGE = {
-  type: "auditFilter",
-  filters: {
-    dateFrom: "2026-01-01T00:00:00.000Z",
-    dateTo: "2026-01-31T23:59:59.999Z",
-    actionFilter: "",
-    userFilter: "",
-  },
-};
-
-/**
- * A message the user sends once the tab has rendered: `after` recognises
- * that render, so the message is not dropped by a fetch still in flight.
- */
-interface FollowUp {
-  after: (panel: string) => boolean;
-  message: Record<string, unknown>;
-}
-
-/**
- * Tab id, a predicate over that tab's panel markup, and any follow-up the
- * user would send before reading it. Each predicate needs text only the demo
- * workspace's files can put there: a run title or the summed cost of the four
- * seeded history records ($8.52). The overview one also rejects the
- * empty-health placeholder, which shows while history is unread.
- */
-const FILE_BACKED_TABS: ReadonlyArray<readonly [string, (panel: string) => boolean, FollowUp?]> = [
+const FILE_BACKED_TABS: ReadonlyArray<readonly [string, (panel: string) => boolean]> = [
   [
     "overview",
     (p) => p.includes("$8.52") && !p.includes("Run your first pipeline to see health metrics"),
@@ -78,7 +58,6 @@ const FILE_BACKED_TABS: ReadonlyArray<readonly [string, (panel: string) => boole
       p.includes("platform communication is off") &&
       p.includes("pipeline_run_failed") &&
       p.includes("Move berth assignments to the new schema"),
-    { after: (p) => p.includes("Showing local telemetry"), message: AUDIT_RANGE },
   ],
   [
     "discovery",
@@ -127,16 +106,12 @@ suite("demo workspace", () => {
       const send = async (message: Record<string, unknown>) => {
         for (const listener of dashboard.messageListeners) await listener(message);
       };
-      for (const [tab, populated, followUp] of FILE_BACKED_TABS) {
+      // The dashboard outlives the earlier suites, whose Audit Trail read ran
+      // before the demo history landed. Reset (the tab's own button) reads it
+      // again on the default range, the last seven days (#2285).
+      await send({ type: "auditResetFilters" });
+      for (const [tab, populated] of FILE_BACKED_TABS) {
         await send({ type: "selectTab", tab });
-        if (followUp) {
-          await waitFor(
-            () => (followUp.after(tabPanel(dashboard.panel.webview.html, tab)) ? true : undefined),
-            15_000,
-            `the ${tab} tab's first render`
-          );
-          await send(followUp.message);
-        }
         const panel = await waitFor(
           () => {
             const body = tabPanel(dashboard.panel.webview.html, tab);
@@ -148,8 +123,7 @@ suite("demo workspace", () => {
         const shown = tabPanel(dashboard.panel.webview.html, tab);
         assert.ok(
           panel,
-          `The ${tab} tab shows no demo workspace rows:\n${shown
-            .replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, " ")
+          `The ${tab} tab shows no demo workspace rows:\n${stripScriptBlocks(shown)
             .replace(/<[^>]+>/g, " ")
             .replace(/\s+/g, " ")
             .slice(0, 2000)}`

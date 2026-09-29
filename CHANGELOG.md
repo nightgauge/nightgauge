@@ -444,6 +444,36 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
   run in flight. A snapshot for a different issue now also resets the tree's
   stages, so the previous issue's running stage no longer keeps its spinner.
 
+- **Demo mode's Runs, Cost and Trends tabs show the demo daemon's data**
+  (#2105). The dashboard's session-token precheck turned them into "sign in"
+  because the demo profile holds no token by design. It now passes while a
+  daemon that announced `demo: true` is connected (ADR-026 section 6, amended),
+  so these tabs, and Health and Compliance behind the same gate, reach the
+  daemon's answers. Without demo mode a missing token blocks exactly as before.
+  The demo seeds a week of trend rows in percent, the units the Trends tab plots.
+
+- **`npm run demo` opens with its history inside the Audit Trail's default
+  range** (#2285). The demo workspace is dated January 2026 and the tab opens
+  on the last seven days, so it read "No Local Events". The session's copy is
+  now re-dated to the launch with the helper the demo daemon rebases scenario
+  state with: every event keeps its order and spacing, and run history files
+  are renamed to their new days.
+
+- **The dashboard's board summary no longer sticks at zero after an early
+  open** (#2287). A board refresh that ran before the project config resolved,
+  for example while the workspace root was still being set, read no board and
+  recorded it as 0 Ready / 0 In Progress / 0 In Review / 0 Done. Nothing read it
+  again until a manual refresh. The summary now stays loading and reads the real
+  counts as soon as the config resolves. A config that names no project shows
+  as not configured rather than as an empty board.
+
+- **The demo run shows its stages' phase progress** (#2289). The reference
+  scenario reported phases under invented names that no stage's phase registry
+  knows, so every completed stage read "phases not reported (N)". It now
+  reports each stage's registry phases by name, in order, so the Pipeline tree
+  shows `N/N phases`. A test fails when a scenario phase drifts from the
+  registry.
+
 - **The Audit Trail tab shows local run history when `platform.enabled` is
   false** (#2107). It showed "No Access" to every user without a platform
   session, and with a stored session it still called the platform. With the

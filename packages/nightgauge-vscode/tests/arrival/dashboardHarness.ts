@@ -34,6 +34,7 @@
  */
 
 import { vi, type Mock } from "vitest";
+import { stripScriptBlocks, stripStyleBlocks } from "../vscode-host/html";
 
 // ---------------------------------------------------------------------------
 // Captured webview panels
@@ -377,6 +378,7 @@ export function projectBoardServiceMockModule() {
       this.getSelectedProject = vi.fn(() => null);
       this.setSelectedProject = vi.fn();
       this.onStatusChanged = vi.fn(() => ({ dispose: vi.fn() }));
+      this.onDidResolveConfig = vi.fn(() => ({ dispose: vi.fn() }));
     }),
   };
 }
@@ -445,14 +447,9 @@ export function renderDashboardHtml(dashboard: unknown): string {
  */
 export function renderedText(html: string): string {
   return (
-    html
-      // Case-insensitive, and tolerant of attributes on the closing tag.
-      // Browsers accept `<SCRIPT>` and `</script foo="bar">`; a stripper that
-      // only matches lower-case `</script>` leaves script *source* in the
-      // extracted text, and an arrival assertion can then match against code
-      // instead of rendered output — passing for the wrong reason.
-      .replace(/<script[\s\S]*?<\/script[^>]*>/gi, " ")
-      .replace(/<style[\s\S]*?<\/style[^>]*>/gi, " ")
+    // The shared stripper is case-insensitive and tolerant of attributes on
+    // the closing tag; see tests/vscode-host/html.ts for why that matters.
+    stripStyleBlocks(stripScriptBlocks(html))
       .replace(/<[^>]+>/g, " ")
       // Unescape `&amp;` LAST. Doing it first double-unescapes: `&amp;lt;`
       // becomes `&lt;` and then `<`, so text that legitimately renders the
