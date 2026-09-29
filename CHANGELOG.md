@@ -14,6 +14,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **The demo daemon plays scenarios on a deterministic clock** (#2106). A
+  scenario JSON (`seed`, `state`, timed `steps`) passed with `--scenario`
+  drives board moves, queue changes, attention items, history and pipeline
+  events on a scenario clock; `--speed` scales delays without reordering, and
+  `--clock` pins the start for a byte-identical replay. Seed timestamps are
+  rebased to the scenario start so a demo always looks current. An invalid
+  scenario exits non-zero naming the step and reason before `ipc.ready`. A
+  fictional reference scenario ships in
+  `packages/nightgauge-vscode/demo/scenarios/reference.json`.
+
 ### Changed
 
 - **`nightgauge doctor` reports coded findings from a check registry, and

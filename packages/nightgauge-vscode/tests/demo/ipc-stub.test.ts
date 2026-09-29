@@ -48,7 +48,12 @@ const DAEMON = path.join(packageRoot, "demo", "daemon", "daemon.cjs");
 describe("demo daemon module graph is inert", () => {
   it("covers the entry and the daemon modules", () => {
     const files = [...graph.keys()].map((f) => path.relative(packageRoot, f)).sort();
-    expect(files).toEqual(["demo/daemon/daemon.cjs", "demo/daemon/state.cjs", "demo/ipc-stub.cjs"]);
+    expect(files).toEqual([
+      "demo/daemon/daemon.cjs",
+      "demo/daemon/scenario.cjs",
+      "demo/daemon/state.cjs",
+      "demo/ipc-stub.cjs",
+    ]);
   });
 
   it("requires only local filesystem and stream builtins", () => {
