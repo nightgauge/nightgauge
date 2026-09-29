@@ -409,13 +409,9 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
   recomputes them before it re-renders. An index rebuild also no longer reads
   a JSONL listing cached for up to five seconds from before the files changed.
 
-- **The Adapter Doctor panel shows the Go row's warnings and notes, and a gated
-  OpenCode row no longer reads "not on PATH"** (#2111). A usable adapter with
-  a warning is marked `!` and its stages `warn`, matching the CLI, which exits
-  1 on it; while `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` is unset the OpenCode row
-  says it was not checked. `docs/GO_BINARY.md` documents the `warnings`,
-  `notes` and `opencode` fields, the exit-code rule, and the current OpenCode
-  refusals.
+- **`docs/GO_BINARY.md` documents the doctor adapter row's `warnings`,
+  `notes` and `opencode` fields** (#2111), the exit-code rule (a usable
+  adapter's warnings alone exit 1) and the current OpenCode refusals.
 
 - **OpenCode refusals and docs match what the adapter does** (#2111). A refusal
   that says where to set an `opencode:` key names the machine-tier config file
