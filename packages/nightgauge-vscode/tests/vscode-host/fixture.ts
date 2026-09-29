@@ -70,6 +70,19 @@ export function materializePopulatedFixture(): void {
   }
 }
 
+/**
+ * Copy the committed demo workspace (`demo/workspace/`, #2107) over the open
+ * workspace folder. Used by the demo-fixture suite, which runs last, so the
+ * smaller `populated` fixture the earlier suites saw is not disturbed.
+ */
+export function materializeDemoWorkspace(): void {
+  const source = process.env.NIGHTGAUGE_HOST_DEMO_WORKSPACE;
+  if (!source || !fs.existsSync(source)) {
+    throw new Error(`NIGHTGAUGE_HOST_DEMO_WORKSPACE is unset or missing: ${source}`);
+  }
+  copyTree(source, workspaceRoot());
+}
+
 function copyTree(from: string, to: string): void {
   fs.mkdirSync(to, { recursive: true });
   for (const entry of fs.readdirSync(from, { withFileTypes: true })) {

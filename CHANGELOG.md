@@ -14,6 +14,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **A seeded demo workspace for the dashboard's file-backed tabs** (#2107).
+  `packages/nightgauge-vscode/demo/workspace/` is a fictional Lanternworks
+  workspace (run history, health trends, knowledge, pipeline state and a config
+  with `platform.enabled: false`) for demo mode. The `vscode-host` tier now
+  asserts that the Overview, Pipeline, Analytics and History tabs render rows
+  from it. It ships in no package.
+
 ### Changed
 
 - **`nightgauge doctor` reports each leaked object and learning gap as its own

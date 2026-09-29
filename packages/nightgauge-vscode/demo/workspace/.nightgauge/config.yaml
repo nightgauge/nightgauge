@@ -1,0 +1,12 @@
+# Demo workspace for demo mode (ADR-026, #2107). Every name is fictional.
+# platform.enabled is false: the demo makes no platform network call.
+schema_version: "2"
+github:
+  owner: lanternworks
+  repo: harbor-api
+pipeline:
+  max_concurrent: 1
+knowledge:
+  enabled: true
+platform:
+  enabled: false
