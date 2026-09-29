@@ -353,7 +353,7 @@ func orUnknown(s string) string {
 // sweep` remedy: the sweep restores it only onto that branch on a clean tree
 // and skips it otherwise. Any other stash cannot be proven safe to restore and
 // gets a manual remedy.
-func pipelineStashFindings(startDir string, now time.Time) ([]Finding, string) {
+func pipelineStashFindings(startDir string, now time.Time, door mergedPRDoorFactory) ([]Finding, string) {
 	const check, code = "pipeline_stashes", "NGD019"
 	roots := config.WorkspaceRepoRoots(startDir)
 	if len(roots) == 0 {
@@ -374,7 +374,7 @@ func pipelineStashFindings(startDir string, now time.Time) ([]Finding, string) {
 		if len(owned) == 0 {
 			continue
 		}
-		landed := landedBranches(root)
+		landed := landedBranches(root, door)
 		for _, e := range owned {
 			age := int(e.Age(now).Hours() / 24)
 			if age > oldest {
@@ -413,9 +413,9 @@ func pipelineStashFindings(startDir string, now time.Time) ([]Finding, string) {
 // default branch: the default branch itself and every stranded (merged,
 // unheld) branch. Best effort: a failed scan proves nothing, so it yields
 // only what was proven.
-func landedBranches(root string) map[string]bool {
+func landedBranches(root string, door mergedPRDoorFactory) map[string]bool {
 	landed := map[string]bool{}
-	scan, err := execution.ScanStrandedBranches(execution.StrandedBranchOptions{RepoRoot: root})
+	scan, err := execution.ScanStrandedBranches(execution.StrandedBranchOptions{RepoRoot: root, MergedPRLookup: doorFor(door, root)})
 	if err != nil {
 		return landed
 	}

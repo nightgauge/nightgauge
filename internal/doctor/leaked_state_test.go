@@ -380,7 +380,7 @@ func hygieneScan(r *leakRepo, now time.Time) []Finding {
 	all = append(all, fs...)
 	fs, _ = strandedBranchFindings(r.dir, nil)
 	all = append(all, fs...)
-	fs, _ = pipelineStashFindings(r.dir, now)
+	fs, _ = pipelineStashFindings(r.dir, now, nil)
 	return append(all, fs...)
 }
 

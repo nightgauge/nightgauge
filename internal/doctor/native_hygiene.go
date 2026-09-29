@@ -42,7 +42,7 @@ func init() {
 		})
 	native("pipeline_stashes", "Pipeline stashes", "NGD019",
 		func(ctx context.Context, env *Env) ([]Finding, string) {
-			return pipelineStashFindings(env.Cwd, env.Now)
+			return pipelineStashFindings(env.Cwd, env.Now, mergedPRDoor(ctx, env.Client))
 		})
 	// Work from a killed stage preserved under a WIP ref (#1105).
 	native("preserved_wip", "Preserved WIP refs", "NGD020",

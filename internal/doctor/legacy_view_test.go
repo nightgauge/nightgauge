@@ -29,7 +29,7 @@ func checkStrandedBranches(startDir string, door mergedPRDoorFactory) (CheckItem
 }
 
 func checkPipelineStashes(startDir string, now time.Time) (CheckItem, string) {
-	return asItem(pipelineStashFindings(startDir, now))
+	return asItem(pipelineStashFindings(startDir, now, nil))
 }
 
 func checkPreservedWip(startDir string, now time.Time) (CheckItem, string) {
