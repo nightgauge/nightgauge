@@ -2226,6 +2226,11 @@ export async function initializeServices(
   if (pipelineStateService) {
     treeProvider.setStateService(pipelineStateService);
     dragController.setStateService(pipelineStateService);
+    // A run already in flight at connect sends no event this relay could have
+    // heard, so ask the daemon's run registry once the tree listens (#2105).
+    pipelineStateService.adoptRunningRun().catch((error: unknown) => {
+      logger.debug("No in-flight run adopted at connect", { error: String(error) });
+    });
   }
 
   // Connect TreeProvider to IssueQueueService for queue section

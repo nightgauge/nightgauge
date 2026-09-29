@@ -62,7 +62,7 @@
       "surfaces": ["demo mode > the active dashboard tab follows each UI step"],
       "sampleParams": {
         "repos": ["lanternworks/harbor-api"],
-        "since": "2026-09-29T12:47:54.225Z"
+        "since": "2026-09-29T16:20:45.304Z"
       },
       "paramsShape": {
         "repos": ["string"],
@@ -221,8 +221,8 @@
       "resultType": "KnowledgeMetricsResult",
       "client": "generated",
       "surfaces": [
-        "webviews > KnowledgeValueDashboard creates, renders, and disposes",
-        "webviews > RecoveryDialog creates, renders, and disposes"
+        "webviews > DoctorPanel creates, renders, and disposes",
+        "webviews > ApprovalDialog creates, renders, and disposes"
       ],
       "sampleParams": {
         "windowDays": 7,
@@ -234,12 +234,37 @@
       }
     },
     {
+      "method": "knowledge.relatedToIssue",
+      "resultType": "KnowledgeRelatedToIssueResult",
+      "client": "generated",
+      "surfaces": ["ipc inventory > tree view nightgauge.knowledgeView"],
+      "sampleParams": {
+        "issueNumber": 112,
+        "limit": 10
+      },
+      "paramsShape": {
+        "issueNumber": "number",
+        "limit": "number"
+      }
+    },
+    {
       "method": "pipeline.getMaxConcurrent",
       "resultType": "PipelineMaxConcurrentResult",
       "client": "generated",
       "surfaces": [
         "activation > deferred startup work settles without a new unhandled rejection",
-        "demo mode > the demo daemon's handshake shows the Demo badge"
+        "demo mode > the extension activates on the demo workspace"
+      ],
+      "sampleParams": null,
+      "paramsShape": null
+    },
+    {
+      "method": "pipeline.runningSummary",
+      "resultType": "RunningPipelinesResult",
+      "client": "generated",
+      "surfaces": [
+        "activation > activate() resolves against the fixture workspace",
+        "demo mode > the extension activates on the demo workspace"
       ],
       "sampleParams": null,
       "paramsShape": null

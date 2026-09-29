@@ -549,6 +549,11 @@ export class PipelineTreeProvider
 
     // Update issue if changed
     if (!this.currentIssue || this.currentIssue.issueNumber !== state.issue_number) {
+      // A different issue starts from pending stages. The loop below only
+      // touches the stages the new state lists, so without this a stage the
+      // previous issue left running kept its spinner under the new one (#2105:
+      // a run adopted at connect, then another run's first snapshot).
+      if (this.currentIssue) this.resetAllStages();
       this.setIssue({
         number: state.issue_number,
         title: state.title,
