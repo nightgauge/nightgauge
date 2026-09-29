@@ -16,6 +16,23 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **`nightgauge doctor` reports coded findings from a check registry, and
+  `--json` is schema v2** (#2088). Every check is registered and runs in a
+  bounded parallel pool with its own deadline (10s by default); a check that
+  cannot finish reports `NGD000` as a warning instead of hanging the command,
+  and a check whose dependency failed is reported as skipped rather than
+  passing. `--json` now emits `v: 2` with `findings[]` (code, severity, title,
+  cause, redacted evidence, fingerprint, remedies) and a per-severity
+  `summary`; the `checks` map is gone. `healthy`, `exit_code`,
+  `failed_checks`, `errors`, `warnings` and `install_instructions` are derived
+  from the findings with unchanged meaning, so skills' preflight is unaffected.
+  The human output groups findings by severity with a text label on each, now
+  shows `github_identity`, `project_mapping` and `board_population`, and emits
+  no color under `NO_COLOR`, `TERM=dumb` or a non-terminal. Housekeeping
+  findings (leaked worktrees, stashes, stranded branches, orphaned processes
+  and compose projects) and informational ones (survival and corpus checks) no
+  longer turn the status "degraded" or the exit code to 1.
+
 - **Extension-only logs move to `ExtensionContext.logUri`, out of the
   workspace** (#2030). The extension's own diagnostic lines — its "Nightgauge"
   output channel (lifecycle, config resolution, board sync, gate results,
