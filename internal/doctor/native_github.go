@@ -252,7 +252,7 @@ func ghFindings(path string, err error) ([]Finding, string) {
 		map[string]string{"lookup": "PATH"}, []string{"missing"},
 		manualRemedy("install", "Install the GitHub CLI", check,
 			"Install gh from https://cli.github.com/ and make sure it is on PATH",
-			"Run `gh auth login`"))}, "gh CLI not found in PATH"
+			"Authenticate with `gh auth login`, or export GH_TOKEN with a personal access token"))}, "gh CLI not found in PATH"
 }
 
 // authRemedy is the operator's route to a working credential.
