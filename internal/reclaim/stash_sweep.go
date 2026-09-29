@@ -41,6 +41,9 @@ const (
 	// puts the tree back as it found it before recording this skip, and
 	// reports an error if it could not.
 	StashSkipRestoreFailed StashSkipReason = "restore-failed"
+	// StashSkipNotSelected — owned, but not the one stash a Message-scoped
+	// sweep was asked about (the doctor remedy acts on exactly one stash).
+	StashSkipNotSelected StashSkipReason = "not-selected"
 )
 
 // StashAction is what the sweep does with a stash it owns.
@@ -93,6 +96,10 @@ type StashSweepOptions struct {
 	// Issue narrows the sweep to one issue's stashes. Zero sweeps every
 	// pipeline-owned stash in the repo.
 	Issue int
+	// Message narrows the sweep to the one stash whose message is exactly
+	// this. A stash's message is its stable identity: stash@{N} renumbers as
+	// others are removed. Empty sweeps every selected stash.
+	Message string
 	// Action selects restore (default) or drop.
 	Action StashAction
 	// DryRun classifies without touching the stash stack.
@@ -156,6 +163,8 @@ func SweepPipelineStashes(opts StashSweepOptions) (StashSweepResult, error) {
 			res.Skipped = append(res.Skipped, SkippedStash{Ref: e.Ref, Message: e.Message, Reason: StashSkipUnowned, AgeDays: age})
 		case opts.Issue > 0 && e.Issue != opts.Issue:
 			res.Skipped = append(res.Skipped, SkippedStash{Ref: e.Ref, Message: e.Message, Reason: StashSkipOtherIssue, AgeDays: age})
+		case opts.Message != "" && e.Message != opts.Message:
+			res.Skipped = append(res.Skipped, SkippedStash{Ref: e.Ref, Message: e.Message, Reason: StashSkipNotSelected, AgeDays: age})
 		case action == StashRestore && (head == "" || e.Branch != head):
 			res.Skipped = append(res.Skipped, SkippedStash{Ref: e.Ref, Message: e.Message, Reason: StashSkipOtherBranch, AgeDays: age})
 		default:

@@ -973,3 +973,90 @@ func TestProbeOpenCodeEndpointGenericUsesBasePathAndKey(t *testing.T) {
 		t.Fatalf("with no api_key_env the probe sends no credential; got ready=%v auth=%q problem=%q", r.Ready, gotAuth, r.Problem)
 	}
 }
+
+// TestAdapterFindings_OpenCodeCauseIsNotMasked (#1741): a refused
+// opencode.binary pin and a refused machine-tier opencode: block each report
+// their own cause and code, and only a binary genuinely missing from PATH is
+// "not found on PATH", with the managed install as its remedy.
+func TestAdapterFindings_OpenCodeCauseIsNotMasked(t *testing.T) {
+	notOnPath := func(string) (string, error) { return "", fmt.Errorf("executable file not found in $PATH") }
+	for _, c := range []struct {
+		name      string
+		setup     func(f *openCodeFixture)
+		code      string
+		cause     string
+		notFound  bool
+		remedyHas string
+	}{
+		{"binary missing from PATH", func(f *openCodeFixture) { f.probe.lookPath = notOnPath },
+			codeAdapterNotInstalled, "not on PATH", true, "npm i --prefix"},
+		{"relative pin refused", func(f *openCodeFixture) {
+			s := openCodeLMStudio()
+			s.Binary = "bin/opencode"
+			f.probe.settings = func() (config.OpenCodeConfig, error) { return s, nil }
+			f.probe.lookPath = notOnPath
+		}, codeOpenCodePin, "is not an absolute path", false, "opencode.binary"},
+		{"missing pin refused", func(f *openCodeFixture) {
+			s := openCodeLMStudio()
+			s.Binary = filepath.Join(f.home, "no-such-opencode")
+			f.probe.settings = func() (config.OpenCodeConfig, error) { return s, nil }
+		}, codeOpenCodePin, "cannot be run", false, "opencode.binary"},
+		{"machine config refused", func(f *openCodeFixture) {
+			f.probe.settings = func() (config.OpenCodeConfig, error) {
+				return config.OpenCodeConfig{}, fmt.Errorf("opencode: block in ~/.nightgauge/config.yaml: unknown key \"modle\"")
+			}
+			f.probe.lookPath = notOnPath
+		}, codeOpenCodeConfig, "unknown key", false, "opencode: block"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newOpenCodeFixture(t, openCodeLMStudio())
+			c.setup(f)
+			h := f.check()
+			if h.OK || h.Code != c.code {
+				t.Fatalf("row ok %v code %q, want not usable with %s; remediation %q", h.OK, h.Code, c.code, h.Remediation)
+			}
+			fs := adapterHealthFindings([]AdapterHealth{h})
+			if len(fs) != 1 {
+				t.Fatalf("want one finding, got %s", findingsText(fs))
+			}
+			fnd := fs[0]
+			if fnd.Code != c.code || !strings.Contains(fnd.Cause, c.cause) {
+				t.Errorf("finding %s cause %q; want %s naming %q", fnd.Code, fnd.Cause, c.code, c.cause)
+			}
+			if got := strings.Contains(fnd.Title, "not found on PATH"); got != c.notFound {
+				t.Errorf("title %q: says not found on PATH = %v, want %v", fnd.Title, got, c.notFound)
+			}
+			if got := strings.Contains(h.Problem(), "not found on PATH"); got != c.notFound {
+				t.Errorf("row problem %q: says not found on PATH = %v, want %v", h.Problem(), got, c.notFound)
+			}
+			if !strings.Contains(remedyText(fnd), c.remedyHas) {
+				t.Errorf("remedy does not name %q:\n%s", c.remedyHas, remedyText(fnd))
+			}
+		})
+	}
+}
+
+// TestAdapterFindings_OpenCodeGateAndRefusal: the closed enable gate names the
+// switch, and a dispatch refusal (an endpoint that is not ready) keeps every
+// refusal in the cause cap recovery reports.
+func TestAdapterFindings_OpenCodeGateAndRefusal(t *testing.T) {
+	gated := checkAdapter("opencode", adapterProbe{})
+	f := findingFor(t, adapterHealthFindings([]AdapterHealth{gated}), "opencode", codeOpenCodeGate)
+	if !strings.Contains(remedyText(f), adapters.ExperimentalOpenCodeEnvVar+"=1") {
+		t.Errorf("gate remedy does not name the switch: %s", remedyText(f))
+	}
+
+	fx := newOpenCodeFixture(t, openCodeLMStudio())
+	fx.probe.endpoint = func(target adapters.OpenCodeEndpointTarget, model string, injected int) adapters.OpenCodeEndpointReadiness {
+		return adapters.OpenCodeEndpointReadiness{Endpoint: target.ID, Kind: target.Kind, Problem: "endpoint " + target.ID + " is not answering"}
+	}
+	h := fx.check()
+	fs := adapterHealthFindings([]AdapterHealth{h})
+	refused := findingFor(t, fs, "opencode", codeAdapterRefused)
+	if reason, unusable := AdapterUnusable(fs, "opencode"); !unusable || reason != h.Remediation || !strings.Contains(reason, "is not answering") {
+		t.Errorf("AdapterUnusable = %q, %v; want the row's remediation %q", reason, unusable, h.Remediation)
+	}
+	if refused.Severity != SeverityWarning {
+		t.Errorf("severity %q, want warning", refused.Severity)
+	}
+}

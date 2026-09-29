@@ -505,6 +505,12 @@ export class Dashboard implements vscode.Disposable {
   private async loadHistoryFromTelemetryStore(): Promise<void> {
     const result = await this.state.loadFromTelemetryStore();
     if (!this.panel) return;
+    // The widgets computed from history were computed against whatever
+    // history the panel had before this load landed; recompute them so the
+    // render does not pair a populated history with an empty health widget.
+    if (result.ok && result.count > 0) {
+      await this.refreshHistoryDerivedWidgets();
+    }
     // Re-render on failure too. The old `loaded > 0` gate skipped the render
     // for both "nothing to show" and "the read threw", so a raced index write
     // left the panel sitting on the untouched "No pipeline runs recorded"
@@ -527,8 +533,19 @@ export class Dashboard implements vscode.Disposable {
   private async backfillHistoryFromArtifacts(): Promise<void> {
     const imported = await this.state.backfillFromPipelineArtifacts();
     if (imported > 0 && this.panel) {
+      await this.refreshHistoryDerivedWidgets();
       this.updatePanel("backfill");
     }
+  }
+
+  /**
+   * Recompute the widgets that read the in-memory history (the health widget
+   * and the cost summary). A background history load calls this before it
+   * renders; the refresh paths instead load history first and then compute
+   * every widget, so they never pair new history with stale widgets (#2274).
+   */
+  private async refreshHistoryDerivedWidgets(): Promise<void> {
+    await Promise.all([this.refreshHealthWidgetData(), this.refreshCostSummary()]);
   }
 
   /**
@@ -1175,9 +1192,8 @@ export class Dashboard implements vscode.Disposable {
         // disk artifacts so health/cost/sparklines reflect the completion. The
         // run's history record is written by the Go authoritative writer; the
         // dashboard only reads it (#141).
-        this.backfillHistoryFromArtifacts()
-          .then(() => this.refreshAllMetrics())
-          .then(() => this.updatePanel("autoRefreshMetrics"));
+        // refreshAllMetrics() loads history before it computes the widgets.
+        this.refreshAllMetrics().then(() => this.updatePanel("autoRefreshMetrics"));
         return;
       }
       // Pipeline still running - start tracking and reconcile completed stages (Issue #639)
@@ -1304,9 +1320,9 @@ export class Dashboard implements vscode.Disposable {
     }
 
     try {
-      // Backfill must complete first — health/cost computations read from
-      // history, so running them in parallel with backfill causes stale data.
-      await this.backfillHistoryFromArtifacts();
+      // History must load first — health/cost computations read from it, so
+      // running them in parallel with the load computes them from stale data.
+      await this.state.backfillFromPipelineArtifacts();
       await Promise.all([
         this.refreshHealthWidgetData(),
         this.refreshCostSummary(),
@@ -1919,13 +1935,18 @@ export class Dashboard implements vscode.Disposable {
       case "refresh":
         // Reset pagination on refresh (Issue #983)
         this.historyDisplayCount = this.state.getHistoryPageSize();
-        // Refresh ALL widget data (Issue #639)
+        // Refresh ALL widget data (Issue #639). The health widget and the cost
+        // summary read the in-memory history, so they wait for the history
+        // load; computing them alongside it read the history as it was before
+        // the load and showed the empty-health placeholder beside populated
+        // history until a second refresh (#2274). The board and the routing
+        // metrics read their own sources and run alongside.
         await Promise.all([
           this.refreshProjectBoardData(),
-          this.backfillHistoryFromArtifacts(),
-          this.refreshHealthWidgetData(),
           this.refreshModelRoutingMetrics(),
-          this.refreshCostSummary(),
+          this.state
+            .backfillFromPipelineArtifacts()
+            .then(() => this.refreshHistoryDerivedWidgets()),
         ]);
         // Re-initialize firewall data if service is available
         if (this.sanitizationLogService) {

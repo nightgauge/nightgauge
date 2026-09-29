@@ -39,8 +39,10 @@ Decisions, each with the alternative rejected:
 UI subscribes to (`stage.*`, `phase.*`, `pipeline.*`, `queue.changed`, `attention.event`,
 `autonomous.*`). It never emits or honours `pipeline.runStage` or `pipeline.abort`, never
 spawns a process, opens a network connection, or reads a token, credential or keychain entry.
-Only the scenario path, a speed factor and the #2103 log path are read from its arguments and
-environment.
+Only the scenario path, a speed factor, a start file, an event log path and the #2103 log path
+are read from its arguments and environment. Each has an environment variable
+(`NIGHTGAUGE_DEMO_*`) as well as a flag, because `nightgauge.backend.binaryPath` cannot carry
+arguments (amended by #2110).
 
 **Rejected: an extension-side mock.** It would need a code path inside the shipped extension
 that bypasses `IpcClient`, so the demo would no longer exercise the real data path and the

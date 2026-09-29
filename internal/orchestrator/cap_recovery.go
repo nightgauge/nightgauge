@@ -381,24 +381,11 @@ func capDescentReason(reason, fromModel, toModel string) string {
 // path — and it is injected through the input struct so the decision itself
 // stays a pure function.
 func AdapterUsableForCapHop(adapter string) (bool, string) {
-	health := doctor.CheckAdapters([]string{adapter})
-	// CheckAdapters may prepend a "compat-manifests" row ahead of the
-	// requested adapters (checkAdaptersWithProbe, internal/doctor/adapters.go)
-	// when the embedded compat manifests fail to load, so the requested
-	// adapter's row is not always health[0]. Select it by name (#1712).
-	want := strings.TrimSpace(adapter)
-	for _, h := range health {
-		if h.Adapter != want {
-			continue
-		}
-		if !h.OK {
-			reason := h.Remediation
-			if reason == "" {
-				reason = "not usable"
-			}
-			return false, reason
-		}
-		return true, ""
+	// The adapter findings carry the requested adapter's name, so a
+	// "compat-manifests" finding (the embedded compat manifests failed to
+	// load) is never read as this adapter's own verdict (#1712).
+	if reason, unusable := doctor.AdapterUnusable(doctor.AdapterFindings([]string{adapter}), adapter); unusable {
+		return false, reason
 	}
-	return false, "adapter doctor returned no reading"
+	return true, ""
 }

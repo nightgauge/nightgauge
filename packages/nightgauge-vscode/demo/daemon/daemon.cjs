@@ -10,6 +10,8 @@
  *     player (#2106) drives the UI through this. It refuses
  *     `pipeline.runStage`, which would make the extension spawn an agent.
  *   - `ready()`: the `ipc.ready` handshake with `demo: true` (decision 4).
+ *   - `answers(method)`: whether a request gets more than the empty result;
+ *     the entry point logs it with each request for the drift guard (#2109).
  *
  * Pure: no I/O of its own. The entry point (`../ipc-stub.cjs`) owns stdio.
  */
@@ -78,6 +80,15 @@ function buildHandlers(state) {
             : { state: "open" },
         })),
     }),
+    // The demo has no forge to sweep: every repository is evaluated and
+    // nothing changes; the scenario raises and resolves attention itself.
+    "attention.sweep": (p) => ({
+      repos: state.repositories.map((r) => ({ repo: `${state.owner}/${r.name}`, evaluated: [] })),
+      created: 0,
+      updated: 0,
+      autoResolved: 0,
+      reason: p && p.reason,
+    }),
     "audit.getRetentionConfig": () => ({ retentionDays: 90, updatedAt: state.now }),
     "autonomous.status": () => ({
       status: "running",
@@ -117,9 +128,8 @@ function buildHandlers(state) {
       projectNumber: state.projectNumber,
       sanitizationMode: "warn",
       projects: [{ name: "Demo board", number: state.projectNumber, default: true }],
-      defaultRepo: state.repositories[0]
-        ? `${state.owner}/${state.repositories[0].name}`
-        : undefined,
+      // The short name: the extension joins it to the owner itself.
+      defaultRepo: state.repositories[0] ? state.repositories[0].name : undefined,
       ownerType: "org",
     }),
     "config.tierAudit": () => ({ entries: [], hasDrift: false }),
@@ -129,6 +139,12 @@ function buildHandlers(state) {
       ],
     }),
     "git.cleanupMergedBranches": () => ({ deleted: [], count: 0 }),
+    // A comfortable budget, so the UI never shows a rate-limit warning.
+    "github.rateLimit": () => ({
+      remaining: 4870,
+      limit: 5000,
+      resetAt: Math.floor(Date.parse(state.now) / 1000) + 3600,
+    }),
     "git.root": (p) => ({ root: (p && p.workDir) || repoPath("workspace") }),
     "knowledge.metrics": (p) => ({
       window_days: (p && p.windowDays) || 7,
@@ -294,7 +310,12 @@ function buildHandlers(state) {
       })),
       updated_at: state.now,
     }),
-    "board.list": (p) => state.board.filter((i) => !p || !p.status || i.status === p.status),
+    // The extension asks for GitHub's own spelling ("In progress"); match
+    // statuses case-insensitively, as the board does.
+    "board.list": (p) =>
+      state.board.filter(
+        (i) => !p || !p.status || i.status.toLowerCase() === String(p.status).toLowerCase()
+      ),
     "board.listOpen": () => openItems(),
     "board.counts": () => counts(),
     "board.changed": (p) => ({
@@ -369,7 +390,24 @@ function createDaemon({ state, send, log }) {
     return handler(params);
   }
 
-  return { handle, emit, query, ready, methods: Object.keys(handlers), state };
+  /**
+   * Whether `method` gets a real answer: a handler, or an explicit refusal.
+   * False is what the drift guard (#2109) reports: the extension called a
+   * method this daemon would answer with the protocol's empty result.
+   */
+  function answers(method) {
+    return Object.prototype.hasOwnProperty.call(handlers, method) || REFUSED_METHODS.has(method);
+  }
+
+  return {
+    handle,
+    emit,
+    query,
+    ready,
+    answers,
+    methods: Object.keys(handlers),
+    state,
+  };
 }
 
 module.exports = { BOARD_STATUSES, PROTOCOL_VERSION, REFUSED_METHODS, createDaemon };

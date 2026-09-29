@@ -1130,6 +1130,25 @@ run_step "ci-local.sh change-scoping contract" \
 # never `gofmt`: those are seconds, and a compile error is not confined to the
 # package that changed. The decision is made once, here, and both suites report
 # the same reason.
+#
+# Both test passes set -timeout, the per-package-binary hang guard, instead of
+# go test's 10m default (#2269). That default is sized for one package on a
+# quiet box; this gate admits concurrent gates on purpose and accepts that
+# they run slower. internal/execution and internal/orchestrator are the
+# longest serial suites (no t.Parallel) and spend their time spawning git and
+# shell fakes, so their wall time grows with contention for the CPU:
+#
+#   2026-09-29, 12-core Apple M, one package alone, load 25-130:
+#     internal/execution    124s plain, 146s race; 64-71s CPU incl. children,
+#                           ~3,460 git invocations
+#     internal/orchestrator 148s plain, 176s race; 101-113s CPU incl. children,
+#                           ~6,600 git invocations
+#   2026-09-28, two gates at CI_LOCAL_JOBS=2 plus two focused go test runs,
+#   load ~39: both packages hit the 10m default ("test timed out after 10m0s").
+#
+# 20m is twice that observed worst. A hang still fails the step; it just takes
+# 20 minutes, not 10, to say so.
+GO_TEST_TIMEOUT=20m
 decide_go_scope
 run_step "go build ./..." go build ./...
 if [ "$GO_SCOPE_RUN" -eq 0 ]; then
@@ -1137,7 +1156,7 @@ if [ "$GO_SCOPE_RUN" -eq 0 ]; then
     "--changed, and $GO_SCOPE_REASON"
 else
 run_group "go test ./... -count=1 (with skip accounting)" \
-  bash -c 'set -o pipefail; go test -json ./... -count=1 | tee go-test.json | python3 scripts/go-test-json-echo.py && python3 scripts/check-go-test-skips.py go-test.json'
+  bash -c 'set -o pipefail; go test -json ./... -count=1 -timeout "$1" | tee go-test.json | python3 scripts/go-test-json-echo.py && python3 scripts/check-go-test-skips.py go-test.json' _ "$GO_TEST_TIMEOUT"
 fi
 # Mirrors the race half of ci.yml's "Test (plain and race, concurrently)" step
 # (#493, merged with the plain pass in #1218), which replaced the
@@ -1172,7 +1191,7 @@ if [ "$GO_SCOPE_RUN" -eq 0 ]; then
     "--changed, and $GO_SCOPE_REASON"
 else
 run_group "go test -race -count=1 ./..." \
-  go test -race -count=1 ./...
+  go test -race -count=1 -timeout "$GO_TEST_TIMEOUT" ./...
 fi
 run_step "gofmt -l ./internal ./cmd" \
   bash -c '! gofmt -l ./internal ./cmd | grep .'

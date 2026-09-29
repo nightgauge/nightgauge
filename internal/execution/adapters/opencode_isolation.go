@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
@@ -758,8 +759,8 @@ func openCodeManagedConfigRefusal(files []string) error {
 	}
 	return fmt.Errorf(
 		"this machine has managed OpenCode config (%s), which OpenCode merges above every config a pipeline run is given, Nightgauge's own included, whatever the run's directories are, so a pipeline run cannot be isolated from it. "+
-			"Remove it, or set %s: true in your machine-tier config (~/.nightgauge/config.yaml) to run pipeline stages with it and the rest of your OpenCode config. See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
-		strings.Join(found, ", "), openCodeInheritSetting)
+			"Remove it, or set %s: true in your machine-tier config (%s) to run pipeline stages with it and the rest of your OpenCode config. See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
+		strings.Join(found, ", "), openCodeInheritSetting, config.MachineConfigFile())
 }
 
 // openCodeStoredLoginRefusal refuses a dispatch whose run root holds an

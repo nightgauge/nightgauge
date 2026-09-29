@@ -8,26 +8,44 @@
  *   - on start it emits `ipc.ready` with the protocol version the extension
  *     expects (`IPC_PROTOCOL_VERSION`) and `demo: true`;
  *   - it answers requests from in-memory demo state (`daemon/daemon.cjs`),
- *     seeded from `daemon/seed.json` or the `state` of the JSON file named by
- *     `--scenario <path>`, rebased so the state's `now` is the scenario start;
- *     unknown methods get `null` and a stderr line;
+ *     seeded from `daemon/seed.json` or the `state` of a scenario file,
+ *     rebased so the state's `now` is the scenario start; unknown methods get
+ *     `null` and a stderr line;
  *   - with a scenario, it plays the `steps` on a scenario clock
- *     (`daemon/scenario.cjs`): `--speed <n>` scales delays only, and
+ *     (`daemon/scenario.cjs`): the speed factor scales delays only, and
  *     `--clock <iso>` pins the start for a byte-identical replay. An invalid
  *     scenario exits 1 naming the step before `ipc.ready` is sent;
- *   - it appends one JSONL record per request — timestamp, method, params and
- *     a type-only shape of the params — to the file named by
- *     `NIGHTGAUGE_DEMO_IPC_LOG`, or to `ipc-stub.jsonl` in the OS temp dir.
+ *   - it appends one JSONL record per request — timestamp, method, params, a
+ *     type-only shape of the params and whether the daemon answers the
+ *     method — to the IPC log (#2103, #2109).
+ *
+ * Every option has a flag and an environment variable. The flag wins; the
+ * variable exists because the extension spawns `<binaryPath> serve
+ * --workspace <root>` and a setting cannot carry arguments, so a demo window
+ * or the `vscode-host` tier configures the daemon through the environment it
+ * inherits from the extension host:
+ *
+ *   --scenario <path>    NIGHTGAUGE_DEMO_SCENARIO    scenario file (default: seed, no steps)
+ *   --speed <n>          NIGHTGAUGE_DEMO_SPEED       playback speed factor (default 1)
+ *   --start-file <path>  NIGHTGAUGE_DEMO_START_FILE  hold playback until this file exists
+ *   --event-log <path>   NIGHTGAUGE_DEMO_EVENT_LOG   append every emitted event, with
+ *                                                    timestamps relative to scenario start
+ *   (none)               NIGHTGAUGE_DEMO_IPC_LOG     request log (default: OS temp dir)
+ *
+ * The start file is the start signal (#2110): the window comes up populated
+ * with the scenario's initial state, and the first step runs only once the
+ * file appears, so a screen recorder can begin capture first. The event log
+ * is what two runs of one scenario compare byte-for-byte.
  *
  * Point the extension at it with `nightgauge.backend.binaryPath`. The
  * extension spawns `<binary> serve --workspace <root>`; those arguments are
  * accepted and ignored.
  *
  * Deliberately inert: it makes no network calls, spawns no processes and
- * reads no credentials. The only environment variable it reads is the log
- * path. `tests/demo/ipc-stub.test.ts` asserts the module graph stays that way.
+ * reads no credentials. The only environment variables it reads are the five
+ * above. `tests/demo/ipc-stub.test.ts` asserts the module graph stays that way.
  */
-/* global process, __dirname, setTimeout */
+/* global process, __dirname, setTimeout, setInterval, clearInterval */
 "use strict";
 
 const fs = require("node:fs");
@@ -35,7 +53,12 @@ const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
 const { createDaemon } = require("./daemon/daemon.cjs");
-const { createPlayer, loadScenario, rebaseState } = require("./daemon/scenario.cjs");
+const {
+  createPlayer,
+  loadScenario,
+  rebaseState,
+  relativeToStart,
+} = require("./daemon/scenario.cjs");
 const { createState } = require("./daemon/state.cjs");
 
 const logPath = process.env.NIGHTGAUGE_DEMO_IPC_LOG || path.join(os.tmpdir(), "ipc-stub.jsonl");
@@ -67,8 +90,28 @@ function shapeOf(value) {
   return typeof value;
 }
 
+/** Where emitted events are recorded (set once options load), and the scenario start. */
+let eventLog;
+let scenarioEpochMs = 0;
+
 function send(message) {
   process.stdout.write(JSON.stringify(message) + "\n");
+  if (eventLog && message.event) recordEvent(message);
+}
+
+/**
+ * One line per emitted event: its offset on the scenario clock and its
+ * payload with every timestamp made relative to the scenario start, so two
+ * runs of one scenario write byte-identical logs whatever the wall clock.
+ */
+function recordEvent(message) {
+  const at = daemon ? Date.parse(daemon.state.now) - scenarioEpochMs : 0;
+  const line = { at, event: message.event, data: relativeToStart(message.data, scenarioEpochMs) };
+  try {
+    fs.appendFileSync(eventLog, JSON.stringify(line) + "\n");
+  } catch (err) {
+    process.stderr.write(`demo-daemon: cannot write ${eventLog}: ${err.message}\n`);
+  }
 }
 
 function record(request) {
@@ -77,6 +120,9 @@ function record(request) {
     method: request.method,
     params: request.params === undefined ? null : scrub(request.params),
     paramsShape: request.params === undefined ? null : shapeOf(request.params),
+    // The drift guard (#2109): false means the extension called a method the
+    // daemon has no answer for, and the host tier fails naming it.
+    answered: daemon.answers(request.method),
   };
   try {
     fs.appendFileSync(logPath, JSON.stringify(entry) + "\n");
@@ -108,28 +154,80 @@ function flagValue(argv, flag) {
   return value;
 }
 
+/** A flag's value, else the environment variable's, else undefined. */
+function option(argv, flag, envValue) {
+  const value = flagValue(argv, flag);
+  if (value !== undefined) return value;
+  return envValue === undefined || envValue === "" ? undefined : envValue;
+}
+
 /**
- * The scenario (`--scenario <path>`, else the built-in seed with no steps),
- * the playback speed (`--speed <n>`, default 1) and the scenario start
- * (`--clock <iso>`, default now; pin it to replay byte-identically).
+ * The scenario (else the built-in seed with no steps), the playback speed
+ * (default 1), the scenario start (`--clock <iso>`, default now; pin it to
+ * replay byte-identically), the start file and the event log. See the file
+ * header for each option's flag and environment variable.
  */
-function loadOptions(argv) {
-  const file = flagValue(argv, "--scenario") || path.join(__dirname, "daemon", "seed.json");
+function loadOptions(argv, env) {
+  const file =
+    option(argv, "--scenario", env.NIGHTGAUGE_DEMO_SCENARIO) ||
+    path.join(__dirname, "daemon", "seed.json");
   const scenario = loadScenario(JSON.parse(fs.readFileSync(file, "utf8")));
-  const speedArg = flagValue(argv, "--speed");
+  const speedArg = option(argv, "--speed", env.NIGHTGAUGE_DEMO_SPEED);
   const speed = speedArg === undefined ? 1 : Number(speedArg);
   if (!(speed > 0 && Number.isFinite(speed))) throw new Error("--speed must be a positive number");
   const clockArg = flagValue(argv, "--clock");
   const epochMs = clockArg === undefined ? Date.now() : Date.parse(clockArg);
   if (Number.isNaN(epochMs)) throw new Error("--clock must be an ISO-8601 timestamp");
-  return { scenario, speed, epochMs };
+  return {
+    scenario,
+    speed,
+    epochMs,
+    startFile: option(argv, "--start-file", env.NIGHTGAUGE_DEMO_START_FILE),
+    eventLog: option(argv, "--event-log", env.NIGHTGAUGE_DEMO_EVENT_LOG),
+  };
+}
+
+/** Run `fn` now, or once `file` exists when a start file was given. */
+function whenStarted(file, fn) {
+  if (!file || fs.existsSync(file)) {
+    fn();
+    return;
+  }
+  log(`waiting for the start signal: create ${file} to play the scenario`);
+  const poll = setInterval(() => {
+    if (!fs.existsSync(file)) return;
+    clearInterval(poll);
+    log("start signal received");
+    fn();
+  }, 100);
 }
 
 const log = (message) => process.stderr.write(`demo-daemon: ${message}\n`);
+
+// The extension also runs one-shot CLI subcommands through the binary path
+// (`worktree sweep --json`, for one). The demo has none: fail them at once,
+// as an unavailable command, rather than start a second daemon that waits on
+// stdin and announces itself.
+const subcommand = process.argv[2];
+if (subcommand !== "serve") {
+  log(`"${subcommand || ""}" is not available in demo mode; only serve runs`);
+  process.exit(1);
+}
+
 let daemon;
 let player;
+let startFile;
 try {
-  const { scenario, speed, epochMs } = loadOptions(process.argv.slice(2));
+  const options = loadOptions(process.argv.slice(2), {
+    NIGHTGAUGE_DEMO_SCENARIO: process.env.NIGHTGAUGE_DEMO_SCENARIO,
+    NIGHTGAUGE_DEMO_SPEED: process.env.NIGHTGAUGE_DEMO_SPEED,
+    NIGHTGAUGE_DEMO_START_FILE: process.env.NIGHTGAUGE_DEMO_START_FILE,
+    NIGHTGAUGE_DEMO_EVENT_LOG: process.env.NIGHTGAUGE_DEMO_EVENT_LOG,
+  });
+  const { scenario, speed, epochMs } = options;
+  startFile = options.startFile;
+  eventLog = options.eventLog;
+  scenarioEpochMs = epochMs;
   daemon = createDaemon({ state: createState(rebaseState(scenario.state, epochMs)), send, log });
   player = createPlayer({
     daemon,
@@ -146,7 +244,8 @@ try {
 }
 
 fs.mkdirSync(path.dirname(logPath), { recursive: true });
+if (eventLog) fs.mkdirSync(path.dirname(eventLog), { recursive: true });
 readline.createInterface({ input: process.stdin }).on("line", handleLine);
 process.stdin.on("end", () => process.exit(0));
 daemon.ready();
-player.start();
+whenStarted(startFile, () => player.start());

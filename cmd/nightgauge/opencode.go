@@ -180,7 +180,7 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 		model = settings.Model
 	}
 	if model == "" {
-		return nil, errors.New("no model: pass --model <provider>/<model>, or set opencode.model in the machine-tier config (~/.nightgauge/config.yaml)")
+		return nil, fmt.Errorf("no model: pass --model <provider>/<model>, or set opencode.model in the machine-tier config (%s)", config.MachineConfigFile())
 	}
 	allowedTools, skillPath, err := openCodeVerbStageTools(stage, f.skillsRoot)
 	if err != nil {

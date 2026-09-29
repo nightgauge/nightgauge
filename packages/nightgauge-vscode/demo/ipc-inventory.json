@@ -1,5 +1,5 @@
 {
-  "description": "IPC methods the VS Code extension calls at activation, while resolving each tree view and while opening each dashboard tab, recorded against demo/ipc-stub.cjs by the vscode-host tier. Regenerate: npm run -w nightgauge-vscode demo:inventory",
+  "description": "IPC methods the VS Code extension calls at activation, while resolving each tree view, while opening each dashboard tab and while the demo window plays the reference scenario, recorded against demo/ipc-stub.cjs by the vscode-host tier. Regenerate: npm run -w nightgauge-vscode demo:inventory",
   "protocolVersion": 2,
   "methods": [
     {
@@ -7,7 +7,9 @@
       "resultType": "AttentionListResult",
       "client": "generated",
       "surfaces": [
-        "activation > activate() resolves against the fixture workspace"
+        "activation > activate() resolves against the fixture workspace",
+        "demo mode > the extension activates on the demo workspace",
+        "demo mode > the active dashboard tab follows each UI step"
       ],
       "sampleParams": {
         "includeTerminal": false
@@ -17,12 +19,24 @@
       }
     },
     {
+      "method": "attention.sweep",
+      "resultType": "AttentionSweepResult",
+      "client": "generated",
+      "surfaces": ["demo mode > the Pipeline tree's active stage walks every stage in order"],
+      "sampleParams": {
+        "repos": ["lanternworks/harbor-api"],
+        "reason": "activation"
+      },
+      "paramsShape": {
+        "reason": "string",
+        "repos": ["string"]
+      }
+    },
+    {
       "method": "audit.getRetentionConfig",
       "resultType": "RetentionConfig",
       "client": "generated",
-      "surfaces": [
-        "ipc inventory > dashboard tab audit"
-      ],
+      "surfaces": ["ipc inventory > dashboard tab audit"],
       "sampleParams": null,
       "paramsShape": null
     },
@@ -33,10 +47,71 @@
       "surfaces": [
         "tree views (empty workspace) > nightgauge.repositoriesView resolves children on an empty workspace",
         "tree views (populated workspace) > nightgauge.repositoriesView resolves children on a populated workspace",
-        "ipc inventory > tree view nightgauge.repositoriesView"
+        "ipc inventory > tree view nightgauge.repositoriesView",
+        "demo mode > the Repositories tree shows the seeded board counts",
+        "demo mode > the start signal plays the scenario",
+        "demo mode > the Pipeline tree's active stage walks every stage in order"
       ],
       "sampleParams": null,
       "paramsShape": null
+    },
+    {
+      "method": "board.changed",
+      "resultType": "BoardChangedResult",
+      "client": "generated",
+      "surfaces": ["demo mode > the active dashboard tab follows each UI step"],
+      "sampleParams": {
+        "repos": ["lanternworks/harbor-api"],
+        "since": "2026-09-29T12:47:54.225Z"
+      },
+      "paramsShape": {
+        "repos": ["string"],
+        "since": "string"
+      }
+    },
+    {
+      "method": "board.list",
+      "resultType": "BoardItem[] | null",
+      "client": "generated",
+      "surfaces": [
+        "webviews > Dashboard creates, renders, and disposes",
+        "ipc inventory > dashboard opens",
+        "demo workspace > each file-backed dashboard tab renders a populated row",
+        "demo mode > the Repositories tree shows the seeded board counts",
+        "demo mode > the start signal plays the scenario",
+        "demo mode > the Pipeline tree's active stage walks every stage in order",
+        "demo mode > the active dashboard tab follows each UI step"
+      ],
+      "sampleParams": {
+        "owner": "lanternworks",
+        "projectNumber": 7,
+        "ownerType": "org"
+      },
+      "paramsShape": {
+        "owner": "string",
+        "ownerType": "string",
+        "projectNumber": "number"
+      }
+    },
+    {
+      "method": "board.listOpen",
+      "resultType": "BoardItem[] | null",
+      "client": "generated",
+      "surfaces": [
+        "ipc inventory > tree view nightgauge.repositoriesView",
+        "demo mode > the Repositories tree shows the seeded board counts",
+        "demo mode > the Pipeline tree's active stage walks every stage in order"
+      ],
+      "sampleParams": {
+        "owner": "lanternworks",
+        "projectNumber": 7,
+        "ownerType": "org"
+      },
+      "paramsShape": {
+        "owner": "string",
+        "ownerType": "string",
+        "projectNumber": "number"
+      }
     },
     {
       "method": "config.getProjectConfig",
@@ -46,10 +121,16 @@
         "activation > activate() resolves against the fixture workspace",
         "activation > deferred startup work settles without a new unhandled rejection",
         "webviews > Dashboard creates, renders, and disposes",
-        "webviews > SettingsPanel creates, renders, and disposes",
+        "webviews > BrownfieldDashboard creates, renders, and disposes",
         "ipc inventory > tree view nightgauge.pipelineView",
         "ipc inventory > tree view nightgauge.repositoriesView",
-        "ipc inventory > dashboard opens"
+        "ipc inventory > dashboard opens",
+        "demo workspace > each file-backed dashboard tab renders a populated row",
+        "demo mode > the extension activates on the demo workspace",
+        "demo mode > the demo daemon's handshake shows the Demo badge",
+        "demo mode > the Repositories tree shows the seeded board counts",
+        "demo mode > the start signal plays the scenario",
+        "demo mode > the Pipeline tree's active stage walks every stage in order"
       ],
       "sampleParams": {
         "root": "<workspace>"
@@ -64,7 +145,8 @@
       "client": "generated",
       "surfaces": [
         "webviews > SettingsPanel creates, renders, and disposes",
-        "ipc inventory > tree view nightgauge.pipelineView"
+        "ipc inventory > tree view nightgauge.pipelineView",
+        "demo workspace > each file-backed dashboard tab renders a populated row"
       ],
       "sampleParams": {},
       "paramsShape": {}
@@ -75,7 +157,8 @@
       "client": "generated",
       "surfaces": [
         "webviews > SettingsPanel creates, renders, and disposes",
-        "ipc inventory > tree view nightgauge.pipelineView"
+        "ipc inventory > tree view nightgauge.pipelineView",
+        "demo workspace > each file-backed dashboard tab renders a populated row"
       ],
       "sampleParams": null,
       "paramsShape": null
@@ -85,7 +168,8 @@
       "resultType": "GitCleanupMergedBranchesResult",
       "client": "generated",
       "surfaces": [
-        "activation > deferred startup work settles without a new unhandled rejection"
+        "activation > deferred startup work settles without a new unhandled rejection",
+        "demo mode > the Pipeline tree's active stage walks every stage in order"
       ],
       "sampleParams": {},
       "paramsShape": {}
@@ -95,7 +179,8 @@
       "resultType": "{ root: string }",
       "client": "generated",
       "surfaces": [
-        "activation > activate() resolves against the fixture workspace"
+        "activation > activate() resolves against the fixture workspace",
+        "demo mode > the extension activates on the demo workspace"
       ],
       "sampleParams": {
         "workDir": "<workspace>"
@@ -105,12 +190,24 @@
       }
     },
     {
+      "method": "github.rateLimit",
+      "resultType": "RateLimitInfo",
+      "client": "generated",
+      "surfaces": [
+        "ipc inventory > tree view nightgauge.repositoriesView",
+        "demo mode > the Repositories tree shows the seeded board counts",
+        "demo mode > the Pipeline tree's active stage walks every stage in order"
+      ],
+      "sampleParams": {},
+      "paramsShape": {}
+    },
+    {
       "method": "knowledge.metrics",
       "resultType": "KnowledgeMetricsResult",
       "client": "generated",
       "surfaces": [
-        "webviews > AdapterDoctorPanel creates, renders, and disposes",
-        "webviews > ApprovalDialog creates, renders, and disposes"
+        "webviews > KnowledgeValueDashboard creates, renders, and disposes",
+        "webviews > RecoveryDialog creates, renders, and disposes"
       ],
       "sampleParams": {
         "windowDays": 7,
@@ -126,7 +223,8 @@
       "resultType": "PipelineMaxConcurrentResult",
       "client": "generated",
       "surfaces": [
-        "activation > activate() resolves against the fixture workspace"
+        "activation > deferred startup work settles without a new unhandled rejection",
+        "demo mode > the demo daemon's handshake shows the Demo badge"
       ],
       "sampleParams": null,
       "paramsShape": null
@@ -136,7 +234,8 @@
       "resultType": "HealthResponse",
       "client": "generated",
       "surfaces": [
-        "activation > activate() resolves against the fixture workspace"
+        "activation > activate() resolves against the fixture workspace",
+        "demo mode > the extension activates on the demo workspace"
       ],
       "sampleParams": null,
       "paramsShape": null
@@ -146,7 +245,8 @@
       "resultType": "StatusOK",
       "client": "generated",
       "surfaces": [
-        "activation > activate() resolves against the fixture workspace"
+        "activation > activate() resolves against the fixture workspace",
+        "demo mode > the extension activates on the demo workspace"
       ],
       "sampleParams": {
         "token": ""
@@ -159,9 +259,7 @@
       "method": "pr.list",
       "resultType": "PullRequestDetail[]",
       "client": "manual",
-      "surfaces": [
-        "ipc inventory > dashboard tab dependencies"
-      ],
+      "surfaces": ["ipc inventory > dashboard tab dependencies"],
       "sampleParams": {
         "owner": "nightgauge",
         "repo": "nightgauge",
@@ -178,7 +276,8 @@
       "resultType": "IpcQueueState",
       "client": "generated",
       "surfaces": [
-        "activation > activate() resolves against the fixture workspace"
+        "activation > activate() resolves against the fixture workspace",
+        "demo mode > the extension activates on the demo workspace"
       ],
       "sampleParams": null,
       "paramsShape": null
@@ -187,18 +286,12 @@
       "method": "workspace.repoList",
       "resultType": "WorkspaceRepoListResult",
       "client": "generated",
-      "surfaces": [
-        "webviews > SettingsPanel creates, renders, and disposes"
-      ],
+      "surfaces": ["webviews > SettingsPanel creates, renders, and disposes"],
       "sampleParams": {
-        "folders": [
-          "<workspace>"
-        ]
+        "folders": ["<workspace>"]
       },
       "paramsShape": {
-        "folders": [
-          "string"
-        ]
+        "folders": ["string"]
       }
     },
     {
@@ -207,7 +300,6 @@
       "client": "generated",
       "surfaces": [
         "activation > deferred startup work settles without a new unhandled rejection",
-        "webviews > SettingsPanel creates, renders, and disposes",
         "ipc inventory > tree view nightgauge.pipelineView"
       ],
       "sampleParams": {

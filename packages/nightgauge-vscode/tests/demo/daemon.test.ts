@@ -15,6 +15,7 @@ import type {
   AnalyticsRunsResult,
   AnalyticsTrendsResult,
   AttentionListResult,
+  AttentionSweepResult,
   AutonomousStatusResult,
   BoardChangedResult,
   BoardItem,
@@ -30,6 +31,7 @@ import type {
   PipelineMaxConcurrentResult,
   PlatformStatus,
   PullRequestDetail,
+  RateLimitInfo,
   RetentionConfig,
   RunningPipelinesResult,
   StatusCounts,
@@ -137,6 +139,13 @@ const guards: Record<string, (v: unknown) => boolean> = {
           })
         ),
     }),
+  "attention.sweep": (v): v is AttentionSweepResult =>
+    has(v, {
+      repos: (x) => arrOf(x, (r) => has(r, { repo: str })),
+      created: num,
+      updated: num,
+      autoResolved: num,
+    }),
   "audit.getRetentionConfig": (v): v is RetentionConfig => has(v, { retentionDays: num }),
   "autonomous.status": (v): v is AutonomousStatusResult =>
     has(v, {
@@ -170,6 +179,8 @@ const guards: Record<string, (v: unknown) => boolean> = {
   "git.cleanupMergedBranches": (v): v is GitCleanupMergedBranchesResult =>
     has(v, { deleted: (x) => arrOf(x, str), count: num }),
   "git.root": (v): v is { root: string } => has(v, { root: str }),
+  "github.rateLimit": (v): v is RateLimitInfo =>
+    has(v, { remaining: num, limit: num, resetAt: num }),
   "knowledge.metrics": (v): v is KnowledgeMetricsResult =>
     has(v, {
       window_days: num,
@@ -369,6 +380,20 @@ describe("demo daemon results", () => {
     expect(ready.map((i) => i.number)).toEqual([131, 133, 135]);
     const running = call("pipeline.runningSummary").result as RunningPipelinesResult;
     expect(running.runs.map((r) => r.issueNumber)).toEqual([112]);
+  });
+
+  it("names the default repository by its short name, as the real daemon does", () => {
+    // The extension joins it to the owner; a full name shows no board rows.
+    const { call } = freshDaemon();
+    expect((call("config.getProjectConfig").result as ConfigGetProjectResult).defaultRepo).toBe(
+      "harbor-api"
+    );
+  });
+
+  it("matches board statuses case-insensitively, as the extension spells them", () => {
+    const { call } = freshDaemon();
+    const inProgress = call("board.list", { status: "In progress" }).result as BoardItem[];
+    expect(inProgress.map((i) => i.number)).toEqual([112, 115]);
   });
 
   it("reflects state mutations in later answers", () => {

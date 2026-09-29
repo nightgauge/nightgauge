@@ -16,6 +16,38 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge doctor --fix` applies remedies and verifies each one**
+  (#2093). A closed Go verb registry executes the remedies doctor findings
+  declare: `auto` remedies apply, `confirm` remedies only with `--yes`, and
+  `manual` remedies print their steps. Each verb re-checks its precondition
+  immediately before acting; if the world changed since the scan the remedy
+  is `blocked` (exit 4) and nothing is done, and a conflict exits 3. After
+  apply the owning check re-runs, and the outcome is `fixed` only when the
+  finding is gone, otherwise `still-present` with the new evidence. The
+  hygiene remedies run end to end: worktree sweep (only the finding's own
+  worktree, honouring live runs), stash sweep (only the named stash), stranded
+  branch delete (compare-and-delete at the scanned tip), WIP prune,
+  orphaned-process terminate and serve-lease reclaim (SIGTERM to the single
+  pid, re-verified as a nightgauge binary you own), plus compose cleanup,
+  `outcome init`, survival sweep and the CLI rebuild. `--dry-run` prints every
+  preview and changes nothing; `--only` and `--severity` narrow the pass. Each
+  attempted remedy is appended to `<state dir>/doctor/fix-log.jsonl` (0600,
+  redacted, no evidence values), and `nightgauge doctor --history` prints it.
+
+- **One command opens a demo session, and CI fails when the demo drifts from
+  the extension** (#2105, #2106, #2108, #2109, #2110). `npm run demo` in the
+  extension package opens a VS Code window with a profile of its own, the demo
+  daemon as its backend and a fresh demo workspace, and plays the reference
+  scenario; the operator's own profile is never touched. `--wait-for-start`
+  holds playback until a start file exists so a recorder can begin first, and
+  the event log of two runs compares byte-for-byte. The daemon reads its
+  scenario, speed, start file and event log from `NIGHTGAUGE_DEMO_*`
+  environment variables, since a setting cannot carry arguments. The
+  `vscode-host` tier now plays the scenario in a demo window, checking the
+  seeded views, every pipeline stage in order and each dashboard tab step, and
+  fails naming any IPC method the extension calls that the daemon does not
+  answer.
+
 - **VS Code shows a "Demo" badge and follows scenario UI steps in demo mode**
   (#2108). When the connected daemon's `ipc.ready` announces `demo: true`, the
   extension sets the `nightgauge.demoMode` context key and shows a "Demo"
@@ -46,6 +78,16 @@ changelog, and the release workflow refuses a tag that does not.
   from it. It ships in no package.
 
 ### Changed
+
+- **`nightgauge doctor --adapters` reports each unusable adapter as a coded
+  finding** (#2092). Adapter health is now the `adapters` check group: each
+  adapter that is not usable is one warning coded by its cause (`NGD100`–`NGD111`),
+  with a remedy naming the install command, the login command or the API-key
+  variable to set. A key is reported only as present or absent, never by
+  value. A refused `opencode.binary` pin or an invalid machine-tier `opencode:`
+  block now reports its own cause instead of "opencode CLI not found on PATH"
+  (#1741). Requested adapters are probed concurrently, and cap recovery reads
+  the adapter findings with unchanged behavior.
 
 - **Doctor's GitHub, config and credential checks emit coded findings**
   (#2091). `binary`, `skills`, `gh`, `github_auth`, `api_user`, `scopes`,
@@ -282,6 +324,35 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
   `remote.notifyOnPipelineRun` config keys.
 
 ### Fixed
+
+- **The dashboard's first refresh shows the health widget from the history it
+  just loaded** (#2274). Refresh computed the health widget and cost summary
+  alongside the history load, so they read the history from before it and
+  the Overview showed "Run your first pipeline" beside populated history until
+  a second refresh. They now wait for the load, and a background history load
+  recomputes them before it re-renders. An index rebuild also no longer reads
+  a JSONL listing cached for up to five seconds from before the files changed.
+
+- **The Adapter Doctor panel shows the Go row's warnings and notes, and a gated
+  OpenCode row no longer reads "not on PATH"** (#2111). A usable adapter with
+  a warning is marked `!` and its stages `warn`, matching the CLI, which exits
+  1 on it; while `NIGHTGAUGE_EXPERIMENTAL_OPENCODE` is unset the OpenCode row
+  says it was not checked. `docs/GO_BINARY.md` documents the `warnings`,
+  `notes` and `opencode` fields, the exit-code rule, and the current OpenCode
+  refusals.
+
+- **OpenCode refusals and docs match what the adapter does** (#2111). A refusal
+  that says where to set an `opencode:` key names the machine-tier config file
+  as resolved on that machine (`NIGHTGAUGE_CONFIG_HOME`, then
+  `XDG_CONFIG_HOME`, then the platform default), not a hardcoded
+  `~/.nightgauge/config.yaml`. The `inherit_user_config` notice and the doctor
+  name the exact files OpenCode loads from your config directory. An unquoted
+  numeric timeout is documented as what it is, a "missing unit" error that
+  fails the whole `opencode:` block, not a nanosecond value. The docs state
+  that `OPENCODE_API_KEY` is always withheld, so a paid `opencode/` or
+  `opencode-go/` model fails provider authentication after spawn. The
+  permission-rejected remediation and ADR-022's `--pure`, `RunOptions` and
+  permission-map statements are corrected.
 
 - **A sanitization warning no longer creates `.nightgauge/logs/` in whatever
   directory the command ran from.** The Bash gate's warn-mode log resolves the

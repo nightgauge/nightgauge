@@ -124,7 +124,10 @@ const openCodeSubagentDepth = 1
 const openCodeDefaultTimeout = 3 * time.Minute
 
 // openCodeMinTimeout rejects a timeout that is almost certainly a unit
-// mistake: a bare number in the YAML is read as nanoseconds.
+// mistake, such as 500ms written for 500s. A bare number never reaches it: the
+// machine-tier loader decodes an unquoted 180000 as the string "180000", which
+// time.ParseDuration refuses with "missing unit", so the whole opencode: block
+// fails to load (TestOpenCodeTimeoutBareNumberFailsTheBlock).
 const openCodeMinTimeout = time.Second
 
 // Tool output above either cap is written to a file and the model gets a
@@ -558,7 +561,7 @@ func openCodeTimeout(d time.Duration, key string) (time.Duration, error) {
 		return openCodeDefaultTimeout, nil
 	}
 	if d < openCodeMinTimeout {
-		return 0, fmt.Errorf("%s is %s, under a second: write it as a duration such as 3m (a bare number is read as nanoseconds)", key, d)
+		return 0, fmt.Errorf("%s is %s, under a second: write it as a duration with a unit, such as 3m", key, d)
 	}
 	return d, nil
 }
@@ -984,8 +987,8 @@ func BuildOpenCodeConfig(in OpenCodeConfigInput) (OpenCodeRunConfig, error) {
 	case openCodeIsLocalKey(model):
 		return OpenCodeRunConfig{}, fmt.Errorf(
 			"model %q names provider key %q, a model server you run, but the machine-tier opencode: config declares no endpoint with that id, so its limits are unknown: LM Studio reports a context limit of 0, and OpenCode never compacts a session whose limit is 0. "+
-				"Set opencode.provider and opencode.base_url in ~/.nightgauge/config.yaml; the limits are discovered from the server, and opencode.limit.context and opencode.limit.output override them. See docs/SETTINGS_ARCHITECTURE.md",
-			model, key)
+				"Set opencode.provider and opencode.base_url in %s; the limits are discovered from the server, and opencode.limit.context and opencode.limit.output override them. See docs/SETTINGS_ARCHITECTURE.md",
+			model, key, config.MachineConfigFile())
 	case !catalogKey:
 		return OpenCodeRunConfig{}, fmt.Errorf(
 			"model %q names provider key %q, which is neither an endpoint the machine-tier opencode: config declares nor a provider OpenCode's bundled catalog knows, so only a config Nightgauge does not build (the repository's opencode.json or your own OpenCode config) could define it, with a base URL and limits Nightgauge never checked: a missing or 0 context limit means OpenCode never compacts the session. "+
@@ -1200,8 +1203,8 @@ func (ep OpenCodeEndpoint) resolveLimit(modelID string, maxTokens int, desc mode
 	unresolved := func(name, what string) error {
 		return fmt.Errorf(
 			"%s.limit.%s is not set for endpoint %s, and %s could not be discovered from the server (%v). OpenCode compacts a session only when it knows the model's limits, and with a context limit of 0 it never does, so the stage would run into the server's loaded window. "+
-				"Make the server report it, or set %s.limit.context to the context the server has loaded (at or below it, not the model's maximum) and %s.limit.output to the most one reply may use, in ~/.nightgauge/config.yaml",
-			key, name, ep.ID, what, discoverErr, key, key)
+				"Make the server report it, or set %s.limit.context to the context the server has loaded (at or below it, not the model's maximum) and %s.limit.output to the most one reply may use, in %s",
+			key, name, ep.ID, what, discoverErr, key, key, config.MachineConfigFile())
 	}
 
 	var warnings []string
@@ -1556,6 +1559,17 @@ type OpenCodeRun struct {
 	Endpoints []string `json:"-"`
 }
 
+// OpenCodeInheritedConfigFiles is what OpenCode 1.18.30 loads from a config
+// directory, OPENCODE_CONFIG_DIR and $HOME/.opencode included: the file set a
+// dispatch with opencode.inherit_user_config on reads from the operator's
+// OpenCode config. Messages that describe that opt-in name this set rather
+// than the whole directory (ADR-022 § 8).
+const OpenCodeInheritedConfigFiles = "opencode.json, opencode.jsonc and the agent, command, mode, plugin, tool and skill directories"
+
+// OpenCodeInheritedConfigNotLoaded is what a config directory can hold that
+// OpenCode does not load from it, so an inherited run does not read it either.
+const OpenCodeInheritedConfigNotLoaded = "not config.json, the legacy TOML config file or the global AGENTS.md"
+
 // OpenCodeEnvWithhold is OpenCodeAdapter.WithholdsEnv for one dispatch, as
 // data: an inherited variable is withheld when it is one of Names, or when
 // its name starts with one of Prefixes and it is not one of Keep (#1657).
@@ -1683,8 +1697,8 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 		return nil, err
 	}
 	if req.Settings.InheritUserConfig {
-		fmt.Fprintf(os.Stderr, "[opencode] %s is on: this dispatch also reads your own OpenCode config (your XDG OpenCode config directory, ~/.opencode and any managed OpenCode config on this machine). Every key the per-run config sets still wins over it except a managed config's, which outranks them all; stored logins are not inherited, but an API key written in that config is\n",
-			openCodeInheritSetting)
+		fmt.Fprintf(os.Stderr, "[opencode] %s is on: this dispatch also reads your own OpenCode config: %s, from %s and from ~/.opencode, and any managed OpenCode config on this machine (%s). Every key the per-run config sets still wins over it except a managed config's, which outranks them all; stored logins are not inherited, but an API key written in that config is\n",
+			openCodeInheritSetting, OpenCodeInheritedConfigFiles, isolation["OPENCODE_CONFIG_DIR"], OpenCodeInheritedConfigNotLoaded)
 	} else {
 		managed := req.ManagedConfigFiles
 		if managed == nil {

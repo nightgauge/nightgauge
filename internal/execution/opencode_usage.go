@@ -5,12 +5,14 @@
 // the redaction of credentials from every line the child prints.
 //
 // Every opencode process started here (--version, db, export) runs in its own
-// process group under a timeout, from the run's own root directory, with
-// --pure, and with only the variables that point it at the run's root
-// (openCodeHelperEnv): it reads the run's session database, loads no plugin,
-// and holds no credential. Its stdout is an unnamed file, never a pipe, which
-// would cut a long export short (helper). A failure never fails the stage: it
-// marks usage partial and leaves a drift marker.
+// process group under a timeout, from the run's own root directory, and with
+// only the variables that point it at the run's root (openCodeHelperEnv), so
+// it reads the run's session database and holds no credential. db and export
+// also run with --pure, so they load no plugin; --version runs without it: it
+// only prints the binary's version, and its result is cached per binary path
+// and modification time (version). Its stdout is an unnamed file, never a
+// pipe, which would cut a long export short (helper). A failure never fails
+// the stage: it marks usage partial and leaves a drift marker.
 package execution
 
 import (

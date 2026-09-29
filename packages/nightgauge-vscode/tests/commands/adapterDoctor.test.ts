@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import { EventEmitter } from "events";
 import type { spawn } from "child_process";
 import type { AdapterPreflightAggregateResult } from "@nightgauge/sdk";
+import { renderAdapterDoctorHtml } from "../../src/views/doctor/AdapterDoctorHtml";
 import {
   mergeAdapterRows,
   finalizeStageRows,
@@ -150,6 +151,119 @@ describe("mergeAdapterRows (#4031)", () => {
     const rows = mergeAdapterRows(["opencode"], [], authResult({ opencode: { ok: true } }), false);
     expect(rows).toHaveLength(1);
     expect(rows[0].displayName).toBe("OpenCode");
+  });
+});
+
+/**
+ * The Go row's `warnings`, `notes` and `opencode` section (#2111). A usable
+ * row's warnings make `nightgauge doctor --adapters opencode` exit 1, and a
+ * closed experimental gate means the Go doctor ran no OpenCode check, so the
+ * panel must neither call such a row ready nor call a gated binary missing.
+ */
+describe("Go warnings, notes and the OpenCode gate (#2111)", () => {
+  const openCodeUsable: GoAdapterHealth = {
+    adapter: "opencode",
+    kind: "cli",
+    binary: "opencode",
+    installed: true,
+    path: "/usr/local/bin/opencode",
+    version: "1.18.30",
+    version_ok: true,
+    min_version: "1.18.30",
+    ok: true,
+    warnings: ["OpenCode holds a stored oauth login for anthropic in auth.json"],
+    notes: ["version floor 1.18.30 (fail_closed), tested up to 1.18.30"],
+    opencode: { enabled: true, max_tested: "1.18.30", floor_policy: "fail_closed" },
+  };
+  const openCodeGated: GoAdapterHealth = {
+    adapter: "opencode",
+    kind: "cli",
+    binary: "opencode",
+    installed: false,
+    version_ok: false,
+    min_version: "1.18.30",
+    ok: false,
+    remediation:
+      "the opencode adapter is experimental and dispatches only with NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1",
+    notes: ["version floor 1.18.30 (fail_closed), tested up to 1.18.30"],
+    opencode: { enabled: false, max_tested: "1.18.30" },
+  };
+  const report = (rows: ReturnType<typeof mergeAdapterRows>) =>
+    renderAdapterDoctorHtml(
+      { rows, stages: [], generatedAt: "now", binaryResolved: true, notes: [] },
+      { cspSource: "vscode-resource://test", nonce: "n" }
+    );
+
+  it("carries a usable row's warnings and notes, and marks it and its stages warn", () => {
+    const rows = mergeAdapterRows(
+      ["opencode"],
+      [openCodeUsable],
+      authResult({ opencode: { ok: true } }),
+      true
+    );
+    expect(rows[0].ok).toBe(true);
+    expect(rows[0].warnings).toEqual(openCodeUsable.warnings);
+    expect(rows[0].notes).toEqual(openCodeUsable.notes);
+    expect(rows[0].gated).toBe(false);
+
+    const stages = finalizeStageRows(
+      [
+        {
+          stage: "feature-dev",
+          adapter: "opencode",
+          sdkAdapter: "opencode",
+          source: "env",
+          model: "anthropic/x",
+        },
+      ],
+      rows,
+      true
+    );
+    expect(stages[0].status).toBe("warn");
+
+    const html = report(rows);
+    expect(html).toContain("OpenCode holds a stored oauth login for anthropic in auth.json");
+    expect(html).toContain("tested up to 1.18.30");
+    expect(html).toContain('<span class="status warn">!</span>');
+    expect(html).not.toContain('<span class="status ok">✓</span>');
+  });
+
+  it("does not report a gated, installed opencode as not on PATH", () => {
+    const rows = mergeAdapterRows(
+      ["opencode"],
+      [openCodeGated],
+      authResult({ opencode: { ok: true } }),
+      true
+    );
+    expect(rows[0].gated).toBe(true);
+    expect(rows[0].ok).toBe(false);
+
+    const html = report(rows);
+    expect(html).not.toContain("not on PATH");
+    expect(html).toContain("not checked: experimental gate closed");
+    expect(html).toContain("NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1");
+  });
+
+  it("still reports an ungated opencode that is missing as not on PATH", () => {
+    const missing: GoAdapterHealth = {
+      ...openCodeUsable,
+      installed: false,
+      path: undefined,
+      version: undefined,
+      ok: false,
+      warnings: [],
+      remediation: "opencode is not on PATH",
+    };
+    const rows = mergeAdapterRows(["opencode"], [missing], authResult({}), true);
+    expect(rows[0].gated).toBe(false);
+    expect(report(rows)).toContain("not on PATH");
+  });
+
+  it("shows no Go warnings or notes when the Go facts are unavailable", () => {
+    const rows = mergeAdapterRows(["opencode"], [], authResult({ opencode: { ok: true } }), false);
+    expect(rows[0].warnings).toEqual([]);
+    expect(rows[0].notes).toEqual([]);
+    expect(rows[0].gated).toBe(false);
   });
 });
 

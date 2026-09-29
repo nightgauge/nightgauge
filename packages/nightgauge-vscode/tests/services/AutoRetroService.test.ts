@@ -736,8 +736,8 @@ describe("AutoRetroService", () => {
     );
 
     it("does not blame a Nightgauge permission map for an adapter permission rejection (Issue #1631)", () => {
-      // Nightgauge generates no OpenCode permission map yet, so the `ask` that
-      // was rejected came from a repository's or the user's opencode.json.
+      // Nightgauge's permission map holds only `allow` and `deny`, so the `ask`
+      // that was rejected came from a repository's or the user's opencode.json.
       // The retro must say so, and must not steer the operator toward
       // loosening a rule that guards secret files.
       const reason =
@@ -757,9 +757,9 @@ describe("AutoRetroService", () => {
     });
 
     it("parks OpenCode's .env read guard and points at the issue text (Issue #1631)", () => {
-      // OpenCode's own default ruleset asks before reading `*.env` and
-      // `*.env.*`, so a stage sent to a secret file by the model or by the
-      // issue text ends `tool=read`. It parks like every other rejection; the
+      // Nightgauge's map denies reading `*.env` and `*.env.*`, and an `ask`
+      // rule outside it can still stop a stage sent to a secret file by the
+      // model or by the issue text, which ends `tool=read`. It parks like every other rejection; the
       // retro must name the guard and the issue text, never a retry, and
       // never advise loosening the guard.
       const reason =

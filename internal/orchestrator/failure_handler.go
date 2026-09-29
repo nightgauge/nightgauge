@@ -597,10 +597,11 @@ const (
 	TerminalKindContextWindowExceeded = "context_window_exceeded"
 	// TerminalKindAdapterPermissionRejected: the adapter auto-rejected a tool
 	// the stage's allowed tools grant (#1624's
-	// `[adapter-permission-rejected]` marker) under an `ask` rule: OpenCode's
-	// own default guard on reading `*.env` and `*.env.*`, or a rule in a
-	// repository's or the user's opencode.json. Nightgauge generates no
-	// OpenCode permission map yet (#1638). Whatever permission the marker
+	// `[adapter-permission-rejected]` marker) under an `ask` rule. The
+	// permission map Nightgauge generates (#1815) holds only `allow` and
+	// `deny`, and denies reading `*.env` and `*.env.*` outright, so the rule
+	// comes from OpenCode config outside that map, such as a repository's or
+	// the user's opencode.json. Whatever permission the marker
 	// names, the kind is the same and parks: a `read` rejection retried would
 	// let the model or the issue text that sent it to a secret file loop the
 	// issue. Distinct from TerminalKindPermissionDenied, the harness refusing
@@ -643,9 +644,9 @@ func TerminalKindRemediation(kind string) string {
 			" — a retry on the same model and adapter meets the same limit"
 	case TerminalKindAdapterPermissionRejected:
 		return "OpenCode asked before a tool the stage's allowed tools grant and rejected it headless; " +
-			"Nightgauge generates no OpenCode permission map yet, so the `ask` rule is OpenCode's own default " +
-			"guard on reading `*.env` and `*.env.*` files or a rule in the repository's or the user's " +
-			"opencode.json. Find the rule for the permission the stage's stderr names (`tool=<permission>`); " +
+			"the permission map Nightgauge generates holds only `allow` and `deny`, and denies reading `*.env` and " +
+			"`*.env.*` files outright, so the `ask` rule comes from OpenCode config outside that map, such as the " +
+			"repository's or the user's opencode.json. Find the rule for the permission the stage's stderr names (`tool=<permission>`); " +
 			"for `tool=read`, check whether the issue text asks the stage to read secret files and remove that " +
 			"ask. Change a rule only if the stage should have that tool, never by loosening a rule that guards " +
 			"secret files, " + parkedReleaseStep

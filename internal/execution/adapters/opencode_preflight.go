@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
+	"github.com/nightgauge/nightgauge/internal/config"
 )
 
 // OpenCode's version policy, binary pin, endpoint readiness, and the OpenCode
@@ -119,7 +120,7 @@ func OpenCodeManagedInstall(m adaptercompat.Manifest, home string) (command, pin
 // openCodeInstallRemedy is the remediation that ends every version refusal.
 func openCodeInstallRemedy(m adaptercompat.Manifest, home string) string {
 	command, pin := OpenCodeManagedInstall(m, home)
-	return fmt.Sprintf("Install the tested build with `%s` and pin it with opencode.binary: %s in ~/.nightgauge/config.yaml", command, pin)
+	return fmt.Sprintf("Install the tested build with `%s` and pin it with opencode.binary: %s in %s", command, pin, config.MachineConfigFile())
 }
 
 // OpenCodeBinary is the opencode binary a dispatch spawns and the doctor
@@ -142,8 +143,8 @@ func ResolveOpenCodeBinary(pin string, lookPath func(string) (string, error)) (O
 	if pin != "" {
 		if !filepath.IsAbs(pin) {
 			return OpenCodeBinary{}, fmt.Errorf(
-				"opencode.binary %q is not an absolute path, and a pinned binary is never looked up on PATH: set it to the binary's absolute path in ~/.nightgauge/config.yaml, or remove it to run the opencode on PATH",
-				pin)
+				"opencode.binary %q is not an absolute path, and a pinned binary is never looked up on PATH: set it to the binary's absolute path in %s, or remove it to run the opencode on PATH",
+				pin, config.MachineConfigFile())
 		}
 		fi, err := os.Stat(pin)
 		switch {
@@ -160,7 +161,7 @@ func ResolveOpenCodeBinary(pin string, lookPath func(string) (string, error)) (O
 	if err != nil {
 		m, merr := openCodeManifest()
 		if merr != nil {
-			return OpenCodeBinary{}, errors.New("opencode is not on PATH: install it and put it on PATH, or pin it with opencode.binary in ~/.nightgauge/config.yaml")
+			return OpenCodeBinary{}, fmt.Errorf("opencode is not on PATH: install it and put it on PATH, or pin it with opencode.binary in %s", config.MachineConfigFile())
 		}
 		return OpenCodeBinary{}, fmt.Errorf("opencode is not on PATH. %s", openCodeInstallRemedy(m, ""))
 	}

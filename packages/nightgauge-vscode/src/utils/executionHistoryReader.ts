@@ -175,13 +175,22 @@ export class ExecutionHistoryReader {
    * Read all history records from the history directory.
    *
    * @param workspaceRoot - Absolute path to repository root
+   * @param options.fresh - Skip the short-lived result cache and re-list the
+   *   directory. A caller that has already seen the files change (an index
+   *   rebuild after a staleness check) must pass it: the cache can hold a
+   *   listing from before the change for up to its TTL, and a rebuild from it
+   *   writes the stale set back as a fresh index (#2274). The per-file parse
+   *   cache still applies, since it is keyed on each file's mtime and size.
    * @returns All parsed records sorted by recorded_at ascending
    */
-  static async readAll(workspaceRoot: string): Promise<ExecutionHistoryRecord[]> {
+  static async readAll(
+    workspaceRoot: string,
+    options: { fresh?: boolean } = {}
+  ): Promise<ExecutionHistoryRecord[]> {
     // Check short-lived cache to avoid redundant re-parsing within the same
     // event cascade (e.g. PostPipelineAnalyzer calls readAll then getCostByIssue
     // which calls readAll again internally).
-    const cached = this._readAllCache.get(workspaceRoot);
+    const cached = options.fresh ? undefined : this._readAllCache.get(workspaceRoot);
     if (cached && Date.now() < cached.expiresAt) {
       return cached.records;
     }

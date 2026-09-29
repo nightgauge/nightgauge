@@ -34,16 +34,27 @@ import "./suites/demo-mode.suite.js";
 // place before anything can activate the extension.
 installObservers();
 
+/**
+ * The launcher opens two windows (launch.ts). The demo window opens the demo
+ * workspace and plays the reference scenario, so it runs only the demo-mode
+ * suite; the main window runs everything else.
+ */
+const DEMO_WINDOW_SUITES = ["demo mode"];
+const isDemoWindow = process.env.NIGHTGAUGE_HOST_WINDOW === "demo";
+const runsSuite = (name: string): boolean => DEMO_WINDOW_SUITES.includes(name) === isDemoWindow;
+
 /** Suites that must each contribute at least one case, or the run is a lie. */
-const REQUIRED_SUITES = [
-  "activation",
-  "commands",
-  "tree views (empty workspace)",
-  "tree views (populated workspace)",
-  "webviews",
-  "ipc inventory",
-  "demo workspace",
-];
+const REQUIRED_SUITES = isDemoWindow
+  ? DEMO_WINDOW_SUITES
+  : [
+      "activation",
+      "commands",
+      "tree views (empty workspace)",
+      "tree views (populated workspace)",
+      "webviews",
+      "ipc inventory",
+      "demo workspace",
+    ];
 
 export async function run(): Promise<void> {
   const lines: string[] = [];
@@ -53,7 +64,7 @@ export async function run(): Promise<void> {
     console.log(line);
   };
 
-  log("VSCode host smoke tier");
+  log(`VSCode host smoke tier (${isDemoWindow ? "demo" : "main"} window)`);
 
   const declaredSuites = registeredSuiteNames();
   const missingSuites = REQUIRED_SUITES.filter((name) => !declaredSuites.includes(name));
@@ -67,7 +78,7 @@ export async function run(): Promise<void> {
     throw new Error("Zero cases registered — refusing to report success.");
   }
 
-  const results = await runRegisteredCases(log, undefined, markIpcLog);
+  const results = await runRegisteredCases(log, undefined, markIpcLog, runsSuite);
 
   const passed = results.filter((entry) => entry.status === "pass");
   const failed = results.filter((entry) => entry.status === "fail");

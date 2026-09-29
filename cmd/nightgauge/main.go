@@ -12091,6 +12091,7 @@ func renderDoctorHuman(w io.Writer, result doctor.DoctorResult, color bool) {
 func doctorCmd() *cobra.Command {
 	var jsonOutput bool
 	var adaptersFlag string
+	var fixFlags doctorFixFlags
 	cmd := &cobra.Command{
 		Use:   "doctor",
 		Short: "Verify the full environment is healthy for pipeline operations",
@@ -12127,9 +12128,28 @@ Exit codes:
   1  degraded — warnings only
   2  broken — at least one blocker; skills will halt at Phase 0
 
-Use --json for machine-readable JSON v2 output (skills parse this format).`,
+Use --json for machine-readable JSON v2 output (skills parse this format).
+
+--fix applies remedies (ADR-025): every auto remedy, confirm remedies only
+with --yes, and prints manual remedies' steps. Each applied remedy is
+verified by re-running its check: FIXED only when the finding is gone.
+--dry-run prints every preview and changes nothing. --only and --severity
+narrow the pass. --history prints the local fix log. Under --fix the exit
+code is the state after verification, except 3 (conflict: nothing was
+overwritten) and 4 (blocked: a precondition failed at apply time).`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			fixOpts, err := fixFlags.options()
+			if err != nil {
+				return err
+			}
+			if fixFlags.history {
+				path, err := doctor.DefaultFixLogPath()
+				if err != nil {
+					return err
+				}
+				return runDoctorHistory(cmd.OutOrStdout(), path, jsonOutput)
+			}
 			workdir, _ := os.Getwd()
 			cfg, cfgErr := config.Load(workdir)
 
@@ -12139,6 +12159,16 @@ Use --json for machine-readable JSON v2 output (skills parse this format).`,
 			}
 
 			adapters := parseAdaptersFlag(adaptersFlag)
+			if fixFlags.active() {
+				fx, logErr := doctor.NewFixer(cfg, cfgErr, client, adapters)
+				if logErr != nil {
+					fmt.Fprintf(os.Stderr, "warning: the fix log is unavailable, applied remedies will not be recorded: %v\n", logErr)
+				}
+				if code := runDoctorFix(cmd.Context(), os.Stdout, fx, fixOpts, jsonOutput); code != 0 {
+					os.Exit(code)
+				}
+				return nil
+			}
 			result := doctor.RunDoctorWithConfigError(cmd.Context(), cfg, cfgErr, client, adapters)
 
 			if jsonOutput {
@@ -12161,6 +12191,7 @@ Use --json for machine-readable JSON v2 output (skills parse this format).`,
 	}
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "Output result as JSON (parsed by skills)")
 	cmd.Flags().StringVar(&adaptersFlag, "adapters", "", "Comma-separated adapters to health-check (e.g. codex,claude); 'all' checks every adapter")
+	addDoctorFixFlags(cmd, &fixFlags)
 	cmd.AddCommand(doctorAutomationCmd())
 	return cmd
 }
@@ -12269,7 +12300,9 @@ func renderAdapterDetail(a doctor.AdapterHealth) string {
 			return "experimental adapter, not enabled"
 		}
 		if !a.Installed {
-			return fmt.Sprintf("%s CLI not found on PATH", a.Binary)
+			// The row's own cause: a refused pin or machine config is not a
+			// binary missing from PATH (#1741).
+			return a.Problem()
 		}
 		v := a.Version
 		if v == "" {

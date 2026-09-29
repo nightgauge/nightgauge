@@ -503,27 +503,37 @@ func contains(slice []string, s string) bool {
 // A single output line larger than bufio.Scanner's 64KB token cap must not
 // stop the reader. When it did (#238), the pipe stopped being drained, the
 // child blocked on write, and a passing suite surfaced as a 10-minute timeout.
+//
+// What proves the pipe was drained is the child exiting cleanly with every
+// byte captured: an undrained pipe blocks it forever. The timeout is only
+// that regression's hang guard, so it is generous (#2269). The line is made
+// by dd and tr, which cost milliseconds of CPU. An awk gsub over the same
+// 256KB took about 0.7s of CPU alone and 30s at a load average of 39, which
+// is what used to reach the old 30s bound.
 func TestRunCmd_LongSingleLine_NotTruncatedOrTimedOut(t *testing.T) {
 	dir := t.TempDir()
 
 	const lineLen = 256 * 1024 // 4x bufio.MaxScanTokenSize
 	script := fmt.Sprintf(
-		`awk 'BEGIN { s=sprintf("%%%dsEND", ""); gsub(/ /, "x", s); print s }'`,
-		lineLen,
+		`dd if=/dev/zero bs=1024 count=%d 2>/dev/null | tr '\0' x; echo END`,
+		lineLen/1024,
 	)
 
-	out, err := runCmd(context.Background(), dir, 30*time.Second, "sh", "-c", script)
+	out, err := runCmd(context.Background(), dir, 2*time.Minute, "sh", "-c", script)
+	if errors.Is(err, errE2ETimeout) {
+		t.Fatalf("a long line must not be reported as a timeout (captured %d bytes)", len(out))
+	}
 	if err != nil {
 		t.Fatalf("expected success, got error: %v", err)
-	}
-	if errors.Is(err, errE2ETimeout) {
-		t.Fatal("a long line must not be reported as a timeout")
 	}
 	if len(out) < lineLen {
 		t.Errorf("output truncated: got %d bytes, want >= %d", len(out), lineLen)
 	}
 	if !strings.Contains(out, "END") {
 		t.Error("tail of the long line was lost — output was truncated mid-line")
+	}
+	if want := strings.Repeat("x", lineLen) + "END\n"; out != want {
+		t.Errorf("output is not the one %d-byte line the child wrote (got %d bytes, %d newlines)", len(want), len(out), strings.Count(out, "\n"))
 	}
 }
 

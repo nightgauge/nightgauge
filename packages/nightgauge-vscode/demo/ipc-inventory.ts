@@ -19,6 +19,8 @@ export interface IpcLogEntry {
   method?: string;
   params?: unknown;
   paramsShape?: unknown;
+  /** Written by the demo daemon: false when it has no answer for the method (#2109). */
+  answered?: boolean;
   /** Written by the host harness, not the stub: the case now running. */
   marker?: string;
 }
@@ -140,9 +142,81 @@ export function buildInventory(
   return {
     description:
       "IPC methods the VS Code extension calls at activation, while resolving each tree " +
-      "view and while opening each dashboard tab, recorded against demo/ipc-stub.cjs by " +
-      "the vscode-host tier. Regenerate: npm run -w nightgauge-vscode demo:inventory",
+      "view, while opening each dashboard tab and while the demo window plays the " +
+      "reference scenario, recorded against demo/ipc-stub.cjs by the vscode-host tier. " +
+      "Regenerate: npm run -w nightgauge-vscode demo:inventory",
     protocolVersion: protocolVersionFromClient(clientSource),
     methods: [...byMethod.values()].sort((a, b) => a.method.localeCompare(b.method)),
   };
+}
+
+/** Inputs to the drift guard (#2109, ADR-026 decision 7). */
+export interface DriftInputs {
+  /** The demo daemon's request log from one `vscode-host` run. */
+  entries: readonly IpcLogEntry[];
+  /** The committed inventory; omit while it is being re-recorded. */
+  inventory?: IpcInventory;
+  /** `IPC_PROTOCOL_VERSION` in the generated client. */
+  clientProtocolVersion: number;
+  /** `PROTOCOL_VERSION` in `demo/daemon/daemon.cjs`. */
+  daemonProtocolVersion: number;
+}
+
+/**
+ * The drift guard's findings, one line each, naming the method or version
+ * at fault. Empty means the demo daemon still covers everything the
+ * extension called. Fails on:
+ *
+ *   - a method the daemon answered with the protocol's empty result because
+ *     it has no handler (the daemon logs `answered: false`);
+ *   - a method the extension called that the committed inventory does not
+ *     list, so the contract was not re-recorded;
+ *   - a daemon or inventory protocol version that differs from the client's.
+ */
+export function driftProblems(inputs: DriftInputs): string[] {
+  const problems: string[] = [];
+  const unanswered = new Set<string>();
+  const called = new Set<string>();
+  for (const entry of inputs.entries) {
+    if (!entry.method) continue;
+    called.add(entry.method);
+    if (entry.answered === false) unanswered.add(entry.method);
+  }
+  for (const method of [...unanswered].sort()) {
+    problems.push(
+      `the extension called ${method}, which the demo daemon does not answer: ` +
+        "add a handler in demo/daemon/daemon.cjs and a type guard in tests/demo/daemon.test.ts"
+    );
+  }
+  if (inputs.inventory) {
+    const listed = new Set(inputs.inventory.methods.map((entry) => entry.method));
+    for (const method of [...called].filter((m) => !listed.has(m)).sort()) {
+      problems.push(
+        `the extension called ${method}, which demo/ipc-inventory.json does not list: ` +
+          "re-record it with npm run -w nightgauge-vscode demo:inventory"
+      );
+    }
+    if (inputs.inventory.protocolVersion !== inputs.clientProtocolVersion) {
+      problems.push(
+        `demo/ipc-inventory.json records protocol ${inputs.inventory.protocolVersion}, ` +
+          `the extension speaks ${inputs.clientProtocolVersion}: re-record it`
+      );
+    }
+  }
+  if (inputs.daemonProtocolVersion !== inputs.clientProtocolVersion) {
+    problems.push(
+      `the demo daemon announces protocol ${inputs.daemonProtocolVersion}, the extension ` +
+        `speaks ${inputs.clientProtocolVersion}: update PROTOCOL_VERSION in demo/daemon/daemon.cjs`
+    );
+  }
+  return problems;
+}
+
+/** `PROTOCOL_VERSION` from the demo daemon's source. */
+export function protocolVersionFromDaemon(source: string): number {
+  const match = /const PROTOCOL_VERSION = (\d+);/.exec(source);
+  if (!match) {
+    throw new Error("PROTOCOL_VERSION not found in demo/daemon/daemon.cjs");
+  }
+  return Number(match[1]);
 }

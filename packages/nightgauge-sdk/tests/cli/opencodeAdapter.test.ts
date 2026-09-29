@@ -7,7 +7,6 @@
  */
 import {
   chmodSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -55,6 +54,36 @@ function tmp(prefix: string): string {
 afterEach(() => {
   for (const d of tmpDirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
+
+/**
+ * The pid a stub wrote to `file`, or 0 while there is none yet. A shell's `>`
+ * creates (truncates) the file before `echo` writes to it, so the file
+ * existing is not the pid being there: an empty read is `Number("") === 0`
+ * (#2251). Only a positive integer counts, so a caller never signals pid 0,
+ * which is this process's own group.
+ */
+function readPid(file: string): number {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf-8");
+  } catch {
+    return 0;
+  }
+  const pid = Number(raw.trim());
+  return Number.isInteger(pid) && pid > 0 ? pid : 0;
+}
+
+/** Polls `file` until it holds a positive pid, 200 × 25 ms at most. */
+async function waitForPid(file: string): Promise<number> {
+  const attempts = 200;
+  const intervalMs = 25;
+  for (let i = 0; i < attempts; i++) {
+    const pid = readPid(file);
+    if (pid > 0) return pid;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error(`${file} held no positive pid after ${attempts} polls ${intervalMs} ms apart`);
+}
 
 /**
  * A run config the way `nightgauge opencode config` would build one, under
@@ -715,10 +744,7 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     );
     const controller = new AbortController();
     const pending = drain(query({ prompt: "p", options: { abortSignal: controller.signal } }));
-    for (let i = 0; i < 200 && !existsSync(pidFile); i++)
-      await new Promise((r) => setTimeout(r, 25));
-    const pid = Number(readFileSync(pidFile, "utf-8").trim());
-    expect(pid).toBeGreaterThan(0);
+    const pid = await waitForPid(pidFile);
     controller.abort();
     await expect(pending).rejects.toThrow(/aborted/);
 
@@ -734,7 +760,9 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
     }
     if (alive) process.kill(pid, "SIGKILL");
     expect(alive).toBe(false);
-  });
+    // The pid poll and the reap check are each bounded (5 s and 2 s); the
+    // default 5 s test timeout would cut them short on a loaded machine.
+  }, 20_000);
 });
 
 /**
@@ -797,7 +825,8 @@ process.kill(process.pid, "SIGINT");
     const stubPidFile = join(dir, "stub.pid");
     const bin = writeStub(
       dir,
-      `  echo $$ > '${stubPidFile}'
+      `  echo $$ > '${stubPidFile}.tmp'
+  mv '${stubPidFile}.tmp' '${stubPidFile}'
   sleep 30 &
   echo $! > '${pidFile}.tmp'
   mv '${pidFile}.tmp' '${pidFile}'
@@ -828,9 +857,7 @@ process.kill(process.pid, "SIGINT");
       child.on("close", (code, signal) => r({ code, signal }))
     );
     clearTimeout(killer);
-    const pids = [pidFile, stubPidFile]
-      .filter((f) => existsSync(f))
-      .map((f) => Number(readFileSync(f, "utf-8").trim()));
+    const pids = [pidFile, stubPidFile].map(readPid).filter((pid) => pid > 0);
     // Give a killed group a moment to be reaped, then clean up whatever survived.
     const deadline = Date.now() + 3000;
     while (pids.some(isAlive) && Date.now() < deadline) {

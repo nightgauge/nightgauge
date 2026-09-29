@@ -186,6 +186,11 @@ exactly as `GET /v1/models` lists it.
 - `AUTH_MISSING` — `anthropic/*` dispatched with `ANTHROPIC_API_KEY` unset. A
   subscription or OAuth login OpenCode may hold is never used as a
   substitute (ADR-022 § 17).
+- Not refused before spawn: an `opencode/` or `opencode-go/` model that needs
+  `OPENCODE_API_KEY`. Every inherited `OPENCODE_*` variable is withheld, that
+  key included, and OpenCode serves some of those models with no key, so the
+  dispatch runs and a paid model fails provider authentication after spawn
+  (a 401 classifies as `adapter_auth_failed`, below).
 
 **Fix:** `npm install -g opencode-ai`, or pin `opencode.binary` to an
 absolute path; for `anthropic/*`, `export ANTHROPIC_API_KEY=<key>`
@@ -206,7 +211,7 @@ Nightgauge's own (`internal/terminalkind/table.json`,
 | `adapter_incompatible`        | `adapter_incompatible: <reason>` — below the compat manifest's floor, or a version that could not be read; a newer version is never refused                 | Pin `opencode.binary` to a version at or above the compat manifest's floor                                                                                                                                                        |
 | `model_unavailable`           | `not_found_error` / `model not found` / `invalid model`, or a usage-limit phrase naming the model                                                           | Fix `opencode.model` or the dispatched model id, or pull/load the model on the endpoint                                                                                                                                           |
 | `network_unavailable`         | `AI_APICallError: Cannot connect to API: Unable to connect. Is the computer able to access the url?`                                                        | The dispatched endpoint's model server is not listening; verify it is running and reachable                                                                                                                                       |
-| `adapter_auth_failed`         | `AI_APICallError: Unauthorized` — the model server rejected OpenCode's credentials with a 401                                                               | For `anthropic/*`, verify `ANTHROPIC_API_KEY`; for a declared endpoint, verify the endpoint's configured key                                                                                                                      |
+| `adapter_auth_failed`         | `AI_APICallError: Unauthorized` — the model server rejected OpenCode's credentials with a 401                                                               | For `anthropic/*`, verify `ANTHROPIC_API_KEY`; for a declared endpoint, verify the endpoint's configured key; for `opencode/*` and `opencode-go/*`, the key is always withheld, so use a provider with its own key variable       |
 
 ## Usage in Code
 

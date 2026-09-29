@@ -34,6 +34,15 @@ export interface AdapterReportRow {
   authOk: boolean;
   authReason?: string;
   remediations: string[];
+  /** The Go row's warnings: usable, but each one fails the Go doctor's verdict. */
+  warnings: string[];
+  /** The Go row's notes: context that never changes the verdict. */
+  notes: string[];
+  /**
+   * The OpenCode experimental gate is closed, so the Go doctor ran no OpenCode
+   * check and `installed` is not evidence about PATH.
+   */
+  gated?: boolean;
   ok: boolean;
 }
 
@@ -75,8 +84,18 @@ function statusClass(ok: boolean): string {
   return ok ? "ok" : "error";
 }
 
+/** A usable row with warnings reads `!`/warn, as the Go doctor exits 1 on it. */
+function rowIcon(row: AdapterReportRow): string {
+  return row.ok && row.warnings.length > 0 ? "!" : statusIcon(row.ok);
+}
+
+function rowClass(row: AdapterReportRow): string {
+  return row.ok && row.warnings.length > 0 ? "warn" : statusClass(row.ok);
+}
+
 function renderVersionCell(row: AdapterReportRow, binaryResolved: boolean): string {
   if (!binaryResolved) return `<span class="muted">unknown</span>`;
+  if (row.gated) return `<span class="muted">not checked: experimental gate closed</span>`;
   if (row.kind === "sdk")
     return row.installed ? "API key set" : `<span class="muted">no API key</span>`;
   if (row.kind === "http")
@@ -114,17 +133,24 @@ function renderAdapterRows(report: AdapterDoctorReport): string {
       const remediation = row.remediations.length
         ? `<ul class="remediation">${row.remediations.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`
         : "";
+      const warnings = row.warnings.length
+        ? `<ul class="remediation warnings">${row.warnings.map((w) => `<li class="warn">${esc(w)}</li>`).join("")}</ul>`
+        : "";
+      const notes = row.notes.length
+        ? `<ul class="remediation row-notes">${row.notes.map((n) => `<li class="muted">${esc(n)}</li>`).join("")}</ul>`
+        : "";
+      const fix = remediation + warnings + notes;
       return `
-      <tr data-adapter="${esc(row.sdkAdapter)}" class="adapter-row ${statusClass(row.ok)}">
+      <tr data-adapter="${esc(row.sdkAdapter)}" class="adapter-row ${rowClass(row)}">
         <td>
-          <span class="status ${statusClass(row.ok)}">${statusIcon(row.ok)}</span>
+          <span class="status ${rowClass(row)}">${rowIcon(row)}</span>
           <strong>${esc(row.displayName)}</strong>
           <div class="muted small">${esc(row.sdkAdapter)} · ${esc(row.kind)}</div>
         </td>
         <td>${renderVersionCell(row, report.binaryResolved)}</td>
         <td>${renderAuthCell(row)}</td>
         <td>${renderMcpCell(row)}</td>
-        <td>${remediation || `<span class="muted">—</span>`}</td>
+        <td>${fix || `<span class="muted">—</span>`}</td>
       </tr>`;
     })
     .join("\n");
