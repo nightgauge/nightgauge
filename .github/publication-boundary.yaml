@@ -359,6 +359,8 @@ deny:
       - "docs/decisions/022-opencode-multi-provider-adapter.md"
       - "docs/decisions/023-model-aware-context-budgets.md"
       - "docs/decisions/024-data-and-state-layout.md"
+      - "docs/decisions/025-doctor-findings-and-remedies.md"
+      - "docs/decisions/026-demo-mode-architecture.md"
     rationale: >-
       ADRs are private until individually reviewed and excepted. The exceptions
       describe shipped open-source implementation decisions.
