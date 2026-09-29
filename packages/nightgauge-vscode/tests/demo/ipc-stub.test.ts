@@ -24,31 +24,64 @@ const GENERATED = fs.readFileSync(
   "utf8"
 );
 const MANUAL = fs.readFileSync(path.join(packageRoot, "src", "services", "IpcClient.ts"), "utf8");
-const stubSource = fs.readFileSync(STUB, "utf8");
 
-describe("demo/ipc-stub.cjs is inert", () => {
+/**
+ * The daemon's whole module graph: the entry plus every relative module it
+ * requires, transitively. Only builtins may appear outside `demo/`.
+ */
+function moduleGraph(entry: string): Map<string, string> {
+  const seen = new Map<string, string>();
+  const visit = (file: string) => {
+    if (seen.has(file)) return;
+    const source = fs.readFileSync(file, "utf8");
+    seen.set(file, source);
+    for (const [, spec] of source.matchAll(/require\(\s*["']([^"']+)["']\s*\)/g)) {
+      if (spec.startsWith(".")) visit(path.resolve(path.dirname(file), spec));
+    }
+  };
+  visit(entry);
+  return seen;
+}
+const graph = moduleGraph(STUB);
+const DAEMON = path.join(packageRoot, "demo", "daemon", "daemon.cjs");
+
+describe("demo daemon module graph is inert", () => {
+  it("covers the entry and the daemon modules", () => {
+    const files = [...graph.keys()].map((f) => path.relative(packageRoot, f)).sort();
+    expect(files).toEqual(["demo/daemon/daemon.cjs", "demo/daemon/state.cjs", "demo/ipc-stub.cjs"]);
+  });
+
   it("requires only local filesystem and stream builtins", () => {
-    const required = [...stubSource.matchAll(/require\(\s*["']([^"']+)["']\s*\)/g)].map(
-      (m) => m[1]
-    );
-    expect(required.sort()).toEqual(["node:fs", "node:os", "node:path", "node:readline"]);
-    expect(stubSource).not.toMatch(/\bimport\s*\(/);
+    const builtins = new Set<string>();
+    for (const source of graph.values()) {
+      for (const [, spec] of source.matchAll(/require\(\s*["']([^"']+)["']\s*\)/g)) {
+        if (!spec.startsWith(".")) builtins.add(spec);
+      }
+      expect(source).not.toMatch(/\bimport\s*\(/);
+    }
+    expect([...builtins].sort()).toEqual(["node:fs", "node:os", "node:path", "node:readline"]);
   });
 
   it("uses no network, process-spawning or credential-reading API", () => {
-    expect(stubSource).not.toMatch(/\bfetch\s*\(|https?\b|child_process|\bnet\b|tls|dgram/);
-    const envReads = [...stubSource.matchAll(/process\.env\.(\w+)/g)].map((m) => m[1]);
+    const envReads: string[] = [];
+    for (const [file, source] of graph) {
+      expect(source, file).not.toMatch(
+        /\bfetch\s*\(|\bhttps?\b(?!:\/\/example\.invalid)|child_process|\bnet\b|tls|dgram|keychain|keytar/
+      );
+      envReads.push(...[...source.matchAll(/process\.env\.(\w+)/g)].map((m) => m[1]));
+      expect(source, file).not.toMatch(/process\.env\[/);
+    }
     expect(envReads).toEqual(["NIGHTGAUGE_DEMO_IPC_LOG"]);
   });
 
   it("announces the protocol version the extension expects", () => {
-    const stubVersion = /const PROTOCOL_VERSION = (\d+);/.exec(stubSource)?.[1];
-    expect(Number(stubVersion)).toBe(protocolVersionFromClient(GENERATED));
+    const version = /const PROTOCOL_VERSION = (\d+);/.exec(graph.get(DAEMON) ?? "")?.[1];
+    expect(Number(version)).toBe(protocolVersionFromClient(GENERATED));
   });
 });
 
 describe("demo/ipc-stub.cjs protocol", () => {
-  it("sends ipc.ready, answers with null and logs the request", async () => {
+  it("sends ipc.ready, answers from demo state and logs the request", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ipc-stub-test-"));
     const log = path.join(dir, "log.jsonl");
     const proc = spawn(process.execPath, [STUB, "serve", "--workspace", dir], {
@@ -66,8 +99,9 @@ describe("demo/ipc-stub.cjs protocol", () => {
       .trim()
       .split("\n")
       .map((line) => JSON.parse(line));
-    expect(lines[0]).toEqual({ event: "ipc.ready", data: { protocolVersion: 2 } });
-    expect(lines[1]).toEqual({ id: 7, result: null });
+    expect(lines[0]).toEqual({ event: "ipc.ready", data: { protocolVersion: 2, demo: true } });
+    expect(lines[1].id).toBe(7);
+    expect(Array.isArray(lines[1].result)).toBe(true);
 
     const [entry] = parseLog(fs.readFileSync(log, "utf8"));
     expect(entry.method).toBe("board.list");
