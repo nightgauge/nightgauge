@@ -155,9 +155,9 @@
       "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
-      "id": "src/views/doctor/AdapterDoctorPanel.ts",
+      "id": "src/views/doctor/DoctorPanel.ts",
       "kind": "webview-panel",
-      "transport": "doctor --adapters over IPC",
+      "transport": "doctor.run, doctor.applyRemedy and doctor.recheck over IPC",
       "arrivalTest": null,
       "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },

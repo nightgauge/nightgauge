@@ -2,13 +2,12 @@
  * Every webview panel the extension can open: does it create, render a
  * non-empty body, and dispose cleanly?
  *
- * Twelve `createWebviewPanel` call sites exist under `src/`. Eight are
+ * Twelve `createWebviewPanel` call sites exist under `src/`. Nine are
  * reachable through a registered command and are opened that way, because
  * that exercises the *activated* extension's real instance — its real
- * services, its real extension context. Four have no command that can reach
- * them from a cold window (`AdapterDoctorPanel` only via a live adapter
- * probe; `PipelineSummary` only with real pipeline state on disk;
- * `ApprovalDialog` and `RecoveryDialog` have no command at all) and are
+ * services, its real extension context. Three have no command that can reach
+ * them from a cold window (`PipelineSummary` only with real pipeline state on
+ * disk; `ApprovalDialog` and `RecoveryDialog` have no command at all) and are
  * constructed directly from the view class.
  *
  * The direct-construction cases are honest about what they cover: a second
@@ -37,7 +36,6 @@ import {
 } from "../fixture.js";
 import { extension } from "./activation.suite.js";
 
-import { AdapterDoctorPanel } from "../../../src/views/doctor/AdapterDoctorPanel.js";
 import { PipelineSummary } from "../../../src/views/summary/PipelineSummary.js";
 import { ApprovalDialog } from "../../../src/views/approval/ApprovalDialog.js";
 import { RecoveryDialog } from "../../../src/views/recovery/RecoveryDialog.js";
@@ -153,30 +151,12 @@ const PANEL_CASES: PanelCase[] = [
     open: () => run("nightgauge.openKnowledgeValueDashboard"),
   },
   {
-    name: "AdapterDoctorPanel",
-    viewType: "nightgaugeAdapterDoctor",
-    // `nightgauge.adapterDoctor` probes every adapter binary before it shows
-    // anything; that is a data question, and on a CI runner with no adapters
-    // installed it is a slow one. The panel's own contract is what this tier
-    // owns, so it is handed a synthetic report.
-    open: async () => {
-      AdapterDoctorPanel.show(
-        {
-          rows: [],
-          stages: [],
-          generatedAt: new Date().toISOString(),
-          binaryResolved: false,
-          notes: ["vscode-host smoke tier"],
-        },
-        async () => ({
-          rows: [],
-          stages: [],
-          generatedAt: new Date().toISOString(),
-          binaryResolved: false,
-          notes: ["vscode-host smoke tier"],
-        })
-      );
-    },
+    name: "DoctorPanel",
+    viewType: "nightgaugeDoctor",
+    // The panel runs doctor.run against the demo daemon, which answers it
+    // with fictional findings.
+    viaCommand: "nightgauge.runDoctor",
+    open: () => run("nightgauge.runDoctor"),
   },
   {
     name: "PipelineSummary",

@@ -22,6 +22,10 @@ import type {
   ConfigGetProjectResult,
   ConfigTierAuditResult,
   CostAnalyticsResult,
+  DoctorApplyRemedyResult,
+  DoctorHistoryResult,
+  DoctorRecheckResult,
+  DoctorRunResult,
   ForgeListResult,
   GitCleanupMergedBranchesResult,
   HealthResponse,
@@ -113,7 +117,45 @@ const isBoardItem = (v: unknown): v is BoardItem =>
     isEpic: bool,
   });
 
+const isDoctorFinding = (v: unknown): boolean =>
+  has(v, {
+    code: (x) => typeof x === "string" && /^NGD\d{3}$/.test(x),
+    check: str,
+    severity: (x) => ["blocker", "warning", "housekeeping", "info"].includes(x as string),
+    title: str,
+    cause: str,
+    evidence: isObj,
+    docs: str,
+    fingerprint: (x) => typeof x === "string" && /^[0-9a-f]{16}$/.test(x),
+    remedies: (x) =>
+      arrOf(x, (r) =>
+        has(r, {
+          id: str,
+          kind: (k) => ["auto", "confirm", "manual"].includes(k as string),
+          summary: str,
+          preview: str,
+          verb: str,
+          reversible: bool,
+          verify: str,
+        })
+      ),
+  });
+
 const guards: Record<string, (v: unknown) => boolean> = {
+  "doctor.run": (v): v is DoctorRunResult =>
+    has(v, {
+      v: (x) => x === 2,
+      findings: (x) => arrOf(x, isDoctorFinding),
+      summary: (x) => has(x, { blocker: num, warning: num, housekeeping: num, info: num }),
+      healthy: bool,
+      exit_code: num,
+    }),
+  "doctor.applyRemedy": (v): v is DoctorApplyRemedyResult =>
+    has(v, { outcome: str, action: str, preview: str }),
+  "doctor.recheck": (v): v is DoctorRecheckResult =>
+    has(v, { check: str, title: str, status: str, findings: (x) => arrOf(x, isDoctorFinding) }),
+  "doctor.history": (v): v is DoctorHistoryResult =>
+    has(v, { entries: Array.isArray, malformed: num }),
   "attention.list": (v): v is AttentionListResult =>
     has(v, {
       requests: (x) =>

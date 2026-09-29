@@ -78,7 +78,6 @@ import { registerClearCompletedIssuesCommand } from "./clearCompletedIssues";
 import { registerClearFailedIssuesCommand } from "./clearFailedIssues";
 import { registerRetryFailedIssueCommand } from "./retryFailedIssue";
 import { registerCheckEpicCompletionCommand } from "./checkEpicCompletion";
-import { registerAdapterDoctorCommand } from "./adapterDoctor";
 import { registerAddIssueToPipelineCommand } from "./addIssueToPipeline";
 import { registerAddEpicToPipelineCommand } from "./addEpicToPipeline";
 import { registerStopQueueAfterCurrentCommand } from "./stopQueueAfterCurrent";
@@ -856,7 +855,6 @@ export function registerAllCommands(deps: AllCommandDeps): void {
 
     // Epic lifecycle commands (Issue #520)
     registerCheckEpicCompletionCommand(logger, outputWindow),
-    registerAdapterDoctorCommand(context, logger, outputWindow),
 
     // Query commands (Issue #138)
     registerQueryProjectItemsCommand(queryService!, savedQueriesService!, logger),

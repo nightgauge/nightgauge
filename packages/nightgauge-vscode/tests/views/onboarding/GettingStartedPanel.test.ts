@@ -2,7 +2,7 @@
  * GettingStartedPanel lifecycle tests (#4155): singleton reuse, dispatching
  * webview button clicks to the injected action callback, ignoring malformed
  * messages, and dispose resetting the singleton. Mirrors the
- * AdapterDoctorPanel test pattern.
+ * DoctorPanel test pattern.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";

@@ -46,6 +46,10 @@ import type {
   ConfigTierAuditResult,
   ConfigureForgeInstanceResult,
   CostAnalyticsResult,
+  DoctorApplyRemedyResult,
+  DoctorHistoryResult,
+  DoctorRecheckResult,
+  DoctorRunResult,
   EpicContextResult,
   EpicProgress,
   ExecutionInfo,
@@ -689,20 +693,20 @@ export class IpcClientGenerated extends IpcClientBase {
   // Doctor
   // -------------------------------------------------------------------------
 
-  async doctorRun(only?: string[], severity?: string[], adapters?: string[]): Promise<unknown> {
-    return this.call<unknown>('doctor.run', { only, severity, adapters });
+  async doctorRun(only?: string[], severity?: string[], adapters?: string[]): Promise<DoctorRunResult> {
+    return this.call<DoctorRunResult>('doctor.run', { only, severity, adapters });
   }
 
-  async doctorApplyRemedy(fingerprint: string, remedyId: string, confirm?: boolean, dryRun?: boolean): Promise<unknown> {
-    return this.call<unknown>('doctor.applyRemedy', { fingerprint, remedyId, confirm, dryRun });
+  async doctorApplyRemedy(fingerprint: string, remedyId: string, confirm?: boolean, dryRun?: boolean): Promise<DoctorApplyRemedyResult> {
+    return this.call<DoctorApplyRemedyResult>('doctor.applyRemedy', { fingerprint, remedyId, confirm, dryRun });
   }
 
-  async doctorRecheck(code?: string, check?: string): Promise<unknown> {
-    return this.call<unknown>('doctor.recheck', { code, check });
+  async doctorRecheck(code?: string, check?: string): Promise<DoctorRecheckResult> {
+    return this.call<DoctorRecheckResult>('doctor.recheck', { code, check });
   }
 
-  async doctorHistory(limit?: number): Promise<unknown> {
-    return this.call<unknown>('doctor.history', { limit });
+  async doctorHistory(limit?: number): Promise<DoctorHistoryResult> {
+    return this.call<DoctorHistoryResult>('doctor.history', { limit });
   }
 
 

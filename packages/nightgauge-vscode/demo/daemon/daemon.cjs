@@ -37,7 +37,171 @@ function statusKey(status) {
   }[status];
 }
 
+/**
+ * The demo doctor's findings (ADR-025 shapes), fictional throughout. Fixes
+ * resolve in memory: an applied remedy removes its finding and appends to
+ * the fix log, so a later scan and re-check agree with the card.
+ */
+function demoDoctor(state) {
+  const remedy = (id, kind, summary, preview, extra) =>
+    Object.assign(
+      {
+        id,
+        kind,
+        summary,
+        preview,
+        verb: kind === "manual" ? "" : `demo.${id}`,
+        reversible: kind === "auto",
+        verify: "",
+      },
+      extra || {}
+    );
+  const finding = (code, check, severity, title, cause, evidence, fingerprint, remedies) => ({
+    code,
+    check,
+    severity,
+    title,
+    cause,
+    evidence,
+    docs: `docs/DOCTOR.md#${code.toLowerCase()}`,
+    fingerprint,
+    remedies: remedies.map((r) => Object.assign(r, { verify: check })),
+  });
+  const repo = state.repositories[0] ? state.repositories[0].name : "app";
+  return {
+    findings: [
+      finding(
+        "NGD029",
+        "scheduled_automations",
+        "warning",
+        "The nightly sweep automation is stopped",
+        "Its schedule has not fired since the demo machine went to sleep.",
+        { automation: "nightly-sweep" },
+        "a1b2c3d4e5f60718",
+        [
+          remedy("restart", "manual", "Start the automation again", "", {
+            steps: ["Open the automation's settings", "Choose Resume"],
+          }),
+        ]
+      ),
+      finding(
+        "NGD017",
+        "worktree_leaks",
+        "housekeeping",
+        "A finished run left its worktree behind",
+        "The run completed but its worktree was not removed.",
+        { path: `/demo/${repo}/.worktrees/feat-12-demo` },
+        "0f1e2d3c4b5a6978",
+        [
+          remedy(
+            "remove",
+            "auto",
+            "Remove the leaked worktree",
+            `git worktree remove /demo/${repo}/.worktrees/feat-12-demo`
+          ),
+        ]
+      ),
+      finding(
+        "NGD018",
+        "stranded_branches",
+        "housekeeping",
+        "A merged branch is still on the remote",
+        "The pull request merged but its branch was kept.",
+        { branch: "feat/12-demo" },
+        "9a8b7c6d5e4f3021",
+        [
+          remedy(
+            "delete-branch",
+            "confirm",
+            "Delete the merged branch",
+            "git push origin --delete feat/12-demo"
+          ),
+        ]
+      ),
+      finding(
+        "NGD026",
+        "survival_backlog",
+        "info",
+        "Two survival records wait for their follow-up",
+        "Survival is measured a week after merge.",
+        { pending: "2" },
+        "5c4d3e2f1a0b9c8d",
+        []
+      ),
+    ],
+    adapters: [
+      {
+        adapter: "claude-headless",
+        kind: "cli",
+        installed: true,
+        version: "2.1.0",
+        version_ok: true,
+        ok: true,
+      },
+    ],
+    log: [],
+  };
+}
+
+function doctorResult(doctor) {
+  const summary = { blocker: 0, warning: 0, housekeeping: 0, info: 0 };
+  for (const f of doctor.findings) summary[f.severity] += 1;
+  const exitCode = summary.blocker ? 2 : summary.warning ? 1 : 0;
+  return {
+    v: 2,
+    findings: doctor.findings,
+    summary,
+    healthy: exitCode < 2,
+    exit_code: exitCode,
+    failed_checks: [],
+    errors: [],
+    warnings: doctor.findings.filter((f) => f.severity === "warning").map((f) => f.title),
+    install_instructions: "",
+    adapters: doctor.adapters,
+  };
+}
+
+function doctorApply(state, doctor, p) {
+  const params = p || {};
+  const f = doctor.findings.find((x) => x.fingerprint === params.fingerprint);
+  const action = params.dryRun ? "previewed" : "applied";
+  if (!f) {
+    return { outcome: "stale", action, preview: "", detail: "not in the current scan" };
+  }
+  const r = f.remedies.find((x) => x.id === params.remedyId);
+  if (!r) {
+    return { outcome: "skipped", action: "no-remedy", preview: "", finding: f };
+  }
+  if (params.dryRun) {
+    return { outcome: "", action: "previewed", preview: r.preview, finding: f, remedy: r };
+  }
+  if (r.kind === "manual") {
+    return { outcome: "skipped", action: "manual", preview: r.preview, finding: f, remedy: r };
+  }
+  if (r.kind === "confirm" && !params.confirm) {
+    return {
+      outcome: "skipped",
+      action: "awaiting-consent",
+      preview: r.preview,
+      finding: f,
+      remedy: r,
+    };
+  }
+  doctor.findings = doctor.findings.filter((x) => x !== f);
+  doctor.log.push({
+    time: state.now,
+    code: f.code,
+    check: f.check,
+    fingerprint: f.fingerprint,
+    remedy: r.id,
+    verb: r.verb,
+    outcome: "fixed",
+  });
+  return { outcome: "fixed", action: "applied", preview: r.preview, finding: f, remedy: r };
+}
+
 function buildHandlers(state) {
+  const doctor = demoDoctor(state);
   const repoPath = (name) => `/demo/${name}`;
   const openItems = () => state.board.filter((i) => i.status !== "Done");
   const counts = () => {
@@ -133,6 +297,23 @@ function buildHandlers(state) {
       ownerType: "org",
     }),
     "config.tierAudit": () => ({ entries: [], hasDrift: false }),
+    "doctor.run": () => doctorResult(doctor),
+    "doctor.applyRemedy": (p) => doctorApply(state, doctor, p),
+    "doctor.recheck": (p) => {
+      const byCode = p && p.code ? doctor.findings.find((f) => f.code === p.code) : undefined;
+      const check = (p && p.check) || (byCode && byCode.check) || "";
+      const findings = doctor.findings.filter((f) => f.check === check);
+      return {
+        check,
+        title: check,
+        status: findings.length ? "failed" : "passed",
+        findings,
+      };
+    },
+    "doctor.history": (p) => ({
+      entries: p && p.limit ? doctor.log.slice(-p.limit) : doctor.log,
+      malformed: 0,
+    }),
     "forge.list": () => ({
       forges: [
         { id: "github", kind: "github", base_url: "https://example.invalid", auth_method: "demo" },
