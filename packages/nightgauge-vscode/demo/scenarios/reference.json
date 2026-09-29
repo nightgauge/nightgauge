@@ -1,0 +1,1365 @@
+{
+  "seed": 1,
+  "state": {
+    "owner": "lanternworks",
+    "projectNumber": 7,
+    "repositories": [
+      {
+        "name": "harbor-api",
+        "role": "service"
+      },
+      {
+        "name": "tide-web",
+        "role": "app"
+      }
+    ],
+    "board": {
+      "Backlog": [
+        {
+          "number": 118,
+          "title": "Rate-limit the tide-report export endpoint",
+          "repo": "harbor-api"
+        },
+        {
+          "number": 121,
+          "title": "Dark theme for the berth calendar",
+          "repo": "tide-web"
+        },
+        {
+          "number": 124,
+          "title": "Archive vessels inactive for a season",
+          "repo": "harbor-api"
+        },
+        {
+          "number": 127,
+          "title": "Keyboard shortcuts for the manifest editor",
+          "repo": "tide-web"
+        }
+      ],
+      "Ready": [
+        {
+          "number": 131,
+          "title": "Paginate the berth search results",
+          "repo": "tide-web",
+          "size": "S"
+        },
+        {
+          "number": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "repo": "harbor-api",
+          "size": "M"
+        },
+        {
+          "number": 135,
+          "title": "Add a tidal-window column to the schedule",
+          "repo": "tide-web",
+          "size": "S"
+        }
+      ],
+      "In Progress": [
+        {
+          "number": 112,
+          "title": "Retry failed harbour-fee webhooks",
+          "repo": "harbor-api",
+          "size": "M"
+        },
+        {
+          "number": 115,
+          "title": "Show crane availability on the dock map",
+          "repo": "tide-web",
+          "size": "M"
+        }
+      ],
+      "In Review": [
+        {
+          "number": 109,
+          "title": "Cache the weather feed for ten minutes",
+          "repo": "harbor-api",
+          "size": "S"
+        }
+      ],
+      "Done": [
+        {
+          "number": 101,
+          "title": "Move berth assignments to the new schema",
+          "repo": "harbor-api",
+          "size": "L"
+        },
+        {
+          "number": 104,
+          "title": "Fix time-zone drift in arrival times",
+          "repo": "tide-web",
+          "size": "S"
+        }
+      ]
+    },
+    "activeRuns": [
+      {
+        "runId": "demo-run-112",
+        "repo": "harbor-api",
+        "issueNumber": 112,
+        "title": "Retry failed harbour-fee webhooks",
+        "stage": "feature-implement",
+        "startedAt": "2026-01-15T09:00:00.000Z"
+      }
+    ],
+    "queue": [
+      {
+        "repo": "harbor-api",
+        "issueNumber": 133,
+        "title": "Validate pilot licence expiry on booking",
+        "priority": 1
+      },
+      {
+        "repo": "tide-web",
+        "issueNumber": 131,
+        "title": "Paginate the berth search results",
+        "priority": 2
+      }
+    ],
+    "attention": [
+      {
+        "id": "att-1",
+        "kind": "approve",
+        "severity": "blocking_run",
+        "title": "Approve the migration plan for #115",
+        "body": "The plan adds a crane_slots table. Approve to continue.",
+        "repo": "tide-web",
+        "issue": 115
+      }
+    ],
+    "history": [
+      {
+        "repo": "harbor-api",
+        "number": 101,
+        "title": "Move berth assignments to the new schema",
+        "outcome": "success",
+        "completedAt": "2026-01-14T16:20:00.000Z",
+        "durationMs": 2460000,
+        "costUsd": "3.42"
+      },
+      {
+        "repo": "tide-web",
+        "number": 104,
+        "title": "Fix time-zone drift in arrival times",
+        "outcome": "success",
+        "completedAt": "2026-01-14T18:05:00.000Z",
+        "durationMs": 1080000,
+        "costUsd": "1.17"
+      },
+      {
+        "repo": "harbor-api",
+        "number": 98,
+        "title": "Split the invoice worker",
+        "outcome": "failed",
+        "completedAt": "2026-01-13T11:40:00.000Z",
+        "durationMs": 1920000,
+        "costUsd": "2.05",
+        "reason": "tests failed after two retries"
+      }
+    ],
+    "knowledge": [
+      {
+        "path": "knowledge/harbor-api/decisions/webhook-retries.md",
+        "kind": "decision",
+        "hits": 6,
+        "snippet": "Retry webhooks with capped exponential backoff."
+      },
+      {
+        "path": "knowledge/tide-web/patterns/map-layers.md",
+        "kind": "pattern",
+        "hits": 3,
+        "snippet": "Each dock-map overlay is its own layer component."
+      }
+    ],
+    "platform": {
+      "costByModel": [
+        {
+          "modelId": "claude-sonnet",
+          "costUsd": "5.10",
+          "tokens": 1820000
+        },
+        {
+          "modelId": "claude-haiku",
+          "costUsd": "1.54",
+          "tokens": 2410000
+        }
+      ],
+      "trends": [
+        {
+          "date": "2026-01-12",
+          "successRate": 0.75,
+          "totalRuns": 4,
+          "totalTokens": 1210000
+        },
+        {
+          "date": "2026-01-13",
+          "successRate": 0.67,
+          "totalRuns": 3,
+          "totalTokens": 980000
+        },
+        {
+          "date": "2026-01-14",
+          "successRate": 1,
+          "totalRuns": 5,
+          "totalTokens": 2040000
+        }
+      ]
+    },
+    "now": "2026-01-15T09:30:00.000Z"
+  },
+  "steps": [
+    {
+      "at": 0,
+      "kind": "ui",
+      "action": "focus",
+      "target": "pipeline-tree"
+    },
+    {
+      "at": 0,
+      "kind": "event",
+      "method": "autonomous.statusChanged",
+      "payload": {
+        "status": "running",
+        "runningCount": 1,
+        "remaining": 2
+      }
+    },
+    {
+      "at": 1000,
+      "kind": "queue.set",
+      "items": [
+        {
+          "repo": "tide-web",
+          "issueNumber": 131,
+          "title": "Paginate the berth search results",
+          "priority": 1
+        }
+      ]
+    },
+    {
+      "at": 1000,
+      "kind": "board.move",
+      "number": 133,
+      "status": "In Progress"
+    },
+    {
+      "at": 1000,
+      "kind": "event",
+      "method": "autonomous.statusChanged",
+      "payload": {
+        "status": "running",
+        "runningCount": 1,
+        "remaining": 1
+      }
+    },
+    {
+      "at": 1500,
+      "kind": "event",
+      "method": "stage.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "pipeline-start",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "title": "Validate pilot licence expiry on booking"
+      }
+    },
+    {
+      "at": 1500,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "pipeline-start",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": []
+        }
+      }
+    },
+    {
+      "at": 4000,
+      "kind": "event",
+      "method": "stage.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "pipeline-start",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "error": "",
+        "inputTokens": 42000,
+        "outputTokens": 6000,
+        "cacheReadTokens": 18000,
+        "cacheCreationTokens": 0,
+        "costUsd": 0.18,
+        "model": "claude-sonnet"
+      }
+    },
+    {
+      "at": 4000,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "pipeline-start",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 4500,
+      "kind": "event",
+      "method": "stage.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "issue-pickup",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "title": "Validate pilot licence expiry on booking"
+      }
+    },
+    {
+      "at": 4500,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "issue-pickup",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 7000,
+      "kind": "event",
+      "method": "stage.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "issue-pickup",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "error": "",
+        "inputTokens": 43000,
+        "outputTokens": 6200,
+        "cacheReadTokens": 18000,
+        "cacheCreationTokens": 0,
+        "costUsd": 0.22,
+        "model": "claude-sonnet"
+      }
+    },
+    {
+      "at": 7000,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "issue-pickup",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 7500,
+      "kind": "event",
+      "method": "stage.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-planning",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "title": "Validate pilot licence expiry on booking"
+      }
+    },
+    {
+      "at": 7500,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "feature-planning",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 9000,
+      "kind": "event",
+      "method": "phase.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-planning",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "read issue",
+        "index": 0,
+        "total": 2
+      }
+    },
+    {
+      "at": 11000,
+      "kind": "event",
+      "method": "phase.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-planning",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "read issue",
+        "index": 0,
+        "total": 2,
+        "status": "completed"
+      }
+    },
+    {
+      "at": 12500,
+      "kind": "event",
+      "method": "phase.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-planning",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "draft plan",
+        "index": 1,
+        "total": 2
+      }
+    },
+    {
+      "at": 13500,
+      "kind": "attention.raise",
+      "item": {
+        "id": "att-2",
+        "kind": "approve",
+        "severity": "blocking_run",
+        "title": "Approve the plan for #133",
+        "body": "The plan adds a licence_expiry check to bookings. Approve to continue.",
+        "repo": "harbor-api",
+        "issue": 133
+      }
+    },
+    {
+      "at": 17500,
+      "kind": "attention.resolve",
+      "id": "att-2",
+      "option": "approve"
+    },
+    {
+      "at": 19500,
+      "kind": "event",
+      "method": "phase.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-planning",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "draft plan",
+        "index": 1,
+        "total": 2,
+        "status": "completed"
+      }
+    },
+    {
+      "at": 22000,
+      "kind": "event",
+      "method": "stage.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-planning",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "error": "",
+        "inputTokens": 44000,
+        "outputTokens": 6400,
+        "cacheReadTokens": 18000,
+        "cacheCreationTokens": 0,
+        "costUsd": 0.26,
+        "model": "claude-sonnet"
+      }
+    },
+    {
+      "at": 22000,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "feature-planning",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            },
+            {
+              "stage": "feature-planning"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 22500,
+      "kind": "event",
+      "method": "stage.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-dev",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "title": "Validate pilot licence expiry on booking"
+      }
+    },
+    {
+      "at": 22500,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "feature-dev",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            },
+            {
+              "stage": "feature-planning"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 24000,
+      "kind": "event",
+      "method": "phase.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-dev",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "write tests",
+        "index": 0,
+        "total": 3
+      }
+    },
+    {
+      "at": 26000,
+      "kind": "event",
+      "method": "phase.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-dev",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "write tests",
+        "index": 0,
+        "total": 3,
+        "status": "completed"
+      }
+    },
+    {
+      "at": 27500,
+      "kind": "event",
+      "method": "phase.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-dev",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "implement",
+        "index": 1,
+        "total": 3
+      }
+    },
+    {
+      "at": 29500,
+      "kind": "event",
+      "method": "phase.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-dev",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "implement",
+        "index": 1,
+        "total": 3,
+        "status": "completed"
+      }
+    },
+    {
+      "at": 31000,
+      "kind": "event",
+      "method": "phase.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-dev",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "refactor",
+        "index": 2,
+        "total": 3
+      }
+    },
+    {
+      "at": 33000,
+      "kind": "event",
+      "method": "phase.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-dev",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "refactor",
+        "index": 2,
+        "total": 3,
+        "status": "completed"
+      }
+    },
+    {
+      "at": 35500,
+      "kind": "event",
+      "method": "stage.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-dev",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "error": "",
+        "inputTokens": 45000,
+        "outputTokens": 6600,
+        "cacheReadTokens": 18000,
+        "cacheCreationTokens": 0,
+        "costUsd": 0.3,
+        "model": "claude-sonnet"
+      }
+    },
+    {
+      "at": 35500,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "feature-dev",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            },
+            {
+              "stage": "feature-planning"
+            },
+            {
+              "stage": "feature-dev"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 36000,
+      "kind": "event",
+      "method": "stage.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-validate",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "title": "Validate pilot licence expiry on booking"
+      }
+    },
+    {
+      "at": 36000,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "feature-validate",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            },
+            {
+              "stage": "feature-planning"
+            },
+            {
+              "stage": "feature-dev"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 37500,
+      "kind": "event",
+      "method": "phase.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-validate",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "lint",
+        "index": 0,
+        "total": 2
+      }
+    },
+    {
+      "at": 39500,
+      "kind": "event",
+      "method": "phase.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-validate",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "lint",
+        "index": 0,
+        "total": 2,
+        "status": "completed"
+      }
+    },
+    {
+      "at": 41000,
+      "kind": "event",
+      "method": "phase.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-validate",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "test suite",
+        "index": 1,
+        "total": 2
+      }
+    },
+    {
+      "at": 43000,
+      "kind": "event",
+      "method": "phase.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-validate",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "name": "test suite",
+        "index": 1,
+        "total": 2,
+        "status": "completed"
+      }
+    },
+    {
+      "at": 45500,
+      "kind": "event",
+      "method": "stage.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "feature-validate",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "error": "",
+        "inputTokens": 46000,
+        "outputTokens": 6800,
+        "cacheReadTokens": 18000,
+        "cacheCreationTokens": 0,
+        "costUsd": 0.34,
+        "model": "claude-sonnet"
+      }
+    },
+    {
+      "at": 45500,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "feature-validate",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            },
+            {
+              "stage": "feature-planning"
+            },
+            {
+              "stage": "feature-dev"
+            },
+            {
+              "stage": "feature-validate"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 46000,
+      "kind": "event",
+      "method": "stage.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "pr-create",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "title": "Validate pilot licence expiry on booking"
+      }
+    },
+    {
+      "at": 46000,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "pr-create",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            },
+            {
+              "stage": "feature-planning"
+            },
+            {
+              "stage": "feature-dev"
+            },
+            {
+              "stage": "feature-validate"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 48500,
+      "kind": "board.move",
+      "number": 133,
+      "status": "In Review"
+    },
+    {
+      "at": 48500,
+      "kind": "event",
+      "method": "stage.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "pr-create",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "error": "",
+        "inputTokens": 47000,
+        "outputTokens": 7000,
+        "cacheReadTokens": 18000,
+        "cacheCreationTokens": 0,
+        "costUsd": 0.38,
+        "model": "claude-sonnet"
+      }
+    },
+    {
+      "at": 48500,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "pr-create",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            },
+            {
+              "stage": "feature-planning"
+            },
+            {
+              "stage": "feature-dev"
+            },
+            {
+              "stage": "feature-validate"
+            },
+            {
+              "stage": "pr-create"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 49000,
+      "kind": "event",
+      "method": "stage.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "pr-merge",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "title": "Validate pilot licence expiry on booking"
+      }
+    },
+    {
+      "at": 49000,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "pr-merge",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            },
+            {
+              "stage": "feature-planning"
+            },
+            {
+              "stage": "feature-dev"
+            },
+            {
+              "stage": "feature-validate"
+            },
+            {
+              "stage": "pr-create"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 51500,
+      "kind": "board.move",
+      "number": 133,
+      "status": "Done"
+    },
+    {
+      "at": 51500,
+      "kind": "event",
+      "method": "stage.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "pr-merge",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "error": "",
+        "inputTokens": 48000,
+        "outputTokens": 7200,
+        "cacheReadTokens": 18000,
+        "cacheCreationTokens": 0,
+        "costUsd": 0.42,
+        "model": "claude-sonnet"
+      }
+    },
+    {
+      "at": 51500,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "pr-merge",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            },
+            {
+              "stage": "feature-planning"
+            },
+            {
+              "stage": "feature-dev"
+            },
+            {
+              "stage": "feature-validate"
+            },
+            {
+              "stage": "pr-create"
+            },
+            {
+              "stage": "pr-merge"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 52000,
+      "kind": "event",
+      "method": "stage.start",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "pipeline-finish",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "title": "Validate pilot licence expiry on booking"
+      }
+    },
+    {
+      "at": 52000,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "pipeline-finish",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            },
+            {
+              "stage": "feature-planning"
+            },
+            {
+              "stage": "feature-dev"
+            },
+            {
+              "stage": "feature-validate"
+            },
+            {
+              "stage": "pr-create"
+            },
+            {
+              "stage": "pr-merge"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 54500,
+      "kind": "event",
+      "method": "stage.complete",
+      "payload": {
+        "issueNumber": 133,
+        "stage": "pipeline-finish",
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "error": "",
+        "inputTokens": 49000,
+        "outputTokens": 7400,
+        "cacheReadTokens": 18000,
+        "cacheCreationTokens": 0,
+        "costUsd": 0.46,
+        "model": "claude-sonnet"
+      }
+    },
+    {
+      "at": 54500,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 133,
+        "repo": "lanternworks/harbor-api",
+        "runId": "demo-run-133",
+        "state": {
+          "issueNumber": 133,
+          "title": "Validate pilot licence expiry on booking",
+          "stage": "pipeline-finish",
+          "stageStart": "{{now}}",
+          "branch": "feat/133-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            },
+            {
+              "stage": "issue-pickup"
+            },
+            {
+              "stage": "feature-planning"
+            },
+            {
+              "stage": "feature-dev"
+            },
+            {
+              "stage": "feature-validate"
+            },
+            {
+              "stage": "pr-create"
+            },
+            {
+              "stage": "pr-merge"
+            },
+            {
+              "stage": "pipeline-finish"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "at": 55000,
+      "kind": "event",
+      "method": "pipeline.complete",
+      "payload": {
+        "issueNumber": 133,
+        "runId": "demo-run-133",
+        "success": true,
+        "totalInputTokens": 364000,
+        "totalOutputTokens": 53600,
+        "totalCostUSD": 2.56
+      }
+    },
+    {
+      "at": 55000,
+      "kind": "history.append",
+      "entry": {
+        "repo": "harbor-api",
+        "number": 133,
+        "title": "Validate pilot licence expiry on booking",
+        "outcome": "success",
+        "completedAt": "{{now}}",
+        "durationMs": 54000,
+        "costUsd": "2.56"
+      }
+    },
+    {
+      "at": 55000,
+      "kind": "event",
+      "method": "pipeline.historyRecorded",
+      "payload": {
+        "issueNumber": 133,
+        "runId": "demo-run-133",
+        "success": true
+      }
+    },
+    {
+      "at": 57000,
+      "kind": "queue.set",
+      "items": []
+    },
+    {
+      "at": 57000,
+      "kind": "board.move",
+      "number": 131,
+      "status": "In Progress"
+    },
+    {
+      "at": 57000,
+      "kind": "event",
+      "method": "autonomous.statusChanged",
+      "payload": {
+        "status": "running",
+        "runningCount": 1,
+        "remaining": 0
+      }
+    },
+    {
+      "at": 57500,
+      "kind": "event",
+      "method": "stage.start",
+      "payload": {
+        "issueNumber": 131,
+        "stage": "pipeline-start",
+        "repo": "lanternworks/tide-web",
+        "runId": "demo-run-131",
+        "title": "Paginate the berth search results"
+      }
+    },
+    {
+      "at": 57500,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 131,
+        "repo": "lanternworks/tide-web",
+        "runId": "demo-run-131",
+        "state": {
+          "issueNumber": 131,
+          "title": "Paginate the berth search results",
+          "stage": "pipeline-start",
+          "stageStart": "{{now}}",
+          "branch": "feat/131-demo",
+          "completedStages": []
+        }
+      }
+    },
+    {
+      "at": 59500,
+      "kind": "event",
+      "method": "stage.complete",
+      "payload": {
+        "issueNumber": 131,
+        "stage": "pipeline-start",
+        "repo": "lanternworks/tide-web",
+        "runId": "demo-run-131",
+        "error": "",
+        "inputTokens": 9000,
+        "outputTokens": 800,
+        "cacheReadTokens": 4000,
+        "cacheCreationTokens": 0,
+        "costUsd": 0.04,
+        "model": "claude-haiku"
+      }
+    },
+    {
+      "at": 60000,
+      "kind": "event",
+      "method": "stage.start",
+      "payload": {
+        "issueNumber": 131,
+        "stage": "issue-pickup",
+        "repo": "lanternworks/tide-web",
+        "runId": "demo-run-131",
+        "title": "Paginate the berth search results"
+      }
+    },
+    {
+      "at": 60000,
+      "kind": "event",
+      "method": "pipeline.stateChanged",
+      "payload": {
+        "issueNumber": 131,
+        "repo": "lanternworks/tide-web",
+        "runId": "demo-run-131",
+        "state": {
+          "issueNumber": 131,
+          "title": "Paginate the berth search results",
+          "stage": "issue-pickup",
+          "stageStart": "{{now}}",
+          "branch": "feat/131-demo",
+          "completedStages": [
+            {
+              "stage": "pipeline-start"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

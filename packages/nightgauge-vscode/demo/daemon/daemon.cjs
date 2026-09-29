@@ -68,7 +68,7 @@ function buildHandlers(state) {
             { id: "reject", label: "Reject", verb: "reject", style: "danger" },
           ],
           created_at: state.now,
-          expires_at: "2026-12-31T00:00:00.000Z",
+          expires_at: new Date(Date.parse(state.now) + 30 * 86400000).toISOString(),
           default_action: "reject",
           lifecycle: a.resolved
             ? {
@@ -362,7 +362,14 @@ function createDaemon({ state, send, log }) {
     send({ event: "ipc.ready", data: { protocolVersion: PROTOCOL_VERSION, demo: true } });
   }
 
-  return { handle, emit, ready, methods: Object.keys(handlers), state };
+  /** A handler's answer, for the player to embed in an event payload. */
+  function query(method, params) {
+    const handler = handlers[method];
+    if (!handler) throw new Error(`demo daemon has no handler for ${method}`);
+    return handler(params);
+  }
+
+  return { handle, emit, query, ready, methods: Object.keys(handlers), state };
 }
 
 module.exports = { BOARD_STATUSES, PROTOCOL_VERSION, REFUSED_METHODS, createDaemon };

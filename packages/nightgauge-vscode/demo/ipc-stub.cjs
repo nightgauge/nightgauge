@@ -9,7 +9,12 @@
  *     expects (`IPC_PROTOCOL_VERSION`) and `demo: true`;
  *   - it answers requests from in-memory demo state (`daemon/daemon.cjs`),
  *     seeded from `daemon/seed.json` or the `state` of the JSON file named by
- *     `--scenario <path>`; unknown methods get `null` and a stderr line;
+ *     `--scenario <path>`, rebased so the state's `now` is the scenario start;
+ *     unknown methods get `null` and a stderr line;
+ *   - with a scenario, it plays the `steps` on a scenario clock
+ *     (`daemon/scenario.cjs`): `--speed <n>` scales delays only, and
+ *     `--clock <iso>` pins the start for a byte-identical replay. An invalid
+ *     scenario exits 1 naming the step before `ipc.ready` is sent;
  *   - it appends one JSONL record per request — timestamp, method, params and
  *     a type-only shape of the params — to the file named by
  *     `NIGHTGAUGE_DEMO_IPC_LOG`, or to `ipc-stub.jsonl` in the OS temp dir.
@@ -22,7 +27,7 @@
  * reads no credentials. The only environment variable it reads is the log
  * path. `tests/demo/ipc-stub.test.ts` asserts the module graph stays that way.
  */
-/* global process, __dirname */
+/* global process, __dirname, setTimeout */
 "use strict";
 
 const fs = require("node:fs");
@@ -30,6 +35,7 @@ const os = require("node:os");
 const path = require("node:path");
 const readline = require("node:readline");
 const { createDaemon } = require("./daemon/daemon.cjs");
+const { createPlayer, loadScenario, rebaseState } = require("./daemon/scenario.cjs");
 const { createState } = require("./daemon/state.cjs");
 
 const logPath = process.env.NIGHTGAUGE_DEMO_IPC_LOG || path.join(os.tmpdir(), "ipc-stub.jsonl");
@@ -93,24 +99,49 @@ function handleLine(line) {
   daemon.handle(request);
 }
 
-/** The seed state: `--scenario <path>` if given, else the built-in seed. */
-function loadState(argv) {
-  const at = argv.indexOf("--scenario");
-  const file = at >= 0 ? argv[at + 1] : path.join(__dirname, "daemon", "seed.json");
-  if (!file) throw new Error("--scenario needs a path");
-  const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-  return createState(parsed.state);
+/** The value after `flag` in argv, or undefined. */
+function flagValue(argv, flag) {
+  const at = argv.indexOf(flag);
+  if (at < 0) return undefined;
+  const value = argv[at + 1];
+  if (value === undefined || value.startsWith("--")) throw new Error(`${flag} needs a value`);
+  return value;
 }
 
+/**
+ * The scenario (`--scenario <path>`, else the built-in seed with no steps),
+ * the playback speed (`--speed <n>`, default 1) and the scenario start
+ * (`--clock <iso>`, default now; pin it to replay byte-identically).
+ */
+function loadOptions(argv) {
+  const file = flagValue(argv, "--scenario") || path.join(__dirname, "daemon", "seed.json");
+  const scenario = loadScenario(JSON.parse(fs.readFileSync(file, "utf8")));
+  const speedArg = flagValue(argv, "--speed");
+  const speed = speedArg === undefined ? 1 : Number(speedArg);
+  if (!(speed > 0 && Number.isFinite(speed))) throw new Error("--speed must be a positive number");
+  const clockArg = flagValue(argv, "--clock");
+  const epochMs = clockArg === undefined ? Date.now() : Date.parse(clockArg);
+  if (Number.isNaN(epochMs)) throw new Error("--clock must be an ISO-8601 timestamp");
+  return { scenario, speed, epochMs };
+}
+
+const log = (message) => process.stderr.write(`demo-daemon: ${message}\n`);
 let daemon;
+let player;
 try {
-  daemon = createDaemon({
-    state: loadState(process.argv.slice(2)),
-    send,
-    log: (message) => process.stderr.write(`demo-daemon: ${message}\n`),
+  const { scenario, speed, epochMs } = loadOptions(process.argv.slice(2));
+  daemon = createDaemon({ state: createState(rebaseState(scenario.state, epochMs)), send, log });
+  player = createPlayer({
+    daemon,
+    steps: scenario.steps,
+    epochMs,
+    speed,
+    schedule: (fn, delayMs) => setTimeout(fn, delayMs),
+    log,
+    onDone: () => log("scenario finished"),
   });
 } catch (err) {
-  process.stderr.write(`demo-daemon: cannot load state: ${err.message}\n`);
+  process.stderr.write(`demo-daemon: cannot load scenario: ${err.message}\n`);
   process.exit(1);
 }
 
@@ -118,3 +149,4 @@ fs.mkdirSync(path.dirname(logPath), { recursive: true });
 readline.createInterface({ input: process.stdin }).on("line", handleLine);
 process.stdin.on("end", () => process.exit(0));
 daemon.ready();
+player.start();
