@@ -21,13 +21,13 @@ changelog, and the release workflow refuses a tag that does not.
   orphans, stranded branches, pipeline stashes, preserved WIP refs, orphaned
   processes and the serve lease now emit one finding per worktree, branch,
   stash, ref or pid, each with a stable fingerprint and a remedy: `worktree
-  sweep` and `stash sweep` for provably merged state are `auto`; branch delete,
+sweep` and `stash sweep` for provably merged state are `auto`; branch delete,
   `wip prune`, process terminate, compose cleanup and serve-lease reclaim are
   `confirm`; anything that cannot be proven safe (for example a branch with
   unique commits and no merged PR, now also reported) is `manual` and says
   why. Scheduled automations report never-ran (`NGD030`), stopped (`NGD029`)
   and unverifiable (`NGD031`) separately; `nightgauge doctor automation pause
-  <id>` records an intentional pause, which reports the stopped automation as
+<id>` records an intentional pause, which reports the stopped automation as
   `info` until `resume`. A missing complexity model is an `info` finding
   (`NGD033`) offering `outcome init`, and the survival and calibration gaps
   say which command explains them. Remedies are declared data; the engine
