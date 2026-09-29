@@ -58,7 +58,7 @@ func checkCorpusCalibration(root string) (CheckItem, string) {
 }
 
 func checkScheduledAutomations(ctx context.Context, probes map[cadence.EvidenceKind]cadenceProbe, scope cadence.Scope, declared []cadence.ConfigAutomation, now time.Time) (CheckItem, string) {
-	return asItem(scheduledAutomationFindings(ctx, probes, scope, declared, nil, now))
+	return asItem(scheduledAutomationFindings(ctx, probes, scope, declared, nil, nil, now))
 }
 
 func checkOrphanedProcesses(startDir string, now time.Time) (CheckItem, string) {

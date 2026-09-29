@@ -8,6 +8,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -36,6 +37,10 @@ var integrationNightgaugeBinaryCleanup func()
 // nothing for the same reason: no test may ask whatever model server this
 // machine runs.
 func TestMain(m *testing.M) {
+	// Stages commit through the adapter's own `git commit`, a plain child that
+	// inherits os.Environ(): without this, a developer's global
+	// commit.gpgsign=true fails those commits (#2283).
+	gittest.IsolateProcess()
 	restore := adapters.SwapOpenCodeMcpForgeForTest(openCodeMapForge{err: errors.New("the execution test binary reads no forge")})
 	restoreDiscovery := adapters.SwapOpenCodeLocalDiscoveryForTest(func(adapters.OpenCodeEndpoint, string) (models.LocalDescriptor, error) {
 		return models.LocalDescriptor{}, errors.New("the execution test binary asks no model server")

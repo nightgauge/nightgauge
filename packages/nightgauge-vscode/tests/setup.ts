@@ -16,6 +16,23 @@ import { DEFAULT_CONFIG } from "../src/config/schema";
 // their own fixture directory.
 process.env.NIGHTGAUGE_CONFIG_HOME ??= path.join(os.tmpdir(), "nightgauge-tests-no-machine-tier");
 
+// Hermetic git (#2283): tests that commit in temporary repositories, and the
+// code under test they exercise, must not read the developer's global or
+// system git config. A global commit.gpgsign=true with a key the agent cannot
+// unlock otherwise fails `git commit` for reasons unrelated to the test. The
+// identity comes with the neutralisation because, with no config left, Linux
+// git refuses to commit without one (macOS only warns). Same keys as the Go
+// suite's gittest.IsolateProcess.
+Object.assign(process.env, {
+  GIT_CONFIG_GLOBAL: os.devNull,
+  GIT_CONFIG_SYSTEM: os.devNull,
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "nightgauge-test",
+  GIT_AUTHOR_EMAIL: "nightgauge-test@example.invalid",
+  GIT_COMMITTER_NAME: "nightgauge-test",
+  GIT_COMMITTER_EMAIL: "nightgauge-test@example.invalid",
+});
+
 // #4044: the HeadlessOrchestrator auth gate now injects a real preflight runner
 // that probes CLI auth (codex login status / claude auth status). Unit tests run
 // in environments without that auth (and must not depend on it), so skip the

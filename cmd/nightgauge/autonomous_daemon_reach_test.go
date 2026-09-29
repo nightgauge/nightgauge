@@ -45,10 +45,21 @@ func TestAutonomousVerbsReachTheDaemon(t *testing.T) {
 	} {
 		t.Run(tc.fn, func(t *testing.T) {
 			body := funcBody(t, text, tc.fn)
+			dial := "ipc.DialDaemon"
+			// start reaches the daemon through the entry point it shares with
+			// doctor's automation.restart (#2090); that function must itself
+			// dial the socket and call the method.
+			if tc.fn == "autonomousStartCmd" && strings.Contains(body, "ipc.StartDaemonScheduler") {
+				shared, err := os.ReadFile("../../internal/ipc/autonomous_start.go")
+				if err != nil {
+					t.Fatalf("read the shared start entry point: %v", err)
+				}
+				body, dial = funcBody(t, string(shared), "StartDaemonScheduler"), "DialDaemon("
+			}
 			if !strings.Contains(body, tc.method) {
 				t.Errorf("%s does not call %s — %s", tc.fn, tc.method, tc.why)
 			}
-			if !strings.Contains(body, "ipc.DialDaemon") {
+			if !strings.Contains(body, dial) {
 				t.Errorf("%s never dials the daemon socket — %s", tc.fn, tc.why)
 			}
 		})

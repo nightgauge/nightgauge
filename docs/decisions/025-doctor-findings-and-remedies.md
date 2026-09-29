@@ -178,6 +178,16 @@ type Remedy struct {
 Outcomes are `fixed`, `still-present`, `skipped`, `blocked`, `conflict` and `stale` (IPC and
 card only: the fingerprint no longer matches the current scan).
 
+A verb acts through the entry point the product already uses for the same action, never a
+parallel one. `automation.restart` (#2090) restarts a stopped autonomous loop only through the
+running daemon's `autonomous.start`, the method `nightgauge autonomous start` and the extension's
+Start call. Doctor never spawns a daemon. The daemon client lives in `internal/ipc`, which
+imports this package, so it registers the entry point rather than being imported. The check
+offers the `confirm` remedy only while that entry point is reachable; otherwise it offers manual
+start steps, so a missing daemon is never a `blocked` remedy. A stopped workflow is normally
+started by GitHub's own scheduler, which doctor cannot invoke. A `workflow_dispatch` is a
+different trigger and would make a dead cron look alive, so that restart stays `manual`.
+
 Rejected: remedies as command lines the operator or engine runs. They cannot be previewed,
 confirmed per kind, confined, or verified, and they are an injection path.
 

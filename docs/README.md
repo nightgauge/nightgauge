@@ -19,6 +19,7 @@ repository.
 | [SPRINT_WORKFLOW.md](./SPRINT_WORKFLOW.md)           | Sprint/iteration support and planning              |
 | [ESTIMATION.md](./ESTIMATION.md)                     | Story points, size labels, and velocity tracking   |
 | [TROUBLESHOOTING.md](./TROUBLESHOOTING.md)           | Common issues and solutions                        |
+| [DOCTOR.md](./DOCTOR.md)                             | `nightgauge doctor`: every finding code and fix    |
 | [MULTI_REPO_WORKSPACE.md](./MULTI_REPO_WORKSPACE.md) | Multi-repository workspace setup and configuration |
 | [INTERACTIVE_MODE.md](./INTERACTIVE_MODE.md)         | Interactive vs headless execution modes            |
 

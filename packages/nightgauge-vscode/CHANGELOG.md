@@ -34,6 +34,10 @@ and this project adheres to
 
 ### Fixed
 
+- The Pipeline view shows a pipeline that was already running when the
+  extension connected, instead of "No issue active" until its next stage.
+- The Audit Trail tab shows your local run history when `platform.enabled` is
+  false, instead of "No Access", and no longer contacts the platform then.
 - The dashboard's first Refresh now shows health metrics when run history
   exists, instead of "Run your first pipeline" until a second Refresh.
 - Stage cost for Claude Sonnet 5 is now priced at $2/$10 per MTok instead of

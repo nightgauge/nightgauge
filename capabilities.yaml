@@ -88,7 +88,7 @@ capabilities:
     status: ga
     disposition: core
     surfaces: [sdk]
-    docs: [docs/ADAPTER_MATRIX.md, docs/ADAPTER_GUIDE.md, docs/ADAPTER_DOCTOR.md]
+    docs: [docs/ADAPTER_MATRIX.md, docs/ADAPTER_GUIDE.md, docs/DOCTOR.md]
     owns:
       - packages/nightgauge-sdk/src/cli/adapters/**
       - internal/models/**

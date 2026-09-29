@@ -3995,7 +3995,7 @@ already the log's last line — see the Side-Channel Log Contract in
 and the recorded version, on every outcome — including the diverging one, which
 keeps its full `detail` (resolved path, resolving step, the binary's own
 version, the inventory) alongside the error — see
-[docs/ADAPTER_DOCTOR.md](ADAPTER_DOCTOR.md#what-the-binary-check-reports-356).
+[docs/DOCTOR.md](DOCTOR.md#ngd001).
 
 When an earlier cascade step wins and the recorded extension bundle is
 runnable, `doctor` also executes that bundle's `version` command and compares
@@ -5421,6 +5421,9 @@ attention sweep` shows the #845 win but never reaches a renewal.
 
 ### Doctor — Environment Health Check
 
+The reference for doctor's finding codes, remedies, `--fix`, exit codes and
+JSON v2 is [DOCTOR.md](DOCTOR.md); this section keeps the check internals.
+
 ```bash
 nightgauge doctor [--json]
 ```
@@ -5836,9 +5839,9 @@ A `missing` entry looks like:
 ```
 
 Auth status (`codex login status`, `claude auth status`, …) is intentionally
-**not** probed here — it lives in the SDK adapters and is layered on by the
-VSCode **Adapter Doctor** (see [ADAPTER_DOCTOR.md](ADAPTER_DOCTOR.md)). The
-`adapters[]` section is the deterministic half; the extension adds auth + a UI.
+**not** probed here — it lives in the SDK adapters' auth preflight
+(`runAdapterAuthPreflight`), which runs before a dispatch. The findings these
+rows produce are documented in [DOCTOR.md](DOCTOR.md#adapter-health-in-detail).
 
 Each CLI adapter's `min_version` floor and its floor policy come from its
 compat manifest, `internal/adaptercompat/manifests/<adapter>.json`, which also

@@ -274,7 +274,7 @@ func TestAutomationFindings_ThreeDistinctCodes(t *testing.T) {
 		"nightly":          {Err: errors.New("api unreachable")},
 	})
 	declared := []cadence.ConfigAutomation{{ID: "nightly", Interval: "24h", Workflow: "nightly.yml"}}
-	fs, _ := scheduledAutomationFindings(context.Background(), probes, coreScope, declared, nil, testNow)
+	fs, _ := scheduledAutomationFindings(context.Background(), probes, coreScope, declared, nil, func() error { return nil }, testNow)
 
 	got := map[string]Finding{}
 	for _, f := range fs {
@@ -329,7 +329,7 @@ func TestAutomationFindings_PauseTurnsStoppedIntoInfo(t *testing.T) {
 		if err != nil {
 			t.Fatalf("load pauses: %v", err)
 		}
-		fs, _ := scheduledAutomationFindings(context.Background(), probes, scope, nil, pauses, testNow)
+		fs, _ := scheduledAutomationFindings(context.Background(), probes, scope, nil, pauses, nil, testNow)
 		if len(fs) != 1 {
 			t.Fatalf("want one finding, got %s", findingsText(fs))
 		}

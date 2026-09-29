@@ -8,12 +8,14 @@
  * HTML and must contain content only the demo files carry, so an empty-state
  * placeholder cannot satisfy it.
  *
+ * Audit Trail reads the local run history while `platform.enabled` is false,
+ * as it is in the fixture (ADR-026 section 6). Discovery reads the
+ * release-watch and continuous-improvement logs.
+ *
  * Out of scope, because they do not read local files: Runs, Cost, Trends,
- * Health, Compliance and Audit Trail (platform data over IPC, answered by the
- * demo daemon, #2105; Audit shows "No Access" with the platform off), and
- * Epics, Discovery and Dependencies (GitHub). `platform.enabled` is false in
- * the fixture (ADR-026 section 6). The Knowledge and Attention tree views are
- * covered by the tree-view suites against the same files.
+ * Health and Compliance (platform data over IPC, answered by the demo daemon,
+ * #2105), and Epics and Dependencies (GitHub). The Knowledge and Attention
+ * tree views are covered by the tree-view suites against the same files.
  */
 
 import * as assert from "node:assert/strict";
@@ -25,22 +27,65 @@ import { capturedPanels } from "../observe.js";
 import { materializeDemoWorkspace, waitFor, workspaceRoot } from "../fixture.js";
 
 /**
- * Tab id and a predicate over that tab's panel markup. Each predicate needs
- * text only the demo workspace's files can put there: a run title or the
- * summed cost of the four seeded history records ($8.52). The overview one
- * also rejects the empty-health placeholder, which shows while history is
- * unread.
+ * The Audit Trail's date range, as its filter inputs send it: the seeded
+ * history is dated January 2026, and the tab opens on the last seven days.
  */
-const FILE_BACKED_TABS: ReadonlyArray<readonly [string, (panel: string) => boolean]> = [
+const AUDIT_RANGE = {
+  type: "auditFilter",
+  filters: {
+    dateFrom: "2026-01-01T00:00:00.000Z",
+    dateTo: "2026-01-31T23:59:59.999Z",
+    actionFilter: "",
+    userFilter: "",
+  },
+};
+
+/**
+ * A message the user sends once the tab has rendered: `after` recognises
+ * that render, so the message is not dropped by a fetch still in flight.
+ */
+interface FollowUp {
+  after: (panel: string) => boolean;
+  message: Record<string, unknown>;
+}
+
+/**
+ * Tab id, a predicate over that tab's panel markup, and any follow-up the
+ * user would send before reading it. Each predicate needs text only the demo
+ * workspace's files can put there: a run title or the summed cost of the four
+ * seeded history records ($8.52). The overview one also rejects the
+ * empty-health placeholder, which shows while history is unread.
+ */
+const FILE_BACKED_TABS: ReadonlyArray<readonly [string, (panel: string) => boolean, FollowUp?]> = [
   [
     "overview",
     (p) => p.includes("$8.52") && !p.includes("Run your first pipeline to see health metrics"),
   ],
-  ["pipeline", (p) => p.includes("Fix time-zone drift in arrival times")],
+  // The run the demo workspace's state.json and the daemon both hold in
+  // flight, adopted at connect (#2105).
+  [
+    "pipeline",
+    (p) => p.includes("Current Pipeline Run") && p.includes("Retry failed harbour-fee webhooks"),
+  ],
   ["analytics", (p) => p.includes("Token Usage by Stage") && p.includes("claude-sonnet")],
   [
     "history",
     (p) => p.includes("Move berth assignments to the") && p.includes("Split the invoice worker"),
+  ],
+  [
+    "audit",
+    (p) =>
+      p.includes("platform communication is off") &&
+      p.includes("pipeline_run_failed") &&
+      p.includes("Move berth assignments to the new schema"),
+    { after: (p) => p.includes("Showing local telemetry"), message: AUDIT_RANGE },
+  ],
+  [
+    "discovery",
+    (p) =>
+      p.includes("Adopt the tide-table client") &&
+      p.includes("Cache the pilot roster") &&
+      p.includes("Retire the legacy anchorage-zone lookup table"),
   ],
 ];
 
@@ -79,9 +124,18 @@ suite("demo workspace", () => {
       for (const listener of dashboard.messageListeners) {
         await listener({ type: "refresh" });
       }
-      for (const [tab, populated] of FILE_BACKED_TABS) {
-        for (const listener of dashboard.messageListeners) {
-          await listener({ type: "selectTab", tab });
+      const send = async (message: Record<string, unknown>) => {
+        for (const listener of dashboard.messageListeners) await listener(message);
+      };
+      for (const [tab, populated, followUp] of FILE_BACKED_TABS) {
+        await send({ type: "selectTab", tab });
+        if (followUp) {
+          await waitFor(
+            () => (followUp.after(tabPanel(dashboard.panel.webview.html, tab)) ? true : undefined),
+            15_000,
+            `the ${tab} tab's first render`
+          );
+          await send(followUp.message);
         }
         const panel = await waitFor(
           () => {
@@ -90,8 +144,16 @@ suite("demo workspace", () => {
           },
           15_000,
           `the ${tab} tab to render rows from the demo workspace`
+        ).catch(() => undefined);
+        const shown = tabPanel(dashboard.panel.webview.html, tab);
+        assert.ok(
+          panel,
+          `The ${tab} tab shows no demo workspace rows:\n${shown
+            .replace(/<script\b[^>]*>[\s\S]*?<\/script[^>]*>/gi, " ")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s+/g, " ")
+            .slice(0, 2000)}`
         );
-        assert.ok(panel.length > 0);
       }
     } finally {
       dashboard.panel.dispose();

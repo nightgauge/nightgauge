@@ -28,6 +28,19 @@ const REFUSED_EVENTS = new Set(["pipeline.runStage", "pipeline.abort"]);
 
 const OK = { status: "ok" };
 
+/** Knowledge entries as ranked recall hits (`KnowledgeRecallHit`). */
+function knowledgeHits(entries) {
+  return entries.map((k, i) => ({
+    rank: i + 1,
+    score: 1 - i * 0.1,
+    path: k.path,
+    kind: k.kind,
+    snippet: k.snippet,
+    stale: false,
+    lifecycle_multiplier: 1,
+  }));
+}
+
 function statusKey(status) {
   return {
     Ready: "ready",
@@ -359,19 +372,18 @@ function buildHandlers(state) {
     }),
     "knowledge.search": (p) => {
       const query = String((p && p.query) || "").toLowerCase();
-      const hits = state.knowledge
-        .filter((k) => !query || `${k.path} ${k.snippet}`.toLowerCase().includes(query))
-        .map((k, i) => ({
-          rank: i + 1,
-          score: 1 - i * 0.1,
-          path: k.path,
-          kind: k.kind,
-          snippet: k.snippet,
-          stale: false,
-          lifecycle_multiplier: 1,
-        }));
+      const hits = knowledgeHits(
+        state.knowledge.filter(
+          (k) => !query || `${k.path} ${k.snippet}`.toLowerCase().includes(query)
+        )
+      );
       return { hits, total_hits: hits.length };
     },
+    // The Knowledge tree's "Related to the active issue" section, asked once a
+    // run is active: every seeded entry, up to the caller's limit.
+    "knowledge.relatedToIssue": (p) => ({
+      hits: knowledgeHits(state.knowledge).slice(0, (p && p.limit) || undefined),
+    }),
     "pipeline.getMaxConcurrent": () => ({ maxConcurrent: 2, persisted: true }),
     "pipeline.runningSummary": () => ({
       count: state.activeRuns.length,

@@ -1,0 +1,32 @@
+{
+  "schema_version": "1",
+  "run_started_at": "2026-01-14T06:00:00.000Z",
+  "triggered_by": "schedule",
+  "new_version": "3.4.0",
+  "since_version": "3.3.2",
+  "status": "completed",
+  "issues_created": [
+    {
+      "number": 141,
+      "title": "Adopt the tide-table client's new retry options",
+      "url": "#",
+      "score": 0.82
+    },
+    {
+      "number": 142,
+      "title": "Drop the berth-map polyfill the new runtime makes redundant",
+      "url": "#",
+      "score": 0.71
+    }
+  ],
+  "issues_backlogged": [
+    {
+      "title": "Evaluate the streaming parser for harbour-fee exports",
+      "score": 0.48,
+      "reason": "below the creation threshold"
+    }
+  ],
+  "issues_deduped": ["Upgrade the date library"],
+  "completed_at": "2026-01-14T06:04:30.000Z",
+  "error": null
+}

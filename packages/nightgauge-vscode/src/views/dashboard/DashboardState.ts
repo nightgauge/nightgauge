@@ -393,6 +393,12 @@ export interface AuditLogData {
   isLocalFallback?: boolean;
   /** Human-readable label shown in the local-mode banner (Issue #3324) */
   localDataLabel?: string;
+  /**
+   * Whether the local-mode banner offers Retry: true when the platform was
+   * asked and failed, false when `platform.enabled` is off (#2107). Absent
+   * means true.
+   */
+  localRetryable?: boolean;
   /** ISO 8601 timestamp of the last successful platform fetch, if known (Issue #3324) */
   lastPlatformSync?: string;
 }

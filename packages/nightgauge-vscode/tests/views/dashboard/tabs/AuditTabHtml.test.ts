@@ -93,6 +93,24 @@ describe("getAuditTabHtml", () => {
     expect(html).toContain("Platform audit API not available");
   });
 
+  it("local mode offers Retry when the platform failed, not when it is off (#2107)", () => {
+    const unreachable = getAuditTabHtml(
+      makeData({ isLocalFallback: true, localDataLabel: "Showing local telemetry — unreachable" })
+    );
+    expect(unreachable).toContain("Showing local telemetry — unreachable");
+    expect(unreachable).toContain('id="auditRetryBtn"');
+
+    const disabled = getAuditTabHtml(
+      makeData({
+        isLocalFallback: true,
+        localDataLabel: "Showing local telemetry — platform communication is off",
+        localRetryable: false,
+      })
+    );
+    expect(disabled).toContain("platform communication is off");
+    expect(disabled).not.toContain('id="auditRetryBtn"');
+  });
+
   it("entries present → renders table rows with column data", () => {
     const entry = makeEntry();
     const html = getAuditTabHtml(

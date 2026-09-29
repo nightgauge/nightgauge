@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`docs/DOCTOR.md` is the doctor reference** (#2100). It has one section per
+  finding code (`NGD000`–`NGD042`, `NGD100`–`NGD111`) with its cause and
+  remedies. Every finding's `docs` link points there. It also covers the guided
+  repair session, `--fix`, `--dry-run`, `--only`, `--severity`, `--yes` and
+  `--history`, the exit codes including 3 (conflict) and 4 (blocked), the VS Code
+  Doctor panel, status bar item and Action Center cards, and the JSON v2 and fix
+  report schemas. A test fails when a registered code has no section or a
+  section names a code that does not exist. `docs/ADAPTER_DOCTOR.md` is removed:
+  its adapter and binary material is in `docs/DOCTOR.md`, and the doctor
+  passages in `docs/TROUBLESHOOTING.md` link there.
+
 - **`nightgauge doctor` diagnoses GitHub identity and board failures down to
   the missing permission** (#2094). With a GitHub App configured, doctor reads
   the App's declared permissions and the installation's granted ones with the
@@ -154,6 +165,19 @@ changelog, and the release workflow refuses a tag that does not.
   from it. It ships in no package.
 
 ### Changed
+
+- **`nightgauge doctor --fix --yes` restarts a stopped autonomous loop through
+  the daemon** (#2090). A stopped `autonomous-loop` (`NGD029`) now offers a
+  `confirm` restart that asks the daemon serving the workspace to start its
+  scheduler. It uses the same `autonomous.start` call as `nightgauge
+autonomous start` and the extension's Start button. The remedy re-reads the
+  loop's state and the daemon just before acting and refuses if either
+  changed. It then waits up to 30 seconds for the loop to scan and reports
+  `fixed` only when `scheduled_automations` no longer reports it. With no
+  daemon listening, the finding lists the manual start steps instead, so
+  `--fix --yes` no longer reports the restart as `blocked` (exit 4). A stopped
+  scheduled workflow is restarted by hand, since only GitHub's scheduler can
+  start it.
 
 - **`nightgauge doctor --adapters` reports each unusable adapter as a coded
   finding** (#2092). Adapter health is now the `adapters` check group: each
@@ -400,6 +424,27 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
   `remote.notifyOnPipelineRun` config keys.
 
 ### Fixed
+
+- **The Pipeline tree shows a run already in flight when the extension
+  connects** (#2105). Run state arrived only as `pipeline.stateChanged`
+  events, and the first IPC call of activation starts the daemon before the
+  state relay listens, so the tree read "No issue active" over a running
+  pipeline until its next stage change. Once the tree is wired the extension
+  asks the daemon's run registry (`pipeline.runningSummary`) and shows the one
+  run in flight. A snapshot for a different issue now also resets the tree's
+  stages, so the previous issue's running stage no longer keeps its spinner.
+
+- **The Audit Trail tab shows local run history when `platform.enabled` is
+  false** (#2107). It showed "No Access" to every user without a platform
+  session, and with a stored session it still called the platform. With the
+  platform off it now reads only the local telemetry, labelled as such and
+  without a Retry button, and every read picks up runs recorded since the tab
+  first loaded.
+
+- **The demo workspace populates the Audit Trail and Discovery tabs** (#2107):
+  fictional release-watch, continuous-improvement and backlog files, and the
+  demo daemon answers `knowledge.relatedToIssue` for the Knowledge tree's
+  related-decisions section.
 
 - **The dashboard's first refresh shows the health widget from the history it
   just loaded** (#2274). Refresh computed the health widget and cost summary

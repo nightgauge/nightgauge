@@ -11667,16 +11667,14 @@ func autonomousStartCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workdir, _ := os.Getwd()
 
-			client, dialErr := ipc.DialDaemon(cmd.Context(), workdir, daemonDialTimeout)
-			if dialErr != nil {
+			status, err := ipc.StartDaemonScheduler(cmd.Context(), workdir)
+			var noDaemon *ipc.NoDaemonError
+			if errors.As(err, &noDaemon) {
 				return fmt.Errorf("no daemon is listening in %s, so there is no scheduler to start: %w\n"+
 					"Start a daemon (`nightgauge serve`, or open the VS Code extension), "+
-					"or run one in this process with `nightgauge autonomous run`", workdir, dialErr)
+					"or run one in this process with `nightgauge autonomous run`", workdir, noDaemon.Err)
 			}
-			defer client.Close()
-
-			var status orchestrator.AutonomousState
-			if err := client.Call(cmd.Context(), "autonomous.start", ipc.AutonomousStartParams{}, &status); err != nil {
+			if err != nil {
 				return err
 			}
 			if outputJSON {
