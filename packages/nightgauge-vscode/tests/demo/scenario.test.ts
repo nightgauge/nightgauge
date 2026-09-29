@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import { createRequire } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PHASE_REGISTRY, type ExecutionStage } from "@nightgauge/sdk";
 import { describe, expect, it } from "vitest";
 
 const packageRoot = path.resolve(__dirname, "..", "..");
@@ -168,6 +169,36 @@ describe("reference scenario", () => {
     ]);
     const item = (state.board as Obj[]).find((i) => i.number === 133);
     expect(item!.status).toBe("Done");
+  });
+
+  it("reports every registry phase of each stage, by its registry name (#2289)", () => {
+    // The Pipeline tree back-fills every registry phase a completed stage did
+    // not report as `unreported`; a stage whose names match none of them reads
+    // "phases not reported (N)". So the demo run reports the registry's own
+    // phases, each started and completed inside its stage, in registry order.
+    const run = events.filter((e) => (e.data as Obj | undefined)?.issueNumber === 133);
+    const stagesWithRegistry = byEvent("stage.start")
+      .filter((d) => d.issueNumber === 133)
+      .map((d) => d.stage as string)
+      .filter((stage) => (PHASE_REGISTRY[stage as ExecutionStage] ?? []).length > 0);
+    expect(stagesWithRegistry.length).toBeGreaterThan(0);
+    for (const stage of stagesWithRegistry) {
+      const registry = PHASE_REGISTRY[stage as ExecutionStage].map((p) => p.name);
+      const inStage = run.filter((e) => (e.data as Obj).stage === stage);
+      const kinds = inStage.map((e) => e.event);
+      const phases = (kind: string) =>
+        inStage.filter((e) => e.event === kind).map((e) => e.data as Obj);
+      for (const kind of ["phase.start", "phase.complete"]) {
+        expect(
+          phases(kind).map((d) => d.name),
+          `${stage} ${kind}`
+        ).toEqual(registry);
+        expect(phases(kind).map((d) => d.index)).toEqual(registry.map((_, i) => i));
+        expect(new Set(phases(kind).map((d) => d.total))).toEqual(new Set([registry.length]));
+      }
+      expect(kinds[0]).toBe("stage.start");
+      expect(kinds.at(-1)).toBe("stage.complete");
+    }
   });
 
   it("starts a second run", () => {

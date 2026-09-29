@@ -457,6 +457,13 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
   counts as soon as the config resolves. A config that names no project shows
   as not configured rather than as an empty board.
 
+- **The demo run shows its stages' phase progress** (#2289). The reference
+  scenario reported phases under invented names that no stage's phase registry
+  knows, so every completed stage read "phases not reported (N)". It now
+  reports each stage's registry phases by name, in order, so the Pipeline tree
+  shows `N/N phases`. A test fails when a scenario phase drifts from the
+  registry.
+
 - **The Audit Trail tab shows local run history when `platform.enabled` is
   false** (#2107). It showed "No Access" to every user without a platform
   session, and with a stored session it still called the platform. With the

@@ -22,6 +22,7 @@ import http from "node:http";
 import https from "node:https";
 import { isDeepStrictEqual } from "node:util";
 import * as vscode from "vscode";
+import { PHASE_REGISTRY, type ExecutionStage } from "@nightgauge/sdk";
 import { suite, test } from "../harness.js";
 import { capturedPanels, capturedStatusBarItems, capturedTreeProviders } from "../observe.js";
 import { delay, materializeDemoWorkspace, waitFor, workspaceRoot } from "../fixture.js";
@@ -156,6 +157,21 @@ function recordOutboundHttp(): void {
 
 /** Pipeline tree running-stage transitions, recorded as the tree fires changes. */
 const stageTransitions: string[] = [];
+/** The latest description each completed stage of the first run showed (#2289). */
+const completedStageDescriptions = new Map<string, string>();
+
+async function recordCompletedStages(p: Provider, issue: number): Promise<void> {
+  for (const root of await children(p)) {
+    const item = await treeItem(p, root);
+    if (item.contextValue !== "issue" || !labelOf(item).startsWith(`#${issue} - `)) continue;
+    for (const child of await children(p, root)) {
+      const stageItem = await treeItem(p, child);
+      if (stageItem.contextValue !== "stage-complete") continue;
+      const stage = String((child as { stage?: unknown }).stage ?? labelOf(stageItem));
+      completedStageDescriptions.set(stage, String(stageItem.description ?? ""));
+    }
+  }
+}
 
 function startRecordingStages(): void {
   const p = provider("nightgauge.pipelineView");
@@ -167,6 +183,7 @@ function startRecordingStages(): void {
     reading = reading.then(async () => {
       const stage = await runningStage(p, RUN_ISSUE);
       if (stage && stageTransitions.at(-1) !== stage) stageTransitions.push(stage);
+      await recordCompletedStages(p, RUN_ISSUE);
     });
   });
 }
@@ -410,6 +427,19 @@ suite("demo mode", () => {
       STAGES,
       `Running-stage transitions: ${stageTransitions.join(" -> ") || "(none)"}`
     );
+  });
+
+  test("each completed stage shows its registry phases as N/N, not unreported", () => {
+    // The scenario reports each stage's registry phases by name (#2289). With
+    // names the registry does not know, the tree back-fills every registry
+    // phase as unreported and reads "phases not reported (N)".
+    for (const stage of STAGES) {
+      const registry = PHASE_REGISTRY[stage as ExecutionStage] ?? [];
+      if (registry.length === 0) continue;
+      const shown = completedStageDescriptions.get(stage) ?? "(never shown complete)";
+      const n = registry.length;
+      assert.match(shown, new RegExp(`^${n}/${n} phases`), `${stage}: ${shown}`);
+    }
   });
 
   test("the active dashboard tab follows each UI step", async () => {
