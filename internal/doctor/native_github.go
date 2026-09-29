@@ -30,6 +30,7 @@ const (
 )
 
 // Codes this group adds beyond the ADR-025 per-check defaults.
+// NGD036–NGD042 (App permissions and board diagnosis) are in github_identity.go.
 const (
 	codeReadOrg        = "NGD034" // scopes: read:org missing (advisory)
 	codeCommitIdentity = "NGD035" // github_identity: App commits not attributed
@@ -95,7 +96,10 @@ func init() {
 	native("github_identity", "GitHub identity", "github", "NGD009", probe, auth,
 		func(ctx context.Context, env *Env) ([]Finding, string) {
 			rl, _ := env.rateLimit(ctx)
-			return githubIdentityFindings(env.Client.App(), rl)
+			fs, detail := githubIdentityFindings(env.Client.App(), rl)
+			// With an App, compare what it declares and what the installation
+			// granted against what the pipeline needs (#2094).
+			return append(fs, appPermissionFindings(env.githubApp(ctx))...), detail
 		})
 	// The request ledger, written unattended (#1347).
 	native("github_api_budget", "GitHub API budget", "github", "NGD008", 0, nil,
@@ -136,6 +140,9 @@ func init() {
 				return nil, "not applicable in this workspace"
 			}
 			pop, err := readBoardPopulation(ctx, cfg, env.Client)
+			if isProjectResolutionFailure(err) {
+				return boardFailureFindings(ctx, env, cfg, pop, err)
+			}
 			return boardPopulationFindings(cfg, pop, err)
 		})
 	// "Can this machine run a stage at all?" (#862).
@@ -321,11 +328,12 @@ func scopeFindings(info *gh.TokenScopeInfo) ([]Finding, string) {
 		return []Finding{newFinding(check, code, SeverityBlocker,
 			"missing required scopes: "+missing,
 			"the classic token lacks scopes pipeline operations need",
-			map[string]string{"missing": missing, "granted": strings.Join(info.Scopes, ", ")},
+			map[string]string{"missing": missing, "granted": strings.Join(info.Scopes, ", "), "login": info.Login},
 			[]string{missing},
-			manualRemedy("refresh", "Grant the missing scopes", check,
-				"Run `gh auth refresh -s "+strings.Join(info.MissingScopes, ",")+"`",
-				"Or issue a token with those scopes and export it as GITHUB_TOKEN"))}, "missing: " + missing
+			ghRefreshRemedy(check, info.MissingScopes),
+			manualRemedy("token", "Or issue a token with the missing scopes", check,
+				"Issue a token with those scopes and export it as GITHUB_TOKEN",
+				checkAgainStep(code)))}, "missing: " + missing
 	case !info.ScopesAdvertised:
 		return nil, "not advertised (fine-grained or App token): permissions are per repository, checked by the operations that need them"
 	}
@@ -333,8 +341,8 @@ func scopeFindings(info *gh.TokenScopeInfo) ([]Finding, string) {
 	if msg := readOrgWarning(info.Scopes); msg != "" {
 		return []Finding{newFinding(check, codeReadOrg, SeverityWarning, msg,
 			"without read:org, private organisation memberships are invisible to the token",
-			map[string]string{"granted": detail}, []string{"read:org"},
-			manualRemedy("refresh", "Add the read:org scope", check, "Run `gh auth refresh -s read:org`"))}, detail
+			map[string]string{"granted": detail, "missing": "read:org", "login": info.Login}, []string{"read:org"},
+			ghRefreshRemedy(check, []string{"read:org"}))}, detail
 	}
 	return nil, detail
 }
@@ -497,8 +505,36 @@ func projectMappingFindings(report config.ProjectMappingReport) ([]Finding, stri
 	return nil, "workspace manifest and runtime config agree"
 }
 
+// boardFailureFindings re-diagnoses a board read that failed to resolve the
+// project (#2094). A GitHub App client first discards a token minted before
+// the installation's permissions changed and reads once more; a read that
+// still fails is diagnosed down to the missing permission, a wrong number or
+// a deleted project, never GitHub's raw message alone.
+func boardFailureFindings(ctx context.Context, env *Env, cfg *config.Config, pop boardPopulation, err error) ([]Finding, string) {
+	d := boardDiagnosis{cfg: cfg, readErr: err,
+		list: func(ctx context.Context) (gh.OwnerProjects, error) {
+			return gh.ListOwnerProjects(ctx, env.Client, cfg.Owner, boardOwnerType(cfg))
+		}}
+	if env.Client.App() != nil {
+		d.app = env.githubApp(ctx)
+		if d.app != nil && d.app.tokenRefreshed {
+			if pop, err = readBoardPopulation(ctx, cfg, env.Client); err == nil {
+				return boardPopulationFindings(cfg, pop, nil)
+			}
+			d.readErr = err
+		}
+	} else {
+		d.scopes, _ = env.tokenScopes(ctx)
+	}
+	if fs, detail, ok := diagnoseBoardFailure(ctx, d); ok {
+		return fs, detail
+	}
+	return boardPopulationFindings(cfg, pop, d.readErr)
+}
+
 // boardPopulationFindings reports a failed board read or a board holding none
-// of the repo's open issues as a blocker. Deep permission diagnosis is #2094.
+// of the repo's open issues as a blocker. A project-resolution failure is
+// re-diagnosed first (boardFailureFindings).
 func boardPopulationFindings(cfg *config.Config, pop boardPopulation, err error) ([]Finding, string) {
 	const check, code = "board_population", "NGD013"
 	board := fmt.Sprintf("%s/%d", cfg.Owner, cfg.ProjectNumber)

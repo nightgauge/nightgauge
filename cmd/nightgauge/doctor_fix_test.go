@@ -141,14 +141,18 @@ func TestDoctorFix_ConfirmRemedyNeedsYes(t *testing.T) {
 func TestDoctorFix_FlagValidation(t *testing.T) {
 	for _, fl := range []doctorFixFlags{
 		{yes: true},
-		{only: []string{"NGD017"}},
 		{severity: []string{"warning"}},
+		{history: true, only: []string{"NGD017"}},
 		{history: true, fix: true},
 		{fix: true, severity: []string{"urgent"}},
 	} {
 		if _, err := fl.options(); err == nil {
 			t.Errorf("flags %+v were accepted", fl)
 		}
+	}
+	// --only alone re-runs the named checks: a manual remedy's "check again".
+	if opts, err := (doctorFixFlags{only: []string{" NGD036 "}}).options(); err != nil || len(opts.Only) != 1 || opts.Only[0] != "NGD036" {
+		t.Errorf("--only without --fix = %+v, %v; want it accepted and trimmed", opts, err)
 	}
 	opts, err := doctorFixFlags{dryRun: true, yes: true, severity: []string{"Housekeeping"}}.options()
 	if err != nil || !opts.DryRun || opts.Yes || len(opts.Severities) != 1 {

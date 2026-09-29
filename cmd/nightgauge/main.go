@@ -12134,7 +12134,9 @@ Use --json for machine-readable JSON v2 output (skills parse this format).
 with --yes, and prints manual remedies' steps. Each applied remedy is
 verified by re-running its check: FIXED only when the finding is gone.
 --dry-run prints every preview and changes nothing. --only and --severity
-narrow the pass. --history prints the local fix log. Under --fix the exit
+narrow the pass. Without --fix, --only NGD036 (a code or a check ID) re-runs
+just the checks that own it, plus their dependencies: the "check again" a
+manual remedy names. --history prints the local fix log. Under --fix the exit
 code is the state after verification, except 3 (conflict: nothing was
 overwritten) and 4 (blocked: a precondition failed at apply time).`,
 		SilenceUsage: true,
@@ -12169,7 +12171,12 @@ overwritten) and 4 (blocked: a precondition failed at apply time).`,
 				}
 				return nil
 			}
-			result := doctor.RunDoctorWithConfigError(cmd.Context(), cfg, cfgErr, client, adapters)
+			// --only re-runs just the named checks: a manual remedy's
+			// "check again" (#2094).
+			result, err := doctor.RunDoctorOnly(cmd.Context(), cfg, cfgErr, client, adapters, fixOpts.Only)
+			if err != nil {
+				return err
+			}
 
 			if jsonOutput {
 				if err := printJSON(result); err != nil {

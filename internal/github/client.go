@@ -122,6 +122,8 @@ type Client struct {
 	// token (#1955). An installation has no GET /user; getCurrentUserLogin
 	// answers from it instead.
 	app *AppCredentials
+	// appSrc is the App client's token source, reset by ResetAppToken.
+	appSrc *appReuseSource
 
 	// ledgerIdentity labels whose rate-limit bucket this client spends, for
 	// the API ledger (#2087): "app:<slug>", "user:<login>", or "" (read as
@@ -645,8 +647,10 @@ func appClient(cfg TokenResolver, owner string) *Client {
 		return nil
 	}
 	slot := "app:" + strconv.FormatInt(creds.InstallationID, 10)
-	c := newClientWithSource(oauth2.ReuseTokenSource(first, appTokenSource{creds: creds}), slot)
+	src := newAppReuseSource(first, creds)
+	c := newClientWithSource(src, slot)
 	c.app = creds
+	c.appSrc = src
 	c.ledgerIdentity.Store(appLedgerIdentity(creds))
 	if path, err := DefaultSharedTrackerPath(); err == nil {
 		c = c.WithRateLimitTracker(NewSharedRateLimitTracker(path), slot).WithRateLimitWait()
@@ -676,6 +680,17 @@ func (c *Client) App() *AppCredentials {
 		return nil
 	}
 	return c.app
+}
+
+// ResetAppToken drops the installation token this client holds in memory, so
+// its next request re-mints (or re-reads the cache). A no-op for a user token.
+// Callers pair it with SyncAppTokenPermissions after the installation's
+// permissions changed (#2094).
+func (c *Client) ResetAppToken() {
+	if c == nil || c.appSrc == nil {
+		return
+	}
+	c.appSrc.reset()
 }
 
 // NewClientWithURL creates a GitHub GraphQL client pointing at the given URL.

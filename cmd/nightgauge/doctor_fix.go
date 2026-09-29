@@ -33,7 +33,7 @@ func addDoctorFixFlags(cmd *cobra.Command, fl *doctorFixFlags) {
 	cmd.Flags().BoolVar(&fl.yes, "yes", false, "With --fix, also apply confirm remedies (destructive or visible to others)")
 	cmd.Flags().BoolVar(&fl.dryRun, "dry-run", false, "Print every remedy's preview and change nothing (implies --fix planning)")
 	cmd.Flags().BoolVar(&fl.history, "history", false, "Print the local fix log of applied remedies")
-	cmd.Flags().StringSliceVar(&fl.only, "only", nil, "With --fix or --dry-run, act only on these finding codes (NGD017) or check IDs (worktree_leaks)")
+	cmd.Flags().StringSliceVar(&fl.only, "only", nil, "Run only the checks owning these finding codes (NGD017) or check IDs (worktree_leaks), plus their dependencies; with --fix or --dry-run, act only on those findings")
 	cmd.Flags().StringSliceVar(&fl.severity, "severity", nil, "With --fix or --dry-run, act only on findings of these severities (blocker, warning, housekeeping)")
 }
 
@@ -45,8 +45,8 @@ func (fl doctorFixFlags) options() (doctor.FixOptions, error) {
 	if fl.history && (fl.active() || fl.yes || len(fl.only) > 0 || len(fl.severity) > 0) {
 		return doctor.FixOptions{}, errors.New("--history prints the fix log and takes no other remedy flag")
 	}
-	if !fl.active() && (fl.yes || len(fl.only) > 0 || len(fl.severity) > 0) {
-		return doctor.FixOptions{}, errors.New("--yes, --only and --severity need --fix or --dry-run")
+	if !fl.active() && (fl.yes || len(fl.severity) > 0) {
+		return doctor.FixOptions{}, errors.New("--yes and --severity need --fix or --dry-run")
 	}
 	opts := doctor.FixOptions{DryRun: fl.dryRun, Yes: fl.yes && !fl.dryRun}
 	for _, o := range fl.only {

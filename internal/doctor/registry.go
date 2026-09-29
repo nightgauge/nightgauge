@@ -137,6 +137,8 @@ type Env struct {
 	rlOnce     sync.Once
 	rl         *gh.RateLimitInfo
 	rlErr      error
+	appOnce    sync.Once
+	app        *appProbe // github_identity.go
 }
 
 // SetDetail records the human-readable detail for a check (shown for a
