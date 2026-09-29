@@ -113,6 +113,7 @@ import type {
 } from "./DashboardState";
 import { getDefaultRunsPagination } from "./DashboardState";
 import { classifyPlatformError, type PlatformFailure } from "../../services/platformResult";
+import { isDemoMode } from "../../services/DemoModeController";
 
 /**
  * Message from WebView to extension
@@ -3115,8 +3116,15 @@ export class Dashboard implements vscode.Disposable {
    * `PlatformFailure` from a locally-verified fact (no throw, no guess) —
    * distinct from the `unauthorized` kind the platform itself reports, but
    * rendered identically since both mean "sign in" (#748).
+   *
+   * Passes while a demo daemon is connected (ADR-026 section 6): the demo
+   * answers these methods from scenario state and holds no session token by
+   * design (section 1), so the tabs render its stub data instead of "sign in".
+   * Real users are unaffected; `isDemoMode()` is true only after the connected
+   * daemon's `ipc.ready` said `demo: true` (#2105).
    */
   private async checkPlatformTokenState(endpoint: string): Promise<PlatformFailure | null> {
+    if (isDemoMode()) return null;
     const tokenStorage = TokenStorage.getInstance();
     if (!tokenStorage) {
       return {

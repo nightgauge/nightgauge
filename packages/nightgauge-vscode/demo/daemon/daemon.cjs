@@ -461,7 +461,8 @@ function buildHandlers(state) {
         dateFrom: trends.length ? trends[0].date : state.now.slice(0, 10),
         dateTo: trends.length ? trends[trends.length - 1].date : state.now.slice(0, 10),
         repos: state.repositories.map((r) => `${state.owner}/${r.name}`),
-        targetSuccessRate: 0.8,
+        // Percent, like each row's successRate (the platform's units, #801).
+        targetSuccessRate: 80,
       };
     },
     "platform.getAnalyticsHealth": () => ({
@@ -471,6 +472,9 @@ function buildHandlers(state) {
       period_days: 30,
       total_runs: state.history.length,
     }),
+    // The Compliance tab shares the platform token gate, which passes in demo
+    // mode (ADR-026 section 6): the demo workspace has generated no reports.
+    "platform.auditListReports": () => ({ reports: [] }),
     "pr.list": (p) =>
       state.board
         .filter((i) => i.status === "In Review")

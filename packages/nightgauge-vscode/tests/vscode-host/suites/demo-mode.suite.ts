@@ -194,6 +194,11 @@ function scenario(): {
     board: Record<string, SeededItem[]>;
     queue: SeededQueueItem[];
     activeRuns: SeededRun[];
+    history: Array<{ title: string }>;
+    platform: {
+      costByModel: Array<{ modelId: string }>;
+      trends: Array<{ totalRuns: number }>;
+    };
   };
 } {
   const file = process.env.NIGHTGAUGE_DEMO_SCENARIO;
@@ -347,6 +352,37 @@ suite("demo mode", () => {
       `Overview board summary is not "${expected}":\n${body.slice(0, 3000)}`
     );
     assert.match(body, new RegExp(`Up next ${upNext}`), `Overview queue:\n${body.slice(0, 3000)}`);
+  });
+
+  test("the Runs, Cost and Trends tabs render the daemon's platform data", async () => {
+    // The demo profile holds no session token (ADR-026 section 1); the
+    // dashboard's token precheck passes in demo mode (section 6, #2105), so
+    // these tabs reach platform.getAnalyticsRuns, getCostAnalytics and
+    // getAnalyticsTrends, which the daemon answers from scenario state.
+    const state = scenario().state;
+    const expected: Record<string, (html: string) => boolean> = {
+      runs: (html) => text(html).includes(state.history[0].title),
+      cost: (html) => html.includes(`>${state.platform.costByModel[0].modelId}<`),
+      trends: (html) => html.includes(`${state.platform.trends[0].totalRuns} runs on `),
+    };
+    await vscode.commands.executeCommand("nightgauge.showDashboard");
+    const panel = await waitFor(dashboard, 5_000, "the Dashboard panel");
+    for (const [tab, populated] of Object.entries(expected)) {
+      for (const listener of panel.messageListeners) {
+        await listener({ type: "selectTab", tab });
+      }
+      const body = () => tabPanel(panel.panel.webview.html, tab);
+      await waitFor(
+        () => (populated(body()) ? true : undefined),
+        15_000,
+        `the ${tab} tab's demo data`
+      ).catch(() => undefined);
+      assert.ok(
+        populated(body()),
+        `The ${tab} tab does not show the daemon's data:\n${text(body()).slice(0, 2000)}`
+      );
+      assert.doesNotMatch(text(body()), /sign-in required/i, `The ${tab} tab asks to sign in`);
+    }
   });
 
   test("the start signal plays the scenario", async () => {

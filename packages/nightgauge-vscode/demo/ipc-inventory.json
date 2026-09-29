@@ -62,7 +62,7 @@
       "surfaces": ["demo mode > the active dashboard tab follows each UI step"],
       "sampleParams": {
         "repos": ["lanternworks/harbor-api"],
-        "since": "2026-09-29T16:20:45.304Z"
+        "since": "2026-09-29T18:24:33.260Z"
       },
       "paramsShape": {
         "repos": ["string"],
@@ -118,7 +118,6 @@
       "resultType": "ConfigGetProjectResult",
       "client": "generated",
       "surfaces": [
-        "activation > activate() resolves against the fixture workspace",
         "activation > deferred startup work settles without a new unhandled rejection",
         "webviews > Dashboard creates, renders, and disposes",
         "webviews > BrownfieldDashboard creates, renders, and disposes",
@@ -126,9 +125,9 @@
         "ipc inventory > tree view nightgauge.repositoriesView",
         "ipc inventory > dashboard opens",
         "demo workspace > each file-backed dashboard tab renders a populated row",
-        "demo mode > the extension activates on the demo workspace",
         "demo mode > the demo daemon's handshake shows the Demo badge",
         "demo mode > the Repositories tree shows the seeded board counts",
+        "demo mode > the dashboard Overview shows the seeded totals",
         "demo mode > the start signal plays the scenario",
         "demo mode > the Pipeline tree's active stage walks every stage in order"
       ],
@@ -221,7 +220,7 @@
       "resultType": "KnowledgeMetricsResult",
       "client": "generated",
       "surfaces": [
-        "webviews > DoctorPanel creates, renders, and disposes",
+        "webviews > KnowledgeValueDashboard creates, renders, and disposes",
         "webviews > ApprovalDialog creates, renders, and disposes"
       ],
       "sampleParams": {
@@ -253,7 +252,7 @@
       "client": "generated",
       "surfaces": [
         "activation > deferred startup work settles without a new unhandled rejection",
-        "demo mode > the extension activates on the demo workspace"
+        "demo mode > the demo daemon's handshake shows the Demo badge"
       ],
       "sampleParams": null,
       "paramsShape": null
@@ -268,6 +267,69 @@
       ],
       "sampleParams": null,
       "paramsShape": null
+    },
+    {
+      "method": "platform.auditListReports",
+      "resultType": "ComplianceReportsResult",
+      "client": "generated",
+      "surfaces": ["ipc inventory > dashboard tab compliance"],
+      "sampleParams": null,
+      "paramsShape": null
+    },
+    {
+      "method": "platform.getAnalyticsHealth",
+      "resultType": "AnalyticsHealthResult",
+      "client": "generated",
+      "surfaces": ["ipc inventory > dashboard tab health"],
+      "sampleParams": null,
+      "paramsShape": null
+    },
+    {
+      "method": "platform.getAnalyticsRuns",
+      "resultType": "AnalyticsRunsResult",
+      "client": "generated",
+      "surfaces": [
+        "ipc inventory > dashboard tab runs",
+        "demo mode > the Runs, Cost and Trends tabs render the daemon's platform data"
+      ],
+      "sampleParams": {
+        "limit": 20
+      },
+      "paramsShape": {
+        "limit": "number"
+      }
+    },
+    {
+      "method": "platform.getAnalyticsTrends",
+      "resultType": "AnalyticsTrendsResult",
+      "client": "generated",
+      "surfaces": [
+        "ipc inventory > dashboard tab trends",
+        "demo mode > the Runs, Cost and Trends tabs render the daemon's platform data"
+      ],
+      "sampleParams": {
+        "period": "30d"
+      },
+      "paramsShape": {
+        "period": "string"
+      }
+    },
+    {
+      "method": "platform.getCostAnalytics",
+      "resultType": "CostAnalyticsResult",
+      "client": "generated",
+      "surfaces": [
+        "ipc inventory > dashboard tab cost",
+        "demo mode > the Runs, Cost and Trends tabs render the daemon's platform data"
+      ],
+      "sampleParams": {
+        "startDate": "2026-09-22",
+        "endDate": "2026-09-29"
+      },
+      "paramsShape": {
+        "endDate": "string",
+        "startDate": "string"
+      }
     },
     {
       "method": "platform.healthCheck",

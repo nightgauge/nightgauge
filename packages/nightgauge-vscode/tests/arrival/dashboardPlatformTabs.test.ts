@@ -17,6 +17,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 import { createMockMemento } from "../mocks/memento";
 
+// Demo mode is set by the connected daemon's handshake; here a flag stands in
+// for it so the token gate's demo pass can be driven both ways (#2105).
+const demo = vi.hoisted(() => ({ active: false }));
+vi.mock("../../src/services/DemoModeController", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../src/services/DemoModeController")>()),
+  isDemoMode: () => demo.active,
+}));
 vi.mock("vscode", async () => (await import("./dashboardHarness")).vscodeMockModule());
 vi.mock("../../src/services/IpcClient", async () =>
   (await import("./dashboardHarness")).ipcClientMockModule()
@@ -48,6 +55,7 @@ import {
   resetHarness,
   signIn,
   signOut,
+  tokenState,
   renderDashboardHtml,
   renderedText,
   tabPanelHtml,
@@ -75,6 +83,7 @@ function newDashboard(): Dashboard {
 beforeEach(() => {
   vi.clearAllMocks();
   resetHarness();
+  demo.active = false;
   dashboard = newDashboard();
 });
 
@@ -756,6 +765,95 @@ describe("arrival: every platform tab short-circuits when signed out", () => {
       signIn();
       await drive[tab]();
       expect(ipcStub[ipcMethod[tab]]).toHaveBeenCalledTimes(1);
+    }
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Demo mode: the token gate passes with no session (ADR-026 section 6, #2105)
+// ---------------------------------------------------------------------------
+
+describe("arrival: the token gate passes in demo mode and only there", () => {
+  // The demo profile holds no session token by design (ADR-026 section 1), and
+  // the demo daemon answers these methods from scenario state. So while the
+  // connected daemon announced demo mode, the gate must let every tab reach
+  // IPC; the moment it did not, a missing token must block exactly as before.
+  const drive: Record<string, () => Promise<void>> = {
+    health: () => dashboard.refreshHealthAnalyticsData(),
+    runs: () => dashboard.refreshRunsData(),
+    cost: () => dashboard.refreshCostData(),
+    trends: () =>
+      (dashboard as unknown as { fetchTrendsData: () => Promise<void> }).fetchTrendsData(),
+    compliance: () =>
+      (
+        dashboard as unknown as { refreshComplianceData: (c?: string) => Promise<void> }
+      ).refreshComplianceData(),
+  };
+  const stateField: Record<string, string> = {
+    health: "healthAnalyticsData",
+    runs: "runsData",
+    cost: "platformCostData",
+    trends: "trendsData",
+    compliance: "complianceData",
+  };
+  const ipcMethod: Record<string, keyof typeof ipcStub> = {
+    health: "platformGetAnalyticsHealth",
+    runs: "platformGetAnalyticsRuns",
+    cost: "platformGetCostAnalytics",
+    trends: "platformGetAnalyticsTrends",
+    compliance: "platformAuditListReports",
+  };
+
+  beforeEach(() => {
+    ipcStub.platformGetAnalyticsHealth.mockResolvedValue(arrivalFixtures.analyticsHealth());
+    ipcStub.platformGetAnalyticsRuns.mockResolvedValue(arrivalFixtures.analyticsRuns());
+    ipcStub.platformGetCostAnalytics.mockResolvedValue(arrivalFixtures.costAnalytics());
+    ipcStub.platformGetAnalyticsTrends.mockResolvedValue(arrivalFixtures.analyticsTrends());
+    ipcStub.platformAuditListReports.mockResolvedValue(arrivalFixtures.complianceReports());
+  });
+
+  const failureOf = (tab: string) =>
+    (dashboard as unknown as Record<string, { failure?: { kind: string } }>)[stateField[tab]]
+      .failure;
+
+  it.each(Object.keys(drive))(
+    "%s reaches IPC with no stored session while a demo daemon is connected",
+    async (tab) => {
+      signOut();
+      demo.active = true;
+
+      await drive[tab]();
+
+      expect(ipcStub[ipcMethod[tab]]).toHaveBeenCalledTimes(1);
+      expect(failureOf(tab)).toBeUndefined();
+      expect(tabText(tab).toLowerCase()).not.toContain("sign-in required");
+    }
+  );
+
+  it.each(Object.keys(drive))(
+    "%s reaches IPC in demo mode even with no token store at all",
+    async (tab) => {
+      tokenState.instanceMissing = true;
+      demo.active = true;
+
+      await drive[tab]();
+
+      expect(ipcStub[ipcMethod[tab]]).toHaveBeenCalledTimes(1);
+      expect(failureOf(tab)).toBeUndefined();
+    }
+  );
+
+  it.each(Object.keys(drive))(
+    "%s still blocks on a missing token outside demo mode",
+    async (tab) => {
+      signOut();
+      demo.active = false;
+
+      await drive[tab]();
+
+      expect(ipcStub[ipcMethod[tab]]).not.toHaveBeenCalled();
+      expect(failureOf(tab)?.kind).toBe("unauthorized");
+      expect(tabText(tab).toLowerCase()).toContain("sign-in required");
     }
   );
 });

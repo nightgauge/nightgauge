@@ -187,20 +187,44 @@
       ],
       "trends": [
         {
+          "date": "2026-01-08",
+          "successRate": 80,
+          "totalRuns": 5,
+          "totalTokens": 1640000
+        },
+        {
+          "date": "2026-01-09",
+          "successRate": 67,
+          "totalRuns": 3,
+          "totalTokens": 870000
+        },
+        {
+          "date": "2026-01-10",
+          "successRate": 100,
+          "totalRuns": 2,
+          "totalTokens": 610000
+        },
+        {
+          "date": "2026-01-11",
+          "successRate": 75,
+          "totalRuns": 4,
+          "totalTokens": 1150000
+        },
+        {
           "date": "2026-01-12",
-          "successRate": 0.75,
+          "successRate": 75,
           "totalRuns": 4,
           "totalTokens": 1210000
         },
         {
           "date": "2026-01-13",
-          "successRate": 0.67,
+          "successRate": 67,
           "totalRuns": 3,
           "totalTokens": 980000
         },
         {
           "date": "2026-01-14",
-          "successRate": 1,
+          "successRate": 100,
           "totalRuns": 5,
           "totalTokens": 2040000
         }

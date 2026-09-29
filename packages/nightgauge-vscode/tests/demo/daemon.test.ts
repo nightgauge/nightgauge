@@ -19,6 +19,7 @@ import type {
   AutonomousStatusResult,
   BoardChangedResult,
   BoardItem,
+  ComplianceReportsResult,
   ConfigGetProjectResult,
   ConfigTierAuditResult,
   CostAnalyticsResult,
@@ -327,6 +328,21 @@ const guards: Record<string, (v: unknown) => boolean> = {
       period_days: num,
       total_runs: num,
     }),
+  "platform.auditListReports": (v): v is ComplianceReportsResult =>
+    has(v, {
+      reports: (x) =>
+        arrOf(x, (r) =>
+          has(r, {
+            id: str,
+            reportType: str,
+            status: str,
+            startDate: str,
+            endDate: str,
+            format: str,
+            createdAt: str,
+          })
+        ),
+    }),
   "pr.list": (v): v is PullRequestDetail[] =>
     arrOf(v, (p) =>
       has(p, {
@@ -412,6 +428,20 @@ describe("demo daemon results", () => {
       expect(guards[method](response.result), JSON.stringify(response.result)).toBe(true);
     });
   }
+
+  it("answers trends the Trends tab plots: a week of rows, in percent", () => {
+    // The tab shows "Not enough data" below seven rows, and plots successRate
+    // and targetSuccessRate as percentages (0-100), the platform's units (#801).
+    const { call } = freshDaemon();
+    const trends = call("platform.getAnalyticsTrends").result as AnalyticsTrendsResult;
+    expect(trends.entries.length).toBeGreaterThanOrEqual(7);
+    expect(trends.targetSuccessRate).toBeGreaterThan(1);
+    for (const entry of trends.entries) {
+      expect(entry.successRate).toBeGreaterThanOrEqual(0);
+      expect(entry.successRate).toBeLessThanOrEqual(100);
+    }
+    expect(trends.entries.some((e) => e.successRate > 1)).toBe(true);
+  });
 
   it("serves the seeded board by status", () => {
     const { call } = freshDaemon();

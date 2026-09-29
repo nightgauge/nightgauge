@@ -434,6 +434,14 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
   run in flight. A snapshot for a different issue now also resets the tree's
   stages, so the previous issue's running stage no longer keeps its spinner.
 
+- **Demo mode's Runs, Cost and Trends tabs show the demo daemon's data**
+  (#2105). The dashboard's session-token precheck turned them into "sign in"
+  because the demo profile holds no token by design. It now passes while a
+  daemon that announced `demo: true` is connected (ADR-026 section 6, amended),
+  so these tabs, and Health and Compliance behind the same gate, reach the
+  daemon's answers. Without demo mode a missing token blocks exactly as before.
+  The demo seeds a week of trend rows in percent, the units the Trends tab plots.
+
 - **The Audit Trail tab shows local run history when `platform.enabled` is
   false** (#2107). It showed "No Access" to every user without a platform
   session, and with a stored session it still called the platform. With the
