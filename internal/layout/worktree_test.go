@@ -3,21 +3,17 @@ package layout
 import (
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 func gitInit(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	cmd := exec.Command("git", "init", "-q", dir)
-	cmd.Env = withoutGitLocationEnv(os.Environ())
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Skipf("git init: %v: %s", err, out)
-	}
-	return dir
+	return gittest.InitRepo(t, dir, "-q")
 }
 
 func TestRepoKey_ShapeAndStability(t *testing.T) {
@@ -51,16 +47,8 @@ func TestWorktreeBase_DefaultIsStateKeyedOnCommonDir(t *testing.T) {
 	}
 	// A linked worktree of the same clone resolves to the same base.
 	linked := filepath.Join(t.TempDir(), "linked")
-	for _, args := range [][]string{
-		{"-C", root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x"},
-		{"-C", root, "worktree", "add", "-q", "--detach", linked},
-	} {
-		cmd := exec.Command("git", args...)
-		cmd.Env = withoutGitLocationEnv(os.Environ())
-		if out, err := cmd.CombinedOutput(); err != nil {
-			t.Fatalf("git %v: %v: %s", args, err, out)
-		}
-	}
+	gittest.Run(t, root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "x")
+	gittest.Run(t, root, "worktree", "add", "-q", "--detach", linked)
 	if fromLinked, err := WorktreeBase(linked, WorktreeBaseSetting{}); err != nil || fromLinked != got {
 		t.Fatalf("WorktreeBase from a linked worktree = (%q, %v), want %q", fromLinked, err, got)
 	}
