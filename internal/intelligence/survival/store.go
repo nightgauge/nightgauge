@@ -7,11 +7,35 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
+// storeFileName is the survival journal's name inside the pipeline state
+// directory (layout.PipelineStateDir).
+const storeFileName = "survival-records.jsonl"
+
 // StoreRelPath is the survival store's path under the workspace, relative to the
-// repo root. It lives beside the other pipeline state under .nightgauge.
-var StoreRelPath = filepath.Join(".nightgauge", "pipeline", "survival-records.jsonl")
+// repo root. It lives beside the other pipeline state, and is derived from
+// layout.PipelineStateDir (against the filesystem root) so it cannot drift
+// from the resolver.
+var StoreRelPath = storeRelPath()
+
+func storeRelPath() string {
+	root, err := filepath.Abs(string(filepath.Separator))
+	if err != nil {
+		return ""
+	}
+	dir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		return ""
+	}
+	rel, err := filepath.Rel(root, dir)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(rel, storeFileName)
+}
 
 // Store is an append-only JSONL journal of survival records. Capture appends a
 // `pending` line; finalize appends a terminal line with the same merge commit
@@ -27,9 +51,21 @@ type Store struct {
 	path string
 }
 
-// NewStore returns a Store rooted at the workspace's survival journal.
+// NewStore returns a Store rooted at the workspace's survival journal, in
+// workspaceRoot's pipeline state directory (layout.PipelineStateDir). A
+// relative workspaceRoot is made absolute first, so it names the same file as
+// before; if that fails the path is "", on which Load finds nothing and
+// Append fails.
 func NewStore(workspaceRoot string) *Store {
-	return &Store{path: filepath.Join(workspaceRoot, StoreRelPath)}
+	abs, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return &Store{}
+	}
+	dir, err := layout.PipelineStateDir(abs)
+	if err != nil {
+		return &Store{}
+	}
+	return &Store{path: filepath.Join(dir, storeFileName)}
 }
 
 // Path is the absolute journal path (exposed for diagnostics/tests).

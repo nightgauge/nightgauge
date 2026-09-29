@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // canonicalStages mirrors the ALL_STAGES list from retro Phase 2.1 — the
@@ -86,7 +88,11 @@ func Extract(opts Options) (Result, error) {
 // present) and appends failure rows to result.BatchFailures. Missing file is
 // not an error.
 func extractBatchState(workdir string, opts Options, result *Result) error {
-	path := filepath.Join(workdir, ".nightgauge", "pipeline", "batch-state.json")
+	dir, err := pipelineStateDir(workdir)
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(dir, "batch-state.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -160,7 +166,11 @@ func extractBatchState(workdir string, opts Options, result *Result) error {
 // matching. Malformed JSON lines are counted in result.SkippedRecords (matches
 // the Python skipped_records semantics).
 func extractHistory(workdir string, opts Options, result *Result) error {
-	historyDir := filepath.Join(workdir, ".nightgauge", "pipeline", "history")
+	dir, err := pipelineStateDir(workdir)
+	if err != nil {
+		return err
+	}
+	historyDir := filepath.Join(dir, "history")
 	entries, err := os.ReadDir(historyDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -259,7 +269,10 @@ func extractHistory(workdir string, opts Options, result *Result) error {
 // appends a row when the matching pr-{N}.json is absent (implying the run
 // did not reach PR creation). Mirrors retro Phase 2.4.
 func extractContextFiles(workdir string, opts Options, result *Result) error {
-	pipelineDir := filepath.Join(workdir, ".nightgauge", "pipeline")
+	pipelineDir, err := pipelineStateDir(workdir)
+	if err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(pipelineDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -343,6 +356,17 @@ func fallbackStatus(s string) string {
 		return "unknown"
 	}
 	return s
+}
+
+// pipelineStateDir resolves workdir's pipeline state directory through
+// layout.PipelineStateDir. A relative workdir (the --workdir flag accepts
+// one) is made absolute first, so it names the same directory as before.
+func pipelineStateDir(workdir string) (string, error) {
+	abs, err := filepath.Abs(workdir)
+	if err != nil {
+		return "", fmt.Errorf("resolve workdir %q: %w", workdir, err)
+	}
+	return layout.PipelineStateDir(abs)
 }
 
 func fileExists(path string) bool {

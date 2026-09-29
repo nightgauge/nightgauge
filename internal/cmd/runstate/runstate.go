@@ -17,8 +17,6 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const defaultBaseDir = ".nightgauge/pipeline"
-
 // Cmd returns the `run state` parent subcommand. The caller registers this
 // under `runCmd()` in cmd/nightgauge/main.go.
 func Cmd() *cobra.Command {
@@ -46,20 +44,35 @@ func resolveBaseDir(cmd *cobra.Command) string {
 // the repository's MAIN checkout, which is where the orchestrator writes
 // run-state.json (#1964). Resolving through git's common directory makes
 // `run state get` from a run's worktree read the same record as the main
-// checkout. Outside a git repository it falls back to the cwd-relative
-// .nightgauge/pipeline.
+// checkout. Outside a git repository it falls back to the working directory's
+// pipeline state directory.
 func mainCheckoutBaseDir() string {
 	out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
 	if err != nil {
-		return defaultBaseDir
+		return cwdBaseDir()
 	}
 	common := strings.TrimSpace(string(out))
 	if filepath.Base(common) != ".git" {
-		return defaultBaseDir // bare repository: no checkout owns the state
+		return cwdBaseDir() // bare repository: no checkout owns the state
 	}
 	dir, err := layout.PipelineStateDir(filepath.Dir(common))
 	if err != nil {
-		return defaultBaseDir
+		return cwdBaseDir()
+	}
+	return dir
+}
+
+// cwdBaseDir is the working directory's pipeline state directory
+// (layout.PipelineStateDir), the fallback when no main checkout resolves. It
+// returns "" only when the working directory itself cannot be determined.
+func cwdBaseDir() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	dir, err := layout.PipelineStateDir(cwd)
+	if err != nil {
+		return ""
 	}
 	return dir
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	gitpkg "github.com/nightgauge/nightgauge/internal/git"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/spf13/cobra"
@@ -51,7 +52,7 @@ func resolvePlatformCreds() (backfillPlatformCreds, error) {
 }
 
 // pipelineBackfillCmd backfills all local pipeline run history
-// (.nightgauge/pipeline/history/*.jsonl) onto the production dashboard via
+// (history/*.jsonl in the pipeline state directory) onto the production dashboard via
 // POST /v1/telemetry/pipeline-run — the canonical pipeline-run telemetry sink
 // Records are canonicalized
 // (duplicates folded, noise dropped) before posting.
@@ -66,7 +67,7 @@ func pipelineBackfillCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backfill",
 		Short: "Backfill local pipeline run history onto the production dashboard",
-		Long: `Reads all local run history from .nightgauge/pipeline/history/*.jsonl,
+		Long: `Reads all local run history from ` + layout.PipelineStateDisplay() + `/history/*.jsonl,
 canonicalizes it (folds the duplicate records written per logical run, drops
 pure-synthetic noise), and POSTs each surviving run to the platform's
 POST /v1/telemetry/pipeline-run endpoint.

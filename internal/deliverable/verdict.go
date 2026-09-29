@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // StatusPassedUnverified is the verdict for a run whose gates all passed but
@@ -70,10 +72,19 @@ func (f Finding) Summary() string {
 		len(f.Artifacts), noun, strings.Join(tiers, "/"))
 }
 
-// validatePath is the per-issue validate context written by feature-validate.
-func validatePath(workspace string, issueNumber int) string {
-	return filepath.Join(workspace, ".nightgauge", "pipeline",
-		fmt.Sprintf("validate-%d.json", issueNumber))
+// validatePath is the per-issue validate context written by feature-validate,
+// in workspace's pipeline state directory (layout.PipelineStateDir). A
+// relative workspace is made absolute first, so it names the same file.
+func validatePath(workspace string, issueNumber int) (string, error) {
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace %q: %w", workspace, err)
+	}
+	dir, err := layout.PipelineStateDir(abs)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, fmt.Sprintf("validate-%d.json", issueNumber)), nil
 }
 
 // ExecutionFromArtifact reads the per-tier `ran` flags out of a parsed validate
@@ -188,7 +199,11 @@ func Apply(doc map[string]any, f Finding) bool {
 // into a typed struct would silently drop every field this package does not
 // know about — which is most of them, and which downstream stages depend on.
 func ReadValidateContext(workspace string, issueNumber int) (map[string]any, error) {
-	data, err := os.ReadFile(validatePath(workspace, issueNumber))
+	path, err := validatePath(workspace, issueNumber)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -206,7 +221,11 @@ func WriteValidateContext(workspace string, issueNumber int, doc map[string]any)
 		return fmt.Errorf("encode validate context: %w", err)
 	}
 	data = append(data, '\n')
-	return os.WriteFile(validatePath(workspace, issueNumber), data, 0o644)
+	path, err := validatePath(workspace, issueNumber)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }
 
 // FindingFromArtifact re-reads a previously applied finding out of a validate

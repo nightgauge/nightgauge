@@ -17,6 +17,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	workspace "github.com/nightgauge/nightgauge/internal/knowledge/workspace"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -208,6 +209,22 @@ func parseETime(s string) (time.Duration, bool) {
 		time.Duration(nums[1])*time.Second, true
 }
 
+// pipelineStatePath is the path of name inside root's pipeline state
+// directory (layout.PipelineStateDir), for doctor's read-only probes. A
+// relative root is made absolute first, so it names the same file as before;
+// if root cannot be resolved it returns "", which every read treats as absent.
+func pipelineStatePath(root, name string) string {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return ""
+	}
+	dir, err := layout.PipelineStateDir(abs)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, name)
+}
+
 // sidecarRoots is every directory that can hold a run sidecar: the workspace's
 // repo checkouts plus the WORKSPACE root itself.
 //
@@ -290,7 +307,7 @@ func sidecarPIDs(startDir string, now time.Time) map[int]bool {
 			StartedAt  string `json:"started_at"`
 			StageStart string `json:"stage_started_at"`
 		}
-		if readJSONFile(filepath.Join(root, ".nightgauge", "pipeline", "current-run.json"), &currentRun) &&
+		if readJSONFile(pipelineStatePath(root, "current-run.json"), &currentRun) &&
 			progressIsFresh(now, currentRun.StageStart, currentRun.StartedAt) {
 			claimPID(claimed, currentRun.PID)
 		}
@@ -303,7 +320,7 @@ func sidecarPIDs(startDir string, now time.Time) map[int]bool {
 				PID *int `json:"pid"`
 			} `json:"attempts"`
 		}
-		if readJSONFile(filepath.Join(root, ".nightgauge", "pipeline", "run-state.json"), &runState) &&
+		if readJSONFile(pipelineStatePath(root, "run-state.json"), &runState) &&
 			progressIsFresh(now, runState.UpdatedAt, runState.CreatedAt) {
 			for _, a := range runState.Attempts {
 				if a.PID != nil {

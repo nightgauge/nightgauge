@@ -634,7 +634,11 @@ func (s *Server) startDeferredReconcileAfter(ctx context.Context, grace time.Dur
 func (s *Server) countReconcileCandidates() int {
 	n := 0
 	for _, root := range s.pipelineStateScanRoots() {
-		entries, err := os.ReadDir(filepath.Join(root, ".nightgauge", "pipeline"))
+		stateDir := state.PipelineStateDir(root)
+		if stateDir == "" {
+			continue
+		}
+		entries, err := os.ReadDir(stateDir)
 		if err != nil {
 			continue
 		}
@@ -678,7 +682,10 @@ func (s *Server) reconcilePass(now time.Time) {
 
 	ev := s.serverEvidence(now)
 	for _, root := range s.pipelineStateScanRoots() {
-		stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+		stateDir := state.PipelineStateDir(root)
+		if stateDir == "" {
+			continue
+		}
 		for _, act := range collectReconcileActions(stateDir, ev, now) {
 			s.applyReconcileAction(stateDir, act)
 		}

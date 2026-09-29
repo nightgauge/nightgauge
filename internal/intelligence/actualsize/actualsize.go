@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 var sizeOrder = []string{"XS", "S", "M", "L", "XL"}
@@ -126,8 +128,15 @@ func ResolveBaseBranch(issueNumber int, roots ...string) string {
 		if root == "" {
 			continue
 		}
-		path := filepath.Join(root, ".nightgauge", "pipeline", fmt.Sprintf("pr-%d.json", issueNumber))
-		data, err := os.ReadFile(path)
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			continue
+		}
+		dir, err := layout.PipelineStateDir(absRoot)
+		if err != nil {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("pr-%d.json", issueNumber)))
 		if err != nil {
 			continue
 		}

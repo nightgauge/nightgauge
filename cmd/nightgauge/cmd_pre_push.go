@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -157,8 +158,11 @@ exec "$BINARY" pre-push validate "$ISSUE"
 
 // resolveTargetBranch reads the base_branch from issue-{N}.json if available.
 func resolveTargetBranch(workDir string, issueNumber int) string {
-	contextFile := filepath.Join(workDir, ".nightgauge", "pipeline", fmt.Sprintf("issue-%d.json", issueNumber))
-	data, err := os.ReadFile(contextFile)
+	dir, err := cloneDir(layout.PipelineStateDir, workDir)
+	if err != nil {
+		return ""
+	}
+	data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("issue-%d.json", issueNumber)))
 	if err != nil {
 		return ""
 	}

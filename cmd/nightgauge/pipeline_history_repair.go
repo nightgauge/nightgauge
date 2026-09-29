@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/spf13/cobra"
 )
@@ -26,7 +27,7 @@ func pipelineRepairHistoryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "repair-history",
 		Short: "Collapse duplicate run records in pipeline history (dry run by default)",
-		Long: `De-duplicates .nightgauge/pipeline/history/*.jsonl so each pipeline run
+		Long: `De-duplicates ` + layout.PipelineStateDisplay() + `/history/*.jsonl so each pipeline run
 occupies exactly one record.
 
 Records are grouped by run identity: run_id when present, otherwise
@@ -102,7 +103,7 @@ that produced it.`,
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&workdir, "workdir", "", "Repository root holding .nightgauge/pipeline/history (default: cwd)")
+	cmd.Flags().StringVar(&workdir, "workdir", "", "Repository root holding "+layout.PipelineStateDisplay()+"/history (default: cwd)")
 	cmd.Flags().BoolVar(&apply, "apply", false, "Rewrite the history files (without this the command only reports)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Emit the full report as JSON")
 	cmd.Flags().IntVar(&topGroup, "top", 10, "Show this many worst-duplicated runs (0 to hide)")

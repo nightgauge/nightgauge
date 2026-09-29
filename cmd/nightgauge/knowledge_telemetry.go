@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -15,7 +16,7 @@ func knowledgeTelemetryCmd() *cobra.Command {
 		Use:   "telemetry",
 		Short: "Emit and inspect knowledge telemetry events",
 		Long: `Operations on the knowledge-events.jsonl stream written to
-.nightgauge/pipeline/history/knowledge-events.jsonl.
+` + layout.PipelineStateDisplay() + `/history/knowledge-events.jsonl.
 
 Sub-commands let skills and downstream stages emit events that happen outside
 the binary (e.g., a skill reading an ADR via cat, a stage reporting a

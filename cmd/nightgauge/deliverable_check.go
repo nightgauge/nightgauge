@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -70,8 +71,11 @@ the file.`,
 				}
 				work = wd
 			}
-			path := filepath.Join(work, ".nightgauge", "pipeline",
-				fmt.Sprintf("%s-%d.json", stage, issueNumber))
+			dir, err := cloneDir(layout.PipelineStateDir, work)
+			if err != nil {
+				return err
+			}
+			path := filepath.Join(dir, fmt.Sprintf("%s-%d.json", stage, issueNumber))
 
 			outcome, err := deliverable.ApplyPolicyToFile(stage, path, time.Now())
 			if err != nil {

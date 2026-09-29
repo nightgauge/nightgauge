@@ -183,6 +183,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Every Go caller resolves its per-clone directories through `internal/layout`
+  (#2034, #2035).** The CLI (`cmd/nightgauge`) and the remaining internal
+  packages (`ipc`, `state`, `execution`, `hooks`, `github`, `diagnostics`,
+  `trace`, `telemetry` and others) no longer join `.nightgauge` and `pipeline`,
+  `plans`, `retros` or `logs` by hand; they call `PipelineStateDir`,
+  `PlansDir`, `RetrosDir` and `CloneLogsDir`. Nothing moves on disk: each
+  class is still `<root>/.nightgauge/<class>`, and a relative root is made
+  absolute first, so it names the same directory. Help and flag texts take the
+  displayed path from the layout package, so the text is unchanged.
+  The hooks' `sanitization.log` is now written mode 0600, and an existing
+  0644 log is tightened on its next append.
+
 - **Derived caches live in the user cache directory, not the working tree**
   (#2028). The BM25 recall index moves from
   `.nightgauge/knowledge/.recall-cache/` to

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +32,7 @@ func budgetStatsCmd() *cobra.Command {
 		Use:   "budget-stats",
 		Short: "Aggregate stage-exit records into budget statistics (#3667)",
 		Long: `Reads per-stage exit-record JSONL files under
-.nightgauge/pipeline/exit-records/<UTC-day>.jsonl and computes p50/p75/p95
+` + layout.PipelineStateDisplay() + `/exit-records/<UTC-day>.jsonl and computes p50/p75/p95
 cost statistics grouped by (repo, stage, size_label).
 
 Use --json for machine-readable output (one JSON array). Use --repo / --stage

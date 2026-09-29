@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/intelligence/approvalGate"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -121,7 +122,7 @@ func printApprovalHuman(issue int, r approvalGate.ApprovalResult, label string) 
 		fmt.Printf("  - %s\n", reason)
 	}
 	if r.RequiresApproval {
-		fmt.Printf("  → A human must review the decision and add the %q label to the issue (or write .nightgauge/pipeline/approval-%d.json with {\"approved\": true}).\n", label, issue)
+		fmt.Printf("  → A human must review the decision and add the %q label to the issue (or write %s/approval-%d.json with {\"approved\": true}).\n", label, layout.PipelineStateDisplay(), issue)
 	}
 }
 
@@ -141,8 +142,11 @@ type approvalFacts struct {
 
 func readApprovalFacts(workdir string, issueNum int) approvalFacts {
 	facts := approvalFacts{}
-	path := filepath.Join(workdir, ".nightgauge", "pipeline", fmt.Sprintf("issue-%d.json", issueNum))
-	data, err := os.ReadFile(path)
+	dir, err := cloneDir(layout.PipelineStateDir, workdir)
+	if err != nil {
+		return facts
+	}
+	data, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("issue-%d.json", issueNum)))
 	if err != nil {
 		return facts
 	}
@@ -187,7 +191,11 @@ func readApprovalFacts(workdir string, issueNum int) approvalFacts {
 
 // approvalFileGranted reports whether an approval file grants approval.
 func approvalFileGranted(workdir string, issueNum int) bool {
-	b, err := os.ReadFile(filepath.Join(workdir, ".nightgauge", "pipeline", fmt.Sprintf("approval-%d.json", issueNum)))
+	dir, err := cloneDir(layout.PipelineStateDir, workdir)
+	if err != nil {
+		return false
+	}
+	b, err := os.ReadFile(filepath.Join(dir, fmt.Sprintf("approval-%d.json", issueNum)))
 	if err != nil {
 		return false
 	}

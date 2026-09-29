@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -19,14 +20,15 @@ import (
 // deterministic readers over the per-stage diagnostic JSONL files written
 // during pipeline execution (#3605).
 //
-// The daily files live at `.nightgauge/pipeline/exit-records/<UTC-day>.jsonl`.
+// The daily files live at `exit-records/<UTC-day>.jsonl` under the pipeline
+// state directory (layout.PipelineStateDir).
 // Each line is one StageExitRecord — see internal/diagnostics for the schema.
 func exitRecordsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "exit-records",
 		Short: "Inspect stage-exit diagnostic records (#3605)",
 		Long: `Stage-exit diagnostic records (#3605) — one JSONL line per stage exit
-in .nightgauge/pipeline/exit-records/<UTC-day>.jsonl.
+in ` + layout.PipelineStateDisplay() + `/exit-records/<UTC-day>.jsonl.
 
 Use the 'tail' subcommand to inspect the most recent records (default 20),
 optionally filtered to a single issue number. Daily files are ordered
@@ -88,9 +90,9 @@ func exitRecordsTailCmd() *cobra.Command {
 	return cmd
 }
 
-// tailExitRecords walks every daily file under root/.nightgauge/pipeline/
-// exit-records/, returning up to `limit` records, most recent first, with an
-// optional issue-number filter.
+// tailExitRecords walks every daily file under exit-records/ in root's
+// pipeline state directory (layout.PipelineStateDir), returning up to `limit`
+// records, most recent first, with an optional issue-number filter.
 //
 // Strategy: list files lex-descending (== chronologically newest-first because
 // the filename is YYYY-MM-DD), read each file fully into memory, then stop

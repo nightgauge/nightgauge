@@ -9,6 +9,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/knowledge/metrics"
 	"github.com/nightgauge/nightgauge/internal/knowledge/okf"
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -24,7 +25,7 @@ func knowledgeMetricsCmd() *cobra.Command {
 		Use:          "metrics",
 		Short:        "Aggregate knowledge-events.jsonl into the KB Value dashboard payload",
 		SilenceUsage: true,
-		Long: `Stream .nightgauge/pipeline/history/knowledge-events.jsonl over a
+		Long: `Stream ` + layout.PipelineStateDisplay() + `/history/knowledge-events.jsonl over a
 sliding window and emit the typed Result used by the KB Value dashboard.
 
 The same aggregator backs the knowledge.metrics IPC method so the dashboard

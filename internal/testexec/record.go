@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // RecordSchemaVersion is the execution-record schema version. Readers must
@@ -50,9 +52,20 @@ func (r Record) Passed() bool { return strings.EqualFold(r.Outcome, OutcomePass)
 // applyToValidateContext in check.go is the single place that would grow the
 // second sink. Shipping the local record first is what keeps this gate from
 // being gated on #12.
-func RecordPath(workspace string, issueNumber int) string {
-	return filepath.Join(workspace, ".nightgauge", "pipeline",
-		fmt.Sprintf("test-execution-%d.jsonl", issueNumber))
+//
+// The directory is workspace's pipeline state directory
+// (layout.PipelineStateDir); a relative workspace is made absolute first, so
+// it names the same file as before.
+func RecordPath(workspace string, issueNumber int) (string, error) {
+	abs, err := filepath.Abs(workspace)
+	if err != nil {
+		return "", fmt.Errorf("resolve workspace %q: %w", workspace, err)
+	}
+	dir, err := layout.PipelineStateDir(abs)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, fmt.Sprintf("test-execution-%d.jsonl", issueNumber)), nil
 }
 
 // AppendRecord writes one execution record, creating the file if needed.
@@ -71,7 +84,10 @@ func AppendRecord(workspace string, issueNumber int, rec Record) error {
 		return fmt.Errorf("execution record outcome must be %q or %q, got %q", OutcomePass, OutcomeFail, rec.Outcome)
 	}
 
-	path := RecordPath(workspace, issueNumber)
+	path, err := RecordPath(workspace, issueNumber)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create pipeline dir: %w", err)
 	}
@@ -97,7 +113,11 @@ func AppendRecord(workspace string, issueNumber int, rec Record) error {
 // evidence, and missing evidence already blocks; letting it error instead would
 // convert a bad byte into an unexplainable stage failure.
 func ReadRecords(workspace string, issueNumber int) ([]Record, error) {
-	f, err := os.Open(RecordPath(workspace, issueNumber))
+	path, err := RecordPath(workspace, issueNumber)
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

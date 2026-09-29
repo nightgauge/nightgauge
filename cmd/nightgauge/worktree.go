@@ -11,6 +11,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -203,14 +204,14 @@ ancestry: a squash merge leaves the branch tip a non-ancestor of the default
 branch, so an ancestry check reports a false negative for every merged branch.
 
 Every root is canonicalized to its repository's MAIN checkout first, including an
-explicit --workdir. A linked worktree has a .nightgauge/pipeline directory of its
+explicit --workdir. A linked worktree has a ` + layout.PipelineStateDisplay() + ` directory of its
 own (the .gitkeep is tracked) and it is always empty, so a sweep rooted there
 would read "no runs in flight" while git still listed — and this command still
 removed — every worktree of the repository.
 
 Runs in flight are protected by their runtime snapshots
-(.nightgauge/pipeline/runtime-<issue>-<runId>.json), read per canonicalized root,
-plus the in-flight sidecar (.nightgauge/pipeline/current-run.json) when the
+(` + layout.PipelineStateDisplay() + `/runtime-<issue>-<runId>.json), read per canonicalized root,
+plus the in-flight sidecar (` + layout.PipelineStateDisplay() + `/current-run.json) when the
 process it names is alive: an issue with a live run is never reclaimed however
 merged its branch looks. A root whose snapshot directory cannot be read, or that
 resolves to no main checkout at all, is skipped entirely rather than swept blind.
@@ -430,8 +431,8 @@ func mergedPRDoorFor(ctx context.Context, root string) execution.MergedPRLookup 
 //
 // EVERY root is then canonicalized with config.MainCheckoutRoot, --workdir
 // included, because a root here is used for two different things: `git worktree
-// list` (correct from any worktree of the repo) and the `.nightgauge/pipeline`
-// state dir (correct ONLY at the main checkout). A linked worktree satisfies the
+// list` (correct from any worktree of the repo) and the pipeline state dir,
+// layout.PipelineStateDir (correct ONLY at the main checkout). A linked worktree satisfies the
 // first and silently defeats the second — its state dir exists, is empty, and
 // reports a determined "no runs in flight" — so the un-canonicalized form ran
 // `git worktree remove --force` over a live run's directory with zero protection

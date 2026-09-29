@@ -26,6 +26,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // GraphQLHourlyLimit is GitHub's per-hour GraphQL point budget for a user
@@ -58,10 +60,21 @@ const (
 // is not reachable by idle bookkeeping under any correct configuration.
 const IdleBudgetWarnFraction = 0.5
 
-// DefaultLedgerPath returns a workspace's ledger base path. The ledger there
-// is written in dated segments beside it; LedgerFiles lists them.
+// DefaultLedgerPath returns a workspace's ledger base path, in its per-clone
+// logs directory (layout.CloneLogsDir). The ledger there is written in dated
+// segments beside it; LedgerFiles lists them. A relative workspaceRoot is made
+// absolute first, so it names the same file as before; if that fails it
+// returns "", on which a read finds nothing and the ledger stays closed.
 func DefaultLedgerPath(workspaceRoot string) string {
-	return filepath.Join(workspaceRoot, filepath.FromSlash(apiLedgerDefaultPath))
+	abs, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return ""
+	}
+	dir, err := layout.CloneLogsDir(abs)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, apiLedgerFileName)
 }
 
 // ledgerSegmentDateLayout is the date in a segment's name, a UTC day.
@@ -77,7 +90,7 @@ func ledgerSegmentPath(base, day string) string {
 // LedgerSegmentName is the base name of the default ledger's segment for the
 // UTC day of t. Log retention keeps the current day's segment as a live file.
 func LedgerSegmentName(t time.Time) string {
-	return filepath.Base(ledgerSegmentPath(apiLedgerDefaultPath, t.UTC().Format(ledgerSegmentDateLayout)))
+	return ledgerSegmentPath(apiLedgerFileName, t.UTC().Format(ledgerSegmentDateLayout))
 }
 
 // LedgerFiles returns every ledger file for path, oldest first, skipping any
@@ -98,6 +111,9 @@ func LedgerFiles(path string) []string {
 // unknown. A segment log retention deleted is simply not listed, so a range
 // reaching past the oldest segment reads as absent, never as an error.
 func LedgerFilesSince(path string, since time.Time) []string {
+	if path == "" {
+		return nil // DefaultLedgerPath could not resolve the workspace
+	}
 	var out []string
 	withBackups := func(p string) {
 		for i := ledgerKeepFiles - 1; i >= 1; i-- {

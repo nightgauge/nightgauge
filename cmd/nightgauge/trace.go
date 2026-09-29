@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/trace"
 	"github.com/spf13/cobra"
 )
@@ -14,7 +15,8 @@ import (
 // traceCmd is the top-level "trace" command: deterministic readers over the
 // per-run lifecycle decision trace written during pipeline execution (#179).
 //
-// Per-run files live at `.nightgauge/pipeline/trace/<run_id>.jsonl`. Each
+// Per-run files live at `trace/<run_id>.jsonl` in the pipeline state directory
+// (layout.PipelineStateDir). Each
 // line is one trace event — see internal/trace and ADR 013
 // (docs/decisions/013-run-lifecycle-trace-schema.md) for the schema.
 func traceCmd() *cobra.Command {
@@ -22,7 +24,7 @@ func traceCmd() *cobra.Command {
 		Use:   "trace",
 		Short: "Inspect per-run lifecycle decision traces (#179)",
 		Long: `Run lifecycle decision traces (#179 / ADR 013) — one JSONL file per run
-in .nightgauge/pipeline/trace/<run_id>.jsonl capturing every stage boundary
+in ` + layout.PipelineStateDisplay() + `/trace/<run_id>.jsonl capturing every stage boundary
 and every decision with its rationale and rejected alternatives.
 
 Use 'show' to print a run's ordered timeline (by issue number or run id) and

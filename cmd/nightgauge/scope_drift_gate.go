@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/scopeDriftGate"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -202,7 +203,11 @@ func inferIssueType(labels []string) string {
 // readDevFilesChanged reads dev-{N}.json from the pipeline directory and returns
 // the union of created+modified files (deletions are omitted — always allowed).
 func readDevFilesChanged(workdir string, issueNum int) ([]string, error) {
-	devPath := filepath.Join(workdir, ".nightgauge", "pipeline", fmt.Sprintf("dev-%d.json", issueNum))
+	dir, err := cloneDir(layout.PipelineStateDir, workdir)
+	if err != nil {
+		return nil, err
+	}
+	devPath := filepath.Join(dir, fmt.Sprintf("dev-%d.json", issueNum))
 	data, err := os.ReadFile(devPath)
 	if err != nil {
 		return nil, err

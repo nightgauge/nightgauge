@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // FailurePatterns is the canonical 16-pattern set used to extract failure
@@ -94,7 +96,14 @@ func Scan(opts Options) (Result, error) {
 		Warnings:   []string{},
 	}
 
-	logsDir := filepath.Join(workdir, ".nightgauge", "logs")
+	absWorkdir, err := filepath.Abs(workdir)
+	if err != nil {
+		return result, fmt.Errorf("resolve workdir %q: %w", workdir, err)
+	}
+	logsDir, err := layout.CloneLogsDir(absWorkdir)
+	if err != nil {
+		return result, err
+	}
 	entries, err := os.ReadDir(logsDir)
 	if err != nil {
 		if os.IsNotExist(err) {

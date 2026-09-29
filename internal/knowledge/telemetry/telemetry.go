@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/history"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // redactedQuerySummary is the sentinel inserted when
@@ -33,8 +34,21 @@ func IsEnabled(telemetryEnabled bool) bool { return telemetryEnabled }
 // Path returns the absolute JSONL file path where Emit writes events for a
 // given workspace root. Exposed for the aggregator and for tests that need
 // to read events without rerunning the emit path.
+//
+// The file lives in workspaceRoot's pipeline history directory
+// (layout.PipelineStateDir). A relative workspaceRoot is made absolute first,
+// so it names the same file as before; if that fails Path returns "", on
+// which a read finds nothing and Emit fails.
 func Path(workspaceRoot string) string {
-	return filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history", "knowledge-events.jsonl")
+	abs, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return ""
+	}
+	dir, err := layout.PipelineStateDir(abs)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(dir, "history", "knowledge-events.jsonl")
 }
 
 // Emit writes one Event to knowledge-events.jsonl under workspaceRoot.
