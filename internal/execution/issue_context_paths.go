@@ -25,7 +25,9 @@ func IssueContextRelPath(issueNumber int) string {
 //     leaf carries the repo name so two repos' issue #N cannot collide.
 //   - Before #2038 it wrote `<repoRoot>/.nightgauge/worktrees/{repoName}-issue-N`;
 //     a run that began there keeps that worktree until it ends.
-//   - The VSCode extension writes `<repoRoot>/.worktrees/issue-N`.
+//   - The VSCode extension's WorktreeManager now writes the same
+//     `<worktree base>/{repoName}-issue-N`; before #2038 it wrote
+//     `<repoRoot>/.worktrees/issue-N`.
 //
 // The scheduler searched neither — it read the plain repo root only — so an
 // autonomous run recorded complexity score 0 and no model prediction on every
@@ -87,7 +89,7 @@ func stageContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int,
 			// The pre-#2038 in-tree location of the same leaf.
 			roots = append(roots, filepath.Join(repoRoot, LegacyWorktreeBaseRel, leaf))
 		}
-		// VSCode extension layout.
+		// The VSCode extension's pre-#2038 layout.
 		roots = append(roots, filepath.Join(repoRoot, ".worktrees",
 			fmt.Sprintf("issue-%d", issueNumber)))
 		// The repo root itself — a run that never took a worktree.

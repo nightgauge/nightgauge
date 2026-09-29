@@ -46,6 +46,7 @@ import {
   type PipelineStateSnapshot,
   type RunAttachment,
 } from "./runAttachment";
+import { resolveMainRepoRoot } from "../../utils/adaptiveBudgetLoader";
 
 // ─── Mattermost attachment limits ───────────────────────────────────────────
 
@@ -293,7 +294,7 @@ export class MattermostService implements Notifier, vscode.Disposable {
 
     // #471: was a state-file path getter split back to its directory; same value.
     let repoRoot = effectiveStateService.getRepoRoot();
-    repoRoot = repoRoot.replace(/\/\.worktrees\/[^/]+$/, "");
+    repoRoot = resolveMainRepoRoot(repoRoot); // worktree → its repo (#2038)
     const repoName = repoRoot.split("/").pop() ?? repoRoot;
 
     const repoSlug = this.pendingRepoSlugs.get(issueNumber);

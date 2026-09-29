@@ -209,12 +209,17 @@ changelog, and the release workflow refuses a tag that does not.
   committed `.nightgauge/config.yaml`, or one that resolves inside the working
   tree fails worktree creation with the file, line and fix. A worktree path
   that resolves, after symlink evaluation, anywhere but directly inside the
-  base is refused. `nightgauge worktree base` prints the resolved base, and the
-  extension's issue-context, Knowledge view, architecture-plan and budget
-  history readers take it from there. Worktrees already under
-  `.nightgauge/worktrees/` are not moved: a run that began there keeps its
-  worktree, and sweep and reclaim still find it through `git worktree list`.
-  This repository's committed `worktree_base: .worktrees` is removed.
+  base is refused. `nightgauge worktree base` prints the resolved base. The
+  extension's `WorktreeManager` takes its base from there too and names its
+  worktrees `<repo>-issue-<N>`, so both dispatch paths share one location and
+  one name. The extension's `.worktrees` default and its `worktree_base`
+  reading are gone. The issue-context, Knowledge view, architecture-plan and
+  budget history readers also take the base from the binary. Worktrees already
+  under `.nightgauge/worktrees/` or `.worktrees/` are not moved: they are found
+  through `git worktree list` and used where they are until their run ends.
+  Orphan cleanup in a shared base never removes a directory that is still
+  another repository's worktree. This repository's committed
+  `worktree_base: .worktrees` is removed.
 
 - **`nightgauge doctor --fix --yes` restarts a stopped autonomous loop through
   the daemon** (#2090). A stopped `autonomous-loop` (`NGD029`) now offers a

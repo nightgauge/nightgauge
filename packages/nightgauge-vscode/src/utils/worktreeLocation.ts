@@ -19,11 +19,9 @@
  * @see Issue #2038
  */
 
-import { execFile } from "child_process";
+import * as childProcess from "child_process";
 import * as path from "path";
 import { promisify } from "util";
-
-const execFileAsync = promisify(execFile);
 
 /** Per-call timeout for `nightgauge worktree base`. */
 const RESOLVE_TIMEOUT_MS = 10_000;
@@ -73,7 +71,7 @@ const FAILURE_RETRY_MS = 60_000;
 const resolved = new Map<string, string>();
 /** repoRoot → when the last lookup failed. */
 const failedAt = new Map<string, number>();
-const inflight = new Map<string, Promise<string | undefined>>();
+const inflight = new Map<string, Promise<{ base?: string; error: string }>>();
 
 function key(repoRoot: string): string {
   return path.resolve(repoRoot);
@@ -103,13 +101,41 @@ export function resolveWorktreeBase(repoRoot: string): Promise<string | undefine
   if (failed !== undefined && Date.now() - failed < FAILURE_RETRY_MS) {
     return Promise.resolve(undefined);
   }
+  return lookupWorktreeBase(k).then((r) => r.base);
+}
+
+/**
+ * {@link resolveWorktreeBase} for a caller that is about to CREATE a worktree:
+ * a refusal is an error carrying the binary's own message (the file, line and
+ * fix for a rejected `pipeline.worktree_base`), never a silent fallback into
+ * the working tree. Always asks the binary when nothing is cached, so a fixed
+ * configuration is picked up without waiting out the failure back-off.
+ */
+export async function requireWorktreeBase(repoRoot: string): Promise<string> {
+  if (!repoRoot || !path.isAbsolute(repoRoot)) {
+    throw new Error(`worktree base: repository root "${repoRoot}" is not an absolute path`);
+  }
+  const k = key(repoRoot);
+  const known = resolved.get(k);
+  if (known) return known;
+  const { base, error } = await lookupWorktreeBase(k);
+  if (base) return base;
+  throw new Error(`Cannot resolve the pipeline worktree base for ${k}: ${error}`);
+}
+
+/** One binary lookup per root at a time; records success and failure. */
+function lookupWorktreeBase(k: string): Promise<{ base?: string; error: string }> {
   const pending = inflight.get(k);
   if (pending) return pending;
   const lookup = (async () => {
     let base: string | undefined;
+    let error = "the nightgauge binary was not found";
     try {
       const bin = await binaryPathResolver();
       if (bin) {
+        // Promisified per call, not at import: suites that mock child_process
+        // partially still import the pure helpers here.
+        const execFileAsync = promisify(childProcess.execFile);
         const { stdout } = await execFileAsync(
           bin,
           ["worktree", "base", "--workdir", k, "--json"],
@@ -118,10 +144,18 @@ export function resolveWorktreeBase(repoRoot: string): Promise<string | undefine
         const parsed = JSON.parse(stdout) as { base?: unknown };
         if (typeof parsed.base === "string" && path.isAbsolute(parsed.base)) {
           base = parsed.base;
+        } else {
+          error = `\`nightgauge worktree base\` returned no absolute base (${stdout.trim()})`;
         }
       }
-    } catch {
-      base = undefined;
+    } catch (err) {
+      const stderr = (err as { stderr?: unknown }).stderr;
+      error =
+        typeof stderr === "string" && stderr.trim()
+          ? stderr.trim()
+          : err instanceof Error
+            ? err.message
+            : String(err);
     }
     if (base) {
       resolved.set(k, base);
@@ -130,7 +164,7 @@ export function resolveWorktreeBase(repoRoot: string): Promise<string | undefine
       failedAt.set(k, Date.now());
     }
     inflight.delete(k);
-    return base;
+    return { base, error };
   })();
   inflight.set(k, lookup);
   return lookup;

@@ -5,6 +5,18 @@
  * execution. Each concurrent pipeline runs in its own worktree directory,
  * providing full filesystem isolation while sharing the .git object store.
  *
+ * WHERE (#2038, ADR-024 § 9): `<worktree base>/<repo>-issue-<N>`, OUTSIDE the
+ * working tree, the same place and name the Go manager uses. The base comes
+ * from the binary (`nightgauge worktree base`, via `worktreeLocation`), the one
+ * resolver: the machine- or local-tier `pipeline.worktree_base`, else
+ * `STATE/worktrees/<repo-key>`. There is no in-tree default any more — a base
+ * the binary cannot resolve or refuses fails creation with its message.
+ *
+ * Worktrees created before #2038 at `<repo>/.worktrees/issue-<N>` (or by the Go
+ * manager at `<repo>/.nightgauge/worktrees/<repo>-issue-<N>`) are still found
+ * through `git worktree list` and used where they are; nothing moves them
+ * (the migration, #2040, moves idle ones).
+ *
  * @see Issue #1621 - Git worktree-based concurrent pipeline execution
  */
 
@@ -13,7 +25,12 @@ import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as fs from "node:fs/promises";
 import { assertValidBranchName } from "./BranchNameValidator";
-import { writeLocalExcludeBlock } from "./localGitExclude";
+import { rememberWorktreeMainRoot } from "./adaptiveBudgetLoader";
+import {
+  goWorktreeDirName,
+  LEGACY_GO_WORKTREE_BASE,
+  requireWorktreeBase,
+} from "./worktreeLocation";
 
 const execAsync = promisify(exec);
 // #2884: avoid sync subprocess — blocks the VSCode extension host event loop.
@@ -55,13 +72,43 @@ export interface WorktreeCreateOptions {
 
 const DEFAULT_NPM_INSTALL_TIMEOUT = 300_000; // 5 minutes
 
+/**
+ * The extension's pre-#2038 in-tree worktree directory. Worktrees still there
+ * are found and used; nothing new is created there.
+ */
+export const LEGACY_EXTENSION_WORKTREE_BASE = ".worktrees";
+
+export interface WorktreeManagerOptions {
+  /**
+   * Repository name for the `<repo>-issue-<N>` directory ("owner/name" or a
+   * bare name). Default: the repository root's directory name.
+   */
+  repoName?: string;
+  /** Resolves the worktree base. Default: the binary (`requireWorktreeBase`). */
+  resolveBase?: (repoRoot: string) => Promise<string>;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 export class WorktreeManager {
   private repoRoot: string;
-  private worktreeBase: string;
+  private readonly repoName: string;
+  private readonly resolveBase: (repoRoot: string) => Promise<string>;
+  private readonly managedLeafRe: RegExp;
+  /** The resolved base, once known. */
+  private baseDir: string | undefined;
+  /** issue → the worktree path this manager created or found for it. */
+  private readonly knownPaths = new Map<number, string>();
 
-  constructor(repoRoot: string, worktreeBase: string = ".worktrees") {
+  constructor(repoRoot: string, options: WorktreeManagerOptions = {}) {
     this.repoRoot = repoRoot;
-    this.worktreeBase = worktreeBase;
+    const raw = options.repoName ?? path.basename(repoRoot);
+    const slash = raw.lastIndexOf("/");
+    this.repoName = slash >= 0 ? raw.slice(slash + 1) : raw;
+    this.resolveBase = options.resolveBase ?? requireWorktreeBase;
+    this.managedLeafRe = new RegExp(`^(?:${escapeRegExp(this.repoName)}-)?issue-(\\d+)$`);
   }
 
   /**
@@ -72,10 +119,85 @@ export class WorktreeManager {
   }
 
   /**
-   * Get the absolute path where a worktree for an issue would live
+   * The directory name of an issue's worktree, `<repo>-issue-<N>`. Throws when
+   * the repository name cannot name one (the Go resolver's rule).
    */
-  getWorktreePath(issueNumber: number): string {
-    return path.resolve(this.repoRoot, this.worktreeBase, `issue-${issueNumber}`);
+  private worktreeDirName(issueNumber: number): string {
+    const leaf = goWorktreeDirName(this.repoName, issueNumber);
+    if (!leaf) {
+      throw new Error(
+        `Cannot name a worktree for issue #${issueNumber} of repository "${this.repoName}"`
+      );
+    }
+    return leaf;
+  }
+
+  /** The worktree base, resolved once through the binary. */
+  async getWorktreeBase(): Promise<string> {
+    if (!this.baseDir) {
+      this.baseDir = await this.resolveBase(this.repoRoot);
+    }
+    return this.baseDir;
+  }
+
+  /**
+   * The path of an issue's worktree when already known without I/O: one this
+   * manager created or found, else `<base>/<repo>-issue-<N>` once the base has
+   * been resolved. Undefined before either. Use {@link resolveWorktreePath}
+   * when the answer matters.
+   */
+  getWorktreePath(issueNumber: number): string | undefined {
+    const known = this.knownPaths.get(issueNumber);
+    if (known) return known;
+    const leaf = goWorktreeDirName(this.repoName, issueNumber);
+    return this.baseDir && leaf ? path.join(this.baseDir, leaf) : undefined;
+  }
+
+  /**
+   * Where an issue's worktree is: an existing one `git worktree list` reports
+   * for it (at the current base or a pre-#2038 location — used where it is,
+   * never moved), else `<base>/<repo>-issue-<N>`.
+   */
+  async resolveWorktreePath(issueNumber: number): Promise<string> {
+    const registered = (await this.listActive()).find((w) => w.issueNumber === issueNumber);
+    const worktreePath =
+      registered?.path ??
+      path.join(await this.getWorktreeBase(), this.worktreeDirName(issueNumber));
+    this.knownPaths.set(issueNumber, worktreePath);
+    rememberWorktreeMainRoot(worktreePath, this.repoRoot);
+    return worktreePath;
+  }
+
+  /**
+   * Directories this manager's worktrees live in: the current base (when it
+   * resolves) and the two pre-#2038 in-tree locations.
+   */
+  private async managedParents(): Promise<string[]> {
+    const parents = [
+      path.join(this.repoRoot, LEGACY_EXTENSION_WORKTREE_BASE),
+      path.join(this.repoRoot, LEGACY_GO_WORKTREE_BASE),
+    ];
+    try {
+      parents.unshift(await this.getWorktreeBase());
+    } catch {
+      // Unresolvable base: only the legacy locations can hold worktrees then.
+    }
+    const out = new Set<string>();
+    for (const p of parents) {
+      out.add(path.resolve(p));
+      try {
+        out.add(await fs.realpath(p));
+      } catch {
+        // Not on disk (or no realpath): the lexical form is enough.
+      }
+    }
+    return [...out];
+  }
+
+  /** The issue number a managed worktree directory name encodes, if any. */
+  private issueFromLeaf(dirName: string): number | undefined {
+    const match = dirName.match(this.managedLeafRe);
+    return match ? parseInt(match[1], 10) : undefined;
   }
 
   /**
@@ -95,7 +217,6 @@ export class WorktreeManager {
     branchName: string,
     options?: WorktreeCreateOptions
   ): Promise<WorktreeInfo> {
-    const worktreePath = this.getWorktreePath(issueNumber);
     const baseBranch = options?.baseBranch ?? "main";
     const shouldInstall = options?.npmInstall !== false;
     const installTimeout = options?.npmInstallTimeout ?? DEFAULT_NPM_INSTALL_TIMEOUT;
@@ -124,12 +245,10 @@ export class WorktreeManager {
       );
     }
 
-    // Ensure the base directory exists
-    const baseDir = path.resolve(this.repoRoot, this.worktreeBase);
-    await fs.mkdir(baseDir, { recursive: true });
-
-    // Add .worktrees to .gitignore if not already there
-    await this.ensureGitignore();
+    // Outside the working tree (#2038), so nothing needs ignoring. The base is
+    // private (0700): a worktree holds source code.
+    const worktreePath = await this.resolveWorktreePath(issueNumber);
+    await fs.mkdir(path.dirname(worktreePath), { recursive: true, mode: 0o700 });
 
     // Fetch latest from remote to ensure base branch is up to date
     try {
@@ -494,7 +613,18 @@ export class WorktreeManager {
    * @param deleteBranch - Whether to also delete the local branch (default: false)
    */
   async cleanup(issueNumber: number, deleteBranch?: boolean): Promise<void> {
-    const worktreePath = this.getWorktreePath(issueNumber);
+    let worktreePath: string;
+    try {
+      worktreePath = await this.resolveWorktreePath(issueNumber);
+    } catch (error) {
+      // No registered worktree and no resolvable base: nothing to remove.
+      console.warn(
+        `[WorktreeManager] no worktree to clean up for issue #${issueNumber}: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+      return;
+    }
 
     if (await this.hasUncommittedChanges(worktreePath)) {
       console.warn(
@@ -594,8 +724,10 @@ export class WorktreeManager {
   /**
    * List all active worktrees managed by this instance
    *
-   * Filters `git worktree list` output to only show worktrees in the
-   * configured worktree base directory.
+   * Filters `git worktree list` output to worktrees named `<repo>-issue-<N>`
+   * (or the pre-#2038 `issue-<N>`) directly inside the worktree base or one
+   * of the legacy in-tree locations. Discovery is git's list, never a
+   * directory scan, so a worktree at an old location is still found.
    *
    * @returns Array of active worktree info
    */
@@ -607,7 +739,7 @@ export class WorktreeManager {
       });
 
       const worktrees: WorktreeInfo[] = [];
-      const baseDir = path.resolve(this.repoRoot, this.worktreeBase);
+      const parents = new Set(await this.managedParents());
       const entries = stdout.split("\n\n").filter(Boolean);
 
       for (const entry of entries) {
@@ -618,17 +750,14 @@ export class WorktreeManager {
         if (!worktreeLine) continue;
         const worktreePath = worktreeLine.replace("worktree ", "");
 
-        // Only include worktrees in our managed directory
-        if (!worktreePath.startsWith(baseDir)) continue;
+        // Only include worktrees directly inside a managed directory
+        if (!parents.has(path.dirname(worktreePath))) continue;
 
         const branch = branchLine ? branchLine.replace("branch refs/heads/", "") : "unknown";
 
         // Extract issue number from directory name
-        const dirName = path.basename(worktreePath);
-        const match = dirName.match(/^issue-(\d+)$/);
-        if (!match) continue;
-
-        const issueNumber = parseInt(match[1], 10);
+        const issueNumber = this.issueFromLeaf(path.basename(worktreePath));
+        if (issueNumber === undefined) continue;
         let exists = false;
         try {
           await fs.access(worktreePath);
@@ -720,8 +849,8 @@ export class WorktreeManager {
    * Check if a worktree exists for a given issue
    */
   async exists(issueNumber: number): Promise<boolean> {
-    const worktreePath = this.getWorktreePath(issueNumber);
     try {
+      const worktreePath = await this.resolveWorktreePath(issueNumber);
       await fs.access(worktreePath);
       return true;
     } catch {
@@ -751,19 +880,28 @@ export class WorktreeManager {
       // Non-fatal
     }
 
-    // Check for directories in worktree base that aren't tracked by git
-    const baseDir = path.resolve(this.repoRoot, this.worktreeBase);
+    // Directories in a managed location, named like one of this repository's
+    // worktrees, that git does not track. The base may be shared with other
+    // repositories and clones (a configured pipeline.worktree_base), so a
+    // directory whose `.git` still points at a live git dir belongs to SOME
+    // repository and is never removed; only one with no `.git` or a dangling
+    // one is an orphan.
     try {
-      const entries = await fs.readdir(baseDir, { withFileTypes: true });
       const activeWorktrees = await this.listActive();
       const activePaths = new Set(activeWorktrees.map((w) => w.path));
-
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const fullPath = path.join(baseDir, entry.name);
-
-        // If this directory isn't tracked by git worktree, it's orphaned
-        if (!activePaths.has(fullPath)) {
+      for (const baseDir of await this.managedParents()) {
+        let entries: Array<{ name: string; isDirectory(): boolean }>;
+        try {
+          entries = await fs.readdir(baseDir, { withFileTypes: true });
+        } catch {
+          continue; // Location does not exist — that's fine
+        }
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          if (this.issueFromLeaf(entry.name) === undefined) continue;
+          const fullPath = path.join(baseDir, entry.name);
+          if (activePaths.has(fullPath)) continue;
+          if (await this.belongsToLiveRepository(fullPath)) continue;
           try {
             await fs.rm(fullPath, { recursive: true, force: true });
             cleaned++;
@@ -773,10 +911,26 @@ export class WorktreeManager {
         }
       }
     } catch {
-      // Base directory may not exist yet — that's fine
+      // Non-fatal
     }
 
     return cleaned;
+  }
+
+  /**
+   * True when `dir/.git` is a worktree link (`gitdir: <path>`) whose git dir
+   * still exists — the directory is some repository's live worktree.
+   */
+  private async belongsToLiveRepository(dir: string): Promise<boolean> {
+    try {
+      const content = await fs.readFile(path.join(dir, ".git"), "utf-8");
+      const match = content.match(/^gitdir:\s*(.+)$/m);
+      if (!match) return false;
+      await fs.access(path.resolve(dir, match[1].trim()));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -925,32 +1079,6 @@ export class WorktreeManager {
           error instanceof Error ? error.message : "Unknown error"
         }`
       );
-    }
-  }
-
-  /**
-   * Ensure the worktree base is ignored — per machine, never by editing the
-   * tracked root .gitignore (#1875). Appending to it left the operator's
-   * primary clone dirty on `main` with a change nothing committed. The rule
-   * goes to the repository's info/exclude, which every worktree shares.
-   */
-  private async ensureGitignore(): Promise<void> {
-    // An absolute base (a machine- or local-tier pipeline.worktree_base,
-    // ADR-024 § 9) is outside the working tree: nothing to ignore.
-    if (path.isAbsolute(this.worktreeBase)) return;
-    const base = this.worktreeBase.replace(/^\/+|\/+$/g, "");
-    try {
-      const content = await fs.readFile(path.join(this.repoRoot, ".gitignore"), "utf-8");
-      if (content.split("\n").some((l) => l.trim().replace(/^\/|\/$/g, "") === base)) {
-        return;
-      }
-    } catch {
-      // No root .gitignore.
-    }
-    try {
-      await writeLocalExcludeBlock(this.repoRoot, "worktrees", [`/${base}/`]);
-    } catch {
-      // Non-fatal
     }
   }
 }

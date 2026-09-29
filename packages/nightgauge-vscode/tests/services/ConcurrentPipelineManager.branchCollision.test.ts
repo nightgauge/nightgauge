@@ -56,7 +56,6 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getConcurrentPipelineConfig: vi.fn().mockReturnValue({
     maxConcurrent: 2,
-    worktreeBase: ".worktrees",
   }),
 }));
 
@@ -182,7 +181,7 @@ describe("ConcurrentPipelineManager — branch collision handling (#2992)", () =
       mockQueue as any,
       orchestratorMocks.factory,
       mockLogger as any,
-      { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      { maxConcurrent: 2 }
     );
   });
 

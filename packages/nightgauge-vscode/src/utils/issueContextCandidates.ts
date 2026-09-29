@@ -9,7 +9,9 @@
  *     repos' issue #N cannot collide in one base).
  *   - Before #2038 it wrote `<repoRoot>/.nightgauge/worktrees/{repoName}-issue-N`;
  *     a run that began there keeps that worktree until it ends.
- *   - The VSCode extension writes `<repoRoot>/.worktrees/issue-N`.
+ *   - The VSCode extension's WorktreeManager now writes the same
+ *     `<worktree base>/{repoName}-issue-N`; before #2038 it wrote
+ *     `<repoRoot>/.worktrees/issue-N`.
  *   - A run that never took a worktree leaves the file at the repo root.
  *
  * Go fixed this for its own readers in #994 with a single shared list, on the

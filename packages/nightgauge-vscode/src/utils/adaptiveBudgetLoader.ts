@@ -24,10 +24,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { createReadStream } from "node:fs";
-import { execFile } from "node:child_process";
+import * as childProcess from "node:child_process";
 import { promisify } from "node:util";
-
-const execFileAsync = promisify(execFile);
 
 export type EstimateSource = "adaptive_p75" | "static_table";
 
@@ -134,6 +132,18 @@ function stripWorktreeMarker(workspaceRoot: string): string | undefined {
 
 /** dir → its main checkout, for linked worktrees only. */
 const mainRootCache = new Map<string, string>();
+
+/**
+ * Record that `worktreePath` is a linked worktree of `repoRoot`. The code that
+ * creates or finds a worktree knows this already, so it seeds the answer the
+ * synchronous {@link resolveMainRepoRoot} returns for it — no git call, and
+ * correct from the first read (#2038).
+ */
+export function rememberWorktreeMainRoot(worktreePath: string, repoRoot: string): void {
+  if (!worktreePath || !repoRoot || !path.isAbsolute(worktreePath)) return;
+  mainRootCache.set(worktreePath, repoRoot);
+  notLinked.delete(worktreePath);
+}
 /** Paths git has already said are not linked worktrees. */
 const notLinked = new Set<string>();
 
@@ -147,6 +157,9 @@ async function linkedWorktreeMainRoot(dir: string): Promise<string | undefined> 
   if (cached !== undefined) return cached;
   if (notLinked.has(dir)) return undefined;
   try {
+    // Promisified here, not at import: many suites mock node:child_process
+    // partially, and this module is imported for its pure helpers too.
+    const execFileAsync = promisify(childProcess.execFile);
     const { stdout } = await execFileAsync(
       "git",
       ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],

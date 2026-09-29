@@ -228,6 +228,7 @@ import {
   type AdapterSource,
   type AutoRouterOptions,
 } from "./resolvers/adapterResolver";
+import { resolveMainRepoRoot } from "./adaptiveBudgetLoader";
 
 // Re-export for consumers
 export type { ParsedTokenUsage, RateLimitEventData } from "./tokenParser";
@@ -1728,8 +1729,9 @@ function formatElapsed(ms: number): string {
 }
 
 /**
- * If `workspaceRoot` looks like a per-issue worktree
- * (`<canonical>/[.]worktrees/issue-<N>`), return the canonical repo root.
+ * If `workspaceRoot` is a per-issue worktree — one WorktreeManager placed
+ * outside the tree (#2038), or an in-tree `<canonical>/[.]worktrees/issue-<N>`
+ * — return the canonical repo root.
  * Otherwise return null.
  *
  * Used by the stall and cost-cap diagnostic writers (#3204) to mirror their
@@ -1740,6 +1742,10 @@ function formatElapsed(ms: number): string {
  */
 function deriveCanonicalFromWorktree(workspaceRoot: string): string | null {
   const norm = path.resolve(workspaceRoot);
+  // A worktree outside the working tree (`<base>/<repo>-issue-<N>`, #2038) has
+  // no in-path marker; WorktreeManager records its repo when it creates it.
+  const recorded = resolveMainRepoRoot(norm);
+  if (recorded !== norm) return recorded;
   const segments = norm.split(path.sep);
   for (let i = segments.length - 1; i > 0; i--) {
     if (/^issue-\d+$/.test(segments[i])) {

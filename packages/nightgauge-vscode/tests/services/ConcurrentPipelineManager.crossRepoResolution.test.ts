@@ -77,7 +77,6 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getConcurrentPipelineConfig: vi.fn().mockReturnValue({
     maxConcurrent: 3,
-    worktreeBase: ".worktrees",
   }),
 }));
 
@@ -226,7 +225,7 @@ describe("ConcurrentPipelineManager — per-command cross-repo worktree resoluti
       queue as any,
       createPendingFactory(),
       logger as any,
-      { maxConcurrent: 3, worktreeBase: ".worktrees" },
+      { maxConcurrent: 3 },
       workspaceManager as any
     );
 
@@ -268,7 +267,7 @@ describe("ConcurrentPipelineManager — per-command cross-repo worktree resoluti
       queue as any,
       factory,
       makeLogger() as any,
-      { maxConcurrent: 3, worktreeBase: ".worktrees" },
+      { maxConcurrent: 3 },
       workspaceManager as any
     );
 
@@ -301,7 +300,7 @@ describe("ConcurrentPipelineManager — per-command cross-repo worktree resoluti
       queue as any,
       createPendingFactory(),
       logger as any,
-      { maxConcurrent: 3, worktreeBase: ".worktrees" },
+      { maxConcurrent: 3 },
       workspaceManager as any
     );
 
@@ -324,7 +323,7 @@ describe("ConcurrentPipelineManager — per-command cross-repo worktree resoluti
       queue as any,
       createPendingFactory(),
       logger as any,
-      { maxConcurrent: 3, worktreeBase: ".worktrees" },
+      { maxConcurrent: 3 },
       workspaceManager as any
     );
     manager.setCallbacks({ onSlotFailed });

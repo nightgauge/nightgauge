@@ -1331,11 +1331,14 @@ export const PipelineConfigSchema = z.object({
    */
   max_concurrent: z.number().int().min(1).max(8).optional(),
   /**
-   * Base directory for git worktrees, relative to repository root.
-   * Each concurrent pipeline creates a worktree at `{worktree_base}/issue-{N}/`.
-   * Default: '.worktrees'.
+   * Absolute directory for pipeline worktrees; a machine- or local-tier key
+   * (ADR-024 § 9). Each pipeline creates `<base>/<repo>-issue-<N>/`. No
+   * default here: unset, the binary resolves `STATE/worktrees/<repo-key>`,
+   * outside the working tree, and it is the only reader (`nightgauge worktree
+   * base`). A relative value or one in the committed file is refused.
    *
    * @see Issue #1621 - Git worktree-based concurrent pipeline execution
+   * @see Issue #2038 - Worktrees outside the working tree
    */
   worktree_base: z.string().optional(),
   /**
@@ -3871,7 +3874,6 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     // #1517: 3, the value Go's DefaultPipelineMaxConcurrent, the docs table and
     // the settings panel all use. Deprecated in favour of concurrency.*.
     max_concurrent: 3,
-    worktree_base: ".worktrees",
     cache: {
       alert_threshold: 40,
     },

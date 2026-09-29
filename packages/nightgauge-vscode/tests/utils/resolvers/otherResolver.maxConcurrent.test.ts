@@ -38,14 +38,14 @@ function withTempConfig(yaml: string): string {
 }
 
 describe("parseMaxConcurrentBlocks", () => {
-  it("extracts pipeline.max_concurrent and worktree_base", () => {
+  it("extracts pipeline.max_concurrent and ignores worktree_base (#2038)", () => {
     const result = parseMaxConcurrentBlocks(
       `pipeline:\n  max_concurrent: 4\n  worktree_base: .wt\n`,
       1,
       10
     );
     expect(result.pipelineMaxConcurrent).toBe(4);
-    expect(result.worktreeBase).toBe(".wt");
+    expect(result).not.toHaveProperty("worktreeBase");
     expect(result.autonomousMaxConcurrent).toBeUndefined();
   });
 
@@ -136,9 +136,9 @@ describe("getConcurrentPipelineConfig", () => {
     expect(result.maxConcurrent).toBe(4);
   });
 
-  it("preserves worktree_base from pipeline block", () => {
+  it("does not read worktree_base: the binary resolves it (#2038)", () => {
     const dir = withTempConfig(`pipeline:\n  worktree_base: .custom-wt\n`);
     const result = getConcurrentPipelineConfig(dir);
-    expect(result.worktreeBase).toBe(".custom-wt");
+    expect(result).not.toHaveProperty("worktreeBase");
   });
 });

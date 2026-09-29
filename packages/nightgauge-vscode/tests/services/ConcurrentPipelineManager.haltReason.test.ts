@@ -52,9 +52,7 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
 }));
 
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
-  getConcurrentPipelineConfig: vi
-    .fn()
-    .mockReturnValue({ maxConcurrent: 2, worktreeBase: ".worktrees" }),
+  getConcurrentPipelineConfig: vi.fn().mockReturnValue({ maxConcurrent: 2 }),
 }));
 
 const mockAutonomousPause = vi.fn().mockResolvedValue(undefined);
@@ -193,7 +191,7 @@ describe("ConcurrentPipelineManager — haltQueueOnSlotFailure pause reason (#32
         return c.factory;
       })(),
       { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), getChannel: vi.fn() } as any,
-      { maxConcurrent: 1, worktreeBase: ".worktrees" }
+      { maxConcurrent: 1 }
     );
 
     await manager.fillSlots();
@@ -245,7 +243,7 @@ describe("ConcurrentPipelineManager — haltQueueOnSlotFailure pause reason (#32
         return c.factory;
       })(),
       { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), getChannel: vi.fn() } as any,
-      { maxConcurrent: 1, worktreeBase: ".worktrees" }
+      { maxConcurrent: 1 }
     );
 
     await manager.fillSlots();
@@ -279,7 +277,7 @@ describe("ConcurrentPipelineManager — haltQueueOnSlotFailure pause reason (#32
         return c.factory;
       })(),
       { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), getChannel: vi.fn() } as any,
-      { maxConcurrent: 1, worktreeBase: ".worktrees" }
+      { maxConcurrent: 1 }
     );
 
     await manager.fillSlots();

@@ -696,8 +696,8 @@ const cwdTimeout = 10 * time.Second
 // scan treats as a pipeline worktree base. There are three in-tree layouts on
 // a real machine, not one: the Go execution.Manager's pre-#2038 default
 // (.nightgauge/worktrees, still holding worktrees created before the move),
-// the VSCode extension's default (.worktrees, WorktreeManager.ts) — the
-// interactive harness whose leaked shells motivated #519 in the first place —
+// the VSCode extension's pre-#2038 default (.worktrees, WorktreeManager.ts) —
+// the interactive harness whose leaked shells motivated #519 in the first place —
 // and Claude Code's own worktree base (.claude/worktrees). See
 // docs/GO_BINARY.md's worktree-layout table. The Go manager's current base is
 // outside the tree (pipeline.worktree_base, else STATE/worktrees/<repo-key>;

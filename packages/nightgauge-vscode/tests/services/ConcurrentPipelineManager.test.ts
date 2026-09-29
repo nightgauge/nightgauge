@@ -58,7 +58,6 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getConcurrentPipelineConfig: vi.fn().mockReturnValue({
     maxConcurrent: 2,
-    worktreeBase: ".worktrees",
   }),
 }));
 
@@ -186,7 +185,7 @@ describe("ConcurrentPipelineManager", () => {
       mockQueue as any,
       orchestratorMocks.factory,
       mockLogger as any,
-      { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      { maxConcurrent: 2 }
     );
   });
 
@@ -201,7 +200,7 @@ describe("ConcurrentPipelineManager", () => {
         mockQueue as any,
         orchestratorMocks.factory,
         mockLogger as any,
-        { maxConcurrent: 1, worktreeBase: ".worktrees" }
+        { maxConcurrent: 1 }
       );
       expect(singleSlot.isConcurrentEnabled).toBe(true);
     });
@@ -218,7 +217,7 @@ describe("ConcurrentPipelineManager", () => {
         mockQueue as any,
         orchestratorMocks.factory,
         mockLogger as any,
-        { maxConcurrent: 1, worktreeBase: ".worktrees" }
+        { maxConcurrent: 1 }
       );
       expect(singleSlot.maxConcurrentSlots).toBe(1);
     });
@@ -391,7 +390,7 @@ describe("ConcurrentPipelineManager", () => {
         singleSlotQueue as any,
         singleSlotMocks.factory,
         mockLogger as any,
-        { maxConcurrent: 1, worktreeBase: ".worktrees" }
+        { maxConcurrent: 1 }
       );
     });
 

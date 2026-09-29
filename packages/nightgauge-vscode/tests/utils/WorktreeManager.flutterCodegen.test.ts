@@ -91,7 +91,9 @@ describe("WorktreeManager — Flutter codegen hook", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    manager = new WorktreeManager(repoRoot, ".worktrees");
+    manager = new WorktreeManager(repoRoot, {
+      resolveBase: async () => "/state/worktrees/abc123def456",
+    });
     execAsyncMock.mockResolvedValue({ stdout: "", stderr: "" });
     execFileAsyncMock.mockResolvedValue({ stdout: "", stderr: "" });
     execFileSyncMock.mockReturnValue(Buffer.from(""));
@@ -122,7 +124,9 @@ describe("WorktreeManager — Flutter codegen hook", () => {
 
     expect(pubGet).toBeDefined();
     expect(buildRunner).toBeDefined();
-    expect(pubGet?.[1]).toEqual(expect.objectContaining({ cwd: "/repo/.worktrees/issue-42" }));
+    expect(pubGet?.[1]).toEqual(
+      expect.objectContaining({ cwd: "/state/worktrees/abc123def456/repo-issue-42" })
+    );
   });
 
   it("uses `fvm flutter` when .fvmrc is present", async () => {
@@ -211,7 +215,7 @@ describe("WorktreeManager — Flutter codegen hook", () => {
 
     const result = await manager.create(42, "feat/42-codegen-fails");
 
-    expect(result.path).toBe("/repo/.worktrees/issue-42");
+    expect(result.path).toBe("/state/worktrees/abc123def456/repo-issue-42");
     expect(result.exists).toBe(true);
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("Flutter codegen failed"));
 

@@ -86,7 +86,6 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getConcurrentPipelineConfig: vi.fn().mockReturnValue({
     maxConcurrent: 2,
-    worktreeBase: ".worktrees",
   }),
 }));
 
@@ -322,7 +321,7 @@ describe("ConcurrentPipelineManager force-clear raises the abandoned-dispatch ca
       mockQueue as any,
       factory,
       mockLogger as any,
-      { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      { maxConcurrent: 2 }
     );
     manager.setCallbacks(callbacks as any);
     return manager;

@@ -97,7 +97,6 @@ let deferredCreate: {
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getConcurrentPipelineConfig: vi.fn().mockReturnValue({
     maxConcurrent: 3,
-    worktreeBase: ".worktrees",
   }),
 }));
 
@@ -271,7 +270,7 @@ describe("ConcurrentPipelineManager — per-repo concurrency cap (#3874)", () =>
       cap.service as any,
       createPendingFactory(),
       mockLogger as any,
-      { maxConcurrent: 3, worktreeBase: ".worktrees" }
+      { maxConcurrent: 3 }
     );
 
     const started = await manager.fillSlots();
@@ -300,7 +299,7 @@ describe("ConcurrentPipelineManager — per-repo concurrency cap (#3874)", () =>
       // maxConcurrent=1 forces #11 to wait on the first pass; freeing the
       // ceiling for the second pass isolates the per-repo cap as the only
       // thing that can keep #11 queued.
-      { maxConcurrent: 1, worktreeBase: ".worktrees" }
+      { maxConcurrent: 1 }
     );
 
     const firstStarted = await manager.fillSlots();
@@ -335,7 +334,7 @@ describe("ConcurrentPipelineManager — per-repo concurrency cap (#3874)", () =>
       cap.service as any,
       createPendingFactory(),
       mockLogger as any,
-      { maxConcurrent: 3, worktreeBase: ".worktrees" }
+      { maxConcurrent: 3 }
     );
 
     const started = await manager.fillSlots();
@@ -354,7 +353,7 @@ describe("ConcurrentPipelineManager — per-repo concurrency cap (#3874)", () =>
       cap.service as any,
       createPendingFactory(),
       mockLogger as any,
-      { maxConcurrent: 3, worktreeBase: ".worktrees" }
+      { maxConcurrent: 3 }
     );
 
     const started = await manager.fillSlots();
@@ -375,7 +374,7 @@ describe("ConcurrentPipelineManager — per-repo concurrency cap (#3874)", () =>
       cap.service as any,
       createPendingFactory(),
       mockLogger as any,
-      { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      { maxConcurrent: 2 }
     );
 
     expect(manager.availableSlotCount).toBe(2);
@@ -403,7 +402,7 @@ describe("ConcurrentPipelineManager — per-repo concurrency cap (#3874)", () =>
       cap.service as any,
       createPendingFactory(),
       mockLogger as any,
-      { maxConcurrent: 3, worktreeBase: ".worktrees" }
+      { maxConcurrent: 3 }
     );
 
     // Start the fill but do NOT await — create() is now blocked, so #10 is

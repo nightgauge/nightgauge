@@ -83,8 +83,8 @@ describe("Concurrent pipeline config schema", () => {
       expect(DEFAULT_CONFIG.pipeline?.max_concurrent).toBe(3);
     });
 
-    it("has worktree_base defaulting to .worktrees", () => {
-      expect(DEFAULT_CONFIG.pipeline?.worktree_base).toBe(".worktrees");
+    it("has no worktree_base default: unset means the binary's default outside the tree (#2038)", () => {
+      expect(DEFAULT_CONFIG.pipeline?.worktree_base).toBeUndefined();
     });
   });
 });
@@ -105,7 +105,8 @@ describe("getConcurrentPipelineConfig", () => {
     const { getConcurrentPipelineConfig } = await import("../../src/utils/nightgaugeConfig");
     const config = getConcurrentPipelineConfig("/nonexistent");
     expect(config.maxConcurrent).toBe(3);
-    expect(config.worktreeBase).toBe(".worktrees");
+    // The worktree base is the binary's to resolve, not this config's (#2038).
+    expect(config).not.toHaveProperty("worktreeBase");
   });
 
   it("respects NIGHTGAUGE_PIPELINE_MAX_CONCURRENT env var", async () => {

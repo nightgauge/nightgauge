@@ -1752,27 +1752,26 @@ The two dispatch paths lay their worktrees out differently, and the scanner sees
 both — often on the same machine, since a repo can be driven by the extension one
 day and the Go scheduler the next:
 
-| Creator                              | Directory                                           |
-| ------------------------------------ | --------------------------------------------------- |
-| VSCode extension `WorktreeManager`   | `{repoRoot}/{worktree_base}/issue-{N}`              |
-| Go `execution.Manager`               | `{worktree base}/{repo}-issue-{N}`                  |
-| Go `execution.Manager`, before #2038 | `{repoRoot}/.nightgauge/worktrees/{repo}-issue-{N}` |
+| Creator                                             | Directory                                           |
+| --------------------------------------------------- | --------------------------------------------------- |
+| Go `execution.Manager` and VSCode `WorktreeManager` | `{worktree base}/{repo}-issue-{N}`                  |
+| Go `execution.Manager`, before #2038                | `{repoRoot}/.nightgauge/worktrees/{repo}-issue-{N}` |
+| VSCode `WorktreeManager`, before #2038              | `{repoRoot}/.worktrees/issue-{N}`                   |
 
-The Go worktree base is outside the working tree (ADR-024 § 9):
-`pipeline.worktree_base` from the machine or local config tier, else
-`STATE/worktrees/<repo-key>`, resolved by `config.ResolveWorktreeBase` and printed
-by `nightgauge worktree base`. `layout.WorktreePath` refuses a path that, after
-symlink evaluation, is not directly inside that base. A worktree a run created at
-the pre-#2038 location is reused until the run ends; sweep and reclaim find
-worktrees at either location through `git worktree list`.
+Both dispatch paths now use one location and one name (ADR-024 § 9). The worktree
+base is outside the working tree: `pipeline.worktree_base` from the machine or
+local config tier, else `STATE/worktrees/<repo-key>`, resolved by
+`config.ResolveWorktreeBase` and printed by `nightgauge worktree base`, which is
+where the extension gets it. There is no in-tree default. `layout.WorktreePath`
+refuses a path that, after symlink evaluation, is not directly inside that base. A
+worktree created at a pre-#2038 location is found through `git worktree list` and
+used where it is until its run ends; sweep and reclaim find worktrees at every
+location the same way. Nothing moves them (the migration, #2040, moves idle ones).
 
-**The `{repo}-` prefix is load-bearing, not decoration.** The extension nests its
-worktree base (default `.worktrees`) inside each repo root, so `issue-42` is
-already namespaced by the repo that contains it. The Go layer's base can be one
+**The `{repo}-` prefix is load-bearing, not decoration.** The base can be one
 directory shared by several repositories (a configured `pipeline.worktree_base`),
 so in a multi-repo workspace two repos' issue #42 would land on the same
-directory without the prefix — one run checking out over another's tree. Dropping
-the prefix to "match the extension" reintroduces exactly that collision.
+directory without the prefix — one run checking out over another's tree.
 
 Creation and teardown must never derive this name independently: `worktreePath`
 is the single derivation, and both `ensureWorktree` and `CleanupWorktree` call it
@@ -5677,8 +5676,8 @@ nightgauge process, so the argv-basename filter could never have seen them.
 - **Four known worktree bases per repo root**: the Go `execution.Manager`'s
   resolved base outside the tree (`pipeline.worktree_base`, else
   `STATE/worktrees/<repo-key>`, #2038), `.nightgauge/worktrees` (its pre-#2038
-  default), `.worktrees` (the VSCode extension's default, `WorktreeManager.ts`),
-  and `.claude/worktrees` (Claude Code's own base).
+  default), `.worktrees` (the VSCode extension's pre-#2038 default), and
+  `.claude/worktrees` (Claude Code's own base).
 - **Containment is decided lexically, and cwd need not exist.** Only the
   worktree-base directory (e.g. `<repo>/.nightgauge/worktrees`) is resolved
   with `filepath.EvalSymlinks` — it still exists whenever this scan has
