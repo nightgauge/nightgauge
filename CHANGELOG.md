@@ -31,6 +31,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Demo daemon for scripted recordings** (#2105). The #2103 IPC stub
+  (`packages/nightgauge-vscode/demo/ipc-stub.cjs`) now answers the extension's
+  IPC methods from an in-memory, fictional workspace: board items by status,
+  queue, attention, active run, run history, knowledge and platform
+  runs/cost/trends. Its `ipc.ready` carries `demo: true`, it refuses
+  `pipeline.abort` and never emits `pipeline.runStage`, answers unknown methods
+  empty with a log line, and opens no network connection, spawns no process and
+  reads no credential. Point `nightgauge.backend.binaryPath` at it; pass
+  `--scenario <file>` to seed a different state. Ships in no package.
+
 - **A logging IPC stub and an inventory of the IPC methods the extension
   calls** (#2103). `packages/nightgauge-vscode/demo/ipc-stub.cjs` stands in
   for `nightgauge serve`: it announces the current protocol version, answers
