@@ -20,6 +20,7 @@ import * as assert from "node:assert/strict";
 import * as fs from "node:fs";
 import http from "node:http";
 import https from "node:https";
+import { isDeepStrictEqual } from "node:util";
 import * as vscode from "vscode";
 import { suite, test } from "../harness.js";
 import { capturedPanels, capturedStatusBarItems, capturedTreeProviders } from "../observe.js";
@@ -28,7 +29,8 @@ import { extension } from "./activation.suite.js";
 
 type Provider = vscode.TreeDataProvider<unknown>;
 
-/** Stages the reference scenario runs issue #133 through, in order. */
+/** The issue the reference scenario runs, and the stages it runs through, in order. */
+const RUN_ISSUE = 133;
 const STAGES = [
   "pipeline-start",
   "issue-pickup",
@@ -95,19 +97,27 @@ function text(html: string): string {
     .replace(/\s+/g, " ");
 }
 
-/** The running stage of the Pipeline tree's active issue, or null. */
-async function runningStage(p: Provider): Promise<string | null> {
+/** The Pipeline tree's active issue (its label) and running stage, or null. */
+async function activeRun(p: Provider): Promise<{ issue: string; stage: string | null } | null> {
   for (const root of await children(p)) {
     const item = await treeItem(p, root);
     if (item.contextValue !== "issue") continue;
     for (const child of await children(p, root)) {
       const stageItem = await treeItem(p, child);
       if (/^stage-(bookend-)?running$/.test(stageItem.contextValue ?? "")) {
-        return String((child as { stage?: unknown }).stage ?? labelOf(stageItem));
+        const stage = String((child as { stage?: unknown }).stage ?? labelOf(stageItem));
+        return { issue: labelOf(item), stage };
       }
     }
+    return { issue: labelOf(item), stage: null };
   }
   return null;
+}
+
+/** The running stage of the Pipeline tree's active issue when it is `issue`, or null. */
+async function runningStage(p: Provider, issue: number): Promise<string | null> {
+  const run = await activeRun(p);
+  return run && run.issue.startsWith(`#${issue} - `) ? run.stage : null;
 }
 
 /** Outbound HTTP attempts recorded while the scenario plays (ADR-026 § 6). */
@@ -156,7 +166,7 @@ function startRecordingStages(): void {
   // Read in order, one change at a time, so no transition is reordered.
   subscribe(() => {
     reading = reading.then(async () => {
-      const stage = await runningStage(p);
+      const stage = await runningStage(p, RUN_ISSUE);
       if (stage && stageTransitions.at(-1) !== stage) stageTransitions.push(stage);
     });
   });
@@ -172,10 +182,19 @@ interface SeededQueueItem {
   title: string;
   repo: string;
 }
+interface SeededRun {
+  issueNumber: number;
+  title: string;
+  stage: string;
+}
 
 /** The scenario the launcher handed the daemon. */
 function scenario(): {
-  state: { board: Record<string, SeededItem[]>; queue: SeededQueueItem[] };
+  state: {
+    board: Record<string, SeededItem[]>;
+    queue: SeededQueueItem[];
+    activeRuns: SeededRun[];
+  };
 } {
   const file = process.env.NIGHTGAUGE_DEMO_SCENARIO;
   assert.ok(file, "NIGHTGAUGE_DEMO_SCENARIO is unset — the launcher did not wire it");
@@ -237,6 +256,13 @@ suite("demo mode", () => {
 
   test("the Repositories tree shows the seeded board counts", async () => {
     const p = provider("nightgauge.repositoriesView");
+    // Activation starts WorkspaceManager.initialize() without awaiting it, so
+    // the tree can still answer "Initializing..." here; wait that out.
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const roots = await children(p);
+      if (!roots.length || labelOf(await treeItem(p, roots[0])) !== "Initializing...") break;
+      await delay(100);
+    }
     const seeded = scenarioBoard();
     const shown: Record<string, Record<string, number>> = {};
     const expected: Record<string, Record<string, number>> = {};
@@ -264,10 +290,22 @@ suite("demo mode", () => {
     assert.deepEqual(shown, expected, `Repositories tree:\n${await dumpTree(p)}`);
   });
 
-  // The seeded active run (#112) cannot be asserted here: the extension
-  // learns run state only from pipeline.stateChanged events, and nothing asks
-  // the daemon for runs already in flight, so a static seed can show the
-  // queue but not an active issue. Playback below asserts the active run.
+  test("the Pipeline tree shows the seeded active run", async () => {
+    // No event announces a run that was already in flight: the extension
+    // asks the daemon's run registry (pipeline.runningSummary) once the
+    // Pipeline tree is wired (#2105).
+    const p = provider("nightgauge.pipelineView");
+    const [seeded] = scenario().state.activeRuns;
+    assert.ok(seeded, "The reference scenario seeds no active run");
+    const expected = { issue: `#${seeded.issueNumber} - ${seeded.title}`, stage: seeded.stage };
+    let shown = await activeRun(p);
+    for (let attempt = 0; attempt < 100 && !isDeepStrictEqual(shown, expected); attempt++) {
+      await delay(100);
+      shown = await activeRun(p);
+    }
+    assert.deepEqual(shown, expected, `Pipeline tree:\n${await dumpTree(p)}`);
+  });
+
   test("the Pipeline tree shows the seeded queue", async () => {
     const p = provider("nightgauge.pipelineView");
     const expected = scenario().state.queue.map((q) => `#${q.issueNumber} - ${q.title}`);

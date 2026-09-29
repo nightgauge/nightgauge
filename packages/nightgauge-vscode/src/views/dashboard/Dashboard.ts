@@ -3040,7 +3040,8 @@ export class Dashboard implements vscode.Disposable {
       tokenStorage,
       () => resolvePlatformBaseUrl(ConfigBridge.getInstance().getPlatform()),
       useLegacy,
-      localFallback
+      localFallback,
+      () => ConfigBridge.getInstance().getPlatform()?.enabled ?? false
     );
   }
 

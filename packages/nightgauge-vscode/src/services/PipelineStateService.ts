@@ -738,8 +738,8 @@ export class PipelineStateService implements vscode.Disposable {
   /**
    * Apply an authoritative runtime snapshot discovered on disk.
    *
-   * Used only by the direct-CLI reconciliation fallback. Normal extension
-   * runs continue to use IPC. The per-worktree service is issue-filtered, so
+   * Used by the direct-CLI reconciliation fallback and by
+   * {@link adoptRunningRun}. Normal extension runs continue to use IPC events. The per-worktree service is issue-filtered, so
    * a snapshot can never overwrite a sibling slot.
    */
   applyRuntimeSnapshot(goState: GoRuntimeState): void {
@@ -825,6 +825,44 @@ export class PipelineStateService implements vscode.Disposable {
         : undefined,
     };
     this._onStateChanged.fire(this._lastState);
+  }
+
+  /**
+   * Adopt the run the daemon already has in flight when this relay connects
+   * (#2105).
+   *
+   * Run state otherwise arrives only as `pipeline.stateChanged`, which the
+   * daemon emits when a run changes. The first IPC call of an activation
+   * (`getNightgaugeRoot` asking for the git root) starts the daemon before
+   * this relay exists, so neither a snapshot sent at connect nor a run that
+   * has not changed since can reach it: the Pipeline tree showed "No issue
+   * active" over a running pipeline until its next transition.
+   * `pipeline.runningSummary` is the daemon's own run registry, the answer the
+   * reload-safety check already reads.
+   *
+   * Adopts only into an empty relay, and only an unambiguous run: the single
+   * one matching this relay's issue filter. Several runs in flight are
+   * concurrent slots, rendered from their own relays. The summary names the
+   * running stage but not the stages before it, which stay pending until the
+   * run's next snapshot. Returns whether a run was adopted.
+   */
+  async adoptRunningRun(): Promise<boolean> {
+    if (this._lastState) return false;
+    const summary = await this.ipc.pipelineRunningSummary();
+    const runs = (summary?.runs ?? []).filter(
+      (run) => this.issueNumber === null || run.issueNumber === this.issueNumber
+    );
+    // A snapshot that arrived while the summary was in flight is newer.
+    if (runs.length !== 1 || this._lastState) return false;
+    const [run] = runs;
+    this.applyRuntimeSnapshot({
+      issueNumber: run.issueNumber,
+      title: run.title,
+      stage: run.stage,
+      startedAt: run.startedAt,
+      runId: run.runId,
+    });
+    return true;
   }
 
   /**

@@ -223,6 +223,41 @@ describe("AuditLogService — local fallback activation", () => {
     expect(localFallback.buildLocalAuditData).not.toHaveBeenCalled();
   });
 
+  it("platform.enabled false → local telemetry, never the platform, even with a token (#2107)", async () => {
+    const localFallback = makeLocalFallback();
+    const tokenStorage = makeTokenStorage("valid-token");
+    const svc = new AuditLogService(
+      tokenStorage,
+      () => "https://api.example.com",
+      false,
+      localFallback,
+      () => false
+    );
+
+    const result = await svc.fetch(filters, 2);
+
+    expect(result.hasAccess).toBe(true);
+    expect(result.entries).toHaveLength(1);
+    expect(localFallback.buildLocalAuditData).toHaveBeenCalledWith(filters, 2, "disabled");
+    expect(fetch).not.toHaveBeenCalled();
+    expect(tokenStorage.retrieve).not.toHaveBeenCalled();
+  });
+
+  it("platform.enabled false and no local fallback → noAccessState, no request", async () => {
+    const svc = new AuditLogService(
+      makeTokenStorage("valid-token"),
+      () => "https://api.example.com",
+      false,
+      null,
+      () => false
+    );
+
+    const result = await svc.fetch(filters, 0);
+
+    expect(result.hasAccess).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("fetchLocal delegates to localFallback.buildLocalAuditData", async () => {
     const localFallback = makeLocalFallback();
     const svc = new AuditLogService(

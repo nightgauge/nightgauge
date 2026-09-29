@@ -425,6 +425,27 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
 
 ### Fixed
 
+- **The Pipeline tree shows a run already in flight when the extension
+  connects** (#2105). Run state arrived only as `pipeline.stateChanged`
+  events, and the first IPC call of activation starts the daemon before the
+  state relay listens, so the tree read "No issue active" over a running
+  pipeline until its next stage change. Once the tree is wired the extension
+  asks the daemon's run registry (`pipeline.runningSummary`) and shows the one
+  run in flight. A snapshot for a different issue now also resets the tree's
+  stages, so the previous issue's running stage no longer keeps its spinner.
+
+- **The Audit Trail tab shows local run history when `platform.enabled` is
+  false** (#2107). It showed "No Access" to every user without a platform
+  session, and with a stored session it still called the platform. With the
+  platform off it now reads only the local telemetry, labelled as such and
+  without a Retry button, and every read picks up runs recorded since the tab
+  first loaded.
+
+- **The demo workspace populates the Audit Trail and Discovery tabs** (#2107):
+  fictional release-watch, continuous-improvement and backlog files, and the
+  demo daemon answers `knowledge.relatedToIssue` for the Knowledge tree's
+  related-decisions section.
+
 - **The dashboard's first refresh shows the health widget from the history it
   just loaded** (#2274). Refresh computed the health widget and cost summary
   alongside the history load, so they read the history from before it and

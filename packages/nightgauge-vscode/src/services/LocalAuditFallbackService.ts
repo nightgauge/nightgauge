@@ -1,7 +1,8 @@
 /**
  * LocalAuditFallbackService — Local telemetry fallback for the Audit Log tab.
  *
- * When the platform audit API is unreachable (non-401/403 failure), this service
+ * When the platform audit API is unreachable (non-401/403 failure), or when
+ * `platform.enabled` is false and the platform is never asked, this service
  * reads `pipelineStateDir(root)/history/index.json` via TelemetryStore and maps
  * HistoryIndexEntry records to AuditLogEntry objects that the AuditTabHtml renderer
  * can display.
@@ -22,9 +23,31 @@ import type {
 } from "../views/dashboard/DashboardState";
 
 const PAGE_SIZE = 50;
-const LOCAL_DATA_LABEL = "Showing local telemetry — platform unreachable";
 
-function emptyLocalData(filters: AuditFilterState): AuditLogData {
+/**
+ * Why local telemetry is shown instead of the platform's audit log:
+ * `unreachable` — the platform was asked and failed, so Retry may help;
+ * `disabled` — `platform.enabled` is false, so the platform is never asked
+ * and there is nothing to retry.
+ */
+export type LocalAuditSource = "unreachable" | "disabled";
+
+const LOCAL_DATA_LABELS: Record<LocalAuditSource, string> = {
+  unreachable: "Showing local telemetry — platform unreachable",
+  disabled: "Showing local telemetry — platform communication is off (platform.enabled: false)",
+};
+
+function localMode(
+  source: LocalAuditSource
+): Pick<AuditLogData, "isLocalFallback" | "localDataLabel" | "localRetryable"> {
+  return {
+    isLocalFallback: true,
+    localDataLabel: LOCAL_DATA_LABELS[source],
+    localRetryable: source === "unreachable",
+  };
+}
+
+function emptyLocalData(filters: AuditFilterState, source: LocalAuditSource): AuditLogData {
   return {
     entries: [],
     filters,
@@ -37,8 +60,7 @@ function emptyLocalData(filters: AuditFilterState): AuditLogData {
     },
     isLoading: false,
     hasAccess: true,
-    isLocalFallback: true,
-    localDataLabel: LOCAL_DATA_LABEL,
+    ...localMode(source),
   };
 }
 
@@ -113,11 +135,22 @@ export class LocalAuditFallbackService {
   /**
    * Build AuditLogData from local history index.
    * Applies date filters from the AuditFilterState and paginates in-memory.
+   * `source` says why local data is shown; it sets the banner label and
+   * whether Retry is offered.
    * Never throws — errors return empty AuditLogData with isLocalFallback: true.
    */
-  async buildLocalAuditData(filters: AuditFilterState, page = 0): Promise<AuditLogData> {
+  async buildLocalAuditData(
+    filters: AuditFilterState,
+    page = 0,
+    source: LocalAuditSource = "unreachable"
+  ): Promise<AuditLogData> {
     let entries: AuditLogEntry[];
     try {
+      // Every read here is a user action (tab open, filter, page, refresh), so
+      // it reflects the history on disk now. The store caches its index for
+      // its lifetime, which is this service's: without this, runs recorded
+      // after the tab first loaded never appeared until a window reload.
+      this.telemetryStore.invalidateCache();
       const summaries = await this.telemetryStore.getAllRunSummaries();
       const filtered = summaries.filter((entry) =>
         isInDateRange(entry.recorded_at, filters.dateFrom, filters.dateTo)
@@ -130,7 +163,7 @@ export class LocalAuditFallbackService {
       entries = actionFiltered.map(entryToAuditLogEntry);
     } catch (err) {
       console.warn("[LocalAuditFallbackService] Failed to read local history index:", err);
-      return emptyLocalData(filters);
+      return emptyLocalData(filters, source);
     }
 
     const totalCount = entries.length;
@@ -151,8 +184,7 @@ export class LocalAuditFallbackService {
       pagination,
       isLoading: false,
       hasAccess: true,
-      isLocalFallback: true,
-      localDataLabel: LOCAL_DATA_LABEL,
+      ...localMode(source),
     };
   }
 }

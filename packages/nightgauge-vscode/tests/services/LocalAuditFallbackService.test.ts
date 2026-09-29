@@ -209,6 +209,43 @@ describe("LocalAuditFallbackService", () => {
     expect(result.entries).toHaveLength(0);
   });
 
+  it("re-reads the history on every call, so a run recorded later appears", async () => {
+    await writeIndex(tmpDir, makeIndex([]));
+    const svc = new LocalAuditFallbackService(tmpDir);
+    expect((await svc.buildLocalAuditData(makeFilters())).entries).toHaveLength(0);
+
+    await writeIndex(
+      tmpDir,
+      makeIndex([
+        {
+          issue_number: 7,
+          title: "Recorded after the first read",
+          outcome: "complete",
+          cost_usd: 0.1,
+          duration_ms: 1000,
+          recorded_at: "2026-01-14T10:00:00.000Z",
+          started_at: "2026-01-14T09:59:00.000Z",
+        } as HistoryIndex["entries"][number],
+      ])
+    );
+
+    const later = await svc.buildLocalAuditData(makeFilters());
+    expect(later.entries.map((e) => e.resourceId)).toEqual(["7"]);
+  });
+
+  it("labels why local data is shown and offers Retry only when the platform failed", async () => {
+    await writeIndex(tmpDir, makeIndex([]));
+    const svc = new LocalAuditFallbackService(tmpDir);
+
+    const unreachable = await svc.buildLocalAuditData(makeFilters());
+    expect(unreachable.localDataLabel).toMatch(/platform unreachable/);
+    expect(unreachable.localRetryable).toBe(true);
+
+    const disabled = await svc.buildLocalAuditData(makeFilters(), 0, "disabled");
+    expect(disabled.localDataLabel).toMatch(/platform\.enabled: false/);
+    expect(disabled.localRetryable).toBe(false);
+  });
+
   it("paginates correctly — page 0 returns first PAGE_SIZE entries", async () => {
     const baseDate = new Date("2026-03-01T00:00:00.000Z");
     const entries = Array.from({ length: 60 }, (_, i) => ({

@@ -30,6 +30,9 @@ describe("demo workspace fixture (#2107)", () => {
         path.join(".nightgauge", "pipeline", "state.json"),
         path.join(".nightgauge", "health", "trends.jsonl"),
         path.join(".nightgauge", "knowledge", "issue-112", "PRD.md"),
+        path.join(".nightgauge", "release-watch", "creation-log.json"),
+        path.join(".nightgauge", "release-watch", "backlog.json"),
+        path.join(".nightgauge", "improvement-runs", "latest.json"),
       ])
     );
     expect(rel.filter((f) => f.includes("history") && f.endsWith(".jsonl")).length).toBeGreaterThan(

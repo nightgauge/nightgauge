@@ -31,6 +31,7 @@ import type {
   HealthResponse,
   IpcQueueState,
   KnowledgeMetricsResult,
+  KnowledgeRelatedToIssueResult,
   KnowledgeSearchResult,
   PipelineMaxConcurrentResult,
   PlatformStatus,
@@ -141,6 +142,17 @@ const isDoctorFinding = (v: unknown): boolean =>
       ),
   });
 
+const isRecallHit = (h: unknown): boolean =>
+  has(h, {
+    rank: num,
+    score: num,
+    path: str,
+    kind: str,
+    snippet: str,
+    stale: bool,
+    lifecycle_multiplier: num,
+  });
+
 const guards: Record<string, (v: unknown) => boolean> = {
   "doctor.run": (v): v is DoctorRunResult =>
     has(v, {
@@ -238,20 +250,11 @@ const guards: Record<string, (v: unknown) => boolean> = {
       expired_entries: Array.isArray,
       deprecated_entries: Array.isArray,
     }),
+  "knowledge.relatedToIssue": (v): v is KnowledgeRelatedToIssueResult =>
+    has(v, { hits: (x) => arrOf(x, isRecallHit) }),
   "knowledge.search": (v): v is KnowledgeSearchResult =>
     has(v, {
-      hits: (x) =>
-        arrOf(x, (h) =>
-          has(h, {
-            rank: num,
-            score: num,
-            path: str,
-            kind: str,
-            snippet: str,
-            stale: bool,
-            lifecycle_multiplier: num,
-          })
-        ),
+      hits: (x) => arrOf(x, isRecallHit),
       total_hits: num,
     }),
   "pipeline.getMaxConcurrent": (v): v is PipelineMaxConcurrentResult =>

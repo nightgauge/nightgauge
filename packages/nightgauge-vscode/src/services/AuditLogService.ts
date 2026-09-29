@@ -88,7 +88,8 @@ export class AuditLogService {
     private readonly tokenStorage: TokenStorage,
     private readonly getPlatformUrl: () => string,
     private readonly useLegacyEndpoint: boolean = false,
-    private readonly localFallback: LocalAuditFallbackService | null = null
+    private readonly localFallback: LocalAuditFallbackService | null = null,
+    private readonly isPlatformEnabled: () => boolean = () => true
   ) {}
 
   /**
@@ -102,6 +103,15 @@ export class AuditLogService {
     this.fetchInProgress = true;
 
     try {
+      // `platform.enabled: false` means the platform is never asked (#2107):
+      // local telemetry is the only audit source, not a fallback from a
+      // failure, and a stored session token does not change that.
+      if (!this.isPlatformEnabled()) {
+        return this.localFallback
+          ? await this.localFallback.buildLocalAuditData(filters, page, "disabled")
+          : noAccessState(filters);
+      }
+
       const token = await this.tokenStorage.retrieve("accessToken");
       if (!token) {
         return noAccessState(filters);
