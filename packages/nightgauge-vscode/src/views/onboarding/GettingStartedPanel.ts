@@ -1,7 +1,7 @@
 /**
  * GettingStartedPanel — singleton webview for first-run onboarding (#4155).
  *
- * Mirrors the singleton lifecycle of AdapterDoctorPanel: a static `show()`
+ * Mirrors the singleton lifecycle of DoctorPanel: a static `show()`
  * reveals (or creates) the panel, messages from the webview are dispatched
  * to an injected callback, and the panel resets its own singleton reference
  * on disposal so a later `show()` builds a fresh one.

@@ -176,6 +176,9 @@ import { hasCustomStageOverrides } from "../utils/customStageModels";
 import { migrateSuperchargeToPerformanceMode } from "../utils/migratePerformanceMode";
 import { KnowledgeDocumentLinkProvider } from "../views/KnowledgeDocumentLinkProvider";
 import { PipelineConnectivityStatusItem } from "../views/PipelineConnectivityStatusItem";
+import { DoctorService } from "../views/doctor/DoctorService";
+import { DoctorStatusBarItem } from "../views/doctor/DoctorStatusBarItem";
+import { registerRunDoctorCommand, resolveDoctorAdapters } from "../commands/doctor";
 import { getRepoIdentity } from "../utils/configPathResolver";
 
 import {
@@ -4417,6 +4420,18 @@ export async function initializeServices(
   // offline. Click → quick pick for cancel-vs-wait.
   const pipelineConnectivityStatusItem = new PipelineConnectivityStatusItem();
   context.subscriptions.push(pipelineConnectivityStatusItem);
+
+  // Doctor (ADR-025): `Nightgauge: Run Doctor` opens the Doctor panel, and
+  // the status bar health item shows the verdict of the latest scan. Both read
+  // one DoctorService, which speaks only the doctor.* IPC methods.
+  const doctorService = new DoctorService(ipcClient, () =>
+    resolveDoctorAdapters(getWorkspaceRoot() ?? undefined)
+  );
+  context.subscriptions.push(
+    doctorService,
+    registerRunDoctorCommand(doctorService, logger),
+    new DoctorStatusBarItem(doctorService, { enabled: () => !!getWorkspaceRoot() })
+  );
 
   // Initialize platform quota service for tier quota display (Issue #1479, #2091 IPC migration)
   let platformQuotaService: PlatformQuotaService | null = null;

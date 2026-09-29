@@ -6,7 +6,7 @@
  * claim an issue → watch a pipeline run produce a pull request. The local
  * product is free and needs no account or sign-in, so onboarding never asks
  * for one. Kept framework-free and side-effect-free (no `vscode` import) so it
- * can be unit-tested without a VSCode host, mirroring AdapterDoctorHtml.ts.
+ * can be unit-tested without a VSCode host, mirroring DoctorHtml.ts.
  */
 
 /** Webview hardening inputs — strict CSP + a per-render script nonce. */

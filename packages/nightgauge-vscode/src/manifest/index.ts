@@ -596,8 +596,8 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(tasklist)",
     },
     {
-      command: "nightgauge.adapterDoctor",
-      title: "Nightgauge: Adapter Doctor",
+      command: "nightgauge.runDoctor",
+      title: "Nightgauge: Run Doctor",
       icon: "$(pulse)",
     },
     {

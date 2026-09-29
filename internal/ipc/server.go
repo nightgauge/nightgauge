@@ -5386,16 +5386,16 @@ func (s *Server) registerMethods() {
 	// --- Doctor (ADR-025): the remedy engine behind `doctor --fix` ---
 	// doctor.run streams `doctor.progress` events; see internal/ipc/doctor.go.
 
-	//ipc:method doctorRun params:DoctorRunParams result:unknown
+	//ipc:method doctorRun params:DoctorRunParams result:DoctorRunResult
 	s.methods["doctor.run"] = s.handleDoctorRun
 
-	//ipc:method doctorApplyRemedy params:DoctorApplyRemedyParams result:unknown
+	//ipc:method doctorApplyRemedy params:DoctorApplyRemedyParams result:DoctorApplyRemedyResult
 	s.methods["doctor.applyRemedy"] = s.handleDoctorApplyRemedy
 
-	//ipc:method doctorRecheck params:DoctorRecheckParams result:unknown
+	//ipc:method doctorRecheck params:DoctorRecheckParams result:DoctorRecheckResult
 	s.methods["doctor.recheck"] = s.handleDoctorRecheck
 
-	//ipc:method doctorHistory params:DoctorHistoryParams result:unknown
+	//ipc:method doctorHistory params:DoctorHistoryParams result:DoctorHistoryResult
 	s.methods["doctor.history"] = s.handleDoctorHistory
 
 	//ipc:method issueRemoveBlockedBy params:IssueRemoveBlockedByParams result:void

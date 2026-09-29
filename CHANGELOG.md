@@ -99,6 +99,17 @@ changelog, and the release workflow refuses a tag that does not.
   `board_population` and `project_mapping` checks report those conditions
   with one threshold each.
 
+- **The VS Code Doctor panel and status bar health item replace the Adapter
+  Doctor** (#2099). `Nightgauge: Run Doctor` opens a panel that runs
+  `doctor.run`, shows each check's progress as it finishes, and renders one
+  card per finding, grouped by severity, with its code, cause and evidence.
+  Fix, Review & fix (a preview, then a confirmation), Open and Check again
+  call the `doctor.*` IPC methods, and a card shows the verified outcome
+  after a fix. Adapter health is the panel's `adapters` group, and the
+  `nightgauge.adapterDoctor` command is removed. A status bar item reads
+  `Nightgauge: ✓ healthy`, `N warnings` or `N blockers`, opens the panel on
+  click, and rescans in the background at most every ten minutes.
+
 - **One command opens a demo session, and CI fails when the demo drifts from
   the extension** (#2105, #2106, #2108, #2109, #2110). `npm run demo` in the
   extension package opens a VS Code window with a profile of its own, the demo

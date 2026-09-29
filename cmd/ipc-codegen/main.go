@@ -417,6 +417,10 @@ func collectImportTypes(methods []MethodDef) []string {
 		"AttentionSweepResult":               true, // Issue #93 — repo-scoped sweep
 		"AttentionRaiseResult":               true, // Issue #305 — run-scoped raise
 		"BoardChangedResult":                 true, // board.changed — the probe in front of the sweep
+		"DoctorRunResult":                    true, // ADR-025 — doctor.run (JSON v2)
+		"DoctorApplyRemedyResult":            true, // ADR-025
+		"DoctorRecheckResult":                true, // ADR-025
+		"DoctorHistoryResult":                true, // ADR-025
 	}
 
 	for _, m := range methods {

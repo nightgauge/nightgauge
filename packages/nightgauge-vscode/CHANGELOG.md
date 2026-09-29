@@ -11,6 +11,19 @@ and this project adheres to
 
 ### Added
 
+- **Doctor panel.** `Nightgauge: Run Doctor` runs every doctor check and
+  shows its progress, then one card per finding, grouped by severity: the
+  finding's code (linked to its reference), title, cause and evidence. A
+  card's buttons follow its fix: **Fix** applies a safe fix, **Review & fix**
+  shows the preview in the card and asks before applying, and **Open** and
+  **Check again** serve fixes only you can make. After a fix the card shows
+  whether the check still reports the problem, without reloading the panel.
+  Housekeeping is collapsed, with **Fix all safe**. Adapter health is the
+  panel's Adapters group.
+- **Doctor status bar item.** `Nightgauge: ✓ healthy`, `N warnings` or
+  `N blockers`; click it to open the Doctor panel. It follows every doctor
+  result and rescans in the background at most every ten minutes, without
+  probing adapters.
 - A "Demo" status bar badge appears whenever the extension is connected to
   the demo daemon, so a recording never passes for a real run. In demo mode
   scenario UI steps can open the dashboard, switch its tab, focus a
@@ -23,9 +36,6 @@ and this project adheres to
 
 - The dashboard's first Refresh now shows health metrics when run history
   exists, instead of "Run your first pipeline" until a second Refresh.
-- The Adapter Doctor shows each adapter's warnings and notes from
-  `nightgauge doctor`, marks a usable adapter with warnings `!`, and no longer
-  reports a gated OpenCode as "not on PATH".
 - Stage cost for Claude Sonnet 5 is now priced at $2/$10 per MTok instead of
   $3/$15, because the announced price increase was cancelled.
 
@@ -41,6 +51,8 @@ and this project adheres to
 
 ### Removed
 
+- The **Adapter Doctor** command (`nightgauge.adapterDoctor`) and its panel.
+  Run **Nightgauge: Run Doctor** instead; adapter health is its Adapters group.
 - The remote-command status bar item and the `remote.notifyOnPipelineRun`
   setting. They reported a command poller that never received a command
   (#2113).
