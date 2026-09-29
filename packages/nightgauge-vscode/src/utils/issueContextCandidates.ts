@@ -1,12 +1,17 @@
 /**
  * issueContextCandidates — the TypeScript half of `execution.IssueContextCandidates`.
  *
- * THERE ARE TWO WORKTREE LAYOUTS AND EVERY SINGLE-ROOT READER KNOWS ABOUT NONE.
+ * THERE ARE SEVERAL WORKTREE LAYOUTS AND EVERY SINGLE-ROOT READER KNOWS ABOUT NONE.
  *
- *   - The Go manager writes `<repoRoot>/.nightgauge/worktrees/{repoName}-issue-N`
- *     (the leaf carries the repo name so two repos' issue #N cannot collide in
- *     one workspace).
- *   - The VSCode extension writes `<repoRoot>/.worktrees/issue-N`.
+ *   - The Go manager writes `<worktree base>/{repoName}-issue-N`, outside the
+ *     working tree (ADR-024 § 9, #2038). The base comes from the binary, the one
+ *     resolver, via `worktreeLocation` (the leaf carries the repo name so two
+ *     repos' issue #N cannot collide in one base).
+ *   - Before #2038 it wrote `<repoRoot>/.nightgauge/worktrees/{repoName}-issue-N`;
+ *     a run that began there keeps that worktree until it ends.
+ *   - The VSCode extension's WorktreeManager now writes the same
+ *     `<worktree base>/{repoName}-issue-N`; before #2038 it wrote
+ *     `<repoRoot>/.worktrees/issue-N`.
  *   - A run that never took a worktree leaves the file at the repo root.
  *
  * Go fixed this for its own readers in #994 with a single shared list, on the
@@ -33,6 +38,7 @@ import {
   isUsableWorkspaceRoot,
 } from "./cloneLayout";
 import * as path from "node:path";
+import { cachedWorktreeBase, goWorktreeDirName, LEGACY_GO_WORKTREE_BASE } from "./worktreeLocation";
 
 /** A run's issue-context file name inside its root's pipeline state dir. */
 function issueContextFileName(issueNumber: number): string {
@@ -51,15 +57,18 @@ export function issueContextRelPath(issueNumber: number): string {
 /**
  * Every path a run's `issue-{N}.json` may live at, most-specific first.
  *
- * @param repoRoot    the workspace root
- * @param worktreeDir the run's actual worktree when known; "" when not
- * @param repo        "owner/name" or a bare name; "" skips the Go layout
+ * @param repoRoot     the workspace root
+ * @param worktreeDir  the run's actual worktree when known; "" when not
+ * @param repo         "owner/name" or a bare name; "" skips the Go layout
+ * @param worktreeBase the Go worktree base for `repoRoot`; defaults to the
+ *                     binary's cached answer (`primeWorktreeBase` fills it)
  */
 export function issueContextCandidates(
   repoRoot: string,
   worktreeDir: string,
   repo: string,
-  issueNumber: number
+  issueNumber: number,
+  worktreeBase: string | undefined = cachedWorktreeBase(repoRoot)
 ): string[] {
   const fileName = issueContextFileName(issueNumber);
   const roots: string[] = [];
@@ -69,12 +78,10 @@ export function issueContextCandidates(
   }
   if (repoRoot) {
     // "owner/name" → "name". The Go manager's leaf uses the bare repo name.
-    const slash = repo.lastIndexOf("/");
-    const repoName = slash >= 0 ? repo.slice(slash + 1) : repo;
-    if (repoName) {
-      roots.push(
-        path.join(repoRoot, ".nightgauge", "worktrees", `${repoName}-issue-${issueNumber}`)
-      );
+    const leaf = goWorktreeDirName(repo, issueNumber);
+    if (leaf) {
+      if (worktreeBase) roots.push(path.join(worktreeBase, leaf));
+      roots.push(path.join(repoRoot, LEGACY_GO_WORKTREE_BASE, leaf));
     }
     roots.push(path.join(repoRoot, ".worktrees", `issue-${issueNumber}`));
     roots.push(repoRoot);
@@ -103,9 +110,10 @@ export function pipelineFileCandidates(
   worktreeDir: string,
   repo: string,
   issueNumber: number,
-  fileName: string
+  fileName: string,
+  worktreeBase: string | undefined = cachedWorktreeBase(repoRoot)
 ): string[] {
-  return issueContextCandidates(repoRoot, worktreeDir, repo, issueNumber).map((p) =>
+  return issueContextCandidates(repoRoot, worktreeDir, repo, issueNumber, worktreeBase).map((p) =>
     path.join(path.dirname(p), fileName)
   );
 }

@@ -735,8 +735,7 @@ block with a non-empty `type`.**
 
 Reserved names are skipped — `index.md`, `log.md`, `README.md` and
 `_template.md` are navigation and template files, read structurally rather than
-as knowledge. Directories beginning with `.` (the recall cache) hold derived
-state, not entries.
+as knowledge. Directories beginning with `.` hold derived state, not entries.
 
 Three reason codes:
 

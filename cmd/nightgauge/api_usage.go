@@ -80,7 +80,8 @@ which is never reproducible on demand:
 
 Set NIGHTGAUGE_GITHUB_API_LOG=0 (or github.api_ledger.enabled: false) to switch
 the ledger off; set it to a path to write somewhere other than the default
-.nightgauge/logs/github-api.jsonl.`,
+.nightgauge/logs/github-api.jsonl (written as one github-api-YYYY-MM-DD.jsonl
+segment per UTC day beside that name, so log retention can drop old days).`,
 		SilenceUsage: true,
 		Example: `  nightgauge api-usage
   nightgauge api-usage --since 30m --by op
@@ -142,7 +143,7 @@ the ledger off; set it to a path to write somewhere other than the default
 			return nil
 		},
 	}
-	cmd.Flags().StringVar(&path, "file", "", "Read one specific ledger file (default: the rolling set at .nightgauge/logs/github-api.jsonl)")
+	cmd.Flags().StringVar(&path, "file", "", "Read one specific ledger file (default: every ledger file under .nightgauge/logs/: the dated github-api-YYYY-MM-DD.jsonl segments and any pre-segment github-api.jsonl)")
 	cmd.Flags().DurationVar(&since, "since", 0, "Only records newer than this (e.g. 30m, 2h)")
 	cmd.Flags().StringVar(&byWhat, "by", "caller", "Group by: caller, op, resource, path, identity")
 	cmd.Flags().StringVar(&identity, "identity", "",
@@ -169,13 +170,16 @@ func readAPIUsage(path string, since time.Duration) ([]apiUsageRecord, error) {
 	}
 
 	// An explicit --file is read exactly as given — that is the archaeology
-	// case, pointed at one preserved file. The DEFAULT path is the live,
-	// rolling ledger (#1347), so it is read as the rolling SET: oldest backup
-	// first, live file last. Reading only the live file would report a sudden
-	// collapse in spending at precisely the moment spending was heavy enough
-	// to rotate, which is the one window anybody opens this report for.
+	// case, pointed at one preserved file. The DEFAULT path is the live
+	// ledger (#1347), read as its whole SET: the pre-segment files, then every
+	// dated segment in the window (#2029), each with its size backup, oldest
+	// first. Reading only the live file would report a sudden collapse in
+	// spending at precisely the moment spending was heavy enough to rotate,
+	// which is the one window anybody opens this report for. A segment log
+	// retention deleted is not listed: that range is absent, not an error.
 	var files []string
-	if path != "" {
+	explicit := path != ""
+	if explicit {
 		files = []string{path}
 	} else {
 		wd, err := os.Getwd()
@@ -183,18 +187,21 @@ func readAPIUsage(path string, since time.Duration) ([]apiUsageRecord, error) {
 			return nil, fmt.Errorf("api-usage: resolve working dir: %w", err)
 		}
 		path = filepath.Join(wd, apiUsageDefaultPath)
-		files = github.LedgerFiles(path)
-		if len(files) == 0 {
+		if len(github.LedgerFiles(path)) == 0 {
 			return nil, fmt.Errorf("api-usage: no ledger at %s (the ledger is on by default; %s=0 switches it off)", path, apiLedgerEnvName)
 		}
+		files = github.LedgerFilesSince(path, cutoff)
 	}
 
 	var out []apiUsageRecord
 	for _, file := range files {
 		recs, err := readAPIUsageFile(file, cutoff)
 		if err != nil {
-			if os.IsNotExist(err) && len(files) > 1 {
-				continue // rotated away between listing and opening
+			if os.IsNotExist(err) && !explicit {
+				// Rotated away or pruned by log retention (#2029) between
+				// listing and opening: that range is absent, not an error.
+				// Zero surviving records report as an empty window.
+				continue
 			}
 			return nil, err
 		}

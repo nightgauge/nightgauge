@@ -42,9 +42,11 @@ patterns prove unreliable.
 `issue-{N}.json`, which the **issue-pickup stage writes into the run's
 worktree**. Two facts follow, and getting either wrong empties the pair:
 
-**There are two worktree layouts.** The Go manager writes
-`<repoRoot>/.nightgauge/worktrees/{repoName}-issue-N`; the VSCode extension
-writes `<repoRoot>/.worktrees/issue-N`. `execution.IssueContextCandidates` is
+**There are several worktree layouts.** Both the Go manager and the VSCode
+extension now write `<worktree base>/{repoName}-issue-N`, outside the working
+tree (#2038); before that they wrote
+`<repoRoot>/.nightgauge/worktrees/{repoName}-issue-N` and
+`<repoRoot>/.worktrees/issue-N`. `execution.IssueContextCandidates` is
 the single list both readers use — before it existed, the scheduler searched
 neither layout and the IPC path searched only the extension's, so one corpus
 field had two readers each knowing a different subset of where its source

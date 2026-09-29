@@ -1318,3 +1318,24 @@ func TestOrphanedProcessRemedySafety(t *testing.T) {
 		t.Errorf("a matching nightgauge pid owned by this user was refused: %v", err)
 	}
 }
+
+// TestWorktreeDirContaining_FindsResolvedBaseOutsideTree: the Go manager's
+// worktrees live outside the working tree since #2038, so a shell parked in
+// one must still be found through the resolved base, not only the in-tree
+// directory names.
+func TestWorktreeDirContaining_FindsResolvedBaseOutsideTree(t *testing.T) {
+	root := t.TempDir()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prev := resolveWorktreeBase
+	resolveWorktreeBase = func(string) (string, error) { return base, nil }
+	t.Cleanup(func() { resolveWorktreeBase = prev })
+
+	cwd := filepath.Join(base, "widget-issue-2038", "src")
+	gotRoot, leaf, ok := worktreeDirContaining(cwd, []string{root})
+	if !ok || gotRoot != root || leaf != "widget-issue-2038" {
+		t.Fatalf("worktreeDirContaining = (%q, %q, %v), want (%q, widget-issue-2038, true)", gotRoot, leaf, ok, root)
+	}
+}

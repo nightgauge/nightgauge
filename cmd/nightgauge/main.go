@@ -53,6 +53,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
 	"github.com/nightgauge/nightgauge/internal/intelligence/typeinfer"
 	"github.com/nightgauge/nightgauge/internal/ipc"
+	"github.com/nightgauge/nightgauge/internal/logretention"
 	"github.com/nightgauge/nightgauge/internal/notifications/inbound"
 	"github.com/nightgauge/nightgauge/internal/notifications/inbound/auth"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
@@ -690,6 +691,14 @@ func rootCmd() *cobra.Command {
 		// every `--workdir X` invocation) wrote its records against whatever
 		// directory the caller happened to be in, or nowhere at all.
 		gh.SetAPILedgerWorkspaceRoot(explicitWorkspaceRoot(cmd))
+
+		// Log retention at CLI start (ADR-024 § 11, #2029): two stats when
+		// the last prune is under a day old, a prune otherwise. `serve` runs
+		// its own at start and daily, so it is skipped here, as is
+		// `logs prune`, whose --dry-run must see the unpruned directory.
+		if cmd.Name() != "serve" && cmd.CommandPath() != "nightgauge logs prune" {
+			pruneLogsAtCLIStart(cmd)
+		}
 
 		workdir, err := os.Getwd()
 		if err != nil {
@@ -4998,6 +5007,15 @@ func serveCmd() *cobra.Command {
 			// Set up persistent file-based logging (tees to stderr + file)
 			closeLog := setupServeLogging(workspaceRoot)
 			defer closeLog()
+
+			// Log retention (ADR-024 § 11, #2029): pruned now and daily for
+			// the life of this daemon, off the startup path. go-backend.log,
+			// opened just above, is a live file and is never deleted.
+			retentionCtx := cmd.Context()
+			if retentionCtx == nil {
+				retentionCtx = context.Background()
+			}
+			go logretention.RunDaemon(retentionCtx, absPathOrEmpty(workspaceRoot), logretention.Interval, log.Printf)
 
 			// The .nightgauge/ ignore rules (#2026). The extension ensures them
 			// on activation, but a CLI-only or CI clone never runs it, and

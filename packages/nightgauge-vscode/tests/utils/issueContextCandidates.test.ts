@@ -12,6 +12,7 @@ import {
   issueContextRelPath,
   pipelineFileCandidates,
 } from "../../src/utils/issueContextCandidates";
+import { setCachedWorktreeBaseForTest } from "../../src/utils/worktreeLocation";
 
 describe("issueContextCandidates (#1206, mirrors Go #994)", () => {
   it("covers both worktree layouts and the plain repo root", () => {
@@ -116,5 +117,43 @@ describe("issueContextCandidates (#1206, mirrors Go #994)", () => {
       expect(path.dirname(p)).toBe(path.dirname(ctx[i]));
       expect(path.basename(p)).toBe("planning-42.json");
     });
+  });
+});
+
+describe("issueContextCandidates — the Go worktree base outside the tree (#2038)", () => {
+  const base = path.join(path.sep + "state", "worktrees", "0123456789ab");
+
+  it("searches the resolved base first, then the pre-#2038 in-tree location", () => {
+    const got = issueContextCandidates("/repo", "", "acme/widget", 42, base);
+    const resolved = path.join(base, "widget-issue-42", ".nightgauge", "pipeline", "issue-42.json");
+    const legacy = path.join(
+      "/repo",
+      ".nightgauge",
+      "worktrees",
+      "widget-issue-42",
+      ".nightgauge",
+      "pipeline",
+      "issue-42.json"
+    );
+    expect(got[0]).toBe(resolved);
+    expect(got.indexOf(legacy)).toBeGreaterThan(0);
+  });
+
+  it("uses the binary's cached answer when no base is passed", () => {
+    setCachedWorktreeBaseForTest("/repo", base);
+    try {
+      expect(pipelineFileCandidates("/repo", "", "acme/widget", 42, "planning-42.json")[0]).toBe(
+        path.join(base, "widget-issue-42", ".nightgauge", "pipeline", "planning-42.json")
+      );
+    } finally {
+      setCachedWorktreeBaseForTest("/repo", undefined);
+    }
+  });
+
+  it("never builds a candidate from a repo name that could escape the base", () => {
+    for (const repo of ["acme/..", "..", "acme/a b"]) {
+      const got = issueContextCandidates("/repo", "", repo, 42, base);
+      expect(got.some((p) => p.startsWith(base))).toBe(false);
+    }
   });
 });

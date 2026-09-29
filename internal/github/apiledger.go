@@ -38,14 +38,24 @@ import (
 const apiLedgerEnv = "NIGHTGAUGE_GITHUB_API_LOG"
 
 // apiLedgerDefaultPath is used unless apiLedgerEnv names a different file:
-// a JSONL file beside the other per-workspace logs.
+// JSONL beside the other per-workspace logs.
+//
+// At the default path this is the ledger's BASE name, not the file written:
+// records go to one dated segment per UTC day, github-api-YYYY-MM-DD.jsonl
+// (#2029, ADR-024 § 11). Log retention deletes whole files, so a single
+// append-only file could only ever be kept or lost in full; per-day segments
+// let the age and size caps drop the oldest days. A file named github-api.jsonl
+// is a pre-segment ledger: never written again, still read (LedgerFiles) until
+// retention ages it out. An explicit NIGHTGAUGE_GITHUB_API_LOG path is written
+// exactly as named: the operator chose that file.
 const apiLedgerDefaultPath = ".nightgauge/logs/github-api.jsonl"
 
-// The ledger is a rolling file so "always on" cannot become "fills the disk".
-// One record is ~250 bytes, so 5 MB holds roughly 20k requests — several days
-// of idle daemon traffic, and far more than the one-hour window every consumer
-// of the ledger actually asks about. One backup is kept so a rotation in the
-// middle of the window under investigation does not erase its first half.
+// Each file the ledger writes (the day's segment, or an explicit path) also
+// rotates on size so "always on" cannot become "fills the disk" within a day.
+// One record is ~250 bytes, so 5 MB holds roughly 20k requests — far more than
+// the one-hour window every consumer of the ledger actually asks about. One
+// backup is kept so a rotation in the middle of the window under investigation
+// does not erase its first half.
 const (
 	ledgerMaxBytes  = 5 * 1024 * 1024
 	ledgerKeepFiles = 2
@@ -186,8 +196,16 @@ func (a *atomicString) Store(s string) { a.v.Store(s) }
 // apiLedger appends request records to a rolling JSONL file. A nil *apiLedger
 // is a no-op, so the disabled path costs one nil check per request.
 type apiLedger struct {
-	mu     sync.Mutex
-	path   string
+	mu   sync.Mutex
+	path string
+	// segmented writes one file per UTC day beside path (the default-path
+	// ledger); cur is the file open now and day its date. When segmented is
+	// false the ledger writes path itself.
+	segmented bool
+	cur       string
+	day       string
+	// now is the clock that picks the day's segment; nil means time.Now.
+	now    func() time.Time
 	f      *os.File
 	enc    *json.Encoder
 	prev   map[string]int       // resource -> last observed Remaining
@@ -323,6 +341,7 @@ func openAPILedger() *apiLedger {
 	}
 	path := raw
 	explicitPath := true
+	// explicitPath==false below means the default path, which is segmented.
 	if path == "" || path == "1" || path == "true" || path == "on" {
 		path = apiLedgerDefaultPath
 		explicitPath = false
@@ -353,22 +372,59 @@ func openAPILedger() *apiLedger {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil
 	}
-	l := &apiLedger{path: path, prev: map[string]int{}, prevAt: map[string]time.Time{}}
+	l := &apiLedger{path: path, segmented: !explicitPath, prev: map[string]int{}, prevAt: map[string]time.Time{}}
 	if err := l.open(); err != nil {
 		return nil
 	}
 	return l
 }
 
-// open attaches the writer to l.path. Caller must hold l.mu (or own l).
+// open attaches the writer to the current file: today's segment for a
+// segmented ledger, else l.path. Caller must hold l.mu (or own l).
 func (l *apiLedger) open() error {
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if l.segmented {
+		t := time.Now()
+		if l.now != nil {
+			t = l.now()
+		}
+		l.day = t.UTC().Format(ledgerSegmentDateLayout)
+		l.cur = ledgerSegmentPath(l.path, l.day)
+	}
+	f, err := os.OpenFile(l.file(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
 	}
 	l.f = f
 	l.enc = json.NewEncoder(f)
 	return nil
+}
+
+// file is the path the ledger writes now.
+func (l *apiLedger) file() string {
+	if l.segmented && l.cur != "" {
+		return l.cur
+	}
+	return l.path
+}
+
+// rollDayIfNeeded moves a segmented ledger to the new day's segment once the
+// UTC date has changed. Caller must hold l.mu.
+func (l *apiLedger) rollDayIfNeeded() {
+	if !l.segmented {
+		return
+	}
+	t := time.Now()
+	if l.now != nil {
+		t = l.now()
+	}
+	if t.UTC().Format(ledgerSegmentDateLayout) == l.day {
+		return
+	}
+	if l.f != nil {
+		_ = l.f.Close()
+	}
+	l.f, l.enc = nil, nil
+	_ = l.open()
 }
 
 // close releases the file. Safe on an already-closed ledger.
@@ -392,6 +448,10 @@ func (l *apiLedger) record(rec APILedgerRecord, remainingHdr string) {
 	defer l.mu.Unlock()
 	if l.enc == nil {
 		return // closed by SetAPILedgerEnabled(false)
+	}
+	l.rollDayIfNeeded()
+	if l.enc == nil {
+		return // the new day's segment could not be opened
 	}
 	if remainingHdr != "" {
 		if n, err := strconv.Atoi(remainingHdr); err == nil {
@@ -441,7 +501,8 @@ func (l *apiLedger) rotateIfFull() {
 	if l.f == nil {
 		return
 	}
-	info, err := os.Stat(l.path)
+	path := l.file()
+	info, err := os.Stat(path)
 	if err != nil || info.Size() < ledgerMaxBytes {
 		if err == nil && l.rotatedAway(info) {
 			// A sibling process rotated our file out from under us; follow it
@@ -460,17 +521,17 @@ func (l *apiLedger) rotateIfFull() {
 	// keep-1 would rename the oldest backup to .keep and quietly retain one
 	// more file than the bound promises.
 	for i := ledgerKeepFiles - 2; i >= 1; i-- {
-		src := l.path + "." + strconv.Itoa(i)
-		dst := l.path + "." + strconv.Itoa(i+1)
+		src := path + "." + strconv.Itoa(i)
+		dst := path + "." + strconv.Itoa(i+1)
 		if _, serr := os.Stat(src); serr == nil {
 			_ = os.Rename(src, dst)
 		}
 	}
-	_ = os.Rename(l.path, l.path+".1")
+	_ = os.Rename(path, path+".1")
 	_ = l.open()
 }
 
-// rotatedAway reports whether the file at l.path is a different inode from the
+// rotatedAway reports whether the file at l.file() is a different inode from the
 // one l.f is writing to — the signature of a sibling process having rotated.
 func (l *apiLedger) rotatedAway(pathInfo os.FileInfo) bool {
 	ourInfo, err := l.f.Stat()

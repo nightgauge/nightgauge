@@ -314,8 +314,8 @@ func WalkEntries(root string, fn func(rel, abs string, block *FrontmatterBlock, 
 		}
 		name := d.Name()
 		if d.IsDir() {
-			// Dot-directories hold derived state, not entries — the recall
-			// cache under .recall-cache/ is the reason this exists.
+			// Dot-directories hold derived state, not entries: a stale
+			// pre-ADR-024 recall cache left in an old checkout is one.
 			if path != root && strings.HasPrefix(name, ".") {
 				return fs.SkipDir
 			}

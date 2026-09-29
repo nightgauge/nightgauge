@@ -55,6 +55,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/atomicfile"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // condStoreVersion is the ENTRY layout's version (condEntry). A reducer's
@@ -96,27 +97,25 @@ func NewConditionalStore(dir string) *ConditionalStore {
 }
 
 // cacheHomeEnv overrides the cache root: the store is then
-// $NIGHTGAUGE_CACHE_HOME/github-conditional.
-const cacheHomeEnv = "NIGHTGAUGE_CACHE_HOME"
+// $NIGHTGAUGE_CACHE_HOME/github-conditional. The resolver is
+// internal/layout.CacheHomePath (ADR-024 § 6); this alias only names it here.
+const cacheHomeEnv = layout.EnvCacheHome
 
 // ConditionalStoreDir is THE one place the store's location is decided:
-// $NIGHTGAUGE_CACHE_HOME/github-conditional when that is set, else the OS
-// user cache directory's nightgauge/github-conditional (os.UserCacheDir:
-// ~/Library/Caches on macOS, $XDG_CACHE_HOME or ~/.cache on Linux,
-// %LocalAppData% on Windows).
+// <cache home>/github-conditional, where the cache home is
+// internal/layout.CacheHomePath ($NIGHTGAUGE_CACHE_HOME, else
+// $XDG_CACHE_HOME/nightgauge, else the OS user cache directory's nightgauge;
+// on Windows %LOCALAPPDATA%\nightgauge\cache).
 //
 // Per user and never inside a repository: the entries are keyed by token
 // identity and hold forge answers, not repository state. An error means there
 // is no cache directory; the caller then keeps memory-only stores.
 func ConditionalStoreDir() (string, error) {
-	if root := os.Getenv(cacheHomeEnv); root != "" {
-		return filepath.Join(root, "github-conditional"), nil
-	}
-	base, err := os.UserCacheDir()
+	root, err := layout.CacheHomePath()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "nightgauge", "github-conditional"), nil
+	return filepath.Join(root, "github-conditional"), nil
 }
 
 // processCondStore is the store every client built by NewClientWithToken

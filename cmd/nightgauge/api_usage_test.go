@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/logretention"
 )
 
 func writeLedger(t *testing.T, lines ...string) string {
@@ -432,5 +435,55 @@ func TestAPIUsageByIdentity(t *testing.T) {
 	out = run("--identity", "unknown")
 	if !strings.Contains(out, "1 requests") {
 		t.Errorf("--identity unknown did not select the pre-#2087 record:\n%s", out)
+	}
+}
+
+// TestReadAPIUsageAfterRetentionPrune (#2029): the ledger is written in dated
+// segments, so log retention can delete old days whole. After a prune the
+// default read reports the surviving segments and treats the pruned days, and
+// the pruned pre-segment file, as absent.
+func TestReadAPIUsageAfterRetentionPrune(t *testing.T) {
+	root := t.TempDir()
+	logs := filepath.Join(root, ".nightgauge", "logs")
+	if err := os.MkdirAll(logs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	oldDay := now.Add(-60 * 24 * time.Hour)
+	write := func(name, caller string, ts, mod time.Time) {
+		t.Helper()
+		p := filepath.Join(logs, name)
+		line := `{"ts":"` + ts.UTC().Format(time.RFC3339Nano) + `","kind":"graphql","cost":1,"caller":"` + caller + `"}` + "\n"
+		if err := os.WriteFile(p, []byte(line), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(p, mod, mod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("github-api.jsonl", "legacy", oldDay, oldDay)
+	write(github.LedgerSegmentName(oldDay), "old-day", oldDay, oldDay)
+	write(github.LedgerSegmentName(now), "today", now.Add(-5*time.Minute), now)
+
+	t.Chdir(root)
+	before, err := readAPIUsage("", 0)
+	if err != nil || len(before) != 3 || before[0].Caller != "legacy" {
+		t.Fatalf("before prune: %+v, %v; want legacy, old-day and today, legacy first", before, err)
+	}
+
+	res, err := logretention.Prune(logs, logretention.Options{Policy: logretention.DefaultPolicy()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Deleted) != 2 {
+		t.Fatalf("pruned %+v, want the pre-segment file and the old day", res.Deleted)
+	}
+
+	recs, err := readAPIUsage("", 0)
+	if err != nil {
+		t.Fatalf("readAPIUsage after prune: %v", err)
+	}
+	if len(recs) != 1 || recs[0].Caller != "today" {
+		t.Fatalf("got %+v, want today's one record", recs)
 	}
 }

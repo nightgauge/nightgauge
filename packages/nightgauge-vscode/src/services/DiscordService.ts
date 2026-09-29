@@ -53,6 +53,7 @@ import {
   type WarnLogger,
 } from "./notifications/transport";
 import { formatCost } from "../utils/formatCost";
+import { resolveMainRepoRoot } from "../utils/adaptiveBudgetLoader";
 
 // Re-export so existing imports (tests/services/DiscordService.test.ts) still resolve.
 export { redactSecrets };
@@ -1029,14 +1030,16 @@ export class DiscordService implements Notifier, vscode.Disposable {
     // updated by RepositoryContextLoader when the active repo changes, so it
     // correctly reflects the platform repo during batch runs on acme-platform.
     // e.g. ".../acme-platform" → pop last segment → "acme-platform"
-    // Worktree roots: ".../repo/.worktrees/issue-63"
-    //   → strip ".worktrees/..." → ".../repo"
+    // Worktree roots: ".../repo/.worktrees/issue-63" or, since #2038, a
+    //   worktree outside the tree → resolveMainRepoRoot → ".../repo"
     //   → pop last segment → "repo"
     // (#471: this used to read a path getter and split the phantom state-file
     // suffix back off to arrive at exactly this value.)
     let repoRoot = effectiveStateService.getRepoRoot();
-    // Strip worktree suffix so we get the actual repo name, not "issue-NNN"
-    repoRoot = repoRoot.replace(/\/\.worktrees\/[^/]+$/, "");
+    // Walk a worktree back to its repo so we get the actual repo name, not
+    // "issue-NNN" — in-tree layouts by marker, outside-tree ones (#2038) from
+    // the answer WorktreeManager recorded when it created the worktree.
+    repoRoot = resolveMainRepoRoot(repoRoot);
     const repoName = repoRoot.split("/").pop() ?? repoRoot;
 
     // Consume pending repo slug (set via subscribeToSlot before embed creation)

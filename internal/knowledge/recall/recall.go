@@ -162,7 +162,8 @@ func BuildIndex(workdir string, scopes []string, cfg *config.KnowledgeConfig) (*
 	if docs == nil {
 		docs = scanRefs(workdir, refs)
 		if saveErr := saveToCache(workdir, docs, k1, b); saveErr != nil {
-			// Non-fatal — continue without cache persistence.
+			// Non-fatal: with no usable cache home the index lives in memory
+			// for this call, and nothing is written into the working tree.
 			_ = saveErr
 		}
 	}

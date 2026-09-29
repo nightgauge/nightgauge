@@ -22,7 +22,7 @@
  */
 
 import * as path from "path";
-import { resolveMainRepoRoot as resolveMainRepoRootShared } from "./adaptiveBudgetLoader";
+import { resolveMainRepoRootAsync as resolveMainRepoRootShared } from "./adaptiveBudgetLoader";
 import {
   AutoModelSelector,
   StageModelCalibrationService,
@@ -56,7 +56,8 @@ import { toModelEnvelope } from "./modeProfiles";
  * Re-exported from adaptiveBudgetLoader so there is ONE definition (#1017).
  * There were two copies, and both knew about one of the two worktree layouts —
  * see the note on the definition for why that made this estimator calibrate
- * against a near-empty history.
+ * against a near-empty history. The async form, so a Go worktree outside the
+ * working tree (#2038) is walked back to its repo through git.
  */
 const resolveMainRepoRoot = resolveMainRepoRootShared;
 
@@ -372,7 +373,7 @@ export async function captureEstimatorInputs(
   metadata: IssueMetadata,
   workspaceRoot: string
 ): Promise<EstimatorInputSnapshot> {
-  const historyRoot = resolveMainRepoRoot(workspaceRoot);
+  const historyRoot = await resolveMainRepoRoot(workspaceRoot);
   const calibrationPath = StageModelCalibrationService.getDefaultPath(historyRoot);
   const stageModelCalibration = await StageModelCalibrationService.load(calibrationPath);
   const { getPerformanceMode } = await import("./resolvers/monitoringResolver");
@@ -495,7 +496,7 @@ export async function runPreFlightBudgetCheck(
   // Issue #3216: the (mode, size) calibration bucket is consulted (with
   // elevated fallback) instead of a flat size lookup.
   const selector = new AutoModelSelector();
-  const historyRoot = resolveMainRepoRoot(workspaceRoot);
+  const historyRoot = await resolveMainRepoRoot(workspaceRoot);
   const snap = snapshot ?? (await captureEstimatorInputs(metadata, workspaceRoot));
   const estimate: PipelineCostEstimate = selector.estimatePipelineCost(snap.metadata, {
     skipStages,
@@ -722,7 +723,7 @@ export async function buildBudgetRetro(params: {
   const burnRatePerMinute = elapsedMinutes > 0 ? currentCost / elapsedMinutes : 0;
 
   // Historical comparison — use main repo root, not worktree
-  const retroHistoryRoot = resolveMainRepoRoot(workspaceRoot);
+  const retroHistoryRoot = await resolveMainRepoRoot(workspaceRoot);
   let calibration: HistoricalCalibration = { costUsd: null, sampleCount: 0, source: "none" };
   let costAssessment: "normal" | "above-average" | "anomalous" = "normal";
 

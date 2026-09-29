@@ -50,26 +50,76 @@ vi.mock("node:fs/promises", () => fsMock);
 
 import { WorktreeManager } from "../../src/utils/WorktreeManager";
 
+/** The base the binary resolves for /repo (#2038): outside the working tree. */
+const BASE = "/state/worktrees/abc123def456";
+
 describe("WorktreeManager", () => {
   let manager: WorktreeManager;
   const repoRoot = "/repo";
 
   beforeEach(() => {
     vi.clearAllMocks();
-    manager = new WorktreeManager(repoRoot, ".worktrees");
+    manager = new WorktreeManager(repoRoot, { resolveBase: async () => BASE });
     execAsyncMock.mockResolvedValue({ stdout: "", stderr: "" });
     execFileAsyncMock.mockResolvedValue({ stdout: "", stderr: "" });
     execFileSyncMock.mockReturnValue(Buffer.from(""));
   });
 
-  describe("getWorktreePath", () => {
-    it("returns correct path for issue number", () => {
-      expect(manager.getWorktreePath(42)).toBe("/repo/.worktrees/issue-42");
+  describe("getWorktreePath / resolveWorktreePath (#2038)", () => {
+    it("names <repo>-issue-<N> under the binary's base, outside the tree", async () => {
+      expect(manager.getWorktreePath(42)).toBeUndefined(); // base not resolved yet
+      expect(await manager.resolveWorktreePath(42)).toBe(`${BASE}/repo-issue-42`);
+      expect(manager.getWorktreePath(42)).toBe(`${BASE}/repo-issue-42`);
     });
 
-    it("works with custom worktree base", () => {
-      const custom = new WorktreeManager(repoRoot, "custom-trees");
-      expect(custom.getWorktreePath(100)).toBe("/repo/custom-trees/issue-100");
+    it("uses the configured repository name, owner stripped", async () => {
+      const named = new WorktreeManager(repoRoot, {
+        repoName: "acme/widget",
+        resolveBase: async () => BASE,
+      });
+      expect(await named.resolveWorktreePath(7)).toBe(`${BASE}/widget-issue-7`);
+    });
+
+    it("finds a pre-#2038 worktree through git worktree list and leaves it in place", async () => {
+      execAsyncMock.mockImplementation((cmd: string) =>
+        Promise.resolve({
+          stdout: cmd.startsWith("git worktree list")
+            ? [
+                "worktree /repo",
+                "branch refs/heads/main",
+                "",
+                "worktree /repo/.worktrees/issue-42",
+                "branch refs/heads/feat/42-old",
+                "",
+                "worktree /repo/.nightgauge/worktrees/repo-issue-43",
+                "branch refs/heads/feat/43-go",
+                "",
+              ].join("\n")
+            : "",
+          stderr: "",
+        })
+      );
+      expect(await manager.resolveWorktreePath(42)).toBe("/repo/.worktrees/issue-42");
+      expect(await manager.resolveWorktreePath(43)).toBe(
+        "/repo/.nightgauge/worktrees/repo-issue-43"
+      );
+      expect(await manager.resolveWorktreePath(44)).toBe(`${BASE}/repo-issue-44`);
+    });
+
+    it("fails creation with the binary's refusal instead of falling back into the tree", async () => {
+      const refused = new WorktreeManager(repoRoot, {
+        resolveBase: async () => {
+          throw new Error("invalid pipeline.worktree_base: config.yaml:30");
+        },
+      });
+      await expect(refused.create(42, "feat/42-x", { npmInstall: false })).rejects.toThrow(
+        "config.yaml:30"
+      );
+      expect(execFileAsyncMock).not.toHaveBeenCalledWith(
+        "git",
+        expect.arrayContaining(["worktree", "add"]),
+        expect.anything()
+      );
     });
   });
 
@@ -86,16 +136,23 @@ describe("WorktreeManager", () => {
       // this async, so the mock is execFileAsyncMock now.
       expect(execFileAsyncMock).toHaveBeenCalledWith(
         "git",
-        ["worktree", "add", "/repo/.worktrees/issue-42", "-b", "feat/42-dark-mode", "origin/main"],
+        [
+          "worktree",
+          "add",
+          "/state/worktrees/abc123def456/repo-issue-42",
+          "-b",
+          "feat/42-dark-mode",
+          "origin/main",
+        ],
         expect.objectContaining({ cwd: repoRoot })
       );
       // npm install via execAsync
       expect(execAsyncMock).toHaveBeenCalledWith(
         "npm install --prefer-offline",
-        expect.objectContaining({ cwd: "/repo/.worktrees/issue-42" })
+        expect.objectContaining({ cwd: "/state/worktrees/abc123def456/repo-issue-42" })
       );
 
-      expect(result.path).toBe("/repo/.worktrees/issue-42");
+      expect(result.path).toBe("/state/worktrees/abc123def456/repo-issue-42");
       expect(result.branch).toBe("feat/42-dark-mode");
       expect(result.issueNumber).toBe(42);
       expect(result.exists).toBe(true);
@@ -201,52 +258,18 @@ describe("WorktreeManager", () => {
 
       const result = await manager.create(42, "feat/42-test");
 
-      expect(result.path).toBe("/repo/.worktrees/issue-42");
+      expect(result.path).toBe("/state/worktrees/abc123def456/repo-issue-42");
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("npm install failed"));
       warnSpy.mockRestore();
     });
 
-    it("ignores the worktree base per machine, never in the tracked .gitignore (#1875)", async () => {
-      fsMock.readFile.mockImplementation((p: string) =>
-        String(p) === "/repo/.gitignore"
-          ? Promise.resolve("node_modules\n")
-          : Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }))
-      );
-      execFileAsyncMock.mockImplementation((_cmd: string, args: string[]) =>
-        Promise.resolve({
-          stdout:
-            args[0] === "rev-parse" && args.includes("--git-common-dir") ? "/repo/.git\n" : "",
-          stderr: "",
-        })
-      );
+    it("writes no ignore rule: the worktree is outside the working tree (#2038)", async () => {
+      fsMock.readFile.mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
 
       await manager.create(42, "feat/42-test", { npmInstall: false });
 
-      expect(fsMock.writeFile).toHaveBeenCalledWith(
-        "/repo/.git/info/exclude",
-        expect.stringContaining("/.worktrees/"),
-        "utf8"
-      );
-      expect(fsMock.writeFile).not.toHaveBeenCalledWith(
-        "/repo/.gitignore",
-        expect.anything(),
-        expect.anything()
-      );
-    });
-
-    it("does not duplicate .gitignore entry", async () => {
-      fsMock.readFile.mockImplementation((p: string) => {
-        if (String(p).endsWith(".gitignore")) {
-          return Promise.resolve("node_modules\n.worktrees\n");
-        }
-        // No config.local.yaml in this repo.
-        return Promise.reject(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
-      });
-
-      await manager.create(42, "feat/42-test", { npmInstall: false });
-
-      // writeFile should not be called since .worktrees is already in .gitignore
       expect(fsMock.writeFile).not.toHaveBeenCalled();
+      expect(fsMock.mkdir).toHaveBeenCalledWith(BASE, { recursive: true, mode: 0o700 });
     });
 
     it("copies config.local.yaml into the worktree when present (tier parity)", async () => {
@@ -266,7 +289,7 @@ describe("WorktreeManager", () => {
       // The gitignored local tier must reach the worktree — the Go gates run
       // with --workdir <worktree> and merge project+local from there.
       expect(fsMock.writeFile).toHaveBeenCalledWith(
-        "/repo/.worktrees/issue-42/.nightgauge/config.local.yaml",
+        "/state/worktrees/abc123def456/repo-issue-42/.nightgauge/config.local.yaml",
         localBody,
         "utf-8"
       );
@@ -310,7 +333,7 @@ describe("WorktreeManager", () => {
         if (cmd === "git worktree list --porcelain") {
           return Promise.resolve({
             stdout: [
-              "worktree /repo/.worktrees/issue-42",
+              "worktree /state/worktrees/abc123def456/repo-issue-42",
               "HEAD def456",
               "branch refs/heads/feat/42-test",
               "",
@@ -324,7 +347,7 @@ describe("WorktreeManager", () => {
       const result = await manager.create(42, "feat/42-test", { npmInstall: false });
 
       expect(result).toEqual({
-        path: "/repo/.worktrees/issue-42",
+        path: "/state/worktrees/abc123def456/repo-issue-42",
         branch: "feat/42-test",
         issueNumber: 42,
         exists: true,
@@ -354,7 +377,7 @@ describe("WorktreeManager", () => {
 
       expect(execFileAsyncMock).toHaveBeenCalledWith(
         "git",
-        ["worktree", "add", "/repo/.worktrees/issue-42", "feat/42-test"],
+        ["worktree", "add", "/state/worktrees/abc123def456/repo-issue-42", "feat/42-test"],
         expect.objectContaining({ cwd: repoRoot })
       );
       expect(execFileAsyncMock).not.toHaveBeenCalledWith(
@@ -386,7 +409,7 @@ describe("WorktreeManager", () => {
         if (cmd === "git worktree list --porcelain") {
           return Promise.resolve({
             stdout: [
-              "worktree /repo/.worktrees/issue-42",
+              "worktree /state/worktrees/abc123def456/repo-issue-42",
               "HEAD def456",
               "branch refs/heads/feat/42-test",
               "",
@@ -400,7 +423,7 @@ describe("WorktreeManager", () => {
       const result = await manager.create(42, "feat/42-test", { npmInstall: false });
 
       expect(result).toEqual({
-        path: "/repo/.worktrees/issue-42",
+        path: "/state/worktrees/abc123def456/repo-issue-42",
         branch: "feat/42-test",
         issueNumber: 42,
         exists: true,
@@ -434,7 +457,7 @@ describe("WorktreeManager", () => {
         if (cmd === "git worktree list --porcelain") {
           return Promise.resolve({
             stdout: [
-              "worktree /repo/.worktrees/issue-42",
+              "worktree /state/worktrees/abc123def456/repo-issue-42",
               "HEAD def456",
               "branch refs/heads/feat/42-test",
               "",
@@ -449,7 +472,14 @@ describe("WorktreeManager", () => {
 
       expect(execFileAsyncMock).toHaveBeenCalledWith(
         "git",
-        ["worktree", "add", "/repo/.worktrees/issue-42", "-b", "feat/42-test", "origin/main"],
+        [
+          "worktree",
+          "add",
+          "/state/worktrees/abc123def456/repo-issue-42",
+          "-b",
+          "feat/42-test",
+          "origin/main",
+        ],
         expect.anything()
       );
     });
@@ -466,7 +496,14 @@ describe("WorktreeManager", () => {
       );
       expect(execFileAsyncMock).toHaveBeenCalledWith(
         "git",
-        ["worktree", "add", "/repo/.worktrees/issue-42", "-b", "feat/42-test", "origin/main"],
+        [
+          "worktree",
+          "add",
+          "/state/worktrees/abc123def456/repo-issue-42",
+          "-b",
+          "feat/42-test",
+          "origin/main",
+        ],
         expect.objectContaining({ cwd: repoRoot })
       );
     });
@@ -478,7 +515,14 @@ describe("WorktreeManager", () => {
 
       expect(execFileAsyncMock).toHaveBeenCalledWith(
         "git",
-        ["worktree", "add", "/repo/.worktrees/issue-42", "-b", "feat/42-test", "origin/main"],
+        [
+          "worktree",
+          "add",
+          "/state/worktrees/abc123def456/repo-issue-42",
+          "-b",
+          "feat/42-test",
+          "origin/main",
+        ],
         expect.objectContaining({ cwd: repoRoot })
       );
     });
@@ -503,7 +547,14 @@ describe("WorktreeManager", () => {
       );
       expect(execFileAsyncMock).toHaveBeenCalledWith(
         "git",
-        ["worktree", "add", "/repo/.worktrees/issue-42", "-b", "feat/42-test", "origin/main"],
+        [
+          "worktree",
+          "add",
+          "/state/worktrees/abc123def456/repo-issue-42",
+          "-b",
+          "feat/42-test",
+          "origin/main",
+        ],
         expect.objectContaining({ cwd: repoRoot })
       );
     });
@@ -514,7 +565,7 @@ describe("WorktreeManager", () => {
       await manager.cleanup(42);
 
       expect(execAsyncMock).toHaveBeenCalledWith(
-        'git worktree remove "/repo/.worktrees/issue-42" --force',
+        'git worktree remove "/state/worktrees/abc123def456/repo-issue-42" --force',
         expect.objectContaining({ cwd: repoRoot })
       );
     });
@@ -530,7 +581,7 @@ describe("WorktreeManager", () => {
       await manager.cleanup(42);
 
       expect(fsMock.rm).toHaveBeenCalledWith(
-        "/repo/.worktrees/issue-42",
+        "/state/worktrees/abc123def456/repo-issue-42",
         expect.objectContaining({ recursive: true, force: true })
       );
       expect(execAsyncMock).toHaveBeenCalledWith(
@@ -786,7 +837,7 @@ describe("WorktreeManager", () => {
       await manager.cleanup(42);
 
       expect(execAsyncMock).toHaveBeenCalledWith(
-        'git worktree remove "/repo/.worktrees/issue-42" --force',
+        'git worktree remove "/state/worktrees/abc123def456/repo-issue-42" --force',
         expect.objectContaining({ cwd: repoRoot })
       );
     });
@@ -809,7 +860,7 @@ describe("WorktreeManager", () => {
       await manager.cleanup(42);
 
       expect(execAsyncMock).toHaveBeenCalledWith(
-        'git worktree remove "/repo/.worktrees/issue-42" --force',
+        'git worktree remove "/state/worktrees/abc123def456/repo-issue-42" --force',
         expect.objectContaining({ cwd: repoRoot })
       );
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("docker compose teardown"));
@@ -853,11 +904,11 @@ describe("WorktreeManager", () => {
           "HEAD abc123",
           "branch refs/heads/main",
           "",
-          "worktree /repo/.worktrees/issue-42",
+          "worktree /state/worktrees/abc123def456/repo-issue-42",
           "HEAD def456",
           "branch refs/heads/feat/42-dark-mode",
           "",
-          "worktree /repo/.worktrees/issue-99",
+          "worktree /state/worktrees/abc123def456/repo-issue-99",
           "HEAD ghi789",
           "branch refs/heads/feat/99-fix-bug",
           "",
@@ -870,7 +921,7 @@ describe("WorktreeManager", () => {
       expect(active).toHaveLength(2);
       expect(active[0].issueNumber).toBe(42);
       expect(active[0].branch).toBe("feat/42-dark-mode");
-      expect(active[0].path).toBe("/repo/.worktrees/issue-42");
+      expect(active[0].path).toBe("/state/worktrees/abc123def456/repo-issue-42");
       expect(active[1].issueNumber).toBe(99);
       expect(active[1].branch).toBe("feat/99-fix-bug");
     });
@@ -917,16 +968,48 @@ describe("WorktreeManager", () => {
     it("removes directories not tracked by git worktree", async () => {
       execAsyncMock.mockResolvedValue({ stdout: "", stderr: "" });
 
-      fsMock.readdir.mockResolvedValue([
-        { name: "issue-42", isDirectory: () => true },
-        { name: "issue-99", isDirectory: () => true },
-      ]);
+      fsMock.readdir.mockImplementation((dir: string) =>
+        Promise.resolve(
+          dir === BASE
+            ? [
+                { name: "repo-issue-42", isDirectory: () => true },
+                { name: "repo-issue-99", isDirectory: () => true },
+              ]
+            : dir === "/repo/.worktrees"
+              ? [{ name: "issue-7", isDirectory: () => true }]
+              : []
+        )
+      );
 
       // listActive returns empty (no tracked worktrees)
       const cleaned = await manager.cleanupOrphans();
 
-      expect(fsMock.rm).toHaveBeenCalledTimes(2);
-      expect(cleaned).toBe(2);
+      expect(fsMock.rm).toHaveBeenCalledTimes(3);
+      expect(cleaned).toBe(3);
+    });
+
+    it("never touches another repository's worktree in a shared base", async () => {
+      execAsyncMock.mockResolvedValue({ stdout: "", stderr: "" });
+      fsMock.readdir.mockImplementation((dir: string) =>
+        Promise.resolve(
+          dir === BASE
+            ? [
+                { name: "other-issue-42", isDirectory: () => true }, // another repo's name
+                { name: "repo-issue-43", isDirectory: () => true }, // live in another clone
+                { name: "notes", isDirectory: () => true },
+              ]
+            : []
+        )
+      );
+      fsMock.readFile.mockImplementation((p: string) =>
+        String(p) === `${BASE}/repo-issue-43/.git`
+          ? Promise.resolve("gitdir: /elsewhere/.git/worktrees/repo-issue-43\n")
+          : Promise.reject(new Error("ENOENT"))
+      );
+      fsMock.access.mockResolvedValue(undefined); // that gitdir exists
+
+      expect(await manager.cleanupOrphans()).toBe(0);
+      expect(fsMock.rm).not.toHaveBeenCalled();
     });
   });
 

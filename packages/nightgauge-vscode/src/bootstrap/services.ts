@@ -1475,7 +1475,6 @@ export async function initializeServices(
       logger,
       {
         maxConcurrent: concurrentConfig.maxConcurrent,
-        worktreeBase: concurrentConfig.worktreeBase,
       },
       workspaceManager ?? undefined
     );
@@ -1489,7 +1488,7 @@ export async function initializeServices(
 
     // #1499: tell worktree containment which repos other slots are working in.
     // With max_concurrent > 1 each slot's own legitimate activity in its own
-    // repo (its worktree lives under that repo's `.worktrees/`, its pr stages
+    // repo (its worktree belongs to that repo's clone, its pr stages
     // fetch and push in the root) is, from every OTHER slot's point of view,
     // an out-of-bounds repo going dirty. Those repos stay observed but become
     // warning-only, so one slot can no longer fail another for doing its job.
@@ -2036,7 +2035,6 @@ export async function initializeServices(
     // stale recovery and orphan cleanup regardless of maxConcurrent.
     logger.info("Worktree pipeline mode enabled", {
       maxConcurrent: concurrentConfig.maxConcurrent,
-      worktreeBase: concurrentConfig.worktreeBase,
     });
 
     // Direct `nightgauge run` processes do not pass through this extension's

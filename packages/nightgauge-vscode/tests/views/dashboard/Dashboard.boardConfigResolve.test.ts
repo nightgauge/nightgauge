@@ -100,6 +100,17 @@ function boardData(): ProjectBoardData | null {
   ).state.getProjectBoardData();
 }
 
+/**
+ * Wait until the config-resolved refresh has recorded a loaded board. That
+ * refresh runs detached and its tail does real I/O (it reads the workspace
+ * config file, which is absent here), so the number of event-loop turns it
+ * takes is not fixed: a fixed settle() count passed locally and lost on a
+ * loaded CI runner. Wait for the state instead.
+ */
+async function boardLoaded(): Promise<void> {
+  await vi.waitFor(() => expect(boardData()?.loadingState).toBe("loaded"), { timeout: 5000 });
+}
+
 /** Let the config-resolved refresh run to completion. */
 async function settle(): Promise<void> {
   for (let i = 0; i < 10; i++) await new Promise((r) => setImmediate(r));
@@ -133,9 +144,7 @@ describe("board summary before and after the config resolves (#2287)", () => {
 
     // The config resolves; no one presses refresh.
     resolve();
-    await settle();
-
-    expect(boardData()?.loadingState).toBe("loaded");
+    await boardLoaded();
     expect(boardData()?.statusCounts).toEqual({
       ready: 1,
       inProgress: 1,
@@ -159,10 +168,9 @@ describe("board summary before and after the config resolves (#2287)", () => {
     board.hold = null;
     release();
     await refresh;
-    await settle();
+    await boardLoaded();
 
     expect(svc.prefetchAllItems).toHaveBeenCalledTimes(2);
-    expect(boardData()?.loadingState).toBe("loaded");
     expect(boardData()?.statusCounts.ready).toBe(1);
   });
 

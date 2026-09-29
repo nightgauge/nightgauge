@@ -88,7 +88,6 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getConcurrentPipelineConfig: vi.fn().mockReturnValue({
     maxConcurrent: 2,
-    worktreeBase: ".worktrees",
   }),
 }));
 
@@ -319,7 +318,7 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
       mockQueue as any,
       factory,
       mockLogger as any,
-      { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      { maxConcurrent: 2 }
     );
     manager.setCallbacks(callbacks as any);
     return manager;

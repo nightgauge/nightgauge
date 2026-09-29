@@ -183,6 +183,14 @@ func computeStatus(effectiveTier, targetTier string) string {
 	if targetTier == "unknown" {
 		return "UNCLASSIFIED"
 	}
+	// A per-machine value that may also sit in the gitignored local file
+	// (pipeline.worktree_base, ADR-024 § 9): only the committed file is wrong.
+	if targetTier == "machine-or-local" {
+		if effectiveTier == "machine" || effectiveTier == "local" {
+			return "OK"
+		}
+		return "DRIFT — machine key in " + effectiveTier + " config"
+	}
 	// Resolve each target tier to its expected file tier.
 	expectedEffective := map[string]string{
 		"team":    "project", // team keys live in .nightgauge/config.yaml (the project file)

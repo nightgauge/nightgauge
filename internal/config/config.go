@@ -1261,9 +1261,16 @@ type UICoreConfig struct {
 }
 
 // PipelineConfig captures the subset of the YAML pipeline: block that the Go
-// binary needs. Other fields (worktree_base, stage_cost_caps, etc.) are owned
-// by the TypeScript side and intentionally not mirrored here.
+// binary needs. Other fields (stage_cost_caps, etc.) are owned by the
+// TypeScript side and intentionally not mirrored here.
 type PipelineConfig struct {
+	// WorktreeBase is pipeline.worktree_base, the directory pipeline worktrees
+	// are created in (ADR-024 § 9). Displayed by `config show`; never read from
+	// here to place a worktree: ResolveWorktreeBase reads it per tier, because
+	// it is a machine- or local-tier key and a value in the committed team file
+	// is an error, which the merged view cannot tell apart.
+	WorktreeBase string `yaml:"worktree_base,omitempty" json:"worktreeBase,omitempty"`
+
 	// StallIdleMs is the absolute idle-kill threshold in milliseconds. When set,
 	// overrides the computed threshold×multiplier value. Mirrors the TypeScript
 	// pipeline.stall_idle_ms field (Issue #3484).
@@ -1360,9 +1367,11 @@ type PipelineConfig struct {
 	// Logs holds the pipeline.logs: block — currently just
 	// history_retention_days, the ONE knob shared by the VSCode extension's
 	// execution-history cleanup and the Go writer's own prune pass (#674).
-	// The other pipeline.logs.* keys (retain, dir, max_age_days, max_count,
-	// max_entry_chars) govern the VSCode-only disk session log and have no Go
-	// consumer, so they are deliberately not modeled here.
+	// The other pipeline.logs.* keys (retain, dir, max_count, max_entry_chars)
+	// govern the VSCode-only disk session log and have no Go consumer, so they
+	// are deliberately not modeled here. max_size_mb and max_age_days are the
+	// machine-tier log retention caps (ADR-024 § 11); internal/logretention
+	// reads them from the machine file alone, never through this struct.
 	Logs *PipelineLogsConfig `yaml:"logs,omitempty" json:"logs,omitempty"`
 }
 

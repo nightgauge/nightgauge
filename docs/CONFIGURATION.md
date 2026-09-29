@@ -607,9 +607,11 @@ github:
 
 It is on by default because an exhausted GraphQL quota is never reproducible on
 demand, so an opt-in instrument is reliably switched off during the only hours
-that matter. The file is bounded — `.nightgauge/logs/github-api.jsonl`, 5 MB
-with one rotated backup, gitignored — and the disabled path costs one nil check
-per request.
+that matter. The ledger is bounded: it is written as one
+`.nightgauge/logs/github-api-YYYY-MM-DD.jsonl` segment per UTC day (5 MB with
+one rotated backup within a day, gitignored), and log retention deletes whole
+old segments under `pipeline.logs.max_size_mb` and `pipeline.logs.max_age_days`.
+The disabled path costs one nil check per request.
 
 `NIGHTGAUGE_GITHUB_API_LOG` overrides this setting in **both** directions, as
 `NIGHTGAUGE_*` overrides do everywhere: `0` switches the ledger off even when
@@ -2495,25 +2497,38 @@ pipeline:
 Unified concurrent-slot ceiling — the **single source of truth** for both
 drag-to-pipeline (TS `ConcurrentPipelineManager`) and autonomous-mode dispatch
 (Go `internal/orchestrator` scheduler). Each concurrent pipeline runs in an
-isolated worktree directory under `{worktree_base}/issue-{N}/`. Set to 1 to
-disable concurrent execution (sequential mode, no worktrees).
+isolated worktree directory, `<worktree base>/<repo>-issue-<N>/`, outside the
+working tree. Set to 1 to disable concurrent execution (sequential mode, no
+worktrees).
 
 > **Deprecated:** `autonomous.max_concurrent` was previously a separate key.
 > It is now honored only as a fallback when `pipeline.max_concurrent` is
 > unset, and the extension prompts to consolidate on activation. See
 > [DEPRECATIONS.md](DEPRECATIONS.md#autonomousmax_concurrent).
 
-| Option           | Type    | Default        | Range | Description                                     |
-| ---------------- | ------- | -------------- | ----- | ----------------------------------------------- |
-| `max_concurrent` | integer | `3`            | 1–10  | Maximum concurrent pipeline executions          |
-| `worktree_base`  | string  | `".worktrees"` | -     | Base directory for worktrees (relative to repo) |
+| Option           | Type    | Default                       | Range | Description                                                             |
+| ---------------- | ------- | ----------------------------- | ----- | ----------------------------------------------------------------------- |
+| `max_concurrent` | integer | `3`                           | 1–10  | Maximum concurrent pipeline executions                                  |
+| `worktree_base`  | string  | `STATE/worktrees/<repo-key>/` | -     | Absolute directory for pipeline worktrees; machine or local config only |
+
+`worktree_base` is a machine- or local-tier key (`~` is expanded). Unset, worktrees
+live in the machine-state directory, keyed per clone
+([ADR-024 § 9](decisions/024-data-and-state-layout.md)); `nightgauge worktree base`
+prints the resolved directory. A relative value, a value in the committed
+`.nightgauge/config.yaml`, or one that resolves inside the working tree makes worktree
+creation fail with an error naming the file, the line and the fix.
 
 **Example:**
 
 ```yaml
 pipeline:
   max_concurrent: 4
-  worktree_base: ".worktrees"
+```
+
+```yaml
+# ~/.nightgauge/config.yaml or .nightgauge/config.local.yaml
+pipeline:
+  worktree_base: ~/nightgauge-worktrees
 ```
 
 **Environment override:**

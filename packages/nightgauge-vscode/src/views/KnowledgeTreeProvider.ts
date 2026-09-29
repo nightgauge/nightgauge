@@ -32,6 +32,7 @@ import type { KnowledgeRecallHit } from "../services/IpcClientBase";
 import type { ConfigBridge } from "../services/ConfigBridge";
 import { TRUST_UNVERIFIED, trustTierOfContent, type TrustTier } from "@nightgauge/sdk";
 import { issueContextCandidates, pipelineFileCandidates } from "../utils/issueContextCandidates";
+import { resolveWorktreeBase } from "../utils/worktreeLocation";
 
 const RELATED_LIMIT = 10;
 const WATCHER_DEBOUNCE_MS = 500;
@@ -86,11 +87,20 @@ export class KnowledgeTreeProvider
     }
 
     this.initializeWatcher();
+
+    // The Go manager's worktrees live outside the working tree (#2038); the
+    // binary resolves their base. Re-render once the answer arrives so the
+    // Active Issue section can read an issue context written there.
+    if (this.workspaceRoot) {
+      void resolveWorktreeBase(this.workspaceRoot).then((base) => {
+        if (base) this._onDidChangeTreeData.fire();
+      });
+    }
   }
 
   /**
    * The repo name used by the Go manager's worktree leaf
-   * (`.nightgauge/worktrees/{repoName}-issue-N`). Falls back to the workspace
+   * (`<worktree base>/{repoName}-issue-N`). Falls back to the workspace
    * directory name, which is what that leaf is in the ordinary layout.
    */
   private get repoName(): string {

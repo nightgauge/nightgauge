@@ -1752,18 +1752,26 @@ The two dispatch paths lay their worktrees out differently, and the scanner sees
 both — often on the same machine, since a repo can be driven by the extension one
 day and the Go scheduler the next:
 
-| Creator                            | Directory                                                |
-| ---------------------------------- | -------------------------------------------------------- |
-| VSCode extension `WorktreeManager` | `{repoRoot}/{worktree_base}/issue-{N}`                   |
-| Go `execution.Manager`             | `{workspaceRoot}/.nightgauge/worktrees/{repo}-issue-{N}` |
+| Creator                                             | Directory                                           |
+| --------------------------------------------------- | --------------------------------------------------- |
+| Go `execution.Manager` and VSCode `WorktreeManager` | `{worktree base}/{repo}-issue-{N}`                  |
+| Go `execution.Manager`, before #2038                | `{repoRoot}/.nightgauge/worktrees/{repo}-issue-{N}` |
+| VSCode `WorktreeManager`, before #2038              | `{repoRoot}/.worktrees/issue-{N}`                   |
 
-**The `{repo}-` prefix is load-bearing, not decoration.** The extension nests its
-worktree base (default `.worktrees`) inside each repo root, so `issue-42` is
-already namespaced by the repo that contains it. The Go layer does the opposite:
-every run in the workspace shares one `{workspaceRoot}/.nightgauge/worktrees/`
-root, so in a multi-repo workspace two repos' issue #42 would land on the same
-directory without the prefix — one run checking out over another's tree. Dropping
-the prefix to "match the extension" reintroduces exactly that collision.
+Both dispatch paths now use one location and one name (ADR-024 § 9). The worktree
+base is outside the working tree: `pipeline.worktree_base` from the machine or
+local config tier, else `STATE/worktrees/<repo-key>`, resolved by
+`config.ResolveWorktreeBase` and printed by `nightgauge worktree base`, which is
+where the extension gets it. There is no in-tree default. `layout.WorktreePath`
+refuses a path that, after symlink evaluation, is not directly inside that base. A
+worktree created at a pre-#2038 location is found through `git worktree list` and
+used where it is until its run ends; sweep and reclaim find worktrees at every
+location the same way. Nothing moves them (the migration, #2040, moves idle ones).
+
+**The `{repo}-` prefix is load-bearing, not decoration.** The base can be one
+directory shared by several repositories (a configured `pipeline.worktree_base`),
+so in a multi-repo workspace two repos' issue #42 would land on the same
+directory without the prefix — one run checking out over another's tree.
 
 Creation and teardown must never derive this name independently: `worktreePath`
 is the single derivation, and both `ensureWorktree` and `CleanupWorktree` call it
@@ -3528,9 +3536,14 @@ existing Python parser's behavior).
       ]
     }
   ],
-  "warnings": []
+  "warnings": [],
+  "oldest_log_date": "2026-04-02"
 }
 ```
+
+`oldest_log_date` is the date of the earliest log scanned. Log retention deletes
+whole session logs, so a `--since` range that reaches back past it is absent:
+reported with no error and no warning.
 
 The 16-pattern set is the source of truth in
 `internal/cmd/scanfailures/scanner.go` (`var FailurePatterns`). Failure
@@ -3539,6 +3552,34 @@ _classification_ (bucketing into one of 7 categories) is owned separately by
 `scripts/retro/classifiers/failure_classifier.py`.
 
 Used by `skills/nightgauge-retro/SKILL.md` Phase 2.3.
+
+#### `logs prune`
+
+Applies log retention now (ADR-024 § 11). Each log directory (the clone's
+`.nightgauge/logs/` and the machine state `logs/`) is held to a total size cap
+and a maximum file age, set by machine-tier `pipeline.logs.max_size_mb`
+(default 200) and `pipeline.logs.max_age_days` (default 30). Files older than
+the age cap go first, then the oldest files until the directory is under the
+size cap.
+
+Never deleted: the live files `go-backend.log` and the current UTC day's ledger
+segment `github-api-YYYY-MM-DD.jsonl` (earlier segments, size backups and a
+pre-segment `github-api.jsonl` are prunable),
+files written in the last hour, files of a run that is not terminal (running,
+queued, paused or parked; every issue-keyed file when the run state cannot be
+read), dot files, symlinks, subdirectories, and anything outside the resolved
+directory. A log directory that is itself a symlink is refused. When only such
+files remain over the cap, pruning stops and `nightgauge doctor` reports the
+directory (`NGD043`).
+
+The same prune runs at `nightgauge serve` start and daily while it runs, and at
+CLI start when the last prune (the mtime of `logs/.last-prune`) is over a day
+old.
+
+```bash
+nightgauge logs prune --dry-run
+nightgauge logs prune --workdir /path/to/repo --json
+```
 
 ---
 
@@ -4857,8 +4898,8 @@ It is therefore **on by default**, bounded rather than unbounded:
 
 | | |
 | --- | --- |
-| File | `.nightgauge/logs/github-api.jsonl`, gitignored with the other logs |
-| Bound | 5 MB, one numbered backup (`.jsonl.1`) — ~20k requests, days of idle traffic |
+| File | `.nightgauge/logs/github-api-YYYY-MM-DD.jsonl`, one segment per UTC day, gitignored with the other logs |
+| Bound | Log retention (200 MB and 30 days per log directory) deletes whole old segments; within a day each segment rotates at 5 MB into one numbered backup (`.jsonl.1`) |
 | Off switch | `github.api_ledger.enabled: false`, or `NIGHTGAUGE_GITHUB_API_LOG=0` |
 | Override | `NIGHTGAUGE_GITHUB_API_LOG=<path>` writes elsewhere; env wins over config in both directions |
 
@@ -4873,12 +4914,16 @@ is how a script asks for the same thing, and it includes `graphql_mutation`
 because mutations bill to the same pool. The human report prints an unfiltered
 per-resource table instead, which is honest because it labels each pool.
 
-**Read the rolling SET, not the live file.** The window anyone opens this report
+**Read the whole SET, not the live file.** The window anyone opens this report
 for is the busy one, and a busy hour is the hour that rotates: a reader that
-opens only `github-api.jsonl` reports a sudden collapse in spending at exactly
+opens only the day's segment reports a sudden collapse in spending at exactly
 the moment spending was heaviest. `api-usage` without `--file` reads the set
-(`github.LedgerFiles`); `--file` reads one named file, which is the archaeology
-case.
+(`github.LedgerFiles`): a pre-segment `github-api.jsonl` and its backup, if
+any, then every dated segment in the window with its backup. A segment log
+retention deleted is absent from the set, so a window reaching past it reports
+fewer records, never an error. `--file` reads one named file, which is the
+archaeology case. An explicit `NIGHTGAUGE_GITHUB_API_LOG=<path>` is written as
+named, without dated segments.
 
 Rotation is safe across the several nightgauge processes that share one
 workspace ledger. The writer sizes the **path**, not its open handle, so a
@@ -5628,14 +5673,11 @@ nightgauge process, so the argv-basename filter could never have seen them.
   produces nothing at all) is a MECHANISM FAILURE, not "nothing found": it
   routes the whole check through `unverifiableProcessScan` rather than
   reporting clean off a scan that never ran (#296).
-- **Three known worktree bases per repo root**:
-  `.nightgauge/worktrees` (the Go `execution.Manager`'s own default),
-  `.worktrees` (the VSCode extension's default, `WorktreeManager.ts`), and
-  `.claude/worktrees` (Claude Code's own base) — the same three
-  `worktreeContainment.ts`'s `isLinkedWorktree` doc comment names. Best-effort,
-  not authoritative: a workspace-configured `pipeline.worktree_base` is
-  TypeScript-side config this Go binary does not parse, so a custom base is
-  invisible to this scan.
+- **Four known worktree bases per repo root**: the Go `execution.Manager`'s
+  resolved base outside the tree (`pipeline.worktree_base`, else
+  `STATE/worktrees/<repo-key>`, #2038), `.nightgauge/worktrees` (its pre-#2038
+  default), `.worktrees` (the VSCode extension's pre-#2038 default), and
+  `.claude/worktrees` (Claude Code's own base).
 - **Containment is decided lexically, and cwd need not exist.** Only the
   worktree-base directory (e.g. `<repo>/.nightgauge/worktrees`) is resolved
   with `filepath.EvalSymlinks` — it still exists whenever this scan has
@@ -8156,7 +8198,7 @@ ranking change ends up applying to one caller and not the other.
 
 **Graduated ADR de-duplication**: when a `decisions.md` has a `<!-- graduated-to: docs/path.md -->` marker and the graduation target also appears in results, the source is suppressed. The stable `docs/` location always wins. If the target is below `--limit`, the source appears with `"graduated": true`.
 
-**Cache**: index stored at `.nightgauge/knowledge/.recall-cache/index.jsonl` (JSONL, gitignored), at `cacheVersion: 2`, which carries the lifecycle fields (`trust_tier`, `status`, and the raw `stale_after` stamp). The version bump is load-bearing: without it an existing warm cache with unchanged mtimes loads as valid and every document reads `unverified`/`stable` forever. Invalidation is by **document set plus per-file mtime**: the cache is rebuilt when a cached file's mtime changes, when a cached file is gone, **and when a document exists on disk that the cache has no entry for**. Full rebuild on `--update-cache` or BM25 parameter change.
+**Cache**: index stored at `<cache home>/recall/<root-key>/index.jsonl` (JSONL), never in the working tree. The cache home is `internal/layout.CacheHome` (ADR-024 § 6): `NIGHTGAUGE_CACHE_HOME`, else `$XDG_CACHE_HOME/nightgauge`, else the OS user cache directory's `nightgauge` (`%LOCALAPPDATA%\nightgauge\cache` on Windows); `<root-key>` is a hash of the canonical checkout root. Directories are created 0700 and no symlink is followed out of the cache home; with no usable cache home the index is rebuilt in memory for the call and nothing is written. The cache is at `cacheVersion: 2`, which carries the lifecycle fields (`trust_tier`, `status`, and the raw `stale_after` stamp). The version bump is load-bearing: without it an existing warm cache with unchanged mtimes loads as valid and every document reads `unverified`/`stable` forever. Invalidation is by **document set plus per-file mtime**: the cache is rebuilt when a cached file's mtime changes, when a cached file is gone, **and when a document exists on disk that the cache has no entry for**. Full rebuild on `--update-cache` or BM25 parameter change.
 
 The membership half is load-bearing, not belt-and-braces. Validating only the entries the cache already holds answers "did anything I know about change?", which is structurally silent about *additions* — an unindexed file is never stat-ed, so it can never be found stale. A newly scaffolded knowledge document would then stay unreachable until some unrelated indexed file happened to change, and "nothing new was indexed" and "nothing new exists" would share one observable value: zero hits, exit 0. Membership is checked by directory enumeration only — no file reads, no tokenisation — so the warm path keeps the saving it exists for, and `BuildIndex` hands the same enumeration to both the cache validator and the scanner so the two cannot disagree about what belongs in the index.
 

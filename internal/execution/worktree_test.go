@@ -1,12 +1,14 @@
 package execution
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // initTestGitRepo creates a real git repo with one commit on a named branch.
@@ -418,4 +420,223 @@ func TestCopyWorktreeConfig(t *testing.T) {
 		// Should not panic or error
 		copyWorktreeConfig(repoRoot, worktreeDir)
 	})
+}
+
+// mustWorktreePath is m.worktreePath for a test that expects resolution to
+// succeed.
+func mustWorktreePath(t testing.TB, m *Manager, repo string, issueNumber int) string {
+	t.Helper()
+	p, err := m.worktreePath(repo, issueNumber)
+	if err != nil {
+		t.Fatalf("worktreePath(%s, %d): %v", repo, issueNumber, err)
+	}
+	return p
+}
+
+// --- Worktree location (#2038, ADR-024 § 9) ---
+
+// hermeticConfigHome points the machine config tier at an empty directory so
+// the developer's own machine config cannot leak a worktree_base into a test.
+func hermeticConfigHome(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", dir)
+	return dir
+}
+
+func writeTestConfig(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// evalDir resolves a test directory's symlinks (macOS /var -> /private/var).
+func evalDir(t *testing.T, dir string) string {
+	t.Helper()
+	r, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestWorktreePath_HonoursWorktreeBase(t *testing.T) {
+	hermeticConfigHome(t)
+	repoRoot := initTestGitRepo(t, "main")
+	base := filepath.Join(evalDir(t, t.TempDir()), "wt")
+	writeTestConfig(t, filepath.Join(repoRoot, ".nightgauge", "config.local.yaml"),
+		"pipeline:\n  worktree_base: "+base+"\n")
+
+	m := &Manager{workspaceRoot: repoRoot}
+	got := mustWorktreePath(t, m, "acme/widget", 7)
+	if want := filepath.Join(base, "widget-issue-7"); got != want {
+		t.Fatalf("worktreePath = %q, want %q (under pipeline.worktree_base)", got, want)
+	}
+}
+
+func TestWorktreePath_HonoursMachineTierWorktreeBase(t *testing.T) {
+	configHome := hermeticConfigHome(t)
+	repoRoot := initTestGitRepo(t, "main")
+	base := filepath.Join(evalDir(t, t.TempDir()), "machine-wt")
+	writeTestConfig(t, filepath.Join(configHome, "config.yaml"),
+		"pipeline:\n  worktree_base: "+base+"\n")
+
+	m := &Manager{workspaceRoot: repoRoot}
+	if got, want := mustWorktreePath(t, m, "acme/widget", 7), filepath.Join(base, "widget-issue-7"); got != want {
+		t.Fatalf("worktreePath = %q, want %q", got, want)
+	}
+}
+
+func TestWorktreePath_DefaultIsOutsideWorkingTree(t *testing.T) {
+	hermeticConfigHome(t)
+	repoRoot := initTestGitRepo(t, "main")
+	m := &Manager{workspaceRoot: repoRoot}
+
+	got := mustWorktreePath(t, m, "acme/widget", 7)
+	state, err := layout.StateHomePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	common, err := layout.GitCommonDir(repoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := filepath.Join(state, "worktrees", layout.RepoKey(common), "widget-issue-7"); got != want {
+		t.Fatalf("worktreePath = %q, want the ADR-024 default %q", got, want)
+	}
+	rel, err := filepath.Rel(repoRoot, got)
+	if err != nil || !strings.HasPrefix(rel, "..") {
+		t.Fatalf("filepath.Rel(repoRoot, path) = %q, want a path outside the working tree", rel)
+	}
+}
+
+func TestWorktreePath_RefusesTeamTierRelativeAndInTreeValues(t *testing.T) {
+	cases := []struct {
+		name, file, value string
+		wantInErr         []string
+	}{
+		{"team tier", "config.yaml", "/abs/elsewhere", []string{"committed team config", "config.yaml:2", "config.local.yaml"}},
+		{"relative", "config.local.yaml", ".worktrees", []string{"relative path", "config.local.yaml:2"}},
+		{"in tree", "config.local.yaml", "<root>/inside", []string{"inside the working tree", "config.local.yaml:2"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			hermeticConfigHome(t)
+			repoRoot := initTestGitRepo(t, "main")
+			value := strings.ReplaceAll(tc.value, "<root>", repoRoot)
+			writeTestConfig(t, filepath.Join(repoRoot, ".nightgauge", tc.file),
+				"pipeline:\n  worktree_base: "+value+"\n")
+			m := &Manager{workspaceRoot: repoRoot}
+
+			_, err := m.worktreePath("acme/widget", 7)
+			if !errors.Is(err, layout.ErrWorktreeBase) {
+				t.Fatalf("worktreePath error = %v, want ErrWorktreeBase", err)
+			}
+			for _, s := range tc.wantInErr {
+				if !strings.Contains(err.Error(), s) {
+					t.Errorf("error %q does not name %q", err, s)
+				}
+			}
+			// Creation fails the same way and leaves nothing in the tree.
+			if _, err := m.ensureWorktree("acme/widget", 7); !errors.Is(err, layout.ErrWorktreeBase) {
+				t.Fatalf("ensureWorktree error = %v, want ErrWorktreeBase", err)
+			}
+			if _, err := os.Stat(filepath.Join(repoRoot, ".worktrees")); !os.IsNotExist(err) {
+				t.Errorf("a refused relative base was created in the tree: %v", err)
+			}
+		})
+	}
+}
+
+// A base that is a symlink into the working tree is refused after symlink
+// evaluation, not accepted on its spelling.
+func TestWorktreePath_RefusesBaseSymlinkedIntoTree(t *testing.T) {
+	hermeticConfigHome(t)
+	repoRoot := initTestGitRepo(t, "main")
+	inside := filepath.Join(repoRoot, "inside")
+	if err := os.MkdirAll(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(t.TempDir(), "base-link")
+	if err := os.Symlink(inside, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	writeTestConfig(t, filepath.Join(repoRoot, ".nightgauge", "config.local.yaml"),
+		"pipeline:\n  worktree_base: "+link+"\n")
+	m := &Manager{workspaceRoot: repoRoot}
+	if _, err := m.worktreePath("acme/widget", 7); !errors.Is(err, layout.ErrWorktreeBase) {
+		t.Fatalf("worktreePath error = %v, want ErrWorktreeBase for a base symlinked into the tree", err)
+	}
+}
+
+// Security: a leaf planted as a symlink to another directory, and a crafted
+// repository name, cannot place a worktree outside the configured base.
+func TestWorktreePath_ContainmentRejectsEscapes(t *testing.T) {
+	hermeticConfigHome(t)
+	repoRoot := initTestGitRepo(t, "main")
+	base := filepath.Join(evalDir(t, t.TempDir()), "wt")
+	if err := os.MkdirAll(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeTestConfig(t, filepath.Join(repoRoot, ".nightgauge", "config.local.yaml"),
+		"pipeline:\n  worktree_base: "+base+"\n")
+	m := &Manager{workspaceRoot: repoRoot}
+
+	elsewhere := t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(base, "widget-issue-7")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := m.worktreePath("acme/widget", 7); !errors.Is(err, layout.ErrWorktreeEscape) {
+		t.Fatalf("symlinked leaf: error = %v, want ErrWorktreeEscape", err)
+	}
+	if got, err := m.ensureWorktree("acme/widget", 7); !errors.Is(err, layout.ErrWorktreeEscape) || got != "" {
+		t.Fatalf("ensureWorktree through a symlinked leaf = (%q, %v), want refusal", got, err)
+	}
+
+	for _, repo := range []string{"acme/..", "..", "acme/.", "", "acme/a b", `acme\..\x`} {
+		if p, err := m.worktreePath(repo, 7); !errors.Is(err, layout.ErrWorktreeEscape) {
+			t.Errorf("repo %q: worktreePath = (%q, %v), want ErrWorktreeEscape", repo, p, err)
+		}
+	}
+	if p, err := m.worktreePath("acme/widget", -1); !errors.Is(err, layout.ErrWorktreeEscape) {
+		t.Errorf("negative issue: worktreePath = (%q, %v), want ErrWorktreeEscape", p, err)
+	}
+}
+
+// A run that began before #2038 keeps its in-tree worktree: ensureWorktree
+// reuses it rather than creating a second one that would fight it for the
+// feature branch, and CleanupWorktree tears the legacy one down.
+func TestEnsureWorktree_ReusesLegacyInTreeWorktree(t *testing.T) {
+	hermeticConfigHome(t)
+	repoRoot := initTestGitRepo(t, "main")
+	legacy := filepath.Join(repoRoot, ".nightgauge", "worktrees", "widget-issue-9")
+	gittest.Run(t, repoRoot, "worktree", "add", "--detach", legacy, "HEAD")
+
+	fakeDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(fakeDir, "docker"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	m := &Manager{workspaceRoot: repoRoot}
+	got, err := m.ensureWorktree("acme/widget", 9)
+	if err != nil {
+		t.Fatalf("ensureWorktree: %v", err)
+	}
+	if got != legacy {
+		t.Fatalf("ensureWorktree = %q, want the existing legacy worktree %q", got, legacy)
+	}
+	if _, err := os.Stat(mustWorktreePath(t, m, "acme/widget", 9)); !os.IsNotExist(err) {
+		t.Fatalf("a second worktree was created at the new location: %v", err)
+	}
+	if err := m.CleanupWorktree("acme/widget", 9); err != nil {
+		t.Fatalf("CleanupWorktree: %v", err)
+	}
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy worktree survived CleanupWorktree: %v", err)
+	}
 }

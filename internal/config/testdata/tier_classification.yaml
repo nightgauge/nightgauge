@@ -21,7 +21,6 @@ keys:
   branch: team
   issue: team
   pipeline.budget_preset: team
-  pipeline.worktree_base: team
   knowledge: team
   pipeline: team
   autonomous.scan_interval: team
@@ -40,5 +39,9 @@ keys:
   autonomous.enabled_repos: machine
   autonomous.allow_self_repo: machine
   autonomous.repositories.*: machine
+  pipeline.logs.max_size_mb: machine
+  pipeline.logs.max_age_days: machine
+  # Machine or local tier — an absolute path on one machine (ADR-024 § 9)
+  pipeline.worktree_base: machine-or-local
   # Runtime tier — VSCode memento (not in YAML files; enforcement pending #3313 Phase 3)
   pipeline.max_concurrent: runtime

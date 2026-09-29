@@ -65,9 +65,7 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
 }));
 
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
-  getConcurrentPipelineConfig: vi
-    .fn()
-    .mockReturnValue({ maxConcurrent: 2, worktreeBase: ".worktrees" }),
+  getConcurrentPipelineConfig: vi.fn().mockReturnValue({ maxConcurrent: 2 }),
 }));
 
 /** The two durable reactions under test. */
@@ -178,7 +176,7 @@ function buildManager(issueNumbers: number[]) {
       debug: vi.fn(),
       getChannel: vi.fn(),
     } as any,
-    { maxConcurrent: issueNumbers.length, worktreeBase: ".worktrees" }
+    { maxConcurrent: issueNumbers.length }
   );
 
   manager.setCallbacks({ onSlotFailed });

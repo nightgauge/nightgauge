@@ -50,7 +50,6 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getConcurrentPipelineConfig: vi.fn().mockReturnValue({
     maxConcurrent: 2,
-    worktreeBase: ".worktrees",
   }),
 }));
 
@@ -163,7 +162,7 @@ describe("ConcurrentPipelineManager — token passthrough (#3704)", () => {
       mockQueue as any,
       vi.fn().mockReturnValue({ orchestrator: mockOrchestrator, stateService: mockStateService }),
       mockLogger as any,
-      { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      { maxConcurrent: 2 }
     );
   });
 
@@ -251,7 +250,7 @@ describe("ConcurrentPipelineManager — token passthrough (#3704)", () => {
         stateService: mockStateServiceWithSpy,
       }),
       mockLogger as any,
-      { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      { maxConcurrent: 2 }
     );
 
     mockQueue.dequeueIndependent.mockResolvedValueOnce([

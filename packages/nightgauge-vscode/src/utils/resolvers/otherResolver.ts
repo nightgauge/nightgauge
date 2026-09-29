@@ -1630,7 +1630,6 @@ export function getEpicMergeConfig(workspaceRoot?: string): EpicMergeConfig {
  */
 export interface ConcurrentPipelineConfig {
   maxConcurrent: number;
-  worktreeBase: string;
 }
 
 /**
@@ -1685,12 +1684,10 @@ export function parseConcurrencyWorkspaceMax(
  */
 export function getConcurrentPipelineConfig(workspaceRoot?: string): ConcurrentPipelineConfig {
   const DEFAULT_MAX_CONCURRENT = 3;
-  const DEFAULT_WORKTREE_BASE = ".worktrees";
   const RANGE_MIN = 1;
   const RANGE_MAX = 10;
 
   let maxConcurrent = DEFAULT_MAX_CONCURRENT;
-  let worktreeBase = DEFAULT_WORKTREE_BASE;
 
   // Environment variable override — wins over both YAML blocks. An invalid
   // env value (non-numeric, out-of-range) is treated as if the env var were
@@ -1707,17 +1704,15 @@ export function getConcurrentPipelineConfig(workspaceRoot?: string): ConcurrentP
 
   const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) {
-    return { maxConcurrent, worktreeBase };
+    return { maxConcurrent };
   }
 
   try {
     const resolved = resolveConfigPathSync(root);
     if (!resolved) {
-      return { maxConcurrent, worktreeBase };
+      return { maxConcurrent };
     }
     const content = readEffectiveConfigTextSync(resolved);
-    const parsed = parseMaxConcurrentBlocks(content, RANGE_MIN, RANGE_MAX);
-    worktreeBase = parsed.worktreeBase ?? worktreeBase;
 
     // concurrency.workspace_max is the canonical workspace-wide ceiling
     // (#3781). It is the single source of truth; nothing else is consulted.
@@ -1731,13 +1726,13 @@ export function getConcurrentPipelineConfig(workspaceRoot?: string): ConcurrentP
     // Config read failure is non-fatal
   }
 
-  return { maxConcurrent, worktreeBase };
+  return { maxConcurrent };
 }
 
 /**
  * Single-pass YAML scan that extracts the top-level `max_concurrent` value
- * from both the `pipeline:` and `autonomous:` blocks (plus `worktree_base`
- * from `pipeline:`). Hand-rolled instead of routing through a YAML parser
+ * from both the `pipeline:` and `autonomous:` blocks. (`pipeline.worktree_base`
+ * is not read here: the binary resolves it, #2038.) Hand-rolled instead of routing through a YAML parser
  * because this lives on the synchronous extension-startup path and the
  * project intentionally keeps config reads dependency-free.
  *
@@ -1750,11 +1745,9 @@ export function parseMaxConcurrentBlocks(
 ): {
   pipelineMaxConcurrent: number | undefined;
   autonomousMaxConcurrent: number | undefined;
-  worktreeBase: string | undefined;
 } {
   let pipelineMaxConcurrent: number | undefined;
   let autonomousMaxConcurrent: number | undefined;
-  let worktreeBase: string | undefined;
 
   const lines = content.split("\n");
   let block: "pipeline" | "autonomous" | null = null;
@@ -1797,16 +1790,9 @@ export function parseMaxConcurrentBlocks(
       }
       continue;
     }
-
-    if (block === "pipeline") {
-      const baseMatch = trimmed.match(/^worktree_base:\s*['"]?([^'"]+)['"]?/);
-      if (baseMatch) {
-        worktreeBase = baseMatch[1].trim();
-      }
-    }
   }
 
-  return { pipelineMaxConcurrent, autonomousMaxConcurrent, worktreeBase };
+  return { pipelineMaxConcurrent, autonomousMaxConcurrent };
 }
 
 // ============================================================================

@@ -70,9 +70,7 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
 }));
 
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
-  getConcurrentPipelineConfig: vi
-    .fn()
-    .mockReturnValue({ maxConcurrent: 1, worktreeBase: ".worktrees" }),
+  getConcurrentPipelineConfig: vi.fn().mockReturnValue({ maxConcurrent: 1 }),
 }));
 
 /**
@@ -186,7 +184,7 @@ function makeManager(batches: any[][], maxConcurrent = 1) {
     queueService as any,
     controllable.factory,
     { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), getChannel: vi.fn() } as any,
-    { maxConcurrent, worktreeBase: ".worktrees" }
+    { maxConcurrent }
   );
   return { manager, queueService, controllable };
 }

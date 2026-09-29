@@ -58,28 +58,88 @@ const (
 // is not reachable by idle bookkeeping under any correct configuration.
 const IdleBudgetWarnFraction = 0.5
 
-// DefaultLedgerPath returns the ledger file for a workspace.
+// DefaultLedgerPath returns a workspace's ledger base path. The ledger there
+// is written in dated segments beside it; LedgerFiles lists them.
 func DefaultLedgerPath(workspaceRoot string) string {
 	return filepath.Join(workspaceRoot, filepath.FromSlash(apiLedgerDefaultPath))
 }
 
-// LedgerFiles returns the rolling set for path — the numbered backups oldest
-// first, then the live file — skipping any that do not exist.
+// ledgerSegmentDateLayout is the date in a segment's name, a UTC day.
+const ledgerSegmentDateLayout = "2006-01-02"
+
+// ledgerSegmentPath is the segment of base for day: github-api.jsonl and
+// 2026-09-29 give github-api-2026-09-29.jsonl in the same directory.
+func ledgerSegmentPath(base, day string) string {
+	ext := filepath.Ext(base)
+	return strings.TrimSuffix(base, ext) + "-" + day + ext
+}
+
+// LedgerSegmentName is the base name of the default ledger's segment for the
+// UTC day of t. Log retention keeps the current day's segment as a live file.
+func LedgerSegmentName(t time.Time) string {
+	return filepath.Base(ledgerSegmentPath(apiLedgerDefaultPath, t.UTC().Format(ledgerSegmentDateLayout)))
+}
+
+// LedgerFiles returns every ledger file for path, oldest first, skipping any
+// that do not exist: the pre-segment files (path's numbered backups, then
+// path itself), then each dated segment in date order, a segment's size
+// backup before the segment.
 //
 // Callers must read the backups too. The window every consumer asks about is
 // the last hour, and a rotation inside that hour puts the first half of it in
 // `.1`; a reader that only opens the live file reports a sudden, fictional
 // drop in spending at the exact moment spending was highest enough to rotate.
 func LedgerFiles(path string) []string {
+	return LedgerFilesSince(path, time.Time{})
+}
+
+// LedgerFilesSince is LedgerFiles without the segments wholly before since's
+// UTC day. The pre-segment files are always included: their dates are
+// unknown. A segment log retention deleted is simply not listed, so a range
+// reaching past the oldest segment reads as absent, never as an error.
+func LedgerFilesSince(path string, since time.Time) []string {
 	var out []string
-	for i := ledgerKeepFiles - 1; i >= 1; i-- {
-		p := path + "." + strconv.Itoa(i)
+	withBackups := func(p string) {
+		for i := ledgerKeepFiles - 1; i >= 1; i-- {
+			b := p + "." + strconv.Itoa(i)
+			if _, err := os.Stat(b); err == nil {
+				out = append(out, b)
+			}
+		}
 		if _, err := os.Stat(p); err == nil {
 			out = append(out, p)
 		}
 	}
-	if _, err := os.Stat(path); err == nil {
-		out = append(out, path)
+	withBackups(path)
+
+	ext := filepath.Ext(path)
+	prefix := strings.TrimSuffix(filepath.Base(path), ext) + "-"
+	entries, err := os.ReadDir(filepath.Dir(path))
+	if err != nil {
+		return out
+	}
+	minDay := ""
+	if !since.IsZero() {
+		minDay = since.UTC().Format(ledgerSegmentDateLayout)
+	}
+	var days []string
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ext) {
+			continue
+		}
+		day := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ext)
+		if _, perr := time.Parse(ledgerSegmentDateLayout, day); perr != nil {
+			continue
+		}
+		if minDay != "" && day < minDay {
+			continue
+		}
+		days = append(days, day)
+	}
+	sort.Strings(days)
+	for _, day := range days {
+		withBackups(ledgerSegmentPath(path, day))
 	}
 	return out
 }
@@ -87,8 +147,8 @@ func LedgerFiles(path string) []string {
 // ErrNoLedger reports that no ledger file exists at the given path.
 var ErrNoLedger = errors.New("no GitHub API ledger")
 
-// ReadLedgerSince loads every record at or after `since` from the rolling set
-// at path, oldest first.
+// ReadLedgerSince loads every record at or after `since` from the ledger at
+// path (legacy files and the dated segments in range), oldest first.
 //
 // A malformed line is skipped rather than fatal: the ledger is append-only
 // from live processes, so a torn final line is normal operation, not
@@ -97,8 +157,11 @@ var ErrNoLedger = errors.New("no GitHub API ledger")
 // otherwise, and guessing would silently inflate whichever window it is
 // guessed into.
 func ReadLedgerSince(path string, since time.Time) ([]APILedgerRecord, error) {
-	files := LedgerFiles(path)
+	files := LedgerFilesSince(path, since)
 	if len(files) == 0 {
+		if len(LedgerFiles(path)) > 0 {
+			return nil, nil // a ledger exists; nothing in it reaches the window
+		}
 		return nil, fmt.Errorf("%w at %s", ErrNoLedger, path)
 	}
 	var out []APILedgerRecord

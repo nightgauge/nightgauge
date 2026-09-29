@@ -693,19 +693,16 @@ type foreignCwdHolder struct {
 const cwdTimeout = 10 * time.Second
 
 // worktreeBaseDirs is every directory name, relative to a repo root, this
-// scan treats as a pipeline worktree base. There are three live layouts on a
-// real machine, not one: the Go execution.Manager's own default
-// (.nightgauge/worktrees, execution/worktree.go's ensureWorktree), the VSCode
-// extension's default (.worktrees, WorktreeManager.ts) — the interactive
-// harness whose leaked shells motivated #519 in the first place — and Claude
-// Code's own worktree base (.claude/worktrees). See
-// docs/GO_BINARY.md's worktree-layout table and
-// worktreeContainment.ts's isLinkedWorktree doc comment, which independently
-// names the same three.
+// scan treats as a pipeline worktree base. There are three in-tree layouts on
+// a real machine, not one: the Go execution.Manager's pre-#2038 default
+// (.nightgauge/worktrees, still holding worktrees created before the move),
+// the VSCode extension's pre-#2038 default (.worktrees, WorktreeManager.ts) —
+// the interactive harness whose leaked shells motivated #519 in the first place —
+// and Claude Code's own worktree base (.claude/worktrees). See
+// docs/GO_BINARY.md's worktree-layout table. The Go manager's current base is
+// outside the tree (pipeline.worktree_base, else STATE/worktrees/<repo-key>;
+// #2038) and is added per repo root by worktreeBasesFor.
 //
-// Best-effort, not authoritative: `pipeline.worktree_base` lets an operator
-// configure a fourth location, and that setting is TypeScript-side config
-// this Go binary does not parse — a custom base is invisible to this scan.
 // Deliberately narrower than execution.ActiveWorktreeIssues' own notion of "a
 // worktree": that answers "what has git registered?" anywhere on disk, which
 // is right for reclaiming stray worktrees a maintainer hand-created
@@ -717,6 +714,25 @@ var worktreeBaseDirs = []string{
 	".worktrees",
 	filepath.Join(".claude", "worktrees"),
 }
+
+// worktreeBasesFor is every worktree base directory of root this scan
+// checks: the Go manager's resolved base (pipeline.worktree_base or the
+// default under the machine-state directory, outside the tree; #2038), then
+// worktreeBaseDirs joined onto root. The resolved base is skipped when it
+// cannot be resolved; doctor reports an invalid setting elsewhere.
+func worktreeBasesFor(root string) []string {
+	bases := make([]string, 0, len(worktreeBaseDirs)+1)
+	if base, err := resolveWorktreeBase(root); err == nil && base != "" {
+		bases = append(bases, base)
+	}
+	for _, rel := range worktreeBaseDirs {
+		bases = append(bases, filepath.Join(root, rel))
+	}
+	return bases
+}
+
+// resolveWorktreeBase is config.ResolveWorktreeBase, swappable in tests.
+var resolveWorktreeBase = config.ResolveWorktreeBase
 
 // buildForeignCwdScan gathers the cwd-half inputs for this run. The second
 // return value is false only when the MECHANISM did not work — `git worktree
@@ -838,8 +854,8 @@ func worktreeDirContaining(cwd string, repoRoots []string) (repoRoot, base strin
 		clean = abs
 	}
 	for _, root := range repoRoots {
-		for _, baseDir := range worktreeBaseDirs {
-			rr, err := filepath.EvalSymlinks(filepath.Join(root, baseDir))
+		for _, baseDir := range worktreeBasesFor(root) {
+			rr, err := filepath.EvalSymlinks(baseDir)
 			if err != nil {
 				continue
 			}

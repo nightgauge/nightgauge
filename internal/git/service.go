@@ -1063,7 +1063,7 @@ const (
 var issueNumberFromBranchRE = regexp.MustCompile(`^(?:feat|fix|docs)/(\d+)-`)
 
 // issueNumberFromWorktreeRE matches the directory layout the worktree manager
-// creates (`.nightgauge/worktrees/<repo>-issue-<N>`, see
+// creates (`<worktree base>/<repo>-issue-<N>`, see
 // internal/execution/worktree.go). Worktrees are created with
 // `git worktree add --detach`, so from creation until the dev skill creates
 // `feat/<N>-…` the branch name carries no issue number at all and the path is

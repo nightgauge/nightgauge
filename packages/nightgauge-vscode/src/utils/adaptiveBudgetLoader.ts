@@ -24,6 +24,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { createReadStream } from "node:fs";
+import * as childProcess from "node:child_process";
+import { promisify } from "node:util";
 
 export type EstimateSource = "adaptive_p75" | "static_table";
 
@@ -87,11 +89,33 @@ interface ExitRecord {
  * cohort is how a pre-flight estimate lands ~2x under actual.
  *
  * String-stripping is not the ideal shape; the caller usually knows the real
- * root. It stays because both callers currently receive a worktree path, and
- * making it aware of both layouts is the smallest change that stops the
- * estimator reading the wrong corpus.
+ * root. It stays for the two in-tree layouts because both callers currently
+ * receive a worktree path.
+ *
+ * Since #2038 the Go manager's worktrees live OUTSIDE the working tree
+ * (`<worktree base>/{repo}-issue-N`, ADR-024 § 9), where no marker names the
+ * repository. For such a path git answers instead
+ * ({@link resolveMainRepoRootAsync}): a linked worktree's `--git-common-dir`
+ * is `<main checkout>/.git`, so its parent is the repo root. This synchronous
+ * form returns that answer once the async form has cached it, and the path
+ * unchanged before then; it never spawns (the extension host must not block).
  */
 export function resolveMainRepoRoot(workspaceRoot: string): string {
+  return stripWorktreeMarker(workspaceRoot) ?? mainRootCache.get(workspaceRoot) ?? workspaceRoot;
+}
+
+/**
+ * {@link resolveMainRepoRoot}, asking git when no in-tree marker applies. A
+ * path that is not a linked worktree (or not a checkout at all) is returned
+ * unchanged. Answers are cached per path.
+ */
+export async function resolveMainRepoRootAsync(workspaceRoot: string): Promise<string> {
+  const marked = stripWorktreeMarker(workspaceRoot);
+  if (marked !== undefined) return marked;
+  return (await linkedWorktreeMainRoot(workspaceRoot)) ?? workspaceRoot;
+}
+
+function stripWorktreeMarker(workspaceRoot: string): string | undefined {
   // Longest marker first: the Go layout contains a path separator that the
   // extension marker would otherwise match inside it.
   for (const marker of [
@@ -103,7 +127,55 @@ export function resolveMainRepoRoot(workspaceRoot: string): string {
       return workspaceRoot.substring(0, idx);
     }
   }
-  return workspaceRoot;
+  return undefined;
+}
+
+/** dir → its main checkout, for linked worktrees only. */
+const mainRootCache = new Map<string, string>();
+
+/**
+ * Record that `worktreePath` is a linked worktree of `repoRoot`. The code that
+ * creates or finds a worktree knows this already, so it seeds the answer the
+ * synchronous {@link resolveMainRepoRoot} returns for it — no git call, and
+ * correct from the first read (#2038).
+ */
+export function rememberWorktreeMainRoot(worktreePath: string, repoRoot: string): void {
+  if (!worktreePath || !repoRoot || !path.isAbsolute(worktreePath)) return;
+  mainRootCache.set(worktreePath, repoRoot);
+  notLinked.delete(worktreePath);
+}
+/** Paths git has already said are not linked worktrees. */
+const notLinked = new Set<string>();
+
+/**
+ * The main checkout of the linked worktree at `dir`, or undefined when `dir`
+ * is a main checkout, not a checkout, or git is unavailable.
+ */
+async function linkedWorktreeMainRoot(dir: string): Promise<string | undefined> {
+  if (!dir || !path.isAbsolute(dir)) return undefined;
+  const cached = mainRootCache.get(dir);
+  if (cached !== undefined) return cached;
+  if (notLinked.has(dir)) return undefined;
+  try {
+    // Promisified here, not at import: many suites mock node:child_process
+    // partially, and this module is imported for its pure helpers too.
+    const execFileAsync = promisify(childProcess.execFile);
+    const { stdout } = await execFileAsync(
+      "git",
+      ["rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir"],
+      { cwd: dir, encoding: "utf8", timeout: 5_000 }
+    );
+    const [gitDir, commonDir] = stdout.trim().split("\n");
+    if (gitDir && commonDir && path.resolve(gitDir) !== path.resolve(commonDir)) {
+      const root = path.dirname(path.resolve(commonDir));
+      mainRootCache.set(dir, root);
+      return root;
+    }
+  } catch {
+    // Not a checkout, or no git: leave the path as it is.
+  }
+  notLinked.add(dir);
+  return undefined;
 }
 
 /**
@@ -193,7 +265,7 @@ export async function loadAdaptiveBudgetOverrides(
   }
 
   try {
-    const mainRoot = resolveMainRepoRoot(workspaceRoot);
+    const mainRoot = await resolveMainRepoRootAsync(workspaceRoot);
     const exitRecordsDir = path.join(pipelineStateDir(mainRoot), "exit-records");
 
     let entries: string[];

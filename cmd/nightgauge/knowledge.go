@@ -64,7 +64,7 @@ func knowledgeRecallCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "recall <query>",
 		Short:        "Find and rank prior decisions by semantic similarity",
-		Long:         "Search all knowledge base documents using BM25 scoring with tag and path boosting. Caches the index at .nightgauge/knowledge/.recall-cache/.",
+		Long:         "Search all knowledge base documents using BM25 scoring with tag and path boosting. Caches the index under the user cache directory (recall/<root-key>/; NIGHTGAUGE_CACHE_HOME overrides the root), never in the working tree.",
 		Args:         cobra.ExactArgs(1),
 		SilenceUsage: true,
 		Example: `  nightgauge knowledge recall "BM25 scoring" --json
@@ -99,7 +99,7 @@ func knowledgeRecallCmd() *cobra.Command {
 
 			// Invalidate cache if --update-cache.
 			if updateCache {
-				_ = os.Remove(filepath.Join(workdir, ".nightgauge", "knowledge", ".recall-cache", "index.jsonl"))
+				_ = recall.InvalidateCache(workdir)
 			}
 
 			start := time.Now()

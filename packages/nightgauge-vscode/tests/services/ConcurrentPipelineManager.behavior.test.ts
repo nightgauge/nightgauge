@@ -76,7 +76,6 @@ vi.mock("../../src/utils/WorktreeManager", () => ({
 vi.mock("../../src/utils/nightgaugeConfig", () => ({
   getConcurrentPipelineConfig: vi.fn().mockReturnValue({
     maxConcurrent: 3,
-    worktreeBase: ".worktrees",
   }),
 }));
 
@@ -258,7 +257,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       // Queue has 3 items but only 2 slots available
@@ -279,7 +278,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 1, worktreeBase: ".worktrees" }
+        { maxConcurrent: 1 }
       );
 
       mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(10)]);
@@ -306,7 +305,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       // Initial fill: 2 slots
@@ -336,7 +335,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(10), makeQueueItem(20)]);
@@ -363,7 +362,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       mockQueue.dequeueIndependent.mockResolvedValueOnce([{ ...makeQueueItem(10), epicOrder: 0 }]);
@@ -381,7 +380,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(10)]);
@@ -405,7 +404,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(10)]);
@@ -435,7 +434,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(10)]);
@@ -468,7 +467,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(10), makeQueueItem(20)]);
@@ -494,7 +493,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       manager.pauseFilling();
@@ -512,7 +511,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       manager.pauseFilling();
@@ -534,7 +533,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       // Start an issue, then call pauseFilling (simulating "stop after current")
@@ -563,7 +562,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       const slotChanges: any[][] = [];
@@ -586,7 +585,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       const completions: Array<{
@@ -622,7 +621,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       const failures: Array<{ issueNumber: number }> = [];
@@ -649,7 +648,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       let allCompleteFired = false;
@@ -677,7 +676,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         mockQueue as any,
         controllable.factory,
         mockLogger as any,
-        { maxConcurrent: 2, worktreeBase: ".worktrees" }
+        { maxConcurrent: 2 }
       );
 
       mockQueue.dequeueIndependent.mockResolvedValue([makeQueueItem(10), makeQueueItem(20)]);
@@ -733,7 +732,7 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
           mockQueue as any,
           controllable.factory,
           mockLogger as any,
-          { maxConcurrent: 3, worktreeBase: ".worktrees" }
+          { maxConcurrent: 3 }
         );
 
         // First dequeue: return issues 10 and 20
@@ -771,7 +770,7 @@ describe("ConcurrentPipelineManager — remote run request pin (#1656)", () => {
       mockQueue as any,
       controllable.factory,
       createMockLogger() as any,
-      { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      { maxConcurrent: 2 }
     );
     mockQueue.dequeueIndependent.mockResolvedValueOnce([
       {
@@ -802,7 +801,7 @@ describe("ConcurrentPipelineManager — remote run request pin (#1656)", () => {
       mockQueue as any,
       controllable.factory,
       createMockLogger() as any,
-      { maxConcurrent: 2, worktreeBase: ".worktrees" }
+      { maxConcurrent: 2 }
     );
     manager.setPendingRemoteRunId(1658, "platform-run-1658");
     mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(1658), makeQueueItem(1659)]);

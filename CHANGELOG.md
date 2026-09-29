@@ -16,6 +16,23 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Nightgauge logs are bounded by size and age** (#2029, ADR-024 § 11). Each
+  log directory (the clone's `.nightgauge/logs/` and the machine state `logs/`)
+  is held to 200 MB and 30 days by default, set by machine-tier
+  `pipeline.logs.max_size_mb` and `pipeline.logs.max_age_days`. Retention runs
+  at `nightgauge serve` start and daily while it runs, and at CLI start when the
+  last prune is over a day old; `nightgauge logs prune` runs it on demand. It
+  deletes whole regular files, oldest first, inside the resolved directory
+  only, and never a live file, a file written in the last hour, or a file of a
+  run that is not terminal. `nightgauge doctor` reports each directory's size
+  and the caps, and flags a directory over its cap (`NGD043`).
+  The GitHub request ledger is now written as one
+  `github-api-YYYY-MM-DD.jsonl` segment per UTC day so retention can drop whole
+  old days; only the current day's segment is kept as a live file, and a
+  pre-segment `github-api.jsonl` is still read until retention ages it out.
+  `nightgauge logs scan-failures`, `nightgauge api-usage` and doctor's ledger
+  checks report a pruned range as absent rather than as an error.
+
 - **`docs/DOCTOR.md` is the doctor reference** (#2100). It has one section per
   finding code (`NGD000`–`NGD042`, `NGD100`–`NGD111`) with its cause and
   remedies. Every finding's `docs` link points there. It also covers the guided
@@ -165,6 +182,44 @@ changelog, and the release workflow refuses a tag that does not.
   from it. It ships in no package.
 
 ### Changed
+
+- **Derived caches live in the user cache directory, not the working tree**
+  (#2028). The BM25 recall index moves from
+  `.nightgauge/knowledge/.recall-cache/` to
+  `<cache home>/recall/<root-key>/index.jsonl`, where `<root-key>` is a hash
+  of the canonical checkout root. The cache home is `NIGHTGAUGE_CACHE_HOME`,
+  else `$XDG_CACHE_HOME/nightgauge` on every OS, else
+  `~/.cache/nightgauge` (Linux), `~/Library/Caches/nightgauge` (macOS) or
+  `%LOCALAPPDATA%\nightgauge\cache` (Windows). The resolver PR #2020 added for
+  the GitHub ETag store is now `internal/layout.CacheHome`, and that store
+  uses it too, so on Windows it moves under `nightgauge\cache` and a
+  relative `NIGHTGAUGE_CACHE_HOME` now means "no cache directory". Cache
+  directories are created 0700, no symlink is followed out of the cache home,
+  and with no usable cache home the index is rebuilt in memory for the call
+  and nothing is written. An old `.recall-cache/` in a checkout is no longer
+  read and can be deleted; the layout migration (#2040) removes it.
+- **Pipeline worktrees are created outside the working tree** (#2038). The Go
+  manager now puts a run's worktree at `<worktree base>/<repo>-issue-<N>`,
+  where the base is `pipeline.worktree_base` or, unset, the machine-state
+  directory keyed per clone (`STATE/worktrees/<repo-key>`,
+  [ADR-024](docs/decisions/024-data-and-state-layout.md) § 9), instead of
+  `<repo>/.nightgauge/worktrees/`, which search, watchers, linters and
+  `git add -A` all traversed. `pipeline.worktree_base` is now a machine- or
+  local-tier key read by the Go binary: a relative value, a value in the
+  committed `.nightgauge/config.yaml`, or one that resolves inside the working
+  tree fails worktree creation with the file, line and fix. A worktree path
+  that resolves, after symlink evaluation, anywhere but directly inside the
+  base is refused. `nightgauge worktree base` prints the resolved base. The
+  extension's `WorktreeManager` takes its base from there too and names its
+  worktrees `<repo>-issue-<N>`, so both dispatch paths share one location and
+  one name. The extension's `.worktrees` default and its `worktree_base`
+  reading are gone. The issue-context, Knowledge view, architecture-plan and
+  budget history readers also take the base from the binary. Worktrees already
+  under `.nightgauge/worktrees/` or `.worktrees/` are not moved: they are found
+  through `git worktree list` and used where they are until their run ends.
+  Orphan cleanup in a shared base never removes a directory that is still
+  another repository's worktree. This repository's committed
+  `worktree_base: .worktrees` is removed.
 
 - **`nightgauge doctor --fix --yes` restarts a stopped autonomous loop through
   the daemon** (#2090). A stopped `autonomous-loop` (`NGD029`) now offers a

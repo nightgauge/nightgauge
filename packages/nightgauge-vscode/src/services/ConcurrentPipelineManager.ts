@@ -560,13 +560,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     private queueService: IssueQueueService,
     private orchestratorFactory: OrchestratorFactory,
     private logger: Logger,
-    config?: { maxConcurrent?: number; worktreeBase?: string },
+    config?: { maxConcurrent?: number },
     workspaceManager?: WorkspaceManager
   ) {
     const pipelineConfig = getConcurrentPipelineConfig(repoRoot);
     this.maxConcurrent = config?.maxConcurrent ?? pipelineConfig.maxConcurrent;
-    const worktreeBase = config?.worktreeBase ?? pipelineConfig.worktreeBase;
-    this.worktreeManager = new WorktreeManager(repoRoot, worktreeBase);
+    // The worktree base comes from the binary, not this config (#2038).
+    this.worktreeManager = new WorktreeManager(repoRoot);
     this.workspaceManager = workspaceManager;
 
     this.disposables.push(this._onSlotsChanged);
@@ -687,7 +687,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     this.repoRoot = newRepoRoot;
     const pipelineConfig = getConcurrentPipelineConfig(newRepoRoot);
     this.maxConcurrent = pipelineConfig.maxConcurrent;
-    this.worktreeManager = new WorktreeManager(newRepoRoot, pipelineConfig.worktreeBase);
+    this.worktreeManager = new WorktreeManager(newRepoRoot);
   }
 
   /**
@@ -953,7 +953,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       repoName: item.repoName,
       targetPath: targetRepo.path,
     });
-    return new WorktreeManager(targetRepo.path);
+    return new WorktreeManager(targetRepo.path, { repoName: item.repoName || undefined });
   }
 
   private async startSlot(item: QueueItem): Promise<StartSlotOutcome> {

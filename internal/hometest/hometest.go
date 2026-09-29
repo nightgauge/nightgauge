@@ -44,8 +44,9 @@ var Home string
 var RealHome string
 
 // Isolate repoints HOME at a fresh directory, and the machine-state root
-// (NIGHTGAUGE_STATE_HOME, ADR-024 § 8) at a directory inside it, and returns
-// the cleanup for both. The state override is set explicitly because the root
+// (NIGHTGAUGE_STATE_HOME, ADR-024 § 8) and the cache root
+// (NIGHTGAUGE_CACHE_HOME, § 6) at directories inside it, and returns
+// the cleanup for all of them. The state override is set explicitly because the root
 // does not always follow HOME: XDG_STATE_HOME or %LOCALAPPDATA% in the
 // developer's environment would otherwise lead a test to the real one.
 //
@@ -65,6 +66,12 @@ func Isolate() (cleanup func()) {
 	}
 	if err := os.Setenv("NIGHTGAUGE_STATE_HOME", filepath.Join(dir, "state")); err != nil {
 		fmt.Fprintf(os.Stderr, "hometest: could not set NIGHTGAUGE_STATE_HOME: %v\n", err)
+		os.Exit(1)
+	}
+	// Caches (ADR-024 § 6) likewise: the recall index and the GitHub ETag
+	// store would otherwise land in the operator's user cache directory.
+	if err := os.Setenv("NIGHTGAUGE_CACHE_HOME", filepath.Join(dir, "cache")); err != nil {
+		fmt.Fprintf(os.Stderr, "hometest: could not set NIGHTGAUGE_CACHE_HOME: %v\n", err)
 		os.Exit(1)
 	}
 	// The daemon socket's runtime root (ADR-024 § 10) is shared per user, so a
