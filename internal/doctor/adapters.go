@@ -314,7 +314,7 @@ type adapterProbe struct {
 	runCatalog func(path string, args []string) (string, error) // kindCLI: combined output of `<path> <catalogArgs...>` (#551)
 	// runModelProbe is the kindCLI model-validity spawn (#1274). It is nil on
 	// the DEFAULT probe on purpose: the always-on availability check
-	// (checkAIAdapterAvailable) runs on every plain `nightgauge doctor` and
+	// (aiAdapterFindings) runs on every plain `nightgauge doctor` and
 	// must stay free, while this probe sends a real (tiny) request. Only the
 	// opt-in `--adapters` path wires it — see CheckAdapters.
 	runModelProbe func(path string, args []string) (string, error)
@@ -370,7 +370,7 @@ func resolveCodexHome() string {
 // spawning real binaries or reading the developer's own environment.
 var newAdapterProbe = defaultAdapterProbe
 
-// checkAIAdapterAvailable answers one question for the DEFAULT doctor run: can
+// aiAdapterFindings answers one question for the DEFAULT doctor run: can
 // this machine run a pipeline stage at all?
 //
 // Before #862 the answer was never asked. The default check list covered the
@@ -392,19 +392,22 @@ var newAdapterProbe = defaultAdapterProbe
 //
 // The probe short-circuits on the first usable adapter, so the common case
 // costs one `lookPath` plus one `--version` spawn rather than nine.
-func checkAIAdapterAvailable(probe adapterProbe) (CheckItem, string) {
+func aiAdapterFindings(probe adapterProbe) ([]Finding, string) {
 	for _, name := range AllAdapterNames() {
 		if h := checkAdapter(name, probe); h.OK {
-			return CheckItem{
-				OK:     true,
-				Detail: fmt.Sprintf("%s is usable", h.Adapter),
-			}, ""
+			return nil, fmt.Sprintf("%s is usable", h.Adapter)
 		}
 	}
-	const msg = "no usable AI coding agent found — the pipeline cannot run a stage. " +
-		"Install the claude CLI (the supported default) or configure an adapter, " +
-		"then run `nightgauge doctor --adapters all` for per-adapter detail."
-	return CheckItem{OK: false, Error: msg}, msg
+	const check, code = "ai_adapter", "NGD015"
+	return []Finding{newFinding(check, code, SeverityWarning,
+		"no usable AI coding agent found — the pipeline cannot run a stage",
+		"no adapter answered the availability probe. Install the claude CLI (the supported default) or configure an adapter, "+
+			"then run `nightgauge doctor --adapters all` for per-adapter detail.",
+		map[string]string{"adapters_probed": strings.Join(AllAdapterNames(), ", ")},
+		[]string{"none-usable"},
+		manualRemedy("install", "Install or configure an AI coding agent", check,
+			"Install the claude CLI (the supported default) or configure another adapter",
+			"Run `nightgauge doctor --adapters all` for per-adapter detail"))}, "no usable AI coding agent"
 }
 
 // CheckAdapters returns deterministic health for each requested adapter, in the

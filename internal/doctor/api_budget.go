@@ -42,36 +42,31 @@ const apiBudgetWindow = time.Hour
 // always one caller.
 const maxAPIBudgetCallers = 3
 
-// checkGitHubAPIBudget summarizes the last hour of the request ledger.
+// apiBudgetFindings summarizes the last hour of the request ledger.
 //
 // An absent ledger is NOT a failure: a fresh workspace that has made no GitHub
 // requests has no file, and a workspace that deliberately set
 // `github.api_ledger.enabled: false` chose this. Reporting either as a problem
 // would make the arm noise on exactly the installs that are fine.
-func checkGitHubAPIBudget(workspaceRoot string, now time.Time) (CheckItem, string) {
+func apiBudgetFindings(workspaceRoot string, now time.Time) ([]Finding, string) {
+	const check, code = "github_api_budget", "NGD008"
 	if workspaceRoot == "" {
-		return CheckItem{OK: true, Detail: "API budget not checked (no workspace root)"}, ""
+		return nil, "API budget not checked (no workspace root)"
 	}
 
 	w, err := github.ReadWindow(workspaceRoot, apiBudgetWindow, now)
 	if err != nil {
 		if errors.Is(err, github.ErrNoLedger) {
-			return CheckItem{
-				OK:     true,
-				Detail: "no API ledger yet (no GitHub requests recorded in this workspace)",
-			}, ""
+			return nil, "no API ledger yet (no GitHub requests recorded in this workspace)"
 		}
 		// Unreadable is not "spent nothing" — say so rather than reporting a
 		// clean bill derived from a file we could not open.
-		msg := fmt.Sprintf("github api budget unverifiable: %v", err)
-		return CheckItem{OK: false, Detail: "could not read the API ledger", Error: msg}, msg
+		return []Finding{unverifiableFinding(check, code, SeverityWarning, "github api budget",
+			fmt.Sprintf("the API ledger could not be read: %v", err))}, "could not read the API ledger"
 	}
 
 	if w.Calls == 0 {
-		return CheckItem{
-			OK:     true,
-			Detail: "0 GitHub requests in the last hour",
-		}, ""
+		return nil, "0 GitHub requests in the last hour"
 	}
 
 	// GraphQLCalls, not Calls: the point total above is GraphQL-only, and
@@ -80,28 +75,43 @@ func checkGitHubAPIBudget(workspaceRoot string, now time.Time) (CheckItem, strin
 	detail := fmt.Sprintf("%d GraphQL point(s) over %d GraphQL request(s) in the last hour (%.0f/h of %d)%s%s%s",
 		w.Points, w.GraphQLCalls, w.PointsPerHour(), github.GraphQLHourlyLimit,
 		restSuffix(w), cachedSuffix(w), remainingSuffix(w))
+	evidence := func(state string) map[string]string {
+		return map[string]string{
+			"state":           state,
+			"points_per_hour": fmt.Sprintf("%.0f", w.PointsPerHour()),
+			"hourly_limit":    fmt.Sprint(github.GraphQLHourlyLimit),
+			"top_callers":     topCallerList(w),
+		}
+	}
+	inspect := manualRemedy("inspect", "Find the repeating caller with `nightgauge api-usage`", check,
+		"Run `nightgauge api-usage --since 1h --by op` to see which query is repeating",
+		"Reduce that caller's polling, or wait for the hourly window to reset")
 
 	switch {
 	case w.Exhausted:
-		msg := fmt.Sprintf(
-			"github-api-budget-exhausted: the %s quota of identity %s hit ZERO %s. Every board read, sweep and "+
+		ev := evidence("exhausted")
+		ev["resource"] = w.ExhaustedResource
+		ev["identity"] = w.ExhaustedIdentity
+		return []Finding{newFinding(check, code, SeverityWarning,
+			"github-api-budget-exhausted: the "+w.ExhaustedResource+" quota hit zero "+exhaustedWhen(w, now),
+			fmt.Sprintf("the %s quota of identity %s hit ZERO %s. Every board read, sweep and "+
 				"PR check failed for the rest of that window — which presents as an idle queue, not "+
 				"as an error. Top spender(s): %s. Run `nightgauge api-usage --since 1h` for the full "+
-				"breakdown",
-			w.ExhaustedResource, w.ExhaustedIdentity, exhaustedWhen(w, now), topCallerList(w))
-		return CheckItem{OK: false, Detail: detail, Error: msg}, msg
+				"breakdown", w.ExhaustedResource, w.ExhaustedIdentity, exhaustedWhen(w, now), topCallerList(w)),
+			ev, []string{"exhausted"}, inspect)}, detail
 
 	case w.OverIdleBudget():
-		msg := fmt.Sprintf(
-			"github-api-budget-high: %.0f GraphQL points/hour projected — past %.0f%% of the %d/hour "+
+		return []Finding{newFinding(check, code, SeverityWarning,
+			fmt.Sprintf("github-api-budget-high: %.0f GraphQL points/hour projected", w.PointsPerHour()),
+			fmt.Sprintf("%.0f GraphQL points/hour projected — past %.0f%% of the %d/hour "+
 				"quota, which one open workspace can exhaust on its own. Top spender(s): %s. Run "+
 				"`nightgauge api-usage --since 1h --by op` to see which query is repeating",
-			w.PointsPerHour(), github.IdleBudgetWarnFraction*100, github.GraphQLHourlyLimit,
-			topCallerList(w))
-		return CheckItem{OK: false, Detail: detail, Error: msg}, msg
+				w.PointsPerHour(), github.IdleBudgetWarnFraction*100, github.GraphQLHourlyLimit,
+				topCallerList(w)),
+			evidence("high"), []string{"high"}, inspect)}, detail
 	}
 
-	return CheckItem{OK: true, Detail: detail + "; top: " + topCallerList(w)}, ""
+	return nil, detail + "; top: " + topCallerList(w)
 }
 
 // restSuffix names the REST traffic without adding it to the GraphQL bill.

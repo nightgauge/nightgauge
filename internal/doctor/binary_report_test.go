@@ -25,7 +25,7 @@ func TestRunDoctor_ReportsHookResolutionFromCwd(t *testing.T) {
 	recordedVersion := strings.TrimPrefix(layout.RecordedRelativeLocation, bundleDirPrefix)
 
 	result := RunDoctor(context.Background(), nil, nil, nil)
-	check := result.Checks["binary"]
+	check := resultItem(result, "binary")
 	if !check.OK {
 		t.Fatalf("expected binary check OK with a healthy recorded bundle, got error %q", check.Error)
 	}
@@ -67,7 +67,7 @@ func TestRunDoctor_ReportsUnusableRecord(t *testing.T) {
 	writeExtensionsIndex(t, home, bundleDirPrefix+"0.2.1-darwin-arm64")
 
 	result := RunDoctor(context.Background(), nil, nil, nil)
-	check := result.Checks["binary"]
+	check := resultItem(result, "binary")
 	if check.OK {
 		t.Fatalf("expected binary check to flag the unusable record, got OK with detail %q", check.Detail)
 	}
@@ -130,7 +130,7 @@ func TestRunDoctor_RecordedDowngradeIsHealthy(t *testing.T) {
 	writeExtensionsIndex(t, home, bundleDirPrefix+"0.2.0")
 
 	result := RunDoctor(context.Background(), nil, nil, nil)
-	check := result.Checks["binary"]
+	check := resultItem(result, "binary")
 	if !check.OK {
 		t.Fatalf("a recorded install is healthy regardless of what else is on disk; got error %q", check.Error)
 	}
@@ -168,7 +168,7 @@ func TestRunDoctor_BinaryDetailNamesBundleInventoryFromRepo(t *testing.T) {
 	t.Chdir(repo)
 
 	result := RunDoctor(context.Background(), nil, nil, nil)
-	check := result.Checks["binary"]
+	check := resultItem(result, "binary")
 	if !check.OK {
 		t.Fatalf("expected binary check OK, got error %q", check.Error)
 	}
@@ -198,7 +198,7 @@ func TestRunDoctor_CrossStepVersionMismatchWarns(t *testing.T) {
 	)
 
 	result := RunDoctor(context.Background(), nil, nil, nil)
-	check := result.Checks["binary"]
+	check := resultItem(result, "binary")
 	if check.OK {
 		t.Fatalf("expected a cross-step version mismatch warning, got OK with detail %q", check.Detail)
 	}
@@ -213,7 +213,7 @@ func TestRunDoctor_CrossStepVersionMismatchWarns(t *testing.T) {
 			t.Errorf("cross-step warning must name %q, got %q", want, check.Error)
 		}
 	}
-	if !containsString(result.Warnings, check.Error) {
+	if !containsPrefix(result.Warnings, "stale binary: hooks resolve "+repoBin) {
 		t.Errorf("cross-step finding must be present in Warnings, got %v", result.Warnings)
 	}
 	if containsString(result.FailedChecks, "binary") {
@@ -226,7 +226,7 @@ func TestRunDoctor_CrossStepMatchingVersionsAreHealthy(t *testing.T) {
 	repoBin, recordedBin := setupCrossStepVersionBinaries(t, version, version, true)
 
 	result := RunDoctor(context.Background(), nil, nil, nil)
-	check := result.Checks["binary"]
+	check := resultItem(result, "binary")
 	if !check.OK {
 		t.Fatalf("matching cross-step versions must be healthy, got %q", check.Error)
 	}
@@ -251,7 +251,7 @@ func TestRunDoctor_CrossStepComparisonRequiresInstallRecord(t *testing.T) {
 	)
 
 	result := RunDoctor(context.Background(), nil, nil, nil)
-	check := result.Checks["binary"]
+	check := resultItem(result, "binary")
 	if !check.OK {
 		t.Fatalf("an unrecorded bundle must not drive cross-step staleness, got %q", check.Error)
 	}
@@ -322,7 +322,7 @@ func TestRunDoctor_NotFoundKeepsBundleInventory(t *testing.T) {
 	writeExtensionsIndex(t, home, bundleDirPrefix+"0.2.1-darwin-arm64")
 
 	result := RunDoctor(context.Background(), nil, nil, nil)
-	check := result.Checks["binary"]
+	check := resultItem(result, "binary")
 	if check.OK {
 		t.Fatalf("expected an unresolved binary, got OK with detail %q", check.Detail)
 	}
@@ -345,7 +345,7 @@ func TestRunDoctor_CrossStepDevBuildIsUnversionedNotStale(t *testing.T) {
 		t.Run(dev, func(t *testing.T) {
 			setupCrossStepVersionBinaries(t, dev, "nightgauge v0.4.8-16-gd8d5adde", true)
 			result := RunDoctor(context.Background(), nil, nil, nil)
-			check := result.Checks["binary"]
+			check := resultItem(result, "binary")
 			if !check.OK {
 				t.Fatalf("a dev build must be info, got %q", check.Error)
 			}
@@ -367,8 +367,17 @@ func TestRunDoctor_CrossStepIsolationEnvDowngradesToInfo(t *testing.T) {
 	setupCrossStepVersionBinaries(t, "nightgauge v0.1.0", "nightgauge v0.2.0", true)
 	t.Setenv(binaryIsolatedEnv, "1")
 	result := RunDoctor(context.Background(), nil, nil, nil)
-	check := result.Checks["binary"]
+	check := resultItem(result, "binary")
 	if !check.OK || !strings.Contains(check.Detail, "intentionally isolated") {
 		t.Fatalf("isolation must downgrade to info, got OK=%v detail=%q err=%q", check.OK, check.Detail, check.Error)
 	}
+}
+
+func containsPrefix(list []string, prefix string) bool {
+	for _, s := range list {
+		if strings.HasPrefix(s, prefix) {
+			return true
+		}
+	}
+	return false
 }

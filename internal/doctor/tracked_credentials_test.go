@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/config"
+	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
@@ -232,7 +234,7 @@ func TestRunDoctorRefusedConfigIsRequiredFailure(t *testing.T) {
 	if result.ExitCode != 2 {
 		t.Errorf("ExitCode = %d, want 2", result.ExitCode)
 	}
-	cfgCheck := result.Checks["config"]
+	cfgCheck := resultItem(result, "config")
 	if cfgCheck.OK || !strings.Contains(cfgCheck.Error, "refused") {
 		t.Errorf("config check = %+v, want a failure carrying the load error", cfgCheck)
 	}
@@ -244,5 +246,87 @@ func TestRunDoctorRefusedConfigIsRequiredFailure(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("FailedChecks = %v, want config", result.FailedChecks)
+	}
+}
+
+// TestCredentialFindings pins #2091: a committed ghp_ token and a CI machine
+// credential are blockers whose JSON carries only the redacted prefix and key
+// names, with manual rotation remedies.
+func TestCredentialFindings(t *testing.T) {
+	dir := newCredentialRepo(t)
+	writeFixture(t, dir, ".nightgauge/config.yaml", "github_auth:\n  token: "+fixtureToken+"\n")
+	gitIn(t, dir, "add", ".nightgauge/config.yaml")
+	gitIn(t, dir, "commit", "-q", "-m", "fixture")
+
+	fs, _ := trackedCredentialFindings(dir)
+	if len(fs) != 1 || fs[0].Code != "NGD024" || fs[0].Severity != SeverityBlocker {
+		t.Fatalf("want one NGD024 blocker, got %s", findingsText(fs))
+	}
+	if fs[0].Evidence["redacted"] != "ghp_…" {
+		t.Errorf("evidence = %v, want the redacted prefix", fs[0].Evidence)
+	}
+	r := fs[0].Remedies[0]
+	steps := strings.Join(r.Steps, " ")
+	if r.Kind != RemedyManual || r.Verb != "" || !strings.Contains(steps, "git rm --cached") ||
+		!strings.Contains(steps, "history") || !strings.Contains(steps, "Rotate") {
+		t.Errorf("want a manual rotate + git rm --cached + history remedy, got %+v", r)
+	}
+	raw, err := json.Marshal(BuildResult([]CheckResult{{ID: trackedCredentialsCheck, Findings: fs}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), fixtureToken) || !strings.Contains(string(raw), "ghp_…") {
+		t.Errorf("JSON must carry only the redacted prefix: %s", raw)
+	}
+
+	stubMachineCredentials(t, []string{"license_key", "github_auth.token"}, nil)
+	ci, _ := ciMachineCredentialFindings(envOf(map[string]string{"CI": "true"}))
+	if len(ci) != 1 || ci[0].Code != "NGD025" || ci[0].Severity != SeverityBlocker ||
+		ci[0].Evidence["keys"] != "license_key, github_auth.token" || ci[0].Remedies[0].Kind != RemedyManual {
+		t.Errorf("want one NGD025 blocker naming the keys, got %s", findingsText(ci))
+	}
+}
+
+// TestCredentialFindingsNeverCarryTokens feeds a token-shaped fixture into every
+// input of this group's checks that could echo one — errors, config errors,
+// board and rate-limit failures — and asserts no finding, evidence value or
+// remedy preview carries it after the render boundary.
+func TestCredentialFindingsNeverCarryTokens(t *testing.T) {
+	leak := errors.New("request failed: Authorization: token " + fixtureToken)
+	cfg := &config.Config{Owner: "o", DefaultRepo: "r", ProjectNumber: 3}
+	var all []CheckResult
+	add := func(fs []Finding, _ string) {
+		if len(fs) == 0 {
+			t.Fatal("fixture produced no finding")
+		}
+		all = append(all, CheckResult{ID: fs[0].Check, Findings: fs})
+	}
+	add(githubAuthFindings(nil, leak))
+	add(rateLimitFindings(nil, leak))
+	add(configFindings(nil, leak, "/w"))
+	add(boardPopulationFindings(cfg, boardPopulation{}, leak))
+	add(scopeFindings(&gh.TokenScopeInfo{Valid: false, MissingScopes: []string{"repo"}}))
+	add(apiUserFindings(nil))
+	add(ghFindings("", leak))
+	add(projectFindings(&config.Config{}, "/w"))
+	add(githubIdentityFindings(nil, nil))
+	stubMachineCredentials(t, nil, leak)
+	add(ciMachineCredentialFindings(envOf(map[string]string{"CI": "true"})))
+
+	raw, err := json.Marshal(BuildResult(all))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), fixtureToken) {
+		t.Errorf("a finding carries the token: %s", raw)
+	}
+	for _, r := range all {
+		for _, f := range r.Findings {
+			for _, rem := range f.Remedies {
+				if strings.Contains(rem.Preview+strings.Join(rem.Steps, " "), fixtureToken) {
+					t.Errorf("%s remedy carries the token", f.Code)
+				}
+			}
+		}
 	}
 }

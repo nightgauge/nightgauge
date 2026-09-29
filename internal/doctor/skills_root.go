@@ -10,16 +10,16 @@ import (
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 )
 
-// checkSkillsRoot reports whether THIS binary, run from startDir's repository,
+// skillsRootFindings reports whether THIS binary, run from startDir's repository,
 // can locate every stage's SKILL.md through skillrender.DefaultRoots — the
 // same roots `nightgauge run` and the scheduler render from (#2220). It is
-// offline and costs one stat per candidate. A miss is a warning naming the
+// offline and costs one stat per candidate. A miss is a blocker (ADR-025 NGD002) naming the
 // roots searched and the two remedies, because a run fails in seconds on it.
-func checkSkillsRoot(startDir string) (CheckItem, string) {
-	return checkSkillsRootIn(skillrender.DefaultRoots(repoRootOf(startDir)))
+func skillsRootFindings(startDir string) ([]Finding, string) {
+	return skillsRootFindingsIn(skillrender.DefaultRoots(repoRootOf(startDir)))
 }
 
-func checkSkillsRootIn(roots []string) (CheckItem, string) {
+func skillsRootFindingsIn(roots []string) ([]Finding, string) {
 	stages := make([]string, 0, len(skillrender.StageSkillDirs))
 	for stage := range skillrender.StageSkillDirs {
 		stages = append(stages, stage)
@@ -48,14 +48,18 @@ func checkSkillsRootIn(roots []string) (CheckItem, string) {
 			used = append(used, r)
 		}
 		sort.Strings(used)
-		return CheckItem{OK: true, Detail: fmt.Sprintf("all %d stage skills located (resolved from %s; searched %s)",
-			len(stages), strings.Join(used, ", "), searched)}, ""
+		return nil, fmt.Sprintf("all %d stage skills located (resolved from %s; searched %s)",
+			len(stages), strings.Join(used, ", "), searched)
 	}
-	msg := fmt.Sprintf("skills: this binary cannot locate SKILL.md for %s (searched %s). "+
-		"A run needing these stages fails before dispatch. Fix: install the bundle layout "+
-		"<prefix>/bin/nightgauge beside <prefix>/skills/, or set %s to a skills tree",
-		strings.Join(missing, ", "), searched, skillrender.SkillsRootEnv)
-	return CheckItem{OK: false, Error: msg}, msg
+	const check, code = "skills", "NGD002"
+	return []Finding{newFinding(check, code, SeverityBlocker,
+		"skills: this binary cannot locate SKILL.md for "+strings.Join(missing, ", "),
+		fmt.Sprintf("searched %s. A run needing these stages fails before dispatch", searched),
+		map[string]string{"missing": strings.Join(missing, ", "), "searched": searched},
+		[]string{"skills-root"},
+		manualRemedy("install", "Install the bundled skills tree or point "+skillrender.SkillsRootEnv+" at one", check,
+			"Install the bundle layout <prefix>/bin/nightgauge beside <prefix>/skills/",
+			"Or set "+skillrender.SkillsRootEnv+" to a skills tree"))}, "stage skills missing"
 }
 
 // repoRootOf walks up from dir to the nearest directory holding .git (a
