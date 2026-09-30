@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
 # Resolve a release version to the VS Code Marketplace/Open VSX channel.
 #
-# Marketplace versions do not support SemVer pre-release suffixes and a version
-# uploaded as pre-release cannot later be uploaded as stable. Microsoft therefore
-# recommends separate numeric lines: even 0.x minors for stable releases and odd
-# 0.x minors for previews. Once Nightgauge reaches 1.x, releases are stable.
+# Every version publishes on the release channel: Nightgauge runs no preview
+# channel (owner decision, 2026-09-30, #2305). Until then odd 0.x minor lines
+# resolved to "pre-release", which published v0.5.0 to Open VSX as a preview
+# while normal users kept receiving 0.4.8. A version once uploaded as
+# pre-release cannot be re-uploaded as release, so 0.5.0 stays a preview and
+# 0.5.1 supersedes it.
+#
+# The resolver stays the single place the channel is decided: staging, GitHub
+# Release packaging, Marketplace publishing and Open VSX publishing all ask it.
 set -euo pipefail
 
 VERSION="${1:-}"
@@ -13,11 +18,4 @@ if [[ ! "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)(-rc\.[1-9][0-9]*)?$ ]]; then
   exit 2
 fi
 
-MAJOR="${BASH_REMATCH[1]}"
-MINOR="${BASH_REMATCH[2]}"
-
-if [[ "$MAJOR" == "0" && $((10#$MINOR % 2)) -eq 1 ]]; then
-  echo "pre-release"
-else
-  echo "release"
-fi
+echo "release"

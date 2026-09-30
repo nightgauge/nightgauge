@@ -30,11 +30,13 @@ check_rejected() {
 }
 
 check_channel 0.2.3 release
-check_channel 0.3.1 pre-release
+check_channel 0.3.1 release
 check_channel 0.4.0 release
 check_channel 0.4.0-rc.1 release
-check_channel 0.5.0 pre-release
-check_channel 0.5.0-rc.2 pre-release
+check_channel 0.5.0 release
+check_channel 0.5.0-rc.2 release
+check_channel 0.5.1 release
+check_channel 0.7.0 release
 check_channel 1.0.0 release
 check_channel 2.7.4 release
 check_rejected ""
