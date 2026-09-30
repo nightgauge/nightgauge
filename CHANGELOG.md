@@ -14,6 +14,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`dev-install.sh --from-release` installs this host's VSIX** (#2309). It
+  downloaded every VSIX of the latest release and installed whichever sorted
+  first, which put the linux-x64 build on an arm64 Mac. It now maps
+  `uname -s`/`uname -m` to the release target, downloads only that asset, and
+  fails with the release's VSIX list on a host no release is built for.
+
+### Changed
+
+- **`@anthropic-ai/sdk` 0.112.5 → 0.128.0 in the SDK, with the lockfile.**
+  Dependabot's #2301 changed only `package.json`, so its green checks ran
+  against the locked 0.112.5.
+
 ## [0.5.1] - 2026-09-30
 
 **0.5.1 is the first 0.5 build on the normal release channel.** 0.5.0 reached
