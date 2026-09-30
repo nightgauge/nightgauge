@@ -201,6 +201,28 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Each checkout keeps its own run control and runtime state in
+  `<git-dir>/nightgauge-worktree/`** (#2037, ADR-024 § 7). `current-run.json`,
+  `run-state.json`, batch and queue state, `serve.lock`, `go-backend.log`,
+  `attention/`, `health/`, `focus.yaml`, performance mode, reports, the
+  complexity model and the other runtime files move there. `nightgauge layout`
+  reports the root as `checkout`, and `layout path|write|append checkout` read
+  and write it. A linked worktree no longer shares these files with the main
+  checkout, and appends to shared JSONL take `CLONE/.lock`.
+- **`nightgauge layout write --no-clobber`** fails instead of replacing an
+  existing file; repo-init's complexity-model seed uses it, so a model created
+  while seeding ran is never overwritten.
+- **The layout migration moves this data once (layout v2)**, including each
+  linked worktree's old `.nightgauge/` (#2040). The automatic run at CLI start
+  never fails your command (recorded as an ADR-024 § 15 amendment);
+  `nightgauge doctor --fix` exits 3 on a conflict, including a conflict-only
+  run, and 4 when blocked.
+- **`.nightgauge/.gitignore` is deny-by-default (template v17)** (#2043): `/*`
+  ignores everything except team config, `audit/` (not
+  `scope-drift-stats.json`), `skill-smoke/`, `skill-evals/baseline.jsonl` and
+  `model-evals/evidence/`. Knowledge is ignored unless `!/knowledge/` is added
+  under Local additions. The tracked `.gitkeep` anchors are removed.
+
 - **Run state, plans, retros and per-clone logs live in the git directory, not
   the working tree** (#2037, ADR-024 § 7). The pipeline, plans, retros and logs
   classes moved from `<repo>/.nightgauge/<class>` to
@@ -537,6 +559,14 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
   `remote.notifyOnPipelineRun` config keys.
 
 ### Fixed
+
+- The retro engine imported a `batch_state_parser` module that was never
+  committed, so it could not run; the parser is added with tests (#2296).
+- `scripts/analyze-model-routing.ts` type-checks again, pricing from the
+  registry-derived rates and covering the fable tier (#2297).
+- The retro session-log test fixture was gitignored and never committed; it is
+  tracked now, and the retro pytest suite and the model-routing typecheck run
+  in `ci-local.sh` and `ci.yml` (#2298).
 
 - **A doctor check that crashes names the crash in the human report**
   (#2098). The `NGD000` finding for a check that panicked carries the panic

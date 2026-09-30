@@ -160,6 +160,12 @@ func TestLayoutCmdWriteAndPath(t *testing.T) {
 	if err != nil || strings.TrimSpace(out) != written {
 		t.Fatalf("path = %q, %v; want %q", out, err, written)
 	}
+	if _, err := runLayoutCmd(t, "y", "write", "pipeline", "issue-7.json", "--no-clobber", "--workdir", root); err == nil {
+		t.Error("write --no-clobber replaced an existing file")
+	}
+	if got, _ := os.ReadFile(written); string(got) != `{"n":1}` {
+		t.Fatalf("content after --no-clobber = %q, want unchanged", got)
+	}
 	if _, err := runLayoutCmd(t, "x\n", "append", "retros", "7.md", "--workdir", root); err != nil {
 		t.Fatal(err)
 	}

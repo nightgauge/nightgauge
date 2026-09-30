@@ -10,7 +10,8 @@ All notable changes to this skill are documented here.
   directory (`nightgauge layout path checkout complexity-model.yaml`); a
   `--seed-from` model is staged in a temp file and written through
   `nightgauge layout write checkout complexity-model.yaml`, not into
-  `.nightgauge/` (#2037, ADR-024 § 7).
+  `.nightgauge/` (#2037, ADR-024 § 7). The write uses `--no-clobber`, so a
+  model created while seeding ran is never overwritten.
 
 ## [1.3.2] - 2026-09-27
 

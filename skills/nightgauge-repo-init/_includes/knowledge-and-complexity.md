@@ -171,11 +171,11 @@ PYEOF
   if [ $? -ne 0 ]; then
     echo "WARNING: Python seed transform failed. Using bootstrap defaults instead."
     SEED_FROM=""
-  elif [ -e "$MODEL_PATH" ]; then
-    echo "$MODEL_PATH appeared during seeding — preserving it"
-  else
-    nightgauge layout write checkout complexity-model.yaml --from "$SEED_TMP" > /dev/null
+  elif nightgauge layout write checkout complexity-model.yaml --no-clobber --from "$SEED_TMP" > /dev/null 2>&1; then
     echo "Seeded complexity model from $SEED_FROM"
+  else
+    # --no-clobber never replaces a model created while seeding ran.
+    echo "$MODEL_PATH appeared during seeding — preserving it"
   fi
   rm -f "$SEED_TMP"
 fi

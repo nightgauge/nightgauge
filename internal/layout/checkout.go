@@ -269,7 +269,17 @@ func WriteCheckoutFile(root, name string, data io.Reader) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return writeConfined(dir, name, data, false)
+	return writeConfined(dir, name, data, writeReplace)
+}
+
+// CreateCheckoutFile is WriteCheckoutFile that never replaces an existing
+// file: it fails with an error wrapping fs.ErrExist when name is present.
+func CreateCheckoutFile(root, name string, data io.Reader) (string, error) {
+	dir, err := CheckoutDir(root)
+	if err != nil {
+		return "", err
+	}
+	return writeConfined(dir, name, data, writeCreate)
 }
 
 // AppendCheckoutFile appends data to name inside CHECKOUT, creating it and its
@@ -279,7 +289,7 @@ func AppendCheckoutFile(root, name string, data io.Reader) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return writeConfined(dir, name, data, true)
+	return writeConfined(dir, name, data, writeAppend)
 }
 
 // CloneLockName is the lock file in CLONE that appends to shared JSONL take

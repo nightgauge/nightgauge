@@ -88,7 +88,18 @@ func WriteClassFile(root, class, name string, data io.Reader) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return writeConfined(dir, name, data, false)
+	return writeConfined(dir, name, data, writeReplace)
+}
+
+// CreateClassFile is WriteClassFile that never replaces an existing file: it
+// fails with an error wrapping fs.ErrExist when name is already present, so a
+// check-then-write race cannot overwrite a file another writer created.
+func CreateClassFile(root, class, name string, data io.Reader) (string, error) {
+	dir, err := ClassDir(root, class)
+	if err != nil {
+		return "", err
+	}
+	return writeConfined(dir, name, data, writeCreate)
 }
 
 // AppendClassFile appends data to name inside class for the repository root
@@ -100,12 +111,23 @@ func AppendClassFile(root, class, name string, data io.Reader) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return writeConfined(dir, name, data, true)
+	return writeConfined(dir, name, data, writeAppend)
 }
 
+// writeMode selects how writeConfined installs data.
+type writeMode int
+
+const (
+	writeReplace writeMode = iota // temporary file renamed into place
+	writeAppend                   // append, creating the file when absent
+	writeCreate                   // temporary file linked into place; never replaces
+)
+
 // writeConfined writes (or appends) data to name inside dir, confined to dir
-// through os.Root. A write goes to a temporary file renamed into place.
-func writeConfined(dir, name string, data io.Reader, appendMode bool) (string, error) {
+// through os.Root. A write goes to a temporary file renamed into place, or,
+// for writeCreate, hard-linked into place so an existing file is never
+// replaced.
+func writeConfined(dir, name string, data io.Reader, mode writeMode) (string, error) {
 	clean, err := cleanClassFileName(name)
 	if err != nil {
 		return "", err
@@ -123,7 +145,7 @@ func writeConfined(dir, name string, data io.Reader, appendMode bool) (string, e
 	if err := refuseSymlinkTarget(r, dir, clean); err != nil {
 		return "", err
 	}
-	if appendMode {
+	if mode == writeAppend {
 		f, err := r.OpenFile(clean, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
 		if err != nil {
 			return "", fmt.Errorf("open %s: %w", filepath.Join(dir, clean), err)
@@ -148,6 +170,14 @@ func writeConfined(dir, name string, data io.Reader, appendMode bool) (string, e
 	if err := errors.Join(copyErr, syncErr, closeErr); err != nil {
 		_ = r.Remove(tmp)
 		return "", fmt.Errorf("write %s: %w", filepath.Join(dir, clean), err)
+	}
+	if mode == writeCreate {
+		linkErr := r.Link(tmp, clean)
+		_ = r.Remove(tmp)
+		if linkErr != nil {
+			return "", fmt.Errorf("create %s: %w", filepath.Join(dir, clean), linkErr)
+		}
+		return filepath.Join(dir, clean), nil
 	}
 	if err := r.Rename(tmp, clean); err != nil {
 		_ = r.Remove(tmp)

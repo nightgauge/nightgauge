@@ -2,6 +2,7 @@ package layout
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,33 @@ func TestWriteClassFile(t *testing.T) {
 	// Subdirectories are created.
 	if _, err := WriteClassFile(root, ClassPlans, "sub/42-x.md", strings.NewReader("plan")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestCreateClassFile: a create never replaces a file already present, so a
+// check-then-write race cannot overwrite another writer's file, and it leaves
+// no temporary behind either way.
+func TestCreateClassFile(t *testing.T) {
+	root := gitInit(t)
+	p, err := CreateClassFile(root, ClassPipeline, "seed.yaml", strings.NewReader("first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateClassFile(root, ClassPipeline, "seed.yaml", strings.NewReader("second")); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("second create err = %v, want fs.ErrExist", err)
+	}
+	if got, _ := os.ReadFile(p); string(got) != "first" {
+		t.Fatalf("content = %q, want the first writer's", got)
+	}
+	entries, _ := os.ReadDir(filepath.Dir(p))
+	if len(entries) != 1 {
+		t.Fatalf("pipeline dir holds %d entries, want 1 (no temp file left)", len(entries))
+	}
+	if _, err := CreateCheckoutFile(root, "complexity-model.yaml", strings.NewReader("m")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateCheckoutFile(root, "complexity-model.yaml", strings.NewReader("n")); !errors.Is(err, fs.ErrExist) {
+		t.Fatalf("second checkout create err = %v, want fs.ErrExist", err)
 	}
 }
 

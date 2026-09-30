@@ -188,6 +188,7 @@ Read files at the printed path; write them with 'nightgauge layout write'.`,
 
 func layoutWriteCmd(workdir *string, appendMode bool) *cobra.Command {
 	var from string
+	var noClobber bool
 	use, short, verb := "write", "Write stdin (or --from) to a file in a per-clone class directory", "Replaces"
 	if appendMode {
 		use, short, verb = "append", "Append stdin (or --from) to a file in a per-clone class directory", "Appends to"
@@ -242,6 +243,10 @@ Prints the absolute path written.`,
 				} else {
 					p, err = layout.AppendCheckoutFile(root, args[1], in)
 				}
+			} else if noClobber && args[0] == layoutCheckoutClass {
+				p, err = layout.CreateCheckoutFile(root, args[1], in)
+			} else if noClobber {
+				p, err = layout.CreateClassFile(root, args[0], args[1], in)
 			} else if args[0] == layoutCheckoutClass {
 				p, err = layout.WriteCheckoutFile(root, args[1], in)
 			} else {
@@ -255,5 +260,8 @@ Prints the absolute path written.`,
 		},
 	}
 	cmd.Flags().StringVar(&from, "from", "", "Read the content from this file instead of stdin")
+	if !appendMode {
+		cmd.Flags().BoolVar(&noClobber, "no-clobber", false, "Fail instead of replacing a file that already exists")
+	}
 	return cmd
 }
