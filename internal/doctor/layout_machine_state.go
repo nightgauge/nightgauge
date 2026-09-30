@@ -733,10 +733,11 @@ func machineItemFindings(plan machinePlan, it machineItem) []Finding {
 			break
 		}
 		why := "the two copies differ and the migration never overwrites a file, so no machine state is moved until you choose one"
-		switch {
-		case it.Entry.Name == "machine-id":
-			why += ". It is never regenerated: a new id is a new device to the platform"
-		case it.Entry.Config:
+		if it.Entry.Name == machineIDName {
+			out = append(out, machineIDConflictFinding(c, why, ev, id, migrate))
+			continue
+		}
+		if it.Entry.Config {
 			why += ". Two config files are never merged; neither file's content is shown here"
 		}
 		out = append(out, newFinding(checkLayout, codeLayoutConflict, SeverityHousekeeping,

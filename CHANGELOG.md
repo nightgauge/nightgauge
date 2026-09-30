@@ -14,6 +14,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **`nightgauge doctor resolve machine-id --keep state|legacy` settles a
+  machine-id conflict** (#2308). When `~/.nightgauge/machine-id` and the one in
+  the machine-state directory differ, the NGD045 finding now shows both ids,
+  when each file was last modified, the id the running binary uses, and the
+  command for each choice. The command installs the chosen id byte for byte
+  with mode 0600. It saves the other id beside it as
+  `machine-id.replaced-<UTC time>`, never deleting it, and clears the legacy
+  file so `nightgauge doctor --fix` moves the rest of the machine state. There
+  is no default and no id is generated: a new id is a new device to the
+  platform. See [DOCTOR.md § NGD045](docs/DOCTOR.md#ngd045).
+
 ### Fixed
 
 - **`dev-install.sh --from-release` installs this host's VSIX** (#2309). It
