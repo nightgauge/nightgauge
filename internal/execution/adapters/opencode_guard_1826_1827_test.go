@@ -4,13 +4,13 @@ import (
 	"context"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 )
 
 // #1826: a Bash-capable stage can set core.fsmonitor in the worktree's
@@ -18,15 +18,14 @@ import (
 func TestOpenCodeTamperGateIgnoresRepoLocalFsmonitor(t *testing.T) {
 	wt := openCodeFixtureRepo(t, tamperFixtureBaseFiles)
 	marker := filepath.Join(t.TempDir(), "PWNED")
-	cmd := exec.Command("git", "-C", wt, "config", "core.fsmonitor", "touch '"+marker+"'; false")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("git config: %v\n%s", err, out)
-	}
+	gittest.Run(t, wt, "config", "core.fsmonitor", "touch '"+marker+"'; false")
 
 	// The probe from the issue: unhardened, git runs the configured command.
-	// Skip when this git does not, since the regression below would then
-	// prove nothing.
-	probe := exec.Command("git", "-C", wt, "status", "--porcelain=v1", "--ignored", "--untracked-files=all", "--", "opencode.json", "opencode.jsonc", ".opencode")
+	// gittest's own core.fsmonitor=false override is dropped from the probe's
+	// environment, or it would hide the hole. Skip when this git does not run
+	// the command, since the regression below would then prove nothing.
+	probe := gittest.Command(wt, "status", "--porcelain=v1", "--ignored", "--untracked-files=all", "--", "opencode.json", "opencode.jsonc", ".opencode")
+	probe.Env = withoutGitConfigOverrides(probe.Env)
 	_ = probe.Run()
 	if _, err := os.Stat(marker); err != nil {
 		t.Skip("this git does not run core.fsmonitor from git status; the probe cannot show the hole")
@@ -119,4 +118,17 @@ func TestOpenCodePluginCaseFoldListsMatchTheGuard(t *testing.T) {
 			t.Errorf("gates.js %s = %q, want %q", name, got, want)
 		}
 	}
+}
+
+// withoutGitConfigOverrides drops the GIT_CONFIG_COUNT/KEY_n/VALUE_n block
+// gittest.Env injects, so repo-local config takes effect again.
+func withoutGitConfigOverrides(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "GIT_CONFIG_COUNT=") || strings.HasPrefix(kv, "GIT_CONFIG_KEY_") || strings.HasPrefix(kv, "GIT_CONFIG_VALUE_") {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
