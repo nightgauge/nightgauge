@@ -28,11 +28,11 @@ runtime (ephemeral) tier for VSCode UI state.
 At a high level, configuration is organized into three conceptual tiers that
 map to different storage locations and ownership models:
 
-| Conceptual Tier | Storage                                           | Committed? | Owner                                      |
-| --------------- | ------------------------------------------------- | ---------- | ------------------------------------------ |
-| **Team**        | `.nightgauge/config.yaml`                         | Yes        | Team — stable, reviewed via PR             |
-| **Machine**     | `~/.nightgauge/config.yaml`                       | No         | Developer — personal preferences, per-host |
-| **Runtime**     | VSCode `globalState` / `workspaceState` (memento) | n/a        | UI — ephemeral, never produces a YAML diff |
+| Conceptual Tier | Storage                                                                | Committed? | Owner                                      |
+| --------------- | ---------------------------------------------------------------------- | ---------- | ------------------------------------------ |
+| **Team**        | `.nightgauge/config.yaml`                                              | Yes        | Team — stable, reviewed via PR             |
+| **Machine**     | `~/.nightgauge/config.yaml` (macOS; [per OS](#global-config-location)) | No         | Developer — personal preferences, per-host |
+| **Runtime**     | VSCode `globalState` / `workspaceState` (memento)                      | n/a        | UI — ephemeral, never produces a YAML diff |
 
 These three conceptual tiers map to seven technical tiers in the merge engine
 (see precedence diagram below). The key placement guide later in this section
@@ -70,16 +70,16 @@ override lower tiers:
 
 ### Configuration Files
 
-| Tier | File / Storage                          | Conceptual Tier | Purpose                      | Committed | Scope            |
-| ---- | --------------------------------------- | --------------- | ---------------------------- | --------- | ---------------- |
-| 1    | (built-in)                              | —               | Sensible defaults            | -         | All              |
-| 2    | `~/.nightgauge/config.yaml`             | Machine         | User-wide preferences        | No        | All repositories |
-| 3    | `.nightgauge/config.yaml`               | Team            | Project/team settings        | Yes       | Current repo     |
-| 4    | `.nightgauge/config.local.yaml`         | Machine         | Developer overrides          | No        | Current repo     |
-| 5    | VSCode `globalState` / `workspaceState` | Runtime         | Ephemeral UI state (memento) | No        | Current session  |
-| 6    | `NIGHTGAUGE_*` environment vars         | —               | CI/CD and process override   | -         | Current process  |
-| 7    | `--config-*` CLI flags                  | —               | One-time override            | -         | Current command  |
-|      | `.nightgauge/nightgauge.yaml` (legacy)  | Team            | Deprecated project config    | Yes       | Current repo     |
+| Tier | File / Storage                                                         | Conceptual Tier | Purpose                      | Committed | Scope            |
+| ---- | ---------------------------------------------------------------------- | --------------- | ---------------------------- | --------- | ---------------- |
+| 1    | (built-in)                                                             | —               | Sensible defaults            | -         | All              |
+| 2    | `~/.nightgauge/config.yaml` (macOS; [per OS](#global-config-location)) | Machine         | User-wide preferences        | No        | All repositories |
+| 3    | `.nightgauge/config.yaml`                                              | Team            | Project/team settings        | Yes       | Current repo     |
+| 4    | `.nightgauge/config.local.yaml`                                        | Machine         | Developer overrides          | No        | Current repo     |
+| 5    | VSCode `globalState` / `workspaceState`                                | Runtime         | Ephemeral UI state (memento) | No        | Current session  |
+| 6    | `NIGHTGAUGE_*` environment vars                                        | —               | CI/CD and process override   | -         | Current process  |
+| 7    | `--config-*` CLI flags                                                 | —               | One-time override            | -         | Current command  |
+|      | `.nightgauge/nightgauge.yaml` (legacy)                                 | Team            | Deprecated project config    | Yes       | Current repo     |
 
 ### Tier Placement Guide
 
@@ -178,13 +178,13 @@ the project file:
 Pipeline stages run in **git worktrees**, which changes which tier files are
 physically present:
 
-| Tier                                | Reaches a pipeline worktree? | How                                                                                                                             |
-| ----------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Machine (`~/.nightgauge/…`)         | Always                       | Read from `$HOME` (or `NIGHTGAUGE_CONFIG_HOME` / `XDG_CONFIG_HOME`) — worktree-independent.                                     |
-| Project (`.nightgauge/config.yaml`) | Always                       | Tracked file — arrives with the `origin/<base>` checkout. Note: the **committed** content applies, not uncommitted local edits. |
-| Local (`config.local.yaml`)         | Always                       | Gitignored, so both worktree paths copy it in: TS `WorktreeManager.create()` and Go `internal/execution/worktree.go`.           |
-| Runtime (VSCode memento)            | Orchestrator-level only      | Applied by the extension before dispatch (e.g. `pipeline.max_concurrent`); never visible to Go gates inside worktrees.          |
-| Env / CLI                           | Always                       | Inherited by spawned processes / passed per invocation.                                                                         |
+| Tier                                     | Reaches a pipeline worktree? | How                                                                                                                             |
+| ---------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| Machine (the machine-tier `config.yaml`) | Always                       | Read from `$HOME` (or `NIGHTGAUGE_CONFIG_HOME` / `XDG_CONFIG_HOME`) — worktree-independent.                                     |
+| Project (`.nightgauge/config.yaml`)      | Always                       | Tracked file — arrives with the `origin/<base>` checkout. Note: the **committed** content applies, not uncommitted local edits. |
+| Local (`config.local.yaml`)              | Always                       | Gitignored, so both worktree paths copy it in: TS `WorktreeManager.create()` and Go `internal/execution/worktree.go`.           |
+| Runtime (VSCode memento)                 | Orchestrator-level only      | Applied by the extension before dispatch (e.g. `pipeline.max_concurrent`); never visible to Go gates inside worktrees.          |
+| Env / CLI                                | Always                       | Inherited by spawned processes / passed per invocation.                                                                         |
 
 **Practical placement guide:**
 
@@ -197,6 +197,221 @@ physically present:
   servers, notification webhooks): `~/.nightgauge/config.yaml` — but
   remember the project tier overrides it where both define a key.
 - CI or one-shot pinning: `NIGHTGAUGE_*` env vars / `--config-*` flags.
+
+---
+
+## Where Nightgauge keeps its data
+
+Nightgauge commits only team configuration. Everything else it writes lives
+outside the working tree: in per-user directories, inside the clone's git
+directory, or in VS Code's own storage, so `git status`, search, file watchers
+and Docker build contexts never see it. The reasoning is recorded in
+[ADR-024](decisions/024-data-and-state-layout.md); this section is the
+reference. `nightgauge layout` prints every location resolved for the current
+repository as JSON, and `nightgauge layout path <class>` prints one.
+
+In the table, `~` is the home directory. `<git-common-dir>` is
+`git rev-parse --git-common-dir`: `.git` in a normal clone, and the main clone's
+`.git` from a linked worktree, so every worktree of a clone shares it.
+`<git-dir>` is `git rev-parse --absolute-git-dir`: `.git` in the main checkout,
+`.git/worktrees/<name>` in a linked worktree. `STATE` and `CACHE` are the
+machine-state and cache directories from their own rows.
+
+| Data class                                                                                                                                                                                                                       | Linux                                                                                                    | macOS                          | Windows                            | Override                                                                                                                   | Committed                                                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------ | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Team config: `config.yaml`, `config.schema.json`, `pattern-mining-config.yaml`                                                                                                                                                   | `<repo>/.nightgauge/`                                                                                    | same                           | same                               | none                                                                                                                       | Yes                                                                                              |
+| Committed allowlist: `.gitignore`, `audit/`, `skill-smoke/`, `skill-evals/baseline.jsonl`, `model-evals/evidence/`                                                                                                               | `<repo>/.nightgauge/`                                                                                    | same                           | same                               | none                                                                                                                       | Yes ([allowlist](#gitignore-entry))                                                              |
+| Per-clone config: `config.local.yaml`                                                                                                                                                                                            | `<repo>/.nightgauge/`                                                                                    | same                           | same                               | none                                                                                                                       | No (ignored)                                                                                     |
+| Knowledge base                                                                                                                                                                                                                   | `<repo>/.nightgauge/knowledge/`                                                                          | same                           | same                               | none                                                                                                                       | No by default; [opt in](KNOWLEDGE_BASE.md#adopting-the-knowledge-base-in-an-existing-repository) |
+| Machine config (the machine tier)                                                                                                                                                                                                | `~/.config/nightgauge/config.yaml`                                                                       | `~/.nightgauge/config.yaml`    | `%APPDATA%\nightgauge\config.yaml` | `NIGHTGAUGE_CONFIG_HOME`, `XDG_CONFIG_HOME`                                                                                | No                                                                                               |
+| License key                                                                                                                                                                                                                      | Secret Service                                                                                           | Keychain                       | Credential Manager                 | `NIGHTGAUGE_LICENSE_KEY`                                                                                                   | Never; see [the license key](#the-license-key-nightgauge-auth-license)                           |
+| GitHub tokens                                                                                                                                                                                                                    | gh's credential store                                                                                    | same                           | same                               | `GITHUB_TOKEN`, `GH_TOKEN`, or an `env:` reference                                                                         | Never; see [plaintext secrets](#plaintext-secrets-in-repository-config-are-refused)              |
+| Machine state (`STATE`): the serve registry `serve/`, `rate-limit.json`, `ratelimit-gitlab-<host>.json`, `machine-id`, `telemetry-notice-v1`, the doctor fix log `doctor/fix-log.jsonl`, the GitHub App installation-token cache | `~/.local/state/nightgauge/`                                                                             | `~/.nightgauge/state/`         | `%LOCALAPPDATA%\nightgauge\state\` | `NIGHTGAUGE_STATE_HOME`, `XDG_STATE_HOME`                                                                                  | Never                                                                                            |
+| Usage readings and OpenCode run state: `usage/`, `opencode/runs/`, `opencode/self-test/`, `opencode/last-dispatch.json`                                                                                                          | `STATE/`                                                                                                 | same                           | same                               | follows `STATE`                                                                                                            | Never                                                                                            |
+| Machine logs                                                                                                                                                                                                                     | `STATE/logs/`                                                                                            | same                           | same                               | follows `STATE`                                                                                                            | Never                                                                                            |
+| Caches (`CACHE`): the GitHub conditional-request store `github-conditional/`, the recall index `recall/<root-key>/`                                                                                                              | `~/.cache/nightgauge/`                                                                                   | `~/Library/Caches/nightgauge/` | `%LOCALAPPDATA%\nightgauge\cache\` | `NIGHTGAUGE_CACHE_HOME`, `XDG_CACHE_HOME`                                                                                  | Never; disposable                                                                                |
+| Pipeline state (`pipeline/`: history, stage contexts and results, decision traces, `runtime-<issue>-<run>.json`), `plans/`, `retros/`                                                                                            | `<git-common-dir>/nightgauge/`                                                                           | same                           | same                               | none                                                                                                                       | Never (inside the git directory)                                                                 |
+| Per-clone logs: session logs, the GitHub request ledger `github-api-<date>.jsonl`, `sanitization.log`                                                                                                                            | `<git-common-dir>/nightgauge/logs/`                                                                      | same                           | same                               | none                                                                                                                       | Never                                                                                            |
+| Per-checkout run control and runtime state: `current-run.json`, `run-state.json`, batch and queue state, `serve.lock`, `go-backend.log`, `attention/`, `health/`, `focus.yaml`, `reports/` and the rest                          | `<git-dir>/nightgauge-worktree/`                                                                         | same                           | same                               | none                                                                                                                       | Never                                                                                            |
+| Pipeline worktrees                                                                                                                                                                                                               | `STATE/worktrees/<repo-key>/<repo>-issue-<N>`                                                            | same                           | same                               | `pipeline.worktree_base`: an absolute path, machine or local tier only                                                     | Never                                                                                            |
+| Daemon socket                                                                                                                                                                                                                    | `$XDG_RUNTIME_DIR/nightgauge/<key>.sock` when that is set, else `<temp dir>/nightgauge-<uid>/<key>.sock` | same                           | same rule, under `%TEMP%`          | `NIGHTGAUGE_RUNTIME_DIR`, `XDG_RUNTIME_DIR`; `NIGHTGAUGE_DAEMON_SOCKET`, which the daemon sets for the processes it starts | Never                                                                                            |
+| Layout-version marker and migration lock (`layout-version`, `.migrate.lock`)                                                                                                                                                     | `<git-common-dir>/nightgauge/` and `STATE/`                                                              | same                           | same                               | follows its directory                                                                                                      | Never                                                                                            |
+| VS Code extension data                                                                                                                                                                                                           | VS Code's `SecretStorage`, mementos, `storageUri`, `globalStorageUri` and `logUri`                       | same                           | same                               | VS Code's own                                                                                                              | Never                                                                                            |
+| Operator-installed OpenCode pin                                                                                                                                                                                                  | `~/.nightgauge/tools/`                                                                                   | same                           | same                               | the absolute `opencode.binary` value                                                                                       | Never                                                                                            |
+
+`<repo-key>` is the first 12 hex characters of the SHA-256 of the clone's
+canonical git common dir, so every worktree of one clone shares one base and two
+clones never share one. `<key>` is the same hash of the checkout's canonical
+root, so each checkout reaches its own daemon.
+
+**How the directories are resolved.**
+
+- An `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` or `XDG_RUNTIME_DIR`
+  that is set is honoured on every OS, as `$XDG_…/nightgauge`; a relative value
+  is ignored. A `NIGHTGAUGE_*` override beats the XDG variable and must be an
+  absolute path.
+- The per-user directories are created with mode `0700`, and a symlink as a
+  directory's final component is refused. The runtime directory is also refused
+  when another user owns it or it has group or other permission bits.
+- The per-clone and per-checkout directories have no override: they live in the
+  git directory so they can never be committed, and they go with the clone or
+  worktree when it is deleted. Outside a git repository a command that needs
+  them fails with `not a git repository` and writes nothing.
+- With no home directory, or a machine-state directory that cannot be written,
+  a command that needs it fails with an error naming `NIGHTGAUGE_STATE_HOME`;
+  a cache that cannot be created is kept in memory for the call. Nothing falls
+  back into the working tree.
+- On Linux the loader still reads a legacy `~/.nightgauge/config.yaml` when
+  `~/.config/nightgauge/config.yaml` does not exist. On macOS
+  `~/.nightgauge/config.yaml` is the machine config itself and is never moved.
+- A `pipeline.worktree_base` that is relative, set in the committed team file,
+  or inside the working tree is refused with an error naming the file, the line
+  and the fix; `nightgauge doctor` reports it.
+
+### Secrets
+
+Nightgauge stores a credential itself only when it issues or receives it: the
+platform license key, in the OS keychain, and the short-lived GitHub App
+installation tokens it mints, cached in `STATE` with mode `0600`. GitHub tokens
+belong to gh's
+credential store, and every other credential (model provider keys, webhooks,
+`NIGHTGAUGE_API_KEY`) is read from the environment only. A config field that
+_names_ an environment variable (`*_env`, `token_env`, `api_key_env`) is not a
+secret and may be committed. The full list is in
+[ADR-024 § 5](decisions/024-data-and-state-layout.md#5-secrets).
+
+On a CI host (`CI=true` or `CI=1`) Nightgauge never writes a credential to disk,
+neither to the keychain nor to the machine-tier file; give the job the
+credential in its environment.
+
+#### The license key: `nightgauge auth license`
+
+The key is stored in the OS keychain under service `nightgauge`, account
+`platform.license_key`. The CLI, the daemon and the VS Code extension resolve
+it in one order: `NIGHTGAUGE_LICENSE_KEY`, then the keychain entry, then
+`platform.license_key` in the machine-tier file (the only file form, used on a
+host with no keychain).
+
+```bash
+# Store the key. It is read from stdin, never from an argument, because
+# arguments are visible to every process on the machine. Run at a terminal,
+# it prompts and reads without echo.
+printf '%s' "$KEY" | nightgauge auth license set
+
+# Show where the key comes from (env, keychain, machine-file or none) and its
+# fingerprint. The key itself is never printed.
+nightgauge auth license status
+nightgauge auth license status --json
+
+# Delete the key from the keychain, the machine-tier file and this checkout's
+# .nightgauge/config.local.yaml.
+nightgauge auth license clear
+```
+
+- `set` stores the key in the keychain and removes a plaintext copy from the
+  machine-tier file. With no keychain it writes the machine-tier file with mode
+  `0600` and says so. If `NIGHTGAUGE_LICENSE_KEY` is set, it notes that the
+  variable still takes precedence.
+- `status` prints `source:`, `fingerprint:` (the first 12 hex characters of a
+  salted scrypt hash, which the extension compares against its own copy) and,
+  when the key comes from a file, `path:`.
+- `clear` reports a key in the committed `.nightgauge/config.yaml` without
+  editing it; remove that one by hand and rotate the key. It exits non-zero
+  when the keychain could not be reached, so a caller never reads "cleared"
+  while an entry may remain. A host with no keychain at all is not a failure.
+
+The extension stores a key entered in its UI by piping it to
+`nightgauge auth license set`; it never opens the keychain itself.
+
+#### Plaintext secrets in repository config are refused
+
+The repository tiers, `.nightgauge/config.yaml` (committed) and
+`.nightgauge/config.local.yaml` (one `git add -f` from a commit), accept the
+credential keys `github_auth.token`, `github_auth.tokens.<owner>`,
+`github_auth.app.private_key`, `github_auth.app.private_key_path` and
+`platform.license_key` only as an `env:VAR_NAME` reference, and the variable
+name may not itself look like a token:
+
+```yaml
+# .nightgauge/config.yaml
+github_auth:
+  token: env:NIGHTGAUGE_GITHUB_TOKEN
+```
+
+A literal value stops the config load before any network call. The error names
+the file and every offending key, never the value (shown wrapped):
+
+```text
+plaintext credential in a repository config file: /path/to/repo/.nightgauge/config.yaml
+holds a plaintext secret at github_auth.token (value redacted). This file belongs to
+the repository, so it accepts only an environment reference such as
+`token: env:MY_VARIABLE`. For GitHub, run `nightgauge forge auth refresh` (it stores
+the gh token in the OS keychain and removes literal GitHub tokens from these files),
+or name the account in github_user; for any credential, move the literal value to
+/home/you/.config/nightgauge/config.yaml, which is outside every repository. If the
+value was ever committed, rotate it
+```
+
+The machine-tier path in the message is the file the loader reads on that
+machine. `nightgauge doctor`'s `tracked_secrets` check reports a credential
+already committed to the repository, with the value redacted.
+[github_auth](#github_auth) covers the GitHub identity options.
+
+### Moving an existing install: `nightgauge doctor --fix`
+
+An upgrade moves existing data once; nothing reads the old locations as a
+fallback afterwards.
+
+- **Automatically, per clone.** The first `nightgauge` command run on a clone
+  without a current `layout-version` marker moves that clone's per-clone data,
+  every checkout's per-checkout data (each linked worktree included) and its
+  idle pipeline worktrees before doing anything else. `doctor`, `layout`,
+  `version`, `help`, completion, `hook`, `pre-push` and any `--dry-run` never
+  trigger it. It never fails or blocks your command: whatever it cannot move (a
+  conflict, a run in flight, a live daemon) stays where it is, one line on
+  stderr names `nightgauge doctor --fix`, and it does not retry for an hour.
+- **`nightgauge doctor`** reports what is still at an old location, with the
+  exact target: [NGD044](DOCTOR.md#ngd044) (data to move), NGD045 (a file at
+  both locations that differs) and NGD046 (an old location that cannot be moved
+  safely). Its exit status is unchanged by them.
+- **`nightgauge doctor --dry-run`** previews every move and changes nothing.
+- **`nightgauge doctor --fix`** runs the one migration for the clone and for
+  machine state: files left in `~/.nightgauge/` by an earlier release (usage
+  readings, OpenCode run state, machine logs, the serve registry while no daemon
+  is running, the rate-limit hints) move to `STATE`, and `machine-id` moves byte
+  for byte with mode `0600`. It is never regenerated, because a new id is a new
+  device to the platform. A `layout-version` marker is written last, in the
+  per-clone directory and in `STATE`, so a second run changes nothing.
+
+The migration takes `.migrate.lock` in the target directory, moves each file by
+a rename or a synced copy then a delete, keeps modes, recreates symlinks without
+following them, and never overwrites a file that differs. Append-only JSONL
+(pipeline history, the request ledger) found at both locations is merged. Caches
+are deleted rather than moved; they rebuild on next use. Worktrees move with
+`git worktree move`, except one a run is in flight on.
+
+| `doctor --fix` exit | Meaning                                                                      |
+| ------------------- | ---------------------------------------------------------------------------- |
+| `0`                 | Migrated, or nothing to do                                                   |
+| `3`                 | Conflict: a file at both locations differs; nothing was overwritten          |
+| `4`                 | Blocked: a run in flight, a live daemon, a held lock or an unwritable target |
+
+For a conflict, compare the two paths the finding names, keep the one you want
+at the new location, delete the other, and run `nightgauge doctor --fix` again.
+[DOCTOR.md](DOCTOR.md#ngd044) has the full mechanics.
+
+### Log retention
+
+Each log directory, the clone's `<git-common-dir>/nightgauge/logs/` and the
+machine's `STATE/logs/`, is held to **200 MB** and **30 days** by default, set by
+the machine-tier keys `pipeline.logs.max_size_mb` and
+`pipeline.logs.max_age_days`. Oldest files go first. The current day's request
+ledger segment, files written in the last hour, and the files of a run that is
+not finished (running, queued, paused or parked on a decision) are never
+deleted. Retention runs when `nightgauge serve` starts, daily while it runs, and
+at CLI start once a day; `nightgauge logs prune` (with `--dry-run` to preview)
+applies it now. Pipeline history keeps its own retention,
+`pipeline.logs.history_retention_days` (default 90).
 
 ---
 
@@ -225,9 +440,12 @@ The global config path is determined by platform and environment:
 
 Machine state that is not configuration (the serve daemon's claim registry
 `serve/`, the rate-limit hints `rate-limit.json` and
-`ratelimit-gitlab-<host>.json`, this device's `machine-id`, and the
-`telemetry-notice-v1` marker) lives in one directory, created with mode `0700`
-(ADR-024 § 8):
+`ratelimit-gitlab-<host>.json`, this device's `machine-id`, the
+`telemetry-notice-v1` marker, usage readings `usage/`, OpenCode run state under
+`opencode/`, machine logs `logs/` and, by default, pipeline worktrees
+`worktrees/`) lives in one directory, created with mode `0700` (ADR-024 § 8).
+Every other location is in
+[Where Nightgauge keeps its data](#where-nightgauge-keeps-its-data):
 
 | Priority | Check                       | Path                                |
 | -------- | --------------------------- | ----------------------------------- |
@@ -246,7 +464,9 @@ differ, the new one is used and a warning is logged. For any other moved file,
 if both locations hold different contents nothing is overwritten and the error
 names both paths: Nightgauge reads only the new one, so keep it and delete the
 legacy file, or move the legacy file over it if that is the value you need.
-Serve claims are not moved.
+`nightgauge doctor --fix` moves everything still left in `~/.nightgauge/`,
+including the serve registry once no daemon is running; see
+[Moving an existing install](#moving-an-existing-install-nightgauge-doctor---fix).
 With no home directory, or an unwritable state directory, a command that needs
 it fails with an error naming `NIGHTGAUGE_STATE_HOME`; nothing is written into
 the working tree.

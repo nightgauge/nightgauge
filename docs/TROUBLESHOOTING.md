@@ -896,7 +896,8 @@ force-removes the worktree) — it only fixes the case where the _current_
 worktree is intact but the handoff file is missing.
 
 **If the kill predates #128** the changes may still be sitting in the worktree
-under `.nightgauge/worktrees/issue-<N>/` — provided the issue has not been
+under the pre-ADR-024 `.nightgauge/worktrees/issue-<N>/` (today the worktree base,
+`nightgauge layout` prints it) — provided the issue has not been
 re-dispatched since. Copy them out before re-queuing the issue.
 
 ### A stage wrote into another repo's checkout (#129)
@@ -1134,7 +1135,8 @@ genuinely different reason.
 
 **Do not "just exclude `.nightgauge`".** A staged change to a tracked file under
 `.nightgauge/` can be the whole deliverable — #701's was 209 staged deletions
-under `.nightgauge/pipeline/assessments/`. The tracked/untracked distinction is
+under `.nightgauge/pipeline/assessments/` (a pre-ADR-024 in-tree path). The
+tracked/untracked distinction is
 what separates the two, and it is why `sweep` still refuses that worktree.
 
 ### Stashes accumulating in sibling repos (#330)
