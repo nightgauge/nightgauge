@@ -9,6 +9,16 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-30
+
+**Upgrading from 0.4.x: this release moves your files, and you should not
+downgrade afterwards.** The bundled binary moves per-clone state out of
+`.nightgauge/` on first use and machine state (including `machine-id`) out of
+`~/.nightgauge`. After upgrading, do not run a 0.4.x extension or binary on the
+same machine: it reads `machine-id` from the old path and would register the
+machine as a new device. Every location is listed in
+[Where Nightgauge keeps its data](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md#where-nightgauge-keeps-its-data).
+
 ### Added
 
 - **Doctor panel.** `Nightgauge: Run Doctor` runs every doctor check and

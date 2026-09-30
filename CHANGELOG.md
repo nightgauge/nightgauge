@@ -14,6 +14,23 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-30
+
+**Upgrading from 0.4.x: this release moves your files, and you should not
+downgrade afterwards.** Nightgauge now keeps only team config in your
+repository (ADR-024). The first `nightgauge` command on each clone moves that
+clone's pipeline state, plans, retros and logs into the clone's git directory.
+Machine state moves out of `~/.nightgauge` into the per-user state directory
+(usage readings, OpenCode run state, machine logs and `machine-id`), and on
+Linux `~/.nightgauge/config.yaml` moves to `~/.config/nightgauge/config.yaml`.
+`nightgauge doctor --fix` moves anything the automatic run left and reports
+conflicts instead of overwriting. Log retention prunes session logs older
+than 30 days. **After upgrading, do not run a 0.4.x binary on the same
+machine** (including an older extension's bundled binary): it reads
+`machine-id` from the old path and would register the machine as a new
+device. Every location is listed in
+[CONFIGURATION.md § Where Nightgauge keeps its data](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md#where-nightgauge-keeps-its-data).
+
 ### Added
 
 - **`nightgauge doctor --fix` moves machine state out of `~/.nightgauge`
