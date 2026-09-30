@@ -49,6 +49,13 @@ and this project adheres to
 
 ### Changed
 
+- The Claude usage meter reads `usage/claude-rate-limits.json` from the
+  Nightgauge machine-state directory (`NIGHTGAUGE_STATE_HOME`, then
+  `$XDG_STATE_HOME/nightgauge`, then `~/.nightgauge/state` on macOS or
+  `~/.local/state/nightgauge` on Linux) instead of `~/.nightgauge/usage/`,
+  the same place the `nightgauge hook claude-statusline` writer now uses.
+  `nightgauge doctor --fix` moves an existing file.
+
 - The extension's own diagnostic logs — the "Nightgauge" output channel's disk
   sink and the IPC transport log (`ipc-client.log`) — now write under VS
   Code's per-extension `logUri` directory (visible through "Open Extension

@@ -201,6 +201,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Claude usage readings, OpenCode run state and the machine logs live in the
+  machine-state directory** (#2032, ADR-024 § 2). `usage/claude-rate-limits.json`,
+  OpenCode's per-run roots, preserved failure evidence, last-dispatch record and
+  published endpoint slots (`opencode/`), and the machine log directory
+  (`logs/`) resolve under `NIGHTGAUGE_STATE_HOME`, then
+  `$XDG_STATE_HOME/nightgauge`, then `~/.nightgauge/state` on macOS,
+  `~/.local/state/nightgauge` on Linux and `%LOCALAPPDATA%\nightgauge\state` on
+  Windows, instead of `~/.nightgauge`. Only the new location is read;
+  `nightgauge doctor --fix` moves what an older build left. The extension's
+  usage meter resolves the same directory in the same order. Run directories
+  stay 0700, and a symlink planted as any of these directories is refused
+  rather than written through. The OpenCode binary pin under
+  `~/.nightgauge/tools/` is unchanged.
+
 - **Each checkout keeps its own run control and runtime state in
   `<git-dir>/nightgauge-worktree/`** (#2037, ADR-024 § 7). `current-run.json`,
   `run-state.json`, batch and queue state, `serve.lock`, `go-backend.log`,

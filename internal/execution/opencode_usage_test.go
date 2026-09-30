@@ -1435,7 +1435,7 @@ func TestOpenCodeFoldHelpersRunPureFromTheRunRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runs := filepath.Join(home, ".nightgauge", "opencode", "runs") + string(filepath.Separator)
+	runs := filepath.Join(testStateHome(home), "opencode", "runs") + string(filepath.Separator)
 	seen := map[string]bool{}
 	for _, call := range out.helpers {
 		if len(call.args) == 0 {

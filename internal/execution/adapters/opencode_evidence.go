@@ -10,13 +10,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
 // OpenCodeEvidenceDir is where a failed run's OpenCode evidence is kept
-// (#2171), beside the runs directory and never inside any repository.
-func OpenCodeEvidenceDir(home string) string {
-	return filepath.Join(home, ".nightgauge", "opencode", "evidence")
+// (#2171), STATE/opencode/evidence beside the runs directory and never inside
+// any repository. state is the machine-state root (layout.StateHome).
+func OpenCodeEvidenceDir(state string) string {
+	return filepath.Join(OpenCodeStateDir(state), "evidence")
 }
 
 // PreserveOpenCodeRunEvidence copies a failed run's OpenCode session database
@@ -31,13 +33,13 @@ func OpenCodeEvidenceDir(home string) string {
 //
 // Returns the evidence directory, or "" when the root held nothing to keep
 // (including a root that does not exist).
-func PreserveOpenCodeRunEvidence(home, id string, now time.Time) (string, error) {
-	root, err := OpenCodeRunRoot(home, id)
+func PreserveOpenCodeRunEvidence(state, id string, now time.Time) (string, error) {
+	root, err := OpenCodeRunRoot(state, id)
 	if err != nil {
 		return "", err
 	}
 	// Sweep first, so a failure below still bounds the directory.
-	_, sweepErr := SweepOpenCodeRunEvidence(home, OpenCodeOrphanMaxAge, now)
+	_, sweepErr := SweepOpenCodeRunEvidence(state, OpenCodeOrphanMaxAge, now)
 
 	src := filepath.Join(root, "data", "opencode")
 	var files []string // relative to src
@@ -76,14 +78,10 @@ func PreserveOpenCodeRunEvidence(home, id string, now time.Time) (string, error)
 		return "", sweepErr
 	}
 
-	dst := filepath.Join(OpenCodeEvidenceDir(home), id)
-	if err := os.MkdirAll(dst, 0o700); err != nil {
-		return "", fmt.Errorf("opencode run evidence: %w", err)
-	}
-	for _, dir := range []string{filepath.Dir(OpenCodeEvidenceDir(home)), OpenCodeEvidenceDir(home), dst} {
-		if err := os.Chmod(dir, 0o700); err != nil {
-			return "", fmt.Errorf("opencode run evidence: %w", err)
-		}
+	// STATE/opencode, evidence/ and <id>/ are 0700 and none may be a link.
+	dst, err := ensureOpenCodeStateDirs(state, layout.StateOpenCode, "evidence", id)
+	if err != nil {
+		return "", errors.Join(fmt.Errorf("opencode run evidence: %w", err), sweepErr)
 	}
 	for _, rel := range files {
 		if err := copyEvidenceFile(filepath.Join(src, rel), filepath.Join(dst, rel)); err != nil {
@@ -119,8 +117,8 @@ func copyEvidenceFile(from, to string) error {
 // SweepOpenCodeRunEvidence deletes every run's evidence directory older than
 // maxAge and returns the ids it deleted. Only a real directory named by a run
 // identity is touched.
-func SweepOpenCodeRunEvidence(home string, maxAge time.Duration, now time.Time) ([]string, error) {
-	dir := OpenCodeEvidenceDir(home)
+func SweepOpenCodeRunEvidence(state string, maxAge time.Duration, now time.Time) ([]string, error) {
+	dir := OpenCodeEvidenceDir(state)
 	entries, err := os.ReadDir(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil

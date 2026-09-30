@@ -3947,7 +3947,10 @@ line they already had. The VS Code command
 (`nightgauge.enableClaudeUsageStatusLine`) writes the setting, moving any prior
 command into `--delegate`, and unwires by lifting it back out.
 
-**Storage.** Readings land in `~/.nightgauge/usage/claude-rate-limits.json` —
+**Storage.** Readings land in `usage/claude-rate-limits.json` under the
+machine-state directory (`NIGHTGAUGE_STATE_HOME`, then
+`$XDG_STATE_HOME/nightgauge`, then `~/.nightgauge/state` on macOS,
+`~/.local/state/nightgauge` on Linux; ADR-024 § 8) —
 **account-scoped, not workspace-scoped**, because the allowance is one
 account-wide pool and this writer runs in whatever directory the operator
 happens to be in. `internal/usagestore` and the extension's

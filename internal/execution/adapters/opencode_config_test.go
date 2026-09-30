@@ -357,6 +357,7 @@ func TestPrepareOpenCodeRunDiscoversFromTheMachineTierEndpoint(t *testing.T) {
 	stderr := captureAdapterStderr(t, func() {
 		run, err = PrepareOpenCodeRun(withMcpForge(OpenCodeRunRequest{
 			Home:               home,
+			StateHome:          testStateHome(home),
 			ID:                 testRunID,
 			MachineConfigDir:   filepath.Join(home, ".nightgauge"),
 			Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/" + model, WorktreeDir: wt},
@@ -1126,6 +1127,7 @@ func TestPrepareOpenCodeRunNamesWhatTheSpawnMustNotInherit(t *testing.T) {
 	for _, model := range []string{"lmstudio/qwen/qwen3.8-27b", "openai/gpt-5.5"} {
 		run, err := PrepareOpenCodeRun(OpenCodeRunRequest{
 			Home:             home,
+			StateHome:        testStateHome(home),
 			ID:               testRunID,
 			MachineConfigDir: filepath.Join(home, ".nightgauge"),
 			Run:              RunOptions{Stage: "feature-dev", Model: model, WorktreeDir: t.TempDir()},
@@ -1185,6 +1187,7 @@ func TestPrepareOpenCodeRunRefusesConfigARunCannotBeIsolatedFrom(t *testing.T) {
 	}
 	req := OpenCodeRunRequest{
 		Home:               home,
+		StateHome:          testStateHome(home),
 		ID:                 testRunID,
 		MachineConfigDir:   filepath.Join(home, ".nightgauge"),
 		Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()},
@@ -1198,8 +1201,8 @@ func TestPrepareOpenCodeRunRefusesConfigARunCannotBeIsolatedFrom(t *testing.T) {
 	} else if !strings.Contains(err.Error(), managed) || !strings.Contains(err.Error(), openCodeInheritSetting) {
 		t.Errorf("the refusal does not name the managed config file and the opt-in: %v", err)
 	}
-	if _, err := os.Lstat(OpenCodeRunsDir(home)); !os.IsNotExist(err) {
-		t.Errorf("a refused run created %s", OpenCodeRunsDir(home))
+	if _, err := os.Lstat(OpenCodeRunsDir(testStateHome(home))); !os.IsNotExist(err) {
+		t.Errorf("a refused run created %s", OpenCodeRunsDir(testStateHome(home)))
 	}
 
 	req.Settings.InheritUserConfig = true
@@ -1239,6 +1242,7 @@ func TestPrepareOpenCodeRunGetsItsOwnHomeWithNoOpencodeToRefuse(t *testing.T) {
 	}
 	req := OpenCodeRunRequest{
 		Home:               home,
+		StateHome:          testStateHome(home),
 		ID:                 testRunID,
 		MachineConfigDir:   filepath.Join(home, ".nightgauge"),
 		Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: t.TempDir()},
@@ -1277,6 +1281,7 @@ func TestPrepareOpenCodeRunKeepsTheBaseURLOutOfTheEnvironment(t *testing.T) {
 	home := t.TempDir()
 	req := OpenCodeRunRequest{
 		Home:             home,
+		StateHome:        testStateHome(home),
 		ID:               testRunID,
 		MachineConfigDir: filepath.Join(home, ".nightgauge"),
 		Run:              RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", MaxTurns: 40, WorktreeDir: t.TempDir()},
@@ -1290,15 +1295,15 @@ func TestPrepareOpenCodeRunKeepsTheBaseURLOutOfTheEnvironment(t *testing.T) {
 	if _, err := PrepareOpenCodeRun(refused); err == nil {
 		t.Fatal("a zero context limit was accepted")
 	}
-	if _, err := os.Lstat(OpenCodeRunsDir(home)); !os.IsNotExist(err) {
-		t.Errorf("a refused config created %s", OpenCodeRunsDir(home))
+	if _, err := os.Lstat(OpenCodeRunsDir(testStateHome(home))); !os.IsNotExist(err) {
+		t.Errorf("a refused config created %s", OpenCodeRunsDir(testStateHome(home)))
 	}
 
 	run, err := PrepareOpenCodeRun(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.SchemaVersion != OpenCodeConfigSchemaVersion || run.RunDir != filepath.Join(OpenCodeRunsDir(home), testRunID) {
+	if run.SchemaVersion != OpenCodeConfigSchemaVersion || run.RunDir != filepath.Join(OpenCodeRunsDir(testStateHome(home)), testRunID) {
 		t.Errorf("run = %+v", run)
 	}
 	if run.Env["OPENCODE_CONFIG_CONTENT"] != run.ConfigContent || run.ConfigContent == "" {

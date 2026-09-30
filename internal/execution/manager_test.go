@@ -973,10 +973,13 @@ func isolateOpenCodeHome(t *testing.T) string {
 	t.Setenv("HOME", home)
 	for _, k := range []string{
 		"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME",
-		"GH_CONFIG_DIR", "GOCACHE", "NIGHTGAUGE_CONFIG_HOME", "NIGHTGAUGE_STATE_HOME",
+		"GH_CONFIG_DIR", "GOCACHE", "NIGHTGAUGE_CONFIG_HOME",
 	} {
 		t.Setenv(k, "")
 	}
+	// The run roots live under the machine-state root (ADR-024 § 2), pinned
+	// inside the fake home so every OS resolves the same place.
+	t.Setenv("NIGHTGAUGE_STATE_HOME", testStateHome(home))
 	writeOpenCodeMachineConfig(t, openCodeMachineConfig)
 	return home
 }
@@ -1353,7 +1356,7 @@ func TestOpenCodeSpawnWithholdsNightgaugeSecrets(t *testing.T) {
 }
 
 // TestOpenCodeStageRunsInItsOwnRunRoot: every opencode spawn runs with its
-// four XDG directories inside ~/.nightgauge/opencode/runs/<id>/, each a 0700
+// four XDG directories inside STATE/opencode/runs/<id>/, each a 0700
 // directory, and with the tools that move with XDG pinned back to the
 // operator's (ADR-022 § 8). A dispatch with no run identity gets a root id of
 // its own, never exported as NIGHTGAUGE_RUN_ID, and its root is gone when
@@ -1368,7 +1371,7 @@ func TestOpenCodeStageRunsInItsOwnRunRoot(t *testing.T) {
 	writeOpenCodeMachineConfig(t, openCodeMachineConfig) // the machine tier moved with XDG_CONFIG_HOME
 	fake := installOpenCodeFake(t, "")
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
-	runs := filepath.Join(home, ".nightgauge", "opencode", "runs")
+	runs := filepath.Join(testStateHome(home), "opencode", "runs")
 	workspace := openCodeWorkspace(t)
 
 	run := func(runtime *state.RuntimeState) map[string]string {
@@ -1400,7 +1403,7 @@ func TestOpenCodeStageRunsInItsOwnRunRoot(t *testing.T) {
 	env := run(nil)
 	rootDir := filepath.Dir(env["XDG_DATA_HOME"])
 	if filepath.Dir(rootDir) != runs || !runstate.IsIdentity(filepath.Base(rootDir)) {
-		t.Fatalf("XDG_DATA_HOME = %q, want <home>/.nightgauge/opencode/runs/<run id>/data", env["XDG_DATA_HOME"])
+		t.Fatalf("XDG_DATA_HOME = %q, want <state>/opencode/runs/<run id>/data", env["XDG_DATA_HOME"])
 	}
 	for xdg, dir := range map[string]string{"XDG_CONFIG_HOME": "config", "XDG_DATA_HOME": "data", "XDG_CACHE_HOME": "cache", "XDG_STATE_HOME": "state"} {
 		if want := filepath.Join(rootDir, dir); env[xdg] != want {
@@ -1470,7 +1473,7 @@ func TestOpenCodeZeroContextLimitRefusesBeforeSpawn(t *testing.T) {
 	t.Setenv(adapters.ExperimentalOpenCodeEnvVar, "1")
 	workspace := openCodeWorkspace(t)
 	const runID = "01890a5d-ac96-774b-bcce-b30209a81625"
-	root := filepath.Join(home, ".nightgauge", "opencode", "runs", runID)
+	root := filepath.Join(testStateHome(home), "opencode", "runs", runID)
 	dispatch := func() error {
 		var err error
 		captureStderr(t, func() {

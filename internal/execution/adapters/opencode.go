@@ -19,6 +19,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -534,6 +535,10 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the opencode per-run root needs the home directory: %w", err)
 	}
+	state, err := layout.StateHome()
+	if err != nil {
+		return nil, fmt.Errorf("the opencode per-run root needs the machine-state directory: %w", err)
+	}
 	settings, err := a.loadSettings(req.Run.WorktreeDir)
 	if err != nil {
 		return nil, err
@@ -548,6 +553,7 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	}
 	run, err := PrepareOpenCodeRun(OpenCodeRunRequest{
 		Home:               home,
+		StateHome:          state,
 		ID:                 req.ID,
 		MachineConfigDir:   req.MachineConfigDir,
 		Run:                req.Run,

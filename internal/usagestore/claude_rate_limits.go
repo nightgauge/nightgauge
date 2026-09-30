@@ -33,10 +33,14 @@ package usagestore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // StoreVersion is the on-disk schema version, and must stay in lockstep with
@@ -46,11 +50,13 @@ import (
 // cache of a figure that will be re-observed within minutes, not user data.
 const StoreVersion = 1
 
-// relPath is the store's location beneath the account root. It is account
-// scoped rather than workspace scoped because the utilization it holds is
+// relPath is the store's location beneath the machine-state root
+// (layout.StateHome, ADR-024 § 2: STATE/usage/). It is per machine and per
+// account rather than per workspace because the utilization it holds is
 // account wide: a statusline render in any repository must reach every
-// workspace's footer.
-const relPath = ".nightgauge/usage/claude-rate-limits.json"
+// workspace's footer. The extension resolves the same root in the same order
+// (NIGHTGAUGE_STATE_HOME, XDG_STATE_HOME/nightgauge, the platform default).
+const relPath = layout.StateUsage + "/claude-rate-limits.json"
 
 // Reading is one bucket's last-seen utilization.
 //
@@ -88,19 +94,21 @@ type Store struct {
 	path string
 }
 
-// New opens the store beneath an explicit account root. Tests pass a temp
-// directory; production uses ForAccount.
-func New(accountRoot string) *Store {
-	return &Store{path: filepath.Join(accountRoot, relPath)}
+// New opens the store beneath an explicit machine-state root. Tests pass a
+// temp directory; production uses ForAccount.
+func New(stateRoot string) *Store {
+	return &Store{path: filepath.Join(stateRoot, filepath.FromSlash(relPath))}
 }
 
-// ForAccount opens the store beneath the current user's home directory.
+// ForAccount opens the store beneath the machine-state root
+// (layout.StateHome), which it creates with mode 0700 when absent. The
+// readings are this account's, as seen from this machine.
 func ForAccount() (*Store, error) {
-	home, err := os.UserHomeDir()
+	root, err := layout.StateHome()
 	if err != nil {
-		return nil, fmt.Errorf("resolve home directory: %w", err)
+		return nil, fmt.Errorf("resolve the machine-state directory: %w", err)
 	}
-	return New(home), nil
+	return New(root), nil
 }
 
 // Path is the absolute path of the backing file.
@@ -110,6 +118,11 @@ func (s *Store) Path() string { return s.path }
 // state, and an unreadable, malformed or wrong-version file is treated as "no
 // readings" — never as an error worth failing a status line over.
 func (s *Store) load() map[string]Reading {
+	// A symlink (or anything but a regular file) in the store's place is not
+	// followed: nothing under the state directory is read through a link.
+	if info, err := os.Lstat(s.path); err != nil || !info.Mode().IsRegular() {
+		return map[string]Reading{}
+	}
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		return map[string]Reading{}
@@ -193,8 +206,8 @@ func (s *Store) Record(readings []Reading, now time.Time) error {
 // file — never observes a partially written document.
 func (s *Store) write(store persistedStore) error {
 	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create usage directory: %w", err)
+	if err := ensurePrivateDir(dir); err != nil {
+		return err
 	}
 	// Match the TypeScript writer byte for byte: two-space indent, trailing
 	// newline. A round-trip that reformats the file would make every write
@@ -239,4 +252,29 @@ func (s *Store) Readings(now time.Time) []Reading {
 		out = append(out, reading)
 	}
 	return out
+}
+
+// ensurePrivateDir creates the usage directory with mode 0700 when absent and
+// refuses a symlink or a non-directory in its place, so a write never lands
+// outside the state directory through a planted link (ADR-024 § 17).
+func ensurePrivateDir(dir string) error {
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("create usage directory: %w", err)
+		}
+		// The state root itself is missing (a test's bare root): create it.
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create usage directory: %w", err)
+		}
+	}
+	info, err := os.Lstat(dir)
+	switch {
+	case err != nil:
+		return fmt.Errorf("stat usage directory: %w", err)
+	case info.Mode()&fs.ModeSymlink != 0:
+		return fmt.Errorf("refusing usage directory %s: it is a symlink", dir)
+	case !info.IsDir():
+		return fmt.Errorf("refusing usage directory %s: not a directory", dir)
+	}
+	return nil
 }

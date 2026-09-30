@@ -648,7 +648,8 @@ opencode:
 ```
 
 **Isolation from the operator's own OpenCode state.** Every dispatch gets its
-own XDG-isolated run root (`~/.nightgauge/opencode/runs/<run_id>/`), never the
+own XDG-isolated run root (`opencode/runs/<run_id>/` under the machine-state
+directory, ADR-024 § 2), never the
 operator's real `~/.opencode` or global OpenCode config: `inherit_user_config`
 defaults to `false`, and a run's `HOME` structurally keeps `~/.opencode` out
 of it. The session database, transcript, and per-run config are deleted with

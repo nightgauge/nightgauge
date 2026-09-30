@@ -312,28 +312,71 @@ func openCodeWithheldProviderEnv(model string, environ []string) []string {
 	return slices.Compact(names)
 }
 
-// OpenCodeRunsDir is the directory every OpenCode per-run root lives in.
-func OpenCodeRunsDir(home string) string {
-	return filepath.Join(home, ".nightgauge", "opencode", "runs")
+// OpenCodeStateDir is OpenCode's machine-state directory, STATE/opencode
+// (ADR-024 § 2), where state is the machine-state root (layout.StateHome):
+// the per-run roots, the preserved evidence, the last-dispatch record and the
+// published endpoint slots. It is never under the operator's home directory
+// unless the state root is.
+func OpenCodeStateDir(state string) string {
+	return filepath.Join(state, layout.StateOpenCode)
 }
 
-// OpenCodeRunRoot returns the per-run root for id. id must be a run identity
-// (runstate.IsIdentity), which is also the shape of an id minted for a
-// dispatch without one, so a value holding a path separator or ".." can never
-// name a directory outside OpenCodeRunsDir.
-func OpenCodeRunRoot(home, id string) (string, error) {
-	if !filepath.IsAbs(home) {
-		return "", fmt.Errorf("opencode run root: the home directory %q is not an absolute path", home)
+// OpenCodeRunsDir is the directory every OpenCode per-run root lives in,
+// STATE/opencode/runs.
+func OpenCodeRunsDir(state string) string {
+	return filepath.Join(OpenCodeStateDir(state), "runs")
+}
+
+// OpenCodeRunRoot returns the per-run root for id under the machine-state
+// root state. id must be a run identity (runstate.IsIdentity), which is also
+// the shape of an id minted for a dispatch without one, so a value holding a
+// path separator or ".." can never name a directory outside OpenCodeRunsDir.
+func OpenCodeRunRoot(state, id string) (string, error) {
+	if !filepath.IsAbs(state) {
+		return "", fmt.Errorf("opencode run root: the machine-state directory %q is not an absolute path", state)
 	}
 	if !runstate.IsIdentity(id) {
 		return "", fmt.Errorf("opencode run root: %q is not a run identity (a canonical lowercase UUIDv7)", id)
 	}
-	return filepath.Join(OpenCodeRunsDir(home), id), nil
+	return filepath.Join(OpenCodeRunsDir(state), id), nil
 }
 
-// EnsureOpenCodeRunRoot creates the per-run root for id, or reuses it when an
-// earlier stage of the run created it, and returns its path. created reports
-// whether this call created it.
+// ensureOpenCodeStateDirs creates the machine-state root state (mode 0700
+// when absent) and each of elems below it, one component at a time, as
+// directories of mode 0700. None of them may be a symbolic link or anything
+// but a directory, so no write under the state directory goes through a link
+// (ADR-024 § 17). It returns the deepest directory.
+func ensureOpenCodeStateDirs(state string, elems ...string) (string, error) {
+	if !filepath.IsAbs(state) {
+		return "", fmt.Errorf("opencode state: the machine-state directory %q is not an absolute path", state)
+	}
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		return "", fmt.Errorf("opencode state: %w", err)
+	}
+	fi, err := os.Lstat(state)
+	if err != nil {
+		return "", fmt.Errorf("opencode state: %w", err)
+	}
+	if !fi.IsDir() {
+		return "", fmt.Errorf("opencode state: %s is not a directory (a symbolic link is refused)", state)
+	}
+	dir := state
+	for _, e := range elems {
+		dir = filepath.Join(dir, e)
+		if _, err := ensurePrivateDir(dir); err != nil {
+			return "", err
+		}
+	}
+	return dir, nil
+}
+
+// EnsureOpenCodeRunRoot creates the per-run root for id under the
+// machine-state root state, or reuses it when an earlier stage of the run
+// created it, and returns its path. created reports whether this call created
+// it. home is the operator's home directory, which home/ forwards to.
+//
+// STATE/opencode and STATE/opencode/runs are directories of mode 0700 and a
+// symbolic link in place of either is refused (ensureOpenCodeStateDirs).
 //
 // The root and its config/, data/, cache/, state/ and home/ are directories of
 // mode 0700; an existing one with another mode is reset to 0700, and one that
@@ -367,13 +410,13 @@ func OpenCodeRunRoot(home, id string) (string, error) {
 //
 // Every call refreshes the root's modification time, which is what
 // SweepOpenCodeRunRoots ages.
-func EnsureOpenCodeRunRoot(home, id string, lookup func(string) (string, bool)) (root string, created bool, err error) {
-	root, err = OpenCodeRunRoot(home, id)
+func EnsureOpenCodeRunRoot(state, home, id string, lookup func(string) (string, bool)) (root string, created bool, err error) {
+	root, err = OpenCodeRunRoot(state, id)
 	if err != nil {
 		return "", false, err
 	}
-	if err := os.MkdirAll(OpenCodeRunsDir(home), 0o700); err != nil {
-		return "", false, fmt.Errorf("opencode run root: %w", err)
+	if _, err := ensureOpenCodeStateDirs(state, layout.StateOpenCode, "runs"); err != nil {
+		return "", false, err
 	}
 	if created, err = ensurePrivateDir(root); err != nil {
 		return "", false, err
@@ -509,16 +552,16 @@ func linkOperatorConfigEntry(link, target string) error {
 	return nil
 }
 
-// RemoveOpenCodeRunRoot deletes the per-run root for id. A root that does not
-// exist is not an error.
+// RemoveOpenCodeRunRoot deletes the per-run root for id under the
+// machine-state root state. A root that does not exist is not an error.
 //
 // It refuses an id that is not a run identity, a root that is itself a
 // symbolic link or not a directory, and a root that does not resolve to a
 // directory directly under OpenCodeRunsDir. Inside the root nothing is
 // followed: os.RemoveAll unlinks a symbolic link, such as a link in config/
 // to the operator's config, and never deletes what it points at.
-func RemoveOpenCodeRunRoot(home, id string) error {
-	root, err := OpenCodeRunRoot(home, id)
+func RemoveOpenCodeRunRoot(state, id string) error {
+	root, err := OpenCodeRunRoot(state, id)
 	if err != nil {
 		return err
 	}
@@ -535,7 +578,7 @@ func RemoveOpenCodeRunRoot(home, id string) error {
 	if !fi.IsDir() {
 		return fmt.Errorf("opencode run root: refusing to delete %s: it is not a directory", root)
 	}
-	runs, err := filepath.EvalSymlinks(OpenCodeRunsDir(home))
+	runs, err := filepath.EvalSymlinks(OpenCodeRunsDir(state))
 	if err != nil {
 		return fmt.Errorf("opencode run root: %w", err)
 	}
@@ -560,8 +603,8 @@ func RemoveOpenCodeRunRoot(home, id string) error {
 // OpenCodeRunsDir, a symbolic link named like one included, is left alone,
 // because Nightgauge did not create it. A failure to delete one root does not
 // stop the sweep; the failures are returned together.
-func SweepOpenCodeRunRoots(home string, maxAge time.Duration, now time.Time) ([]string, error) {
-	entries, err := os.ReadDir(OpenCodeRunsDir(home))
+func SweepOpenCodeRunRoots(state string, maxAge time.Duration, now time.Time) ([]string, error) {
+	entries, err := os.ReadDir(OpenCodeRunsDir(state))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -575,11 +618,11 @@ func SweepOpenCodeRunRoots(home string, maxAge time.Duration, now time.Time) ([]
 		if !runstate.IsIdentity(id) {
 			continue
 		}
-		fi, err := os.Lstat(filepath.Join(OpenCodeRunsDir(home), id))
+		fi, err := os.Lstat(filepath.Join(OpenCodeRunsDir(state), id))
 		if err != nil || !fi.IsDir() || now.Sub(fi.ModTime()) <= maxAge {
 			continue
 		}
-		if err := RemoveOpenCodeRunRoot(home, id); err != nil {
+		if err := RemoveOpenCodeRunRoot(state, id); err != nil {
 			errs = append(errs, err)
 			continue
 		}

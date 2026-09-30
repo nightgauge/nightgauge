@@ -251,14 +251,72 @@ func TestRecordWithNoReadingsDoesNotCreateAFile(t *testing.T) {
 	}
 }
 
-func TestForAccountUsesHomeDirectory(t *testing.T) {
-	t.Setenv("HOME", "/tmp/nightgauge-usagestore-home")
+// TestRateLimitsForAccountWritesUnderTheStateHome: the production store
+// resolves through the machine-state root (ADR-024 § 2, #2032), never HOME. A
+// fake HOME stays empty; every write lands under NIGHTGAUGE_STATE_HOME.
+func TestRateLimitsForAccountWritesUnderTheStateHome(t *testing.T) {
+	home, state := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("NIGHTGAUGE_STATE_HOME", state)
 	store, err := ForAccount()
 	if err != nil {
 		t.Fatalf("ForAccount: %v", err)
 	}
-	want := filepath.Join("/tmp/nightgauge-usagestore-home", ".nightgauge/usage/claude-rate-limits.json")
+	want := filepath.Join(state, "usage", "claude-rate-limits.json")
 	if store.Path() != want {
 		t.Errorf("Path() = %q, want %q", store.Path(), want)
+	}
+	at := now()
+	if err := store.Record([]Reading{reading("five_hour", 12, at.Add(time.Hour).Unix(), at)}, at); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("the reading was not written to %s: %v", want, err)
+	}
+	info, err := os.Stat(filepath.Dir(want))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("usage directory mode = %o, want 0700", perm)
+	}
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("HOME gained %d entr(ies) (first %q); nothing may be written there", len(entries), entries[0].Name())
+	}
+}
+
+// TestRateLimitsRefusesASymlinkedUsageDir: a link planted as the usage
+// directory is never written through, and a linked store file is not read.
+func TestRateLimitsRefusesASymlinkedUsageDir(t *testing.T) {
+	root, elsewhere := t.TempDir(), t.TempDir()
+	if err := os.Symlink(elsewhere, filepath.Join(root, "usage")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	store := New(root)
+	at := now()
+	if err := store.Record([]Reading{reading("five_hour", 12, at.Add(time.Hour).Unix(), at)}, at); err == nil {
+		t.Fatal("Record wrote through a symlinked usage directory")
+	}
+	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
+		t.Errorf("the link target gained %d entr(ies)", len(entries))
+	}
+
+	root2, target := t.TempDir(), filepath.Join(t.TempDir(), "real.json")
+	if err := os.WriteFile(target, []byte(`{"version":1,"buckets":{"five_hour":{"rateLimitType":"five_hour","utilization":44,"resetsAt":0,"status":"allowed","observedAt":"2026-08-19T15:00:00Z"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root2, "usage"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(root2, "usage", "claude-rate-limits.json")); err != nil {
+		t.Fatal(err)
+	}
+	if got := New(root2).Readings(at); len(got) != 0 {
+		t.Errorf("Readings followed a symlinked store file: %+v", got)
 	}
 }

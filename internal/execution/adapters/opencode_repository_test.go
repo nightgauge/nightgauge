@@ -121,6 +121,7 @@ func TestPrepareOpenCodeRunGivesTheRepositorysSteeringAndMcp(t *testing.T) {
 	stderr := captureAdapterStderr(t, func() {
 		run, err = PrepareOpenCodeRun(withMcpForge(OpenCodeRunRequest{
 			Home:               home,
+			StateHome:          testStateHome(home),
 			ID:                 testRunID,
 			MachineConfigDir:   filepath.Join(home, ".nightgauge"),
 			Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: wt},
@@ -200,6 +201,7 @@ func TestPrepareOpenCodeRunRefusesADispatchWithoutAWorktree(t *testing.T) {
 	home := t.TempDir()
 	run, err := PrepareOpenCodeRun(OpenCodeRunRequest{
 		Home:               home,
+		StateHome:          testStateHome(home),
 		ID:                 testRunID,
 		MachineConfigDir:   filepath.Join(home, ".nightgauge"),
 		Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b"},
@@ -211,8 +213,8 @@ func TestPrepareOpenCodeRunRefusesADispatchWithoutAWorktree(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "no worktree") {
 		t.Fatalf("PrepareOpenCodeRun without a worktree = %+v, %v; want a refusal naming the missing worktree", run, err)
 	}
-	if _, statErr := os.Lstat(OpenCodeRunsDir(home)); !os.IsNotExist(statErr) {
-		t.Errorf("the refused dispatch created %s", OpenCodeRunsDir(home))
+	if _, statErr := os.Lstat(OpenCodeRunsDir(testStateHome(home))); !os.IsNotExist(statErr) {
+		t.Errorf("the refused dispatch created %s", OpenCodeRunsDir(testStateHome(home)))
 	}
 }
 
@@ -235,6 +237,7 @@ func TestPrepareOpenCodeRunLeavesOutAnMcpValueOpenCodeCannotPaste(t *testing.T) 
 	stderr := captureAdapterStderr(t, func() {
 		run, err = PrepareOpenCodeRun(withMcpForge(OpenCodeRunRequest{
 			Home:               home,
+			StateHome:          testStateHome(home),
 			ID:                 testRunID,
 			MachineConfigDir:   filepath.Join(home, ".nightgauge"),
 			Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: wt},
@@ -294,6 +297,7 @@ func TestPrepareOpenCodeRunChecksMcpValuesInTheSpawnEnvironment(t *testing.T) {
 	stderr := captureAdapterStderr(t, func() {
 		run, err = PrepareOpenCodeRun(withMcpForge(OpenCodeRunRequest{
 			Home:               home,
+			StateHome:          testStateHome(home),
 			ID:                 testRunID,
 			MachineConfigDir:   filepath.Join(home, ".nightgauge"),
 			Run:                RunOptions{Stage: "feature-dev", Model: "lmstudio/qwen/qwen3.8-27b", WorktreeDir: wt},

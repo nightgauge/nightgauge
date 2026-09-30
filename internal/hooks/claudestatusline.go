@@ -101,9 +101,10 @@ type ClaudeStatusLineOptions struct {
 	// verb's stdout, so adopting the usage feed never costs an operator the
 	// status line they already had.
 	Delegate string
-	// AccountRoot overrides the store's account root. Empty means the current
-	// user's home directory. Tests set it; production does not.
-	AccountRoot string
+	// StateRoot overrides the store's machine-state root. Empty means
+	// layout.StateHome (usagestore.ForAccount). Tests set it; production does
+	// not.
+	StateRoot string
 }
 
 // ClaudeStatusLine parses the payload, records any rate-limit readings, and
@@ -123,7 +124,7 @@ func ClaudeStatusLine(input []byte, opts ClaudeStatusLineOptions, now time.Time)
 
 	readings := readingsFrom(parsed, now)
 	if len(readings) > 0 {
-		if err := recordReadings(readings, opts.AccountRoot, now); err != nil {
+		if err := recordReadings(readings, opts.StateRoot, now); err != nil {
 			// The store is a cache of a figure that will be re-observed on the
 			// next render. Losing one write costs the footer nothing lasting.
 			fmt.Fprintf(os.Stderr, "warn: claude-statusline: %v\n", err)
@@ -178,10 +179,10 @@ func readingsFrom(in statusLineInput, now time.Time) []usagestore.Reading {
 	return readings
 }
 
-func recordReadings(readings []usagestore.Reading, accountRoot string, now time.Time) error {
+func recordReadings(readings []usagestore.Reading, stateRoot string, now time.Time) error {
 	var store *usagestore.Store
-	if accountRoot != "" {
-		store = usagestore.New(accountRoot)
+	if stateRoot != "" {
+		store = usagestore.New(stateRoot)
 	} else {
 		resolved, err := usagestore.ForAccount()
 		if err != nil {

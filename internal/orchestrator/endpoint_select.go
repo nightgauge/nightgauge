@@ -11,6 +11,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -41,7 +42,7 @@ var openCodeEndpointRecheck = 30 * time.Second
 var openCodeEndpointFailoverBackoff = 2 * time.Second
 
 // openCodeEndpointSlotsPath lets a test move the published ledger; nil uses
-// adapters.OpenCodeEndpointSlotsPath under the user's home. Never set outside
+// adapters.OpenCodeEndpointSlotsPath under the machine-state root. Never set outside
 // a test.
 var openCodeEndpointSlotsPath func() string
 
@@ -425,8 +426,8 @@ func (s *Scheduler) publishEndpointSlotsLocked() {
 	path := ""
 	if openCodeEndpointSlotsPath != nil {
 		path = openCodeEndpointSlotsPath()
-	} else if home, err := os.UserHomeDir(); err == nil {
-		path = adapters.OpenCodeEndpointSlotsPath(home)
+	} else if state, err := layout.StateHome(); err == nil {
+		path = adapters.OpenCodeEndpointSlotsPath(state)
 	}
 	if path == "" {
 		return

@@ -136,7 +136,7 @@
     },
     {
       "name": "opencode-failure-evidence",
-      "note": "#2171: a failed run's OpenCode session database and logs are copied out of its per-run root, owner-only, into ~/.nightgauge/opencode/evidence/<run id> before the root is deleted, and the log line names the path.",
+      "note": "#2171: a failed run's OpenCode session database and logs are copied out of its per-run root, owner-only, into the machine-state directory's opencode/evidence/<run id> before the root is deleted, and the log line names the path.",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
         "anchor": "s.execMgr.PreserveOpenCodeFailureEvidence(runtime.RunID"

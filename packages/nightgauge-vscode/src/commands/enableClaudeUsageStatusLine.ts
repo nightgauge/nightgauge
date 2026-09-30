@@ -97,7 +97,7 @@ export function registerEnableClaudeUsageStatusLineCommand(): vscode.Disposable 
           "Claude Code hands its status line command your account's five-hour and weekly " +
           "utilization on every render. Nightgauge records it so the footer can show how much " +
           "of your plan is left instead of a dollar estimate. Nothing is sent anywhere — the " +
-          "reading is written to ~/.nightgauge/usage/claude-rate-limits.json.",
+          "reading is written to usage/claude-rate-limits.json in the Nightgauge machine-state directory.",
       },
       "Enable"
     );

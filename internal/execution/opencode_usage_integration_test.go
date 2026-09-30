@@ -83,7 +83,7 @@ func TestOpenCodeIntegrationFoldReadsALongSession(t *testing.T) {
 	if session == "" {
 		t.Fatalf("the stage's stream names no session:\n%s", stderr)
 	}
-	root, err := adapters.OpenCodeRunRoot(home, openCodeFoldRunID)
+	root, err := adapters.OpenCodeRunRoot(testStateHome(home), openCodeFoldRunID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -258,7 +258,7 @@ func guardDirectRun(t *testing.T, permission *openCodePermissionJSON, stub *guar
 	t.Helper()
 	bin := openCodeCatalogBinary(t)
 	home := t.TempDir()
-	root, _, err := EnsureOpenCodeRunRoot(home, guardRunID, func(string) (string, bool) { return "", false })
+	root, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, guardRunID, func(string) (string, bool) { return "", false })
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -24,7 +24,9 @@ type openCodeRootRunner struct {
 }
 
 func (r *openCodeRootRunner) RunStage(ctx context.Context, params StageRunParams) (*StageRunResult, error) {
-	root := filepath.Join(r.home, ".nightgauge", "opencode", "runs", params.RunID)
+	// The run roots live under the machine-state root (ADR-024 § 2), which the
+	// test pins inside its fake home with NIGHTGAUGE_STATE_HOME.
+	root := filepath.Join(r.home, ".nightgauge", "state", "opencode", "runs", params.RunID)
 	for _, dir := range []string{"config", "data/opencode", "cache", "state", "home"} {
 		if err := os.MkdirAll(filepath.Join(root, dir), 0o700); err != nil {
 			return nil, err
@@ -69,6 +71,7 @@ func TestRunPipeline_DeletesTheOpenCodeRunRootAtEveryTerminalOutcome(t *testing.
 			})
 			home := t.TempDir()
 			t.Setenv("HOME", home)
+			t.Setenv("NIGHTGAUGE_STATE_HOME", filepath.Join(home, ".nightgauge", "state"))
 			operatorGit := filepath.Join(home, ".config", "git")
 			if err := os.MkdirAll(operatorGit, 0o700); err != nil {
 				t.Fatal(err)

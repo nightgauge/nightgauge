@@ -17,7 +17,7 @@ import (
 func TestManagerCleanupOpenCodeRunRoot(t *testing.T) {
 	home := isolateOpenCodeHome(t)
 	const runID = "01890a5d-ac96-774b-bcce-b302099a8057"
-	root, _, err := adapters.EnsureOpenCodeRunRoot(home, runID, func(string) (string, bool) { return "", false })
+	root, _, err := adapters.EnsureOpenCodeRunRoot(testStateHome(home), home, runID, func(string) (string, bool) { return "", false })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func TestManagerCleanupOpenCodeRunRoot(t *testing.T) {
 	if err := m.CleanupOpenCodeRunRoot(""); err != nil {
 		t.Errorf("CleanupOpenCodeRunRoot for a run with no identity = %v, want nil", err)
 	}
-	sibling := filepath.Join(home, ".nightgauge", "opencode", "x")
+	sibling := filepath.Join(testStateHome(home), "opencode", "x")
 	if err := os.MkdirAll(sibling, 0o700); err != nil {
 		t.Fatal(err)
 	}

@@ -29,7 +29,7 @@ async function tempRoot(): Promise<string> {
   return fs.mkdtemp(path.join(os.tmpdir(), "ng-usage-"));
 }
 
-const STORE_REL = ".nightgauge/usage/claude-rate-limits.json";
+const STORE_REL = "usage/claude-rate-limits.json";
 
 /** Write the store file the way the Go `claude-statusline` verb does. */
 async function writeAsGoVerb(
@@ -174,12 +174,20 @@ describe("ClaudeRateLimitStore — the statusline writer is a second process", (
       new Date()
     );
 
-    const entries = await fs.readdir(path.join(root, ".nightgauge/usage"));
+    const entries = await fs.readdir(path.join(root, "usage"));
     expect(entries).toEqual(["claude-rate-limits.json"]);
   });
 
-  it("resolves to the account root, not a workspace", () => {
-    expect(ClaudeRateLimitStore.forAccount().filePath).toBe(path.join(os.homedir(), STORE_REL));
+  it("resolves to the machine-state root the Go writer uses, not a workspace or HOME", () => {
+    const saved = process.env.NIGHTGAUGE_STATE_HOME;
+    const state = path.join(os.tmpdir(), "nightgauge-state-home-test");
+    process.env.NIGHTGAUGE_STATE_HOME = state;
+    try {
+      expect(ClaudeRateLimitStore.forAccount().filePath).toBe(path.join(state, STORE_REL));
+    } finally {
+      if (saved === undefined) delete process.env.NIGHTGAUGE_STATE_HOME;
+      else process.env.NIGHTGAUGE_STATE_HOME = saved;
+    }
   });
 });
 

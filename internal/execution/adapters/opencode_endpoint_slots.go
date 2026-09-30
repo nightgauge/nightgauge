@@ -2,6 +2,8 @@ package adapters
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -26,25 +28,44 @@ type OpenCodeEndpointSlots struct {
 }
 
 // OpenCodeEndpointSlotsPath is where the scheduler publishes its endpoint
-// slot ledger for home.
-func OpenCodeEndpointSlotsPath(home string) string {
-	return filepath.Join(home, ".nightgauge", "opencode", "endpoint-slots.json")
+// slot ledger: STATE/opencode/endpoint-slots.json under the machine-state
+// root state (layout.StateHome).
+func OpenCodeEndpointSlotsPath(state string) string {
+	return filepath.Join(OpenCodeStateDir(state), "endpoint-slots.json")
 }
 
-// WriteOpenCodeEndpointSlots publishes slots at path, atomically.
+// WriteOpenCodeEndpointSlots publishes slots at path, atomically: a temporary
+// file of mode 0600 in the same directory, renamed into place. The directory
+// is created 0700 and is refused when it is a symbolic link, so the ledger is
+// never written through a link.
 func WriteOpenCodeEndpointSlots(path string, slots OpenCodeEndpointSlots) error {
 	data, err := json.Marshal(slots)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
+	if fi, err := os.Lstat(dir); err != nil {
+		return err
+	} else if !fi.IsDir() {
+		return fmt.Errorf("opencode endpoint slots: %s is not a directory (a symbolic link is refused)", dir)
+	}
+	tmp, err := os.CreateTemp(dir, ".endpoint-slots-*")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	_, werr := tmp.Write(data)
+	if err := errors.Join(werr, tmp.Chmod(0o600), tmp.Close()); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return nil
 }
 
 // ReadOpenCodeEndpointSlots reads the published ledger at path.

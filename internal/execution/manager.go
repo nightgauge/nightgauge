@@ -23,6 +23,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -2038,11 +2039,11 @@ func (m *Manager) CleanupOpenCodeRunRoot(runID string) error {
 	if runID == "" {
 		return nil
 	}
-	home, err := os.UserHomeDir()
+	state, err := layout.StateHome()
 	if err != nil {
 		return fmt.Errorf("opencode run root: %w", err)
 	}
-	return adapters.RemoveOpenCodeRunRoot(home, runID)
+	return adapters.RemoveOpenCodeRunRoot(state, runID)
 }
 
 // PreserveOpenCodeRunEvidence keeps a failed run's OpenCode session database
@@ -2053,11 +2054,11 @@ func (m *Manager) PreserveOpenCodeRunEvidence(runID string) (string, error) {
 	if runID == "" {
 		return "", nil
 	}
-	home, err := os.UserHomeDir()
+	state, err := layout.StateHome()
 	if err != nil {
 		return "", fmt.Errorf("opencode run evidence: %w", err)
 	}
-	return adapters.PreserveOpenCodeRunEvidence(home, runID, time.Now())
+	return adapters.PreserveOpenCodeRunEvidence(state, runID, time.Now())
 }
 
 // PreserveOpenCodeFailureEvidence is PreserveOpenCodeRunEvidence with its outcome
