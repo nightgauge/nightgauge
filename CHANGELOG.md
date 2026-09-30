@@ -14,8 +14,30 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-30
+
+**0.5.1 is the first 0.5 build on the normal release channel.** 0.5.0 reached
+the extension registries only as a preview, so this is the release most
+extension users upgrade to from 0.4.x. **It moves your files, and you should
+not downgrade afterwards.** The first `nightgauge` command on each clone moves
+that clone's pipeline state, plans, retros and logs into the clone's git
+directory. Machine state moves out of `~/.nightgauge` into the per-user state
+directory (usage readings, OpenCode run state, machine logs and `machine-id`),
+and on Linux `~/.nightgauge/config.yaml` moves to
+`~/.config/nightgauge/config.yaml`. `nightgauge doctor --fix` moves anything
+the automatic run left and reports conflicts instead of overwriting. Log
+retention prunes session logs older than 30 days. **After upgrading, do not
+run a 0.4.x binary or extension on the same machine**: it reads `machine-id`
+from the old path and would register the machine as a new device. Every
+location is listed in
+[CONFIGURATION.md § Where Nightgauge keeps its data](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md#where-nightgauge-keeps-its-data).
+
 ### Changed
 
+- **Every version publishes on the release channel** (#2305). The rule that
+  sent odd 0.x minor versions to the extension registries as opt-in previews
+  is removed: `scripts/marketplace-channel.sh` resolves every version to
+  `release`, and the release procedure gains a step for choosing the version.
 - **The registry listing shows the demo the repository README shows**
   (#2303). The extension README, which Open VSX and the Marketplace render as
   the listing page, now leads with the same 31-second demo, and a test keeps

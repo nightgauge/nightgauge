@@ -230,9 +230,10 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          # Even 0.x minor lines are releases; odd 0.x minor lines are previews.
-          # This follows Marketplace numeric-version ordering guidance and lets
-          # 0.4.0 install normally without presenting beta maturity as GA.
+          # The shared channel resolver decides the channel, and it resolves
+          # every version to the release channel (#2305): there is no preview
+          # line. The pre-release branch below is kept so the resolver stays
+          # the only place that decision is made.
           CHANNEL=()
           CHANNEL_NAME="$(bash "$GITHUB_WORKSPACE/scripts/marketplace-channel.sh" "$VERSION")"
           if [[ "$CHANNEL_NAME" == "pre-release" ]]; then

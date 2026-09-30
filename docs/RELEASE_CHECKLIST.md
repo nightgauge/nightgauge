@@ -552,7 +552,7 @@ pre-release.
 ## What this checklist is not
 
 - It is not the current channel policy. This file records the first Marketplace
-  launch; the active even-minor release / odd-minor preview contract lives in
+  launch; the active contract (every version on the release channel) lives in
   [GIT_WORKFLOW.md](GIT_WORKFLOW.md#extension-registry-channels).
 - It is not permission to ship producer/resume/restart/discard recovery.
 - It is not a claim that every contributed command was hand-tested.

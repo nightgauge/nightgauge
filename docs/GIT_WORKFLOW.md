@@ -878,12 +878,13 @@ they share one version.
 
 The Marketplace and Open VSX require different numeric versions for release
 and pre-release uploads; a version already published as pre-release cannot be
-republished as release. While the unified product version is `0.x`, Nightgauge
-uses even minor lines (`0.4.x`, `0.6.x`) for normal release-channel builds and
-odd minor lines (`0.5.x`, `0.7.x`) for opt-in previews. Versions `1.x` and later
-publish to the release channel. `scripts/marketplace-channel.sh` is the single
-resolver consumed by staging, GitHub Release packaging, Marketplace publishing,
-and Open VSX publishing.
+republished as release. **Nightgauge runs no preview channel: every
+version publishes on the release channel** (#2305). Until v0.5.0 odd minor
+lines (`0.5.x`) were published as opt-in previews, which sent v0.5.0 to Open
+VSX as a pre-release while normal users kept receiving 0.4.8; 0.5.0 stays a
+preview there and 0.5.1 supersedes it. `scripts/marketplace-channel.sh` is the
+single resolver consumed by staging, GitHub Release packaging, Marketplace
+publishing, and Open VSX publishing.
 
 ## Deployment Strategy — Tags & Environments
 
@@ -941,8 +942,7 @@ main ──●──●──●──●──●──
 9. `gh workflow run marketplace-publish.yml --ref v0.4.0 -f registries=both`
    → promotes the release's own per-target VSIXs to the VS Code Marketplace
    and Open VSX after verifying each against `checksums.txt` and its
-   `release.yml` attestation (even 0.x minor lines are stable; odd 0.x minor
-   lines are pre-release)
+   `release.yml` attestation (every version publishes on the release channel)
 
 ### Per-Repository Workflows
 
@@ -955,6 +955,12 @@ main ──●──●──●──●──●──
 ### Cutting a Release — Step by Step
 
 ```bash
+# 0a. Choose the version. Patch for fixes, minor for anything a user must act
+#     on (a migration, a removed setting). Every version publishes on the
+#     release channel; no number means "preview" (§ Extension Registry
+#     Channels). Confirm what the resolver will do with it:
+bash scripts/marketplace-channel.sh 0.2.0      # prints: release
+
 # 0. Land the changelog rollover PR first (§ Changelog): [Unreleased] becomes
 #    [X.Y.Z] - date in CHANGELOG.md and the extension's changelog. release.yml
 #    refuses a tag without it.

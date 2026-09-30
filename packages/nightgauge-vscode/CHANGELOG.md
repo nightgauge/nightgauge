@@ -9,8 +9,21 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-30
+
+**0.5.1 is the first 0.5 build on the normal release channel.** 0.5.0 reached
+the registries only as a preview. **It moves your files, and you should not
+downgrade afterwards.** The bundled binary moves per-clone state out of
+`.nightgauge/` on first use and machine state (including `machine-id`) out of
+`~/.nightgauge`. After upgrading, do not run a 0.4.x extension or binary on the
+same machine: it reads `machine-id` from the old path and would register the
+machine as a new device. Every location is listed in
+[Where Nightgauge keeps its data](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md#where-nightgauge-keeps-its-data).
+
 ### Changed
 
+- **No preview channel.** Every version of the extension is published as a
+  normal release (#2305).
 - **The listing page shows the demo.** The README now leads with the same
   31-second tour the repository README shows (#2303).
 
