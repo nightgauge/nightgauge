@@ -543,7 +543,7 @@ func TestOpenCodeIntegrationIsolatesTheRun(t *testing.T) {
 		t.Errorf("the stage exited %d; a model the catalog does not list exits 1", result.ExitCode)
 	}
 
-	runs := filepath.Join(home, ".nightgauge", "opencode", "runs") + string(os.PathSeparator)
+	runs := filepath.Join(testStateHome(home), "opencode", "runs") + string(os.PathSeparator)
 	paths := debugPaths(t, readShimFile(t, out, "paths.txt"))
 	for _, name := range []string{"config", "data", "cache", "state", "home"} {
 		if !strings.HasPrefix(paths[name], runs) {
@@ -673,7 +673,7 @@ func TestOpenCodeIntegrationInheritUserConfigOptIn(t *testing.T) {
 	if n := strings.Count(stderr, openCodeInheritNotice); n != 1 {
 		t.Errorf("the opt-in was announced %d times on stderr, want once:\n%s", n, stderr)
 	}
-	runs := filepath.Join(home, ".nightgauge", "opencode", "runs") + string(os.PathSeparator)
+	runs := filepath.Join(testStateHome(home), "opencode", "runs") + string(os.PathSeparator)
 	if data := debugPaths(t, readShimFile(t, out, "paths.txt"))["data"]; !strings.HasPrefix(data, runs) {
 		t.Errorf("with the opt-in the data directory moved to %s; it stays in the run root", data)
 	}
@@ -970,7 +970,7 @@ func TestOpenCodeIntegrationPerRunConfigReachesOpenCode(t *testing.T) {
 
 	const runID = "01890a5d-ac96-774b-bcce-b30209a81625"
 	// A file layer below the per-run config tries to lift every locked key.
-	xdgConfig := filepath.Join(home, ".nightgauge", "opencode", "runs", runID, "config", "opencode")
+	xdgConfig := filepath.Join(testStateHome(home), "opencode", "runs", runID, "config", "opencode")
 	if err := os.MkdirAll(xdgConfig, 0o700); err != nil {
 		t.Fatal(err)
 	}

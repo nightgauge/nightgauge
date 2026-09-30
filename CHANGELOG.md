@@ -616,6 +616,10 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
 
 ### Fixed
 
+- **`scripts/ci-local.sh` runs the OpenCode integration suite** that `ci.yml`
+  runs. Both call `scripts/opencode-integration.sh`, which installs the
+  manifest's `max_tested` pin. Before this the local gate never compiled the
+  `opencode_integration` tag, so a moved run root failed only in CI.
 - The retro engine imported a `batch_state_parser` module that was never
   committed, so it could not run; the parser is added with tests (#2296).
 - `scripts/analyze-model-routing.ts` type-checks again, pricing from the
