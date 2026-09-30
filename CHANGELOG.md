@@ -14,6 +14,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- **The registry listing shows the demo the repository README shows**
+  (#2303). The extension README, which Open VSX and the Marketplace render as
+  the listing page, now leads with the same 31-second demo, and a test keeps
+  the two together and rejects a relative image path. The release procedure
+  gains three numbered steps that were left to memory: a multi-engine scan of
+  every VSIX before registry publish, the Homebrew cask merge, and a read of
+  each listing page.
+
 ## [0.5.0] - 2026-09-30
 
 **Upgrading from 0.4.x: this release moves your files, and you should not

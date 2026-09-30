@@ -995,6 +995,18 @@ gh release view v0.2.0 --json assets --jq '.assets[].name'
 gh release download v0.2.0 -p 'nightgauge-vscode-darwin-arm64-*.vsix' -D /tmp/rel
 gh attestation verify /tmp/rel/nightgauge-vscode-darwin-arm64-*.vsix --owner nightgauge
 
+# 9a. Multi-engine scan BEFORE any registry sees the files. release.yml's
+#     ClamAV step is one engine; a registry reviewer reads VirusTotal, where
+#     an archive has been flagged on some builds and not on near-identical
+#     others while every file inside it was clean. So it is checked per
+#     release, never assumed. Upload every VSIX (and the bare binaries) at
+#     https://www.virustotal.com/gui/home/upload and keep each report URL
+#     (https://www.virustotal.com/gui/file/<sha256>, the sha256 from
+#     checksums.txt). A detection on a VSIX stops the release here: do not
+#     publish that file; remove the asset and cut the next patch.
+gh release download v0.4.0 -p '*.vsix' -p 'checksums.txt' -D /tmp/rel
+(cd /tmp/rel && shasum -a 256 -c checksums.txt --ignore-missing)
+
 # 10. Publish to the registries — ON THE TAG, never from a branch. The run
 #     verifies VSCE_PAT / OVSX_PAT, downloads the release's VSIXs, checks each
 #     against checksums.txt and its release.yml attestation, checks version and
@@ -1007,7 +1019,23 @@ gh run watch
 #     any issue the release closes (§ After Merge).
 npx --yes @vscode/vsce@3.9.2 show nightgauge.nightgauge-vscode --json | jq '.versions[]|{version,targetPlatform}'
 curl -s https://open-vsx.org/api/nightgauge/nightgauge-vscode | jq '{version,preRelease}'
+
+# 12. Bring every other channel to the same version the same day. release.yml
+#     opened the Homebrew cask pull request: check its sha256s against the
+#     release's checksums.txt, merge it, and confirm the tap serves the version.
+bash scripts/verify-release-channels.sh --channel homebrew
+
+# 13. Read each listing page as a user would. The listing is the extension's
+#     README as packaged in the VSIX, so it only changes with a release:
+#     confirm the page shows the new version, the demo the repository README
+#     shows (tests/listingParity.test.ts holds the two together), and the
+#     changelog. The website's demo is checked the same way.
+open https://open-vsx.org/extension/nightgauge/nightgauge-vscode
 ```
+
+A release is finished when steps 9a to 13 are done, not when the tag is
+pushed. Three of them were once left to memory, and the Homebrew tap served a
+version two releases old for three days.
 
 **Build once, promote the same bytes** (#2151). The registries receive the
 GitHub Release's own VSIX files, so the SHA-256 the Marketplace and Open VSX

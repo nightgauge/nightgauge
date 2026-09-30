@@ -16,6 +16,8 @@ conversation history, so context stays focused and any stage can be retried
 independently. Deterministic code verifies repository state and selected stage
 outputs; provider behavior and manual review remain part of the trust model.
 
+![31-second tour: an issue goes in, six gated stages run, a pull request comes out, watched from VS Code, the dashboard and chat](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/demo.gif)
+
 ![Nightgauge dashboard Overview tab — a completed run with per-stage durations and cost, active slots, and the token and cache totals for the day](https://raw.githubusercontent.com/nightgauge/nightgauge/main/docs/images/marketing/extension-dashboard-overview.png)
 
 ## Quick Start
