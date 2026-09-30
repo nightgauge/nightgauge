@@ -28,7 +28,7 @@ func payload(rateLimits string) []byte {
 
 func readStore(t *testing.T, root string) map[string]usagestore.Reading {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, ".nightgauge/usage/claude-rate-limits.json"))
+	data, err := os.ReadFile(filepath.Join(root, "usage/claude-rate-limits.json"))
 	if err != nil {
 		t.Fatalf("read store: %v", err)
 	}
@@ -55,7 +55,7 @@ func TestClaudeStatusLineRecordsBothBuckets(t *testing.T) {
 		payload(fmt.Sprintf(
 			`{"five_hour":{"used_percentage":44.2,"resets_at":%d},"seven_day":{"used_percentage":61.8,"resets_at":%d}}`,
 			reset5, reset7)),
-		ClaudeStatusLineOptions{AccountRoot: root}, now)
+		ClaudeStatusLineOptions{StateRoot: root}, now)
 	if err != nil {
 		t.Fatalf("ClaudeStatusLine: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestClaudeStatusLineRecordsOneBucket(t *testing.T) {
 
 	if _, err := ClaudeStatusLine(
 		payload(fmt.Sprintf(`{"five_hour":{"used_percentage":7,"resets_at":%d}}`, now.Add(time.Hour).Unix())),
-		ClaudeStatusLineOptions{AccountRoot: root}, now); err != nil {
+		ClaudeStatusLineOptions{StateRoot: root}, now); err != nil {
 		t.Fatalf("ClaudeStatusLine: %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestClaudeStatusLineRecordsMeasuredZero(t *testing.T) {
 
 	if _, err := ClaudeStatusLine(
 		payload(`{"five_hour":{"used_percentage":0,"resets_at":0}}`),
-		ClaudeStatusLineOptions{AccountRoot: root}, now); err != nil {
+		ClaudeStatusLineOptions{StateRoot: root}, now); err != nil {
 		t.Fatalf("ClaudeStatusLine: %v", err)
 	}
 
@@ -129,11 +129,11 @@ func TestClaudeStatusLineIgnoresBucketWithoutPercentage(t *testing.T) {
 
 	line, err := ClaudeStatusLine(
 		payload(`{"five_hour":{"resets_at":123}}`),
-		ClaudeStatusLineOptions{AccountRoot: root}, now)
+		ClaudeStatusLineOptions{StateRoot: root}, now)
 	if err != nil {
 		t.Fatalf("ClaudeStatusLine: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(root, ".nightgauge/usage/claude-rate-limits.json")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(root, "usage/claude-rate-limits.json")); !os.IsNotExist(statErr) {
 		t.Errorf("store written for a bucket with no percentage: %v", statErr)
 	}
 	if strings.Contains(line, "5h") {
@@ -146,11 +146,11 @@ func TestClaudeStatusLineIgnoresBucketWithoutPercentage(t *testing.T) {
 func TestClaudeStatusLineWithoutRateLimits(t *testing.T) {
 	root := t.TempDir()
 
-	line, err := ClaudeStatusLine(payload(""), ClaudeStatusLineOptions{AccountRoot: root}, fixedNow())
+	line, err := ClaudeStatusLine(payload(""), ClaudeStatusLineOptions{StateRoot: root}, fixedNow())
 	if err != nil {
 		t.Fatalf("ClaudeStatusLine: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(root, ".nightgauge/usage/claude-rate-limits.json")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(root, "usage/claude-rate-limits.json")); !os.IsNotExist(statErr) {
 		t.Errorf("store written with no rate_limits block: %v", statErr)
 	}
 	if line != "Opus 5 · nightgauge" {
@@ -163,7 +163,7 @@ func TestClaudeStatusLineWithoutRateLimits(t *testing.T) {
 func TestClaudeStatusLineToleratesMalformedPayload(t *testing.T) {
 	root := t.TempDir()
 
-	line, err := ClaudeStatusLine([]byte("not json at all"), ClaudeStatusLineOptions{AccountRoot: root}, fixedNow())
+	line, err := ClaudeStatusLine([]byte("not json at all"), ClaudeStatusLineOptions{StateRoot: root}, fixedNow())
 	if err != nil {
 		t.Fatalf("ClaudeStatusLine returned an error for a malformed payload: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestClaudeStatusLineDelegatePassthrough(t *testing.T) {
 
 	line, err := ClaudeStatusLine(
 		payload(fmt.Sprintf(`{"seven_day":{"used_percentage":50,"resets_at":%d}}`, now.Add(time.Hour).Unix())),
-		ClaudeStatusLineOptions{AccountRoot: root, Delegate: "printf 'my own line'"}, now)
+		ClaudeStatusLineOptions{StateRoot: root, Delegate: "printf 'my own line'"}, now)
 	if err != nil {
 		t.Fatalf("ClaudeStatusLine: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestClaudeStatusLineDelegateReceivesPayload(t *testing.T) {
 	root := t.TempDir()
 
 	line, err := ClaudeStatusLine(payload(""),
-		ClaudeStatusLineOptions{AccountRoot: root, Delegate: "cat"}, fixedNow())
+		ClaudeStatusLineOptions{StateRoot: root, Delegate: "cat"}, fixedNow())
 	if err != nil {
 		t.Fatalf("ClaudeStatusLine: %v", err)
 	}
@@ -219,7 +219,7 @@ func TestClaudeStatusLineFallsBackWhenDelegateFails(t *testing.T) {
 	root := t.TempDir()
 
 	line, err := ClaudeStatusLine(payload(""),
-		ClaudeStatusLineOptions{AccountRoot: root, Delegate: "exit 3"}, fixedNow())
+		ClaudeStatusLineOptions{StateRoot: root, Delegate: "exit 3"}, fixedNow())
 	if err != nil {
 		t.Fatalf("ClaudeStatusLine: %v", err)
 	}
@@ -239,7 +239,7 @@ func TestClaudeStatusLineSurvivesUnwritableStore(t *testing.T) {
 
 	line, err := ClaudeStatusLine(
 		payload(`{"five_hour":{"used_percentage":10,"resets_at":0}}`),
-		ClaudeStatusLineOptions{AccountRoot: root}, now)
+		ClaudeStatusLineOptions{StateRoot: root}, now)
 	if err != nil {
 		t.Fatalf("ClaudeStatusLine: %v", err)
 	}

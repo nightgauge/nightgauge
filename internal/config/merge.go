@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -90,9 +89,7 @@ func MachineConfigPath() (string, error) {
 }
 
 // MachineConfigDir returns the directory holding the machine-tier config file
-// Load reads: the directory of MachineConfigPath, or the Linux legacy
-// ~/.nightgauge when the canonical file is absent and the legacy one exists,
-// which is the fallback readMachineConfigBytes takes.
+// Load reads: the directory of MachineConfigPath.
 //
 // A child process given NIGHTGAUGE_CONFIG_HOME set to it reads the same
 // machine tier as this process, whatever XDG_CONFIG_HOME it runs under. The
@@ -104,20 +101,12 @@ func MachineConfigDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
-		if legacy := legacyMachineConfigPath(); legacy != "" && legacy != path {
-			if _, legacyErr := os.Stat(legacy); legacyErr == nil {
-				return filepath.Dir(legacy), nil
-			}
-		}
-	}
 	return filepath.Dir(path), nil
 }
 
 // MachineConfigFile names the machine-tier config file Load reads, for a
-// message that tells the operator where to put a value: MachineConfigPath, or
-// the Linux legacy file when only it exists (the fallback
-// readMachineConfigBytes takes). It follows NIGHTGAUGE_CONFIG_HOME and
+// message that tells the operator where to put a value: MachineConfigPath.
+// It follows NIGHTGAUGE_CONFIG_HOME and
 // XDG_CONFIG_HOME, so a refusal never sends the operator to a file this
 // process does not read. When the home directory cannot be resolved it
 // returns ~/.nightgauge/config.yaml, the macOS default, as a hint.
@@ -125,13 +114,6 @@ func MachineConfigFile() string {
 	path, err := machineConfigPathFn()
 	if err != nil {
 		return filepath.Join("~", ".nightgauge", "config.yaml")
-	}
-	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
-		if legacy := legacyMachineConfigPath(); legacy != "" && legacy != path {
-			if _, legacyErr := os.Stat(legacy); legacyErr == nil {
-				return legacy
-			}
-		}
 	}
 	return path
 }
@@ -158,24 +140,13 @@ func readMachineConfigBytes() ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Linux used ~/.nightgauge before the XDG path was standardized.
-			// Read that location only as a compatibility fallback when the
-			// canonical path is absent; all new writes target the canonical path.
-			if legacy := legacyMachineConfigPath(); legacy != "" && legacy != path {
-				if legacyData, legacyErr := os.ReadFile(legacy); legacyErr == nil {
-					log.Printf("WARN config: using legacy machine config %s; move it to %s", legacy, path)
-					return legacyData, nil
-				}
-			}
+			// No fallback: the Linux ~/.nightgauge/config.yaml an older build
+			// read is moved here by `nightgauge doctor --fix` (ADR-024 § 15).
 			return nil, errConfigNotFound
 		}
 		return nil, fmt.Errorf("read machine config %q: %w", path, err)
 	}
 	return data, nil
-}
-
-func legacyMachineConfigPath() string {
-	return configpath.LegacyForGOOS(machineGOOSFn())
 }
 
 // readProjectConfigBytes returns the raw bytes of the project-tier YAML

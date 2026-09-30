@@ -428,6 +428,15 @@ state and is not moved.
 Rejected: the socket in the working tree (length, synced folders, container bind mounts); under
 `CLONE` (the path length is still the clone's depth).
 
+> **Amendment (2026-09-30): the key and Windows, as built (#2039).** `<key>` is the first 12 hex
+> characters of the SHA-256 of the canonical workspace root (made absolute, symlinks resolved,
+> cleaned; `ipc.SocketKey`), not of the checkout's git dir. For a checkout that is the same one
+> daemon per checkout, and it also keys a workspace root that is not inside a git repository,
+> which has no git dir and still runs a daemon (its lease is `STATE/serve/<key>.lock`, § 7). On
+> Windows the § 1 "not applicable" is superseded: `layout.RuntimeDir` applies the same rule there,
+> under `os.TempDir()` (`%TEMP%`), and the daemon attempts the bind; a failed bind is logged and is
+> not fatal, so a client finds no daemon, as before.
+
 ### 11. Log retention
 
 One Go pruning function enforces, per log directory (`CLONE/logs/`, `STATE/logs/`):
@@ -593,6 +602,44 @@ targets as warnings and keeps its existing exit status.
 > `model-evals/`, which § 13 keeps in place and the deny-by-default template ignores), and
 > `config.yaml.tmp`, the config writer's temporary file, which must sit beside `config.yaml` for an
 > atomic rename.
+
+> **Amendment (2026-09-30, #2032, #2041): the machine-state migration.** `STATE` gets its own
+> marker (`STATE/layout-version`, machine-state layout `1`) and lock (`STATE/.migrate.lock`), and
+> the same automatic run at CLI start under the 2026-09-29 rule: it never fails the command, and
+> `doctor --fix` exits `3` on a conflict and `4` when blocked. Its rows are the § 2 machine-state
+> rows, each moved from `~/.nightgauge/<name>` to `STATE/<name>`, plus two OpenCode files the § 2
+> row did not name: `opencode/evidence/` (preserved failure evidence, #2171) and
+> `opencode/endpoint-slots.json` (the published slot ledger). Per class:
+>
+> - **Hints keep the new copy.** The rate-limit files, `telemetry-notice-v1`, the `usage/`
+>   readings, `opencode/last-dispatch.json`, `opencode/endpoint-slots.json` and the serve claims:
+>   a copy at both locations keeps the one under `STATE`, which this build wrote since, and deletes
+>   the old one. A hint is never a conflict.
+> - **`machine-id`** is moved byte for byte, ends mode 0600, and a differing copy is a conflict.
+> - **A live daemon holds two classes.** The migration reads the serve lease through the lock files
+>   in the old `serve/` directory (an older daemon's own lease, or the compatibility lock a daemon
+>   of this build takes there). While one is held, the serve claims and `opencode/runs` (the run
+>   roots a daemon's stage may be using) stay in place and are reported; every other class moves.
+> - **`opencode/self-test/`** has had no reader since #2148, so it is deleted, like a cache.
+> - **Machine logs** merge like append-only JSONL, so a log is never a conflict.
+> - **Linux legacy `config.yaml`** is a row on Linux only, and only with neither
+>   `NIGHTGAUGE_CONFIG_HOME` nor `XDG_CONFIG_HOME` set (the one case the old loader read it): it
+>   moves to `CONFIG/config.yaml`, mode 0600 in a 0700 directory, confined to `CONFIG`; a
+>   differing file at both is a conflict, never a merge, and no finding prints either file. The
+>   loader's fallback (`configpath.LegacyForGOOS`, `InUse`) and the extension's copy of it are
+>   removed, and the extension's machine-config readers resolve through `globalConfigResolver`.
+>   On macOS `CONFIG` is `~/.nightgauge` itself, and nothing moves. `tools/` is never a row.
+> - **Runtime `machine-id` is a move too.** The first lookup moves a legacy `machine-id` into
+>   `STATE` (`layout.MoveLegacyStateFile`) instead of copying it and keeping the legacy file, and a
+>   freshly minted id is no longer written to `~/.nightgauge`. When both differ, the lookup uses
+>   the `STATE` copy and logs a warning, and `doctor` reports the conflict.
+>
+> **The extension resolves `STATE` itself.** The § 2 row said the extension reads `usage/` through
+> the binary. It resolves the root with the same order instead (`resolveStateHome`,
+> `NIGHTGAUGE_STATE_HOME`, `XDG_STATE_HOME/nightgauge`, the platform default), because the store
+> is read synchronously on every usage snapshot and `nightgauge layout` answers only inside a git
+> repository. `tests/utils/machineStateDir.test.ts` pins the TypeScript resolver to the Go table
+> (`TestStateHomePathResolution`). Tests: `TestLayoutMigrationMachineState` (`internal/doctor`).
 
 **Releases.** A relocation and its migration ship in the same release. `main` may carry the gap
 between the two merges; a release tag may not.

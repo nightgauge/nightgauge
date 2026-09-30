@@ -43,13 +43,15 @@
  */
 
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
+import { resolveStateHome } from "../../utils/machineStateDir";
 import type { RateLimitEventData } from "../../utils/tokenParser";
 
 /**
- * Path to the persisted readings, relative to the **account** root (the user's
- * home directory), not a workspace root.
+ * Path to the persisted readings, relative to the machine-state root
+ * (`STATE/usage/`, ADR-024 § 2, #2032), not a workspace root. The Go writer
+ * (`internal/usagestore`) resolves the same root in the same order
+ * ({@link resolveStateHome}).
  *
  * Account-scoped because the figure is account-wide. Claude's five-hour and
  * seven-day allowances are consumed by every Claude Code session the operator
@@ -59,7 +61,7 @@ import type { RateLimitEventData } from "../../utils/tokenParser";
  * (Issue #730 — a process running in whatever directory the operator happens to
  * be in) somewhere no particular workspace would look.
  */
-const CLAUDE_RATE_LIMIT_FILE = ".nightgauge/usage/claude-rate-limits.json";
+const CLAUDE_RATE_LIMIT_FILE = "usage/claude-rate-limits.json";
 
 /**
  * On-disk schema version. Bumped when the persisted shape changes; a file
@@ -203,11 +205,13 @@ export class ClaudeRateLimitStore {
   private writeChain: Promise<void> = Promise.resolve();
 
   /**
-   * @param accountRoot Directory the store path is resolved beneath. Production
-   *   passes the user's home directory via {@link forAccount}; tests pass a
-   *   temp directory.
+   * @param stateRoot Machine-state root the store path is resolved beneath.
+   *   Production passes {@link resolveStateHome}'s answer via
+   *   {@link forAccount}; tests pass a temp directory. `undefined` (no
+   *   resolvable root) is a store that starts cold and never writes: the
+   *   readings are a hint, never a reason to fail activation.
    */
-  constructor(private readonly accountRoot: string) {}
+  constructor(private readonly stateRoot: string | undefined) {}
 
   /**
    * The store for the current account.
@@ -217,12 +221,14 @@ export class ClaudeRateLimitStore {
    * is account-scoped rather than workspace-scoped.
    */
   static forAccount(): ClaudeRateLimitStore {
-    return new ClaudeRateLimitStore(os.homedir());
+    return new ClaudeRateLimitStore(resolveStateHome());
   }
 
-  /** Absolute path of the backing file. */
-  get filePath(): string {
-    return path.join(this.accountRoot, CLAUDE_RATE_LIMIT_FILE);
+  /** Absolute path of the backing file; `undefined` without a state root. */
+  get filePath(): string | undefined {
+    return this.stateRoot === undefined
+      ? undefined
+      : path.join(this.stateRoot, CLAUDE_RATE_LIMIT_FILE);
   }
 
   /**
@@ -241,9 +247,17 @@ export class ClaudeRateLimitStore {
    * activation failure.
    */
   async load(): Promise<void> {
+    const filePath = this.filePath;
+    if (filePath === undefined) {
+      return;
+    }
     let text: string;
     try {
-      text = await fs.readFile(this.filePath, "utf8");
+      // A link in the store's place is not followed (ADR-024 § 17).
+      if (!(await fs.lstat(filePath)).isFile()) {
+        return;
+      }
+      text = await fs.readFile(filePath, "utf8");
     } catch {
       // No file yet, or it went away. Whatever is already in memory stands: a
       // reading this process observed is not invalidated by the absence of its
@@ -379,11 +393,15 @@ export class ClaudeRateLimitStore {
    * and the pipeline never awaits it.
    */
   private persist(): Promise<void> {
+    const filePath = this.filePath;
+    if (filePath === undefined) {
+      return this.writeChain;
+    }
     this.writeChain = this.writeChain
       .then(async () => {
         let onDisk: RateLimitReading[] = [];
         try {
-          onDisk = parseStore(await fs.readFile(this.filePath, "utf8"));
+          onDisk = parseStore(await fs.readFile(filePath, "utf8"));
         } catch {
           // Missing or unreadable: this process's readings are the whole file.
         }
@@ -403,7 +421,7 @@ export class ClaudeRateLimitStore {
             observedAt: reading.observedAt.toISOString(),
           };
         }
-        await writeStoreAtomically(this.filePath, snapshot);
+        await writeStoreAtomically(filePath, snapshot);
       })
       .catch((error) => {
         console.warn("[Nightgauge] failed to persist Claude rate-limit readings:", error);
@@ -470,7 +488,13 @@ function nextTempId(): number {
  */
 async function writeStoreAtomically(filePath: string, snapshot: PersistedStore): Promise<void> {
   const dir = path.dirname(filePath);
-  await fs.mkdir(dir, { recursive: true });
+  // STATE/usage is private (0700) and never a link: a planted symlink would
+  // otherwise carry the write outside the state directory (ADR-024 § 17).
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+  const stat = await fs.lstat(dir);
+  if (!stat.isDirectory()) {
+    throw new Error(`refusing ${dir}: not a directory (a symbolic link is refused)`);
+  }
   const tempPath = path.join(dir, `.claude-rate-limits-${process.pid}-${nextTempId()}.json`);
   try {
     await fs.writeFile(tempPath, `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");

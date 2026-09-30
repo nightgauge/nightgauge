@@ -225,7 +225,7 @@ const openCodeCanaryDirectRunID = "0199a8b3-0000-7000-8000-000000001639"
 func openCodeCanaryDirectRun(t *testing.T, real, model string, extraConfig map[string]any, stubBase string) (exitCode int, stdout, stderr string) {
 	t.Helper()
 	home := t.TempDir()
-	root, _, err := adapters.EnsureOpenCodeRunRoot(home, openCodeCanaryDirectRunID, func(string) (string, bool) { return "", false })
+	root, _, err := adapters.EnsureOpenCodeRunRoot(testStateHome(home), home, openCodeCanaryDirectRunID, func(string) (string, bool) { return "", false })
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,6 +22,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // OpenCode's version policy, binary pin, endpoint readiness, and the OpenCode
@@ -518,19 +519,28 @@ type OpenCodeDispatchRecord struct {
 }
 
 // OpenCodeDispatchRecordPath is where the record is kept, beside the per-run
-// roots.
-func OpenCodeDispatchRecordPath(home string) string {
-	return filepath.Join(home, ".nightgauge", "opencode", "last-dispatch.json")
+// roots: STATE/opencode/last-dispatch.json under the machine-state root state
+// (layout.StateHome).
+func OpenCodeDispatchRecordPath(state string) string {
+	return filepath.Join(OpenCodeStateDir(state), "last-dispatch.json")
 }
 
 // RecordOpenCodeDispatch replaces the record.
-func RecordOpenCodeDispatch(home string, rec OpenCodeDispatchRecord) error {
-	return writeOpenCodeStateJSON(OpenCodeDispatchRecordPath(home), rec)
+func RecordOpenCodeDispatch(state string, rec OpenCodeDispatchRecord) error {
+	if _, err := ensureOpenCodeStateDirs(state, layout.StateOpenCode); err != nil {
+		return err
+	}
+	return writeOpenCodeStateJSON(OpenCodeDispatchRecordPath(state), rec)
 }
 
 // ReadOpenCodeDispatchRecord returns the record, and false when there is none.
-func ReadOpenCodeDispatchRecord(home string) (OpenCodeDispatchRecord, bool, error) {
-	data, err := os.ReadFile(OpenCodeDispatchRecordPath(home))
+// A record that is not a regular file (a symbolic link) is not followed.
+func ReadOpenCodeDispatchRecord(state string) (OpenCodeDispatchRecord, bool, error) {
+	path := OpenCodeDispatchRecordPath(state)
+	if fi, err := os.Lstat(path); err == nil && !fi.Mode().IsRegular() {
+		return OpenCodeDispatchRecord{}, false, fmt.Errorf("%s is not a regular file; it is not read", path)
+	}
+	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return OpenCodeDispatchRecord{}, false, nil
 	}
@@ -539,7 +549,7 @@ func ReadOpenCodeDispatchRecord(home string) (OpenCodeDispatchRecord, bool, erro
 	}
 	var rec OpenCodeDispatchRecord
 	if err := json.Unmarshal(data, &rec); err != nil {
-		return OpenCodeDispatchRecord{}, false, fmt.Errorf("%s is not a dispatch record: %w", OpenCodeDispatchRecordPath(home), err)
+		return OpenCodeDispatchRecord{}, false, fmt.Errorf("%s is not a dispatch record: %w", path, err)
 	}
 	return rec, true, nil
 }
@@ -603,8 +613,9 @@ func (a *OpenCodeAdapter) checkVersionPolicy(ctx context.Context, opts RunOption
 	if err != nil {
 		return err
 	}
-	// Without a home directory there is nowhere to keep the dispatch record,
-	// which is not a reason to refuse the dispatch.
+	// home only makes the managed-install remediation's pin absolute (the
+	// operator-installed tools/ directory, ADR-024 § 2); an unknown home
+	// leaves it relative.
 	home, _ := os.UserHomeDir()
 	version, versionErr := OpenCodeVersionOf(ctx, bin.Path)
 	if versionErr != nil && ctx.Err() != nil {
@@ -617,11 +628,13 @@ func (a *OpenCodeAdapter) checkVersionPolicy(ctx context.Context, opts RunOption
 	if p.BelowFloor {
 		fmt.Fprintf(os.Stderr, "[opencode] WARNING: opencode %s (%s) is below the minimum tested version %s\n", p.Version, bin.Path, p.MinVersion)
 	}
-	if home != "" {
-		rec := OpenCodeDispatchRecord{Binary: bin.Path, Version: p.Version, RecordedAt: time.Now().UTC()}
-		if err := RecordOpenCodeDispatch(home, rec); err != nil {
-			fmt.Fprintf(os.Stderr, "[opencode] the version this dispatch runs could not be recorded, so the doctor cannot compare the next opencode with it: %v\n", err)
-		}
+	// Without a machine-state directory there is nowhere to keep the dispatch
+	// record, which is not a reason to refuse the dispatch.
+	rec := OpenCodeDispatchRecord{Binary: bin.Path, Version: p.Version, RecordedAt: time.Now().UTC()}
+	if state, err := layout.StateHome(); err != nil {
+		fmt.Fprintf(os.Stderr, "[opencode] the version this dispatch runs could not be recorded, so the doctor cannot compare the next opencode with it: %v\n", err)
+	} else if err := RecordOpenCodeDispatch(state, rec); err != nil {
+		fmt.Fprintf(os.Stderr, "[opencode] the version this dispatch runs could not be recorded, so the doctor cannot compare the next opencode with it: %v\n", err)
 	}
 	return nil
 }

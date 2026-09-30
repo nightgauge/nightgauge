@@ -16,6 +16,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // openCodeManifest is the opencode compat manifest, the source of every
@@ -74,10 +75,19 @@ type openCodeFixture struct {
 	probe openCodeProbe
 }
 
+// state is the fixture's machine-state root, inside its home.
+func (f *openCodeFixture) state() string {
+	return filepath.Join(f.home, ".nightgauge", "state")
+}
+
 func newOpenCodeFixture(t *testing.T, settings config.OpenCodeConfig) *openCodeFixture {
 	t.Helper()
 	m := openCodeManifest(t)
 	f := &openCodeFixture{env: map[string]string{adapters.ExperimentalOpenCodeEnvVar: "1"}, home: t.TempDir()}
+	// The OpenCode state (run roots, the dispatch record, the endpoint slots)
+	// lives under the machine-state root (ADR-024 § 2), which the probe
+	// resolves from its own environment.
+	f.env[layout.EnvStateHome] = f.state()
 	configured := readOpenCodeFixture(t, "models-configured")
 	f.probe = openCodeProbe{
 		getenv:           func(k string) string { return f.env[k] },
@@ -570,7 +580,7 @@ func TestOpenCodeRunDirsAreTheIsolationDirs(t *testing.T) {
 		f := newOpenCodeFixture(t, settings)
 		h := f.check()
 		want, err := adapters.OpenCodeIsolationEnv(adapters.OpenCodeIsolation{
-			Root:              filepath.Join(adapters.OpenCodeRunsDir(f.home), "<run-id>"),
+			Root:              filepath.Join(adapters.OpenCodeRunsDir(f.state()), "<run-id>"),
 			Home:              f.home,
 			Lookup:            func(string) (string, bool) { return "", false },
 			GOOS:              runtime.GOOS,
@@ -618,7 +628,7 @@ func TestOpenCodeRunDirsAreTheIsolationDirs(t *testing.T) {
 func TestOpenCodeFlagsAnAnthropicOAuthLogin(t *testing.T) {
 	f := newOpenCodeFixture(t, openCodeLMStudio())
 	operator := filepath.Join(f.home, ".local", "share", "opencode", "auth.json")
-	runRoot := filepath.Join(adapters.OpenCodeRunsDir(f.home), "01890a5d-ac96-774b-bcce-b302099a8057", "data", "opencode", "auth.json")
+	runRoot := filepath.Join(adapters.OpenCodeRunsDir(f.state()), "01890a5d-ac96-774b-bcce-b302099a8057", "data", "opencode", "auth.json")
 	for path, body := range map[string]string{
 		operator: `{"anthropic":{"type":"oauth","access":"SECRET","refresh":"SECRET","expires":1},"openai":{"type":"oauth","access":"SECRET"}}`,
 		runRoot:  `{"anthropic":{"type":"oauth","access":"SECRET"}}`,
@@ -688,7 +698,7 @@ func TestOpenCodePinnedBinaryVersionAndDrift(t *testing.T) {
 	}
 
 	last := patchBelow(t, m.MaxTested)
-	if err := adapters.RecordOpenCodeDispatch(f.home, adapters.OpenCodeDispatchRecord{Binary: pin, Version: last}); err != nil {
+	if err := adapters.RecordOpenCodeDispatch(f.state(), adapters.OpenCodeDispatchRecord{Binary: pin, Version: last}); err != nil {
 		t.Fatal(err)
 	}
 	h = f.check()
@@ -914,7 +924,7 @@ func TestOpenCodeRowEndpointSlotsInUse(t *testing.T) {
 	settings := openCodeLMStudio()
 	settings.BaseURL = srv.URL + "/v1"
 	f := newOpenCodeFixture(t, settings)
-	path := adapters.OpenCodeEndpointSlotsPath(f.home)
+	path := adapters.OpenCodeEndpointSlotsPath(f.state())
 	if err := adapters.WriteOpenCodeEndpointSlots(path, adapters.OpenCodeEndpointSlots{PID: os.Getpid(), InUse: map[string]int{"lmstudio": 1}}); err != nil {
 		t.Fatal(err)
 	}

@@ -16,8 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/flock"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/platform"
+	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
 // layoutRepo is a fixture repository whose migration table points the new
@@ -77,9 +80,9 @@ func (r layoutRepo) migrator(daemon string) *layoutMigrator {
 func (r layoutRepo) fixer(m *layoutMigrator) *Fixer {
 	mk := func(string) *layoutMigrator { return m }
 	reg := NewRegistry()
-	reg.MustRegister(layoutCheck(mk))
+	reg.MustRegister(layoutCheck(mk, nil))
 	verbs := NewVerbRegistry()
-	if err := verbs.Register(verbLayoutMigrate, layoutMigrateVerb(mk)); err != nil {
+	if err := verbs.Register(verbLayoutMigrate, layoutMigrateVerb(mk, nil)); err != nil {
 		panic(err)
 	}
 	return &Fixer{Registry: reg, Verbs: verbs, Env: &Env{Cwd: r.root, Now: time.Now()}}
@@ -800,4 +803,437 @@ func TestLayoutMigrationRestOfRuntimeFiles(t *testing.T) {
 	if s := gittest.Run(t, r.root, "status", "--porcelain"); s != status {
 		t.Errorf("git status changed:\n%s\nwant\n%s", s, status)
 	}
+}
+
+// machineStateFixture is a fake HOME holding every legacy machine-state class
+// (#2031, #2032) under ~/.nightgauge, and a machine-state root of its own.
+type machineStateFixture struct {
+	home, legacy, state string
+	files               map[string]string // path under ~/.nightgauge -> content
+	serveLock           string
+}
+
+func newMachineStateFixture(t *testing.T) machineStateFixture {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fixture uses symlinks, flock and POSIX modes")
+	}
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := machineStateFixture{
+		home:  filepath.Join(base, "home"),
+		state: filepath.Join(base, "state"),
+	}
+	f.legacy = filepath.Join(f.home, ".nightgauge")
+	t.Setenv("HOME", f.home)
+	t.Setenv(layout.EnvStateHome, f.state)
+	serveKey := strings.TrimSuffix(runstate.ServeSidecarName(filepath.Join(base, "workspace")), ".json")
+	f.serveLock = filepath.Join(f.legacy, "serve", serveKey+".lock")
+	f.files = map[string]string{
+		"serve/" + serveKey + ".json":              `{"pid":1,"workspace_root":"/w"}`,
+		"serve/" + serveKey + ".lock":              "",
+		"rate-limit.json":                          `{"remaining":4000}`,
+		"ratelimit-gitlab-gitlab.example.com.json": `{"remaining":12}`,
+		"telemetry-notice-v1":                      "shown\n",
+		"usage/claude-rate-limits.json":            `{"version":1,"buckets":{}}` + "\n",
+		"opencode/runs/01890a5d-ac96-774b-bcce-b302099a8057/data/opencode/opencode.db": "transcript",
+		"opencode/evidence/01890a5d-ac96-774b-bcce-b302099a8057/opencode.db":           "evidence",
+		"opencode/last-dispatch.json":  `{"binary":"/bin/opencode","version":"1.18.30"}`,
+		"opencode/endpoint-slots.json": `{"pid":1,"in_use":{}}`,
+		"logs/machine.log":             "one\n",
+	}
+	for rel, content := range f.files {
+		writeLayoutFile(t, filepath.Join(f.legacy, filepath.FromSlash(rel)), content, 0o644)
+	}
+	// machine-id is 0644, as an older binary wrote it.
+	writeLayoutFile(t, filepath.Join(f.legacy, "machine-id"), "11111111-2222-4333-8444-555555555555\n", 0o644)
+	// A run root's link to the operator's config: recreated, never followed.
+	if err := os.Symlink(filepath.Join(f.home, ".config", "git"),
+		filepath.Join(f.legacy, "opencode", "runs", "01890a5d-ac96-774b-bcce-b302099a8057", "config-git")); err != nil {
+		t.Fatal(err)
+	}
+	// Obsolete since #2148: deleted, not moved.
+	writeLayoutFile(t, filepath.Join(f.legacy, "opencode", "self-test", "abc"), "passed\n", 0o644)
+	// Not machine state: CONFIG and the operator-installed tools stay.
+	writeLayoutFile(t, filepath.Join(f.legacy, "config.yaml"), "owner: someone\n", 0o600)
+	writeLayoutFile(t, filepath.Join(f.legacy, "tools", "opencode", "package.json"), "{}\n", 0o644)
+	return f
+}
+
+// migrator is the production machine-state table over the fixture's roots,
+// with the daemon check reading the fixture's legacy serve directory.
+func (f machineStateFixture) migrator() *machineStateMigrator {
+	return &machineStateMigrator{
+		legacyRoot: f.legacy,
+		statePath:  func() (string, error) { return f.state, nil },
+		stateHome: func() (string, error) {
+			if err := os.MkdirAll(f.state, 0o700); err != nil {
+				return "", err
+			}
+			return f.state, nil
+		},
+		daemonLive: legacyServeLeaseLive,
+		entries:    machineStateEntries(),
+	}
+}
+
+// fixer runs the real remedy engine over the layout check with the
+// machine-state rows alone (no clone: the working directory is not a git
+// checkout).
+func (f machineStateFixture) fixer(m *machineStateMigrator) *Fixer {
+	mk := func(string) *layoutMigrator { return nil }
+	mm := func() *machineStateMigrator { return m }
+	reg := NewRegistry()
+	reg.MustRegister(layoutCheck(mk, mm))
+	verbs := NewVerbRegistry()
+	if err := verbs.Register(verbLayoutMigrate, layoutMigrateVerb(mk, mm)); err != nil {
+		panic(err)
+	}
+	return &Fixer{Registry: reg, Verbs: verbs, Env: &Env{Cwd: f.home, Now: time.Now()}}
+}
+
+// TestLayoutMigrationMachineState (#2041): every legacy machine-state class
+// moves to the machine-state directory once, byte for byte; machine-id keeps
+// its value, ends 0600 and is never regenerated; the marker is written; a
+// second run changes nothing; a live serve lease leaves the serve claims (and
+// the run roots a daemon may be using) in place and --fix exits 4; config.yaml
+// and tools/ are not moved.
+func TestLayoutMigrationMachineState(t *testing.T) {
+	t.Run("every class moves once", func(t *testing.T) {
+		f := newMachineStateFixture(t)
+		// A hint this build already rewrote at the new location: the new copy
+		// wins and the old one goes.
+		writeLayoutFile(t, filepath.Join(f.state, "rate-limit.json"), `{"remaining":3999}`, 0o600)
+		if err := os.Chmod(f.state, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		m := f.migrator()
+
+		// Plain doctor: one housekeeping finding per class, each naming its
+		// exact target, and the exit status is unchanged.
+		found, _ := machineFindings(m)
+		targets := map[string]string{}
+		for _, fd := range found {
+			if fd.Code != codeLayoutLegacy || fd.Severity != SeverityHousekeeping || fd.Evidence["scope"] != machineScope {
+				t.Errorf("unexpected finding %s %s %v: %s", fd.Code, fd.Severity, fd.Evidence, fd.Title)
+			}
+			targets[fd.Evidence["class"]] = fd.Evidence["target"]
+		}
+		for class, rel := range map[string]string{
+			"serve claims": "serve", "GitHub rate-limit hint": "rate-limit.json",
+			"GitLab rate-limit hint": "ratelimit-gitlab-gitlab.example.com.json", "machine-id": "machine-id",
+			"telemetry notice": "telemetry-notice-v1", "usage": "usage",
+			"OpenCode run roots": "opencode/runs", "OpenCode evidence": "opencode/evidence",
+			"OpenCode last dispatch": "opencode/last-dispatch.json", "OpenCode endpoint slots": "opencode/endpoint-slots.json",
+			"OpenCode self-test records": "opencode/self-test", "machine logs": "logs",
+		} {
+			if want := filepath.Join(f.state, filepath.FromSlash(rel)); targets[class] != want {
+				t.Errorf("%s target = %q, want %q", class, targets[class], want)
+			}
+		}
+		if len(found) != 12 {
+			t.Errorf("%d findings, want 12 (one per class):\n%s", len(found), findingsText(found))
+		}
+		if code := BuildResult([]CheckResult{{ID: checkLayout, Status: StatusFailed, Findings: found}}).ExitCode; code != 0 {
+			t.Errorf("doctor exit code with only legacy machine-state findings = %d, want 0 (unchanged)", code)
+		}
+
+		rep := f.fixer(m).Run(context.Background(), FixOptions{})
+		if rep.ExitCode != 0 || rep.Counts.Fixed != len(found) {
+			t.Fatalf("fix: exit %d, counts %+v, want exit 0 and %d fixed; results %+v", rep.ExitCode, rep.Counts, len(found), rep.Results)
+		}
+
+		for rel, content := range f.files {
+			if rel == "rate-limit.json" {
+				continue
+			}
+			if got := readLayoutFile(t, filepath.Join(f.state, filepath.FromSlash(rel))); got != content {
+				t.Errorf("%s = %q, want the legacy bytes %q", rel, got, content)
+			}
+			assertGone(t, filepath.Join(f.legacy, filepath.FromSlash(rel)))
+		}
+		if got := readLayoutFile(t, filepath.Join(f.state, "rate-limit.json")); got != `{"remaining":3999}` {
+			t.Errorf("the newer rate-limit hint was replaced: %q", got)
+		}
+		assertGone(t, filepath.Join(f.legacy, "rate-limit.json"))
+		link, err := os.Readlink(filepath.Join(f.state, "opencode", "runs", "01890a5d-ac96-774b-bcce-b302099a8057", "config-git"))
+		if err != nil || link != filepath.Join(f.home, ".config", "git") {
+			t.Errorf("the run root's link = %q (%v), want it recreated with the same text", link, err)
+		}
+		assertGone(t, filepath.Join(f.legacy, "opencode"))
+		assertGone(t, filepath.Join(f.legacy, "serve"))
+
+		// machine-id: the same bytes, mode 0600, and the resolver reads it
+		// without the legacy-copy warning or error (#2031) and mints nothing.
+		idPath := filepath.Join(f.state, "machine-id")
+		if got := readLayoutFile(t, idPath); got != "11111111-2222-4333-8444-555555555555\n" {
+			t.Errorf("machine-id = %q, want the legacy bytes", got)
+		}
+		if info, err := os.Stat(idPath); err != nil || info.Mode().Perm() != 0o600 {
+			t.Errorf("machine-id mode = %v (%v), want 0600", info.Mode().Perm(), err)
+		}
+		assertGone(t, filepath.Join(f.legacy, "machine-id"))
+		if err := layout.MoveLegacyStateFile("machine-id", f.state); err != nil {
+			t.Errorf("after the move the machine-id lookup still reports %v", err)
+		}
+		t.Setenv("NIGHTGAUGE_AGENT_ID", "")
+		if id, err := platform.MachineID(); err != nil || id != "11111111-2222-4333-8444-555555555555" {
+			t.Errorf("MachineID after the move = %q, %v; want the moved id", id, err)
+		}
+
+		// The state directory is private, the marker is present.
+		if info, err := os.Stat(f.state); err != nil || info.Mode().Perm() != 0o700 {
+			t.Errorf("state dir mode = %v (%v), want 0700", info.Mode().Perm(), err)
+		}
+		if got := readLayoutFile(t, filepath.Join(f.state, layoutMarkerName)); got != strconv.Itoa(MachineStateLayoutVersion)+"\n" {
+			t.Errorf("marker = %q, want %d", got, MachineStateLayoutVersion)
+		}
+		// Not machine state: left exactly where they were.
+		if got := readLayoutFile(t, filepath.Join(f.legacy, "config.yaml")); got != "owner: someone\n" {
+			t.Errorf("config.yaml changed: %q", got)
+		}
+		if got := readLayoutFile(t, filepath.Join(f.legacy, "tools", "opencode", "package.json")); got != "{}\n" {
+			t.Errorf("tools/ changed: %q", got)
+		}
+		assertGone(t, filepath.Join(f.state, "config.yaml"))
+		assertGone(t, filepath.Join(f.state, "opencode", "self-test"))
+
+		// A second run is a no-op.
+		legacyBefore, stateBefore := treeDigest(t, f.legacy), treeDigest(t, f.state)
+		if again, _ := machineFindings(m); len(again) != 0 {
+			t.Errorf("findings after the move:\n%s", findingsText(again))
+		}
+		rep = f.fixer(m).Run(context.Background(), FixOptions{})
+		if rep.ExitCode != 0 || rep.Counts.Fixed != 0 {
+			t.Errorf("second fix: exit %d, counts %+v, want a no-op", rep.ExitCode, rep.Counts)
+		}
+		if again := m.Migrate(context.Background()); again.Changed() || again.Version != MachineStateLayoutVersion {
+			t.Errorf("second migration: %s", again.Summary())
+		}
+		if treeDigest(t, f.legacy) != legacyBefore || treeDigest(t, f.state) != stateBefore {
+			t.Error("the second run changed the tree")
+		}
+	})
+
+	t.Run("a live serve lease leaves the serve claims in place", func(t *testing.T) {
+		f := newMachineStateFixture(t)
+		lock, err := os.OpenFile(f.serveLock, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lock.Close()
+		if err := flock.Exclusive(lock, 0); err != nil {
+			t.Skipf("flock unavailable: %v", err)
+		}
+		defer func() { _ = flock.Unlock(lock) }()
+		m := f.migrator()
+		found, _ := machineFindings(m)
+		var busy []string
+		for _, fd := range found {
+			if fd.Evidence["busy"] != "" {
+				busy = append(busy, fd.Evidence["class"])
+			}
+		}
+		sort.Strings(busy)
+		if strings.Join(busy, ",") != "OpenCode run roots,serve claims" {
+			t.Errorf("held classes = %v, want the serve claims and the OpenCode run roots", busy)
+		}
+		rep := f.fixer(m).Run(context.Background(), FixOptions{})
+		if rep.ExitCode != 4 {
+			t.Errorf("fix exit = %d, want 4 (blocked by the live daemon); results %+v", rep.ExitCode, rep.Results)
+		}
+		for rel := range f.files {
+			held := strings.HasPrefix(rel, "serve/") || strings.HasPrefix(rel, "opencode/runs/")
+			_, legacyErr := os.Lstat(filepath.Join(f.legacy, filepath.FromSlash(rel)))
+			if held && legacyErr != nil {
+				t.Errorf("%s moved while a daemon held the serve lease", rel)
+			}
+			if !held && legacyErr == nil {
+				t.Errorf("%s was not moved; only the daemon's classes wait", rel)
+			}
+		}
+		if got := readLayoutFile(t, filepath.Join(f.state, "machine-id")); got != "11111111-2222-4333-8444-555555555555\n" {
+			t.Errorf("machine-id = %q, want it moved meanwhile", got)
+		}
+		assertGone(t, filepath.Join(f.state, layoutMarkerName))
+
+		// The automatic run at CLI start leaves the same data and fails nothing.
+		auto, ran := autoMigrateMachineState(context.Background(), m, time.Now())
+		if !ran || auto.FilesHeld == "" || auto.Version != 0 {
+			t.Errorf("automatic run: ran=%v %s; want it held by the daemon", ran, auto.Summary())
+		}
+	})
+
+	t.Run("a differing machine-id is a conflict: nothing moves, exit 3", func(t *testing.T) {
+		f := newMachineStateFixture(t)
+		writeLayoutFile(t, filepath.Join(f.state, "machine-id"), "99999999-2222-4333-8444-555555555555\n", 0o600)
+		before := treeDigest(t, f.legacy)
+		m := f.migrator()
+		if len(findingsWith(mustMachineFindings(t, m), codeLayoutConflict)) != 1 {
+			t.Fatal("no conflict finding for the differing machine-id")
+		}
+		rep := f.fixer(m).Run(context.Background(), FixOptions{})
+		if rep.ExitCode != 3 {
+			t.Errorf("fix exit = %d, want 3 (conflict); results %+v", rep.ExitCode, rep.Results)
+		}
+		if treeDigest(t, f.legacy) != before {
+			t.Error("the legacy tree changed despite the conflict")
+		}
+		if got := readLayoutFile(t, filepath.Join(f.state, "machine-id")); got != "99999999-2222-4333-8444-555555555555\n" {
+			t.Errorf("the new machine-id was overwritten: %q", got)
+		}
+		// The automatic run never fails the command.
+		if auto, ran := autoMigrateMachineState(context.Background(), m, time.Now()); !ran || len(auto.Conflicts) == 0 {
+			t.Errorf("automatic run: ran=%v %s; want the conflict reported", ran, auto.Summary())
+		}
+	})
+
+	t.Run("a legacy class that is a symlink is refused, never followed", func(t *testing.T) {
+		f := newMachineStateFixture(t)
+		outside := filepath.Join(t.TempDir(), "outside")
+		writeLayoutFile(t, filepath.Join(outside, "claude-rate-limits.json"), "outside\n", 0o644)
+		if err := os.RemoveAll(filepath.Join(f.legacy, "usage")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(f.legacy, "usage")); err != nil {
+			t.Fatal(err)
+		}
+		m := f.migrator()
+		if refused := findingsWith(mustMachineFindings(t, m), codeLayoutRefused); len(refused) != 1 || refused[0].Evidence["class"] != "usage" {
+			t.Fatalf("refused findings = %v, want the usage symlink", refused)
+		}
+		rep := m.Migrate(context.Background())
+		if len(rep.Refused) != 1 || rep.Version != 0 {
+			t.Errorf("migration: %s; want the symlink refused and no marker", rep.Summary())
+		}
+		if got := readLayoutFile(t, filepath.Join(outside, "claude-rate-limits.json")); got != "outside\n" {
+			t.Errorf("the link target changed: %q", got)
+		}
+		assertGone(t, filepath.Join(f.state, "usage"))
+	})
+
+	t.Run("the automatic run is a no-op once the marker is current", func(t *testing.T) {
+		f := newMachineStateFixture(t)
+		writeLayoutFile(t, filepath.Join(f.state, layoutMarkerName), strconv.Itoa(MachineStateLayoutVersion)+"\n", 0o600)
+		before := treeDigest(t, f.legacy)
+		if _, ran := autoMigrateMachineState(context.Background(), f.migrator(), time.Now()); ran {
+			t.Error("the automatic run ran with a current marker")
+		}
+		if treeDigest(t, f.legacy) != before {
+			t.Error("the legacy tree changed")
+		}
+	})
+}
+
+// TestLayoutMigrationLinuxLegacyConfig (#2041, ADR-024 § 4, § 15): on Linux
+// the ~/.nightgauge/config.yaml an older loader read is moved to the XDG
+// machine-config directory once, byte for byte, mode 0600 in a 0700
+// directory; two differing files are a conflict and neither is touched.
+func TestLayoutMigrationLinuxLegacyConfig(t *testing.T) {
+	withConfig := func(f machineStateFixture) (*machineStateMigrator, string) {
+		dir := filepath.Join(filepath.Dir(f.home), "xdg-config", "nightgauge")
+		m := f.migrator()
+		m.configDir = func() (string, error) { return dir, nil }
+		return m, dir
+	}
+	t.Run("moves once", func(t *testing.T) {
+		f := newMachineStateFixture(t)
+		m, dir := withConfig(f)
+		var seen bool
+		for _, fd := range mustMachineFindings(t, m) {
+			if fd.Evidence["class"] == "machine config" {
+				seen = true
+				if fd.Evidence["target"] != filepath.Join(dir, "config.yaml") {
+					t.Errorf("config target = %q", fd.Evidence["target"])
+				}
+				if strings.Contains(fd.Cause+fd.Title, "owner: someone") {
+					t.Error("the finding prints the config file's content")
+				}
+			}
+		}
+		if !seen {
+			t.Fatal("no finding for the Linux legacy config.yaml")
+		}
+		if rep := f.fixer(m).Run(context.Background(), FixOptions{}); rep.ExitCode != 0 {
+			t.Fatalf("fix exit = %d; results %+v", rep.ExitCode, rep.Results)
+		}
+		dst := filepath.Join(dir, "config.yaml")
+		if got := readLayoutFile(t, dst); got != "owner: someone\n" {
+			t.Errorf("config.yaml = %q, want the legacy bytes", got)
+		}
+		if info, err := os.Stat(dst); err != nil || info.Mode().Perm() != 0o600 {
+			t.Errorf("config.yaml mode = %v (%v), want 0600", info.Mode().Perm(), err)
+		}
+		if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+			t.Errorf("config dir mode = %v (%v), want 0700", info.Mode().Perm(), err)
+		}
+		assertGone(t, filepath.Join(f.legacy, "config.yaml"))
+		if got := readLayoutFile(t, filepath.Join(f.legacy, "tools", "opencode", "package.json")); got != "{}\n" {
+			t.Errorf("tools/ changed: %q", got)
+		}
+		if again := mustMachineFindings(t, m); len(again) != 0 {
+			t.Errorf("findings after the move:\n%s", findingsText(again))
+		}
+	})
+	t.Run("two differing files are a conflict", func(t *testing.T) {
+		f := newMachineStateFixture(t)
+		m, dir := withConfig(f)
+		writeLayoutFile(t, filepath.Join(dir, "config.yaml"), "owner: other\n", 0o600)
+		if rep := f.fixer(m).Run(context.Background(), FixOptions{}); rep.ExitCode != 3 {
+			t.Errorf("fix exit = %d, want 3 (conflict)", rep.ExitCode)
+		}
+		if got := readLayoutFile(t, filepath.Join(f.legacy, "config.yaml")); got != "owner: someone\n" {
+			t.Errorf("legacy config.yaml changed: %q", got)
+		}
+		if got := readLayoutFile(t, filepath.Join(dir, "config.yaml")); got != "owner: other\n" {
+			t.Errorf("the XDG config.yaml was overwritten: %q", got)
+		}
+	})
+}
+
+// TestLegacyConfigTargetOnlyOnLinuxWithoutOverrides: the machine-config row
+// exists only where an older loader read the legacy file.
+func TestLegacyConfigTargetOnlyOnLinuxWithoutOverrides(t *testing.T) {
+	env := func(kv map[string]string) func(string) string { return func(k string) string { return kv[k] } }
+	for _, tc := range []struct {
+		goos string
+		env  map[string]string
+		want bool
+	}{
+		{"linux", nil, true},
+		{"darwin", nil, false},
+		{"windows", nil, false},
+		{"linux", map[string]string{"NIGHTGAUGE_CONFIG_HOME": "/c"}, false},
+		{"linux", map[string]string{"XDG_CONFIG_HOME": "/x"}, false},
+	} {
+		if got := legacyConfigTarget(tc.goos, env(tc.env)) != nil; got != tc.want {
+			t.Errorf("%s %v: row present = %v, want %v", tc.goos, tc.env, got, tc.want)
+		}
+	}
+}
+
+// TestAutoMigrateMachineStateCreatesNothingWithoutLegacyData: on a machine an
+// older build never ran on, the automatic run at CLI start does nothing and
+// creates no directory.
+func TestAutoMigrateMachineStateCreatesNothingWithoutLegacyData(t *testing.T) {
+	base := t.TempDir()
+	state := filepath.Join(base, "state")
+	m := &machineStateMigrator{
+		legacyRoot: filepath.Join(base, "home", ".nightgauge"),
+		statePath:  func() (string, error) { return state, nil },
+		stateHome:  func() (string, error) { t.Error("the state root was created"); return state, nil },
+		entries:    machineStateEntries(),
+	}
+	if _, ran := autoMigrateMachineState(context.Background(), m, time.Now()); ran {
+		t.Error("the automatic run ran with nothing to migrate")
+	}
+	assertGone(t, state)
+}
+
+func mustMachineFindings(t *testing.T, m *machineStateMigrator) []Finding {
+	t.Helper()
+	found, _ := machineFindings(m)
+	return found
 }

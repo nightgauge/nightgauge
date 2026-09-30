@@ -268,19 +268,15 @@ jobs:
           [ "$plain_rc" -eq 0 ] && [ "$race_rc" -eq 0 ] && [ "$skips_rc" -eq 0 ]
       # The opencode_integration tag against the real OpenCode binary (#1632):
       # the adversarial config-merge and plugin-loading suite, the catalog
-      # snapshots, and run isolation (#1616). The install is an exact pin, the
-      # version the tests assert, into a temp prefix. With CI=true a missing
+      # snapshots, and run isolation (#1616). scripts/opencode-integration.sh
+      # installs the manifest's max_tested pin into a temp prefix and runs the
+      # suite; ci-local.sh calls the same script. With CI=true a missing
       # binary fails every test rather than skipping it, and -v lists every
       # test that ran.
       - name: OpenCode integration (opencode-ai@1.18.30)
         id: opencode
         if: ${{ !cancelled() && needs.changes.outputs.run_heavy != 'false' }}
-        run: |
-          prefix="$RUNNER_TEMP/opencode-cli"
-          npm install --prefix "$prefix" --no-fund --no-audit opencode-ai@1.18.30
-          PATH="$prefix/node_modules/.bin:$PATH" timeout 10m go test -tags opencode_integration -count=1 -v \
-            -run '^Test(OpenCode(Integration.*|PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|CatalogEnvMatchesTheBinary|AnthropicModelsMatchTheBinary)|RealOpenCodePinRelaxedUnderCanary|PluginLoadsOnRealOpenCode|CompactionAutocontinueSuppressionAgainstRealOpenCode|PermissionAskEventAgainstRealOpenCode)$' \
-            ./internal/execution/ ./internal/execution/adapters/ ./internal/execution/opencodeplugin/
+        run: bash scripts/opencode-integration.sh "$RUNNER_TEMP/opencode-cli"
       # Evidence that outlives the runner. Both passes write to files, so if the
       # step is cancelled (job timeout, a runner OOM-kill) the replay groups
       # never happen and the only record of how far each pass got is these three

@@ -17,7 +17,7 @@ func TestPreserveOpenCodeRunEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root, err := OpenCodeRunRoot(home, id)
+	root, err := OpenCodeRunRoot(testStateHome(home), id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,11 +40,11 @@ func TestPreserveOpenCodeRunEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dst, err := PreserveOpenCodeRunEvidence(home, id, time.Now())
+	dst, err := PreserveOpenCodeRunEvidence(testStateHome(home), id, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(OpenCodeEvidenceDir(home), id); dst != want {
+	if want := filepath.Join(OpenCodeEvidenceDir(testStateHome(home)), id); dst != want {
 		t.Fatalf("dst = %q, want %q", dst, want)
 	}
 	var got []string
@@ -72,14 +72,14 @@ func TestPreserveOpenCodeRunEvidence(t *testing.T) {
 			t.Fatalf("preserved %v, want %v", got, want)
 		}
 	}
-	for _, d := range []string{OpenCodeEvidenceDir(home), filepath.Dir(OpenCodeEvidenceDir(home))} {
+	for _, d := range []string{OpenCodeEvidenceDir(testStateHome(home)), filepath.Dir(OpenCodeEvidenceDir(testStateHome(home)))} {
 		if fi, _ := os.Stat(d); fi.Mode().Perm() != 0o700 {
 			t.Errorf("%s mode %v, want 0700", d, fi.Mode().Perm())
 		}
 	}
 
 	// The root can now go; the evidence stays.
-	if err := RemoveOpenCodeRunRoot(home, id); err != nil {
+	if err := RemoveOpenCodeRunRoot(testStateHome(home), id); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(filepath.Join(dst, "opencode.db")); err != nil {
@@ -91,7 +91,7 @@ func TestPreserveOpenCodeRunEvidence(t *testing.T) {
 	if err := os.Chtimes(dst, old, old); err != nil {
 		t.Fatal(err)
 	}
-	removed, err := SweepOpenCodeRunEvidence(home, OpenCodeOrphanMaxAge, time.Now())
+	removed, err := SweepOpenCodeRunEvidence(testStateHome(home), OpenCodeOrphanMaxAge, time.Now())
 	if err != nil || len(removed) != 1 || removed[0] != id {
 		t.Fatalf("sweep removed %v, %v; want [%s]", removed, err, id)
 	}
@@ -100,11 +100,11 @@ func TestPreserveOpenCodeRunEvidence(t *testing.T) {
 func TestPreserveOpenCodeRunEvidence_NothingToKeep(t *testing.T) {
 	home := t.TempDir()
 	id, _ := runstate.NewRunID()
-	dst, err := PreserveOpenCodeRunEvidence(home, id, time.Now())
+	dst, err := PreserveOpenCodeRunEvidence(testStateHome(home), id, time.Now())
 	if err != nil || dst != "" {
 		t.Fatalf("missing root: dst=%q err=%v, want none", dst, err)
 	}
-	if _, err := os.Stat(OpenCodeEvidenceDir(home)); !os.IsNotExist(err) {
+	if _, err := os.Stat(OpenCodeEvidenceDir(testStateHome(home))); !os.IsNotExist(err) {
 		t.Fatalf("evidence dir created for nothing: %v", err)
 	}
 }

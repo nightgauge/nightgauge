@@ -1456,8 +1456,12 @@ func openCodeCheckRunRoot(root string) error {
 
 // OpenCodeRunRequest is what PrepareOpenCodeRun prepares a spawn from.
 type OpenCodeRunRequest struct {
-	// Home is the operator's home directory.
+	// Home is the operator's home directory, which the run's home/ forwards
+	// to (linkOperatorHome).
 	Home string
+	// StateHome is the machine-state root (layout.StateHome, ADR-024 § 2) the
+	// per-run root lives under, at STATE/opencode/runs/<ID>.
+	StateHome string
 	// ID names the run root: a run identity, or one minted for the dispatch.
 	ID string
 	// MachineConfigDir is the machine-tier config directory
@@ -1658,7 +1662,7 @@ func OpenCodeEnvWithholdFor(model, configContent string) OpenCodeEnvWithhold {
 // so the SDK path and the Go path run under the same bytes and the same
 // refusals.
 func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
-	rootPath, err := OpenCodeRunRoot(req.Home, req.ID)
+	rootPath, err := OpenCodeRunRoot(req.StateHome, req.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -1712,12 +1716,12 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	for _, warning := range built.Warnings {
 		fmt.Fprintf(os.Stderr, "[opencode] %s\n", warning)
 	}
-	root, created, err := EnsureOpenCodeRunRoot(req.Home, req.ID, req.Lookup)
+	root, created, err := EnsureOpenCodeRunRoot(req.StateHome, req.Home, req.ID, req.Lookup)
 	if err != nil {
 		return nil, err
 	}
 	if created {
-		removed, sweepErr := SweepOpenCodeRunRoots(req.Home, OpenCodeOrphanMaxAge, time.Now())
+		removed, sweepErr := SweepOpenCodeRunRoots(req.StateHome, OpenCodeOrphanMaxAge, time.Now())
 		if len(removed) > 0 {
 			fmt.Fprintf(os.Stderr, "[opencode] deleted %d per-run root(s) no stage had used for %s: %s\n",
 				len(removed), OpenCodeOrphanMaxAge, strings.Join(removed, ", "))

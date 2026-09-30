@@ -13,6 +13,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/adaptercompat"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -127,6 +128,23 @@ type openCodeProbe struct {
 	// machine's. Only tests set it, because the real files are outside any
 	// directory a test may write.
 	managedConfigFiles []string
+}
+
+// stateHome is the machine-state root (ADR-024 § 2) the OpenCode state lives
+// under, resolved from the probe's own environment and home the way
+// layout.StateHome resolves it for this process: NIGHTGAUGE_STATE_HOME, then
+// XDG_STATE_HOME/nightgauge, then the platform default. "" when it cannot be
+// resolved. Nothing is created.
+func (p openCodeProbe) stateHome(home string) string {
+	goos := p.goos
+	if goos == "" {
+		goos = runtime.GOOS
+	}
+	state, err := layout.StateHomePathFrom(goos, home, p.lookupEnv)
+	if err != nil {
+		return ""
+	}
+	return state
 }
 
 // newOpenCodeProbe builds the OpenCode check's dependencies for
@@ -393,7 +411,11 @@ func checkOpenCodeDrift(p openCodeProbe, home string, bin adapters.OpenCodeBinar
 	if home == "" {
 		return
 	}
-	rec, ok, err := adapters.ReadOpenCodeDispatchRecord(home)
+	state := p.stateHome(home)
+	if state == "" {
+		return
+	}
+	rec, ok, err := adapters.ReadOpenCodeDispatchRecord(state)
 	switch {
 	case err != nil:
 		warn("the last OpenCode dispatch's record could not be read: " + err.Error())
@@ -596,7 +618,11 @@ func openCodeSlotsInUse(p openCodeProbe) map[string]int {
 	if err != nil || home == "" {
 		return nil
 	}
-	slots, err := adapters.ReadOpenCodeEndpointSlots(adapters.OpenCodeEndpointSlotsPath(home))
+	state := p.stateHome(home)
+	if state == "" {
+		return nil
+	}
+	slots, err := adapters.ReadOpenCodeEndpointSlots(adapters.OpenCodeEndpointSlotsPath(state))
 	if err != nil || slots.PID <= 0 || !runstate.ProcessAlive(slots.PID) {
 		return nil
 	}
@@ -632,6 +658,10 @@ func openCodeOfflinePosture(model string, endpoints []adapters.OpenCodeEndpoint)
 // isolation environment the adapter gives every spawn, for a run whose id is
 // a placeholder.
 func openCodeRunDirs(p openCodeProbe, home string, inherit bool) *OpenCodeDirs {
+	state := p.stateHome(home)
+	if state == "" {
+		return nil
+	}
 	machineDir := filepath.Join(home, ".nightgauge")
 	if p.machineConfigDir != nil {
 		if d, err := p.machineConfigDir(); err == nil && filepath.IsAbs(d) {
@@ -639,7 +669,7 @@ func openCodeRunDirs(p openCodeProbe, home string, inherit bool) *OpenCodeDirs {
 		}
 	}
 	env, err := adapters.OpenCodeIsolationEnv(adapters.OpenCodeIsolation{
-		Root:              filepath.Join(adapters.OpenCodeRunsDir(home), openCodeRunIDPlaceholder),
+		Root:              filepath.Join(adapters.OpenCodeRunsDir(state), openCodeRunIDPlaceholder),
 		Home:              home,
 		Lookup:            p.lookupEnv,
 		GOOS:              p.goos,
@@ -686,8 +716,8 @@ func openCodeStoredLogins(p openCodeProbe, home string) []OpenCodeStoredLogin {
 	if v, ok := p.lookupEnv(openCodeAuthContentEnvVar); ok && v != "" {
 		flag(openCodeAuthContentEnvVar, []byte(v))
 	}
-	if p.glob != nil {
-		roots, _ := p.glob(filepath.Join(adapters.OpenCodeRunsDir(home), "*", "data", "opencode", "auth.json"))
+	if state := p.stateHome(home); p.glob != nil && state != "" {
+		roots, _ := p.glob(filepath.Join(adapters.OpenCodeRunsDir(state), "*", "data", "opencode", "auth.json"))
 		for _, path := range roots {
 			if data, err := p.readFile(path); err == nil {
 				flag(path, data)

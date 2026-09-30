@@ -242,27 +242,17 @@ export function expandEnvVar(value: string): string | null {
 
 /**
  * The machine-tier file the Go loader reads, resolved the same way
- * (internal/configpath): NIGHTGAUGE_CONFIG_HOME, then XDG_CONFIG_HOME, then
- * the platform default (~/.nightgauge on macOS, ~/.config/nightgauge on Linux,
- * %APPDATA%\nightgauge on Windows) — or, on Linux with no override, the legacy
- * ~/.nightgauge/config.yaml when only that file exists.
+ * (internal/configpath) through {@link getGlobalConfigPath}:
+ * NIGHTGAUGE_CONFIG_HOME, then XDG_CONFIG_HOME, then the platform default
+ * (~/.nightgauge on macOS, ~/.config/nightgauge on Linux, %APPDATA%\nightgauge
+ * on Windows). There is no fallback: a Linux ~/.nightgauge/config.yaml an older
+ * build read is moved by `nightgauge doctor --fix` (ADR-024 § 15), never read.
  */
 export function machineConfigPathInUse(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = getPlatform()
 ): string {
-  const canonical = getGlobalConfigPath(env, platform);
-  if (
-    platform === "linux" &&
-    !env.NIGHTGAUGE_CONFIG_HOME &&
-    !env.XDG_CONFIG_HOME &&
-    !fs.existsSync(canonical)
-  ) {
-    const os = require("os") as typeof import("os");
-    const legacy = path.join(os.homedir(), ".nightgauge", "config.yaml");
-    if (fs.existsSync(legacy)) return legacy;
-  }
-  return canonical;
+  return getGlobalConfigPath(env, platform);
 }
 
 /**

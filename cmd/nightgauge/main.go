@@ -6013,7 +6013,8 @@ Claude subscribers, carries the account-wide five-hour and seven-day allowance:
 That is the only channel which reports the figure at rest — the ` + "`" + `rate_limit_event` + "`" + `
 envelope nightgauge already parses is observable only while a pipeline stage is
 streaming (Issue #709). Wiring this verb in as the statusLine command keeps
-~/.nightgauge/usage/claude-rate-limits.json current, which is what lets the VS
+usage/claude-rate-limits.json in the machine-state directory current (see
+'nightgauge layout', "state"), which is what lets the VS
 Code footer show "session (5h) 44% · 56% left · resets 2h 14m" instead of a
 locally-derived dollar total (Issue #730).
 

@@ -170,16 +170,36 @@ describe("ClaudeRateLimitStore — persistence across process restarts", () => {
     expect(readings[0].live).toBe(false);
   });
 
-  it("writes the file where the gitignore rule covers it", async () => {
+  it("writes the file under the machine-state root, in a private directory", async () => {
     const store = new ClaudeRateLimitStore(workspace);
     await store.record(event(), NOW);
 
-    // Pinned literally: the generated .nightgauge/.gitignore is
-    // deny-by-default (`/*`, ADR-024 § 13), which keeps this per-machine
-    // cache out of git. Moving it to an allowlisted path would surface it as
-    // an untracked change in every user's repository.
-    expect(store.filePath).toBe(path.join(workspace, ".nightgauge/usage/claude-rate-limits.json"));
-    await expect(fs.access(store.filePath)).resolves.toBeUndefined();
+    // Pinned literally: STATE/usage/ (ADR-024 § 2), the path the Go
+    // statusline writer (internal/usagestore) uses under the same root.
+    const file = path.join(workspace, "usage/claude-rate-limits.json");
+    expect(store.filePath).toBe(file);
+    await expect(fs.access(file)).resolves.toBeUndefined();
+    if (process.platform !== "win32") {
+      expect((await fs.stat(path.dirname(file))).mode & 0o777).toBe(0o700);
+    }
+  });
+
+  it("never writes through a symlink planted as the usage directory", async () => {
+    const elsewhere = await fs.mkdtemp(path.join(os.tmpdir(), "rate-limit-elsewhere-"));
+    await fs.symlink(elsewhere, path.join(workspace, "usage"));
+    const store = new ClaudeRateLimitStore(workspace);
+    await store.record(event(), NOW);
+
+    expect(await fs.readdir(elsewhere)).toEqual([]);
+  });
+
+  it("starts cold and writes nothing without a machine-state root", async () => {
+    const store = new ClaudeRateLimitStore(undefined);
+    await store.record(event(), NOW);
+    await store.load();
+
+    expect(store.filePath).toBeUndefined();
+    expect(store.readings(NOW)).toHaveLength(1);
   });
 
   it("keeps only the newest reading per bucket, and one per bucket", async () => {
@@ -232,8 +252,8 @@ describe("ClaudeRateLimitStore — persistence across process restarts", () => {
 
   it("treats an unreadable or malformed file as no readings, never as a crash", async () => {
     const store = new ClaudeRateLimitStore(workspace);
-    await fs.mkdir(path.dirname(store.filePath), { recursive: true });
-    await fs.writeFile(store.filePath, "{ not json", "utf8");
+    await fs.mkdir(path.dirname(store.filePath!), { recursive: true });
+    await fs.writeFile(store.filePath!, "{ not json", "utf8");
 
     await store.load();
 
@@ -242,9 +262,9 @@ describe("ClaudeRateLimitStore — persistence across process restarts", () => {
 
   it("discards a persisted entry whose fields do not hold up", async () => {
     const store = new ClaudeRateLimitStore(workspace);
-    await fs.mkdir(path.dirname(store.filePath), { recursive: true });
+    await fs.mkdir(path.dirname(store.filePath!), { recursive: true });
     await fs.writeFile(
-      store.filePath,
+      store.filePath!,
       JSON.stringify({
         version: 1,
         buckets: {

@@ -43,11 +43,16 @@ func layoutAutoMigrateApplies(cmd *cobra.Command) bool {
 	return true
 }
 
-// autoMigrateLayoutAtCLIStart runs the migration for the command's workspace
-// (the same root log retention uses). It prints one line to stderr only when
-// it moved data or had to leave some behind, which the retry window bounds to
-// once an hour.
+// autoMigrateLayoutAtCLIStart runs the machine-state migration (#2041: this
+// user's state from ~/.nightgauge to the machine-state directory, wherever
+// the command runs) and the migration for the command's workspace (the same
+// root log retention uses). Each prints one line to stderr only when it moved
+// data or had to leave some behind, which the retry window bounds to once an
+// hour.
 func autoMigrateLayoutAtCLIStart(cmd *cobra.Command) {
+	if rep, ran := doctor.AutoMigrateMachineState(context.Background()); ran {
+		reportAutoMigration(cmd, "machine state", rep)
+	}
 	root := explicitWorkspaceRoot(cmd)
 	if root == "" {
 		root, _ = os.Getwd()
@@ -56,12 +61,19 @@ func autoMigrateLayoutAtCLIStart(cmd *cobra.Command) {
 	if !ran {
 		return
 	}
+	reportAutoMigration(cmd, "data", rep)
+}
+
+// reportAutoMigration prints the one stderr line an automatic migration run
+// earns: what moved, or what is still at an old location. what names the
+// migrated data ("data", "machine state").
+func reportAutoMigration(cmd *cobra.Command, what string, rep doctor.LayoutReport) {
 	switch {
 	case rep.Version > 0 && rep.Changed():
-		fmt.Fprintf(cmd.ErrOrStderr(), "nightgauge: moved Nightgauge data to the new layout (%s)\n", rep.Summary())
+		fmt.Fprintf(cmd.ErrOrStderr(), "nightgauge: moved Nightgauge %s to the new layout (%s)\n", what, rep.Summary())
 	case rep.Version == 0 && (rep.Changed() || len(rep.Conflicts) > 0 || rep.Blocked != "" ||
 		rep.FilesHeld != "" || len(rep.Skipped) > 0 || len(rep.Refused) > 0 || len(rep.Errors) > 0):
-		fmt.Fprintf(cmd.ErrOrStderr(), "nightgauge: Nightgauge data is still at an old location (%s); "+
-			"run `nightgauge doctor --fix`\n", rep.Summary())
+		fmt.Fprintf(cmd.ErrOrStderr(), "nightgauge: Nightgauge %s is still at an old location (%s); "+
+			"run `nightgauge doctor --fix`\n", what, rep.Summary())
 	}
 }

@@ -39,8 +39,19 @@ This document classifies every settings key from three orthogonal sources
 | Tier        | Storage location                                     | Committed? | One-line rule                                                                                                                                                                                              |
 | ----------- | ---------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Team**    | `.nightgauge/config.yaml`                            | Yes        | Stable, reviewed via PR, identical for everyone on the team. Edited by humans through git.                                                                                                                 |
-| **Machine** | `~/.nightgauge/config.yaml`                          | No         | Per-developer preference — never appropriate to commit. UI write target for identity/credential keys (`MACHINE_TIER_KEY_PATHS`); the general default write target is the local tier (`config.local.yaml`). |
+| **Machine** | the machine-tier `config.yaml` (below)               | No         | Per-developer preference — never appropriate to commit. UI write target for identity/credential keys (`MACHINE_TIER_KEY_PATHS`); the general default write target is the local tier (`config.local.yaml`). |
 | **Runtime** | VSCode `extensionState` / `workspaceState` (memento) | n/a        | Ephemeral state the UI flips often (concurrency, paused state, last picker selections). Must not produce a YAML diff.                                                                                      |
+
+The machine-tier file is `~/.config/nightgauge/config.yaml` on Linux,
+`~/.nightgauge/config.yaml` on macOS and `%APPDATA%\nightgauge\config.yaml` on
+Windows, overridable with `NIGHTGAUGE_CONFIG_HOME` or `XDG_CONFIG_HOME`; this
+document writes `~/.nightgauge/config.yaml` for short. There is no fallback: on
+Linux a `~/.nightgauge/config.yaml` an earlier release read is not read any
+more, and `nightgauge doctor --fix` (or the first command) moves it to the XDG
+path. Where everything that is
+not a setting lives (state, caches, logs, worktrees, secrets) is in
+[CONFIGURATION.md § Where Nightgauge keeps its data](CONFIGURATION.md#where-nightgauge-keeps-its-data)
+and [ADR-024](decisions/024-data-and-state-layout.md).
 
 The three tier tables below assign every enumerated key to exactly one of
 those tiers, the **Migrations** sub-table lists every key whose `Current
@@ -74,7 +85,7 @@ Per-tier justification:
 | #   | Tier      | Source                                     | Why it sits here                                                                                                                                                    |
 | --- | --------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1   | defaults  | Built-in (`schema.ts` `DEFAULT_CONFIG`)    | Lowest priority — guarantees the system has a coherent value for every key even with no config files present.                                                       |
-| 2   | machine   | `~/.nightgauge/config.yaml`                | Per-developer _defaults_ that apply across every repo and worktree (identity, adapters, local model servers). Below team so committed repo policy is authoritative. |
+| 2   | machine   | machine-tier `config.yaml`                 | Per-developer _defaults_ that apply across every repo and worktree (identity, adapters, local model servers). Below team so committed repo policy is authoritative. |
 | 3   | team      | `.nightgauge/config.yaml`                  | Committed, reviewed repo policy. Overrides machine defaults so a repo behaves the same for everyone.                                                                |
 | 4   | local     | `.nightgauge/config.local.yaml`            | Gitignored per-checkout override — the highest file tier. Where a developer beats team policy without dirtying the tree, and the UI's default write target.         |
 | 5   | runtime   | VSCode `extensionState` / `workspaceState` | Ephemeral UI state (concurrency slider, pause). Above the files because a UI flip is the most current expression of intent; below env so CI still wins.             |
@@ -103,7 +114,7 @@ the startup `max_concurrent` migration all rewrote the committed team file.
 | Write                                                                                                         | Target file                     | Enforced by                                                                                                                           |
 | ------------------------------------------------------------------------------------------------------------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
 | Any runtime/UI write of a key **not** in `MACHINE_TIER_KEY_PATHS`                                             | `.nightgauge/config.local.yaml` | TS `NightgaugeYamlService.writeRuntimeValue` → `runtimeWriteTierFor` (`views/settings/tierRouting.ts`); Go `config.WriteRuntimeValue` |
-| Any runtime/UI write of a **machine-tier** key (identity, credentials, model choice)                          | `~/.nightgauge/config.yaml`     | same two entry points; the key sets are TS `MACHINE_TIER_KEY_PATHS` and Go `config.MachineTierKeys`                                   |
+| Any runtime/UI write of a **machine-tier** key (identity, credentials, model choice)                          | machine-tier `config.yaml`      | same two entry points; the key sets are TS `MACHINE_TIER_KEY_PATHS` and Go `config.MachineTierKeys`                                   |
 | Ephemeral UI state (`TIER_3_KEY_PATHS`, e.g. the pause flag)                                                  | VSCode memento                  | `SettingsPanel.handleSave` → `RuntimeStateStore`                                                                                      |
 | Secrets (`SECRET_KEY_PATHS`)                                                                                  | OS keychain                     | `SettingsPanel.handleSave` → `SecretStorageService`                                                                                   |
 | An explicit user action that **names** the team file — the Settings panel's _Project_ tab, "Edit team config" | `.nightgauge/config.yaml`       | `NightgaugeYamlService.write(config, "project")`, the only project-tier writer                                                        |
@@ -228,8 +239,8 @@ the YAML and produces a normal commit.
 ## Tier 2: Machine
 
 Per-developer preferences. Never appropriate to commit. The UI's **default
-write target** for any non-ephemeral key. File:
-`~/.nightgauge/config.yaml`. Plumbing already exists in
+write target** for any non-ephemeral key. File: the machine-tier
+`config.yaml` (per OS above). Plumbing already exists in
 `globalConfigResolver.ts` and is watched by `NightgaugeYamlService.ts`.
 
 | Key Path                                                           | Current Location                      | Target Tier | Rationale                                                                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -274,7 +285,8 @@ The `opencode` adapter builds each run's OpenCode config from this block
 in the machine-tier config file and nowhere else: `$NIGHTGAUGE_CONFIG_HOME/config.yaml`
 when that variable is set, else `$XDG_CONFIG_HOME/nightgauge/config.yaml`, else
 the platform default (`~/.nightgauge/config.yaml` on macOS,
-`~/.config/nightgauge/config.yaml` on Linux). The loader
+`~/.config/nightgauge/config.yaml` on Linux, `%APPDATA%\nightgauge\config.yaml`
+on Windows). The loader
 (`config.LoadOpenCodeConfig`) reads that file alone, never the checkout's
 `config.local.yaml`, and refuses a dispatch whose committed project config
 declares `opencode:`. Every OpenCode refusal that says where to set a key names

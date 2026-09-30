@@ -29,7 +29,7 @@ func ReadWorktreeBaseSetting(workspaceRoot string) (layout.WorktreeBaseSetting, 
 	if s, err := worktreeBaseFromFile(project); err != nil {
 		return layout.WorktreeBaseSetting{}, err
 	} else if s.Value != "" {
-		machine, _ := configpath.InUse()
+		machine, _ := configpath.MachineConfigPath()
 		return layout.WorktreeBaseSetting{}, fmt.Errorf(
 			"%w: %s = %q is set in the committed team config %s:%d; it is a machine- or local-tier key. "+
 				"Delete it there, and to use a custom location set an absolute path outside the repository in %s or %s",
@@ -58,21 +58,9 @@ func ResolveWorktreeBase(workspaceRoot string) (string, error) {
 	return layout.WorktreeBase(workspaceRoot, setting)
 }
 
-// machineConfigFileInUse is the machine-tier file the loader reads: the
-// canonical path, or the Linux legacy one when only that exists.
+// machineConfigFileInUse is the machine-tier file the loader reads.
 func machineConfigFileInUse() (string, error) {
-	path, err := machineConfigPathFn()
-	if err != nil {
-		return "", err
-	}
-	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
-		if legacy := legacyMachineConfigPath(); legacy != "" && legacy != path {
-			if _, lerr := os.Stat(legacy); lerr == nil {
-				return legacy, nil
-			}
-		}
-	}
-	return path, nil
+	return machineConfigPathFn()
 }
 
 // worktreeBaseFromFile reads pipeline.worktree_base from one YAML file. A

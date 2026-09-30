@@ -303,6 +303,8 @@ fi
 REQUIRED_FILES=(
   go.mod
   scripts/test-ci-local-inventory.sh
+  scripts/opencode-integration.sh
+  scripts/adapter-cli-pin.sh
   scripts/ci-local-steps.txt
   scripts/test-branch-merged-check.sh
   scripts/test-post-merge-check.sh
@@ -1567,6 +1569,30 @@ run_step "Mirror link gate regression suite" \
   bash scripts/test-mirror-link-check.sh
 run_step "Mirror link integrity" python3 scripts/check-mirror-links.py
 
+# Collect every concurrent step before summarising. Placed HERE, at the very
+# end, so a grouped step overlaps the entire serial remainder rather than just
+# its immediate neighbours — the Go suites (284s combined) run underneath the
+# npm, lint and doc steps instead of in front of them.
+#
+# Nothing may read a grouped step's result before this point, and nothing does:
+# the group is read-only by construction, so no serial step downstream depends
+# on one having finished.
+run_group_wait
+
+# ci.yml's OpenCode integration step, through the same script (#2300: the tag
+# was never compiled here, so a moved run root reached CI red). It runs after
+# the groups drain, alone, as it does in CI: two of its tests assert wall-clock
+# bounds on a real OpenCode process (a fast-path dispatch, a kill deadline),
+# and under the concurrent Go and vitest suites both overran (measured
+# 2026-09-30: 23s against a ~4.5s fast path, and a killed run).
+if [ "$GO_SCOPE_RUN" -eq 0 ]; then
+  skip_step "OpenCode integration (opencode_integration tag)" \
+    "--changed, and $GO_SCOPE_REASON"
+else
+  run_step "OpenCode integration (opencode_integration tag)" \
+    bash scripts/opencode-integration.sh
+fi
+
 if [ "$LIST_STEPS" -eq 1 ]; then
   exit 0
 fi
@@ -1582,16 +1608,6 @@ print_timing_summary() {
     printf '%6s  %s\n' "${STEP_SECONDS[$i]}s" "${STEP_LABELS[$i]}"
   done | sort -rn | head -8 | sed 's/^/  /'
 }
-
-# Collect every concurrent step before summarising. Placed HERE, at the very
-# end, so a grouped step overlaps the entire serial remainder rather than just
-# its immediate neighbours — the Go suites (284s combined) run underneath the
-# npm, lint and doc steps instead of in front of them.
-#
-# Nothing may read a grouped step's result before this point, and nothing does:
-# the group is read-only by construction, so no serial step downstream depends
-# on one having finished.
-run_group_wait
 
 echo ""
 echo "-------------------------------------------------------------------------"

@@ -97,8 +97,8 @@ func Targets(workspaceRoot string) []Target {
 			out = append(out, Target{Label: "clone", Dir: dir, root: workspaceRoot})
 		}
 	}
-	if home, err := layout.StateHomePath(); err == nil {
-		out = append(out, Target{Label: "machine", Dir: filepath.Join(home, "logs")})
+	if dir, err := layout.StateDirPath(layout.StateLogs); err == nil {
+		out = append(out, Target{Label: "machine", Dir: dir})
 	}
 	return out
 }

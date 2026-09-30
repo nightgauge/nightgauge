@@ -1462,12 +1462,19 @@ func readLayoutMarker(path string) int {
 
 // writeLayoutMarker records LayoutVersion in the new root, atomically.
 func writeLayoutMarker(newRoot string) error {
+	return writeLayoutMarkerVersion(newRoot, LayoutVersion)
+}
+
+// writeLayoutMarkerVersion records version in root's layout-version marker,
+// atomically: the per-clone root's LayoutVersion, or STATE's
+// MachineStateLayoutVersion.
+func writeLayoutMarkerVersion(newRoot string, version int) error {
 	if err := ensureRealDir(newRoot, true); err != nil {
 		return err
 	}
 	dst := filepath.Join(newRoot, layoutMarkerName)
 	if err := installTemp(dst, 0o600, time.Time{}, true, func(w io.Writer) error {
-		_, err := fmt.Fprintf(w, "%d\n", LayoutVersion)
+		_, err := fmt.Fprintf(w, "%d\n", version)
 		return err
 	}); err != nil {
 		return fmt.Errorf("write the layout-version marker %s: %w", dst, err)
@@ -1592,16 +1599,25 @@ func (r LayoutReport) Changed() bool {
 // --- the check ----------------------------------------------------------------
 
 func init() {
-	builtinChecks = append(builtinChecks, layoutCheck(newLayoutMigrator))
+	builtinChecks = append(builtinChecks, layoutCheck(newLayoutMigrator, newMachineStateMigrator))
 }
 
 // layoutCheck is the `layout_migration` check over the migrator mk builds for
-// the working directory.
-func layoutCheck(mk func(dir string) *layoutMigrator) Check {
+// the working directory and, when mm is set, the machine-state migrator it
+// builds (layout_machine_state.go), whose rows are reported wherever doctor
+// runs.
+func layoutCheck(mk func(dir string) *layoutMigrator, mm func() *machineStateMigrator) Check {
 	return Check{
 		ID: checkLayout, Title: "Data layout", Group: "hygiene", Code: codeLayoutLegacy,
 		Run: func(_ context.Context, env *Env) []Finding {
 			fs, detail := layoutFindings(mk(env.Cwd))
+			if mm != nil {
+				mfs, mdetail := machineFindings(mm())
+				fs = append(fs, mfs...)
+				if mdetail != "" {
+					detail += "; " + mdetail
+				}
+			}
 			env.SetDetail(checkLayout, detail)
 			return fs
 		},
@@ -1743,9 +1759,11 @@ func itemFindings(plan layoutPlan, it layoutItem) []Finding {
 // --- the verb -----------------------------------------------------------------
 
 // layoutMigrateVerb is `layout.migrate`: it runs the whole migration for the
-// finding's repository, because the marker is written only once everything
-// has moved. The engine re-runs the check to decide each finding's outcome.
-func layoutMigrateVerb(mk func(dir string) *layoutMigrator) RemedyVerb {
+// finding's repository, or for this user's machine state when the finding is
+// a machine-state row (scope "machine"), because the marker is written only
+// once everything has moved. The engine re-runs the check to decide each
+// finding's outcome.
+func layoutMigrateVerb(mk func(dir string) *layoutMigrator, mm func() *machineStateMigrator) RemedyVerb {
 	migrator := func(f Finding) (*layoutMigrator, error) {
 		root, err := evidence(f, "repo_root")
 		if err != nil {
@@ -1760,6 +1778,9 @@ func layoutMigrateVerb(mk func(dir string) *layoutMigrator) RemedyVerb {
 	return VerbFuncs{
 		PreviewFunc: declaredPreview(verbLayoutMigrate),
 		PreconditionFunc: func(_ context.Context, f Finding) error {
+			if f.Evidence["scope"] == machineScope {
+				return machineRefusal(mm, f)
+			}
 			m, err := migrator(f)
 			if err != nil {
 				return err
@@ -1771,6 +1792,9 @@ func layoutMigrateVerb(mk func(dir string) *layoutMigrator) RemedyVerb {
 			return layoutRefusal(plan, f, m.daemonLive)
 		},
 		ApplyFunc: func(ctx context.Context, f Finding) error {
+			if f.Evidence["scope"] == machineScope {
+				return machineMigrateApply(ctx, mm, f)
+			}
 			m, err := migrator(f)
 			if err != nil {
 				return err

@@ -15,6 +15,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 )
@@ -216,6 +217,10 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 	if err != nil {
 		return nil, fmt.Errorf("the opencode per-run root needs the home directory: %w", err)
 	}
+	state, err := layout.StateHome()
+	if err != nil {
+		return nil, fmt.Errorf("the opencode per-run root needs the machine-state directory: %w", err)
+	}
 	machineDir, err := config.MachineConfigDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolve the machine-tier config directory: %w", err)
@@ -227,6 +232,7 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 	cwd, _ := os.Getwd()
 	prepared, err := adapters.PrepareOpenCodeRun(adapters.OpenCodeRunRequest{
 		Home:             home,
+		StateHome:        state,
 		ID:               id,
 		MachineConfigDir: machineDir,
 		Run:              run,
@@ -342,11 +348,11 @@ runs directory is refused, and nothing inside the root is followed.`,
 			if !runstate.IsIdentity(runID) {
 				return fmt.Errorf("--run-id %q is not a run identity (a canonical lowercase UUIDv7)", runID)
 			}
-			home, err := os.UserHomeDir()
+			state, err := layout.StateHome()
 			if err != nil {
-				return fmt.Errorf("the opencode per-run root needs the home directory: %w", err)
+				return fmt.Errorf("the opencode per-run root needs the machine-state directory: %w", err)
 			}
-			return adapters.RemoveOpenCodeRunRoot(home, runID)
+			return adapters.RemoveOpenCodeRunRoot(state, runID)
 		},
 	}
 	cmd.Flags().StringVar(&runID, "run-id", "", "Run identity whose root to delete (required)")

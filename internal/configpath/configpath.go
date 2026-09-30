@@ -1,5 +1,9 @@
 // Package configpath resolves the machine-tier config file's location.
 //
+// There is one location and no fallback (ADR-024 § 4, § 15): the Linux
+// ~/.nightgauge/config.yaml an older build read when the XDG file was absent
+// is moved by `nightgauge doctor --fix` (internal/doctor), never read.
+//
 // It is a leaf package so that packages internal/config imports (for example
 // internal/github) can name the same file in their messages without an import
 // cycle. internal/config's loader and every message that tells an operator
@@ -8,8 +12,6 @@
 package configpath
 
 import (
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -52,42 +54,4 @@ func ForGOOS(goos string) (string, error) {
 	default:
 		return filepath.Join(home, ".nightgauge", "config.yaml"), nil
 	}
-}
-
-// LegacyForGOOS returns the Linux legacy machine-tier path, ~/.nightgauge/
-// config.yaml, which the loader reads only when the canonical file is absent.
-// Empty when no legacy location applies: another platform, or an explicit
-// NIGHTGAUGE_CONFIG_HOME / XDG_CONFIG_HOME.
-func LegacyForGOOS(goos string) string {
-	if os.Getenv("NIGHTGAUGE_CONFIG_HOME") != "" || os.Getenv("XDG_CONFIG_HOME") != "" || goos != "linux" {
-		return ""
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".nightgauge", "config.yaml")
-}
-
-// InUse returns the machine-tier file the loader actually reads on this
-// platform: the canonical path, or the legacy one when only that exists. A
-// message that tells an operator where to put a value names this file.
-func InUse() (string, error) {
-	return InUseForGOOS(runtime.GOOS)
-}
-
-// InUseForGOOS is InUse as it would resolve on goos.
-func InUseForGOOS(goos string) (string, error) {
-	path, err := ForGOOS(goos)
-	if err != nil {
-		return "", err
-	}
-	if _, statErr := os.Stat(path); errors.Is(statErr, fs.ErrNotExist) {
-		if legacy := LegacyForGOOS(goos); legacy != "" && legacy != path {
-			if _, legacyErr := os.Stat(legacy); legacyErr == nil {
-				return legacy, nil
-			}
-		}
-	}
-	return path, nil
 }

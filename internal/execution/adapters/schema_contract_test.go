@@ -241,6 +241,7 @@ func schemaContractConfigs(t *testing.T) []schemaContractConfig {
 					captureAdapterStderr(t, func() {
 						prepared, err = PrepareOpenCodeRun(withMcpForge(OpenCodeRunRequest{
 							Home:               home,
+							StateHome:          testStateHome(home),
 							ID:                 testRunID,
 							MachineConfigDir:   filepath.Join(home, ".nightgauge"),
 							Run:                run,

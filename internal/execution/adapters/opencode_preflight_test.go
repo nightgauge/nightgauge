@@ -162,7 +162,7 @@ func (f fakeOpenCode) count(t *testing.T, args string) int {
 func preflightEnv(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	t.Setenv(ExperimentalOpenCodeEnvVar, "1")
 	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "GH_CONFIG_DIR", "GOCACHE"} {
 		t.Setenv(k, "")
@@ -204,7 +204,7 @@ func TestOpenCodeDispatchBelowMinTestedIsIncompatible(t *testing.T) {
 	if got := fake.invocations(t); len(got) != 1 || got[0] != "--version" {
 		t.Errorf("the binary ran %q; a refused dispatch runs only `--version`", got)
 	}
-	if _, ok, _ := ReadOpenCodeDispatchRecord(home); ok {
+	if _, ok, _ := ReadOpenCodeDispatchRecord(testStateHome(home)); ok {
 		t.Error("a refused dispatch was recorded as the last dispatch")
 	}
 }
@@ -254,7 +254,7 @@ func TestOpenCodeAboveMaxTestedDispatchesLikeATestedVersion(t *testing.T) {
 			if got := fake.count(t, "debug config") + fake.count(t, "run --help"); got != 0 {
 				t.Errorf("%s on opencode %s ran %d probe(s) beyond the version read", name, above, got)
 			}
-			if rec, ok, _ := ReadOpenCodeDispatchRecord(home); !ok || rec.Version != above {
+			if rec, ok, _ := ReadOpenCodeDispatchRecord(testStateHome(home)); !ok || rec.Version != above {
 				t.Errorf("%s on opencode %s: dispatch record = %+v, %v; want the version recorded", name, above, rec, ok)
 			}
 		}
@@ -276,7 +276,7 @@ func TestOpenCodePinnedBinaryIsCheckedSpawnedAndRecorded(t *testing.T) {
 	if got := fake.invocations(t); len(got) != 1 || got[0] != "--version" {
 		t.Errorf("the pinned binary ran %q, want its `--version` once", got)
 	}
-	rec, ok, err := ReadOpenCodeDispatchRecord(home)
+	rec, ok, err := ReadOpenCodeDispatchRecord(testStateHome(home))
 	if err != nil || !ok || rec.Binary != fake.path || rec.Version != m.MaxTested {
 		t.Errorf("dispatch record = %+v, %v, %v; want the pin at %s", rec, ok, err, m.MaxTested)
 	}
@@ -575,7 +575,7 @@ func TestOpenCodeStoppedDispatchIsNotIncompatible(t *testing.T) {
 		t.Errorf("a dispatch whose context was done ran the binary: %q", got)
 	}
 
-	if _, ok, _ := ReadOpenCodeDispatchRecord(home); ok {
+	if _, ok, _ := ReadOpenCodeDispatchRecord(testStateHome(home)); ok {
 		t.Error("a stopped dispatch was recorded as the last dispatch")
 	}
 }
@@ -623,6 +623,7 @@ func TestOpenCodeMachineConfigRefusalsAreTheDispatchs(t *testing.T) {
 			settings.InheritUserConfig = c.inherit
 			req := OpenCodeRunRequest{
 				Home:             home,
+				StateHome:        testStateHome(home),
 				ID:               testRunID,
 				MachineConfigDir: filepath.Join(home, ".nightgauge"),
 				// A worktree with nothing in it: this test is about machine

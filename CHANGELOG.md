@@ -16,6 +16,33 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge doctor --fix` moves machine state out of `~/.nightgauge`
+  once, keeping `machine-id`** (#2041, ADR-024 § 15). Plain
+  `nightgauge doctor` reports each machine-state class still under
+  `~/.nightgauge` (serve claims, `rate-limit.json`, the GitLab rate-limit
+  files, `machine-id`, `telemetry-notice-v1`, `usage/`, OpenCode's run roots,
+  evidence, last-dispatch record and endpoint slots, and the machine logs)
+  with its target in the machine-state directory (`NGD044`); `--fix` moves
+  them under `.migrate.lock` there and writes a `layout-version` marker, and
+  a second run changes nothing. `machine-id` is moved byte for byte, ends mode
+  0600 and is never regenerated, so the platform keeps seeing the same device;
+  a differing copy at both locations is a conflict (`NGD045`, exit 3). A hint
+  at both locations keeps the newer copy. While a daemon holds a serve lease
+  the serve claims and the OpenCode run roots stay in place and are reported
+  (exit 4); everything else still moves. The old OpenCode self-test records
+  are deleted. The `tools/` OpenCode install is not moved. On Linux, a legacy
+  `~/.nightgauge/config.yaml` moves to `~/.config/nightgauge/config.yaml` (mode
+  0600 in a 0700 directory; two differing files are a conflict, never merged),
+  and the loader's fallback that read it when the XDG file was absent is
+  removed, in the binary and in the extension, whose machine-config readers
+  now resolve through one resolver. On macOS `~/.nightgauge/config.yaml` stays
+  the machine config. At runtime `machine-id` is now moved into the state
+  directory on first use rather than copied, and a new id is no longer written
+  to `~/.nightgauge`. Moves are confined to the old and new roots after symlink
+  evaluation, a symlinked class is refused, and new directories are 0700. The
+  first `nightgauge` command without the marker runs the same migration and
+  never fails because of it.
+
 - **`nightgauge doctor --fix` moves per-clone data to its new location once**
   (#2040, ADR-024 § 15). Plain `nightgauge doctor` reports each class still at
   an old location (pipeline state, plans, retros, logs, pipeline worktrees
@@ -201,6 +228,35 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Nightgauge now keeps only team config in your repository** (epic #2021,
+  ADR-024). Pipeline state, plans, retros and logs live in the clone's git
+  directory; caches, machine state, usage readings and pipeline worktrees live
+  in per-user directories that follow each OS's conventions (with
+  `NIGHTGAUGE_CACHE_HOME`, `NIGHTGAUGE_STATE_HOME` and `NIGHTGAUGE_RUNTIME_DIR`
+  overrides); the daemon socket is in a private runtime directory; the license
+  key is in the OS keychain (`nightgauge auth license set|status|clear`); and a
+  plaintext token or license key in `.nightgauge/config.yaml` or
+  `config.local.yaml` is refused. The first `nightgauge` command on each clone
+  moves that clone's files to the new locations without failing your command;
+  `nightgauge doctor --fix` moves whatever it left behind, and the machine
+  state under `~/.nightgauge/`, and reports any conflict instead of
+  overwriting. Log retention now prunes session logs older than 30 days (and
+  caps each log directory at 200 MB). Every location, per OS, is listed in
+  [CONFIGURATION.md § Where Nightgauge keeps its data](docs/CONFIGURATION.md#where-nightgauge-keeps-its-data)
+  (#2045).
+- **Claude usage readings, OpenCode run state and the machine logs live in the
+  machine-state directory** (#2032, ADR-024 § 2). `usage/claude-rate-limits.json`,
+  OpenCode's per-run roots, preserved failure evidence, last-dispatch record and
+  published endpoint slots (`opencode/`), and the machine log directory
+  (`logs/`) resolve under `NIGHTGAUGE_STATE_HOME`, then
+  `$XDG_STATE_HOME/nightgauge`, then `~/.nightgauge/state` on macOS,
+  `~/.local/state/nightgauge` on Linux and `%LOCALAPPDATA%\nightgauge\state` on
+  Windows, instead of `~/.nightgauge`. Only the new location is read;
+  `nightgauge doctor --fix` moves what an older build left. The extension's
+  usage meter resolves the same directory in the same order. Run directories
+  stay 0700, and a symlink planted as any of these directories is refused
+  rather than written through. The OpenCode binary pin under
+  `~/.nightgauge/tools/` is unchanged.
 - **Each checkout keeps its own run control and runtime state in
   `<git-dir>/nightgauge-worktree/`** (#2037, ADR-024 § 7). `current-run.json`,
   `run-state.json`, batch and queue state, `serve.lock`, `go-backend.log`,
@@ -560,6 +616,10 @@ demo:inventory` regenerates the committed `demo/ipc-inventory.json`, the
 
 ### Fixed
 
+- **`scripts/ci-local.sh` runs the OpenCode integration suite** that `ci.yml`
+  runs. Both call `scripts/opencode-integration.sh`, which installs the
+  manifest's `max_tested` pin. Before this the local gate never compiled the
+  `opencode_integration` tag, so a moved run root failed only in CI.
 - The retro engine imported a `batch_state_parser` module that was never
   committed, so it could not run; the parser is added with tests (#2296).
 - `scripts/analyze-model-routing.ts` type-checks again, pricing from the

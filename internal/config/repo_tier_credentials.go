@@ -3,7 +3,6 @@ package config
 import (
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -201,26 +200,15 @@ func repoTierCredentialError(path string, offending []string) error {
 		ErrRepoTierCredential, path, strings.Join(offending, ", "), machine)
 }
 
-// machineConfigPathInUse is the machine-tier file the loader actually reads:
-// the canonical path, or the Linux legacy ~/.nightgauge/config.yaml when only
-// that one exists.
+// machineConfigPathInUse is the machine-tier file the loader reads. There is
+// one: the Linux legacy ~/.nightgauge/config.yaml is moved, never read
+// (ADR-024 § 15).
 func machineConfigPathInUse() (string, error) {
-	path, err := machineConfigPathFn()
-	if err != nil {
-		return "", err
-	}
-	if _, statErr := os.Stat(path); errors.Is(statErr, os.ErrNotExist) {
-		if legacy := legacyMachineConfigPath(); legacy != "" && legacy != path {
-			if _, legacyErr := os.Stat(legacy); legacyErr == nil {
-				return legacy, nil
-			}
-		}
-	}
-	return path, nil
+	return machineConfigPathFn()
 }
 
 // IsMachineTierFile reports whether path is the machine-tier config file,
-// canonical or Linux legacy, compared after resolving symlinks. Run from the
+// compared after resolving symlinks. Run from the
 // home directory, `.nightgauge/config.yaml` IS the machine file; it is not a
 // repository tier and may hold a literal credential.
 func IsMachineTierFile(path string) bool {
@@ -231,9 +219,6 @@ func IsMachineTierFile(path string) bool {
 	var candidates []string
 	if p, err := machineConfigPathFn(); err == nil && p != "" {
 		candidates = append(candidates, p)
-	}
-	if legacy := legacyMachineConfigPath(); legacy != "" {
-		candidates = append(candidates, legacy)
 	}
 	for _, c := range candidates {
 		if canonicalFilePath(c) == target {

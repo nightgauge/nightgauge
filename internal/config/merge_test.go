@@ -647,7 +647,10 @@ func TestMachineConfigPathPlatformDefaults(t *testing.T) {
 	}
 }
 
-func TestReadMachineConfigBytesFallsBackToLegacyLinuxPath(t *testing.T) {
+// TestReadMachineConfigBytesNeverReadsTheLegacyLinuxPath (ADR-024 § 15): the
+// loader's fallback to ~/.nightgauge/config.yaml is gone; doctor --fix moves
+// that file.
+func TestReadMachineConfigBytesNeverReadsTheLegacyLinuxPath(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("NIGHTGAUGE_CONFIG_HOME", "")
@@ -661,12 +664,8 @@ func TestReadMachineConfigBytesFallsBackToLegacyLinuxPath(t *testing.T) {
 
 	legacy := filepath.Join(home, ".nightgauge", "config.yaml")
 	writeTierFile(t, legacy, "github_user: legacy-user\n")
-	got, err := readMachineConfigBytes()
-	if err != nil {
-		t.Fatalf("readMachineConfigBytes: %v", err)
-	}
-	if !strings.Contains(string(got), "legacy-user") {
-		t.Fatalf("legacy config not loaded: %s", got)
+	if got, err := readMachineConfigBytes(); !errors.Is(err, errConfigNotFound) {
+		t.Fatalf("readMachineConfigBytes = %q, %v; want errConfigNotFound, the legacy file unread", got, err)
 	}
 	canonical, err := defaultMachineConfigPath()
 	if err != nil {
@@ -678,11 +677,10 @@ func TestReadMachineConfigBytesFallsBackToLegacyLinuxPath(t *testing.T) {
 }
 
 // TestMachineConfigDirIsTheDirectoryLoadReads: MachineConfigDir names the
-// directory whose config.yaml the loader actually reads, the Linux legacy
-// ~/.nightgauge included. A child given NIGHTGAUGE_CONFIG_HOME set to it must
-// read the same machine tier (ADR-022 § 8), and a pin to the canonical
-// directory while only the legacy file exists would lose it, because the
-// loader takes the legacy fallback only when neither override is set.
+// directory whose config.yaml the loader reads. A child given
+// NIGHTGAUGE_CONFIG_HOME set to it must read the same machine tier (ADR-022
+// § 8). A Linux legacy ~/.nightgauge/config.yaml is never that directory
+// (ADR-024 § 15).
 func TestMachineConfigDirIsTheDirectoryLoadReads(t *testing.T) {
 	oldGOOS := machineGOOSFn
 	oldPathFn := machineConfigPathFn
@@ -697,7 +695,7 @@ func TestMachineConfigDirIsTheDirectoryLoadReads(t *testing.T) {
 	}{
 		{name: "darwin default", goos: "darwin", want: ".nightgauge"},
 		{name: "linux canonical present", goos: "linux", files: []string{".config/nightgauge/config.yaml", ".nightgauge/config.yaml"}, want: ".config/nightgauge"},
-		{name: "linux canonical absent, legacy present", goos: "linux", files: []string{".nightgauge/config.yaml"}, want: ".nightgauge"},
+		{name: "linux canonical absent, legacy present", goos: "linux", files: []string{".nightgauge/config.yaml"}, want: ".config/nightgauge"},
 		{name: "linux neither present", goos: "linux", want: ".config/nightgauge"},
 		{name: "override wins over legacy", goos: "linux", files: []string{".nightgauge/config.yaml"}, configHome: "custom", want: "custom"},
 	} {
@@ -1134,25 +1132,6 @@ func TestHomeDirProjectIsMachineTier(t *testing.T) {
 		}
 		if got, _ := cfg.ResolveToken("acme"); got != "literal-home-token" {
 			t.Errorf("ResolveToken = %q", got)
-		}
-	})
-	t.Run("linux legacy through a symlink", func(t *testing.T) {
-		real := t.TempDir()
-		link := filepath.Join(t.TempDir(), "home")
-		if err := os.Symlink(real, link); err != nil {
-			t.Skip("symlinks unavailable")
-		}
-		t.Setenv("HOME", real)
-		t.Setenv("NIGHTGAUGE_CONFIG_HOME", "")
-		t.Setenv("XDG_CONFIG_HOME", "")
-		prevGOOS := machineGOOSFn
-		machineGOOSFn = func() string { return "linux" }
-		prev := machineConfigPathFn
-		machineConfigPathFn = defaultMachineConfigPath
-		t.Cleanup(func() { machineGOOSFn = prevGOOS; machineConfigPathFn = prev })
-		writeProjectYAML(t, real, "owner: acme\ngithub_auth:\n  token: literal-home-token\n")
-		if _, err := LoadMerged(link); err != nil {
-			t.Fatalf("LoadMerged from the legacy machine directory: %v", err)
 		}
 	})
 }

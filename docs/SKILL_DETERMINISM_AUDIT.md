@@ -28,7 +28,7 @@
 
 1. **`nightgauge issue route`** — pipeline-stage, reach 2 (`issue-pickup`, `feature-planning`). Consolidates the label/board-field mapping prose that was the canonical drift case behind #3051 and #3052/#3057. ~150 lines of fixed-table prose currently re-derived in two pipeline phases. **Effort: M. Token-cost savings: high.** ✅ landed in #3062 — proof consumer: `issue-pickup` Step 3.2.5; `feature-planning` Phase 2 migration deferred under the B4 banner.
 2. **`nightgauge scan ecosystem` (+ `scan deps`, `scan debt`)** — user-invocable, reach 4 (`health-check`, `security-audit`, `refactor-rewrite`, `dep-modernize`). The single largest verbatim-duplicated phase across the four codebase-assessment skills (~50–80 lines each). **Effort: M. Token-cost savings: high.**
-3. **`nightgauge pipeline aggregate`** — user-invocable, reach 4 (`pipeline-audit`, `pipeline-health`, `retro`, `continuous-improvement`). Consolidates ~300 lines of inline Python that re-derives the same per-stage metrics from `.nightgauge/pipeline/history/`. **Effort: M. Token-cost savings: high.**
+3. **`nightgauge pipeline aggregate`** — user-invocable, reach 4 (`pipeline-audit`, `pipeline-health`, `retro`, `continuous-improvement`). Consolidates ~300 lines of inline Python that re-derives the same per-stage metrics from `.nightgauge/pipeline/history/` (its pre-ADR-024 location at the audit SHA). **Effort: M. Token-cost savings: high.**
 
 > **Token-cost savings tiers are rough** (low/medium/high based on call frequency × prose length). Real numbers come from outcome data after each follow-up lands and the optimizer measures the delta — see [docs/SELF_IMPROVEMENT_LOOP.md](SELF_IMPROVEMENT_LOOP.md).
 

@@ -487,7 +487,7 @@ func TestOpenCodeCatalogEnvSnapshot(t *testing.T) {
 // outside the runs directory is created or deleted.
 func TestOpenCodeRunRootNamesOnlyARunIdentity(t *testing.T) {
 	home := t.TempDir()
-	sibling := filepath.Join(home, ".nightgauge", "opencode", "x")
+	sibling := filepath.Join(testStateHome(home), "opencode", "x")
 	if err := os.MkdirAll(filepath.Join(sibling, "keep"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -497,13 +497,13 @@ func TestOpenCodeRunRootNamesOnlyARunIdentity(t *testing.T) {
 		"01890a5d-ac96-474b-bcce-b302099a8057", // a UUIDv4
 		testRunID + "/..",
 	} {
-		if _, err := OpenCodeRunRoot(home, id); err == nil {
+		if _, err := OpenCodeRunRoot(testStateHome(home), id); err == nil {
 			t.Errorf("OpenCodeRunRoot(%q) succeeded", id)
 		}
-		if _, _, err := EnsureOpenCodeRunRoot(home, id, envLookup(nil)); err == nil {
+		if _, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, id, envLookup(nil)); err == nil {
 			t.Errorf("EnsureOpenCodeRunRoot(%q) succeeded", id)
 		}
-		if err := RemoveOpenCodeRunRoot(home, id); err == nil {
+		if err := RemoveOpenCodeRunRoot(testStateHome(home), id); err == nil {
 			t.Errorf("RemoveOpenCodeRunRoot(%q) succeeded", id)
 		}
 	}
@@ -513,11 +513,11 @@ func TestOpenCodeRunRootNamesOnlyARunIdentity(t *testing.T) {
 	if _, err := OpenCodeRunRoot("relative/home", testRunID); err == nil {
 		t.Error("OpenCodeRunRoot accepted a relative home directory")
 	}
-	got, err := OpenCodeRunRoot(home, testRunID)
+	got, err := OpenCodeRunRoot(testStateHome(home), testRunID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(home, ".nightgauge", "opencode", "runs", testRunID); got != want {
+	if want := filepath.Join(testStateHome(home), "opencode", "runs", testRunID); got != want {
 		t.Errorf("OpenCodeRunRoot = %q, want %q", got, want)
 	}
 }
@@ -529,14 +529,14 @@ func TestOpenCodeRunRootNamesOnlyARunIdentity(t *testing.T) {
 // written through it.
 func TestEnsureOpenCodeRunRoot(t *testing.T) {
 	home := t.TempDir()
-	root, created, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil))
+	root, created, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !created {
 		t.Error("the first call did not report creating the root")
 	}
-	if want := filepath.Join(OpenCodeRunsDir(home), testRunID); root != want {
+	if want := filepath.Join(OpenCodeRunsDir(testStateHome(home)), testRunID); root != want {
 		t.Errorf("root = %q, want %q", root, want)
 	}
 	for _, dir := range []string{"", "config", "data", "cache", "state", "home"} {
@@ -559,7 +559,7 @@ func TestEnsureOpenCodeRunRoot(t *testing.T) {
 	if err := os.Chmod(filepath.Join(root, "state"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	again, created, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil))
+	again, created, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(nil))
 	if err != nil || again != root || created {
 		t.Fatalf("second call = %q, created=%v, %v; want the same root, reused", again, created, err)
 	}
@@ -572,10 +572,10 @@ func TestEnsureOpenCodeRunRoot(t *testing.T) {
 
 	elsewhere := t.TempDir()
 	const planted = "01890a5d-ac96-774b-bcce-b302099a8058"
-	if err := os.Symlink(elsewhere, filepath.Join(OpenCodeRunsDir(home), planted)); err != nil {
+	if err := os.Symlink(elsewhere, filepath.Join(OpenCodeRunsDir(testStateHome(home)), planted)); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := EnsureOpenCodeRunRoot(home, planted, envLookup(nil)); err == nil {
+	if _, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, planted, envLookup(nil)); err == nil {
 		t.Error("a root that is a symbolic link was accepted")
 	}
 	if entries, _ := os.ReadDir(elsewhere); len(entries) != 0 {
@@ -588,7 +588,7 @@ func TestEnsureOpenCodeRunRoot(t *testing.T) {
 	if err := os.Symlink(elsewhere, filepath.Join(root, "data")); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil)); err == nil {
+	if _, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(nil)); err == nil {
 		t.Error("a data/ that is a symbolic link was accepted")
 	}
 }
@@ -600,7 +600,7 @@ func TestEnsureOpenCodeRunRoot(t *testing.T) {
 // content being read.
 func TestOpenCodeRunStartsWithNoStoredLogin(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME", "GH_CONFIG_DIR", "GOCACHE"} {
 		t.Setenv(k, "")
 	}
@@ -667,7 +667,7 @@ func TestRemoveOpenCodeRunRootNeverFollowsALink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil))
+	root, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,7 +678,7 @@ func TestRemoveOpenCodeRunRootNeverFollowsALink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := RemoveOpenCodeRunRoot(home, testRunID); err != nil {
+	if err := RemoveOpenCodeRunRoot(testStateHome(home), testRunID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(root); !os.IsNotExist(err) {
@@ -689,15 +689,15 @@ func TestRemoveOpenCodeRunRootNeverFollowsALink(t *testing.T) {
 			t.Errorf("deleting the root deleted %s, which a link inside it pointed at: %v", kept, err)
 		}
 	}
-	if err := RemoveOpenCodeRunRoot(home, testRunID); err != nil {
+	if err := RemoveOpenCodeRunRoot(testStateHome(home), testRunID); err != nil {
 		t.Errorf("deleting a root that is already gone = %v; want nil", err)
 	}
 
-	linked := filepath.Join(OpenCodeRunsDir(home), testRunID)
+	linked := filepath.Join(OpenCodeRunsDir(testStateHome(home)), testRunID)
 	if err := os.Symlink(outside, linked); err != nil {
 		t.Fatal(err)
 	}
-	if err := RemoveOpenCodeRunRoot(home, testRunID); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+	if err := RemoveOpenCodeRunRoot(testStateHome(home), testRunID); err == nil || !strings.Contains(err.Error(), "symbolic link") {
 		t.Errorf("deleting a root that is a symbolic link = %v; want a refusal", err)
 	}
 	if _, err := os.Lstat(linked); err != nil {
@@ -716,13 +716,13 @@ func TestRemoveOpenCodeRunRootNeverFollowsALink(t *testing.T) {
 func TestSweepOpenCodeRunRoots(t *testing.T) {
 	home := t.TempDir()
 	now := time.Now()
-	runs := OpenCodeRunsDir(home)
+	runs := OpenCodeRunsDir(testStateHome(home))
 	ids := map[string]time.Duration{
 		"01890a5d-ac96-774b-bcce-000000000001": 8 * 24 * time.Hour, // orphaned
 		"01890a5d-ac96-774b-bcce-000000000002": 24 * time.Hour,     // a paused run's
 	}
 	for id, age := range ids {
-		root, _, err := EnsureOpenCodeRunRoot(home, id, envLookup(nil))
+		root, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, id, envLookup(nil))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -752,7 +752,7 @@ func TestSweepOpenCodeRunRoots(t *testing.T) {
 		_ = os.Chtimes(filepath.Join(runs, s), ancient, ancient)
 	}
 
-	removed, err := SweepOpenCodeRunRoots(home, OpenCodeOrphanMaxAge, now)
+	removed, err := SweepOpenCodeRunRoots(testStateHome(home), OpenCodeOrphanMaxAge, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -850,7 +850,7 @@ func TestOpenCodeIsolationKeepsTheOperatorsGitAndGh(t *testing.T) {
 			write(filepath.Join(ghDir, "config.yml"), "editor: fixture-editor\n")
 			write(filepath.Join(ghDir, "hosts.yml"), "github.com:\n    oauth_token: fixture-token-not-real\n    user: fixture-user\n    git_protocol: https\n")
 
-			root, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(outside))
+			root, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(outside))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -949,7 +949,7 @@ func TestOpenCodeRunRootLinksTheOperatorsXDGConfig(t *testing.T) {
 	write(filepath.Join(operator, ".bunfig.toml"), "[install]\n")
 	write(filepath.Join(operator, "opencode", "opencode.json"), `{"username":"operator"}`)
 
-	root, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil))
+	root, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -977,7 +977,7 @@ func TestOpenCodeRunRootLinksTheOperatorsXDGConfig(t *testing.T) {
 	write(filepath.Join(root, "config", "pnpm", "rc"), "the run's own\n")
 	write(filepath.Join(operator, "pnpm", "rc"), "the operator's\n")
 	write(filepath.Join(operator, "containers", "registries.conf"), "unqualified-search-registries = []\n")
-	if _, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil)); err != nil {
+	if _, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(nil)); err != nil {
 		t.Fatalf("the next stage refused a root holding an entry the run made itself: %v", err)
 	}
 	linked("containers", filepath.Join(operator, "containers"))
@@ -988,14 +988,14 @@ func TestOpenCodeRunRootLinksTheOperatorsXDGConfig(t *testing.T) {
 	// The operator's XDG config directory moved.
 	moved := filepath.Join(home, "xdg-elsewhere")
 	write(filepath.Join(moved, "uv", "uv.toml"), index)
-	if _, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(map[string]string{"XDG_CONFIG_HOME": moved})); err != nil {
+	if _, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(map[string]string{"XDG_CONFIG_HOME": moved})); err != nil {
 		t.Fatal(err)
 	}
 	linked("uv", filepath.Join(moved, "uv"))
 
 	spelled := t.TempDir()
 	write(filepath.Join(spelled, ".config", "OpenCode", "opencode.json"), `{"username":"operator"}`)
-	spelledRoot, _, err := EnsureOpenCodeRunRoot(spelled, testRunID, envLookup(nil))
+	spelledRoot, _, err := EnsureOpenCodeRunRoot(testStateHome(spelled), spelled, testRunID, envLookup(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1032,7 +1032,7 @@ func TestOpenCodeRunRootLinksTheOperatorsHome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	root, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil))
+	root, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1053,7 +1053,7 @@ func TestOpenCodeRunRootLinksTheOperatorsHome(t *testing.T) {
 	// then made one.
 	write(filepath.Join(root, "home", ".npmrc"), "the run's own\n")
 	write(filepath.Join(home, ".npmrc"), "the operator's\n")
-	if _, _, err := EnsureOpenCodeRunRoot(home, testRunID, envLookup(nil)); err != nil {
+	if _, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(nil)); err != nil {
 		t.Fatalf("the next stage refused a root holding an entry the run made itself: %v", err)
 	}
 	if b, err := os.ReadFile(filepath.Join(root, "home", ".npmrc")); err != nil || string(b) != "the run's own\n" {
@@ -1156,7 +1156,7 @@ func TestOpenCodeRefusesManagedOpenCodeConfig(t *testing.T) {
 // race.)
 func TestOpenCodeIsolationRefusalFollowsTheBlockTheRunIsBuiltFrom(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR", "GOCACHE"} {
 		t.Setenv(k, "")
 	}
@@ -1219,12 +1219,12 @@ func captureAdapterStderr(t *testing.T, fn func()) string {
 // a root sweeps an orphan a crashed run left behind.
 func TestOpenCodePrepareRunRoot(t *testing.T) {
 	home := t.TempDir()
-	t.Setenv("HOME", home)
+	setTestHome(t, home)
 	for _, k := range []string{"XDG_CONFIG_HOME", "XDG_CACHE_HOME", "GH_CONFIG_DIR", "GOCACHE"} {
 		t.Setenv(k, "")
 	}
 	const orphan = "01890a5d-ac96-774b-bcce-0000000000ff"
-	orphanRoot, _, err := EnsureOpenCodeRunRoot(home, orphan, envLookup(nil))
+	orphanRoot, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, orphan, envLookup(nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1244,7 +1244,7 @@ func TestOpenCodePrepareRunRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(home, ".nightgauge", "opencode", "runs", testRunID); first.Dir != want {
+	if want := filepath.Join(testStateHome(home), "opencode", "runs", testRunID); first.Dir != want {
 		t.Errorf("Dir = %q, want %q", first.Dir, want)
 	}
 	if first.Env["XDG_DATA_HOME"] != filepath.Join(first.Dir, "data") || first.Env["NIGHTGAUGE_CONFIG_HOME"] != req.MachineConfigDir {
