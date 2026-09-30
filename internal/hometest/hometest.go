@@ -55,6 +55,7 @@ var RealHome string
 // explicitly around the run.
 func Isolate() (cleanup func()) {
 	RealHome, _ = os.UserHomeDir()
+	pinGoToolchainDirs(RealHome)
 	dir, err := os.MkdirTemp("", "nightgauge-home-")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "hometest: could not create an isolated HOME: %v\n", err)
@@ -90,6 +91,21 @@ func Isolate() (cleanup func()) {
 	_ = os.Unsetenv("NIGHTGAUGE_DAEMON_SOCKET")
 	Home = dir
 	return func() { _ = os.RemoveAll(dir); _ = os.RemoveAll(runDir) }
+}
+
+// pinGoToolchainDirs keeps a `go` child of the test on the operator's build
+// and module caches: both default to paths under HOME, and a fresh HOME would
+// make every `go build` a test runs start cold (#2311 moved HOME isolation
+// into more packages). A value the environment already sets is kept.
+func pinGoToolchainDirs(realHome string) {
+	if os.Getenv("GOCACHE") == "" {
+		if cache, err := os.UserCacheDir(); err == nil {
+			_ = os.Setenv("GOCACHE", filepath.Join(cache, "go-build"))
+		}
+	}
+	if os.Getenv("GOPATH") == "" && realHome != "" {
+		_ = os.Setenv("GOPATH", filepath.Join(realHome, "go"))
+	}
 }
 
 // RealPath is a path inside the home Isolate replaced, for an assertion that

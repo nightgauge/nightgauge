@@ -33,6 +33,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
 	"github.com/nightgauge/nightgauge/internal/doctor"
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/hometest"
 )
 
 // binaryPath is set by TestMain after building the binary.
@@ -89,14 +90,6 @@ func TestMain(m *testing.M) {
 	}
 	defer os.RemoveAll(machineConfigHome)
 
-	// Pipeline worktrees default to STATE/worktrees/<repo-key> (#2038): keep
-	// every worktree a handler provisions out of the real state root.
-	stateHome, err := os.MkdirTemp("", "nightgauge-ipc-state-*")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "TempDir (state isolation):", err)
-		os.Exit(1)
-	}
-	_ = os.Setenv("NIGHTGAUGE_STATE_HOME", stateHome)
 	os.Setenv("NIGHTGAUGE_CONFIG_HOME", machineConfigHome)
 
 	// Point every spawned `serve` subprocess's $HOME, and its machine-state
@@ -104,22 +97,16 @@ func TestMain(m *testing.M) {
 	// directory instead of the real developer/CI account's. The daemon's
 	// GitHub rate-limit gate persists to gh.DefaultSharedTrackerPath(), which
 	// resolves <STATE>/rate-limit.json (internal/github/ratelimit_tracker.go),
-	// and every
-	// harness in this package inherits os.Environ() — including HOME —
-	// into the subprocess env. Without this, a machine whose real GraphQL
-	// quota is exhausted makes "verb is registered" contract subtests read
-	// that real, global, mutable file and gate on it: the operator's quota
-	// state, not the tree under test, decides whether the suite is red.
-	// Issue #1348.
-	ipcTestHomeDir, err := os.MkdirTemp("", "nightgauge-ipc-home-*")
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "TempDir (HOME isolation):", err)
-		os.Exit(1)
-	}
-	defer os.RemoveAll(ipcTestHomeDir)
-	os.Setenv("HOME", ipcTestHomeDir)
-	os.Setenv("NIGHTGAUGE_STATE_HOME", filepath.Join(ipcTestHomeDir, "state"))
-	ipcTestHome = ipcTestHomeDir
+	// and every harness in this package inherits os.Environ() — including
+	// HOME — into the subprocess env. Without this, a machine whose real
+	// GraphQL quota is exhausted makes "verb is registered" contract subtests
+	// read that real, global, mutable file and gate on it: the operator's
+	// quota state, not the tree under test, decides whether the suite is red.
+	// Issue #1348. Pipeline worktrees default to STATE/worktrees/<repo-key>
+	// (#2038), so this also keeps every worktree a handler provisions out of
+	// the real state root; HOME and STATE move together (#2311).
+	cleanupHome := hometest.Isolate()
+	ipcTestHome = hometest.Home
 
 	// Disable the rate-limit gate's wait-for-reset behavior
 	// (gh.WithRateLimitWait, internal/github/client.go) for every `serve`
@@ -145,7 +132,7 @@ func TestMain(m *testing.M) {
 	})
 	code := m.Run()
 	restoreDoctor()
-	_ = os.RemoveAll(stateHome)
+	cleanupHome()
 	os.Exit(code)
 }
 

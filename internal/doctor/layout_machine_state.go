@@ -139,19 +139,31 @@ type machineStateMigrator struct {
 	// configDir is the machine-config directory the Linux legacy
 	// config.yaml moves to; nil when that row does not apply.
 	configDir func() (string, error)
-	entries   []machineStateEntry
+	// refusal says why legacy state must not move into STATE, or "" when
+	// it may (layout.LegacyMoveRefusal); nil refuses nothing.
+	refusal func(state string) string
+	// override names the environment variable STATE comes from, or ""
+	// (layout.StateOverride); nil is no override.
+	override func() string
+	// defaultState is STATE with no override (layout.DefaultStateHomePath):
+	// a machine-id there is compared too; nil skips that comparison.
+	defaultState func() (string, error)
+	entries      []machineStateEntry
 }
 
 // newMachineStateMigrator is the production machine-state migrator. A
 // variable so a test drives the check without the machine's state.
 var newMachineStateMigrator = func() *machineStateMigrator {
 	return &machineStateMigrator{
-		legacyRoot: layout.LegacyStatePath(""),
-		statePath:  layout.StateHomePath,
-		stateHome:  layout.StateHome,
-		daemonLive: legacyServeLeaseLive,
-		configDir:  legacyConfigTarget(runtime.GOOS, os.Getenv),
-		entries:    machineStateEntries(),
+		legacyRoot:   layout.LegacyStatePath(""),
+		statePath:    layout.StateHomePath,
+		stateHome:    layout.StateHome,
+		daemonLive:   legacyServeLeaseLive,
+		configDir:    legacyConfigTarget(runtime.GOOS, os.Getenv),
+		refusal:      layout.LegacyMoveRefusal,
+		override:     layout.StateOverride,
+		defaultState: layout.DefaultStateHomePath,
+		entries:      machineStateEntries(),
 	}
 }
 
@@ -280,6 +292,10 @@ func (m *machineStateMigrator) scan(state string) (machinePlan, error) {
 		return plan, fmt.Errorf("resolve %s: %w", plan.State, err)
 	}
 
+	refused := ""
+	if m.refusal != nil {
+		refused = m.refusal(plan.State)
+	}
 	held, live := "", false
 	if m.daemonLive != nil {
 		held, live = m.daemonLive(filepath.Join(m.legacyRoot, "serve"))
@@ -320,6 +336,8 @@ func (m *machineStateMigrator) scan(state string) (machinePlan, error) {
 			continue
 		case err != nil:
 			it.Refused = fmt.Sprintf("cannot read %s: %v", it.Legacy, err)
+		case refused != "":
+			it.Refused = refused
 		case linfo.Mode()&fs.ModeSymlink != 0:
 			it.Refused = fmt.Sprintf("%s is a symlink; the migration moves only a real file or directory, so a link cannot aim it elsewhere", it.Legacy)
 		case e.Dir && !linfo.IsDir():
@@ -340,11 +358,48 @@ func (m *machineStateMigrator) scan(state string) (machinePlan, error) {
 				if err := scanMachineFiles(&it); err != nil {
 					return plan, err
 				}
+				if e.Name == machineIDName {
+					m.checkDefaultMachineID(plan.State, &it)
+				}
 			}
 		}
 		plan.Items = append(plan.Items, it)
 	}
 	return plan, nil
+}
+
+// checkDefaultMachineID adds a conflict when STATE is not the default
+// machine-state directory and the default one holds a machine-id that
+// differs from the legacy one: that id is the one every process without the
+// override uses, so moving the legacy id elsewhere would hide the difference
+// (#2311). Nothing is moved while it stands.
+func (m *machineStateMigrator) checkDefaultMachineID(state string, it *machineItem) {
+	if m.defaultState == nil || len(it.Files) == 0 {
+		return
+	}
+	def, err := m.defaultState()
+	if err != nil || def == "" || filepath.Clean(def) == filepath.Clean(state) {
+		return
+	}
+	other := filepath.Join(def, machineIDName)
+	theirs, err := os.ReadFile(other)
+	if err != nil {
+		return
+	}
+	ours, err := os.ReadFile(it.Legacy)
+	if err != nil || string(ours) == string(theirs) {
+		return
+	}
+	it.Files = nil
+	it.Conflicts = append(it.Conflicts, layoutConflict{Class: it.Entry.Class, Legacy: it.Legacy, Target: other})
+}
+
+// overrideName is the environment variable STATE comes from, or "".
+func (m *machineStateMigrator) overrideName() string {
+	if m.override == nil {
+		return ""
+	}
+	return m.override()
 }
 
 // hasLegacyData reports whether any row has something at the legacy root, by
@@ -570,6 +625,13 @@ func (m *machineStateMigrator) moveFiles(root string, it machineItem, rep *Layou
 			rep.Errors = append(rep.Errors, err.Error())
 			continue
 		}
+		if it.Entry.Name == machineIDName && f.Link == "" {
+			// The legacy id is never removed without a backup (#2311).
+			if err := backupLegacyMachineID(f.Src); err != nil {
+				rep.Errors = append(rep.Errors, err.Error())
+				continue
+			}
+		}
 		var err error
 		switch {
 		case f.Done:
@@ -604,6 +666,17 @@ func (m *machineStateMigrator) moveFiles(root string, it machineItem, rep *Layou
 	for i := len(it.Dirs) - 1; i >= 0; i-- {
 		removeEmptyDir(it.Dirs[i])
 	}
+}
+
+// backupLegacyMachineID saves the legacy machine-id beside itself as
+// machine-id.migrated-<UTC time> before the move removes it.
+func backupLegacyMachineID(path string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("back up %s: %w", path, err)
+	}
+	_, err = layout.BackupLegacyFile(path, data, time.Now())
+	return err
 }
 
 // --- the automatic run ----------------------------------------------------------
@@ -649,7 +722,15 @@ func autoMigrateMachineState(ctx context.Context, m *machineStateMigrator, now t
 	if info, err := os.Lstat(attempt); err == nil && now.Sub(info.ModTime()) < autoMigrateRetry {
 		return LayoutReport{}, false
 	}
-	rep = m.Migrate(ctx)
+	if env := m.overrideName(); env != "" {
+		// An override is often a sandbox (a test, a scratch run) with the
+		// operator's real home: moving the state into it is how #2311 lost a
+		// machine's state. Report only; `nightgauge doctor --fix` decides.
+		rep = LayoutReport{Root: m.legacyRoot, NewRoot: filepath.Clean(state),
+			Blocked: fmt.Sprintf("the machine-state directory comes from %s, so the automatic move does not run", env)}
+	} else {
+		rep = m.Migrate(ctx)
+	}
 	if rep.Version >= MachineStateLayoutVersion {
 		_ = os.Remove(attempt)
 	} else if info, err := os.Lstat(state); err == nil && info.IsDir() {

@@ -712,6 +712,15 @@ layout` prints it as `state`). `migrate` moves them under `.migrate.lock` in tha
 directory with the mechanics above and writes its own `layout-version` marker:
 
 - `machine-id` is moved byte for byte, ends mode 0600 and is never regenerated.
+  The old copy is saved as `~/.nightgauge/machine-id.migrated-<UTC time>` before
+  it is removed. A `machine-id` in the default machine-state directory that
+  differs from the old one is a conflict (NGD045) even when the machine-state
+  directory in use is another one.
+- Nothing moves, and nothing is deleted, into a machine-state directory that is
+  not where this user's state belongs (NGD046, with the reason): one set by
+  `NIGHTGAUGE_STATE_HOME` or `XDG_STATE_HOME` while the default machine-state
+  directory for this home exists, or one under the temporary directory when
+  `~/.nightgauge` is not. Unset the override to migrate.
 - A hint found at both locations (the rate-limit files, the telemetry notice, the
   usage readings, the last-dispatch record, the endpoint slots, a serve claim)
   keeps the copy in the state directory and deletes the old one.
@@ -727,7 +736,8 @@ directory with the mechanics above and writes its own `layout-version` marker:
   config and never moves; `tools/` never moves.
 
 The same machine-state migration runs automatically at CLI start, under the
-same never-fail rule.
+same never-fail rule. With `NIGHTGAUGE_STATE_HOME` or `XDG_STATE_HOME` set, the
+automatic run only reports what is left; `nightgauge doctor --fix` moves it.
 
 The finding never changes the exit code of plain `nightgauge doctor`.
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -31,6 +32,19 @@ var ErrNoStateHome = errors.New("no usable machine-state directory")
 // ErrStateMoveConflict reports that a legacy machine-state file and its new
 // location both exist with different contents. Nothing is overwritten.
 var ErrStateMoveConflict = errors.New("machine-state file exists in both the legacy and the new location")
+
+// ErrStateMoveRefused reports that legacy machine state was left in place
+// because the machine-state root it would move into is not one this user's
+// state belongs in (LegacyMoveRefusal). Nothing is moved or deleted.
+var ErrStateMoveRefused = errors.New("legacy machine state not moved")
+
+// MachineIDName is the machine-state file that identifies this device. Its
+// legacy copy is never removed without a backup (BackupLegacyFile).
+const MachineIDName = "machine-id"
+
+// migratedBackupInfix names the backup BackupLegacyFile leaves beside a
+// legacy file it is about to remove: <name>.migrated-<UTC time>.
+const migratedBackupInfix = ".migrated-"
 
 // StateHome returns the machine-state root, creating it with mode 0700 when
 // it is absent (ADR-024 § 1, § 8, § 17). Resolution, highest first:
@@ -119,6 +133,130 @@ func StateHomePathFrom(goos, home string, lookup func(string) (string, bool)) (s
 	}
 }
 
+// StateOverride names the environment variable the machine-state root comes
+// from (NIGHTGAUGE_STATE_HOME, or XDG_STATE_HOME when it is absolute), or ""
+// when the platform default applies.
+func StateOverride() string {
+	if os.Getenv(EnvStateHome) != "" {
+		return EnvStateHome
+	}
+	if xdg := os.Getenv("XDG_STATE_HOME"); xdg != "" && filepath.IsAbs(xdg) {
+		return "XDG_STATE_HOME"
+	}
+	return ""
+}
+
+// DefaultStateHomePath is the machine-state root this user's home resolves to
+// with neither override set: where a process without the override, such as
+// the operator's own shell or editor, keeps its state. It creates nothing.
+func DefaultStateHomePath() (string, error) {
+	home := ""
+	if h, err := os.UserHomeDir(); err == nil {
+		home = h
+	}
+	return StateHomePathFrom(runtime.GOOS, home, func(k string) (string, bool) {
+		if k == EnvStateHome || k == "XDG_STATE_HOME" {
+			return "", false
+		}
+		return os.LookupEnv(k)
+	})
+}
+
+// LegacyMoveRefusal reports why legacy machine state ($HOME/.nightgauge) must
+// not move into root, or "" when it may. Two cases are refused (#2311):
+//
+//   - root comes from an override while the default root for this home
+//     exists: the override is a sandbox (a test, a scratch run), and the
+//     state it would take belongs to the processes that use the default;
+//   - root lies under the temporary directory and the legacy root does not:
+//     a test's STATE, deleted when the test ends, with the real state in it.
+//
+// A process whose HOME and STATE are both temporary (an isolated test) is
+// not refused, and neither is an operator who set an override on a machine
+// with no default root.
+func LegacyMoveRefusal(root string) string {
+	def, _ := DefaultStateHomePath()
+	return legacyMoveRefusal(root, LegacyStatePath(""), StateOverride(), def, tempRoots())
+}
+
+func legacyMoveRefusal(root, legacy, override, def string, temps []string) string {
+	if root == "" || legacy == "" {
+		return ""
+	}
+	resolvedRoot, err := EvalExisting(root)
+	if err != nil {
+		resolvedRoot = filepath.Clean(root)
+	}
+	if override != "" && def != "" {
+		resolvedDef, err := EvalExisting(def)
+		if err != nil {
+			resolvedDef = filepath.Clean(def)
+		}
+		if info, err := os.Stat(def); err == nil && info.IsDir() && resolvedDef != resolvedRoot {
+			return fmt.Sprintf("the machine-state directory %s comes from %s, and the default one, %s, exists: "+
+				"the state in %s belongs to the processes that use the default, so it is not moved into the override. "+
+				"Unset %s to migrate it", root, override, def, legacy, override)
+		}
+	}
+	resolvedLegacy, err := EvalExisting(legacy)
+	if err != nil {
+		resolvedLegacy = filepath.Clean(legacy)
+	}
+	for _, tmp := range temps {
+		if underDir(tmp, resolvedRoot) && !underDir(tmp, resolvedLegacy) {
+			return fmt.Sprintf("the machine-state directory %s is under the temporary directory %s and %s is not, "+
+				"so moving the state there would lose it when the temporary directory is cleaned", root, tmp, legacy)
+		}
+	}
+	return ""
+}
+
+// tempRoots is the resolved temporary directories a sandboxed STATE lives in.
+func tempRoots() []string {
+	cands := []string{os.TempDir()}
+	if runtime.GOOS != "windows" {
+		cands = append(cands, "/tmp")
+	}
+	var out []string
+	for _, c := range cands {
+		if c == "" {
+			continue
+		}
+		if r, err := EvalExisting(c); err == nil {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// underDir reports whether child is parent or lies under it.
+func underDir(parent, child string) bool {
+	rel, err := filepath.Rel(parent, child)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
+}
+
+// BackupLegacyFile saves data, the content of the legacy file at legacy that
+// is about to be removed, as <legacy>.migrated-<UTC time> beside it (mode
+// 0600, never overwriting), and returns the backup's path. The legacy
+// machine-id is never removed without one (#2311).
+func BackupLegacyFile(legacy string, data []byte, now time.Time) (string, error) {
+	base := legacy + migratedBackupInfix + now.UTC().Format("20060102T150405Z")
+	path := base
+	for i := 1; ; i++ {
+		won, err := installExclusive(path, data, movedFileMode)
+		if err != nil {
+			return "", fmt.Errorf("back up %s: %w", legacy, err)
+		}
+		if won {
+			return path, nil
+		}
+		path = fmt.Sprintf("%s-%d", base, i)
+	}
+}
+
 // verifiedStateRoots caches roots this process has already created and
 // probed, so the write probe runs once per root per process.
 var verifiedStateRoots sync.Map
@@ -192,7 +330,7 @@ func StateHintFile(name string) (string, error) {
 		return "", err
 	}
 	target := filepath.Join(root, name)
-	if err := MoveLegacyStateFile(name, root); err != nil {
+	if err := MoveLegacyStateFile(name, root); err != nil && !errors.Is(err, ErrStateMoveRefused) {
 		if legacy := LegacyStatePath(name); legacy != "" {
 			if info, lerr := os.Lstat(legacy); lerr == nil && info.Mode().IsRegular() {
 				_ = os.Remove(legacy)
@@ -252,7 +390,11 @@ func conflictError(legacy, target, why string) error {
 //   - a target that exists and differs is never overwritten: the call returns
 //     ErrStateMoveConflict naming both paths and the manual remedy;
 //   - a legacy symlink or non-regular file is never followed or moved; it is
-//     reported as a conflict.
+//     reported as a conflict;
+//   - nothing moves into a root LegacyMoveRefusal refuses (an override or a
+//     temporary directory the state does not belong in): the call returns
+//     ErrStateMoveRefused and the legacy file stays;
+//   - the legacy machine-id is backed up beside itself before it is removed.
 //
 // Nothing to move (no home, no legacy file, or the legacy path is the target)
 // returns nil.
@@ -260,6 +402,9 @@ func MoveLegacyStateFile(name, root string) error {
 	legacy, target, src, err := readLegacyForTarget(name, root)
 	if err != nil || src == nil {
 		return err
+	}
+	if why := LegacyMoveRefusal(root); why != "" {
+		return fmt.Errorf("%w: %s: %s", ErrStateMoveRefused, legacy, why)
 	}
 	if _, err := os.Lstat(target); err == nil {
 		return finishOrConflict(legacy, target, src)
@@ -274,6 +419,9 @@ func MoveLegacyStateFile(name, root string) error {
 	if !won {
 		// Another process installed the target first.
 		return finishOrConflict(legacy, target, src)
+	}
+	if err := backupBeforeRemove(legacy, src); err != nil {
+		return err
 	}
 	if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("move %s: remove legacy file after copying it: %w", legacy, err)
@@ -330,10 +478,23 @@ func finishOrConflict(legacy, target string, src []byte) error {
 	if !bytes.Equal(dst, src) {
 		return conflictError(legacy, target, "their contents differ")
 	}
+	if err := backupBeforeRemove(legacy, src); err != nil {
+		return err
+	}
 	if err := os.Remove(legacy); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("move %s: remove legacy file: %w", legacy, err)
 	}
 	return nil
+}
+
+// backupBeforeRemove backs up a legacy machine-id before the move removes it;
+// any other file needs none.
+func backupBeforeRemove(legacy string, src []byte) error {
+	if filepath.Base(legacy) != MachineIDName {
+		return nil
+	}
+	_, err := BackupLegacyFile(legacy, src, time.Now())
+	return err
 }
 
 // removeStaleStateTemps deletes temporary copies of name left in root by a

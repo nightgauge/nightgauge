@@ -32,6 +32,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
 )
@@ -259,7 +260,7 @@ func machineIDConflictFinding(c layoutConflict, why string, ev func(map[string]s
 		"The platform knows this device by its id, and a new id is a new device, so neither is regenerated and "+
 		"nothing is chosen for you. %s",
 		c.Target, stateID, stamp(stateAt), c.Legacy, legacyID, stamp(legacyAt), inUse,
-		keepState, keepLegacy, machineIDBackupPrefix, why)
+		keepState, keepLegacy, machineIDBackupPrefix, sentence(why))
 	return newFinding(checkLayout, codeLayoutConflict, SeverityHousekeeping,
 		fmt.Sprintf("layout-conflict: a machine-id file exists at both %s and %s", c.Legacy, c.Target),
 		cause,
@@ -284,4 +285,13 @@ func machineIDConflictFinding(c layoutConflict, why string, ev func(map[string]s
 			fmt.Sprintf("Run `%s` to keep %s", keepLegacy, legacyID),
 			fmt.Sprintf("The id this build used, %s, is saved as %s<time> and %s is cleared", stateID, filepath.Join(filepath.Dir(c.Target), machineIDBackupPrefix), c.Legacy),
 			"Re-run `nightgauge doctor --fix`"))
+}
+
+// sentence capitalises s's first letter, for a clause that starts a sentence.
+func sentence(s string) string {
+	r, n := utf8.DecodeRuneInString(s)
+	if n == 0 {
+		return s
+	}
+	return string(unicode.ToUpper(r)) + s[n:]
 }
