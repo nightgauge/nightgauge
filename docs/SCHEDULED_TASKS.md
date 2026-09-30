@@ -92,7 +92,13 @@ To run the full release-watch skill with detailed analysis:
 
 #### Last-Seen State File
 
-Location: `.nightgauge/release-watch/last-seen-claude-code.json`
+Location: this checkout's `release-watch/last-seen-claude-code.json`, inside
+the git directory (ADR-024 § 7):
+
+```bash
+nightgauge layout path checkout release-watch/last-seen-claude-code.json
+# → /path/to/repo/.git/nightgauge-worktree/release-watch/last-seen-claude-code.json
+```
 
 ```json
 {
@@ -103,17 +109,21 @@ Location: `.nightgauge/release-watch/last-seen-claude-code.json`
 }
 ```
 
-**Important:** This file is **tracked in git** so all team members see the same state.
+**Important:** This file is never committed. The scheduled workflow publishes
+it to the `discovery-state` branch, and `scripts/discovery-state-sync.sh` copies
+it into a checkout, so every team member sees the same state (see
+[SCHEDULED_DISCOVERY.md](SCHEDULED_DISCOVERY.md)).
 
 #### Reports Directory
 
-Location: `.nightgauge/release-watch/reports/`
+Location: this checkout's `release-watch/reports/`
+(`nightgauge layout path checkout release-watch/reports`)
 
-Transient files created during full assessment (not committed):
+Transient files created during full assessment, never committed and never
+published to the state branch:
 
 - `assessment-TIMESTAMP.md` — Detailed markdown report
 - `assessment-TIMESTAMP.json` — Structured assessment data
-- `.gitignore` entry: `release-watch/reports/`
 
 ### Workflow: New Release Detection
 
@@ -133,7 +143,7 @@ Transient files created during full assessment (not committed):
                             ▼
 ┌─────────────────────────────────────────────────────────────┐
 │    Step 2: Compare with Last-Seen Version                   │
-│    - Read: .nightgauge/release-watch/last-seen-claude-code.json    │
+│    - Read: checkout release-watch/last-seen-<provider>.json │
 │    - Match: latest_version == last_seen_version?            │
 └─────────────────────────────────────────────────────────────┘
                             │
@@ -152,10 +162,10 @@ Transient files created during full assessment (not committed):
                     │
                     ▼
         ┌───────────────────────────────────────────┐
-        │ Step 4: Update last-seen.json             │
+        │ Step 4: Update last-seen-<provider>.json  │
         │ - Store detected version                  │
         │ - Store detection timestamp               │
-        │ - Commit to git                           │
+        │ - Publish to the discovery-state branch   │
         └───────────────────────────────────────────┘
 ```
 
@@ -166,7 +176,8 @@ Transient files created during full assessment (not committed):
 1. **Last detection time:**
 
    ```bash
-   jq '.detected_at' .nightgauge/release-watch/last-seen-claude-code.json
+   scripts/discovery-state-sync.sh
+   jq '.detected_at' "$(nightgauge layout path checkout release-watch/last-seen-claude-code.json)"
    ```
 
 2. **View GitHub Actions runs:**
@@ -205,15 +216,18 @@ set -e
 echo "=== Release Watchdog Health Check ==="
 echo ""
 
+# This checkout's copy of the state (run scripts/discovery-state-sync.sh first)
+STATE_FILE="$(nightgauge layout path checkout release-watch/last-seen-claude-code.json)"
+
 # Check if state file exists
-if [ ! -f ".nightgauge/release-watch/last-seen-claude-code.json" ]; then
+if [ ! -f "$STATE_FILE" ]; then
   echo "ERROR: State file not found — watchdog may not have run yet"
   exit 1
 fi
 
 # Get last detection time
-LAST_DETECTED=$(jq -r '.detected_at' .nightgauge/release-watch/last-seen-claude-code.json)
-LAST_VERSION=$(jq -r '.version' .nightgauge/release-watch/last-seen-claude-code.json)
+LAST_DETECTED=$(jq -r '.detected_at' "$STATE_FILE")
+LAST_VERSION=$(jq -r '.version' "$STATE_FILE")
 
 echo "Last detection: $LAST_DETECTED"
 echo "Last version: $LAST_VERSION"
@@ -269,8 +283,6 @@ release_watch:
   relevance_threshold: 70
   notification_channel: github_issue # or: slack, email (future)
   stale_threshold_hours: 48
-  state_file: .nightgauge/release-watch/last-seen-claude-code.json
-  reports_dir: .nightgauge/release-watch/reports
 ```
 
 ---
@@ -351,16 +363,23 @@ The watchdog checks for existing issues before creating new ones. If duplicates 
 
 ### State File Out of Sync
 
-If `.nightgauge/release-watch/last-seen-claude-code.json` is out of sync with actual releases:
+If the checkout's `release-watch/last-seen-claude-code.json` is out of sync with
+actual releases, re-sync it from the state branch first:
 
 ```bash
-# Reset to current latest release
-gh api repos/anthropics/claude-code/releases/latest --jq '.tag_name' | \
-  xargs -I {} bash -c 'echo "{\"version\":\"'{}'\",\"detected_at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"detection_source\":\"manual-reset\",\"full_tag\":\"{}\"}" > .nightgauge/release-watch/last-seen-claude-code.json'
+scripts/discovery-state-sync.sh
+```
 
-git add .nightgauge/release-watch/last-seen-claude-code.json
-git commit -m "chore: reset release-watch state"
-git push
+If the published state itself is wrong, dispatch the workflow with an explicit
+starting version (`gh workflow run release-watchdog.yml -f since=<version>`);
+the next run republishes the file. To reset only your local copy:
+
+```bash
+TAG=$(gh api repos/anthropics/claude-code/releases/latest --jq '.tag_name')
+jq -n --arg tag "$TAG" --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{version: ($tag | ltrimstr("v")), detected_at: $at,
+    detection_source: "manual-reset", full_tag: $tag}' |
+  nightgauge layout write checkout release-watch/last-seen-claude-code.json
 ```
 
 ### Full Assessment Not Running
@@ -444,10 +463,11 @@ For complete focus mode documentation, see [docs/FOCUS_MODE.md](FOCUS_MODE.md).
 
 ### State Management
 
-1. **Commit last-seen.json to git:** Keep team in sync
+1. **Sync, don't commit, last-seen state:** `scripts/discovery-state-sync.sh`
+   keeps every checkout in step with the `discovery-state` branch
 2. **Review state periodically:** Check for stale detections
 3. **Don't manually edit timestamps:** Let the system manage state
-4. **Archive old reports:** Move `.nightgauge/release-watch/reports/` periodically
+4. **Archive old reports:** Move the checkout's `release-watch/reports/` periodically
 
 ### Notifications
 

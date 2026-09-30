@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
@@ -31,7 +33,7 @@ func TestScenario_DiagnoseFixVerify(t *testing.T) {
 	r := newLeakRepo(t) // isolates HOME and the machine-state root
 	state := os.Getenv("NIGHTGAUGE_STATE_HOME")
 	// Worktrees nest inside the checkout here (production keeps them beside
-	// it) and the model lands under .nightgauge/; neither dirties the tree.
+	// it) and must not dirty the tree; the model lands in the git dir.
 	r.write(".git/info/exclude", ".worktrees/\n.nightgauge/\n")
 
 	// Token-shaped fakes, assembled so no scanner reads them as real.
@@ -55,7 +57,7 @@ func TestScenario_DiagnoseFixVerify(t *testing.T) {
 	t.Setenv("GH_TOKEN", patToken)
 	t.Setenv("GITHUB_TOKEN", patToken)
 	// 4. No complexity model: none is written.
-	model := filepath.Join(r.dir, ".nightgauge", "complexity-model.yaml")
+	model := layouttest.CheckoutPath(t, r.dir, layout.CheckoutComplexityModel)
 
 	fx := hygieneFixer(t, r.dir, verbDeps{}, "worktree_leaks", "pipeline_stashes", "complexity_model")
 	ctx := context.Background()

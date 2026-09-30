@@ -182,9 +182,10 @@ block:
   graduate according to [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md).
 - Private execution handoffs live in `nightgauge-internal/runbooks/handoffs/`.
   Verify their state against the repository before relying on it.
-- `.nightgauge/session-handoff.md` and
-  `.nightgauge/backlog-orchestrator-prompt.md` are gitignored per-machine
-  runtime state, not handoffs; their state blocks are routinely stale.
+- This checkout's `session-handoff.md` (inside the git directory,
+  `nightgauge layout path checkout session-handoff.md`) and the gitignored
+  `.nightgauge/backlog-orchestrator-prompt.md` are per-machine runtime state,
+  not handoffs; their state blocks are routinely stale.
 
 ## Session discipline
 

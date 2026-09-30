@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -54,8 +55,11 @@ func outcomeInitCmd() *cobra.Command {
 	var workdir string
 
 	cmd := &cobra.Command{
-		Use:          "init",
-		Short:        "Initialize the canonical complexity model if it is missing",
+		Use:   "init",
+		Short: "Initialize the canonical complexity model if it is missing",
+		Long: "Write the deterministic baseline complexity model to " +
+			layout.CheckoutDisplay(layout.CheckoutComplexityModel) +
+			" when it is missing. The model is per-checkout learned state in the git dir; a linked worktree has its own.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Example: `  nightgauge outcome init

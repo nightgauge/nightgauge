@@ -2772,8 +2772,9 @@ There is no implicit basename fallback. To allow a file at any depth, use a
 - Deleted files are never considered drift — only `files_changed.created` and
   `files_changed.modified` from `dev-{N}.json` are evaluated.
 - Drift events emit a `scope_drift_detected` pipeline event (best-effort —
-  silent when no platform is configured) and append to
-  `.nightgauge/audit/scope-drift-stats.json` for offline counter tuning.
+  silent when no platform is configured) and append to this checkout's
+  `scope-drift-stats.json` (`nightgauge layout path checkout scope-drift-stats.json`)
+  for offline counter tuning.
 
 **Failure classification**: Strict-mode rejections exit `1` with a
 human-readable `Scope drift gate: BLOCKED` banner on stderr. The pr-create
@@ -5089,7 +5090,9 @@ new projects to benefit from existing calibration data.
 
 ### saved-queries
 
-**File**: `.nightgauge/saved-queries.yaml`
+**File**: this checkout's `saved-queries.yaml`
+(`nightgauge layout path checkout saved-queries.yaml`; `.git/nightgauge-worktree/`
+in the main checkout, ADR-024 § 7)
 
 Stores saved queries for quick access from VSCode and CLI. Queries can be
 created manually or saved from the UI.

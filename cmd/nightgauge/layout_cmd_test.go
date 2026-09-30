@@ -89,11 +89,16 @@ func TestLayoutCmdJSON(t *testing.T) {
 
 	// The per-checkout entry names are the fixture's, so the SDK's
 	// CHECKOUT_ENTRIES (pinned to the same fixture) agree with Go's.
-	var names []string
+	names := []string{layout.CheckoutServeLock}
 	for _, e := range layout.CheckoutEntries {
-		names = append(names, e.Name)
+		name := e.Name
+		if strings.HasPrefix(name, layout.CheckoutReports+"/") {
+			name = layout.CheckoutReports
+		}
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
 	}
-	names = append(names, layout.CheckoutServeLock)
 	for key, name := range fx.CheckoutEntries {
 		if !slices.Contains(names, name) {
 			t.Errorf("fixture checkout entry %s = %q is not a Go per-checkout entry %v", key, name, names)

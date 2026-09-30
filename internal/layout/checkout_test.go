@@ -3,6 +3,7 @@ package layout
 import (
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -157,7 +158,8 @@ func TestCheckoutEntriesLegacy(t *testing.T) {
 			t.Errorf("duplicate entry %s", e.Name)
 		}
 		seen[e.Name] = true
-		if !strings.HasPrefix(e.Legacy, ".nightgauge/") || !strings.HasSuffix(e.Legacy, e.Name) {
+		if !strings.HasPrefix(e.Legacy, ".nightgauge/") ||
+			(!e.Glob && e.Name != CheckoutBrownfieldHistory && path.Base(e.Legacy) != path.Base(e.Name)) {
 			t.Errorf("%s: legacy %q", e.Name, e.Legacy)
 		}
 		if e.CloneLegacyClass != "" && e.Legacy != ".nightgauge/"+e.CloneLegacyClass+"/"+e.Name {

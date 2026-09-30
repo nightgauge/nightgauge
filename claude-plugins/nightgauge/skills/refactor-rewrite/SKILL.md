@@ -543,12 +543,14 @@ fi
 ### Phase 1: Load Existing Assessments
 
 Optionally read upstream assessment reports to avoid redundant analysis and
-enrich scoring with pre-computed data.
+enrich scoring with pre-computed data. They are in this checkout's `reports/`
+directory inside the git directory (`nightgauge layout path checkout reports`,
+ADR-024 § 7).
 
 ```bash
-HEALTH_REPORT=".nightgauge/health-report.json"
-SECURITY_REPORT=".nightgauge/security-audit.json"
-SCAFFOLD_REPORT=".nightgauge/test-scaffold-report.json"
+HEALTH_REPORT="$(nightgauge layout path checkout reports/health-report.json)"
+SECURITY_REPORT="$(nightgauge layout path checkout reports/security-audit.json)"
+SCAFFOLD_REPORT="$(nightgauge layout path checkout reports/test-scaffold-report.json)"
 
 HEALTH_AVAILABLE=false
 SECURITY_AVAILABLE=false
@@ -1494,17 +1496,17 @@ See Phase 8 Step 8.2 for the complete JSON report structure.
 ```text
 UTILITIES (not part of main pipeline)
 
-/nightgauge:health-check ────────────────────┐
+/nightgauge:health-check ──────────────────────────┐
        |                                           |
-  Writes: .nightgauge/health-report.json      |
+  Writes: checkout reports/health-report.json      |
                                                    |
-/nightgauge:security-audit ──────────────────┤
+/nightgauge:security-audit ────────────────────────┤
        |                                           |
-  Writes: .nightgauge/security-audit.json     |
+  Writes: checkout reports/security-audit.json     |
                                                    ├──► /nightgauge:refactor-rewrite
-/nightgauge:test-scaffold ───────────────────┤         |
+/nightgauge:test-scaffold ─────────────────────────┤         |
        |                                           |    Reads: all three reports (optional)
-  Writes: .nightgauge/test-scaffold-report.json    Writes: refactor-rewrite-analysis.json
+  Writes: checkout reports/test-scaffold-report.json    Writes: refactor-rewrite-analysis.json
                                                         |
                                                         ├──► /nightgauge:modernize-plan
                                                         |

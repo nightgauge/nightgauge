@@ -276,7 +276,8 @@ export type WorkTimeFeedback = z.infer<typeof WorkTimeFeedbackSchema>;
 /**
  * Complete Complexity Model Schema
  *
- * The full schema for .nightgauge/complexity-model.yaml
+ * The full schema for complexity-model.yaml, in the checkout's per-checkout
+ * directory (`.git/nightgauge-worktree/` for a main checkout, ADR-024 § 7)
  *
  * @see docs/ARCHITECTURE.md for design rationale
  */

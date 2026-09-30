@@ -4046,8 +4046,8 @@ export async function initializeServices(
   // ── 14. RefreshTriggerService ─────────────────────────────────────────
 
   // Initialize RefreshTriggerService for CLI-triggered refresh (Issue #308)
-  // Watches .nightgauge/.refresh-trigger file to auto-refresh tree views when
-  // CLI tools create/update issues
+  // Watches the checkout's .refresh-trigger (in .git/nightgauge-worktree/) to
+  // auto-refresh tree views when CLI tools create/update issues
   if (nightgaugeRoot) {
     const refreshTriggerService = new RefreshTriggerService(nightgaugeRoot, logger);
 

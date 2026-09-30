@@ -843,8 +843,9 @@ includes:
 
 #### Step 7.4: Write JSON Report
 
-Write structured report to `.nightgauge/health-report.json` (or custom
-`--output` path):
+Write the structured report to this checkout's `reports/health-report.json`
+(`nightgauge layout path checkout reports/health-report.json`, inside the git
+directory, ADR-024 § 7), or to the custom `--output` path:
 
 ```json
 {
@@ -965,6 +966,23 @@ Write structured report to `.nightgauge/health-report.json` (or custom
 }
 ```
 
+Build the JSON in a temporary file, validate it, then write it. The default
+report goes through `nightgauge layout write`; never write under `.git` by
+path:
+
+```bash
+REPORT_TMP="$(mktemp)"
+# ... write the JSON report to "$REPORT_TMP" ...
+python3 -m json.tool "$REPORT_TMP" > /dev/null || { echo "Invalid report JSON" >&2; exit 1; }
+if [ -n "$OUTPUT_FILE" ]; then
+  cp "$REPORT_TMP" "$OUTPUT_FILE"
+  REPORT_PATH="$OUTPUT_FILE"
+else
+  REPORT_PATH="$(nightgauge layout write checkout reports/health-report.json --from "$REPORT_TMP")"
+fi
+rm -f "$REPORT_TMP"
+```
+
 #### Step 7.5: Write Markdown Summary
 
 Output a human-readable report:
@@ -1012,7 +1030,7 @@ TOP RECOMMENDATIONS (sorted by impact)
   3. Triage 12 TODO/FIXME markers into issues (medium effort)
 
 ----------------------------------------------------------------
-Report saved: .nightgauge/health-report.json
+Report saved: .git/nightgauge-worktree/reports/health-report.json
 ```
 
 If `--format json`, write only JSON. If `--format summary`, output only
@@ -1082,10 +1100,14 @@ See Phase 7 Step 7.4 for the complete JSON report structure.
 
 ### Report Files
 
-| File                             | Format   | When Written            |
-| -------------------------------- | -------- | ----------------------- |
-| `.nightgauge/health-report.json` | JSON     | `--format json/both`    |
-| Console output                   | Markdown | `--format summary/both` |
+| File                                  | Format   | When Written            |
+| ------------------------------------- | -------- | ----------------------- |
+| `checkout reports/health-report.json` | JSON     | `--format json/both`    |
+| Console output                        | Markdown | `--format summary/both` |
+
+`checkout` paths are inside this checkout's git directory (ADR-024 § 7):
+`nightgauge layout path checkout reports/health-report.json` prints the resolved
+path.
 
 ---
 
@@ -1113,7 +1135,7 @@ UTILITIES (not part of main pipeline)
        |
   Standalone utility — run anytime
   Reads: Codebase files (read-only analysis)
-  Writes: .nightgauge/health-report.json
+  Writes: checkout reports/health-report.json
   Consumers: modernize-plan, security-audit (future)
 ```
 

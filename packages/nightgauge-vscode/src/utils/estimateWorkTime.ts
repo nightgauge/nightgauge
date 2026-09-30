@@ -2,7 +2,8 @@
  * Work time estimation based on size labels and complexity model
  *
  * Provides deterministic time estimates for issues based on size labels.
- * Reads calibrated averages from complexity-model.yaml when available,
+ * Reads calibrated averages from the checkout's complexity-model.yaml
+ * (`.git/nightgauge-worktree/complexity-model.yaml`) when available,
  * falls back to sensible defaults.
  *
  * @see Issue #310 - Add actual work time feedback loop
@@ -11,6 +12,7 @@
 import * as fs from "node:fs/promises";
 import * as yaml from "js-yaml";
 import type { SizeLabel } from "./changeAnalyzer";
+import { checkoutPath } from "./cloneLayout";
 
 /**
  * Default time estimates per size (in minutes)
@@ -88,7 +90,9 @@ async function readCalibratedEstimate(
   workspaceRoot: string
 ): Promise<number | null> {
   try {
-    const yamlPath = `${workspaceRoot}/.nightgauge/complexity-model.yaml`;
+    // Per-checkout (ADR-024 § 7); throws outside a git repository, which the
+    // catch below turns into "use defaults".
+    const yamlPath = checkoutPath(workspaceRoot, "complexityModel");
     const content = await fs.readFile(yamlPath, "utf-8");
     const parsed = yaml.load(content) as Record<string, unknown>;
 

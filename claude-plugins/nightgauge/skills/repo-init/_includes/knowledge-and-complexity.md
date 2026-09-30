@@ -97,9 +97,10 @@ the directory exists, it is skipped entirely — no files are overwritten.
 
 ## Phase 6.8: Bootstrap Complexity Model
 
-Initialize `.nightgauge/complexity-model.yaml` through the supported Go command.
-`nightgauge outcome init` owns the canonical universal baseline, creates the
-`.nightgauge` directory when needed, and leaves an existing model untouched.
+Initialize this checkout's `complexity-model.yaml` (inside the git directory,
+`nightgauge layout path checkout complexity-model.yaml`) through the supported
+Go command. `nightgauge outcome init` owns the canonical universal baseline,
+creates the directory when needed, and leaves an existing model untouched.
 The Go outcome recorder calls this same initializer automatically, so a fresh
 repository can also learn from its first completed run without a setup-only
 dependency.
@@ -112,19 +113,18 @@ accuracy). This gives a new repo the benefit of cross-repo learning without
 polluting with another repo's history.
 
 ```bash
-MODEL_PATH=".nightgauge/complexity-model.yaml"
+# The layout resolver refuses a symlinked entry, so a resolved path is safe to test.
+MODEL_PATH="$(nightgauge layout path checkout complexity-model.yaml)" || exit 1
 
-if [ -L ".nightgauge" ]; then
-  echo "ERROR: refusing symlinked .nightgauge directory" >&2
-  exit 1
-elif [ -e "$MODEL_PATH" ] || [ -L "$MODEL_PATH" ]; then
+if [ -e "$MODEL_PATH" ]; then
   echo "$MODEL_PATH already exists — preserving it"
 elif [ -n "$SEED_FROM" ]; then
   # Cross-repo seeding (#1323): Python YAML transform (jq cannot parse YAML)
   echo "Seeding complexity model from $SEED_FROM..."
   TODAY=$(date +%Y-%m-%d)
-  python3 - "$SEED_FROM" "$TODAY" "$MODEL_PATH" << 'PYEOF'
-import os, sys, tempfile, yaml
+  SEED_TMP="$(mktemp)"
+  python3 - "$SEED_FROM" "$TODAY" "$SEED_TMP" << 'PYEOF'
+import sys, yaml
 
 source_path = sys.argv[1]
 today = sys.argv[2]
@@ -163,39 +163,28 @@ patterns = model.get('patterns', {})
 for category in ['high_complexity', 'medium_complexity', 'low_complexity']:
     patterns[category] = filter_patterns(patterns.get(category, []))
 
-temp_path = None
-try:
-    with tempfile.NamedTemporaryFile(
-        mode='w', dir=os.path.dirname(target_path),
-        prefix='.complexity-model-seed-', suffix='.yaml.tmp', delete=False,
-    ) as f:
-        temp_path = f.name
-        yaml.dump(model, f, default_flow_style=False, allow_unicode=True)
-        f.flush()
-        os.fsync(f.fileno())
-    try:
-        os.link(temp_path, target_path)
-        print(f"Seeded complexity model from {source_path}")
-    except FileExistsError:
-        print(f"{target_path} appeared during seeding — preserving it")
-finally:
-    if temp_path:
-        try:
-            os.unlink(temp_path)
-        except FileNotFoundError:
-            pass
+# Stage the seeded model in a temp file; the checkout directory is inside the
+# git directory, so it is written only through `nightgauge layout write`.
+with open(target_path, 'w') as f:
+    yaml.dump(model, f, default_flow_style=False, allow_unicode=True)
 PYEOF
   if [ $? -ne 0 ]; then
     echo "WARNING: Python seed transform failed. Using bootstrap defaults instead."
     SEED_FROM=""
+  elif [ -e "$MODEL_PATH" ]; then
+    echo "$MODEL_PATH appeared during seeding — preserving it"
+  else
+    nightgauge layout write checkout complexity-model.yaml --from "$SEED_TMP" > /dev/null
+    echo "Seeded complexity model from $SEED_FROM"
   fi
+  rm -f "$SEED_TMP"
 fi
 
-if [ ! -e "$MODEL_PATH" ] && [ ! -L "$MODEL_PATH" ]; then
+if [ ! -e "$MODEL_PATH" ]; then
   nightgauge outcome init
 fi
 ```
 
-The generated YAML is NOT committed to git (covered by
-`.nightgauge/.gitignore`). It is populated with real data via the feedback loop
+The generated YAML lives in the git directory, so it is never committed. It is
+populated with real data via the feedback loop
 as pipeline runs accumulate.

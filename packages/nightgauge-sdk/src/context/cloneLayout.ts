@@ -61,6 +61,23 @@ export const CHECKOUT_ENTRIES = {
   focus: "focus.yaml",
   performanceMode: "performance-mode.yaml",
   carefulLock: "careful.lock",
+  refreshTrigger: ".refresh-trigger",
+  complexityModel: "complexity-model.yaml",
+  complexityModelLock: "complexity-model.lock",
+  outcomeRecovery: "outcome-recovery.jsonl",
+  crossProjectPatterns: "cross-project-patterns.json",
+  savedQueries: "saved-queries.yaml",
+  auditQueue: "audit-queue.json",
+  scopeDriftStats: "scope-drift-stats.json",
+  docSnapshots: "doc-snapshots",
+  releaseWatch: "release-watch",
+  improvementRuns: "improvement-runs",
+  analysis: "analysis",
+  brownfieldHistory: "brownfield-history",
+  sessionHandoff: "session-handoff.md",
+  /** Generated reports: health-report.json, security-audit.json, backlog-*.md, ... */
+  reports: "reports",
+  automationPauses: "doctor/automation-pauses.json",
 } as const;
 export type CheckoutEntry = keyof typeof CHECKOUT_ENTRIES;
 

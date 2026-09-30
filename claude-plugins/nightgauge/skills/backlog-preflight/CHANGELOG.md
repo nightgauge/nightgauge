@@ -14,6 +14,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `$(nightgauge layout path <class> <name>)` and written through
   `nightgauge layout write|append`, not by `.nightgauge/...` path (#2037,
   ADR-024 § 7).
+- The preflight reports (`preflight-<date>.md` and `.json`) are generated
+  reports, so they are written to this checkout's `reports/` inside the git
+  directory through `nightgauge layout write checkout reports/<name>`, not to
+  `.nightgauge/reports/`; the greenfield check reads the checkout's
+  `complexity-model.yaml` (#2037, ADR-024 § 7).
 
 ### Fixed
 

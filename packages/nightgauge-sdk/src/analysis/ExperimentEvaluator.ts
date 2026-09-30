@@ -26,8 +26,7 @@ import type {
   ExperimentEvaluationResult,
   ExperimentConclusion,
 } from "./experiment-types.js";
-
-const EXPERIMENTS_DIR = ".nightgauge/analysis/experiments";
+import { experimentsDir } from "./ExperimentManager.js";
 
 export class ExperimentEvaluator {
   /**
@@ -145,14 +144,18 @@ export class ExperimentEvaluator {
    * Read the experiment conclusion file to detect already-concluded state.
    *
    * Returns null if no conclusion file exists (first-run or never concluded).
-   * File path: `.nightgauge/analysis/experiments/{experimentName}-conclusion.json`
+   * File path: `{experimentsDir}/{experimentName}-conclusion.json` in the
+   * checkout's per-checkout directory (ADR-024 § 7).
    */
   static readConclusion(
     workspaceRoot: string,
     experimentName: string
   ): ExperimentConclusion | null {
-    const filePath = path.join(workspaceRoot, EXPERIMENTS_DIR, `${experimentName}-conclusion.json`);
     try {
+      const filePath = path.join(
+        experimentsDir(workspaceRoot),
+        `${experimentName}-conclusion.json`
+      );
       const content = fs.readFileSync(filePath, "utf-8");
       return JSON.parse(content) as ExperimentConclusion;
     } catch {
@@ -166,10 +169,11 @@ export class ExperimentEvaluator {
    * Creates the experiments directory if needed. This file acts as an
    * idempotency guard: once written, future evaluations return `already_concluded`.
    *
-   * File path: `.nightgauge/analysis/experiments/{name}-conclusion.json`
+   * File path: `{experimentsDir}/{name}-conclusion.json` in the checkout's
+   * per-checkout directory (ADR-024 § 7).
    */
   static writeConclusion(workspaceRoot: string, conclusion: ExperimentConclusion): void {
-    const dir = path.join(workspaceRoot, EXPERIMENTS_DIR);
+    const dir = experimentsDir(workspaceRoot);
     fs.mkdirSync(dir, { recursive: true });
     const filePath = path.join(dir, `${conclusion.experiment_name}-conclusion.json`);
     fs.writeFileSync(filePath, JSON.stringify(conclusion, null, 2), "utf-8");

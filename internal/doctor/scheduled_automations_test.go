@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"os"
 	"path/filepath"
@@ -318,7 +319,7 @@ func TestAutomationFindings_ThreeDistinctCodes(t *testing.T) {
 // TestAutomationFindings_PauseTurnsStoppedIntoInfo: a recorded pause makes the
 // stopped finding info (still reported), and removing it restores the warning.
 func TestAutomationFindings_PauseTurnsStoppedIntoInfo(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	probes := byIDProbes(map[string]cadence.Evidence{
 		"autonomous-loop": {EverRan: true, Newest: testNow.AddDate(0, 0, -17)},
 	})
@@ -343,7 +344,7 @@ func TestAutomationFindings_PauseTurnsStoppedIntoInfo(t *testing.T) {
 	if err := PauseAutomation(root, "autonomous-loop", "maintenance", testNow); err != nil {
 		t.Fatalf("pause: %v", err)
 	}
-	if info, err := os.Stat(AutomationPausePath(root)); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(layouttest.CheckoutPath(t, root, layout.CheckoutAutomationPauses)); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("pause record missing or not 0600: %v", err)
 	}
 	paused := run()

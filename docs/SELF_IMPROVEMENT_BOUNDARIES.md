@@ -49,8 +49,8 @@ a new mechanism, add it to this table before implementing.
 | Retro Skill                         | INTERNAL    | No (analysis only)                        | Output window                           | Active                   |
 | Feedback Loops (backtrack/escalate) | INTERNAL    | No (runtime recovery)                     | Context handoff files                   | Active                   |
 | Outcome Recording                   | SHARED      | No                                        | `<pipeline>/history/outcomes.jsonl`     | Active (see note)        |
-| Complexity Calibration              | SHARED      | No (updates prediction model)             | `.nightgauge/complexity-model.yaml`     | Active                   |
-| Post-Pipeline Analysis              | SHARED      | No (read-only insights)                   | `.nightgauge/analysis/`                 | Active                   |
+| Complexity Calibration              | SHARED      | No (updates prediction model)             | `<checkout>/complexity-model.yaml`      | Active                   |
+| Post-Pipeline Analysis              | SHARED      | No (read-only insights)                   | `<checkout>/analysis/`                  | Active                   |
 | Health Dashboard (8 dims)           | EXTERNAL    | No (read-only display)                    | `<checkout>/health/`                    | Active                   |
 | Learning Effectiveness Dimension    | EXTERNAL    | No (measures learning system health)      | `<checkout>/health/`                    | Active                   |
 | Gate Metrics                        | EXTERNAL    | No (observability)                        | `<checkout>/health/gate-metrics.jsonl`  | Active                   |
@@ -164,7 +164,7 @@ design defect, not a configuration choice.
    cap is as bad as no cap: the operator cannot tell "nothing found" from
    "twelve found, two filed". Today the only volume bound anywhere is
    release-watch's `score_threshold`, which routes sub-threshold changes to
-   `.nightgauge/release-watch/backlog.json` instead of dropping them. **No
+   this checkout's `release-watch/backlog.json` instead of dropping them. **No
    mechanism currently enforces a per-run count cap** — a new filer must ship
    one.
 4. **A kill switch that fails closed.** `autonomous_discovery.kill_switch`

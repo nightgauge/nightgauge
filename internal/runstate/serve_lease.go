@@ -41,7 +41,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/flock"

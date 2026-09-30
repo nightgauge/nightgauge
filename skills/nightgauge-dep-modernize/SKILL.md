@@ -319,8 +319,8 @@ fi
 Check for upstream assessment reports and extract relevant dimensions:
 
 ```bash
-HEALTH_REPORT=".nightgauge/health-report.json"
-SECURITY_REPORT=".nightgauge/security-audit.json"
+HEALTH_REPORT="$(nightgauge layout path checkout reports/health-report.json)"
+SECURITY_REPORT="$(nightgauge layout path checkout reports/security-audit.json)"
 HEALTH_AVAILABLE=false
 SECURITY_AVAILABLE=false
 
@@ -959,22 +959,34 @@ fi
 
 #### Step 7.1: Ensure Output Directory
 
+The markdown report (Step 7.3) is written to `.nightgauge/`:
+
 ```bash
 mkdir -p .nightgauge
 ```
 
 #### Step 7.2: Write JSON Report
 
-Write the structured report to `.nightgauge/dep-modernize-report.json` (or
-the custom `--output` path). See the Output Format section for the full JSON
-schema.
+Write the structured report to this checkout's
+`reports/dep-modernize-report.json`
+(`nightgauge layout path checkout reports/dep-modernize-report.json`, inside the
+git directory, ADR-024 § 7), or to the custom `--output` path. See the Output
+Format section for the full JSON schema. Build the JSON in a temporary file and
+validate it before writing; the default report goes through
+`nightgauge layout write`, never a write under `.git` by path:
 
 ```bash
-OUTPUT_PATH="${OUTPUT_FILE:-.nightgauge/dep-modernize-report.json}"
-
-# Validate JSON before writing
-python3 -m json.tool "$OUTPUT_PATH" > /dev/null && \
-  echo "Report written: $OUTPUT_PATH"
+REPORT_TMP="$(mktemp)"
+# ... write the JSON report to "$REPORT_TMP" ...
+python3 -m json.tool "$REPORT_TMP" > /dev/null || { echo "Invalid report JSON" >&2; exit 1; }
+if [ -n "$OUTPUT_FILE" ]; then
+  cp "$REPORT_TMP" "$OUTPUT_FILE"
+  OUTPUT_PATH="$OUTPUT_FILE"
+else
+  OUTPUT_PATH="$(nightgauge layout write checkout reports/dep-modernize-report.json --from "$REPORT_TMP")"
+fi
+rm -f "$REPORT_TMP"
+echo "Report written: $OUTPUT_PATH"
 ```
 
 #### Step 7.3: Write Markdown Report
@@ -1038,7 +1050,7 @@ REPLACEMENTS SUGGESTED
 
 ----------------------------------------------------------------
 To apply safe updates: /nightgauge:dep-modernize --auto-fix
-Report saved: .nightgauge/dep-modernize-report.json
+Report saved: .git/nightgauge-worktree/reports/dep-modernize-report.json
 ```
 
 #### Step 7.4: Console Summary
@@ -1048,7 +1060,7 @@ Output a concise summary to the console regardless of `--format`:
 ```text
 Dep Modernize: 150 deps | 5 critical CVEs | 42 outdated | 4 groups
 Run with --auto-fix to apply 28 safe updates automatically.
-Full report: .nightgauge/dep-modernize-report.json
+Full report: .git/nightgauge-worktree/reports/dep-modernize-report.json
 ```
 
 ---
@@ -1221,11 +1233,15 @@ Full report: .nightgauge/dep-modernize-report.json
 
 ### Report Files
 
-| File                                    | Format   | When Written            |
-| --------------------------------------- | -------- | ----------------------- |
-| `.nightgauge/dep-modernize-report.json` | JSON     | `--format json/both`    |
-| `.nightgauge/DEP_MODERNIZE_REPORT.md`   | Markdown | `--format summary/both` |
-| Console summary                         | Text     | Always                  |
+| File                                         | Format   | When Written            |
+| -------------------------------------------- | -------- | ----------------------- |
+| `checkout reports/dep-modernize-report.json` | JSON     | `--format json/both`    |
+| `.nightgauge/DEP_MODERNIZE_REPORT.md`        | Markdown | `--format summary/both` |
+| Console summary                              | Text     | Always                  |
+
+`checkout` paths are inside this checkout's git directory (ADR-024 § 7):
+`nightgauge layout path checkout reports/dep-modernize-report.json` prints the
+resolved path.
 
 ---
 
@@ -1254,13 +1270,13 @@ Full report: .nightgauge/dep-modernize-report.json
 ```text
 UTILITIES (not part of main pipeline)
 
-/nightgauge:health-check ────────────────────┐
+/nightgauge:health-check ──────────────────────────┐
        |                                           |
-  Writes: .nightgauge/health-report.json      |
+  Writes: checkout reports/health-report.json      |
                                                    |
-/nightgauge:security-audit ──────────────────┤
+/nightgauge:security-audit ────────────────────────┤
        |                                           |
-  Writes: .nightgauge/security-audit.json     |
+  Writes: checkout reports/security-audit.json     |
                                                    ├──► /nightgauge:dep-modernize
                                                    |         |
                                                    |    Reads: health-report.json (optional)
@@ -1270,7 +1286,7 @@ UTILITIES (not part of main pipeline)
                                                    |         |
                                                    ├──► /nightgauge:modernize-plan
                                                    |
-/nightgauge:test-scaffold ───────────────────┘
+/nightgauge:test-scaffold ─────────────────────────┘
 ```
 
 This is a standalone utility skill. It does not affect pipeline state and can be
@@ -1308,14 +1324,17 @@ dep_modernize:
 
 **Consumes** (optional):
 
-- `.nightgauge/health-report.json` — reads `dimensions.dependency_health`
-  for outdated count context and score baseline
-- `.nightgauge/security-audit.json` — reads
+- `checkout reports/health-report.json` — reads
+  `dimensions.dependency_health` for outdated count context and score baseline
+- `checkout reports/security-audit.json` — reads
   `dimensions.dependency_vulnerabilities` for CVE cross-reference
+
+`checkout reports/<name>` is this checkout's `reports/` directory inside the git
+directory: `nightgauge layout path checkout reports/<name>`.
 
 **Produces**:
 
-- `.nightgauge/dep-modernize-report.json` — full structured report
+- `checkout reports/dep-modernize-report.json` — full structured report
 - `.nightgauge/DEP_MODERNIZE_REPORT.md` — human-readable summary (when
   format includes summary)
 

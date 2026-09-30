@@ -47,7 +47,48 @@ const (
 	CheckoutFocus             = "focus.yaml"
 	CheckoutPerformanceMode   = "performance-mode.yaml"
 	CheckoutCarefulLock       = "careful.lock"
+
+	// The rest of the runtime files the pre-ADR-024 template ignored one by
+	// one (ADR-024 § 7, "and the rest"): unkeyed, so per checkout.
+	CheckoutRefreshTrigger       = ".refresh-trigger"
+	CheckoutComplexityModel      = "complexity-model.yaml"
+	CheckoutComplexityModelLock  = "complexity-model.lock"
+	CheckoutOutcomeRecovery      = "outcome-recovery.jsonl"
+	CheckoutCrossProjectPatterns = "cross-project-patterns.json"
+	CheckoutSavedQueries         = "saved-queries.yaml"
+	CheckoutAuditQueue           = "audit-queue.json"
+	// CheckoutScopeDriftStats is the scope-drift gate's per-machine counter,
+	// the one runtime file inside the committed audit/ (ADR-024 § 13).
+	CheckoutScopeDriftStats = "scope-drift-stats.json"
+	CheckoutDocSnapshots    = "doc-snapshots"
+	CheckoutReleaseWatch    = "release-watch"
+	CheckoutImprovementRuns = "improvement-runs"
+	CheckoutAnalysis        = "analysis"
+	// CheckoutBrownfieldHistory holds the brownfield assessment snapshots
+	// (.nightgauge/history/ before ADR-024).
+	CheckoutBrownfieldHistory = "brownfield-history"
+	CheckoutSessionHandoff    = "session-handoff.md"
+	// CheckoutReports holds the generated reports skills and commands write
+	// (health-report.json, security-audit.json, backlog-*.md, ...).
+	CheckoutReports = "reports"
+	// CheckoutAutomationPauses is doctor's record of paused automations.
+	CheckoutAutomationPauses = "doctor/automation-pauses.json"
 )
+
+// Generated report names inside CheckoutReports.
+const (
+	ReportHealth         = "health-report.json"
+	ReportSecurityAudit  = "security-audit.json"
+	ReportModernization  = "modernization-plan.json"
+	ReportDepModernize   = "dep-modernize-report.json"
+	ReportTestScaffold   = "test-scaffold-report.json"
+	ReportBacklogPattern = "backlog-*.md"
+)
+
+// ReportPath is the path of a generated report inside CHECKOUT/reports.
+func ReportPath(root, name string) (string, error) {
+	return CheckoutPath(root, CheckoutReports+"/"+name)
+}
 
 // CheckoutEntry is one per-checkout file or directory and where an older
 // build kept it, relative to the checkout's working tree.
@@ -59,6 +100,9 @@ type CheckoutEntry struct {
 	// Legacy is the pre-ADR-024 location relative to the checkout's working
 	// tree, slash-separated.
 	Legacy string
+	// Glob marks a Legacy that is a file pattern (backlog-*.md): every match
+	// moves into the directory Name.
+	Glob bool
 	// CloneLegacyClass is set for the run-control singletons the per-clone
 	// move (layout v1) placed in CLONE/pipeline or CLONE/logs: the class they
 	// sat in there, under the same name. A v1 clone moves them to its main
@@ -87,6 +131,27 @@ var CheckoutEntries = []CheckoutEntry{
 	{Name: CheckoutFocus, Legacy: ".nightgauge/focus.yaml"},
 	{Name: CheckoutPerformanceMode, Legacy: ".nightgauge/performance-mode.yaml"},
 	{Name: CheckoutCarefulLock, Legacy: ".nightgauge/careful.lock"},
+	{Name: CheckoutRefreshTrigger, Legacy: ".nightgauge/.refresh-trigger"},
+	{Name: CheckoutComplexityModel, Legacy: ".nightgauge/complexity-model.yaml"},
+	{Name: CheckoutComplexityModelLock, Legacy: ".nightgauge/complexity-model.lock"},
+	{Name: CheckoutOutcomeRecovery, Legacy: ".nightgauge/outcome-recovery.jsonl"},
+	{Name: CheckoutCrossProjectPatterns, Legacy: ".nightgauge/cross-project-patterns.json"},
+	{Name: CheckoutSavedQueries, Legacy: ".nightgauge/saved-queries.yaml"},
+	{Name: CheckoutAuditQueue, Legacy: ".nightgauge/audit-queue.json"},
+	{Name: CheckoutScopeDriftStats, Legacy: ".nightgauge/audit/scope-drift-stats.json"},
+	{Name: CheckoutDocSnapshots, Dir: true, Legacy: ".nightgauge/doc-snapshots"},
+	{Name: CheckoutReleaseWatch, Dir: true, Legacy: ".nightgauge/release-watch"},
+	{Name: CheckoutImprovementRuns, Dir: true, Legacy: ".nightgauge/improvement-runs"},
+	{Name: CheckoutAnalysis, Dir: true, Legacy: ".nightgauge/analysis"},
+	{Name: CheckoutBrownfieldHistory, Dir: true, Legacy: ".nightgauge/history"},
+	{Name: CheckoutSessionHandoff, Legacy: ".nightgauge/session-handoff.md"},
+	{Name: CheckoutAutomationPauses, Legacy: ".nightgauge/doctor/automation-pauses.json"},
+	{Name: CheckoutReports + "/" + ReportHealth, Legacy: ".nightgauge/" + ReportHealth},
+	{Name: CheckoutReports + "/" + ReportSecurityAudit, Legacy: ".nightgauge/" + ReportSecurityAudit},
+	{Name: CheckoutReports + "/" + ReportModernization, Legacy: ".nightgauge/" + ReportModernization},
+	{Name: CheckoutReports + "/" + ReportDepModernize, Legacy: ".nightgauge/" + ReportDepModernize},
+	{Name: CheckoutReports + "/" + ReportTestScaffold, Legacy: ".nightgauge/" + ReportTestScaffold},
+	{Name: CheckoutReports, Glob: true, Legacy: ".nightgauge/" + ReportBacklogPattern},
 }
 
 // GitDir returns the canonical git dir of the checkout dir is in: `git

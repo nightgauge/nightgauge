@@ -2706,8 +2706,17 @@ holds every unkeyed singleton — `current-run.json`, `run-state.json`,
 serve lease `serve.lock` and `go-backend.log` — and the per-checkout runtime
 state: `attention/`, `attention-coverage.json`, `autonomous/`, `health/`,
 `graph/`, `containment/`, `notifications/`, `skills/`, `triage/`,
-`focus.yaml`, `performance-mode.yaml` and `careful.lock`. Address it as the
-`checkout` class.
+`focus.yaml`, `performance-mode.yaml`, `careful.lock` — and the rest of the
+unkeyed runtime files: `.refresh-trigger`, `complexity-model.yaml` and its
+`complexity-model.lock`, `outcome-recovery.jsonl`,
+`cross-project-patterns.json`, `saved-queries.yaml`, `audit-queue.json`,
+`scope-drift-stats.json`, `doc-snapshots/`, `release-watch/`,
+`improvement-runs/`, `analysis/`, `brownfield-history/` (the brownfield
+assessment snapshots), `session-handoff.md` and
+`doctor/automation-pauses.json`. Generated reports (`health-report.json`,
+`security-audit.json`, `modernization-plan.json`, `dep-modernize-report.json`,
+`test-scaffold-report.json`, `backlog-*.md`) go in its `reports/`. Address it
+as the `checkout` class.
 
 ```bash
 # Print the whole layout for the repository at --workdir (default: cwd)
@@ -3845,7 +3854,7 @@ embed per provider-release; the embed timestamp is taken from the log's
 # Route the claude-code provider's findings (reads the webhook from the env var)
 export RELEASE_WATCH_DISCORD_WEBHOOK="https://discord.com/api/webhooks/<id>/<token>"
 nightgauge release notify-findings \
-  --creation-log .nightgauge/release-watch/creation-log-claude-code.json --json
+  --creation-log "$(nightgauge layout path checkout release-watch/creation-log-claude-code.json)" --json
 ```
 
 Invoked by the `release-watchdog.yml` workflow after each provider's discovery
@@ -4607,7 +4616,8 @@ as `routed_model`.
 The gate reads `dev-{N}.json.files_changed` (created + modified) and matches
 each path against `pipeline.scope_drift_gate.allowlist_docs` /
 `allowlist_chore`. Drift events emit a `scope_drift_detected` pipeline event
-(best-effort) and append to `.nightgauge/audit/scope-drift-stats.json`.
+(best-effort) and append to this checkout's `scope-drift-stats.json`
+(`nightgauge layout path checkout scope-drift-stats.json`).
 See [docs/CONFIGURATION.md#pipelinescope_drift_gate-issue-3040](CONFIGURATION.md#pipelinescope_drift_gate-issue-3040).
 
 **`version-downgrade check` flags**:
@@ -5571,7 +5581,7 @@ pipeline skill calls this as Phase 0 preflight via `skills/_shared/PREFLIGHT.md`
 | `rate_limit`  | API requests remaining (warn < 500, warn < 100) | warning    |
 | `config`      | `.nightgauge/config.yaml` loads; a refused config (for example a plaintext token, #2023) fails here | required\* |
 | `project`     | `project_number` and `owner` set in config      | required\* |
-| `complexity_model` | `.nightgauge/complexity-model.yaml` exists; missing output points to `nightgauge outcome init` | warning |
+| `complexity_model` | this checkout's `complexity-model.yaml` (`nightgauge layout path checkout complexity-model.yaml`) exists; missing output points to `nightgauge outcome init` | warning |
 | `tracked_secrets` | No GitHub token or license key in files git tracks under `.nightgauge/` (#2024); each hit is `path:line`, redacted to its prefix, with structured `findings` in `--json`. Files over 1 MiB and binary files are skipped with a note; skipped outside a git work tree | warning |
 
 Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
@@ -7375,13 +7385,13 @@ distinguished after the fact; no migration is offered.
 nightgauge modernize aggregate-findings [--workdir DIR] [--out FILE] [--json]
 ```
 
-Reads the three `.nightgauge/` assessment reports (health, security,
-test scaffold), applies severity normalization, deduplicates overlapping
+Reads the three assessment reports (health, security, test scaffold) from
+this checkout's `reports/` (`nightgauge layout path checkout reports`), applies severity normalization, deduplicates overlapping
 findings, and outputs a single stable JSON structure. Replaces the shell+jq
 extraction previously inlined in modernize-plan SKILL.md Phase 2.1–2.4
 (audit row **B31**).
 
-**Input files** (read from `--workdir/.nightgauge/`):
+**Input files** (read from the `--workdir` checkout's `reports/`):
 
 | File | Produced by |
 | ---- | ----------- |
@@ -7396,7 +7406,7 @@ At least one input file must be present. Missing files are listed in
 
 | Flag | Default | Behavior |
 | ---- | ------- | -------- |
-| `--workdir DIR` | cwd | Project root containing `.nightgauge/` |
+| `--workdir DIR` | cwd | Checkout whose `reports/` holds the inputs |
 | `--out FILE` | — | Write JSON output to file instead of stdout |
 | `--json` | `false` | Emit JSON to stdout (skills always set this) |
 

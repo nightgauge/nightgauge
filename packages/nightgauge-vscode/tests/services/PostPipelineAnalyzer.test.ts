@@ -533,7 +533,7 @@ describe("PostPipelineAnalyzer", () => {
       await PostPipelineAnalyzer.analyze(workspaceRoot, 943, logger as any);
 
       // Should create directory
-      expect(fs.mkdir).toHaveBeenCalledWith(path.join(workspaceRoot, ".nightgauge/analysis"), {
+      expect(fs.mkdir).toHaveBeenCalledWith(path.join(layout.checkout, "analysis"), {
         recursive: true,
       });
 

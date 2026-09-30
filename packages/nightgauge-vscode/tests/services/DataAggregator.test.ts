@@ -25,6 +25,8 @@ vi.mock("node:fs/promises");
 const WORKSPACE = "/test/workspace";
 /** The workspace's pipeline state dir, under its (fake) git dir (#2037). */
 const PIPELINE_DIR = fakeCloneLayout(WORKSPACE).pipeline;
+/** Analysis and experiments are per checkout, under CHECKOUT (ADR-024 § 7). */
+const CHECKOUT = fakeCloneLayout(WORKSPACE).checkout;
 
 /** Build a mock v2 execution history run record */
 function buildRunRecord(
@@ -309,7 +311,7 @@ describe("DataAggregator", () => {
 
   describe("aggregate — with analysis reports", () => {
     it("should read and filter analysis reports by created_at", async () => {
-      const analysisDir = `${WORKSPACE}/.nightgauge/analysis`;
+      const analysisDir = `${CHECKOUT}/analysis`;
       vi.mocked(fs.readdir).mockImplementation(async (dirPath) => {
         const p = typeof dirPath === "string" ? dirPath : dirPath.toString();
         if (p === analysisDir) {
@@ -352,7 +354,7 @@ describe("DataAggregator", () => {
     });
 
     it("should skip latest.json", async () => {
-      const analysisDir = `${WORKSPACE}/.nightgauge/analysis`;
+      const analysisDir = `${CHECKOUT}/analysis`;
       vi.mocked(fs.readdir).mockImplementation(async (dirPath) => {
         const p = typeof dirPath === "string" ? dirPath : dirPath.toString();
         if (p === analysisDir) {
@@ -372,7 +374,7 @@ describe("DataAggregator", () => {
 
   describe("aggregate — with experiment results", () => {
     it("should read and filter experiment outcomes", async () => {
-      const experimentsDir = `${WORKSPACE}/.nightgauge/analysis/experiments`;
+      const experimentsDir = `${CHECKOUT}/analysis/experiments`;
       vi.mocked(fs.readdir).mockImplementation(async (dirPath) => {
         const p = typeof dirPath === "string" ? dirPath : dirPath.toString();
         if (p === experimentsDir) {
@@ -566,7 +568,7 @@ describe("DataAggregator", () => {
     });
 
     it("should handle malformed analysis report files", async () => {
-      const analysisDir = `${WORKSPACE}/.nightgauge/analysis`;
+      const analysisDir = `${CHECKOUT}/analysis`;
       vi.mocked(fs.readdir).mockImplementation(async (dirPath) => {
         const p = typeof dirPath === "string" ? dirPath : dirPath.toString();
         if (p === analysisDir) {
@@ -612,8 +614,8 @@ describe("DataAggregator", () => {
         buildHealthSnapshot({ timestamp: "2026-02-12T11:00:00.000Z" }),
       ]);
       // Analysis reports
-      const analysisDir = `${WORKSPACE}/.nightgauge/analysis`;
-      const experimentsDir = `${WORKSPACE}/.nightgauge/analysis/experiments`;
+      const analysisDir = `${CHECKOUT}/analysis`;
+      const experimentsDir = `${CHECKOUT}/analysis/experiments`;
       const pipelineDir = PIPELINE_DIR;
 
       vi.mocked(fs.readdir).mockImplementation(async (dirPath) => {

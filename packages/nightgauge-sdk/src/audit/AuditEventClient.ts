@@ -21,6 +21,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { EventBus } from "../events/EventBus.js";
+import { checkoutPath } from "../context/cloneLayout.js";
 import {
   AuditEventSchema,
   type AuditConfig as AuditConfigBase,
@@ -141,6 +142,7 @@ export class AuditEventClient {
     if (!this.config.enabled) return;
 
     const queuePath = this.resolveQueuePath();
+    if (!queuePath) return;
     let raw: string;
     try {
       raw = await fs.readFile(queuePath, "utf-8");
@@ -261,6 +263,12 @@ export class AuditEventClient {
    */
   private async writeToOfflineQueue(events: AuditEvent[]): Promise<void> {
     const queuePath = this.resolveQueuePath();
+    if (!queuePath) {
+      process.stderr.write(
+        `[AuditEventClient] No offline queue location (not in a git repository); dropped ${events.length} event(s).\n`
+      );
+      return;
+    }
 
     try {
       await fs.mkdir(path.dirname(queuePath), { recursive: true });
@@ -312,8 +320,21 @@ export class AuditEventClient {
     }
   }
 
-  private resolveQueuePath(): string {
+  /**
+   * The configured queue path, or `audit-queue.json` in the per-checkout
+   * directory (ADR-024 § 7) when none is configured. Null when unconfigured
+   * and the process cwd is not inside a git repository: the client never
+   * throws, and never writes a queue into an arbitrary directory.
+   */
+  private resolveQueuePath(): string | null {
     const queuePath = this.config.offlineQueuePath;
-    return path.isAbsolute(queuePath) ? queuePath : path.resolve(queuePath);
+    if (queuePath) {
+      return path.isAbsolute(queuePath) ? queuePath : path.resolve(queuePath);
+    }
+    try {
+      return checkoutPath("auditQueue");
+    } catch {
+      return null;
+    }
   }
 }

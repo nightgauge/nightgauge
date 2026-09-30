@@ -511,7 +511,10 @@ func (v *verbs) modelTarget(f Finding) (string, error) {
 	if root == "" {
 		return "", errors.New("no workspace root")
 	}
-	target := filepath.Join(root, ".nightgauge", "complexity-model.yaml")
+	target, err := complexityModelPath(root)
+	if err != nil {
+		return "", err
+	}
 	if p := f.Evidence["path"]; p != target {
 		return "", fmt.Errorf("the finding names %q, not this workspace's model %s", p, target)
 	}
@@ -551,16 +554,6 @@ func (v *verbs) outcomeInitApply(_ context.Context, f Finding) error {
 	if err != nil {
 		return err
 	}
-	// A directory this remedy creates is private (ADR-025 § 8); an existing
-	// one is left as it is, and a symlink was refused by the precondition.
-	if dir := filepath.Dir(target); !dirExists(dir) {
-		if err := os.Mkdir(dir, 0o700); err != nil {
-			return fmt.Errorf("create %s: %w", dir, err)
-		}
-		if err := os.Chmod(dir, 0o700); err != nil {
-			return err
-		}
-	}
 	if f.Code != codeComplexityModelMissing {
 		// Move the invalid model aside rather than deleting it: the preview
 		// says so, and the operator may want what was in it.
@@ -571,11 +564,6 @@ func (v *verbs) outcomeInitApply(_ context.Context, f Finding) error {
 	}
 	_, err = gh.NewOutcomeService(v.env.Cwd).InitializeModel()
 	return err
-}
-
-func dirExists(p string) bool {
-	info, err := os.Lstat(p)
-	return err == nil && info.IsDir()
 }
 
 // --- survival.sweep ----------------------------------------------------------------

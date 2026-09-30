@@ -221,7 +221,8 @@ Create the knowledge base directory structure (idempotent). Skip if
 
 ### Phase 6.8: Bootstrap Complexity Model
 
-Create `.nightgauge/complexity-model.yaml` with baseline calibration (or
+Create this checkout's `complexity-model.yaml` (`nightgauge layout path checkout
+complexity-model.yaml`) with baseline calibration (or
 seed it from another repo via `--seed-from`) if it does not already exist.
 
 > **Read `_includes/knowledge-and-complexity.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**

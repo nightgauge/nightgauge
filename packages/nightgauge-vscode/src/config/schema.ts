@@ -3345,8 +3345,12 @@ export const AuditConfigSectionSchema = z.object({
   batchSize: z.number().int().min(1).max(1000).default(50),
   /** Interval between automatic flushes in milliseconds (default: 30000) */
   flushIntervalMs: z.number().int().default(30_000),
-  /** Path to the offline queue file for events that fail to submit (default: .nightgauge/audit-queue.json) */
-  offlineQueuePath: z.string().default(".nightgauge/audit-queue.json"),
+  /**
+   * Path to the offline queue file for events that fail to submit, relative to
+   * the workspace root (default: audit-queue.json in the checkout's per-checkout
+   * directory, `.git/nightgauge-worktree/audit-queue.json`)
+   */
+  offlineQueuePath: z.string().optional(),
 });
 export type AuditConfigSection = z.infer<typeof AuditConfigSectionSchema>;
 

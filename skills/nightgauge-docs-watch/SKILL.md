@@ -52,7 +52,8 @@ Nightgauge pipeline.
 | `--enrich-assessments`       | Update existing assessment files with doc links      | `false`  |
 | `--skip-release-correlation` | Disable release correlation (e.g., for offline CI)   | `false`  |
 
-\*Enabled by default when `.nightgauge/release-watch/last-seen.json` exists; disabled if missing.
+\*Enabled by default when this checkout's `release-watch/last-seen-claude-code.json` exists
+(`nightgauge layout path checkout release-watch/last-seen-claude-code.json`); disabled if missing.
 
 ### Examples
 
@@ -139,12 +140,14 @@ echo "Found ${PAGE_COUNT} documentation pages"
 #### Step 2.1: Load or initialize snapshot
 
 ```bash
-SNAPSHOT_DIR=".nightgauge/doc-snapshots"
-SNAPSHOT_FILE="${SNAPSHOT_DIR}/index.json"
+# This checkout's doc-snapshots/ inside the git directory (ADR-024 § 7):
+# read by path, written only through `nightgauge layout write checkout`.
+SNAPSHOT_NAME="doc-snapshots/index.json"
+SNAPSHOT_FILE="$(nightgauge layout path checkout "$SNAPSHOT_NAME")"
 
 if [ ! -f "$SNAPSHOT_FILE" ]; then
   echo '{"last_check":"1970-01-01T00:00:00Z","page_count":0,"pages":{}}' \
-    | jq '.' > "$SNAPSHOT_FILE"
+    | jq '.' | nightgauge layout write checkout "$SNAPSHOT_NAME" > /dev/null
   echo "Initialized new snapshot file at ${SNAPSHOT_FILE}"
 fi
 ```
@@ -244,14 +247,15 @@ For each new or changed page:
 
 ### Phase 5.5: Release Correlation (Optional)
 
-Only executes when `--skip-release-correlation` is not set AND
-`.nightgauge/release-watch/last-seen.json` exists.
+Only executes when `--skip-release-correlation` is not set AND this checkout's
+`release-watch/last-seen-claude-code.json` exists.
 
 #### Step 5.5.1: Load release state and recent reports
 
 ```bash
-RELEASE_STATE_FILE=".nightgauge/release-watch/last-seen.json"
-REPORTS_DIR=".nightgauge/release-watch/reports"
+RELEASE_STATE_FILE="$(nightgauge layout path checkout release-watch/last-seen-claude-code.json)"
+REPORTS_DIR="$(nightgauge layout path checkout release-watch/reports)"
+export RELEASE_STATE_FILE REPORTS_DIR
 
 if [ ! -f "$RELEASE_STATE_FILE" ]; then
   echo "Release state not found; skipping correlation"
@@ -361,11 +365,11 @@ with open('/tmp/docs-watch-diff.json') as f:
     diff = json.load(f)
 
 # Load release state
-with open('.nightgauge/release-watch/last-seen.json') as f:
+with open(os.environ['RELEASE_STATE_FILE']) as f:
     release_state = json.load(f)
 
 current_version = release_state.get('version', release_state.get('full_tag', '')).lstrip('v')
-reports_dir = '.nightgauge/release-watch/reports'
+reports_dir = os.environ['REPORTS_DIR']
 
 # Enrich each change with correlation data
 for entry_list in [diff.get('new', []), diff.get('changed', [])]:
@@ -509,11 +513,13 @@ for entry in diff.get('removed', []):
 snapshot['last_check'] = datetime.utcnow().isoformat() + 'Z'
 snapshot['page_count'] = len(snapshot['pages'])
 
-with open('${SNAPSHOT_FILE}', 'w') as f:
+with open('/tmp/docs-watch-snapshot-updated.json', 'w') as f:
     json.dump(snapshot, f, indent=2)
 
 print(f'Snapshot updated: {len(snapshot[\"pages\"])} pages tracked')
 "
+nightgauge layout write checkout "$SNAPSHOT_NAME" \
+  --from /tmp/docs-watch-snapshot-updated.json > /dev/null
 ```
 
 ---
@@ -593,7 +599,9 @@ The snapshot (`index.json`) already tracks per-page state; this log tracks the
 
 ```bash
 SKILL_NAME="nightgauge-docs-watch"
-RUN_LOG=".nightgauge/doc-snapshots/runs.jsonl"
+RUN_LOG_CLASS="checkout"
+RUN_LOG_NAME="doc-snapshots/runs.jsonl"
+RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
 ```
 
 <!-- include: ../_shared/RUN_REFLECTION.md -->
@@ -633,8 +641,8 @@ UTILITIES (not part of main pipeline)
        ↑
   Use on regular cadence or after CC releases
   Reads:  https://code.claude.com/docs/llms.txt
-  Reads:  .nightgauge/doc-snapshots/index.json
-  Writes: .nightgauge/doc-snapshots/index.json
+  Reads:  checkout doc-snapshots/index.json
+  Writes: checkout doc-snapshots/index.json
   Writes: /tmp/docs-watch-report.json (ephemeral)
 ```
 

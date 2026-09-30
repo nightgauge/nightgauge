@@ -67,7 +67,7 @@ reporting.
 │                                                    │                   │
 │                                  ┌─────────────────▼──────────────┐   │
 │                                  │  Offline Queue (JSON file)      │   │
-│                                  │  .nightgauge/              │   │
+│                                  │  <git-dir>/nightgauge-worktree/ │   │
 │                                  │    audit-queue.json             │   │
 │                                  │                                 │   │
 │                                  │  Used when network unavailable  │   │
@@ -311,13 +311,15 @@ the operational procedure.
 ### Offline Queue Integrity
 
 When the platform is unreachable (network outage, planned maintenance), the SDK
-writes pending events to a local JSON file:
+writes pending events to a local JSON file, this checkout's `audit-queue.json`:
 
-```
-.nightgauge/audit-queue.json
+```bash
+nightgauge layout path checkout audit-queue.json
+# → /path/to/repo/.git/nightgauge-worktree/audit-queue.json
 ```
 
-This file is stored in the project working directory. When the next pipeline
+The file lives in the checkout's own git directory (ADR-024 § 7), never in the
+working tree, so it cannot be committed. When the next pipeline
 run completes, the SDK attempts to submit the queued events before completing.
 If submission succeeds the queue file is deleted; if it fails the file is
 retained for the next attempt.
@@ -385,10 +387,10 @@ applicable time window. This ensures the purge itself is auditable.
 The offline queue file on disk retains events until they are successfully
 submitted or until the queue size cap is reached.
 
-| Parameter              | Default                        | Config Key                  | Env Variable                              |
-| ---------------------- | ------------------------------ | --------------------------- | ----------------------------------------- |
-| Offline queue size cap | 10,000 events                  | `audit.offlineQueueMaxSize` | `NIGHTGAUGE_AUDIT_OFFLINE_QUEUE_MAX_SIZE` |
-| Queue file location    | `.nightgauge/audit-queue.json` | `audit.offlineQueuePath`    | `NIGHTGAUGE_AUDIT_OFFLINE_QUEUE_PATH`     |
+| Parameter              | Default                     | Config Key                  | Env Variable                              |
+| ---------------------- | --------------------------- | --------------------------- | ----------------------------------------- |
+| Offline queue size cap | 10,000 events               | `audit.offlineQueueMaxSize` | `NIGHTGAUGE_AUDIT_OFFLINE_QUEUE_MAX_SIZE` |
+| Queue file location    | checkout `audit-queue.json` | `audit.offlineQueuePath`    | `NIGHTGAUGE_AUDIT_OFFLINE_QUEUE_PATH`     |
 
 ### Configurable Parameters Summary
 
@@ -515,7 +517,7 @@ audit:
   api_key: sk_live_... # Keep this secret — use a secrets manager
   batch_size: 100 # Optional: events per batch
   flush_interval_ms: 30000 # Optional: flush every 30 seconds
-  offline_queue_path: .nightgauge/audit-queue.json # Optional
+  # offline_queue_path: /var/lib/nightgauge/audit-queue.json # Optional; default: the checkout's audit-queue.json
   offline_queue_max_size: 10000 # Optional: cap for disk-buffered events
 ```
 

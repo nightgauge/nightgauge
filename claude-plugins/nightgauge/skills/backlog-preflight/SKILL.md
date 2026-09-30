@@ -102,7 +102,8 @@ This is a **standalone utility skill**, not part of the main pipeline. It:
 
 - Does NOT read pipeline context files (`nightgauge layout path pipeline`)
 - Does NOT write pipeline handoff files
-- Generates standalone reports in `.nightgauge/reports/`
+- Generates standalone reports in this checkout's `reports/`
+  (`nightgauge layout path checkout reports`)
 - Can be run at any time without affecting pipeline state
 
 **CRITICAL**: This skill runs headless. Do NOT use AskUserQuestion. Make
@@ -362,7 +363,7 @@ PYEOF
   #### Check 2.5: Greenfield Readiness
 
   if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "greenfield" ]; then
-    [ ! -f ".nightgauge/complexity-model.yaml" ] && GREENFIELD_WARNINGS+=("Missing complexity-model.yaml — run nightgauge outcome init")
+    [ ! -f "$(nightgauge layout path checkout complexity-model.yaml)" ] && GREENFIELD_WARNINGS+=("Missing complexity-model.yaml — run nightgauge outcome init")
     [ ! -d "docs" ] && GREENFIELD_WARNINGS+=("Missing docs/ directory — feature-dev will use AGENTS.md fallback for standards")
     [ ! -f "docs/CODE_STANDARDS.md" ] && GREENFIELD_WARNINGS+=("Missing docs/CODE_STANDARDS.md — feature-dev will fall back to AGENTS.md or language defaults")
     if [ ! -f "docs/SECURITY_AND_ERROR_HANDLING.md" ] && [ ! -f "docs/SECURITY.md" ]; then
@@ -438,10 +439,13 @@ fi
 Generate the preflight report:
 
 ```bash
-mkdir -p .nightgauge/reports
+# Generated reports live in this checkout's reports/ inside the git directory
+# (ADR-024 § 7); they are written only through `nightgauge layout write`.
 DATE=$(date +%Y-%m-%d)
-REPORT=".nightgauge/reports/preflight-${DATE}.md"
-REPORT_JSON=".nightgauge/reports/preflight-${DATE}.json"
+REPORT_NAME="reports/preflight-${DATE}.md"
+REPORT_JSON_NAME="reports/preflight-${DATE}.json"
+REPORT="$(nightgauge layout path checkout "$REPORT_NAME")"
+REPORT_JSON="$(nightgauge layout path checkout "$REPORT_JSON_NAME")"
 
 # Count totals
 MISSING_TYPE_COUNT=${#MISSING_TYPE[@]}
@@ -456,7 +460,7 @@ READY_COUNT=$((ISSUE_COUNT - TOTAL_ISSUES_NEEDING_ATTENTION))
 [ "$READY_COUNT" -lt 0 ] && READY_COUNT=0
 
 # Write markdown report
-cat > "$REPORT" << REPORTEOF
+nightgauge layout write checkout "$REPORT_NAME" > /dev/null << REPORTEOF
 ## Backlog Preflight Report — ${DATE}
 
 ### Summary
@@ -556,7 +560,7 @@ jq -n \
     },
     report_md: $report_md,
     pipeline_ready: ($ready_count == $issue_count and ($cycles | length) == 0)
-  }' > "$REPORT_JSON"
+  }' | nightgauge layout write checkout "$REPORT_JSON_NAME" > /dev/null
 
 echo "JSON report written: $REPORT_JSON"
 ```

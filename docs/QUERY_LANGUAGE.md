@@ -247,7 +247,8 @@ npx @nightgauge/sdk query "status:ready AND priority:P0" --save "high-priority-r
 
 ### Managing Saved Queries
 
-Saved queries are stored in `.nightgauge/saved-queries.yaml`:
+Saved queries are stored in this checkout's `saved-queries.yaml`, inside the
+git directory (`nightgauge layout path checkout saved-queries.yaml`):
 
 ```yaml
 version: "1.0"

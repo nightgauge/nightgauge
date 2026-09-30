@@ -6,13 +6,17 @@
  * - Returns null for missing files
  * - Emits onDataChanged when files are created/updated
  * - Saves history snapshot on score change
- * - Loads history from .nightgauge/history/
+ * - Loads history from the checkout's brownfield-history/ (ADR-024 § 7)
  *
  * @see Issue #1163 - Brownfield Modernization Progress Dashboard
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { BrownfieldDataService } from "../../src/services/BrownfieldDataService";
+import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 // Track watcher callbacks
 const watcherCallbacks: {
@@ -24,7 +28,7 @@ const watcherCallbacks: {
 vi.mock("vscode", () => ({
   RelativePattern: class {
     constructor(
-      public base: string,
+      public base: { fsPath: string },
       public pattern: string
     ) {}
   },
@@ -55,6 +59,7 @@ vi.mock("vscode", () => ({
   },
   Uri: {
     joinPath: vi.fn(),
+    file: (p: string) => ({ fsPath: p, scheme: "file" }),
   },
 }));
 
@@ -79,7 +84,13 @@ vi.mock("node:fs/promises", () => ({
 
 describe("BrownfieldDataService", () => {
   let service: BrownfieldDataService;
-  const workspaceRoot = "/test/workspace";
+  // A temp root with a fixed layout (no git); the reports dir the watcher
+  // needs is created under it, never in the real checkout.
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-brownfield-"));
+  const CHECKOUT = mkFakeCloneLayout(workspaceRoot).checkout;
+  const REPORTS = path.join(CHECKOUT, "reports");
+
+  afterAll(() => fs.rmSync(workspaceRoot, { recursive: true, force: true }));
 
   beforeEach(() => {
     // Clear mock files
@@ -110,7 +121,7 @@ describe("BrownfieldDataService", () => {
       top_recommendations: [],
       created_at: "2026-02-21T00:00:00Z",
     };
-    mockFiles["/test/workspace/.nightgauge/health-report.json"] = JSON.stringify(healthData);
+    mockFiles[path.join(REPORTS, "health-report.json")] = JSON.stringify(healthData);
 
     const result = await service.loadHealth();
     expect(result).not.toBeNull();
@@ -145,7 +156,7 @@ describe("BrownfieldDataService", () => {
       top_recommendations: [],
       created_at: "2026-02-21T00:00:00Z",
     };
-    mockFiles["/test/workspace/.nightgauge/security-audit.json"] = JSON.stringify(securityData);
+    mockFiles[path.join(REPORTS, "security-audit.json")] = JSON.stringify(securityData);
 
     const result = await service.loadSecurity();
     expect(result).not.toBeNull();
@@ -177,7 +188,7 @@ describe("BrownfieldDataService", () => {
         tasks_total: 20,
       },
     ];
-    mockFiles["/test/workspace/.nightgauge/history/brownfield-snapshots.json"] =
+    mockFiles[path.join(CHECKOUT, "brownfield-history", "brownfield-snapshots.json")] =
       JSON.stringify(history);
 
     const result = await service.loadHistory();
@@ -208,7 +219,7 @@ describe("BrownfieldDataService", () => {
       top_recommendations: [],
       created_at: "2026-02-21T00:00:00Z",
     };
-    mockFiles["/test/workspace/.nightgauge/health-report.json"] = JSON.stringify(healthData);
+    mockFiles[path.join(REPORTS, "health-report.json")] = JSON.stringify(healthData);
 
     const result = await service.loadAll();
     expect(result.hasAnyData).toBe(true);
@@ -227,6 +238,24 @@ describe("BrownfieldDataService", () => {
     }
 
     expect(fired).toBe(true);
+  });
+
+  it("watches the report files in the checkout's reports/ directory", async () => {
+    const vscode = await import("vscode");
+    const calls = vi.mocked(vscode.workspace.createFileSystemWatcher).mock.calls;
+    const pattern = calls[calls.length - 1][0] as unknown as { base: { fsPath: string } };
+    expect(pattern.base.fsPath).toBe(REPORTS);
+    expect(fs.existsSync(REPORTS)).toBe(true);
+  });
+
+  it("reports no data and watches nothing when the root is not a git checkout", async () => {
+    const vscode = await import("vscode");
+    vi.mocked(vscode.workspace.createFileSystemWatcher).mockClear();
+    const unusable = new BrownfieldDataService("relative/root");
+    expect(vscode.workspace.createFileSystemWatcher).not.toHaveBeenCalled();
+    expect(await unusable.loadHealth()).toBeNull();
+    expect(await unusable.loadHistory()).toEqual([]);
+    unusable.dispose();
   });
 
   it("disposes watchers on dispose", () => {

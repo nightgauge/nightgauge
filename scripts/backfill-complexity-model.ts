@@ -16,6 +16,7 @@
 import { execSync } from "child_process";
 import * as fs from "fs/promises";
 import * as yaml from "js-yaml";
+import { checkoutPath } from "../packages/nightgauge-sdk/src/context/cloneLayout.js";
 
 interface HistoricalPR {
   number: number;
@@ -192,7 +193,7 @@ async function appendToModel(
     model = yaml.load(content);
   } catch (error: any) {
     if (error.code === "ENOENT") {
-      console.error("Error: .nightgauge/complexity-model.yaml not found");
+      console.error(`Error: ${modelPath} not found (run nightgauge outcome init)`);
       console.error("Run the pipeline at least once to create the model file.");
       process.exit(1);
     }
@@ -320,7 +321,8 @@ async function main() {
   }
 
   // Append to model
-  const modelPath = ".nightgauge/complexity-model.yaml";
+  // This checkout's complexity model, <git-dir>/nightgauge-worktree (ADR-024 § 7).
+  const modelPath = checkoutPath("complexityModel");
   await appendToModel(observations, modelPath);
 
   console.log(`✓ Appended ${observations.length} observations to ${modelPath}`);

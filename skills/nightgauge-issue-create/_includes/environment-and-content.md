@@ -282,13 +282,14 @@ the wave planner and to the next groom. Before Phase 3:
 
 #### Size Prediction from Complexity Model
 
-When `.nightgauge/complexity-model.yaml` exists, use it to determine the
+When this checkout's `complexity-model.yaml` exists
+(`nightgauge layout path checkout complexity-model.yaml`), use it to determine the
 Size field value deterministically instead of guessing. This ensures sizing is
 data-driven and improves over time via the feedback loop.
 
 **Steps:**
 
-1. Read `.nightgauge/complexity-model.yaml`
+1. Read `"$(nightgauge layout path checkout complexity-model.yaml)"`
 2. Look up `type_adjustments[type].modifier` for the issue type (default `0`)
 3. Look up `priority_adjustments[priority].modifier` for the priority (default
    `0`)

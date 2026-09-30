@@ -12,6 +12,7 @@
  * @see Issue #1582 - Pipeline execution audit trail emission
  */
 
+import * as path from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AuditEventClient, AuditEventSchema, AUDIT_ACTIONS } from "@nightgauge/sdk";
 import type { AuditConfig } from "@nightgauge/sdk";
@@ -450,11 +451,24 @@ describe("getAuditConfig — returns safe defaults when no config file present",
       enabled: expect.any(Boolean),
       batchSize: expect.any(Number),
       flushIntervalMs: expect.any(Number),
-      offlineQueuePath: expect.any(String),
       offlineQueueMaxSize: expect.any(Number),
       retryMaxAttempts: expect.any(Number),
       retryBackoffMs: expect.any(Number),
       timeoutMs: expect.any(Number),
     });
+  });
+
+  it("leaves the offline queue unset outside a git checkout", async () => {
+    const { getAuditConfig } = await import("../../src/utils/nightgaugeConfig");
+    expect(getAuditConfig("/nonexistent/workspace").offlineQueuePath).toBeUndefined();
+  });
+
+  it("puts the offline queue in the checkout's per-checkout directory", async () => {
+    const { fakeCloneLayout } = await import("../helpers/cloneLayout");
+    const { getAuditConfig } = await import("../../src/utils/nightgaugeConfig");
+    const layout = fakeCloneLayout("/fake/audit-root");
+    expect(getAuditConfig("/fake/audit-root").offlineQueuePath).toBe(
+      path.join(layout.checkout, "audit-queue.json")
+    );
   });
 });

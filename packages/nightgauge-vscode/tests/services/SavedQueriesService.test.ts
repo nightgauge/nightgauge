@@ -1,5 +1,6 @@
 /**
- * Tests for SavedQueriesService — manages saved queries in .nightgauge/saved-queries.yaml
+ * Tests for SavedQueriesService — manages saved queries in the checkout's
+ * saved-queries.yaml (`.git/nightgauge-worktree/`, ADR-024 § 7)
  *
  * Covers:
  * - getAll() — includes/excludes built-in queries based on constructor flag
@@ -30,10 +31,11 @@ const watcherCallbacks: {
 vi.mock("vscode", () => ({
   RelativePattern: class {
     constructor(
-      public base: string,
+      public base: { fsPath: string },
       public pattern: string
     ) {}
   },
+  Uri: { file: (p: string) => ({ fsPath: p, scheme: "file" }) },
   workspace: {
     createFileSystemWatcher: vi.fn(() => ({
       onDidChange: vi.fn((cb: (uri: unknown) => void) => {
@@ -107,7 +109,14 @@ vi.mock("../../src/types/QueryTypes", () => ({
 // Helpers
 // ---------------------------------------------------------------------------
 
-async function makeService(workspaceRoot = "/tmp/workspace", includeBuiltIn = true) {
+const ROOT = "/tmp/workspace";
+const QUERIES_FILE = "/tmp/workspace/.git/nightgauge-worktree/saved-queries.yaml";
+
+async function makeService(workspaceRoot = ROOT, includeBuiltIn = true) {
+  // vi.resetModules() gives each test a fresh layout cache: fix the root's
+  // layout in it (no git runs; fs is mocked, so nothing touches disk).
+  const { fakeCloneLayout } = await import("../helpers/cloneLayout");
+  fakeCloneLayout(ROOT);
   const { SavedQueriesService } = await import("../../src/services/SavedQueriesService");
   return new SavedQueriesService(workspaceRoot, includeBuiltIn);
 }
@@ -140,14 +149,14 @@ describe("SavedQueriesService", () => {
 
   describe("getAll()", () => {
     it("includes built-in queries when includeBuiltIn=true", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       const all = svc.getAll();
       expect(all.some((q) => q.name === "Ready Issues")).toBe(true);
       expect(all.some((q) => q.name === "In Progress")).toBe(true);
     });
 
     it("excludes built-in queries when includeBuiltIn=false", async () => {
-      const svc = await makeService("/tmp/ws", false);
+      const svc = await makeService(ROOT, false);
       const all = svc.getAll();
       expect(all.some((q) => q.isBuiltIn)).toBe(false);
     });
@@ -159,14 +168,14 @@ describe("SavedQueriesService", () => {
 
   describe("getUserQueries()", () => {
     it("returns empty when only built-ins are loaded", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       expect(svc.getUserQueries()).toHaveLength(0);
     });
   });
 
   describe("getBuiltInQueries()", () => {
     it("returns the built-in queries", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       const builtIns = svc.getBuiltInQueries();
       expect(builtIns).toHaveLength(2);
       expect(builtIns.every((q) => q.isBuiltIn)).toBe(true);
@@ -179,14 +188,14 @@ describe("SavedQueriesService", () => {
 
   describe("get(name)", () => {
     it("finds a query by name", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       const q = svc.get("Ready Issues");
       expect(q).toBeDefined();
       expect(q?.name).toBe("Ready Issues");
     });
 
     it("returns undefined for a missing query", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       expect(svc.get("Does Not Exist")).toBeUndefined();
     });
   });
@@ -197,13 +206,13 @@ describe("SavedQueriesService", () => {
 
   describe("save()", () => {
     it("adds a new user query", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       await svc.save({ name: "Sprint Backlog", query: "status:ready" });
       expect(svc.get("Sprint Backlog")).toBeDefined();
     });
 
     it("updates an existing query", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       await svc.save({ name: "Sprint Backlog", query: "status:ready" });
       await svc.save({
         name: "Sprint Backlog",
@@ -215,7 +224,7 @@ describe("SavedQueriesService", () => {
     });
 
     it("fires onQueriesChanged after save", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       const events: unknown[] = [];
       svc.onQueriesChanged((e: unknown) => events.push(e));
 
@@ -225,9 +234,21 @@ describe("SavedQueriesService", () => {
     });
 
     it("writes to file after save", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       await svc.save({ name: "Persist Me", query: "status:ready" });
-      expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalled();
+      expect(vi.mocked(fs.writeFileSync)).toHaveBeenCalledWith(
+        QUERIES_FILE,
+        expect.any(String),
+        "utf-8"
+      );
+    });
+
+    it("refuses to save when the workspace root is not a git checkout", async () => {
+      const svc = await makeService("relative/root", true);
+      await expect(svc.save({ name: "Nowhere", query: "status:ready" })).rejects.toThrow(
+        /not a git checkout/
+      );
+      expect(vi.mocked(fs.writeFileSync)).not.toHaveBeenCalled();
     });
   });
 
@@ -237,7 +258,7 @@ describe("SavedQueriesService", () => {
 
   describe("delete()", () => {
     it("removes a user query and returns true", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       await svc.save({ name: "To Delete", query: "status:ready" });
       expect(svc.get("To Delete")).toBeDefined();
 
@@ -247,13 +268,13 @@ describe("SavedQueriesService", () => {
     });
 
     it("returns false when query is not found", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       const result = await svc.delete("No Such Query");
       expect(result).toBe(false);
     });
 
     it("cannot delete built-in queries — returns false", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       const result = await svc.delete("Ready Issues");
       expect(result).toBe(false);
       expect(svc.get("Ready Issues")).toBeDefined();
@@ -266,7 +287,7 @@ describe("SavedQueriesService", () => {
 
   describe("rename()", () => {
     it("renames a user query and returns true", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       await svc.save({ name: "Old Name", query: "type:bug" });
 
       const result = await svc.rename("Old Name", "New Name");
@@ -276,13 +297,13 @@ describe("SavedQueriesService", () => {
     });
 
     it("returns false when original query not found", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       const result = await svc.rename("Nonexistent", "Something Else");
       expect(result).toBe(false);
     });
 
     it("returns false when new name already exists", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       await svc.save({ name: "Query A", query: "type:bug" });
       await svc.save({ name: "Query B", query: "type:feature" });
 
@@ -300,7 +321,7 @@ describe("SavedQueriesService", () => {
 
   describe("recordUsage()", () => {
     it("increments runCount and updates lastUsedAt", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       await svc.save({ name: "Tracked Query", query: "status:ready" });
 
       const before = svc.get("Tracked Query");
@@ -322,8 +343,18 @@ describe("SavedQueriesService", () => {
   // -------------------------------------------------------------------------
 
   describe("file watcher", () => {
+    it("watches saved-queries.yaml in the per-checkout directory", async () => {
+      const vscode = await import("vscode");
+      vi.mocked(vscode.workspace.createFileSystemWatcher).mockClear();
+      await makeService(ROOT, true);
+      const pattern = vi.mocked(vscode.workspace.createFileSystemWatcher).mock
+        .calls[0][0] as unknown as { base: { fsPath: string }; pattern: string };
+      expect(pattern.base.fsPath).toBe("/tmp/workspace/.git/nightgauge-worktree");
+      expect(pattern.pattern).toBe("saved-queries.yaml");
+    });
+
     it("triggers reload when the file changes", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
 
       // File now exists with no user queries initially
       vi.mocked(fs.existsSync).mockReturnValue(true);
@@ -355,7 +386,7 @@ describe("SavedQueriesService", () => {
 
   describe("dispose()", () => {
     it("disposes resources without throwing", async () => {
-      const svc = await makeService("/tmp/ws", true);
+      const svc = await makeService(ROOT, true);
       expect(() => svc.dispose()).not.toThrow();
     });
   });

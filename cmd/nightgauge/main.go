@@ -13828,9 +13828,10 @@ func modernizeAggregateFindingsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "aggregate-findings",
 		Short: "Aggregate health, security, and test-scaffold findings into a single JSON output",
-		Long: `Reads the three .nightgauge/ assessment reports (health-report.json,
-security-audit.json, test-scaffold-report.json), applies severity normalization,
-deduplicates overlapping findings, and outputs a single stable JSON structure.
+		Long: `Reads the checkout's three assessment reports in ` + layout.CheckoutDisplay(layout.CheckoutReports) + `/
+(health-report.json, security-audit.json, test-scaffold-report.json), applies
+severity normalization, deduplicates overlapping findings, and outputs a single
+stable JSON structure.
 
 At least one input file must be present; missing files are reported in
 sources_missing and do not cause an error. All absent means exit 2.

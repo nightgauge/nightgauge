@@ -1,14 +1,22 @@
 /**
- * SavedQueriesService - Manages saved queries in .nightgauge/saved-queries.yaml
+ * SavedQueriesService - Manages saved queries in the checkout's saved-queries.yaml
  *
  * Provides CRUD operations for saved queries, with support for both
- * repo-level queries (shared with team) and built-in queries.
+ * user queries and built-in queries. User queries live in the checkout's
+ * per-checkout directory (`.git/nightgauge-worktree/saved-queries.yaml` for a
+ * main checkout, ADR-024 § 7); share a set with `export`/`import`.
  */
 
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
 import * as yaml from "yaml";
+import {
+  CHECKOUT_ENTRIES,
+  checkoutDir,
+  checkoutPath,
+  isUsableWorkspaceRoot,
+} from "../utils/cloneLayout";
 import { type SavedQuery, type SavedQueriesFile, SavedQueriesFileSchema } from "@nightgauge/sdk";
 import { type SavedQueryWithMeta, BUILTIN_QUERIES } from "../types/QueryTypes";
 
@@ -52,20 +60,30 @@ export class SavedQueriesService implements vscode.Disposable {
   }
 
   /**
-   * Get the path to the saved queries file
+   * The saved queries file, or null when the workspace root is not a usable
+   * checkout (then only built-in queries are available).
    */
-  private getFilePath(): string {
-    return path.join(this.workspaceRoot, ".nightgauge", "saved-queries.yaml");
+  private getFilePath(): string | null {
+    return isUsableWorkspaceRoot(this.workspaceRoot)
+      ? checkoutPath(this.workspaceRoot, "savedQueries")
+      : null;
   }
 
   /**
-   * Set up file watcher for the saved queries file
+   * Set up file watcher for the saved queries file. The file is under the git
+   * directory, outside the workspace folders' watched tree, so the pattern is
+   * rooted at the per-checkout directory itself.
    */
   private setupFileWatcher(): void {
-    const pattern = new vscode.RelativePattern(
-      this.workspaceRoot,
-      ".nightgauge/saved-queries.yaml"
-    );
+    if (!isUsableWorkspaceRoot(this.workspaceRoot)) return;
+    const dir = checkoutDir(this.workspaceRoot);
+    try {
+      // The watcher's base directory must exist; it is inside the git dir.
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      return;
+    }
+    const pattern = new vscode.RelativePattern(vscode.Uri.file(dir), CHECKOUT_ENTRIES.savedQueries);
 
     this.fileWatcher = vscode.workspace.createFileSystemWatcher(pattern);
 
@@ -88,7 +106,7 @@ export class SavedQueriesService implements vscode.Disposable {
     this.queries = this.includeBuiltIn ? [...BUILTIN_QUERIES] : [];
 
     // Load from file if it exists
-    if (fs.existsSync(filePath)) {
+    if (filePath && fs.existsSync(filePath)) {
       try {
         const content = fs.readFileSync(filePath, "utf-8");
         const data = yaml.parse(content);
@@ -124,11 +142,16 @@ export class SavedQueriesService implements vscode.Disposable {
    */
   private async saveToFile(): Promise<void> {
     const filePath = this.getFilePath();
-    const nightgaugeDir = path.dirname(filePath);
+    if (!filePath) {
+      throw new Error(
+        `Cannot save queries: workspace root "${this.workspaceRoot}" is not a git checkout`
+      );
+    }
+    const dir = path.dirname(filePath);
 
-    // Ensure .nightgauge directory exists
-    if (!fs.existsSync(nightgaugeDir)) {
-      fs.mkdirSync(nightgaugeDir, { recursive: true });
+    // Ensure the per-checkout directory exists
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
     }
 
     // Filter out built-in queries

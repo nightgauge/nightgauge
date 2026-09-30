@@ -143,11 +143,16 @@ if ! command -v jq &> /dev/null; then
 fi
 ```
 
-#### Step 1.3: Ensure `.nightgauge/` directory exists
+#### Step 1.3: Resolve the state directory
+
+The state lives in this checkout's `release-watch/` inside the git directory
+(`nightgauge layout path checkout release-watch`). Read it by path; write it
+only through `nightgauge layout write checkout release-watch/<file>`, which
+creates the directory and never follows a link out of it.
 
 ```bash
-WATCH_DIR=".nightgauge/release-watch"
-mkdir -p "${WATCH_DIR}/reports"
+WATCH_DIR="$(nightgauge layout path checkout release-watch)"
+export WATCH_DIR
 ```
 
 ---
@@ -168,13 +173,15 @@ if [[ "$*" == *"--source"* ]]; then
   SOURCE=$(printf '%s\n' "$*" | grep -oP '(?<=--source\s)\S+')
 fi
 RELEASE_LABEL="${PROVIDER}-release"
+LAST_SEEN_NAME="release-watch/last-seen-${PROVIDER}.json"
 LAST_SEEN_FILE="${WATCH_DIR}/last-seen-${PROVIDER}.json"
+export LAST_SEEN_NAME LAST_SEEN_FILE
 echo "Provider: ${PROVIDER}  Source: ${SOURCE}  Label: ${RELEASE_LABEL}"
 
 if [ ! -f "$LAST_SEEN_FILE" ]; then
   # Initialize with empty state (all releases are new)
   echo "{\"provider\":\"${PROVIDER}\",\"source\":\"${SOURCE}\",\"version\":\"0.0.0\",\"checked_at\":\"1970-01-01T00:00:00Z\",\"releases_seen\":[]}" \
-    | jq '.' > "$LAST_SEEN_FILE"
+    | jq '.' | nightgauge layout write checkout "$LAST_SEEN_NAME" > /dev/null
   LAST_VERSION="0.0.0"
   echo "Initialized new last-seen state for ${PROVIDER}"
 else
@@ -526,16 +533,19 @@ PYTHON_EOF
 
 ```bash
 REPORT_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-REPORT_FILE="${WATCH_DIR}/reports/report-$(date -u +%Y%m%d-%H%M%S).md"
+REPORT_NAME="release-watch/reports/report-$(date -u +%Y%m%d-%H%M%S).md"
+REPORT_TMP="$(mktemp)"
+export REPORT_TMP
 
 python3 << 'PYTHON_EOF'
 import json
+import os
 from datetime import datetime
 
 with open('/tmp/release-watch-scored.json') as f:
     releases = json.load(f)
 
-with open('.nightgauge/release-watch/last-seen-claude-code.json') as f:
+with open(os.environ['LAST_SEEN_FILE']) as f:
     last_state = json.load(f)
 
 # Detect active focus lens (same across all releases in this run)
@@ -641,27 +651,32 @@ report.append("")
 output = '\n'.join(report)
 print(output)
 
-# Also save to file for archival
-with open('${REPORT_FILE}', 'w') as f:
+# Also save for archival (moved into the checkout directory below)
+with open(os.environ['REPORT_TMP'], 'w') as f:
     f.write(output)
-
-print(f"\nReport saved to: ${REPORT_FILE}")
 PYTHON_EOF
+
+REPORT_FILE="$(nightgauge layout write checkout "$REPORT_NAME" --from "$REPORT_TMP")"
+rm -f "$REPORT_TMP"
+echo "Report saved to: ${REPORT_FILE}"
 ```
 
 #### Step 6.2: Create JSON report for programmatic consumption
 
 ```bash
-REPORT_JSON="${WATCH_DIR}/reports/report-$(date -u +%Y%m%d-%H%M%S).json"
+REPORT_JSON_NAME="release-watch/reports/report-$(date -u +%Y%m%d-%H%M%S).json"
+REPORT_JSON_TMP="$(mktemp)"
+export REPORT_JSON_TMP
 
 python3 << 'PYTHON_EOF'
 import json
+import os
 from datetime import datetime
 
 with open('/tmp/release-watch-scored.json') as f:
     releases = json.load(f)
 
-with open('.nightgauge/release-watch/last-seen-claude-code.json') as f:
+with open(os.environ['LAST_SEEN_FILE']) as f:
     last_state = json.load(f)
 
 active_lens = releases[0]['focus_lens'] if releases else 'general'
@@ -684,11 +699,13 @@ report = {
     'releases': releases
 }
 
-with open('${REPORT_JSON}', 'w') as f:
+with open(os.environ['REPORT_JSON_TMP'], 'w') as f:
     json.dump(report, f, indent=2)
-
-print(f"JSON report saved to: ${REPORT_JSON}")
 PYTHON_EOF
+
+REPORT_JSON="$(nightgauge layout write checkout "$REPORT_JSON_NAME" --from "$REPORT_JSON_TMP")"
+rm -f "$REPORT_JSON_TMP"
+echo "JSON report saved to: ${REPORT_JSON}"
 ```
 
 ---
@@ -707,8 +724,12 @@ fi
 #### Step 7.2: Update last-seen file with newest version
 
 ```bash
+STATE_TMP="$(mktemp)"
+export STATE_TMP
+
 python3 << 'PYTHON_EOF'
 import json
+import os
 from datetime import datetime
 
 with open('/tmp/release-watch-scored.json') as f:
@@ -721,7 +742,7 @@ else:
     newest_version = releases[0]['version']
 
     # Load current state
-    with open('.nightgauge/release-watch/last-seen-claude-code.json') as f:
+    with open(os.environ['LAST_SEEN_FILE']) as f:
         state = json.load(f)
 
     # Update with new version
@@ -733,12 +754,17 @@ else:
         state['releases_seen'].insert(0, newest_version)
         state['releases_seen'] = state['releases_seen'][:10]
 
-    # Save updated state
-    with open('.nightgauge/release-watch/last-seen-claude-code.json', 'w') as f:
+    # Stage the updated state; it is written into the checkout directory below
+    with open(os.environ['STATE_TMP'], 'w') as f:
         json.dump(state, f, indent=2)
 
     print(f"Updated last-seen version to: {newest_version}")
 PYTHON_EOF
+
+if [ -s "$STATE_TMP" ]; then
+  nightgauge layout write checkout "$LAST_SEEN_NAME" --from "$STATE_TMP" > /dev/null
+fi
+rm -f "$STATE_TMP"
 ```
 
 ---
@@ -755,7 +781,7 @@ This phase:
 - Handles override rules (breaking changes min 60, deprecations min 70, security min 50, model changes min 60)
 - Applies deduplication to prevent duplicate issues
 - Syncs created issues to the project board with proper labels and fields
-- Tracks all decisions in `.nightgauge/release-watch/creation-log.json` for auditability
+- Tracks all decisions in `checkout release-watch/creation-log.json` for auditability
 - Supports `--dry-run` flag for preview before creation
 - Enforces safety rails (max 3 issues per release, confirmation before creation)
 
@@ -872,10 +898,10 @@ MONITORING UTILITY (not part of main pipeline)
        ↑
   Use on regular cadence or after a provider release
   Reads:  GitHub API (<source> releases — e.g. anthropics/claude-code, openai/codex, google-gemini/gemini-cli)
-  Reads:  .nightgauge/release-watch/last-seen-<provider>.json
-  Writes: .nightgauge/release-watch/reports/*.md
-  Writes: .nightgauge/release-watch/reports/*.json
-  Writes: .nightgauge/release-watch/last-seen-<provider>.json (unless --dry-run)
+  Reads:  checkout release-watch/last-seen-<provider>.json
+  Writes: checkout release-watch/reports/*.md
+  Writes: checkout release-watch/reports/*.json
+  Writes: checkout release-watch/last-seen-<provider>.json (unless --dry-run)
 ```
 
 This is a standalone utility skill. It does not affect pipeline state and can be

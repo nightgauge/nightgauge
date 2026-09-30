@@ -1,5 +1,5 @@
 {
-  "_comment": "Shared by the Go `nightgauge layout` tests (cmd/nightgauge/layout_cmd_test.go, internal/layout) and the SDK cloneLayout tests: every path field of the layout JSON, derived from the git common dir ({common}) and the checkout's own git dir ({gitdir}), and the per-checkout entry names. ADR-024 § 7.",
+  "_comment": "Shared by the Go `nightgauge layout` tests (cmd/nightgauge/layout_cmd_test.go, internal/layout) and the SDK cloneLayout tests: every path field of the layout JSON, derived from the git common dir ({common}) and the checkout's own git dir ({gitdir}), and the per-checkout entry names. ADR-024 \u00a7 7.",
   "schema_version": 2,
   "fields": {
     "git_common_dir": "{common}",
@@ -30,6 +30,22 @@
     "triage": "triage",
     "focus": "focus.yaml",
     "performanceMode": "performance-mode.yaml",
-    "carefulLock": "careful.lock"
+    "carefulLock": "careful.lock",
+    "refreshTrigger": ".refresh-trigger",
+    "complexityModel": "complexity-model.yaml",
+    "complexityModelLock": "complexity-model.lock",
+    "outcomeRecovery": "outcome-recovery.jsonl",
+    "crossProjectPatterns": "cross-project-patterns.json",
+    "savedQueries": "saved-queries.yaml",
+    "auditQueue": "audit-queue.json",
+    "scopeDriftStats": "scope-drift-stats.json",
+    "docSnapshots": "doc-snapshots",
+    "releaseWatch": "release-watch",
+    "improvementRuns": "improvement-runs",
+    "analysis": "analysis",
+    "brownfieldHistory": "brownfield-history",
+    "sessionHandoff": "session-handoff.md",
+    "reports": "reports",
+    "automationPauses": "doctor/automation-pauses.json"
   }
 }

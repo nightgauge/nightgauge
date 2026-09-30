@@ -7,7 +7,9 @@
  * Assignment is deterministic: `issueNumber % 100 < splitPercent` → treatment.
  * This ensures the same issue always gets the same group across retries.
  *
- * Results persist as JSONL in `.nightgauge/analysis/experiments/`.
+ * Results persist as JSONL in `analysis/experiments/` of the checkout's own
+ * per-checkout directory (ADR-024 § 7): `.git/nightgauge-worktree/analysis/experiments/`
+ * for a main checkout.
  *
  * @see Issue #949 - A/B Testing Framework for Model Routing Decisions
  */
@@ -22,8 +24,15 @@ import type {
   ExperimentGroup,
   GroupMetrics,
 } from "./experiment-types.js";
+import { checkoutPath } from "../context/cloneLayout.js";
 
-const EXPERIMENTS_DIR = ".nightgauge/analysis/experiments";
+/**
+ * `<git-dir>/nightgauge-worktree/analysis/experiments` for the checkout
+ * containing `workspaceRoot`. Throws outside a git repository.
+ */
+export function experimentsDir(workspaceRoot: string): string {
+  return path.join(checkoutPath("analysis", workspaceRoot), "experiments");
+}
 
 export class ExperimentManager {
   /**
@@ -67,12 +76,13 @@ export class ExperimentManager {
   /**
    * Record an experiment outcome to JSONL.
    *
-   * Appends to `.nightgauge/analysis/experiments/{experiment_name}.jsonl`.
+   * Appends to `{experimentsDir}/{experiment_name}.jsonl` in the checkout's
+   * per-checkout directory.
    * Creates directory if needed. Failures are logged as warnings (non-blocking).
    */
   static recordOutcome(workspaceRoot: string, outcome: ExperimentOutcome): void {
     try {
-      const dir = path.join(workspaceRoot, EXPERIMENTS_DIR);
+      const dir = experimentsDir(workspaceRoot);
       fs.mkdirSync(dir, { recursive: true });
 
       const filePath = path.join(dir, `${outcome.experiment_name}.jsonl`);
@@ -153,12 +163,12 @@ export class ExperimentManager {
   }
 
   /**
-   * Read outcomes from a JSONL experiment file.
+   * Read outcomes from a JSONL experiment file. Empty when there is none, or
+   * when `workspaceRoot` is not inside a git repository.
    */
   static readOutcomes(workspaceRoot: string, experimentName: string): ExperimentOutcome[] {
-    const filePath = path.join(workspaceRoot, EXPERIMENTS_DIR, `${experimentName}.jsonl`);
-
     try {
+      const filePath = path.join(experimentsDir(workspaceRoot), `${experimentName}.jsonl`);
       const content = fs.readFileSync(filePath, "utf-8");
       return content
         .split("\n")

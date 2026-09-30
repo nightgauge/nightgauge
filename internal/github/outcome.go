@@ -11,17 +11,15 @@ import (
 	"io/fs"
 	"math"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/atomicfile"
 	"github.com/nightgauge/nightgauge/internal/flock"
 	"github.com/nightgauge/nightgauge/internal/intelligence/actualsize"
-	"github.com/nightgauge/nightgauge/internal/scaffold"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"gopkg.in/yaml.v3"
 )
 
@@ -36,14 +34,6 @@ const (
 	outcomeModelLockTimeout  = 30 * time.Second
 	maxComplexityModelBytes  = 10 << 20
 )
-
-const localModelGitignore = `# Managed by nightgauge outcome initialization.
-# Repo-init or the VS Code extension will replace this lightweight file with
-# the complete canonical .nightgauge ignore rules.
-/.gitignore
-/complexity-model.yaml
-/complexity-model.lock
-`
 
 var (
 	sizeOrder           = []string{"XS", "S", "M", "L", "XL"}
@@ -327,13 +317,38 @@ type recentOutcome struct {
 // OutcomeService records pipeline execution outcomes to the complexity model.
 type OutcomeService struct {
 	modelPath string
+	lockPath  string
+	// resolveErr is set when the model's per-checkout location could not be
+	// resolved (a root outside git); every operation returns it.
+	resolveErr error
 }
 
-// NewOutcomeService creates an OutcomeService using the workspace root to locate the model file.
+// NewOutcomeService creates an OutcomeService for the complexity model of the
+// checkout workspaceRoot is in: CHECKOUT/complexity-model.yaml (ADR-024 § 7),
+// per-checkout learned state inside the git dir, so it is never tracked. A
+// root outside git leaves the service unusable: every operation returns the
+// resolver's error.
 func NewOutcomeService(workspaceRoot string) *OutcomeService {
-	return &OutcomeService{
-		modelPath: filepath.Join(workspaceRoot, ".nightgauge", "complexity-model.yaml"),
+	s := &OutcomeService{}
+	root, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		s.resolveErr = fmt.Errorf("resolve workspace root %q: %w", workspaceRoot, err)
+		return s
 	}
+	if s.modelPath, err = layout.CheckoutPath(root, layout.CheckoutComplexityModel); err != nil {
+		s.resolveErr = fmt.Errorf("locate the complexity model: %w", err)
+		return s
+	}
+	if s.lockPath, err = layout.CheckoutPath(root, layout.CheckoutComplexityModelLock); err != nil {
+		s.resolveErr = fmt.Errorf("locate the complexity-model lock: %w", err)
+	}
+	return s
+}
+
+// ModelPath returns the complexity model's path, or the error that kept it
+// from being resolved.
+func (s *OutcomeService) ModelPath() (string, error) {
+	return s.modelPath, s.resolveErr
 }
 
 // InitializeModel creates the canonical complexity-model baseline without
@@ -415,6 +430,9 @@ func decodeComplexityModelDocument(data []byte) (*complexityModel, error) {
 // ValidateModel verifies that the existing model is a safe regular file and
 // satisfies the same strict contract enforced by the transaction broker.
 func (s *OutcomeService) ValidateModel() error {
+	if s.resolveErr != nil {
+		return s.resolveErr
+	}
 	if err := s.ensureSafeModelDir(); err != nil {
 		return err
 	}
@@ -582,9 +600,6 @@ func (s *OutcomeService) initializeModelLocked() (ModelInitResult, error) {
 	if exists {
 		return result, nil
 	}
-	if err := s.ensureLocalModelGitignore(); err != nil {
-		return result, err
-	}
 
 	model := newBootstrapComplexityModel(time.Now().UTC())
 	data, err := yaml.Marshal(model)
@@ -629,7 +644,7 @@ func (s *OutcomeService) ensureSafeModelDir() error {
 	dir := filepath.Dir(s.modelPath)
 	info, err := os.Lstat(dir)
 	if os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return fmt.Errorf("create model directory: %w", err)
 		}
 		info, err = os.Lstat(dir)
@@ -663,141 +678,10 @@ func (s *OutcomeService) safeExistingModel() (bool, error) {
 	return true, nil
 }
 
-func (s *OutcomeService) ensureLocalModelGitignore() error {
-	ignorePath := filepath.Join(filepath.Dir(s.modelPath), ".gitignore")
-	info, err := os.Lstat(ignorePath)
-	if os.IsNotExist(err) {
-		tmp, createErr := os.CreateTemp(filepath.Dir(ignorePath), ".model-gitignore-*.tmp")
-		if createErr != nil {
-			return fmt.Errorf("create model gitignore temp file: %w", createErr)
-		}
-		tmpPath := tmp.Name()
-		defer os.Remove(tmpPath)
-		if chmodErr := tmp.Chmod(0o644); chmodErr != nil {
-			tmp.Close()
-			return fmt.Errorf("set model gitignore permissions: %w", chmodErr)
-		}
-		if _, writeErr := tmp.WriteString(localModelGitignore); writeErr != nil {
-			tmp.Close()
-			return fmt.Errorf("write model gitignore: %w", writeErr)
-		}
-		if syncErr := tmp.Sync(); syncErr != nil {
-			tmp.Close()
-			return fmt.Errorf("sync model gitignore: %w", syncErr)
-		}
-		if closeErr := tmp.Close(); closeErr != nil {
-			return fmt.Errorf("close model gitignore: %w", closeErr)
-		}
-		if linkErr := os.Link(tmpPath, ignorePath); linkErr != nil && !errors.Is(linkErr, fs.ErrExist) {
-			return fmt.Errorf("install model gitignore: %w", linkErr)
-		}
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("inspect model gitignore: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing symlinked model gitignore: %s", ignorePath)
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("model gitignore path is not a regular file: %s", ignorePath)
-	}
-
-	data, err := os.ReadFile(ignorePath)
-	if err != nil {
-		return fmt.Errorf("read model gitignore: %w", err)
-	}
-	content := string(data)
-	missing := ""
-	for _, pattern := range []string{"/complexity-model.yaml", "/complexity-model.lock"} {
-		if !containsLine(content, pattern) {
-			missing += pattern + "\n"
-		}
-	}
-	if missing == "" {
-		return nil
-	}
-	// A committed .gitignore is the repository's, not this machine's: editing it
-	// leaves the primary clone dirty on main with a change nothing commits, and a
-	// staged copy of it blocks `git pull --ff-only` (#1875). The rules this
-	// process needs are per-machine, so they go to the repository's
-	// info/exclude, which git reads the same way and never tracks. The
-	// committed file catches up when the repository adopts the current
-	// template through a pull request.
-	if handled, err := excludeLocallyIfTracked(filepath.Dir(ignorePath), missing); handled || err != nil {
-		return err
-	}
-	if len(content) > 0 && content[len(content)-1] != '\n' {
-		content += "\n"
-	}
-	return atomicfile.Write(ignorePath, []byte(content+missing), info.Mode().Perm())
-}
-
-// excludeLocallyIfTracked writes the directory-relative ignore patterns in
-// missing (one per line, each starting with "/") to the repository's
-// info/exclude when dir/.gitignore is tracked. It reports handled=false,
-// leaving the caller to edit the file, when dir is not in a git work tree or
-// its .gitignore is untracked (no committed state to dirty).
-//
-// The tracked check and the info/exclude resolution (common dir in a linked
-// worktree, symlinks refused) are internal/scaffold's, shared with the
-// .nightgauge/ ignore rules `config init` and `serve` ensure.
-func excludeLocallyIfTracked(dir, missing string) (bool, error) {
-	if !scaffold.IsTracked(dir, ".gitignore") {
-		return false, nil
-	}
-	rev := exec.Command("git", "rev-parse", "--show-prefix")
-	rev.Dir = dir
-	out, err := rev.Output()
-	if err != nil {
-		return false, nil
-	}
-	prefix := strings.TrimSuffix(strings.TrimSpace(string(out)), "/")
-	excludePath, err := scaffold.LocalExcludePath(dir)
-	if errors.Is(err, scaffold.ErrNotGitWorkTree) {
-		return false, nil
-	}
-	if err != nil {
-		return true, err
-	}
-	existing, err := os.ReadFile(excludePath)
-	if err != nil && !os.IsNotExist(err) {
-		return true, fmt.Errorf("read %s: %w", excludePath, err)
-	}
-	content := string(existing)
-	add := ""
-	for _, pattern := range strings.Split(strings.TrimSpace(missing), "\n") {
-		rooted := "/" + strings.TrimPrefix(pattern, "/")
-		if prefix != "" {
-			rooted = "/" + prefix + rooted
-		}
-		if !containsLine(content, rooted) {
-			add += rooted + "\n"
-		}
-	}
-	if add == "" {
-		return true, nil
-	}
-	if len(content) > 0 && content[len(content)-1] != '\n' {
-		content += "\n"
-	}
-	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
-		return true, fmt.Errorf("create %s: %w", filepath.Dir(excludePath), err)
-	}
-	content += "# nightgauge: per-machine runtime state (the committed .gitignore predates it, #1875)\n" + add
-	return true, atomicfile.Write(excludePath, []byte(content), 0o644)
-}
-
-func containsLine(content, expected string) bool {
-	for _, line := range strings.Split(content, "\n") {
-		if strings.TrimSpace(line) == expected {
-			return true
-		}
-	}
-	return false
-}
-
 func (s *OutcomeService) lockModel() (func(), error) {
+	if s.resolveErr != nil {
+		return nil, s.resolveErr
+	}
 	modelPath, err := filepath.Abs(s.modelPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve complexity-model path: %w", err)
@@ -816,22 +700,13 @@ func (s *OutcomeService) lockModel() (func(), error) {
 		return nil, err
 	}
 
-	lockPath := filepath.Join(filepath.Dir(s.modelPath), "complexity-model.lock")
-	lockMissing := false
+	lockPath := s.lockPath
 	if info, err := os.Lstat(lockPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
 		modelMu.Unlock()
 		return nil, fmt.Errorf("refusing symlinked complexity-model lock: %s", lockPath)
-	} else if os.IsNotExist(err) {
-		lockMissing = true
 	} else if err != nil && !os.IsNotExist(err) {
 		modelMu.Unlock()
 		return nil, fmt.Errorf("inspect complexity-model lock: %w", err)
-	}
-	if lockMissing {
-		if err := s.ensureLocalModelGitignore(); err != nil {
-			modelMu.Unlock()
-			return nil, err
-		}
 	}
 
 	lockFile, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)

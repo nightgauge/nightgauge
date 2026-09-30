@@ -202,7 +202,8 @@ export interface SavedQuery {
 }
 
 /**
- * Saved queries file format (.nightgauge/saved-queries.yaml)
+ * Saved queries file format (saved-queries.yaml in the checkout's per-checkout
+ * directory, `.git/nightgauge-worktree/` for a main checkout)
  */
 export interface SavedQueriesFile {
   /** Schema version for forward compatibility */

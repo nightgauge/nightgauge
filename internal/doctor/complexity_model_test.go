@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // TestCheckComplexityModel_MissingIsBootstrappedNotAWarning is #2202: the
@@ -14,7 +16,7 @@ import (
 // deterministic baseline is installed on first use. Absence is info only —
 // never a warning — and offers `outcome init`.
 func TestCheckComplexityModel_MissingIsBootstrappedNotAWarning(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	fs, _ := complexityModelFindings(root)
 	if len(fs) != 1 || fs[0].Severity != SeverityInfo || fs[0].Code != codeComplexityModelMissing {
 		t.Fatalf("missing model must be one info finding, got %s", findingsText(fs))
@@ -28,7 +30,7 @@ func TestCheckComplexityModel_MissingIsBootstrappedNotAWarning(t *testing.T) {
 }
 
 func TestCheckComplexityModel_ExistingFileIsHealthy(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	result, err := gh.NewOutcomeService(root).InitializeModel()
 	if err != nil {
 		t.Fatalf("initialize model: %v", err)
@@ -46,8 +48,8 @@ func TestCheckComplexityModel_ExistingFileIsHealthy(t *testing.T) {
 }
 
 func TestCheckComplexityModel_InvalidFileUsesSupportedRepairGuidance(t *testing.T) {
-	root := t.TempDir()
-	modelPath := filepath.Join(root, ".nightgauge", "complexity-model.yaml")
+	root := layouttest.Repo(t)
+	modelPath := layouttest.CheckoutPath(t, root, layout.CheckoutComplexityModel)
 	if err := os.MkdirAll(filepath.Dir(modelPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -74,8 +76,8 @@ func TestCheckComplexityModel_V03xFixtureIsHealthy(t *testing.T) {
 		t.Fatalf("read v0.3.x fixture: %v", err)
 	}
 
-	root := t.TempDir()
-	modelPath := filepath.Join(root, ".nightgauge", "complexity-model.yaml")
+	root := layouttest.Repo(t)
+	modelPath := layouttest.CheckoutPath(t, root, layout.CheckoutComplexityModel)
 	if err := os.MkdirAll(filepath.Dir(modelPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -91,24 +93,44 @@ func TestCheckComplexityModel_V03xFixtureIsHealthy(t *testing.T) {
 }
 
 func TestCheckComplexityModel_RejectsSymlinkedDirectory(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
+	gitDir, err := layout.GitDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	outside := t.TempDir()
-	if err := os.Symlink(outside, filepath.Join(root, ".nightgauge")); err != nil {
+	if err := os.Symlink(outside, filepath.Join(gitDir, "nightgauge-worktree")); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 
 	fs, _ := complexityModelFindings(root)
 	warning := findingsText(fs)
-	if len(fs) == 0 || !strings.Contains(warning, "directory is a symlink") {
+	if len(fs) != 1 || fs[0].Severity != SeverityWarning || !strings.Contains(warning, "directory is unsafe") {
 		t.Fatalf("symlinked directory check = %+v, warning = %q", fs, warning)
+	}
+	if len(fs[0].Remedies) != 1 || fs[0].Remedies[0].Kind == RemedyConfirm {
+		t.Fatalf("an unsafe directory must offer only a manual remedy, got %+v", fs[0].Remedies)
+	}
+}
+
+// A root outside git has no per-checkout directory, so there is no model to
+// check: the check is skipped, not reported missing.
+func TestCheckComplexityModel_OutsideGitIsSkipped(t *testing.T) {
+	root := t.TempDir()
+	fs, detail := complexityModelFindings(root)
+	if len(fs) != 0 || !strings.HasPrefix(detail, "skipped") {
+		t.Fatalf("outside git: findings %s, detail %q; want skipped", findingsText(fs), detail)
+	}
+	if entries, _ := os.ReadDir(root); len(entries) != 0 {
+		t.Fatalf("the check wrote under a root outside git: %v", entries)
 	}
 }
 
 // TestComplexityModelRemedyPreview: the outcome-init remedy's preview names
 // the file it would write, and producing it writes nothing.
 func TestComplexityModelRemedyPreview(t *testing.T) {
-	root := t.TempDir()
-	modelPath := filepath.Join(root, ".nightgauge", "complexity-model.yaml")
+	root := layouttest.Repo(t)
+	modelPath := layouttest.CheckoutPath(t, root, layout.CheckoutComplexityModel)
 	fs, _ := complexityModelFindings(root)
 	if len(fs) != 1 || len(fs[0].Remedies) == 0 {
 		t.Fatalf("want one finding with a remedy, got %s", findingsText(fs))

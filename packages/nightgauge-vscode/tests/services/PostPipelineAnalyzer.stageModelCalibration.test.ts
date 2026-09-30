@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "node:fs/promises";
 import type { ExecutionHistoryRunRecord } from "../../src/schemas/executionHistory";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 vi.mock("node:fs/promises");
 
@@ -197,6 +198,8 @@ function mockAnalyzeSuccess() {
 
 describe("PostPipelineAnalyzer — per-(stage, model) calibration (Issue #142)", () => {
   const workspaceRoot = "/test/workspace";
+  // The analysis dir is per checkout (ADR-024 § 7); a fixed layout, no git.
+  fakeCloneLayout(workspaceRoot);
   let logger: ReturnType<typeof createMockLogger>;
 
   beforeEach(() => {

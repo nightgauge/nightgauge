@@ -578,6 +578,21 @@ targets as warnings and keeps its existing exit status.
 > migrated in the same pass: its per-checkout files to its own `CHECKOUT`, its keyed data merged
 > into `CLONE`. `go-backend.log` is merged like append-only JSONL, so a log both builds wrote never
 > stops the migration. The marker is kept only in `CLONE`: the one pass covers every checkout.
+>
+> **"And the rest" (§ 7), as moved.** Besides the entries § 7 names, these unkeyed runtime files go
+> to `CHECKOUT`: `.refresh-trigger`, `complexity-model.yaml` and its lock, `outcome-recovery.jsonl`,
+> `cross-project-patterns.json`, `saved-queries.yaml`, `audit-queue.json`, the scope-drift counter
+> (`audit/scope-drift-stats.json`, now `scope-drift-stats.json`; the rest of `audit/` stays
+> committed, § 13), `doc-snapshots/`, `release-watch/`, `improvement-runs/`, `analysis/`, the
+> brownfield snapshots (`history/`, now `brownfield-history/`), `session-handoff.md`,
+> `doctor/automation-pauses.json`, and the generated reports (`health-report.json`,
+> `security-audit.json`, `modernization-plan.json`, `dep-modernize-report.json`,
+> `test-scaffold-report.json`, `backlog-*.md`) under `CHECKOUT/reports/`. `layout.CheckoutEntries`
+> is the list and the migration table. Stay in `.nightgauge/`: the § 13 allowlist, `knowledge/`,
+> `config.local.yaml`, the evaluation runs beside their tracked references (`skill-evals/`,
+> `model-evals/`, which § 13 keeps in place and the deny-by-default template ignores), and
+> `config.yaml.tmp`, the config writer's temporary file, which must sit beside `config.yaml` for an
+> atomic rename.
 
 **Releases.** A relocation and its migration ship in the same release. `main` may carry the gap
 between the two merges; a release tag may not.

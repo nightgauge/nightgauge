@@ -224,11 +224,11 @@ CHECKOUT_DIR="$(nightgauge layout path checkout)"
 [ -f ".nightgauge/execution-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES execution-history"
 [ -d "${PIPELINE_DIR}/assessments" ] && DATA_SOURCES="$DATA_SOURCES assessments"
 [ -f ".nightgauge/calibration.json" ] && DATA_SOURCES="$DATA_SOURCES calibration"
-[ -d ".nightgauge/analysis" ] && DATA_SOURCES="$DATA_SOURCES analysis"
+[ -d "${CHECKOUT_DIR}/analysis" ] && DATA_SOURCES="$DATA_SOURCES analysis"
 [ -f "${CHECKOUT_DIR}/health/gate-metrics.jsonl" ] && DATA_SOURCES="$DATA_SOURCES gate-metrics"
 [ -f ".nightgauge/skill-effectiveness.jsonl" ] && DATA_SOURCES="$DATA_SOURCES skill-effectiveness"
 [ -d "${CHECKOUT_DIR}/health" ] && DATA_SOURCES="$DATA_SOURCES health-trends"
-[ -f ".nightgauge/complexity-model.yaml" ] && DATA_SOURCES="$DATA_SOURCES complexity-model"
+[ -f "${CHECKOUT_DIR}/complexity-model.yaml" ] && DATA_SOURCES="$DATA_SOURCES complexity-model"
 [ -f "${PIPELINE_DIR}/recommendation-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES recommendations"
 ```
 
@@ -321,7 +321,8 @@ entries matching the analysis period).
 
 ### Signal Group 3: Calibration Accuracy (SHARED)
 
-Read from `.nightgauge/complexity-model.yaml`:
+Read from `checkout/complexity-model.yaml`
+(`nightgauge layout path checkout complexity-model.yaml`):
 
 **Key metrics to extract:**
 
@@ -999,12 +1000,12 @@ This skill reads configuration from `.nightgauge/config.yaml`:
 | --------------------------------------- | -------------------- | --------- |
 | `pipeline/assessments/*.json`           | Skill Friction       | No        |
 | `checkout/health/trends.jsonl`          | Health Dimensions    | No        |
-| `.nightgauge/complexity-model.yaml`     | Calibration          | No        |
+| `checkout/complexity-model.yaml`        | Calibration          | No        |
 | `pipeline/recommendation-history.jsonl` | Recommendations      | No        |
 | `.nightgauge/execution-history.jsonl`   | Execution Efficiency | No        |
 | `checkout/health/gate-metrics.jsonl`    | Feedback & Recovery  | No        |
 | `.nightgauge/skill-effectiveness.jsonl` | Feedback & Recovery  | No        |
-| `.nightgauge/analysis/latest.json`      | Health Dimensions    | No        |
+| `checkout/analysis/latest.json`         | Health Dimensions    | No        |
 | `.nightgauge/calibration.json`          | Calibration          | No        |
 
 `pipeline/...` sources are in the clone's pipeline state directory

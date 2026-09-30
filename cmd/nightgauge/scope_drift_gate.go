@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -254,7 +255,8 @@ func emitScopeDriftTelemetry(ctx context.Context, issueNum int, result *scopeDri
 	})
 }
 
-// scopeDriftAudit is the on-disk shape of .nightgauge/audit/scope-drift-stats.json.
+// scopeDriftAudit is the on-disk shape of the per-checkout drift counter,
+// CHECKOUT/scope-drift-stats.json (ADR-024 § 7, § 13).
 type scopeDriftAudit struct {
 	TotalDriftEvents int                 `json:"total_drift_events"`
 	ByIssueType      map[string]int      `json:"by_issue_type"`
@@ -270,14 +272,17 @@ type scopeDriftAuditEv struct {
 	Timestamp    string   `json:"timestamp"`
 }
 
-// appendScopeDriftAudit updates the local audit counter file. Best-effort:
+// appendScopeDriftAudit updates the per-checkout drift counter. Best-effort:
 // failures are reported via stderr but do not fail the gate.
 func appendScopeDriftAudit(workdir string, issueNum int, result *scopeDriftGate.GateResult) error {
-	auditDir := filepath.Join(workdir, ".nightgauge", "audit")
-	if err := os.MkdirAll(auditDir, 0o755); err != nil {
+	root, err := filepath.Abs(workdir)
+	if err != nil {
 		return err
 	}
-	auditPath := filepath.Join(auditDir, "scope-drift-stats.json")
+	auditPath, err := layout.CheckoutPath(root, layout.CheckoutScopeDriftStats)
+	if err != nil {
+		return err
+	}
 
 	var audit scopeDriftAudit
 	audit.ByIssueType = map[string]int{}
@@ -309,7 +314,8 @@ func appendScopeDriftAudit(workdir string, issueNum int, result *scopeDriftGate.
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(auditPath, data, 0o644)
+	_, err = layout.WriteCheckoutFile(root, layout.CheckoutScopeDriftStats, bytes.NewReader(data))
+	return err
 }
 
 func renderScopeDriftHuman(result *scopeDriftGate.GateResult, status string, issueNum int) {

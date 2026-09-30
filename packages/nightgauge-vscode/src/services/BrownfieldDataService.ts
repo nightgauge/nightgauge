@@ -1,8 +1,10 @@
 /**
  * BrownfieldDataService - File watcher and data loader for brownfield assessment JSONs
  *
- * Reads assessment reports from .nightgauge/ and watches for file changes.
- * Manages history snapshots in .nightgauge/history/ for trend visualization.
+ * Reads assessment reports from the checkout's `reports/` directory and
+ * watches for file changes. Manages history snapshots in the checkout's
+ * `brownfield-history/` for trend visualization. Both are in the per-checkout
+ * directory (`.git/nightgauge-worktree/` for a main checkout, ADR-024 § 7).
  *
  * Pattern: Follows PipelineStateService for file watching and event emission.
  *
@@ -10,9 +12,11 @@
  */
 
 import * as vscode from "vscode";
+import { mkdirSync } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { writeFileAtomic } from "../utils/atomicWrite";
+import { checkoutPath, isUsableWorkspaceRoot } from "../utils/cloneLayout";
 import type {
   HealthReportData,
   SecurityAuditData,
@@ -25,7 +29,7 @@ import type {
 /** Maximum number of history snapshots to retain */
 const MAX_HISTORY_SNAPSHOTS = 100;
 
-/** Assessment file names relative to .nightgauge/ */
+/** Assessment file names in the checkout's reports/ directory */
 const ASSESSMENT_FILES = {
   health: "health-report.json",
   security: "security-audit.json",
@@ -44,18 +48,22 @@ const ASSESSMENT_FILES = {
  * ```
  */
 export class BrownfieldDataService implements vscode.Disposable {
-  private readonly nightgaugeDir: string;
-  private readonly historyDir: string;
-  private readonly historyFile: string;
+  // Null when the workspace root is not a usable checkout: nothing is
+  // watched, loaders report no data, and history is never written.
+  private readonly reportsDir: string | null = null;
+  private readonly historyDir: string | null = null;
+  private readonly historyFile: string | null = null;
   private readonly disposables: vscode.Disposable[] = [];
 
   private readonly _onDataChanged = new vscode.EventEmitter<void>();
   readonly onDataChanged = this._onDataChanged.event;
 
   constructor(private readonly workspaceRoot: string) {
-    this.nightgaugeDir = path.join(workspaceRoot, ".nightgauge");
-    this.historyDir = path.join(this.nightgaugeDir, "history");
-    this.historyFile = path.join(this.historyDir, "brownfield-snapshots.json");
+    if (isUsableWorkspaceRoot(workspaceRoot)) {
+      this.reportsDir = checkoutPath(workspaceRoot, "reports");
+      this.historyDir = checkoutPath(workspaceRoot, "brownfieldHistory");
+      this.historyFile = path.join(this.historyDir, "brownfield-snapshots.json");
+    }
 
     this.initializeWatchers();
   }
@@ -64,8 +72,18 @@ export class BrownfieldDataService implements vscode.Disposable {
    * Set up file watchers for all assessment JSON files
    */
   private initializeWatchers(): void {
+    this.disposables.push(this._onDataChanged);
+    if (!this.reportsDir) return;
+    try {
+      // The watcher's base directory must exist; it is inside the git dir.
+      mkdirSync(this.reportsDir, { recursive: true });
+    } catch {
+      return;
+    }
+    // Rooted at the reports directory itself: it is under the git directory,
+    // which workspace-wide watchers exclude.
     const pattern = new vscode.RelativePattern(
-      this.nightgaugeDir,
+      vscode.Uri.file(this.reportsDir),
       "{health-report.json,security-audit.json,modernization-plan.json,dep-modernize-report.json}"
     );
 
@@ -75,7 +93,7 @@ export class BrownfieldDataService implements vscode.Disposable {
     watcher.onDidChange(() => this._onDataChanged.fire());
     watcher.onDidDelete(() => this._onDataChanged.fire());
 
-    this.disposables.push(watcher, this._onDataChanged);
+    this.disposables.push(watcher);
   }
 
   /**
@@ -101,37 +119,38 @@ export class BrownfieldDataService implements vscode.Disposable {
   }
 
   /**
-   * Load health report from .nightgauge/health-report.json
+   * Load health report from reports/health-report.json
    */
   async loadHealth(): Promise<HealthReportData | null> {
     return this.loadJsonFile<HealthReportData>(ASSESSMENT_FILES.health);
   }
 
   /**
-   * Load security audit from .nightgauge/security-audit.json
+   * Load security audit from reports/security-audit.json
    */
   async loadSecurity(): Promise<SecurityAuditData | null> {
     return this.loadJsonFile<SecurityAuditData>(ASSESSMENT_FILES.security);
   }
 
   /**
-   * Load modernization plan from .nightgauge/modernization-plan.json
+   * Load modernization plan from reports/modernization-plan.json
    */
   async loadPlan(): Promise<ModernizationPlanData | null> {
     return this.loadJsonFile<ModernizationPlanData>(ASSESSMENT_FILES.plan);
   }
 
   /**
-   * Load dependency modernize report from .nightgauge/dep-modernize-report.json
+   * Load dependency modernize report from reports/dep-modernize-report.json
    */
   async loadDeps(): Promise<DepModernizeData | null> {
     return this.loadJsonFile<DepModernizeData>(ASSESSMENT_FILES.deps);
   }
 
   /**
-   * Load history snapshots from .nightgauge/history/brownfield-snapshots.json
+   * Load history snapshots from brownfield-history/brownfield-snapshots.json
    */
   async loadHistory(): Promise<BrownfieldSnapshot[]> {
+    if (!this.historyFile) return [];
     try {
       const content = await fs.readFile(this.historyFile, "utf-8");
       const data = JSON.parse(content);
@@ -193,6 +212,7 @@ export class BrownfieldDataService implements vscode.Disposable {
    * Save history snapshots to disk
    */
   private async saveHistory(history: BrownfieldSnapshot[]): Promise<void> {
+    if (!this.historyDir || !this.historyFile) return;
     try {
       await fs.mkdir(this.historyDir, { recursive: true });
       // Atomic — a crash mid-write would otherwise lose the whole history (#1210).
@@ -203,11 +223,12 @@ export class BrownfieldDataService implements vscode.Disposable {
   }
 
   /**
-   * Load and parse a JSON file from .nightgauge/
+   * Load and parse a JSON file from the checkout's reports/ directory
    */
   private async loadJsonFile<T>(filename: string): Promise<T | null> {
+    if (!this.reportsDir) return null;
     try {
-      const filePath = path.join(this.nightgaugeDir, filename);
+      const filePath = path.join(this.reportsDir, filename);
       const content = await fs.readFile(filePath, "utf-8");
       return JSON.parse(content) as T;
     } catch {

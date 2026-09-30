@@ -3430,7 +3430,9 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
     apiKey: undefined,
     batchSize: 50,
     flushIntervalMs: 30_000,
-    offlineQueuePath: ".nightgauge/audit-queue.json",
+    // Set below from the workspace root: audit-queue.json in the checkout's
+    // per-checkout directory (ADR-024 § 7).
+    offlineQueuePath: undefined,
     offlineQueueMaxSize: 10_000,
     retryMaxAttempts: 3,
     retryBackoffMs: 1_000,
@@ -3456,6 +3458,9 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
   const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) {
     return defaults;
+  }
+  if (isUsableWorkspaceRoot(root)) {
+    defaults.offlineQueuePath = checkoutPath(root, "auditQueue");
   }
 
   try {
@@ -3549,7 +3554,9 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
         }
         case "offline_queue_path":
         case "offlineQueuePath":
-          defaults.offlineQueuePath = value.trim();
+          // A relative path is relative to the workspace root, never to the
+          // extension host's working directory.
+          defaults.offlineQueuePath = path.resolve(root, value.trim());
           break;
       }
     }

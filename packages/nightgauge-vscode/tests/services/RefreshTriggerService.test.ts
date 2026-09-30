@@ -11,8 +11,12 @@
  * @see Issue #308 - Add auto-refresh when GitHub issues are created via CLI
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { RefreshTriggerService } from "../../src/services/RefreshTriggerService";
+import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mock logger to avoid console noise in tests
 const mockLogger = {
@@ -33,10 +37,11 @@ vi.mock("vscode", () => {
   return {
     RelativePattern: class RelativePattern {
       constructor(
-        public base: string,
+        public base: { fsPath: string },
         public pattern: string
       ) {}
     },
+    Uri: { file: (p: string) => ({ fsPath: p, scheme: "file" }) },
     workspace: {
       createFileSystemWatcher: vi.fn((pattern) => ({
         onDidCreate: vi.fn((callback) => {
@@ -54,7 +59,15 @@ vi.mock("vscode", () => {
 });
 
 describe("RefreshTriggerService", () => {
-  const workspaceRoot = "/test/workspace";
+  // A temp root with a fixed layout: no git runs, and the per-checkout
+  // directory is created under the temp dir, never the real checkout.
+  const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-refresh-trigger-"));
+  const layout = mkFakeCloneLayout(workspaceRoot);
+  const triggerPath = path.join(layout.checkout, ".refresh-trigger");
+
+  afterAll(() => {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  });
   let vscode: any;
   let mockWatcherCallbacks: any;
 
@@ -79,10 +92,20 @@ describe("RefreshTriggerService", () => {
 
       expect(vscode.workspace.createFileSystemWatcher).toHaveBeenCalledTimes(1);
       const pattern = vscode.workspace.createFileSystemWatcher.mock.calls[0][0];
-      expect(pattern.base).toBe(workspaceRoot);
-      expect(pattern.pattern).toBe(".nightgauge/.refresh-trigger");
+      expect(pattern.base.fsPath).toBe(layout.checkout);
+      expect(pattern.base.fsPath).toBe(path.join(workspaceRoot, ".git", "nightgauge-worktree"));
+      expect(pattern.pattern).toBe(".refresh-trigger");
 
       service.dispose();
+    });
+
+    it("should not watch anything when the workspace root is not a usable checkout", () => {
+      for (const root of ["", "relative/root"]) {
+        const service = new RefreshTriggerService(root, mockLogger as any);
+        service.dispose();
+      }
+
+      expect(vscode.workspace.createFileSystemWatcher).not.toHaveBeenCalled();
     });
 
     it("should subscribe to onCreate and onChange events", () => {
@@ -126,7 +149,7 @@ describe("RefreshTriggerService", () => {
       service.registerTreeProvider(mockProvider);
 
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/.refresh-trigger",
+        fsPath: triggerPath,
       };
 
       // Simulate multiple rapid triggers
@@ -154,7 +177,7 @@ describe("RefreshTriggerService", () => {
       service.registerTreeProvider(mockProvider);
 
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/.refresh-trigger",
+        fsPath: triggerPath,
       };
 
       // First trigger
@@ -192,7 +215,7 @@ describe("RefreshTriggerService", () => {
       service.registerTreeProvider(provider3);
 
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/.refresh-trigger",
+        fsPath: triggerPath,
       };
       mockWatcherCallbacks.onCreate?.(mockUri);
       vi.advanceTimersByTime(100);
@@ -220,7 +243,7 @@ describe("RefreshTriggerService", () => {
       service.registerTreeProvider(provider3);
 
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/.refresh-trigger",
+        fsPath: triggerPath,
       };
       mockWatcherCallbacks.onCreate?.(mockUri);
       vi.advanceTimersByTime(100);
@@ -264,7 +287,7 @@ describe("RefreshTriggerService", () => {
       service.registerTreeProvider(mockProvider);
 
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/.refresh-trigger",
+        fsPath: triggerPath,
       };
       mockWatcherCallbacks.onCreate?.(mockUri);
 

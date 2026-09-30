@@ -80,7 +80,11 @@ export class EpicEstimator {
   private modelPath: string;
   private workspaceRoot: string | undefined;
 
-  constructor(modelPath: string = ".nightgauge/complexity-model.yaml", workspaceRoot?: string) {
+  /**
+   * @param modelPath - Absolute path of the complexity model, normally
+   *   `checkoutPath("complexityModel", workspaceRoot)` (ADR-024 § 7).
+   */
+  constructor(modelPath: string, workspaceRoot?: string) {
     this.modelPath = modelPath;
     this.workspaceRoot = workspaceRoot;
   }

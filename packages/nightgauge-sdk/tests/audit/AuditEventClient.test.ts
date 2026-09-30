@@ -3,6 +3,11 @@ import * as fsMod from "node:fs/promises";
 import { EventBus, PipelineRunEmitter } from "../../src/events/EventBus.js";
 import { AuditEventClient } from "../../src/audit/AuditEventClient.js";
 import { AuditConfigSchema } from "../../src/audit/schemas.js";
+import {
+  clearCloneLayoutCache,
+  cloneLayoutFor,
+  setCloneLayout,
+} from "../../src/context/cloneLayout.js";
 
 vi.mock("node:fs/promises");
 
@@ -155,6 +160,27 @@ describe("flush", () => {
       "utf-8"
     );
     await client.dispose();
+  });
+
+  it("defaults the offline queue to the per-checkout directory of the cwd", async () => {
+    // A fixed layout for the cwd, so nothing resolves against the real checkout.
+    const cwd = process.cwd();
+    setCloneLayout(cwd, cloneLayoutFor(cwd, "/fake/repo/.git"));
+    try {
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+      const { offlineQueuePath: _unset, ...rest } = BASE_CONFIG;
+      const client = new AuditEventClient(AuditConfigSchema.parse(rest));
+      client.enqueue({ action: "pipeline.started" });
+      await client.flush();
+      expect(fs.writeFile).toHaveBeenCalledWith(
+        "/fake/repo/.git/nightgauge-worktree/audit-queue.json",
+        expect.stringContaining('"pipeline.started"'),
+        "utf-8"
+      );
+      await client.dispose();
+    } finally {
+      clearCloneLayoutCache(cwd);
+    }
   });
 
   it("writes to offline queue on 5xx response", async () => {

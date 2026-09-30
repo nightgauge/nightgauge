@@ -2,6 +2,16 @@
 
 All notable changes to this skill are documented here.
 
+## [Unreleased]
+
+### Changed
+
+- Phase 6.8 bootstraps this checkout's `complexity-model.yaml` inside the git
+  directory (`nightgauge layout path checkout complexity-model.yaml`); a
+  `--seed-from` model is staged in a temp file and written through
+  `nightgauge layout write checkout complexity-model.yaml`, not into
+  `.nightgauge/` (#2037, ADR-024 § 7).
+
 ## [1.3.2] - 2026-09-27
 
 ### Changed

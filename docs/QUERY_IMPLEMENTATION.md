@@ -160,7 +160,9 @@ State machine with transitions: `idle → parsing → executing → complete|err
 
 ### SavedQueriesService (`SavedQueriesService.ts`)
 
-Persists queries to `.nightgauge/saved-queries.yaml`:
+Persists queries to this checkout's `saved-queries.yaml`
+(`nightgauge layout path checkout saved-queries.yaml`, inside the git
+directory):
 
 - File watcher auto-reloads on external changes
 - Merges built-in queries (read-only) with user queries

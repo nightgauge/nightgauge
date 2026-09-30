@@ -54,6 +54,7 @@ vi.mock("@nightgauge/sdk", () => ({
 }));
 
 import { DashboardState, type EpicDisplayEntry } from "../../../src/views/dashboard/DashboardState";
+import { fakeCloneLayout } from "../../helpers/cloneLayout";
 import type { EpicEstimate } from "@nightgauge/sdk";
 
 function makeEpicEstimate(
@@ -92,6 +93,8 @@ describe("DashboardState - refreshEpicEstimates (Issue #987)", () => {
       repo: "test-repo",
     });
     workspaceState = createMockMemento();
+    // The complexity model is per checkout (ADR-024 § 7); a fixed layout.
+    fakeCloneLayout("/test/workspace");
     state = new DashboardState(workspaceState, "/test/workspace");
   });
 

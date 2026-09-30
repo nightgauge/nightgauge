@@ -331,7 +331,8 @@ under-provisioning on uncertain inputs.
 
 **ComplexityModel Integration:**
 
-When a `.nightgauge/complexity-model.yaml` file exists, AutoModelSelector
+When this checkout's `complexity-model.yaml` exists
+(`nightgauge layout path checkout complexity-model.yaml`), AutoModelSelector
 applies regex pattern matching against issue text to adjust complexity up or
 down before the matrix lookup. This provides project-specific tuning without
 changing configuration.

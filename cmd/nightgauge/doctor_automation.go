@@ -32,7 +32,11 @@ func doctorAutomationCmd() *cobra.Command {
 			if err := doctor.PauseAutomation(root, args[0], reason, time.Now()); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "paused %s (recorded in %s)\n", args[0], doctor.AutomationPausePath(root))
+			recorded, err := doctor.AutomationPausePath(root)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "paused %s (recorded in %s)\n", args[0], recorded)
 			return nil
 		},
 	}

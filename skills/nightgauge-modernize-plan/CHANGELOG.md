@@ -10,6 +10,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The plan is written to this checkout's `reports/modernization-plan.json`
+  inside the git directory (`nightgauge layout path checkout
+reports/modernization-plan.json`) through `nightgauge layout write checkout`, not to
+  `.nightgauge/modernization-plan.json`; the three assessment reports are read
+  from `reports/` there too (#2037, ADR-024 § 7).
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.
 
 ## [1.0.0] - 2026-02-21

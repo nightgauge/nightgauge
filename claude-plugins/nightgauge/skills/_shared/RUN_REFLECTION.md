@@ -3,22 +3,21 @@
 **PURPOSE**: Cadence skills (those run weekly/periodically) should remember their
 own prior runs so each execution reports **deltas, not a full re-dump**. Without
 memory, every run re-surfaces the same findings and can't say "what changed since
-last time." This mirrors `nightgauge-release-watch`'s `last-seen.json`.
+last time." This mirrors `nightgauge-release-watch`'s `last-seen-<provider>.json`.
 
-> Set `RUN_LOG` to this skill's append-only log path **before** this section,
-> e.g. `RUN_LOG=".nightgauge/doc-snapshots/runs.jsonl"`. Keep all state with
-> the repository — never `${CLAUDE_PLUGIN_DATA}` (single source of truth). A
-> log in a per-clone class directory (pipeline, plans, retros, logs) or in this
-> checkout's directory (`checkout`, e.g. `triage/runs.jsonl`) also sets
-> `RUN_LOG_CLASS` and `RUN_LOG_NAME`, with
-> `RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"`: that
-> directory is inside the git directory, so the append goes through
-> `nightgauge layout append`, never a redirect.
+> Set `RUN_LOG_CLASS`, `RUN_LOG_NAME` and
+> `RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"`
+> **before** this section. The class is a per-clone class directory
+> (`pipeline`, `plans`, `retros`, `logs`) or this checkout's directory
+> (`checkout`), e.g. `RUN_LOG_CLASS="checkout"` with
+> `RUN_LOG_NAME="doc-snapshots/runs.jsonl"`. Never `${CLAUDE_PLUGIN_DATA}`
+> (single source of truth). Both directories are inside the git directory, so
+> the log is read by path and appended through `nightgauge layout append`,
+> never a redirect.
 
 #### Step 1: Load the previous run
 
 ```bash
-[ -n "${RUN_LOG_CLASS:-}" ] || mkdir -p "$(dirname "$RUN_LOG")"
 if [ -f "$RUN_LOG" ]; then
   PREV=$(tail -n 1 "$RUN_LOG")
   PREV_TS=$(printf '%s\n' "$PREV" | jq -r '.ts // "never"')
@@ -49,11 +48,7 @@ else
   RECORD=$(jq -nc --arg ts "$NOW" --arg skill "$SKILL_NAME" \
         --argjson counts "${RUN_COUNTS:-{}}" --arg summary "${RUN_SUMMARY:-}" \
         '{ts:$ts, skill:$skill, counts:$counts, summary:$summary}')
-  if [ -n "${RUN_LOG_CLASS:-}" ]; then
-    printf '%s\n' "$RECORD" | nightgauge layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
-  else
-    printf '%s\n' "$RECORD" >> "$RUN_LOG"
-  fi
+  printf '%s\n' "$RECORD" | nightgauge layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
   echo "Appended run record to $RUN_LOG"
 fi
 ```

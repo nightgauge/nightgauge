@@ -1,10 +1,20 @@
 import { spawn } from "node:child_process";
-import { describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { ComplexityModelService } from "@nightgauge/sdk";
 import {
   withComplexityModelService,
   type ComplexityModelLockDeps,
 } from "../../src/services/ComplexityModelLock";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
+
+// A temp root with a fixed layout, so nothing resolves against the real
+// checkout. The model is per checkout (ADR-024 § 7).
+const ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "ng-complexity-lock-"));
+const LAYOUT = fakeCloneLayout(ROOT);
+afterAll(() => fs.rmSync(ROOT, { recursive: true, force: true }));
 
 function depsForScript(script: string): {
   deps: ComplexityModelLockDeps;
@@ -32,12 +42,12 @@ describe("withComplexityModelService", () => {
        process.stdin.on("end", () => process.exit(input.includes('schema_version: "1.0"') ? 0 : 4));`
     );
 
-    const workspaceRoot = process.cwd();
+    const workspaceRoot = ROOT;
     const value = await withComplexityModelService(
       workspaceRoot,
       async (modelService) => {
         expect(modelService.getModelPath()).toBe(
-          `${workspaceRoot}/.nightgauge/complexity-model.yaml`
+          path.join(LAYOUT.checkout, "complexity-model.yaml")
         );
         await modelService.save(ComplexityModelService.createBootstrapModel());
         return 42;
@@ -57,7 +67,7 @@ describe("withComplexityModelService", () => {
     const { deps } = depsForScript("");
     deps.resolveBinary = async () => null;
 
-    await expect(withComplexityModelService(process.cwd(), async () => 42, deps)).rejects.toThrow(
+    await expect(withComplexityModelService(ROOT, async () => 42, deps)).rejects.toThrow(
       "nightgauge binary not found"
     );
   });
@@ -65,7 +75,7 @@ describe("withComplexityModelService", () => {
   it("rejects when the broker exits before acquiring the lock", async () => {
     const { deps } = depsForScript(`process.stderr.write("lock failed"); process.exit(2);`);
 
-    await expect(withComplexityModelService(process.cwd(), async () => 42, deps)).rejects.toThrow(
+    await expect(withComplexityModelService(ROOT, async () => 42, deps)).rejects.toThrow(
       /exited before readiness.*lock failed/
     );
   });
@@ -75,7 +85,7 @@ describe("withComplexityModelService", () => {
     deps.readyTimeoutMs = 25;
     deps.exitTimeoutMs = 25;
 
-    await expect(withComplexityModelService(process.cwd(), async () => 42, deps)).rejects.toThrow(
+    await expect(withComplexityModelService(ROOT, async () => 42, deps)).rejects.toThrow(
       /timed out waiting for complexity-model lock/
     );
     const child = spawnLock.mock.results[0].value;
@@ -89,7 +99,7 @@ describe("withComplexityModelService", () => {
 
     await expect(
       withComplexityModelService(
-        process.cwd(),
+        ROOT,
         async () => {
           throw new Error("model computation failed");
         },
@@ -104,7 +114,7 @@ describe("withComplexityModelService", () => {
     );
     deps.exitTimeoutMs = 25;
 
-    await expect(withComplexityModelService(process.cwd(), async () => 42, deps)).rejects.toThrow(
+    await expect(withComplexityModelService(ROOT, async () => 42, deps)).rejects.toThrow(
       /timed out waiting for complexity-model broker to release transaction/
     );
   });
@@ -115,7 +125,7 @@ describe("withComplexityModelService", () => {
 
     await expect(
       withComplexityModelService(
-        process.cwd(),
+        ROOT,
         async (modelService) => {
           await new Promise((resolve) => setTimeout(resolve, 30));
           await modelService.save(ComplexityModelService.createBootstrapModel());

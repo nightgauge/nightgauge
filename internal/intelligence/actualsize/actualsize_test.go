@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestFiveBucketMatchesOutcomeServiceBoundaries(t *testing.T) {
@@ -25,11 +27,8 @@ func TestFiveBucketMatchesOutcomeServiceBoundaries(t *testing.T) {
 }
 
 func TestLearningBucketUsesLearnedThresholdsAndScoreVocabulary(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, ".nightgauge", "complexity-model.yaml")
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	root := layouttest.Repo(t)
+	path := layouttest.CheckoutPath(t, root, layout.CheckoutComplexityModel)
 	model := []byte("size_calibration:\n  XS:\n    expected_lines: 10\n  S:\n    expected_lines: 20\n  M:\n    expected_lines: 30\n  L:\n    expected_lines: 40\n")
 	if err := os.WriteFile(path, model, 0o644); err != nil {
 		t.Fatal(err)

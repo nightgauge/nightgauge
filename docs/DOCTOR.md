@@ -101,7 +101,9 @@ remedy; without a terminal and without `--yes` it applies only `auto` remedies.
 
 `nightgauge doctor automation pause <id> --reason "<why>"` records that a stopped
 scheduled automation is paused on purpose (its finding becomes `info`, see
-[NGD029](#ngd029)); `nightgauge doctor automation resume <id>` clears it.
+[NGD029](#ngd029)); `nightgauge doctor automation resume <id>` clears it. The
+record is this checkout's `doctor/automation-pauses.json`
+(`nightgauge layout path checkout doctor/automation-pauses.json`).
 
 ### `--history`
 
@@ -209,9 +211,9 @@ and a remedy ID; a `confirm` remedy needs `confirm: true`), `doctor.recheck` and
       "code": "NGD033",
       "check": "complexity_model",
       "severity": "info",
-      "title": "complexity model not yet created at <workspace>/.nightgauge/complexity-model.yaml",
+      "title": "complexity model not yet created at <git-dir>/nightgauge-worktree/complexity-model.yaml",
       "cause": "the model is per-checkout learned state; ...",
-      "evidence": { "path": "<workspace>/.nightgauge/complexity-model.yaml" },
+      "evidence": { "path": "<git-dir>/nightgauge-worktree/complexity-model.yaml" },
       "docs": "docs/DOCTOR.md#ngd033",
       "fingerprint": "<16 hex characters>",
       "remedies": [
@@ -219,7 +221,7 @@ and a remedy ID; a `confirm` remedy needs `confirm: true`), `doctor.recheck` and
           "id": "init",
           "kind": "confirm",
           "summary": "Write the deterministic baseline now (`nightgauge outcome init`)",
-          "preview": "write the deterministic baseline model to <workspace>/.nightgauge/complexity-model.yaml",
+          "preview": "write the deterministic baseline model to <git-dir>/nightgauge-worktree/complexity-model.yaml",
           "verb": "outcome.init",
           "reversible": false,
           "verify": "complexity_model"
@@ -494,7 +496,8 @@ one. Manual `renumber`.
 
 **Complexity model invalid or unsafe.** `complexity_model` · `warning`.
 
-Complexity routing reads `.nightgauge/complexity-model.yaml` and falls back
+Complexity routing reads this checkout's `complexity-model.yaml`
+(`nightgauge layout path checkout complexity-model.yaml`) and falls back
 blindly while it cannot be parsed. Invalid: `confirm` `init` moves the invalid
 file aside and writes the deterministic baseline (`nightgauge outcome init`). A
 symlink or non-regular path is never written through: manual `replace`.

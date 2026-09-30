@@ -22,6 +22,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "fs";
 import { DiscoveryActivityService } from "../../src/services/DiscoveryActivityService";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 import type {
   ReleaseWatchRunData,
   ContinuousImprovementRunData,
@@ -33,6 +34,9 @@ vi.mock("fs");
 const mockFs = vi.mocked(fs);
 
 const WORKSPACE = "/fake/workspace";
+// Discovery state is per checkout (ADR-024 § 7); a fixed layout, no git.
+fakeCloneLayout(WORKSPACE);
+const CHECKOUT = `${WORKSPACE}/.git/nightgauge-worktree`;
 
 function makeService(): DiscoveryActivityService {
   return new DiscoveryActivityService(WORKSPACE);
@@ -84,7 +88,7 @@ const backlogEntries: BacklogEntry[] = [
 // File mock helpers
 // ---------------------------------------------------------------------------
 
-const releaseWatchDir = `${WORKSPACE}/.nightgauge/release-watch`;
+const releaseWatchDir = `${CHECKOUT}/release-watch`;
 
 // Drives existsSync/readFileSync for file paths AND readdirSync/existsSync for
 // the release-watch directory (the multi-provider creation-log glob, #4057).
@@ -124,7 +128,7 @@ function noFiles(): void {
 }
 
 const releaseWatchLog = `${releaseWatchDir}/creation-log.json`;
-const improvementLog = `${WORKSPACE}/.nightgauge/improvement-runs/latest.json`;
+const improvementLog = `${CHECKOUT}/improvement-runs/latest.json`;
 const backlogPath = `${releaseWatchDir}/backlog.json`;
 
 // ---------------------------------------------------------------------------
@@ -134,6 +138,17 @@ const backlogPath = `${releaseWatchDir}/backlog.json`;
 describe("DiscoveryActivityService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe("when the workspace root is not a git checkout", () => {
+    it("reports the pre-first-run state without reading anything", async () => {
+      noFiles();
+      const data = await new DiscoveryActivityService("relative/root").getActivityData();
+      expect(data.releaseWatch).toBeNull();
+      expect(data.continuousImprovement).toBeNull();
+      expect(data.backlog).toEqual([]);
+      expect(mockFs.readFileSync).not.toHaveBeenCalled();
+    });
   });
 
   describe("when no state files exist", () => {

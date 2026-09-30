@@ -528,7 +528,8 @@ When stage-level healing succeeds, the orchestrator never sees the failure. When
 stage-level healing fails, `CatSdkDistStale` flows through the retry engine
 automatically.
 
-**Outcome recording**: Captured in `.nightgauge/complexity-model.yaml` under
+**Outcome recording**: Captured in this checkout's `complexity-model.yaml`
+(`nightgauge layout path checkout complexity-model.yaml`) under
 `prediction_accuracy.self_heal_events` via `nightgauge outcome record-self-heal`.
 If frequency is high, consider making SDK build a mandatory first step in all pipeline
 stages. See issue #2917.

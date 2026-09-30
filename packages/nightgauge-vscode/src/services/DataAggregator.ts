@@ -12,7 +12,7 @@
  * @see docs/ARCHITECTURE.md for utility patterns
  */
 
-import { pipelineStateDir } from "../utils/cloneLayout";
+import { checkoutPath, isUsableWorkspaceRoot, pipelineStateDir } from "../utils/cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -32,8 +32,6 @@ import type {
   HealthReport,
 } from "../types/aggregation";
 
-const ANALYSIS_DIR = ".nightgauge/analysis";
-const EXPERIMENTS_DIR = ".nightgauge/analysis/experiments";
 const HEALTH_REPORT_PREFIX = "health-report-";
 
 /** Source names used in quality metrics */
@@ -176,8 +174,10 @@ export class DataAggregator {
     workspaceRoot: string,
     filter: DateRangeFilter
   ): Promise<StoredAnalysisReport[]> {
-    const analysisDir = path.join(workspaceRoot, ANALYSIS_DIR);
     const reports: StoredAnalysisReport[] = [];
+    // Per checkout (ADR-024 § 7): <git-dir>/nightgauge-worktree/analysis.
+    if (!isUsableWorkspaceRoot(workspaceRoot)) return reports;
+    const analysisDir = checkoutPath(workspaceRoot, "analysis");
 
     let entries: string[];
     try {
@@ -211,8 +211,9 @@ export class DataAggregator {
     workspaceRoot: string,
     filter: DateRangeFilter
   ): Promise<ExperimentOutcome[]> {
-    const experimentsDir = path.join(workspaceRoot, EXPERIMENTS_DIR);
     const outcomes: ExperimentOutcome[] = [];
+    if (!isUsableWorkspaceRoot(workspaceRoot)) return outcomes;
+    const experimentsDir = checkoutPath(workspaceRoot, "analysis", "experiments");
 
     let entries: string[];
     try {

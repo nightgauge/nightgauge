@@ -6,6 +6,14 @@ documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/), and this
 project adheres to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Size prediction reads this checkout's `complexity-model.yaml`
+  (`nightgauge layout path checkout complexity-model.yaml`), not
+  `.nightgauge/complexity-model.yaml` (#2037, ADR-024 § 7).
+
 ## [1.25.1] - 2026-09-27
 
 ### Fixed

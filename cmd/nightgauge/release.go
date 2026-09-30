@@ -10,6 +10,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/cmd/release"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/spf13/cobra"
 )
 
@@ -252,7 +253,7 @@ Exit codes:
   0  finished (sent / skipped / best-effort delivery failure)
   2  hard error (missing/unreadable/unparseable creation-log, bad flags)`,
 		Example: `  nightgauge release notify-findings \
-    --creation-log .nightgauge/release-watch/creation-log-claude-code.json
+    --creation-log ` + layout.CheckoutDisplay(layout.CheckoutReleaseWatch, "creation-log-claude-code.json") + `
   nightgauge release notify-findings --creation-log path.json --min-score 80 --max 5 --json`,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -206,13 +206,27 @@ func appendOnlyLog(name string) func(string) bool {
 
 // perCheckoutLayoutEntries are the rows of one checkout's per-checkout data
 // (layout.CheckoutEntries): its legacy .nightgauge/ copy moves to its own
-// CHECKOUT. checkout is "" for the main checkout. For the main checkout, the
-// run-control singletons a layout-v1 build kept in CLONE/pipeline and
-// CLONE/logs move to its CHECKOUT as well.
-func perCheckoutLayoutEntries(checkout string, main bool) []LayoutEntry {
+// CHECKOUT. root is the checkout's working tree; checkout is "" for the main
+// checkout. For the main checkout, the run-control singletons a layout-v1
+// build kept in CLONE/pipeline and CLONE/logs move to its CHECKOUT as well. A
+// Glob entry (backlog-*.md) becomes one row per file that matches now.
+func perCheckoutLayoutEntries(root, checkout string, main bool) []LayoutEntry {
 	var out []LayoutEntry
 	for _, ce := range layout.CheckoutEntries {
 		ce := ce
+		if ce.Glob {
+			matches, _ := filepath.Glob(filepath.Join(root, filepath.FromSlash(ce.Legacy)))
+			for _, m := range matches {
+				base := filepath.Base(m)
+				out = append(out, LayoutEntry{
+					Class: ce.Name + "/" + base, Kind: LayoutFiles, Checkout: checkout, File: true,
+					Legacy:     legacyDir(base),
+					Target:     checkoutTarget(ce.Name + "/" + base),
+					TargetRoot: layout.CheckoutDir,
+				})
+			}
+			continue
+		}
 		out = append(out, LayoutEntry{
 			Class: ce.Name, Kind: LayoutFiles, Checkout: checkout, File: !ce.Dir,
 			Legacy:     legacyDir(strings.Split(strings.TrimPrefix(ce.Legacy, legacyDataDirName+"/"), "/")...),
@@ -244,7 +258,7 @@ func perCheckoutLayoutEntries(checkout string, main bool) []LayoutEntry {
 // entries to its own CHECKOUT, its keyed per-clone data into the one CLONE,
 // and its old recall cache deleted.
 func linkedCheckoutEntries(checkout string) []LayoutEntry {
-	out := perCheckoutLayoutEntries(checkout, false)
+	out := perCheckoutLayoutEntries(checkout, checkout, false)
 	for _, e := range perCloneFileEntries() {
 		e.Checkout = checkout
 		out = append(out, e)
@@ -307,7 +321,7 @@ func newLayoutMigrator(dir string) *layoutMigrator {
 // checkout's rows first, then each linked worktree's (#2040: every checkout's
 // legacy .nightgauge/ is migrated, not only the main one).
 func allCheckoutEntries(main string, linked []string) []LayoutEntry {
-	out := perCheckoutLayoutEntries("", true)
+	out := perCheckoutLayoutEntries(main, "", true)
 	for _, wt := range linked {
 		out = append(out, linkedCheckoutEntries(wt)...)
 	}
@@ -1665,6 +1679,8 @@ func itemFindings(plan layoutPlan, it layoutItem) []Finding {
 				fmt.Sprintf("layout-conflict: %d more %s file(s) exist at both locations", len(it.Conflicts)-i, class),
 				"the migration never overwrites a file, so it moves nothing in this clone until every conflict is resolved",
 				ev(map[string]string{"count": strconv.Itoa(len(it.Conflicts) - i)}), []string{plan.Root, class, it.Legacy, "more"},
+				migrate("Migrate once the conflicts are resolved (refused while they stand)",
+					"refused: files differ at both locations; nothing is overwritten"),
 				manualRemedy("resolve", "Resolve each conflict", checkLayout,
 					"Run `nightgauge doctor --only "+codeLayoutConflict+"` again after resolving the ones listed")))
 			break
@@ -1673,6 +1689,12 @@ func itemFindings(plan layoutPlan, it layoutItem) []Finding {
 			fmt.Sprintf("layout-conflict: a %s file exists at both %s and %s", class, c.Legacy, c.Target),
 			"the two copies differ and the migration never overwrites a file, so nothing in this clone is moved until you choose one",
 			ev(map[string]string{"legacy": c.Legacy, "target": c.Target}), []string{plan.Root, class, c.Legacy, c.Target},
+			// The migrate remedy comes first so `doctor --fix` reaches the
+			// verb, whose precondition refuses with ErrRemedyConflict: a
+			// conflict alone exits 3 (ADR-024 § 15), never 0 as a skipped
+			// manual finding would.
+			migrate("Migrate once the conflict is resolved (refused while it stands)",
+				"refused: "+c.Legacy+" and "+c.Target+" differ; nothing is overwritten"),
 			manualRemedy("resolve", "Keep one copy at the new location", checkLayout,
 				"Compare "+c.Legacy+" with "+c.Target,
 				"Keep the copy you want at "+c.Target+" and delete "+c.Legacy,

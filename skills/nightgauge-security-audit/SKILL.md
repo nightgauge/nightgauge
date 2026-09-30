@@ -457,7 +457,7 @@ EXCLUDE_DIRS=(
 Detect existing health-check output to cross-reference:
 
 ```bash
-HEALTH_CHECK_PATH=".nightgauge/health-report.json"
+HEALTH_CHECK_PATH="$(nightgauge layout path checkout reports/health-report.json)"
 HEALTH_CHECK_AVAILABLE=false
 
 if [ -f "$HEALTH_CHECK_PATH" ]; then
@@ -1155,13 +1155,9 @@ first within the same severity). Each recommendation includes:
 
 #### Step 8.4: Write JSON Report
 
-Ensure the `.nightgauge/` directory exists, then write the structured
-report to `.nightgauge/security-audit.json` (or the custom `--output`
-path):
-
-```bash
-mkdir -p .nightgauge
-```
+Write the structured report to this checkout's `reports/security-audit.json`
+(`nightgauge layout path checkout reports/security-audit.json`, inside the git
+directory, ADR-024 § 7), or to the custom `--output` path:
 
 ```json
 {
@@ -1298,7 +1294,7 @@ mkdir -p .nightgauge
     }
   },
   "health_check_integration": {
-    "health_report_path": ".nightgauge/health-report.json",
+    "health_report_path": ".git/nightgauge-worktree/reports/health-report.json",
     "dependency_overlap": true,
     "health_check_dep_score": 65,
     "note": "Dependency vulnerability data cross-referenced with health-check report"
@@ -1316,6 +1312,23 @@ mkdir -p .nightgauge
   ],
   "created_at": "2026-02-21T00:00:00Z"
 }
+```
+
+Build the JSON in a temporary file, validate it, then write it. The default
+report goes through `nightgauge layout write`; never write under `.git` by
+path:
+
+```bash
+REPORT_TMP="$(mktemp)"
+# ... write the JSON report to "$REPORT_TMP" ...
+python3 -m json.tool "$REPORT_TMP" > /dev/null || { echo "Invalid report JSON" >&2; exit 1; }
+if [ -n "$OUTPUT_FILE" ]; then
+  cp "$REPORT_TMP" "$OUTPUT_FILE"
+  REPORT_PATH="$OUTPUT_FILE"
+else
+  REPORT_PATH="$(nightgauge layout write checkout reports/security-audit.json --from "$REPORT_TMP")"
+fi
+rm -f "$REPORT_TMP"
 ```
 
 #### Step 8.5: Write Markdown Summary
@@ -1370,7 +1383,7 @@ HEALTH CHECK CROSS-REFERENCE
   Health check dependency score: 65 — consistent with audit findings
 
 ----------------------------------------------------------------
-Report saved: .nightgauge/security-audit.json
+Report saved: .git/nightgauge-worktree/reports/security-audit.json
 ```
 
 If `--format json`, write only JSON. If `--format summary`, output only the
@@ -1433,8 +1446,9 @@ Add per-package section to both JSON and markdown reports:
 
 ## Health Check Integration
 
-The security audit cross-references the health-check report when available at
-`.nightgauge/health-report.json`. This enables:
+The security audit cross-references the health-check report when available in
+this checkout's `reports/health-report.json`
+(`nightgauge layout path checkout reports/health-report.json`). This enables:
 
 - **Dependency overlap**: The health-check `dependency_health` dimension runs
   `npm audit` too. If the health-check report is fresh (< 24 hours), the
@@ -1442,8 +1456,8 @@ The security audit cross-references the health-check report when available at
 - **Context enrichment**: Lockfile presence, outdated dependency count, and
   total dependency count from the health-check feed into security dimension
   score computation.
-- **Consistent reporting**: Both reports are stored in `.nightgauge/` for
-  easy side-by-side comparison.
+- **Consistent reporting**: Both reports are stored in this checkout's
+  `reports/` directory for easy side-by-side comparison.
 
 To generate both reports in sequence:
 
@@ -1485,10 +1499,14 @@ See Phase 8 Step 8.4 for the complete JSON report structure.
 
 ### Report Files
 
-| File                              | Format   | When Written            |
-| --------------------------------- | -------- | ----------------------- |
-| `.nightgauge/security-audit.json` | JSON     | `--format json/both`    |
-| Console output                    | Markdown | `--format summary/both` |
+| File                                   | Format   | When Written            |
+| -------------------------------------- | -------- | ----------------------- |
+| `checkout reports/security-audit.json` | JSON     | `--format json/both`    |
+| Console output                         | Markdown | `--format summary/both` |
+
+`checkout` paths are inside this checkout's git directory (ADR-024 § 7):
+`nightgauge layout path checkout reports/security-audit.json` prints the
+resolved path.
 
 ---
 
@@ -1517,14 +1535,14 @@ UTILITIES (not part of main pipeline)
 /nightgauge:health-check ─────────────────────┐
        |                                            |
   Standalone utility — run anytime           (optional input)
-  Writes: .nightgauge/health-report.json       |
+  Writes: checkout reports/health-report.json  |
                                                     v
                                   /nightgauge:security-audit
                                          |
                                     Standalone utility — run anytime
                                     Reads: Codebase files (read-only)
-                                    Reads: .nightgauge/health-report.json (optional)
-                                    Writes: .nightgauge/security-audit.json
+                                    Reads: checkout reports/health-report.json (optional)
+                                    Writes: checkout reports/security-audit.json
 ```
 
 This is a standalone utility skill. It does not affect pipeline state and can be

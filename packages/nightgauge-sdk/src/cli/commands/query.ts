@@ -11,7 +11,7 @@
  * @see docs/QUERY_LANGUAGE.md for query syntax
  */
 
-import { cloneClassDir } from "../../context/cloneLayout.js";
+import { checkoutPath, cloneClassDir } from "../../context/cloneLayout.js";
 import type { CAC } from "cac";
 import * as fs from "fs";
 import * as path from "path";
@@ -160,15 +160,16 @@ function exportResults(result: QueryResult, filepath: string, format: "json" | "
 }
 
 /**
- * Load saved queries from .nightgauge/saved-queries.yaml
+ * Load saved queries from saved-queries.yaml in the checkout's per-checkout
+ * directory (`.git/nightgauge-worktree/` for a main checkout, ADR-024 § 7).
+ * Null when there is none, or outside a git repository.
  */
 function loadSavedQueries(workingDir: string): SavedQueriesFile | null {
-  const filepath = path.join(workingDir, ".nightgauge", "saved-queries.yaml");
-  if (!fs.existsSync(filepath)) {
-    return null;
-  }
-
   try {
+    const filepath = checkoutPath("savedQueries", workingDir);
+    if (!fs.existsSync(filepath)) {
+      return null;
+    }
     const content = fs.readFileSync(filepath, "utf-8");
     const data = yaml.parse(content);
     return SavedQueriesFileSchema.parse(data);
@@ -178,16 +179,12 @@ function loadSavedQueries(workingDir: string): SavedQueriesFile | null {
 }
 
 /**
- * Save a query to .nightgauge/saved-queries.yaml
+ * Save a query to the checkout's saved-queries.yaml (ADR-024 § 7). Throws
+ * outside a git repository.
  */
 function saveQuery(workingDir: string, name: string, query: string): void {
-  const filepath = path.join(workingDir, ".nightgauge", "saved-queries.yaml");
-  const nightgaugeDir = path.join(workingDir, ".nightgauge");
-
-  // Ensure .nightgauge directory exists
-  if (!fs.existsSync(nightgaugeDir)) {
-    fs.mkdirSync(nightgaugeDir, { recursive: true });
-  }
+  const filepath = checkoutPath("savedQueries", workingDir);
+  fs.mkdirSync(path.dirname(filepath), { recursive: true });
 
   // Load existing or create new
   let savedQueries = loadSavedQueries(workingDir);

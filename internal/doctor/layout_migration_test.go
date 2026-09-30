@@ -726,3 +726,78 @@ func evalDir(t *testing.T, dir string) string {
 	}
 	return resolved
 }
+
+// TestLayoutMigrationConflictOnlyExits3: a conflict with nothing else to move
+// still makes `doctor --fix` exit 3 (ADR-024 § 15), not 0, and nothing is
+// overwritten.
+func TestLayoutMigrationConflictOnlyExits3(t *testing.T) {
+	r := newLayoutRepo(t)
+	legacyPlan := filepath.Join(r.root, ".nightgauge", "plans", "issue-5.md")
+	newPlan := filepath.Join(r.newRoot, "plans", "issue-5.md")
+	writeLayoutFile(t, legacyPlan, "old plan\n", 0o644)
+	writeLayoutFile(t, newPlan, "new plan\n", 0o600)
+	m := r.migrator("")
+	found, _ := layoutFindings(m)
+	if len(found) != 1 || found[0].Code != codeLayoutConflict {
+		t.Fatalf("findings = %s, want exactly one %s", findingsText(found), codeLayoutConflict)
+	}
+	rep := r.fixer(m).Run(context.Background(), FixOptions{})
+	if rep.ExitCode != 3 {
+		t.Errorf("fix exit with only a conflict = %d, want 3; results %+v", rep.ExitCode, rep.Results)
+	}
+	if readLayoutFile(t, legacyPlan) != "old plan\n" || readLayoutFile(t, newPlan) != "new plan\n" {
+		t.Error("a conflicting file was changed")
+	}
+}
+
+// TestLayoutMigrationRestOfRuntimeFiles (ADR-024 § 7, "and the rest"): the
+// remaining runtime files the old template ignored one by one move to
+// CHECKOUT (reports into CHECKOUT/reports, backlog-*.md by pattern), while
+// the committed audit/ keeps its tracked files and only loses the per-machine
+// counter.
+func TestLayoutMigrationRestOfRuntimeFiles(t *testing.T) {
+	r := newLayoutRepo(t)
+	nd := filepath.Join(r.root, ".nightgauge")
+	writeLayoutFile(t, filepath.Join(nd, "audit", "features.yaml"), "features: []\n", 0o644)
+	writeLayoutFile(t, filepath.Join(r.root, ".gitignore"), "/.nightgauge/*\n!/.nightgauge/audit/\n/.nightgauge/audit/scope-drift-stats.json\n", 0o644)
+	gittest.Run(t, r.root, "add", "-A")
+	gittest.Run(t, r.root, "commit", "-q", "-m", "audit")
+	checkout, err := layout.CheckoutDir(r.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moves := map[string]string{
+		"complexity-model.yaml":             "complexity-model.yaml",
+		"audit/scope-drift-stats.json":      "scope-drift-stats.json",
+		"health-report.json":                "reports/health-report.json",
+		"backlog-2026-09-29.md":             "reports/backlog-2026-09-29.md",
+		"backlog-triage.md":                 "reports/backlog-triage.md",
+		"session-handoff.md":                "session-handoff.md",
+		"history/brownfield-snapshots.json": "brownfield-history/brownfield-snapshots.json",
+		"release-watch/state.json":          "release-watch/state.json",
+		"doctor/automation-pauses.json":     "doctor/automation-pauses.json",
+		".refresh-trigger":                  ".refresh-trigger",
+	}
+	for legacy := range moves {
+		writeLayoutFile(t, filepath.Join(nd, filepath.FromSlash(legacy)), legacy+"\n", 0o644)
+	}
+	status := gittest.Run(t, r.root, "status", "--porcelain")
+	m := r.migrator("")
+	m.checkoutEntries = allCheckoutEntries
+	rep := m.Migrate(context.Background())
+	if rep.Version != LayoutVersion || len(rep.Errors) > 0 {
+		t.Fatalf("migration: %s", rep.Summary())
+	}
+	for legacy, dst := range moves {
+		if got := readLayoutFile(t, filepath.Join(checkout, filepath.FromSlash(dst))); got != legacy+"\n" {
+			t.Errorf("%s = %q, want the bytes of .nightgauge/%s", dst, got, legacy)
+		}
+		assertGone(t, filepath.Join(nd, filepath.FromSlash(legacy)))
+	}
+	if got := readLayoutFile(t, filepath.Join(nd, "audit", "features.yaml")); got != "features: []\n" {
+		t.Errorf("the tracked audit file changed: %q", got)
+	}
+	if s := gittest.Run(t, r.root, "status", "--porcelain"); s != status {
+		t.Errorf("git status changed:\n%s\nwant\n%s", s, status)
+	}
+}
