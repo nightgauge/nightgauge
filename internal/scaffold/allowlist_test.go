@@ -278,6 +278,11 @@ func TestCLIOnlyCloneStaysClean(t *testing.T) {
 			strings.Join(got, "\n  "), strings.Join(want, "\n  "))
 	}
 
+	// No command appends its own rules to a deny-by-default file.
+	if got := read(t, filepath.Join(clone, ".nightgauge", ".gitignore")); got != GitignoreTemplate {
+		t.Fatalf(".nightgauge/.gitignore changed after the state-writing commands:\n%s", got)
+	}
+
 	gittest.Run(t, clone, "add", "-A")
 	gittest.Run(t, clone, "commit", "-q", "-m", "nightgauge config")
 	stateCommands()

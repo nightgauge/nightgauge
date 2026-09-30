@@ -27,8 +27,8 @@ const (
 const Interval = 24 * time.Hour
 
 // MarkerName is the file in each log directory whose mtime records the last
-// prune. It is a dot file, so Prune never counts or deletes it, and the
-// .nightgauge/.gitignore `logs/*` rule keeps it out of git.
+// prune. It is a dot file, so Prune never counts or deletes it; the log
+// directories live outside the working tree (ADR-024 § 7), so git never sees it.
 const MarkerName = ".last-prune"
 
 // ConfiguredPolicy is the policy in effect with where each cap came from.

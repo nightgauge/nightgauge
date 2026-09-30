@@ -708,6 +708,11 @@ func (s *OutcomeService) ensureLocalModelGitignore() error {
 		return fmt.Errorf("read model gitignore: %w", err)
 	}
 	content := string(data)
+	// A deny-by-default file (template v17+, ADR-024 § 13) already ignores
+	// both; appending would only leave clutter under Local additions.
+	if containsLine(content, "/*") {
+		return nil
+	}
 	missing := ""
 	for _, pattern := range []string{"/complexity-model.yaml", "/complexity-model.lock"} {
 		if !containsLine(content, pattern) {

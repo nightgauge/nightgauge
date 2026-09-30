@@ -1443,3 +1443,28 @@ func loadModel(t *testing.T, dir string) *complexityModel {
 	}
 	return &m
 }
+
+// #2043: a deny-by-default .nightgauge/.gitignore (template v17, `/*`) already
+// ignores the model files, so initialization appends nothing to it.
+func TestInitializeModel_LeavesADenyByDefaultGitignoreAlone(t *testing.T) {
+	dir := t.TempDir()
+	gittest.InitRepo(t, dir, "-q")
+	modelDir := filepath.Join(dir, ".nightgauge")
+	if err := os.MkdirAll(modelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ignorePath := filepath.Join(modelDir, ".gitignore")
+	body := "# nightgauge-gitignore-version: 17\n/*\n!/config.yaml\n!/.gitignore\n"
+	if err := os.WriteFile(ignorePath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewOutcomeService(dir).InitializeModel(); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(ignorePath); string(data) != body {
+		t.Fatalf("deny-by-default .gitignore was edited:\n%s", data)
+	}
+	if out := gittest.Run(t, dir, "status", "--porcelain", "--untracked-files=all"); out != "?? .nightgauge/.gitignore" {
+		t.Fatalf("git status = %q, want only the ignore file", out)
+	}
+}
