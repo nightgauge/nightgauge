@@ -1064,7 +1064,7 @@ func openCodeProjectConfigTamperCheck(ctx context.Context, worktreeDir string) e
 	if baseRef, ok := openCodeTamperGateBaseRef(ctx, worktreeDir); ok {
 		if mergeBase, err := openCodeGitOutput(ctx, worktreeDir, "merge-base", "HEAD", baseRef); err == nil {
 			if mergeBase = strings.TrimSpace(mergeBase); mergeBase != "" {
-				diffArgs := append([]string{"diff", "--name-only", mergeBase, "--"}, protectedPaths...)
+				diffArgs := append([]string{"diff", "--no-ext-diff", "--no-textconv", "--name-only", mergeBase, "--"}, protectedPaths...)
 				if diffOut, err := openCodeGitOutput(ctx, worktreeDir, diffArgs...); err == nil {
 					for _, line := range strings.Split(strings.TrimSpace(diffOut), "\n") {
 						add(line)
@@ -1132,15 +1132,36 @@ func openCodeTamperGateBaseRef(ctx context.Context, worktreeDir string) (ref str
 
 // openCodeGitRefExists reports whether ref resolves to a commit in dir.
 func openCodeGitRefExists(ctx context.Context, dir, ref string) bool {
-	cmd := exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--verify", "--quiet", ref)
-	return cmd.Run() == nil
+	return openCodeGitCommand(ctx, dir, "rev-parse", "--verify", "--quiet", ref).Run() == nil
 }
 
 // openCodeGitOutput runs a git command in dir and returns its trimmed-of-
 // nothing stdout (the caller trims what it needs: a porcelain listing's
 // leading status columns are significant).
 func openCodeGitOutput(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	out, err := cmd.Output()
+	out, err := openCodeGitCommand(ctx, dir, args...).Output()
 	return string(out), err
+}
+
+// openCodeGitHardeningArgs are prepended to every git invocation the tamper
+// gate makes (#1826). The gate runs in the unisolated orchestrator process,
+// against a worktree a Bash-capable stage has just had write access to: a
+// stage can `git config core.fsmonitor '<script>'` there with no path
+// argument for external_directory to check, and the gate's own `git status`
+// would then run that script outside every OpenCode isolation boundary.
+// Command-line -c overrides every config file, so the worktree's repo-local
+// config can no longer name a program for these invocations to execute.
+var openCodeGitHardeningArgs = []string{
+	"-c", "core.fsmonitor=false",
+	"-c", "core.hooksPath=/dev/null",
+}
+
+// openCodeGitCommand builds a tamper-gate git invocation in dir: the
+// hardening overrides above, and GIT_CONFIG_NOSYSTEM=1 so the system-wide
+// config is not read either.
+func openCodeGitCommand(ctx context.Context, dir string, args ...string) *exec.Cmd {
+	full := append(append([]string{}, openCodeGitHardeningArgs...), "-C", dir)
+	cmd := exec.CommandContext(ctx, "git", append(full, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_NOSYSTEM=1")
+	return cmd
 }
