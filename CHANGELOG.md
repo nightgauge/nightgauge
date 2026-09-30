@@ -51,8 +51,10 @@ changelog, and the release workflow refuses a tag that does not.
 ### Changed
 
 - **`@anthropic-ai/sdk` 0.112.5 → 0.128.0 in the SDK, with the lockfile.**
-  Dependabot's #2301 changed only `package.json`, so its green checks ran
-  against the locked 0.112.5.
+  The root `overrides` floor (`^0.112.3`, set to clear advisories in #70) is
+  raised to `^0.128.0`. Dependabot's #2301 changed only the SDK's
+  `package.json`, and the override kept the locked 0.112.5, so its green
+  checks never exercised 0.128.
 
 ## [0.5.1] - 2026-09-30
 
