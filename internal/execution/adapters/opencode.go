@@ -495,12 +495,6 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 	}
 	if opts.RunRoot != nil {
 		maps.Copy(env, opts.RunRoot.Env)
-		// EnvOperatorInstallRisk is manager-only (manager.go's operator-
-		// install-risk watchdog reads it back from opts.RunRoot.Env
-		// directly, before this function ever runs): the child opencode
-		// process itself has no use for it, so it does not belong in the
-		// child's own environment (#1635/A11 round 8).
-		delete(env, opencodeplugin.EnvOperatorInstallRisk)
 	}
 
 	return name, args, env
@@ -584,7 +578,12 @@ func (a *OpenCodeAdapter) PrepareRunRoot(req RunRootRequest) (*RunRoot, error) {
 	if err := InstallNightgaugePlugin(ctx, run, req.Run.OutputFile, req.ID); err != nil {
 		return nil, err
 	}
-	root := &RunRoot{Dir: run.RunDir, Env: run.Env, Endpoints: run.Endpoints}
+	root := &RunRoot{
+		Dir:                 run.RunDir,
+		Env:                 run.Env,
+		Endpoints:           run.Endpoints,
+		OperatorInstallRisk: run.OperatorInstallRisk,
+	}
 	if pin != "" {
 		a.pinned.Store(root, pin)
 	}
@@ -686,9 +685,7 @@ func InstallNightgaugePlugin(ctx context.Context, run *OpenCodeRun, outputFile, 
 	// and classify a stage that never produces output as adapter_incompatible
 	// instead of an unclassified hang (manager.go), rather than silently
 	// waiting on the registry.
-	if risk := operatorInstallRisk(run); risk != "" {
-		run.Env[opencodeplugin.EnvOperatorInstallRisk] = risk
-	}
+	run.OperatorInstallRisk = operatorInstallRisk(run)
 	content, err := addNightgaugePluginToConfig(run.ConfigContent, entry)
 	if err != nil {
 		return fmt.Errorf("opencode: adding the nightgauge plugin to the per-run config: %w", err)

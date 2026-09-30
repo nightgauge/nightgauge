@@ -148,6 +148,12 @@ type RunRoot struct {
 	// key a stage names on -m to reach it. The stage result's Endpoint is
 	// read against them.
 	Endpoints []string
+	// OperatorInstallRisk is the operator-owned OpenCode config directory a
+	// run's OpenCode install may wait on (OpenCodeRun.OperatorInstallRisk),
+	// or "". Only the manager's operator-install-risk watchdog reads it; it
+	// is a field rather than an Env entry so it never reaches the child's
+	// environment or the printed run config (#1802).
+	OperatorInstallRisk string
 }
 
 // RunResult captures the output of a skill execution.

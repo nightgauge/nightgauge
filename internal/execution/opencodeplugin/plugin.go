@@ -164,16 +164,6 @@ const (
 	// (#2194). Unset when the caller names no workspace. Defined in
 	// opencodeallow, the leaf both this package and internal/hooks read.
 	EnvKnowledgeDir = opencodeallow.EnvKnowledgeDir
-	// EnvOperatorInstallRisk names, when set, the operator-owned OpenCode
-	// config directory ($HOME/.opencode, or an inherited OPENCODE_CONFIG_DIR)
-	// this run's config puts at risk of OpenCode's own @opencode-ai/plugin
-	// install waiting on the registry (#1635/A11 round 6, ADR-022 amendment
-	// 2026-09-15, narrowed AC1: Nightgauge never seeds or merges into either
-	// directory). adapters.operatorInstallRisk sets it (read-only — the
-	// directory is never written); manager.go reads it back to bound the
-	// wait and classify a stage that never produces output as
-	// adapter_incompatible instead of an unclassified hang.
-	EnvOperatorInstallRisk = "NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK"
 )
 
 // HandshakeConfig is what a manager needs to verify one opencode run's

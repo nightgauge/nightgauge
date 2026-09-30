@@ -307,23 +307,16 @@ const OPENCODE_RUN_ENV_NAMES: ReadonlySet<string> = new Set<string>([
 ]);
 
 /**
- * `NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK` (`opencodeplugin.EnvOperatorInstallRisk`,
- * internal/execution/opencodeplugin/plugin.go), accepted by `checkRunConfig`
- * but never applied to a child's environment — the TS twin of the Go
- * adapter's own `BuildCommand`, which deletes this name from the child's env
- * right before returning it (`opencode.go`, `delete(env,
- * opencodeplugin.EnvOperatorInstallRisk)`, pinned by
- * `TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild`) with the
- * comment "this marker is manager-only ... must not reach the opencode child
- * process". #1802's child-env half of that leak is already closed on the Go
- * side by that delete; only the config verb's *printed* `env` still carries
- * the name, because the verb prints `RunRoot.Env` directly without going
- * through `BuildCommand`'s own withhold. So `checkRunConfig` must accept the
- * name — refusing it would fail closed on every machine where an operator's
- * `$HOME/.opencode` or an inherited `OPENCODE_CONFIG_DIR` happens to be
- * unsatisfied, which the operator neither set nor controls — while
- * `curateOpenCodeChildEnv` must still never apply it, mirroring
- * `BuildCommand`'s delete rather than reopening the leak on this spawn path.
+ * `NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK`, accepted by `checkRunConfig`
+ * but never applied to a child's environment. The Go binary's operator-
+ * install-risk flag is manager-only: since #1802 it travels in
+ * `RunRoot.OperatorInstallRisk`, so neither the Go child nor
+ * `nightgauge opencode config --json` carries it. A binary from before #1802
+ * still prints it in the verb's `env` whenever an operator's
+ * `$HOME/.opencode` or inherited `OPENCODE_CONFIG_DIR` is unsatisfied, a
+ * condition the operator neither set nor controls. So `checkRunConfig` keeps
+ * accepting the name, since refusing it would fail closed against such a
+ * binary, and `curateOpenCodeChildEnv` never applies it.
  * A separate set (rather than adding the name to {@link OPENCODE_RUN_ENV_NAMES})
  * is required because that set has exactly one meaning used on both axes:
  * `checkRunConfig` accepts a name in it, and `curateOpenCodeChildEnv` forwards

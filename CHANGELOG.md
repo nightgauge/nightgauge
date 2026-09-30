@@ -37,6 +37,16 @@ changelog, and the release workflow refuses a tag that does not.
   only for a PR merged into the same base whose head contains the tip. Every
   lookup failure stays `KEEP`.
 
+- **The OpenCode operator-install-risk flag stays with the manager** (#1802).
+  The path of an operator's OpenCode config directory that may wait on
+  OpenCode's own plugin install now reaches the manager's watchdog through the
+  run root, not the run's environment. `nightgauge opencode config --json` no
+  longer prints `NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK` in its `env`, so
+  that output again holds only isolation variables and
+  `OPENCODE_CONFIG_CONTENT`. The opencode child never received it, and the
+  watchdog arms exactly as before. The SDK still accepts the name from an
+  older binary and never passes it to the child.
+
 - **A test run can no longer move, and lose, the developer's machine state**
   (#2311). A process with the real `HOME` and `NIGHTGAUGE_STATE_HOME` pointed
   at a temporary directory ran the machine-state migration into that directory,

@@ -619,7 +619,7 @@ func (m *Manager) RunStage(ctx context.Context, opts StageOptions) (stageResult 
 	var operatorInstallRisk string
 	if openCode != nil && runOpts.RunRoot != nil {
 		pluginHandshake, pluginHandshakeOK = opencodeplugin.HandshakeConfigFromEnv(runOpts.RunRoot.Env)
-		operatorInstallRisk = runOpts.RunRoot.Env[opencodeplugin.EnvOperatorInstallRisk]
+		operatorInstallRisk = runOpts.RunRoot.OperatorInstallRisk
 	}
 	// Operator install risk watchdog (#1635/A11 round 6, narrowed AC1,
 	// ADR-022 amendment 2026-09-15; round 8 correction, same amendment date):

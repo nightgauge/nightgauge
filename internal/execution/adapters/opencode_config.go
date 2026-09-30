@@ -1553,6 +1553,13 @@ type OpenCodeRun struct {
 	// one, so a plugin-bearing config still leaves it needing a seed of its
 	// own.
 	Home string `json:"-"`
+	// OperatorInstallRisk is the operator-owned OpenCode config directory
+	// InstallNightgaugePlugin found at risk of OpenCode's own plugin install
+	// waiting on the registry (operatorInstallRisk), or "". It is handed to
+	// the manager's watchdog through RunRoot.OperatorInstallRisk, never
+	// through Env, so neither the child nor `nightgauge opencode config`
+	// sees it (#1802).
+	OperatorInstallRisk string `json:"-"`
 	// NonLoopback is false only when the stage dispatches to a declared
 	// endpoint on this machine. It is true for an endpoint elsewhere and for
 	// every hosted provider, so a claim that the run stays offline does not

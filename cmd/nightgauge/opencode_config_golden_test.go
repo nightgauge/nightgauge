@@ -219,10 +219,6 @@ func TestOpenCodeConfigGolden(t *testing.T) {
 		t.Errorf("config_content differs from the Go spawn's OPENCODE_CONFIG_CONTENT")
 	}
 	for k, v := range verb.Env {
-		// The one variable the Go spawn deliberately withholds from the child.
-		if k == opencodeplugin.EnvOperatorInstallRisk {
-			continue
-		}
 		if normalize(v) != goEnv[k] {
 			t.Errorf("env[%s]: the verb prints %q, the Go spawn gets %q", k, normalize(v), goEnv[k])
 		}

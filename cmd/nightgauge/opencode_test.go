@@ -331,13 +331,10 @@ func TestOpenCodeConfigVerbMatchesTheAdapter(t *testing.T) {
 // know about is exactly as invisible to that TS assertion, so keeping this
 // test green is what keeps the two lists from drifting apart again.
 //
-// NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK is deliberately not in the
-// fixture: operatorInstallRisk (opencode_plugin_deps.go) only sets it when an
-// operator's OpenCode install directory is at risk, which this bare
-// invocation's fresh, empty $HOME never is. Its own accept-but-withhold
-// contract is pinned by TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild
-// on this side and by dedicated tests in opencodeAdapter.test.ts on the TS
-// side, not by this fixture.
+// The operator-install-risk flag is not an env key at all since #1802: it
+// travels to the manager in RunRoot.OperatorInstallRisk, so the verb never
+// prints it (TestOpenCodeConfigVerbRefusesWhatTheAdapterRefusesBeforeSpawn
+// pins that under opencode.inherit_user_config).
 func TestOpenCodeConfigVerbEnvKeysMatchGoldenFixture(t *testing.T) {
 	worktree := isolateOpenCodeVerb(t, openCodeVerbMachineConfig)
 	out, err := runOpenCodeVerb(t, "--stage", "feature-dev", "--worktree", worktree, "--run-id", openCodeVerbRunID, "--json")
@@ -668,5 +665,20 @@ func TestOpenCodeConfigVerbRefusesWhatTheAdapterRefusesBeforeSpawn(t *testing.T)
 	}
 	if !strings.Contains(stderr, "opencode.inherit_user_config is on") {
 		t.Errorf("with the opt-in the verb did not say so on stderr:\n%s", stderr)
+	} // #1802: under the opt-in the operator's own ~/.opencode, which does not
+	// yet satisfy OpenCode's plugin install, is flagged for the manager's
+	// install-risk watchdog. The flag is the manager's alone: the printed
+	// env is the isolation set, so neither the marker nor the flagged path
+	// appears in it.
+	if opencodeplugin.OperatorInstallSatisfied(dotDir) {
+		t.Fatalf("precondition: %s already satisfies OpenCode's install check, so nothing is flagged", dotDir)
+	}
+	if strings.Contains(out, "NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK") {
+		t.Errorf("the verb's JSON carries NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK; the install-risk marker is manager-only:\n%s", out)
+	}
+	for k, v := range inheritRun.Env {
+		if v == dotDir {
+			t.Errorf("the verb's env[%s] = %q names the flagged operator directory; it is not an isolation variable", k, v)
+		}
 	}
 }
