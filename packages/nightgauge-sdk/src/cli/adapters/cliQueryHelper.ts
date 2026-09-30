@@ -94,6 +94,9 @@ export async function runCliCommand(
       resolve({ code: code ?? 1, stdout, stderr });
     });
 
+    // A child that exits without reading stdin makes the write fail with
+    // EPIPE; the close handler already reports its exit code (#2314).
+    child.stdin.on("error", () => {});
     child.stdin.write(prompt);
     child.stdin.end();
   });

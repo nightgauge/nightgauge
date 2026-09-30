@@ -29,6 +29,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The SDK's eval and CLI spawn helpers survive a child that never reads
+  stdin** (#2314). Writing the prompt to a child that had already exited
+  raised an uncaught `EPIPE` instead of returning the child's exit code. The
+  live-cell executor, the model runner and `runCliCommand` now handle the
+  stdin error, and the exit code is reported as before.
+
 - **`scripts/branch-merged-check.sh` recognises a branch folded into another
   pull request** (#2313). A branch merged into a batch branch and landed
   through that branch's squash merge has no PR of its own, so the checker kept

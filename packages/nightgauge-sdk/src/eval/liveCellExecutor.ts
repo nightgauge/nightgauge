@@ -423,6 +423,9 @@ export const defaultCliSpawn: CliSpawnFn = (command, args, prompt, cwd, timeoutM
           resolvePromise({ stdout, stderr, code: code ?? 1 });
         });
 
+        // A child that exits without reading stdin makes the write fail with
+        // EPIPE; the close handler already reports its exit code (#2314).
+        child.stdin?.on("error", () => {});
         child.stdin?.write(prompt);
         child.stdin?.end();
       })

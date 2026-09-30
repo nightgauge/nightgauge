@@ -647,6 +647,22 @@ describe("defaultCliSpawn — the spawn plan owns the thinking env keys (#571)",
   });
 });
 
+describe("defaultCliSpawn — a child that never reads stdin (#2314)", () => {
+  it("resolves with the exit code instead of raising EPIPE", async () => {
+    // 8 MiB exceeds any pipe buffer, so the write is still pending when the
+    // child exits and fails with EPIPE unless the stream has an error listener.
+    const res = await defaultCliSpawn(
+      process.execPath,
+      ["-e", "process.exit(3)"],
+      "x".repeat(8 * 1024 * 1024),
+      process.cwd(),
+      30_000,
+      {}
+    );
+    expect(res.code).toBe(3);
+  });
+});
+
 describe("parseClaudeResult", () => {
   it("parses a single JSON object", () => {
     expect(parseClaudeResult(claudeJson({ input_tokens: 5 }))?.usage?.input_tokens).toBe(5);
