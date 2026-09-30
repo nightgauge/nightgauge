@@ -48,7 +48,7 @@ export interface CloneLayout {
 export class NotAGitRepositoryError extends Error {
   constructor(
     public readonly root: string,
-    detail?: string
+    public readonly detail?: string
   ) {
     super(
       `not a git repository: ${root} (per-clone data lives in the git directory, ADR-024 § 7)` +
@@ -138,6 +138,17 @@ function ensureCloneRoot(layout: CloneLayout): void {
   }
 }
 
+/**
+ * A cached failure, re-created per throw: a cached error object keeps the stack
+ * of the call that first resolved the root, so every later throw would point at
+ * that call instead of at the caller that failed to guard against it.
+ */
+function rethrowable(hit: Error): Error {
+  return hit instanceof NotAGitRepositoryError
+    ? new NotAGitRepositoryError(hit.root, hit.detail)
+    : hit;
+}
+
 function remember(root: string, layout: CloneLayout): CloneLayout {
   ensureCloneRoot(layout);
   cache.set(root, layout);
@@ -152,7 +163,7 @@ function remember(root: string, layout: CloneLayout): CloneLayout {
  */
 export function resolveCloneLayout(root: string): CloneLayout {
   const hit = cache.get(root);
-  if (hit instanceof Error) throw hit;
+  if (hit instanceof Error) throw rethrowable(hit);
   if (hit) return hit;
   const missing = missingRoot(root);
   if (missing) throw missing;
@@ -189,7 +200,7 @@ export function cloneClassDir(cls: CloneClass, cwd: string = process.cwd()): str
  */
 export function primeCloneLayout(root: string): Promise<CloneLayout> {
   const hit = cache.get(root);
-  if (hit instanceof Error) return Promise.reject(hit);
+  if (hit instanceof Error) return Promise.reject(rethrowable(hit));
   if (hit) return Promise.resolve(hit);
   const missing = missingRoot(root);
   if (missing) return Promise.reject(missing);

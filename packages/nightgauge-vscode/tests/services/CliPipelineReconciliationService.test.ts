@@ -124,6 +124,26 @@ describe("CliPipelineReconciliationService", () => {
     service.dispose();
   });
 
+  it("skips a root outside a git repository instead of rejecting every interval", async () => {
+    const primary = await fixture("acme/primary", 1, runIdFor(1));
+    const plainFolder = await mkdtemp(path.join(tmpdir(), "nightgauge-not-a-repo-"));
+    tempRoots.push(plainFolder);
+    const events = callbacks();
+    const service = new CliPipelineReconciliationService(
+      () => [
+        { path: plainFolder, repo: "acme/plain" },
+        { path: primary, repo: "acme/primary" },
+      ],
+      events.value,
+      { isProcessAlive: () => true }
+    );
+
+    await expect(service.scan()).resolves.toBeUndefined();
+
+    expect(events.discovered.map((run) => run.snapshot.repo)).toEqual(["acme/primary"]);
+    service.dispose();
+  });
+
   it("rejects stale processes, malformed identity, and cross-repository snapshots", async () => {
     const stale = await fixture("acme/stale", 3, runIdFor(3));
     const crossRepo = await fixture("acme/wrong", 4, runIdFor(4));

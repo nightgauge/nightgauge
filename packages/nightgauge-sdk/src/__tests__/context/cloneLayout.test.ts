@@ -116,6 +116,29 @@ describe("CL.resolveCloneLayout", () => {
     expect(child_process.execFileSync).toHaveBeenCalledTimes(1);
   });
 
+  it("throws a fresh error per call from the cache, so each stack names its caller", () => {
+    const dir = tmp("clonelayout-norepo-");
+    const prev = process.env.GIT_CEILING_DIRECTORIES;
+    process.env.GIT_CEILING_DIRECTORIES = path.dirname(fs.realpathSync(dir));
+    const thrown: unknown[] = [];
+    try {
+      for (let i = 0; i < 2; i++) {
+        try {
+          CL.resolveCloneLayout(dir);
+        } catch (e) {
+          thrown.push(e);
+        }
+      }
+    } finally {
+      if (prev === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+      else process.env.GIT_CEILING_DIRECTORIES = prev;
+    }
+    expect(thrown).toHaveLength(2);
+    expect(thrown[1]).toBeInstanceOf(CL.NotAGitRepositoryError);
+    expect(thrown[1]).not.toBe(thrown[0]);
+    expect((thrown[1] as Error).message).toBe((thrown[0] as Error).message);
+  });
+
   it("ignores GIT_DIR in the environment", () => {
     const root = repo();
     const other = repo();
