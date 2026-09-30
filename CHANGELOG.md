@@ -29,6 +29,22 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A test run can no longer move, and lose, the developer's machine state**
+  (#2311). A process with the real `HOME` and `NIGHTGAUGE_STATE_HOME` pointed
+  at a temporary directory ran the machine-state migration into that directory,
+  which the test then deleted. Legacy state in `~/.nightgauge` now never moves
+  into a machine-state directory set by an override while the default one
+  exists, or into one under the temporary directory when `~/.nightgauge` is
+  not; `nightgauge doctor` reports why (NGD046), and the automatic run at CLI
+  start only reports while an override is set. The legacy `machine-id` is
+  compared with the default machine-state directory's too, and is saved as
+  `machine-id.migrated-<UTC time>` before any move removes it. Every Go test
+  package that overrides the machine-state directory now isolates `HOME`, a
+  lint test enforces it, and the VS Code test setup isolates `HOME` and the
+  machine-state directory. `scripts/ci-local.sh` fails, naming the paths, when
+  a run changed `~/.nightgauge` or removed anything from the default
+  machine-state directory; it only records, never restores or deletes.
+
 - **`dev-install.sh --from-release` installs this host's VSIX** (#2309). It
   downloaded every VSIX of the latest release and installed whichever sorted
   first, which put the linux-x64 build on an arm64 Mac. It now maps

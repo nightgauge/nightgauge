@@ -408,3 +408,102 @@ func TestInstallExclusiveFallsBackWithoutHardLinks(t *testing.T) {
 		t.Errorf("temporary files left behind: %v", left)
 	}
 }
+
+// TestLegacyMoveRefusal (#2311): legacy state never moves into an override
+// while the default root exists, nor into a temporary root when the legacy
+// root is not temporary; an isolated test (both temporary) and an override
+// on a machine without a default root are allowed.
+func TestLegacyMoveRefusal(t *testing.T) {
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(base, "tmp")
+	realHome := filepath.Join(base, "home")
+	def := filepath.Join(realHome, ".nightgauge", "state")
+	if err := os.MkdirAll(def, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(realHome, ".nightgauge")
+	missingDef := filepath.Join(base, "nohome", ".nightgauge", "state")
+	temps := []string{tmp}
+
+	cases := []struct {
+		name, root, legacy, override, def string
+		want                              string // substring; "" means allowed
+	}{
+		{"override while the default exists", filepath.Join(base, "sandbox"), legacy, EnvStateHome, def, EnvStateHome},
+		{"override without a default root", filepath.Join(base, "sandbox"), legacy, "XDG_STATE_HOME", missingDef, ""},
+		{"override naming the default itself", def, legacy, EnvStateHome, def, ""},
+		{"temporary root, real legacy root", filepath.Join(tmp, "state"), legacy, "", "", "temporary directory"},
+		{"temporary root and temporary home", filepath.Join(tmp, "state"), filepath.Join(tmp, "home", ".nightgauge"), "", "", ""},
+		{"the default, no override", def, legacy, "", def, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := legacyMoveRefusal(c.root, c.legacy, c.override, c.def, temps)
+			if c.want == "" && got != "" {
+				t.Errorf("refused: %s", got)
+			}
+			if c.want != "" && !strings.Contains(got, c.want) {
+				t.Errorf("refusal = %q, want it to name %q", got, c.want)
+			}
+		})
+	}
+}
+
+// TestStateFileRefusesAnOverrideWhileTheDefaultExists (#2311): a process with
+// the real HOME and a sandbox STATE leaves the legacy file in place, and the
+// hint variant does not delete it either.
+func TestStateFileRefusesAnOverrideWhileTheDefaultExists(t *testing.T) {
+	root, legacyDir := stateAndLegacy(t)
+	def, err := DefaultStateHomePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(def, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"machine-id", "rate-limit.json"} {
+		if err := os.WriteFile(filepath.Join(legacyDir, name), []byte(name+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := StateFile("machine-id"); !errors.Is(err, ErrStateMoveRefused) {
+		t.Errorf("StateFile error = %v, want ErrStateMoveRefused", err)
+	}
+	if _, err := StateHintFile("rate-limit.json"); err != nil {
+		t.Errorf("StateHintFile: %v", err)
+	}
+	for _, name := range []string{"machine-id", "rate-limit.json"} {
+		if got, err := os.ReadFile(filepath.Join(legacyDir, name)); err != nil || string(got) != name+"\n" {
+			t.Errorf("legacy %s = %q, %v; want it untouched", name, got, err)
+		}
+		if _, err := os.Lstat(filepath.Join(root, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s reached the override: %v", name, err)
+		}
+	}
+}
+
+// TestStateFileBacksUpTheLegacyMachineID (#2311): the move leaves
+// machine-id.migrated-<UTC> beside the legacy path, byte for byte.
+func TestStateFileBacksUpTheLegacyMachineID(t *testing.T) {
+	root, legacyDir := stateAndLegacy(t)
+	content := []byte("11111111-2222-4333-8444-555555555555\n")
+	if err := os.WriteFile(filepath.Join(legacyDir, MachineIDName), content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StateFile(MachineIDName); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(root, MachineIDName)); string(got) != string(content) {
+		t.Errorf("moved id = %q", got)
+	}
+	backups, _ := filepath.Glob(filepath.Join(legacyDir, MachineIDName+migratedBackupInfix+"*"))
+	if len(backups) != 1 {
+		t.Fatalf("backups = %v, want one", backups)
+	}
+	if got, _ := os.ReadFile(backups[0]); string(got) != string(content) {
+		t.Errorf("backup = %q", got)
+	}
+}
