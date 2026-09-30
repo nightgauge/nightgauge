@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
+import { cloneLayoutFor, setCloneLayout } from "../../src/context/cloneLayout.js";
 import {
   StageModelCalibrationService,
   MIN_CALIBRATION_SAMPLES,
@@ -208,10 +209,11 @@ describe("StageModelCalibrationService", () => {
   });
 
   describe("getDefaultPath", () => {
-    it("resolves under .nightgauge/pipeline/", () => {
+    it("resolves into the repository's pipeline class directory", () => {
+      setCloneLayout("/workspace", cloneLayoutFor("/workspace", "/workspace/.git"));
       const resolved = StageModelCalibrationService.getDefaultPath("/workspace");
       expect(resolved).toBe(
-        path.join("/workspace", ".nightgauge", "pipeline", "stage-model-calibration.json")
+        path.join("/workspace", ".git", "nightgauge", "pipeline", "stage-model-calibration.json")
       );
     });
   });

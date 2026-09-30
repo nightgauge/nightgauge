@@ -15,10 +15,12 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs/promises";
+import * as path from "path";
 import * as vscode from "vscode";
 import { RepositoryContextLoader } from "../../src/services/RepositoryContextLoader";
 import { Repository } from "../../src/models/Repository";
 import type { WorkspaceManager } from "../../src/services/WorkspaceManager";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mock fs/promises
 vi.mock("fs/promises");
@@ -49,6 +51,12 @@ vi.mock("vscode", () => ({
 describe("RepositoryContextLoader", () => {
   const workspaceRoot = "/test/workspace";
   const repoPath = "/test/workspace/packages/frontend";
+  const backendPath = "/test/workspace/packages/backend";
+  // Each repository is its own clone here; per-clone data resolves under its
+  // git directory (ADR-024 § 7), mapped without running git.
+  const wsLayout = () => fakeCloneLayout(workspaceRoot);
+  const repoLayout = () => fakeCloneLayout(repoPath);
+  const backendLayout = () => fakeCloneLayout(backendPath);
 
   // Mock WorkspaceManager. Tests that previously relied on
   // `_triggerRepoChange` now hit the resolveActiveRepository path through
@@ -84,6 +92,9 @@ describe("RepositoryContextLoader", () => {
     RepositoryContextLoader.resetInstance();
     // Setup default workspace folders
     vi.mocked(vscode.workspace).workspaceFolders = [{ uri: { fsPath: workspaceRoot } }] as any;
+    wsLayout();
+    repoLayout();
+    backendLayout();
   });
 
   afterEach(() => {
@@ -152,12 +163,12 @@ describe("RepositoryContextLoader", () => {
 
       const contextDir = loader.getContextDir();
 
-      expect(contextDir).toBe(`${repoPath}/.nightgauge/pipeline`);
+      expect(contextDir).toBe(repoLayout().pipeline);
     });
 
     it("should return correct path for specified repository", async () => {
       const currentRepo = new Repository("frontend", repoPath);
-      const otherRepo = new Repository("backend", "/test/workspace/packages/backend");
+      const otherRepo = new Repository("backend", backendPath);
       const manager = createMockWorkspaceManager(currentRepo);
 
       const loader = RepositoryContextLoader.getInstance();
@@ -165,7 +176,7 @@ describe("RepositoryContextLoader", () => {
 
       const contextDir = loader.getContextDir(otherRepo);
 
-      expect(contextDir).toBe("/test/workspace/packages/backend/.nightgauge/pipeline");
+      expect(contextDir).toBe(backendLayout().pipeline);
     });
 
     it("should fallback to workspace root when no repository", async () => {
@@ -176,7 +187,7 @@ describe("RepositoryContextLoader", () => {
 
       const contextDir = loader.getContextDir();
 
-      expect(contextDir).toBe(`${workspaceRoot}/.nightgauge/pipeline`);
+      expect(contextDir).toBe(wsLayout().pipeline);
     });
   });
 
@@ -190,7 +201,7 @@ describe("RepositoryContextLoader", () => {
 
       const filePath = loader.getContextFile("issue", 42);
 
-      expect(filePath).toBe(`${repoPath}/.nightgauge/pipeline/issue-42.json`);
+      expect(filePath).toBe(path.join(repoLayout().pipeline, "issue-42.json"));
     });
 
     it("should return correct path for planning context file", async () => {
@@ -202,7 +213,7 @@ describe("RepositoryContextLoader", () => {
 
       const filePath = loader.getContextFile("planning", 42);
 
-      expect(filePath).toBe(`${repoPath}/.nightgauge/pipeline/planning-42.json`);
+      expect(filePath).toBe(path.join(repoLayout().pipeline, "planning-42.json"));
     });
 
     // A case here asserted the path returned for the "state" context type.
@@ -219,7 +230,7 @@ describe("RepositoryContextLoader", () => {
 
       const filePath = loader.getContextFile("batch-state");
 
-      expect(filePath).toBe(`${repoPath}/.nightgauge/pipeline/batch-state.json`);
+      expect(filePath).toBe(path.join(repoLayout().pipeline, "batch-state.json"));
     });
 
     it("should return correct paths for all context file types", async () => {
@@ -229,13 +240,15 @@ describe("RepositoryContextLoader", () => {
       const loader = RepositoryContextLoader.getInstance();
       await loader.initialize(manager);
 
-      expect(loader.getContextFile("dev", 42)).toBe(`${repoPath}/.nightgauge/pipeline/dev-42.json`);
-      expect(loader.getContextFile("validate", 42)).toBe(
-        `${repoPath}/.nightgauge/pipeline/validate-42.json`
+      expect(loader.getContextFile("dev", 42)).toBe(
+        path.join(repoLayout().pipeline, "dev-42.json")
       );
-      expect(loader.getContextFile("pr", 42)).toBe(`${repoPath}/.nightgauge/pipeline/pr-42.json`);
+      expect(loader.getContextFile("validate", 42)).toBe(
+        path.join(repoLayout().pipeline, "validate-42.json")
+      );
+      expect(loader.getContextFile("pr", 42)).toBe(path.join(repoLayout().pipeline, "pr-42.json"));
       expect(loader.getContextFile("running", 42)).toBe(
-        `${repoPath}/.nightgauge/pipeline/running-42.json`
+        path.join(repoLayout().pipeline, "running-42.json")
       );
     });
 
@@ -262,7 +275,7 @@ describe("RepositoryContextLoader", () => {
 
       const plansDir = loader.getPlansDir();
 
-      expect(plansDir).toBe(`${repoPath}/.nightgauge/plans`);
+      expect(plansDir).toBe(repoLayout().plans);
     });
 
     it("should return correct plan file path with slug", async () => {
@@ -274,7 +287,7 @@ describe("RepositoryContextLoader", () => {
 
       const planPath = loader.getPlanFile(42, "add-auth");
 
-      expect(planPath).toBe(`${repoPath}/.nightgauge/plans/42-add-auth.md`);
+      expect(planPath).toBe(path.join(repoLayout().plans, "42-add-auth.md"));
     });
 
     it("should return default plan file name without slug", async () => {
@@ -286,7 +299,7 @@ describe("RepositoryContextLoader", () => {
 
       const planPath = loader.getPlanFile(42);
 
-      expect(planPath).toBe(`${repoPath}/.nightgauge/plans/42-plan.md`);
+      expect(planPath).toBe(path.join(repoLayout().plans, "42-plan.md"));
     });
   });
 
@@ -553,8 +566,8 @@ describe("RepositoryContextLoader", () => {
       const issuePath = loader.getContextFile("issue", 42);
       const workDir = loader.getWorkingDirectory();
 
-      expect(contextDir).toBe(`${workspaceRoot}/.nightgauge/pipeline`);
-      expect(issuePath).toBe(`${workspaceRoot}/.nightgauge/pipeline/issue-42.json`);
+      expect(contextDir).toBe(wsLayout().pipeline);
+      expect(issuePath).toBe(path.join(wsLayout().pipeline, "issue-42.json"));
       expect(workDir).toBe(workspaceRoot);
     });
   });

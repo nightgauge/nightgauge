@@ -302,7 +302,7 @@ describe("configMergeEngine.behavior", () => {
             ci_timeout: 300,
             auto_fix: true,
             skip: { tests: false, lint: false },
-            logs: { retain: true, dir: ".nightgauge/logs" },
+            logs: { retain: true, max_age_days: 14 },
           },
         },
         local: {

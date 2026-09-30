@@ -9,12 +9,6 @@ import (
 	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
-// IssueContextRelPath is where every writer puts a run's issue context,
-// relative to whichever root it considers "the run".
-func IssueContextRelPath(issueNumber int) string {
-	return pipelineStateRelPath(issueContextName(issueNumber))
-}
-
 func issueContextName(issueNumber int) string {
 	return fmt.Sprintf("issue-%d.json", issueNumber)
 }
@@ -24,33 +18,15 @@ func planningContextName(issueNumber int) string {
 }
 
 // pipelineStateDir resolves root's pipeline state directory through
-// layout.PipelineStateDir. A relative root is made absolute first, so it names
-// the same directory it always did.
+// layout.PipelineStateDir. A relative root is made absolute first. Every root
+// of one clone (the checkout and each worktree) resolves to the same directory
+// under the git common dir, so the candidates below collapse to one path.
 func pipelineStateDir(root string) (string, error) {
 	abs, err := filepath.Abs(root)
 	if err != nil {
 		return "", fmt.Errorf("resolve root %q: %w", root, err)
 	}
 	return layout.PipelineStateDir(abs)
-}
-
-// pipelineStateRelPath is name's path relative to a repository root, derived
-// from layout.PipelineStateDir (against the filesystem root) so it cannot
-// drift from the resolver.
-func pipelineStateRelPath(name string) string {
-	root, err := filepath.Abs(string(filepath.Separator))
-	if err != nil {
-		return ""
-	}
-	dir, err := layout.PipelineStateDir(root)
-	if err != nil {
-		return ""
-	}
-	rel, err := filepath.Rel(root, dir)
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(rel, name)
 }
 
 // IssueContextCandidates returns every path a run's issue-{N}.json may live at,
@@ -83,13 +59,6 @@ func pipelineStateRelPath(name string) string {
 // tried first; pass "" when unknown. repo may be "owner/name" or a bare name.
 func IssueContextCandidates(repoRoot, worktreeDir, repo string, issueNumber int) []string {
 	return stageContextCandidates(repoRoot, worktreeDir, repo, issueNumber, issueContextName(issueNumber))
-}
-
-// PlanningContextRelPath is where every writer puts a run's planning context,
-// relative to whichever root it considers "the run" — the sibling of
-// IssueContextRelPath, written by the feature-planning stage.
-func PlanningContextRelPath(issueNumber int) string {
-	return pipelineStateRelPath(planningContextName(issueNumber))
 }
 
 // PlanningContextCandidates returns every path a run's planning-{N}.json may

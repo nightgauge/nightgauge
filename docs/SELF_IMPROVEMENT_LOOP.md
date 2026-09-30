@@ -46,8 +46,10 @@ them is how #304 went unnoticed.
 `pipeline.notifyComplete` in `internal/ipc/server.go` (extension/interactive
 path, #304).
 
-**File**: `<targetRepoRoot>/.nightgauge/pipeline/history/outcomes.jsonl` —
-**per-repo**, rooted at the run's target repo. That is the same root the run
+**File**: `history/outcomes.jsonl` in the target repo's pipeline state
+directory (`nightgauge layout path pipeline`, which resolves to
+`<git-common-dir>/nightgauge/pipeline/`) — **per-repo**, rooted at the run's
+target repo. That is the same root the run
 record the outcome is derived from is written to (#215/#232: a run's persisted
 state lands in its target repo, never the daemon's launch root), and the same
 root `nightgauge intelligence loop-verdicts --workdir X` / `nightgauge learn
@@ -287,8 +289,8 @@ performance-mode envelope (`modeProfiles.toModelEnvelope()`), and prices it
 against the run's actual **provider** and **per-stage effort** — see
 [GUARDRAILS_AND_BUDGETS.md](GUARDRAILS_AND_BUDGETS.md#pre-flight-cost-estimate-1213).
 
-`PostPipelineAnalyzer` rebuilds and persists
-`.nightgauge/pipeline/stage-model-calibration.json` after every completed run.
+`PostPipelineAnalyzer` rebuilds and persists `stage-model-calibration.json` in
+the clone's pipeline state directory after every completed run.
 It reads `tokens.per_stage[*].model`, falling back to
 `stages[*].model_selection.model` — **that fallback is the backfill**: every
 pre-#1213 record carries the same value in the sibling field, so the loop
@@ -347,8 +349,9 @@ reality. This happens after the stage's primary work is complete.
 - The agent reflects on any friction encountered during the stage: instructions
   that were ambiguous, steps that required workarounds, or assumptions that
   turned out to be incorrect.
-- **If friction is detected**, the agent writes a JSON assessment record to:
-  `.nightgauge/pipeline/assessments/<stage>-<issue>.json`
+- **If friction is detected**, the agent writes a JSON assessment record
+  through `nightgauge layout write pipeline assessments/<stage>-<issue>.json`
+  (the `assessments/` subdirectory of the clone's pipeline state directory)
 - **If everything worked as written**, nothing is written. Silence indicates
   health — the absence of an assessment file is itself a signal.
 
@@ -418,7 +421,8 @@ that recurred across multiple issues.
 
 ### Synthesis Process
 
-1. **Collect** all `.nightgauge/pipeline/assessments/*-<issue>.json` files
+1. **Collect** all `assessments/*-<issue>.json` files in the pipeline state
+   directory
    for sub-issues belonging to epic N.
 2. **Group** friction points by the instruction they reference (normalized to
    the skill file + phase header).
@@ -444,8 +448,8 @@ that recurred across multiple issues.
 
 ### SkillImprovementProposal Storage
 
-Proposals are written to:
-`.nightgauge/pipeline/proposals/retro-epic-<N>.json`
+Proposals are written to `proposals/retro-epic-<N>.json` in the clone's
+pipeline state directory (`nightgauge layout path pipeline`).
 
 They are also surfaced in the VSCode dashboard under a future "Skill Health" tab
 (tracked separately).
@@ -534,17 +538,22 @@ Generate prioritized improvement proposals
 
 ## File Locations
 
-| File                                                    | Purpose                                                      |
-| ------------------------------------------------------- | ------------------------------------------------------------ |
-| `.nightgauge/execution-history.jsonl`                   | Pipeline execution records                                   |
-| `.nightgauge/pipeline/history/outcomes.jsonl`           | Learning outcome corpus (per target repo, both exec paths)   |
-| `.nightgauge/analysis/latest.json`                      | Most recent analysis result                                  |
-| `.nightgauge/analysis/analysis-*.json`                  | Timestamped analysis history                                 |
-| `.nightgauge/gate-metrics.jsonl`                        | Gate invocation records                                      |
-| `.nightgauge/skill-effectiveness.jsonl`                 | Skill change effectiveness                                   |
-| `.nightgauge/calibration.json`                          | Size estimate calibration                                    |
-| `.nightgauge/pipeline/stage-model-calibration.json`     | Per-(stage, model) cost calibration (#142)                   |
-| `.nightgauge/pipeline/assessments/<stage>-<issue>.json` | Per-stage friction records (written only on friction)        |
-| `.nightgauge/pipeline/proposals/retro-epic-<N>.json`    | SkillImprovementProposal records from retro runs             |
-| `.nightgauge/pipeline/continuous-improvement-*.json`    | Periodic continuous improvement review reports               |
-| `.nightgauge/pipeline/survival-records.jsonl`           | Post-merge survival verdicts feeding #4152/#4153 calibration |
+`<pipeline>` is the clone's pipeline state directory
+(`nightgauge layout path pipeline`, resolving to
+`<git-common-dir>/nightgauge/pipeline/`; see
+[ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
+
+| File                                          | Purpose                                                      |
+| --------------------------------------------- | ------------------------------------------------------------ |
+| `.nightgauge/execution-history.jsonl`         | Pipeline execution records                                   |
+| `<pipeline>/history/outcomes.jsonl`           | Learning outcome corpus (per target repo, both exec paths)   |
+| `.nightgauge/analysis/latest.json`            | Most recent analysis result                                  |
+| `.nightgauge/analysis/analysis-*.json`        | Timestamped analysis history                                 |
+| `.nightgauge/gate-metrics.jsonl`              | Gate invocation records                                      |
+| `.nightgauge/skill-effectiveness.jsonl`       | Skill change effectiveness                                   |
+| `.nightgauge/calibration.json`                | Size estimate calibration                                    |
+| `<pipeline>/stage-model-calibration.json`     | Per-(stage, model) cost calibration (#142)                   |
+| `<pipeline>/assessments/<stage>-<issue>.json` | Per-stage friction records (written only on friction)        |
+| `<pipeline>/proposals/retro-epic-<N>.json`    | SkillImprovementProposal records from retro runs             |
+| `<pipeline>/continuous-improvement-*.json`    | Periodic continuous improvement review reports               |
+| `<pipeline>/survival-records.jsonl`           | Post-merge survival verdicts feeding #4152/#4153 calibration |

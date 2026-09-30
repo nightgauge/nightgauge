@@ -183,6 +183,25 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Run state, plans, retros and per-clone logs live in the git directory, not
+  the working tree** (#2037, ADR-024 § 7). The pipeline, plans, retros and logs
+  classes moved from `<repo>/.nightgauge/<class>` to
+  `<git-common-dir>/nightgauge/<class>` (`.git/nightgauge/` in a normal clone),
+  so `git add -A`, watchers, search indexes, linters and Docker build contexts
+  no longer see them, and every linked worktree of a clone shares the main
+  clone's data. The directory is created with mode 0700 (git's group mode in a
+  `core.sharedRepository` clone), and a symlinked class directory is refused.
+  Outside a git repository these commands fail with "not a git repository"
+  instead of writing into the current directory. The new `nightgauge layout`
+  command prints every resolved location as JSON, `nightgauge layout path`
+  prints one, and `nightgauge layout write` / `append` store a file there
+  (atomic, confined to the class directory); skills write stage contexts, plans
+  and retros through it instead of by path. The VS Code extension resolves the
+  same directory once per workspace folder, and neither it nor
+  `nightgauge serve` creates `.nightgauge/pipeline`, `plans` or `logs`
+  directories or `.gitkeep` files in the working tree any more. Existing
+  in-tree files are not read; `nightgauge doctor --fix` moves them (#2040).
+
 - **Every Go caller resolves its per-clone directories through `internal/layout`
   (#2034, #2035).** The CLI (`cmd/nightgauge`) and the remaining internal
   packages (`ipc`, `state`, `execution`, `hooks`, `github`, `diagnostics`,

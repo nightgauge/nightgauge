@@ -179,9 +179,14 @@ echo "code exited $CODE_EXIT"
 grep -a "^\[driver " "$OUT/vscode.log" || true
 
 step "collect evidence"
-if [[ -d "$WORK/.nightgauge/pipeline" ]]; then
-  mkdir -p "$OUT/pipeline"
-  cp -r "$WORK/.nightgauge/pipeline/." "$OUT/pipeline/" 2>/dev/null || true
+# Pipeline state lives in the clone's git directory (ADR-024 § 7).
+if PIPELINE_DIR="$("$BIN" layout --workdir "$WORK" path pipeline)"; then
+  if [[ -d "$PIPELINE_DIR" ]]; then
+    mkdir -p "$OUT/pipeline"
+    cp -r "$PIPELINE_DIR/." "$OUT/pipeline/" 2>/dev/null || true
+  fi
+else
+  echo "ERROR: cannot resolve the pipeline directory of $WORK (nightgauge layout path pipeline)" >&2
 fi
 # VS Code persists every output channel (including the extension's own
 # logger) under the user-data dir, and that is the only place the reason for a

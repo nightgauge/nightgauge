@@ -8,16 +8,21 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
 import { LogFileWriter } from "../../src/utils/log-file-writer";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mock node:fs/promises
 vi.mock("node:fs/promises");
 
 describe("LogFileWriter", () => {
   const workspaceRoot = "/test/workspace";
+  let logsDir = "";
 
   beforeEach(() => {
     vi.clearAllMocks();
+    logsDir = fakeCloneLayout(workspaceRoot).logs;
     // Default mock implementations
     vi.mocked(fs.mkdir).mockResolvedValue(undefined);
     vi.mocked(fs.appendFile).mockResolvedValue();
@@ -61,6 +66,15 @@ describe("LogFileWriter", () => {
   });
 
   describe("appendToLog()", () => {
+    it("writes nothing outside a git repository (#2037)", async () => {
+      const notARepo = path.join(os.tmpdir(), `ng-log-nogit-${process.pid}-${Date.now()}`);
+
+      await LogFileWriter.appendToLog(notARepo, 42, "INFO", null, "Test message");
+
+      expect(fs.mkdir).not.toHaveBeenCalled();
+      expect(fs.appendFile).not.toHaveBeenCalled();
+    });
+
     it("should write formatted entry to log file", async () => {
       await LogFileWriter.appendToLog(
         workspaceRoot,
@@ -70,7 +84,7 @@ describe("LogFileWriter", () => {
         "Starting implementation..."
       );
 
-      expect(fs.mkdir).toHaveBeenCalledWith(expect.stringContaining(".nightgauge/logs"), {
+      expect(fs.mkdir).toHaveBeenCalledWith(logsDir, {
         recursive: true,
       });
 
@@ -137,23 +151,6 @@ describe("LogFileWriter", () => {
       expect(fs.appendFile).not.toHaveBeenCalled();
     });
 
-    it("should use custom log directory from config", async () => {
-      await LogFileWriter.appendToLog(workspaceRoot, 42, "INFO", null, "Test message", {
-        retain: true,
-        dir: "custom/logs",
-      });
-
-      expect(fs.mkdir).toHaveBeenCalledWith("/test/workspace/custom/logs", {
-        recursive: true,
-      });
-
-      expect(fs.appendFile).toHaveBeenCalledWith(
-        expect.stringContaining("custom/logs"),
-        expect.any(String),
-        "utf-8"
-      );
-    });
-
     it("should handle mkdir failure gracefully", async () => {
       const error = new Error("EACCES: permission denied");
       vi.mocked(fs.mkdir).mockRejectedValue(error);
@@ -218,12 +215,12 @@ describe("LogFileWriter", () => {
         "utf-8"
       );
 
-      // No write lands under the fixture workspace's .nightgauge/logs.
+      // No write lands under the fixture workspace's clone logs directory.
       for (const call of vi.mocked(fs.mkdir).mock.calls) {
-        expect(String(call[0])).not.toContain(".nightgauge/logs");
+        expect(String(call[0])).not.toContain(logsDir);
       }
       for (const call of vi.mocked(fs.appendFile).mock.calls) {
-        expect(String(call[0])).not.toContain(".nightgauge/logs");
+        expect(String(call[0])).not.toContain(logsDir);
       }
     });
 
@@ -284,15 +281,7 @@ describe("LogFileWriter", () => {
     it("should return full path with default config", () => {
       const today = new Date().toISOString().split("T")[0];
       const path = LogFileWriter.getLogPath(workspaceRoot, 42);
-      expect(path).toBe(`/test/workspace/.nightgauge/logs/${today}_42_session.log`);
-    });
-
-    it("should use custom dir from config", () => {
-      const today = new Date().toISOString().split("T")[0];
-      const path = LogFileWriter.getLogPath(workspaceRoot, 42, {
-        dir: "custom/path",
-      });
-      expect(path).toBe(`/test/workspace/custom/path/${today}_42_session.log`);
+      expect(path).toBe(`${logsDir}/${today}_42_session.log`);
     });
   });
 
@@ -456,17 +445,6 @@ describe("LogFileWriter", () => {
       expect(result).toHaveLength(1);
       expect(result[0].text).toBe("Readable entry");
     });
-
-    it("should use custom log dir from config", async () => {
-      vi.mocked(fs.readdir).mockResolvedValue([] as any);
-
-      await LogFileWriter.readEntriesForIssue(workspaceRoot, 42, {
-        retain: true,
-        dir: "custom/logs",
-      });
-
-      expect(fs.readdir).toHaveBeenCalledWith("/test/workspace/custom/logs");
-    });
   });
 
   describe("parseLogLine()", () => {
@@ -627,14 +605,6 @@ describe("LogFileWriter", () => {
       const descriptors = await LogFileWriter.listLogs(workspaceRoot, { max_count: 2 });
 
       expect(descriptors.map((d) => d.issueNumber)).toEqual([1, 2]);
-    });
-
-    it("uses custom dir from config", async () => {
-      vi.mocked(fs.readdir).mockResolvedValueOnce([] as any);
-
-      await LogFileWriter.listLogs(workspaceRoot, { dir: "custom/log/dir" });
-
-      expect(fs.readdir).toHaveBeenCalledWith(expect.stringContaining("custom/log/dir"));
     });
   });
 

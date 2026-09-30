@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -88,12 +90,24 @@ func TestSetState_RejectsBogus(t *testing.T) {
 	}
 }
 
-func TestAbsoluteDir(t *testing.T) {
-	if got := AbsoluteDir(""); got == "" {
-		t.Error("expected default dir")
+// TestDefaultDirIsTheClonesPipelineStateDir: without --dir, every subcommand
+// reads the pipeline state directory of the clone the working directory is
+// in; outside a git repository that is an error, never the working directory.
+func TestDefaultDirIsTheClonesPipelineStateDir(t *testing.T) {
+	repo := layouttest.Repo(t)
+	t.Chdir(repo)
+	got, err := resolveBaseDir(getCmd())
+	if err != nil {
+		t.Fatalf("resolveBaseDir: %v", err)
 	}
-	if got := AbsoluteDir("/abs/path"); got != "/abs/path" {
-		t.Errorf("absolute pass-through failed: %s", got)
+	if want := layouttest.PipelineDir(t, repo); got != want {
+		t.Errorf("default dir = %q, want %q", got, want)
+	}
+
+	t.Chdir(t.TempDir())
+	if _, err := resolveBaseDir(getCmd()); err == nil ||
+		!strings.Contains(err.Error(), "not a git repository") {
+		t.Errorf("default dir outside a repository: err = %v, want not a git repository", err)
 	}
 }
 

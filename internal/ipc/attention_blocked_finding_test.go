@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
@@ -25,7 +26,7 @@ func TestClearBlockedFindingRefusesUnresolvedRoot(t *testing.T) {
 // TestClearBlockedFindingRemovesAndToleratesAbsent: with an absolute root the
 // file is removed, and a second clear of the now-absent file still succeeds.
 func TestClearBlockedFindingRemovesAndToleratesAbsent(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	path := orchestrator.BlockedFindingPath(root, 7)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)

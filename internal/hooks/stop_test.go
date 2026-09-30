@@ -6,11 +6,14 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestStopAllComplete(t *testing.T) {
 	dir := t.TempDir()
-	planDir := filepath.Join(dir, ".nightgauge", "plans")
+	planDir := layouttest.PlansDir(t, dir)
 	if err := os.MkdirAll(planDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +39,7 @@ func TestStopAllComplete(t *testing.T) {
 
 func TestStopIncomplete(t *testing.T) {
 	dir := t.TempDir()
-	planDir := filepath.Join(dir, ".nightgauge", "plans")
+	planDir := layouttest.PlansDir(t, dir)
 	if err := os.MkdirAll(planDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +94,7 @@ func TestStopFallbackPlanMD(t *testing.T) {
 
 func TestStopPipelinePlanFallback(t *testing.T) {
 	dir := t.TempDir()
-	pipelineDir := filepath.Join(dir, ".nightgauge", "pipeline")
+	pipelineDir := layouttest.PipelineDir(t, dir)
 	if err := os.MkdirAll(pipelineDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +193,7 @@ func TestStopResultJSON(t *testing.T) {
 // Go scheduler can detect that the stop hook blocked session exit.
 func TestStopWritesSentinelOnIncomplete(t *testing.T) {
 	dir := t.TempDir()
-	planDir := filepath.Join(dir, ".nightgauge", "plans")
+	planDir := layouttest.PlansDir(t, dir)
 	if err := os.MkdirAll(planDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +208,7 @@ func TestStopWritesSentinelOnIncomplete(t *testing.T) {
 		t.Fatal("expected OK=false for incomplete plan")
 	}
 
-	sentinelPath := filepath.Join(dir, ".nightgauge", "pipeline", "stop-hook-status-3542.json")
+	sentinelPath := filepath.Join(layouttest.PipelineDir(t, dir), "stop-hook-status-3542.json")
 	data, err := os.ReadFile(sentinelPath)
 	if err != nil {
 		t.Fatalf("sentinel file not written: %v", err)
@@ -233,7 +236,7 @@ func TestStopWritesSentinelOnIncomplete(t *testing.T) {
 // happy path (all tasks complete → OK=true).
 func TestStopNoSentinelWhenComplete(t *testing.T) {
 	dir := t.TempDir()
-	planDir := filepath.Join(dir, ".nightgauge", "plans")
+	planDir := layouttest.PlansDir(t, dir)
 	if err := os.MkdirAll(planDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -246,7 +249,7 @@ func TestStopNoSentinelWhenComplete(t *testing.T) {
 	if result := EvaluateStop(dir); !result.OK {
 		t.Fatalf("expected OK=true, got %s", result.Reason)
 	}
-	sentinelPath := filepath.Join(dir, ".nightgauge", "pipeline", "stop-hook-status-3542.json")
+	sentinelPath := filepath.Join(layouttest.PipelineDir(t, dir), "stop-hook-status-3542.json")
 	if _, err := os.Stat(sentinelPath); !os.IsNotExist(err) {
 		t.Errorf("sentinel file should not exist on the OK=true path, stat err=%v", err)
 	}
@@ -264,7 +267,7 @@ func TestStopNoSentinelWhenBranchUnresolvable(t *testing.T) {
 	if result := EvaluateStop(dir); result.OK {
 		t.Fatal("expected OK=false for incomplete PLAN.md")
 	}
-	pipelineDir := filepath.Join(dir, ".nightgauge", "pipeline")
+	pipelineDir := layouttest.PipelineDir(t, dir)
 	if entries, err := os.ReadDir(pipelineDir); err == nil {
 		for _, e := range entries {
 			if filepath.Ext(e.Name()) == ".json" {
@@ -294,7 +297,7 @@ func TestEvaluateStopHookOutput_OKEmitsNothing(t *testing.T) {
 // field — that's the legacy shape Claude Code can't parse.
 func TestEvaluateStopHookOutput_BlockEmitsCanonicalJSON(t *testing.T) {
 	dir := t.TempDir()
-	planDir := filepath.Join(dir, ".nightgauge", "plans")
+	planDir := layouttest.PlansDir(t, dir)
 	if err := os.MkdirAll(planDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +340,7 @@ func TestEvaluateStopHookOutput_BlockEmitsCanonicalJSON(t *testing.T) {
 // signal; the stdout change is purely about Claude Code's contract.
 func TestEvaluateStopHookOutput_DoesNotAffectSentinel(t *testing.T) {
 	dir := t.TempDir()
-	planDir := filepath.Join(dir, ".nightgauge", "plans")
+	planDir := layouttest.PlansDir(t, dir)
 	if err := os.MkdirAll(planDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +356,7 @@ func TestEvaluateStopHookOutput_DoesNotAffectSentinel(t *testing.T) {
 
 	// Sentinel must still be written so the Go scheduler can detect
 	// uncommitted work and trigger recovery.
-	sentinelPath := filepath.Join(dir, ".nightgauge", "pipeline", "stop-hook-status-99.json")
+	sentinelPath := filepath.Join(layouttest.PipelineDir(t, dir), "stop-hook-status-99.json")
 	if _, err := os.Stat(sentinelPath); err != nil {
 		t.Fatalf("sentinel file should still be written on the OK=false path: %v", err)
 	}
@@ -362,14 +365,10 @@ func TestEvaluateStopHookOutput_DoesNotAffectSentinel(t *testing.T) {
 // setupFakeBranch creates a .git/HEAD file pointing to the given branch.
 func setupFakeBranch(t *testing.T, dir, branch string) {
 	t.Helper()
-	gitDir := filepath.Join(dir, ".git")
-	if err := os.MkdirAll(gitDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	head := "ref: refs/heads/" + branch + "\n"
-	if err := os.WriteFile(filepath.Join(gitDir, "HEAD"), []byte(head), 0644); err != nil {
-		t.Fatal(err)
-	}
+	// A real repository: the sentinel lands in the clone's pipeline state
+	// directory, which resolves only inside one (ADR-024 § 7).
+	layouttest.Init(t, dir)
+	gittest.Run(t, dir, "symbolic-ref", "HEAD", "refs/heads/"+branch)
 }
 
 // The task list rides on the same parse as the counts (#1651), so the

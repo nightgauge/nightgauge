@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // recordedGateFetch captures the exact owner/name slug a gate hands to the
@@ -65,7 +67,7 @@ func assertWellFormedGateSlug(t *testing.T, rec *recordedGateFetch) {
 // short-circuit on "dev context unavailable" — the very reason #548 was latent.
 func writeDevContext(t *testing.T, dir string, issueNum int, body string) {
 	t.Helper()
-	pipelineDir := filepath.Join(dir, ".nightgauge", "pipeline")
+	pipelineDir := layouttest.PipelineDir(t, dir)
 	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
 		t.Fatalf("mkdir pipeline dir: %v", err)
 	}

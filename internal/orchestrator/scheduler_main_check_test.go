@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -13,6 +12,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // redMainReader answers every check-runs read with one concluded failure, so
@@ -38,8 +39,8 @@ func (r *redMainReader) GetRequiredCheckNames(context.Context, string, string, s
 // the verdict on the run record, the verdict on the survival record, and a
 // merge-commit-checks card in the Action Center.
 func TestVerifyPRMergeForStage_ObservesMainAndRecordsTheVerdict(t *testing.T) {
-	launchRoot := t.TempDir()
-	targetRoot := t.TempDir()
+	launchRoot := layouttest.Repo(t)
+	targetRoot := layouttest.Repo(t)
 	s := newBreadcrumbScheduler(t, launchRoot, targetRoot)
 	reader := &redMainReader{}
 	s.mainCheckReaderFn = func(*gh.Client) hooks.MainCheckReader { return reader }
@@ -58,7 +59,7 @@ func TestVerifyPRMergeForStage_ObservesMainAndRecordsTheVerdict(t *testing.T) {
 	}
 
 	// Run record.
-	snaps, err := state.FindPersistedStatesForIssue(filepath.Join(targetRoot, ".nightgauge", "pipeline"), breadcrumbIssue)
+	snaps, err := state.FindPersistedStatesForIssue(layouttest.PipelineDir(t, targetRoot), breadcrumbIssue)
 	if err != nil || len(snaps) != 1 {
 		t.Fatalf("target snapshots: %d (%v), want 1", len(snaps), err)
 	}

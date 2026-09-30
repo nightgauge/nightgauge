@@ -5,14 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 )
 
 // FeaturePlanningGate verifies the post-conditions of feature-planning:
 //
 //  1. pipeline/planning-{N}.json exists and parses
-//  2. The context references a plan_file path that exists on disk and is
-//     non-empty (a zero-byte plan is a skill-no-op masquerading as success)
+//  2. The context references a plan_file path that exists on disk, inside the
+//     clone's plans directory (ResolvePlanFile), and is non-empty (a zero-byte
+//     plan is a skill-no-op masquerading as success)
 type FeaturePlanningGate struct{}
 
 // Name implements StageGate.
@@ -45,9 +45,9 @@ func (FeaturePlanningGate) Verify(_ context.Context, issueNumber int, workspace 
 			}, KindNoOp, ""
 		}
 
-		planAbs := planCtx.PlanFile
-		if !filepath.IsAbs(planAbs) {
-			planAbs = filepath.Join(workspace, planCtx.PlanFile)
+		planAbs, err := PlanFilePath(workspace, planCtx.PlanFile)
+		if err != nil {
+			return false, "failed to resolve plan_file", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable
 		}
 		stat, err := os.Stat(planAbs)
 		if err != nil {
@@ -57,6 +57,13 @@ func (FeaturePlanningGate) Verify(_ context.Context, issueNumber int, workspace 
 				}, KindNoOp, ""
 			}
 			return false, "failed to stat plan_file", []string{err.Error()}, KindFail, TerminalKindStageContextUnreadable
+		}
+		// feature-dev reads the plan only from the plans directory
+		// (ResolvePlanFile), so a plan anywhere else is not a plan it can use.
+		if _, err := ResolvePlanFile(workspace, planCtx.PlanFile); err != nil {
+			return false, "plan_file is not a regular file inside the plans directory", []string{
+				fmt.Sprintf("plan_file=%s", planCtx.PlanFile), err.Error(),
+			}, KindFail, TerminalKindValidationError
 		}
 		if stat.Size() == 0 {
 			return false, "plan_file is empty", []string{

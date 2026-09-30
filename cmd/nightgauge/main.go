@@ -802,6 +802,7 @@ func rootCmd() *cobra.Command {
 		skillCmd(),
 		pipelineCmd(),
 		logsCmd(),
+		layoutCmd(),
 		exitRecordsCmd(),
 		traceCmd(),
 		attentionCmd(),

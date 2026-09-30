@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // writeFile creates a file (and its parents) under dir.
@@ -23,7 +25,7 @@ func writeFile(t *testing.T, dir, rel, body string) {
 // invocation under test.
 func flutterRepo(t *testing.T, makeRecipe string) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeFile(t, dir, "pubspec.yaml", "name: fixture\n")
 	writeFile(t, dir, "Makefile", "test:\n\t"+makeRecipe+"\n")
 	return dir
@@ -200,7 +202,7 @@ func TestFailingExecutionRecordDoesNotSatisfy(t *testing.T) {
 // produce a Result indistinguishable from one taken before this package
 // existed: no findings, no warnings, no command chatter.
 func TestCommonCaseIsSilent(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeFile(t, dir, "package.json", `{"scripts":{"test":"vitest run"}}`)
 	writeFile(t, dir, "src/thing.test.ts", "test('x', () => {});\n")
 
@@ -216,7 +218,7 @@ func TestCommonCaseIsSilent(t *testing.T) {
 // TestNoDetectorForEcosystemIsQuiet — a Go repo has no detector, so the check
 // says nothing rather than guessing.
 func TestNoDetectorForEcosystemIsQuiet(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeFile(t, dir, "go.mod", "module fixture\n\ngo 1.23\n")
 	writeFile(t, dir, "internal/thing_test.go", "package internal\n")
 
@@ -232,7 +234,7 @@ func TestNoDetectorForEcosystemIsQuiet(t *testing.T) {
 // TestUnresolvableCommandIsQuiet — no manifest, no command, no evidence. An
 // inability to tell must never read as an accusation.
 func TestUnresolvableCommandIsQuiet(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeFile(t, dir, "integration_test/a_test.dart", "@Tags(['e2e'])\nvoid main() {}\n")
 
 	res, err := Check(Options{Workspace: dir, IssueNumber: 1, ChangedFiles: []string{"integration_test/a_test.dart"}})
@@ -308,7 +310,7 @@ func TestConfiguredCommandOverridesRepoScan(t *testing.T) {
 // the script body. A detector handed only the entry point sees nothing, which
 // is the exact failure shape this package exists to catch.
 func TestNpmScriptExpansion(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeFile(t, dir, "package.json",
 		`{"scripts":{"test":"flutter test --exclude-tags=app-e2e"}}`)
 	const file = "integration_test/app_e2e/a_test.dart"
@@ -346,8 +348,8 @@ func TestSplitTagExpression(t *testing.T) {
 }
 
 func TestReadRecords_SkipsMalformedLines(t *testing.T) {
-	dir := t.TempDir()
-	writeFile(t, dir, ".nightgauge/pipeline/test-execution-7.jsonl",
+	dir := layouttest.Repo(t)
+	writeFile(t, layouttest.PipelineDir(t, dir), "test-execution-7.jsonl",
 		"not json\n{\"v\":1,\"file\":\"a_test.dart\",\"outcome\":\"pass\",\"recorded_at\":\"x\"}\n{\"v\":99,\"file\":\"b\",\"outcome\":\"pass\"}\n")
 
 	got, err := ReadRecords(dir, 7)
@@ -360,7 +362,7 @@ func TestReadRecords_SkipsMalformedLines(t *testing.T) {
 }
 
 func TestAppendRecord_RejectsUnknownOutcome(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	if err := AppendRecord(dir, 1, Record{File: "a_test.dart", Outcome: "probably"}); err == nil {
 		t.Fatal("expected an error for an unknown outcome")
 	}

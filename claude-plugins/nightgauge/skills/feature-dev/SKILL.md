@@ -45,10 +45,10 @@ orchestration:
 # (spike #33 D2, #55). Do not reintroduce hooks here — the portability
 # linter rejects them.
 inputs:
-  - .nightgauge/pipeline/planning-{N}.json
-  - .nightgauge/plans/{N}-*.md
+  - pipeline/planning-{N}.json
+  - plans/{N}-*.md
 outputs:
-  - .nightgauge/pipeline/dev-{N}.json
+  - pipeline/dev-{N}.json
 disable-model-invocation: true
 ---
 
@@ -90,7 +90,7 @@ This skill implements features by:
 /nightgauge-feature-dev
 
 # Implement specific plan file
-/nightgauge-feature-dev --plan .nightgauge/plans/42-photo-upload.md
+/nightgauge-feature-dev --plan "$(nightgauge layout path plans 42-photo-upload.md)"
 
 # Force sequential implementation (disable parallel file creation)
 /nightgauge-feature-dev --sequential
@@ -155,7 +155,8 @@ export NIGHTGAUGE_COMMANDS_LINT="pnpm lint"
 
 ## Input Contract
 
-This skill requires `.nightgauge/pipeline/planning-{N}.json` from
+This skill requires `planning-{N}.json` (in the clone's pipeline state
+directory, `nightgauge layout path pipeline`) from
 `/nightgauge-feature-planning`.
 
 **Schema**: See
@@ -308,7 +309,8 @@ if [ -n "$BINARY" ]; then
   "$BINARY" approval-gate "$ISSUE_NUMBER" || {
     echo "ARCHITECTURE APPROVAL REQUIRED — do NOT implement. A human must review the"
     echo "decision (the plan / decisions.md ADR) and add the approval label, or write"
-    echo ".nightgauge/pipeline/approval-${ISSUE_NUMBER}.json with {\"approved\": true}."
+    echo "{\"approved\": true} to approval-${ISSUE_NUMBER}.json with"
+    echo "'nightgauge layout write pipeline approval-${ISSUE_NUMBER}.json'."
     exit 1
   }
 fi
@@ -383,7 +385,8 @@ writing one anyway would be a fabrication dressed as progress.
 **Stop here and declare it.** Do not implement, do not commit, and do not simply
 end your turn with an explanation: prose in a final message is invisible to
 every gate downstream. What the pipeline reads is the deliverable, so write
-`.nightgauge/pipeline/dev-{N}.json` with empty `files_changed` and this signal:
+`dev-{N}.json` (`nightgauge layout write pipeline dev-{N}.json`) with empty
+`files_changed` and this signal:
 
 ```json
 {
@@ -622,8 +625,8 @@ context file path, and next step (`/nightgauge-feature-validate`).
 This skill outputs:
 
 1. **Code changes** - Committed to feature branch
-2. **`.nightgauge/pipeline/dev-{N}.json`** - Structured context for
-   pipeline
+2. **`dev-{N}.json`** (written with `nightgauge layout write pipeline`) -
+   Structured context for pipeline
 
 **Schema**: See
 [docs/CONTEXT_ARCHITECTURE.md](../../../../docs/CONTEXT_ARCHITECTURE.md) for full

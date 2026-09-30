@@ -41,7 +41,7 @@ human-authored content.
 
 ```bash
 # Strict mode — verify against a creation manifest
-/nightgauge:issue-audit --manifest .nightgauge/pipeline/issue-create-manifest-<ts>.json
+/nightgauge:issue-audit --manifest "$(nightgauge layout path pipeline issue-create-manifest-<ts>.json)"
 
 # Inferential mode — audit a known epic and its sub-issues
 /nightgauge:issue-audit --epic 3237
@@ -357,7 +357,8 @@ import { CreationManifestSchema, CreationManifestEntrySchema } from "@nightgauge
 
 ### File location
 
-`.nightgauge/pipeline/issue-create-manifest-<timestamp>.json`
+`issue-create-manifest-<timestamp>.json` in the clone's pipeline state directory
+(`nightgauge layout path pipeline`)
 
 ### Top-level shape
 
@@ -403,7 +404,8 @@ import { CreationManifestSchema, CreationManifestEntrySchema } from "@nightgauge
 
 ### Markdown report
 
-`.nightgauge/pipeline/issue-audit-<timestamp>.md`
+`issue-audit-<timestamp>.md` in the clone's pipeline state directory
+(`nightgauge layout path pipeline`)
 
 Severity-tiered finding list with the per-finding repair command (or "no
 auto-fix available" for human-only items). Final verdict line is
@@ -411,7 +413,7 @@ auto-fix available" for human-only items). Final verdict line is
 
 ### JSON findings
 
-`.nightgauge/pipeline/issue-audit-<timestamp>.json`
+`issue-audit-<timestamp>.json`, beside the markdown report
 
 ```json
 {
@@ -441,7 +443,7 @@ include `repair_error` with the underlying error string.
 
 ### Audit trail
 
-`.nightgauge/pipeline/issue-audit-<timestamp>.audit.jsonl`
+`issue-audit-<timestamp>.audit.jsonl`, beside the markdown report
 
 One JSON line per repair attempt:
 
@@ -461,8 +463,8 @@ One JSON line per repair attempt:
 }
 ```
 
-Trail files are per-run and retention is bounded by the
-`.nightgauge/pipeline/` cleanup policy (cleared on PR merge).
+Trail files are per-run and retention is bounded by the pipeline state
+directory's cleanup policy (cleared on PR merge).
 
 ## Invocation Matrix
 

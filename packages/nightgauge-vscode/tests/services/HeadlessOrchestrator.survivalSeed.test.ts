@@ -17,11 +17,13 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import * as path from "path";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 vi.mock("../../src/utils/nightgaugeConfig", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/utils/nightgaugeConfig")>()),
@@ -226,6 +228,10 @@ describe("HeadlessOrchestrator seeds a survival record on the extension merge pa
     vi.clearAllMocks();
     vi.useFakeTimers();
     hookSpawns.length = 0;
+    // Per-clone data resolves under the clone's git dir (ADR-024 § 7); the
+    // worktree is a linked worktree of the launch root's clone.
+    fakeCloneLayout(LAUNCH_ROOT);
+    fakeCloneLayout(WORKTREE, path.join(LAUNCH_ROOT, ".git"));
     mockLogger = {
       info: vi.fn(),
       warn: vi.fn(),

@@ -167,7 +167,7 @@ describe("Pattern Mining integration with planning schema", () => {
     const planningContext = {
       schema_version: "1.5",
       issue_number: 42,
-      plan_file: ".nightgauge/plans/42-test.md",
+      plan_file: "/repo/.git/nightgauge/plans/42-test.md",
       approach: "Test approach",
       files_to_create: [],
       files_to_modify: [],
@@ -196,7 +196,7 @@ describe("Pattern Mining integration with planning schema", () => {
     const planningContext = {
       schema_version: "1.5",
       issue_number: 42,
-      plan_file: ".nightgauge/plans/42-test.md",
+      plan_file: "/repo/.git/nightgauge/plans/42-test.md",
       approach: "Test approach",
       files_to_create: [],
       files_to_modify: [],

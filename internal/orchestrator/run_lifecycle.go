@@ -26,9 +26,9 @@ var runLifecycleMu sync.Mutex
 // context was cancelled (SIGTERM/SIGINT reach it through `nightgauge run`'s
 // signal context), aborted otherwise.
 //
-// The record lives under the run root's .nightgauge/pipeline/, which is the
-// main checkout; `nightgauge run state` resolves the same directory from a
-// worktree. Only one issue can own the file: a run that finds it held by a
+// The record lives in the run root's pipeline state directory
+// (layout.PipelineStateDir), which belongs to the clone; `nightgauge run state`
+// resolves the same directory from a worktree. Only one issue can own the file: a run that finds it held by a
 // live run for another issue does not track at all rather than clobbering
 // that run's record. Every write failure is logged and never fails the run.
 //

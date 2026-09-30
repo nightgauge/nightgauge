@@ -9,12 +9,16 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // writeLedger lays down a ledger file inside a fake workspace root.
 func writeLedger(t *testing.T, root string, recs ...github.APILedgerRecord) {
 	t.Helper()
-	path := github.DefaultLedgerPath(root)
+	path, err := github.DefaultLedgerPath(root)
+	if err != nil {
+		t.Fatalf("ledger path: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -49,7 +53,7 @@ func rec(now time.Time, ago time.Duration, caller string, cost, remaining int) g
 // normal state of a fresh install and must not be reported as a problem — an
 // arm that fires on every fresh install is an arm operators switch off.
 func TestAPIBudgetAbsentLedgerIsNotAFinding(t *testing.T) {
-	fs, _ := apiBudgetFindings(t.TempDir(), time.Now())
+	fs, _ := apiBudgetFindings(layouttest.Repo(t), time.Now())
 	warning := findingsText(fs)
 	if len(fs) != 0 {
 		t.Errorf("findings raised for a workspace with no ledger: %+v", fs)
@@ -69,7 +73,7 @@ func TestAPIBudgetNoWorkspaceRoot(t *testing.T) {
 
 // Quiet hour: the arm reports the spend and stays green.
 func TestAPIBudgetQuietWindowIsGreen(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Now()
 	writeLedger(t, root,
 		rec(now, 40*time.Minute, "boardcache.Refresh", 17, 4983),
@@ -94,7 +98,7 @@ func TestAPIBudgetQuietWindowIsGreen(t *testing.T) {
 // The whole point of the feature: an exhaustion nobody was watching for is
 // still legible afterwards, and it names the caller that caused it.
 func TestAPIBudgetExhaustionIsAFindingThatNamesTheCaller(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Now()
 	writeLedger(t, root,
 		rec(now, 50*time.Minute, "sweep.Producers", 2500, 2500),
@@ -121,7 +125,7 @@ func TestAPIBudgetExhaustionIsAFindingThatNamesTheCaller(t *testing.T) {
 // Half the hourly quota from one workspace is the rate at which a single open
 // window can exhaust the budget on its own.
 func TestAPIBudgetHighIdleSpendWarns(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Now()
 	writeLedger(t, root,
 		rec(now, 55*time.Minute, "boardcache.Refresh", 1600, 3400),
@@ -143,7 +147,7 @@ func TestAPIBudgetHighIdleSpendWarns(t *testing.T) {
 // Records older than the window are not this hour's bill. Without the bound,
 // an exhaustion from yesterday warns forever and the arm becomes furniture.
 func TestAPIBudgetIgnoresRecordsOutsideTheWindow(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Now()
 	writeLedger(t, root,
 		rec(now, 6*time.Hour, "yesterday.Caller", 5000, 0),

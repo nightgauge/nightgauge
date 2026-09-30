@@ -42,9 +42,11 @@ type Options struct {
 	AllFailures bool
 }
 
-// Extract reads pipeline state files under workdir and returns the
-// consolidated Result. Missing files are treated as zero-row inputs (matches
-// the existing Python parsers' behavior); only structural errors fail.
+// Extract reads workdir's pipeline state files and returns the consolidated
+// Result. Missing files are treated as zero-row inputs (matches the existing
+// Python parsers' behavior); only structural errors fail. A workdir whose
+// pipeline state directory cannot be resolved (not a git repository) is an
+// error, never an empty result.
 func Extract(opts Options) (Result, error) {
 	workdir := opts.Workdir
 	if workdir == "" {
@@ -69,29 +71,30 @@ func Extract(opts Options) (Result, error) {
 		Warnings:        []string{},
 	}
 
-	if err := extractBatchState(workdir, opts, &result); err != nil {
+	dir, err := pipelineStateDir(workdir)
+	if err != nil {
+		return result, err
+	}
+
+	if err := extractBatchState(dir, opts, &result); err != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("batch-state: %v", err))
 	}
 
-	if err := extractHistory(workdir, opts, &result); err != nil {
+	if err := extractHistory(dir, opts, &result); err != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("history: %v", err))
 	}
 
-	if err := extractContextFiles(workdir, opts, &result); err != nil {
+	if err := extractContextFiles(dir, opts, &result); err != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("context-files: %v", err))
 	}
 
 	return result, nil
 }
 
-// extractBatchState reads .nightgauge/pipeline/batch-state.json (when
-// present) and appends failure rows to result.BatchFailures. Missing file is
-// not an error.
-func extractBatchState(workdir string, opts Options, result *Result) error {
-	dir, err := pipelineStateDir(workdir)
-	if err != nil {
-		return err
-	}
+// extractBatchState reads batch-state.json in the pipeline state directory
+// dir (when present) and appends failure rows to result.BatchFailures.
+// Missing file is not an error.
+func extractBatchState(dir string, opts Options, result *Result) error {
 	path := filepath.Join(dir, "batch-state.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -160,16 +163,12 @@ func extractBatchState(workdir string, opts Options, result *Result) error {
 	return nil
 }
 
-// extractHistory walks .nightgauge/pipeline/history/*.jsonl and appends
-// failure rows to result.HistoryFailures. The Since filter pre-filters by
-// filename stem (YYYY-MM-DD); per-line filters apply Issue and outcome
-// matching. Malformed JSON lines are counted in result.SkippedRecords (matches
+// extractHistory walks history/*.jsonl under the pipeline state directory
+// dir and appends failure rows to result.HistoryFailures. The Since filter
+// pre-filters by filename stem (YYYY-MM-DD); per-line filters apply Issue and
+// outcome matching. Malformed JSON lines are counted in result.SkippedRecords (matches
 // the Python skipped_records semantics).
-func extractHistory(workdir string, opts Options, result *Result) error {
-	dir, err := pipelineStateDir(workdir)
-	if err != nil {
-		return err
-	}
+func extractHistory(dir string, opts Options, result *Result) error {
 	historyDir := filepath.Join(dir, "history")
 	entries, err := os.ReadDir(historyDir)
 	if err != nil {
@@ -265,14 +264,10 @@ func extractHistory(workdir string, opts Options, result *Result) error {
 	return nil
 }
 
-// extractContextFiles scans .nightgauge/pipeline/issue-*.json files and
-// appends a row when the matching pr-{N}.json is absent (implying the run
-// did not reach PR creation). Mirrors retro Phase 2.4.
-func extractContextFiles(workdir string, opts Options, result *Result) error {
-	pipelineDir, err := pipelineStateDir(workdir)
-	if err != nil {
-		return err
-	}
+// extractContextFiles scans issue-*.json files in the pipeline state
+// directory and appends a row when the matching pr-{N}.json is absent
+// (implying the run did not reach PR creation). Mirrors retro Phase 2.4.
+func extractContextFiles(pipelineDir string, opts Options, result *Result) error {
 	entries, err := os.ReadDir(pipelineDir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -360,7 +355,7 @@ func fallbackStatus(s string) string {
 
 // pipelineStateDir resolves workdir's pipeline state directory through
 // layout.PipelineStateDir. A relative workdir (the --workdir flag accepts
-// one) is made absolute first, so it names the same directory as before.
+// one) is made absolute first.
 func pipelineStateDir(workdir string) (string, error) {
 	abs, err := filepath.Abs(workdir)
 	if err != nil {

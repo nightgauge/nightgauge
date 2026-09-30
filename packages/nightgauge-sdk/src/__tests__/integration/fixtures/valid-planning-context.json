@@ -1,7 +1,7 @@
 {
   "schema_version": "1.5",
   "issue_number": 42,
-  "plan_file": ".nightgauge/plans/42-add-token-tracking.md",
+  "plan_file": "/repo/.git/nightgauge/plans/42-add-token-tracking.md",
   "approach": "Add TokenTracker class to orchestrator with per-stage recording",
   "files_to_create": ["packages/nightgauge-sdk/src/tracking/TokenTracker.ts"],
   "files_to_modify": ["packages/nightgauge-sdk/src/orchestrator/PipelineOrchestrator.ts"],

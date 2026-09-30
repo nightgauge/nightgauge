@@ -20,6 +20,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 const stepIssue = 1651
@@ -29,6 +31,7 @@ type stepFixture struct {
 	ws       string
 	planPath string
 	devPath  string
+	ctxPath  string
 }
 
 func newStepFixture(t *testing.T, tasks ...string) stepFixture {
@@ -39,20 +42,23 @@ func newStepFixture(t *testing.T, tasks ...string) stepFixture {
 	for _, task := range tasks {
 		plan.WriteString("- [ ] " + task + "\n")
 	}
-	planRel := filepath.Join(".nightgauge", "plans", fmt.Sprintf("%d-plan.md", stepIssue))
-	writeFileT(t, filepath.Join(ws, planRel), plan.String())
-	writeStepPlanningContext(t, ws, planRel)
+	// feature-planning writes the plan into the clone's plans directory and
+	// records that absolute path as plan_file.
+	planPath := filepath.Join(layouttest.PlansDir(t, ws), fmt.Sprintf("%d-plan.md", stepIssue))
+	writeFileT(t, planPath, plan.String())
+	writeStepPlanningContext(t, ws, planPath)
 	return stepFixture{
 		ws:       ws,
-		planPath: filepath.Join(ws, planRel),
-		devPath:  filepath.Join(ws, ".nightgauge", "pipeline", fmt.Sprintf("dev-%d.json", stepIssue)),
+		planPath: planPath,
+		devPath:  filepath.Join(layouttest.PipelineDir(t, ws), fmt.Sprintf("dev-%d.json", stepIssue)),
+		ctxPath:  filepath.Join(layouttest.PipelineDir(t, ws), fmt.Sprintf("planning-%d.json", stepIssue)),
 	}
 }
 
 func writeStepPlanningContext(t *testing.T, ws, planFile string) {
 	t.Helper()
 	data, _ := json.Marshal(map[string]any{"issue_number": stepIssue, "plan_file": planFile})
-	writeFileT(t, filepath.Join(ws, ".nightgauge", "pipeline", fmt.Sprintf("planning-%d.json", stepIssue)), string(data))
+	writeFileT(t, filepath.Join(layouttest.PipelineDir(t, ws), fmt.Sprintf("planning-%d.json", stepIssue)), string(data))
 }
 
 func writeFileT(t *testing.T, path, body string) {
@@ -74,7 +80,7 @@ func (f stepFixture) params() StageRunParams {
 		OutputFile:      f.devPath,
 		WorktreePath:    f.ws,
 		SkillPath:       "/skills/nightgauge-feature-dev/SKILL.md",
-		ContextFile:     filepath.Join(f.ws, ".nightgauge", "pipeline", fmt.Sprintf("planning-%d.json", stepIssue)),
+		ContextFile:     f.ctxPath,
 		TargetRepo:      "nightgauge/test",
 		AllowedTools:    []string{"Read", "Edit", "Bash"},
 		ResumeSessionID: "ses_prior_attempt",
@@ -423,7 +429,7 @@ func TestFeatureDevSteps_TimeoutIsShared(t *testing.T) {
 // scheduler's post-stage recovery commit; the last session's sentinel does.
 func TestFeatureDevSteps_IntermediateStopHookSentinelIsCleared(t *testing.T) {
 	f := newStepFixture(t, "One", "Two")
-	sentinel := filepath.Join(f.ws, ".nightgauge", "pipeline", fmt.Sprintf("stop-hook-status-%d.json", stepIssue))
+	sentinel := filepath.Join(layouttest.PipelineDir(t, f.ws), fmt.Sprintf("stop-hook-status-%d.json", stepIssue))
 	write := writesAFile(t, f.ws)
 	r := &fakeStepRunner{honours: true, act: func(k int, p StageRunParams) (*StageRunResult, error) {
 		if k == 2 {
@@ -541,7 +547,9 @@ func TestFeatureDevSteps_UnfingerprintableStepIsNotProgress(t *testing.T) {
 // it: the loop stops before dispatch, with the same kind.
 func TestFeatureDevSteps_UnfingerprintableTreeDispatchesNoSession(t *testing.T) {
 	f := newStepFixture(t, "One", "Two")
-	if err := os.Rename(filepath.Join(f.ws, ".git"), filepath.Join(f.ws, ".git-gone")); err != nil {
+	// A corrupt index fails the fingerprint's `git add`, while the git
+	// directory — which holds the plan and the planning context — stays.
+	if err := os.WriteFile(filepath.Join(f.ws, ".git", "index"), []byte("not an index"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	r := &fakeStepRunner{honours: true}
@@ -610,9 +618,11 @@ func TestFeatureDevSteps_CancelReapsTheSessionProcessGroup(t *testing.T) {
 	root := gitWorkspace(t)
 	wt := filepath.Join(root, ".nightgauge", "worktrees", fmt.Sprintf("test-issue-%d", stepIssue))
 	gitIn(t, root, "worktree", "add", "-q", "--detach", wt)
-	planRel := filepath.Join(".nightgauge", "plans", "plan.md")
-	writeFileT(t, filepath.Join(wt, planRel), "- [ ] One\n- [ ] Two\n")
-	writeStepPlanningContext(t, wt, planRel)
+	// The plan sits in the MAIN clone's plans directory, outside the linked
+	// worktree: the shape every worktree-isolated run has (ADR-024 § 7).
+	planPath := filepath.Join(layouttest.PlansDir(t, wt), "plan.md")
+	writeFileT(t, planPath, "- [ ] One\n- [ ] Two\n")
+	writeStepPlanningContext(t, wt, planPath)
 
 	pids := t.TempDir()
 	adapter := &sleepAdapter{script: fmt.Sprintf(
@@ -626,7 +636,7 @@ func TestFeatureDevSteps_CancelReapsTheSessionProcessGroup(t *testing.T) {
 	params := StageRunParams{
 		Stage: state.StageFeatureDev, IssueNumber: stepIssue, Repo: "nightgauge/test",
 		Prompt: "SKILL", Timeout: 5 * time.Minute,
-		OutputFile: filepath.Join(wt, ".nightgauge", "pipeline", fmt.Sprintf("dev-%d.json", stepIssue)),
+		OutputFile: filepath.Join(layouttest.PipelineDir(t, wt), fmt.Sprintf("dev-%d.json", stepIssue)),
 	}
 	type outcome struct {
 		res *StageRunResult
@@ -717,7 +727,8 @@ func TestFeatureDevSteps_StepTextIsFencedCappedData(t *testing.T) {
 	}
 }
 
-// AC5: a plan_file that resolves outside the worktree refuses the stage.
+// AC5: a plan_file that resolves outside the worktree and the clone's plans
+// directory refuses the stage.
 func TestFeatureDevSteps_PlanOutsideWorktreeRefuses(t *testing.T) {
 	outside := filepath.Join(t.TempDir(), "plan.md")
 	writeFileT(t, outside, "- [ ] Outside\n")
@@ -726,11 +737,11 @@ func TestFeatureDevSteps_PlanOutsideWorktreeRefuses(t *testing.T) {
 		setup func(ws string) string
 	}{
 		{"symlink to /etc/passwd", func(ws string) string {
-			link := filepath.Join(ws, ".nightgauge", "plans", "evil.md")
+			link := filepath.Join(layouttest.PlansDir(t, ws), "evil.md")
 			if err := os.Symlink("/etc/passwd", link); err != nil {
 				t.Fatal(err)
 			}
-			return filepath.Join(".nightgauge", "plans", "evil.md")
+			return link
 		}},
 		{"symlink to a plan outside", func(ws string) string {
 			link := filepath.Join(ws, "PLAN.md")
@@ -750,7 +761,7 @@ func TestFeatureDevSteps_PlanOutsideWorktreeRefuses(t *testing.T) {
 			writeStepPlanningContext(t, f.ws, tc.setup(f.ws))
 			r := &fakeStepRunner{honours: true}
 			res, err := runSteps(t, f, r, localWindow)
-			if !errors.Is(err, errPlanOutsideWorktree) {
+			if !errors.Is(err, errPlanNotContained) {
 				t.Fatalf("err = %v, want a refusal", err)
 			}
 			if len(r.calls) != 0 {
@@ -763,10 +774,54 @@ func TestFeatureDevSteps_PlanOutsideWorktreeRefuses(t *testing.T) {
 	}
 }
 
+// A worktree-isolated run's plan sits in the main clone's plans directory,
+// outside the linked worktree: resolvePlanFile accepts it there, and refuses a
+// plan in the worktree itself, one outside both, and a symlink in the plans
+// directory that escapes it.
+func TestResolvePlanFile_ConfinesToThePlansDirectory(t *testing.T) {
+	root := gitWorkspace(t)
+	wt := filepath.Join(t.TempDir(), "wt")
+	gitIn(t, root, "worktree", "add", "-q", "--detach", wt)
+	plans := layouttest.MkPlansDir(t, wt)
+	if rel, err := filepath.Rel(wt, plans); err == nil && !strings.HasPrefix(rel, "..") {
+		t.Fatalf("fixture: plans dir %s is inside the worktree %s", plans, wt)
+	}
+
+	plan := filepath.Join(plans, "7-plan.md")
+	writeFileT(t, plan, "- [ ] One\n")
+	got, err := resolvePlanFile(wt, plan)
+	if err != nil {
+		t.Fatalf("plan in the plans directory refused: %v", err)
+	}
+	if want, _ := filepath.EvalSymlinks(plan); got != want {
+		t.Errorf("resolved %q, want %q", got, want)
+	}
+
+	inTree := filepath.Join(wt, "PLAN.md")
+	writeFileT(t, inTree, "- [ ] One\n")
+	outside := filepath.Join(t.TempDir(), "plan.md")
+	writeFileT(t, outside, "- [ ] One\n")
+	escape := filepath.Join(plans, "escape.md")
+	if err := os.Symlink(outside, escape); err != nil {
+		t.Fatal(err)
+	}
+	for name, planFile := range map[string]string{
+		"in the worktree":      inTree,
+		"relative in worktree": "PLAN.md",
+		"outside both":         outside,
+		"symlink escaping":     escape,
+		"the plans directory":  plans,
+	} {
+		if _, err := resolvePlanFile(wt, planFile); !errors.Is(err, errPlanNotContained) {
+			t.Errorf("%s: err = %v, want errPlanNotContained", name, err)
+		}
+	}
+}
+
 // No plan (a fast-tracked planning stage) keeps the single session.
 func TestFeatureDevSteps_NoPlanDispatchesOnce(t *testing.T) {
 	f := newStepFixture(t, "One", "Two")
-	if err := os.Remove(filepath.Join(f.ws, ".nightgauge", "pipeline", fmt.Sprintf("planning-%d.json", stepIssue))); err != nil {
+	if err := os.Remove(filepath.Join(layouttest.PipelineDir(t, f.ws), fmt.Sprintf("planning-%d.json", stepIssue))); err != nil {
 		t.Fatal(err)
 	}
 	r := &fakeStepRunner{honours: true, act: writesAFile(t, f.ws)}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/flock"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -35,7 +36,10 @@ func heldLease(t *testing.T, root string, pid int, now time.Time) {
 // writeLedgerRecord appends one record to the workspace's ledger.
 func writeLedgerRecord(t *testing.T, root string, rec gh.APILedgerRecord) {
 	t.Helper()
-	path := gh.DefaultLedgerPath(root)
+	path, err := gh.DefaultLedgerPath(root)
+	if err != nil {
+		t.Fatalf("ledger path: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir logs: %v", err)
 	}
@@ -53,10 +57,7 @@ func writeLedgerRecord(t *testing.T, root string, rec gh.APILedgerRecord) {
 // will call a missing record a finding.
 func markPipelineActivity(t *testing.T, root string) {
 	t.Helper()
-	dir := filepath.Join(root, ".nightgauge", "pipeline")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir pipeline: %v", err)
-	}
+	dir := layouttest.MkPipelineDir(t, root)
 	if err := os.WriteFile(filepath.Join(dir, "runtime-1-abc.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatalf("write runtime file: %v", err)
 	}
@@ -73,7 +74,7 @@ func TestLedgerCoverageNoWorkspaceRoot(t *testing.T) {
 // No daemon, nothing to cover.
 func TestLedgerCoverageNoDaemonIsClean(t *testing.T) {
 	isolateMachineState(t)
-	fs, _ := ledgerDaemonCoverageFindings(t.TempDir(), time.Now())
+	fs, _ := ledgerDaemonCoverageFindings(layouttest.Repo(t), time.Now())
 	warning := findingsText(fs)
 	if len(fs) != 0 {
 		t.Fatalf("a free lease produced %+v / %q, want a clean result", fs, warning)
@@ -83,7 +84,7 @@ func TestLedgerCoverageNoDaemonIsClean(t *testing.T) {
 // The happy path: a live daemon whose records are in this workspace's ledger.
 func TestLedgerCoverageDaemonRecordsPresent(t *testing.T) {
 	isolateMachineState(t)
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Now()
 	heldLease(t, root, 4242, now)
 	markPipelineActivity(t, root)
@@ -102,7 +103,7 @@ func TestLedgerCoverageDaemonRecordsPresent(t *testing.T) {
 // The finding this arm exists for: a working daemon whose spend went nowhere.
 func TestLedgerCoverageActiveDaemonWithNoRecordsIsAFinding(t *testing.T) {
 	isolateMachineState(t)
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Now()
 	heldLease(t, root, 4242, now)
 	markPipelineActivity(t, root)
@@ -115,7 +116,11 @@ func TestLedgerCoverageActiveDaemonWithNoRecordsIsAFinding(t *testing.T) {
 	if !strings.Contains(warning, "4242") {
 		t.Errorf("warning %q does not name the holding pid", warning)
 	}
-	if !strings.Contains(warning, gh.DefaultLedgerPath(root)) {
+	ledger, err := gh.DefaultLedgerPath(root)
+	if err != nil {
+		t.Fatalf("ledger path: %v", err)
+	}
+	if !strings.Contains(warning, ledger) {
 		t.Errorf("warning %q does not name the ledger path it looked at", warning)
 	}
 	if !strings.Contains(warning, "--workspace") {
@@ -127,7 +132,7 @@ func TestLedgerCoverageActiveDaemonWithNoRecordsIsAFinding(t *testing.T) {
 // here would train operators to ignore the arm.
 func TestLedgerCoverageIdleDaemonIsNotAFinding(t *testing.T) {
 	isolateMachineState(t)
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Now()
 	heldLease(t, root, 4242, now)
 
@@ -145,7 +150,7 @@ func TestLedgerCoverageIdleDaemonIsNotAFinding(t *testing.T) {
 // was one process writing somewhere else while another wrote here.
 func TestLedgerCoverageOtherPidRecordsDoNotCount(t *testing.T) {
 	isolateMachineState(t)
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Now()
 	heldLease(t, root, 4242, now)
 	markPipelineActivity(t, root)
@@ -167,7 +172,7 @@ func TestLedgerCoverageStaleHolderDefersToServeLease(t *testing.T) {
 	if !flock.Supported {
 		t.Skip("no advisory file lock on this platform")
 	}
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Now()
 	lease, err := runstate.AcquireServeLease(root)
 	if err != nil {

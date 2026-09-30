@@ -3,7 +3,7 @@
 # fixtures for the #304 learning-outcome recording gap.
 #
 # Issue #304: the learning/calibration outcome corpus
-# (.nightgauge/pipeline/history/outcomes.jsonl) had exactly one writer, the Go
+# (<pipeline>/history/outcomes.jsonl) had exactly one writer, the Go
 # scheduler. Extension-path runs (ConcurrentPipelineManager →
 # HeadlessOrchestrator → IPC pipeline.notifyComplete) never entered that loop,
 # so in the mode the product is actually operated in nothing recorded an
@@ -49,8 +49,10 @@
 #
 # Roots default to the git repository root. Pass several roots for a multi-repo
 # workspace (run history and issue context files often live in different
-# repos). Fixtures are written to internal/ipc/testdata/outcome-gap/ relative to
-# the repository this script lives in.
+# repos). Each root's pipeline directory is <git-common-dir>/nightgauge/pipeline
+# (ADR-024 § 7); a root outside a git repository is an error. Fixtures are
+# written to internal/ipc/testdata/outcome-gap/ relative to the repository this
+# script lives in.
 
 set -euo pipefail
 
@@ -68,11 +70,34 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
 
 out_dir = os.environ["OUT_DIR"]
 roots = sorted(os.path.abspath(r) for r in sys.argv[1:])
+
+
+# Variables that redirect which repository git reads; cleared for the lookup.
+GIT_LOCATION_ENV = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+)
+
+
+def pipeline_dir(root):
+    """The clone's pipeline directory: <git-common-dir>/nightgauge/pipeline."""
+    env = {k: v for k, v in os.environ.items() if k not in GIT_LOCATION_ENV}
+    res = subprocess.run(
+        ["git", "-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True, text=True, env=env,
+    )
+    if res.returncode != 0:
+        sys.exit("error: %s is not a git repository" % root)
+    return os.path.join(os.path.realpath(res.stdout.strip()), "nightgauge", "pipeline")
+
+
+# Worktrees of one clone share its pipeline directory: read it once.
+pipeline_dirs = sorted(set(pipeline_dir(r) for r in roots))
 
 # --- redaction -----------------------------------------------------------
 
@@ -331,8 +356,8 @@ def read_jsonl(path):
 daily_files = []
 outcome_files = []
 context_files = []
-for root in roots:
-    history_dir = os.path.join(root, ".nightgauge", "pipeline", "history")
+for pdir in pipeline_dirs:
+    history_dir = os.path.join(pdir, "history")
     daily_files.extend(
         sorted(
             f
@@ -345,7 +370,7 @@ for root in roots:
         outcome_files.append(outcomes_path)
     context_files.extend(
         sorted(
-            glob.glob(os.path.join(root, ".nightgauge", "pipeline", "issue-*.json")),
+            glob.glob(os.path.join(pdir, "issue-*.json")),
             key=lambda p: (
                 int(re.sub(r"\D", "", os.path.basename(p)) or 0),
                 p,

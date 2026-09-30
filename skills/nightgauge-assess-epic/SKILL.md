@@ -253,11 +253,7 @@ esac
 #### Step 4.2: Write JSON Report
 
 ```bash
-REPORT_DIR=".nightgauge/pipeline"
-mkdir -p "$REPORT_DIR"
-REPORT_FILE="$REPORT_DIR/epic-assessment-${EPIC_NUMBER}.json"
-
-printf '%s\n' "$ASSESS_JSON" | jq \
+REPORT_FILE=$(printf '%s\n' "$ASSESS_JSON" | jq \
   --arg epic_number "$EPIC_NUMBER" \
   --arg epic_title "$(echo "$EPIC_TITLE" | sed 's/"/\\"/g')" \
   --argjson sub_total "$SUB_COUNT" \
@@ -268,7 +264,7 @@ printf '%s\n' "$ASSESS_JSON" | jq \
     "epic_title": $epic_title,
     "sub_issues": { "total": $sub_total, "open": (.issues | length) },
     "assessed_at": $assessed_at
-  }' > "$REPORT_FILE"
+  }' | nightgauge layout write pipeline "epic-assessment-${EPIC_NUMBER}.json")
 
 echo ""
 echo "Report written to: $REPORT_FILE"
@@ -308,7 +304,7 @@ UTILITIES (not part of main pipeline)
        |
   Standalone analysis tool for epic batch planning
   Reads: GitHub API (epic + sub-issues + blocking)
-  Writes: .nightgauge/pipeline/epic-assessment-{N}.json
+  Writes: pipeline/epic-assessment-{N}.json (nightgauge layout write)
 ```
 
 This is a standalone utility skill. It does not affect pipeline state and can be

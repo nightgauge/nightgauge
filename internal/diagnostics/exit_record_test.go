@@ -9,10 +9,12 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestWriteStageExitRecord_WritesOneLine(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	rec := StageExitRecord{
 		Repo:    "nightgauge/nightgauge",
 		Issue:   3591,
@@ -51,7 +53,7 @@ func TestWriteStageExitRecord_WritesOneLine(t *testing.T) {
 }
 
 func TestWriteStageExitRecord_RoundTripsAllFields(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	exitCode := 137
 	lastBashExit := 1
 	rec := StageExitRecord{
@@ -140,7 +142,7 @@ func TestWriteStageExitRecord_RoundTripsAllFields(t *testing.T) {
 }
 
 func TestWriteStageExitRecord_DailyFileRotation(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	today := time.Now().UTC()
 	yesterday := today.AddDate(0, 0, -1)
 
@@ -172,7 +174,7 @@ func TestWriteStageExitRecord_DailyFileRotation(t *testing.T) {
 }
 
 func TestWriteStageExitRecord_ConcurrentAppendsNotInterleaved(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	const writers = 16
 	const perWriter = 25
 	var wg sync.WaitGroup
@@ -222,19 +224,31 @@ func TestWriteStageExitRecord_EmptyRootFails(t *testing.T) {
 	}
 }
 
-func TestExitRecordsDir_RelativeToRoot(t *testing.T) {
-	got := ExitRecordsDir("/some/workspace")
-	want := "/some/workspace/.nightgauge/pipeline/exit-records"
+func TestExitRecordsDir_UnderPipelineStateDir(t *testing.T) {
+	root := layouttest.Repo(t)
+	got, err := ExitRecordsDir(root)
+	if err != nil {
+		t.Fatalf("ExitRecordsDir: %v", err)
+	}
+	want := filepath.Join(layouttest.PipelineDir(t, root), "exit-records")
 	if got != want {
 		t.Errorf("ExitRecordsDir = %q, want %q", got, want)
 	}
 }
 
-func TestExitRecordsSubdir_ConstantSurfacesViaDir(t *testing.T) {
-	// Defense against accidental rename of the on-disk path — every
-	// external reader (CLI tooling, retro skill) relies on the path.
-	got := ExitRecordsDir("root")
-	if !strings.HasSuffix(got, exitRecordsSubdir) {
-		t.Errorf("ExitRecordsDir = %q does not end with %q", got, exitRecordsSubdir)
+func TestExitRecordsDir_OutsideGitRepositoryIsAnError(t *testing.T) {
+	root := t.TempDir()
+	got, err := ExitRecordsDir(root)
+	if err == nil || !strings.Contains(err.Error(), "not a git repository") {
+		t.Fatalf("ExitRecordsDir = %q, %v; want a not-a-git-repository error", got, err)
+	}
+	if DailyFilePath(root, time.Now()) != "" {
+		t.Error("DailyFilePath outside a repository must be empty")
+	}
+	if err := WriteStageExitRecord(root, StageExitRecord{Issue: 1}); err == nil {
+		t.Error("WriteStageExitRecord outside a repository must fail")
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".nightgauge")); !os.IsNotExist(statErr) {
+		t.Errorf("nothing may be written in the working tree: %v", statErr)
 	}
 }

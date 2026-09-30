@@ -52,6 +52,8 @@ import { LocalTelemetryUsageProvider } from "../../../src/services/usage/LocalTe
 import type { UsageProvider, UsageSnapshot } from "../../../src/services/usage/types";
 import type { ExecutionAdapter } from "../../../src/config/schema";
 import { setMockUIConfig, resetMockConfigBridge } from "../../setup";
+import { initGitRepo } from "../../helpers/cloneLayout";
+import { pipelineStateDir } from "../../../src/utils/cloneLayout";
 
 const NOW = new Date(2026, 7, 17, 10, 0, 0);
 
@@ -360,11 +362,11 @@ describe("forWorkspace — the default wiring #659 will call", () => {
     vi.useRealTimers();
     const previousAdapter = process.env.NIGHTGAUGE_UI_CORE_ADAPTER;
     process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "claude";
-    const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "ng-usage-"));
+    const workspaceRoot = initGitRepo(await fs.mkdtemp(path.join(os.tmpdir(), "ng-usage-")));
 
     try {
       const now = new Date();
-      const historyDir = path.join(workspaceRoot, ".nightgauge", "pipeline", "history");
+      const historyDir = path.join(pipelineStateDir(workspaceRoot), "history");
       await fs.mkdir(historyDir, { recursive: true });
       const record = {
         schema_version: "2",

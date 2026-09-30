@@ -21,15 +21,16 @@ prerequisite is `planning-{N}.json` or `issue-{N}.json`. Signal stage start via
 Go binary: `project move-status`.
 
 - **`Input context type` is `planning`, or the line is absent** (older
-  orchestrator build) — normal case. Load `.nightgauge/pipeline/planning-{N}.json`.
+  orchestrator build) — normal case. Load
+  `"$(nightgauge layout path pipeline planning-{N}.json)"`.
   Parse `PLAN_FILE`, `APPROACH`, `FILES_TO_CREATE`, `FILES_TO_MODIFY`. If the
   file is missing, exit 1 — feature-planning ran (it was not skipped) and
   failed to write its output, which is a real upstream failure.
 - **`Input context type` is `issue`** — fast-tracked case (#4126/#4129).
   `feature-planning` was intentionally skipped by routing, so
   `planning-{N}.json` legitimately does not exist. Load
-  `.nightgauge/pipeline/issue-{N}.json` instead and derive the brief directly
-  from its `.requirements`:
+  `"$(nightgauge layout path pipeline issue-{N}.json)"` instead and derive the
+  brief directly from its `.requirements`:
   - `APPROACH="fast-tracked"` (distinct from `verify-and-close`)
   - `PLAN_FILE=""` (no plan `.md` was produced — skipped by design)
   - `FILES_TO_CREATE=[]`, `FILES_TO_MODIFY=[]` (derive scope from
@@ -53,7 +54,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 if [ "$INPUT_CONTEXT_TYPE" = "issue" ]; then
   # Fast-tracked (#4126/#4129): feature-planning was intentionally skipped —
   # issue-{N}.json is the real, and only, prerequisite context.
-  CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+  CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
   if [ ! -f "$CONTEXT_FILE" ]; then
     echo "ERROR: Missing context file: $CONTEXT_FILE"
     echo "Orchestrator declared input context type 'issue' but issue-${ISSUE_NUMBER}.json is absent."
@@ -67,7 +68,7 @@ if [ "$INPUT_CONTEXT_TYPE" = "issue" ]; then
   FILES_TO_MODIFY="[]"
   FILES_TO_READ=$(jq -r '.requirements.technical_notes | @json' "$CONTEXT_FILE" 2>/dev/null)
 else
-  CONTEXT_FILE=".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json"
+  CONTEXT_FILE="$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)"
 
   if [ ! -f "$CONTEXT_FILE" ]; then
     echo "ERROR: Missing context file: $CONTEXT_FILE"
@@ -115,7 +116,7 @@ fi
 BRANCH=$(git branch --show-current)
 : "${BRANCH:?detached HEAD: check out the issue branch}"
 EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-BATCH_PLANNING=".nightgauge/pipeline/planning-batch-${EPIC_NUMBER}.json"
+BATCH_PLANNING="$(nightgauge layout path pipeline planning-batch-${EPIC_NUMBER}.json)"
 
 if [ -f "$BATCH_PLANNING" ]; then
   BATCH_MODE=true
@@ -142,7 +143,7 @@ When `BATCH_MODE=true`:
 #### Write dev-batch-{E}.json
 
 ```bash
-cat > .nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json << EOF
+nightgauge layout write pipeline "dev-batch-${EPIC_NUMBER}.json" >/dev/null << EOF
 {
   "schema_version": "1.6",
   "epic_number": ${EPIC_NUMBER},
@@ -169,8 +170,9 @@ The schema matches `DevBatchContextSchema` from
 #### Verify Batch Dev Context
 
 ```bash
-jq . .nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json > /dev/null && \
-  echo "Batch dev context written: .nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
+BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
+jq . "$BATCH_DEV" > /dev/null && \
+  echo "Batch dev context written: $BATCH_DEV"
 ```
 
 When in batch mode, skip Phase 8 (Write Dev Context) for single-issue
@@ -192,7 +194,7 @@ When in batch mode, skip Phase 8 (Write Dev Context) for single-issue
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-FEEDBACK_FILE=".nightgauge/pipeline/feedback-${ISSUE_NUMBER}.json"
+FEEDBACK_FILE="$(nightgauge layout path pipeline feedback-${ISSUE_NUMBER}.json)"
 RETRY_COUNT=0
 RETRY_REASONS_JSON="[]"
 IS_RETRY=false
@@ -222,8 +224,8 @@ if [ -f "$FEEDBACK_FILE" ]; then
     [ "$CONFLICT_SIGNAL_COUNT" -gt 0 ] && IS_CONFLICT_RESOLUTION=true
 
     # Determine retry count from any existing dev-{N}.json
-    if [ -f ".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json" ]; then
-      PREV_RETRY=$(jq -r '.retry_count // 0' ".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json" 2>/dev/null || echo "0")
+    if [ -f "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" ]; then
+      PREV_RETRY=$(jq -r '.retry_count // 0' "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "0")
       RETRY_COUNT=$((PREV_RETRY + 1))
     else
       RETRY_COUNT=1
@@ -243,7 +245,7 @@ resolved work would not attach to the open PR.
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ "$IS_CONFLICT_RESOLUTION" = "true" ]; then
-  CONFLICT_CONTEXT=".nightgauge/pipeline/conflict-context-${ISSUE_NUMBER}.json"
+  CONFLICT_CONTEXT="$(nightgauge layout path pipeline conflict-context-${ISSUE_NUMBER}.json)"
 
   if [ -f "$CONFLICT_CONTEXT" ]; then
     CONFLICT_BRANCH=$(jq -r '.branch // ""' "$CONFLICT_CONTEXT" 2>/dev/null)
@@ -325,9 +327,9 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # The plan file is authoritative over planning-{N}.json approach field. When the prompt
 # quotes it in a Planning hand-off section, use that copy instead of reading it again.
-PLAN_FILE=$(jq -r '.plan_file' ".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json" 2>/dev/null)
+PLAN_FILE=$(jq -r '.plan_file' "$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)" 2>/dev/null)
 if [ -z "$PLAN_FILE" ] || [ ! -f "$PLAN_FILE" ]; then
-  PLAN_FILE=$(ls .nightgauge/plans/${ISSUE_NUMBER}-*.md 2>/dev/null | head -1)
+  PLAN_FILE=$(ls "$(nightgauge layout path plans)"/${ISSUE_NUMBER}-*.md 2>/dev/null | head -1)
 fi
 # $PLAN_FILE is now set for Phase 1 to read
 ```

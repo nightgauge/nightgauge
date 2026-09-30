@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -37,8 +38,9 @@ import (
 // the outcome is derived from the run record, and a run's persisted state lands
 // in its target repo (#215/#232). loop-verdicts and `learn tune` read one
 // --workdir and read that root's run history beside it.
-func outcomesPath(root string) string {
-	return filepath.Join(root, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+func outcomesPath(t *testing.T, root string) string {
+	t.Helper()
+	return filepath.Join(layouttest.PipelineDir(t, root), "history", "outcomes.jsonl")
 }
 
 // readOutcomes returns the corpus entries under root. A missing file returns
@@ -47,7 +49,7 @@ func outcomesPath(root string) string {
 // must not share a return shape (#166).
 func readOutcomes(t *testing.T, root string) ([]learning.Outcome, bool) {
 	t.Helper()
-	data, err := os.ReadFile(outcomesPath(root))
+	data, err := os.ReadFile(outcomesPath(t, root))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, false
@@ -95,7 +97,7 @@ func loadCapturedRunRecord(t *testing.T, name string) state.V2RunRecord {
 // a real run was picked up under.
 func capturedClassification(t *testing.T, issueNumber int) issueClassification {
 	t.Helper()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeCapturedIssueContext(t, root, issueNumber)
 	cls := loadIssueClassification(root, "", issueNumber)
 	if cls.ComplexityScore <= 0 || cls.PredictedModel == "" || cls.Size == "" {
@@ -114,7 +116,7 @@ func writeCapturedIssueContext(t *testing.T, root string, issueNumber int) {
 	loadCapturedFixture(t, "issue-context.json", &ctx)
 	ctx["issue_number"] = issueNumber
 
-	dir := filepath.Join(root, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir pipeline dir: %v", err)
 	}
@@ -137,7 +139,7 @@ func writeCapturedIssueContext(t *testing.T, root string, issueNumber int) {
 // still fails, on complexityScore/predictedSize/actualSize — the fields that
 // stayed degenerate.
 func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeCapturedIssueContext(t, dir, 304)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
@@ -156,7 +158,7 @@ func TestNotifyComplete_WritesLearningOutcome(t *testing.T) {
 
 	outcomes, exists := readOutcomes(t, dir)
 	if !exists {
-		t.Fatalf("no learning outcome corpus at %s — the extension terminal funnel recorded nothing (#304)", outcomesPath(dir))
+		t.Fatalf("no learning outcome corpus at %s — the extension terminal funnel recorded nothing (#304)", outcomesPath(t, dir))
 	}
 	if len(outcomes) != 1 {
 		t.Fatalf("expected exactly one learning outcome, got %d", len(outcomes))
@@ -376,8 +378,8 @@ func isSizeBucket(v string) bool {
 // Against the pre-fix code this fails on the FIRST assertion: the outcome
 // lands under the active repo, and the target repo has no corpus at all.
 func TestNotifyComplete_RecordsOutcomeInTargetRepoNotActiveRepo(t *testing.T) {
-	activeRepoRoot := t.TempDir() // what workspace.setRoot last pointed at
-	targetRepoRoot := t.TempDir() // the repo this run actually belongs to
+	activeRepoRoot := layouttest.Repo(t) // what workspace.setRoot last pointed at
+	targetRepoRoot := layouttest.Repo(t) // the repo this run actually belongs to
 	writeCapturedIssueContext(t, targetRepoRoot, 3044)
 
 	s := NewServer(nil, WithWorkspaceRoot(activeRepoRoot))
@@ -433,7 +435,7 @@ func TestNotifyComplete_RecordsOutcomeInTargetRepoNotActiveRepo(t *testing.T) {
 //
 // Against the round-2 code this fails with ActualModel = "opus".
 func TestNotifyComplete_AttributesModelToTheStageThePredictionIsAbout(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeCapturedIssueContext(t, dir, 3045)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
@@ -503,7 +505,7 @@ func TestServedDevModel_RefusalFallbackIsScopedToTheDevStage(t *testing.T) {
 // path, so the reliability loop's success rate was computed entirely from
 // autonomous runs.
 func TestNotifyComplete_WritesLearningOutcomeForFailure(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -521,7 +523,7 @@ func TestNotifyComplete_WritesLearningOutcomeForFailure(t *testing.T) {
 
 	outcomes, exists := readOutcomes(t, dir)
 	if !exists {
-		t.Fatalf("no learning outcome corpus at %s — a failed extension-path run recorded nothing (#304)", outcomesPath(dir))
+		t.Fatalf("no learning outcome corpus at %s — a failed extension-path run recorded nothing (#304)", outcomesPath(t, dir))
 	}
 	if len(outcomes) != 1 {
 		t.Fatalf("expected exactly one learning outcome, got %d", len(outcomes))
@@ -556,7 +558,7 @@ func TestNotifyComplete_WritesLearningOutcomeForFailure(t *testing.T) {
 // Pinned separately from the network-unavailable skip so a regression cannot
 // merge the two into one "didn't record" branch.
 func TestNotifyComplete_SkipsOutcomeForDeferral(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -584,7 +586,7 @@ func TestNotifyComplete_SkipsOutcomeForDeferral(t *testing.T) {
 // scheduler skips it; the extension seam must skip it identically, or the two
 // paths disagree about what the corpus means.
 func TestNotifyComplete_SkipsOutcomeForNetworkUnavailable(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -957,7 +959,7 @@ func captureLog(t *testing.T, fn func()) string {
 // model — it just has no registry band — and "the feature-dev stage reported no
 // served model" tells them the stage never ran.
 func TestNotifyComplete_DiagnosesAnUnregisteredServedModel(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeCapturedIssueContext(t, dir, 3401)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
@@ -998,7 +1000,7 @@ func TestNotifyComplete_DiagnosesAnUnregisteredServedModel(t *testing.T) {
 // writers and one reader; a diagnostic that differs between them is a second,
 // quieter drift of exactly the kind #340 removed.
 func TestOutcomeDiagnosticsAreSharedWithTheSchedulerWriter(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeCapturedIssueContext(t, dir, 3402)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 	transition := s.methods["pipeline.notifyStageTransition"]

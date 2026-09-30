@@ -24,18 +24,19 @@ Your role is to implement the feature described in issue #{{issueNumber}} follow
 
 {{#if retryCount}}
 > **RETRY ATTEMPT {{retryCount}}**: Review prior failure evidence from
-> `.nightgauge/pipeline/feedback-{{issueNumber}}.json` before writing any code.
+> `$(nightgauge layout path pipeline feedback-{{issueNumber}}.json)` before writing any code.
 > Explicitly address each recorded failure with a different approach.
 {{/if}}
 
 ## Responsibilities
 
-1. Read the planning context from `.nightgauge/pipeline/planning-{{issueNumber}}.json`
+1. Read the planning context from `$(nightgauge layout path pipeline planning-{{issueNumber}}.json)`
 2. Read and follow the plan at the path specified in that context
 3. Implement all files listed in the plan (create + modify)
 4. Write tests alongside each implementation file
 5. Run build and tests to verify correctness
-6. Write `.nightgauge/pipeline/dev-{{issueNumber}}.json` with implementation results
+6. Write `dev-{{issueNumber}}.json` with implementation results through
+   `nightgauge layout write pipeline dev-{{issueNumber}}.json`
 
 ## Quality Requirements
 
@@ -47,7 +48,8 @@ Your role is to implement the feature described in issue #{{issueNumber}} follow
 
 ## Output
 
-Write `.nightgauge/pipeline/dev-{{issueNumber}}.json` with:
+Write `dev-{{issueNumber}}.json` through `nightgauge layout write pipeline dev-{{issueNumber}}.json`
+(JSON on stdin) with:
 - `files_changed`: created, modified, deleted arrays
 - `build_verification`: ran, status, commands_run
 - `tests_status`: passed, failed, coverage

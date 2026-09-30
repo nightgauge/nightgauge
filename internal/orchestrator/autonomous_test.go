@@ -15,6 +15,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // buildTestGraph constructs a depgraph.Graph directly (no GitHub calls).
@@ -4021,14 +4023,14 @@ func TestStopSignalsMainLoopAndRefinement(t *testing.T) {
 // TestWriteCrashExitEvent verifies that a crash exit record is written to
 // autonomous-exits.jsonl with the expected fields.
 func TestWriteCrashExitEvent(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{
 		workspaceRoot: dir,
 	}
 
 	as.writeCrashExitEvent("something went wrong", "goroutine 1 [running]:\nsome/package.go:42")
 
-	logPath := filepath.Join(dir, ".nightgauge", "logs", "autonomous-exits.jsonl")
+	logPath := filepath.Join(layouttest.LogsDir(t, dir), "autonomous-exits.jsonl")
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("exit log not written: %v", err)
@@ -4067,13 +4069,13 @@ func TestWriteCrashExitEvent_EmptyWorkspaceRoot(t *testing.T) {
 // TestWriteCrashExitEvent_StackTruncation verifies that a stack trace larger
 // than 4KB is accepted without error (actual truncation happens in Run()).
 func TestWriteCrashExitEvent_StackTruncation(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{workspaceRoot: dir}
 
 	longStack := string(make([]byte, 8192))
 	as.writeCrashExitEvent("overflow", longStack)
 
-	logPath := filepath.Join(dir, ".nightgauge", "logs", "autonomous-exits.jsonl")
+	logPath := filepath.Join(layouttest.LogsDir(t, dir), "autonomous-exits.jsonl")
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("exit log not written: %v", err)
@@ -4091,12 +4093,12 @@ func TestWriteCrashExitEvent_StackTruncation(t *testing.T) {
 // TestRunPanicRecovery verifies that writeCrashExitEvent produces a parseable
 // crash record matching what the Run() panic recovery defer would write.
 func TestRunPanicRecovery(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{workspaceRoot: dir}
 
 	as.writeCrashExitEvent("test panic: integer divide by zero", "goroutine 1 [running]:\ntest/pkg.go:10")
 
-	logPath := filepath.Join(dir, ".nightgauge", "logs", "autonomous-exits.jsonl")
+	logPath := filepath.Join(layouttest.LogsDir(t, dir), "autonomous-exits.jsonl")
 	raw, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("crash exit log missing: %v", err)
@@ -5190,7 +5192,7 @@ func TestResolveIssueStatesByKey_NilIssueService(t *testing.T) {
 // deadline used to live only in an unexported map and a log line, so the UI
 // rendered a recovering fleet as a stalled one.
 func TestPendingRetriesAreVisibleInExportedState(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{
 		config: AutonomousConfig{MaxConcurrent: 3},
 		state: &AutonomousState{
@@ -5296,7 +5298,7 @@ func TestPendingRetriesExcludeExpiredAndSortByDeadline(t *testing.T) {
 
 // TestPendingRetryClearsOnSuccess proves the entry does not outlive the wait.
 func TestPendingRetryClearsOnSuccess(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	as := &AutonomousScheduler{
 		config:               AutonomousConfig{MaxConcurrent: 3},
 		state:                &AutonomousState{Status: "running", LifetimeIssueFailures: map[string]int{}},

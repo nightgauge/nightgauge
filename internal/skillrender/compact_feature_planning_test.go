@@ -67,7 +67,7 @@ func TestCompactFeaturePlanning_KeepsContractAndChecklist(t *testing.T) {
 	for _, want := range []string{
 		// The planning-{N}.json Output Contract's minimal skeleton fields.
 		`"schema_version": "1.9"`,
-		`"plan_file": ".nightgauge/plans/{N}-*.md"`,
+		`"plan_file": "<absolute path printed by nightgauge layout write plans>"`,
 		`"files_to_create": []`,
 		`"files_to_modify": []`,
 		"complexity_assessment",
@@ -76,8 +76,8 @@ func TestCompactFeaturePlanning_KeepsContractAndChecklist(t *testing.T) {
 		"parsePlanFile",
 		// Completion Checklist, verbatim heading and items.
 		"## Completion Checklist",
-		"`.nightgauge/plans/{N}-*.md` exists and is complete",
-		"`.nightgauge/pipeline/planning-{N}.json` written",
+		"The plan `{N}-*.md` exists in `nightgauge layout path plans` and is",
+		"`planning-{N}.json` written (`nightgauge layout write pipeline`)",
 	} {
 		if !strings.Contains(compact.Content, want) {
 			t.Errorf("compact render is missing %q", want)

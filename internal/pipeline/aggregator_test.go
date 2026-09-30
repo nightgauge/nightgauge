@@ -8,6 +8,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -623,8 +624,8 @@ func TestLoadHistory_RejectsInvalidDate(t *testing.T) {
 func TestLoadHistory_FilenameAndStartedAtFilters(t *testing.T) {
 	// Write three daily JSONL files; LoadHistory should apply the
 	// --since/--until filter against StartedAt (the per-record date).
-	dir := t.TempDir()
-	historyDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	dir := layouttest.Repo(t)
+	historyDir := filepath.Join(layouttest.PipelineDir(t, dir), "history")
 	if err := os.MkdirAll(historyDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

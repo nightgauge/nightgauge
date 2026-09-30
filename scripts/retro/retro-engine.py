@@ -27,6 +27,7 @@ _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SCRIPT_DIR not in sys.path:
     sys.path.insert(0, _SCRIPT_DIR)
 
+from clone_layout import NotAGitRepositoryError, clone_class_dir
 from parsers.session_log_parser import SessionLogParser
 from parsers.history_parser import HistoryParser
 from parsers.batch_state_parser import BatchStateParser
@@ -88,16 +89,16 @@ def compute_since_date(args):
     return cutoff.strftime("%Y-%m-%d")
 
 
-def discover_data_sources(workspace, since_date, issue_filter, all_failures):
+def discover_data_sources(pipeline_dir, logs_dir, since_date, issue_filter, all_failures):
     """Discover which data sources are available and parse them.
+
+    *pipeline_dir* and *logs_dir* are the clone's per-clone directories
+    (``<git-common-dir>/nightgauge/{pipeline,logs}``, ADR-024 § 7).
 
     Returns (batch_data, history_data, log_data, data_sources).
     """
-    logs_dir = os.path.join(workspace, ".nightgauge", "logs")
-    history_dir = os.path.join(workspace, ".nightgauge", "pipeline", "history")
-    batch_state_path = os.path.join(
-        workspace, ".nightgauge", "pipeline", "batch-state.json"
-    )
+    history_dir = os.path.join(pipeline_dir, "history")
+    batch_state_path = os.path.join(pipeline_dir, "batch-state.json")
 
     data_sources = []
     batch_data = None
@@ -314,18 +315,18 @@ def main(argv=None):
     workspace = os.path.abspath(args.workspace)
     since_date = compute_since_date(args)
 
-    # Check Python3 availability (we're already running, but verify workspace)
-    nightgauge_dir = os.path.join(workspace, ".nightgauge")
-    if not os.path.isdir(nightgauge_dir):
-        print(
-            f"WARNING: .nightgauge/ not found in {workspace}. "
-            "Some data sources may be unavailable.",
-            file=sys.stderr,
-        )
+    # Per-clone data lives in the git directory (ADR-024 § 7).
+    try:
+        pipeline_dir = clone_class_dir(workspace, "pipeline")
+        logs_dir = clone_class_dir(workspace, "logs")
+    except NotAGitRepositoryError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
     # Discover and parse data sources
     batch_data, history_data, log_data, data_sources = discover_data_sources(
-        workspace,
+        pipeline_dir,
+        logs_dir,
         since_date,
         args.issue,
         args.all_failures,
@@ -335,9 +336,9 @@ def main(argv=None):
         print("No pipeline data sources found.")
         print(f"  Workspace: {workspace}")
         print(f"  Expected locations:")
-        print(f"    .nightgauge/logs/*_session.log")
-        print(f"    .nightgauge/pipeline/history/*.jsonl")
-        print(f"    .nightgauge/pipeline/batch-state.json")
+        print(f"    {os.path.join(logs_dir, '*_session.log')}")
+        print(f"    {os.path.join(pipeline_dir, 'history', '*.jsonl')}")
+        print(f"    {os.path.join(pipeline_dir, 'batch-state.json')}")
         return 0
 
     # Build unified failure events
@@ -376,17 +377,16 @@ def main(argv=None):
     report = generator.generate_json_report(scope, enriched)
 
     # Output
-    output_dir = os.path.join(workspace, ".nightgauge", "pipeline")
-
+    filepath = None
     if args.output_format in ("json", "both"):
-        filepath = generator.write_json_report(report, output_dir)
+        filepath = generator.write_json_report(report, pipeline_dir)
         if args.output_format == "json":
             # JSON-only: write to stdout
             print(json.dumps(report, indent=2))
         print(f"\nJSON report written: {filepath}", file=sys.stderr)
 
     if args.output_format in ("summary", "both"):
-        markdown = generator.generate_markdown_report(report)
+        markdown = generator.generate_markdown_report(report, report_path=filepath)
         print(markdown)
 
     return 0

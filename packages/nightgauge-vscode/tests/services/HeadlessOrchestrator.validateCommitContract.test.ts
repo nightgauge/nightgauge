@@ -23,6 +23,7 @@ import * as os from "os";
 import * as path from "path";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { Logger } from "../../src/utils/logger";
+import { pipelineStateDir } from "../../src/utils/cloneLayout";
 
 // Mock skillRunner so importing the orchestrator doesn't pull the real CLI.
 vi.mock("../../src/utils/skillRunner", () => ({
@@ -79,7 +80,9 @@ function writeContexts(
   filesCreated: string[],
   filesModified: string[] = []
 ): void {
-  const dir = path.join(workDir, ".nightgauge", "pipeline");
+  // Contexts live in the clone's pipeline directory, under its git dir
+  // (ADR-024 § 7), so they never show in `git status`.
+  const dir = pipelineStateDir(workDir);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, `dev-${issueNumber}.json`),
@@ -135,10 +138,10 @@ describe("HeadlessOrchestrator.enforceValidateCommitContract (#1608 backstop)", 
     // The validated tree is now committed ahead of base...
     const ahead = git(fx.workDir, "rev-list", "--count", "origin/main..HEAD").trim();
     expect(Number(ahead)).toBe(1);
-    // ...source files are clean (only the excluded .nightgauge remains untracked)...
-    const status = git(fx.workDir, "status", "--porcelain")
+    // ...and the tree is clean: the contexts live under the git directory...
+    const status = git(fx.workDir, "status", "--porcelain", "--untracked-files=all")
       .split("\n")
-      .filter((l) => l.trim() && !l.includes(".nightgauge"));
+      .filter((l) => l.trim());
     expect(status).toEqual([]);
     // ...and the branch was pushed to origin.
     const remoteBranches = git(fx.originDir, "branch", "--list");

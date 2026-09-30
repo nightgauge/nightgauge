@@ -25,7 +25,7 @@ Silently skip to Phase 1.
 BRANCH=$(git branch --show-current)
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-FEEDBACK_FILE=".nightgauge/pipeline/feedback-${ISSUE_NUMBER}.json"
+FEEDBACK_FILE="$(nightgauge layout path pipeline feedback-${ISSUE_NUMBER}.json)"
 
 REVISION_COUNT=0
 REVISION_REASONS="[]"
@@ -35,7 +35,7 @@ if [ -f "$FEEDBACK_FILE" ]; then
   IS_REVISION=true
   SIGNALS=$(jq -r '.signals' "$FEEDBACK_FILE")
   SIGNAL_COUNT=$(printf '%s\n' "$SIGNALS" | jq 'length')
-  REVISION_COUNT=$(jq -r '.revision_count // 0' ".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json" 2>/dev/null || echo 0)
+  REVISION_COUNT=$(jq -r '.revision_count // 0' "$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)" 2>/dev/null || echo 0)
 
   echo "=== PLAN REVISION (Attempt $((REVISION_COUNT + 1))) ==="
   echo ""
@@ -122,7 +122,7 @@ rather than producing a re-written plan that ignores the original failures.
 ## Phase 1: Load Context and Start Stage
 
 1. Extract issue number from branch name.
-2. Load `.nightgauge/pipeline/issue-{N}.json`.
+2. Load `"$(nightgauge layout path pipeline issue-{N}.json)"`.
 3. Read title, requirements, acceptance criteria, and labels.
 4. Signal stage start using Go binary `project move-status`:
    ```bash
@@ -161,8 +161,8 @@ is the `parent_issue` (epic number) from the issue context JSON.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-EPIC_NUMBER=$(jq -r '.parent_issue // empty' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)
-BATCH_CONTEXT=".nightgauge/pipeline/batch-${EPIC_NUMBER}.json"
+EPIC_NUMBER=$(jq -r '.parent_issue // empty' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
+BATCH_CONTEXT="$(nightgauge layout path pipeline batch-${EPIC_NUMBER}.json)"
 
 if [ -f "$BATCH_CONTEXT" ]; then
   BATCH_MODE=true
@@ -181,15 +181,16 @@ When `BATCH_MODE=true`:
 
 1. Read combined requirements from all issues in `batch-{E}.json`
 2. Identify shared file modifications across issues
-3. Produce a single `.nightgauge/plans/{E}-*.md` plan file covering all
-   issues
+3. Produce a single `{E}-*.md` plan file covering all issues, written with
+   `nightgauge layout write plans {E}-<slug>.md` (it prints the plan's path;
+   that path is `PLAN_FILE`)
 4. Write `planning-batch-{E}.json` with `per_issue_plans[]`,
    `shared_files_to_modify`, `files_to_read`, and `decisions`
 
 #### Write planning-batch-{E}.json
 
 ```bash
-cat > .nightgauge/pipeline/planning-batch-${EPIC_NUMBER}.json << EOF
+nightgauge layout write pipeline "planning-batch-${EPIC_NUMBER}.json" >/dev/null << EOF
 {
   "schema_version": "1.0",
   "epic_number": ${EPIC_NUMBER},
@@ -211,8 +212,9 @@ The schema matches `PlanningBatchContextSchema` from
 #### Verify Batch Planning Context
 
 ```bash
-jq . .nightgauge/pipeline/planning-batch-${EPIC_NUMBER}.json > /dev/null && \
-  echo "Batch planning context written: .nightgauge/pipeline/planning-batch-${EPIC_NUMBER}.json"
+BATCH_PLANNING="$(nightgauge layout path pipeline planning-batch-${EPIC_NUMBER}.json)"
+jq . "$BATCH_PLANNING" > /dev/null && \
+  echo "Batch planning context written: $BATCH_PLANNING"
 ```
 
 When in batch mode, skip Phase 5 (Write Planning Context) for single-issue

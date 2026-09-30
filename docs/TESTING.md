@@ -1894,7 +1894,8 @@ new mock methods.
 
 ### Context File Schema Validation
 
-Pipeline context files (`.nightgauge/pipeline/*.json`) are validated with
+Pipeline context files (the `*.json` files in the clone's pipeline state
+directory, `nightgauge layout path pipeline`) are validated with
 Zod schemas from `@nightgauge/sdk`. Use the helpers in
 `tests/helpers/workspaceSetup.ts` to create isolated temp workspaces:
 
@@ -1922,7 +1923,7 @@ Available helpers: `makeIssueContext`, `makePlanningContext`, `makeDevContext`,
 2. **Create hoisted mocks inline** — never call imported helpers inside
    `vi.hoisted()`.
 3. **Use workspace helpers** for context file tests — never write to the real
-   `.nightgauge/pipeline/` directory.
+   pipeline state directory (it resolves into this checkout's git directory).
 4. **Reset mocks in `beforeEach`** — call `mockXxx.mockReset()` to prevent
    test bleed. Don't use `vi.clearAllMocks()` (it clears global setup mocks).
 5. **Dispose services in `afterEach`** — call `service.dispose()` and
@@ -1978,7 +1979,7 @@ npx -w @nightgauge/sdk vitest run
 
 ### Writing New Integration Tests
 
-1. **Use temp workspace helpers** — never write to the real `.nightgauge/pipeline/` directory. Use `createTestWorkspace()` from `helpers/workspace.ts`.
+1. **Use temp workspace helpers** — never write to the real pipeline state directory (`nightgauge layout path pipeline`, inside this checkout's git directory). Use `createTestWorkspace()` from `helpers/workspace.ts`.
 2. **Mock external dependencies at boundaries** — use `createSuccessQueryFn()` or `createFailureQueryFn()` from `helpers/query-mocks.ts` to avoid real Claude API calls.
 3. **Use real EventBus and TokenTracker** — these components are simple enough that mocking them adds no value and hides real behavior.
 4. **Test observable behavior** — verify what downstream systems see (files on disk, events received, cumulative totals), not internal implementation.

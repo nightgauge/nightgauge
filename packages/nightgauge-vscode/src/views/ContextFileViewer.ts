@@ -50,6 +50,9 @@ export class ContextFileViewer implements vscode.TextDocumentContentProvider {
    */
   async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
     const filename = uri.path.slice(1); // Remove leading slash
+    if (!this.contextPath) {
+      return `// Context file not found: ${filename}\n// This workspace is not a git repository.`;
+    }
     const filePath = path.join(this.contextPath, filename);
 
     try {

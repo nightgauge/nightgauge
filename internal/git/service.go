@@ -970,14 +970,15 @@ func (s *Service) AbortPipeline(featureBranch string) error {
 // ResetPipeline resets the working tree to a clean state (hard reset to HEAD).
 //
 // Before resetting, it preserves any unlanded deliverable a pipeline stage
-// recorded: if `.nightgauge/pipeline/dev-{N}.json` lists created/modified
-// files that are still present on disk and uncommitted, those changes are
-// committed to the current branch as a recovery commit FIRST, so the reset
-// below cannot discard them. A hard reset+clean called on a worktree holding
-// a completed-but-uncommitted implementation is exactly the destroy-on-revert
-// mechanism from Issue #289. Any baseline stash this branch is carrying
-// (`<stage>-<issue>-baseline`, taken by the CI-gate baseline-failure
-// detector) is also popped first so it is never silently left behind.
+// recorded: if dev-{N}.json in the clone's pipeline state directory lists
+// created/modified files that are still present on disk and uncommitted, those
+// changes are committed to the current branch as a recovery commit FIRST, so
+// the reset below cannot discard them. A hard reset+clean called on a
+// worktree holding a completed-but-uncommitted implementation is exactly the
+// destroy-on-revert mechanism from Issue #289. Any baseline stash this branch
+// is carrying (`<stage>-<issue>-baseline`, taken by the CI-gate
+// baseline-failure detector) is also popped first so it is never silently
+// left behind.
 //
 // The deliverable guard answers in three states, not two (#297). "There is
 // nothing to preserve" and "I could not tell what this tree holds" used to

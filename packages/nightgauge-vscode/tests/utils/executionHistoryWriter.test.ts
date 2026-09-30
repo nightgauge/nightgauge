@@ -6,15 +6,20 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { ExecutionHistoryWriter } from "../../src/utils/executionHistoryWriter";
+import type { CloneLayout } from "../../src/utils/cloneLayout";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 vi.mock("node:fs/promises");
 
 describe("ExecutionHistoryWriter", () => {
   const workspaceRoot = "/test/workspace";
+  let layout: CloneLayout;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    layout = fakeCloneLayout(workspaceRoot);
   });
 
   afterEach(() => {
@@ -37,9 +42,9 @@ describe("ExecutionHistoryWriter", () => {
     });
   });
 
-  it("returns the workspace history directory", () => {
+  it("returns the history directory in the clone's pipeline state dir", () => {
     expect(ExecutionHistoryWriter.getHistoryDir(workspaceRoot)).toBe(
-      "/test/workspace/.nightgauge/pipeline/history"
+      path.join(layout.pipeline, "history")
     );
   });
 

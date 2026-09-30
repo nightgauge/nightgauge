@@ -882,7 +882,7 @@ func buildConflictFiles(ctx context.Context, workspace string, paths []unmergedP
 }
 
 // preserveConflictEvidence copies the raw conflicted index out of git and into
-// `.nightgauge/pipeline/conflict-evidence-{N}/` so the conflict survives the
+// `.git/nightgauge/pipeline/conflict-evidence-{N}/` so the conflict survives the
 // `git rebase --abort` that follows.
 //
 // This exists because "leave the rebase in progress instead" does not work in
@@ -1075,7 +1075,7 @@ func captureConflictContextFromIndex(ctx context.Context, workspace string, issu
 	//
 	// Absence is this function's signal for "not captured", so every non-captured
 	// exit also drops a document left by an EARLIER attempt:
-	// `.nightgauge/pipeline/` outlives the run, and a stale context is read by
+	// `.git/nightgauge/pipeline/` outlives the run, and a stale context is read by
 	// ConflictRecoveryLoop exactly like a fresh one — re-dispatching feature-dev
 	// against files and blobs from a conflict that no longer exists (#301 round-2
 	// advisory). Best-effort: a context we cannot remove is still handled by the

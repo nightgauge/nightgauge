@@ -5,11 +5,10 @@ host run, by `tests/vscode-host/fixture.ts`.
 
 There is no `empty/` directory: "empty" is the workspace folder as the
 launcher creates it — a fresh temp directory with nothing in it. That is not
-an oversight. The extension's `activationEvents` are
-`workspaceContains:.nightgauge/pipeline` and
-`workspaceContains:.nightgauge/plans`, so a committed "empty" fixture that
-carried even a `.gitkeep` under `.nightgauge/` would auto-activate the
-extension on window open. Activation would then race the loading of the test
+an oversight. The extension's `activationEvents` is
+`workspaceContains:.nightgauge/config.yaml`, so a committed "empty" fixture
+that carried an initialized `.nightgauge/` would auto-activate the extension
+on window open. Activation would then race the loading of the test
 module, and any rejection it threw would be gone before the observation layer
 existed to see it — which is the single thing this tier is here to catch.
 

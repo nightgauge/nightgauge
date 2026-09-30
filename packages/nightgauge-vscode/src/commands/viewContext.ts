@@ -5,11 +5,7 @@
  * Supports both single-pipeline and concurrent slot modes.
  */
 
-import {
-  pipelineStateDir,
-  resolveCloneSetting,
-  RELATIVE_PIPELINE_STATE_DIR,
-} from "../utils/cloneLayout";
+import { pipelineStateDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as path from "node:path";
 import type { PipelineStage } from "@nightgauge/sdk";
@@ -102,15 +98,10 @@ export function registerViewContextCommand(
     logger.debug("Opening context file", { filename, worktreePath });
 
     try {
-      // For concurrent slots, temporarily point the viewer at the worktree's context path
+      // For concurrent slots, temporarily point the viewer at the context
+      // path the slot's worktree resolves (its clone's pipeline directory).
       if (worktreePath) {
-        const settings = await import("../config/settings");
-        const slotContextPath = resolveCloneSetting(
-          worktreePath,
-          settings.getSettings().contextPath,
-          RELATIVE_PIPELINE_STATE_DIR,
-          pipelineStateDir
-        );
+        const slotContextPath = pipelineStateDir(worktreePath);
         const originalPath = contextViewer.getContextPath();
         contextViewer.setContextPath(slotContextPath);
         try {

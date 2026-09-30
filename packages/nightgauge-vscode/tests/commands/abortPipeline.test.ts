@@ -4,7 +4,10 @@
  * @see src/commands/abortPipeline.ts
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { registerAbortPipelineCommand } from "../../src/commands/abortPipeline";
 import type { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
@@ -12,6 +15,8 @@ import type { Logger } from "../../src/utils/logger";
 import type { StatusBarManager } from "../../src/utils/statusBar";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { PipelineTreeProvider } from "../../src/views";
+import type { CloneLayout } from "../../src/utils/cloneLayout";
+import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mock vscode
 vi.mock("vscode", () => ({
@@ -26,13 +31,9 @@ vi.mock("vscode", () => ({
     executeCommand: vi.fn(),
   },
   workspace: {
-    findFiles: vi.fn(),
     fs: { delete: vi.fn().mockResolvedValue(undefined) },
   },
   QuickPickItemKind: {},
-  RelativePattern: vi.fn(function (base, pattern) {
-    return { base, pattern };
-  }),
   Uri: { file: vi.fn((path) => ({ fsPath: path })) },
 }));
 
@@ -67,20 +68,34 @@ describe("abortPipeline Command", () => {
   let mockStateService: PipelineStateService;
   let mockTreeProvider: PipelineTreeProvider;
   let commandHandler: () => Promise<void>;
+  // The workspace is a temp dir whose per-clone classes resolve to its own
+  // `.git/nightgauge/<class>`; the command lists them from disk (#2037).
+  let workspaceRoot: string;
+  let layout: CloneLayout;
+  const seed = (dir: string, ...names: string[]) => {
+    for (const name of names) fs.writeFileSync(path.join(dir, name), "{}");
+  };
+  const deletedPaths = () =>
+    vi.mocked(vscode.workspace.fs.delete).mock.calls.map((c) => (c[0] as any).fsPath as string);
+
+  afterEach(() => {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
+  });
 
   beforeEach(async () => {
     // Reset all mocks (clearAllMocks only clears call history, not implementations)
     vi.clearAllMocks();
 
     // Restore module-level mock implementations that individual tests may override
+    workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-abort-"));
+    layout = mkFakeCloneLayout(workspaceRoot);
     const { getWorkspaceRoot } = await import("../../src/config/settings");
-    vi.mocked(getWorkspaceRoot).mockReturnValue("/test/workspace");
+    vi.mocked(getWorkspaceRoot).mockReturnValue(workspaceRoot);
 
     const { fullResetGitHubIssue } = await import("../../src/utils/githubStatusSync");
     vi.mocked(fullResetGitHubIssue).mockResolvedValue({ success: true });
 
-    // Ensure findFiles and fs.delete return proper defaults
-    vi.mocked(vscode.workspace.findFiles).mockResolvedValue([]);
+    // Ensure fs.delete returns its default
     vi.mocked(vscode.workspace.fs.delete).mockResolvedValue(undefined);
 
     // Create mocks for all dependencies
@@ -185,7 +200,7 @@ describe("abortPipeline Command", () => {
 
       // fullResetGitHubIssue should be called for the affected issue
       const { fullResetGitHubIssue } = await import("../../src/utils/githubStatusSync");
-      expect(fullResetGitHubIssue).toHaveBeenCalledWith(119, "/test/workspace", expect.any(Object));
+      expect(fullResetGitHubIssue).toHaveBeenCalledWith(119, workspaceRoot, expect.any(Object));
       expect(mockStateService.clearPipeline).toHaveBeenCalled();
     });
   });
@@ -249,40 +264,27 @@ describe("abortPipeline Command", () => {
       (mockOrchestrator.getIsRunning as any).mockReturnValue(true);
       vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Abort" as any);
       vi.mocked(vscode.window.showQuickPick).mockResolvedValue("Keep branch" as any);
-      vi.mocked(vscode.workspace.findFiles)
-        .mockResolvedValueOnce([
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/issue-119.json",
-          } as any,
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/planning-119.json",
-          } as any,
-        ])
-        .mockResolvedValueOnce([]);
+      seed(layout.pipeline, "issue-119.json", "planning-119.json");
 
       await commandHandler();
 
-      expect(vscode.workspace.findFiles).toHaveBeenCalled();
-      expect(vscode.workspace.fs.delete).toHaveBeenCalledTimes(2);
+      expect(deletedPaths().sort()).toEqual(
+        [
+          path.join(layout.pipeline, "issue-119.json"),
+          path.join(layout.pipeline, "planning-119.json"),
+        ].sort()
+      );
     });
 
     it("should delete plan files", async () => {
       (mockOrchestrator.getIsRunning as any).mockReturnValue(true);
       vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Abort" as any);
       vi.mocked(vscode.window.showQuickPick).mockResolvedValue("Keep branch" as any);
-      vi.mocked(vscode.workspace.findFiles)
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([
-          {
-            fsPath: "/test/workspace/.nightgauge/plans/119-abort.md",
-          } as any,
-        ]);
+      seed(layout.plans, "119-abort.md", "1190-other.md");
 
       await commandHandler();
 
-      expect(vscode.workspace.findFiles).toHaveBeenCalledWith(
-        expect.objectContaining({ pattern: "119-*.md" })
-      );
+      expect(deletedPaths()).toEqual([path.join(layout.plans, "119-abort.md")]);
     });
   });
 
@@ -331,11 +333,7 @@ describe("abortPipeline Command", () => {
       (mockOrchestrator.getIsRunning as any).mockReturnValue(true);
       vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Abort" as any);
       vi.mocked(vscode.window.showQuickPick).mockResolvedValue("Keep branch" as any);
-      vi.mocked(vscode.workspace.findFiles).mockResolvedValue([
-        {
-          fsPath: "/test/workspace/.nightgauge/pipeline/issue-119.json",
-        } as any,
-      ]);
+      seed(layout.pipeline, "issue-119.json");
       vi.mocked(vscode.workspace.fs.delete).mockRejectedValue(new Error("File not found"));
 
       await commandHandler();
@@ -400,7 +398,7 @@ describe("abortPipeline Command", () => {
       await commandHandler();
 
       const { fullResetGitHubIssue } = await import("../../src/utils/githubStatusSync");
-      expect(fullResetGitHubIssue).toHaveBeenCalledWith(119, "/test/workspace", expect.any(Object));
+      expect(fullResetGitHubIssue).toHaveBeenCalledWith(119, workspaceRoot, expect.any(Object));
     });
 
     it("should handle GitHub reset failure gracefully while continuing cleanup", async () => {
@@ -427,52 +425,27 @@ describe("abortPipeline Command", () => {
     });
 
     it("deletes context files but never the durable *-state.json files", async () => {
-      // `findFiles` here matches EVERY *.json in .nightgauge/pipeline/, not just
-      // per-issue context files, so the skip filter in abortPipeline is what
-      // stops an abort from destroying the queue and the run's own state.
+      // The listing here matches EVERY *.json in the pipeline directory, not
+      // just per-issue context files, so the skip filter in abortPipeline is
+      // what stops an abort from destroying the queue and the run's own state.
       //
-      // The previous version of this test used a `state.json` fixture and only
-      // asserted that issue-119.json WAS deleted — it never asserted the skip,
-      // so it stayed green whether or not the filter existed. It now names the
-      // three files that actually exist and asserts both directions (#471).
-      const DIR = "/test/workspace/.nightgauge/pipeline";
-      const PRESERVED = [
-        `${DIR}/run-state.json`,
-        `${DIR}/queue-state.json`,
-        `${DIR}/batch-state.json`,
-      ];
+      // An earlier version used a `state.json` fixture and only asserted that
+      // issue-119.json WAS deleted, so it stayed green whether or not the
+      // filter existed. It names the three files that actually exist and
+      // asserts both directions (#471).
+      const PRESERVED = ["run-state.json", "queue-state.json", "batch-state.json"];
+      seed(layout.pipeline, "issue-119.json", ...PRESERVED);
 
       (mockOrchestrator.getIsRunning as any).mockReturnValue(true);
       vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Abort" as any);
       vi.mocked(vscode.window.showQuickPick).mockResolvedValue("Keep branch" as any);
-      // Key the mock on the glob, NOT on call order: abortPipeline builds the
-      // plan-file `findFiles` promises inside an `affectedIssues.map(...)`
-      // BEFORE the context-file one, so the plan queries are invoked first and
-      // a `mockResolvedValueOnce` chain hands the context list to the plan
-      // reader — which deletes unfiltered. That is how the earlier version of
-      // this test passed while exercising the wrong call entirely.
-      vi.mocked(vscode.workspace.findFiles).mockImplementation((pattern: any) =>
-        Promise.resolve(
-          pattern?.pattern === "*.json"
-            ? ([
-                { fsPath: `${DIR}/issue-119.json` },
-                ...PRESERVED.map((fsPath) => ({ fsPath })),
-              ] as any)
-            : ([] as any)
-        )
-      );
 
       await commandHandler();
 
-      expect(vscode.workspace.fs.delete).toHaveBeenCalledWith(
-        expect.objectContaining({ fsPath: `${DIR}/issue-119.json` })
-      );
-
-      const deleted = vi
-        .mocked(vscode.workspace.fs.delete)
-        .mock.calls.map((c) => (c[0] as { fsPath: string }).fsPath);
+      const deleted = deletedPaths();
+      expect(deleted).toContain(path.join(layout.pipeline, "issue-119.json"));
       for (const survivor of PRESERVED) {
-        expect(deleted).not.toContain(survivor);
+        expect(deleted).not.toContain(path.join(layout.pipeline, survivor));
       }
     });
   });

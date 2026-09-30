@@ -22,6 +22,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -33,7 +36,7 @@ import (
 func newIpcTestHarnessWithSkills(t *testing.T) (*ipcTestHarness, string) {
 	t.Helper()
 
-	workDir := t.TempDir()
+	workDir := layouttest.Repo(t)
 	configDir := filepath.Join(workDir, ".nightgauge")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
@@ -46,7 +49,7 @@ func newIpcTestHarnessWithSkills(t *testing.T) (*ipcTestHarness, string) {
 	}
 
 	// Create pipeline directory
-	pipelineDir := filepath.Join(workDir, ".nightgauge", "pipeline")
+	pipelineDir := layouttest.PipelineDir(t, workDir)
 	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
 		t.Fatalf("mkdir pipeline dir: %v", err)
 	}
@@ -70,6 +73,11 @@ func newIpcTestHarnessWithSkills(t *testing.T) (*ipcTestHarness, string) {
 			t.Fatalf("write skill stub %s: %v", dir, err)
 		}
 	}
+
+	// The scheduler runs stages in a worktree of this repository, which
+	// needs a commit to branch from.
+	gittest.Run(t, workDir, "add", "-A")
+	gittest.Run(t, workDir, "commit", "-qm", "fixture")
 
 	// Start binary with this workspace
 	h := startHarness(t, &cmdSpec{workDir: workDir})
@@ -157,7 +165,10 @@ func newCmd(workDir string) *exec.Cmd {
 // using the flat <prefix>-<N>.json convention shared by the skills, gates, and
 // stagecontext.ContextPath. contextType is the prefix (e.g., "issue", "planning").
 func writeContextFile(workDir string, issueNumber int, contextType string) {
-	dir := filepath.Join(workDir, ".nightgauge", "pipeline")
+	dir, err := layout.PipelineStateDir(workDir)
+	if err != nil {
+		return // the stage's gate reports the missing file
+	}
 	os.MkdirAll(dir, 0o755) //nolint:errcheck
 	content := fmt.Sprintf(`{"issueNumber":%d,"repo":"test-org/test-repo","stage":"%s"}`,
 		issueNumber, contextType)
@@ -176,8 +187,16 @@ func writeContextFile(workDir string, issueNumber int, contextType string) {
 // real process, so the simplest approach is to deregister pr-merge from
 // the gate registry inside `serve` when GITHUB_TOKEN is the
 // fake-token-for-integration-test sentinel (handled in main.go).
-func writeGatePassingSkillOutput(workDir string, issueNumber int, stage string) {
-	pipelineDir := filepath.Join(workDir, ".nightgauge", "pipeline")
+//
+// Stage context files land in the clone's pipeline state directory (shared by
+// every worktree); gate-metrics.jsonl lands in the stage's own checkout,
+// worktreeDir, where the validate gate reads it (workDir when the event names
+// none).
+func writeGatePassingSkillOutput(workDir, worktreeDir string, issueNumber int, stage string) {
+	pipelineDir, err := layout.PipelineStateDir(workDir)
+	if err != nil {
+		return // the stage's gate reports the missing output
+	}
 	os.MkdirAll(pipelineDir, 0o755) //nolint:errcheck
 
 	switch stage {
@@ -187,7 +206,14 @@ func writeGatePassingSkillOutput(workDir string, issueNumber int, stage string) 
 		os.WriteFile(path, []byte(body), 0o644) //nolint:errcheck
 
 	case "feature-planning":
-		planFile := filepath.Join(pipelineDir, fmt.Sprintf("plan-%d.md", issueNumber))
+		// The plan lives in the clone's plans directory, where the
+		// feature-planning gate confines plan_file (ADR-024 § 7).
+		plansDir, err := layout.PlansDir(workDir)
+		if err != nil {
+			return
+		}
+		os.MkdirAll(plansDir, 0o755) //nolint:errcheck
+		planFile := filepath.Join(plansDir, fmt.Sprintf("%d-test.md", issueNumber))
 		os.WriteFile(planFile, []byte("# plan\n"), 0o644) //nolint:errcheck
 		path := filepath.Join(pipelineDir, fmt.Sprintf("planning-%d.json", issueNumber))
 		body := fmt.Sprintf(`{"issue_number":%d,"plan_file":%q}`, issueNumber, planFile)
@@ -203,7 +229,11 @@ func writeGatePassingSkillOutput(workDir string, issueNumber int, stage string) 
 
 	case "feature-validate":
 		// Emit gate-metrics.jsonl with all gates passing.
-		healthDir := filepath.Join(workDir, ".nightgauge", "health")
+		checkout := worktreeDir
+		if checkout == "" {
+			checkout = workDir
+		}
+		healthDir := filepath.Join(checkout, ".nightgauge", "health")
 		os.MkdirAll(healthDir, 0o755) //nolint:errcheck
 		f, err := os.OpenFile(filepath.Join(healthDir, "gate-metrics.jsonl"),
 			os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
@@ -328,7 +358,7 @@ func pipelineStageResponder(
 					// Issue #3266: also write the skill-output context files
 					// the post-condition stage gates inspect. Each stage gate
 					// requires minimum fields matching what real skills emit.
-					writeGatePassingSkillOutput(h.workDir, data.IssueNumber, data.Stage)
+					writeGatePassingSkillOutput(h.workDir, data.WorktreeDir, data.IssueNumber, data.Stage)
 
 					// Send pipeline.stageResult back
 					h.sendRequest("pipeline.stageResult", StageResultParams{
@@ -523,7 +553,7 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 	// pipeline.complete is emitted from the scheduler's terminal defer just
 	// before SealAndRemove runs. Wait for that defer to finish, then assert the
 	// durable terminal contract rather than racing the transient snapshot.
-	stateDir := filepath.Join(workDir, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, workDir)
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		snapshots, err := state.FindPersistedStatesForIssue(stateDir, issueNumber)
@@ -653,7 +683,7 @@ func TestE2E_QueueSurvivesRestart(t *testing.T) {
 	}
 
 	// Create shared workspace directory (persists across binary restarts)
-	workDir := t.TempDir()
+	workDir := layouttest.Repo(t)
 	configDir := filepath.Join(workDir, ".nightgauge")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
@@ -662,7 +692,7 @@ func TestE2E_QueueSurvivesRestart(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte(configYAML), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
-	pipelineDir := filepath.Join(workDir, ".nightgauge", "pipeline")
+	pipelineDir := layouttest.PipelineDir(t, workDir)
 	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
 		t.Fatalf("mkdir pipeline dir: %v", err)
 	}
@@ -901,7 +931,7 @@ func TestE2E_ConcurrentPipelines(t *testing.T) {
 
 					// Issue #3266: write skill-output files the post-condition
 					// gates inspect (see writeGatePassingSkillOutput helper).
-					writeGatePassingSkillOutput(workDir, data.IssueNumber, data.Stage)
+					writeGatePassingSkillOutput(workDir, data.WorktreeDir, data.IssueNumber, data.Stage)
 
 					// Send stageResult
 					h.sendRequest("pipeline.stageResult", StageResultParams{

@@ -265,8 +265,9 @@ vi.mock("vscode", () => ({
 }));
 
 import { Dashboard } from "../../../src/views/dashboard/Dashboard";
+import { fakeCloneLayout, mkFakeCloneLayout } from "../../helpers/cloneLayout";
 
-const HEALTH_FILE = path.join(".nightgauge", "pipeline", "health-history.jsonl");
+const HEALTH_FILE = "health-history.jsonl";
 
 /**
  * Seed a repo root with completed runs.
@@ -277,7 +278,8 @@ const HEALTH_FILE = path.join(".nightgauge", "pipeline", "health-history.jsonl")
  * passes for the wrong reason.
  */
 function seedRepo(root: string, costs: number[]): void {
-  const histDir = path.join(root, ".nightgauge", "pipeline", "history");
+  // Each repo is its own clone, with its own per-clone pipeline directory.
+  const histDir = path.join(mkFakeCloneLayout(root).pipeline, "history");
   fs.mkdirSync(histDir, { recursive: true });
   const lines = costs.map((c, i) => {
     const hh = String(i + 1).padStart(2, "0");
@@ -324,7 +326,7 @@ function seedRepo(root: string, costs: number[]): void {
 }
 
 function readSnapshots(root: string): any[] {
-  const f = path.join(root, HEALTH_FILE);
+  const f = path.join(fakeCloneLayout(root).pipeline, HEALTH_FILE);
   if (!fs.existsSync(f)) return [];
   return fs
     .readFileSync(f, "utf-8")
@@ -439,7 +441,7 @@ describe("health snapshots are attributed to the repo that ran (#1231)", () => {
 
   it("does not write a snapshot for a repo with no history of its own", async () => {
     const emptyRoot = path.join(tmp, "empty");
-    fs.mkdirSync(path.join(emptyRoot, ".nightgauge", "pipeline"), { recursive: true });
+    mkFakeCloneLayout(emptyRoot);
     repoRoots.set("acme/empty", emptyRoot);
 
     await dashboard.recordHealthSnapshotForRun(1, 1, "acme/empty", "run-e");

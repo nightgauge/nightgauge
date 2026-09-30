@@ -15,7 +15,8 @@ type LocalStateService struct {
 }
 
 // NewLocalStateService creates a LocalStateService that reads state files from stateDir.
-// stateDir is typically {workspaceRoot}/.nightgauge/pipeline.
+// stateDir is typically the workspace's pipeline state directory
+// (layout.PipelineStateDir).
 func NewLocalStateService(stateDir string) *LocalStateService {
 	return &LocalStateService{stateDir: stateDir}
 }

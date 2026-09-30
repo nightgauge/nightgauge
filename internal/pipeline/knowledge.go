@@ -46,7 +46,10 @@ func emptyKnowledgeAggregate() KnowledgeAggregate {
 func AggregateKnowledge(workspaceRoot string) (KnowledgeAggregate, error) {
 	agg := emptyKnowledgeAggregate()
 
-	path := telemetry.Path(workspaceRoot)
+	path, err := telemetry.Path(workspaceRoot)
+	if err != nil {
+		return agg, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -110,7 +113,10 @@ func AggregateKnowledge(workspaceRoot string) (KnowledgeAggregate, error) {
 // Missing file returns nil, nil — same convention as AggregateKnowledge.
 // Malformed lines are skipped silently.
 func LoadKnowledgeEvents(workspaceRoot string) ([]telemetry.Event, error) {
-	path := telemetry.Path(workspaceRoot)
+	path, err := telemetry.Path(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -134,11 +140,4 @@ func LoadKnowledgeEvents(workspaceRoot string) ([]telemetry.Event, error) {
 		return events, fmt.Errorf("scan knowledge events: %w", err)
 	}
 	return events, nil
-}
-
-// knowledgeEventsPathFor builds the knowledge-events.jsonl path. Exported via
-// telemetry.Path; this internal helper exists for tests that want to write a
-// fixture without depending on telemetry.
-func knowledgeEventsPathFor(workspaceRoot string) string {
-	return telemetry.Path(workspaceRoot)
 }

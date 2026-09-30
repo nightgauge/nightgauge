@@ -126,7 +126,7 @@ export type CreationManifestEntry = z.infer<typeof CreationManifestEntrySchema>;
 
 /**
  * Top-level manifest. One file per creation flow, written to
- * `.nightgauge/pipeline/issue-create-manifest-<timestamp>.json`.
+ * `<git-common-dir>/nightgauge/pipeline/issue-create-manifest-<timestamp>.json`.
  */
 export const CreationManifestSchema = z
   .object({

@@ -14,7 +14,8 @@ describe("SettingsHtml automations section", () => {
     // General subsection
     expect(html).toContain('data-path="automations.enabled"');
     expect(html).toContain('data-path="automations.dry_run"');
-    expect(html).toContain('data-path="automations.log_file"');
+    // The automation log lives in the clone's logs directory; no setting (#2037).
+    expect(html).not.toContain('data-path="automations.log_file"');
 
     // Triggers subsection
     expect(html).toContain("Configured Triggers");
@@ -22,7 +23,6 @@ describe("SettingsHtml automations section", () => {
     // Labels
     expect(html).toContain("Enabled");
     expect(html).toContain("Dry Run");
-    expect(html).toContain("Log File");
 
     // Subsection titles
     expect(html).toContain("General");
@@ -41,9 +41,6 @@ describe("SettingsHtml automations section", () => {
     expect(dryRunMatch).toBeTruthy();
     expect(dryRunMatch![0]).not.toContain("checked");
 
-    // log_file defaults to '.nightgauge/automations.log'
-    expect(html).toMatch(/id="automations\.log_file"[^>]*value="\.nightgauge\/automations\.log"/);
-
     // triggers count shows "0 triggers"
     expect(html).toContain("0 triggers configured");
   });
@@ -53,7 +50,6 @@ describe("SettingsHtml automations section", () => {
     config.automations = {
       enabled: false,
       dry_run: true,
-      log_file: "/var/log/automations.jsonl",
       triggers: [
         {
           name: "notify-on-review",
@@ -76,9 +72,6 @@ describe("SettingsHtml automations section", () => {
     // dry_run is true (checked)
     expect(html).toMatch(/id="automations\.dry_run"[^>]*checked/);
 
-    // log_file reflects custom value
-    expect(html).toMatch(/id="automations\.log_file"[^>]*value="\/var\/log\/automations\.jsonl"/);
-
     // triggers count shows "2 triggers"
     expect(html).toContain("2 triggers configured");
   });
@@ -87,7 +80,7 @@ describe("SettingsHtml automations section", () => {
     const config = getDefaultConfig() as NightgaugeConfig;
     const sources: ConfigSourceMap = {
       "automations.enabled": "project",
-      "automations.log_file": "local",
+      "automations.dry_run": "local",
     };
 
     // merged view shows badges

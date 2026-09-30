@@ -228,7 +228,7 @@ func TestTelemetryStageErrorNotEmittedOnEscalation(t *testing.T) {
 }
 
 func TestTelemetryStageCompletedEmitted(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := gitWorkspace(t)
 	mock := &mockTelemetry{}
 	// Only create the skill file for issue-pickup. After it succeeds (and the
 	// mock writes the output context — see mockAlwaysSucceedStageRunner),
@@ -334,7 +334,7 @@ func TestTelemetryServiceInterfaceSatisfied(t *testing.T) {
 // TestPersistQueueSyncsSnapshot verifies persistQueue mirrors the queue to the
 // platform, mapping status/priority and filtering terminal items.
 func TestPersistQueueSyncsSnapshot(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := gitWorkspace(t)
 	mock := &mockTelemetry{}
 	s := buildTelemetryTestScheduler(t, tmpDir, mock, &mockAlwaysSucceedStageRunner{}, nil)
 	s.workspaceRoot = tmpDir

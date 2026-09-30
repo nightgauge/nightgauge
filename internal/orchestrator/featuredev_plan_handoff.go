@@ -26,9 +26,12 @@ const featureDevPlanHandoffFileListCap = 60
 //
 // It returns "" when there is no planning context or no readable plan, which
 // keeps a fast-tracked stage's prompt byte-identical. A plan_file outside the
-// worktree is never read (resolvePlanInsideWorktree).
+// plans directory is never read (resolvePlanFile).
 func renderPlanHandoffForPrompt(workspace string, issueNumber int) string {
-	planningPath := stagecontext.ContextPath(workspace, issueNumber, "planning")
+	planningPath, err := stagecontext.ContextPath(workspace, issueNumber, "planning")
+	if err != nil {
+		return ""
+	}
 	if info, err := os.Stat(planningPath); err != nil || !info.Mode().IsRegular() {
 		return ""
 	}
@@ -45,7 +48,7 @@ func renderPlanHandoffForPrompt(workspace string, issueNumber int) string {
 	if json.Unmarshal(raw, &planning) != nil || strings.TrimSpace(planning.PlanFile) == "" {
 		return ""
 	}
-	planPath, err := resolvePlanInsideWorktree(workspace, planning.PlanFile)
+	planPath, err := resolvePlanFile(workspace, planning.PlanFile)
 	if err != nil {
 		return ""
 	}

@@ -68,7 +68,7 @@ elif [ "${VERIFY_UI_RAN:-false}" = "true" ] && [ "${VERIFY_UI_PASSED:-false}" = 
   VALIDATION_STATUS="failed"
 fi
 
-CONTEXT_FILE=".nightgauge/pipeline/validate-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline validate-${ISSUE_NUMBER}.json)"
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 jq -n \
@@ -178,7 +178,7 @@ jq -n \
     feedback: $feedback,
     notes: $notes,
     created_at: $created_at
-  }' > "$CONTEXT_FILE"
+  }' | nightgauge layout write pipeline "validate-${ISSUE_NUMBER}.json" >/dev/null
 
 jq . "$CONTEXT_FILE" > /dev/null || \
   { echo "ERROR: validate context JSON invalid" >&2; exit 1; }

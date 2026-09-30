@@ -20,6 +20,10 @@ import {
 } from "../../scripts/demo-session";
 import { getDefaultAuditFilters } from "../../src/services/AuditLogService";
 import { LocalAuditFallbackService } from "../../src/services/LocalAuditFallbackService";
+import { pipelineStateDir } from "../../src/utils/cloneLayout";
+
+/** The source stages the demo's per-clone pipeline data in the tree (#2037). */
+const STAGED_PIPELINE_DIR = path.join(".nightgauge", "pipeline");
 
 let home: string;
 beforeEach(() => {
@@ -34,11 +38,15 @@ function plan(extra: string[] = []) {
 }
 
 /** Every file in `dir`, relative, with its content. */
-function snapshot(dir: string): Record<string, string> {
+function snapshot(
+  dir: string,
+  skip: (rel: string) => boolean = () => false
+): Record<string, string> {
   const out: Record<string, string> = {};
   const walk = (at: string) => {
     for (const entry of fs.readdirSync(at, { withFileTypes: true })) {
       const full = path.join(at, entry.name);
+      if (skip(path.relative(dir, full))) continue;
       if (entry.isDirectory()) walk(full);
       else out[path.relative(dir, full)] = fs.readFileSync(full, "utf8");
     }
@@ -142,10 +150,21 @@ describe("preparing a demo session", () => {
     fs.writeFileSync(p.startFile!, "");
     prepareDemoSession(p, DEMO_WORKSPACE, epoch);
     expect(snapshot(p.workspace)).toEqual(first);
-    // The same files, less the history ones, which are named by their day.
+    // The working tree holds the source's files less the staged per-clone
+    // data, and nothing under .git but the clone's data came from the source.
+    const isGit = (rel: string) => rel === ".git";
+    const isStaged = (rel: string) => rel === STAGED_PIPELINE_DIR;
+    expect(Object.keys(snapshot(p.workspace, isGit))).toEqual(
+      Object.keys(snapshot(DEMO_WORKSPACE, isStaged))
+    );
+    // The per-clone data moved into the clone's pipeline directory: the same
+    // files, less the history ones, which are named by their day.
     const notHistory = (files: Record<string, string>) =>
-      Object.keys(files).filter((f) => !f.startsWith(HISTORY_DIR));
-    expect(notHistory(first)).toEqual(notHistory(snapshot(DEMO_WORKSPACE)));
+      Object.keys(files).filter((f) => !f.startsWith("history"));
+    expect(notHistory(snapshot(pipelineStateDir(p.workspace)))).toEqual(
+      notHistory(snapshot(path.join(DEMO_WORKSPACE, STAGED_PIPELINE_DIR)))
+    );
+    expect(fs.existsSync(path.join(p.workspace, STAGED_PIPELINE_DIR))).toBe(false);
     expect(fs.readFileSync(p.eventLog, "utf8")).toBe("");
     expect(fs.existsSync(p.startFile!)).toBe(false);
   });
@@ -161,9 +180,16 @@ describe("preparing a demo session", () => {
   });
 });
 
-/** Every run record in a workspace's history, oldest file first, in file order. */
+/**
+ * Every run record in a workspace's history, oldest file first, in file order:
+ * the source's staged history for {@link DEMO_WORKSPACE}, the clone's history
+ * (where the extension reads it) for a prepared session workspace.
+ */
 function historyRecords(root: string): Array<{ file: string; recorded_at: string }> {
-  const dir = path.join(root, HISTORY_DIR);
+  const dir =
+    root === DEMO_WORKSPACE
+      ? path.join(root, HISTORY_DIR)
+      : path.join(pipelineStateDir(root), "history");
   return fs
     .readdirSync(dir)
     .filter((f) => f.endsWith(".jsonl"))

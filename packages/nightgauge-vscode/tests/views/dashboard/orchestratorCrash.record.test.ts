@@ -19,6 +19,7 @@ import { getProgressBarHtml } from "../../../src/views/dashboard/DashboardCompon
 import { DashboardState } from "../../../src/views/dashboard/DashboardState";
 import { getHistoryHtml } from "../../../src/views/dashboard/tabs/PipelineTabHtml";
 import { createMockMemento } from "../../mocks/memento";
+import { mkFakeCloneLayout } from "../../helpers/cloneLayout";
 
 const FIXTURE_ROOT = join(__dirname, "..", "..", "fixtures");
 const CRASH_LINE = readFileSync(
@@ -36,11 +37,13 @@ const PHANTOM_LINE = readFileSync(
 
 describe("orchestrator-crash history records (#447)", () => {
   let root: string;
+  let historyDir: string;
 
   beforeEach(() => {
     ExecutionHistoryReader.clearCache();
     root = mkdtempSync(join(tmpdir(), "ng-orchestrator-crash-"));
-    mkdirSync(join(root, ".nightgauge", "pipeline", "history"), { recursive: true });
+    historyDir = join(mkFakeCloneLayout(root).pipeline, "history");
+    mkdirSync(historyDir, { recursive: true });
   });
 
   afterEach(() => {
@@ -50,7 +53,7 @@ describe("orchestrator-crash history records (#447)", () => {
 
   function writeBothPopulations(): void {
     writeFileSync(
-      join(root, ".nightgauge", "pipeline", "history", "2026-08-11.jsonl"),
+      join(historyDir, "2026-08-11.jsonl"),
       `${CRASH_LINE}\n${PHANTOM_LINE}\n${unmarkedCrashLine()}\n`
     );
   }
@@ -84,7 +87,7 @@ describe("orchestrator-crash history records (#447)", () => {
       branch: "",
     });
     writeFileSync(
-      join(root, ".nightgauge", "pipeline", "history", "index.json"),
+      join(historyDir, "index.json"),
       JSON.stringify({
         schema_version: "1",
         // Keep the index newer than the JSONL so only the schema-version gate
@@ -125,10 +128,7 @@ describe("orchestrator-crash history records (#447)", () => {
       },
     ],
   ])("%s filters the captured crash shape when its marker is absent", async (_name, read) => {
-    writeFileSync(
-      join(root, ".nightgauge", "pipeline", "history", "2026-08-11.jsonl"),
-      `${unmarkedCrashLine()}\n`
-    );
+    writeFileSync(join(historyDir, "2026-08-11.jsonl"), `${unmarkedCrashLine()}\n`);
 
     expect(await read()).toBe(0);
   });
@@ -149,10 +149,7 @@ describe("orchestrator-crash history records (#447)", () => {
       },
     ],
   ])("%s does not exempt a different terminal-failure marker", async (_name, read) => {
-    writeFileSync(
-      join(root, ".nightgauge", "pipeline", "history", "2026-08-11.jsonl"),
-      `${differentlyMarkedCrashLine()}\n`
-    );
+    writeFileSync(join(historyDir, "2026-08-11.jsonl"), `${differentlyMarkedCrashLine()}\n`);
 
     expect(await read()).toBe(0);
   });
@@ -229,7 +226,7 @@ describe("orchestrator-crash history records (#447)", () => {
     retry.completed_at = "2026-08-11T02:10:00Z";
     retry.recorded_at = "2026-08-11T02:10:00Z";
     writeFileSync(
-      join(root, ".nightgauge", "pipeline", "history", "2026-08-11.jsonl"),
+      join(historyDir, "2026-08-11.jsonl"),
       `${CRASH_LINE}\n${JSON.stringify(retry)}\n`
     );
 

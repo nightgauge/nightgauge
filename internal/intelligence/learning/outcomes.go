@@ -155,6 +155,11 @@ func (r *Recorder) Record(outcome Outcome) error {
 		outcome.ActualSize = r.actualSizeFromRuntime(outcome)
 	}
 
+	if r.filePath == "" {
+		// Never write relative to the cwd: report why the history directory
+		// did not resolve ("not a git repository").
+		return fmt.Errorf("record outcome: %w", pipelineStateDirErr(r.workspaceRoot))
+	}
 	if err := os.MkdirAll(filepath.Dir(r.filePath), 0755); err != nil {
 		return fmt.Errorf("create outcome dir: %w", err)
 	}
@@ -422,6 +427,18 @@ func pipelineStateDir(workspaceRoot string) string {
 		return ""
 	}
 	return dir
+}
+
+// pipelineStateDirErr is the error pipelineStateDir swallowed.
+func pipelineStateDirErr(workspaceRoot string) error {
+	abs, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	if _, err := layout.PipelineStateDir(abs); err != nil {
+		return err
+	}
+	return fmt.Errorf("pipeline state directory for %q did not resolve", workspaceRoot)
 }
 
 // historyFilePath is name inside workspaceRoot's pipeline history directory,

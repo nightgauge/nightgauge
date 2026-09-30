@@ -60,7 +60,10 @@ func ledgerDaemonCoverageFindings(workspaceRoot string, now time.Time) ([]Findin
 		return nil, fmt.Sprintf("pid %d is not heartbeating — see serve_lease", holder.PID)
 	}
 
-	path := gh.DefaultLedgerPath(workspaceRoot)
+	path, err := gh.DefaultLedgerPath(workspaceRoot)
+	if err != nil {
+		return nil, fmt.Sprintf("the ledger could not be located: %v", err)
+	}
 	since := now.Add(-ledgerCoverageWindow)
 	records, err := gh.ReadLedgerSince(path, since)
 	// A ledger file that does not exist at all is not an unreadable ledger —

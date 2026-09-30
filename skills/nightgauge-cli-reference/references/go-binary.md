@@ -47,6 +47,13 @@ nightgauge health gate-metrics --json
 nightgauge skills usage --json                          # skill-usage telemetry (#3957)
 nightgauge exit-records tail
 
+# Per-clone data layout (ADR-024 § 7): pipeline, plans, retros, logs
+nightgauge layout                                       # whole layout as JSON
+nightgauge layout path pipeline issue-42.json           # absolute path to read
+jq -n '{…}' | nightgauge layout write pipeline issue-42.json   # atomic write
+nightgauge layout write plans 42-slug.md --from /tmp/plan.md
+echo '{…}' | nightgauge layout append pipeline history/events.jsonl
+
 # Hooks (invoked by the plugin's hooks.json wrappers, not by hand)
 nightgauge hook <subcommand>
 ```
@@ -56,6 +63,16 @@ repo `nightgauge` — pass `--owner` / `--repo` for other targets.
 
 ## Gotchas
 
+- Per-clone data (`pipeline`, `plans`, `retros`, `logs`) lives in
+  `<git-common-dir>/nightgauge/<class>/`, not in the working tree, and a linked
+  worktree shares the main clone's. Never hard-code it and never write under
+  the git directory by path: read at `$(nightgauge layout path <class> <name>)`,
+  write with `nightgauge layout write <class> <name>` (stdin or `--from FILE`;
+  atomic, confined to the class directory, prints the path) and append with
+  `nightgauge layout append`. `nightgauge layout` prints the whole layout as JSON
+  (`schema_version`, `root`, `git_common_dir`, `clone`, `pipeline`, `plans`,
+  `retros`, `logs`, `state`, `cache`, `runtime`); outside a git repository every
+  `layout` command fails with `not a git repository`.
 - Prefer the binary over hand-rolled GraphQL/bash for board, epic, and sub-issue
   operations — it encodes the routing/field rules that caused incidents like
   #3232 when done by hand.

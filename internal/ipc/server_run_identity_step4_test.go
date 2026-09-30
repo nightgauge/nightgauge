@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -30,7 +31,7 @@ import (
 // transition persists under {workspaceRoot}/.nightgauge/pipeline.
 func newRunIdentityTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := layouttest.Repo(t)
 	s := &Server{
 		writer:         &bytes.Buffer{},
 		methods:        make(map[string]Handler),
@@ -38,7 +39,7 @@ func newRunIdentityTestServer(t *testing.T) (*Server, string) {
 		workspaceRoot:  workspaceRoot,
 	}
 	s.registerMethods()
-	return s, filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	return s, layouttest.PipelineDir(t, workspaceRoot)
 }
 
 // mustMarshal renders a production param struct to the wire form the handler

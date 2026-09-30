@@ -4,7 +4,7 @@
  * Mirrors internal/intelligence/survival/record.go (#4151, spike #4134):
  * field names match the Go struct's JSON tags exactly (snake_case) so a
  * survival record round-trips unchanged between the Go-written
- * `.nightgauge/pipeline/survival-records.jsonl` journal and TS readers.
+ * `<git-common-dir>/nightgauge/pipeline/survival-records.jsonl` journal and TS readers.
  *
  * This schema module is capture/detection-agnostic — it only describes the
  * record shape. Calibration (#4152/#4153) lives in OutcomeRecorder.ts and

@@ -43,7 +43,7 @@ import {
   pipelineStateDir,
   retrosDir as cloneRetrosDir,
   cloneLogsDir,
-  RELATIVE_PIPELINE_STATE_DIR,
+  PIPELINE_STATE_DISPLAY,
   isUsableWorkspaceRoot,
 } from "../utils/cloneLayout";
 import * as fs from "node:fs/promises";
@@ -1910,7 +1910,7 @@ export class AutoRetroService {
         "Review failing tests or type errors. Fix implementation before re-running.",
       "stall-kill":
         "Open the stall diagnostic at " +
-        RELATIVE_PIPELINE_STATE_DIR +
+        PIPELINE_STATE_DISPLAY +
         "/history/<issue>/<stage>-stalled.log to see the last stdout/stderr captured before the kill. Common causes: a Bash command hung in the subagent, an infinite tool loop, or a stop-hook deadlock. Increase pipeline.stage_hard_caps if the stage is legitimately long; otherwise resume after addressing the hang.",
       "cost-cap":
         "The per-stage cost cap fired before BudgetEnforcer's estimate-vs-actual grace landed, which usually indicates a runaway tool loop. Inspect token usage by tool to find the loop, then either increase the cap (pipeline.stage_cost_caps) or fix the loop. Re-running without addressing the cause will hit the cap again.",
@@ -1920,7 +1920,7 @@ export class AutoRetroService {
         "The Claude CLI's stop-hook fired with an error and the subagent went silent. The most common source (#3234) is the nightgauge plugin's own Stop hook (`claude-plugins/nightgauge/hooks/stop-verification.sh`) failing because the `nightgauge` Go binary is not resolvable — typically when a stage runs in a worktree (`pipeline.worktree.enabled: true`) where `bin/nightgauge` was never built. Verify the binary is on PATH (`command -v nightgauge`) or in the canonical repo's `bin/`. After PR #3234 ships, the hook skips gracefully when the binary is unresolvable; if you still see this category, check `~/.claude/settings.json` for a user-defined Stop hook and inspect the failing hook's stderr.",
       "skill-no-op":
         "The stage's LLM path reported success but the deterministic post-condition gate found the work never landed (pr-merge: the PR is not merged; pr-create: no open PR exists). Inspect `" +
-        RELATIVE_PIPELINE_STATE_DIR +
+        PIPELINE_STATE_DISPLAY +
         "/<stage>-<N>.json` for the verification result, then verify the gate/fallback path in PR_MERGE_STAGE.md / PR_CREATE_STAGE.md. Re-running without addressing the gate will repeat the no-op.",
       "merge-blocked":
         "The PR cannot merge as-is and the pipeline correctly declined — this is not a pipeline bug. Resolve the named blocker on the PR: fix/re-run the failing check, satisfy the required review, or rebase a behind/conflicting branch. The issue is parked in 'In review'; re-queue once the PR is mergeable, or merge it manually if the failing check is non-blocking.",
@@ -1948,7 +1948,7 @@ export class AutoRetroService {
         "The stage wrote into a repository it does not own (#129). It exited 0 and reported success, so no other signal marks the run failed. Attribute the out-of-worktree writes before touching anything: the containment record names the files and the repository. Then fix why the stage reached outside — usually a hard-coded path or a sibling-repo edit that belongs in its own session — rather than re-running and writing there again.",
       "validation-inconclusive":
         "A validation tier ran and executed zero tests, so the suite proved nothing while reporting no failures. There is no failing test to open. Check the tier's target paths and tag filters (`exclude-tags`, the test-execution record under `" +
-        RELATIVE_PIPELINE_STATE_DIR +
+        PIPELINE_STATE_DISPLAY +
         "/`) against where the change actually landed — a green suite that ran nothing is the failure mode this kind exists to name.",
       "credential-failure":
         "Fix the machine's git/forge credentials, then re-queue — the work itself was never attempted. Check the remote's scheme against what is configured (`git remote -v`): an SSH remote needs a loaded agent key, an HTTPS remote needs a credential helper or a token the forge still accepts. `Bad credentials` / HTTP 401 from the API means the token is present but rejected, so every board read, PR create and merge in the run would have failed the same way. Do NOT re-run at a higher model tier: no model can supply a credential, which is why the escalation gate declines this class (#878).",

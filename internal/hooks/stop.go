@@ -100,7 +100,8 @@ func EvaluateStop(workdir string) StopResult {
 }
 
 // writeStopHookSentinel records that EvaluateStop returned OK=false into
-// .nightgauge/pipeline/stop-hook-status-{N}.json. Best-effort: any error
+// stop-hook-status-{N}.json in the clone's pipeline state directory
+// (layout.PipelineStateDir). Best-effort: any error
 // is silently ignored — hasUncommittedWork() in the scheduler is the fallback
 // detection path. The scheduler removes the sentinel after reading it.
 // Issue #3542.
@@ -189,8 +190,8 @@ func EvaluateStopHookOutput(workdir string) ([]byte, error) {
 }
 
 // findPlanFile locates the plan file for the current issue.
-// It checks .nightgauge/plans/ for issue-numbered plan files,
-// then falls back to PLAN.md in the working directory.
+// It checks the clone's plans directory (layout.PlansDir) for issue-numbered
+// plan files, then falls back to PLAN.md in the working directory.
 func findPlanFile(workdir string) string {
 	// Try issue-specific plan from branch name
 	issueNum := getIssueNumberFromBranch(workdir)

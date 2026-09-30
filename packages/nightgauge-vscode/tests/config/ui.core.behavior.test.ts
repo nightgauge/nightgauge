@@ -29,8 +29,6 @@ export const DEFAULT_UI_CORE_CONFIG: UICoreConfig = {
   adapter: "claude",
   auth_provider: "max",
   default_model: "sonnet",
-  context_path: ".nightgauge/pipeline",
-  plans_path: ".nightgauge/plans",
 };
 
 /**
@@ -172,63 +170,6 @@ describe("ui.core.behavior", () => {
 
     it("defaults to sonnet", () => {
       expect(DEFAULT_CONFIG.ui?.core?.default_model).toBe("sonnet");
-    });
-  });
-
-  // ============================================================================
-  // context_path - Behavior Tests
-  // ============================================================================
-
-  describe("context_path", () => {
-    it("determines where context files are stored", () => {
-      const config = createMockUICoreConfig({
-        context_path: ".custom/context",
-      });
-
-      const getContextFilePath = (cfg: typeof config, issueNumber: number): string => {
-        return `${cfg.context_path}/issue-${issueNumber}.json`;
-      };
-
-      expect(getContextFilePath(config, 42)).toBe(".custom/context/issue-42.json");
-    });
-
-    it("accepts any string path", () => {
-      const result = UICoreConfigSchema.safeParse({
-        context_path: "/absolute/path/to/context",
-      });
-      expect(result.success).toBe(true);
-    });
-
-    it("defaults to .nightgauge/pipeline", () => {
-      expect(DEFAULT_CONFIG.ui?.core?.context_path).toBe(".nightgauge/pipeline");
-    });
-  });
-
-  // ============================================================================
-  // plans_path - Behavior Tests
-  // ============================================================================
-
-  describe("plans_path", () => {
-    it("determines where plan files are stored", () => {
-      const config = createMockUICoreConfig({ plans_path: ".custom/plans" });
-
-      const getPlanFilePath = (cfg: typeof config, issueNumber: number, title: string): string => {
-        const slug = title.toLowerCase().replace(/\s+/g, "-");
-        return `${cfg.plans_path}/${issueNumber}-${slug}.md`;
-      };
-
-      expect(getPlanFilePath(config, 42, "Add Feature")).toBe(".custom/plans/42-add-feature.md");
-    });
-
-    it("accepts any string path", () => {
-      const result = UICoreConfigSchema.safeParse({
-        plans_path: "docs/plans",
-      });
-      expect(result.success).toBe(true);
-    });
-
-    it("defaults to .nightgauge/plans", () => {
-      expect(DEFAULT_CONFIG.ui?.core?.plans_path).toBe(".nightgauge/plans");
     });
   });
 

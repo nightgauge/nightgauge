@@ -99,7 +99,7 @@ Look for dev context file from `/feature-dev`:
 
 ```bash
 # Check for dev context
-CONTEXT_FILE=".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)"
 
 if [ -f "$CONTEXT_FILE" ]; then
   echo "Found dev context: $CONTEXT_FILE"
@@ -598,7 +598,8 @@ Write documentation context for pipeline continuity:
 }
 ```
 
-Save to `.nightgauge/pipeline/docgen-{N}.json`.
+Save it with `nightgauge layout write pipeline docgen-{N}.json` (content on
+stdin, or `--from FILE` after writing a temp file outside the git directory).
 
 #### Step 6.2: Final Report
 

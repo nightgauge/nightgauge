@@ -197,14 +197,15 @@ if [ "$CONFIG_AUTO_INDEX" = "true" ] && [ -d "$KNOWLEDGE_DIR" ]; then
 fi
 
 # Write issue_closed and issue_closed_verified to pr-{N}.json for pipeline history
-MERGE_CONTEXT_FILE=".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json"
+MERGE_CONTEXT_FILE="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
 if [ -f "$MERGE_CONTEXT_FILE" ]; then
   TMP_FILE=$(mktemp)
   if jq --argjson issue_closed "$ISSUE_CLOSED" \
        --argjson issue_closed_verified "$CLOSE_VERIFIED" \
     '.issue_closed = $issue_closed | .issue_closed_verified = $issue_closed_verified' \
-    "$MERGE_CONTEXT_FILE" > "$TMP_FILE" 2>/dev/null; then
-    mv "$TMP_FILE" "$MERGE_CONTEXT_FILE"
+    "$MERGE_CONTEXT_FILE" > "$TMP_FILE" 2>/dev/null &&
+    nightgauge layout write pipeline "pr-${ISSUE_NUMBER}.json" --from "$TMP_FILE" >/dev/null; then
+    rm -f "$TMP_FILE"
   else
     rm -f "$TMP_FILE"
     echo "WARNING: Failed to write issue_closed/issue_closed_verified to $MERGE_CONTEXT_FILE" >&2
@@ -273,8 +274,8 @@ the epic branch (not main):
 # feature branch comes from the pickup context, not from HEAD.
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-BRANCH=$(jq -r '.branch // empty' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json")
-: "${BRANCH:?no branch recorded in .nightgauge/pipeline/issue-${ISSUE_NUMBER}.json}"
+BRANCH=$(jq -r '.branch // empty' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)")
+: "${BRANCH:?no branch recorded in issue-${ISSUE_NUMBER}.json (nightgauge layout path pipeline)}"
 # Branch cleanup (local + remote + prune)
 git fetch --prune
 git branch -d "$BRANCH" 2>/dev/null || git branch -D "$BRANCH" 2>/dev/null || true
@@ -296,7 +297,7 @@ reads the context files for the complexity model feedback loop. Do NOT run
 causing 0-line garbage data in the complexity model.
 
 **Plan artifact cleanup:** For single-issue PRs, plan artifacts
-(`.nightgauge/plans/{N}-*.md`) are cleaned up automatically by the
+(`{N}-*.md` in the clone's plans directory) are cleaned up automatically by the
 HeadlessOrchestrator during `pipeline-finish`.
 
 Batch runs have no `pipeline-finish` owner for their epic-keyed files, so
@@ -314,11 +315,11 @@ as warnings and do not block the pipeline.
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Read context files (all guaranteed available at this phase)
-ISSUE_NUMBER=$(jq -r '.issue_number' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null || echo "$ISSUE_NUMBER")
-PR_NUMBER=$(jq -r '.pr_number' ".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json" 2>/dev/null || echo "$PR_NUMBER")
-MODEL_USED=$(jq -r '.quality_checks.model_used // "claude-sonnet-4-6"' ".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json" 2>/dev/null || echo "claude-sonnet-4-6")
-PREDICTED_SIZE=$(jq -r '.complexity.label // "M"' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null || echo "M")
-ISSUE_TYPE=$(jq -r '.issue_type // "feature"' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/ /_/g' || echo "feature")
+ISSUE_NUMBER=$(jq -r '.issue_number' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "$ISSUE_NUMBER")
+PR_NUMBER=$(jq -r '.pr_number' "$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "$PR_NUMBER")
+MODEL_USED=$(jq -r '.quality_checks.model_used // "claude-sonnet-4-6"' "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "claude-sonnet-4-6")
+PREDICTED_SIZE=$(jq -r '.complexity.label // "M"' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "M")
+ISSUE_TYPE=$(jq -r '.issue_type // "feature"' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sed 's/ /_/g' || echo "feature")
 
 # Get actual lines changed via Go binary (additions/deletions fields added in #2668)
 ACTUAL_LINES=0
@@ -418,11 +419,11 @@ fi
 if [ -z "$BINARY" ]; then
   echo "WARNING: batch cleanup skipped — nightgauge binary not found; batch context files remain"
 else
-  for BATCH_DEV in .nightgauge/pipeline/dev-batch-*.json; do
+  for BATCH_DEV in "$(nightgauge layout path pipeline)"/dev-batch-*.json; do
     [ -f "$BATCH_DEV" ] || continue                     # no batch files at all
     E=$(jq -r '.epic_number // empty' "$BATCH_DEV")
     [ -n "$E" ] || continue
-    BATCH_PR=$(jq -r '.pr_number // empty' ".nightgauge/pipeline/pr-${E}.json" 2>/dev/null)
+    BATCH_PR=$(jq -r '.pr_number // empty' "$(nightgauge layout path pipeline pr-${E}.json)" 2>/dev/null)
     [ -n "$BATCH_PR" ] || continue                      # PR not created yet — keep
     MERGED_AT=$("$BINARY" pr view "$BATCH_PR" --json 2>/dev/null | jq -r '.mergedAt // empty')
     [ -n "$MERGED_AT" ] || continue                     # not merged — another run owns it
@@ -430,12 +431,12 @@ else
     # Every epic-keyed artifact the batch path produces (see
     # skills/_shared/BATCH_MODE.md). pr-{E}.json is the consequential one: it
     # shares a namespace with a later single-issue run for issue #E.
-    rm -f ".nightgauge/pipeline/batch-${E}.json" \
-          ".nightgauge/pipeline/planning-batch-${E}.json" \
-          ".nightgauge/pipeline/validate-${E}.json" \
-          ".nightgauge/pipeline/pr-${E}.json" \
+    rm -f "$(nightgauge layout path pipeline batch-${E}.json)" \
+          "$(nightgauge layout path pipeline planning-batch-${E}.json)" \
+          "$(nightgauge layout path pipeline validate-${E}.json)" \
+          "$(nightgauge layout path pipeline pr-${E}.json)" \
           "$BATCH_DEV"
-    rm -f .nightgauge/plans/${E}-*.md
+    rm -f "$(nightgauge layout path plans)"/${E}-*.md
     echo "Batch cleanup: removed context files and plan artifacts for epic #${E} (PR #${BATCH_PR})"
   done
 fi

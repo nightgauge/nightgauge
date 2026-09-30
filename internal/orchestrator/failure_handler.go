@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/failure"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/terminalkind"
 )
@@ -682,7 +683,7 @@ const (
 	HoldNone = ""
 	// HoldArchitectureApproval — released by the grant the gate itself reads:
 	// the configured approval label on the issue (default
-	// `approved:architecture`), or `.nightgauge/pipeline/approval-<n>.json`
+	// `approved:architecture`), or `.git/nightgauge/pipeline/approval-<n>.json`
 	// with `{"approved": true}`. Both are what `nightgauge approval-gate`
 	// consults, so the reconcile and the gate cannot disagree about whether a
 	// human approved the decision.
@@ -815,8 +816,12 @@ func writeCurrentRunSidecar(workspaceRoot string, sc CurrentRunSidecar) error {
 	if workspaceRoot == "" {
 		return nil
 	}
-	p := filepath.Join(workspaceRoot, currentRunSidecarFile)
-	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+	dir, err := layout.PipelineStateDir(workspaceRoot)
+	if err != nil {
+		return fmt.Errorf("resolve sidecar dir: %w", err)
+	}
+	p := filepath.Join(dir, currentRunSidecarFile)
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create sidecar dir: %w", err)
 	}
 	data, err := json.MarshalIndent(sc, "", "  ")
@@ -839,7 +844,7 @@ func removeCurrentRunSidecar(workspaceRoot string) {
 	if workspaceRoot == "" {
 		return
 	}
-	p := filepath.Join(workspaceRoot, currentRunSidecarFile)
+	p := pipelineStatePath(workspaceRoot, currentRunSidecarFile)
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		log.Printf("failure: failed to remove current-run sidecar: %v", err)
 	}
@@ -851,7 +856,7 @@ func readCurrentRunSidecar(workspaceRoot string) (*CurrentRunSidecar, error) {
 	if workspaceRoot == "" {
 		return nil, nil
 	}
-	p := filepath.Join(workspaceRoot, currentRunSidecarFile)
+	p := pipelineStatePath(workspaceRoot, currentRunSidecarFile)
 	data, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
 		return nil, nil

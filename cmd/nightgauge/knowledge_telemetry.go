@@ -104,18 +104,20 @@ exit code can be ignored because telemetry must never fail a user-facing op.`,
 			if err := telemetry.Emit(workdir, ev); err != nil {
 				return fmt.Errorf("emit event: %w", err)
 			}
+			// Emit resolved the same path, so this cannot fail now.
+			eventsPath, _ := telemetry.Path(workdir)
 
 			if outputJSON {
 				out := map[string]any{
 					"recorded": true,
 					"type":     string(et),
-					"path":     telemetry.Path(workdir),
+					"path":     eventsPath,
 				}
 				enc := json.NewEncoder(os.Stdout)
 				enc.SetIndent("", "  ")
 				return enc.Encode(out)
 			}
-			fmt.Printf("Recorded %s event → %s\n", et, telemetry.Path(workdir))
+			fmt.Printf("Recorded %s event → %s\n", et, eventsPath)
 			return nil
 		},
 	}

@@ -8,10 +8,11 @@
  */
 
 import {
+  isUsableWorkspaceRoot,
+  listCloneFiles,
   pipelineStateDir,
   plansDir as clonePlansDir,
-  resolveCloneSetting,
-  RELATIVE_PIPELINE_STATE_DIR,
+  primeCloneLayouts,
 } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
@@ -32,12 +33,7 @@ import {
   getStageLabel,
   type SkillRunCallbacks,
 } from "../utils/skillRunner";
-import {
-  getSettings,
-  getWorkspaceRoot,
-  getNightgaugeRoot,
-  getWorkItemSourceConfig,
-} from "../config/settings";
+import { getWorkspaceRoot, getNightgaugeRoot, getWorkItemSourceConfig } from "../config/settings";
 import type { IWorkItemProvider } from "../services/types/WorkItemProvider";
 
 import { getOutputWindowSettings } from "../config/outputWindowSettings";
@@ -667,6 +663,9 @@ export async function initializeServices(
   const workspaceRootForNightgauge = getWorkspaceRoot();
   if (workspaceRootForNightgauge) {
     nightgaugeRoot = await getNightgaugeRoot(workspaceRootForNightgauge);
+    // Fill the clone-layout cache for the git root before any service reads
+    // per-clone data, so the synchronous helpers never spawn git (#2037).
+    await primeCloneLayouts([nightgaugeRoot]);
     logger.info("Resolved nightgauge root", {
       workspaceRoot: workspaceRootForNightgauge,
       nightgaugeRoot,
@@ -1299,7 +1298,7 @@ export async function initializeServices(
   // not match the repo that contains it, is cross-contamination from a
   // concurrent multi-repo run — ignore it AND delete it so it can never be
   // resurrected as a zombie run in a repo that never ran the issue.
-  if (nightgaugeRoot) {
+  if (isUsableWorkspaceRoot(nightgaugeRoot)) {
     const pipelineDir = pipelineStateDir(nightgaugeRoot);
     // Best-effort: the "owner/repo" (or short name) of the repo that owns this
     // pipeline dir, for the repo-mismatch check. Undefined → mismatch check is
@@ -1859,7 +1858,7 @@ export async function initializeServices(
         );
         if (funnelTarget) {
           const { owner: failOwner, repo: failRepo } = funnelTarget;
-          const signalPath = nightgaugeRoot
+          const signalPath = isUsableWorkspaceRoot(nightgaugeRoot)
             ? path.join(pipelineStateDir(nightgaugeRoot), `conflict-restart-${issueNumber}.json`)
             : null;
           const conflictRestartCheck = signalPath
@@ -2384,7 +2383,6 @@ export async function initializeServices(
 
   // Initialize project board tree views (one per status tab)
   const workspaceRoot = getWorkspaceRoot();
-  const settings = getSettings();
 
   const workItemSourceConfig = getWorkItemSourceConfig();
   if (workspaceRoot) {
@@ -2738,20 +2736,11 @@ export async function initializeServices(
 
   // ── 11. Context viewer ────────────────────────────────────────────────
 
-  // Initialize context file viewer
-  // Use nightgaugeRoot (git root) for correct .nightgauge directory location
-  // The default context path resolves through the clone-layout helper; a
-  // user override keeps being joined onto the root as before (#2036).
-  const contextPath = nightgaugeRoot
-    ? resolveCloneSetting(
-        nightgaugeRoot,
-        settings.contextPath,
-        RELATIVE_PIPELINE_STATE_DIR,
-        pipelineStateDir,
-        (root, rel) => `${root}/${rel}`
-      )
-    : settings.contextPath;
-  const contextViewer = new ContextFileViewer(contextPath);
+  // Initialize context file viewer over the clone's pipeline directory
+  // (ADR-024 § 7). Without a repository there are no context files to show.
+  const contextViewer = new ContextFileViewer(
+    isUsableWorkspaceRoot(nightgaugeRoot) ? pipelineStateDir(nightgaugeRoot) : ""
+  );
 
   // ── 12. Dashboard & output ────────────────────────────────────────────
 
@@ -3830,38 +3819,22 @@ export async function initializeServices(
             `pr-${issueNumber}.json`,
           ];
 
-          for (const filename of filesToDelete) {
-            const files = await vscode.workspace.findFiles(
-              new vscode.RelativePattern(contextDir, filename)
-            );
-            for (const file of files) {
-              try {
-                await vscode.workspace.fs.delete(file);
-              } catch {
-                // Ignore if file doesn't exist
-              }
-            }
-          }
-
-          // Delete running-*.json files
-          const runningFiles = await vscode.workspace.findFiles(
-            new vscode.RelativePattern(contextDir, "running-*.json")
-          );
-          for (const file of runningFiles) {
+          // Listed from disk: the class dirs live under the git directory,
+          // which `findFiles` never searches (#2037).
+          const files = [
+            ...(await listCloneFiles(contextDir, (n) => filesToDelete.includes(n))),
+            ...(await listCloneFiles(
+              contextDir,
+              (n) => n.startsWith("running-") && n.endsWith(".json")
+            )),
+            ...(await listCloneFiles(
+              plansDir,
+              (n) => n.startsWith(`${issueNumber}-`) && n.endsWith(".md")
+            )),
+          ];
+          for (const file of files) {
             try {
-              await vscode.workspace.fs.delete(file);
-            } catch {
-              // Ignore if file doesn't exist
-            }
-          }
-
-          // Delete plan files for this issue
-          const planFiles = await vscode.workspace.findFiles(
-            new vscode.RelativePattern(plansDir, `${issueNumber}-*.md`)
-          );
-          for (const file of planFiles) {
-            try {
-              await vscode.workspace.fs.delete(file);
+              await vscode.workspace.fs.delete(vscode.Uri.file(file));
             } catch {
               // Ignore if file doesn't exist
             }

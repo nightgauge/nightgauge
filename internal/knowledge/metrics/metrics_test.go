@@ -8,11 +8,12 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func writeFixture(t *testing.T, dir string, events []telemetry.Event) {
 	t.Helper()
-	histDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	histDir := filepath.Join(layouttest.PipelineDir(t, dir), "history")
 	if err := os.MkdirAll(histDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -30,7 +31,7 @@ func writeFixture(t *testing.T, dir string, events []telemetry.Event) {
 }
 
 func TestAggregate_MissingFileReturnsEmpty(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	r, err := Aggregate(dir, 7, 30)
 	if err != nil {
 		t.Fatalf("Aggregate: %v", err)
@@ -47,7 +48,7 @@ func TestAggregate_MissingFileReturnsEmpty(t *testing.T) {
 }
 
 func TestAggregate_WindowFilter(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	inside := now.Add(-3 * 24 * time.Hour).Format(time.RFC3339)
 	outside := now.Add(-30 * 24 * time.Hour).Format(time.RFC3339)
@@ -73,7 +74,7 @@ func TestAggregate_WindowFilter(t *testing.T) {
 }
 
 func TestAggregate_HitRateAndPerStage(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	ts := now.Add(-1 * time.Hour).Format(time.RFC3339)
 	events := []telemetry.Event{
@@ -110,7 +111,7 @@ func TestAggregate_HitRateAndPerStage(t *testing.T) {
 }
 
 func TestAggregate_TopRecalledOrdering(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	ts := now.Add(-1 * time.Hour).Format(time.RFC3339)
 	events := []telemetry.Event{
@@ -138,7 +139,7 @@ func TestAggregate_TopRecalledOrdering(t *testing.T) {
 }
 
 func TestAggregate_UntouchedEntries(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	fresh := now.Add(-2 * 24 * time.Hour).Format(time.RFC3339)
 	old := now.Add(-25 * 24 * time.Hour).Format(time.RFC3339)
@@ -169,7 +170,7 @@ func TestAggregate_UntouchedEntries(t *testing.T) {
 }
 
 func TestAggregate_GraduationHistory(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	t1 := now.Add(-2 * 24 * time.Hour).Format(time.RFC3339)
 	t2 := now.Add(-1 * 24 * time.Hour).Format(time.RFC3339)
@@ -195,7 +196,7 @@ func TestAggregate_GraduationHistory(t *testing.T) {
 }
 
 func TestAggregate_EmptyModeBackfillsManual(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	ts := now.Add(-1 * time.Hour).Format(time.RFC3339)
 	writeFixture(t, dir, []telemetry.Event{
@@ -211,7 +212,7 @@ func TestAggregate_EmptyModeBackfillsManual(t *testing.T) {
 }
 
 func TestAggregate_UnknownStage(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	now := time.Date(2026, 5, 16, 12, 0, 0, 0, time.UTC)
 	ts := now.Add(-1 * time.Hour).Format(time.RFC3339)
 	writeFixture(t, dir, []telemetry.Event{
@@ -227,8 +228,8 @@ func TestAggregate_UnknownStage(t *testing.T) {
 }
 
 func TestAggregate_MalformedLinesSkipped(t *testing.T) {
-	dir := t.TempDir()
-	histDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	dir := layouttest.Repo(t)
+	histDir := filepath.Join(layouttest.PipelineDir(t, dir), "history")
 	if err := os.MkdirAll(histDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -249,10 +250,10 @@ func TestAggregate_MalformedLinesSkipped(t *testing.T) {
 }
 
 func TestAggregate_InvalidArgs(t *testing.T) {
-	if _, err := Aggregate(t.TempDir(), 0, 30); err == nil {
+	if _, err := Aggregate(layouttest.Repo(t), 0, 30); err == nil {
 		t.Error("expected error for windowDays=0")
 	}
-	if _, err := Aggregate(t.TempDir(), 7, -1); err == nil {
+	if _, err := Aggregate(layouttest.Repo(t), 7, -1); err == nil {
 		t.Error("expected error for staleDays<0")
 	}
 }
@@ -265,7 +266,7 @@ func TestAggregate_InvalidArgs(t *testing.T) {
 // case for a base that has never run the pipeline. Reporting an empty trust
 // distribution there would be wrong rather than merely unhelpful.
 func TestAggregate_LifecycleFactsAreIndependentOfTelemetry(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	kb := filepath.Join(root, ".nightgauge", "knowledge", "features")
 
 	write := func(dir, body string) {
@@ -314,7 +315,7 @@ func TestAggregate_LifecycleFactsAreIndependentOfTelemetry(t *testing.T) {
 // TestAggregate_TrustDistributionAlwaysHasThreeBuckets keeps the dashboard
 // from rendering an absent bucket differently from a zero one.
 func TestAggregate_TrustDistributionAlwaysHasThreeBuckets(t *testing.T) {
-	r, err := AggregateAt(t.TempDir(), 7, 30, time.Now())
+	r, err := AggregateAt(layouttest.Repo(t), 7, 30, time.Now())
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -28,12 +28,17 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/platform"
 )
 
-// budgetOverrideRel is the verb's observable side effect: resolving a
-// budget-ceiling card with `raise` writes it under the CARD's repo root.
-var budgetOverrideRel = filepath.Join(".nightgauge", "pipeline", "budget-override.json")
+// budgetOverridePath is the verb's observable side effect: resolving a
+// budget-ceiling card with `raise` writes it in the CARD's repo's pipeline
+// state directory.
+func budgetOverridePath(t *testing.T, root string) string {
+	t.Helper()
+	return filepath.Join(layouttest.PipelineDir(t, root), "budget-override.json")
+}
 
 // twoDaemons builds two independent daemons rooted at two different workspaces,
 // each with its own attention store, and both serving the same repo slug — the
@@ -104,7 +109,7 @@ func TestRelayedResolveIsNotAppliedByADaemonThatDoesNotOwnTheCard(t *testing.T) 
 	}
 	// ...and the verb never ran on either side.
 	for name, root := range map[string]string{"A": daemonA.workspaceRoot, "B": daemonB.workspaceRoot} {
-		if _, err := os.Stat(filepath.Join(root, budgetOverrideRel)); err == nil {
+		if _, err := os.Stat(budgetOverridePath(t, root)); err == nil {
 			t.Errorf("the `raise` verb's side effect landed under workspace %s on a misrouted command", name)
 		}
 	}
@@ -176,10 +181,10 @@ func TestTheOwningDaemonAppliesTheSameRelayedResolve(t *testing.T) {
 	if outcome.NotInThisWorkspace {
 		t.Errorf("the owner reported NotInThisWorkspace for its own card")
 	}
-	if _, err := os.Stat(filepath.Join(daemonA.workspaceRoot, budgetOverrideRel)); err != nil {
+	if _, err := os.Stat(budgetOverridePath(t, daemonA.workspaceRoot)); err != nil {
 		t.Errorf("the verb's side effect is missing under the owner's root: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(daemonB.workspaceRoot, budgetOverrideRel)); err == nil {
+	if _, err := os.Stat(budgetOverridePath(t, daemonB.workspaceRoot)); err == nil {
 		t.Errorf("the owner's verb wrote under the OTHER workspace's root")
 	}
 }

@@ -23,6 +23,8 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // gitInitRepo makes dir a pipeline-shaped run tree: a LINKED worktree on a
@@ -356,24 +358,23 @@ func TestStageRunResult_ShippedPartiallyFieldsPropagate(t *testing.T) {
 //     repo root (a wrong-location decoy).
 //   - When no run-state exists, the lookup falls back to the workspace root.
 func TestBudgetOverrunPathResolution_UsesWorktree(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
+	// The run's tree is its own repository here, so its pipeline state
+	// directory is distinct from the root's and a wrong-root read is
+	// observable. (A linked worktree of root would share root's directory,
+	// ADR-024 § 7.)
 	wt := filepath.Join(root, ".worktrees", "issue-3666")
-	if err := os.MkdirAll(filepath.Join(wt, ".nightgauge", "pipeline"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	wtState := layouttest.MkPipelineDir(t, wt)
 
 	// Decoy at the repo root — pre-fix scheduler reads from here and would
 	// silently miss the worktree file. Post-fix it must NOT consult this.
-	if err := os.MkdirAll(filepath.Join(root, ".nightgauge", "pipeline"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	decoy := filepath.Join(root, ".nightgauge", "pipeline", "budget-overrun-3666.json")
+	decoy := filepath.Join(layouttest.MkPipelineDir(t, root), "budget-overrun-3666.json")
 	if err := os.WriteFile(decoy, []byte(`{"schema_version":"1.1","issue_number":3666,"stage":"pr-create","shipped_partially":false}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	// The real file at the worktree path — what TS HeadlessOrchestrator wrote.
-	real := filepath.Join(wt, ".nightgauge", "pipeline", "budget-overrun-3666.json")
+	real := filepath.Join(wtState, "budget-overrun-3666.json")
 	if err := os.WriteFile(real, []byte(`{"schema_version":"1.1","issue_number":3666,"stage":"pr-create","shipped_partially":true,"shipped_pr_number":4242}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +406,7 @@ func TestBudgetOverrunPathResolution_UsesWorktree(t *testing.T) {
 	// budget-aware retry block — copied verbatim so a regression in either
 	// the path computation OR loadWorktreePath itself fails the test.
 	overrunBase := loadWorktreePath(root, 3666)
-	overrunFile := filepath.Join(overrunBase, ".nightgauge", "pipeline", "budget-overrun-3666.json")
+	overrunFile := pipelineStatePath(overrunBase, fmt.Sprintf("budget-overrun-%d.json", 3666))
 
 	overrun, err := ReadBudgetOverrun(overrunFile)
 	if err != nil {
@@ -423,16 +424,13 @@ func TestBudgetOverrunPathResolution_UsesWorktree(t *testing.T) {
 // workspace-root fallback.
 func TestLoadWorktreePath(t *testing.T) {
 	// No run-state.json — falls back to workspace root.
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if got := loadWorktreePath(root, 3542); got != root {
 		t.Errorf("loadWorktreePath fallback = %q, want %q (workspace root)", got, root)
 	}
 
 	// run-state.json with worktree_path — prefers it.
-	baseDir := filepath.Join(root, ".nightgauge", "pipeline")
-	if err := os.MkdirAll(baseDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	baseDir := layouttest.MkPipelineDir(t, root)
 	wt := filepath.Join(root, ".worktrees", "issue-3542")
 	now := time.Now().UTC().Format(time.RFC3339)
 	rs := &runstate.RunState{
@@ -601,7 +599,7 @@ func (r *stopHookRecoveryRunner) RunStage(_ context.Context, params StageRunPara
 		_ = os.WriteFile(filepath.Join(r.workspaceRoot, "feature.go"),
 			[]byte("package feature\n\n// implemented under #3542\n"), 0o644)
 		// Drop the stop-hook sentinel — the stop hook returned OK=false.
-		sentinel := filepath.Join(r.workspaceRoot, ".nightgauge", "pipeline",
+		sentinel := pipelineStatePath(r.workspaceRoot,
 			"stop-hook-status-"+strconv.Itoa(r.issueNumber)+".json")
 		_ = os.WriteFile(sentinel, []byte(`{"ok":false,"reason":"1 tasks incomplete in PLAN.md"}`), 0o644)
 	}
@@ -663,7 +661,7 @@ func (r *budgetEscalationRunner) RunStage(_ context.Context, params StageRunPara
 // same-model stall-retry / re-plan rewind.
 func TestScheduler_BudgetAwareEscalationOnStallKill(t *testing.T) {
 	stubReconcileGhUnreachable(t)
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	// Enable adaptive stall recovery AND set a low $10 budget ceiling. Without
 	// the budget-aware branch, the stall-kill would rewind to feature-planning;
 	// with it, the >50%-budget condition escalates the model first.
@@ -757,7 +755,7 @@ func TestScheduler3365Recovery(t *testing.T) {
 	}
 
 	// The stop-hook sentinel must be cleaned up by the scheduler after it is read.
-	sentinel := filepath.Join(root, ".nightgauge", "pipeline", "stop-hook-status-8365.json")
+	sentinel := filepath.Join(layouttest.PipelineDir(t, root), "stop-hook-status-8365.json")
 	if _, err := os.Stat(sentinel); !os.IsNotExist(err) {
 		t.Errorf("stop-hook sentinel not cleaned up after recovery; stat err=%v", err)
 	}

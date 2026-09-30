@@ -663,14 +663,14 @@ Handler Scripts          AutomationService.ts
 
 ### Key Components
 
-| Component          | Location                          | Role                            |
-| ------------------ | --------------------------------- | ------------------------------- |
-| Trigger detection  | `scripts/automation-trigger.sh`   | Match status → triggers         |
-| Action dispatch    | `scripts/automation-dispatch.sh`  | Route and log action execution  |
-| Handler scripts    | `scripts/handlers/*.sh`           | Execute individual action types |
-| VSCode integration | `AutomationService.ts`            | UI notifications and log viewer |
-| Configuration      | `.nightgauge/config.yaml`         | Trigger definitions             |
-| Audit log          | `.nightgauge/logs/automation.log` | JSONL execution history         |
+| Component          | Location                                       | Role                            |
+| ------------------ | ---------------------------------------------- | ------------------------------- |
+| Trigger detection  | `scripts/automation-trigger.sh`                | Match status → triggers         |
+| Action dispatch    | `scripts/automation-dispatch.sh`               | Route and log action execution  |
+| Handler scripts    | `scripts/handlers/*.sh`                        | Execute individual action types |
+| VSCode integration | `AutomationService.ts`                         | UI notifications and log viewer |
+| Configuration      | `.nightgauge/config.yaml`                      | Trigger definitions             |
+| Audit log          | `automation.log` in the clone's logs directory | JSONL execution history         |
 
 ### Configuration
 
@@ -776,7 +776,7 @@ sequenceDiagram
     participant FD as feature-dev
     participant PC as pr-create
     participant PM as pr-merge
-    participant FS as .nightgauge/pipeline/
+    participant FS as Pipeline state dir
 
     User->>IP: /nightgauge:issue-pickup 81
     IP->>FS: Write issue-81.json
@@ -858,7 +858,7 @@ Paths are relative to `claude-plugins/nightgauge/`. Gates live in
 {
   "schema_version": "1.9",
   "issue_number": 81,
-  "plan_file": ".nightgauge/plans/81-add-user-auth.md",
+  "plan_file": "/path/to/repo/.git/nightgauge/plans/81-add-user-auth.md",
   "approach": "...",
   "files_to_create": ["src/auth/AuthService.ts"],
   "files_to_modify": ["src/routes/index.ts"],
@@ -922,7 +922,8 @@ If a skill cannot find its required context file, it fails with a clear error:
 │  ERROR: Missing Context File                                     │
 └─────────────────────────────────────────────────────────────────┘
 
-Expected: .nightgauge/pipeline/issue-81.json
+Expected: issue-81.json in the pipeline state directory
+          ($(nightgauge layout path pipeline issue-81.json))
 Created by: /nightgauge-issue-pickup
 
 This skill requires the context file from the previous pipeline step.
@@ -938,19 +939,22 @@ This design ensures:
 
 ### Cleanup
 
-After successful merge, `pr-merge` removes all context files:
+After successful merge, `pr-merge` removes all context files from the clone's
+pipeline state and plans directories:
 
 ```bash
-rm -f .nightgauge/pipeline/issue-${ISSUE_NUMBER}.json
-rm -f .nightgauge/pipeline/planning-${ISSUE_NUMBER}.json
-rm -f .nightgauge/pipeline/dev-${ISSUE_NUMBER}.json
-rm -f .nightgauge/pipeline/pr-${ISSUE_NUMBER}.json
-rm -f .nightgauge/plans/${ISSUE_NUMBER}-*.md
+PIPELINE_DIR="$(nightgauge layout path pipeline)"
+PLANS_DIR="$(nightgauge layout path plans)"
+rm -f "$PIPELINE_DIR/issue-${ISSUE_NUMBER}.json"
+rm -f "$PIPELINE_DIR/planning-${ISSUE_NUMBER}.json"
+rm -f "$PIPELINE_DIR/dev-${ISSUE_NUMBER}.json"
+rm -f "$PIPELINE_DIR/pr-${ISSUE_NUMBER}.json"
+rm -f "$PLANS_DIR/${ISSUE_NUMBER}-"*.md
 ```
 
-Plans and context files are per-run pipeline exhaust: the generated
-`.nightgauge/.gitignore` ignores `plans/*` and `pipeline/*`, so they were never
-committed and this delete is final. A decision worth keeping belongs in the
+Plans and context files are per-run pipeline exhaust: they live in the git
+directory (`<git-common-dir>/nightgauge/`, [ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)),
+so they are never committed and this delete is final. A decision worth keeping belongs in the
 issue's `decisions.md` in the knowledge base (see
 [KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md)) or, when it spans the codebase, in
 `docs/`, not in a plan.
@@ -1226,7 +1230,8 @@ layers, each with a distinct lifetime and purpose (Issues #1352, #2814, #2818):
    `OutputWindowState.scheduleSave`) — snapshots in-memory state so closing and
    reopening the panel within the same VSCode session is instant and
    disk-free.
-3. **On-disk session logs** (`.nightgauge/logs/{YYYY-MM-DD}_{issue}_session.log`)
+3. **On-disk session logs** (`{YYYY-MM-DD}_{issue}_session.log` in the clone's
+   logs directory, `nightgauge layout path logs`)
    written by `LogFileWriter` — survive extension-host crashes and VSCode
    reloads that wipe both memory and memento.
 
@@ -1895,11 +1900,12 @@ implemented in `PipelineStateService.validateStagePreconditions()`.
 
 `PipelineStateService` holds pipeline state in memory and relays every
 transition to the Go backend over IPC. There is no unified pipeline state file:
-nothing in the tree has ever written one under `.nightgauge/pipeline/` (#427).
+nothing has ever written one to the pipeline state directory (#427).
 The durable per-run record is the Go runtime snapshot
-`.nightgauge/pipeline/runtime-{issue}-{runId}.json` (with
-`.nightgauge/pipeline/run-state.json` for the workspace-level view), and that is
-what recovery, UI rendering, and analytics read.
+`runtime-{issue}-{runId}.json` in the clone's pipeline state directory
+(`nightgauge layout path pipeline`), with `run-state.json` there for the
+workspace-level view, and that is what recovery, UI rendering, and analytics
+read.
 
 **Per-stage status values:**
 

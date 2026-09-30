@@ -7,13 +7,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { SanitizationLogService, logWatchGlob } from "../../src/services/SanitizationLogService";
+import { SanitizationLogService } from "../../src/services/SanitizationLogService";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 import {
   DEFAULT_FIREWALL_FILTERS,
   type FirewallFilterState,
 } from "../../src/views/dashboard/FirewallTypes";
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
+import * as vscode from "vscode";
 
 // Mock fs module
 vi.mock("fs", async () => {
@@ -52,10 +55,11 @@ vi.mock("vscode", () => ({
   },
   RelativePattern: class {
     constructor(
-      public base: string,
+      public base: unknown,
       public pattern: string
     ) {}
   },
+  Uri: { file: (fsPath: string) => ({ fsPath }) },
 }));
 
 describe("SanitizationLogService - NDJSON Parsing", () => {
@@ -64,6 +68,7 @@ describe("SanitizationLogService - NDJSON Parsing", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeCloneLayout(workspaceRoot);
     service = new SanitizationLogService(workspaceRoot);
   });
 
@@ -306,6 +311,7 @@ describe("SanitizationLogService - Filtering", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeCloneLayout(workspaceRoot);
     service = new SanitizationLogService(workspaceRoot);
 
     // Load test events directly via parseNdjson
@@ -500,6 +506,7 @@ describe("SanitizationLogService - Aggregation", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeCloneLayout(workspaceRoot);
     service = new SanitizationLogService(workspaceRoot);
 
     // Load test events
@@ -624,6 +631,7 @@ describe("SanitizationLogService - Time Series", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeCloneLayout(workspaceRoot);
     service = new SanitizationLogService(workspaceRoot);
 
     // Load test events spanning multiple hours
@@ -752,20 +760,41 @@ describe("SanitizationLogService - Time Series", () => {
   });
 });
 
-describe("logWatchGlob (#2036)", () => {
-  it("is the log path relative to the root, forward-slashed on POSIX", () => {
-    expect(
-      logWatchGlob(
-        "/test/workspace",
-        "/test/workspace/.nightgauge/logs/sanitization.log",
-        path.posix
-      )
-    ).toBe(".nightgauge/logs/sanitization.log");
+describe("SanitizationLogService - log location (#2037)", () => {
+  it("reads sanitization.log in the clone's logs directory", () => {
+    const root = "/test/workspace";
+    const layout = fakeCloneLayout(root);
+    const service = new SanitizationLogService(root);
+    expect(service.getLogFilePath()).toBe(path.join(layout.logs, "sanitization.log"));
+    service.dispose();
   });
 
-  it("uses forward slashes on win32", () => {
-    expect(logWatchGlob("C:\\ws", "C:\\ws\\.nightgauge\\logs\\sanitization.log", path.win32)).toBe(
-      ".nightgauge/logs/sanitization.log"
-    );
+  it("watches the log from the logs directory itself, which lies outside the workspace", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ng-sanitization-"));
+    const layout = fakeCloneLayout(root);
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    const service = new SanitizationLogService(root);
+    await service.initialize();
+
+    const pattern = vi
+      .mocked(vscode.workspace.createFileSystemWatcher)
+      .mock.calls.at(-1)?.[0] as unknown as {
+      base: { fsPath: string };
+      pattern: string;
+    };
+    expect(pattern.base.fsPath).toBe(layout.logs);
+    expect(pattern.pattern).toBe("sanitization.log");
+    expect(fs.statSync(layout.logs).isDirectory()).toBe(true);
+    service.dispose();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("has no log outside a git repository", async () => {
+    const root = path.join(os.tmpdir(), `ng-sanitization-nogit-${process.pid}`);
+    const service = new SanitizationLogService(root);
+    expect(service.getLogFilePath()).toBeUndefined();
+    expect(service.logFileExists()).toBe(false);
+    expect(await service.loadEvents()).toEqual([]);
+    service.dispose();
   });
 });

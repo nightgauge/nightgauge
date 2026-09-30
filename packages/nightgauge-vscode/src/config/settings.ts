@@ -6,7 +6,6 @@
  * @see Issue #476 - Refactor to use ConfigBridge instead of direct VSCode reads
  */
 
-import { RELATIVE_PIPELINE_STATE_DIR, RELATIVE_PLANS_DIR } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import {
   getCoreSettings,
@@ -31,10 +30,6 @@ export interface NightgaugeSettings {
   authProvider: AuthProvider;
   /** Default model for pipeline stages */
   defaultModel: ModelSelection;
-  /** Path to context files relative to workspace root */
-  contextPath: string;
-  /** Path to plan files relative to workspace root */
-  plansPath: string;
 }
 
 /**
@@ -47,8 +42,6 @@ export const DEFAULT_SETTINGS: NightgaugeSettings = {
   executionAdapter: "claude",
   authProvider: "max",
   defaultModel: "sonnet",
-  contextPath: RELATIVE_PIPELINE_STATE_DIR,
-  plansPath: RELATIVE_PLANS_DIR,
 };
 
 /**
@@ -63,8 +56,6 @@ export function getSettings(): NightgaugeSettings {
     executionAdapter: coreSettings.executionAdapter,
     authProvider: coreSettings.authProvider,
     defaultModel: coreSettings.defaultModel,
-    contextPath: coreSettings.contextPath,
-    plansPath: coreSettings.plansPath,
   };
 }
 

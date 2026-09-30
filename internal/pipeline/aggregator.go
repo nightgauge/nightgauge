@@ -1,5 +1,6 @@
 // Package pipeline provides deterministic readers and aggregators over the
-// .nightgauge/pipeline/history/YYYY-MM-DD.jsonl files. The Result JSON
+// pipeline state directory's history/YYYY-MM-DD.jsonl files
+// (layout.PipelineStateDir, under the git common dir). The Result JSON
 // schema is stable — field names and types must not change after first merge.
 // Skills parse `nightgauge pipeline aggregate --json` output via jq paths;
 // any breaking change requires incrementing the V field. Mirrors the

@@ -188,9 +188,9 @@ describe("summarizeCodexJsonOutput", () => {
           id: "item_12",
           type: "command_execution",
           command:
-            'python3 -m json.tool .nightgauge/pipeline/issue-934.json > /dev/null && echo "Context file written: .nightgauge/pipeline/issue-934.json"',
+            'CONTEXT_FILE="$(nightgauge layout path pipeline issue-934.json)" && jq . "$CONTEXT_FILE" > /dev/null && echo "Context file written: $CONTEXT_FILE"',
           status: "completed",
-          aggregated_output: "Context file written: .nightgauge/pipeline/issue-934.json",
+          aggregated_output: "Context file written: /repo/.git/nightgauge/pipeline/issue-934.json",
         },
       }),
       JSON.stringify({

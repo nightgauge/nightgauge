@@ -11,14 +11,16 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // writeConflictContext drops a well-formed conflict-context-{issue}.json into
 // the workspace's pipeline dir and returns the workspace root.
 func writeConflictContext(t *testing.T, issue, pr int, branch string, files []string) string {
 	t.Helper()
-	ws := t.TempDir()
-	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	ws := layouttest.Repo(t)
+	dir := layouttest.PipelineDir(t, ws)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -43,7 +45,7 @@ func writeConflictContext(t *testing.T, issue, pr int, branch string, files []st
 
 func readFeedbackSignals(t *testing.T, ws string, issue int) feedbackOnDisk {
 	t.Helper()
-	p := filepath.Join(ws, ".nightgauge", "pipeline", "feedback-"+strconv.Itoa(issue)+".json")
+	p := filepath.Join(layouttest.PipelineDir(t, ws), "feedback-"+strconv.Itoa(issue)+".json")
 	data, err := os.ReadFile(p)
 	if err != nil {
 		t.Fatalf("read feedback: %v", err)
@@ -121,7 +123,7 @@ func TestAction_ConflictRecoveryLoop_MergesIntoExistingFeedback(t *testing.T) {
 		}},
 	}
 	data, _ := json.MarshalIndent(existing, "", "  ")
-	_ = os.WriteFile(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-50.json"), data, 0o644)
+	_ = os.WriteFile(filepath.Join(layouttest.PipelineDir(t, ws), "feedback-50.json"), data, 0o644)
 
 	a := NewConflictRecoveryLoop(2)
 	res := a.Execute(context.Background(), StageFailure{
@@ -177,7 +179,7 @@ func TestAction_ConflictRecoveryLoop_NoMatch_FallsThrough(t *testing.T) {
 // conflict-context-{N}.json is missing → escalate to human triage rather than
 // spin a context-less dev re-dispatch.
 func TestAction_ConflictRecoveryLoop_NoContext_Escalates(t *testing.T) {
-	ws := t.TempDir() // empty workspace — no conflict-context file
+	ws := layouttest.Repo(t) // empty workspace — no conflict-context file
 	a := NewConflictRecoveryLoop(2)
 	failure := StageFailure{
 		Stage: state.StagePRMerge, GateKind: gates.KindNoOp, Workspace: ws,
@@ -233,7 +235,7 @@ func TestAction_ConflictRecoveryLoop_DegenerateContext_Escalates(t *testing.T) {
 				t.Errorf("FollowUp = %q, want %q", res.FollowUp, FollowUpHumanTriageRequired)
 			}
 			// No rewind signal may be written for a context nobody can act on.
-			if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-12.json")); err == nil {
+			if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, ws), "feedback-12.json")); err == nil {
 				t.Error("must not emit CONFLICT_RESOLUTION_NEEDED for a degenerate context")
 			}
 		})
@@ -246,8 +248,8 @@ func TestAction_ConflictRecoveryLoop_DegenerateContext_Escalates(t *testing.T) {
 // produce (the shell writer's).
 func writeRawConflictContext(t *testing.T, issue, pr int, branch string, extra map[string]interface{}, entries []map[string]interface{}) string {
 	t.Helper()
-	ws := t.TempDir()
-	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	ws := layouttest.Repo(t)
+	dir := layouttest.PipelineDir(t, ws)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -358,7 +360,7 @@ func TestAction_ConflictRecoveryLoop_PerFileGuard(t *testing.T) {
 			if !strings.Contains(res.Reason, c.wantInReason) {
 				t.Errorf("reason %q must say why (%q)", res.Reason, c.wantInReason)
 			}
-			if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-12.json")); err == nil {
+			if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, ws), "feedback-12.json")); err == nil {
 				t.Error("must not emit CONFLICT_RESOLUTION_NEEDED for a context nobody can act on")
 			}
 		})
@@ -381,7 +383,7 @@ func TestAction_ConflictRecoveryLoop_ExhaustsAndEscalates(t *testing.T) {
 		Signals:       []feedbackSignalOnDisk{sig, sig, sig},
 	}
 	data, _ := json.MarshalIndent(fb, "", "  ")
-	_ = os.WriteFile(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-12.json"), data, 0o644)
+	_ = os.WriteFile(filepath.Join(layouttest.PipelineDir(t, ws), "feedback-12.json"), data, 0o644)
 
 	a := NewConflictRecoveryLoop(2)
 	res := a.Execute(context.Background(), StageFailure{

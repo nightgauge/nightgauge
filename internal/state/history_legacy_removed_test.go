@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // The legacy `executions.jsonl` history path (HistoryEntry, HistoryWriter.Write,
@@ -28,9 +29,9 @@ import (
 // HistoryWriter emits into its directory must carry `stages` as a JSON object,
 // never an array. A reintroduced HistoryEntry-shaped writer fails here.
 func TestHistoryDirRecordsUseObjectStages(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	hw := NewHistoryWriter(root)
-	// hw.dir — <root>/.nightgauge/pipeline/history — is the directory the
+	// hw.dir — the pipeline state dir's history/ — is the directory the
 	// dashboard's JSONL scanners glob, and is where the deleted Write() aimed.
 	dir := hw.dir
 

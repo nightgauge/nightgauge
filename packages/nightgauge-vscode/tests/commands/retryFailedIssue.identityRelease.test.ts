@@ -104,6 +104,13 @@ vi.mock("../../src/services/IpcClient", () => ({
 import { registerRetryFailedIssueCommand } from "../../src/commands/retryFailedIssue";
 import { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
+
+// Per-clone data resolves under the git directory (ADR-024 § 7); map the
+// fake workspace to a clone without running git.
+beforeEach(() => {
+  fakeCloneLayout("/mock/workspace");
+});
 
 const failedIssue = {
   issue_number: 100,

@@ -18,7 +18,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { pipelineStateDir, RELATIVE_PIPELINE_STATE_DIR } from "../utils/cloneLayout";
+import { pipelineStateDir, PIPELINE_STATE_DISPLAY } from "../utils/cloneLayout";
 import { exec, execFile } from "child_process";
 import { promisify } from "util";
 
@@ -2869,7 +2869,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           `decision that must be human-approved before feature-dev implements it. Why: ${reasons}. ` +
           `This is NOT a failure and NO development or validation cost was incurred — the pipeline ` +
           `halted before implementation. To proceed: add the \`approved:architecture\` label to the ` +
-          `issue (or write ${RELATIVE_PIPELINE_STATE_DIR}/approval-${issueNumber}.json with ` +
+          `issue (or write ${PIPELINE_STATE_DISPLAY}/approval-${issueNumber}.json with ` +
           `{"approved": true}), then re-queue. To turn the gate off entirely, set ` +
           `pipeline.architecture_approval.enabled: false.`
       );

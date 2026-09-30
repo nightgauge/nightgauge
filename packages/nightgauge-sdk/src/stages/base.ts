@@ -208,11 +208,13 @@ export abstract class BaseStage<TInput, TOutput> {
     sections.push("## Execution Requirements");
     sections.push("");
     sections.push("1. Follow the skill instructions exactly");
-    sections.push("2. Write the output context file to .nightgauge/pipeline/");
-    sections.push("3. Output must be valid JSON matching the expected schema");
+    const outputName = `${this.config.outputContextType}-${issueNumber}.json`;
     sections.push(
-      `4. Output file should be named: ${this.config.outputContextType}-${issueNumber}.json`
+      `2. Write the output context file with \`nightgauge layout write pipeline ${outputName}\`` +
+        " (JSON on stdin); never write under the git directory by path"
     );
+    sections.push("3. Output must be valid JSON matching the expected schema");
+    sections.push(`4. Output file should be named: ${outputName}`);
 
     return sections.join("\n");
   }

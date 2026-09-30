@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // resetLedgerResolution clears every latch openAPILedger consults, so each
@@ -19,7 +21,7 @@ func resetLedgerResolution(t *testing.T) {
 // explicitly-named root is, and the ledger must follow the root.
 func TestSetAPILedgerWorkspaceRoot_WinsOverCwd(t *testing.T) {
 	resetLedgerResolution(t)
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := os.MkdirAll(filepath.Join(root, ".nightgauge"), 0o755); err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
@@ -32,7 +34,7 @@ func TestSetAPILedgerWorkspaceRoot_WinsOverCwd(t *testing.T) {
 		t.Fatal("openAPILedger returned nil — the named workspace has a .nightgauge/")
 	}
 	defer l.close()
-	want := filepath.Join(root, ".nightgauge", "logs", "github-api.jsonl")
+	want := filepath.Join(layouttest.LogsDir(t, root), "github-api.jsonl")
 	if l.path != want {
 		t.Errorf("ledger path = %q, want %q", l.path, want)
 	}
@@ -42,7 +44,7 @@ func TestSetAPILedgerWorkspaceRoot_WinsOverCwd(t *testing.T) {
 // non-daemon invocation relies on.
 func TestSetAPILedgerWorkspaceRoot_UnsetFallsBackToCwd(t *testing.T) {
 	resetLedgerResolution(t)
-	cwd := t.TempDir()
+	cwd := layouttest.Repo(t)
 	if err := os.MkdirAll(filepath.Join(cwd, ".nightgauge"), 0o755); err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}
@@ -54,7 +56,8 @@ func TestSetAPILedgerWorkspaceRoot_UnsetFallsBackToCwd(t *testing.T) {
 		t.Fatal("openAPILedger returned nil in a real workspace")
 	}
 	defer l.close()
-	if want := filepath.Join(cwd, ".nightgauge", "logs", "github-api.jsonl"); l.path != want {
+	want := filepath.Join(layouttest.LogsDir(t, cwd), "github-api.jsonl")
+	if l.path != want {
 		t.Errorf("ledger path = %q, want %q", l.path, want)
 	}
 }
@@ -95,7 +98,7 @@ func TestSetAPILedgerWorkspaceRoot_EnvPathWins(t *testing.T) {
 // The env opt-out still outranks everything, root or no root.
 func TestSetAPILedgerWorkspaceRoot_EnvOffStillWins(t *testing.T) {
 	resetLedgerResolution(t)
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := os.MkdirAll(filepath.Join(root, ".nightgauge"), 0o755); err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}

@@ -7,6 +7,8 @@
  * regresses), real-marker precedence, path disambiguation (source edit vs
  * dev-context write), and the no-op behaviour for stages without rules.
  */
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { createPhaseInference } from "../events/phaseInference.js";
 import { PHASE_REGISTRY } from "../events/phaseRegistry.js";
@@ -42,17 +44,17 @@ describe("createPhaseInference — feature-dev", () => {
     expect(m?.index).toBe(8);
   });
 
-  it("does NOT treat a .nightgauge bookkeeping write as implementation", () => {
+  it("does NOT treat a per-clone bookkeeping write as implementation", () => {
     const inf = createPhaseInference("feature-dev");
     inf.start();
     // Before any implementation edit it advances nothing (#2181).
     expect(
-      inf.observeToolUse("Write", { file_path: ".nightgauge/pipeline/dev-3760.json" })
+      inf.observeToolUse("Write", { file_path: "/repo/.git/nightgauge/pipeline/dev-3760.json" })
     ).toBeNull();
     inf.observeToolUse("Write", { file_path: "src/foo.ts" }); // implementation
     const m =
       inf.observeToolUse("Write", {
-        file_path: ".nightgauge/pipeline/dev-3760.json",
+        file_path: "/repo/.git/nightgauge/pipeline/dev-3760.json",
       })?.marker ?? null;
     // dev-context path → write-dev-context (14), not implementation (8)
     expect(m?.index).toBe(14);
@@ -158,7 +160,7 @@ describe("createPhaseInference — feature-planning (#3771)", () => {
     inf.start();
     const m =
       inf.observeToolUse("Write", {
-        file_path: ".nightgauge/plans/6-flutter-ia-nav.md",
+        file_path: "/repo/.git/nightgauge/plans/6-flutter-ia-nav.md",
       })?.marker ?? null;
     expect(m?.index).toBe(9);
     expect(m?.name).toBe("produce-plan");
@@ -167,10 +169,10 @@ describe("createPhaseInference — feature-planning (#3771)", () => {
   it("advances to write-planning-context on the planning handoff write", () => {
     const inf = createPhaseInference("feature-planning");
     inf.start();
-    inf.observeToolUse("Write", { file_path: ".nightgauge/plans/6-x.md" }); // produce-plan
+    inf.observeToolUse("Write", { file_path: "/repo/.git/nightgauge/plans/6-x.md" }); // produce-plan
     const m =
       inf.observeToolUse("Write", {
-        file_path: ".nightgauge/pipeline/planning-6.json",
+        file_path: "/repo/.git/nightgauge/pipeline/planning-6.json",
       })?.marker ?? null;
     expect(m?.index).toBe(10);
     expect(m?.name).toBe("write-planning-context");
@@ -182,7 +184,7 @@ describe("createPhaseInference — feature-planning (#3771)", () => {
     // plan markdown matches produce-plan (9), not write-planning-context (10)
     const m =
       inf.observeToolUse("Edit", {
-        file_path: ".nightgauge/plans/6-flutter-ia-nav.md",
+        file_path: "/repo/.git/nightgauge/plans/6-flutter-ia-nav.md",
       })?.marker ?? null;
     expect(m?.index).toBe(9);
   });
@@ -190,7 +192,7 @@ describe("createPhaseInference — feature-planning (#3771)", () => {
   it("is monotonic — a late read does not regress past produce-plan", () => {
     const inf = createPhaseInference("feature-planning");
     inf.start();
-    inf.observeToolUse("Write", { file_path: ".nightgauge/plans/6-x.md" }); // → 9
+    inf.observeToolUse("Write", { file_path: "/repo/.git/nightgauge/plans/6-x.md" }); // → 9
     const regress =
       inf.observeToolUse("Read", { file_path: "docs/ARCHITECTURE.md" })?.marker ?? null;
     expect(regress).toBeNull(); // index 6 < cursor 9
@@ -228,7 +230,8 @@ describe("createPhaseInference — feature-validate (#1850)", () => {
       name: "commit-and-push",
     });
     expect(
-      inf.observeToolUse("Write", { file_path: ".nightgauge/pipeline/validate-42.json" })?.marker
+      inf.observeToolUse("Write", { file_path: "/repo/.git/nightgauge/pipeline/validate-42.json" })
+        ?.marker
     ).toMatchObject({ name: "write-validate-context" });
   });
 
@@ -321,5 +324,45 @@ describe("createPhaseInference — test/build command coverage (#1246)", () => {
     "git log --oneline -5",
   ])("does not advance to testing on %j", (command) => {
     expect(advancesToTesting(command)).toBe(false);
+  });
+});
+
+/**
+ * The shared fixture internal/execution/phase_inference_test.go replays too, so
+ * both inferers reach the same phase for every way an agent writes a per-clone
+ * file (ADR-024 § 7): `nightgauge layout write|append` in a Bash call, or an
+ * edit under `<git-common-dir>/nightgauge/`.
+ */
+describe("createPhaseInference — per-clone writes (Go parity fixture)", () => {
+  interface Call {
+    tool: string;
+    input: Record<string, unknown>;
+  }
+  interface Case extends Call {
+    name: string;
+    stage: string;
+    setup: Call[];
+    want: number;
+  }
+  // `__dirname`, not `import.meta`: this package builds to CommonJS.
+  const fixture = JSON.parse(
+    readFileSync(
+      join(
+        resolve(__dirname, "../../../.."),
+        "internal/execution/testdata/phase_inference_writes.json"
+      ),
+      "utf-8"
+    )
+  ) as { cases: Case[] };
+
+  it("has cases", () => {
+    expect(fixture.cases.length).toBeGreaterThan(0);
+  });
+
+  it.each(fixture.cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
+    const inf = createPhaseInference(c.stage);
+    inf.start();
+    for (const s of c.setup) inf.observeToolUse(s.tool, s.input);
+    expect(inf.observeToolUse(c.tool, c.input)?.marker.index ?? -1).toBe(c.want);
   });
 });

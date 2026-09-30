@@ -29,6 +29,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/trace"
 )
@@ -1620,12 +1621,12 @@ func splitRepo(repo string) (owner, name string) {
 // (#1147).
 const ProducerOutOfScopeBlocker = "out-of-scope-blocker"
 
-// BlockedFindingsDirName is the directory, under `.nightgauge/pipeline/`,
+// BlockedFindingsDirName is the directory, under `.git/nightgauge/pipeline/`,
 // holding one recorded out-of-scope finding per issue (#1147).
 //
 // A DIRECTORY rather than a flat `blocked-<issue>.json`, and that is
 // load-bearing: runstate.ArchiveRun moves EVERY `*-<issue>.json` sitting
-// directly under `.nightgauge/pipeline/` into `pipeline/history/<runID>/` when
+// directly under `.git/nightgauge/pipeline/` into `pipeline/history/<runID>/` when
 // a run ends, and skips directories. A finding written flat would be archived
 // out of the way by the very run that produced it — which is exactly the
 // "discarded context file" #1147 exists to stop.
@@ -1636,9 +1637,10 @@ const BlockedFindingsDirName = "blocked-findings"
 // at issue-pickup to defer for zero tokens; the daemon only ever DELETES it,
 // when an operator resolves the card below.
 //
-// For an empty or relative repoRoot it returns "" (layout.PipelineStateDir
-// refuses to resolve one), so a remove or stat of the result fails as
-// not-exist instead of touching a path under the process's working directory.
+// For an empty or relative repoRoot, or one outside a git repository, it
+// returns "" (layout.PipelineStateDir refuses to resolve one), so a remove or
+// stat of the result fails as not-exist instead of touching a path under the
+// process's working directory.
 func BlockedFindingPath(repoRoot string, issue int) string {
 	return pipelineStatePath(repoRoot, filepath.Join(BlockedFindingsDirName,
 		fmt.Sprintf("%d.json", issue)))
@@ -1688,7 +1690,7 @@ func BuildOutOfScopeBlocker(repo string, issue int, runID, stage string) attenti
 				"scope, so the pipeline ended as `blocked` instead of re-planning into the same "+
 				"wall. The finding — the signal, its rationale and its evidence verbatim — is "+
 				"posted as a comment on the issue and recorded at "+
-				"`.nightgauge/pipeline/%s/%d.json`.\n\n"+
+				"`"+layout.PipelineStateDisplay()+"/%s/%d.json` (`nightgauge layout path pipeline`).\n\n"+
 				"UNTIL THAT FINDING IS CLEARED, re-dispatching #%d defers at pickup for zero "+
 				"tokens rather than re-running three stages. That is deliberate, and it is why "+
 				"this card exists: nothing else retracts it.\n\n"+

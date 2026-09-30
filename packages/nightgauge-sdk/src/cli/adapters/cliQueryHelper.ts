@@ -251,7 +251,7 @@ export function createCliQueryFn(options: {
       // on `exec resume`), so it stays full-access.
       const effectiveBaseArgs =
         options.adapter === "codex"
-          ? applyCodexSandboxProfile(baseArgs, queryOptions.options?.allowedTools)
+          ? applyCodexSandboxProfile(baseArgs, queryOptions.options?.allowedTools, cwd)
           : baseArgs;
       if (delivery === "positional") {
         finalArgs = [queryOptions.prompt, ...effectiveBaseArgs];

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // #1482. The #1076 derivation fired only when the handoff was ABSENT or empty.
@@ -29,7 +31,7 @@ import (
 // list, the build recorded as prose in the wrong field, no build_verification.
 func devContextMissingBuildVerification(t *testing.T, ws string, issue int, files ...string) {
 	t.Helper()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(issue)), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), devContextName(issue)), map[string]any{
 		// The stale version #1177's rule repairs, so this fixture exercises
 		// the exact composition #1482 reported: stamp, then reject.
 		"schema_version": "1.0",
@@ -139,7 +141,7 @@ func TestFeatureDevGate_MissingBuildVerification_CleanTree_StillFails(t *testing
 // terminal failure even with a dirty tree that would otherwise derive.
 func TestFeatureDevGate_BuildVerificationFailed_StillFails(t *testing.T) {
 	ws := gitRepo(t)
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(71)), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), devContextName(71)), map[string]any{
 		"schema_version": "1.9",
 		"issue_number":   71,
 		"files_changed": map[string]any{

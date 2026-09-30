@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // A warn-mode match from a command run in a subdirectory logs to the clone's
@@ -25,7 +26,7 @@ func TestLogWarnEventResolvesTheCloneLogsDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(resolved, ".nightgauge", "logs", "sanitization.log")); err != nil {
+	if _, err := os.Stat(filepath.Join(layouttest.LogsDir(t, resolved), "sanitization.log")); err != nil {
 		t.Errorf("expected the log under the clone root: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(sub, ".nightgauge")); !os.IsNotExist(err) {
@@ -58,7 +59,7 @@ func TestLogWarnEventWritesMode0600(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	logPath := filepath.Join(resolved, ".nightgauge", "logs", "sanitization.log")
+	logPath := filepath.Join(layouttest.LogsDir(t, resolved), "sanitization.log")
 	assertMode := func(want os.FileMode) {
 		t.Helper()
 		info, err := os.Stat(logPath)

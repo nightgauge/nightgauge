@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
+import { cloneLayoutFor, setCloneLayout } from "../../src/context/cloneLayout.js";
 import {
   CalibrationService,
   type CalibrationInput,
@@ -533,9 +534,12 @@ describe("CalibrationService", () => {
   });
 
   describe("getDefaultPath", () => {
-    it("returns the canonical path", () => {
+    it("resolves into the repository's pipeline class directory", () => {
+      setCloneLayout("/workspace", cloneLayoutFor("/workspace", "/workspace/.git"));
       const result = CalibrationService.getDefaultPath("/workspace");
-      expect(result).toBe(path.join("/workspace", ".nightgauge", "pipeline", "calibration.json"));
+      expect(result).toBe(
+        path.join("/workspace", ".git", "nightgauge", "pipeline", "calibration.json")
+      );
     });
   });
 });

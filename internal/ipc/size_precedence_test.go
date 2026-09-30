@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -16,8 +16,8 @@ import (
 // while the run's OWN plan on disk had assessed a size. The extension path is
 // the one that wrote that row.
 func TestLearningOutcomeFor_PlannerSizeReachesTheCorpus(t *testing.T) {
-	root := t.TempDir()
-	planPath := filepath.Join(root, execution.PlanningContextRelPath(1429))
+	root := layouttest.Repo(t)
+	planPath := filepath.Join(layouttest.PipelineDir(t, root), "planning-1429.json")
 	if err := os.MkdirAll(filepath.Dir(planPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestLearningOutcomeFor_PlannerSizeReachesTheCorpus(t *testing.T) {
 
 // A label still outranks the planner, and the source says so.
 func TestLearningOutcomeFor_LabelStillWins(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	cls := issueClassification{Labels: []string{"size:XL"}, ComplexityScore: 8}
 	sizeRes := orchestrator.RunSizeResolution(root, "", "acme/widget", 7, "", cls.Labels, "T", "")
 
@@ -70,8 +70,8 @@ func TestLearningOutcomeFor_LabelStillWins(t *testing.T) {
 // Both writers must reach the same answer from the same evidence — the whole
 // reason the precedence lives in orchestrator and not in either handler.
 func TestSizeResolution_BothWritersAgree(t *testing.T) {
-	root := t.TempDir()
-	planPath := filepath.Join(root, execution.PlanningContextRelPath(42))
+	root := layouttest.Repo(t)
+	planPath := filepath.Join(layouttest.PipelineDir(t, root), "planning-42.json")
 	if err := os.MkdirAll(filepath.Dir(planPath), 0o755); err != nil {
 		t.Fatal(err)
 	}

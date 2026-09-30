@@ -133,7 +133,7 @@ The pattern mining output follows the `PatternMiningResultSchema` defined in
       "title": "Add user photo upload",
       "relevance_score": 0.85,
       "pattern_overlap": ["service_pattern", "api_endpoint", "file_naming"],
-      "plan_file": ".nightgauge/plans/42-user-photo-upload.md"
+      "plan_file": "<git-common-dir>/nightgauge/plans/42-user-photo-upload.md"
     }
   ],
   "pattern_classifications": {

@@ -128,7 +128,6 @@ describe("UI Config Section Integration (Issue #477)", () => {
         pipeline: {
           logs: {
             retain: true,
-            dir: ".nightgauge/logs",
             max_age_days: 30,
           },
         },
@@ -137,7 +136,7 @@ describe("UI Config Section Integration (Issue #477)", () => {
       const result = mergeConfigs({ project: projectConfig }, { skipEnvResolution: true });
 
       expect(result.config.pipeline?.logs?.retain).toBe(true);
-      expect(result.config.pipeline?.logs?.dir).toBe(".nightgauge/logs");
+      expect(result.config.pipeline?.logs?.max_age_days).toBe(30);
     });
   });
 

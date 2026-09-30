@@ -69,7 +69,8 @@ End with a SUMMARY line: counts per verdict, and the recommended next step
 Read failure records from exit-records, newest first:
 
 ```bash
-python3 - "$ARGUMENTS" <<'PY'
+EXIT_DIR="$(nightgauge layout path pipeline exit-records)" \
+  python3 - "$ARGUMENTS" <<'PY'
 import json, glob, sys, os, datetime
 args = " ".join(sys.argv[1:])
 def flag(name, default=None):
@@ -85,7 +86,7 @@ repo    = flag("--repo")
 if not since:
     since = (datetime.date.today() - datetime.timedelta(days=2)).isoformat()
 rows=[]
-for f in sorted(glob.glob('.nightgauge/pipeline/exit-records/*.jsonl')):
+for f in sorted(glob.glob(os.path.join(os.environ['EXIT_DIR'], '*.jsonl'))):
     day = os.path.basename(f).replace('.jsonl','')
     if day < since: continue
     for line in open(f):
@@ -121,7 +122,8 @@ nightgauge forge issue view N --repo OWNER/REPO --json \
   | python3 -c "import json,sys;print(json.load(sys.stdin).get('state',''))"
 
 # 2) PR evidence — the pr-create stage records the PR it opened in context.
-python3 -c "import json;d=json.load(open('.nightgauge/pipeline/pr-N.json'));print(d.get('pr_number'),d.get('pr_url'))" 2>/dev/null
+python3 -c "import json,sys;d=json.load(open(sys.argv[1]));print(d.get('pr_number'),d.get('pr_url'))" \
+  "$(nightgauge layout path pipeline pr-N.json)" 2>/dev/null
 
 # 3) Confirm the merge via the feature branch (branch is in the exit-record / dev context).
 nightgauge forge pr list --head <branch> --state all --repo OWNER/REPO --json \
@@ -141,7 +143,7 @@ Read the session log and match against the known-failure taxonomy. Read in this
 order; stop at the first match:
 
 ```bash
-LOG=$(ls -t .nightgauge/logs/*_<N>_session.log 2>/dev/null | head -1)
+LOG=$(ls -t "$(nightgauge layout path logs)"/*_<N>_session.log 2>/dev/null | head -1)
 grep -niE 'api_error_status|cannot be modified|rate.?limit|429|Force push blocked|Destructive git|"result":"|I asked but|push.failed|Cannot find module|node_modules|stale_sdk_dist' "$LOG" | tail -25
 ```
 

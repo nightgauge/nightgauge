@@ -57,8 +57,6 @@ describe("coreSettings", () => {
         core: {
           auth_provider: "bedrock",
           default_model: "opus",
-          context_path: ".custom/pipeline",
-          plans_path: ".custom/plans",
         },
       });
 
@@ -66,8 +64,6 @@ describe("coreSettings", () => {
 
       expect(settings.authProvider).toBe("bedrock");
       expect(settings.defaultModel).toBe("opus");
-      expect(settings.contextPath).toBe(".custom/pipeline");
-      expect(settings.plansPath).toBe(".custom/plans");
     });
 
     it("falls back to defaults for missing config values", () => {
@@ -83,8 +79,6 @@ describe("coreSettings", () => {
 
       expect(settings.authProvider).toBe("vertex");
       expect(settings.defaultModel).toBe(DEFAULT_CONFIG.ui!.core!.default_model);
-      expect(settings.contextPath).toBe(DEFAULT_CONFIG.ui!.core!.context_path);
-      expect(settings.plansPath).toBe(DEFAULT_CONFIG.ui!.core!.plans_path);
     });
 
     it("handles undefined ui config gracefully", () => {
@@ -103,8 +97,6 @@ describe("coreSettings", () => {
 
       expect(DEFAULT_CORE_SETTINGS.authProvider).toBe(defaults.auth_provider);
       expect(DEFAULT_CORE_SETTINGS.defaultModel).toBe(defaults.default_model);
-      expect(DEFAULT_CORE_SETTINGS.contextPath).toBe(defaults.context_path);
-      expect(DEFAULT_CORE_SETTINGS.plansPath).toBe(defaults.plans_path);
     });
   });
 });

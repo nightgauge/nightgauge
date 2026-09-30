@@ -356,8 +356,9 @@ if [ "$mode" = "linked-worktree" ]; then
   # under .nightgauge/worktrees/, while the main checkout sits on the default
   # branch. `git worktree list` prints the MAIN worktree first from anywhere, so
   # a writer that resolves it writes into a tree no reader consults — the
-  # recovery loop reads <stage worktree>/.nightgauge/pipeline/ and feature-dev's
-  # intake uses the relative path from the same cwd.
+  # recovery loop resolves the pipeline directory from <stage worktree>
+  # (<git-common-dir>/nightgauge/pipeline, ADR-024 § 7) and feature-dev's intake
+  # resolves it from the same cwd.
   #
   # The branch has to leave the main checkout first: git refuses to check out a
   # branch that is already checked out somewhere else.

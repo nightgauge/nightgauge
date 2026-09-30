@@ -145,7 +145,7 @@ func (v *verbs) worktreeSweepPlan(ctx context.Context, f Finding) (main string, 
 	if main == "" {
 		return "", nil, nil, fmt.Errorf("%s is no longer a git repository", root)
 	}
-	active, err := state.ActiveIssuesFromSnapshots(state.PipelineStateDir(main))
+	active, err := state.ActiveIssuesForRoot(main)
 	if err != nil {
 		// "I could not look" is never "nothing is running" (#296).
 		return "", nil, nil, fmt.Errorf("in-flight set for %s is unreadable, refusing to sweep blind: %w", main, err)

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // `nightgauge cost accuracy` (#1213).
@@ -20,7 +22,7 @@ import (
 // writeHistory plants JSONL run records where LoadHistory reads them.
 func writeHistory(t *testing.T, root string, records []map[string]any) {
 	t.Helper()
-	dir := filepath.Join(root, ".nightgauge", "pipeline", "history")
+	dir := filepath.Join(layouttest.PipelineDir(t, root), "history")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

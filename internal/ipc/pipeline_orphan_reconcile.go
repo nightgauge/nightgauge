@@ -521,7 +521,7 @@ func buildOrphanDoneEvent(snap *state.RuntimeState, now time.Time) (platform.Pip
 }
 
 // pipelineStateScanRoots returns every workspace root whose
-// .nightgauge/pipeline dir may hold persisted runtime snapshots: the IPC
+// .git/nightgauge/pipeline dir may hold persisted runtime snapshots: the IPC
 // server's launch root plus every repo registered with the client resolver.
 // Snapshots are persisted into the run's target repo (#215), so the orphan
 // scan must cover all of them or crash recovery misses cross-repo runs.
@@ -634,8 +634,8 @@ func (s *Server) startDeferredReconcileAfter(ctx context.Context, grace time.Dur
 func (s *Server) countReconcileCandidates() int {
 	n := 0
 	for _, root := range s.pipelineStateScanRoots() {
-		stateDir := state.PipelineStateDir(root)
-		if stateDir == "" {
+		stateDir, dirErr := state.PipelineStateDir(root)
+		if dirErr != nil {
 			continue
 		}
 		entries, err := os.ReadDir(stateDir)
@@ -682,8 +682,8 @@ func (s *Server) reconcilePass(now time.Time) {
 
 	ev := s.serverEvidence(now)
 	for _, root := range s.pipelineStateScanRoots() {
-		stateDir := state.PipelineStateDir(root)
-		if stateDir == "" {
+		stateDir, dirErr := state.PipelineStateDir(root)
+		if dirErr != nil {
 			continue
 		}
 		for _, act := range collectReconcileActions(stateDir, ev, now) {

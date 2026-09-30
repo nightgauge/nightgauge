@@ -86,8 +86,7 @@ func RetiredRules() []string { return ruleLines(retiredRulesFile) }
 type IgnoreAction string
 
 const (
-	// IgnoreCreated: .nightgauge/.gitignore was missing and is now written,
-	// with the .gitkeep files its rules anchor to.
+	// IgnoreCreated: .nightgauge/.gitignore was missing and is now written.
 	IgnoreCreated IgnoreAction = "created"
 	// IgnoreUpdated: an untracked, older file was rewritten, keeping the
 	// lines below its Local additions marker.
@@ -115,15 +114,14 @@ type IgnoreResult struct {
 	Carried []string `json:"carried,omitempty"`
 }
 
-// gitkeepDirs are the directories whose .gitkeep the template un-ignores.
-var gitkeepDirs = []string{"pipeline/history", "plans", "logs", "pipeline"}
-
 // EnsureIgnoreRules makes the template's .nightgauge/ ignore rules take
 // effect in the repository at repoRoot, the same way the extension's
 // ensureGitignore does:
 //
-//   - Missing .nightgauge/.gitignore: write the template and the .gitkeep
-//     files it anchors to (the initial scaffold, which the operator commits).
+//   - Missing .nightgauge/.gitignore: write the template (the initial
+//     scaffold, which the operator commits). Per-clone data lives under the
+//     git common dir (ADR-024 § 7), so no class directories or .gitkeep
+//     anchors are created in the working tree.
 //   - Current version marker: nothing.
 //   - Older and TRACKED: never edit the committed file (a change nothing
 //     commits leaves the checkout dirty); write the rules to the
@@ -226,21 +224,11 @@ func ExcludePatterns() []string {
 }
 
 func createIgnoreFile(ngDir, ignorePath string) (IgnoreResult, error) {
-	for _, sub := range gitkeepDirs {
-		if err := os.MkdirAll(filepath.Join(ngDir, sub), 0o755); err != nil {
-			return IgnoreResult{}, fmt.Errorf("create %s: %w", filepath.Join(ngDir, sub), err)
-		}
+	if err := os.MkdirAll(ngDir, 0o755); err != nil {
+		return IgnoreResult{}, fmt.Errorf("create %s: %w", ngDir, err)
 	}
 	if err := atomicfile.Write(ignorePath, []byte(GitignoreTemplate), 0o644); err != nil {
 		return IgnoreResult{}, fmt.Errorf("write %s: %w", ignorePath, err)
-	}
-	for _, sub := range gitkeepDirs {
-		keep := filepath.Join(ngDir, sub, ".gitkeep")
-		if _, err := os.Lstat(keep); os.IsNotExist(err) {
-			if err := os.WriteFile(keep, nil, 0o644); err != nil {
-				return IgnoreResult{}, fmt.Errorf("write %s: %w", keep, err)
-			}
-		}
 	}
 	return IgnoreResult{Action: IgnoreCreated, Path: ignorePath, Changed: true}, nil
 }

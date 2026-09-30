@@ -3,17 +3,18 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 
-	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func writeSizePlanningContext(t *testing.T, root string, issue int, body string) {
 	t.Helper()
-	path := filepath.Join(root, execution.PlanningContextRelPath(issue))
+	path := filepath.Join(layouttest.PipelineDir(t, root), fmt.Sprintf("planning-%d.json", issue))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -21,6 +21,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // steppedPipelineRunner plays every stage of a run whose feature-dev is split
@@ -42,6 +44,13 @@ func (r *steppedPipelineRunner) RunStage(_ context.Context, p StageRunParams) (*
 	if p.Runtime != nil && p.Runtime.WorktreeDir != "" {
 		root = p.Runtime.WorktreeDir
 	}
+	// feature-planning writes the plan into the clone's plans directory, as
+	// `nightgauge layout write plans` does, and names it by absolute path.
+	plans, err := layout.PlansDir(root)
+	if err != nil {
+		return nil, err
+	}
+	plan := filepath.Join(plans, fmt.Sprintf("%d-plan.md", p.IssueNumber))
 	switch p.Stage {
 	case state.StageFeatureDev:
 		r.mu.Lock()
@@ -51,7 +60,6 @@ func (r *steppedPipelineRunner) RunStage(_ context.Context, p StageRunParams) (*
 		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("step%d.go", k)), []byte("package x\n"), 0o644); err != nil {
 			return nil, err
 		}
-		plan := filepath.Join(root, "docs", "plan.md")
 		body, _ := os.ReadFile(plan)
 		_ = os.WriteFile(plan, []byte(strings.Replace(string(body), "- [ ]", "- [x]", 1)), 0o644)
 		return &StageRunResult{InputTokens: 1000 * k, OutputTokens: 100 * k, CacheReadTokens: 10 * k}, nil
@@ -64,10 +72,9 @@ func (r *steppedPipelineRunner) RunStage(_ context.Context, p StageRunParams) (*
 		"ok":             true,
 	}
 	if p.Stage == state.StageFeaturePlanning {
-		plan := filepath.Join(root, "docs", "plan.md")
-		_ = os.MkdirAll(filepath.Dir(plan), 0o755)
+		_ = os.MkdirAll(plans, 0o755)
 		_ = os.WriteFile(plan, []byte("# Plan\n- [ ] First\n- [ ] Second\n- [ ] Third\n"), 0o644)
-		payload["plan_file"] = "docs/plan.md"
+		payload["plan_file"] = plan
 	}
 	if p.OutputFile != "" {
 		_ = os.MkdirAll(filepath.Dir(p.OutputFile), 0o755)

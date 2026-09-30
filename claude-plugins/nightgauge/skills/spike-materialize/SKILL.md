@@ -29,8 +29,8 @@ runs after `pr-merge` for `type:spike` issues only and:
    no cycles, no duplicate ids).
 4. Creates one issue per `adopt` (Status=Ready) and `defer` (Status=Backlog)
    recommendation, filed as a sub-issue of the spike with `blockedBy` chains.
-5. Writes a structured JSON context file
-   `.nightgauge/pipeline/spike-materialize-{N}.json`.
+5. Writes a structured JSON context file `spike-materialize-{N}.json` to the
+   clone's pipeline state directory through `nightgauge layout write`.
 6. Updates the spike PR description with a `## Created Follow-up Issues`
    section listing the materialized issue numbers.
 
@@ -93,14 +93,17 @@ Run the Go subcommand with `--json` output so the skill can parse the result.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-mkdir -p .nightgauge/pipeline
-OUTPUT_FILE=".nightgauge/pipeline/spike-materialize-${ISSUE_NUMBER}.json"
+OUTPUT_TMP=$(mktemp)
 
-if ! "$BINARY" spike materialize "$ISSUE_NUMBER" --json > "$OUTPUT_FILE"; then
+if ! "$BINARY" spike materialize "$ISSUE_NUMBER" --json > "$OUTPUT_TMP"; then
   echo "ERROR: spike materialize failed — see output above"
-  cat "$OUTPUT_FILE" 2>/dev/null
+  cat "$OUTPUT_TMP" 2>/dev/null
+  rm -f "$OUTPUT_TMP"
   exit 1
 fi
+OUTPUT_FILE=$(nightgauge layout write pipeline "spike-materialize-${ISSUE_NUMBER}.json" \
+  --from "$OUTPUT_TMP")
+rm -f "$OUTPUT_TMP"
 
 echo "Wrote: $OUTPUT_FILE"
 ```
@@ -116,7 +119,7 @@ BRANCH=$(git branch --show-current)
 : "${BRANCH:?detached HEAD: check out the spike branch}"
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-OUTPUT_FILE=".nightgauge/pipeline/spike-materialize-${ISSUE_NUMBER}.json"
+OUTPUT_FILE="$(nightgauge layout path pipeline spike-materialize-${ISSUE_NUMBER}.json)"
 PR_NUMBER=$(gh pr list --state merged --search "head:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null)
 if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
   ISSUES_LIST=$(jq -r '.issues[] | select(.skipped != true and .issue_number > 0) | "- #\(.issue_number) \(.title)"' "$OUTPUT_FILE")
@@ -166,7 +169,8 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 
 This skill writes:
 
-1. **`.nightgauge/pipeline/spike-materialize-{N}.json`** — output of
+1. **`spike-materialize-{N}.json`** (clone's pipeline state directory,
+   `nightgauge layout path pipeline`) — output of
    `nightgauge spike materialize --json`. Schema:
 
    ```json

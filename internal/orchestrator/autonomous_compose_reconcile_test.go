@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -259,7 +260,7 @@ func TestSweepOrphanedCompose_SnapshotArmProtectsARunWithNoWorktree(t *testing.T
 	// repo's canonical pipeline dir.
 	rs := state.NewRuntimeState("acme/app", 972, "item-972", testRunID())
 	rs.SetProcess(os.Getpid(), filepath.Join(root, ".worktrees", "issue-972"))
-	if err := rs.Persist(state.PipelineStateDir(root)); err != nil {
+	if err := rs.Persist(layouttest.PipelineDir(t, root)); err != nil {
 		t.Fatalf("persist snapshot: %v", err)
 	}
 
@@ -298,12 +299,9 @@ func TestSweepOrphanedCompose_SnapshotArmProtectsARunWithNoWorktree(t *testing.T
 // unioned in, this state tore the stack down on a set nobody could read.
 func TestSweepOrphanedCompose_UnreadableSnapshotSourceVetoesTheTeardown(t *testing.T) {
 	root := worktreeRepo(t, 991)
-	if err := os.MkdirAll(filepath.Join(root, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	// A FILE where the state directory belongs: ReadDir fails with ENOTDIR, which
 	// is a read failure rather than "this repo never ran the pipeline".
-	if err := os.WriteFile(filepath.Join(root, ".nightgauge", "pipeline"), []byte("not a dir\n"), 0o644); err != nil {
+	if err := os.WriteFile(layouttest.PipelineDir(t, root), []byte("not a dir\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

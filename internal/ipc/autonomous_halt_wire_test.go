@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
@@ -27,7 +28,7 @@ import (
 // respawn does), and returns the server whose method table is under test.
 func newHaltedServer(t *testing.T, state orchestrator.AutonomousState) (*Server, *orchestrator.AutonomousScheduler, context.Context) {
 	t.Helper()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	autoDir := filepath.Join(root, ".nightgauge", "autonomous")
 	if err := os.MkdirAll(autoDir, 0o755); err != nil {
 		t.Fatalf("mkdir state dir: %v", err)

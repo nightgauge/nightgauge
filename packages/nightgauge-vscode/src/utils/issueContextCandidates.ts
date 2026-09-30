@@ -32,26 +32,13 @@
  * @see Issue #994, #1206
  */
 
-import {
-  pipelineStateDir,
-  RELATIVE_PIPELINE_STATE_DIR,
-  isUsableWorkspaceRoot,
-} from "./cloneLayout";
+import { pipelineStateDir, isUsableWorkspaceRoot } from "./cloneLayout";
 import * as path from "node:path";
 import { cachedWorktreeBase, goWorktreeDirName, LEGACY_GO_WORKTREE_BASE } from "./worktreeLocation";
 
 /** A run's issue-context file name inside its root's pipeline state dir. */
 function issueContextFileName(issueNumber: number): string {
   return `issue-${issueNumber}.json`;
-}
-
-/**
- * Where every writer puts a run's issue context, relative to its own root.
- * Display only: resolve against a root with {@link issueContextCandidates},
- * which goes through `pipelineStateDir`.
- */
-export function issueContextRelPath(issueNumber: number): string {
-  return path.join(RELATIVE_PIPELINE_STATE_DIR, issueContextFileName(issueNumber));
 }
 
 /**
@@ -90,8 +77,10 @@ export function issueContextCandidates(
   const seen = new Set<string>();
   const paths: string[] = [];
   for (const root of roots) {
-    // A root the layout helper refuses (relative) would resolve against the
-    // host's cwd; skip it rather than throw from a best-effort lookup.
+    // A root the layout helper refuses (relative, or not in a git repository)
+    // is skipped rather than thrown from a best-effort lookup. Every root of
+    // one clone resolves to the same directory, so the list collapses to one
+    // path per clone (ADR-024 § 7).
     if (!isUsableWorkspaceRoot(root)) continue;
     const p = path.join(pipelineStateDir(root), fileName);
     if (seen.has(p)) continue;

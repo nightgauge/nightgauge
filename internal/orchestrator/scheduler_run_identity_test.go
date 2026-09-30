@@ -14,6 +14,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // uuidV7Pattern is the canonical lowercase UUIDv7 shape ADR-017 fixes as the
@@ -282,7 +284,7 @@ func TestRunPipeline_IgnoresANonIdentityRemoteRunID_AndMintsLocally(t *testing.T
 					return
 				}
 				found, err := state.FindPersistedStatesForIssue(
-					filepath.Join(root, ".nightgauge", "pipeline"), issue)
+					layouttest.PipelineDir(t, root), issue)
 				if err != nil {
 					return
 				}
@@ -399,7 +401,7 @@ func TestRunPipeline_PreflightRefusesANonIdentity_AndBooksThroughTheFunnel(t *te
 		t.Errorf("refusal reason = %q, want it to name the non-canonical id case", reason)
 	}
 	// And nothing was written under the bad name.
-	entries, _ := os.ReadDir(filepath.Join(root, ".nightgauge", "pipeline"))
+	entries, _ := os.ReadDir(layouttest.PipelineDir(t, root))
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "runtime-") {
 			t.Errorf("a refused run left a snapshot behind: %s", e.Name())

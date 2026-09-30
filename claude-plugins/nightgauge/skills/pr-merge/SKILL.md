@@ -10,7 +10,7 @@ metadata:
 allowed-tools: Read Write Edit Glob Grep Bash Task
 model: haiku
 inputs:
-  - .nightgauge/pipeline/pr-{N}.json
+  - pipeline/pr-{N}.json
 outputs: []
 disable-model-invocation: true
 ---
@@ -119,14 +119,15 @@ attempt to populate that section itself; leave the placeholder from
 
 ## Input Contract
 
-This skill requires `.nightgauge/pipeline/pr-{N}.json` from
-`/nightgauge-pr-create`.
+This skill requires `pr-{N}.json` from `/nightgauge-pr-create`. Every context
+file named here lives in the clone's pipeline state directory: read it at
+`$(nightgauge layout path pipeline <file>)`.
 
 It also reads prior pipeline context for history and validation:
 
-- `.nightgauge/pipeline/issue-{N}.json` (from issue-pickup)
-- `.nightgauge/pipeline/planning-{N}.json` (from feature-planning)
-- `.nightgauge/pipeline/dev-{N}.json` (from feature-dev)
+- `nightgauge layout path pipeline issue-{N}.json` (from issue-pickup)
+- `nightgauge layout path pipeline planning-{N}.json` (from feature-planning)
+- `nightgauge layout path pipeline dev-{N}.json` (from feature-dev)
 
 **Full schema**: See
 [docs/CONTEXT_ARCHITECTURE.md](../../../../docs/CONTEXT_ARCHITECTURE.md) for complete
@@ -186,9 +187,9 @@ proceed to the next phase.
 printf '<!-- phase:start name="read-pr-context" index=0 total=14 stage="pr-merge" -->\n'
 ```
 
-Read PR context: resolve the issue number from the branch, load
-`.nightgauge/pipeline/pr-{N}.json`, signal stage start, and reconstruct the
-context file from GitHub if it is missing.
+Read PR context: resolve the issue number from the branch,
+load `"$(nightgauge layout path pipeline pr-{N}.json)"`, signal stage start,
+and reconstruct the context file from GitHub if it is missing.
 
 > **Read `_includes/context-bootstrap.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
@@ -211,7 +212,7 @@ not assigned until Phase 1 and each Bash call is a fresh shell.
 BRANCH=$(git branch --show-current)
 [ -z "$BRANCH" ] && BRANCH=$(git name-rev --name-only HEAD 2>/dev/null | sed 's|remotes/origin/||')
 EPIC_NUMBER=$(printf '%s' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-BATCH_DEV=".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
+BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
 if [ -n "$EPIC_NUMBER" ] && [ -f "$BATCH_DEV" ]; then echo "BATCH_CONTEXT_FOUND=$BATCH_DEV"; else echo "SINGLE_ISSUE"; fi
 ```
 

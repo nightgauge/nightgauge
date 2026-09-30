@@ -35,6 +35,8 @@ import type {
   AttentionListResult,
 } from "../../src/services/IpcClientBase";
 import type { Logger } from "../../src/utils/logger";
+import { pipelineStateDir } from "../../src/utils/cloneLayout";
+import { initGitRepo } from "../helpers/cloneLayout";
 
 vi.mock("../../src/services/IpcClient", () => ({
   IpcClient: { getInstance: vi.fn() },
@@ -678,8 +680,10 @@ describe("Action Center — View details (#1509)", () => {
   });
 
   it("appends the local plan file for an architecture-approval card", () => {
-    tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-attention-"));
-    const dir = path.join(tmpRoot, ".worktrees", "issue-801", ".nightgauge", "pipeline");
+    // The run's worktree and its repository share the clone's pipeline
+    // directory under the git common dir (ADR-024 § 7).
+    tmpRoot = initGitRepo(fs.mkdtempSync(path.join(os.tmpdir(), "ng-attention-")));
+    const dir = pipelineStateDir(tmpRoot);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       path.join(dir, "planning-801.json"),

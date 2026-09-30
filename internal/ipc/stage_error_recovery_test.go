@@ -3,9 +3,9 @@ package ipc
 import (
 	"bytes"
 	"encoding/json"
-	"path/filepath"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -32,7 +32,7 @@ import (
 // `go test -overlay`, this fails at "the recovered stage is still in
 // stageErrors".
 func TestNotifyStageTransition_RetrySuccessClearsTheStageError(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
 
 	// The emitted-event sink. NewServer writes to os.Stdout; the same-package
@@ -100,7 +100,7 @@ func TestNotifyStageTransition_RetrySuccessClearsTheStageError(t *testing.T) {
 		t.Errorf("the emitted snapshot does not list %s in completedStages: %+v", stage, emitted.CompletedStages)
 	}
 
-	persisted, err := state.LoadPersistedState(filepath.Join(root, ".nightgauge", "pipeline"), runID)
+	persisted, err := state.LoadPersistedState(layouttest.PipelineDir(t, root), runID)
 	if err != nil {
 		t.Fatalf("LoadPersistedState: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestNotifyStageTransition_RetrySuccessClearsTheStageError(t *testing.T) {
 // only completion, so nothing about #407 can quietly turn a terminal failure
 // green.
 func TestNotifyStageTransition_TerminalFailureKeepsTheStageError(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
 	var wire bytes.Buffer
 	s.writer = &wire

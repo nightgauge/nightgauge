@@ -199,7 +199,7 @@ func TestOpenCodeParkedFailuresAreNotEscalated(t *testing.T) {
 	}
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := gitWorkspace(t)
 			errText, tail := cliFailureText("", c.stderr)
 			runner := &cliFailureStageRunner{
 				failStage:       state.StagePRCreate,

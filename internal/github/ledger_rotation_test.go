@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // A ledger that is always on must be bounded, and the bound has to be enforced
@@ -105,7 +107,7 @@ func TestLedgerEnablementPrecedence(t *testing.T) {
 		{name: "env path beats config off", env: "custom.jsonl", setEnv: true, configOff: true, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := layouttest.Repo(t)
 			// A real workspace: the default path only writes into one that
 			// already exists (see TestLedgerDoesNotCreateAWorkspaceAtTheDefaultPath).
 			if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
@@ -353,8 +355,13 @@ func TestSummarizeWindowAttributesGraphQLOnly(t *testing.T) {
 // packages — untracked, unignored, and scattered through the source tree. The
 // rule also matches the semantics: the ledger is per-workspace, and a process
 // running outside a workspace has no workspace to bill.
+//
+// The per-clone logs directory lives under the git directory (ADR-024 § 7),
+// which every repository has, so the fixture is a repository: a git directory
+// alone is not a workspace, and resolving the ledger must not create the
+// clone directory in it either.
 func TestLedgerDoesNotCreateAWorkspaceAtTheDefaultPath(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	t.Chdir(dir)
 	t.Setenv(apiLedgerEnv, "")
 
@@ -365,10 +372,13 @@ func TestLedgerDoesNotCreateAWorkspaceAtTheDefaultPath(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".nightgauge")); !os.IsNotExist(err) {
 		t.Errorf("the ledger created %s/.nightgauge", dir)
 	}
+	if _, err := os.Stat(filepath.Join(dir, ".git", "nightgauge")); !os.IsNotExist(err) {
+		t.Errorf("the ledger created %s/.git/nightgauge outside a workspace", dir)
+	}
 }
 
 func TestLedgerWritesIntoAnExistingWorkspace(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -380,11 +390,12 @@ func TestLedgerWritesIntoAnExistingWorkspace(t *testing.T) {
 		t.Fatal("no ledger opened inside a real workspace")
 	}
 	t.Cleanup(l.close)
-	seg := filepath.Join(dir, ".nightgauge", "logs", LedgerSegmentName(time.Now()))
+	logs := layouttest.LogsDir(t, dir)
+	seg := filepath.Join(logs, LedgerSegmentName(time.Now()))
 	if _, err := os.Stat(seg); err != nil {
 		t.Errorf("today's ledger segment not created inside the workspace: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".nightgauge", "logs", "github-api.jsonl")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(logs, "github-api.jsonl")); !os.IsNotExist(err) {
 		t.Errorf("the pre-segment github-api.jsonl was written: %v", err)
 	}
 }

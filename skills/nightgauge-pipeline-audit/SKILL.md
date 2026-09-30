@@ -117,8 +117,9 @@ doc comment).
 - `nightgauge` CLI installed and authenticated (`nightgauge forge auth login`)
 - `jq` installed for JSON processing (fallback data sources only)
 - Git repository with `.nightgauge/` directory
-- Pipeline history in `.nightgauge/pipeline/history/*.jsonl` (preferred) or
-  pipeline context files (`dev-*.json`) as a minimal fallback
+- Pipeline history in `history/*.jsonl` (preferred) or pipeline context files
+  (`dev-*.json`) as a minimal fallback, both in the clone's pipeline state
+  directory (`nightgauge layout path pipeline`)
 
 **CRITICAL**: This skill runs headless. Do NOT use AskUserQuestion. Make
 autonomous decisions or fail with clear error.
@@ -163,8 +164,8 @@ COMPARE_DATE=""
 Check for execution history in priority order:
 
 ```bash
-HISTORY_DIR=".nightgauge/pipeline/history"
-PIPELINE_DIR=".nightgauge/pipeline"
+HISTORY_DIR="$(nightgauge layout path pipeline history)"
+PIPELINE_DIR="$(nightgauge layout path pipeline)"
 
 DATA_SOURCE="none"
 
@@ -351,7 +352,7 @@ directly instead of recomputing percentiles in Python.
 When `DATA_SOURCE="context"`, extract from dev-\*.json pipeline context files:
 
 ```bash
-for f in ${PIPELINE_DIR}/dev-*.json; do
+for f in "${PIPELINE_DIR}"/dev-*.json; do
   ISSUE=$(jq -r '.issue_number' "$f")
   TESTS_PASSED=$(jq -r '.tests_status.passed // 0' "$f")
   TESTS_FAILED=$(jq -r '.tests_status.failed // 0' "$f")
@@ -525,7 +526,8 @@ Display as a comparison table in the human-readable output.
 
 #### Step 3.12: Friction Correlation (Optional)
 
-If `.nightgauge/pipeline/assessments/` directory exists and contains
+If the `assessments/` directory in the clone's pipeline state directory
+(`nightgauge layout path pipeline assessments`) exists and contains
 assessment records:
 
 - Count friction records per skill
@@ -727,8 +729,10 @@ Assemble the full report:
 }
 ```
 
-If `--format json`, write to
-`.nightgauge/pipeline/audit-report-YYYY-MM-DD.json` and output path.
+If `--format json`, write it with
+`nightgauge layout write pipeline audit-report-YYYY-MM-DD.json` (content on
+stdin, or `--from FILE` after writing a temp file outside the git directory)
+and output the path the command prints.
 
 #### Step 5.2: Human-Readable Summary
 
@@ -1171,8 +1175,9 @@ UTILITIES (not part of main pipeline)
 /nightgauge:pipeline-audit
        ↑
   Use anytime to analyze pipeline efficiency
-  Reads: .nightgauge/pipeline/history/*.jsonl
-  Reads: .nightgauge/pipeline/dev-*.json (minimal fallback)
+  (pipeline/ = the clone's pipeline state dir: nightgauge layout path pipeline)
+  Reads: pipeline/history/*.jsonl
+  Reads: pipeline/dev-*.json (minimal fallback)
 ```
 
 This is a standalone utility skill. It does not affect pipeline state and can be

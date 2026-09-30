@@ -2,7 +2,8 @@
  * RecommendationTracker - Persists recommendation history to JSONL for
  * effectiveness assessment and recurring-finding detection.
  *
- * Storage: .nightgauge/pipeline/recommendation-history.jsonl
+ * Storage: <git-common-dir>/nightgauge/pipeline/recommendation-history.jsonl
+ * (`nightgauge layout path pipeline recommendation-history.jsonl`).
  * Each entry records a generated issue, the dimension score at creation time,
  * and (after assessment) the score after the issue was closed.
  *
@@ -27,9 +28,10 @@ import type {
 } from "./types.js";
 
 import { computeTrend } from "./statistics.js";
+import { cloneClassDir } from "../../context/cloneLayout.js";
 
-/** Relative path from workspace root to the recommendation history file */
-const RECOMMENDATION_HISTORY_FILE = ".nightgauge/pipeline/recommendation-history.jsonl";
+/** The recommendation history file inside the pipeline class directory */
+const RECOMMENDATION_HISTORY_FILE = "recommendation-history.jsonl";
 
 /** Default retention period in days */
 const DEFAULT_RETENTION_DAYS = 90;
@@ -59,11 +61,10 @@ export class RecommendationTracker {
    * @returns Parsed entries in chronological order
    */
   static async readAll(workspaceRoot: string): Promise<RecommendationHistoryEntry[]> {
-    const filePath = this.getFilePath(workspaceRoot);
     let content: string;
 
     try {
-      content = await fs.readFile(filePath, "utf-8");
+      content = await fs.readFile(this.getFilePath(workspaceRoot), "utf-8");
     } catch {
       return [];
     }
@@ -95,13 +96,14 @@ export class RecommendationTracker {
     workspaceRoot: string,
     retentionDays: number = DEFAULT_RETENTION_DAYS
   ): Promise<void> {
-    const filePath = this.getFilePath(workspaceRoot);
+    let filePath: string;
     let content: string;
 
     try {
+      filePath = this.getFilePath(workspaceRoot);
       content = await fs.readFile(filePath, "utf-8");
     } catch {
-      return; // File doesn't exist — nothing to do
+      return; // No repository or no file — nothing to do
     }
 
     const cutoff = new Date();
@@ -414,12 +416,14 @@ export class RecommendationTracker {
   }
 
   /**
-   * Returns the absolute path to the recommendation history file.
+   * Returns the absolute path to the recommendation history file, in the
+   * pipeline class directory of `workspaceRoot`'s repository.
    *
    * @param workspaceRoot - Absolute path to repo root
+   * @throws NotAGitRepositoryError when `workspaceRoot` is not in a repository
    */
   static getFilePath(workspaceRoot: string): string {
-    return path.join(workspaceRoot, RECOMMENDATION_HISTORY_FILE);
+    return path.join(cloneClassDir("pipeline", workspaceRoot), RECOMMENDATION_HISTORY_FILE);
   }
 
   /**

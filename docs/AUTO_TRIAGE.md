@@ -97,7 +97,8 @@ failure, the more specific one MUST come first.
 `pipeline-heal-base` is the most aggressive recovery action. When the pr-merge
 auto-fix loop's Step 2.5 has classified every failure as `inherited` — i.e.
 main is broken, not this PR — the action reads
-`.nightgauge/pipeline/auto-fix-baseline-{PR}.json`, matches the cluster
+`auto-fix-baseline-{PR}.json` from the clone's pipeline state directory
+(`nightgauge layout path pipeline`), matches the cluster
 against the heal pattern registry in `internal/heal/`, and opens a fix-PR
 against the affected base branch.
 
@@ -115,8 +116,9 @@ Guardrails (configurable via `pipeline.heal.*`, see
   opens the PR. Approve via either:
   - the `pipeline-heal:approved` label on the **failing** PR (the durable
     signal — survives worktree cleanup), or
-  - a workspace file `.nightgauge/pipeline/approval-heal-base-{PR}.json`
-    containing `{"approved": true}`.
+  - a file `approval-heal-base-{PR}.json` in the pipeline state directory
+    containing `{"approved": true}` (write it with
+    `nightgauge layout write pipeline approval-heal-base-{PR}.json`).
 
   Until approved, the action returns human-triage with an approval-required
   reason and performs no git/forge mutation. This gating lives on the recovery
@@ -204,7 +206,7 @@ then reports one of three outcomes, and each gets its own handling:
   or at least one conflicting path cannot be represented in a context (unreadable
   blob, binary/non-UTF-8 content, over the size cap). Writes no context and no
   signal. The raw index stages are first copied out verbatim to
-  `.nightgauge/pipeline/conflict-evidence-{N}/`, and only then is the rebase
+  `conflict-evidence-{N}/` in the pipeline state directory, and only then is the rebase
   aborted — evidence carries `evidence_preserved=true` and `evidence_dir=…`. The
   follow-up is always human triage, never a resumable stage, since a dev stage
   must not be dispatched against a conflict nobody could record.

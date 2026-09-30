@@ -7,10 +7,13 @@
  * and `outputs:` arrays; this module parses them at startup and exposes
  * `getProducingStage(missingFile)` keyed on file-path patterns.
  *
- * `{N}` in a path acts as the issue-number wildcard. Lookups substitute
- * any digit run in the input path with `{N}` before matching, so
- * `.nightgauge/pipeline/planning-42.json` matches the manifest
- * pattern `.nightgauge/pipeline/planning-{N}.json`.
+ * Patterns name a file by per-clone class and name (`pipeline/planning-{N}.json`,
+ * `plans/{N}-*.md`; ADR-024 § 7), the form `nightgauge layout path <class>
+ * <name>` takes. `{N}` acts as the issue-number wildcard. Lookups substitute
+ * any digit run in the input path with `{N}` before matching and match the
+ * pattern against the path's trailing segments, so the resolved
+ * `/repo/.git/nightgauge/pipeline/planning-42.json` matches
+ * `pipeline/planning-{N}.json`.
  *
  * @see ADR-003 in .nightgauge/knowledge/features/3239-pipeline-error-ux-surface-recovery-actions-when-pi/decisions.md
  */
@@ -67,12 +70,12 @@ export const DEV_FALLBACK_PRODUCERS: ReadonlyArray<{
   pattern: string;
   stage: PipelineStage;
 }> = Object.freeze([
-  { pattern: ".nightgauge/pipeline/issue-{N}.json", stage: "issue-pickup" },
-  { pattern: ".nightgauge/pipeline/planning-{N}.json", stage: "feature-planning" },
-  { pattern: ".nightgauge/plans/{N}-*.md", stage: "feature-planning" },
-  { pattern: ".nightgauge/pipeline/dev-{N}.json", stage: "feature-dev" },
-  { pattern: ".nightgauge/pipeline/validate-{N}.json", stage: "feature-validate" },
-  { pattern: ".nightgauge/pipeline/pr-{N}.json", stage: "pr-create" },
+  { pattern: "pipeline/issue-{N}.json", stage: "issue-pickup" },
+  { pattern: "pipeline/planning-{N}.json", stage: "feature-planning" },
+  { pattern: "plans/{N}-*.md", stage: "feature-planning" },
+  { pattern: "pipeline/dev-{N}.json", stage: "feature-dev" },
+  { pattern: "pipeline/validate-{N}.json", stage: "feature-validate" },
+  { pattern: "pipeline/pr-{N}.json", stage: "pr-create" },
 ]);
 
 /**
@@ -194,11 +197,12 @@ export class StageGraph {
    * this returns null.
    */
   getProducingStage(missingFile: string): StageProducer | null {
-    const normalized = normalizePathToPattern(missingFile);
+    const normalized = normalizePathToPattern(missingFile.replace(/\\/g, "/"));
 
-    // Exact pattern match first.
+    // Exact pattern match first (the pattern equals the path or its trailing
+    // segments).
     for (const producer of this.producers) {
-      if (producer.pattern === normalized) {
+      if (normalized === producer.pattern || normalized.endsWith(`/${producer.pattern}`)) {
         return {
           stage: producer.stage,
           name: STAGE_DISPLAY_NAMES[producer.stage] ?? producer.stage,
@@ -249,7 +253,7 @@ function globPatternToRegex(pattern: string): RegExp {
   // `{N}` to a digit-friendly placeholder. We compare normalized strings
   // (digits already replaced with `{N}`), so `{N}` matches itself.
   const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]*");
-  return new RegExp(`^${escaped}$`);
+  return new RegExp(`(^|/)${escaped}$`);
 }
 
 /**

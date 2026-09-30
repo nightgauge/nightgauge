@@ -515,7 +515,6 @@ export const DEFAULT_SKIP_CHECKS: SkipChecksConfig = {
  */
 export const DEFAULT_PIPELINE_LOGS: PipelineLogsConfig = {
   retain: true,
-  dir: ".nightgauge/logs",
   max_age_days: 30,
   max_count: 100,
 };
@@ -725,7 +724,6 @@ export const EXTENDED_CONFIG_ENV_MAPPINGS = {
   "pipeline.retry.max_auto_attempts": "NIGHTGAUGE_PIPELINE_RETRY_MAX_ATTEMPTS",
   "pipeline.retry.initial_delay_ms": "NIGHTGAUGE_PIPELINE_RETRY_INITIAL_DELAY",
   "pipeline.logs.retain": "NIGHTGAUGE_PIPELINE_LOGS_RETAIN",
-  "pipeline.logs.dir": "NIGHTGAUGE_PIPELINE_LOGS_DIR",
 
   // Routing config
   "routing.trivial_max_complexity": "NIGHTGAUGE_ROUTING_TRIVIAL_MAX",
@@ -891,7 +889,6 @@ export const DEFAULT_AUTOMATION_TRIGGER: import("../../src/config/schema").Autom
 export const DEFAULT_AUTOMATIONS_CONFIG: import("../../src/config/schema").AutomationsConfig = {
   enabled: true,
   dry_run: false,
-  log_file: ".nightgauge/automations.log",
   triggers: [],
 };
 
@@ -988,7 +985,6 @@ export const BEHAVIOR_CONFIG_ENV_MAPPINGS = {
   // Automations config
   "automations.enabled": "NIGHTGAUGE_AUTOMATIONS_ENABLED",
   "automations.dry_run": "NIGHTGAUGE_AUTOMATIONS_DRY_RUN",
-  "automations.log_file": "NIGHTGAUGE_AUTOMATIONS_LOG_FILE",
 } as const;
 
 export type BehaviorConfigEnvMapping = typeof BEHAVIOR_CONFIG_ENV_MAPPINGS;
@@ -1004,8 +1000,6 @@ export const DEFAULT_UI_CORE_CONFIG = {
   adapter: "claude" as const,
   auth_provider: "max" as const,
   default_model: "sonnet" as const,
-  context_path: ".nightgauge/pipeline",
-  plans_path: ".nightgauge/plans",
 };
 
 /**
@@ -1092,8 +1086,6 @@ export const UI_CONFIG_ENV_MAPPINGS = {
   "ui.core.adapter": "NIGHTGAUGE_UI_CORE_ADAPTER",
   "ui.core.auth_provider": "NIGHTGAUGE_UI_CORE_AUTH_PROVIDER",
   "ui.core.default_model": "NIGHTGAUGE_UI_CORE_DEFAULT_MODEL",
-  "ui.core.context_path": "NIGHTGAUGE_UI_CORE_CONTEXT_PATH",
-  "ui.core.plans_path": "NIGHTGAUGE_UI_CORE_PLANS_PATH",
   // Dashboard
   "ui.dashboard.time_savings.issue_pickup": "NIGHTGAUGE_UI_DASHBOARD_TIME_SAVINGS_ISSUE_PICKUP",
   "ui.dashboard.time_savings.feature_planning":

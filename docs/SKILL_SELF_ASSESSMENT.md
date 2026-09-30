@@ -59,7 +59,7 @@ hasn't updated in weeks.
     └── YES → write assessment record
               │
               ▼
-    .nightgauge/pipeline/assessments/<stage>-<issue>.json
+    <pipeline>/assessments/<stage>-<issue>.json
               │
               ▼
          ┌────────────────────────────────────┐
@@ -73,6 +73,9 @@ hasn't updated in weeks.
          │  Optionally create GitHub issues   │
          └────────────────────────────────────┘
 ```
+
+`<pipeline>` is the clone's pipeline state directory
+(`nightgauge layout path pipeline`).
 
 ## Layer 1: Per-Skill Epilogue (In SKILL.md)
 
@@ -115,7 +118,9 @@ questions:
 If ALL answers are "no" — **write nothing and complete normally.**
 
 **Step {N+1}.2 — Write Assessment Record.** Only if friction was detected. The
-agent writes a JSON file to `.nightgauge/pipeline/assessments/`:
+agent writes a JSON file to the `assessments/` subdirectory of the clone's
+pipeline state directory (`<pipeline>`), through
+`nightgauge layout write pipeline assessments/{stage}-{ISSUE_NUMBER}.json`:
 
 **File**: `assessments/{stage}-{ISSUE_NUMBER}.json`
 
@@ -171,7 +176,7 @@ agent writes a JSON file to `.nightgauge/pipeline/assessments/`:
 
 ## Layer 2: Assessment Synthesis (Periodic)
 
-Assessment records accumulate in `.nightgauge/pipeline/assessments/`. A
+Assessment records accumulate in `<pipeline>/assessments/`. A
 synthesis process aggregates them into actionable proposals.
 
 ### Trigger Points
@@ -189,7 +194,7 @@ Synthesis runs at three points:
 
 <!-- prettier-ignore-start -->
 
-1. Read all `.nightgauge/pipeline/assessments/*.json`
+1. Read all `<pipeline>/assessments/*.json`
 2. Group by `(skill, friction.type, friction.description_normalized)`
    - Normalize: lowercase, strip issue numbers, collapse whitespace
 3. For each group:
@@ -214,7 +219,7 @@ Synthesis runs at three points:
 ```
 
 5. Sort proposals: high severity first, then by `occurrence_count` desc
-6. Output: `.nightgauge/pipeline/assessments/synthesis.json`
+6. Output: `<pipeline>/assessments/synthesis.json`
 
 <!-- prettier-ignore-end -->
 
@@ -341,13 +346,17 @@ modification.
 
 ## File Locations
 
-| File                                | Purpose                               |
-| ----------------------------------- | ------------------------------------- |
-| `.nightgauge/pipeline/assessments/` | Per-execution assessment records      |
-| `assessments/<stage>-<issue>.json`  | Individual skill execution assessment |
-| `assessments/synthesis.json`        | Aggregated proposals from synthesis   |
-| `.nightgauge/config.yaml`           | Self-assessment configuration         |
-| `docs/SKILL_SELF_ASSESSMENT.md`     | This document (strategy and design)   |
+`<pipeline>` is the clone's pipeline state directory
+(`nightgauge layout path pipeline`, resolving to
+`<git-common-dir>/nightgauge/pipeline/`).
+
+| File                               | Purpose                               |
+| ---------------------------------- | ------------------------------------- |
+| `<pipeline>/assessments/`          | Per-execution assessment records      |
+| `assessments/<stage>-<issue>.json` | Individual skill execution assessment |
+| `assessments/synthesis.json`       | Aggregated proposals from synthesis   |
+| `.nightgauge/config.yaml`          | Self-assessment configuration         |
+| `docs/SKILL_SELF_ASSESSMENT.md`    | This document (strategy and design)   |
 
 ## Implementation Phases
 
@@ -356,7 +365,7 @@ modification.
 **Status: COMPLETE** — All 28 pipeline and utility skills include the
 self-assessment epilogue via
 `<!-- include: ../_shared/SELF_ASSESSMENT_EPILOGUE.md -->`. Assessment records
-are being written to `.nightgauge/pipeline/assessments/` in production.
+are being written to `<pipeline>/assessments/` in production.
 
 - [x] Add self-assessment epilogue to all 6 core pipeline skills
 - [x] Add epilogue to all utility skills

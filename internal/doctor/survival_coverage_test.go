@@ -7,6 +7,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func mergedRun(issue int) learning.Outcome {
@@ -26,7 +27,7 @@ func mergedRun(issue int) learning.Outcome {
 // writer invisible across a 113-run history. The two arms must be visibly
 // distinguishable, or the second one is decoration.
 func TestSurvivalCoverage_ReportsAJournalThatWasNeverWritten(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	var rows []learning.Outcome
 	for i := 1; i <= 12; i++ {
 		rows = append(rows, mergedRun(i))
@@ -59,7 +60,7 @@ func TestSurvivalCoverage_ReportsAJournalThatWasNeverWritten(t *testing.T) {
 // arm fires on every fresh clone, which is how an absence detector becomes
 // noise that gets muted — and a muted detector detects nothing.
 func TestSurvivalCoverage_IsQuietOnAYoungWorkspace(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	var rows []learning.Outcome
 	for i := 1; i <= 3; i++ {
 		rows = append(rows, mergedRun(i))
@@ -80,7 +81,7 @@ func TestSurvivalCoverage_IsQuietOnAYoungWorkspace(t *testing.T) {
 // TestSurvivalCoverage_IsQuietWhenCaptureIsWorking is the other half of the
 // floor: once records exist the arm must go silent, whatever their verdicts.
 func TestSurvivalCoverage_IsQuietWhenCaptureIsWorking(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	var rows []learning.Outcome
 	for i := 1; i <= 12; i++ {
 		rows = append(rows, mergedRun(i))

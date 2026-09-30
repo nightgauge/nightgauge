@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/knowledge/graduation"
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 const integrationDecisions = `# Decisions: #123 — test fixture
@@ -40,7 +41,7 @@ const integrationDecisions = `# Decisions: #123 — test fixture
 
 func writeFixture(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	// decisions.md under .nightgauge/knowledge/features/123-test/
 	knowledgeDir := filepath.Join(root, ".nightgauge", "knowledge", "features", "123-test")
@@ -66,7 +67,7 @@ func writeFixture(t *testing.T) string {
 	// Seed telemetry: 3 recall_hit events from 3 distinct future issues, all
 	// AFTER decisions.md mtime; one from source issue (123) and one from
 	// before cutoff to verify filtering.
-	historyDir := filepath.Join(root, ".nightgauge", "pipeline", "history")
+	historyDir := filepath.Join(layouttest.PipelineDir(t, root), "history")
 	if err := os.MkdirAll(historyDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +151,13 @@ func TestCandidates_Integration_StrongCandidateWins(t *testing.T) {
 func TestCandidates_NoTelemetryFile(t *testing.T) {
 	root := writeFixture(t)
 	// Remove the telemetry file - should still score on structural signals.
-	_ = os.Remove(filepath.Join(root, ".nightgauge", "pipeline", "history", "knowledge-events.jsonl"))
+	eventsPath, err := telemetry.Path(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(eventsPath); err != nil {
+		t.Fatalf("remove telemetry fixture: %v", err)
+	}
 
 	result, err := graduation.Candidates(root, 123, graduation.Options{})
 	if err != nil {

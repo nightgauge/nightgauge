@@ -120,7 +120,7 @@ ${skillContent}
 
 1. Follow the skill instructions exactly for issue #${issueNumber}
 2. Create the feature branch following the naming convention
-3. Write the output context file to .nightgauge/pipeline/issue-${issueNumber}.json
+3. Write the output context file with \`nightgauge layout write pipeline issue-${issueNumber}.json\` (JSON on stdin); never write under the git directory by path
 4. The context file must include all required fields from the schema
 5. Ensure the branch is pushed to the remote`;
   }

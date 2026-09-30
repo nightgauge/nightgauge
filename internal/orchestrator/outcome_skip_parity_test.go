@@ -25,6 +25,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // terminalSkipScheduler builds a scheduler that WILL record outcomes, whose
@@ -60,7 +62,7 @@ func terminalSkipScheduler(t *testing.T, root, errText string) *Scheduler {
 
 func runTerminalSkipPipeline(t *testing.T, issue int, errText string) (root string) {
 	t.Helper()
-	root = t.TempDir()
+	root = gitWorkspace(t)
 	s := terminalSkipScheduler(t, root, errText)
 	s.runPipeline(context.Background(), types.BoardItem{
 		Number: issue,
@@ -74,7 +76,7 @@ func runTerminalSkipPipeline(t *testing.T, issue int, errText string) (root stri
 
 func corpusRowCount(t *testing.T, root string) int {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, ".nightgauge", "pipeline", "history", "outcomes.jsonl"))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, root), "history", "outcomes.jsonl"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return 0

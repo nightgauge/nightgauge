@@ -20,6 +20,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -974,7 +975,7 @@ func TestAttentionRaiseWithoutStoreIsAnError(t *testing.T) {
 	// stopping at the repo gate — otherwise this test would pass for the wrong
 	// reason and stop covering the case it names.
 	resolver := NewClientResolver(nil, false)
-	resolver.RegisterRepo("o", "r", t.TempDir())
+	resolver.RegisterRepo("o", "r", layouttest.Repo(t))
 	s := &Server{resolver: resolver}
 
 	_, err := s.handleAttentionRaise(context.Background(), raiseParams(t, AttentionRaiseParams{
@@ -1293,7 +1294,7 @@ func TestNotifyRaiseResolveMovesTheCeilingForARealRun(t *testing.T) {
 func TestBudgetOverrideIsWrittenUnderTheCardsRepoRoot(t *testing.T) {
 	s := newAttentionTestServer(t)
 	repoA, repoB := "octocat/acme", "o/r"
-	rootA, rootB := t.TempDir(), t.TempDir()
+	rootA, rootB := layouttest.Repo(t), layouttest.Repo(t)
 	ownerA, nameA := splitSlug(repoA)
 	ownerB, nameB := splitSlug(repoB)
 	s.resolver.RegisterRepo(ownerA, nameA, rootA)
@@ -1313,11 +1314,10 @@ func TestBudgetOverrideIsWrittenUnderTheCardsRepoRoot(t *testing.T) {
 		t.Fatalf("Resolve(raise): %v", err)
 	}
 
-	overrideRel := filepath.Join(".nightgauge", "pipeline", "budget-override.json")
-	if _, err := os.Stat(filepath.Join(rootA, overrideRel)); err != nil {
+	if _, err := os.Stat(budgetOverridePath(t, rootA)); err != nil {
 		t.Errorf("no override under the CARD's repo root %s: %v", rootA, err)
 	}
-	if _, err := os.Stat(filepath.Join(rootB, overrideRel)); err == nil {
+	if _, err := os.Stat(budgetOverridePath(t, rootB)); err == nil {
 		t.Errorf("the override landed under the FOCUSED repo's root %s — read and write disagree "+
 			"about which budget-override.json is live", rootB)
 	}

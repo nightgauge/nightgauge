@@ -3,7 +3,7 @@
  * decision trace (ADR 013, docs/decisions/013-run-lifecycle-trace-schema.md).
  *
  * Appends events to the same per-run JSONL the Go binary writes
- * (`.nightgauge/pipeline/trace/<run_id>.jsonl`), under the same envelope:
+ * (`<git-common-dir>/nightgauge/pipeline/trace/<run_id>.jsonl`), under the same envelope:
  * `seq` is monotonic per (run_id, producer) and total order is
  * (ts, producer, seq), so the two producers interleave without coordination.
  *
@@ -65,7 +65,8 @@ const RUN_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 
 export interface TraceRecorderOptions {
   /**
-   * The pipeline context directory (normally `<root>/.nightgauge/pipeline`).
+   * The pipeline context directory (normally `nightgauge layout path pipeline`,
+   * i.e. `<git-common-dir>/nightgauge/pipeline`).
    * `run-state.json` is read from here and the trace is written to its
    * `trace/` subdirectory — one knob so custom `contextPath` configurations
    * keep run-state and trace co-located.
@@ -73,7 +74,7 @@ export interface TraceRecorderOptions {
   pipelineDir: string;
   /**
    * Explicit run id. When omitted, the recorder resolves `run_id` from
-   * `.nightgauge/pipeline/run-state.json` and disables itself (silent no-op)
+   * `<pipelineDir>/run-state.json` and disables itself (silent no-op)
    * when no run-state exists — a per-stage caller must never invent a run id
    * or it would split one run's trace across files.
    */

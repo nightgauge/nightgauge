@@ -13,6 +13,8 @@ import { LocalAuditFallbackService } from "../../src/services/LocalAuditFallback
 import { HISTORY_INDEX_SCHEMA_VERSION } from "../../src/utils/executionHistoryWriter";
 import type { AuditFilterState } from "../../src/views/dashboard/DashboardState";
 import type { HistoryIndex } from "../../src/services/TelemetryStore";
+import { pipelineStateDir } from "../../src/utils/cloneLayout";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 function makeFilters(overrides: Partial<AuditFilterState> = {}): AuditFilterState {
   return {
@@ -34,7 +36,7 @@ function makeIndex(entries: HistoryIndex["entries"]): HistoryIndex {
 }
 
 async function writeIndex(dir: string, index: HistoryIndex): Promise<void> {
-  const historyDir = path.join(dir, ".nightgauge", "pipeline", "history");
+  const historyDir = path.join(pipelineStateDir(dir), "history");
   await fs.mkdir(historyDir, { recursive: true });
   await fs.writeFile(path.join(historyDir, "index.json"), JSON.stringify(index), "utf-8");
 }
@@ -44,6 +46,7 @@ describe("LocalAuditFallbackService", () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "laf-test-"));
+    fakeCloneLayout(tmpDir);
   });
 
   afterEach(async () => {

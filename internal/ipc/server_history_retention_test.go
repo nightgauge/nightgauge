@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // TestNotifyComplete_PrunesUnderConfiguredRetention seeds a 40-day-old daily
@@ -32,7 +33,7 @@ func TestNotifyComplete_PrunesUnderConfiguredRetention(t *testing.T) {
 	})
 	defer restore()
 
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	cfgDir := filepath.Join(dir, ".nightgauge")
 	if err := os.MkdirAll(cfgDir, 0o755); err != nil {
@@ -43,7 +44,7 @@ func TestNotifyComplete_PrunesUnderConfiguredRetention(t *testing.T) {
 		t.Fatalf("write config.yaml: %v", err)
 	}
 
-	historyDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	historyDir := filepath.Join(layouttest.PipelineDir(t, dir), "history")
 	if err := os.MkdirAll(historyDir, 0o755); err != nil {
 		t.Fatalf("mkdir history dir: %v", err)
 	}

@@ -99,7 +99,7 @@ results in the pipeline.
 
 This is a **standalone utility skill**, not part of the main pipeline. It:
 
-- Does NOT read pipeline context files (`.nightgauge/pipeline/*.json`)
+- Does NOT read pipeline context files (`nightgauge layout path pipeline`)
 - Does NOT write pipeline handoff files
 - Generates standalone reports in `.nightgauge/reports/`
 - Can be run at any time without affecting pipeline state

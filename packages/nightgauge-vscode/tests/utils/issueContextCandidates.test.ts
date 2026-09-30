@@ -1,117 +1,123 @@
 /**
  * Mirrors internal/execution/issue_context_paths_test.go.
  *
- * The two lists have to agree byte for byte: a TypeScript list that merely
- * looks right misses the file on exactly the runs it was added for, and the
- * failure is silent — an empty tree section, not an error (#1206).
+ * The pipeline state directory lives under the git common dir (ADR-024 § 7),
+ * so every root of one clone — the checkout, a Go-manager worktree, a legacy
+ * in-tree worktree, the extension's worktree — resolves to the SAME
+ * issue-{N}.json, and the candidate list collapses to that one path after
+ * de-duplication, whichever worktree layout the run used (#994, #1206, #2037).
  */
-import { describe, it, expect } from "vitest";
+import { afterAll, describe, it, expect } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import {
   issueContextCandidates,
-  issueContextRelPath,
   pipelineFileCandidates,
 } from "../../src/utils/issueContextCandidates";
+import { pipelineStateDir } from "../../src/utils/cloneLayout";
 import { setCachedWorktreeBaseForTest } from "../../src/utils/worktreeLocation";
+import { fakeCloneLayout, git, initGitRepo } from "../helpers/cloneLayout";
+
+const tmpDirs: string[] = [];
+afterAll(() => {
+  for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true });
+});
+
+function repo(): string {
+  const root = initGitRepo(fs.mkdtempSync(path.join(os.tmpdir(), "ng-ctx-cand-")));
+  tmpDirs.push(root);
+  return root;
+}
+
+/** The one path every root of `root`'s clone resolves to. */
+function issueContextFile(root: string, name = "issue-42.json"): string {
+  return path.join(pipelineStateDir(root), name);
+}
 
 describe("issueContextCandidates (#1206, mirrors Go #994)", () => {
-  it("covers both worktree layouts and the plain repo root", () => {
-    const got = issueContextCandidates("/repo", "", "acme/widget", 42);
-
-    // Go manager layout — must match worktreePath's construction exactly, or
-    // the search misses every worktree the Go scheduler creates.
-    expect(got).toContain(
-      path.join(
-        "/repo",
-        ".nightgauge",
-        "worktrees",
-        "widget-issue-42",
-        ".nightgauge",
-        "pipeline",
-        "issue-42.json"
-      )
-    );
-    // VSCode extension layout.
-    expect(got).toContain(
-      path.join("/repo", ".worktrees", "issue-42", ".nightgauge", "pipeline", "issue-42.json")
-    );
-    // A run that never took a worktree.
-    expect(got).toContain(path.join("/repo", ".nightgauge", "pipeline", "issue-42.json"));
+  it("a run that never took a worktree reads the clone's pipeline directory", () => {
+    const root = repo();
+    expect(issueContextCandidates(root, "", "acme/widget", 42)).toEqual([issueContextFile(root)]);
   });
 
-  it("puts a known worktree first — most-specific wins", () => {
-    const got = issueContextCandidates("/repo", "/elsewhere/wt", "acme/widget", 42);
-    expect(got[0]).toBe(path.join("/elsewhere/wt", ".nightgauge", "pipeline", "issue-42.json"));
+  it("a linked worktree shares the clone's file", () => {
+    const root = repo();
+    fs.writeFileSync(path.join(root, "README"), "x\n");
+    git(root, "add", ".");
+    git(root, "commit", "-q", "-m", "init");
+    const wt = path.join(root, ".worktrees", "issue-42");
+    git(root, "worktree", "add", "-q", "--detach", wt);
+
+    expect(issueContextFile(wt)).toBe(issueContextFile(root));
+    for (const worktreeDir of ["", wt]) {
+      expect(issueContextCandidates(root, worktreeDir, "acme/widget", 42)).toEqual([
+        issueContextFile(root),
+      ]);
+    }
   });
 
-  it("strips owner/ from the repo for the Go layout leaf", () => {
-    // The leaf is the BARE repo name; "acme/widget-issue-42" is a directory
-    // that never exists. Compared as a whole path, not a substring — an
-    // `includes` here would be the ambient-path shape #426 forbids.
-    const goLayout = path.join(
-      "/repo",
-      ".nightgauge",
-      "worktrees",
-      "widget-issue-42",
-      ".nightgauge",
-      "pipeline",
-      "issue-42.json"
-    );
-    const nested = path.join(
-      "/repo",
-      ".nightgauge",
-      "worktrees",
-      "acme",
-      "widget-issue-42",
-      ".nightgauge",
-      "pipeline",
-      "issue-42.json"
-    );
-    const got = issueContextCandidates("/repo", "", "acme/widget", 42);
-    expect(got).toContain(goLayout);
-    expect(got).not.toContain(nested);
-  });
-
-  it("accepts a bare repo name", () => {
-    const got = issueContextCandidates("/repo", "", "widget", 42);
-    expect(got).toContain(
-      path.join(
-        "/repo",
-        ".nightgauge",
-        "worktrees",
-        "widget-issue-42",
-        ".nightgauge",
-        "pipeline",
-        "issue-42.json"
-      )
-    );
-  });
-
-  it("skips the Go layout when the repo is unknown rather than emitting -issue-N", () => {
-    const got = issueContextCandidates("/repo", "", "", 42);
-    expect(got).toEqual([
-      path.join("/repo", ".worktrees", "issue-42", ".nightgauge", "pipeline", "issue-42.json"),
-      path.join("/repo", ".nightgauge", "pipeline", "issue-42.json"),
+  it("puts a known worktree first, even one of another clone", () => {
+    const root = repo();
+    const other = repo();
+    expect(issueContextCandidates(root, other, "acme/widget", 42)).toEqual([
+      issueContextFile(other),
+      issueContextFile(root),
     ]);
   });
 
-  it("deduplicates when the worktree is also a derived candidate", () => {
-    const wt = path.join("/repo", ".worktrees", "issue-42");
-    const got = issueContextCandidates("/repo", wt, "widget", 42);
-    expect(new Set(got).size).toBe(got.length);
+  it("still works when the repo name is unknown", () => {
+    const root = repo();
+    expect(issueContextCandidates(root, "", "", 42)).toEqual([issueContextFile(root)]);
+  });
+
+  it("names no path outside a git repository", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ng-ctx-nogit-"));
+    tmpDirs.push(dir);
+    expect(issueContextCandidates(dir, dir, "acme/widget", 42)).toEqual([]);
   });
 
   it("returns nothing when there is no root and no worktree", () => {
     expect(issueContextCandidates("", "", "widget", 42)).toEqual([]);
   });
 
-  it("issueContextRelPath is the shape every writer uses", () => {
-    expect(issueContextRelPath(42)).toBe(path.join(".nightgauge", "pipeline", "issue-42.json"));
+  it("orders the roots most-specific first: worktree, Go base, legacy layouts, root", () => {
+    // Each root mapped to its own git dir, so no two collapse and the order
+    // of the roots is visible in the result.
+    const root = path.resolve("/repo");
+    const base = path.join(path.sep + "state", "worktrees", "0123456789ab");
+    const roots = [
+      path.resolve("/elsewhere/wt"),
+      path.join(base, "widget-issue-42"),
+      path.join(root, ".nightgauge", "worktrees", "widget-issue-42"),
+      path.join(root, ".worktrees", "issue-42"),
+      root,
+    ];
+    const layouts = roots.map((r, i) => fakeCloneLayout(r, path.resolve(`/gitdirs/${i}`)));
+    expect(issueContextCandidates(root, roots[0], "acme/widget", 42, base)).toEqual(
+      layouts.map((l) => path.join(l.pipeline, "issue-42.json"))
+    );
+  });
+
+  it("strips owner/ from the repo for the Go layout leaf", () => {
+    const root = path.resolve("/repo-strip");
+    const bare = fakeCloneLayout(
+      path.join(root, ".nightgauge", "worktrees", "widget-issue-42"),
+      path.resolve("/gitdirs/bare")
+    );
+    fakeCloneLayout(
+      path.join(root, ".nightgauge", "worktrees", "acme", "widget-issue-42"),
+      path.resolve("/gitdirs/nested")
+    );
+    const got = issueContextCandidates(root, "", "acme/widget", 42, "");
+    expect(got).toEqual([path.join(bare.pipeline, "issue-42.json")]);
   });
 
   it("pipelineFileCandidates keeps the order and swaps only the filename", () => {
-    const ctx = issueContextCandidates("/repo", "", "widget", 42);
-    const planning = pipelineFileCandidates("/repo", "", "widget", 42, "planning-42.json");
+    const root = repo();
+    const other = repo();
+    const ctx = issueContextCandidates(root, other, "widget", 42);
+    const planning = pipelineFileCandidates(root, other, "widget", 42, "planning-42.json");
     expect(planning).toHaveLength(ctx.length);
     planning.forEach((p, i) => {
       expect(path.dirname(p)).toBe(path.dirname(ctx[i]));
@@ -121,39 +127,32 @@ describe("issueContextCandidates (#1206, mirrors Go #994)", () => {
 });
 
 describe("issueContextCandidates — the Go worktree base outside the tree (#2038)", () => {
-  const base = path.join(path.sep + "state", "worktrees", "0123456789ab");
-
-  it("searches the resolved base first, then the pre-#2038 in-tree location", () => {
-    const got = issueContextCandidates("/repo", "", "acme/widget", 42, base);
-    const resolved = path.join(base, "widget-issue-42", ".nightgauge", "pipeline", "issue-42.json");
-    const legacy = path.join(
-      "/repo",
-      ".nightgauge",
-      "worktrees",
-      "widget-issue-42",
-      ".nightgauge",
-      "pipeline",
-      "issue-42.json"
-    );
-    expect(got[0]).toBe(resolved);
-    expect(got.indexOf(legacy)).toBeGreaterThan(0);
-  });
+  const base = path.join(path.sep + "state", "worktrees", "fedcba987654");
 
   it("uses the binary's cached answer when no base is passed", () => {
-    setCachedWorktreeBaseForTest("/repo", base);
+    const root = path.resolve("/repo-cached");
+    const wt = fakeCloneLayout(path.join(base, "widget-issue-42"), path.resolve("/gitdirs/wt"));
+    setCachedWorktreeBaseForTest(root, base);
     try {
-      expect(pipelineFileCandidates("/repo", "", "acme/widget", 42, "planning-42.json")[0]).toBe(
-        path.join(base, "widget-issue-42", ".nightgauge", "pipeline", "planning-42.json")
-      );
+      expect(pipelineFileCandidates(root, "", "acme/widget", 42, "planning-42.json")).toEqual([
+        path.join(wt.pipeline, "planning-42.json"),
+      ]);
     } finally {
-      setCachedWorktreeBaseForTest("/repo", undefined);
+      setCachedWorktreeBaseForTest(root, undefined);
     }
   });
 
   it("never builds a candidate from a repo name that could escape the base", () => {
-    for (const repo of ["acme/..", "..", "acme/a b"]) {
-      const got = issueContextCandidates("/repo", "", repo, 42, base);
-      expect(got.some((p) => p.startsWith(base))).toBe(false);
+    const root = path.resolve("/repo-escape");
+    // Map every root an unchecked leaf could produce, so a refused name would
+    // show up as a candidate if the refusal were missing.
+    for (const leaf of ["..-issue-42", "a b-issue-42", "widget-issue-42"]) {
+      fakeCloneLayout(path.join(base, leaf), path.resolve("/escaped"));
+    }
+    fakeCloneLayout(path.dirname(base), path.resolve("/escaped"));
+    for (const repoName of ["acme/..", "..", "acme/a b"]) {
+      const got = issueContextCandidates(root, "", repoName, 42, base);
+      expect(got.some((p) => p.startsWith(path.resolve("/escaped")))).toBe(false);
     }
   });
 });

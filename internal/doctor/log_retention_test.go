@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // logRetentionFixture makes a workspace root with a logs directory, pins the
@@ -23,12 +24,8 @@ func logRetentionFixture(t *testing.T, machineYAML string) (root, logs string) {
 	}
 	t.Cleanup(config.SwapMachineConfigPathForTest(func() (string, error) { return cfg, nil }))
 	t.Setenv("NIGHTGAUGE_STATE_HOME", t.TempDir())
-	root = t.TempDir()
-	logs = filepath.Join(root, ".nightgauge", "logs")
-	if err := os.MkdirAll(logs, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return root, logs
+	root = layouttest.Repo(t)
+	return root, layouttest.MkLogsDir(t, root)
 }
 
 func writeAged(t *testing.T, dir, name string, size int, mod time.Time) string {

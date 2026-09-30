@@ -32,7 +32,7 @@ batch run is the epic, not a sub-issue.
 BRANCH=$(git branch --show-current)
 [ -z "$BRANCH" ] && BRANCH=$(git name-rev --name-only HEAD 2>/dev/null | sed 's|remotes/origin/||')
 EPIC_NUMBER=$(printf '%s' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-BATCH_DEV=".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
+BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
 
 if [ -n "$EPIC_NUMBER" ] && [ -f "$BATCH_DEV" ]; then
   BATCH_ISSUES=$(jq -r '.issue_numbers | @json' "$BATCH_DEV")
@@ -79,11 +79,11 @@ once, unmodified, over the single shared PR.
    BRANCH=$(git branch --show-current)
    [ -z "$BRANCH" ] && BRANCH=$(git name-rev --name-only HEAD 2>/dev/null | sed 's|remotes/origin/||')
    EPIC_NUMBER=$(printf '%s' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-   BATCH_DEV=".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
+   BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
    BATCH_ISSUES=$(jq -r '.issue_numbers | @json' "$BATCH_DEV")
 
    # A batch PR is written by pr-create as pr-{E}.json, keyed on the same epic.
-   PR_NUMBER=$(jq -r '.pr_number // empty' ".nightgauge/pipeline/pr-${EPIC_NUMBER}.json" 2>/dev/null || echo "")
+   PR_NUMBER=$(jq -r '.pr_number // empty' "$(nightgauge layout path pipeline pr-${EPIC_NUMBER}.json)" 2>/dev/null || echo "")
 
    PR_BODY=""
    [ -n "$PR_NUMBER" ] && [ -n "$BINARY" ] && \

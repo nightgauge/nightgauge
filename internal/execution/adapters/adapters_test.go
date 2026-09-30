@@ -1,8 +1,12 @@
 package adapters
 
 import (
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestClaudeAdapter(t *testing.T) {
@@ -1155,6 +1159,33 @@ func TestRegistryRejectsRetiredAdapters(t *testing.T) {
 		for _, want := range []string{"removed", "opencode", "openai-compatible", "OpenAI-compatible server"} {
 			if !strings.Contains(err.Error(), want) {
 				t.Errorf("Get(%q) error %q does not mention %q", name, err, want)
+			}
+		}
+	}
+}
+
+// TestCodexAdapterWorkspaceWriteAddsCloneRoot: Codex's workspace-write sandbox
+// keeps .git read-only, so the per-clone directory under the git common dir
+// (ADR-024 § 7) is added as a writable root; no other mode gets it.
+func TestCodexAdapterWorkspaceWriteAddsCloneRoot(t *testing.T) {
+	root := layouttest.Repo(t)
+	clone, err := layout.CloneDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "sandbox_workspace_write.writable_roots=[" + strconv.Quote(clone) + "]"
+	adapter := NewCodexAdapter()
+	_, args, _ := adapter.BuildCommand(RunOptions{
+		Stage: "feature-dev", WorktreeDir: root, AllowedTools: []string{"Read", "Edit", "Write"},
+	})
+	if !containsArg(args, want) {
+		t.Errorf("workspace-write: missing %q in %v", want, args)
+	}
+	for _, tools := range [][]string{{"Read", "Grep"}, {"Read", "Bash"}} {
+		_, args, _ := adapter.BuildCommand(RunOptions{Stage: "x", WorktreeDir: root, AllowedTools: tools})
+		for _, a := range args {
+			if strings.Contains(a, "writable_roots") {
+				t.Errorf("tools %v: unexpected %q", tools, a)
 			}
 		}
 	}

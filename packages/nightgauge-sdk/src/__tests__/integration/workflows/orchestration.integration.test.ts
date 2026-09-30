@@ -16,11 +16,18 @@ import { PipelineOrchestrator } from "../../../orchestrator/PipelineOrchestrator
 import { EventBus } from "../../../events/EventBus.js";
 import { TokenTracker } from "../../../tracking/TokenTracker.js";
 import { createSuccessQueryFn, createTokenEmittingQueryFn } from "../helpers/query-mocks.js";
+import { initCloneRepo } from "../../helpers/gitRepo.js";
 
 /** Minimal SKILL.md content for test stages */
 const MINIMAL_SKILL_MD = `# Test Stage\nExecute the following test stage.\n`;
 
-async function createSkillWorkspace(): Promise<{ dir: string; cleanup: () => Promise<void> }> {
+interface SkillWorkspace {
+  dir: string;
+  pipelineDir: string;
+  cleanup: () => Promise<void>;
+}
+
+async function createSkillWorkspace(): Promise<SkillWorkspace> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sdk-orch-test-"));
   const stages = [
     "nightgauge-issue-pickup",
@@ -35,12 +42,14 @@ async function createSkillWorkspace(): Promise<{ dir: string; cleanup: () => Pro
     await fs.mkdir(skillDir, { recursive: true });
     await fs.writeFile(path.join(skillDir, "SKILL.md"), MINIMAL_SKILL_MD, "utf-8");
   }
-  // Create pipeline and plans directories
-  await fs.mkdir(path.join(dir, ".nightgauge", "pipeline"), { recursive: true });
-  await fs.mkdir(path.join(dir, ".nightgauge", "plans"), { recursive: true });
+  // A repository, with its per-clone pipeline and plans directories
+  const layout = initCloneRepo(dir);
+  await fs.mkdir(layout.pipeline, { recursive: true });
+  await fs.mkdir(layout.plans, { recursive: true });
 
   return {
     dir,
+    pipelineDir: layout.pipeline,
     cleanup: async () => {
       await fs.rm(dir, { recursive: true, force: true });
     },
@@ -48,7 +57,7 @@ async function createSkillWorkspace(): Promise<{ dir: string; cleanup: () => Pro
 }
 
 describe("Pipeline Orchestration Workflow", () => {
-  let workspace: { dir: string; cleanup: () => Promise<void> };
+  let workspace: SkillWorkspace;
 
   beforeEach(async () => {
     workspace = await createSkillWorkspace();
@@ -127,7 +136,7 @@ describe("Pipeline Orchestration Workflow", () => {
       const orchestrator = new PipelineOrchestrator(createSuccessQueryFn(), {
         cwd: workspace.dir,
         skillsPath: path.join(workspace.dir, "skills"),
-        contextPath: path.join(workspace.dir, ".nightgauge", "pipeline"),
+        contextPath: workspace.pipelineDir,
         stageTimeoutMs: 10_000,
       });
 
@@ -151,7 +160,7 @@ describe("Pipeline Orchestration Workflow", () => {
       const orchestrator = new PipelineOrchestrator(createSuccessQueryFn(), {
         cwd: workspace.dir,
         skillsPath: path.join(workspace.dir, "skills"),
-        contextPath: path.join(workspace.dir, ".nightgauge", "pipeline"),
+        contextPath: workspace.pipelineDir,
         stageTimeoutMs: 10_000,
       });
 
@@ -174,7 +183,7 @@ describe("Pipeline Orchestration Workflow", () => {
       const orchestrator = new PipelineOrchestrator(createTokenEmittingQueryFn(), {
         cwd: workspace.dir,
         skillsPath: path.join(workspace.dir, "skills"),
-        contextPath: path.join(workspace.dir, ".nightgauge", "pipeline"),
+        contextPath: workspace.pipelineDir,
         stageTimeoutMs: 10_000,
       });
 
@@ -190,7 +199,7 @@ describe("Pipeline Orchestration Workflow", () => {
       const orchestrator = new PipelineOrchestrator(createSuccessQueryFn(), {
         cwd: workspace.dir,
         skillsPath: path.join(workspace.dir, "skills"),
-        contextPath: path.join(workspace.dir, ".nightgauge", "pipeline"),
+        contextPath: workspace.pipelineDir,
         stageTimeoutMs: 10_000,
       });
 

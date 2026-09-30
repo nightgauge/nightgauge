@@ -17,13 +17,17 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // ---------------------------------------------------------------------------
 // #299 — the two remaining bare workspace-root branch lookups.
 //
-// On a worktree-isolated run issue-{N}.json is written INSIDE the worktree, so
-// loadFeatureBranch(workspaceRoot, N) answers "" for every such run. #163
+// On a worktree-isolated run issue-{N}.json was written INSIDE the worktree, so
+// loadFeatureBranch(workspaceRoot, N) answered "" for every such run. Since
+// ADR-024 § 7 the pipeline state directory is per clone and shared by every
+// worktree, but these fixtures still pin the branch resolution end to end. #163
 // converted three call sites to resolveFeatureBranch (runtime → worktree →
 // root); two were left behind, and each fails silently in its own way:
 //
@@ -34,7 +38,7 @@ import (
 //   - every V2/V3 history record of a worktree-isolated run lost the branch.
 //
 // Both fixtures below are worktree-isolated in the shape production produces:
-// the issue context exists ONLY in the worktree, written through the package's
+// the issue context is written from the worktree, through the package's
 // production writer (stagecontext.WriteContext at stagecontext.ContextPath), and
 // the runtime learns its worktree the way execution.Manager teaches it
 // (Runtime.SetProcess, internal/execution/manager.go).
@@ -54,7 +58,10 @@ func writeIssueContextInWorktree(t *testing.T, worktree string, issueNumber int,
 	if err := stagecontext.Validate(ctx); err != nil {
 		t.Fatalf("fixture issue context is not a valid stage context: %v", err)
 	}
-	path := stagecontext.ContextPath(worktree, issueNumber, "issue")
+	path, err := stagecontext.ContextPath(worktree, issueNumber, "issue")
+	if err != nil {
+		t.Fatalf("resolve issue context path: %v", err)
+	}
 	if err := stagecontext.WriteContext(path, ctx); err != nil {
 		t.Fatalf("write issue context into worktree: %v", err)
 	}
@@ -229,10 +236,23 @@ func TestScheduler_NonTerminalReconcile_WorktreeIsolatedRun_ReachesPRCheck(t *te
 		t.Fatalf("feature-planning ran %d times, want 1 — the fixture never reached the failing stage", got)
 	}
 
-	// The context this run resolved its branch from lives ONLY in the worktree.
-	// If that ever stops being true the test is no longer exercising #299.
-	if _, err := os.Stat(stagecontext.ContextPath(f.root, issueNumber, "issue")); err == nil {
-		t.Fatalf("fixture leaked issue-%d.json into the workspace root — the worktree-isolation premise is gone", issueNumber)
+	// Pipeline state is per clone (ADR-024 § 7): the context the worktree's
+	// stage wrote is the one the workspace root resolves, so a bare-root
+	// lookup can no longer miss it. Pin that, so the fixture keeps writing
+	// through the worktree the way a real stage does.
+	fromWorktree, err := stagecontext.ContextPath(f.worktree, issueNumber, "issue")
+	if err != nil {
+		t.Fatalf("resolve worktree issue context: %v", err)
+	}
+	fromRoot, err := stagecontext.ContextPath(f.root, issueNumber, "issue")
+	if err != nil {
+		t.Fatalf("resolve root issue context: %v", err)
+	}
+	if fromWorktree != fromRoot {
+		t.Fatalf("worktree and root resolve different issue contexts: %s vs %s", fromWorktree, fromRoot)
+	}
+	if _, err := os.Stat(fromRoot); err != nil {
+		t.Fatalf("issue-%d.json the worktree stage wrote is not at the clone's path: %v", issueNumber, err)
 	}
 
 	head, probed := probes.prListHead()
@@ -391,11 +411,9 @@ func TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch(t *tes
 	)
 
 	t.Run("branch carried on the live runtime", func(t *testing.T) {
-		root := t.TempDir()
+		root := gitWorkspace(t)
 		worktree := filepath.Join(root, ".nightgauge", "worktrees", "issue-299")
-		if err := os.MkdirAll(worktree, 0o755); err != nil {
-			t.Fatalf("create worktree dir: %v", err)
-		}
+		gitIn(t, root, "worktree", "add", "-q", "--detach", worktree)
 		writeIssueContextInWorktree(t, worktree, 299, repo, branch)
 
 		snap := state.NewRuntimeState(repo, 299, "item-299", testRunID())
@@ -409,11 +427,9 @@ func TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch(t *tes
 	})
 
 	t.Run("branch recoverable only from the worktree context", func(t *testing.T) {
-		root := t.TempDir()
+		root := gitWorkspace(t)
 		worktree := filepath.Join(root, ".nightgauge", "worktrees", "issue-300")
-		if err := os.MkdirAll(worktree, 0o755); err != nil {
-			t.Fatalf("create worktree dir: %v", err)
-		}
+		gitIn(t, root, "worktree", "add", "-q", "--detach", worktree)
 		const wtBranch = "fix/300-worktree-only"
 		writeIssueContextInWorktree(t, worktree, 300, repo, wtBranch)
 
@@ -463,7 +479,7 @@ func TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch(t *tes
 // could not name its branch, and that is a resolution gap worth seeing.
 func TestScheduler_RecordV2History_UnresolvedBranch_KeyPresentEmptyMeansUndetermined(t *testing.T) {
 	const repo = "nightgauge/nightgauge"
-	root := t.TempDir()
+	root := gitWorkspace(t)
 
 	// Nothing anywhere names a branch: no runtime branch, no worktree, no
 	// workspace-root context.
@@ -549,7 +565,7 @@ func readRawHistoryLine(t *testing.T, workspaceRoot string, issueNumber int) map
 // bytes.
 func readRawHistoryLineText(t *testing.T, workspaceRoot string, issueNumber int) string {
 	t.Helper()
-	dir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history")
+	dir := filepath.Join(layouttest.PipelineDir(t, workspaceRoot), "history")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read history dir: %v", err)

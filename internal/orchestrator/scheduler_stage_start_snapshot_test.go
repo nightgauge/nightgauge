@@ -10,6 +10,8 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // stageStartObservation is one sample of the on-disk world, taken from INSIDE a
@@ -88,7 +90,7 @@ func TestRunPipeline_PersistsTheRuntimeSnapshotAtStageStart(t *testing.T) {
 	s := newRunIdentityTestScheduler(t, root, runner)
 
 	const issue = 534
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 
 	var observations []stageStartObservation
 	runner.onStage = func() {
@@ -170,7 +172,7 @@ func TestRunPipeline_StageStartSnapshotDoesNotAssertADeadStageChild(t *testing.T
 	s := newRunIdentityTestScheduler(t, root, runner)
 
 	const issue = 535
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 
 	type pidSample struct {
 		dispatch int
@@ -265,8 +267,8 @@ func TestRunPipeline_StageStartSnapshotLandsInTheRunsTargetRepo(t *testing.T) {
 		return ""
 	})
 
-	primaryStateDir := filepath.Join(primary, ".nightgauge", "pipeline")
-	targetStateDir := filepath.Join(target, ".nightgauge", "pipeline")
+	primaryStateDir := layouttest.PipelineDir(t, primary)
+	targetStateDir := layouttest.PipelineDir(t, target)
 
 	type rootSample struct {
 		dispatch        int
@@ -362,7 +364,7 @@ func TestRunPipeline_RedispatchedStageSnapshotRendersRunning(t *testing.T) {
 	s.retryEngine = NewRetryEngine(RetryConfig{MaxBacktracks: 1, MaxEscalationsPerStage: 0})
 
 	const issue = 556
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 	feedbackFile := filepath.Join(stateDir, fmt.Sprintf("feedback-%d.json", issue))
 
 	// One sample of the persisted snapshot per feature-dev dispatch. Index 0 is

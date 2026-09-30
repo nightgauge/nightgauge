@@ -1,15 +1,37 @@
 package survival
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func newTestStore(t *testing.T) *Store {
 	t.Helper()
-	return NewStore(t.TempDir())
+	return NewStore(layouttest.Repo(t))
+}
+
+func TestStore_LivesInThePipelineStateDir(t *testing.T) {
+	root := layouttest.Repo(t)
+	want := filepath.Join(layouttest.PipelineDir(t, root), storeFileName)
+	if got := NewStore(root).Path(); got != want {
+		t.Errorf("Path() = %q, want %q", got, want)
+	}
+}
+
+func TestStore_OutsideAGitRepositoryIsAnError(t *testing.T) {
+	s := NewStore(t.TempDir())
+	if _, err := s.Load(); !errors.Is(err, layout.ErrNotGitRepository) {
+		t.Errorf("Load outside a repository: err = %v, want ErrNotGitRepository", err)
+	}
+	if _, err := s.Append(Record{MergeCommitSHA: "sha"}); !errors.Is(err, layout.ErrNotGitRepository) {
+		t.Errorf("Append outside a repository: err = %v, want ErrNotGitRepository", err)
+	}
 }
 
 func TestStore_LoadMissingFileIsEmpty(t *testing.T) {

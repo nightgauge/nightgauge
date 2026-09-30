@@ -36,7 +36,7 @@ Complete guide to using the Nightgauge VSCode extension — from installation to
 
 2. **Initialize Your Repository**
    - Open or switch to a repository that contains `.nightgauge/config.yaml`
-   - The extension activates automatically when it detects `.nightgauge/pipeline` or `.nightgauge/plans` directories
+   - The extension activates automatically when the workspace contains `.nightgauge/config.yaml`
    - You'll see the **Nightgauge** sidebar appear on the left activity bar
 
 3. **Authenticate with GitHub**
@@ -891,8 +891,9 @@ Quick reference for built-in shortcuts. Customize via VSCode Keybindings (Cmd+K 
 
 - Extension can't read/write to context files
 - Solution:
-  1. Check `.nightgauge/pipeline` directory exists and is writable
-  2. Run: `chmod -R 755 .nightgauge/`
+  1. Run `nightgauge layout` to print the clone's pipeline state directory
+     (inside the git directory) and check it is owned by and writable for you
+  2. Run: `chmod -R u+rwX .nightgauge/ "$(nightgauge layout path pipeline)"`
   3. Restart VSCode
 
 **"Claude CLI not found"**
@@ -939,8 +940,8 @@ Quick reference for built-in shortcuts. Customize via VSCode Keybindings (Cmd+K 
 **Causes & Solutions:**
 
 1. **Workspace doesn't have activation files**
-   - Extension activates only when `.nightgauge/pipeline` OR `.nightgauge/plans` directories exist
-   - Solution: Create directory: `mkdir -p .nightgauge/pipeline`
+   - Extension activates automatically only when the workspace contains `.nightgauge/config.yaml`
+   - Solution: initialize the repository (`/nightgauge:repo-init`), or open the Nightgauge view or run any Nightgauge command, which activates it too
 
 2. **Extension disabled**
    - Check VSCode Extensions view (Cmd+Shift+X)

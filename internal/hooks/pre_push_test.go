@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // mockCmdRunner records calls and returns predefined results.
@@ -102,9 +104,7 @@ func TestEvaluatePrePush_PassesCleanBranch(t *testing.T) {
 	}
 
 	// Create pipeline directory
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge", "pipeline"), 0755); err != nil {
-		t.Fatal(err)
-	}
+	layouttest.MkPipelineDir(t, tmpDir)
 
 	runner := setupCleanBranchMock()
 	input := PrePushInput{
@@ -144,9 +144,7 @@ func TestEvaluatePrePush_BlocksOnMergeConflict(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge", "pipeline"), 0755); err != nil {
-		t.Fatal(err)
-	}
+	layouttest.MkPipelineDir(t, tmpDir)
 
 	runner := newMockRunner()
 	runner.set("git fetch origin main", "", nil)
@@ -180,9 +178,7 @@ func TestEvaluatePrePush_BlocksOnBuildFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge", "pipeline"), 0755); err != nil {
-		t.Fatal(err)
-	}
+	layouttest.MkPipelineDir(t, tmpDir)
 
 	runner := newMockRunner()
 	runner.set("git fetch origin main", "", nil)
@@ -217,9 +213,7 @@ func TestEvaluatePrePush_CancelledValidationStillUsesLiveCleanupContext(t *testi
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge", "pipeline"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	layouttest.MkPipelineDir(t, tmpDir)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	runner := &cancelDuringBuildRunner{mockCmdRunner: setupCleanBranchMock(), cancel: cancel}
@@ -248,9 +242,7 @@ func TestEvaluatePrePush_BlocksWhenOriginalBranchCannotBeRestored(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge", "pipeline"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	layouttest.MkPipelineDir(t, tmpDir)
 	runner := setupCleanBranchMock()
 	runner.set("git checkout feat/42-test-feature", "branch is locked", fmt.Errorf("exit 1"))
 
@@ -270,9 +262,7 @@ func TestEvaluatePrePush_BlocksOnSecurityCritical(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge", "pipeline"), 0755); err != nil {
-		t.Fatal(err)
-	}
+	layouttest.MkPipelineDir(t, tmpDir)
 
 	runner := setupCleanBranchMock()
 	// Override security grep to find a secret
@@ -298,9 +288,7 @@ func TestEvaluatePrePush_BlocksOnSecurityCritical(t *testing.T) {
 
 func TestPrePushResult_WriteContextFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge", "pipeline"), 0755); err != nil {
-		t.Fatal(err)
-	}
+	layouttest.MkPipelineDir(t, tmpDir)
 
 	input := PrePushInput{
 		IssueNumber:   42,
@@ -328,7 +316,7 @@ func TestPrePushResult_WriteContextFile(t *testing.T) {
 		t.Fatal("expected non-empty context path")
 	}
 
-	expectedPath := filepath.Join(tmpDir, ".nightgauge", "pipeline", "pre-push-42.json")
+	expectedPath := filepath.Join(layouttest.PipelineDir(t, tmpDir), "pre-push-42.json")
 	if contextPath != expectedPath {
 		t.Errorf("expected context path %q, got %q", expectedPath, contextPath)
 	}
@@ -368,7 +356,7 @@ func TestReadPrePushContext_ReturnsNilWhenMissing(t *testing.T) {
 
 func TestReadPrePushContext_ParsesValidFile(t *testing.T) {
 	tmpDir := t.TempDir()
-	dir := filepath.Join(tmpDir, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, tmpDir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -426,9 +414,7 @@ func TestEvaluatePrePush_SkipsSecurityOnBlock(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge", "pipeline"), 0755); err != nil {
-		t.Fatal(err)
-	}
+	layouttest.MkPipelineDir(t, tmpDir)
 
 	// Merge conflict → should skip security and static checks
 	runner := newMockRunner()

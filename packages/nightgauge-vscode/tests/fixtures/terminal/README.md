@@ -5,7 +5,9 @@
 Real pipeline run outcomes, captured and redacted from a developer machine's
 local pipeline history.
 
-- **Source**: `.nightgauge/pipeline/history/index.json` — written by the Go
+- **Source**: `history/index.json` in the clone's pipeline directory
+  (`$(nightgauge layout path pipeline)`, `.git/nightgauge/pipeline` in a
+  normal clone; `.nightgauge/pipeline` at capture time) — written by the Go
   binary on every terminal run. The capture read an index holding **483** real
   records.
 - **Capture + redaction**: `scripts/capture-terminal-run-outcomes.mjs`

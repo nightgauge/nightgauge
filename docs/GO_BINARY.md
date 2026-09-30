@@ -1369,7 +1369,7 @@ or branch, and never touches a live run's state** (#410 closed the compose half
 What construction **does** still write, stated precisely because a banner that
 over-claims is how the next side effect slips in: the crash-recovery path
 synthesizes a terminal-failure `RunRecord`, pauses and persists
-`queue-state.json`, and removes `.nightgauge/pipeline/current-run.json` — all
+`queue-state.json`, and removes `current-run.json` from the pipeline state directory — all
 gated on `runstate.ProcessAlive(sidecar.PID)`, so it only ever happens for a run
 whose process is **gone**. A live run is left entirely alone (no record, no pause,
 no removal): that sidecar is the TypeScript side's index into the run, and
@@ -1388,8 +1388,9 @@ once per sibling repo. Roots come from `config.WorkspaceRepoRoots` (the resolver
 (`config.MainCheckoutRoot`), `--workdir` included, and deduped afterwards. A root
 is used for two different things and a linked worktree is only correct for one of
 them: `git worktree list` run from a worktree enumerates the whole repository,
-while the worktree's own `.nightgauge/pipeline` directory exists (the `.gitkeep`
-is tracked, so every checkout has one) and is always empty. Un-canonicalized, a
+while the worktree's own in-tree `.nightgauge/pipeline` directory — where run
+state lived before ADR-024 § 7 — existed (its `.gitkeep` was tracked) and was
+always empty. Un-canonicalized, a
 bare `nightgauge worktree sweep` from inside any pipeline worktree — which is
 where every stage runs — read a determined "no runs in flight", with no error and
 no warning, and then ran `git worktree remove --force` across every worktree of
@@ -1483,7 +1484,8 @@ it passed nothing, so `active-run` was structurally unreachable from the command
 line: one `nightgauge worktree sweep` during any run that was past its merge ran
 `git worktree remove --force` on the directory that run was still executing in.
 The set is now read per **canonicalized** root from
-`{mainCheckout}/.nightgauge/pipeline/runtime-<issue>-<runId>.json` — the layout
+`runtime-<issue>-<runId>.json` in the clone's pipeline state directory
+(`<git-common-dir>/nightgauge/pipeline`, shared by every checkout) — the layout
 ADR-017 Decision 8 built to be readable "by a process with no registry" — and a
 root whose snapshot directory cannot be read is **skipped entirely** rather than
 swept blind.
@@ -2374,10 +2376,10 @@ When the Nightgauge VS Code extension is open, a pipeline started directly with
 `nightgauge run` appears in the Pipeline tree for any locally registered
 repository. IPC events remain the primary update path for extension-started
 runs. For terminal-started runs, the extension reconciles the repository's
-atomic `.nightgauge/pipeline/current-run.json` and `runtime-<issue>.json`
-snapshots. It only accepts snapshots whose repository identity matches the
-registered root and whose owning process is alive; stale and unregistered
-runtime files are ignored.
+atomic `current-run.json` and `runtime-<issue>.json` snapshots in its pipeline
+state directory (`nightgauge layout path pipeline`). It only accepts snapshots
+whose repository identity matches the registered root and whose owning process
+is alive; stale and unregistered runtime files are ignored.
 
 #### Run Identity Keying (Issue #370 / ADR 017)
 
@@ -2416,7 +2418,7 @@ single-scanner hazard
 [#323](#active-worktree-scanning--single-scanner-contract-issue-323) settled for
 worktrees.
 
-One other extension service does poll `.nightgauge/pipeline/`:
+One other extension service does poll the pipeline state directory:
 `CliPipelineReconciliationService` reads each registered root's
 `current-run.json` on a 1s interval and probes the CLI sidecar's pid. It is
 DISCOVERY-ONLY — it mirrors `nightgauge run` pipelines into the tree view and
@@ -2586,8 +2588,9 @@ for how this proves the fast-track win.
 
 #### `pipeline batch-failures`
 
-Extracts pipeline failure rows from `.nightgauge/pipeline/batch-state.json`
-AND `.nightgauge/pipeline/history/*.jsonl`, with a context-files fallback.
+Extracts pipeline failure rows from `batch-state.json` AND `history/*.jsonl` in
+the clone's pipeline state directory (`nightgauge layout path pipeline`), with a
+context-files fallback.
 Replaces ~150 lines of inline Python in `skills/nightgauge-retro/SKILL.md`
 Phases 2.1, 2.2, and 2.4 (audit row B29).
 
@@ -2673,10 +2676,56 @@ The `batch` block is `null` (omitted) when `batch-state.json` is absent.
 
 Used by `skills/nightgauge-retro/SKILL.md` Phases 2.1, 2.2, and 2.4.
 
+### Data Layout (Issue #2037 / ADR-024 § 7)
+
+Per-clone data lives in the git directory, not the working tree:
+`<git-common-dir>/nightgauge/{pipeline,plans,retros,logs}` (for a normal clone
+`.git/nightgauge/<class>/`; a linked worktree resolves to the main clone's, so
+every checkout shares it). Git never tracks its own directory, so none of it can
+be committed. The binary is the one path source: skills, scripts and docs ask
+`nightgauge layout` for these paths instead of hard-coding them, and agents
+never write under the git directory by path — they hand content to
+`layout write` or `layout append`, which write through the resolver. See
+[ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data).
+
+```bash
+# Print the whole layout for the repository at --workdir (default: cwd)
+nightgauge layout
+nightgauge layout --workdir /path/to/repo
+# → { "schema_version": 1, "root", "git_common_dir", "clone",
+#     "pipeline", "plans", "retros", "logs", "state", "cache", "runtime" }
+
+# Absolute path of a class directory, or of a file in it (creates nothing
+# beyond the clone directory)
+nightgauge layout path pipeline
+jq . "$(nightgauge layout path pipeline issue-42.json)"
+
+# Write stdin (or --from FILE) to a file in a class directory; prints the path
+jq -n '{issue_number: 42}' | nightgauge layout write pipeline issue-42.json
+nightgauge layout write plans 42-add-widget.md --from /tmp/plan.md
+
+# Append stdin (or --from FILE); creates the file and its parents when absent
+echo '{"event":"x"}' | nightgauge layout append pipeline history/events.jsonl
+```
+
+| Subcommand                                   | Behaviour                                                                                                                                   |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `layout [--workdir DIR]`                     | Prints the resolved layout as indented JSON. `state`, `cache` and `runtime` are the per-user machine roots (`""` when unresolvable).        |
+| `layout path <class> [name]`                 | Prints the absolute path of the class directory, or of `name` inside it. Read files at this path.                                           |
+| `layout write <class> <name> [--from FILE]`  | Replaces `name` atomically (temporary file + rename, so a reader never sees a partial file), creating parents, and prints the path written. |
+| `layout append <class> <name> [--from FILE]` | Appends to `name`, creating the file and its parents when absent, and prints the path written.                                              |
+
+Classes are `pipeline`, `plans`, `retros` and `logs`. `name` may contain
+subdirectories (`history/2026-09-29.jsonl`) but never `..` or an absolute path;
+writes are confined to the class directory and refuse a symlink out of it.
+Every subcommand accepts `--workdir`. Outside a git repository each one fails
+with `not a git repository`; nothing is redirected into the working tree.
+
 ### Run-State Operations (Issue #3238)
 
-Manages the durable pipeline lifecycle record at
-`.nightgauge/pipeline/run-state.json`. Single source of truth for
+Manages the durable pipeline lifecycle record `run-state.json` in the clone's
+pipeline state directory (`nightgauge layout path pipeline`). Single source of
+truth for
 running / paused / completed / discarded / aborted state. See
 [docs/PIPELINE_STATE_SCHEMA.md](PIPELINE_STATE_SCHEMA.md) for the full
 schema, lifecycle diagram, and recovery decision tree.
@@ -2709,8 +2758,8 @@ surfaces `choices` as a quick-pick dialog for the recovery UX (Gap 2).
 ### Trace Operations (Issue #179 / ADR 013)
 
 Deterministic readers over the per-run lifecycle decision trace — one
-append-only JSONL per run at `.nightgauge/pipeline/trace/<run_id>.jsonl`
-capturing every stage boundary and every decision with its rationale and
+append-only JSONL per run at `trace/<run_id>.jsonl` in the clone's pipeline
+state directory, capturing every stage boundary and every decision with its rationale and
 rejected alternatives (model routing, change-class/fast-track, stage skips,
 escalations, backtracks, recovery retries, gate results, outcome). The
 scheduler emits events fail-open during execution; a trace-write failure never
@@ -2905,7 +2954,7 @@ its residual exposure.
 **No money crosses this wire.** The allowlist bounds _which_ operation a card
 may offer; it says nothing about that operation's _magnitude_. The
 `budget-ceiling` card's primary option is `budget.raiseCeiling`, whose
-resolution writes `.nightgauge/pipeline/budget-override.json`, which
+resolution writes `budget-override.json` to the pipeline state directory, which
 `orchestrator.PipelineBudgetCeilingUSD` takes as `max(config, override)` — a
 workspace-global spend control. So both inputs behind that offer are read
 daemon-side:
@@ -3476,13 +3525,13 @@ Used by `skills/nightgauge-feature-dev/SKILL.md` Phase 6.4 and
 
 ### Logs Operations
 
-Deterministic readers over local pipeline session logs in
-`.nightgauge/logs/`. Distinct from `nightgauge ci logs <run-id>`,
+Deterministic readers over local pipeline session logs in the clone's logs
+directory (`nightgauge layout path logs`). Distinct from `nightgauge ci logs <run-id>`,
 which downloads CI workflow run logs from GitHub.
 
 #### `logs scan-failures`
 
-Scans `.nightgauge/logs/*_session.log` with the canonical 16-pattern
+Scans `*_session.log` in the clone's logs directory with the canonical 16-pattern
 regex set and emits matched lines per file. Replaces ~80 lines of inline
 Python in `skills/nightgauge-retro/SKILL.md` Phase 2.3 (audit row B29).
 
@@ -3556,9 +3605,9 @@ Used by `skills/nightgauge-retro/SKILL.md` Phase 2.3.
 #### `logs prune`
 
 Applies log retention now (ADR-024 § 11). Each log directory (the clone's
-`.nightgauge/logs/` and the machine state `logs/`) is held to a total size cap
-and a maximum file age, set by machine-tier `pipeline.logs.max_size_mb`
-(default 200) and `pipeline.logs.max_age_days` (default 30). Files older than
+logs directory, `nightgauge layout path logs`, and the machine state `logs/`) is
+held to a total size cap and a maximum file age, set by machine-tier
+`pipeline.logs.max_size_mb` (default 200) and `pipeline.logs.max_age_days` (default 30). Files older than
 the age cap go first, then the oldest files until the directory is under the
 size cap.
 
@@ -4071,11 +4120,11 @@ pay for it.
 The `PreToolUse:Task` prompt-injection screen honors `sanitization.mode`, the
 same setting `workflow-gate` already respects:
 
-| Mode             | Behavior                                                       |
-| ---------------- | -------------------------------------------------------------- |
-| `warn` (default) | Log the match to `.nightgauge/logs/sanitization.log` and allow |
-| `block`          | Deny the Task call with the matched pattern as the reason      |
-| `disabled`       | Skip screening entirely                                        |
+| Mode             | Behavior                                                                    |
+| ---------------- | --------------------------------------------------------------------------- |
+| `warn` (default) | Log the match to `sanitization.log` in the clone's logs directory and allow |
+| `block`          | Deny the Task call with the matched pattern as the reason                   |
+| `disabled`       | Skip screening entirely                                                     |
 
 Repairing the stdin plumbing activated a hard-DENY guard that had **never once
 run**. Its patterns — `ignore all previous instructions`, `you are now a `,
@@ -4203,7 +4252,7 @@ nightgauge survival list --verdict pending
 **Capture** appends a `pending` survival record keyed on the merge commit SHA
 (the #4133 breadcrumb) for every **single-issue squash merge** — epic-umbrella
 PRs are skipped (ambiguous N→1 attribution). The record is written to
-`.nightgauge/pipeline/survival-records.jsonl` (append-only; a terminal line
+`survival-records.jsonl` in the clone's pipeline state directory (append-only; a terminal line
 supersedes its pending line on fold).
 
 Every record also carries the **immediate** post-merge observation of the base
@@ -4356,10 +4405,12 @@ and returning deterministic verdicts per loop.
 
 **Loop verdicts**: `closing` / `stalling` / `degrading` / `no-data` / `bootstrapping`
 
-**Data files read** (missing files → `no-data` verdict, not an error):
+**Data files read**, in the clone's pipeline state directory
+(`nightgauge layout path pipeline`; missing files → `no-data` verdict, not an
+error):
 
-- `.nightgauge/pipeline/assessments/*.json` — skill-drift loop
-- `.nightgauge/pipeline/history/outcomes.jsonl` — calibration + cost + reliability loops.
+- `assessments/*.json` — skill-drift loop
+- `history/outcomes.jsonl` — calibration + cost + reliability loops.
   **Per-repo**, rooted at the run's TARGET repo — the same root as the run record
   the outcome is derived from (#215/#232), and the same root `--workdir` reads
   that repo's run history from. Written by `Scheduler.recordOutcome` on the
@@ -4520,7 +4571,7 @@ as `routed_model`.
 | -------------- | -------------------------------------------------------------------------------------------------- |
 | `--issue`      | GitHub issue number to evaluate (required).                                                        |
 | `--config`     | Path to `config.yaml`. Default: `.nightgauge/config.yaml`.                                         |
-| `--workdir`    | Workspace root for locating `.nightgauge/pipeline/dev-{N}.json`. Default: cwd.                     |
+| `--workdir`    | Workspace root; `dev-{N}.json` is read from its clone's pipeline state directory. Default: cwd.    |
 | `--issue-type` | Override inferred issue type (`docs` \| `chore`). When set, skips the type-label lookup on GitHub. |
 | `--json`       | Emit JSON `{ status, allowed, drifted_files, allowed_files, reason, ... }`.                        |
 
@@ -4603,7 +4654,7 @@ expanded one level, because `make test` and `npm test` carry no flags at all and
 the exclusion lives in the recipe.
 
 **The record.** `record-test-execution` appends to
-`.nightgauge/pipeline/test-execution-{N}.jsonl`:
+`test-execution-{N}.jsonl` in the clone's pipeline state directory:
 
 ```json
 {
@@ -4898,7 +4949,7 @@ It is therefore **on by default**, bounded rather than unbounded:
 
 | | |
 | --- | --- |
-| File | `.nightgauge/logs/github-api-YYYY-MM-DD.jsonl`, one segment per UTC day, gitignored with the other logs |
+| File | `github-api-YYYY-MM-DD.jsonl` in the clone's logs directory (`nightgauge layout path logs`), one segment per UTC day, never committed |
 | Bound | Log retention (200 MB and 30 days per log directory) deletes whole old segments; within a day each segment rotates at 5 MB into one numbered backup (`.jsonl.1`) |
 | Off switch | `github.api_ledger.enabled: false`, or `NIGHTGAUGE_GITHUB_API_LOG=0` |
 | Override | `NIGHTGAUGE_GITHUB_API_LOG=<path>` writes elsewhere; env wins over config in both directions |
@@ -5549,7 +5600,7 @@ There is no verb-shaped class. `serve` had one until **#388** — see below.
 - **Ownership is a recent-progress sidecar claim, not a PID's presence.** Every
   long-lived verb writes its OWN pid into the sidecar it owns — the scheduler
   into `.nightgauge/autonomous/state.json`, the runner into
-  `.nightgauge/pipeline/current-run.json` — so a presence test is
+  `current-run.json` in the pipeline state directory — so a presence test is
   self-attestation, and the wedged 31-hour scheduler vouched for itself and
   read as owned forever. A claim counts only while the sidecar's own progress
   timestamp is within `staleSidecarClaim` (24h) of now: `lastScanAt` (rewritten
@@ -6946,7 +6997,8 @@ nightgauge pipeline aggregate [--runs N] [--since YYYY-MM-DD] [--until YYYY-MM-D
 ```
 
 Aggregate per-stage durations, token counts, model usage, and per-run cost
-metrics from `.nightgauge/pipeline/history/YYYY-MM-DD.jsonl`. Replaces the
+metrics from `history/YYYY-MM-DD.jsonl` in the clone's pipeline state directory.
+Replaces the
 ~300 lines of inline-Python aggregation duplicated across `pipeline-audit`,
 `pipeline-health`, `retro`, and `continuous-improvement` (audit row **B2**).
 This PR migrates `pipeline-audit` Phase 2.1 as the proof consumer; the other
@@ -6966,7 +7018,7 @@ produce a warning rather than failing.
 | `--issue N`          | `0`     | Filter to a single issue number. `0` means all issues.                                 |
 | `--include LIST`     | `""`    | Optional analysis blocks (comma-separated). Currently only `analysis` is recognized.   |
 | `--json`             | `false` | Emit JSON instead of human-readable output. Skills always set this.                    |
-| `--workdir DIR`      | cwd     | History root (the `.nightgauge/pipeline/history` directory is resolved under it). |
+| `--workdir DIR`      | cwd     | Repository root; `history/` is read from its clone's pipeline state directory. |
 
 **`--include analysis`** adds the size-accuracy / weekly-trend block that the
 pipeline-audit skill needs (Issue #1591). Other consuming skills do not need
@@ -7125,7 +7177,8 @@ nightgauge pipeline aggregate \
 nightgauge pipeline repair-history [--workdir DIR] [--apply] [--json] [--top N]
 ```
 
-Collapses duplicate run records in `.nightgauge/pipeline/history/*.jsonl` so
+Collapses duplicate run records in `history/*.jsonl` (the clone's pipeline state
+directory) so
 each pipeline run occupies exactly one record (Issue #141).
 
 **Reports by default; rewrites only with `--apply`.** Collapsing records is
@@ -8254,7 +8307,7 @@ for machine-readable output.
 #### Knowledge Telemetry
 
 Every knowledge subcommand emits one JSONL event to
-`.nightgauge/pipeline/history/knowledge-events.jsonl` at its success
+`history/knowledge-events.jsonl` in the clone's pipeline state directory at its success
 path. Skills and downstream stages can also emit events for operations that
 happen outside the binary via `knowledge telemetry record`.
 

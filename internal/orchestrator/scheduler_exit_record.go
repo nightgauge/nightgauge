@@ -15,7 +15,7 @@ import (
 )
 
 // writeStageExitRecord persists one StageExitRecord per stage to the
-// per-project daily JSONL (`.nightgauge/pipeline/exit-records/<day>.jsonl`).
+// per-project daily JSONL (`.git/nightgauge/pipeline/exit-records/<day>.jsonl`).
 //
 // The record is written for both success and failure exits so the daily file
 // also anchors what "healthy" looks like for ratio-based health analysis

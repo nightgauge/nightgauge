@@ -14,21 +14,17 @@ import {
 
 describe("normalizePathToPattern", () => {
   it("collapses single-digit issue numbers", () => {
-    expect(normalizePathToPattern(".nightgauge/pipeline/planning-7.json")).toBe(
-      ".nightgauge/pipeline/planning-{N}.json"
-    );
+    expect(normalizePathToPattern("pipeline/planning-7.json")).toBe("pipeline/planning-{N}.json");
   });
 
   it("collapses multi-digit issue numbers", () => {
-    expect(normalizePathToPattern(".nightgauge/pipeline/planning-12345.json")).toBe(
-      ".nightgauge/pipeline/planning-{N}.json"
+    expect(normalizePathToPattern("pipeline/planning-12345.json")).toBe(
+      "pipeline/planning-{N}.json"
     );
   });
 
   it("preserves glob wildcards in paths", () => {
-    expect(normalizePathToPattern(".nightgauge/plans/42-thing.md")).toBe(
-      ".nightgauge/plans/{N}-thing.md"
-    );
+    expect(normalizePathToPattern("plans/42-thing.md")).toBe("plans/{N}-thing.md");
   });
 });
 
@@ -40,18 +36,15 @@ describe("parseStageManifest", () => {
   it("parses indented list-of-scalars frontmatter", () => {
     const fm = `name: feature-planning
 inputs:
-  - .nightgauge/pipeline/issue-{N}.json
+  - pipeline/issue-{N}.json
 outputs:
-  - .nightgauge/pipeline/planning-{N}.json
-  - .nightgauge/plans/{N}-*.md`;
+  - pipeline/planning-{N}.json
+  - plans/{N}-*.md`;
 
     const parsed = parseStageManifest("feature-planning", fm);
     expect(parsed).not.toBeNull();
-    expect(parsed?.inputs).toEqual([".nightgauge/pipeline/issue-{N}.json"]);
-    expect(parsed?.outputs).toEqual([
-      ".nightgauge/pipeline/planning-{N}.json",
-      ".nightgauge/plans/{N}-*.md",
-    ]);
+    expect(parsed?.inputs).toEqual(["pipeline/issue-{N}.json"]);
+    expect(parsed?.outputs).toEqual(["pipeline/planning-{N}.json", "plans/{N}-*.md"]);
     expect(parsed?.normalizedOutputs).toEqual(parsed?.outputs);
   });
 
@@ -69,20 +62,27 @@ allowed-tools: Read`;
 describe("StageGraph.getProducingStage", () => {
   it("resolves exact-match patterns to the producer", () => {
     const g = StageGraph.fromFallback();
-    const producer = g.getProducingStage(".nightgauge/pipeline/planning-42.json");
+    const producer = g.getProducingStage("/repo/.git/nightgauge/pipeline/planning-42.json");
     expect(producer?.stage).toBe("feature-planning");
     expect(producer?.name).toBe("Feature Planning");
   });
 
   it("resolves glob patterns (plans/*.md)", () => {
     const g = StageGraph.fromFallback();
-    const producer = g.getProducingStage(".nightgauge/plans/42-photo-upload.md");
+    const producer = g.getProducingStage("/repo/.git/nightgauge/plans/42-photo-upload.md");
     expect(producer?.stage).toBe("feature-planning");
+  });
+
+  it("matches the class/name pattern relative to the class directory", () => {
+    const g = StageGraph.fromFallback();
+    expect(g.getProducingStage("pipeline/dev-42.json")?.stage).toBe("feature-dev");
   });
 
   it("returns null for unknown files", () => {
     const g = StageGraph.fromFallback();
     expect(g.getProducingStage(".nightgauge/something/random.json")).toBeNull();
+    // A segment merely ending in "pipeline" is not the class directory.
+    expect(g.getProducingStage("/repo/my-pipeline/dev-42.json")).toBeNull();
   });
 
   it("returns null when called with an empty path", () => {
@@ -118,16 +118,16 @@ describe("StageGraph manifest/fallback parity", () => {
 name: nightgauge-issue-pickup
 inputs: []
 outputs:
-  - .nightgauge/pipeline/issue-{N}.json
+  - pipeline/issue-{N}.json
 ---
 body`,
       "/skills/nightgauge-feature-planning/SKILL.md": `---
 name: nightgauge-feature-planning
 inputs:
-  - .nightgauge/pipeline/issue-{N}.json
+  - pipeline/issue-{N}.json
 outputs:
-  - .nightgauge/pipeline/planning-{N}.json
-  - .nightgauge/plans/{N}-*.md
+  - pipeline/planning-{N}.json
+  - plans/{N}-*.md
 ---
 body`,
     };
@@ -139,9 +139,7 @@ body`,
 
     const g = loadStageGraphFromManifests("/skills", fakeFs);
     expect(g.source).toBe("manifests");
-    expect(g.getProducingStage(".nightgauge/pipeline/planning-7.json")?.stage).toBe(
-      "feature-planning"
-    );
-    expect(g.getProducingStage(".nightgauge/pipeline/issue-7.json")?.stage).toBe("issue-pickup");
+    expect(g.getProducingStage("pipeline/planning-7.json")?.stage).toBe("feature-planning");
+    expect(g.getProducingStage("pipeline/issue-7.json")?.stage).toBe("issue-pickup");
   });
 });

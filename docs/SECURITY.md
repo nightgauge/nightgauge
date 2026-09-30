@@ -23,8 +23,9 @@ against a built-in pattern set covering commands that:
 - Traverse paths (`../../etc/passwd`)
 - Attempt prompt injection ("ignore previous instructions", "you are now a…")
 
-The default is `warn`: a match is logged to
-`.nightgauge/logs/sanitization.log` and the command or prompt is allowed. Set
+The default is `warn`: a match is logged to `sanitization.log` in the clone's
+logs directory (`nightgauge layout path logs`) and the command or prompt is
+allowed. Set
 `sanitization.mode: block` to reject on match, or `disabled` to skip screening
 entirely. Enforcement is deliberately opt-in — the prompt-injection patterns
 appear verbatim in legitimate orchestration prompts, so block-by-default would
@@ -76,8 +77,8 @@ principle. Pattern matching is deterministic, ensuring:
 ### Configuration
 
 `mode` is the only sanitization setting. Patterns are built into the binary;
-the log path (`.nightgauge/logs/sanitization.log`) is fixed and not
-configurable.
+the log path (`sanitization.log` in the clone's logs directory) is fixed and
+not configurable.
 
 ```yaml
 sanitization:
@@ -147,8 +148,13 @@ logged and allowed.
 
 ### Logging
 
-Sanitization events are logged to `.nightgauge/logs/sanitization.log` in
-NDJSON format:
+Sanitization events are logged to `sanitization.log` in the clone's logs
+directory, in NDJSON format. The logs directory resolves to
+`<git-common-dir>/nightgauge/logs/` (`.git/nightgauge/logs/` for a normal clone;
+linked worktrees share the main clone's), inside the git directory, so it is
+never committed
+([ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
+`nightgauge layout path logs sanitization.log` prints the full path:
 
 ```json
 {
@@ -166,13 +172,13 @@ NDJSON format:
 View recent events:
 
 ```bash
-tail -f .nightgauge/logs/sanitization.log | jq
+tail -f "$(nightgauge layout path logs sanitization.log)" | jq
 ```
 
 Count blocked events:
 
 ```bash
-grep '"event":"blocked"' .nightgauge/logs/sanitization.log | wc -l
+grep '"event":"blocked"' "$(nightgauge layout path logs sanitization.log)" | wc -l
 ```
 
 ### Command Exemptions
@@ -181,9 +187,8 @@ There is no allowlist, blocklist or safe-directory setting. Every screened
 command is evaluated against the same built-in pattern set, and `mode` is the
 only control.
 
-Pipeline cleanup commands (`rm -f` on `.nightgauge/pipeline/*.json`, plan
-files, `.git/index.lock`, `.vsix` artifacts) are therefore not specially
-exempted. Under the default `warn` mode any match is logged and allowed, so
+Pipeline cleanup commands (`rm -f` on pipeline context files, plan files,
+`.git/index.lock`, `.vsix` artifacts) are therefore not specially exempted. Under the default `warn` mode any match is logged and allowed, so
 cleanup proceeds; under `mode: block` these commands can be rejected and
 cleanup must run through a path the gate does not screen.
 
@@ -206,6 +211,14 @@ cleanup must run through a path the gate does not screen.
    Set `sanitization.mode: disabled`, or `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` for
    a single invocation.
 
+4. **Per-clone data writes**: pipeline state, plans, retros and logs live in
+   the git directory (`<git-common-dir>/nightgauge/<class>/`). Agents never
+   write there by path: they hand content to
+   `nightgauge layout write <class> <name>` (atomic temp-file-plus-rename) or
+   `nightgauge layout append <class> <name>`, which confine the write to the
+   class directory and refuse `..`, absolute names and symlinks out of it.
+   Agents read those files at `$(nightgauge layout path <class> <name>)`.
+
 ### Testing
 
 Test the sanitization layer:
@@ -220,7 +233,7 @@ echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' \
 ```
 
 Under the default `warn` mode both return `allow` and append an NDJSON line to
-`.nightgauge/logs/sanitization.log`; set `sanitization.mode: block` in
+`sanitization.log` in the clone's logs directory; set `sanitization.mode: block` in
 `.nightgauge/config.yaml` to see a deny.
 
 ### Related Documentation

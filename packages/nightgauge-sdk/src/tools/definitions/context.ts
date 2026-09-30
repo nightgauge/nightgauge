@@ -2,7 +2,8 @@
  * Context File Tool Definitions
  *
  * Custom tool definitions for reading, writing, and listing pipeline
- * context files in `.nightgauge/pipeline/`. These tools enable
+ * context files in the clone's pipeline state directory
+ * (`<git-common-dir>/nightgauge/pipeline`, `nightgauge layout path pipeline`). These tools enable
  * pipeline stages to manage context handoff from code execution sandboxes.
  *
  * @see Issue #1068 - Pipeline: Expose stage operations as programmatic-callable custom tools
@@ -13,7 +14,8 @@ import type { CustomToolDefinition } from "../ToolDefinition.js";
 export const READ_CONTEXT_FILE_TOOL: CustomToolDefinition = {
   name: "read_context_file",
   description:
-    "Read a pipeline context file from .nightgauge/pipeline/. " +
+    "Read a pipeline context file from the clone's pipeline state directory " +
+    "(`nightgauge layout path pipeline`). " +
     "Returns JSON: { success: boolean, filename: string, content: object, " +
     "schema_version: string }",
   input_schema: {
@@ -32,7 +34,8 @@ export const READ_CONTEXT_FILE_TOOL: CustomToolDefinition = {
 export const WRITE_CONTEXT_FILE_TOOL: CustomToolDefinition = {
   name: "write_context_file",
   description:
-    "Write a pipeline context file to .nightgauge/pipeline/. " +
+    "Write a pipeline context file to the clone's pipeline state directory " +
+    "(what `nightgauge layout write pipeline <filename>` does). " +
     "Returns JSON: { success: boolean, filename: string, path: string, " +
     "bytes_written: number }",
   input_schema: {
@@ -55,7 +58,8 @@ export const WRITE_CONTEXT_FILE_TOOL: CustomToolDefinition = {
 export const LIST_CONTEXT_FILES_TOOL: CustomToolDefinition = {
   name: "list_context_files",
   description:
-    "List pipeline context files in .nightgauge/pipeline/. " +
+    "List pipeline context files in the clone's pipeline state directory " +
+    "(`nightgauge layout path pipeline`). " +
     "Returns JSON: { success: boolean, files: Array<{ filename: string, " +
     "size_bytes: number, modified_at: string }>, count: number }",
   input_schema: {

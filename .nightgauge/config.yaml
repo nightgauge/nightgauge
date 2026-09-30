@@ -72,7 +72,6 @@ autonomous:
 automations:
   enabled: false
   dry_run: true
-  log_file: .nightgauge/logs/automation.log
   triggers: []
 
 autonomous_discovery:

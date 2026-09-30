@@ -33,6 +33,8 @@ import { PipelineHealthRunner } from "../../src/services/PipelineHealthRunner";
 import { DataAggregator } from "../../src/services/DataAggregator";
 import type { AggregatedDataset } from "../../src/types/aggregation";
 import type { HealthCheckParams } from "../../src/types/pipelineHealth";
+import type { CloneLayout } from "../../src/utils/cloneLayout";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // --- Test fixtures ---
 
@@ -98,7 +100,10 @@ const defaultParams: HealthCheckParams = {
 };
 
 describe("PipelineHealthRunner", () => {
+  let layout: CloneLayout;
+
   beforeEach(() => {
+    layout = fakeCloneLayout("/workspace");
     vi.clearAllMocks();
 
     // Default mock implementations
@@ -273,11 +278,11 @@ describe("PipelineHealthRunner", () => {
       expect(fs.writeFile).toHaveBeenCalled();
     });
 
-    it("writes to .nightgauge/pipeline/ directory", async () => {
+    it("writes to the clone's pipeline state directory", async () => {
       await PipelineHealthRunner.run("/workspace", defaultParams);
 
       const mkdirCall = vi.mocked(fs.mkdir).mock.calls[0];
-      expect(mkdirCall[0]).toContain(".nightgauge/pipeline");
+      expect(mkdirCall[0]).toBe(layout.pipeline);
       expect(mkdirCall[1]).toEqual({ recursive: true });
     });
   });

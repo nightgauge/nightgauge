@@ -27,11 +27,13 @@ Your role is to produce an approved `PLAN.md` for issue #{{issueNumber}}{{#if is
 
 ## Responsibilities
 
-1. Read the issue context from `.nightgauge/pipeline/issue-{{issueNumber}}.json`
+1. Read the issue context from `$(nightgauge layout path pipeline issue-{{issueNumber}}.json)`
 {{#if docScopePath}}2. Read documentation: {{docScopePath}}
 {{else}}2. Read relevant documentation from `docs/` based on issue keywords
-{{/if}}3. Produce a detailed, actionable `PLAN.md` at `.nightgauge/plans/{{issueNumber}}-<slug>.md`
-4. Write `.nightgauge/pipeline/planning-{{issueNumber}}.json` with context for feature-dev
+{{/if}}3. Produce a detailed, actionable plan `{{issueNumber}}-<slug>.md` with
+   `nightgauge layout write plans {{issueNumber}}-<slug>.md` (it prints the plan's path)
+4. Write `planning-{{issueNumber}}.json` with context for feature-dev through
+   `nightgauge layout write pipeline planning-{{issueNumber}}.json`
 5. Request user approval before the stage is marked complete
 
 ## Plan Contents

@@ -161,7 +161,7 @@ func recordForIssue(t *testing.T, root string, issueNumber int) *state.V2RunReco
 // scheduler.go, and autonomous.go's onPipelineComplete wrapper all index
 // StageErrors by the CURRENT stage.
 func TestPrerequisiteMissingRefusal_RecordsTheReasonUnderTheCurrentStage(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	for _, dir := range []string{
 		"nightgauge-issue-pickup",
 		"nightgauge-feature-planning",
@@ -267,7 +267,7 @@ func TestPrerequisiteMissingRefusal_RecordsTheReasonUnderTheCurrentStage(t *test
 // any skills root, so skillrender.Render returns an error and there is no
 // prompt to dispatch.
 func TestSkillRenderFailureRefusal_RecordsTheReasonUnderTheCurrentStage(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	// Deliberately NOT writing nightgauge-feature-planning: the run reaches
 	// feature-planning with its prerequisite satisfied and fails to compose the
 	// skill.
@@ -675,7 +675,7 @@ const contextBudgetMediumBytes = 600_000
 func TestContextBudgetRefusal_NoLargerModelRefusesImmediately(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_PR_MERGE", "sonnet")
 
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	for _, dir := range []string{
 		"nightgauge-issue-pickup", "nightgauge-feature-planning", "nightgauge-feature-dev",
 		"nightgauge-feature-validate", "nightgauge-pr-create",
@@ -724,7 +724,7 @@ func TestContextBudgetRefusal_NoLargerModelRefusesImmediately(t *testing.T) {
 // candidate's — and the stage is refused after exactly one hop, never a
 // second.
 func TestContextBudgetRefusal_ReRouteStillFailsRefusesAfterOneHop(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	writeBigSkillFile(t, root, "nightgauge-issue-pickup", contextBudgetBigBytes)
 
 	runner := newRefusalCapturingStageRunner()
@@ -779,7 +779,7 @@ func TestContextBudgetRefusal_SuccessfulReRouteDispatches(t *testing.T) {
 // unknown-window branch: dispatch proceeds unchecked, and the branch taken is
 // logged so a trace can tell "checked and passed" from "not checked".
 func TestContextBudgetRefusal_UnknownWindowFailsOpenAndLogsTheBranch(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	for _, dir := range []string{
 		"nightgauge-issue-pickup", "nightgauge-feature-planning", "nightgauge-feature-dev",
 		"nightgauge-feature-validate", "nightgauge-pr-create",

@@ -8,8 +8,9 @@
 subagents with JSON context handoff files.
 
 **Execution model**: Each pipeline stage runs in a fresh conversation. Context
-is passed exclusively through `.nightgauge/pipeline/*.json` files — never
-through conversation history. Every stage reads its predecessor's context file
+is passed exclusively through JSON files in the clone's pipeline state
+directory (`nightgauge layout path pipeline`) — never through conversation
+history. Every stage reads its predecessor's context file
 and writes its own.
 
 **Configuration**: 6-tier config system — built-in defaults → global config →

@@ -59,7 +59,7 @@ func WriteContext(path string, ctx *StageContext) error {
 }
 
 // ContextPath returns the standard path for a stage context file:
-// .nightgauge/pipeline/<stage>-<N>.json. This is the flat convention the
+// <pipeline state dir>/<stage>-<N>.json. This is the flat convention the
 // skills actually write and that the gates (registry.contextFilePath) and the
 // SDK (cli/commands/stage.ts getContextPath) read — e.g. issue-pickup writes
 // issue-<N>.json, pr-create writes pr-<N>.json. (It previously used a nested
@@ -68,19 +68,19 @@ func WriteContext(path string, ctx *StageContext) error {
 // worktree-isolated `nightgauge run`.)
 //
 // The directory is workspaceRoot's pipeline state directory
-// (layout.PipelineStateDir). A relative workspaceRoot is made absolute first,
-// so it names the same file as before; if that fails ContextPath returns "",
-// on which every read reports absent and every write fails.
-func ContextPath(workspaceRoot string, issueNumber int, stage string) string {
+// (layout.PipelineStateDir). A relative workspaceRoot is made absolute first.
+// The resolver's error ("not a git repository" outside one) is returned, never
+// a path somewhere else.
+func ContextPath(workspaceRoot string, issueNumber int, stage string) (string, error) {
 	abs, err := filepath.Abs(workspaceRoot)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("stage context: resolve %q: %w", workspaceRoot, err)
 	}
 	dir, err := layout.PipelineStateDir(abs)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("stage context %s-%d.json: %w", stage, issueNumber, err)
 	}
-	return filepath.Join(dir, fmt.Sprintf("%s-%d.json", stage, issueNumber))
+	return filepath.Join(dir, fmt.Sprintf("%s-%d.json", stage, issueNumber)), nil
 }
 
 // Validate checks that a stage context has required fields.

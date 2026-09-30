@@ -11,12 +11,13 @@ import (
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // --- V2 tests ---
 
 func TestWriteV2_ProducesValidRecord(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 2001, "item-v2", testRunID())
@@ -42,7 +43,7 @@ func TestWriteV2_ProducesValidRecord(t *testing.T) {
 
 	// Read the daily JSONL file
 	today := time.Now().Format("2006-01-02") + ".jsonl"
-	data, err := os.ReadFile(filepath.Join(dir, ".nightgauge", "pipeline", "history", today))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, dir), "history", today))
 	if err != nil {
 		t.Fatalf("read daily file: %v", err)
 	}
@@ -82,7 +83,7 @@ func TestWriteV2_ProducesValidRecord(t *testing.T) {
 }
 
 func TestWriteV2_FailedPipeline(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 2002, "item-fail", testRunID())
@@ -107,7 +108,7 @@ func TestWriteV2_FailedPipeline(t *testing.T) {
 	}
 
 	today := time.Now().Format("2006-01-02") + ".jsonl"
-	data, err := os.ReadFile(filepath.Join(dir, ".nightgauge", "pipeline", "history", today))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, dir), "history", today))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -133,7 +134,7 @@ func TestWriteV2_FailedPipeline(t *testing.T) {
 }
 
 func TestWriteV2_UpdatesIndex(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 
 	for i := 0; i < 3; i++ {
@@ -146,7 +147,7 @@ func TestWriteV2_UpdatesIndex(t *testing.T) {
 		}
 	}
 
-	indexPath := filepath.Join(dir, ".nightgauge", "pipeline", "history", "index.json")
+	indexPath := filepath.Join(layouttest.PipelineDir(t, dir), "history", "index.json")
 	data, err := os.ReadFile(indexPath)
 	if err != nil {
 		t.Fatalf("read index: %v", err)
@@ -167,7 +168,7 @@ func TestWriteV2_UpdatesIndex(t *testing.T) {
 }
 
 func TestWriteV2_SkippedStages(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 
 	rs := NewRuntimeState("nightgauge/nightgauge", 4000, "item-skip", testRunID())
@@ -187,7 +188,7 @@ func TestWriteV2_SkippedStages(t *testing.T) {
 	}
 
 	today := time.Now().Format("2006-01-02") + ".jsonl"
-	data, err := os.ReadFile(filepath.Join(dir, ".nightgauge", "pipeline", "history", today))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, dir), "history", today))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -980,7 +981,7 @@ func TestRunLevelPerformanceMode(t *testing.T) {
 	rs.RecordStageMode(StageFeatureDev, "elevated")
 	rs.CompleteStage(0, tokens.TokenCounts{Input: 2000, Output: 700}, "", "")
 
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 	now := time.Now()
 	record := hw.BuildV2Record(rs, true, "", V2RunInput{
@@ -999,7 +1000,7 @@ func TestRunLevelPerformanceMode(t *testing.T) {
 		t.Fatalf("WriteRecord: %v", err)
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, ".nightgauge", "pipeline", "history", "index.json"))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, dir), "history", "index.json"))
 	if err != nil {
 		t.Fatalf("read index.json: %v", err)
 	}

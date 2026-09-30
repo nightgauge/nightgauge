@@ -21,12 +21,15 @@ import {
   ListContextFilesHandler,
   createContextHandlers,
 } from "../../src/tools/context-handlers.js";
+import { cloneLayoutFor, setCloneLayout } from "../../src/context/cloneLayout.js";
 
 const mockReadFileSync = vi.mocked(readFileSync);
 const mockReaddirSync = vi.mocked(readdirSync);
 const mockStatSync = vi.mocked(statSync);
 
 const CWD = "/project";
+// Pin CWD's clone layout so resolution never spawns git (fs is mocked).
+setCloneLayout(CWD, cloneLayoutFor(CWD, "/project/.git"));
 
 // ---------------------------------------------------------------------------
 // ReadContextFileHandler
@@ -109,9 +112,22 @@ describe("ReadContextFileHandler", () => {
     await handler.execute({ filename: "dev-42.json" }, CWD);
 
     expect(mockReadFileSync).toHaveBeenCalledWith(
-      expect.stringContaining(".nightgauge/pipeline/dev-42.json"),
+      "/project/.git/nightgauge/pipeline/dev-42.json",
       "utf-8"
     );
+  });
+
+  it("fails outside a git repository instead of reading the working tree", async () => {
+    const result = await handler.execute({ filename: "dev-42.json" }, "/nonexistent-ng-2037");
+    expect(result.success).toBe(false);
+    expect(result.output["error"]).toContain("not a git repository");
+    expect(mockReadFileSync).not.toHaveBeenCalled();
+  });
+
+  it("rejects a sibling directory sharing the pipeline prefix", async () => {
+    const result = await handler.execute({ filename: "../pipeline-x/a.json" }, CWD);
+    expect(result.success).toBe(false);
+    expect(result.output["error"]).toContain("path traversal");
   });
 
   it("handles non-string filename input gracefully", async () => {

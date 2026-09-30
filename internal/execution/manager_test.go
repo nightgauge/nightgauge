@@ -18,6 +18,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -543,8 +544,8 @@ func snapshotPID(t *testing.T, stateDir string, issue int, runID string) (int, b
 // exited child's pid stays on disk across the whole between-stages gap, where a
 // recycled pid answers arm 3 for a run nobody is running.
 func TestRunStage_PublishesTheLiveStageChildPidAndRetractsItOnExit(t *testing.T) {
-	root := t.TempDir()
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := layouttest.Repo(t)
+	stateDir := layouttest.PipelineDir(t, root)
 	stub, pidFile, release := blockingStageStub(t, t.TempDir())
 	t.Setenv("NIGHTGAUGE_GROK_CLI_COMMAND", stub)
 
@@ -646,8 +647,8 @@ func TestRunStage_PublishesTheLiveStageChildPidAndRetractsItOnExit(t *testing.T)
 // It is also the resurrection guard: a terminal claim that sealed and removed
 // the file between the spawn and this write must not have it re-created.
 func TestRunStage_DoesNotCreateASnapshotForARunThatHasNone(t *testing.T) {
-	root := t.TempDir()
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := layouttest.Repo(t)
+	stateDir := layouttest.PipelineDir(t, root)
 	stub, _, release := blockingStageStub(t, t.TempDir())
 	// Release before the run so the stub exits immediately — this test is about
 	// the file, not the timing.
@@ -1083,7 +1084,9 @@ func openCodeStageOptions(model string, runtime *state.RuntimeState) StageOption
 // exercise.
 func openCodeWorkspace(t *testing.T) string {
 	t.Helper()
-	root := t.TempDir()
+	// A repository, as every real workspace is: the manager publishes the
+	// stage child into the run's snapshot under the git directory (ADR-024 § 7).
+	root := layouttest.Repo(t)
 	worktree := filepath.Join(root, ".nightgauge", "worktrees", "nightgauge-issue-1612")
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -352,7 +353,7 @@ func TestOrphanReconcile_TheLaunchRootIsScannedAfterASwitch(t *testing.T) {
 
 	orphan := staleSnapshot(t, launchDir, 570, newTestRunID(), now)
 
-	switched := t.TempDir()
+	switched := layouttest.Repo(t)
 	setRoot := s.methods["workspace.setRoot"]
 	if _, err := setRoot(t.Context(), []byte(`{"root":"`+switched+`"}`)); err != nil {
 		t.Fatalf("workspace.setRoot: %v", err)

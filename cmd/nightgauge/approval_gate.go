@@ -122,7 +122,7 @@ func printApprovalHuman(issue int, r approvalGate.ApprovalResult, label string) 
 		fmt.Printf("  - %s\n", reason)
 	}
 	if r.RequiresApproval {
-		fmt.Printf("  → A human must review the decision and add the %q label to the issue (or write %s/approval-%d.json with {\"approved\": true}).\n", label, layout.PipelineStateDisplay(), issue)
+		fmt.Printf("  → A human must review the decision and add the %q label to the issue (or run: echo '{\"approved\": true}' | nightgauge layout write pipeline approval-%d.json).\n", label, issue)
 	}
 }
 

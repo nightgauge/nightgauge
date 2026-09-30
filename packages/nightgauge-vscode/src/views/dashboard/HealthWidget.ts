@@ -28,6 +28,7 @@ import type {
 } from "./HealthWidgetTypes";
 import { DEFAULT_HEALTH_WEIGHTS, DEFAULT_TREND_RANGE, getHealthStatus } from "./HealthWidgetTypes";
 import { HealthScoreHistoryWriter, HealthScoreHistoryReader } from "../../utils/healthScoreHistory";
+import { isUsableWorkspaceRoot } from "../../utils/cloneLayout";
 import type { HealthScoreSnapshot } from "../../schemas/healthScoreHistory";
 
 /**
@@ -408,7 +409,7 @@ export class HealthWidgetService {
       const { AutoModelSelector, StageModelCalibrationService } = await import("@nightgauge/sdk");
       const { toModelEnvelope } = await import("../../utils/modeProfiles");
       const selector = new AutoModelSelector();
-      const calibrationPath = this.workspacePath
+      const calibrationPath = isUsableWorkspaceRoot(this.workspacePath)
         ? StageModelCalibrationService.getDefaultPath(this.workspacePath)
         : null;
       const stageModelCalibration = calibrationPath

@@ -4,7 +4,7 @@ package orchestrator
 // ADR 015 §B: `budget.raiseCeiling` and `run.retryWithEscalation`. Each is a
 // thin, deterministic, audited operation fronting an existing enforcement path
 // — never new business logic. Both persist a small runtime override under
-// `.nightgauge/pipeline/` (atomic temp+rename, the same carrier stall recovery
+// `.git/nightgauge/pipeline/` (atomic temp+rename, the same carrier stall recovery
 // and the queue writer use) that an existing dispatch/enforcement site honors.
 
 import (
@@ -25,7 +25,9 @@ import (
 // that PipelineBudgetCeilingUSD reads and takes as the effective ceiling —
 // so the next dispatch runs under the raised ceiling without editing config.
 
-const budgetOverrideRelPath = ".nightgauge/pipeline/budget-override.json"
+// budgetOverrideFile is the override's name in the pipeline state directory
+// (layout.PipelineStateDir).
+const budgetOverrideFile = "budget-override.json"
 
 // BudgetCeilingOverride is the persisted runtime ceiling raise.
 type BudgetCeilingOverride struct {
@@ -37,7 +39,7 @@ type BudgetCeilingOverride struct {
 }
 
 func budgetOverridePath(workspaceRoot string) string {
-	return filepath.Join(workspaceRoot, budgetOverrideRelPath)
+	return pipelineStatePath(workspaceRoot, budgetOverrideFile)
 }
 
 // WriteBudgetCeilingOverride persists a runtime USD ceiling override. Honored by
@@ -62,8 +64,12 @@ func WriteBudgetCeilingOverride(workspaceRoot string, ceilingUSD float64, actor,
 	if err != nil {
 		return fmt.Errorf("budget.raiseCeiling: marshal: %w", err)
 	}
-	path := budgetOverridePath(workspaceRoot)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir, err := layout.PipelineStateDir(workspaceRoot)
+	if err != nil {
+		return fmt.Errorf("budget.raiseCeiling: %w", err)
+	}
+	path := filepath.Join(dir, budgetOverrideFile)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("budget.raiseCeiling: mkdir: %w", err)
 	}
 	tmp := path + ".tmp"

@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // makeTestV2Record creates a minimal valid V2RunRecord for testing.
@@ -42,7 +44,7 @@ func writeTestJSONL(t *testing.T, dir, filename string, records []V2RunRecord) {
 
 func newTestHistoryWriter(t *testing.T) (*HistoryWriter, string) {
 	t.Helper()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	hw := NewHistoryWriter(root)
 	return hw, hw.dir
 }

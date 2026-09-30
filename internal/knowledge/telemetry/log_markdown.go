@@ -40,7 +40,11 @@ const logMarkdownMaxDays = 90
 // Format: newest date first, one `## YYYY-MM-DD` heading per day, one
 // `* **<Event>**: [path](/bundle-path)` bullet per lifecycle event.
 func WriteLogMarkdown(workspaceRoot, path string) error {
-	events, err := readLifecycleEvents(Path(workspaceRoot))
+	eventsPath, err := Path(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	events, err := readLifecycleEvents(eventsPath)
 	if err != nil {
 		return err
 	}

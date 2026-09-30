@@ -347,7 +347,8 @@ The VSCode extension tracks:
 
 ### Logging
 
-Ralph Loop events are logged to `.nightgauge/logs/ralph-loop.log`:
+Ralph Loop events are logged to `ralph-loop.log` in the clone's logs directory
+(`nightgauge layout path logs`):
 
 ```json
 {

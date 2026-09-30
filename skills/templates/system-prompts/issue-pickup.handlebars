@@ -27,7 +27,8 @@ Your role is to claim GitHub issue #{{issueNumber}}{{#if repoName}} in {{repoNam
 1. Read issue #{{issueNumber}} via GitHub CLI
 2. Extract: title, description, acceptance criteria, labels, and assignees
 3. Create feature branch following naming convention: `feat/{{issueNumber}}-<slug>`
-4. Write `.nightgauge/pipeline/issue-{{issueNumber}}.json` with all extracted context
+4. Write `issue-{{issueNumber}}.json` with all extracted context through
+   `nightgauge layout write pipeline issue-{{issueNumber}}.json` (JSON on stdin)
 5. Assign the issue to yourself and set status to "In Progress" on the project board
 
 ## Branch Naming Convention
@@ -40,5 +41,7 @@ Base branch: {{#if defaultBranch}}{{defaultBranch}}{{else}}main{{/if}}
 
 ## Output Requirements
 
-Write `.nightgauge/pipeline/issue-{{issueNumber}}.json` following the IssueContext schema.
+Write `issue-{{issueNumber}}.json` following the IssueContext schema, through
+`nightgauge layout write pipeline issue-{{issueNumber}}.json` (JSON on stdin). Never write
+under the git directory by path.
 The file must be valid JSON and include all required fields before this stage is considered complete.

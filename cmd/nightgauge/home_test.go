@@ -25,6 +25,9 @@ func TestMain(m *testing.M) {
 	// Commands under test commit with a plain `git`, which inherits
 	// os.Environ(): neutralise ambient git config such as commit.gpgsign (#2283).
 	gittest.IsolateProcess()
+	// Nor does a command run from the package directory resolve per-clone
+	// state into this source checkout's git directory (ADR-024 § 7).
+	ceilGitDiscoveryAtThisCheckout()
 	// No test here reads or writes the operator's OS keychain: go-keyring's
 	// in-memory provider stands in for it (internal/keychain).
 	keyring.MockInit()
@@ -40,6 +43,33 @@ func TestMain(m *testing.M) {
 	restoreForge()
 	cleanup()
 	os.Exit(code)
+}
+
+// ceilGitDiscoveryAtThisCheckout sets GIT_CEILING_DIRECTORIES to every
+// ancestor of the package directory up to the checkout holding it, so git
+// discovery from the package directory (the default cwd of every test here)
+// finds no repository. Without it, each command a test runs without a
+// --workdir resolved the per-clone directories of this source checkout and
+// created them in its real git directory. Temp repositories are unaffected.
+func ceilGitDiscoveryAtThisCheckout() {
+	wd, err := os.Getwd()
+	if err != nil {
+		return
+	}
+	forms := []string{wd}
+	if resolved, err := filepath.EvalSymlinks(wd); err == nil && resolved != wd {
+		forms = append(forms, resolved)
+	}
+	var ceilings []string
+	for _, dir := range forms {
+		for p := filepath.Dir(dir); ; p = filepath.Dir(p) {
+			ceilings = append(ceilings, p)
+			if _, err := os.Stat(filepath.Join(p, ".git")); err == nil || p == filepath.Dir(p) {
+				break
+			}
+		}
+	}
+	_ = os.Setenv("GIT_CEILING_DIRECTORIES", strings.Join(ceilings, string(os.PathListSeparator)))
 }
 
 // The pin for that (#1426 AC3). It deliberately isolates nothing itself: what

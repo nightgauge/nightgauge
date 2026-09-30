@@ -112,7 +112,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 TYPE_LABEL=$(printf '%s\n' "$LABELS" | grep -oE "type:(feature|bug|docs|refactor|chore)" | cut -d: -f2)
 
 # Read Size and Priority from project board fields (board-first, label fallback)
-CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
 SIZE_LABEL=""
 PRIORITY_BOARD=""
 if [[ -f "$CONTEXT_FILE" ]]; then
@@ -250,9 +250,9 @@ complexity-2 refactor (delete dead code) doesn't need a PLAN.md or validation.
 
 ### Validate Size Estimate Against Calibration (Optional — Issue #1589)
 
-If `.nightgauge/pipeline/calibration.json` exists, the orchestrator
-automatically validates the size estimate against historical cost/duration data
-for the same size bucket. Outliers are logged as warnings in the pipeline
+If `calibration.json` exists in the clone's pipeline state directory, the
+orchestrator automatically validates the size estimate against historical
+cost/duration data for the same size bucket. Outliers are logged as warnings in the pipeline
 output.
 
 This is **informational only** — it does not change the routing decision. The

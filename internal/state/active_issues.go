@@ -93,15 +93,10 @@ type ActiveIssues struct {
 }
 
 // ActiveIssuesFromSnapshots scans one repo's canonical snapshot directory
-// ({repoRoot}/.nightgauge/pipeline) and returns the issues whose run is in
-// flight.
-//
-// CALLER CONTRACT: stateDir must belong to a MAIN CHECKOUT. A linked worktree
-// has a `.nightgauge/pipeline` directory of its own — the `.gitkeep` is tracked,
-// so every checkout has one — and it is always empty, so passing one yields a
-// DETERMINED EMPTY answer with no error and no warning while the repository it
-// belongs to may be running anything. Canonicalize first with
-// config.MainCheckoutRoot (#410).
+// (its pipeline state directory, layout.PipelineStateDir) and returns the
+// issues whose run is in flight. Every checkout of one clone, main or linked
+// worktree, resolves to the same directory under the git common dir
+// (ADR-024 § 7); ActiveIssuesForRoot resolves it from a root.
 //
 // An absent directory is a determined empty answer, not an error: a repo that
 // has never run the pipeline has no snapshot dir. Any OTHER read failure IS an
@@ -312,9 +307,9 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 }
 
 // currentRunSidecarName is the in-flight sidecar's filename inside the pipeline
-// state dir. The path is owned by internal/orchestrator
-// (currentRunSidecarFile = ".nightgauge/pipeline/current-run.json"); this is the
-// basename half, because the scan already holds the directory.
+// state dir. The name is owned by internal/orchestrator
+// (currentRunSidecarFile); it is repeated here because the scan already holds
+// the directory.
 const currentRunSidecarName = "current-run.json"
 
 // currentRunSidecar is a MINIMAL decode of the in-flight sidecar written by
@@ -452,35 +447,33 @@ func terminalTailProtects(snap *RuntimeState, info os.FileInfo, now time.Time) b
 // for internal/state's offline store.
 //
 // It delegates to layout.PipelineStateDir, which owns the location (ADR-024).
-// New code calls layout.PipelineStateDir and handles the error; this wrapper
-// keeps its string-only contract for its existing callers (#2033, #2035):
-//
-//   - An empty or relative root is made absolute against the working
-//     directory first, so it names the same directory it always did.
-//   - Any resolver error (for example "not a git repository", once the
-//     directory moves under the git directory, #2037) returns "". The old
-//     working-tree path would name a directory the data no longer lives in, so
-//     it is never returned for such an error. Every caller treats "" as
-//     unresolved: the IPC server's callers check for "", OfflineStore.Save
-//     fails at MkdirAll, and ActiveIssuesFromSnapshots refuses "" with an
-//     error rather than answering "nothing is running".
-func PipelineStateDir(repoRoot string) string {
+// An empty or relative root is made absolute against the working directory
+// first. The resolver's error ("not a git repository" outside one) is
+// returned, never a path somewhere else.
+func PipelineStateDir(repoRoot string) (string, error) {
 	abs, err := filepath.Abs(repoRoot)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("resolve %q: %w", repoRoot, err)
 	}
-	dir, err := layout.PipelineStateDir(abs)
+	return layout.PipelineStateDir(abs)
+}
+
+// ActiveIssuesForRoot is ActiveIssuesFromSnapshots over repoRoot's pipeline
+// state directory. An unresolvable root (not a git repository) is an error:
+// "I could not look" is never "nothing is running" (#296).
+func ActiveIssuesForRoot(repoRoot string) (ActiveIssues, error) {
+	dir, err := PipelineStateDir(repoRoot)
 	if err != nil {
-		return ""
+		return ActiveIssues{Issues: map[int]bool{}, Protected: map[int]string{}}, err
 	}
-	return dir
+	return ActiveIssuesFromSnapshots(dir)
 }
 
 // pipelineHistoryDir is repoRoot's pipeline history directory, or "" when
 // PipelineStateDir cannot resolve repoRoot.
 func pipelineHistoryDir(repoRoot string) string {
-	dir := PipelineStateDir(repoRoot)
-	if dir == "" {
+	dir, err := PipelineStateDir(repoRoot)
+	if err != nil {
 		return ""
 	}
 	return filepath.Join(dir, "history")

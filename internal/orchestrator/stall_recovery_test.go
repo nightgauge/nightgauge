@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestHasCostCapKillMarker(t *testing.T) {
@@ -56,7 +58,7 @@ func TestCanRewindFromStage(t *testing.T) {
 
 func writePlanningContext(t *testing.T, root string, issue int, filesToModify []string) {
 	t.Helper()
-	dir := filepath.Join(root, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -76,7 +78,7 @@ func writePlanningContext(t *testing.T, root string, issue int, filesToModify []
 }
 
 func TestClassifyStallSignal_ComplexityFromHighModifyCount(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writePlanningContext(t, root, 1, []string{"a.go", "b.go", "c.go", "d.go", "e.go"})
 	signal := ClassifyStallSignal(state.StageFeatureDev, "stall kill threshold reached", root, 1)
 	if signal.SignalType != "COMPLEXITY_UNDERESTIMATED" {
@@ -94,7 +96,7 @@ func TestClassifyStallSignal_ComplexityFromHighModifyCount(t *testing.T) {
 }
 
 func TestClassifyStallSignal_ScopeDiscoveredFromMissingFiles(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	// Two files, but neither exists on disk.
 	writePlanningContext(t, root, 1, []string{"missing-1.go", "missing-2.go"})
 	signal := ClassifyStallSignal(state.StageFeatureValidate, "heartbeat stall", root, 1)
@@ -117,7 +119,7 @@ func TestClassifyStallSignal_ScopeDiscoveredFromMissingFiles(t *testing.T) {
 }
 
 func TestClassifyStallSignal_FallbackPlanRevisionWhenPlanAbsent(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	signal := ClassifyStallSignal(state.StageFeatureDev, "stall kill threshold", root, 1)
 	if signal.SignalType != "PLAN_REVISION_NEEDED" {
 		t.Errorf("signal_type = %s, want PLAN_REVISION_NEEDED", signal.SignalType)
@@ -125,7 +127,7 @@ func TestClassifyStallSignal_FallbackPlanRevisionWhenPlanAbsent(t *testing.T) {
 }
 
 func TestClassifyStallSignal_FallbackForNonRewindableStage(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	// Even with a 5-file plan, a stall in pr-create can't trigger
 	// COMPLEXITY_UNDERESTIMATED — the classifier short-circuits to
 	// PLAN_REVISION_NEEDED for non-rewindable stages.
@@ -137,7 +139,7 @@ func TestClassifyStallSignal_FallbackForNonRewindableStage(t *testing.T) {
 }
 
 func TestClassifyStallSignal_FallbackWhenSmallPlanAllFilesPresent(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	// Create the files so missingFiles is empty; plan size below threshold.
 	for _, f := range []string{"a.go", "b.go"} {
 		if err := os.WriteFile(filepath.Join(root, f), []byte(""), 0644); err != nil {
@@ -152,7 +154,7 @@ func TestClassifyStallSignal_FallbackWhenSmallPlanAllFilesPresent(t *testing.T) 
 }
 
 func TestWriteSyntheticFeedbackContext_RoundTrip(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	signal := FeedbackSignal{
 		SignalType:           "PLAN_REVISION_NEEDED",
 		EmittedByStage:       string(state.StageFeatureDev),
@@ -167,7 +169,7 @@ func TestWriteSyntheticFeedbackContext_RoundTrip(t *testing.T) {
 
 	// File round-trips through RetryEngine.EvaluateBacktrack — same path the
 	// scheduler uses on stage-success.
-	feedbackPath := filepath.Join(root, ".nightgauge", "pipeline", "feedback-42.json")
+	feedbackPath := filepath.Join(layouttest.PipelineDir(t, root), "feedback-42.json")
 	if _, err := os.Stat(feedbackPath); err != nil {
 		t.Fatalf("feedback file not written: %v", err)
 	}
@@ -191,14 +193,14 @@ func TestWriteSyntheticFeedbackContext_RoundTrip(t *testing.T) {
 // #3020 — flipped default to true so a stall-killed stage rewinds to planning
 // instead of going straight to terminal failure. Original value was false.
 func TestGetAdaptiveStallRecoveryEnabled_DefaultTrue(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if !GetAdaptiveStallRecoveryEnabled(root) {
 		t.Error("expected true for empty workspace (default flipped to true in #3020)")
 	}
 }
 
 func TestGetAdaptiveStallRecoveryEnabled_EnvOverride(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_ADAPTIVE_STALL_RECOVERY", "true")
 	if !GetAdaptiveStallRecoveryEnabled(root) {
 		t.Error("expected true when env is true")
@@ -211,7 +213,7 @@ func TestGetAdaptiveStallRecoveryEnabled_EnvOverride(t *testing.T) {
 }
 
 func TestGetAdaptiveStallRecoveryEnabled_YAMLTrue(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	dir := filepath.Join(root, ".nightgauge")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -228,7 +230,7 @@ func TestGetAdaptiveStallRecoveryEnabled_YAMLTrue(t *testing.T) {
 }
 
 func TestGetAdaptiveStallRecoveryEnabled_YAMLFalseExplicit(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	dir := filepath.Join(root, ".nightgauge")
 	_ = os.MkdirAll(dir, 0755)
 	yaml := "pipeline:\n  adaptive_stall_recovery: false\n"
@@ -248,7 +250,7 @@ func TestGetAdaptiveStallRecoveryEnabled_YAMLFalseExplicit(t *testing.T) {
 // `pipeline.adaptive_stall_recovery: false` to override the default and
 // assert the top-level value is still ignored.
 func TestGetAdaptiveStallRecoveryEnabled_OutOfPipelineSection(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	dir := filepath.Join(root, ".nightgauge")
 	_ = os.MkdirAll(dir, 0755)
 	// Top-level "true" must NOT be picked up; the in-section "false" wins.

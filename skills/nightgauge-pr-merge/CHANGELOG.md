@@ -10,6 +10,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The clone's pipeline state and plans are read at `$(nightgauge layout path <class> <name>)`
+  and written through `nightgauge layout write|append`, never by a
+  `.nightgauge/...` path: they now live in the git directory (#2037, ADR-024
+  § 7).
+  Batch cleanup still deletes epic-keyed files with `rm -f` on the resolved
+  paths; the binary has no delete verb.
 - **Merge-queue-protected base branches (#2214).** Step 6.2 documents that
   `nightgauge pr merge` enqueues and waits when the base branch requires a
   merge queue, and that a failed merge group is a CI failure.

@@ -815,7 +815,7 @@ func pipelineContextPath(workdir, name string) string {
 }
 
 // defaultReadCreateContext loads issue/dev/validate/planning context from
-// .nightgauge/pipeline/ and projects them into a PRCreateSnapshot.
+// .git/nightgauge/pipeline/ and projects them into a PRCreateSnapshot.
 // Missing dev-{N}.json sets HasDev=false (decision rule punts). Missing
 // validate-{N}.json sets HasValidate=false. Missing issue-{N}.json is
 // tolerated — the snapshot keeps zero-values.

@@ -302,7 +302,7 @@ Key characteristics:
 ```
 I'll start by reading the issue context...
 
-<Read file_path="/Users/.../.nightgauge/pipeline/issue-494.json">
+<Read file_path="/Users/.../.git/nightgauge/pipeline/issue-494.json">
 {
   "schema_version": "1.3",
   ...

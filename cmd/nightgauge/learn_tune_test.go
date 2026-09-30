@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestLearnTune_TunesMeasuredSizeCorpus(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	recorder := learning.NewRecorder(root)
 	for i, actual := range []string{"small", "small", "medium", "large"} {
 		if err := recorder.Record(learning.Outcome{
@@ -41,7 +42,7 @@ func TestLearnTune_TunesMeasuredSizeCorpus(t *testing.T) {
 	if result.Tuning.Param != "size_accuracy" {
 		t.Fatalf("tuning.param = %q, want size_accuracy", result.Tuning.Param)
 	}
-	audit := filepath.Join(root, ".nightgauge", "pipeline", "history", "tuning-audit.jsonl")
+	audit := filepath.Join(layouttest.PipelineDir(t, root), "history", "tuning-audit.jsonl")
 	if info, err := os.Stat(audit); err != nil || info.Size() == 0 {
 		t.Fatalf("tuning audit was not written: info=%v err=%v", info, err)
 	}

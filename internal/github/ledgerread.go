@@ -63,18 +63,18 @@ const IdleBudgetWarnFraction = 0.5
 // DefaultLedgerPath returns a workspace's ledger base path, in its per-clone
 // logs directory (layout.CloneLogsDir). The ledger there is written in dated
 // segments beside it; LedgerFiles lists them. A relative workspaceRoot is made
-// absolute first, so it names the same file as before; if that fails it
-// returns "", on which a read finds nothing and the ledger stays closed.
-func DefaultLedgerPath(workspaceRoot string) string {
+// absolute first. The resolver's error ("not a git repository" outside one)
+// is returned, never a path somewhere else.
+func DefaultLedgerPath(workspaceRoot string) (string, error) {
 	abs, err := filepath.Abs(workspaceRoot)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("api ledger: resolve %q: %w", workspaceRoot, err)
 	}
 	dir, err := layout.CloneLogsDir(abs)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("api ledger: %w", err)
 	}
-	return filepath.Join(dir, apiLedgerFileName)
+	return filepath.Join(dir, apiLedgerFileName), nil
 }
 
 // ledgerSegmentDateLayout is the date in a segment's name, a UTC day.
@@ -428,7 +428,11 @@ func isGraphQLResource(resource string) bool {
 // workspace's ledger, summarized.
 func ReadWindow(workspaceRoot string, d time.Duration, now time.Time) (LedgerWindow, error) {
 	since := now.Add(-d)
-	recs, err := ReadLedgerSince(DefaultLedgerPath(workspaceRoot), since)
+	path, err := DefaultLedgerPath(workspaceRoot)
+	if err != nil {
+		return LedgerWindow{Since: since, Until: now, LowWaterRemaining: -1}, err
+	}
+	recs, err := ReadLedgerSince(path, since)
 	if err != nil {
 		return LedgerWindow{Since: since, Until: now, LowWaterRemaining: -1}, err
 	}

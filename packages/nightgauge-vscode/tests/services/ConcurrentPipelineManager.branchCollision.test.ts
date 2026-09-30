@@ -95,6 +95,13 @@ vi.mock("../../src/services/IpcClient", () => ({
 }));
 
 import { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipelineManager";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
+
+// Per-clone data resolves under the git directory (ADR-024 § 7); map the
+// fake roots (and their worktrees) to a clone without running git.
+beforeEach(() => {
+  fakeCloneLayout("/test-repo");
+});
 
 // Mock queue service — tests opt in to enqueue-throw behaviour.
 function createMockQueueService(overrides?: Partial<Record<string, any>>) {

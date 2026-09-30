@@ -2,7 +2,7 @@
  * RunState — durable pipeline lifecycle record
  *
  * Single source of truth for the pipeline lifecycle. Persisted to
- * `.nightgauge/pipeline/run-state.json` per repo. Mirrored field-for-field
+ * `<git-common-dir>/nightgauge/pipeline/run-state.json` per repo. Mirrored field-for-field
  * by `internal/runstate.RunState` in Go.
  *
  * Schema version history:
@@ -105,7 +105,7 @@ export type RunAttempt = z.infer<typeof RunAttemptSchema>;
 
 /**
  * Top-level RunState envelope. One file per repo:
- * `.nightgauge/pipeline/run-state.json`.
+ * `<git-common-dir>/nightgauge/pipeline/run-state.json`.
  */
 export const RunStateSchema = z
   .object({

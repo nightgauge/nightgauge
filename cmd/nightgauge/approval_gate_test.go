@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // writeIssueContext writes a `.nightgauge/pipeline/issue-{N}.json` under
@@ -15,7 +17,7 @@ import (
 func writeIssueContext(t *testing.T, issueNum int, body string) string {
 	t.Helper()
 	dir := t.TempDir()
-	pipelineDir := filepath.Join(dir, ".nightgauge", "pipeline")
+	pipelineDir := layouttest.PipelineDir(t, dir)
 	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

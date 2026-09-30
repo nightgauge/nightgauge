@@ -23,6 +23,8 @@ import * as os from "os";
 import * as path from "path";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { Logger } from "../../src/utils/logger";
+import { pipelineStateDir } from "../../src/utils/cloneLayout";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mock skillRunner so importing HeadlessOrchestrator doesn't pull the real CLI.
 vi.mock("../../src/utils/skillRunner", () => ({
@@ -52,7 +54,7 @@ function makeOrch(workdir: string, logger: Logger) {
 }
 
 function writeValidateContext(workdir: string, issueNumber: number, body: object): void {
-  const dir = path.join(workdir, ".nightgauge", "pipeline");
+  const dir = pipelineStateDir(workdir);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, `validate-${issueNumber}.json`), JSON.stringify(body));
 }
@@ -65,6 +67,8 @@ describe("HeadlessOrchestrator.verifyPostValidateState (Issue #4220)", () => {
     vi.clearAllMocks();
     logger = makeLogger();
     workdir = fs.mkdtempSync(path.join(os.tmpdir(), "post-validate-"));
+    // Contexts live in the clone's pipeline directory (ADR-024 § 7).
+    fakeCloneLayout(workdir);
   });
 
   afterEach(() => {
@@ -128,7 +132,7 @@ describe("HeadlessOrchestrator.verifyPostValidateState (Issue #4220)", () => {
   });
 
   it("returns null (fail-open) when the context file is unreadable JSON", () => {
-    const dir = path.join(workdir, ".nightgauge", "pipeline");
+    const dir = pipelineStateDir(workdir);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "validate-42.json"), "{ not valid json");
     const result = (makeOrch(workdir, logger) as any).verifyPostValidateState(42);

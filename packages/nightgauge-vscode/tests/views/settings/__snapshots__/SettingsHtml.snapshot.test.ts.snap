@@ -1471,42 +1471,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
 
       </div>
       <p id="core-non-claude-note" class="section-note" style="display:none;">Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ui.core.context_path" class="setting-label">Context Path </label>
-        <p class="setting-description">Directory for pipeline context JSON artifacts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ui.core.context_path"
-               class="text-input"
-               data-path="ui.core.context_path"
-               value=".nightgauge/pipeline"
-               placeholder=".nightgauge/pipeline"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ui.core.plans_path" class="setting-label">Plans Path </label>
-        <p class="setting-description">Directory for generated plan markdown artifacts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ui.core.plans_path"
-               class="text-input"
-               data-path="ui.core.plans_path"
-               value=".nightgauge/plans"
-               placeholder=".nightgauge/plans"
-               disabled>
-      </div>
-    </div>
-
     </div>
 
       </div>
@@ -3020,24 +2984,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > default config render 1`] = `
 
                disabled>
         <label for="automations.dry_run" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="automations.log_file" class="setting-label">Log File </label>
-        <p class="setting-description">Path to the JSON Lines audit log for automation executions</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="automations.log_file"
-               class="text-input"
-               data-path="automations.log_file"
-               value=".nightgauge/automations.log"
-               placeholder=".nightgauge/automations.log"
-               disabled>
       </div>
     </div>
 
@@ -5314,42 +5260,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
 
       </div>
       <p id="core-non-claude-note" class="section-note" style="display:none;">Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ui.core.context_path" class="setting-label">Context Path </label>
-        <p class="setting-description">Directory for pipeline context JSON artifacts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ui.core.context_path"
-               class="text-input"
-               data-path="ui.core.context_path"
-               value=".nightgauge/pipeline"
-               placeholder=".nightgauge/pipeline"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ui.core.plans_path" class="setting-label">Plans Path </label>
-        <p class="setting-description">Directory for generated plan markdown artifacts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ui.core.plans_path"
-               class="text-input"
-               data-path="ui.core.plans_path"
-               value=".nightgauge/plans"
-               placeholder=".nightgauge/plans"
-               >
-      </div>
-    </div>
-
     </div>
 
       </div>
@@ -6863,24 +6773,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > global tier view 1`] = `
 
                >
         <label for="automations.dry_run" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="automations.log_file" class="setting-label">Log File </label>
-        <p class="setting-description">Path to the JSON Lines audit log for automation executions</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="automations.log_file"
-               class="text-input"
-               data-path="automations.log_file"
-               value=".nightgauge/automations.log"
-               placeholder=".nightgauge/automations.log"
-               >
       </div>
     </div>
 
@@ -9157,42 +9049,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
 
       </div>
       <p id="core-non-claude-note" class="section-note" style="display:none;">Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ui.core.context_path" class="setting-label">Context Path </label>
-        <p class="setting-description">Directory for pipeline context JSON artifacts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ui.core.context_path"
-               class="text-input"
-               data-path="ui.core.context_path"
-               value=".nightgauge/pipeline"
-               placeholder=".nightgauge/pipeline"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ui.core.plans_path" class="setting-label">Plans Path </label>
-        <p class="setting-description">Directory for generated plan markdown artifacts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ui.core.plans_path"
-               class="text-input"
-               data-path="ui.core.plans_path"
-               value=".nightgauge/plans"
-               placeholder=".nightgauge/plans"
-               >
-      </div>
-    </div>
-
     </div>
 
       </div>
@@ -10706,24 +10562,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > local tier view 1`] = `
 
                >
         <label for="automations.dry_run" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="automations.log_file" class="setting-label">Log File </label>
-        <p class="setting-description">Path to the JSON Lines audit log for automation executions</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="automations.log_file"
-               class="text-input"
-               data-path="automations.log_file"
-               value=".nightgauge/automations.log"
-               placeholder=".nightgauge/automations.log"
-               >
       </div>
     </div>
 
@@ -13018,42 +12856,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
 
       </div>
       <p id="core-non-claude-note" class="section-note" style="display:none;">Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ui.core.context_path" class="setting-label">Context Path </label>
-        <p class="setting-description">Directory for pipeline context JSON artifacts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ui.core.context_path"
-               class="text-input"
-               data-path="ui.core.context_path"
-               value=".nightgauge/pipeline"
-               placeholder=".nightgauge/pipeline"
-               disabled>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ui.core.plans_path" class="setting-label">Plans Path </label>
-        <p class="setting-description">Directory for generated plan markdown artifacts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ui.core.plans_path"
-               class="text-input"
-               data-path="ui.core.plans_path"
-               value=".nightgauge/plans"
-               placeholder=".nightgauge/plans"
-               disabled>
-      </div>
-    </div>
-
     </div>
 
       </div>
@@ -14567,24 +14369,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > locked section — pipeline r
 
                disabled>
         <label for="automations.dry_run" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="automations.log_file" class="setting-label">Log File </label>
-        <p class="setting-description">Path to the JSON Lines audit log for automation executions</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="automations.log_file"
-               class="text-input"
-               data-path="automations.log_file"
-               value=".nightgauge/automations.log"
-               placeholder=".nightgauge/automations.log"
-               disabled>
       </div>
     </div>
 
@@ -16861,42 +16645,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
 
       </div>
       <p id="core-non-claude-note" class="section-note" style="display:none;">Non-Claude adapters use adapter-specific authentication and model settings. Claude-specific auth provider and model controls are hidden.</p>
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ui.core.context_path" class="setting-label">Context Path </label>
-        <p class="setting-description">Directory for pipeline context JSON artifacts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ui.core.context_path"
-               class="text-input"
-               data-path="ui.core.context_path"
-               value=".nightgauge/pipeline"
-               placeholder=".nightgauge/pipeline"
-               >
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="ui.core.plans_path" class="setting-label">Plans Path </label>
-        <p class="setting-description">Directory for generated plan markdown artifacts</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="ui.core.plans_path"
-               class="text-input"
-               data-path="ui.core.plans_path"
-               value=".nightgauge/plans"
-               placeholder=".nightgauge/plans"
-               >
-      </div>
-    </div>
-
     </div>
 
       </div>
@@ -18410,24 +18158,6 @@ exports[`getSettingsHtml snapshots (Issue #1242) > project tier view 1`] = `
 
                >
         <label for="automations.dry_run" class="toggle-switch"></label>
-      </div>
-    </div>
-
-
-    <div class="setting-row ">
-      <div class="setting-info">
-        <label for="automations.log_file" class="setting-label">Log File </label>
-        <p class="setting-description">Path to the JSON Lines audit log for automation executions</p>
-
-      </div>
-      <div class="setting-control">
-        <input type="text"
-               id="automations.log_file"
-               class="text-input"
-               data-path="automations.log_file"
-               value=".nightgauge/automations.log"
-               placeholder=".nightgauge/automations.log"
-               >
       </div>
     </div>
 

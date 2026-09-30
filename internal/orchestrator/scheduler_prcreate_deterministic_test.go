@@ -323,8 +323,9 @@ func TestScheduler_PRCreate_NilRunner_NoOp(t *testing.T) {
 }
 
 // TestScheduler_PRCreate_ReadsContextFromWorktree — regression for #275. On a
-// worktree-isolated run the dev/validate/issue context the runner projects lives
-// ONLY in the worktree's `.nightgauge/pipeline/`, never in the canonical root.
+// worktree-isolated run the dev/validate/issue context the runner projects is
+// resolved from the worktree (before ADR-024 § 7 it lived only in the
+// worktree's in-tree pipeline directory, never in the canonical root).
 // The scheduler MUST hand the runner the worktree path (via stageWorkspace), not
 // the bare workspaceRoot — otherwise every worktree-mode run punts
 // missing-dev-context and burns the expensive LLM fallback (the dogfood workspace 0-for-N).

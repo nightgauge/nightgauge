@@ -11,6 +11,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/trace"
 )
 
@@ -132,7 +133,9 @@ func observation(key, fingerprint string) attention.DecisionRequest {
 
 func newSweeper(t *testing.T, client forge.ForgeClient, producers ...Producer) (*Sweeper, *attention.Store) {
 	t.Helper()
-	root := t.TempDir()
+	// A repository: the decision trace lives in the clone's pipeline state
+	// directory, which only a git repository has (ADR-024 § 7).
+	root := layouttest.Repo(t)
 	store := attention.New(root)
 	reg := NewRegistry()
 	for _, p := range producers {

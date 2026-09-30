@@ -251,8 +251,8 @@ func (a *PipelineHealBase) Execute(ctx context.Context, failure StageFailure) Re
 	if !healBaseApprovalGranted(ctx, failure.Workspace, repoForGh, failure.PRNumber) {
 		return RecoveryResult{
 			Action: a.Name(),
-			Reason: fmt.Sprintf("auto-heal base PR requires human approval — add the %q label to PR #%d (or write %s with {\"approved\": true}) before it proceeds",
-				healBaseApprovalLabel, failure.PRNumber, healBaseApprovalRelPath(failure.PRNumber)),
+			Reason: fmt.Sprintf("auto-heal base PR requires human approval — add the %q label to PR #%d (or run %s) before it proceeds",
+				healBaseApprovalLabel, failure.PRNumber, healBaseApprovalCommand(failure.PRNumber)),
 			Evidence: []string{
 				fmt.Sprintf("pattern=%s", pattern.Slug()),
 				fmt.Sprintf("pr=%d", failure.PRNumber),
@@ -405,15 +405,16 @@ func (a *PipelineHealBase) createHealPR(ctx context.Context, fix heal.HealFix, p
 // failing PR to greenlight an auto-generated base-branch heal PR (#4136).
 const healBaseApprovalLabel = "pipeline-heal:approved"
 
-// healBaseApprovalRelPath is the workspace-relative approval file a human can
-// write (`{"approved": true}`) as an alternative to the PR label (#4136).
-func healBaseApprovalRelPath(prNumber int) string {
-	return fmt.Sprintf(".nightgauge/pipeline/approval-heal-base-%d.json", prNumber)
+// healBaseApprovalCommand is the command a human runs to write the approval
+// file (`{"approved": true}`) into the pipeline state directory, the
+// alternative to the PR label (#4136).
+func healBaseApprovalCommand(prNumber int) string {
+	return fmt.Sprintf(`echo '{"approved": true}' | nightgauge layout write pipeline approval-heal-base-%d.json`, prNumber)
 }
 
 // healBaseApprovalGranted reports whether a human has approved this base-branch
 // heal PR out-of-band (#4136), via either:
-//   - an approval file at <workspace>/.nightgauge/pipeline/approval-heal-base-{PR}.json
+//   - an approval file at <workspace>/.git/nightgauge/pipeline/approval-heal-base-{PR}.json
 //     containing {"approved": true}, or
 //   - the healBaseApprovalLabel on the failing PR (the durable signal — it
 //     survives worktree cleanup).

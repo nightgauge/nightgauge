@@ -10,8 +10,9 @@
 subagents with JSON context handoff files.
 
 **Execution model**: Each pipeline stage runs in a fresh conversation. Context
-is passed exclusively through `.nightgauge/pipeline/*.json` files — never
-through conversation history. Every stage reads its predecessor's context file
+is passed exclusively through JSON files in the clone's pipeline state
+directory (`nightgauge layout path pipeline`) — never through conversation
+history. Every stage reads its predecessor's context file
 and writes its own.
 
 **Configuration**: 6-tier config system — built-in defaults → global config →
@@ -75,11 +76,12 @@ on disk.
 
 An epic whose sub-issues touch overlapping files can be run once instead of N
 times. `/nightgauge-assess-epic` makes that call and writes
-`.nightgauge/pipeline/epic-assessment-{E}.json` with a `strategy` of
-`parallel`, `mixed`, or `sequential`. When the pipeline acts on a `parallel`
-(or the independent part of a `mixed`) assessment, it carries **one shared
-feature branch and one PR for the whole group**, and each stage writes a batch
-context file alongside — never instead of — its normal single-issue output.
+`epic-assessment-{E}.json` to the clone's pipeline state directory with a
+`strategy` of `parallel`, `mixed`, or `sequential`. When the pipeline acts on a
+`parallel` (or the independent part of a `mixed`) assessment, it carries **one
+shared feature branch and one PR for the whole group**, and each stage writes a
+batch context file alongside — never instead of — its normal single-issue
+output.
 
 **The batch key is the EPIC number `E`, never a sub-issue number.** Every batch
 context file is keyed on it and the shared branch is named for it. A stage that
@@ -97,7 +99,10 @@ never look for, and the batch silently degrades to a single issue.
 | `pr-create`        | `dev-batch-{E}.json`                | `pr-{E}.json`                     |
 | `pr-merge`         | `dev-batch-{E}.json`, `pr-{E}.json` | — (removes all five, in Step 7.8) |
 
-All paths are relative to `.nightgauge/pipeline/`. `batch-{E}.json`,
+All files live in the clone's pipeline state directory
+(`nightgauge layout path pipeline`): read them at
+`$(nightgauge layout path pipeline <file>)` and write them with
+`nightgauge layout write pipeline <file>`. `batch-{E}.json`,
 `planning-batch-{E}.json` and `dev-batch-{E}.json` have explicit schemas — every
 field, every required key, worked examples — in `docs/CONTEXT_ARCHITECTURE.md`
 under the batch context file sections. `validate-{E}.json` and `pr-{E}.json`
@@ -125,7 +130,7 @@ Resolve `E`, test for this stage's batch input, and branch:
 ```bash
 # E is the epic number: `.parent_issue` from the issue context when this stage
 # has one, otherwise the leading number in the branch name.
-BATCH_INPUT=".nightgauge/pipeline/<this stage's batch input, from the table above>"
+BATCH_INPUT="$(nightgauge layout path pipeline <this stage's batch input, from the table above>)"
 if [ -f "$BATCH_INPUT" ]; then
   BATCH_MODE=true
 else
@@ -188,7 +193,7 @@ This skill implements features by:
 /nightgauge-feature-dev
 
 # Implement specific plan file
-/nightgauge-feature-dev --plan .nightgauge/plans/42-photo-upload.md
+/nightgauge-feature-dev --plan "$(nightgauge layout path plans 42-photo-upload.md)"
 
 # Force sequential implementation (disable parallel file creation)
 /nightgauge-feature-dev --sequential
@@ -253,7 +258,8 @@ export NIGHTGAUGE_COMMANDS_LINT="pnpm lint"
 
 ## Input Contract
 
-This skill requires `.nightgauge/pipeline/planning-{N}.json` from
+This skill requires `planning-{N}.json` (in the clone's pipeline state
+directory, `nightgauge layout path pipeline`) from
 `/nightgauge-feature-planning`.
 
 **Schema**: See
@@ -569,7 +575,8 @@ if [ -n "$BINARY" ]; then
   "$BINARY" approval-gate "$ISSUE_NUMBER" || {
     echo "ARCHITECTURE APPROVAL REQUIRED — do NOT implement. A human must review the"
     echo "decision (the plan / decisions.md ADR) and add the approval label, or write"
-    echo ".nightgauge/pipeline/approval-${ISSUE_NUMBER}.json with {\"approved\": true}."
+    echo "{\"approved\": true} to approval-${ISSUE_NUMBER}.json with"
+    echo "'nightgauge layout write pipeline approval-${ISSUE_NUMBER}.json'."
     exit 1
   }
 fi
@@ -644,7 +651,8 @@ writing one anyway would be a fabrication dressed as progress.
 **Stop here and declare it.** Do not implement, do not commit, and do not simply
 end your turn with an explanation: prose in a final message is invisible to
 every gate downstream. What the pipeline reads is the deliverable, so write
-`.nightgauge/pipeline/dev-{N}.json` with empty `files_changed` and this signal:
+`dev-{N}.json` (`nightgauge layout write pipeline dev-{N}.json`) with empty
+`files_changed` and this signal:
 
 ```json
 {
@@ -883,8 +891,8 @@ context file path, and next step (`/nightgauge-feature-validate`).
 This skill outputs:
 
 1. **Code changes** - Committed to feature branch
-2. **`.nightgauge/pipeline/dev-{N}.json`** - Structured context for
-   pipeline
+2. **`dev-{N}.json`** (written with `nightgauge layout write pipeline`) -
+   Structured context for pipeline
 
 **Schema**: See
 [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md) for full
@@ -936,14 +944,17 @@ goal is silence when everything works.
 
 #### Step 2: Write Assessment Record
 
-Only if friction was detected in Step 1. Write a single JSON file:
+Only if friction was detected in Step 1. Write a single JSON file,
+`assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json` in the clone's pipeline state
+directory, through the binary (JSON on stdin; never a direct file write):
 
 ```bash
-ASSESSMENT_DIR=".nightgauge/pipeline/assessments"
-mkdir -p "$ASSESSMENT_DIR"
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+{ ... the record below ... }
+JSON
 ```
-
-**File**: `$ASSESSMENT_DIR/{STAGE_NAME}-${ISSUE_NUMBER}.json`
 
 The assessment record MUST follow this schema:
 
@@ -993,6 +1004,9 @@ The assessment record MUST follow this schema:
 
 ```bash
 # Validate JSON if written
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

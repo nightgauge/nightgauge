@@ -47,14 +47,14 @@ suite("activation", () => {
   });
 
   test("the fixture workspace does not auto-activate the extension", () => {
-    // `activationEvents` is workspaceContains:.nightgauge/{pipeline,plans}.
-    // The empty fixture matches neither, which is what lets the next case
+    // `activationEvents` is workspaceContains:.nightgauge/config.yaml.
+    // The empty fixture does not match, which is what lets the next case
     // observe activation from the outside instead of racing it.
     assert.equal(
       extension().isActive,
       false,
       "Extension was already active before the smoke tier activated it — the fixture " +
-        "workspace must not contain .nightgauge/pipeline or .nightgauge/plans, or " +
+        "workspace must not contain .nightgauge/config.yaml, or " +
         "activation-time faults are unobservable."
     );
   });

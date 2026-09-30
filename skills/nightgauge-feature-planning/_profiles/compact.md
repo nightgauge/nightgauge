@@ -31,14 +31,15 @@ Full contract and invariants: Read `skills/_shared/BATCH_MODE.md` when `batch-{E
 
 Design a complete implementation plan with documentation-first context
 loading: read prior pipeline context, load project docs and the scaffolded
-`PRD.md`/`decisions.md` before source exploration, produce
-`.nightgauge/plans/{N}-*.md`, and write `.nightgauge/pipeline/planning-{N}.json`
-for `/nightgauge-feature-dev`.
+`PRD.md`/`decisions.md` before source exploration, produce the plan
+`{N}-*.md` (`nightgauge layout write plans`), and write `planning-{N}.json`
+(`nightgauge layout write pipeline`) for `/nightgauge-feature-dev`.
 
 ## Required Inputs
 
 - Current branch contains issue number (for example `feat/542-...`)
-- Context file from issue pickup: `.nightgauge/pipeline/issue-{N}.json`
+- Context file from issue pickup:
+  `"$(nightgauge layout path pipeline issue-{N}.json)"`
 
 If context is missing, fail with a clear message and instruct the pipeline
 order: `/nightgauge-issue-pickup {N}` then `/nightgauge-feature-planning`.
@@ -80,9 +81,9 @@ production code changes. See
   `knowledge_path/PRD.md` + `decisions.md` and the relevant `docs/` produces a
   plan that drifts from accumulated decisions and causes rework downstream.
 - **Write the plan file — planning's only durable output is its handoff.** A
-  stage that proposes an approach but never writes its
-  `.nightgauge/pipeline/planning-{N}.json` leaves feature-dev with nothing to
-  implement against.
+  stage that proposes an approach but never writes its `planning-{N}.json`
+  (`nightgauge layout write pipeline planning-{N}.json`) leaves feature-dev
+  with nothing to implement against.
 - **Write each implementation step as a `- [ ] task` checkbox** in the
   Step-by-step implementation plan section. `parsePlanFile`
   (`internal/hooks/context.go`/`stop.go`) counts `- [ ]` / `- [x]` lines to
@@ -151,8 +152,8 @@ printf '<!-- phase:start name="ac-reconcile" index=3 total=14 stage="feature-pla
 
 **PURPOSE**: Deterministic, pre-LLM check classifying each AC as
 `satisfied | partial | unsatisfied | undetectable` against the current `main`
-working tree, persisting the report to `.nightgauge/pipeline/ac-reconcile-{N}.json`
-and routing planning accordingly:
+working tree, persisting the report to `ac-reconcile-{N}.json` in the clone's
+pipeline state directory and routing planning accordingly:
 
 - `all-satisfied` → produce a plan with `approach: "verify-and-close"` and
   empty `files_to_create` / `files_to_modify` (Issue #708 short-circuit).
@@ -188,7 +189,7 @@ priority from the `labels` array in the issue context JSON:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
 SIZE_LABEL=$(jq -r '[.labels[] | select(startswith("size:"))] | first // empty' "$CONTEXT_FILE" 2>/dev/null | sed 's/size://')
 PRIORITY_LABEL=$(jq -r '[.labels[] | select(startswith("priority:"))] | first // empty' "$CONTEXT_FILE" 2>/dev/null | sed 's/priority://')
 TYPE_LABEL=$(jq -r '.type // empty' "$CONTEXT_FILE" 2>/dev/null)
@@ -251,7 +252,7 @@ Query the knowledge base for semantically-related prior decisions and set
 
 ---
 
-### Phase 4: Produce Plan File in `.nightgauge/plans/`
+### Phase 4: Produce Plan File in the Clone's Plans Directory
 
 ```bash
 printf '<!-- phase:start name="produce-plan" index=9 total=14 stage="feature-planning" -->\n'
@@ -259,7 +260,8 @@ printf '<!-- phase:start name="produce-plan" index=9 total=14 stage="feature-pla
 
 > **Read `_includes/plan-and-enrichment.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
-It covers Phase 4 (produce the `.nightgauge/plans/{N}-*.md` plan file, with
+It covers Phase 4 (produce the `{N}-*.md` plan file through
+`nightgauge layout write plans`, with
 each implementation step as a `- [ ] task` checkbox — see Gotchas) and Phase
 5.5 (knowledge base enrichment). Phase 5 below is the inline output contract.
 
@@ -269,7 +271,9 @@ each implementation step as a `- [ ] task` checkbox — see Gotchas) and Phase
 printf '<!-- phase:start name="write-planning-context" index=10 total=14 stage="feature-planning" -->\n'
 ```
 
-Write `.nightgauge/pipeline/planning-{N}.json` with issue metadata, requirement
+Write `planning-{N}.json` through `nightgauge layout write pipeline
+planning-{N}.json` (JSON on stdin, or `--from` a temp file; never a direct
+write under the git directory) with issue metadata, requirement
 summary, planned file changes, `files_to_read`, selected approach, validation
 strategy, timestamp/stage metadata, `pattern_mining_results` (optional; use
 **exactly** the field names in
@@ -299,7 +303,8 @@ failure):**
 - `files_to_modify`: MUST be a JSON array of strings (even if empty: `[]`).
 - `created_at`: MUST be an ISO 8601 datetime string. Never use `planned_at`,
   `timestamp`, or `created_date`.
-- `plan_file`: MUST be the exact path to the `.md` plan file written in Phase 4.
+- `plan_file`: MUST be the exact absolute path to the `.md` plan file written
+  in Phase 4 — the path `nightgauge layout write plans` printed.
 
 Minimal required skeleton:
 
@@ -307,7 +312,7 @@ Minimal required skeleton:
 {
   "schema_version": "1.9",
   "issue_number": N,
-  "plan_file": ".nightgauge/plans/{N}-*.md",
+  "plan_file": "<absolute path printed by nightgauge layout write plans>",
   "approach": "...",
   "files_to_create": [],
   "files_to_modify": [],
@@ -359,14 +364,16 @@ two facts that only the plan knows. Merge a `dependency_analysis` block into
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
 # Replace the two values from the plan; default to 0 / false when none apply.
 DEP_MAJOR_BUMPS=0
 PROD_AREA=false
 tmp=$(mktemp)
 jq --argjson mb "$DEP_MAJOR_BUMPS" --argjson pa "$PROD_AREA" \
   '.dependency_analysis = {major_bumps_count: $mb, production_area: $pa}' \
-  "$CONTEXT_FILE" > "$tmp" && mv "$tmp" "$CONTEXT_FILE"
+  "$CONTEXT_FILE" > "$tmp" &&
+  nightgauge layout write pipeline "issue-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
+rm -f "$tmp"
 jq . "$CONTEXT_FILE" > /dev/null || { echo "ERROR: issue context JSON invalid after dependency_analysis merge" >&2; exit 1; }
 ```
 
@@ -454,7 +461,8 @@ continuing this phase.**
 - Keep context token-efficient: read referenced docs as needed.
 - Prefer deterministic scripts for state transitions over manual logic.
 - Do not implement code in this stage.
-- Do not skip writing `.nightgauge/plans/{N}-*.md` and `planning-{N}.json`.
+- Do not skip writing the plan `{N}-*.md` and `planning-{N}.json` (both
+  through `nightgauge layout write`).
 
 ## Failure Conditions
 
@@ -465,8 +473,9 @@ error.
 
 ## Completion Checklist
 
-- [ ] `.nightgauge/plans/{N}-*.md` exists and is complete — OR the issue was
-      declared `NOT_PIPELINE_ACTIONABLE` and no plan was written
-- [ ] `.nightgauge/pipeline/planning-{N}.json` written
+- [ ] The plan `{N}-*.md` exists in `nightgauge layout path plans` and is
+      complete — OR the issue was declared `NOT_PIPELINE_ACTIONABLE` and no
+      plan was written
+- [ ] `planning-{N}.json` written (`nightgauge layout write pipeline`)
 - [ ] Stage start/completion signaled
 - [ ] Next stage clearly indicated (`/nightgauge-feature-dev`)

@@ -14,12 +14,14 @@ package ipc
 
 import (
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // A trivial-route run whose planning and validate stages were skipped must
 // record the trivial route AND both skipped stages.
 func TestNotifyComplete_RecordsRoutingPathAndSkipStages(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	writeIssueContext(t, dir, 1484, `{
@@ -91,7 +93,7 @@ func TestNotifyComplete_RecordsRoutingPathAndSkipStages(t *testing.T) {
 // BuildV2Record owns, and an empty (never nil) skip list — so the fix above
 // cannot be mistaken for "always write trivial".
 func TestNotifyComplete_RecordsStandardWhenNothingSkipped(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	writeIssueContext(t, dir, 1485, `{"type":"feature","labels":["size:M"],"routing":{"complexity_score":5}}`)
@@ -127,7 +129,7 @@ func TestNotifyComplete_RecordsStandardWhenNothingSkipped(t *testing.T) {
 // The route comes from `suggested_route`. `path` on an issue context is the run
 // record's spelling leaking upstream and must not be honoured (#1484).
 func TestLoadIssueClassification_RouteKeyIsSuggestedRoute(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeIssueContext(t, root, 1484, `{"routing":{"suggested_route":"trivial","path":"extensive"}}`)
 
 	if got := loadIssueClassification(root, "", 1484).SuggestedRoute; got != "trivial" {

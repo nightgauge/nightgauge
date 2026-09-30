@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // The #1176 headline. feature-dev finished — lint clean, three files
@@ -25,7 +27,7 @@ func TestFeatureDevGate_RepairableManifestShapeProceeds(t *testing.T) {
 	writeFile(t, filepath.Join(ws, "docs", "PRODUCT_REQUIREMENTS.md"), "requirements\n")
 	writeFile(t, filepath.Join(ws, "docs", "a.md"), "a\n")
 
-	path := filepath.Join(ws, ".nightgauge", "pipeline", devContextName(210))
+	path := filepath.Join(layouttest.PipelineDir(t, ws), devContextName(210))
 	writeFile(t, path, `{
   "schema_version": "1.5",
   "issue_number": 210,
@@ -87,7 +89,7 @@ func TestFeatureDevGate_RepairableManifestShapeProceeds(t *testing.T) {
 // exists to forbid.
 func TestFeatureDevGate_MissingInformationStillFails(t *testing.T) {
 	ws := gitRepo(t)
-	writeFile(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(211)), `{
+	writeFile(t, filepath.Join(layouttest.PipelineDir(t, ws), devContextName(211)), `{
   "schema_version": "1.8",
   "issue_number": 211,
   "files_changed": ["src/a.ts", "src/b.ts"],
@@ -108,7 +110,7 @@ func TestFeatureDevGate_MissingInformationStillFails(t *testing.T) {
 // produce a TOTAL repair. Partial fill is inference wearing a repair's clothes.
 func TestFeatureDevGate_PartialManifestIsNotARepair(t *testing.T) {
 	ws := gitRepo(t)
-	writeFile(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(212)), `{
+	writeFile(t, filepath.Join(layouttest.PipelineDir(t, ws), devContextName(212)), `{
   "schema_version": "1.8",
   "issue_number": 212,
   "files_changed": ["src/a.ts", "src/b.ts", "src/unaccounted.ts"],

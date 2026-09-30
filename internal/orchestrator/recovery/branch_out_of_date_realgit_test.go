@@ -5,17 +5,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // These tests run BranchOutOfDate.Execute against a REAL git repository built
@@ -72,7 +76,7 @@ func realGitFixture(t *testing.T, mode string) string {
 
 func readConflictContext(t *testing.T, ws string, issue int) map[string]interface{} {
 	t.Helper()
-	data, err := os.ReadFile(conflictContextPathForTest(ws, issue))
+	data, err := os.ReadFile(conflictContextPathForTest(t, ws, issue))
 	if err != nil {
 		t.Fatalf("read conflict context: %v", err)
 	}
@@ -83,19 +87,64 @@ func readConflictContext(t *testing.T, ws string, issue int) map[string]interfac
 	return doc
 }
 
-func conflictContextPathForTest(ws string, issue int) string {
-	return filepath.Join(ws, ".nightgauge", "pipeline", "conflict-context-"+strconv.Itoa(issue)+".json")
+// nightgaugeBin is the nightgauge binary built from this tree, once per
+// package run: the skill helpers under test call `nightgauge layout`, a
+// subcommand an installed binary may predate.
+var nightgaugeBin struct {
+	once sync.Once
+	dir  string
+	err  error
 }
 
-func feedbackPathForTest(ws string, issue int) string {
-	return filepath.Join(ws, ".nightgauge", "pipeline", "feedback-"+strconv.Itoa(issue)+".json")
+// nightgaugeBinDir returns the directory holding the built binary. TestMain
+// removes it when the package's tests finish.
+func nightgaugeBinDir(t testing.TB) string {
+	t.Helper()
+	nightgaugeBin.once.Do(func() {
+		goExe, err := exec.LookPath("go")
+		if err != nil {
+			nightgaugeBin.err = err
+			return
+		}
+		dir, err := os.MkdirTemp("", "ng-recovery-bin-")
+		if err != nil {
+			nightgaugeBin.err = err
+			return
+		}
+		nightgaugeBin.dir = dir
+		cmd := exec.Command(goExe, "build", "-o", filepath.Join(dir, "nightgauge"), "./cmd/nightgauge")
+		cmd.Dir = filepath.Join("..", "..", "..")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			nightgaugeBin.err = fmt.Errorf("go build: %v\n%s", err, out)
+		}
+	})
+	if nightgaugeBin.err != nil {
+		t.Fatalf("build nightgauge: %v", nightgaugeBin.err)
+	}
+	return nightgaugeBin.dir
+}
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if nightgaugeBin.dir != "" {
+		_ = os.RemoveAll(nightgaugeBin.dir)
+	}
+	os.Exit(code)
+}
+
+func conflictContextPathForTest(t testing.TB, ws string, issue int) string {
+	return filepath.Join(layouttest.PipelineDir(t, ws), "conflict-context-"+strconv.Itoa(issue)+".json")
+}
+
+func feedbackPathForTest(t testing.TB, ws string, issue int) string {
+	return filepath.Join(layouttest.PipelineDir(t, ws), "feedback-"+strconv.Itoa(issue)+".json")
 }
 
 // hasConflictSignal reports whether feedback-{issue}.json carries a
 // CONFLICT_RESOLUTION_NEEDED signal. A missing file is "no signal".
 func hasConflictSignal(t *testing.T, ws string, issue int) bool {
 	t.Helper()
-	data, err := os.ReadFile(feedbackPathForTest(ws, issue))
+	data, err := os.ReadFile(feedbackPathForTest(t, ws, issue))
 	if err != nil {
 		return false
 	}
@@ -237,8 +286,8 @@ func TestRealGit_RebaseRefused_NoConflictState(t *testing.T) {
 	a := NewBranchOutOfDate(&fakePRMergeRunner{})
 	res := a.Execute(context.Background(), prMergeConflictFailure(ws, 301))
 
-	if _, err := os.Stat(conflictContextPathForTest(ws, 301)); err == nil {
-		data, _ := os.ReadFile(conflictContextPathForTest(ws, 301))
+	if _, err := os.Stat(conflictContextPathForTest(t, ws, 301)); err == nil {
+		data, _ := os.ReadFile(conflictContextPathForTest(t, ws, 301))
 		t.Errorf("a rebase that conflicted with nothing must not write a conflict context; got:\n%s", data)
 	}
 	if hasConflictSignal(t, ws, 301) {
@@ -272,8 +321,8 @@ func TestRealGit_DetachedHead_BranchGenuinelyUnknown(t *testing.T) {
 	a := NewBranchOutOfDate(&fakePRMergeRunner{})
 	res := a.Execute(context.Background(), prMergeConflictFailure(ws, 301))
 
-	if _, err := os.Stat(conflictContextPathForTest(ws, 301)); err == nil {
-		data, _ := os.ReadFile(conflictContextPathForTest(ws, 301))
+	if _, err := os.Stat(conflictContextPathForTest(t, ws, 301)); err == nil {
+		data, _ := os.ReadFile(conflictContextPathForTest(t, ws, 301))
 		t.Errorf("no branch is resolvable — must not write a context feature-dev cannot act on; got:\n%s", data)
 	}
 	if hasConflictSignal(t, ws, 301) {
@@ -306,8 +355,7 @@ func evidenceStage(t *testing.T, ws string, issue int, path string, stage int) [
 			if st.Stage != stage {
 				continue
 			}
-			data, err := os.ReadFile(filepath.Join(ws, ".nightgauge", "pipeline",
-				"conflict-evidence-"+strconv.Itoa(issue), filepath.FromSlash(st.File)))
+			data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, ws), "conflict-evidence-"+strconv.Itoa(issue), filepath.FromSlash(st.File)))
 			if err != nil {
 				t.Fatalf("read preserved stage %d blob for %s: %v", stage, path, err)
 			}
@@ -333,8 +381,7 @@ type evidenceEntry struct {
 
 func readEvidenceManifest(t *testing.T, ws string, issue int) []evidenceEntry {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(ws, ".nightgauge", "pipeline",
-		"conflict-evidence-"+strconv.Itoa(issue), "manifest.json"))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, ws), "conflict-evidence-"+strconv.Itoa(issue), "manifest.json"))
 	if err != nil {
 		return nil
 	}
@@ -462,8 +509,8 @@ func TestRealGit_BinaryConflict_NotCapturedAsSuccess(t *testing.T) {
 		t.Errorf("FollowUp = %q, want %q — a binary conflict is not something feature-dev can be re-dispatched to resolve",
 			res.FollowUp, FollowUpHumanTriageRequired)
 	}
-	if _, err := os.Stat(conflictContextPathForTest(ws, 301)); err == nil {
-		data, _ := os.ReadFile(conflictContextPathForTest(ws, 301))
+	if _, err := os.Stat(conflictContextPathForTest(t, ws, 301)); err == nil {
+		data, _ := os.ReadFile(conflictContextPathForTest(t, ws, 301))
 		t.Errorf("bytes that cannot round-trip through JSON must not be written as a capture; got:\n%s", data)
 	}
 	if hasConflictSignal(t, ws, 301) {
@@ -808,7 +855,10 @@ func runSkillCapture(t *testing.T, ws string, issue, pr int, reason string, with
 	// calls inherit the same disarming/isolation every fixture in this
 	// package uses (#680, #542) — it already covers the two GIT_CONFIG_*
 	// overrides this call used to set by hand.
+	// The helper reads and writes the pipeline state directory through
+	// `nightgauge layout`, so the binary built from this tree leads PATH.
 	cmd.Env = append(gittest.Env(),
+		"PATH="+nightgaugeBinDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"ISSUE_NUMBER="+strconv.Itoa(issue),
 		"PR_NUMBER="+strconv.Itoa(pr),
 		"BASE_REF=main",
@@ -877,6 +927,11 @@ func pathWithoutIconv(t *testing.T) string {
 		if err := os.Symlink(p, filepath.Join(dir, tool)); err != nil {
 			t.Fatalf("symlink %s: %v", tool, err)
 		}
+	}
+	// The helper's `nightgauge layout` calls need the binary built from this
+	// tree, not whichever one the developer has installed.
+	if err := os.Symlink(filepath.Join(nightgaugeBinDir(t), "nightgauge"), filepath.Join(dir, "nightgauge")); err != nil {
+		t.Fatalf("symlink nightgauge: %v", err)
 	}
 	// Assert the precondition rather than assume it: if iconv were reachable the
 	// test would silently stop testing anything.
@@ -1053,14 +1108,12 @@ func TestRealGit_SkillWriter_ReadByRecoveryLoop(t *testing.T) {
 	})
 
 	// #301 round-5. The writer resolved `git worktree list | head -1`, which is
-	// ALWAYS the main worktree, while every reader resolves the STAGE worktree:
-	// ConflictRecoveryLoop reads <Workspace>/.nightgauge/pipeline with Workspace
-	// = the run's worktree (#275), and feature-dev's intake and this skill's own
-	// context-bootstrap use the relative path from the same cwd. On a
-	// worktree-isolated run — the pipeline's normal mode — a perfectly faithful
-	// capture was therefore written where nothing looks, and every skill-captured
-	// conflict escalated "conflict-context-{N}.json not found".
-	t.Run("the capture lands in the worktree the reader resolves", func(t *testing.T) {
+	// ALWAYS the main worktree, while every reader resolves the STAGE worktree
+	// (#275). With the in-tree pipeline directory that wrote the capture where
+	// nothing looked. Since ADR-024 § 7 the pipeline state directory belongs
+	// to the clone, so both resolve one directory; the capture must land
+	// there, and never in either working tree.
+	t.Run("the capture lands in the directory the reader resolves", func(t *testing.T) {
 		ws := realGitFixture(t, "linked-worktree")
 		// The fixture prints the STAGE worktree: <main>/.nightgauge/worktrees/issue-301.
 		mainRoot := filepath.Dir(filepath.Dir(filepath.Dir(ws)))
@@ -1072,9 +1125,12 @@ func TestRealGit_SkillWriter_ReadByRecoveryLoop(t *testing.T) {
 		// this also proves the branch fallback resolves from a linked worktree.
 		runSkillCapture(t, ws, 301, 7, "rebase --continue failed after partial resolution", false)
 
-		for _, stray := range []string{conflictContextPathForTest(mainRoot, 301), feedbackPathForTest(mainRoot, 301)} {
-			if _, err := os.Stat(stray); err == nil {
-				t.Errorf("the capture escaped into the MAIN worktree: %s", stray)
+		if got, want := conflictContextPathForTest(t, ws, 301), conflictContextPathForTest(t, mainRoot, 301); got != want {
+			t.Errorf("the stage worktree resolves %s, the main worktree %s; want one per-clone path", got, want)
+		}
+		for _, tree := range []string{ws, mainRoot} {
+			if _, err := os.Stat(filepath.Join(tree, ".nightgauge", "pipeline")); err == nil {
+				t.Errorf("the capture wrote pipeline state into the working tree %s", tree)
 			}
 		}
 		// Fatals if the writer put the document anywhere else.

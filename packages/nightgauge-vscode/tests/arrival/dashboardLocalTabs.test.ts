@@ -6,10 +6,10 @@
  * arrival:epics
  *
  * Four of these tabs are fed by local telemetry rather than the platform, and
- * their transport is the on-disk JSONL under
- * `.nightgauge/pipeline/history/` — so nothing is stubbed at all here: a real
- * `TelemetryStore` reads a real recorded day file out of a real temp
- * workspace, rebuilds its index, and the panel renders what it found. If the
+ * their transport is the on-disk JSONL under the clone's pipeline directory
+ * (`.git/nightgauge/pipeline/history/`) — so nothing is stubbed at all here: a
+ * real `TelemetryStore` reads a real recorded day file out of a real temp git
+ * repository, rebuilds its index, and the panel renders what it found. If the
  * reader stops parsing a record shape, or the index rebuild silently yields
  * nothing, these go red where a fixture-and-render test could not.
  *
@@ -24,6 +24,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createMockMemento } from "../mocks/memento";
+import { initGitRepo } from "../helpers/cloneLayout";
+import { pipelineStateDir } from "../../src/utils/cloneLayout";
 
 vi.mock("vscode", async () => (await import("./dashboardHarness")).vscodeMockModule());
 vi.mock("../../src/services/IpcClient", async () =>
@@ -76,7 +78,7 @@ let recordedTitles: string[];
 let recordedIssueNumbers: number[];
 
 beforeAll(() => {
-  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-arrival-local-"));
+  workspaceRoot = initGitRepo(fs.mkdtempSync(path.join(os.tmpdir(), "ng-arrival-local-")));
   fs.mkdirSync(path.join(workspaceRoot, ".nightgauge"), { recursive: true });
   fs.writeFileSync(
     path.join(workspaceRoot, ".nightgauge", "config.yaml"),
@@ -84,7 +86,7 @@ beforeAll(() => {
     "utf-8"
   );
 
-  const historyDir = path.join(workspaceRoot, ".nightgauge", "pipeline", "history");
+  const historyDir = path.join(pipelineStateDir(workspaceRoot), "history");
   fs.mkdirSync(historyDir, { recursive: true });
 
   const lines = fs
@@ -169,7 +171,7 @@ function tabText(tabId: string): string {
 // History
 // ---------------------------------------------------------------------------
 
-describe("arrival: History tab (.nightgauge/pipeline/history/*.jsonl)", () => {
+describe("arrival: History tab (<clone>/pipeline/history/*.jsonl)", () => {
   it("reaches a populated state by reading the real JSONL", async () => {
     dashboard = await newDashboardWithTelemetry();
 
@@ -189,7 +191,7 @@ describe("arrival: History tab (.nightgauge/pipeline/history/*.jsonl)", () => {
   });
 
   it("an empty workspace renders the empty state, not a stale one", async () => {
-    const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-arrival-nohist-"));
+    const emptyRoot = initGitRepo(fs.mkdtempSync(path.join(os.tmpdir(), "ng-arrival-nohist-")));
     try {
       await new TelemetryStore(emptyRoot).rebuildIndex();
       dashboard = new Dashboard(

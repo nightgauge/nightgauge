@@ -16,10 +16,10 @@ import (
 const maxStrandedReported = 5
 
 // statusArgs builds `git status --porcelain` limited to the deliverable. The
-// exclusion is essential, not cosmetic: the stage's own dev-{N}.json lands in
-// `.nightgauge/pipeline/`, so counting bookkeeping as work would make every
-// empty workspace look productive and silently disable this gate in any repo
-// that does not happen to gitignore it. See ci.BookkeepingDirs.
+// exclusion is essential, not cosmetic: bookkeeping such as
+// `.nightgauge/attention/` lands in the tree, so counting it as work would make
+// every empty workspace look productive and silently disable this gate in any
+// repo that does not happen to gitignore it. See ci.BookkeepingDirs.
 // `--untracked-files=all` is load-bearing, not a preference. Porcelain's
 // default collapses untracked directories to a single `internal/` entry, so a
 // stage that created ten files in one new package reads as one changed path —
@@ -118,35 +118,6 @@ type devWorkState struct {
 	// git confirmed as actually changed.
 	DeclaredCount  int
 	ConfirmedCount int
-}
-
-// withoutOwnHandoff drops the running stage's own dev-{N}.json from a declared
-// file list.
-//
-// The bookkeeping probe (#237) widens its scope to whatever the stage declared,
-// then confirms those paths against git. A stage's own handoff is a bookkeeping
-// path that is always present and always modified at the moment the gate runs —
-// every run writes it by definition — so declaring it alone satisfied both
-// halves and passed a run that produced nothing (#249). That is #202 reached
-// through a new door: the exclusion still stands, but a declaration naming the
-// exhaust routes around it.
-//
-// No legitimate deliverable is lost: a stage's handoff is never the work. Work
-// that untracks OTHER issues' context files — #237's motivating case — is
-// unaffected, since only the current issue's own path is dropped.
-//
-// This mirrors enforceValidateCommitContract on the TypeScript side, which
-// already strips .nightgauge/ from claimed files before judging them.
-func withoutOwnHandoff(files []string, issueNumber int) []string {
-	own := fmt.Sprintf(".nightgauge/pipeline/dev-%d.json", issueNumber)
-	out := make([]string, 0, len(files))
-	for _, f := range files {
-		if filepath.ToSlash(strings.TrimPrefix(filepath.Clean(f), "./")) == own {
-			continue
-		}
-		out = append(out, f)
-	}
-	return out
 }
 
 // allBookkeeping reports whether files is non-empty and every entry is a

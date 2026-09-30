@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func writeTreeFile(t *testing.T, root, rel, content string) {
@@ -219,7 +221,7 @@ func TestReconcileACs_AllSatisfiedStillFocusesNothing(t *testing.T) {
 func TestWriteACReconcile(t *testing.T) {
 	dir := t.TempDir()
 	res := ReconcileACs(dir, 13, "- [ ] File `x.md` exists\n")
-	out := filepath.Join(dir, ".nightgauge", "pipeline", "ac-reconcile-13.json")
+	out := filepath.Join(layouttest.PipelineDir(t, dir), "ac-reconcile-13.json")
 	if err := WriteACReconcile(res, out); err != nil {
 		t.Fatal(err)
 	}

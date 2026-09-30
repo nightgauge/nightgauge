@@ -260,6 +260,10 @@ add-blocked-by <later> <earlier>`. Directory-only overlaps stay parallel
 
 ### Changed
 
+- Per-clone pipeline state, plans, retros and logs are read at
+  `$(nightgauge layout path <class> <name>)` and written through
+  `nightgauge layout write|append`, not by `.nightgauge/...` path (#2037,
+  ADR-024 § 7).
 - Updated `skills/nightgauge-issue-create/SKILL.md` to route sub-issue
   creation through deterministic `create-sub-issue.sh`
 - Updated `claude-plugins/nightgauge/commands/issue-create.md` to document

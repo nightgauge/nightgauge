@@ -51,7 +51,7 @@ import (
 // through this function — it has no scheduler and no `state.Running` — and it
 // answers the question above with a different source: `state.
 // ActiveIssuesFromSnapshots`, which scans each repo's own
-// `.nightgauge/pipeline/` directory — the `runtime-{issue}-{runId}.json`
+// `.git/nightgauge/pipeline/` directory — the `runtime-{issue}-{runId}.json`
 // snapshots plus the in-flight `current-run.json` sidecar when the process it
 // names is alive. That is the one machine-wide in-flight source there is (ADR-017
 // Decision 8 built the layout to be readable "by a process with no registry"),

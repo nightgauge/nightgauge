@@ -26,6 +26,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // getAutoCreateEpicBranch is defined in scheduler.go (package-level function);
@@ -204,7 +206,7 @@ func TestQueueOperations(t *testing.T) {
 }
 
 func TestOutcomeRecording(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 
 	s := &Scheduler{recordOutcomes: true}
 
@@ -226,7 +228,7 @@ func TestOutcomeRecording(t *testing.T) {
 	// daemon's launch root (#304).
 	s.recordOutcome(item, snapshot, true, 5, "claude-sonnet-4-6", tmpDir)
 
-	outcomesFile := filepath.Join(tmpDir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	outcomesFile := filepath.Join(layouttest.PipelineDir(t, tmpDir), "history", "outcomes.jsonl")
 	data, err := os.ReadFile(outcomesFile)
 	if err != nil {
 		t.Fatalf("outcomes.jsonl not created: %v", err)
@@ -309,8 +311,8 @@ func TestOutcomeRecording(t *testing.T) {
 }
 
 func TestLoadIssueContext(t *testing.T) {
-	tmpDir := t.TempDir()
-	pipelineDir := filepath.Join(tmpDir, ".nightgauge", "pipeline")
+	tmpDir := layouttest.Repo(t)
+	pipelineDir := layouttest.PipelineDir(t, tmpDir)
 	if err := os.MkdirAll(pipelineDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -573,7 +575,7 @@ func TestSchedulerConfig(t *testing.T) {
 // loud but non-fatal warning when the workspace manifest and the runtime-
 // resolved project number disagree for a repo (#271).
 func TestWarnProjectMappingMismatch(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	vscodeDir := filepath.Join(dir, ".vscode")
 	if err := os.MkdirAll(vscodeDir, 0o755); err != nil {
 		t.Fatalf("mkdir .vscode: %v", err)
@@ -637,7 +639,7 @@ func TestWarnProjectMappingMismatch_NilConfigNoop(t *testing.T) {
 }
 
 func TestQueuePersistence(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 
 	// Create scheduler with workspace root — queue persists to disk
 	s := &Scheduler{
@@ -653,7 +655,7 @@ func TestQueuePersistence(t *testing.T) {
 	)
 
 	// Verify file exists
-	queueFile := filepath.Join(tmpDir, ".nightgauge", "pipeline", "queue-state.json")
+	queueFile := filepath.Join(layouttest.PipelineDir(t, tmpDir), "queue-state.json")
 	data, err := os.ReadFile(queueFile)
 	if err != nil {
 		t.Fatalf("queue-state.json not created: %v", err)
@@ -924,7 +926,7 @@ func (f *fakeTelemetry) SyncQueue(ctx context.Context, items []platform.QueueSyn
 // present in QueueList()/persisted queue-state.json, and completion clears it
 // back to idle. (AC1, AC2, AC3)
 func TestDequeueIndependent_ProducesProcessingStatus(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
 		workspaceRoot: tmpDir,
 		repoRunning:   make(map[string]int),
@@ -953,7 +955,7 @@ func TestDequeueIndependent_ProducesProcessingStatus(t *testing.T) {
 	}
 
 	// Persisted queue-state.json must also carry the in-flight item.
-	queueFile := filepath.Join(tmpDir, ".nightgauge", "pipeline", "queue-state.json")
+	queueFile := filepath.Join(layouttest.PipelineDir(t, tmpDir), "queue-state.json")
 	data, err := os.ReadFile(queueFile)
 	if err != nil {
 		t.Fatalf("queue-state.json not found: %v", err)
@@ -1778,7 +1780,7 @@ func TestIsHaikuModel(t *testing.T) {
 
 func TestGetLargeDiffThreshold(t *testing.T) {
 	t.Run("returns default when no config", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := layouttest.Repo(t)
 		got := getLargeDiffThreshold(dir)
 		if got != 500 {
 			t.Errorf("got %d, want 500", got)
@@ -1786,7 +1788,7 @@ func TestGetLargeDiffThreshold(t *testing.T) {
 	})
 
 	t.Run("reads from config.yaml", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := layouttest.Repo(t)
 		configDir := filepath.Join(dir, ".nightgauge")
 		os.MkdirAll(configDir, 0o755)
 		os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("pipeline:\n  large_diff_threshold: 300\n"), 0o644)
@@ -1797,7 +1799,7 @@ func TestGetLargeDiffThreshold(t *testing.T) {
 	})
 
 	t.Run("env var takes precedence", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := layouttest.Repo(t)
 		configDir := filepath.Join(dir, ".nightgauge")
 		os.MkdirAll(configDir, 0o755)
 		os.WriteFile(filepath.Join(configDir, "config.yaml"), []byte("pipeline:\n  large_diff_threshold: 300\n"), 0o644)
@@ -1819,7 +1821,7 @@ func TestGetLargeDiffThreshold(t *testing.T) {
 
 func TestOnFailureStatusDefault(t *testing.T) {
 	// When OnFailureStatus is empty, NewScheduler should default to "ready"
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
 		workspaceRoot:   tmpDir,
 		repoRunning:     make(map[string]int),
@@ -1860,7 +1862,7 @@ func TestOnFailureStatusConfigValues(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			tmpDir := t.TempDir()
+			tmpDir := layouttest.Repo(t)
 			s := &Scheduler{
 				workspaceRoot:   tmpDir,
 				repoRunning:     make(map[string]int),
@@ -1937,7 +1939,7 @@ func TestFailureRevertTriggeredOnFailure(t *testing.T) {
 
 func TestGetAutoCreateEpicBranch_Default(t *testing.T) {
 	// No env var set, no config file — default is true
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "")
 	if !getAutoCreateEpicBranch(dir) {
 		t.Error("expected default=true when no env var and no config file")
@@ -1945,7 +1947,7 @@ func TestGetAutoCreateEpicBranch_Default(t *testing.T) {
 }
 
 func TestGetAutoCreateEpicBranch_EnvDisable(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "false")
 	if getAutoCreateEpicBranch(dir) {
 		t.Error("expected false when env var is 'false'")
@@ -1953,7 +1955,7 @@ func TestGetAutoCreateEpicBranch_EnvDisable(t *testing.T) {
 }
 
 func TestGetAutoCreateEpicBranch_EnvEnable(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "true")
 	if !getAutoCreateEpicBranch(dir) {
 		t.Error("expected true when env var is 'true'")
@@ -1961,7 +1963,7 @@ func TestGetAutoCreateEpicBranch_EnvEnable(t *testing.T) {
 }
 
 func TestGetAutoCreateEpicBranch_ConfigDisable(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "")
 	configDir := filepath.Join(dir, ".nightgauge")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -1977,7 +1979,7 @@ func TestGetAutoCreateEpicBranch_ConfigDisable(t *testing.T) {
 }
 
 func TestGetAutoCreateEpicBranch_ConfigEnable(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "")
 	configDir := filepath.Join(dir, ".nightgauge")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -2325,12 +2327,12 @@ func TestVerifyPRMergeForStage_NotMergedFailsClosed(t *testing.T) {
 // introduced for #2870. A stage that exits 0 without writing its expected
 // output context file must be treated as a stage failure.
 func TestValidateStageOutput(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 
-	// Pre-create the .nightgauge/pipeline directory so the "present" cases
+	// Pre-create the pipeline state directory so the "present" cases
 	// can write the expected flat <stage>-<N>.json file there (the convention
 	// shared with the gates + SDK; see stagecontext.ContextPath).
-	pipelineDir := filepath.Join(tmpDir, ".nightgauge", "pipeline")
+	pipelineDir := layouttest.PipelineDir(t, tmpDir)
 	if err := os.MkdirAll(pipelineDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -2404,8 +2406,8 @@ func TestValidateStageOutput(t *testing.T) {
 }
 
 func TestDevContextBuildPassed(t *testing.T) {
-	tmpDir := t.TempDir()
-	pipelineDir := filepath.Join(tmpDir, ".nightgauge", "pipeline")
+	tmpDir := layouttest.Repo(t)
+	pipelineDir := layouttest.PipelineDir(t, tmpDir)
 	if err := os.MkdirAll(pipelineDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -2451,7 +2453,7 @@ func TestDevContextBuildPassed(t *testing.T) {
 
 func makeIssueContext(t *testing.T, dir string, issueNumber int, devModel string, complexityScore int) string {
 	t.Helper()
-	pipelineDir := filepath.Join(dir, ".nightgauge", "pipeline")
+	pipelineDir := layouttest.PipelineDir(t, dir)
 	if err := os.MkdirAll(pipelineDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -2485,7 +2487,7 @@ func makePerfModeFile(t *testing.T, dir, mode string) string {
 }
 
 func TestScheduler_ShouldReRoute_PerfModeNewer(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 
 	contextPath := makeIssueContext(t, tmpDir, 3140, "claude-opus-4-7", 8)
@@ -2506,7 +2508,7 @@ func TestScheduler_ShouldReRoute_PerfModeNewer(t *testing.T) {
 }
 
 func TestScheduler_ShouldReRoute_ContextNewer(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 
 	makePerfModeFile(t, tmpDir, "efficiency")
@@ -2514,7 +2516,7 @@ func TestScheduler_ShouldReRoute_ContextNewer(t *testing.T) {
 	makeIssueContext(t, tmpDir, 3140, "claude-opus-4-7", 8)
 
 	// Verify mtime ordering
-	ctxInfo, _ := os.Stat(filepath.Join(tmpDir, ".nightgauge", "pipeline", "issue-3140.json"))
+	ctxInfo, _ := os.Stat(filepath.Join(layouttest.PipelineDir(t, tmpDir), "issue-3140.json"))
 	perfInfo, _ := os.Stat(filepath.Join(tmpDir, ".nightgauge", "performance-mode.yaml"))
 	if !ctxInfo.ModTime().After(perfInfo.ModTime()) {
 		t.Skip("filesystem mtime resolution too coarse for this test — skipping")
@@ -2526,7 +2528,7 @@ func TestScheduler_ShouldReRoute_ContextNewer(t *testing.T) {
 }
 
 func TestScheduler_ShouldReRoute_MissingPerfMode(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 	makeIssueContext(t, tmpDir, 3140, "claude-sonnet-4-6", 5)
 	// No performance-mode.yaml written
@@ -2537,7 +2539,7 @@ func TestScheduler_ShouldReRoute_MissingPerfMode(t *testing.T) {
 }
 
 func TestScheduler_ReRouteContext_EfficiencyOverride(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 	ctx := context.Background()
 
@@ -2555,7 +2557,7 @@ func TestScheduler_ReRouteContext_EfficiencyOverride(t *testing.T) {
 	}
 
 	// Verify context JSON was updated on disk
-	data, err := os.ReadFile(filepath.Join(tmpDir, ".nightgauge", "pipeline", "issue-3140.json"))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, tmpDir), "issue-3140.json"))
 	if err != nil {
 		t.Fatalf("read updated context: %v", err)
 	}
@@ -2575,7 +2577,7 @@ func TestScheduler_ReRouteContext_EfficiencyOverride(t *testing.T) {
 }
 
 func TestScheduler_ReRouteContext_MaximumMode(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 	ctx := context.Background()
 
@@ -2600,7 +2602,7 @@ func TestScheduler_ReRouteContext_MaximumMode(t *testing.T) {
 }
 
 func TestScheduler_ReRouteContext_LogsChange(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 	ctx := context.Background()
 
@@ -2627,7 +2629,7 @@ func TestScheduler_ReRouteContext_LogsChange(t *testing.T) {
 }
 
 func TestScheduler_ReRouteContext_AtomicWrite(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{}
 	ctx := context.Background()
 
@@ -2639,13 +2641,13 @@ func TestScheduler_ReRouteContext_AtomicWrite(t *testing.T) {
 	}
 
 	// Temp file must not remain after successful write
-	tmpFile := filepath.Join(tmpDir, ".nightgauge", "pipeline", "issue-3140.json.tmp")
+	tmpFile := filepath.Join(layouttest.PipelineDir(t, tmpDir), "issue-3140.json.tmp")
 	if _, err := os.Stat(tmpFile); !os.IsNotExist(err) {
 		t.Error("temp file should be removed after atomic rename")
 	}
 
 	// Context file must be valid JSON
-	data, err := os.ReadFile(filepath.Join(tmpDir, ".nightgauge", "pipeline", "issue-3140.json"))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, tmpDir), "issue-3140.json"))
 	if err != nil {
 		t.Fatalf("read context: %v", err)
 	}

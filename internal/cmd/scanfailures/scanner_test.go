@@ -10,24 +10,29 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/logretention"
 )
 
-// writeLog writes a session log fixture under workdir/.nightgauge/logs/.
+// writeLog writes a session log fixture in workdir's clone logs directory.
 func writeLog(t *testing.T, workdir, name string, lines []string) {
 	t.Helper()
-	dir := filepath.Join(workdir, ".nightgauge", "logs")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
+	dir := layouttest.MkLogsDir(t, workdir)
 	body := strings.Join(lines, "\n")
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 		t.Fatalf("write %s: %v", name, err)
 	}
 }
 
+func TestScan_OutsideGitRepositoryIsAnError(t *testing.T) {
+	_, err := Scan(Options{Workdir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "not a git repository") {
+		t.Fatalf("Scan outside a repository: err = %v, want not a git repository", err)
+	}
+}
+
 func TestScan_MissingLogsDir(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	res, err := Scan(Options{Workdir: dir})
 	if err != nil {
 		t.Fatalf("Scan: %v", err)
@@ -42,7 +47,7 @@ func TestScan_MissingLogsDir(t *testing.T) {
 }
 
 func TestScan_AllPatternsMatch(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	// One line per pattern, in mixed case to confirm case-insensitivity.
 	lines := []string{
 		"info: starting",
@@ -90,7 +95,7 @@ func TestScan_AllPatternsMatch(t *testing.T) {
 }
 
 func TestScan_DateFilter(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeLog(t, dir, "2026-04-01_session.log", []string{"[ERROR] old"})
 	writeLog(t, dir, "2026-04-22_session.log", []string{"[ERROR] recent"})
 
@@ -107,7 +112,7 @@ func TestScan_DateFilter(t *testing.T) {
 }
 
 func TestScan_IssueFilter(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeLog(t, dir, "2026-04-22_3087_session.log", []string{"[ERROR] for 3087"})
 	writeLog(t, dir, "2026-04-22_3088_session.log", []string{"[ERROR] for 3088"})
 	writeLog(t, dir, "2026-04-22_session.log", []string{"[ERROR] no issue"})
@@ -125,7 +130,7 @@ func TestScan_IssueFilter(t *testing.T) {
 }
 
 func TestScan_Cap50Matches(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	lines := make([]string, 0, MaxSignalsPerFile+10)
 	for i := 0; i < MaxSignalsPerFile+10; i++ {
 		lines = append(lines, fmt.Sprintf("[ERROR] match %d", i))
@@ -142,7 +147,7 @@ func TestScan_Cap50Matches(t *testing.T) {
 }
 
 func TestScan_NonMatchingLogProducesZeroSignals(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeLog(t, dir, "2026-04-22_session.log", []string{
 		"info: pipeline started",
 		"info: pipeline completed",
@@ -161,7 +166,7 @@ func TestScan_NonMatchingLogProducesZeroSignals(t *testing.T) {
 }
 
 func TestScan_LongLineTruncatedTo300Bytes(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	long := "[ERROR] " + strings.Repeat("x", 500)
 	writeLog(t, dir, "2026-04-22_session.log", []string{long})
 
@@ -177,7 +182,7 @@ func TestScan_LongLineTruncatedTo300Bytes(t *testing.T) {
 
 // TestScan_JSONSchemaStability pins the JSON keys retro Phase 3 consumes.
 func TestScan_JSONSchemaStability(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeLog(t, dir, "2026-04-22_3087_session.log", []string{"[ERROR] foo"})
 
 	res, err := Scan(Options{Workdir: dir})
@@ -254,8 +259,8 @@ func TestFailurePatternsMatchSkillSource(t *testing.T) {
 // error: no warning, the surviving logs still scan, and OldestLogDate names
 // the earliest log left.
 func TestScan_AfterRetentionPrune(t *testing.T) {
-	dir := t.TempDir()
-	logs := filepath.Join(dir, ".nightgauge", "logs")
+	dir := layouttest.Repo(t)
+	logs := layouttest.LogsDir(t, dir)
 	now := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	for _, f := range []struct {
 		name string
@@ -304,9 +309,9 @@ func TestScan_LogVanishedMidScan(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlinks need privileges on Windows")
 	}
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeLog(t, dir, "2026-09-20_13_session.log", []string{"ok"})
-	logs := filepath.Join(dir, ".nightgauge", "logs")
+	logs := layouttest.LogsDir(t, dir)
 	if err := os.Symlink(filepath.Join(logs, "gone"), filepath.Join(logs, "2026-09-01_9_session.log")); err != nil {
 		t.Fatal(err)
 	}

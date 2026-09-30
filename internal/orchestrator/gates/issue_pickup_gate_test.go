@@ -5,11 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestIssuePickupGate_Pass(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "issue-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "issue-42.json"), map[string]any{
 		"issue_number": 42,
 		"branch":       "feat/42-test",
 	})
@@ -41,7 +43,7 @@ func TestIssuePickupGate_Fail_ContextMissing(t *testing.T) {
 // the skill emitted a stub without resolving the feature branch.
 func TestIssuePickupGate_SkillSaidSuccessButNoBranch(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "issue-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "issue-42.json"), map[string]any{
 		"issue_number": 42,
 		"branch":       "",
 	})
@@ -56,7 +58,7 @@ func TestIssuePickupGate_SkillSaidSuccessButNoBranch(t *testing.T) {
 
 func TestIssuePickupGate_Fail_InvalidJSON(t *testing.T) {
 	ws := t.TempDir()
-	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, ws)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

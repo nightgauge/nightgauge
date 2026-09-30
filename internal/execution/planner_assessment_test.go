@@ -4,21 +4,21 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func writePlan(t *testing.T, root string, issue int, body string) {
 	t.Helper()
-	path := filepath.Join(root, PlanningContextRelPath(issue))
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	path := filepath.Join(layouttest.MkPipelineDir(t, root), planningContextName(issue))
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestLoadPlannerAssessment_SizeLabel(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writePlan(t, root, 1429, `{"complexity_assessment":{"size_label":"l","computed_score":5}}`)
 
 	got := LoadPlannerAssessment(root, "", "acme/widget", 1429)
@@ -38,7 +38,7 @@ func TestLoadPlannerAssessment_SizeLabel(t *testing.T) {
 // report "the planner assessed nothing" for a plan that assessed a size —
 // exactly the blindness this loader exists to remove.
 func TestLoadPlannerAssessment_AcceptsFibonacciScoreSpelling(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writePlan(t, root, 149, `{"complexity_assessment":{"size_label":null,"fibonacci_score":3}}`)
 
 	got := LoadPlannerAssessment(root, "", "acme/widget", 149)
@@ -50,27 +50,26 @@ func TestLoadPlannerAssessment_AcceptsFibonacciScoreSpelling(t *testing.T) {
 	}
 }
 
-// The worktree is searched before the repo root, and the two worktree layouts
-// are both known — the same rule IssueContextCandidates follows. A reader that
-// knew one layout would report "absent" for every run of the other path.
+// The worktree is searched before the repo root — the same rule
+// IssueContextCandidates follows. Every worktree of one clone shares the
+// clone's pipeline state directory (ADR-024 § 7), so a run in a linked
+// worktree reads the plan the checkout's run wrote; an explicit worktree of a
+// different clone is the most specific candidate.
 func TestLoadPlannerAssessment_SearchesWorktreeLayouts(t *testing.T) {
-	root := t.TempDir()
+	root := initTestGitRepo(t, "main")
 	writePlan(t, root, 5, `{"complexity_assessment":{"size_label":"XS"}}`)
 
-	extWorktree := filepath.Join(root, ".worktrees", "issue-5")
+	extWorktree := filepath.Join(t.TempDir(), "issue-5")
+	gittest.Run(t, root, "worktree", "add", "--detach", extWorktree)
+	if got := LoadPlannerAssessment(root, extWorktree, "acme/widget", 5); got.SizeLabel != "XS" {
+		t.Errorf("SizeLabel = %q, want \"XS\" — a linked worktree shares the clone's plan", got.SizeLabel)
+	}
 	writePlan(t, extWorktree, 5, `{"complexity_assessment":{"size_label":"XL"}}`)
-
 	if got := LoadPlannerAssessment(root, "", "acme/widget", 5); got.SizeLabel != "XL" {
-		t.Errorf("SizeLabel = %q, want \"XL\" — the extension worktree outranks the repo root", got.SizeLabel)
+		t.Errorf("SizeLabel = %q, want \"XL\" — the worktree wrote the clone's one file", got.SizeLabel)
 	}
 
-	goWorktree := filepath.Join(root, ".nightgauge", "worktrees", "widget-issue-5")
-	writePlan(t, goWorktree, 5, `{"complexity_assessment":{"size_label":"M"}}`)
-	if got := LoadPlannerAssessment(root, "", "acme/widget", 5); got.SizeLabel != "M" {
-		t.Errorf("SizeLabel = %q, want \"M\" — the Go manager worktree outranks the extension's", got.SizeLabel)
-	}
-
-	explicit := t.TempDir()
+	explicit := layouttest.Repo(t)
 	writePlan(t, explicit, 5, `{"complexity_assessment":{"size_label":"S"}}`)
 	if got := LoadPlannerAssessment(root, explicit, "acme/widget", 5); got.SizeLabel != "S" {
 		t.Errorf("SizeLabel = %q, want \"S\" — an explicit worktree is the most specific candidate", got.SizeLabel)
@@ -80,7 +79,7 @@ func TestLoadPlannerAssessment_SearchesWorktreeLayouts(t *testing.T) {
 // Absence stays absence: a missing or malformed plan must not invent a size,
 // because the resolution's next source can only be reached through "".
 func TestLoadPlannerAssessment_AbsentAndMalformed(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if got := LoadPlannerAssessment(root, "", "acme/widget", 99); got.Assessed() {
 		t.Errorf("missing plan yielded %+v, want the zero value", got)
 	}

@@ -6,7 +6,7 @@
  * codebase discoveries, decisions, and file references so that later
  * sub-issues benefit from earlier research.
  *
- * File location: .nightgauge/pipeline/epic-{number}-context.json
+ * File location: <git-common-dir>/nightgauge/pipeline/epic-{number}-context.json
  *
  * @see docs/CONTEXT_ARCHITECTURE.md
  * @see Issue #2404

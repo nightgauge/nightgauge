@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -63,8 +65,8 @@ func TestRecorder_RecordAndLoad(t *testing.T) {
 }
 
 func TestRecorder_AttributesActualSizeToMatchingConcurrentRun(t *testing.T) {
-	root := t.TempDir()
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := layouttest.Repo(t)
+	stateDir := layouttest.PipelineDir(t, root)
 	completedAt := time.Now().UTC()
 
 	target := state.NewRuntimeState("acme/widget", 369, "item-old", "01900130-0000-7000-8000-000000000369")
@@ -378,5 +380,20 @@ func TestRecorder_RecordStampsSchemaVersion(t *testing.T) {
 	}
 	if loaded[1].SchemaVersion != "" {
 		t.Errorf("legacy row loads SchemaVersion = %q, want empty", loaded[1].SchemaVersion)
+	}
+}
+
+// TestRecorderOutsideGitRepository: outside a git repository Record reports
+// "not a git repository" and writes nothing (ADR-024 § 7).
+func TestRecorderOutsideGitRepository(t *testing.T) {
+	t.Setenv("GIT_CEILING_DIRECTORIES", filepath.Dir(t.TempDir()))
+	dir := t.TempDir()
+	t.Chdir(dir)
+	err := NewRecorder(dir).Record(Outcome{IssueNumber: 1})
+	if err == nil || !strings.Contains(err.Error(), "not a git repository") {
+		t.Fatalf("Record outside a repo: err = %v, want \"not a git repository\"", err)
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Errorf("Record wrote into a non-repository: %v", entries)
 	}
 }

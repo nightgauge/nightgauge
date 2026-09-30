@@ -41,13 +41,11 @@ runtime** are **missing from the UI**.
 
 **UI Settings Rendered:**
 
-| Setting                 | Runtime Consumed | Consumer                        |
-| ----------------------- | ---------------- | ------------------------------- |
-| `ui.core.adapter`       | YES              | `getExecutionAdapter()`         |
-| `ui.core.auth_provider` | YES              | `getAuthProvider()`             |
-| `ui.core.default_model` | YES              | `getDefaultModel()`             |
-| `ui.core.context_path`  | YES              | `getCoreSettings().contextPath` |
-| `ui.core.plans_path`    | YES              | `getCoreSettings().plansPath`   |
+| Setting                 | Runtime Consumed | Consumer                |
+| ----------------------- | ---------------- | ----------------------- |
+| `ui.core.adapter`       | YES              | `getExecutionAdapter()` |
+| `ui.core.auth_provider` | YES              | `getAuthProvider()`     |
+| `ui.core.default_model` | YES              | `getDefaultModel()`     |
 
 **Verdict: CORRECT** — All 5 settings are rendered and consumed at runtime via
 `coreSettings.ts` → `ConfigBridge.getUI()`.
@@ -206,7 +204,6 @@ with a note that they are planned.
 | `pipeline.max_turns`                  | YES       | YES      | `getMaxTurns()`                  |
 | `pipeline.skip_checks.format`         | YES       | YES      | Feature-validate skip            |
 | `pipeline.logs.retain`                | YES       | YES      | extension.ts log init            |
-| `pipeline.logs.dir`                   | YES       | YES      | Log output path                  |
 | `pipeline.logs.max_age_days`          | YES       | YES      | Log retention                    |
 | `pipeline.stall_thresholds.*`         | YES       | YES      | `getStallThresholds()`           |
 | `pipeline.budget_mode`                | YES       | YES      | BudgetEnforcer                   |
@@ -390,7 +387,6 @@ implemented.
 | ---------------------- | ---------------- | ----------------- |
 | `automations.enabled`  | YES              | Automation engine |
 | `automations.dry_run`  | YES              | Dry-run mode      |
-| `automations.log_file` | YES              | Log file path     |
 | `automations.triggers` | YES (read-only)  | Trigger engine    |
 
 **Verdict: CORRECT** — All settings are rendered. Triggers are correctly shown

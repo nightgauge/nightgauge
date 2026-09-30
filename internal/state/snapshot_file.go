@@ -16,7 +16,10 @@ import (
 
 // Canonical snapshot layout — ADR-017 Decision 8.
 //
-//	{repoRoot}/.nightgauge/pipeline/runtime-{issueNumber}-{runId}.json
+//	<pipeline state dir>/runtime-{issueNumber}-{runId}.json
+//
+// where the pipeline state dir is layout.PipelineStateDir(repoRoot), under the
+// git common dir (ADR-024 § 7).
 //
 // Everything the old `runtime-{issue}.json` gave us survives — discoverable by
 // directory scan with no index, parseable by a process with no registry,

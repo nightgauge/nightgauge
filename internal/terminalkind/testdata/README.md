@@ -187,8 +187,10 @@ it and a test proves the clause really is unsatisfiable.
 - **Capture date (UTC)**: 2026-08-07
 - **Telemetry window**: 2026-04-02 → 2026-08-03 (recorded in the fixture as
   `telemetry_first_seen` / `telemetry_last_seen`)
-- **Workspace roots scanned**: **21** (every root on this machine with a
-  `.nightgauge/logs/` directory, across public and private repositories)
+- **Workspace roots scanned**: **21** (every root on this machine that had a
+  `.nightgauge/logs/` directory at capture time, before ADR-024 § 7 moved the
+  logs to `<git-common-dir>/nightgauge/logs/`, across public and private
+  repositories)
 - **Log files scanned**: **1112**
 - **Structured pipeline-logger lines scanned**: **956,903**
 - **Distinct redacted failure shapes observed**: **35**
@@ -222,18 +224,19 @@ stamping it there made every re-run on a later day a spurious diff, which is
 what a byte-for-byte claim cannot survive.
 
 ```bash
-scripts/capture-terminal-kind-fixture.sh $(ls -d ~/Repositories/*/*/.nightgauge/logs | sed 's#/.nightgauge/logs##')
+scripts/capture-terminal-kind-fixture.sh $(ls -d ~/Repositories/*/*/.git/nightgauge/logs | sed 's#/.git/nightgauge/logs##')
 ```
 
 ### Why the miner is fussy
 
-`.nightgauge/logs/*_session.log` interleaves two very different things:
-structured pipeline-logger lines, and raw agent session output. The agent output
-includes agents **reading and editing the classifier source** — so a naive
-`grep -r '\[cost-cap-exceeded\]' .nightgauge/logs/` hits the classifier's own
-source code as often as it hits a real failure, and a fixture built that way
-would be evidence of nothing. That is not hypothetical: it is what the first
-pass of this capture produced.
+The clone's `*_session.log` files (in `nightgauge layout path logs`) interleave
+two very different things: structured pipeline-logger lines, and raw agent
+session output. The agent output includes agents **reading and editing the
+classifier source** — so a naive
+`grep -r '\[cost-cap-exceeded\]' "$(nightgauge layout path logs)"` hits the
+classifier's own source code as often as it hits a real failure, and a fixture
+built that way would be evidence of nothing. That is not hypothetical: it is
+what the first pass of this capture produced.
 
 Two miners survive that:
 

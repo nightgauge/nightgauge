@@ -112,7 +112,10 @@ export class FeatureDevStage extends BaseStage<PlanningContext, DevContext> {
     sections.push("4. Write tests alongside implementation");
     sections.push("5. Run tests and ensure they pass");
     sections.push("6. Commit changes with proper message format");
-    sections.push(`7. Write the context file to .nightgauge/pipeline/dev-${issueNumber}.json`);
+    sections.push(
+      `7. Write the context file with \`nightgauge layout write pipeline dev-${issueNumber}.json\`` +
+        " (JSON on stdin); never write under the git directory by path"
+    );
     sections.push("8. The context file must include commit SHA, files changed, and test status");
 
     return sections.join("\n");

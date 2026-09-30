@@ -15,16 +15,12 @@ Phase 6.5 (Verify field IDs in config.yaml).
 Create the directory structure and pipeline artifact `.gitignore`:
 
 ```bash
-mkdir -p .nightgauge/pipeline/history .nightgauge/plans .nightgauge/logs .nightgauge/analysis
+mkdir -p .nightgauge/analysis
 ```
 
-Create `.gitkeep` files so the directory structure is preserved in git:
-
-```bash
-for dir in .nightgauge/pipeline/history .nightgauge/plans .nightgauge/logs; do
-  [ -f "$dir/.gitkeep" ] || touch "$dir/.gitkeep"
-done
-```
+Pipeline state, plans, retros and logs are per-clone data under the git
+directory (`nightgauge layout` prints where); the binary creates them on first
+write, so nothing is created for them in the working tree.
 
 Create `.nightgauge/.gitignore` to prevent pipeline artifacts from
 polluting `git status`.

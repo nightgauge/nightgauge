@@ -19,6 +19,10 @@
  * @see https://developers.openai.com/codex (sandbox modes / approval policy)
  */
 
+import { isAbsolute } from "path";
+
+import { resolveCloneLayout } from "../../context/cloneLayout.js";
+
 /** Codex filesystem sandbox modes, tightest → loosest. */
 export type CodexSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 
@@ -95,7 +99,8 @@ export const CODEX_BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox";
  */
 export function applyCodexSandboxProfile(
   args: readonly string[],
-  allowedTools?: readonly string[]
+  allowedTools?: readonly string[],
+  cwd?: string
 ): string[] {
   const mode = resolveCodexSandboxMode(allowedTools);
   if (mode === "danger-full-access") {
@@ -108,5 +113,28 @@ export function applyCodexSandboxProfile(
     return [...args];
   }
 
-  return [...args.slice(0, idx), ...codexSandboxFlags(mode), ...args.slice(idx + 1)];
+  return [
+    ...args.slice(0, idx),
+    ...codexSandboxFlags(mode),
+    ...codexCloneWritableRoot(mode, cwd),
+    ...args.slice(idx + 1),
+  ];
+}
+
+/**
+ * Makes the clone's per-clone directory (ADR-024 § 7,
+ * `<git-common-dir>/nightgauge`) writable under the workspace-write sandbox.
+ * Codex keeps every `.git` inside a writable root read-only, so without it a
+ * stage could not store its context, plan or retro through
+ * `nightgauge layout write` ("operation not permitted"). Only CLONE is added,
+ * not the git directory. Mirrors the Go `codexCloneWritableRoot`.
+ */
+export function codexCloneWritableRoot(mode: CodexSandboxMode, cwd?: string): string[] {
+  if (mode !== "workspace-write" || !cwd || !isAbsolute(cwd)) return [];
+  try {
+    const { clone } = resolveCloneLayout(cwd);
+    return ["-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(clone)}]`];
+  } catch {
+    return [];
+  }
 }

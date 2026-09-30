@@ -11,7 +11,7 @@ import (
 // Options configures one check.
 type Options struct {
 	// Workspace is the repo root — both the git checkout being validated and
-	// the root of `.nightgauge/`.
+	// the root its pipeline state directory resolves from.
 	Workspace string
 	// IssueNumber scopes the execution record.
 	IssueNumber int

@@ -13,6 +13,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/intelligence/failure"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/spf13/cobra"
 )
 
@@ -227,6 +228,7 @@ func TestValidateStatusFlag_InvalidValue(t *testing.T) {
 // TestProjectAddStatusFlagValidation_InvalidValue verifies that --status
 // validation runs before any GraphQL/network call (offline failure).
 func TestProjectAddStatusFlagValidation_InvalidValue(t *testing.T) {
+	chdirFixtureRepo(t)
 	cmd := rootCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
@@ -688,11 +690,31 @@ func TestIssueHasLabelInvalidNumber(t *testing.T) {
 	}
 }
 
+// chdirFixtureRepo makes the working directory a fresh repository whose
+// .nightgauge/config.yaml names a fixture owner and repository, so a command
+// that resolves --owner/--repo reads the fixture instead of this source
+// checkout, and anything it resolves per clone lands in the fixture's git
+// directory. The machine config is pinned absent so the operator's own tier
+// cannot leak in.
+func chdirFixtureRepo(t *testing.T) string {
+	t.Helper()
+	absent := filepath.Join(t.TempDir(), "no-machine-config.yaml")
+	t.Cleanup(config.SwapMachineConfigPathForTest(func() (string, error) {
+		return absent, nil
+	}))
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", filepath.Dir(absent))
+	repo := layouttest.Repo(t)
+	writeGateConfig(t, repo, productionShapeConfig)
+	t.Chdir(repo)
+	return repo
+}
+
 // runAcCheck executes `issue ac-check` with the given args and returns the
 // stdout bytes plus any execution error. printJSON writes via fmt.Println
 // to os.Stdout, so the test redirects os.Stdout through a pipe.
 func runAcCheck(t *testing.T, args ...string) ([]byte, error) {
 	t.Helper()
+	chdirFixtureRepo(t)
 	prev := os.Stdout
 	rPipe, wPipe, err := os.Pipe()
 	if err != nil {
@@ -719,6 +741,7 @@ func runAcCheck(t *testing.T, args ...string) ([]byte, error) {
 // deterministic write that closes it.
 func runAcMark(t *testing.T, args ...string) ([]byte, error) {
 	t.Helper()
+	chdirFixtureRepo(t)
 	prev := os.Stdout
 	rPipe, wPipe, err := os.Pipe()
 	if err != nil {
@@ -1638,7 +1661,7 @@ func TestConfigInitCmd_JSONFlag(t *testing.T) {
 
 func TestPipelineAggregateCmd_JSONSmokeWithFixture(t *testing.T) {
 	dir := t.TempDir()
-	historyDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	historyDir := filepath.Join(layouttest.PipelineDir(t, dir), "history")
 	if err := os.MkdirAll(historyDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -1953,6 +1976,7 @@ func TestProjectSetFieldDateValidation(t *testing.T) {
 // projectSetFieldCmd entirely and TestProjectSetFieldDateValidation would
 // still pass, since it calls the validator directly.
 func TestProjectSetFieldRejectsInvalidDatesBeforeAPICall(t *testing.T) {
+	chdirFixtureRepo(t)
 	tests := []struct {
 		name string
 		flag string
@@ -2011,6 +2035,7 @@ func TestProjectAddBulkFlag(t *testing.T) {
 }
 
 func TestProjectAddBulkMutuallyExclusive(t *testing.T) {
+	chdirFixtureRepo(t)
 	cmd := rootCmd()
 	cmd.SetArgs([]string{"project", "add", "--bulk", "42"})
 	err := cmd.Execute()
@@ -2137,6 +2162,7 @@ func TestNormalizeBoardStatusArg(t *testing.T) {
 }
 
 func TestProjectSyncStatusRejectsBadStatusValue(t *testing.T) {
+	chdirFixtureRepo(t)
 	out, err := runProjectVerb(t, "project", "sync-status", "210", "Bogus")
 	if err == nil {
 		t.Fatal("a bad status value must be a non-zero exit, not a silent no-op")
@@ -2193,6 +2219,7 @@ func TestProjectSyncStatusFlagFormNamesThePositionalShape(t *testing.T) {
 // unvalidated positional, same usage-as-refusal. Fixing one and not the other
 // only moves the report.
 func TestProjectMoveStatusSharesTheSameGuards(t *testing.T) {
+	chdirFixtureRepo(t)
 	out, err := runProjectVerb(t, "project", "move-status", "210", "Bogus")
 	if err == nil {
 		t.Fatal("move-status must reject a bad status value too")

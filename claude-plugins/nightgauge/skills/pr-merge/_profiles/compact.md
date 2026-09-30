@@ -30,10 +30,11 @@ single-issue path below does not need its detail.
 
 ## Input Contract
 
-This skill requires `.nightgauge/pipeline/pr-{N}.json` from
-`/nightgauge-pr-create`. It also reads prior pipeline context for history and
-validation: `.nightgauge/pipeline/issue-{N}.json`,
-`.nightgauge/pipeline/planning-{N}.json`, `.nightgauge/pipeline/dev-{N}.json`.
+This skill requires `pr-{N}.json` from `/nightgauge-pr-create`. It also reads
+prior pipeline context for history and validation, all in the clone's pipeline
+state directory: `nightgauge layout path pipeline issue-{N}.json`,
+`nightgauge layout path pipeline planning-{N}.json`,
+`nightgauge layout path pipeline dev-{N}.json`.
 Full schema: [docs/CONTEXT_ARCHITECTURE.md](../../../../../docs/CONTEXT_ARCHITECTURE.md).
 
 ## Gotchas
@@ -59,9 +60,9 @@ skipped marker produces an incorrect count.
 printf '<!-- phase:start name="read-pr-context" index=0 total=14 stage="pr-merge" -->\n'
 ```
 
-Resolve the issue number from the branch, load
-`.nightgauge/pipeline/pr-{N}.json`, signal stage start, and reconstruct the
-context file from GitHub if it is missing.
+Resolve the issue number from the branch,
+load `"$(nightgauge layout path pipeline pr-{N}.json)"`, signal stage start,
+and reconstruct the context file from GitHub if it is missing.
 
 > **Read `_includes/context-bootstrap.md` (same directory as this SKILL.md)
 > now and follow its instructions before continuing this phase.**

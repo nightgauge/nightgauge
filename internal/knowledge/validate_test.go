@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/knowledge"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // validADRBlock is a complete ADR block that satisfies the validator.
@@ -50,12 +51,9 @@ We chose the simple approach since no other options were required.
 
 func setupValidateFixtures(t *testing.T, issueNumber int, planText, decisionsText string) string {
 	t.Helper()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
-	plansDir := filepath.Join(root, ".nightgauge", "plans")
-	if err := os.MkdirAll(plansDir, 0o755); err != nil {
-		t.Fatalf("mkdir plans: %v", err)
-	}
+	plansDir := layouttest.MkPlansDir(t, root)
 	planFile := filepath.Join(plansDir, fmt.Sprintf("%d-test-plan.md", issueNumber))
 	if err := os.WriteFile(planFile, []byte(planText), 0o644); err != nil {
 		t.Fatalf("write plan: %v", err)
@@ -194,7 +192,7 @@ func TestValidateDecisions_PlanWithSingleKeyword_Passes(t *testing.T) {
 }
 
 func TestValidateDecisions_MissingPlanFile_ReturnsError(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	_, err := knowledge.ValidateDecisionsPopulation(42, root, requireDecisionsTrue())
 	if err == nil {
 		t.Error("expected error when plan file is missing")
@@ -202,11 +200,8 @@ func TestValidateDecisions_MissingPlanFile_ReturnsError(t *testing.T) {
 }
 
 func TestValidateDecisions_MissingDecisionsFile_FailsWithSuggestion(t *testing.T) {
-	root := t.TempDir()
-	plansDir := filepath.Join(root, ".nightgauge", "plans")
-	if err := os.MkdirAll(plansDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	root := layouttest.Repo(t)
+	plansDir := layouttest.MkPlansDir(t, root)
 	if err := os.WriteFile(filepath.Join(plansDir, "42-test-plan.md"), []byte(planWithTradeoffs), 0o644); err != nil {
 		t.Fatalf("write plan: %v", err)
 	}

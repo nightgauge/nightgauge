@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as path from "path";
 import type { Logger } from "../../../src/utils/logger";
 import type { RepositoryContextLoader } from "../../../src/services/RepositoryContextLoader";
+import { fakeCloneLayout } from "../../helpers/cloneLayout";
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -65,6 +66,11 @@ function makeAssembler(workspaceRoot = "/workspace", contextLoader?: RepositoryC
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Per-clone data resolves through the clone layout (ADR-024 § 7); map every
+  // fake root this suite uses without running git.
+  for (const root of ["/workspace", "/my/repo", "/initial", "/updated", "/repo"]) {
+    fakeCloneLayout(root);
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -112,7 +118,7 @@ describe("ContextAssembler.getContextPath", () => {
   it("builds path from workspace root when no contextLoader", () => {
     const assembler = makeAssembler("/my/repo");
     const p = assembler.getContextPath("issue", 42);
-    expect(p).toBe(path.join("/my/repo", ".nightgauge", "pipeline", "issue-42.json"));
+    expect(p).toBe(path.join(fakeCloneLayout("/my/repo").pipeline, "issue-42.json"));
   });
 
   it("delegates to contextLoader when provided", () => {
@@ -274,7 +280,7 @@ describe("ContextAssembler.validateStageContextOutput", () => {
     const assembler = makeAssembler("/workspace");
     assembler.setContextFileWaitMs(200);
 
-    const expectedPath = path.join("/workspace", ".nightgauge", "pipeline", "planning-42.json");
+    const expectedPath = path.join(fakeCloneLayout("/workspace").pipeline, "planning-42.json");
     const waitSpy = vi
       .spyOn(assembler, "waitForContextFile")
       .mockResolvedValueOnce(null)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,7 +64,14 @@ func sizeGateEnv(t *testing.T) string {
 	t.Setenv("GH_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "")
 	// No `gh` binary is reachable, so the gh-CLI token fallback fails too.
-	t.Setenv("PATH", t.TempDir())
+	// git stays reachable: per-clone state resolves through it (ADR-024 § 7).
+	bin := t.TempDir()
+	if git, err := exec.LookPath("git"); err == nil {
+		if err := os.Symlink(git, filepath.Join(bin, "git")); err != nil {
+			t.Fatalf("link git: %v", err)
+		}
+	}
+	t.Setenv("PATH", bin)
 
 	return dir
 }

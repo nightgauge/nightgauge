@@ -1,6 +1,7 @@
 // Package batchfailures implements deterministic extraction of pipeline
-// failure rows from .nightgauge/pipeline/batch-state.json AND
-// .nightgauge/pipeline/history/YYYY-MM-DD.jsonl. It is the Go-backed
+// failure rows from batch-state.json AND history/YYYY-MM-DD.jsonl in the
+// clone's pipeline state directory (.git/nightgauge/pipeline, resolved by
+// internal/layout). It is the Go-backed
 // implementation of the inline-Python parsers previously embedded in
 // skills/nightgauge-retro/SKILL.md Phases 2.1, 2.2, and 2.4.
 //

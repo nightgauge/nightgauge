@@ -18,13 +18,14 @@ import {
   HISTORY_INDEX_SCHEMA_VERSION,
 } from "../../src/utils/executionHistoryWriter";
 import type { HistoryIndex, HistoryIndexEntry } from "../../src/utils/executionHistoryWriter";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mock node:fs/promises
 vi.mock("node:fs/promises");
 
 describe("TelemetryStore", () => {
   const workspaceRoot = "/test/workspace";
-  const historyDir = `${workspaceRoot}/.nightgauge/pipeline/history`;
+  const historyDir = join(fakeCloneLayout(workspaceRoot).pipeline, "history");
   const indexPath = `${historyDir}/index.json`;
 
   let store: TelemetryStore;
@@ -112,6 +113,7 @@ describe("TelemetryStore", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeCloneLayout(workspaceRoot);
     ExecutionHistoryReader.clearCache();
     store = new TelemetryStore(workspaceRoot);
   });
@@ -741,6 +743,7 @@ describe("TelemetryStore ghost filtering", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeCloneLayout(workspaceRoot);
     ExecutionHistoryReader.clearCache();
     store = new TelemetryStore(workspaceRoot);
   });

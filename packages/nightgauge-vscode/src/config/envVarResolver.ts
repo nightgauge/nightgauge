@@ -360,7 +360,6 @@ const KNOWN_CONFIG_PATHS: string[] = [
   "pipeline.skip.build",
   "pipeline.skip.format",
   "pipeline.logs.retain",
-  "pipeline.logs.dir",
   "pipeline.logs.max_age_days",
   "pipeline.logs.max_count",
   "pipeline.retry.max_auto_attempts",
@@ -425,13 +424,10 @@ const KNOWN_CONFIG_PATHS: string[] = [
   // Automations
   "automations.enabled",
   "automations.dry_run",
-  "automations.log_file",
   // UI - Core
   "ui.core.adapter",
   "ui.core.auth_provider",
   "ui.core.default_model",
-  "ui.core.context_path",
-  "ui.core.plans_path",
   // UI - Dashboard
   "ui.dashboard.time_savings.issue_pickup",
   "ui.dashboard.time_savings.feature_planning",

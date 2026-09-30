@@ -218,7 +218,7 @@ CI_PROGRESS:{"state":"PENDING","elapsed":30,"pending":2,"completed":1}
     "static_checks": "passed"
   },
   "critical_findings": 0,
-  "context_path": ".nightgauge/pipeline/pre-push-2609.json",
+  "context_path": "/path/to/repo/.git/nightgauge/pipeline/pre-push-2609.json",
   "started_at": "2026-04-08T00:00:00Z",
   "completed_at": "2026-04-08T00:01:30Z"
 }

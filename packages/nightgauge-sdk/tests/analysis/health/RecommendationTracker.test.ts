@@ -32,10 +32,13 @@ import type {
   HealthAnalysisResult,
 } from "../../../src/analysis/health/types.js";
 import { DEFAULT_HEALTH_CONFIG } from "../../../src/analysis/health/types.js";
+import { cloneLayoutFor, setCloneLayout } from "../../../src/context/cloneLayout.js";
 
 // ── Helpers ───────────────────────────────────────────────────────
 
 const WORKSPACE = "/fake/workspace";
+// The history lives in the repository's pipeline class directory (ADR-024 § 7).
+setCloneLayout(WORKSPACE, cloneLayoutFor(WORKSPACE, "/fake/workspace/.git"));
 
 function entryToJsonl(entry: RecommendationHistoryEntry): string {
   return JSON.stringify(entry) + "\n";
@@ -115,7 +118,7 @@ const BASE_ISSUE_RESULT: FindingToIssueResult = {
 describe("RecommendationTracker.getFilePath()", () => {
   it("returns an absolute path under workspaceRoot", () => {
     const filePath = RecommendationTracker.getFilePath(WORKSPACE);
-    expect(filePath).toBe("/fake/workspace/.nightgauge/pipeline/recommendation-history.jsonl");
+    expect(filePath).toBe("/fake/workspace/.git/nightgauge/pipeline/recommendation-history.jsonl");
   });
 
   it("includes the JSONL filename", () => {
@@ -147,7 +150,7 @@ describe("RecommendationTracker.append()", () => {
 
     expect(fs.mkdir).toHaveBeenCalledOnce();
     const [dirArg, optsArg] = vi.mocked(fs.mkdir).mock.calls[0];
-    expect(String(dirArg)).toContain(".nightgauge/pipeline");
+    expect(String(dirArg)).toBe("/fake/workspace/.git/nightgauge/pipeline");
     expect(optsArg).toEqual({ recursive: true });
   });
 
@@ -170,7 +173,7 @@ describe("RecommendationTracker.append()", () => {
 
     const [fileArg] = vi.mocked(fs.appendFile).mock.calls[0];
     expect(String(fileArg)).toBe(
-      "/fake/workspace/.nightgauge/pipeline/recommendation-history.jsonl"
+      "/fake/workspace/.git/nightgauge/pipeline/recommendation-history.jsonl"
     );
   });
 

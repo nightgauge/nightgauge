@@ -22,15 +22,24 @@ type OfflineState struct {
 // OfflineStore manages local state files for offline fallback.
 type OfflineStore struct {
 	dir string
+	// err is the pipeline state directory's resolution error, returned by
+	// every method so nothing reads or writes relative to the cwd.
+	err error
 }
 
-// NewOfflineStore creates an offline store at the workspace root.
+// NewOfflineStore creates an offline store in the workspace's pipeline state
+// directory. An unresolvable workspace (not a git repository) makes every
+// method return that error.
 func NewOfflineStore(workspaceRoot string) *OfflineStore {
-	return &OfflineStore{dir: PipelineStateDir(workspaceRoot)}
+	dir, err := PipelineStateDir(workspaceRoot)
+	return &OfflineStore{dir: dir, err: err}
 }
 
 // Save persists offline state to disk.
 func (s *OfflineStore) Save(state *OfflineState) error {
+	if s.err != nil {
+		return fmt.Errorf("offline state: %w", s.err)
+	}
 	if err := os.MkdirAll(s.dir, 0755); err != nil {
 		return fmt.Errorf("create offline dir: %w", err)
 	}
@@ -51,6 +60,9 @@ func (s *OfflineStore) Save(state *OfflineState) error {
 
 // Load reads offline state for a specific issue.
 func (s *OfflineStore) Load(issueNumber int) (*OfflineState, error) {
+	if s.err != nil {
+		return nil, fmt.Errorf("offline state: %w", s.err)
+	}
 	filename := filepath.Join(s.dir, fmt.Sprintf("state-%d.json", issueNumber))
 	data, err := os.ReadFile(filename)
 	if err != nil {
@@ -70,6 +82,9 @@ func (s *OfflineStore) Load(issueNumber int) (*OfflineState, error) {
 
 // Remove deletes the offline state file for an issue (after reconciliation).
 func (s *OfflineStore) Remove(issueNumber int) error {
+	if s.err != nil {
+		return fmt.Errorf("offline state: %w", s.err)
+	}
 	filename := filepath.Join(s.dir, fmt.Sprintf("state-%d.json", issueNumber))
 	if err := os.Remove(filename); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove offline state: %w", err)

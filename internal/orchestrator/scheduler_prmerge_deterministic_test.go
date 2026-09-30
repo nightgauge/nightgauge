@@ -18,6 +18,8 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // passingGate is a StageGate that always passes (KindOK). Used to neutralize
@@ -37,7 +39,7 @@ func (g passingGate) Verify(_ context.Context, _ int, _ string) gates.GateResult
 // and the linked issue is NOT closed — rather than write outcome=complete on an
 // unmerged PR.
 func TestScheduler_PRMerge_PhantomSuccess_FailsPipeline(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	for _, dir := range []string{
 		"nightgauge-issue-pickup",
@@ -52,7 +54,7 @@ func TestScheduler_PRMerge_PhantomSuccess_FailsPipeline(t *testing.T) {
 
 	// Pre-write the pr-create context so loadPrUrl populates runtime.PrUrl —
 	// the post-stage verifyPRMerged checkpoint only runs when a PR URL is known.
-	pcDir := filepath.Join(root, ".nightgauge", "pipeline", "issue-9100")
+	pcDir := filepath.Join(layouttest.PipelineDir(t, root), "issue-9100")
 	if err := os.MkdirAll(pcDir, 0755); err != nil {
 		t.Fatalf("mkdir pr-create context: %v", err)
 	}
@@ -418,7 +420,7 @@ const prMergeCleanupHeadBranch = "fix/42-cleanup-target"
 
 func setupPRMergeCleanupFixture(t *testing.T) prMergeCleanupFixture {
 	t.Helper()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	mainDir := filepath.Join(root, "main")
 	originDir := filepath.Join(root, "origin.git")
 	worktreeDir := filepath.Join(root, "issue-42")

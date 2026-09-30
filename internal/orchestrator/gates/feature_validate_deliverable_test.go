@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // End-to-end coverage for #152: the validate gate must re-derive the verdict
@@ -56,7 +58,7 @@ func commitOnBranch(t *testing.T, ws, branch string, files map[string]string) {
 
 func writeValidateArtifact(t *testing.T, ws string, issue int, body map[string]any) {
 	t.Helper()
-	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, ws)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +74,7 @@ func writeValidateArtifact(t *testing.T, ws string, issue int, body map[string]a
 
 func readValidateArtifact(t *testing.T, ws string, issue int) map[string]any {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(ws, ".nightgauge", "pipeline", "validate-"+strconv.Itoa(issue)+".json"))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, ws), "validate-"+strconv.Itoa(issue)+".json"))
 	if err != nil {
 		t.Fatal(err)
 	}

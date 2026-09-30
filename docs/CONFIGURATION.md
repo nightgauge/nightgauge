@@ -608,8 +608,9 @@ github:
 It is on by default because an exhausted GraphQL quota is never reproducible on
 demand, so an opt-in instrument is reliably switched off during the only hours
 that matter. The ledger is bounded: it is written as one
-`.nightgauge/logs/github-api-YYYY-MM-DD.jsonl` segment per UTC day (5 MB with
-one rotated backup within a day, gitignored), and log retention deletes whole
+`github-api-YYYY-MM-DD.jsonl` segment per UTC day in the clone's logs directory
+(`nightgauge layout path logs`; 5 MB with one rotated backup within a day,
+never committed), and log retention deletes whole
 old segments under `pipeline.logs.max_size_mb` and `pipeline.logs.max_age_days`.
 The disabled path costs one nil check per request.
 
@@ -2063,7 +2064,7 @@ Each entry is a `float >= 0.0`; `0` disables the cap for that stage.
 
 **Default calibration (Issue #3208, 2026-05-06)**: bases are p95 × 2 (rounded
 to the nearest dollar) over the last 90 days of `complete | cancelled` runs
-in `.nightgauge/pipeline/history/*.jsonl`. The factor of 2 gives ~50%
+in `history/*.jsonl` in the clone's pipeline state directory. The factor of 2 gives ~50%
 headroom above the typical-but-real productive cost while staying well below
 runaway outliers (max observed = $215.97 on `feature-dev`). Re-run the
 distribution at any time:
@@ -2610,8 +2611,8 @@ releases matching items immediately; both callers share one implementation
 (`orchestrator.PromoteBaselineDeferrals`) rather than a copy each.
 
 **The trigger cannot be a CI cron**, which is why it lives in the daemon: the
-queue is at `<repo>/.nightgauge/pipeline/queue-state.json` on the operator's
-machine and is gitignored, so a GitHub Actions runner has no queue to promote
+queue is `queue-state.json` in the clone's pipeline state directory on the
+operator's machine and is never committed, so a GitHub Actions runner has no queue to promote
 and anything it wrote would die with the runner. A
 scheduled CI sweep was documented for this for some time and never existed
 (#881).
@@ -3036,8 +3037,8 @@ pipeline:
 
 **Analyzing your own pipeline history:**
 
-1. Export pipeline run costs from the dashboard or `.nightgauge/pipeline/`
-   context files
+1. Export pipeline run costs from the dashboard or the context files in the
+   pipeline state directory (`nightgauge layout path pipeline`)
 2. Calculate p50 and p90 per stage
 3. Set M budget to p90, then apply size multipliers
 4. The 50% grace buffer provides headroom above your chosen baseline
@@ -3203,7 +3204,7 @@ Enforcement phases:
    "you're spending a lot" from "stop now" so a near-complete run isn't killed.
 2. **Warning** at a configurable percentage (default 70%) — logs to output window
 3. **Checkpoint** at a configurable percentage (default 85%) — writes a signal
-   file (`.nightgauge/pipeline/checkpoint-signal-{N}.json`) so the running
+   file (`checkpoint-signal-{N}.json` in the pipeline state directory) so the running
    agent can commit current work and exit gracefully
 4. **Hard stop** at 100% of `ceiling_usd` — pipeline will not start the next stage
 
@@ -3623,17 +3624,16 @@ pipeline:
 
 #### pipeline.logs
 
-Pipeline execution log retention settings. Logs are stored in
-`.nightgauge/logs/nightgauge-output-*.json` and are NEVER
-automatically deleted.
+Pipeline execution log retention settings. Logs are stored as
+`nightgauge-output-*.json` in the clone's logs directory
+(`nightgauge layout path logs`); there is no directory setting.
 
-| Option                   | Type    | Default              | Description                                  |
-| ------------------------ | ------- | -------------------- | -------------------------------------------- |
-| `retain`                 | boolean | `true`               | Enable log retention (always keep logs)      |
-| `max_age_days`           | integer | `null` (unlimited)   | Default age threshold for manual cleanup     |
-| `max_count`              | integer | `null` (unlimited)   | Default count threshold for manual cleanup   |
-| `dir`                    | string  | `".nightgauge/logs"` | Log directory location                       |
-| `history_retention_days` | integer | `90`                 | Days to retain execution history JSONL files |
+| Option                   | Type    | Default            | Description                                  |
+| ------------------------ | ------- | ------------------ | -------------------------------------------- |
+| `retain`                 | boolean | `true`             | Enable log retention (always keep logs)      |
+| `max_age_days`           | integer | `null` (unlimited) | Default age threshold for manual cleanup     |
+| `max_count`              | integer | `null` (unlimited) | Default count threshold for manual cleanup   |
+| `history_retention_days` | integer | `90`               | Days to retain execution history JSONL files |
 
 `history_retention_days` is enforced by the Go writer on every run-record
 append (it is the only retention enforcement a headless workspace gets). The
@@ -3704,7 +3704,6 @@ pipeline:
 export NIGHTGAUGE_PIPELINE_LOGS_RETAIN=true
 export NIGHTGAUGE_PIPELINE_LOGS_MAX_AGE_DAYS=30
 export NIGHTGAUGE_PIPELINE_LOGS_MAX_COUNT=100
-export NIGHTGAUGE_PIPELINE_LOGS_DIR=".nightgauge/logs"
 ```
 
 **Safety Features**
@@ -4839,7 +4838,7 @@ sanitization:
 
 > **Default:** when `sanitization.mode` is unset the effective mode is `block`
 > (ADR-021) — a match is refused and appended to
-> `.nightgauge/logs/sanitization.log`. A security control that logs and proceeds
+> `sanitization.log` in the clone's logs directory. A security control that logs and proceeds
 > is not a control. `warn` is the documented opt-out for a repository still
 > calibrating its rules against a real workload, and `disabled` for one that has
 > decided the gate is not for it; neither is what an unconfigured workspace
@@ -4958,12 +4957,11 @@ Workflow automation configuration. Executes actions when issues transition
 between statuses. See [docs/AUTOMATIONS.md](./AUTOMATIONS.md) for complete
 documentation.
 
-| Option     | Type    | Default                             | Description                    |
-| ---------- | ------- | ----------------------------------- | ------------------------------ |
-| `enabled`  | boolean | `true`                              | Enable/disable all automations |
-| `dry_run`  | boolean | `false`                             | Log without executing          |
-| `log_file` | string  | `".nightgauge/logs/automation.log"` | Audit log location             |
-| `triggers` | array   | `[]`                                | Array of trigger definitions   |
+| Option     | Type    | Default | Description                    |
+| ---------- | ------- | ------- | ------------------------------ |
+| `enabled`  | boolean | `true`  | Enable/disable all automations |
+| `dry_run`  | boolean | `false` | Log without executing          |
+| `triggers` | array   | `[]`    | Array of trigger definitions   |
 
 #### Trigger Definition
 
@@ -5010,7 +5008,6 @@ Use `{{variable}}` syntax in messages and script arguments:
 automations:
   enabled: true
   dry_run: false
-  log_file: ".nightgauge/logs/automation.log"
 
   triggers:
     - name: "notify-on-review"
@@ -5354,16 +5351,14 @@ their descriptions.
 
 ### ui.core
 
-Core VSCode extension settings for authentication and paths.
+Core VSCode extension settings for the adapter, authentication and models.
 
-| Option           | Type   | Default                  | Description                                                                                                        |
-| ---------------- | ------ | ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `adapter`        | enum   | `"claude"`               | Agentic pipeline adapter: claude, codex (beta), gemini (experimental), copilot (experimental), grok (experimental) |
-| `auth_provider`  | enum   | `"max"`                  | Authentication provider: max, bedrock, vertex                                                                      |
-| `default_model`  | enum   | `"sonnet"`               | Default model: sonnet, opus, haiku, fable (#340)                                                                   |
-| `fallback_model` | enum   | _(none)_                 | Fallback model on overload: sonnet, opus, haiku, fable (#626)                                                      |
-| `context_path`   | string | `".nightgauge/pipeline"` | Directory for pipeline context files                                                                               |
-| `plans_path`     | string | `".nightgauge/plans"`    | Directory for feature plan files                                                                                   |
+| Option           | Type | Default    | Description                                                                                                        |
+| ---------------- | ---- | ---------- | ------------------------------------------------------------------------------------------------------------------ |
+| `adapter`        | enum | `"claude"` | Agentic pipeline adapter: claude, codex (beta), gemini (experimental), copilot (experimental), grok (experimental) |
+| `auth_provider`  | enum | `"max"`    | Authentication provider: max, bedrock, vertex                                                                      |
+| `default_model`  | enum | `"sonnet"` | Default model: sonnet, opus, haiku, fable (#340)                                                                   |
+| `fallback_model` | enum | _(none)_   | Fallback model on overload: sonnet, opus, haiku, fable (#626)                                                      |
 
 > **Backend Setup**: For detailed setup instructions including IAM policies,
 > service accounts, and credential configuration for Bedrock, Vertex, and
@@ -5646,8 +5641,6 @@ ui:
     adapter: claude
     auth_provider: max
     default_model: sonnet
-    context_path: .nightgauge/pipeline
-    plans_path: .nightgauge/plans
 ```
 
 ---

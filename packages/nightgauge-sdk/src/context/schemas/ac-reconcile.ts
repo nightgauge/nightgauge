@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * Schema for `.nightgauge/pipeline/ac-reconcile-{N}.json`.
+ * Schema for `<git-common-dir>/nightgauge/pipeline/ac-reconcile-{N}.json`.
  *
  * Output of the deterministic AC reconciliation pre-flight (Issue #3003).
  * Same schema is embedded under `planning.ac_reconcile` (PlanningContextSchema 1.6+).

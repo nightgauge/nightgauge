@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/logretention"
 )
 
@@ -444,7 +445,7 @@ func TestAPIUsageByIdentity(t *testing.T) {
 // the pruned pre-segment file, as absent.
 func TestReadAPIUsageAfterRetentionPrune(t *testing.T) {
 	root := t.TempDir()
-	logs := filepath.Join(root, ".nightgauge", "logs")
+	logs := layouttest.LogsDir(t, root)
 	if err := os.MkdirAll(logs, 0o755); err != nil {
 		t.Fatal(err)
 	}

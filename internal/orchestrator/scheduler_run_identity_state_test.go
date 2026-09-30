@@ -9,6 +9,8 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // ADR-017 step 1, scheduler side: the mint block was HOISTED above the
@@ -73,11 +75,11 @@ func TestRunPipeline_SidecarCarriesTheRunIdentity(t *testing.T) {
 // D11: readers treat a MISSING key as "written by a binary older than
 // ADR-017", so this binary must never omit it.
 func TestCurrentRunSidecar_RunIdKeyIsAlwaysPresent(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := writeCurrentRunSidecar(root, CurrentRunSidecar{IssueNumber: 1, Repo: "o/r"}); err != nil {
 		t.Fatalf("writeCurrentRunSidecar: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(root, currentRunSidecarFile))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, root), currentRunSidecarFile))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
@@ -126,7 +128,7 @@ func TestRunPipeline_SnapshotLandsUnderTheIdentityKeyedName(t *testing.T) {
 		if len(midRun) > 0 {
 			return
 		}
-		stateDir = filepath.Join(root, ".nightgauge", "pipeline")
+		stateDir = layouttest.PipelineDir(t, root)
 		found, err := state.FindPersistedStatesForIssue(stateDir, item.Number)
 		if err == nil {
 			midRun = found

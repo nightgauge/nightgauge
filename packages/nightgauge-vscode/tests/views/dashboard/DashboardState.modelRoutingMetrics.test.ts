@@ -24,6 +24,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { AUTOMATIC_MODEL_SELECTION_SOURCE } from "@nightgauge/sdk";
 import { createMockMemento } from "../../mocks/memento";
+import { mkFakeCloneLayout } from "../../helpers/cloneLayout";
 
 vi.mock("vscode", () => ({
   workspace: {
@@ -101,7 +102,7 @@ function runRecord(issueNumber: number) {
 async function makeWorkspace(records: unknown[]): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "ng-466-"));
   tempRoots.push(root);
-  const historyDir = path.join(root, ".nightgauge", "pipeline", "history");
+  const historyDir = path.join(mkFakeCloneLayout(root).pipeline, "history");
   await fs.mkdir(historyDir, { recursive: true });
   await fs.writeFile(
     path.join(historyDir, "2026-03-01.jsonl"),
@@ -170,7 +171,7 @@ describe("getModelRoutingMetrics (#466)", () => {
 
   it("skips malformed lines instead of failing the whole scan", async () => {
     const root = await makeWorkspace([runRecord(42)]);
-    const file = path.join(root, ".nightgauge", "pipeline", "history", "2026-03-01.jsonl");
+    const file = path.join(mkFakeCloneLayout(root).pipeline, "history", "2026-03-01.jsonl");
     await fs.writeFile(file, "{not json\n" + (await fs.readFile(file, "utf-8")), "utf-8");
 
     const metrics = await createState(root).getModelRoutingMetrics();

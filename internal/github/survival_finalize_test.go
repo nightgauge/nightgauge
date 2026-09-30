@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // stubDetector reports a fixed observation and counts how many records it was
@@ -53,7 +54,7 @@ func verdictOf(t *testing.T, root string, issue int) survival.Verdict {
 // the issue: drive the non-autonomous entry point with a stub detector and
 // assert the record's folded verdict is no longer pending.
 func TestFinalizeDueSurvivalRecords_FinalizesADueRecord(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	seedPending(t, root, "o/r", 42, now.AddDate(0, 0, -30))
 
@@ -77,7 +78,7 @@ func TestFinalizeDueSurvivalRecords_FinalizesADueRecord(t *testing.T) {
 // TestFinalizeDueSurvivalRecords_LeavesUndueRecordsAlone guards the API budget:
 // a record inside its window must cost zero detector calls.
 func TestFinalizeDueSurvivalRecords_LeavesUndueRecordsAlone(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	seedPending(t, root, "o/r", 43, now.AddDate(0, 0, -1)) // 1d into a 7d window
 
@@ -101,7 +102,7 @@ func TestFinalizeDueSurvivalRecords_LeavesUndueRecordsAlone(t *testing.T) {
 // makes this safe on the post-merge hook, which runs on EVERY merge.
 func TestFinalizeDueSurvivalRecords_EmptyStoreMakesNoCalls(t *testing.T) {
 	det := &stubDetector{}
-	res, err := FinalizeDueSurvivalRecordsWith(context.Background(), t.TempDir(), det, time.Now(), 7)
+	res, err := FinalizeDueSurvivalRecordsWith(context.Background(), layouttest.Repo(t), det, time.Now(), 7)
 	if err != nil {
 		t.Fatalf("finalize: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestFinalizeDueSurvivalRecords_EmptyStoreMakesNoCalls(t *testing.T) {
 // criterion: running twice over the same store must report finalized=0 the
 // second time and append no duplicate terminal line.
 func TestFinalizeDueSurvivalRecords_IsIdempotent(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	seedPending(t, root, "o/r", 44, now.AddDate(0, 0, -30))
 
@@ -159,7 +160,7 @@ func TestFinalizeDueSurvivalRecords_IsIdempotent(t *testing.T) {
 // TestFinalizeDueSurvivalRecords_DetectorErrorLeavesRecordPending guards the
 // conservative direction: a GitHub failure must not fabricate a verdict.
 func TestFinalizeDueSurvivalRecords_DetectorErrorLeavesRecordPending(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	seedPending(t, root, "o/r", 45, now.AddDate(0, 0, -30))
 

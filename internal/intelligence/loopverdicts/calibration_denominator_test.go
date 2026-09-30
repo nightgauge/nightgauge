@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func calibrationResult(t *testing.T, dir string) LoopResult {
@@ -33,8 +35,8 @@ func calibrationResult(t *testing.T, dir string) LoopResult {
 // must not read as a regression. Pre-guard this flipped the verdict to
 // `degrading` (66.7% → 0.0%) and fed that into the composite score.
 func TestCalibration_UnmeasurableRecentRowsDoNotDegradeAPerfectRouter(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	dir := layouttest.Repo(t)
+	path := filepath.Join(layouttest.PipelineDir(t, dir), "history", "outcomes.jsonl")
 	now := time.Now().UTC()
 
 	var records []interface{}
@@ -73,8 +75,8 @@ func TestCalibration_UnmeasurableRecentRowsDoNotDegradeAPerfectRouter(t *testing
 // real corpus held before #304 are exactly this shape: no models, a fabricated
 // predicted size, no actual size.
 func TestCalibration_NoMeasurablePairsIsNoData(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	dir := layouttest.Repo(t)
+	path := filepath.Join(layouttest.PipelineDir(t, dir), "history", "outcomes.jsonl")
 	now := time.Now().UTC()
 
 	var records []interface{}
@@ -135,8 +137,8 @@ func unmeasurableRows(n int, base time.Time, offset int) []interface{} {
 // pairs, the oldest 5 agreeing and the newest 5 not. A router that has
 // regressed from perfect to useless must read as `degrading`.
 func TestCalibration_RecentWindowDetectsARealRegressionAtCorpusDensity(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	dir := layouttest.Repo(t)
+	path := filepath.Join(layouttest.PipelineDir(t, dir), "history", "outcomes.jsonl")
 	now := time.Now().UTC().Add(-24 * time.Hour)
 
 	var records []interface{}
@@ -166,8 +168,8 @@ func TestCalibration_RecentWindowDetectsARealRegressionAtCorpusDensity(t *testin
 // The improving direction has to be reachable too, or the loop can only ever
 // report bad news and stalling.
 func TestCalibration_RecentWindowDetectsRecovery(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	dir := layouttest.Repo(t)
+	path := filepath.Join(layouttest.PipelineDir(t, dir), "history", "outcomes.jsonl")
 	now := time.Now().UTC().Add(-24 * time.Hour)
 
 	var records []interface{}
@@ -188,8 +190,8 @@ func TestCalibration_RecentWindowDetectsRecovery(t *testing.T) {
 // Above 2×N the window is exactly the newest N comparisons — the cap only binds
 // on a thin corpus.
 func TestCalibration_RecentWindowIsTenComparisonsOnceTheCorpusAllows(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	dir := layouttest.Repo(t)
+	path := filepath.Join(layouttest.PipelineDir(t, dir), "history", "outcomes.jsonl")
 	now := time.Now().UTC().Add(-24 * time.Hour)
 
 	var records []interface{}
@@ -214,8 +216,8 @@ func TestCalibration_RecentWindowIsTenComparisonsOnceTheCorpusAllows(t *testing.
 // never reached pr-create), so it must be reported as no-data rather than
 // silently contributing nothing to a number labelled as if it covered size.
 func TestCalibration_SizePairReportsNoDataWhenPeriodHasNoActualSize(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	dir := layouttest.Repo(t)
+	path := filepath.Join(layouttest.PipelineDir(t, dir), "history", "outcomes.jsonl")
 	now := time.Now().UTC()
 
 	var records []interface{}
@@ -244,8 +246,8 @@ func TestCalibration_SizePairReportsNoDataWhenPeriodHasNoActualSize(t *testing.T
 // A genuinely mis-routed run must still register as a miss — the guard excludes
 // unmeasurable rows, it does not excuse wrong ones.
 func TestCalibration_MeasurableMissesStillCount(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	dir := layouttest.Repo(t)
+	path := filepath.Join(layouttest.PipelineDir(t, dir), "history", "outcomes.jsonl")
 	now := time.Now().UTC()
 
 	var records []interface{}

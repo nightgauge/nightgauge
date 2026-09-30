@@ -218,15 +218,16 @@ adapts to available data.
 
 ```bash
 DATA_SOURCES=""
+PIPELINE_DIR="$(nightgauge layout path pipeline)"
 [ -f ".nightgauge/execution-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES execution-history"
-[ -d ".nightgauge/pipeline/assessments" ] && DATA_SOURCES="$DATA_SOURCES assessments"
+[ -d "${PIPELINE_DIR}/assessments" ] && DATA_SOURCES="$DATA_SOURCES assessments"
 [ -f ".nightgauge/calibration.json" ] && DATA_SOURCES="$DATA_SOURCES calibration"
 [ -d ".nightgauge/analysis" ] && DATA_SOURCES="$DATA_SOURCES analysis"
 [ -f ".nightgauge/gate-metrics.jsonl" ] && DATA_SOURCES="$DATA_SOURCES gate-metrics"
 [ -f ".nightgauge/skill-effectiveness.jsonl" ] && DATA_SOURCES="$DATA_SOURCES skill-effectiveness"
 [ -d ".nightgauge/health" ] && DATA_SOURCES="$DATA_SOURCES health-trends"
 [ -f ".nightgauge/complexity-model.yaml" ] && DATA_SOURCES="$DATA_SOURCES complexity-model"
-[ -f ".nightgauge/pipeline/recommendation-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES recommendations"
+[ -f "${PIPELINE_DIR}/recommendation-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES recommendations"
 ```
 
 Report available sources. If fewer than 3 sources exist, warn that analysis will
@@ -290,7 +291,8 @@ analysis dataset.
 
 ### Signal Group 1: Skill Friction (INTERNAL)
 
-Read assessment records from `.nightgauge/pipeline/assessments/*.json`.
+Read assessment records from `assessments/*.json` in the clone's pipeline state
+directory (`nightgauge layout path pipeline`).
 Parse and validate each against the `AssessmentRecordSchema`. Run
 `SkillSelfAssessmentSynthesizer.synthesize()` to get proposals.
 
@@ -329,7 +331,8 @@ Read from `.nightgauge/complexity-model.yaml`:
 
 ### Signal Group 4: Recommendation Follow-Through (SHARED)
 
-Read from `.nightgauge/pipeline/recommendation-history.jsonl`:
+Read from `recommendation-history.jsonl` in the clone's pipeline state directory
+(`nightgauge layout path pipeline`):
 
 **Key metrics to extract:**
 
@@ -583,7 +586,9 @@ prose sub-step (no phase marker) so it does not alter the phase total.
 
 ```bash
 SKILL_NAME="nightgauge-continuous-improvement"
-RUN_LOG=".nightgauge/pipeline/continuous-improvement-runs.jsonl"
+RUN_LOG_CLASS="pipeline"
+RUN_LOG_NAME="continuous-improvement-runs.jsonl"
+RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
 ```
 
 <!-- include: ../_shared/RUN_REFLECTION.md -->
@@ -852,8 +857,10 @@ stat line.
 
 ### Step 5.3 — Write JSON Report
 
-Write structured output to
-`.nightgauge/pipeline/continuous-improvement-YYYY-MM-DD.json`:
+Write structured output with
+`nightgauge layout write pipeline continuous-improvement-YYYY-MM-DD.json`
+(content on stdin, or `--from FILE` after writing a temp file outside the git
+directory):
 
 ```json
 {
@@ -956,7 +963,7 @@ Keep the last 10 continuous improvement reports. Delete oldest when limit
 exceeded.
 
 ```bash
-REPORT_DIR=".nightgauge/pipeline"
+REPORT_DIR="$(nightgauge layout path pipeline)"
 ls -t "$REPORT_DIR"/continuous-improvement-*.json 2>/dev/null | tail -n +11 | xargs rm -f
 ```
 
@@ -986,26 +993,27 @@ This skill reads configuration from `.nightgauge/config.yaml`:
 
 ## Data Sources
 
-| Source                                              | Signal Group         | Required? |
-| --------------------------------------------------- | -------------------- | --------- |
-| `.nightgauge/pipeline/assessments/*.json`           | Skill Friction       | No        |
-| `.nightgauge/health/trends.jsonl`                   | Health Dimensions    | No        |
-| `.nightgauge/complexity-model.yaml`                 | Calibration          | No        |
-| `.nightgauge/pipeline/recommendation-history.jsonl` | Recommendations      | No        |
-| `.nightgauge/execution-history.jsonl`               | Execution Efficiency | No        |
-| `.nightgauge/gate-metrics.jsonl`                    | Feedback & Recovery  | No        |
-| `.nightgauge/skill-effectiveness.jsonl`             | Feedback & Recovery  | No        |
-| `.nightgauge/analysis/latest.json`                  | Health Dimensions    | No        |
-| `.nightgauge/calibration.json`                      | Calibration          | No        |
+| Source                                  | Signal Group         | Required? |
+| --------------------------------------- | -------------------- | --------- |
+| `pipeline/assessments/*.json`           | Skill Friction       | No        |
+| `.nightgauge/health/trends.jsonl`       | Health Dimensions    | No        |
+| `.nightgauge/complexity-model.yaml`     | Calibration          | No        |
+| `pipeline/recommendation-history.jsonl` | Recommendations      | No        |
+| `.nightgauge/execution-history.jsonl`   | Execution Efficiency | No        |
+| `.nightgauge/gate-metrics.jsonl`        | Feedback & Recovery  | No        |
+| `.nightgauge/skill-effectiveness.jsonl` | Feedback & Recovery  | No        |
+| `.nightgauge/analysis/latest.json`      | Health Dimensions    | No        |
+| `.nightgauge/calibration.json`          | Calibration          | No        |
 
-All sources are optional. The skill adapts gracefully — missing sources reduce
+`pipeline/...` sources are in the clone's pipeline state directory
+(`nightgauge layout path pipeline`). All sources are optional. The skill adapts gracefully — missing sources reduce
 the number of analyzable loops but never prevent the skill from running.
 
 ## Output Files
 
-| File                                                 | Purpose                    |
-| ---------------------------------------------------- | -------------------------- |
-| `.nightgauge/pipeline/continuous-improvement-*.json` | Timestamped review reports |
+| File                                     | Purpose                                     |
+| ---------------------------------------- | ------------------------------------------- |
+| `pipeline/continuous-improvement-*.json` | Timestamped review reports (`layout write`) |
 
 ## Error Handling
 

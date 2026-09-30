@@ -13,6 +13,8 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // --- #882: launch repo ≠ target repo -----------------------------------------
@@ -159,11 +161,11 @@ func TestCrossRepoRun_RootsStateAndEpicBranchAtTargetRepo(t *testing.T) {
 	s.runPipeline(context.Background(), item)
 
 	// 1. Pipeline state (history, trace, run snapshot) roots at the TARGET repo.
-	if _, err := os.Stat(filepath.Join(targetRoot, ".nightgauge", "pipeline")); err != nil {
-		t.Errorf("target repo has no .nightgauge/pipeline — the run's state did not root at the target repo: %v", err)
+	if _, err := os.Stat(layouttest.PipelineDir(t, targetRoot)); err != nil {
+		t.Errorf("target repo has no pipeline state directory — the run's state did not root at the target repo: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(launchRoot, ".nightgauge", "pipeline")); err == nil {
-		t.Errorf("the LAUNCH repo received .nightgauge/pipeline for a run targeting another repo (#882)")
+	if _, err := os.Stat(layouttest.PipelineDir(t, launchRoot)); err == nil {
+		t.Errorf("the LAUNCH repo received a pipeline state directory for a run targeting another repo (#882)")
 	}
 
 	// 2. The worktree path roots at the TARGET repo. (The leaf already carried

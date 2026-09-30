@@ -513,26 +513,6 @@ describe("pipeline.behavior", () => {
   });
 
   // ============================================================================
-  // pipeline.logs.dir - Behavior Tests
-  // ============================================================================
-
-  describe("logs.dir", () => {
-    it("uses custom log directory", () => {
-      const config = createMockPipelineConfig({ logs: { dir: "/tmp/logs" } });
-
-      const getLogDir = (cfg: typeof config) => {
-        return cfg.logs?.dir || ".nightgauge/logs";
-      };
-
-      expect(getLogDir(config)).toBe("/tmp/logs");
-    });
-
-    it("defaults to .nightgauge/logs", () => {
-      expect(DEFAULT_PIPELINE_LOGS.dir).toBe(".nightgauge/logs");
-    });
-  });
-
-  // ============================================================================
   // pipeline.logs.max_age_days - Behavior Tests
   // ============================================================================
 
@@ -718,7 +698,7 @@ describe("pipeline.behavior", () => {
       expect(DEFAULT_CONFIG.pipeline?.skip_checks?.lint).toBe(false);
       expect(DEFAULT_CONFIG.pipeline?.skip_checks?.build).toBe(false);
       expect(DEFAULT_CONFIG.pipeline?.logs?.retain).toBe(true);
-      expect(DEFAULT_CONFIG.pipeline?.logs?.dir).toBe(".nightgauge/logs");
+      expect(DEFAULT_CONFIG.pipeline?.logs).not.toHaveProperty("dir");
     });
 
     it("mergeWithDefaults preserves user values", () => {

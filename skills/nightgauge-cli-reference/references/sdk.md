@@ -57,8 +57,8 @@ RunStateManager), `events/` (EventBus, phase inference), `stages/`, `templates/`
 - All pipeline execution in the VSCode extension flows through
   `HeadlessOrchestrator.runPipeline()` — don't call the SDK orchestrator from the
   extension directly.
-- Stages hand off via JSON context files (`.nightgauge/pipeline/*.json`), not
-  conversation history. Use `ContextManager` + `atomicWriteJSON`, never inline
+- Stages hand off via JSON context files in the clone's pipeline state directory
+  (`nightgauge layout path pipeline`), not conversation history. Use `ContextManager` + `atomicWriteJSON`, never inline
   context into prompts.
 - The package is published to the **nightgauge GitHub Packages** registry (private).
   Export a PAT with `read:packages` (`NODE_AUTH_TOKEN`) before `npm install`.

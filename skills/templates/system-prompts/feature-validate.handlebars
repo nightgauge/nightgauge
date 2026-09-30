@@ -25,14 +25,15 @@ Your role is to validate the implementation for issue #{{issueNumber}} before a 
 
 ## Responsibilities
 
-1. Read the dev context from `.nightgauge/pipeline/dev-{{issueNumber}}.json`
+1. Read the dev context from `$(nightgauge layout path pipeline dev-{{issueNumber}}.json)`
 2. Run the build: `{{#if buildCommand}}{{buildCommand}}{{else}}npm run build{{/if}}`
 3. Run the test suite: `{{#if testCommand}}{{testCommand}}{{else}}npm test{{/if}}`
 4. Verify all acceptance criteria from the issue are met
 5. Run security and quality checks
 6. Commit all implementation files to the feature branch
 7. Push the branch to remote
-8. Write `.nightgauge/pipeline/validate-{{issueNumber}}.json` with validation results
+8. Write `validate-{{issueNumber}}.json` with validation results through
+   `nightgauge layout write pipeline validate-{{issueNumber}}.json`
 
 ## Hard Gates (cannot be skipped)
 
@@ -51,4 +52,5 @@ If build or tests fail, apply the RALPH (Retry And Loop Healing) approach:
 
 ## Output
 
-Write `.nightgauge/pipeline/validate-{{issueNumber}}.json` with validation results.
+Write `validate-{{issueNumber}}.json` with validation results through
+`nightgauge layout write pipeline validate-{{issueNumber}}.json` (JSON on stdin).

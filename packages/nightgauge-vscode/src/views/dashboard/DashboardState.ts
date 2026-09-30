@@ -8,7 +8,7 @@
  * @see docs/ARCHITECTURE.md for WebView patterns
  */
 
-import { pipelineStateDir } from "../../utils/cloneLayout";
+import { isUsableWorkspaceRoot, pipelineStateDir } from "../../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -2535,7 +2535,7 @@ export class DashboardState {
       return result.ok ? result.count : 0;
     }
 
-    if (!this.workspaceRoot) return 0;
+    if (!isUsableWorkspaceRoot(this.workspaceRoot)) return 0;
 
     const pipelineDir = pipelineStateDir(this.workspaceRoot);
 
@@ -3457,7 +3457,7 @@ export class DashboardState {
         ? { stageMatrix: stageMatrix as AutoModelSelectorConfig["stageMatrix"] }
         : undefined
     );
-    const stageModelCalibration = this.workspaceRoot
+    const stageModelCalibration = isUsableWorkspaceRoot(this.workspaceRoot)
       ? await StageModelCalibrationService.load(
           StageModelCalibrationService.getDefaultPath(this.workspaceRoot)
         )

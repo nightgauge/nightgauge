@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -42,7 +43,7 @@ const fixtureIssueNumber = 9999
 // KindFail (not KindNoOp) when no GitHub credentials are available in the test
 // environment. KindFail is outside the regression class and is acceptable here.
 func TestSyntheticNoOpRegression(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	seedWorkspace(t, ws, fixtureIssueNumber)
 
 	gateMap := gates.Default()
@@ -72,7 +73,7 @@ func TestSyntheticNoOpRegression(t *testing.T) {
 // of gates that are fully deterministic. pr-create and pr-merge are excluded
 // because their Verify implementations call `gh pr view`.
 func TestSyntheticDeterministicGatesPass(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	seedWorkspace(t, ws, fixtureIssueNumber)
 
 	deterministicStages := []state.PipelineStage{
@@ -184,9 +185,9 @@ func TestSyntheticFixtureLoads(t *testing.T) {
 func seedWorkspace(t *testing.T, ws string, issueNumber int) {
 	t.Helper()
 
-	pipelineDir := filepath.Join(ws, ".nightgauge", "pipeline")
+	pipelineDir := layouttest.PipelineDir(t, ws)
 	healthDir := filepath.Join(ws, ".nightgauge", "health")
-	plansDir := filepath.Join(ws, ".nightgauge", "plans")
+	plansDir := layouttest.PlansDir(t, ws)
 
 	for _, dir := range []string{pipelineDir, healthDir, plansDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {

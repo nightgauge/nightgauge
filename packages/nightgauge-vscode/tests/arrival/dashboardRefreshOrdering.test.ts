@@ -5,7 +5,7 @@
  * arrival:overview
  *
  * The Dashboard is built the way activation builds it: a real `TelemetryStore`
- * over a workspace whose `.nightgauge/pipeline/history/` is still empty, so the
+ * over a git workspace whose per-clone `pipeline/history/` is still empty, so the
  * constructor's background load finds nothing. Then the history day-files
  * appear (the demo fixture being copied over an open workspace, or a run
  * finishing while the panel was closed) and the user presses Refresh once.
@@ -27,6 +27,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createMockMemento } from "../mocks/memento";
+import { initGitRepo } from "../helpers/cloneLayout";
+import { pipelineStateDir } from "../../src/utils/cloneLayout";
 
 vi.mock("vscode", async () => (await import("./dashboardHarness")).vscodeMockModule());
 vi.mock("../../src/services/IpcClient", async () =>
@@ -81,7 +83,7 @@ let dashboard: Dashboard | undefined;
 
 /** Lay the recorded JSONL out as one day-file per date, as the writer does. */
 function writeHistory(root: string): number {
-  const historyDir = path.join(root, ".nightgauge", "pipeline", "history");
+  const historyDir = path.join(pipelineStateDir(root), "history");
   fs.mkdirSync(historyDir, { recursive: true });
   const lines = fs
     .readFileSync(RECORDED_HISTORY_JSONL, "utf-8")
@@ -103,7 +105,7 @@ function writeHistory(root: string): number {
 beforeEach(() => {
   vi.clearAllMocks();
   resetHarness();
-  workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-refresh-order-"));
+  workspaceRoot = initGitRepo(fs.mkdtempSync(path.join(os.tmpdir(), "ng-refresh-order-")));
   fs.mkdirSync(path.join(workspaceRoot, ".nightgauge"), { recursive: true });
   fs.writeFileSync(
     path.join(workspaceRoot, ".nightgauge", "config.yaml"),

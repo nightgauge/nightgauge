@@ -93,7 +93,10 @@ to narrow the result to a single repo or stage. Use --days to limit the window
 // days) and returns the flattened record slice. Records are read in any order
 // because ComputeStats groups before sorting.
 func loadExitRecordsForStats(root string, limitDays int) ([]diagnostics.StageExitRecord, error) {
-	dir := diagnostics.ExitRecordsDir(root)
+	dir, err := diagnostics.ExitRecordsDir(root)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

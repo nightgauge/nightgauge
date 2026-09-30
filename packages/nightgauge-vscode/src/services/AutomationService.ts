@@ -17,16 +17,16 @@
  * @see docs/AUTOMATIONS.md - Automation configuration and usage
  */
 
-import { cloneLogsDir, RELATIVE_CLONE_LOGS_DIR, resolveCloneSetting } from "../utils/cloneLayout";
+import { cloneLogsDir, isUsableWorkspaceRoot } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import { open as fsOpen } from "node:fs/promises";
 import * as path from "node:path";
 import type { PipelineStateService } from "./PipelineStateService";
-import { resolveConfigPath, logDeprecationWarning } from "../utils/configPathResolver";
+import { resolveConfigPath } from "../utils/configPathResolver";
 
-/** The automation log's default `log_file`, root-relative. */
-const AUTOMATION_LOG_DEFAULT_REL = `${RELATIVE_CLONE_LOGS_DIR}/automation.log`;
+/** The automation log's file name inside the clone's logs directory. */
+const AUTOMATION_LOG_FILENAME = "automation.log";
 
 /**
  * Automation log entry (JSONL format from automation-dispatch.sh)
@@ -79,8 +79,8 @@ export class AutomationService implements vscode.Disposable {
    * Initialize the automation service
    */
   async initialize(): Promise<void> {
-    // Determine log file path from config
-    this.logPath = await this.getLogFilePath();
+    // Resolve the log file in the clone's logs directory
+    this.logPath = this.getLogFilePath();
 
     // Watch the log file for new entries
     if (this.logPath) {
@@ -92,54 +92,13 @@ export class AutomationService implements vscode.Disposable {
   }
 
   /**
-   * Get the automation log file path from config.yaml
+   * The automation log: `automation.log` in the clone's logs class (ADR-024
+   * § 7), or undefined outside a git repository. There is no path setting;
+   * CLONE has no override.
    */
-  private async getLogFilePath(): Promise<string | undefined> {
-    const defaultLogPath = path.join(cloneLogsDir(this.workspaceRoot), "automation.log");
-
-    // Resolve config path with fallback to legacy
-    const pathResult = await resolveConfigPath(this.workspaceRoot);
-
-    if (!pathResult.exists) {
-      return defaultLogPath;
-    }
-
-    // Log deprecation warning if using legacy path
-    if (pathResult.isLegacy) {
-      logDeprecationWarning(pathResult.path);
-    }
-
-    try {
-      const configContent = await fs.readFile(pathResult.path, "utf-8");
-      // Match log_file only under automations: section
-      const match = configContent.match(
-        /automations:\s*\n(?:\s+\w+:[^\n]*\n)*?\s+log_file:\s*["']?([^"'\n]+)["']?/
-      );
-      const logFile = match ? match[1].trim() : AUTOMATION_LOG_DEFAULT_REL;
-
-      // Validate no path traversal
-      if (logFile.includes("..") || path.isAbsolute(logFile)) {
-        console.warn(
-          "[AutomationService] log_file path contains traversal or is absolute, using default"
-        );
-        return defaultLogPath;
-      }
-
-      // The default resolves through the clone-layout helper; a user override
-      // keeps being joined onto the root (#2036).
-      return resolveCloneSetting(
-        this.workspaceRoot,
-        logFile,
-        AUTOMATION_LOG_DEFAULT_REL,
-        () => defaultLogPath
-      );
-    } catch (error) {
-      console.warn(
-        "[AutomationService] Could not read config for log path:",
-        error instanceof Error ? error.message : String(error)
-      );
-      return defaultLogPath;
-    }
+  private getLogFilePath(): string | undefined {
+    if (!isUsableWorkspaceRoot(this.workspaceRoot)) return undefined;
+    return path.join(cloneLogsDir(this.workspaceRoot), AUTOMATION_LOG_FILENAME);
   }
 
   /**

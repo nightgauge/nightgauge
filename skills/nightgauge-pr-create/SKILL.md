@@ -10,9 +10,9 @@ metadata:
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 inputs:
-  - .nightgauge/pipeline/validate-{N}.json
+  - pipeline/validate-{N}.json
 outputs:
-  - .nightgauge/pipeline/pr-{N}.json
+  - pipeline/pr-{N}.json
 ---
 
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
@@ -31,15 +31,18 @@ interpretation.
 - Creates PR with issue linkage and concise body
 - Requests configured reviewers
 - Optionally enables auto-merge when configured
-- Writes `.nightgauge/pipeline/pr-{N}.json` context file for pr-merge
+- Writes the `pr-{N}.json` context file for pr-merge
+  (`nightgauge layout write pipeline pr-{N}.json`)
 - Signals pipeline status updates for integrations
 
 ## Required Inputs
 
 - Branch includes issue number
-- `.nightgauge/pipeline/dev-{N}.json` from `/nightgauge-feature-dev`
-- Optional: `.nightgauge/pipeline/validate-{N}.json` from
-  `/nightgauge-feature-validate`
+- `dev-{N}.json` from `/nightgauge-feature-dev`
+- Optional: `validate-{N}.json` from `/nightgauge-feature-validate`
+
+Both live in the clone's pipeline state directory: read each at
+`"$(nightgauge layout path pipeline <file>)"`.
 
 If required context is missing, fail and instruct correct stage order.
 
@@ -205,7 +208,7 @@ B and subsequent phases):
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 BASE_BRANCH=$(jq -r '.base_branch // empty' \
-  ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)
+  "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
 if [ -z "$BASE_BRANCH" ]; then
   BASE_BRANCH=$(git config --get nightgauge.branch.base 2>/dev/null || echo "main")
 fi
@@ -424,10 +427,11 @@ gracefully (sets `CI_MONITORED=false`) if it is absent.
 printf '<!-- phase:start name="write-context" index=12 total=14 stage="pr-create" -->\n'
 ```
 
-1. Write `.nightgauge/pipeline/pr-{N}.json` where **N is the ISSUE number**
+1. Write `pr-{N}.json` where **N is the ISSUE number**
    (NOT the PR number). The filename must match the issue being worked on (e.g.,
-   `pr-870.json` for issue #870, even if the PR number is #876). Create the
-   directory if it does not exist. Schema:
+   `pr-870.json` for issue #870, even if the PR number is #876). Write it with
+   `nightgauge layout write pipeline pr-{N}.json` (JSON on stdin; it creates
+   the directory). Schema:
 
    ```json
    {

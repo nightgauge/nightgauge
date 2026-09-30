@@ -64,6 +64,7 @@ import { getRunsTabHtml } from "../../../src/views/dashboard/tabs/RunsTabHtml";
 import type { RunsListData } from "../../../src/views/dashboard/DashboardState";
 import type { RunsEntry } from "../../../src/services/IpcClientBase";
 import { createMockMemento } from "../../mocks/memento";
+import { mkFakeCloneLayout } from "../../helpers/cloneLayout";
 
 // ---------------------------------------------------------------------------
 // The captured fixtures
@@ -190,11 +191,13 @@ describe("undetermined-branch history record (#397)", () => {
 
   describe("readers", () => {
     let root: string;
+    let historyDir: string;
 
     beforeEach(() => {
       ExecutionHistoryReader.clearCache();
       root = mkdtempSync(join(tmpdir(), "ng-undetermined-branch-"));
-      mkdirSync(join(root, ".nightgauge", "pipeline", "history"), { recursive: true });
+      historyDir = join(mkFakeCloneLayout(root).pipeline, "history");
+      mkdirSync(historyDir, { recursive: true });
     });
 
     afterEach(() => {
@@ -204,7 +207,7 @@ describe("undetermined-branch history record (#397)", () => {
 
     function writeHistory(line: string): void {
       const day = new Date().toISOString().slice(0, 10);
-      writeFileSync(join(root, ".nightgauge", "pipeline", "history", `${day}.jsonl`), line + "\n");
+      writeFileSync(join(historyDir, `${day}.jsonl`), line + "\n");
     }
 
     describe("the production attach path (TelemetryStore)", () => {

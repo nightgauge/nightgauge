@@ -56,9 +56,23 @@ and this project adheres to
   read by the Go binary, so nothing changes for pipeline session logs or the
   sanitization log, which still land under the shared per-clone log directory
   (#2030).
+- Run state, contexts and history, plans, retros and pipeline logs now live
+  in the clone's git directory (`.git/nightgauge/`; from a linked worktree,
+  the main clone's) instead of the working tree's `.nightgauge/`, so nothing
+  the pipeline produces can show up in `git status` or be committed. Every
+  checkout of a clone shares them. The extension asks the `nightgauge` binary
+  where they are once per workspace folder at activation, and no longer
+  creates `.nightgauge/pipeline`, `plans` or `logs` directories or `.gitkeep`
+  files. Outside a git repository these views stay empty (#2037).
+- The extension activates automatically in a workspace containing
+  `.nightgauge/config.yaml`, rather than one containing `.nightgauge/pipeline`
+  or `.nightgauge/plans` (#2037).
 
 ### Removed
 
+- The `ui.core.context_path`, `ui.core.plans_path`, `pipeline.logs.dir` and
+  `automations.log_file` settings. These locations are the clone's own and
+  have no override (#2037).
 - The **Adapter Doctor** command (`nightgauge.adapterDoctor`) and its panel.
   Run **Nightgauge: Run Doctor** instead; adapter health is its Adapters group.
 - The remote-command status bar item and the `remote.notifyOnPipelineRun`

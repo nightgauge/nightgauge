@@ -87,8 +87,18 @@ Fill each row from the `RECALL_HITS` array (rank, issue_number, path, first
 sentence of snippet). If `RECALL_HIT_COUNT=0`, omit this section entirely.
 
 The plan must be implementation-ready and specific enough for
-`/nightgauge-feature-dev`. Write the plan file to
-`.nightgauge/plans/{N}-*.md` and do not write `PLAN.md` at repository root.
+`/nightgauge-feature-dev`. Store it as `{N}-<slug>.md` in the clone's plans
+directory through the binary, and do not write `PLAN.md` at repository root.
+Never write under the git directory by path: draft the plan in a temp file
+outside the repository (or pipe it on stdin), then hand it over:
+
+```bash
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+# PLAN_DRAFT is the temp file the plan was drafted in, e.g. /tmp/plan-${ISSUE_NUMBER}.md
+PLAN_FILE=$(nightgauge layout write plans "${ISSUE_NUMBER}-<slug>.md" --from "$PLAN_DRAFT")
+echo "Plan written: $PLAN_FILE" # the absolute path planning-{N}.json records as plan_file
+```
 
 ## Phase 5.5: Knowledge Base Enrichment
 
@@ -164,7 +174,7 @@ entry explaining why no architectural choices were required.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)
+KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
 
 # Deferred scaffolding: if issue-pickup skipped because the issue body had no
 # extractable sections, scaffold now — planning has the richest context.
@@ -310,23 +320,25 @@ DECEOF
   KNOWLEDGE_ENTRIES=$(ls "$KNOWLEDGE_PATH"/*.md 2>/dev/null | xargs -I{} basename {} | jq -R . | jq -s .)
 
   # Patch knowledge_path and knowledge_entries into planning context
-  PLANNING_FILE=".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json"
+  PLANNING_FILE="$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)"
   tmp=$(mktemp)
   jq \
     --arg kp "$KNOWLEDGE_PATH" \
     --argjson ke "${KNOWLEDGE_ENTRIES:-[]}" \
     '.knowledge_path = $kp | .knowledge_entries = $ke' \
-    "$PLANNING_FILE" > "$tmp"
-  mv "$tmp" "$PLANNING_FILE"
+    "$PLANNING_FILE" > "$tmp" &&
+    nightgauge layout write pipeline "planning-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
+  rm -f "$tmp"
 
   # Also patch knowledge_path into issue context if it was deferred
-  ISSUE_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+  ISSUE_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
   if [ -f "$ISSUE_FILE" ]; then
     EXISTING_KP=$(jq -r '.knowledge_path // empty' "$ISSUE_FILE" 2>/dev/null)
     if [ -z "$EXISTING_KP" ]; then
       tmp=$(mktemp)
-      jq --arg kp "$KNOWLEDGE_PATH" '.knowledge_path = $kp' "$ISSUE_FILE" > "$tmp"
-      mv "$tmp" "$ISSUE_FILE"
+      jq --arg kp "$KNOWLEDGE_PATH" '.knowledge_path = $kp' "$ISSUE_FILE" > "$tmp" &&
+        nightgauge layout write pipeline "issue-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
+      rm -f "$tmp"
     fi
   fi
 

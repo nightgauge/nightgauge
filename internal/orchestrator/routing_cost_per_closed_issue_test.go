@@ -8,10 +8,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // These pin the implementation-routing rule on the dispatch path the
@@ -129,7 +131,7 @@ func TestRiskFloors_DispatchAndEnvelope(t *testing.T) {
 
 func writePlannerAssessment(t *testing.T, root string, issue int, body string) {
 	t.Helper()
-	path := filepath.Join(root, execution.PlanningContextRelPath(issue))
+	path := filepath.Join(layouttest.PipelineDir(t, root), fmt.Sprintf("planning-%d.json", issue))
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +217,7 @@ func (r *plannerSizingRunner) RunStage(ctx context.Context, params StageRunParam
 	for _, dir := range dirs {
 		switch params.Stage {
 		case state.StageIssuePickup:
-			writeRunFixture(dir, execution.IssueContextRelPath(params.IssueNumber), fmt.Sprintf(`{
+			writeRunFixture(dir, fmt.Sprintf("issue-%d.json", params.IssueNumber), fmt.Sprintf(`{
   "issue_number": %d,
   "routing": {
     "change_type": "code",
@@ -227,17 +229,22 @@ func (r *plannerSizingRunner) RunStage(ctx context.Context, params StageRunParam
   }
 }`, params.IssueNumber))
 		case state.StageFeaturePlanning:
-			writeRunFixture(dir, execution.PlanningContextRelPath(params.IssueNumber),
+			writeRunFixture(dir, fmt.Sprintf("planning-%d.json", params.IssueNumber),
 				`{"complexity_assessment":{"size_label":"L","computed_score":5,"documentation_scope":"extended"}}`)
 		}
 	}
 	return out, err
 }
 
-// writeRunFixture writes a stage's output file from inside a dispatch, where
-// no *testing.T is in reach; a write failure panics the run, loudly.
-func writeRunFixture(root, rel, body string) {
-	path := filepath.Join(root, rel)
+// writeRunFixture writes a stage's output file into root's pipeline state
+// directory from inside a dispatch, where no *testing.T is in reach; a
+// resolve or write failure panics the run, loudly.
+func writeRunFixture(root, name, body string) {
+	dir, err := layout.PipelineStateDir(root)
+	if err != nil {
+		panic(err)
+	}
+	path := filepath.Join(dir, name)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		panic(err)
 	}

@@ -8,12 +8,7 @@
  * @see docs/ARCHITECTURE.md for utility patterns
  */
 
-import {
-  cloneLogsDir,
-  isUsableWorkspaceRoot,
-  RELATIVE_CLONE_LOGS_DIR,
-  resolveCloneSetting,
-} from "./cloneLayout";
+import { cloneLogsDir, isUsableWorkspaceRoot } from "./cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { redactSecrets } from "./redaction";
@@ -51,8 +46,6 @@ export interface LogFileDescriptor {
 export interface LogFileConfig {
   /** Whether to write logs to files (default: true) */
   retain: boolean;
-  /** Directory for log files relative to workspace root (default: RELATIVE_CLONE_LOGS_DIR) */
-  dir: string;
   /** Maximum age in days before cleanup (optional) */
   max_age_days?: number;
   /** Maximum number of log files to keep (optional) */
@@ -79,7 +72,6 @@ export const DEFAULT_DISK_LOG_MAX_ENTRY_CHARS = 64 * 1024;
  */
 const DEFAULT_CONFIG: LogFileConfig = {
   retain: true,
-  dir: RELATIVE_CLONE_LOGS_DIR,
 };
 
 /**
@@ -94,7 +86,7 @@ const DEFAULT_CONFIG: LogFileConfig = {
  *   'INFO',
  *   'feature-dev',
  *   'Starting implementation...',
- *   { retain: true, dir: RELATIVE_CLONE_LOGS_DIR }
+ *   { retain: true }
  * );
  *
  * // Generate filename for current session
@@ -104,12 +96,12 @@ const DEFAULT_CONFIG: LogFileConfig = {
  */
 export class LogFileWriter {
   /**
-   * The log directory for `workspaceRoot`. The default `dir` resolves through
-   * the clone-layout helper; a configured override is joined onto the root as
-   * before (#2036). Throws on an unusable root.
+   * The log directory for `workspaceRoot`: the clone's logs class (ADR-024
+   * § 7). There is no directory setting; CLONE has no override. Throws on an
+   * unusable root.
    */
-  private static resolveLogDir(workspaceRoot: string, dir: string): string {
-    return resolveCloneSetting(workspaceRoot, dir, RELATIVE_CLONE_LOGS_DIR, cloneLogsDir);
+  private static resolveLogDir(workspaceRoot: string): string {
+    return cloneLogsDir(workspaceRoot);
   }
 
   /**
@@ -138,7 +130,7 @@ export class LogFileWriter {
       return;
     }
 
-    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
+    const logDir = this.resolveLogDir(workspaceRoot);
     const filename = this.generateFilename(issueNumber);
     const logPath = path.join(logDir, filename);
     const timestamp = new Date().toISOString();
@@ -223,16 +215,10 @@ export class LogFileWriter {
    *
    * @param workspaceRoot - Workspace root path
    * @param issueNumber - Issue number or null
-   * @param config - Optional config with dir override
    * @returns Full path to log file
    */
-  static getLogPath(
-    workspaceRoot: string,
-    issueNumber: number | null,
-    config?: Partial<LogFileConfig>
-  ): string {
-    const mergedConfig = { ...DEFAULT_CONFIG, ...config };
-    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
+  static getLogPath(workspaceRoot: string, issueNumber: number | null): string {
+    const logDir = this.resolveLogDir(workspaceRoot);
     const filename = this.generateFilename(issueNumber);
     return path.join(logDir, filename);
   }
@@ -242,16 +228,11 @@ export class LogFileWriter {
    *
    * @param workspaceRoot - Workspace root path
    * @param issueNumber - Issue number or null
-   * @param config - Optional config
    * @returns True if log file exists
    */
-  static async exists(
-    workspaceRoot: string,
-    issueNumber: number | null,
-    config?: Partial<LogFileConfig>
-  ): Promise<boolean> {
+  static async exists(workspaceRoot: string, issueNumber: number | null): Promise<boolean> {
     if (!isUsableWorkspaceRoot(workspaceRoot)) return false;
-    const logPath = this.getLogPath(workspaceRoot, issueNumber, config);
+    const logPath = this.getLogPath(workspaceRoot, issueNumber);
     try {
       await fs.access(logPath);
       return true;
@@ -283,7 +264,7 @@ export class LogFileWriter {
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
     if (!mergedConfig.retain || !isUsableWorkspaceRoot(workspaceRoot)) return [];
 
-    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
+    const logDir = this.resolveLogDir(workspaceRoot);
 
     let filenames: string[];
     try {
@@ -334,7 +315,7 @@ export class LogFileWriter {
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
     if (!mergedConfig.retain || !isUsableWorkspaceRoot(workspaceRoot)) return null;
 
-    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
+    const logDir = this.resolveLogDir(workspaceRoot);
     let filenames: string[];
     try {
       filenames = await fs.readdir(logDir);
@@ -375,7 +356,7 @@ export class LogFileWriter {
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
     if (!mergedConfig.retain || !isUsableWorkspaceRoot(workspaceRoot)) return [];
 
-    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
+    const logDir = this.resolveLogDir(workspaceRoot);
 
     let filenames: string[];
     try {
@@ -443,7 +424,7 @@ export class LogFileWriter {
   ): Promise<{ kept: number; deleted: number; failed: number }> {
     const mergedConfig = { ...DEFAULT_CONFIG, ...config };
     if (!isUsableWorkspaceRoot(workspaceRoot)) return { kept: 0, deleted: 0, failed: 0 };
-    const logDir = this.resolveLogDir(workspaceRoot, mergedConfig.dir);
+    const logDir = this.resolveLogDir(workspaceRoot);
 
     let filenames: string[];
     try {

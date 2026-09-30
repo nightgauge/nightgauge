@@ -62,7 +62,6 @@ Edit `.nightgauge/config.yaml`:
 automations:
   enabled: true
   dry_run: false
-  log_file: ".nightgauge/logs/automation.log"
 
   triggers:
     - name: "notify-on-review"
@@ -84,7 +83,7 @@ export SLACK_WEBHOOK_CODE_REVIEWS="https://hooks.slack.com/services/..."
 ```bash
 export NIGHTGAUGE_AUTOMATION_DRY_RUN=true
 # Change an issue to in-review status
-# Check .nightgauge/logs/automation.log for [DRY-RUN] entries
+# Check "$(nightgauge layout path logs automation.log)" for [DRY-RUN] entries
 ```
 
 ### 4. Enable for Real
@@ -100,11 +99,14 @@ unset NIGHTGAUGE_AUTOMATION_DRY_RUN
 
 ### Global Settings
 
-| Option     | Type    | Default                             | Description                    |
-| ---------- | ------- | ----------------------------------- | ------------------------------ |
-| `enabled`  | boolean | `true`                              | Enable/disable all automations |
-| `dry_run`  | boolean | `false`                             | Log without executing          |
-| `log_file` | string  | `".nightgauge/logs/automation.log"` | Audit log location             |
+| Option    | Type    | Default | Description                    |
+| --------- | ------- | ------- | ------------------------------ |
+| `enabled` | boolean | `true`  | Enable/disable all automations |
+| `dry_run` | boolean | `false` | Log without executing          |
+
+The default audit log is `automation.log` in the clone's logs directory
+(`nightgauge layout path logs automation.log`), which lives in the git directory
+and is never committed.
 
 ### Trigger Definition
 
@@ -290,8 +292,9 @@ Use `{{variable}}` syntax in messages and script arguments.
 
 ## Audit Log
 
-All automation executions are logged to the configured `log_file` in JSON Lines
-(JSONL) format. Each line is a valid JSON object:
+All automation executions are logged to `automation.log` in the clone's logs
+directory (`nightgauge layout path logs automation.log`) in JSON Lines (JSONL)
+format. Each line is a valid JSON object:
 
 ```jsonl
 {"timestamp":"2026-02-07T20:00:00Z","trigger":"in-review","action":"post_slack","status":"success","issue":137,"message":"Posted to Slack","dry_run":false}
@@ -319,29 +322,30 @@ All automation executions are logged to the configured `log_file` in JSON Lines
 **In terminal:**
 
 ```bash
+LOG="$(nightgauge layout path logs automation.log)"
+
 # View last 10 entries
-tail -10 .nightgauge/logs/automation.log | jq
+tail -10 "$LOG" | jq
 
 # Filter by issue
-jq 'select(.issue == 137)' .nightgauge/logs/automation.log
+jq 'select(.issue == 137)' "$LOG"
 
 # Filter by status
-jq 'select(.status == "error")' .nightgauge/logs/automation.log
+jq 'select(.status == "error")' "$LOG"
 
 # Filter by action type
-jq 'select(.action == "post_slack")' .nightgauge/logs/automation.log
+jq 'select(.action == "post_slack")' "$LOG"
 ```
 
 ---
 
 ## Environment Variables
 
-| Variable                          | Description                         |
-| --------------------------------- | ----------------------------------- |
-| `NIGHTGAUGE_AUTOMATIONS_ENABLED`  | Set to `"false"` to disable         |
-| `NIGHTGAUGE_AUTOMATIONS_DRY_RUN`  | Set to `"true"` for dry-run mode    |
-| `NIGHTGAUGE_AUTOMATIONS_LOG_FILE` | Override the log file path          |
-| `SLACK_WEBHOOK_*`                 | Webhook URLs for Slack integrations |
+| Variable                         | Description                         |
+| -------------------------------- | ----------------------------------- |
+| `NIGHTGAUGE_AUTOMATIONS_ENABLED` | Set to `"false"` to disable         |
+| `NIGHTGAUGE_AUTOMATIONS_DRY_RUN` | Set to `"true"` for dry-run mode    |
+| `SLACK_WEBHOOK_*`                | Webhook URLs for Slack integrations |
 
 ---
 
@@ -526,7 +530,7 @@ automations:
 3. **Check audit log for errors:**
    ```bash
    jq 'select(.action == "post_slack" and .status == "error")' \
-     .nightgauge/logs/automation.log
+     "$(nightgauge layout path logs automation.log)"
    ```
 
 ### Script Not Executing
@@ -546,7 +550,7 @@ automations:
 
 3. **Check audit log:**
    ```bash
-   jq 'select(.action == "run_script")' .nightgauge/logs/automation.log
+   jq 'select(.action == "run_script")' "$(nightgauge layout path logs automation.log)"
    ```
 
 ### Dry-Run Mode Stuck

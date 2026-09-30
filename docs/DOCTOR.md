@@ -650,9 +650,9 @@ reached the ledger. Manual `restart`: restart it with
 `warning`.
 
 The check's detail line always reports each log directory's size (the clone's
-`.nightgauge/logs/` and the machine state `logs/`) and the caps in effect:
-machine-tier `pipeline.logs.max_size_mb` (default 200) and
-`pipeline.logs.max_age_days` (default 30). Retention runs at `nightgauge serve`
+logs directory, `nightgauge layout path logs`, and the machine state `logs/`)
+and the caps in effect: machine-tier `pipeline.logs.max_size_mb` (default 200)
+and `pipeline.logs.max_age_days` (default 30). Retention runs at `nightgauge serve`
 start, daily while it runs, and at CLI start once a day. Over the cap with files
 retention may delete (`housekeeping`): manual `prune`, run
 `nightgauge logs prune`. Over the cap with only live files, files written in the

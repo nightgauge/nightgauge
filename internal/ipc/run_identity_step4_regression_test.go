@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -180,9 +181,9 @@ func snapshotFingerprint(t *testing.T, dir string) string {
 // successor's registry entry or its file. The bare-issue delete this replaces
 // could and did.
 func TestRunIdentity_TerminalDeleteIsIdentityChecked(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 
 	const (
 		repo  = "acme/platform"
@@ -226,9 +227,9 @@ func TestRunIdentity_TerminalDeleteIsIdentityChecked(t *testing.T) {
 // richer by one stage, which the history layer accepts as an upgrade —
 // replacing the correct authoritative entry with a zombie's outcome.
 func TestRunIdentity_TerminalSnapshotIsNeverRehydrated(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 
 	const (
 		repo  = "acme/platform"
@@ -270,17 +271,17 @@ func TestRunIdentity_TerminalSnapshotIsNeverRehydrated(t *testing.T) {
 // persisted repo could otherwise leave the real file behind while deleting
 // nothing.
 func TestRunIdentity_TerminalRemovalUsesSnapshotRepo(t *testing.T) {
-	launch := t.TempDir()
-	rootA := t.TempDir()
-	rootB := t.TempDir()
+	launch := layouttest.Repo(t)
+	rootA := layouttest.Repo(t)
+	rootB := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(launch))
 	s.RegisterRepo("acme", "alpha", rootA)
 	s.RegisterRepo("acme", "beta", rootB)
 
 	const issue = 815
 	runID := newTestRunID()
-	dirA := filepath.Join(rootA, ".nightgauge", "pipeline")
-	dirB := filepath.Join(rootB, ".nightgauge", "pipeline")
+	dirA := layouttest.PipelineDir(t, rootA)
+	dirB := layouttest.PipelineDir(t, rootB)
 
 	// The run belongs to repo A and persists there.
 	mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
@@ -333,7 +334,7 @@ func TestRunIdentity_TerminalRemovalUsesSnapshotRepo(t *testing.T) {
 //     mutated the run — a foreign, already-closed run — before discovering it
 //     had no claim to make.
 func TestRunIdentity_ExecutionPathReplayIsInsideTheClaim(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
 	const (
 		repo  = "acme/platform"
@@ -369,7 +370,7 @@ func TestRunIdentity_ExecutionPathReplayIsInsideTheClaim(t *testing.T) {
 	}
 
 	// --- The claim itself, white-box ---------------------------------------
-	s2 := NewServer(nil, WithWorkspaceRoot(t.TempDir()))
+	s2 := NewServer(nil, WithWorkspaceRoot(layouttest.Repo(t)))
 	runID2 := newTestRunID()
 	mustCall(t, s2, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
 		Repo: repo, IssueNumber: issue, Stage: "pr-create", Status: "running", RunID: runID2,
@@ -433,9 +434,9 @@ func TestRunIdentity_ExecutionPathReplayIsInsideTheClaim(t *testing.T) {
 // with terminal:false and the full history, which the reconciler then
 // double-terminals and which adoption rehydrates after any restart.
 func TestRunIdentity_InFlightPersistCannotResurrect(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 	const (
 		repo  = "acme/platform"
 		issue = 927
@@ -484,9 +485,9 @@ func TestRunIdentity_InFlightPersistCannotResurrect(t *testing.T) {
 	// (ErrRunSealed, nothing written). Only an implementation that let the write
 	// escape rs.mu — marshal under the lock, write outside it — can drop a stale
 	// non-terminal byte slice after the removal (F27).
-	raceRoot := t.TempDir()
+	raceRoot := layouttest.Repo(t)
 	rs := NewServer(nil, WithWorkspaceRoot(raceRoot))
-	raceDir := filepath.Join(raceRoot, ".nightgauge", "pipeline")
+	raceDir := layouttest.PipelineDir(t, raceRoot)
 	raceID := newTestRunID()
 
 	mustCall(t, rs, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
@@ -562,9 +563,9 @@ func TestRunIdentity_ClosedRunIsRefusedOnEveryRunProgressMethod(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.method, func(t *testing.T) {
-			root := t.TempDir()
+			root := layouttest.Repo(t)
 			s := NewServer(nil, WithWorkspaceRoot(root))
-			stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+			stateDir := layouttest.PipelineDir(t, root)
 			runID := newTestRunID()
 
 			mustCall(t, s, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
@@ -595,9 +596,9 @@ func TestRunIdentity_ClosedRunIsRefusedOnEveryRunProgressMethod(t *testing.T) {
 // duplicate whose TERMINAL SNAPSHOT SURVIVED is still run_closed — because the
 // durable marker, not the ring, is the authority.
 func TestRunIdentity_ClosedRunsEvictionFallsBackToTheDurableMarker(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 	const (
 		repo  = "acme/platform"
 		issue = 1024
@@ -652,9 +653,9 @@ func TestRunIdentity_ClosedRunsEvictionFallsBackToTheDurableMarker(t *testing.T)
 	// dedup) — it costs one spurious pipeline_done and nothing else.
 	// A fresh root so the history assertions below see this run's records only:
 	// the history directory is the dedup coordinator's key.
-	lateRoot := t.TempDir()
+	lateRoot := layouttest.Repo(t)
 	late := NewServer(nil, WithWorkspaceRoot(lateRoot))
-	lateDir := filepath.Join(lateRoot, ".nightgauge", "pipeline")
+	lateDir := layouttest.PipelineDir(t, lateRoot)
 	gone := newTestRunID()
 
 	mustCall(t, late, "pipeline.notifyStageTransition", PipelineNotifyStageTransitionParams{
@@ -725,9 +726,9 @@ func TestRunIdentity_ClosedRunsEvictionFallsBackToTheDurableMarker(t *testing.T)
 // unique on its own and repo is a component of the INDEX key, not of the
 // identity.
 func TestRunIdentity_CrossRepoSameIssueNumberDoNotCollide(t *testing.T) {
-	launch := t.TempDir()
-	rootA := t.TempDir()
-	rootB := t.TempDir()
+	launch := layouttest.Repo(t)
+	rootA := layouttest.Repo(t)
+	rootB := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(launch))
 	s.RegisterRepo("acme", "alpha", rootA)
 	s.RegisterRepo("acme", "beta", rootB)
@@ -760,10 +761,10 @@ func TestRunIdentity_CrossRepoSameIssueNumberDoNotCollide(t *testing.T) {
 	if len(othersA) != 0 || len(othersB) != 0 {
 		t.Errorf("an issue-addressed lookup crossed repos: othersA=%v othersB=%v", othersA, othersB)
 	}
-	if _, err := os.Stat(filepath.Join(rootA, ".nightgauge", "pipeline", state.SnapshotFilename(issue, runA))); err != nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, rootA), state.SnapshotFilename(issue, runA))); err != nil {
 		t.Errorf("repo A's snapshot missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(rootB, ".nightgauge", "pipeline", state.SnapshotFilename(issue, runB))); err != nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, rootB), state.SnapshotFilename(issue, runB))); err != nil {
 		t.Errorf("repo B's snapshot missing: %v", err)
 	}
 	if currentA.rs.TotalCostUSD != 0 {
@@ -776,7 +777,7 @@ func TestRunIdentity_CrossRepoSameIssueNumberDoNotCollide(t *testing.T) {
 // FirstSeen is not self-correcting — a wedged run that adopts before a live one
 // stays current for the rest of the live run's life (F12 through the index).
 func TestRunIdentity_IssueIndexRanksOnLastSeen(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
 	const (
 		repo  = "acme/platform"
@@ -811,7 +812,7 @@ func TestRunIdentity_IssueIndexRanksOnLastSeen(t *testing.T) {
 // issue has more than one run, the other run ids — so a caller can tell it is
 // looking at one of several.
 func TestRunIdentity_GetStateResolvesThroughTheIndexAndNamesTheRun(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
 	s.RegisterRepo("acme", "platform", root)
 	const issue = 733
@@ -862,7 +863,7 @@ func TestRunIdentity_GetStateResolvesThroughTheIndexAndNamesTheRun(t *testing.T)
 // is better than a confidently wrong one, and it is an EMPTY RESPONSE, not an
 // error — getState is lookup class.
 func TestRunIdentity_GetStateAnswersNothingRatherThanWrongly(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
 	s.RegisterRepo("acme", "platform", root)
 
@@ -892,7 +893,7 @@ func TestRunIdentity_GetStateAnswersNothingRatherThanWrongly(t *testing.T) {
 // would hold a lease, never be terminal-claimed (the scheduler path never calls
 // notifyComplete), leak for the life of the server, and win the index.
 func TestRunIdentity_SchedulerRunIsServedNotAdopted(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
 	fake := newFakeSchedulerRuns()
 	s.schedulerRuns = fake
@@ -931,7 +932,7 @@ func TestRunIdentity_SchedulerRunIsServedNotAdopted(t *testing.T) {
 // registered runtime for that issue records NOTHING in that runtime's
 // PhaseHistory.
 func TestRunIdentity_PhaseTransitionSchedulerArmIsIdentityGated(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
 	fake := newFakeSchedulerRuns()
 	s.schedulerRuns = fake
@@ -983,7 +984,7 @@ func TestRunIdentity_PhaseTransitionSchedulerArmIsIdentityGated(t *testing.T) {
 // The abandonRun leg of this test arrives with ADR-017 step 6, when the verb
 // exists.
 func TestRunIdentity_TerminalVerbAgainstSchedulerRunIsRefused(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
 	fake := newFakeSchedulerRuns()
 	s.schedulerRuns = fake
@@ -1003,10 +1004,10 @@ func TestRunIdentity_TerminalVerbAgainstSchedulerRunIsRefused(t *testing.T) {
 	if schedRun.Terminal {
 		t.Error("an IPC terminal verb latched a scheduler-owned run")
 	}
-	if entries, _ := os.ReadDir(filepath.Join(root, ".nightgauge", "pipeline")); len(entries) != 0 {
+	if entries, _ := os.ReadDir(layouttest.PipelineDir(t, root)); len(entries) != 0 {
 		t.Errorf("a refused terminal verb wrote %d file(s) into the state dir", len(entries))
 	}
-	if _, err := os.Stat(filepath.Join(root, ".nightgauge", "pipeline", "history")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, root), "history")); !os.IsNotExist(err) {
 		t.Errorf("a refused terminal verb wrote a history record; stat = %v", err)
 	}
 }
@@ -1022,7 +1023,7 @@ func TestRunIdentity_TerminalVerbAgainstSchedulerRunIsRefused(t *testing.T) {
 // operator's pause on the copy the scheduler never reads. A test asserting
 // only "no error" would pass against exactly that defect.
 func TestRunIdentity_SetPausedReachesSchedulerOwnedRun(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
 	fake := newFakeSchedulerRuns()
 	s.schedulerRuns = fake
@@ -1073,9 +1074,9 @@ func TestRunIdentity_SetPausedReachesSchedulerOwnedRun(t *testing.T) {
 // server_runtime_persist_test.go) an unknown id WITH a snapshot adopts it
 // through the singleflight with its lease left at zero.
 func TestRunIdentity_SetPausedNeverInventsARuntime(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 	const (
 		repo  = "acme/platform"
 		issue = 918
@@ -1125,9 +1126,9 @@ func TestRunIdentity_SetPausedNeverInventsARuntime(t *testing.T) {
 // pausing one run. It is accepted without an identity and touches nothing:
 // no registry, no runtime, no disk, no event. (Retarget tracked in #423.)
 func TestRunIdentity_SetPausedGlobalArmTouchesNothing(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 
 	mustCall(t, s, "pipeline.setPaused", PipelineSetPausedParams{IssueNumber: 0, Paused: true})
 	mustCall(t, s, "pipeline.setPaused", PipelineSetPausedParams{IssueNumber: 0, Paused: false})
@@ -1155,9 +1156,9 @@ func TestRunIdentity_SetPausedGlobalArmTouchesNothing(t *testing.T) {
 // mutating an orphan whose Persist targets the SAME filename — same-run field
 // loss inside one process.
 func TestRunIdentity_ConcurrentAdoptionYieldsOneRuntime(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 	const (
 		repo  = "acme/platform"
 		issue = 3030
@@ -1237,9 +1238,9 @@ func TestRunIdentity_AdministrativeResolutionInstallsAnEntryWithoutVouching(t *t
 	)
 
 	// --- The resolution itself: one entry, installed, not vouched for. -----
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 	runID := newTestRunID()
 
 	seeded := state.NewRuntimeState(repo, issue, "", runID)
@@ -1280,9 +1281,9 @@ func TestRunIdentity_AdministrativeResolutionInstallsAnEntryWithoutVouching(t *t
 	// carries no lease stamp to mistake for liveness.
 
 	// --- F33 under concurrency: one runtime, and no stage is lost. ---------
-	raceRoot := t.TempDir()
+	raceRoot := layouttest.Repo(t)
 	rs := NewServer(nil, WithWorkspaceRoot(raceRoot))
-	raceDir := filepath.Join(raceRoot, ".nightgauge", "pipeline")
+	raceDir := layouttest.PipelineDir(t, raceRoot)
 	raceID := newTestRunID()
 
 	raceSeed := state.NewRuntimeState(repo, issue, "", raceID)
@@ -1367,9 +1368,9 @@ func TestRunIdentity_AdministrativeResolutionInstallsAnEntryWithoutVouching(t *t
 // the run has no history and would let its next Persist overwrite the
 // unreadable-but-present file with a thinner one.
 func TestRunIdentity_UnreadableSnapshotIsRefusedNotAdoptedEmpty(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 	const (
 		repo  = "acme/platform"
 		issue = 4404
@@ -1425,7 +1426,7 @@ func TestRunIdentity_UnreadableSnapshotIsRefusedNotAdoptedEmpty(t *testing.T) {
 // `len(candidates) == 0` and this test exercises exactly one of its three
 // phases while claiming all of them.
 func TestRunIdentity_ClaimSequenceIsDeadlockFree(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
 	const (
 		repo    = "acme/platform"

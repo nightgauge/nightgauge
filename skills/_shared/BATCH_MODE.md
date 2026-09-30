@@ -11,11 +11,12 @@ on disk.
 
 An epic whose sub-issues touch overlapping files can be run once instead of N
 times. `/nightgauge-assess-epic` makes that call and writes
-`.nightgauge/pipeline/epic-assessment-{E}.json` with a `strategy` of
-`parallel`, `mixed`, or `sequential`. When the pipeline acts on a `parallel`
-(or the independent part of a `mixed`) assessment, it carries **one shared
-feature branch and one PR for the whole group**, and each stage writes a batch
-context file alongside — never instead of — its normal single-issue output.
+`epic-assessment-{E}.json` to the clone's pipeline state directory with a
+`strategy` of `parallel`, `mixed`, or `sequential`. When the pipeline acts on a
+`parallel` (or the independent part of a `mixed`) assessment, it carries **one
+shared feature branch and one PR for the whole group**, and each stage writes a
+batch context file alongside — never instead of — its normal single-issue
+output.
 
 **The batch key is the EPIC number `E`, never a sub-issue number.** Every batch
 context file is keyed on it and the shared branch is named for it. A stage that
@@ -33,7 +34,10 @@ never look for, and the batch silently degrades to a single issue.
 | `pr-create`        | `dev-batch-{E}.json`                | `pr-{E}.json`                     |
 | `pr-merge`         | `dev-batch-{E}.json`, `pr-{E}.json` | — (removes all five, in Step 7.8) |
 
-All paths are relative to `.nightgauge/pipeline/`. `batch-{E}.json`,
+All files live in the clone's pipeline state directory
+(`nightgauge layout path pipeline`): read them at
+`$(nightgauge layout path pipeline <file>)` and write them with
+`nightgauge layout write pipeline <file>`. `batch-{E}.json`,
 `planning-batch-{E}.json` and `dev-batch-{E}.json` have explicit schemas — every
 field, every required key, worked examples — in `docs/CONTEXT_ARCHITECTURE.md`
 under the batch context file sections. `validate-{E}.json` and `pr-{E}.json`
@@ -61,7 +65,7 @@ Resolve `E`, test for this stage's batch input, and branch:
 ```bash
 # E is the epic number: `.parent_issue` from the issue context when this stage
 # has one, otherwise the leading number in the branch name.
-BATCH_INPUT=".nightgauge/pipeline/<this stage's batch input, from the table above>"
+BATCH_INPUT="$(nightgauge layout path pipeline <this stage's batch input, from the table above>)"
 if [ -f "$BATCH_INPUT" ]; then
   BATCH_MODE=true
 else

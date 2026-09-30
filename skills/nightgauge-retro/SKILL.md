@@ -134,12 +134,16 @@ autonomous decisions or fail with clear error.
 
 ## Data Sources
 
-| Source            | Location                                      | What It Provides                                                   |
-| ----------------- | --------------------------------------------- | ------------------------------------------------------------------ |
-| Session Logs      | `.nightgauge/logs/YYYY-MM-DD_NNN_session.log` | Timestamped stage events, error messages, token budget warnings    |
-| Pipeline Context  | `.nightgauge/pipeline/{stage}-{N}.json`       | Per-issue stage outputs, test results, validation status           |
-| Batch State       | `.nightgauge/pipeline/batch-state.json`       | Per-issue completion status, failed stages, token usage per run    |
-| Execution History | `.nightgauge/pipeline/history/*.jsonl`        | Structured per-run records with outcome, stage statuses, durations |
+| Source            | Location                          | What It Provides                                                   |
+| ----------------- | --------------------------------- | ------------------------------------------------------------------ |
+| Session Logs      | `logs/YYYY-MM-DD_NNN_session.log` | Timestamped stage events, error messages, token budget warnings    |
+| Pipeline Context  | `pipeline/{stage}-{N}.json`       | Per-issue stage outputs, test results, validation status           |
+| Batch State       | `pipeline/batch-state.json`       | Per-issue completion status, failed stages, token usage per run    |
+| Execution History | `pipeline/history/*.jsonl`        | Structured per-run records with outcome, stage statuses, durations |
+
+Locations are relative to the clone's per-clone class directories; resolve one
+with `nightgauge layout path <class> [name]` (for example
+`nightgauge layout path pipeline batch-state.json`).
 
 Each data source is optional. The skill analyzes whatever is available and notes
 which sources were absent in the output report.
@@ -219,9 +223,9 @@ absent or `--all-failures` is passed, fall back to date-based scope using
 `--period` or `--since`:
 
 ```bash
-LOGS_DIR=".nightgauge/logs"
-PIPELINE_DIR=".nightgauge/pipeline"
-HISTORY_DIR=".nightgauge/pipeline/history"
+LOGS_DIR="$(nightgauge layout path logs)"
+PIPELINE_DIR="$(nightgauge layout path pipeline)"
+HISTORY_DIR="$(nightgauge layout path pipeline history)"
 BATCH_STATE="${PIPELINE_DIR}/batch-state.json"
 
 SCOPE="batch"
@@ -250,7 +254,7 @@ fi
 KNOWLEDGE_PATH=""
 if [ -n "$ISSUE_FILTER" ]; then
   KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' \
-    ".nightgauge/pipeline/issue-${ISSUE_FILTER}.json" 2>/dev/null)
+    "$(nightgauge layout path pipeline issue-${ISSUE_FILTER}.json)" 2>/dev/null)
   # Auto-detect: if knowledge_path is set, record outcome even without flag
   if [ -n "$KNOWLEDGE_PATH" ]; then
     RECORD_OUTCOME=true
@@ -273,9 +277,9 @@ row B29).
 
 Replaces the previous inline-Python parsers for batch state (old Phase 2.1),
 execution history (old Phase 2.2), and context-files fallback (old Phase 2.4).
-The binary reads `.nightgauge/pipeline/batch-state.json`,
-`.nightgauge/pipeline/history/*.jsonl`, and the `issue-*.json` /
-`pr-*.json` set in one call, emitting a stable v1 JSON schema.
+The binary reads `batch-state.json`, `history/*.jsonl`, and the `issue-*.json` /
+`pr-*.json` set from the clone's pipeline state directory
+(`nightgauge layout path pipeline`) in one call, emitting a stable v1 JSON schema.
 
 ```bash
 ALL_FAILURES_FLAG=""
@@ -534,8 +538,10 @@ Assemble the full retro report:
 }
 ```
 
-If `--format json` or `--format both`, write to
-`.nightgauge/pipeline/retro-report-YYYY-MM-DD.json`.
+If `--format json` or `--format both`, write it with
+`nightgauge layout write pipeline retro-report-YYYY-MM-DD.json` (content on
+stdin, or `--from FILE` after writing a temp file outside the git directory);
+the command prints the path it wrote.
 
 #### Step 6.2: Human-Readable Summary
 
@@ -598,7 +604,7 @@ RECOVERY GUIDANCE
 ESTIMATED RECOVERY EFFORT: 1 medium code fix + 1 low-effort config change
 
 ───────────────────────────────────────────────────────────
-Report saved: .nightgauge/pipeline/retro-report-2026-02-21.json
+Report saved: <pipeline dir>/retro-report-2026-02-21.json
 Run with --create-issues to auto-create GitHub issues for findings.
 Next: /nightgauge:retro --create-issues --severity medium
 ```
@@ -759,7 +765,8 @@ model_routing:
 - **Primary action**: Manual investigation with log file references
 - **No config snippet**
 - **Recovery command**: Review session log at
-  `.nightgauge/logs/<date>_<issue>_session.log`
+  `<date>_<issue>_session.log` in the clone's logs directory
+  (`nightgauge layout path logs`)
 
 #### Step 7.3: Generate Recovery Guidance
 
@@ -957,7 +964,7 @@ When `ISSUE_FILTER` is set and `RECORD_OUTCOME=true`:
 ISSUE_NUMBER="${ISSUE_FILTER}"
 
 # Load outcome metrics from dev context (best-effort)
-DEV_CONTEXT=".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json"
+DEV_CONTEXT="$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)"
 PIPELINE_DURATION_MINS=0
 TOTAL_TOKENS=0
 ESTIMATED_COST_USD=0
@@ -1044,7 +1051,7 @@ Read the merged PR URL out of the PR context file first, when it exists, so
 the entry cites what confirmed it:
 
 ```bash
-PR_CONTEXT=".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json"
+PR_CONTEXT="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
 PR_URL=""
 if [ -f "$PR_CONTEXT" ]; then
   PR_URL=$(jq -r '.pr_url // empty' "$PR_CONTEXT")
@@ -1086,8 +1093,9 @@ with all sub-issues complete.
 EPIC_NUMBER="${ARG_EPIC:-}"
 
 # Auto-detect epic if not specified
-if [ -z "$EPIC_NUMBER" ] && [ -f ".nightgauge/pipeline/batch-state.json" ]; then
-  EPIC_NUMBER=$(jq -r '.epic_number // empty' .nightgauge/pipeline/batch-state.json 2>/dev/null)
+BATCH_STATE="$(nightgauge layout path pipeline batch-state.json)"
+if [ -z "$EPIC_NUMBER" ] && [ -f "$BATCH_STATE" ]; then
+  EPIC_NUMBER=$(jq -r '.epic_number // empty' "$BATCH_STATE" 2>/dev/null)
 fi
 
 if [ -z "$EPIC_NUMBER" ]; then
@@ -1096,12 +1104,12 @@ else
   echo "Running post-epic synthesis for epic #$EPIC_NUMBER..."
 
   # Collect all assessment records for this epic's sub-issues
-  ASSESSMENT_DIR=".nightgauge/pipeline/assessments"
-  RETRO_DIR=".nightgauge/retros"
-  HISTORY_DIR=".nightgauge/pipeline/history"
+  ASSESSMENT_DIR="$(nightgauge layout path pipeline assessments)"
+  RETRO_DIR="$(nightgauge layout path retros)"
+  HISTORY_DIR="$(nightgauge layout path pipeline history)"
 
   # Get sub-issue numbers from batch state or GitHub
-  SUB_ISSUES=$(jq -r '.issues[]?.number // empty' .nightgauge/pipeline/batch-state.json 2>/dev/null)
+  SUB_ISSUES=$(jq -r '.issues[]?.number // empty' "$BATCH_STATE" 2>/dev/null)
   if [ -z "$SUB_ISSUES" ]; then
     REPO="${NIGHTGAUGE_REPO:-$(nightgauge git repo-slug)}"
     SUB_ISSUES=$(nightgauge forge issue view "$EPIC_NUMBER" --repo "$REPO" --json 2>/dev/null | \
@@ -1224,11 +1232,9 @@ if [ -n "$EPIC_NUMBER" ] && [ -n "$SYNTHESIS_RESULT" ]; then
       Fix: \(.suggested_fix // "No suggestion")\n"'
 
     # Write synthesis to assessments dir for dashboard consumption
-    SYNTHESIS_FILE="$ASSESSMENT_DIR/synthesis-epic-${EPIC_NUMBER}.json"
-    mkdir -p "$ASSESSMENT_DIR"
-    printf '%s\n' "$SYNTHESIS_RESULT" | jq --arg epic "$EPIC_NUMBER" \
+    SYNTHESIS_FILE=$(printf '%s\n' "$SYNTHESIS_RESULT" | jq --arg epic "$EPIC_NUMBER" \
       '. + {"epic_number": ($epic | tonumber), "synthesized_at": (now | todate)}' \
-      > "$SYNTHESIS_FILE"
+      | nightgauge layout write pipeline "assessments/synthesis-epic-${EPIC_NUMBER}.json")
     echo "Synthesis written to: $SYNTHESIS_FILE"
   else
     echo "No recurring friction patterns detected across epic #$EPIC_NUMBER sub-issues."
@@ -1266,7 +1272,8 @@ ${FIX}
 ## Evidence
 
 Detected by self-assessment epilogues across multiple pipeline runs.
-See \`.nightgauge/pipeline/assessments/synthesis-epic-${EPIC_NUMBER}.json\` for details.
+See \`assessments/synthesis-epic-${EPIC_NUMBER}.json\` in the clone's pipeline state directory
+(\`nightgauge layout path pipeline\`) for details.
 
 ---
 *Auto-created by /nightgauge:retro --epic ${EPIC_NUMBER} --create-issues*"
@@ -1389,16 +1396,17 @@ UTILITIES (not part of main pipeline)
        ↑
   Use after batch runs or periodically to triage failures
   Also records outcome data to knowledge base when knowledge_path is set
-  Reads:  .nightgauge/logs/*_session.log
-  Reads:  .nightgauge/pipeline/batch-state.json
-  Reads:  .nightgauge/pipeline/history/*.jsonl
-  Reads:  .nightgauge/pipeline/{stage}-{N}.json
-  Reads:  .nightgauge/pipeline/issue-{N}.json (for knowledge_path)
-  Reads:  .nightgauge/pipeline/pr-{N}.json (for pr_url, recorded as a source)
-  Reads:  .nightgauge/pipeline/assessments/*.json (--epic, --skill-feedback)
-  Reads:  .nightgauge/retros/*_retro.json (--epic cross-issue aggregation)
-  Writes: .nightgauge/pipeline/retro-report-YYYY-MM-DD.json (optional)
-  Writes: .nightgauge/pipeline/assessments/synthesis-epic-{N}.json (--epic)
+  (class paths resolve with `nightgauge layout path <class>`)
+  Reads:  logs/*_session.log
+  Reads:  pipeline/batch-state.json
+  Reads:  pipeline/history/*.jsonl
+  Reads:  pipeline/{stage}-{N}.json
+  Reads:  pipeline/issue-{N}.json (for knowledge_path)
+  Reads:  pipeline/pr-{N}.json (for pr_url, recorded as a source)
+  Reads:  pipeline/assessments/*.json (--epic, --skill-feedback)
+  Reads:  retros/*_retro.json (--epic cross-issue aggregation)
+  Writes: pipeline/retro-report-YYYY-MM-DD.json (optional, via layout write)
+  Writes: pipeline/assessments/synthesis-epic-{N}.json (--epic, via layout write)
   Writes: {knowledge_path}/decisions.md (when knowledge_path set)
   Creates: GitHub issues via nightgauge forge issue create (--create-issues only)
 ```

@@ -435,7 +435,7 @@ This prevents wasted effort on the wrong approach.
 /nightgauge-feature-dev
 
 # Or specify a plan file
-/nightgauge-feature-dev --plan .nightgauge/plans/42-photo-upload.md
+/nightgauge-feature-dev --plan "$(nightgauge layout path plans 42-photo-upload.md)"
 ```
 
 ### 4.2 Implementation Process

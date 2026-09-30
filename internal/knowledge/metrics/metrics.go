@@ -178,7 +178,10 @@ func AggregateAt(workspaceRoot string, windowDays, staleDays int, now time.Time)
 	// trust distribution there would be wrong rather than merely unhelpful.
 	scanLifecycle(workspaceRoot, &result, now)
 
-	path := telemetry.Path(workspaceRoot)
+	path, err := telemetry.Path(workspaceRoot)
+	if err != nil {
+		return result, err
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {

@@ -6,6 +6,8 @@ import {
   CliPipelineReconciliationService,
   type ReconciledCliRun,
 } from "../../src/services/CliPipelineReconciliationService";
+import { pipelineStateDir } from "../../src/utils/cloneLayout";
+import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 const tempRoots: string[] = [];
 
@@ -30,7 +32,7 @@ async function fixture(
 ): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "nightgauge-cli-run-"));
   tempRoots.push(root);
-  const stateDir = path.join(root, ".nightgauge", "pipeline");
+  const stateDir = mkFakeCloneLayout(root).pipeline;
   await mkdir(stateDir, { recursive: true });
   await writeFile(
     path.join(stateDir, "current-run.json"),
@@ -151,7 +153,7 @@ describe("CliPipelineReconciliationService", () => {
     );
     await service.scan();
     await service.scan();
-    await rm(path.join(root, ".nightgauge", "pipeline", "current-run.json"));
+    await rm(path.join(pipelineStateDir(root), "current-run.json"));
     await service.scan();
 
     expect(events.discovered).toHaveLength(1);
@@ -214,7 +216,7 @@ describe("CliPipelineReconciliationService", () => {
     const runId = runIdFor(372);
     const root = await mkdtemp(path.join(tmpdir(), "nightgauge-cli-run-"));
     tempRoots.push(root);
-    const stateDir = path.join(root, ".nightgauge", "pipeline");
+    const stateDir = mkFakeCloneLayout(root).pipeline;
     await mkdir(stateDir, { recursive: true });
     // Sidecar from the NEW binary…
     await writeFile(

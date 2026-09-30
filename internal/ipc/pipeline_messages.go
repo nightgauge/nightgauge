@@ -149,7 +149,7 @@ type StageResultParams struct {
 	// the subprocess signal/source, the live stderr tail, the last Bash
 	// tool_use, and the stop-hook stream notification. These are forwarded
 	// verbatim through pipeline.stageResult so Go's scheduler can persist
-	// them in .nightgauge/pipeline/exit-records/<day>.jsonl alongside
+	// them in .git/nightgauge/pipeline/exit-records/<day>.jsonl alongside
 	// the data the Go side already knows (rate-limit reading, concurrent
 	// sibling pipelines). All fields are optional — absent fields are not
 	// written to the record so healthy runs stay terse.

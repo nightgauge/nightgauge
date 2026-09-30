@@ -11,8 +11,9 @@
 > `.nightgauge/complexity-model.yaml`, success-only, driven by pipeline
 > completion). The **learning/calibration
 > corpus** is a separate, Go-owned system
-> (`internal/intelligence/learning.Recorder` →
-> `.nightgauge/pipeline/history/outcomes.jsonl`) that feeds the self-improvement
+> (`internal/intelligence/learning.Recorder` → `history/outcomes.jsonl` in the
+> clone's pipeline state directory, `nightgauge layout path pipeline`) that
+> feeds the self-improvement
 > loop verdicts and `nightgauge learn tune` — see
 > [SELF_IMPROVEMENT_LOOP.md § Outcome Recording](SELF_IMPROVEMENT_LOOP.md#outcome-recording).
 > Assuming one covers the other is exactly how the extension path went years
@@ -69,7 +70,8 @@ because it keys on the row count the polite consumers ignore.
 
 ### The model pair's vocabulary (#340)
 
-The learning corpus (`.nightgauge/pipeline/history/outcomes.jsonl`) stores
+The learning corpus (`history/outcomes.jsonl` in the clone's pipeline state
+directory, `nightgauge layout path pipeline`) stores
 `predictedModel` / `actualModel`, and every consumer compares them for
 **equality**. Both halves are therefore registry **bands**
 (`haiku|sonnet|opus|fable`) and nothing else — a reference the registry has no
@@ -162,7 +164,8 @@ band vocabulary was retired (epic #567), and the decision is **accept-void** —
 no alias tables, no backfill, no migration code, ever (the pre-customer
 no-compat rule in `AGENTS.md`):
 
-- **Learning corpus** (`.nightgauge/pipeline/history/outcomes.jsonl`): rows
+- **Learning corpus** (`history/outcomes.jsonl` in the pipeline state
+  directory): rows
   written before the dispatch-envelope cutover carry no `schema_version`
   marker and no effort/thinking axes — those axes were never recorded and
   cannot be reconstructed, so a backfill would fabricate data and an alias
@@ -175,7 +178,7 @@ no-compat rule in `AGENTS.md`):
   provenance is deterministic rather than vocabulary-sniffed; an unmarked
   row IS a pre-cutover row.
 - **Run-record history** (per-stage `model_selection` in
-  `.nightgauge/pipeline/history/`): pre-envelope records hold bare band
+  the pipeline state directory's `history/`): pre-envelope records hold bare band
   strings in `model_selection.model`. They are operator forensics, not
   learning inputs — they stay readable as-is and are never rewritten. New
   records carry the full dispatch envelope `(model, effort, thinking)` plus
@@ -695,7 +698,7 @@ this tree **forward-only** (the old flat per-stage event shape is deleted):
   efficiency, and the native-vs-fanout per-run cost delta (only once **both**
   backends have ≥1 run).
 - **`PostPipelineAnalyzer`** (VSCode) reads the durable
-  `.nightgauge/pipeline/workflow-*.jsonl` journals via
+  `workflow-*.jsonl` journals in the clone's pipeline state directory via
   `readWorkflowJournals()`, folds them, and surfaces the
   `WorkflowCalibrationSignal` on its analysis result + self-check output.
 - The **learning-effectiveness health dimension** consumes the signal

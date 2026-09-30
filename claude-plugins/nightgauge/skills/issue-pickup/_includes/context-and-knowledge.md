@@ -23,9 +23,9 @@ Procedural detail for two adjacent phases:
 
 ## Step 8.1: Create Context Directory
 
-```bash
-mkdir -p .nightgauge/pipeline
-```
+Nothing to run: the context lives in the clone's pipeline state directory
+(`nightgauge layout path pipeline`), and `nightgauge layout write` creates it on
+the first write. Never create or write it by path.
 
 ## Step 8.2: Write issue-{N}.json inline
 
@@ -83,7 +83,7 @@ if [ -z "$ISSUE_JSON" ] || ! printf '%s\n' "$ISSUE_JSON" | jq -e . >/dev/null 2>
 fi
 
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
 
 TITLE="${TITLE:-$(printf '%s\n' "$ISSUE_JSON" | jq -r '.title // ""')}"
 LABELS_JSON=$(printf '%s\n' "$ISSUE_JSON" | jq -c '[.labels[].name]')
@@ -137,10 +137,10 @@ jq -n \
     dependency_analysis: null,
     knowledge_path: null,
     created_at: $created_at
-  }' > "$CONTEXT_FILE.tmp.$$"
-# Atomic write: a plain redirect truncates the file before jq writes it, so a
-# concurrent reader (the gate, loadFeatureBranch) could see it empty (#1904).
-mv "$CONTEXT_FILE.tmp.$$" "$CONTEXT_FILE"
+  }' | nightgauge layout write pipeline "issue-${ISSUE_NUMBER}.json" >/dev/null
+# Atomic write: `layout write` writes a temp file and renames it into place. A
+# plain redirect truncates the file before jq writes it, so a concurrent reader
+# (the gate, loadFeatureBranch) could see it empty (#1904).
 
 jq -e '.branch != "" and .title != ""' "$CONTEXT_FILE" > /dev/null && \
   echo "Context written: $CONTEXT_FILE (branch=$BRANCH_NAME)" || \
@@ -211,10 +211,11 @@ ROUTING_JSON=$(jq -n \
     estimated_time_minutes: 30
   }')
 
-CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
 tmp=$(mktemp)
-jq --argjson routing "$ROUTING_JSON" '.routing = $routing' "$CONTEXT_FILE" > "$tmp"
-mv "$tmp" "$CONTEXT_FILE"
+jq --argjson routing "$ROUTING_JSON" '.routing = $routing' "$CONTEXT_FILE" > "$tmp" &&
+  nightgauge layout write pipeline "issue-${ISSUE_NUMBER}.json" --from "$tmp" >/dev/null
+rm -f "$tmp"
 ```
 
 Set `change_type`, `complexity_score`, `suggested_route`, `rationale`, and
@@ -273,8 +274,9 @@ Also include `pickup_recommendation` with explicit stage skip recommendations
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-jq . ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" > /dev/null && \
-  echo "Context file written: .nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+jq . "$CONTEXT_FILE" > /dev/null && \
+  echo "Context file written: $CONTEXT_FILE"
 ```
 
 ## Step 8.6: Signal Stage Complete
@@ -310,7 +312,7 @@ fi
 Repository: <owner/repo>
 Issue:      #<number> - <title>
 Branch:     <branch-name>
-Context:    .nightgauge/pipeline/issue-<number>.json
+Context:    <nightgauge layout path pipeline issue-<number>.json>
 
 START A NEW CONVERSATION and run: /nightgauge:feature-planning
 

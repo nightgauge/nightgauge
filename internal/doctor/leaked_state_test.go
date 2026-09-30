@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
@@ -56,6 +57,16 @@ func (r *leakRepo) write(name, content string) {
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		r.t.Fatalf("mkdir: %v", err)
 	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		r.t.Fatalf("write %s: %v", name, err)
+	}
+}
+
+// writePipeline writes name into the clone's pipeline state directory, where
+// the run sidecars live (ADR-024 § 7).
+func (r *leakRepo) writePipeline(name, content string) {
+	r.t.Helper()
+	full := filepath.Join(layouttest.MkPipelineDir(r.t, r.dir), name)
 	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		r.t.Fatalf("write %s: %v", name, err)
 	}

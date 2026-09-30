@@ -648,10 +648,10 @@ else:
 
 - **`architecture_approval_required`** — the approval label on the issue
   (`pipeline.architecture_approval.approval_label`, default
-  `approved:architecture`), or `.nightgauge/pipeline/approval-<n>.json`
-  carrying `{"approved": true}`. These are precisely the two grants
-  `nightgauge approval-gate` itself reads, so the reconcile and the gate cannot
-  disagree about whether a human approved. An `autonomous resume` deliberately
+  `approved:architecture`), or `approval-<n>.json` in the pipeline state
+  directory (`nightgauge layout path pipeline`) carrying `{"approved": true}`.
+  These are precisely the two grants `nightgauge approval-gate` itself reads, so
+  the reconcile and the gate cannot disagree about whether a human approved. An `autonomous resume` deliberately
   does **not** grant it: resume means "go again", not "I reviewed this
   architecture", and the gate would re-halt the run at the price of another
   planning lap.
@@ -1146,7 +1146,7 @@ halt data has one wire shape rather than two that can drift.
 
 - **A `blocked` terminal with a durable out-of-scope finding** (#1142/#1147).
   That run already classified itself, wrote
-  `.nightgauge/pipeline/blocked-findings/<issue>.json`, posted the issue
+  `blocked-findings/<issue>.json` in the pipeline state directory, posted the issue
   comment and raised its own card; pickup defers at zero cost on re-dispatch.
   There is nothing a human triages by also freezing the queue. Keyed on the
   typed `outOfScopeFinding` flag — the other producer of `blocked` (a
@@ -1208,8 +1208,9 @@ unattributable failure would let a real defect keep dispatching.
 ## Learning and Calibration: Where a Run's Size Comes From — #1515
 
 Every terminal run writes two things the self-improvement loop reads: the V2
-history record (`.nightgauge/pipeline/history/<date>.jsonl`) and the outcome
-corpus (`.nightgauge/pipeline/history/outcomes.jsonl`). Both carry the run's
+history record (`history/<date>.jsonl`) and the outcome corpus
+(`history/outcomes.jsonl`), both in the clone's pipeline state directory
+(`nightgauge layout path pipeline`). Both carry the run's
 **size**, and size is not a display field — it is the join key the pre-flight
 cost estimator matches historical runs on. A record written without it is
 unusable as calibration input, and the projection silently collapses back to

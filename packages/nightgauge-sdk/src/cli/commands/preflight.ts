@@ -8,13 +8,14 @@
  *
  * Reads the issue body (from --body-file or `gh issue view --json body`),
  * resolves the current `main` SHA via git, runs the rule library, and
- * writes `.nightgauge/pipeline/ac-reconcile-{N}.json`.
+ * writes `<git-common-dir>/nightgauge/pipeline/ac-reconcile-{N}.json`.
  *
  * Always exits 0 when reconciliation completes (the routing decision is up
  * to the caller). Exits non-zero only on hard failures (missing body,
  * invalid issue number, schema validation failure).
  */
 
+import { cloneClassDir } from "../../context/cloneLayout.js";
 import type { CAC } from "cac";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -77,7 +78,10 @@ export function registerPreflightCommand(cli: CAC): void {
   cli
     .command("preflight ac-reconcile <issue>", "Deterministic AC reconciliation (Issue #3003)")
     .option("--workdir <dir>", "Working directory (default: cwd)")
-    .option("--out <path>", "Output path (default: .nightgauge/pipeline/ac-reconcile-{N}.json)")
+    .option(
+      "--out <path>",
+      "Output path (default: $(nightgauge layout path pipeline ac-reconcile-{N}.json))"
+    )
     .option("--body-file <path>", "Read issue body from file instead of gh")
     .action(async (issueArg: string, options: PreflightOptions) => {
       const issueNumber = parseInt(issueArg, 10);
@@ -87,9 +91,15 @@ export function registerPreflightCommand(cli: CAC): void {
       }
 
       const workdir = path.resolve(options.workdir ?? process.cwd());
-      const outPath =
-        options.out ??
-        path.join(workdir, ".nightgauge", "pipeline", `ac-reconcile-${issueNumber}.json`);
+      let outPath: string;
+      try {
+        outPath =
+          options.out ??
+          path.join(cloneClassDir("pipeline", workdir), `ac-reconcile-${issueNumber}.json`);
+      } catch (err) {
+        console.error(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
 
       let body: string;
       try {

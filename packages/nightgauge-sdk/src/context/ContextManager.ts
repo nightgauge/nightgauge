@@ -18,10 +18,11 @@ import {
   type SubIssueFindings,
 } from "./schemas/epic-context.js";
 import { SchemaVersionMismatch } from "../errors/PipelineStateErrors.js";
+import { cloneClassDir } from "./cloneLayout.js";
 
 /**
  * Major.minor reader expectation for every context file under
- * .nightgauge/pipeline/. Bump the minor when adding optional fields;
+ * `<git-common-dir>/nightgauge/pipeline/` (`nightgauge layout path pipeline`). Bump the minor when adding optional fields;
  * bump the major when changing required fields incompatibly.
  *
  * @see docs/PIPELINE_STATE_SCHEMA.md
@@ -59,7 +60,8 @@ export class ContextValidationError extends Error {
  *
  * @example
  * ```typescript
- * const ctx = new ContextManager('.nightgauge/pipeline');
+ * // Defaults to the working directory's `<git-common-dir>/nightgauge/pipeline`.
+ * const ctx = new ContextManager();
  *
  * // Read and validate issue context
  * const issue = await ctx.read(IssueContextSchema, 'issue-42.json');
@@ -72,10 +74,20 @@ export class ContextValidationError extends Error {
  * ```
  */
 export class ContextManager {
-  private basePath: string;
+  private resolvedBasePath?: string;
 
-  constructor(basePath: string = ".nightgauge/pipeline") {
-    this.basePath = basePath;
+  /**
+   * @param basePath The pipeline context directory. Defaults to the pipeline
+   *   class directory of the working directory's repository
+   *   (`<git-common-dir>/nightgauge/pipeline`), resolved on first use; outside
+   *   a git repository that throws `NotAGitRepositoryError`.
+   */
+  constructor(basePath?: string) {
+    this.resolvedBasePath = basePath;
+  }
+
+  private get basePath(): string {
+    return (this.resolvedBasePath ??= cloneClassDir("pipeline"));
   }
 
   /**
@@ -399,7 +411,7 @@ export class ContextManager {
 /**
  * Atomic + fsync write contract: write-temp → fsync(file) → rename → fsync(parent dir)
  *
- * Used for every JSON write under .nightgauge/pipeline/. Guarantees that
+ * Used for every JSON write under the pipeline class directory. Guarantees that
  * a reader observes either the prior version or the new version — never
  * partial JSON, even on power loss between rename and the next disk flush.
  *

@@ -25,12 +25,13 @@ Your role is to merge the pull request for issue #{{issueNumber}} after all revi
 
 ## Responsibilities
 
-1. Read the PR context from `.nightgauge/pipeline/pr-{{issueNumber}}.json`
+1. Read the PR context from `$(nightgauge layout path pipeline pr-{{issueNumber}}.json)`
 2. {{#if waitForCi}}Wait for all CI checks to pass — poll with `nightgauge ci checks-complete <sha> --repo {owner}/{repo}` on the PR's head SHA, not `gh pr checks` (that call is GraphQL and shares the same hourly pool a board pull can exhaust) and not the raw check-runs endpoint (its rollup can report a required check as done by omitting it entirely — #1540){{else}}Skip CI wait (waitForCi=false){{/if}}
 3. Address any reviewer feedback (if reviews are blocking)
 4. Merge the PR using `{{#if mergeStrategy}}{{mergeStrategy}}{{else}}squash{{/if}}` strategy
 5. Close issue #{{issueNumber}} if not auto-closed by the PR
-6. Update `.nightgauge/pipeline/pr-{{issueNumber}}.json` with merge result
+6. Update `pr-{{issueNumber}}.json` with the merge result through
+   `nightgauge layout write pipeline pr-{{issueNumber}}.json`
 
 ## Merge Command
 
@@ -52,7 +53,8 @@ After successful merge:
 
 ## Output
 
-Update `.nightgauge/pipeline/pr-{{issueNumber}}.json` with:
+Update `pr-{{issueNumber}}.json` through `nightgauge layout write pipeline pr-{{issueNumber}}.json`
+(the updated JSON on stdin) with:
 - `merged_at`: ISO timestamp
 - `merge_commit_sha`: commit SHA
 - `status`: "merged"

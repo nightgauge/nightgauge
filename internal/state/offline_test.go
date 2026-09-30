@@ -2,10 +2,12 @@ package state
 
 import (
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestOfflineSaveAndLoad(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	store := NewOfflineStore(dir)
 
 	state := &OfflineState{
@@ -36,7 +38,7 @@ func TestOfflineSaveAndLoad(t *testing.T) {
 }
 
 func TestOfflineLoadMissing(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	store := NewOfflineStore(dir)
 
 	loaded, err := store.Load(9999)
@@ -49,7 +51,7 @@ func TestOfflineLoadMissing(t *testing.T) {
 }
 
 func TestOfflineRemove(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	store := NewOfflineStore(dir)
 
 	state := &OfflineState{

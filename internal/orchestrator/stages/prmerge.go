@@ -1025,7 +1025,7 @@ func (r *DeterministicRunner) waitForCleanMergeState(ctx context.Context, gh ghC
 	return last, ciWaitTimedOut, nil
 }
 
-// readPRContextNumber reads .nightgauge/pipeline/pr-{N}.json and returns
+// readPRContextNumber reads .git/nightgauge/pipeline/pr-{N}.json and returns
 // pr_number. Default ctxReader for production runs.
 func readPRContextNumber(workdir string, issueNumber int) (int, error) {
 	prContextPath := pipelineContextPath(workdir, fmt.Sprintf("pr-%d.json", issueNumber))

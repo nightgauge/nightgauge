@@ -110,8 +110,8 @@ DEAD_CODE_FINDINGS="..."         # dead code results from Phase 1.6
 MANUAL_FAILED_ITEMS="..."        # checklist items that failed
 
 # From planning context (dev-{N}.json → files_changed)
-PLAN_MODIFIED_COUNT=$(jq -r '.files_changed.modified | length' ".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json" 2>/dev/null || echo "0")
-PLAN_CREATED_COUNT=$(jq -r '.files_changed.created | length' ".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json" 2>/dev/null || echo "0")
+PLAN_MODIFIED_COUNT=$(jq -r '.files_changed.modified | length' "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "0")
+PLAN_CREATED_COUNT=$(jq -r '.files_changed.created | length' "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null || echo "0")
 PLAN_FILE_COUNT=$((PLAN_MODIFIED_COUNT + PLAN_CREATED_COUNT))
 
 # Actual files touched during validate (integration/E2E surface)
@@ -119,7 +119,7 @@ ACTUAL_TEST_FILES_TOUCHED=$(...)  # unique source files exercised by failing tes
 ACTUAL_FILE_COUNT=$(echo "$ACTUAL_TEST_FILES_TOUCHED" | wc -w)
 
 # Validate run history (count of previous validate runs for this issue)
-VALIDATE_HISTORY=$(ls .nightgauge/pipeline/history/validate-${ISSUE_NUMBER}-*.json 2>/dev/null | wc -l || echo "0")
+VALIDATE_HISTORY=$(ls "$(nightgauge layout path pipeline history)"/validate-${ISSUE_NUMBER}-*.json 2>/dev/null | wc -l || echo "0")
 ```
 
 ### Step 4.2: Evaluate PLAN_REVISION_NEEDED
@@ -270,7 +270,7 @@ ESCALATION_EVIDENCE=()
 
 if [ "$VALIDATE_HISTORY" -ge 2 ] && [ "$VALIDATION_STATUS" = "failed" ]; then
   # Compare failing test names against prior run's failures
-  PRIOR_VALIDATE=$(ls -t .nightgauge/pipeline/history/validate-${ISSUE_NUMBER}-*.json 2>/dev/null | head -1)
+  PRIOR_VALIDATE=$(ls -t "$(nightgauge layout path pipeline history)"/validate-${ISSUE_NUMBER}-*.json 2>/dev/null | head -1)
   if [ -n "$PRIOR_VALIDATE" ]; then
     PRIOR_FAILURES=$(jq -r '.integration_tests.tests_run // 0' "$PRIOR_VALIDATE" 2>/dev/null)
     # If same tests failing: escalation warranted

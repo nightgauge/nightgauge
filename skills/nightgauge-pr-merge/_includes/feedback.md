@@ -137,7 +137,7 @@ file using a safe temp-file swap:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE=".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
 CAPTURED_AT=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
 if [ -f "$CONTEXT_FILE" ]; then
@@ -152,8 +152,9 @@ if [ -f "$CONTEXT_FILE" ]; then
       what_could_improve: (if $improve == "" then [] else [$improve] end),
       captured_at: $captured_at,
       execution_mode: $exec_mode
-    }' "$CONTEXT_FILE" > "$TMP_FILE" 2>/dev/null; then
-    mv "$TMP_FILE" "$CONTEXT_FILE"
+    }' "$CONTEXT_FILE" > "$TMP_FILE" 2>/dev/null &&
+    nightgauge layout write pipeline "pr-${ISSUE_NUMBER}.json" --from "$TMP_FILE" >/dev/null; then
+    rm -f "$TMP_FILE"
     echo "Retrospective feedback written to $CONTEXT_FILE"
   else
     rm -f "$TMP_FILE"
@@ -172,13 +173,11 @@ Only when `WHAT_TO_IMPROVE` is non-empty, write a minimal improvement record:
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ -n "$WHAT_TO_IMPROVE" ]; then
-  ASSESSMENT_DIR=".nightgauge/pipeline/assessments"
-  mkdir -p "$ASSESSMENT_DIR"
-  ASSESSMENT_FILE="$ASSESSMENT_DIR/pr-merge-retrospective-${ISSUE_NUMBER}.json"
+  ASSESSMENT_NAME="assessments/pr-merge-retrospective-${ISSUE_NUMBER}.json"
 
   IMPROVEMENTS_JSON=$(printf '%s\n' "$WHAT_TO_IMPROVE" | jq -Rc 'split(", ")')
 
-  cat > "$ASSESSMENT_FILE" <<RECORD
+  nightgauge layout write pipeline "$ASSESSMENT_NAME" >/dev/null <<RECORD
 {
   "stage": "pr-merge",
   "phase": "retrospective",
@@ -189,7 +188,7 @@ if [ -n "$WHAT_TO_IMPROVE" ]; then
 }
 RECORD
 
-  echo "Improvement record written to $ASSESSMENT_FILE"
+  echo "Improvement record written to $(nightgauge layout path pipeline "$ASSESSMENT_NAME")"
 fi
 ```
 

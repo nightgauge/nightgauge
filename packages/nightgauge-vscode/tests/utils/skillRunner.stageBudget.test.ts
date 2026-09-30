@@ -18,6 +18,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { spawn } from "child_process";
 import * as fs from "fs";
+import * as path from "path";
 import { uuidV7 } from "@nightgauge/sdk";
 
 vi.mock("vscode", () => ({
@@ -110,6 +111,7 @@ import {
   type StageBudgets,
 } from "../../src/utils/stageBudget";
 import { createMockChildProcess, type MockChildProcess } from "../mocks/child-process";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 const MOCK_SKILL_CONTENT = `---
 name: test-skill
@@ -326,6 +328,8 @@ const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Per-clone data resolves under the clone's git dir (ADR-024 § 7).
+  fakeCloneLayout("/test/workspace");
   process.env = {
     ...originalEnv,
     PATH: "/usr/local/bin:/usr/bin:/bin",
@@ -522,8 +526,10 @@ describe("runStageSkillHeadless under a stage budget (#1668)", () => {
     );
     let env = (vi.mocked(spawn).mock.calls[0][2] as { env: Record<string, string> }).env;
     expect(env.NIGHTGAUGE_RUN_ID).toBe(runId);
-    expect(env.NIGHTGAUGE_OUTPUT_FILE).toMatch(
-      /^\/test\/workspace\/\.nightgauge\/pipeline\/opencode-events\/feature-dev-42-[^/]+\/stage-output\.log$/
+    const eventsBase = path.join(fakeCloneLayout("/test/workspace").pipeline, "opencode-events");
+    expect(path.dirname(path.dirname(env.NIGHTGAUGE_OUTPUT_FILE))).toBe(eventsBase);
+    expect(path.relative(eventsBase, env.NIGHTGAUGE_OUTPUT_FILE)).toMatch(
+      /^feature-dev-42-[^/]+\/stage-output\.log$/
     );
     expect(vi.mocked(fs.mkdirSync)).toHaveBeenCalledWith(
       expect.stringContaining("/opencode-events/feature-dev-42-"),

@@ -34,14 +34,17 @@ goal is silence when everything works.
 
 #### Step 2: Write Assessment Record
 
-Only if friction was detected in Step 1. Write a single JSON file:
+Only if friction was detected in Step 1. Write a single JSON file,
+`assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json` in the clone's pipeline state
+directory, through the binary (JSON on stdin; never a direct file write):
 
 ```bash
-ASSESSMENT_DIR=".nightgauge/pipeline/assessments"
-mkdir -p "$ASSESSMENT_DIR"
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+{ ... the record below ... }
+JSON
 ```
-
-**File**: `$ASSESSMENT_DIR/{STAGE_NAME}-${ISSUE_NUMBER}.json`
 
 The assessment record MUST follow this schema:
 
@@ -91,6 +94,9 @@ The assessment record MUST follow this schema:
 
 ```bash
 # Validate JSON if written
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

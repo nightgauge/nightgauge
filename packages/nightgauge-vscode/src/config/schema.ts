@@ -12,11 +12,6 @@
  * @see Issue #432 - Comprehensive Zod Schema for Config Fields
  */
 
-import {
-  RELATIVE_PIPELINE_STATE_DIR,
-  RELATIVE_PLANS_DIR,
-  RELATIVE_CLONE_LOGS_DIR,
-} from "../utils/cloneLayout";
 import { z } from "zod";
 import {
   CODEX_DEFAULT_BASE_MODEL,
@@ -390,11 +385,11 @@ export const SkipChecksConfigSchema = z.object({
 export type SkipChecksConfig = z.infer<typeof SkipChecksConfigSchema>;
 
 /**
- * Pipeline logs configuration
+ * Pipeline logs configuration. Session logs live in the clone's logs class
+ * (ADR-024 § 7); there is no directory setting.
  */
 export const PipelineLogsConfigSchema = z.object({
   retain: z.boolean().optional(),
-  dir: z.string().optional(),
   max_age_days: z.number().int().min(1).optional(),
   max_count: z.number().int().min(1).optional(),
   /** Days to retain execution history JSONL files (default: 90) */
@@ -2354,8 +2349,6 @@ export type ErrorSound = z.infer<typeof ErrorSoundSchema>;
  * - `adapter`: Selects execution adapter (Claude CLI or Codex adapter script)
  * - `auth_provider`: Affects which authentication method is used for Claude API
  * - `default_model`: Determines which model runs pipeline stages
- * - `context_path`: Where pipeline context files are stored
- * - `plans_path`: Where plan files are stored
  *
  * @env
  * - `NIGHTGAUGE_UI_CORE_ADAPTER`: Overrides execution adapter
@@ -2375,8 +2368,6 @@ export const UICoreConfigSchema = z.object({
    * @see Issue #626 - Claude CLI headless adapter audit
    */
   fallback_model: DefaultModelSchema.optional(),
-  context_path: z.string().optional(),
-  plans_path: z.string().optional(),
   /**
    * Gemini-specific configuration (auth method, model).
    * Only relevant when adapter is 'gemini' or 'gemini-sdk'.
@@ -2944,7 +2935,6 @@ export type AutomationTrigger = z.infer<typeof AutomationTriggerSchema>;
 export const AutomationsConfigSchema = z.object({
   enabled: z.boolean().optional(),
   dry_run: z.boolean().optional(),
-  log_file: z.string().optional(),
   triggers: z.array(AutomationTriggerSchema).optional(),
 });
 export type AutomationsConfig = z.infer<typeof AutomationsConfigSchema>;
@@ -3849,7 +3839,6 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
     },
     logs: {
       retain: true,
-      dir: RELATIVE_CLONE_LOGS_DIR,
     },
     default_mode: "headless",
     stall_thresholds: {
@@ -4013,8 +4002,6 @@ export const DEFAULT_CONFIG: NightgaugeConfig = {
       adapter: "claude",
       auth_provider: "max",
       default_model: "sonnet",
-      context_path: RELATIVE_PIPELINE_STATE_DIR,
-      plans_path: RELATIVE_PLANS_DIR,
       gemini: {
         auth_method: "api-key",
         model: "gemini-2.5-flash",

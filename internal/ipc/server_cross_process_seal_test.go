@@ -4,12 +4,12 @@ import (
 	"errors"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/pidtest"
 )
 
@@ -58,8 +58,8 @@ func liveForeignPID(t *testing.T) int {
 // removed. What separates them is whether the file survived step 3, which is
 // why the load-bearing assertion is taken there and not at the end.
 func TestRunIdentity_AdoptedSealCannotResurrectALiveOwnersRun(t *testing.T) {
-	root := t.TempDir()
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := layouttest.Repo(t)
+	stateDir := layouttest.PipelineDir(t, root)
 	const (
 		repo  = "acme/platform"
 		issue = 557
@@ -124,8 +124,8 @@ func TestRunIdentity_AdoptedSealCannotResurrectALiveOwnersRun(t *testing.T) {
 // adopted seal — "never seal what you did not mint" — passes the test above and
 // fails this one.
 func TestRunIdentity_AGoneOwnersRunIsStillSealedByItsAdopter(t *testing.T) {
-	root := t.TempDir()
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := layouttest.Repo(t)
+	stateDir := layouttest.PipelineDir(t, root)
 	const (
 		repo  = "acme/platform"
 		issue = 558
@@ -165,8 +165,8 @@ func TestRunIdentity_AdoptionTakesOwnershipOnlyFromAGoneOwner(t *testing.T) {
 
 	adopt := func(t *testing.T, issue, ownerPID int) *state.RuntimeState {
 		t.Helper()
-		root := t.TempDir()
-		stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+		root := layouttest.Repo(t)
+		stateDir := layouttest.PipelineDir(t, root)
 		runID := newTestRunID()
 
 		seed := state.NewRuntimeState(repo, issue, "", runID)

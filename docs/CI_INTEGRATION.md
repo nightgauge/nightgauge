@@ -191,8 +191,11 @@ When using `--format json`, the CLI outputs structured JSON for parsing:
   "isRunning": false,
   "currentStage": "feature-dev",
   "issueNumber": 42,
-  "contextFiles": [".nightgauge/pipeline/issue-42.json", ".nightgauge/pipeline/planning-42.json"],
-  "planFile": ".nightgauge/plans/42-add-feature.md"
+  "contextFiles": [
+    "/path/to/repo/.git/nightgauge/pipeline/issue-42.json",
+    "/path/to/repo/.git/nightgauge/pipeline/planning-42.json"
+  ],
+  "planFile": "/path/to/repo/.git/nightgauge/plans/42-add-feature.md"
 }
 ```
 

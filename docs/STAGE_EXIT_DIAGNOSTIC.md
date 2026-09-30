@@ -32,8 +32,13 @@ stage exit** — including healthy runs, so the file also anchors what
 ## On-disk Format
 
 ```
-<workspaceRoot>/.nightgauge/pipeline/exit-records/<UTC-day>.jsonl
+<git-common-dir>/nightgauge/pipeline/exit-records/<UTC-day>.jsonl
 ```
+
+The directory is `exit-records/` inside the clone's pipeline state directory
+(`nightgauge layout path pipeline exit-records`), which linked worktrees share
+with the main clone
+([ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
 
 One JSON object per line. The filename is always `YYYY-MM-DD.jsonl` so
 lexicographic sort equals chronological sort — every reader (the CLI, future
@@ -111,7 +116,7 @@ already has a real one, and its reason is the stage's own error.
 ```bash
 # Runs that died before any stage started, with their reason
 jq -r 'select(.stage=="pre-dispatch") | "\(.issue) \(.terminal_kind) \(.failure_detail)"' \
-  .nightgauge/pipeline/exit-records/$(date +%F).jsonl
+  "$(nightgauge layout path pipeline "exit-records/$(date +%F).jsonl")"
 ```
 
 Scoped to the record's own issue, so a concurrent run's stash is never
@@ -123,7 +128,7 @@ that is always present is a field readers learn to skip. Reclaim with
 ```bash
 # Every stage exit that stranded a stash, today
 jq -r 'select(.unreclaimed_stashes) | "\(.issue) \(.stage) \(.unreclaimed_stashes|join(", "))"' \
-  .nightgauge/pipeline/exit-records/$(date +%F).jsonl
+  "$(nightgauge layout path pipeline "exit-records/$(date +%F).jsonl")"
 ```
 
 ### Kill Ceilings (#161)
@@ -156,7 +161,7 @@ verbatim in historical records, so treat the set as append-mostly.
 
 ```bash
 # Which ceiling is killing stages this week, and what was it set to?
-cat .nightgauge/pipeline/exit-records/*.jsonl \
+cat "$(nightgauge layout path pipeline exit-records)"/*.jsonl \
   | jq -r 'select(.kill_ceiling != null)
            | [.stage, .kill_ceiling, .kill_ceiling_value] | @tsv' \
   | sort | uniq -c | sort -rn
@@ -225,7 +230,7 @@ Because each line is one JSON object, ad-hoc retro analysis is trivial:
 
 ```bash
 DAY=$(date -u +%Y-%m-%d)
-FILE=.nightgauge/pipeline/exit-records/$DAY.jsonl
+FILE="$(nightgauge layout path pipeline "exit-records/$DAY.jsonl")"
 
 # All SIGKILL exits today
 jq -c 'select(.signal == "SIGKILL")' "$FILE"
@@ -236,7 +241,7 @@ STALL=$(jq -c 'select(.terminal_kind == "stall_kill")' "$FILE" | wc -l)
 echo "scale=2; $STALL/$TOTAL*100" | bc
 
 # Worst stages this week (by elapsed_ms p95)
-cat .nightgauge/pipeline/exit-records/*.jsonl \
+cat "$(nightgauge layout path pipeline exit-records)"/*.jsonl \
   | jq -s 'group_by(.stage) | map({stage: .[0].stage, p95: ([.[].elapsed_ms] | sort | .[(length*0.95|floor)])})'
 ```
 

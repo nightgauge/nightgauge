@@ -129,8 +129,9 @@ That's it. The pipeline guides you through each step.
 ### Claude <-> Codex Adapter Switching
 
 Use the same issue number and feature branch while switching adapters. The
-pipeline handoff contract is shared through `.nightgauge/pipeline/*.json`
-and `.nightgauge/plans/*.md`.
+pipeline handoff contract is shared through the `*.json` context files in the
+clone's pipeline state directory (`nightgauge layout path pipeline`) and the
+`*.md` plans in its plans directory (`nightgauge layout path plans`).
 
 ```bash
 # Codex stages

@@ -72,6 +72,22 @@ export {
 } from "./context/deliverablePolicy.js";
 export { RunStateManager, uuidV7, type ResumeDetection } from "./context/RunStateManager.js";
 
+// Clone layout — where per-clone data lives (ADR-024 § 7): <git-common-dir>/nightgauge.
+export {
+  CLONE_CLASSES,
+  CLONE_DIR_NAME,
+  NotAGitRepositoryError,
+  clearCloneLayoutCache,
+  cloneClassDir,
+  cloneLayoutFor,
+  cloneLayoutFromJson,
+  primeCloneLayout,
+  resolveCloneLayout,
+  setCloneLayout,
+  type CloneClass,
+  type CloneLayout,
+} from "./context/cloneLayout.js";
+
 // Run identity — the ONE TypeScript definition of the shape uuidV7 mints, and
 // the shape the Go side validates (ADR-017 Decision 1, #424). Every consumer
 // derives from here; nothing transcribes the character sequence a second time.

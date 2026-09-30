@@ -16,6 +16,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import type { Logger } from "../../../src/utils/logger";
+import { fakeCloneLayout } from "../../helpers/cloneLayout";
 
 vi.mock("fs");
 vi.mock("../../../src/utils/skillRunner", () => ({
@@ -79,6 +80,8 @@ function writtenBack(): Record<string, unknown> | null {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Map the fake root through the clone layout (ADR-024 § 7) without git.
+  fakeCloneLayout("/workspace");
 });
 
 describe("validateStageContextOutput — repairable shape (#1176)", () => {

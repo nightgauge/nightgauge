@@ -6953,7 +6953,7 @@ func (as *AutonomousScheduler) maxConcurrentForRepo(repo string) int {
 }
 
 // complete transitions the scheduler to a terminal state and writes a
-// persistent exit event to .nightgauge/logs/autonomous-exits.jsonl
+// persistent exit event to .git/nightgauge/logs/autonomous-exits.jsonl
 // so that crashes and shutdowns can be diagnosed after the fact.
 func (as *AutonomousScheduler) complete(reason string) {
 	as.mu.Lock()
@@ -7386,7 +7386,7 @@ func (as *AutonomousScheduler) architectureApprovalLabel() string {
 //
 // HoldArchitectureApproval is released by exactly the two grants
 // `nightgauge approval-gate` reads: the approval label on the issue, or
-// `.nightgauge/pipeline/approval-<n>.json` carrying `{"approved": true}`. A
+// `.git/nightgauge/pipeline/approval-<n>.json` carrying `{"approved": true}`. A
 // truncated label list (#998) can only hide a label that IS there, so it can
 // only extend the hold — the safe direction, and the approval file still
 // releases it.
@@ -7412,7 +7412,7 @@ func (as *AutonomousScheduler) holdReleased(f FailedItem, node *depgraph.Node, a
 			}
 		}
 		if as.architectureApprovalFileGranted(f.Repo, f.Number) {
-			return true, fmt.Sprintf(".nightgauge/pipeline/approval-%d.json grants approval", f.Number)
+			return true, fmt.Sprintf("%s/approval-%d.json grants approval", layout.PipelineStateDisplay(), f.Number)
 		}
 		return false, fmt.Sprintf("the %q label or an approval file", approvalLabel)
 	case HoldOperatorResume:

@@ -154,7 +154,7 @@ decisions.md do not exist at the knowledge path.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' ".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json" 2>/dev/null)
+KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null)
 COVERAGE_MAP_PATH=""
 
 if [ -z "$KNOWLEDGE_PATH" ]; then
@@ -222,7 +222,7 @@ fi
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 if [ -n "$KNOWLEDGE_PATH" ] && [ -f "$PRD_FILE" ]; then
-  COVERAGE_MAP_PATH=".nightgauge/pipeline/coverage-map-${ISSUE_NUMBER}.json"
+  COVERAGE_MAP_PATH="$(nightgauge layout path pipeline coverage-map-${ISSUE_NUMBER}.json)"
 
   # Get list of changed file paths for code evidence scanning
   CHANGED_FILES=$(git diff HEAD~1 --name-only 2>/dev/null | head -50 || true)
@@ -327,7 +327,7 @@ PREPUSH_STATUS="skipped"
 
 if [ -n "$BINARY" ]; then
   echo "=== Pre-Push Merge Validation Gate ==="
-  TARGET_BRANCH=$(jq -r '.base_branch // "main"' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)
+  TARGET_BRANCH=$(jq -r '.base_branch // "main"' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
   [ -z "$TARGET_BRANCH" ] && TARGET_BRANCH="main"
 
   "$BINARY" pre-push validate "$ISSUE_NUMBER" --target "$TARGET_BRANCH" && {
@@ -336,7 +336,7 @@ if [ -n "$BINARY" ]; then
   } || {
     PREPUSH_STATUS="failed"
     echo "GATE BLOCKED: Pre-push validation failed. Fix issues before committing/pushing."
-    echo "See .nightgauge/pipeline/pre-push-${ISSUE_NUMBER}.json for details."
+    echo "See $(nightgauge layout path pipeline pre-push-${ISSUE_NUMBER}.json) for details."
     VALIDATION_STATUS="failed"
     SKIPPED_PHASES=$(printf '%s\n' "$SKIPPED_PHASES" | jq '. + [{"phase": "commit-and-push", "reason": "pre-push gate blocked"}]')
   }

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // The out-of-scope-blocker card is the DECISION REQUEST half of #1147: the
@@ -73,13 +75,14 @@ func TestOutOfScopeBlockerBodyStatesThatNoEdgesWereCreated(t *testing.T) {
 // runstate.ArchiveRun from sweeping the finding into history/<runID>/ at the
 // end of the very run that wrote it.
 func TestBlockedFindingPathIsUnderASubdirectoryOfPipeline(t *testing.T) {
-	got := BlockedFindingPath("/repo", 42)
-	want := filepath.Join("/repo", ".nightgauge", "pipeline", "blocked-findings", "42.json")
+	root := layouttest.Repo(t)
+	got := BlockedFindingPath(root, 42)
+	want := filepath.Join(layouttest.PipelineDir(t, root), "blocked-findings", "42.json")
 	if got != want {
 		t.Errorf("BlockedFindingPath = %q, want %q", got, want)
 	}
 	if filepath.Base(filepath.Dir(got)) == "pipeline" {
-		t.Error("the finding must NOT sit flat under .nightgauge/pipeline/ — ArchiveRun moves " +
+		t.Error("the finding must NOT sit flat under the pipeline state directory — ArchiveRun moves " +
 			"every *-<issue>.json there into history/<runID>/ and skips directories")
 	}
 }

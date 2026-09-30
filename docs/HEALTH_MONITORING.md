@@ -578,9 +578,12 @@ Converts `HealthAnalysisResult` into three output formats:
 
 ### Report File Paths
 
+Both reports are written to the clone's pipeline state directory
+(`nightgauge layout path pipeline`):
+
 ```
-.nightgauge/pipeline/health-report-YYYY-MM-DD.json
-.nightgauge/pipeline/health-report-YYYY-MM-DD.md
+health-report-YYYY-MM-DD.json
+health-report-YYYY-MM-DD.md
 ```
 
 **Retention**: Maximum 20 files per type (JSON and MD independently). Oldest
@@ -668,7 +671,7 @@ interface FindingToIssueResult {
 Persists recommendation history to JSONL for effectiveness assessment and
 recurring-finding detection across health runs.
 
-**Storage**: `.nightgauge/pipeline/recommendation-history.jsonl`
+**Storage**: `recommendation-history.jsonl` in the clone's pipeline state directory
 
 Each entry (`RecommendationHistoryEntry`, `schema_version: '1'`):
 
@@ -932,7 +935,7 @@ whose most recent log entry is `action: 'rollback'` or `action: 'auto-rollback'`
 is treated as already rolled back — no duplicate rollback is issued.
 
 Rollback actions are appended to
-`.nightgauge/pipeline/self-tuning-log.jsonl` with `action: 'auto-rollback'`
+`self-tuning-log.jsonl` in the pipeline state directory with `action: 'auto-rollback'`
 and are visible in the VSCode Health Dashboard under "Recent Rollbacks".
 
 **Source file**:
@@ -969,7 +972,7 @@ the dashboard and silently drained queued work.
 **Guarantees:**
 
 1. **JSONL record preservation.** A V3 `ExecutionHistoryRunRecord` is appended
-   to `.nightgauge/pipeline/history/<date>.jsonl` with:
+   to `history/<date>.jsonl` in the clone's pipeline state directory with:
    - `outcome: "failed"`
    - `terminal_failure_kind ∈ {stall_kill, budget_exceeded, validation_error, subagent_crash, orchestrator_crash}` — see [docs/FAILURE_TAXONOMY.md](FAILURE_TAXONOMY.md#terminal-failure-kind-issue-3001)
    - Full per-stage timeline (every stage with its `status`, `started_at`,

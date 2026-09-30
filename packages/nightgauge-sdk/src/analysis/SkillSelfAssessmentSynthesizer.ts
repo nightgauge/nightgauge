@@ -1,7 +1,7 @@
 /**
  * SkillSelfAssessmentSynthesizer
  *
- * Aggregates assessment records from `.nightgauge/pipeline/assessments/`
+ * Aggregates assessment records from `<git-common-dir>/nightgauge/pipeline/assessments/`
  * and identifies recurring friction patterns using the Two-Strike Rule:
  * a finding that appears in ≥2 distinct issue executions is a signal that
  * the SKILL.md needs fixing, not a one-off agent error.

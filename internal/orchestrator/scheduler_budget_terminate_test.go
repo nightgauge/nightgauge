@@ -90,7 +90,7 @@ func (r *budgetCapturingStageRunner) RunStage(_ context.Context, params StageRun
 // no-side-effect shape the branch-fork preflight precedent
 // (scheduler.go's BeginStage-then-SetStageError block) already relies on.
 func TestBudgetCeilingTerminate_SnapshotStageMatchesRefusedStage(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	for _, dir := range []string{
 		"nightgauge-issue-pickup",
 		"nightgauge-feature-planning",

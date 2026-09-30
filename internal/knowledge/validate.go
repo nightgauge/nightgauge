@@ -118,7 +118,8 @@ func hasValidADRBlocks(decisionsText string) bool {
 }
 
 // readPlanText reads the plan Markdown for the given issue number.
-// Searches .nightgauge/plans/{N}-*.md and returns the first match.
+// Searches the clone's plans directory (layout.PlansDir) for {N}-*.md and
+// returns the first match.
 func readPlanText(issueNumber int, workspaceRoot string) (string, error) {
 	absRoot, err := filepath.Abs(workspaceRoot)
 	if err != nil {

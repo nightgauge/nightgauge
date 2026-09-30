@@ -18,6 +18,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as yaml from "js-yaml";
 import type { ComplexityModel } from "../packages/nightgauge-sdk/src/context/schemas/complexity-model.js";
+import { cloneClassDir } from "../packages/nightgauge-sdk/src/context/cloneLayout.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,7 +67,6 @@ interface SizeBucket {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_SINCE = "2026-02-15T00:00:00Z";
-const HISTORY_DIR = ".nightgauge/pipeline/history";
 const MODEL_PATH = ".nightgauge/complexity-model.yaml";
 const SIZE_ORDER = ["XS", "S", "M", "L", "XL"];
 
@@ -927,8 +927,10 @@ async function main(): Promise<void> {
   const model = await loadModel(MODEL_PATH);
   console.log(`Model loaded: ${model.total_observations} total observations`);
 
-  console.log(`Loading JSONL records from ${HISTORY_DIR} (since ${since})...`);
-  const records = await loadRunRecords(HISTORY_DIR, since);
+  // Run history lives in the clone's pipeline directory (ADR-024 § 7).
+  const historyDir = path.join(cloneClassDir("pipeline"), "history");
+  console.log(`Loading JSONL records from ${historyDir} (since ${since})...`);
+  const records = await loadRunRecords(historyDir, since);
   console.log(`Loaded ${records.length} run records.`);
 
   console.log("Running audit checks...");

@@ -193,7 +193,7 @@ Verify board fields were actually set (via binary exit codes; assert `.status ==
 
 ### Phase 4.9: Write Creation Manifest
 
-Write the strict-mode creation manifest (`.nightgauge/pipeline/issue-create-manifest-<ts>.json`) consumed by the Phase 6 terminal audit, and validate it parses as JSON.
+Write the strict-mode creation manifest (`issue-create-manifest-<ts>.json`, through `nightgauge layout write pipeline`) consumed by the Phase 6 terminal audit, and validate it parses as JSON.
 
 > **Read `_includes/board-and-audit.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
@@ -254,8 +254,8 @@ Fail with clear remediation when:
 - [ ] **Epic only**: Wave and dependency annotations in sub-issue bodies
 - [ ] Knowledge directory scaffolded (when `--with-knowledge` was used)
 - [ ] **Phase 4.9**: Creation manifest written to
-      `.nightgauge/pipeline/issue-create-manifest-<ts>.json` and
-      validates as JSON
+      `issue-create-manifest-<ts>.json` in the clone's pipeline state
+      directory (`nightgauge layout path pipeline`) and validates as JSON
 - [ ] **Phase 6**: Terminal audit pass invoked unless `--no-audit`; verdict
       is READY (exit 0)
 - [ ] Number and URL returned with next step

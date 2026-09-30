@@ -45,11 +45,13 @@
  * @see Issue #1142 — the fork this makes durable
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import * as path from "path";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 const ISSUE = 1147;
 
@@ -316,6 +318,11 @@ describe("HeadlessOrchestrator — a blocked terminal leaves a durable finding (
     const orch = new HeadlessOrchestrator(createMockStateService(), logger, {
       contextFileWaitMs: 0,
     } as never);
+    // An explicit run root, so the finding's location is the clone's pipeline
+    // directory (ADR-024 § 7) and never the process cwd's repository.
+    const runRoot = "/test/blocked-finding-repo";
+    const { pipeline } = fakeCloneLayout(runRoot);
+    orch.setRunRepoRoot(runRoot);
 
     await orch.runPipeline(ISSUE);
 
@@ -323,9 +330,9 @@ describe("HeadlessOrchestrator — a blocked terminal leaves a durable finding (
     expect(write).toBeDefined();
     // A DIRECTORY under pipeline/, not a flat `blocked-<issue>.json`:
     // runstate.ArchiveRun sweeps every flat `*-<issue>.json` under
-    // `.nightgauge/pipeline/` into history/<runId>/ at run end and skips
+    // the pipeline directory into history/<runId>/ at run end and skips
     // directories, so a flat finding would be archived by the run that wrote it.
-    expect(write!.path).toContain(`.nightgauge/pipeline/blocked-findings/${ISSUE}.json`);
+    expect(write!.path).toBe(path.join(pipeline, "blocked-findings", `${ISSUE}.json`));
 
     const written = JSON.parse(write!.data);
     expect(written.issue_number).toBe(ISSUE);
