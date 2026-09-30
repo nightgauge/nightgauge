@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestAuditWriter_Append(t *testing.T) {
@@ -114,5 +116,28 @@ func TestAuditWriter_Rotation(t *testing.T) {
 	// The current audit.jsonl should exist and contain the new entry.
 	if _, err := os.Stat(filepath.Join(dir, auditFilename)); err != nil {
 		t.Errorf("expected audit.jsonl to exist after rotation: %v", err)
+	}
+}
+
+// The checkout audit writer lands in CHECKOUT/notifications (ADR-024 § 7),
+// never the working tree, and refuses outside a git checkout.
+func TestCheckoutAuditWriter_WritesCheckout(t *testing.T) {
+	root := layouttest.Repo(t)
+	w := NewCheckoutAuditWriter(root)
+	if err := w.Append(AuditEntry{MattermostUserID: "u", Command: "health", Result: "allowed"}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(layouttest.CheckoutPath(t, root, "notifications"), auditFilename)); err != nil {
+		t.Fatalf("audit.jsonl not in CHECKOUT: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".nightgauge")); !os.IsNotExist(err) {
+		t.Fatalf("audit writer touched the working tree (stat err %v)", err)
+	}
+	plain := t.TempDir()
+	if err := NewCheckoutAuditWriter(plain).Append(AuditEntry{Command: "health"}); err == nil {
+		t.Fatal("Append outside a git checkout: want an error")
+	}
+	if _, err := os.Stat(filepath.Join(plain, ".nightgauge")); !os.IsNotExist(err) {
+		t.Fatalf("audit writer outside a git checkout wrote into it (stat err %v)", err)
 	}
 }

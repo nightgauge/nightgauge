@@ -142,7 +142,9 @@ vi.mock("../../src/utils/SkillEffectivenessWriter", () => ({
     appendRecord: (...args: unknown[]) => mockSkillEffectivenessAppend(...args),
     readAll: vi.fn().mockResolvedValue([]),
     enforceRetention: vi.fn().mockResolvedValue(undefined),
-    getFilePath: vi.fn().mockReturnValue("/workspace/.nightgauge/health/skill-effectiveness.jsonl"),
+    getFilePath: vi
+      .fn()
+      .mockReturnValue("/workspace/.git/nightgauge-worktree/health/skill-effectiveness.jsonl"),
   },
 }));
 
@@ -531,7 +533,7 @@ describe("PostPipelineAnalyzer", () => {
       await PostPipelineAnalyzer.analyze(workspaceRoot, 943, logger as any);
 
       // Should create directory
-      expect(fs.mkdir).toHaveBeenCalledWith(path.join(workspaceRoot, ".nightgauge/analysis"), {
+      expect(fs.mkdir).toHaveBeenCalledWith(path.join(layout.checkout, "analysis"), {
         recursive: true,
       });
 

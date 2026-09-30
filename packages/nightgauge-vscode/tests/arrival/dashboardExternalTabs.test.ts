@@ -63,6 +63,7 @@ import {
   tabPanelHtml,
 } from "./dashboardHarness";
 import { arrivalFixtures } from "./fixtures";
+import { fakeCloneLayout, mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 // ---------------------------------------------------------------------------
 // A real temp workspace — the filesystem transport is not stubbed
@@ -84,9 +85,11 @@ beforeAll(() => {
   );
 
   // Discovery: the exact files the release-watch / continuous-improvement
-  // workflows write.
-  const releaseWatchDir = path.join(workspaceRoot, ".nightgauge", "release-watch");
-  const improvementDir = path.join(workspaceRoot, ".nightgauge", "improvement-runs");
+  // workflows write, in the checkout's own directory (ADR-024 § 7). A fixed
+  // layout under the temp root, so no git runs.
+  const checkout = mkFakeCloneLayout(workspaceRoot).checkout;
+  const releaseWatchDir = path.join(checkout, "release-watch");
+  const improvementDir = path.join(checkout, "improvement-runs");
   fs.mkdirSync(releaseWatchDir, { recursive: true });
   fs.mkdirSync(improvementDir, { recursive: true });
   fs.writeFileSync(
@@ -230,7 +233,7 @@ describe("arrival: Audit tab (GET /v1/audit-log over HTTPS)", () => {
 // Discovery — the filesystem, unstubbed
 // ---------------------------------------------------------------------------
 
-describe("arrival: Discovery tab (.nightgauge/release-watch, improvement-runs)", () => {
+describe("arrival: Discovery tab (checkout release-watch/, improvement-runs/)", () => {
   it("reaches a populated state by reading the real state files", async () => {
     await dashboard.refreshDiscoveryActivityData();
 
@@ -240,8 +243,9 @@ describe("arrival: Discovery tab (.nightgauge/release-watch, improvement-runs)",
     expect(text).toContain("Evaluate pnpm workspaces for the extension monorepo");
   });
 
-  it("an absent .nightgauge directory renders the pre-first-run state, not stale data", async () => {
+  it("absent discovery state renders the pre-first-run state, not stale data", async () => {
     const emptyRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-arrival-empty-"));
+    fakeCloneLayout(emptyRoot);
     try {
       const empty = new Dashboard(
         { fsPath: "/mock/extension" } as never,

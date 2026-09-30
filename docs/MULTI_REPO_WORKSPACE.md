@@ -989,8 +989,9 @@ fails the run. Under-detecting costs one more incident; misattributing costs the
 operator's trust, and — if the response were destructive — their work.
 
 The response is therefore **capture, never mutate**. The attributed changes are
-written as a `git apply`-able patch under `.nightgauge/containment/` in the
-stage repo's canonical root, which survives the worktree teardown a re-dispatch
+written as a `git apply`-able patch under `containment/` in the per-checkout
+directory of the stage repo's canonical root (`.git/nightgauge-worktree/`,
+`nightgauge layout path checkout containment`), which survives the worktree teardown a re-dispatch
 performs. Nothing in the other repo is staged, committed, stashed, reverted or
 touched. (This is why the #128 work-in-progress preservation is not reused: it
 commits the worktree in place, which would sweep up the operator's unrelated

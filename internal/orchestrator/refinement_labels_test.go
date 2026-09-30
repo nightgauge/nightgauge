@@ -8,6 +8,7 @@ import (
 	"time"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // newRefinementTestScheduler builds a scheduler through the PRODUCTION
@@ -21,7 +22,7 @@ import (
 // through NewAutonomousScheduler is what makes these tests capable of failing.
 func newRefinementTestScheduler(t *testing.T) *AutonomousScheduler {
 	t.Helper()
-	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	// A registered runner short-circuits refineViaCLI, which would otherwise
 	// need an execution manager and a skill on disk. Refinement "succeeds";
 	// what is under test is everything after it.

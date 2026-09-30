@@ -1,11 +1,12 @@
 /**
  * BrownfieldTypes - TypeScript interfaces for brownfield modernization dashboard
  *
- * Matches JSON schemas from brownfield skills:
- * - health-check → .nightgauge/health-report.json
- * - security-audit → .nightgauge/security-audit.json
- * - modernize-plan → .nightgauge/modernization-plan.json
- * - dep-modernize → .nightgauge/dep-modernize-report.json
+ * Matches JSON schemas from brownfield skills, written to the checkout's
+ * reports/ directory (`.git/nightgauge-worktree/reports/`, ADR-024 § 7):
+ * - health-check → reports/health-report.json
+ * - security-audit → reports/security-audit.json
+ * - modernize-plan → reports/modernization-plan.json
+ * - dep-modernize → reports/dep-modernize-report.json
  *
  * @see Issue #1163 - Brownfield Modernization Progress Dashboard
  */

@@ -1,7 +1,8 @@
 name: Release Watchdog
 
 # Daily detection of upstream Claude Code releases, and the producer of
-# `.nightgauge/release-watch/creation-log-<provider>.json` — the file the
+# `release-watch/creation-log-<provider>.json` in the checkout directory
+# (`nightgauge layout path checkout release-watch`) — the file the
 # VSCode dashboard's Discovery tab reads.
 #
 # The tab, DiscoveryActivityService, its unit tests and
@@ -228,13 +229,17 @@ jobs:
         # source tree. Without this the runner starts from 0.0.0 every day and
         # re-detects every release it has already seen. The fetch is
         # unauthenticated (public repository) — see persist-credentials above.
-        run: bash scripts/discovery-state-sync.sh
+        # The state lives in this checkout's directory, CHECKOUT (ADR-024
+        # § 7); later steps address it through NG_CHECKOUT.
+        run: |
+          bash scripts/discovery-state-sync.sh
+          echo "NG_CHECKOUT=$(git rev-parse --absolute-git-dir)/nightgauge-worktree" >> "$GITHUB_ENV"
 
       - name: Detect a new upstream release
         id: detect
         run: |
           set -euo pipefail
-          LAST_SEEN=".nightgauge/release-watch/last-seen-${PROVIDER}.json"
+          LAST_SEEN="$NG_CHECKOUT/release-watch/last-seen-${PROVIDER}.json"
           SINCE="$SINCE_OVERRIDE"
           if [ -z "$SINCE" ] && [ -f "$LAST_SEEN" ]; then
             SINCE="$(jq -r '.version // ""' "$LAST_SEEN")"
@@ -242,7 +247,7 @@ jobs:
           echo "since=$SINCE" >> "$GITHUB_OUTPUT"
 
           # $RUNNER_TEMP, not the checkout: discovery-state-publish.sh only
-          # collects .nightgauge/*, but a stray releases.json in the working
+          # collects the checkout directory, but a stray releases.json in the working
           # tree is exactly the "pipeline exhaust" that makes a later `git
           # status` read as uncommitted work.
           PAYLOAD="$RUNNER_TEMP/releases.json"
@@ -376,7 +381,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Carry forward the previous run's state
-        run: bash scripts/discovery-state-sync.sh
+        # The state lives in this checkout's directory, CHECKOUT (ADR-024
+        # § 7); later steps address it through NG_CHECKOUT.
+        run: |
+          bash scripts/discovery-state-sync.sh
+          echo "NG_CHECKOUT=$(git rev-parse --absolute-git-dir)/nightgauge-worktree" >> "$GITHUB_ENV"
 
       - name: Open the run record
         # Opened BEFORE anything is filed so a run that dies mid-apply still
@@ -415,7 +424,7 @@ jobs:
           bash scripts/apply-proposal-artifact.sh \
             --kind release-watch \
             --file "$PROPOSAL_FILE" \
-            --record ".nightgauge/release-watch/creation-log-${PROVIDER}.json"
+            --record "$NG_CHECKOUT/release-watch/creation-log-${PROVIDER}.json"
 
       - name: Advance last-seen
         # In detection-only mode (no key, or kill switch on) the skill never
@@ -424,7 +433,7 @@ jobs:
         if: ${{ env.NEW_VERSION != '' && env.DRY_RUN != 'true' }}
         run: |
           set -euo pipefail
-          LAST_SEEN=".nightgauge/release-watch/last-seen-${PROVIDER}.json"
+          LAST_SEEN="$NG_CHECKOUT/release-watch/last-seen-${PROVIDER}.json"
           mkdir -p "$(dirname "$LAST_SEEN")"
           NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           if [ ! -f "$LAST_SEEN" ]; then

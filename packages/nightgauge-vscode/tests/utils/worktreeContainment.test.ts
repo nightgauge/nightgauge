@@ -32,7 +32,7 @@ import {
   formatContainmentWarning,
   parsePorcelainZ,
   resolveContainmentTargets,
-  CONTAINMENT_DIR,
+  containmentDir,
   CONTAINMENT_ERROR_MARKER,
 } from "../../src/utils/worktreeContainment";
 
@@ -189,12 +189,19 @@ describe("(a) stage writes into a sibling repo (#129)", () => {
     expect(patchPath).toBeDefined();
     expect(fs.existsSync(patchPath!)).toBe(true);
 
-    // Written under the stage repo's CANONICAL root, which survives the
-    // worktree teardown a re-dispatch performs — not inside the worktree, and
-    // not inside the repo that was written to.
-    expect(patchPath!.startsWith(path.join(primary, CONTAINMENT_DIR))).toBe(true);
+    // Written under the stage repo's CANONICAL root's per-checkout directory
+    // (ADR-024 § 7), which survives the worktree teardown a re-dispatch
+    // performs — not in the worktree's own CHECKOUT (git deletes it with the
+    // worktree), not inside the repo that was written to, and never in a
+    // working tree.
+    expect(patchPath!.startsWith(containmentDir(primary))).toBe(true);
+    expect(containmentDir(primary)).toBe(
+      path.join(primary, ".git", "nightgauge-worktree", "containment")
+    );
+    expect(patchPath!.startsWith(containmentDir(worktree))).toBe(false);
     expect(patchPath!.startsWith(sibling)).toBe(false);
     expect(patchPath!.startsWith(worktree)).toBe(false);
+    expect(fs.existsSync(path.join(primary, ".nightgauge", "containment"))).toBe(false);
 
     const patch = fs.readFileSync(patchPath!, "utf-8");
     expect(patch).toContain("src/handlers.ts");
@@ -302,7 +309,7 @@ describe("(b) pre-existing operator work is never attributed to the stage (#129)
     expect(fs.readFileSync(path.join(sibling, "src", "router.ts"), "utf-8")).toBe(
       "// operator work in progress\n"
     );
-    expect(fs.existsSync(path.join(primary, CONTAINMENT_DIR))).toBe(false);
+    expect(fs.existsSync(containmentDir(primary))).toBe(false);
   });
 
   it("attributes only the stage's new paths when the operator is dirty in the same repo", async () => {
@@ -358,7 +365,7 @@ describe("(b) pre-existing operator work is never attributed to the stage (#129)
     expect(report.warnings).toHaveLength(1);
     expect(report.warnings[0].ambiguousPaths).toEqual(["src/router.ts"]);
     expect(report.artifactDir).toBeUndefined();
-    expect(fs.existsSync(path.join(primary, CONTAINMENT_DIR))).toBe(false);
+    expect(fs.existsSync(containmentDir(primary))).toBe(false);
     expect(formatContainmentWarning("feature-dev", report)).toContain("src/router.ts");
     expect(fs.readFileSync(path.join(sibling, "src", "router.ts"), "utf-8")).toBe(
       "// operator work, revision 2 (longer)\n"
@@ -388,7 +395,7 @@ describe("(c) clean siblings — no false positives (#129)", () => {
     expect(report.warnings).toEqual([]);
     expect(report.artifactDir).toBeUndefined();
     expect(repoState(sibling).status).toBe("");
-    expect(fs.existsSync(path.join(primary, CONTAINMENT_DIR))).toBe(false);
+    expect(fs.existsSync(containmentDir(primary))).toBe(false);
   });
 
   it("ignores .nightgauge/ artifacts the pipeline mirrors into the canonical root by design", async () => {
@@ -753,6 +760,6 @@ describe("a pipeline worktree outside the repo root (#2038, ADR-024 § 9)", () =
     expect(report.breaches.map((b) => b.repoName)).toEqual(["primary"]);
     expect(report.breaches[0].paths).toEqual(["src/router.ts"]);
     // Artifacts go to the main checkout, which outlives the worktree.
-    expect(report.artifactDir?.startsWith(path.join(primary, CONTAINMENT_DIR))).toBe(true);
+    expect(report.artifactDir?.startsWith(containmentDir(primary))).toBe(true);
   });
 });

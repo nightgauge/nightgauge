@@ -17,8 +17,9 @@ import (
 )
 
 // The Action Center platform bridge — client → platform mirror (ADR 015 §C/§E,
-// nightgauge/nightgauge#330). The Go binary's local `.nightgauge/attention/`
-// store is the single authoritative writer and source of truth; this uploader is
+// nightgauge/nightgauge#330). The Go binary's local attention store (the
+// checkout's .git/nightgauge-worktree/attention) is the single authoritative
+// writer and source of truth; this uploader is
 // additive: it pushes open + resolved DecisionRequests to
 // PUT /v1/attention/sync (idempotent by `id`) so multi-device surfaces (the
 // dashboard) mirror the same queue. It rides the telemetry-uploader pattern:

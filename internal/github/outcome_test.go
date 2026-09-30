@@ -3,6 +3,7 @@ package github
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,12 +15,14 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"gopkg.in/yaml.v3"
 )
 
 func makeTestModel(t *testing.T, dir string) string {
 	t.Helper()
-	incDir := filepath.Join(dir, ".nightgauge")
+	incDir := layouttest.CheckoutDir(t, dir)
 	if err := os.MkdirAll(incDir, 0755); err != nil {
 		t.Fatalf("create .nightgauge dir: %v", err)
 	}
@@ -35,7 +38,7 @@ func makeTestModel(t *testing.T, dir string) string {
 		t.Fatalf("marshal model: %v", err)
 	}
 
-	modelPath := filepath.Join(incDir, "complexity-model.yaml")
+	modelPath := filepath.Join(incDir, layout.CheckoutComplexityModel)
 	if err := os.WriteFile(modelPath, data, 0644); err != nil {
 		t.Fatalf("write model: %v", err)
 	}
@@ -43,7 +46,7 @@ func makeTestModel(t *testing.T, dir string) string {
 }
 
 func TestRecordOutcome_RecordsNewOutcome(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 
 	svc := NewOutcomeService(dir)
@@ -87,7 +90,7 @@ func TestRecordOutcome_RecordsNewOutcome(t *testing.T) {
 }
 
 func TestRecordOutcome_Idempotency(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 
 	svc := NewOutcomeService(dir)
@@ -120,7 +123,7 @@ func TestRecordOutcome_Idempotency(t *testing.T) {
 }
 
 func TestRecordOutcome_GarbageOverwrite(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 
 	svc := NewOutcomeService(dir)
@@ -166,7 +169,7 @@ func TestRecordOutcome_GarbageOverwrite(t *testing.T) {
 }
 
 func TestRecordOutcome_BootstrapsMissingModel(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	svc := NewOutcomeService(dir)
 	result := svc.RecordOutcome(OutcomeParams{
@@ -194,7 +197,7 @@ func TestRecordOutcome_BootstrapsMissingModel(t *testing.T) {
 }
 
 func TestInitializeModel_CanonicalAndIdempotent(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	svc := NewOutcomeService(dir)
 
 	first, err := svc.InitializeModel()
@@ -204,7 +207,7 @@ func TestInitializeModel_CanonicalAndIdempotent(t *testing.T) {
 	if !first.Created {
 		t.Fatal("first InitializeModel call did not create the model")
 	}
-	wantPath := filepath.Join(dir, ".nightgauge", "complexity-model.yaml")
+	wantPath := layouttest.CheckoutPath(t, dir, layout.CheckoutComplexityModel)
 	if first.Path != wantPath {
 		t.Errorf("path = %q, want %q", first.Path, wantPath)
 	}
@@ -251,27 +254,8 @@ func TestInitializeModel_CanonicalAndIdempotent(t *testing.T) {
 	}
 }
 
-func TestInitializeModel_InstallsLocalIgnoreRules(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := NewOutcomeService(dir).InitializeModel(); err != nil {
-		t.Fatal(err)
-	}
-	ignorePath := filepath.Join(dir, ".nightgauge", ".gitignore")
-	data, err := os.ReadFile(ignorePath)
-	if err != nil {
-		t.Fatalf("read generated model gitignore: %v", err)
-	}
-	content := string(data)
-	for _, pattern := range []string{"/.gitignore", "/complexity-model.yaml", "/complexity-model.lock"} {
-		if !containsLine(content, pattern) {
-			t.Errorf("generated model gitignore missing %q:\n%s", pattern, content)
-		}
-	}
-}
-
 func TestInitializeModel_LeavesFreshGitStatusClean(t *testing.T) {
-	dir := t.TempDir()
-	gittest.InitRepo(t, dir, "-q")
+	dir := layouttest.Repo(t)
 	if _, err := NewOutcomeService(dir).InitializeModel(); err != nil {
 		t.Fatal(err)
 	}
@@ -281,82 +265,8 @@ func TestInitializeModel_LeavesFreshGitStatusClean(t *testing.T) {
 	}
 }
 
-func TestInitializeModel_PreservesCustomGitignore(t *testing.T) {
-	dir := t.TempDir()
-	modelDir := filepath.Join(dir, ".nightgauge")
-	if err := os.MkdirAll(modelDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ignorePath := filepath.Join(modelDir, ".gitignore")
-	if err := os.WriteFile(ignorePath, []byte("/custom-local-state\n"), 0o640); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewOutcomeService(dir).InitializeModel(); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(ignorePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := string(data)
-	if !containsLine(content, "/custom-local-state") || !containsLine(content, "/complexity-model.yaml") || !containsLine(content, "/complexity-model.lock") {
-		t.Fatalf("initializer did not preserve and extend custom gitignore:\n%s", content)
-	}
-	info, err := os.Stat(ignorePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o640 {
-		t.Fatalf("gitignore permissions = %o, want 640", info.Mode().Perm())
-	}
-}
-
-// #1875: a consumer whose committed .nightgauge/.gitignore predates the
-// /complexity-model.lock rule must not have that committed file edited on its
-// primary clone. The rule goes to info/exclude and the tree stays clean.
-func TestInitializeModel_NeverEditsATrackedGitignore(t *testing.T) {
-	dir := t.TempDir()
-	gittest.InitRepo(t, dir, "-q")
-	modelDir := filepath.Join(dir, ".nightgauge")
-	if err := os.MkdirAll(modelDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	ignorePath := filepath.Join(modelDir, ".gitignore")
-	committed := "# nightgauge-gitignore-version: 11\n/complexity-model.yaml\n"
-	if err := os.WriteFile(ignorePath, []byte(committed), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gittest.Run(t, dir, "add", ".nightgauge/.gitignore")
-	gittest.Run(t, dir, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "init")
-
-	if _, err := NewOutcomeService(dir).InitializeModel(); err != nil {
-		t.Fatal(err)
-	}
-	if data, _ := os.ReadFile(ignorePath); string(data) != committed {
-		t.Fatalf("tracked .gitignore was edited:\n%s", data)
-	}
-	if out := gittest.Run(t, dir, "status", "--porcelain", "--untracked-files=all"); len(out) != 0 {
-		t.Fatalf("primary clone left dirty:\n%s", out)
-	}
-	exclude, err := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !containsLine(string(exclude), "/.nightgauge/complexity-model.lock") {
-		t.Fatalf("lock rule not in info/exclude:\n%s", exclude)
-	}
-	// Idempotent: a second run adds nothing.
-	if _, err := NewOutcomeService(dir).InitializeModel(); err != nil {
-		t.Fatal(err)
-	}
-	again, _ := os.ReadFile(filepath.Join(dir, ".git", "info", "exclude"))
-	if string(again) != string(exclude) {
-		t.Fatalf("second run rewrote info/exclude:\n%s", again)
-	}
-}
-
 func TestRunModelTransaction_InstallsValidatedDocument(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	svc := NewOutcomeService(dir)
 	model := newBootstrapComplexityModel(time.Date(2001, time.February, 3, 0, 0, 0, 0, time.UTC))
 	model.TotalObservations = 7
@@ -371,7 +281,7 @@ func TestRunModelTransaction_InstallsValidatedDocument(t *testing.T) {
 	if ready.String() != "READY\n" {
 		t.Fatalf("readiness = %q, want READY newline", ready.String())
 	}
-	installed, err := os.ReadFile(filepath.Join(dir, ".nightgauge", "complexity-model.yaml"))
+	installed, err := os.ReadFile(layouttest.CheckoutPath(t, dir, layout.CheckoutComplexityModel))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +291,7 @@ func TestRunModelTransaction_InstallsValidatedDocument(t *testing.T) {
 }
 
 func TestRunModelTransaction_RejectsInvalidDocumentWithoutReplacingModel(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	svc := NewOutcomeService(dir)
 	result, err := svc.InitializeModel()
 	if err != nil {
@@ -407,7 +317,7 @@ func TestRunModelTransaction_RejectsInvalidDocumentWithoutReplacingModel(t *test
 
 func TestRunModelTransaction_EmptyInputReleasesWithoutMutation(t *testing.T) {
 	t.Run("existing model", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := layouttest.Repo(t)
 		svc := NewOutcomeService(dir)
 		result, err := svc.InitializeModel()
 		if err != nil {
@@ -431,13 +341,13 @@ func TestRunModelTransaction_EmptyInputReleasesWithoutMutation(t *testing.T) {
 	})
 
 	t.Run("missing model", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := layouttest.Repo(t)
 		svc := NewOutcomeService(dir)
 		var ready bytes.Buffer
 		if err := svc.RunModelTransaction(strings.NewReader(""), &ready); err != nil {
 			t.Fatal(err)
 		}
-		modelPath := filepath.Join(dir, ".nightgauge", "complexity-model.yaml")
+		modelPath := layouttest.CheckoutPath(t, dir, layout.CheckoutComplexityModel)
 		data, err := os.ReadFile(modelPath)
 		if err != nil {
 			t.Fatal(err)
@@ -486,7 +396,7 @@ func TestRunModelTransaction_RejectsSemanticViolationsWithoutReplacingModel(t *t
 
 	for name, invalidDocument := range tests {
 		t.Run(name, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := layouttest.Repo(t)
 			svc := NewOutcomeService(dir)
 			result, err := svc.InitializeModel()
 			if err != nil {
@@ -535,12 +445,12 @@ func TestBootstrapModel_MatchesSharedGoldenFixture(t *testing.T) {
 }
 
 func TestInitializeModel_PreservesExistingFile(t *testing.T) {
-	dir := t.TempDir()
-	modelDir := filepath.Join(dir, ".nightgauge")
+	dir := layouttest.Repo(t)
+	modelDir := layouttest.CheckoutDir(t, dir)
 	if err := os.MkdirAll(modelDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	modelPath := filepath.Join(modelDir, "complexity-model.yaml")
+	modelPath := filepath.Join(modelDir, layout.CheckoutComplexityModel)
 	original := []byte("operator-owned: true\n")
 	if err := os.WriteFile(modelPath, original, 0o600); err != nil {
 		t.Fatal(err)
@@ -563,7 +473,7 @@ func TestInitializeModel_PreservesExistingFile(t *testing.T) {
 }
 
 func TestInitializeModel_ConcurrentCallersCreateOneCompleteModel(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	const callers = 16
 	results := make(chan ModelInitResult, callers)
 	errs := make(chan error, callers)
@@ -599,7 +509,7 @@ func TestInitializeModel_ConcurrentCallersCreateOneCompleteModel(t *testing.T) {
 	if model.SchemaVersion != "1.0" || model.BootstrapDate == "" {
 		t.Fatalf("concurrent bootstrap left invalid model: %+v", model)
 	}
-	entries, err := os.ReadDir(filepath.Join(dir, ".nightgauge"))
+	entries, err := os.ReadDir(layouttest.CheckoutDir(t, dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -611,7 +521,7 @@ func TestInitializeModel_ConcurrentCallersCreateOneCompleteModel(t *testing.T) {
 }
 
 func TestRecordOutcome_ConcurrentFirstRunPreservesEveryOutcome(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	const callers = 10
 	results := make(chan OutcomeResult, callers)
 	var wg sync.WaitGroup
@@ -645,14 +555,14 @@ func TestRecordOutcome_ConcurrentFirstRunPreservesEveryOutcome(t *testing.T) {
 }
 
 func TestModelLock_DoesNotSerializeDifferentWorkspaces(t *testing.T) {
-	first := NewOutcomeService(t.TempDir())
+	first := NewOutcomeService(layouttest.Repo(t))
 	release, err := first.lockModel()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer release()
 
-	secondDir := t.TempDir()
+	secondDir := layouttest.Repo(t)
 	done := make(chan error, 1)
 	go func() {
 		_, err := NewOutcomeService(secondDir).InitializeModel()
@@ -716,7 +626,7 @@ func TestOutcomeRecordProcessHelper(t *testing.T) {
 }
 
 func TestRecordOutcome_CrossProcessLockPreservesBothWriters(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	readyPath := filepath.Join(root, "first-ready")
 	releasePath := filepath.Join(root, "release-first")
 	newHelper := func(mode string, issue int) *exec.Cmd {
@@ -804,40 +714,61 @@ func TestRecordOutcome_CrossProcessLockPreservesBothWriters(t *testing.T) {
 
 func TestInitializeModel_RejectsSymlinkedPaths(t *testing.T) {
 	t.Run("model directory", func(t *testing.T) {
-		root := t.TempDir()
+		root := layouttest.Repo(t)
+		gitDir, err := layout.GitDir(root)
+		if err != nil {
+			t.Fatal(err)
+		}
 		outside := t.TempDir()
-		if err := os.Symlink(outside, filepath.Join(root, ".nightgauge")); err != nil {
+		if err := os.Symlink(outside, filepath.Join(gitDir, "nightgauge-worktree")); err != nil {
 			t.Skipf("symlink unavailable: %v", err)
 		}
-		if _, err := NewOutcomeService(root).InitializeModel(); err == nil || !strings.Contains(err.Error(), "symlinked model directory") {
-			t.Fatalf("InitializeModel error = %v, want symlinked-directory refusal", err)
+		if _, err := NewOutcomeService(root).InitializeModel(); !errors.Is(err, layout.ErrUnsafeCloneDir) {
+			t.Fatalf("InitializeModel error = %v, want the per-checkout directory refused", err)
 		}
-		if _, err := os.Stat(filepath.Join(outside, "complexity-model.yaml")); !os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(outside, layout.CheckoutComplexityModel)); !os.IsNotExist(err) {
 			t.Fatalf("initializer wrote through directory symlink: %v", err)
 		}
 	})
 
 	t.Run("model file", func(t *testing.T) {
-		root := t.TempDir()
-		modelDir := filepath.Join(root, ".nightgauge")
-		if err := os.MkdirAll(modelDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
+		root := layouttest.Repo(t)
 		outside := filepath.Join(t.TempDir(), "outside.yaml")
 		if err := os.WriteFile(outside, []byte("outside: true\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if err := os.Symlink(outside, filepath.Join(modelDir, "complexity-model.yaml")); err != nil {
+		if err := os.Symlink(outside, filepath.Join(layouttest.CheckoutDir(t, root), layout.CheckoutComplexityModel)); err != nil {
 			t.Skipf("symlink unavailable: %v", err)
 		}
-		if _, err := NewOutcomeService(root).InitializeModel(); err == nil || !strings.Contains(err.Error(), "symlinked complexity model") {
+		if _, err := NewOutcomeService(root).InitializeModel(); !errors.Is(err, layout.ErrUnsafeCloneDir) {
 			t.Fatalf("InitializeModel error = %v, want symlinked-model refusal", err)
+		}
+		if data, _ := os.ReadFile(outside); string(data) != "outside: true\n" {
+			t.Fatalf("initializer wrote through the model symlink: %q", data)
 		}
 	})
 }
 
+// A root outside git has no per-checkout directory: every operation fails
+// with the resolver's error and nothing is written under the root.
+func TestOutcomeService_RootOutsideGitFails(t *testing.T) {
+	root := t.TempDir()
+	svc := NewOutcomeService(root)
+	if _, err := svc.InitializeModel(); !errors.Is(err, layout.ErrNotGitRepository) {
+		t.Fatalf("InitializeModel error = %v, want ErrNotGitRepository", err)
+	}
+	if err := svc.ValidateModel(); !errors.Is(err, layout.ErrNotGitRepository) {
+		t.Fatalf("ValidateModel error = %v, want ErrNotGitRepository", err)
+	}
+	if res := svc.RecordOutcome(OutcomeParams{IssueNumber: 1, PRNumber: 2, ActualLines: 3}); res.Recorded || res.Error == "" {
+		t.Fatalf("RecordOutcome = %+v, want an error", res)
+	}
+	if entries, _ := os.ReadDir(root); len(entries) != 0 {
+		t.Fatalf("root outside git was written to: %v", entries)
+	}
+}
 func TestInitializeModel_UsesPrivatePermissions(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	result, err := NewOutcomeService(dir).InitializeModel()
 	if err != nil {
 		t.Fatal(err)
@@ -852,7 +783,7 @@ func TestInitializeModel_UsesPrivatePermissions(t *testing.T) {
 }
 
 func TestRecordOutcome_PreservesWorkTimeFeedback(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 	model := loadModel(t, dir)
 	model.WorkTimeFeedback = &workTimeFeedback{
@@ -874,7 +805,7 @@ func TestRecordOutcome_PreservesWorkTimeFeedback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	modelPath := filepath.Join(dir, ".nightgauge", "complexity-model.yaml")
+	modelPath := layouttest.CheckoutPath(t, dir, layout.CheckoutComplexityModel)
 	if err := os.WriteFile(modelPath, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -902,19 +833,25 @@ func TestRepoInitUsesSupportedModelInitializer(t *testing.T) {
 	if strings.Contains(text, "schema_version: \"1.0\"") {
 		t.Fatal("repo-init embeds a second bootstrap model instead of using outcome init")
 	}
-	if !strings.Contains(text, `[ -e "$MODEL_PATH" ] || [ -L "$MODEL_PATH" ]`) {
+	// The model is per-checkout state in the git dir (ADR-024 § 7): the skill
+	// resolves it through the layout command and writes a seed only through
+	// the confined `layout write`, never by a hand-built working-tree path.
+	if !strings.Contains(text, `MODEL_PATH="$(nightgauge layout path checkout complexity-model.yaml)"`) {
+		t.Fatal("repo-init does not resolve the model through `nightgauge layout path checkout`")
+	}
+	if !strings.Contains(text, `if [ -e "$MODEL_PATH" ]; then`) {
 		t.Fatal("repo-init does not preserve an existing model before seeding")
 	}
-	if !strings.Contains(text, "os.link(temp_path, target_path)") {
-		t.Fatal("repo-init seed install can replace a model that appears concurrently")
+	if !strings.Contains(text, "nightgauge layout write checkout complexity-model.yaml") {
+		t.Fatal("repo-init seed install bypasses the confined per-checkout writer")
 	}
-	if !strings.Contains(text, `[ -L ".nightgauge" ]`) {
-		t.Fatal("repo-init seed path does not reject a symlinked .nightgauge directory")
+	if strings.Contains(text, ".nightgauge/complexity-model.yaml") {
+		t.Fatal("repo-init still names the pre-ADR-024 working-tree model path")
 	}
 }
 
 func TestRecordOutcome_JSONResponseFormat(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 
 	svc := NewOutcomeService(dir)
@@ -1009,7 +946,7 @@ func TestIsPredictionCorrect(t *testing.T) {
 }
 
 func TestRecordSelfHealEvent(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 
 	svc := NewOutcomeService(dir)
@@ -1045,7 +982,7 @@ func TestRecordSelfHealEvent(t *testing.T) {
 }
 
 func TestRecordSelfHealEvent_BootstrapsMissingModel(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	svc := NewOutcomeService(dir)
 	result := svc.RecordSelfHealEvent(42, "stale_sdk_dist", "feature-validate")
@@ -1158,8 +1095,8 @@ func TestDecodeComplexityModelDocument_RejectsUnknownPredictionAccuracyField(t *
 // one-way: a legacy-keyed model round-tripped through RecordOutcome
 // re-serializes with only survival_calibration, never survival.
 func TestRecordOutcome_MigratesLegacySurvivalKeyOnSave(t *testing.T) {
-	dir := t.TempDir()
-	incDir := filepath.Join(dir, ".nightgauge")
+	dir := layouttest.Repo(t)
+	incDir := layouttest.CheckoutDir(t, dir)
 	if err := os.MkdirAll(incDir, 0755); err != nil {
 		t.Fatalf("create .nightgauge dir: %v", err)
 	}
@@ -1173,7 +1110,7 @@ func TestRecordOutcome_MigratesLegacySurvivalKeyOnSave(t *testing.T) {
 	}
 	legacy := bytes.Replace(data, []byte("survival_calibration:"), []byte("survival:"), 1)
 
-	modelPath := filepath.Join(incDir, "complexity-model.yaml")
+	modelPath := filepath.Join(incDir, layout.CheckoutComplexityModel)
 	if err := os.WriteFile(modelPath, legacy, 0644); err != nil {
 		t.Fatalf("write legacy model: %v", err)
 	}
@@ -1371,8 +1308,8 @@ func TestDecodeComplexityModelDocument_RejectsInvalidPresentCriticalFiles(t *tes
 // backfill is one-way: a v0.3.x model missing lines_changed_thresholds,
 // loaded and saved via RecordOutcome, re-serializes with the complete block.
 func TestRecordOutcome_MigratesMissingLinesChangedThresholdsOnSave(t *testing.T) {
-	dir := t.TempDir()
-	incDir := filepath.Join(dir, ".nightgauge")
+	dir := layouttest.Repo(t)
+	incDir := layouttest.CheckoutDir(t, dir)
 	if err := os.MkdirAll(incDir, 0755); err != nil {
 		t.Fatalf("create .nightgauge dir: %v", err)
 	}
@@ -1395,7 +1332,7 @@ func TestRecordOutcome_MigratesMissingLinesChangedThresholdsOnSave(t *testing.T)
 		t.Fatalf("marshal v0.3.x-shaped document: %v", err)
 	}
 
-	modelPath := filepath.Join(incDir, "complexity-model.yaml")
+	modelPath := filepath.Join(incDir, layout.CheckoutComplexityModel)
 	if err := os.WriteFile(modelPath, v03x, 0644); err != nil {
 		t.Fatalf("write v0.3.x model: %v", err)
 	}
@@ -1432,7 +1369,7 @@ func TestRecordOutcome_MigratesMissingLinesChangedThresholdsOnSave(t *testing.T)
 
 func loadModel(t *testing.T, dir string) *complexityModel {
 	t.Helper()
-	modelPath := filepath.Join(dir, ".nightgauge", "complexity-model.yaml")
+	modelPath := layouttest.CheckoutPath(t, dir, layout.CheckoutComplexityModel)
 	data, err := os.ReadFile(modelPath)
 	if err != nil {
 		t.Fatalf("read model: %v", err)
@@ -1442,4 +1379,29 @@ func loadModel(t *testing.T, dir string) *complexityModel {
 		t.Fatalf("unmarshal model: %v", err)
 	}
 	return &m
+}
+
+// #2043: a deny-by-default .nightgauge/.gitignore (template v17, `/*`) already
+// ignores the model files, so initialization appends nothing to it.
+func TestInitializeModel_LeavesADenyByDefaultGitignoreAlone(t *testing.T) {
+	dir := t.TempDir()
+	gittest.InitRepo(t, dir, "-q")
+	modelDir := filepath.Join(dir, ".nightgauge")
+	if err := os.MkdirAll(modelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ignorePath := filepath.Join(modelDir, ".gitignore")
+	body := "# nightgauge-gitignore-version: 17\n/*\n!/config.yaml\n!/.gitignore\n"
+	if err := os.WriteFile(ignorePath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewOutcomeService(dir).InitializeModel(); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(ignorePath); string(data) != body {
+		t.Fatalf("deny-by-default .gitignore was edited:\n%s", data)
+	}
+	if out := gittest.Run(t, dir, "status", "--porcelain", "--untracked-files=all"); out != "?? .nightgauge/.gitignore" {
+		t.Fatalf("git status = %q, want only the ignore file", out)
+	}
 }

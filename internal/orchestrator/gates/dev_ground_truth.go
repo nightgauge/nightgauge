@@ -16,8 +16,8 @@ import (
 const maxStrandedReported = 5
 
 // statusArgs builds `git status --porcelain` limited to the deliverable. The
-// exclusion is essential, not cosmetic: bookkeeping such as
-// `.nightgauge/attention/` lands in the tree, so counting it as work would make
+// exclusion is essential, not cosmetic: bookkeeping such as a pre-ADR-024
+// `.nightgauge/attention/` can land in the tree, so counting it as work would make
 // every empty workspace look productive and silently disable this gate in any
 // repo that does not happen to gitignore it. See ci.BookkeepingDirs.
 // `--untracked-files=all` is load-bearing, not a preference. Porcelain's

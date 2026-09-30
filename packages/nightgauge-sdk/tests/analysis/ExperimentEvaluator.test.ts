@@ -8,10 +8,14 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import { ExperimentEvaluator } from "../../src/analysis/ExperimentEvaluator.js";
+import { cloneLayoutFor, setCloneLayout } from "../../src/context/cloneLayout.js";
 import type { ExperimentConfig, ExperimentOutcome } from "../../src/analysis/experiment-types.js";
 
 const WORKSPACE = "/tmp/test-experiment-evaluator";
-const EXPERIMENTS_DIR = path.join(WORKSPACE, ".nightgauge/analysis/experiments");
+// Experiments live in the checkout's own directory (ADR-024 § 7). A fixed
+// layout, so no test here runs git.
+setCloneLayout(WORKSPACE, cloneLayoutFor(WORKSPACE, path.join(WORKSPACE, ".git")));
+const EXPERIMENTS_DIR = path.join(WORKSPACE, ".git/nightgauge-worktree/analysis/experiments");
 
 const BASE_CONFIG: ExperimentConfig = {
   name: "haiku-vs-sonnet",
@@ -274,10 +278,7 @@ describe("ExperimentEvaluator", () => {
 
       ExperimentEvaluator.writeConclusion(WORKSPACE, conclusion);
 
-      const filePath = path.join(
-        WORKSPACE,
-        ".nightgauge/analysis/experiments/test-exp-conclusion.json"
-      );
+      const filePath = path.join(EXPERIMENTS_DIR, "test-exp-conclusion.json");
       expect(fs.existsSync(filePath)).toBe(true);
     });
 

@@ -25,6 +25,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/careful"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // --- shared plumbing ---
@@ -355,7 +356,7 @@ func TestBashChainOrderAndMarkers(t *testing.T) {
 	})
 
 	t.Run("careful-gate still blocks a destructive command workflow-gate allows", func(t *testing.T) {
-		root := t.TempDir()
+		root := layouttest.Repo(t)
 		if err := careful.Enable(root, 0, ""); err != nil {
 			t.Fatal(err)
 		}

@@ -174,10 +174,10 @@ describe("ClaudeRateLimitStore — persistence across process restarts", () => {
     const store = new ClaudeRateLimitStore(workspace);
     await store.record(event(), NOW);
 
-    // Pinned literally, because the `/usage/` rule in the generated
-    // .nightgauge/.gitignore is what keeps this per-machine cache out of git.
-    // Moving the file without moving the rule surfaces it as an untracked
-    // change in every user's repository.
+    // Pinned literally: the generated .nightgauge/.gitignore is
+    // deny-by-default (`/*`, ADR-024 § 13), which keeps this per-machine
+    // cache out of git. Moving it to an allowlisted path would surface it as
+    // an untracked change in every user's repository.
     expect(store.filePath).toBe(path.join(workspace, ".nightgauge/usage/claude-rate-limits.json"));
     await expect(fs.access(store.filePath)).resolves.toBeUndefined();
   });

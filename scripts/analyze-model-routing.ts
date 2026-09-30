@@ -23,7 +23,7 @@ import {
   type ModelSelectionResult,
   type IssueMetadata,
 } from "../packages/nightgauge-sdk/src/analysis/AutoModelSelector.js";
-import { DEFAULT_MODEL_COST_RATES } from "../packages/nightgauge-sdk/src/analysis/types.js";
+import { ANTHROPIC_TIER_COST_RATES } from "../packages/nightgauge-sdk/src/analysis/types.js";
 import { ESCALATION_CEILING_BAND } from "../packages/nightgauge-sdk/src/eval/selectionQuery.js";
 import { TIER_BANDS } from "../packages/nightgauge-sdk/src/eval/tierBands.js";
 import { cloneClassDir } from "../packages/nightgauge-sdk/src/context/cloneLayout.js";
@@ -315,7 +315,7 @@ function computeHypotheticalCost(
 ): number {
   if (!stageTokens) return 0;
 
-  const targetRates = DEFAULT_MODEL_COST_RATES[targetModel];
+  const targetRates = ANTHROPIC_TIER_COST_RATES[targetModel];
   if (!targetRates) return 0;
 
   // Compute cost using actual token counts with target model rates
@@ -446,8 +446,8 @@ function detectOverRouting(simulations: RunSimulation[]): OverRoutingPattern[] {
         const stageTokens = sim.stages.find((s) => s.stage === stageSim.stage);
         if (stageTokens) {
           const sonnetRatio =
-            DEFAULT_MODEL_COST_RATES.haiku.inputPerMillion /
-            DEFAULT_MODEL_COST_RATES.opus.inputPerMillion;
+            ANTHROPIC_TIER_COST_RATES.haiku.inputPerMillion /
+            ANTHROPIC_TIER_COST_RATES.opus.inputPerMillion;
           existing.haikuCosts.push(stageSim.hypotheticalCostUsd * sonnetRatio);
         }
 
@@ -666,11 +666,9 @@ function analyzeThresholds(simulations: RunSimulation[]): {
 function computeModelDistribution(
   simulations: RunSimulation[]
 ): Record<ModelTier, { stages: number; cost: number }> {
-  const dist: Record<ModelTier, { stages: number; cost: number }> = {
-    haiku: { stages: 0, cost: 0 },
-    sonnet: { stages: 0, cost: 0 },
-    opus: { stages: 0, cost: 0 },
-  };
+  const dist = Object.fromEntries(
+    TIER_BANDS.map((band) => [band, { stages: 0, cost: 0 }])
+  ) as Record<ModelTier, { stages: number; cost: number }>;
 
   for (const sim of simulations) {
     for (const stageSim of sim.stages) {

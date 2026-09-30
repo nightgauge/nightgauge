@@ -15,23 +15,34 @@ import * as path from "node:path";
 import { cloneLayoutFor, setCloneLayout, type CloneLayout } from "../../src/utils/cloneLayout";
 
 /**
- * Maps `root` to the layout of a clone whose git directory is `gitDir`
+ * Maps `root` to the layout of a clone whose git common directory is `gitDir`
  * (default `<root>/.git`), so every helper returns `<gitDir>/nightgauge/<class>`
- * for it without running git. Nothing is created on disk.
+ * for it without running git. `checkoutGitDir` is the checkout's own git dir
+ * (default: `gitDir`, the main checkout), under which the per-checkout root
+ * `nightgauge-worktree` sits. Nothing is created on disk.
  */
-export function fakeCloneLayout(root: string, gitDir = path.join(root, ".git")): CloneLayout {
-  const layout = cloneLayoutFor(root, gitDir);
+export function fakeCloneLayout(
+  root: string,
+  gitDir = path.join(root, ".git"),
+  checkoutGitDir = gitDir
+): CloneLayout {
+  const layout = cloneLayoutFor(root, gitDir, checkoutGitDir);
   setCloneLayout(root, layout);
   return layout;
 }
 
 /**
- * {@link fakeCloneLayout} plus the four class directories created on disk,
- * for tests that write fixtures where the code under test reads them.
+ * {@link fakeCloneLayout} plus the four class directories and the
+ * per-checkout root created on disk, for tests that write fixtures where the
+ * code under test reads them.
  */
-export function mkFakeCloneLayout(root: string, gitDir = path.join(root, ".git")): CloneLayout {
-  const layout = fakeCloneLayout(root, gitDir);
-  for (const dir of [layout.pipeline, layout.plans, layout.retros, layout.logs]) {
+export function mkFakeCloneLayout(
+  root: string,
+  gitDir = path.join(root, ".git"),
+  checkoutGitDir = gitDir
+): CloneLayout {
+  const layout = fakeCloneLayout(root, gitDir, checkoutGitDir);
+  for (const dir of [layout.pipeline, layout.plans, layout.retros, layout.logs, layout.checkout]) {
     fs.mkdirSync(dir, { recursive: true });
   }
   return layout;

@@ -6,7 +6,8 @@
  * 2. Adapts JSONL records to SDK's ExecutionHistoryRecord format
  * 3. Runs ModelPerformanceAnalyzer.analyze()
  * 4. Runs FailurePatternDetector.analyze() for failure pattern detection
- * 5. Stores analysis results in .nightgauge/analysis/
+ * 5. Stores analysis results in the checkout's analysis/ directory
+ *    (`.git/nightgauge-worktree/analysis/`, ADR-024 § 7)
  * 6. Generates self-check summary for output window
  *
  * Non-critical: all operations wrapped in try/catch, failures log warnings
@@ -17,7 +18,7 @@
  * @see packages/nightgauge-sdk/src/analysis/ModelPerformanceAnalyzer.ts
  */
 
-import { pipelineStateDir } from "../utils/cloneLayout";
+import { checkoutPath, isUsableWorkspaceRoot, pipelineStateDir } from "../utils/cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { exec, execFile } from "node:child_process";
@@ -72,7 +73,6 @@ import type { HealthEvaluation } from "./HealthActionService";
 import { withComplexityModelService } from "./ComplexityModelLock";
 
 /** Directory for analysis result storage */
-const ANALYSIS_DIR = ".nightgauge/analysis";
 
 /** Maximum number of analysis files to retain */
 const MAX_ANALYSIS_FILES = 20;
@@ -1165,7 +1165,9 @@ export class PostPipelineAnalyzer {
   }
 
   /**
-   * Store analysis results to .nightgauge/analysis/ directory.
+   * Store analysis results in the checkout's analysis/ directory
+   * (`<git-dir>/nightgauge-worktree/analysis`, ADR-024 § 7). Throws when the
+   * workspace root is not a git checkout.
    *
    * Creates timestamped file and overwrites latest.json.
    * Returns the path to the timestamped analysis file.
@@ -1176,7 +1178,7 @@ export class PostPipelineAnalyzer {
     analysis: ModelRoutingAnalysis,
     failureAnalysis?: FailureAnalysisResult | null
   ): Promise<string> {
-    const analysisDir = path.join(workspaceRoot, ANALYSIS_DIR);
+    const analysisDir = checkoutPath(workspaceRoot, "analysis");
     await fs.mkdir(analysisDir, { recursive: true });
 
     const now = new Date().toISOString();
@@ -1210,7 +1212,8 @@ export class PostPipelineAnalyzer {
    * Enforce retention: keep only the last MAX_ANALYSIS_FILES timestamped files.
    */
   private static async enforceRetention(workspaceRoot: string): Promise<void> {
-    const analysisDir = path.join(workspaceRoot, ANALYSIS_DIR);
+    if (!isUsableWorkspaceRoot(workspaceRoot)) return;
+    const analysisDir = checkoutPath(workspaceRoot, "analysis");
 
     let entries: string[];
     try {

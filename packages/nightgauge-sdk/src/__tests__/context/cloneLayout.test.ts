@@ -89,7 +89,7 @@ describe("CL.resolveCloneLayout", () => {
     for (const cls of CL.CLONE_CLASSES) expect(fs.existsSync(layout[cls])).toBe(false);
   });
 
-  it("resolves a linked worktree to the main clone's directory", () => {
+  it("resolves a linked worktree to the main clone's directory and its own checkout", () => {
     const root = repo();
     git(root, "commit", "-q", "--allow-empty", "-m", "init");
     const wt = path.join(tmp("clonelayout-wt-"), "wt");
@@ -98,6 +98,13 @@ describe("CL.resolveCloneLayout", () => {
     const linked = CL.resolveCloneLayout(wt);
     expect(linked.root).toBe(wt);
     expect(linked.gitCommonDir).toBe(main.gitCommonDir);
+    expect(linked.clone).toBe(main.clone);
+    expect(main.gitDir).toBe(main.gitCommonDir);
+    expect(main.checkout).toBe(path.join(main.gitCommonDir, "nightgauge-worktree"));
+    expect(linked.gitDir).toBe(path.join(main.gitCommonDir, "worktrees", "wt"));
+    expect(linked.checkout).toBe(path.join(linked.gitDir, "nightgauge-worktree"));
+    expect(fs.statSync(linked.checkout).mode & 0o777).toBe(0o700);
+    expect(CL.checkoutPath("runState", wt)).toBe(path.join(linked.checkout, "run-state.json"));
     expect(linked.pipeline).toBe(main.pipeline);
   });
 
@@ -181,14 +188,16 @@ describe("CL.primeCloneLayout", () => {
 
 describe("CL.setCloneLayout / CL.cloneLayoutFromJson", () => {
   const json = JSON.stringify({
-    schema_version: 1,
+    schema_version: 2,
     root: "/r",
     git_common_dir: "/r/.git",
+    git_dir: "/r/.git",
     clone: "/r/.git/nightgauge",
     pipeline: "/r/.git/nightgauge/pipeline",
     plans: "/r/.git/nightgauge/plans",
     retros: "/r/.git/nightgauge/retros",
     logs: "/r/.git/nightgauge/logs",
+    checkout: "/r/.git/nightgauge-worktree",
     state: "/s",
     cache: "/c",
     runtime: "/rt",
@@ -198,12 +207,46 @@ describe("CL.setCloneLayout / CL.cloneLayoutFromJson", () => {
     expect(CL.cloneLayoutFromJson(json)).toEqual({
       root: "/r",
       gitCommonDir: "/r/.git",
+      gitDir: "/r/.git",
       clone: "/r/.git/nightgauge",
       pipeline: "/r/.git/nightgauge/pipeline",
       plans: "/r/.git/nightgauge/plans",
       retros: "/r/.git/nightgauge/retros",
       logs: "/r/.git/nightgauge/logs",
+      checkout: "/r/.git/nightgauge-worktree",
     });
+  });
+
+  // Parity with the Go binary: the fixture the Go `nightgauge layout` test
+  // checks the real output against derives every path field from the git
+  // common dir and the checkout's git dir. JSON built from it must parse to
+  // exactly what cloneLayoutFor derives, and CHECKOUT_ENTRIES must name the
+  // Go per-checkout entries.
+  it("matches the shared Go layout fixture", () => {
+    const fixture = JSON.parse(
+      fs.readFileSync(
+        path.resolve(__dirname, "../../../../../internal/layout/testdata/layout-fields.json"),
+        "utf8"
+      )
+    ) as {
+      schema_version: number;
+      fields: Record<string, string>;
+      checkout_entries: Record<string, string>;
+    };
+    const common = "/x/repo/.git";
+    for (const gitDir of [common, `${common}/worktrees/wt`]) {
+      const out: Record<string, unknown> = {
+        schema_version: fixture.schema_version,
+        root: "/x/wt",
+      };
+      for (const [field, tmpl] of Object.entries(fixture.fields)) {
+        out[field] = tmpl.replace("{common}", common).replace("{gitdir}", gitDir);
+      }
+      expect(CL.cloneLayoutFromJson(JSON.stringify(out))).toEqual(
+        CL.cloneLayoutFor("/x/wt", common, gitDir)
+      );
+    }
+    expect({ ...CL.CHECKOUT_ENTRIES }).toEqual(fixture.checkout_entries);
   });
 
   it("rejects JSON missing a field", () => {

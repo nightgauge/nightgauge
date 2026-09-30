@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/triage"
 )
 
@@ -47,7 +48,7 @@ func groundedRecord() triage.Record {
 }
 
 func TestTriageRecord_WritesAndValidates(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	cmd := triageRecordCmd()
 	cmd.SetArgs([]string{"--file", writeTriageJSON(t, groundedRecord()), "--workdir", ws})
 	if err := cmd.Execute(); err != nil {
@@ -67,7 +68,7 @@ func TestTriageRecord_WritesAndValidates(t *testing.T) {
 }
 
 func TestTriageCheck_ValidRecordPasses(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	if _, violations, err := triage.Write(ws, groundedRecord()); err != nil || len(violations) != 0 {
 		t.Fatalf("Write: %v %+v", err, violations)
 	}
@@ -79,7 +80,7 @@ func TestTriageCheck_ValidRecordPasses(t *testing.T) {
 }
 
 func TestTriageList_ReportsWrittenRecords(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	if _, _, err := triage.Write(ws, groundedRecord()); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -92,7 +93,7 @@ func TestTriageList_ReportsWrittenRecords(t *testing.T) {
 
 func TestTriageCheck_MissingRecordErrors(t *testing.T) {
 	cmd := triageCheckCmd()
-	cmd.SetArgs([]string{"--id", "nope", "--workdir", t.TempDir()})
+	cmd.SetArgs([]string{"--id", "nope", "--workdir", layouttest.Repo(t)})
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("expected an error for a record that does not exist")
 	}

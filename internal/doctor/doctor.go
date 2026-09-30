@@ -9,6 +9,7 @@ package doctor
 import (
 	"context"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/dockercompose"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // SchemaVersion is the `v` field of `nightgauge doctor --json`.
@@ -96,8 +98,10 @@ func cadenceScope(cfg *config.Config, workspaceRoot string) cadence.Scope {
 	if cfg != nil && cfg.Autonomous != nil {
 		scope.Autonomous = autonomousCovers(cfg.Autonomous.ResolvedEnabledRepos(doctorOwner(cfg)), scope.Repo)
 	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, ".nightgauge", "autonomous", "state.json")); err == nil {
-		scope.Autonomous = true
+	if p := checkoutStatePath(workspaceRoot, path.Join(layout.CheckoutAutonomous, "state.json")); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			scope.Autonomous = true
+		}
 	}
 	return scope
 }

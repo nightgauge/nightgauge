@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
+	"github.com/nightgauge/nightgauge/internal/logretention"
 )
 
 // logRetentionFixture makes a workspace root with a logs directory, pins the
@@ -77,12 +78,13 @@ func TestLogRetentionOverCapFindings(t *testing.T) {
 	if err := os.Remove(old); err != nil {
 		t.Fatal(err)
 	}
-	writeAged(t, logs, "go-backend.log", 2<<20, now.Add(-72*time.Hour)) // live: never pruned
+	live := logretention.LiveFiles(now)[0] // today's ledger segment: never pruned
+	writeAged(t, logs, live, 2<<20, now.Add(-72*time.Hour))
 	fs, _ = logRetentionFindings(root, now)
 	if len(fs) != 1 || fs[0].Severity != SeverityWarning || !strings.Contains(fs[0].Title, "log-dir-over-cap") {
 		t.Fatalf("want one over-cap warning, got %s", findingsText(fs))
 	}
-	if !strings.Contains(fs[0].Evidence["kept"], "go-backend.log") {
-		t.Errorf("evidence kept = %q, want it to name go-backend.log", fs[0].Evidence["kept"])
+	if !strings.Contains(fs[0].Evidence["kept"], live) {
+		t.Errorf("evidence kept = %q, want it to name %s", fs[0].Evidence["kept"], live)
 	}
 }

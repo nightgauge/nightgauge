@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nightgauge/nightgauge/internal/intelligence/scopeDriftGate"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
@@ -163,5 +166,40 @@ func TestScopeDriftCheck_RepoHelpIsTrue(t *testing.T) {
 	}
 	if check.Annotations[repoBackfillAnnotation] != "true" {
 		t.Errorf("--repo help promises a config default but the flag is not opted into the back-fill")
+	}
+}
+
+// The drift counter is per-checkout runtime state (ADR-024 § 13): it lands in
+// CHECKOUT, never in the committed .nightgauge/audit/, and a root outside git
+// is refused rather than written.
+func TestAppendScopeDriftAudit_WritesTheCheckoutCounter(t *testing.T) {
+	dir := layouttest.Repo(t)
+	result := &scopeDriftGate.GateResult{IssueType: "docs", DriftedFiles: []string{"a.go"}, EnforcementMode: "warn"}
+	for i := 1; i <= 2; i++ {
+		if err := appendScopeDriftAudit(dir, i, result); err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+	}
+	data, err := os.ReadFile(layouttest.CheckoutPath(t, dir, layout.CheckoutScopeDriftStats))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var audit scopeDriftAudit
+	if err := json.Unmarshal(data, &audit); err != nil {
+		t.Fatal(err)
+	}
+	if audit.TotalDriftEvents != 2 || audit.ByIssueType["docs"] != 2 || len(audit.Events) != 2 {
+		t.Fatalf("counter = %+v, want two docs events", audit)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".nightgauge")); !os.IsNotExist(err) {
+		t.Fatalf("the counter wrote into the working tree: %v", err)
+	}
+
+	outside := t.TempDir()
+	if err := appendScopeDriftAudit(outside, 1, result); !errors.Is(err, layout.ErrNotGitRepository) {
+		t.Fatalf("outside git: err = %v, want ErrNotGitRepository", err)
+	}
+	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
+		t.Fatalf("outside git: wrote %v", entries)
 	}
 }

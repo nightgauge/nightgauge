@@ -138,12 +138,13 @@ autonomous decisions or fail with clear error.
 | ----------------- | --------------------------------- | ------------------------------------------------------------------ |
 | Session Logs      | `logs/YYYY-MM-DD_NNN_session.log` | Timestamped stage events, error messages, token budget warnings    |
 | Pipeline Context  | `pipeline/{stage}-{N}.json`       | Per-issue stage outputs, test results, validation status           |
-| Batch State       | `pipeline/batch-state.json`       | Per-issue completion status, failed stages, token usage per run    |
+| Batch State       | `checkout/batch-state.json`       | Per-issue completion status, failed stages, token usage per run    |
 | Execution History | `pipeline/history/*.jsonl`        | Structured per-run records with outcome, stage statuses, durations |
 
-Locations are relative to the clone's per-clone class directories; resolve one
-with `nightgauge layout path <class> [name]` (for example
-`nightgauge layout path pipeline batch-state.json`).
+Locations are relative to the clone's per-clone class directories, or this
+checkout's directory for `checkout/...`; resolve one with
+`nightgauge layout path <class> [name]` (for example
+`nightgauge layout path checkout batch-state.json`).
 
 Each data source is optional. The skill analyzes whatever is available and notes
 which sources were absent in the output report.
@@ -226,7 +227,7 @@ absent or `--all-failures` is passed, fall back to date-based scope using
 LOGS_DIR="$(nightgauge layout path logs)"
 PIPELINE_DIR="$(nightgauge layout path pipeline)"
 HISTORY_DIR="$(nightgauge layout path pipeline history)"
-BATCH_STATE="${PIPELINE_DIR}/batch-state.json"
+BATCH_STATE="$(nightgauge layout path checkout batch-state.json)"
 
 SCOPE="batch"
 
@@ -277,9 +278,9 @@ row B29).
 
 Replaces the previous inline-Python parsers for batch state (old Phase 2.1),
 execution history (old Phase 2.2), and context-files fallback (old Phase 2.4).
-The binary reads `batch-state.json`, `history/*.jsonl`, and the `issue-*.json` /
-`pr-*.json` set from the clone's pipeline state directory
-(`nightgauge layout path pipeline`) in one call, emitting a stable v1 JSON schema.
+The binary reads the checkout's `batch-state.json`, and `history/*.jsonl` and the
+`issue-*.json` / `pr-*.json` set from the clone's pipeline state directory
+(`nightgauge layout path pipeline`), in one call, emitting a stable v1 JSON schema.
 
 ```bash
 ALL_FAILURES_FLAG=""
@@ -1093,7 +1094,7 @@ with all sub-issues complete.
 EPIC_NUMBER="${ARG_EPIC:-}"
 
 # Auto-detect epic if not specified
-BATCH_STATE="$(nightgauge layout path pipeline batch-state.json)"
+BATCH_STATE="$(nightgauge layout path checkout batch-state.json)"
 if [ -z "$EPIC_NUMBER" ] && [ -f "$BATCH_STATE" ]; then
   EPIC_NUMBER=$(jq -r '.epic_number // empty' "$BATCH_STATE" 2>/dev/null)
 fi
@@ -1398,7 +1399,7 @@ UTILITIES (not part of main pipeline)
   Also records outcome data to knowledge base when knowledge_path is set
   (class paths resolve with `nightgauge layout path <class>`)
   Reads:  logs/*_session.log
-  Reads:  pipeline/batch-state.json
+  Reads:  checkout/batch-state.json
   Reads:  pipeline/history/*.jsonl
   Reads:  pipeline/{stage}-{N}.json
   Reads:  pipeline/issue-{N}.json (for knowledge_path)

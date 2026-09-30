@@ -984,7 +984,8 @@ the dashboard and silently drained queued work.
    operators can correlate paused items with the failed RunRecord. The
    queue-level `status: "paused"` is _derived_ — true iff any item is paused
    (ADR-005).
-3. **Crash recovery.** A `current-run.json` sidecar is written at every
+3. **Crash recovery.** A `current-run.json` sidecar (in the checkout's
+   `nightgauge layout path checkout`) is written at every
    stage-start and removed on clean shutdown. On scheduler startup, a stale
    sidecar triggers synthesis of a `failure_category: orchestrator_crash` /
    `terminal_failure_kind: orchestrator_crash` record and pauses the queue.

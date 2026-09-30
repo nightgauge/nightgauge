@@ -4,14 +4,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func writeTrendsFile(t *testing.T, dir string, lines []string) {
 	t.Helper()
-	healthDir := filepath.Join(dir, ".nightgauge", "health")
-	if err := os.MkdirAll(healthDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	healthDir := layouttest.MkCheckoutSubdir(t, dir, "health")
 	f, err := os.Create(filepath.Join(healthDir, "trends.jsonl"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -26,10 +25,7 @@ func writeTrendsFile(t *testing.T, dir string, lines []string) {
 
 func writeGateFile(t *testing.T, dir string, lines []string) {
 	t.Helper()
-	healthDir := filepath.Join(dir, ".nightgauge", "health")
-	if err := os.MkdirAll(healthDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	healthDir := layouttest.MkCheckoutSubdir(t, dir, "health")
 	f, err := os.Create(filepath.Join(healthDir, "gate-metrics.jsonl"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -43,7 +39,7 @@ func writeGateFile(t *testing.T, dir string, lines []string) {
 }
 
 func TestReadTrends_Empty(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	entries, err := ReadTrends(dir, 10)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -54,7 +50,7 @@ func TestReadTrends_Empty(t *testing.T) {
 }
 
 func TestReadTrends_ValidLines(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	lines := []string{
 		`{"schema_version":"1","timestamp":"2026-01-01T00:00:00Z","run_id":"r1","issue_number":1,"overall_score":80,"dimensions":{},"significant_findings":[]}`,
 		`{"schema_version":"1","timestamp":"2026-01-02T00:00:00Z","run_id":"r2","issue_number":2,"overall_score":85,"dimensions":{},"significant_findings":[]}`,
@@ -76,7 +72,7 @@ func TestReadTrends_ValidLines(t *testing.T) {
 }
 
 func TestReadTrends_SkipsMalformed(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	lines := []string{
 		`{"schema_version":"1","timestamp":"2026-01-01T00:00:00Z","run_id":"r1","issue_number":1,"overall_score":80,"dimensions":{},"significant_findings":[]}`,
 		`{not valid json}`,
@@ -94,7 +90,7 @@ func TestReadTrends_SkipsMalformed(t *testing.T) {
 }
 
 func TestReadGateMetrics_Empty(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	entries, err := ReadGateMetrics(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

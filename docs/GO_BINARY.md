@@ -1369,7 +1369,8 @@ or branch, and never touches a live run's state** (#410 closed the compose half
 What construction **does** still write, stated precisely because a banner that
 over-claims is how the next side effect slips in: the crash-recovery path
 synthesizes a terminal-failure `RunRecord`, pauses and persists
-`queue-state.json`, and removes `current-run.json` from the pipeline state directory — all
+`queue-state.json`, and removes `current-run.json` from the checkout's directory
+(`nightgauge layout path checkout`) — all
 gated on `runstate.ProcessAlive(sidecar.PID)`, so it only ever happens for a run
 whose process is **gone**. A live run is left entirely alone (no record, no pause,
 no removal): that sidecar is the TypeScript side's index into the run, and
@@ -1492,7 +1493,7 @@ root whose snapshot directory cannot be read is **skipped entirely** rather than
 swept blind.
 
 An issue is treated as in flight when the **in-flight sidecar**
-(`current-run.json`) names it and the process it records is alive, or when its
+(`current-run.json` in each checkout's `nightgauge layout path checkout`) names it and the process it records is alive, or when its
 snapshot is:
 
 - **not terminal**, and either its recorded stage child is alive
@@ -1945,10 +1946,16 @@ is a separate mechanism rather than a change of heart in that one.
 write-temp → fsync → rename, which replaces the inode on every heartbeat. An
 advisory lock lives on an _inode_, so a flock on the sidecar would be released
 by its own holder's next heartbeat: a lock that reports success and protects
-nothing, which is worse than no lock. The lease flocks
-`<STATE>/serve/<key>.lock`, created once and never renamed, beside the
-`.json` the sidecar keeps. That `<key>` encodes the workspace root reversibly —
-see [The serve registry](#the-serve-registry-issue-1426), which is where a lock
+nothing, which is worse than no lock. The lease flocks `serve.lock` in the
+checkout's own git directory (`.git/nightgauge-worktree/serve.lock` for the
+main checkout, `nightgauge layout path checkout serve.lock` in general), created
+once and never renamed: one daemon per checkout
+([ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
+The lock is on a file, so a path spelled with different case cannot defeat it.
+A workspace outside git, which has no checkout directory, flocks
+`<STATE>/serve/<key>.lock` beside the `.json` the sidecar keeps. That `<key>`
+encodes the workspace root reversibly — see
+[The serve registry](#the-serve-registry-issue-1426), which is where a lock
 file left behind by a killed daemon gets reclaimed.
 
 **flock is the authority; the sidecar is only the report.** The kernel releases
@@ -2419,9 +2426,9 @@ single-scanner hazard
 [#323](#active-worktree-scanning--single-scanner-contract-issue-323) settled for
 worktrees.
 
-One other extension service does poll the pipeline state directory:
+One other extension service does poll run state:
 `CliPipelineReconciliationService` reads each registered root's
-`current-run.json` on a 1s interval and probes the CLI sidecar's pid. It is
+`current-run.json` (in that checkout's `nightgauge layout path checkout`) on a 1s interval and probes the CLI sidecar's pid. It is
 DISCOVERY-ONLY — it mirrors `nightgauge run` pipelines into the tree view and
 drops the slot when the sidecar's process is gone; it emits no terminal event
 and removes no snapshot, so it is not a second reconciler and does not
@@ -2589,7 +2596,8 @@ for how this proves the fast-track win.
 
 #### `pipeline batch-failures`
 
-Extracts pipeline failure rows from `batch-state.json` AND `history/*.jsonl` in
+Extracts pipeline failure rows from the checkout's `batch-state.json`
+(`nightgauge layout path checkout batch-state.json`) AND `history/*.jsonl` in
 the clone's pipeline state directory (`nightgauge layout path pipeline`), with a
 context-files fallback.
 Replaces ~150 lines of inline Python in `skills/nightgauge-retro/SKILL.md`
@@ -2689,17 +2697,40 @@ never write under the git directory by path — they hand content to
 `layout write` or `layout append`, which write through the resolver. See
 [ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data).
 
+Per-checkout data lives in each checkout's own git directory:
+`<git-dir>/nightgauge-worktree/` (`.git/nightgauge-worktree/` for the main
+checkout; a linked worktree has its own under
+`.git/worktrees/<name>/nightgauge-worktree/`, deleted with the worktree). It
+holds every unkeyed singleton — `current-run.json`, `run-state.json`,
+`batch-state.json`, `queue-state.json`, the hooks' `PLAN.md` fallback, the
+serve lease `serve.lock` and `go-backend.log` — and the per-checkout runtime
+state: `attention/`, `attention-coverage.json`, `autonomous/`, `health/`,
+`graph/`, `containment/`, `notifications/`, `skills/`, `triage/`,
+`focus.yaml`, `performance-mode.yaml`, `careful.lock` — and the rest of the
+unkeyed runtime files: `.refresh-trigger`, `complexity-model.yaml` and its
+`complexity-model.lock`, `outcome-recovery.jsonl`,
+`cross-project-patterns.json`, `saved-queries.yaml`, `audit-queue.json`,
+`scope-drift-stats.json`, `doc-snapshots/`, `release-watch/`,
+`improvement-runs/`, `analysis/`, `brownfield-history/` (the brownfield
+assessment snapshots), `session-handoff.md` and
+`doctor/automation-pauses.json`. Generated reports (`health-report.json`,
+`security-audit.json`, `modernization-plan.json`, `dep-modernize-report.json`,
+`test-scaffold-report.json`, `backlog-*.md`) go in its `reports/`. Address it
+as the `checkout` class.
+
 ```bash
 # Print the whole layout for the repository at --workdir (default: cwd)
 nightgauge layout
 nightgauge layout --workdir /path/to/repo
-# → { "schema_version": 1, "root", "git_common_dir", "clone",
-#     "pipeline", "plans", "retros", "logs", "state", "cache", "runtime" }
+# → { "schema_version": 2, "root", "git_common_dir", "git_dir", "clone",
+#     "pipeline", "plans", "retros", "logs", "checkout", "state", "cache",
+#     "runtime" }
 
 # Absolute path of a class directory, or of a file in it (creates nothing
 # beyond the clone directory)
 nightgauge layout path pipeline
 jq . "$(nightgauge layout path pipeline issue-42.json)"
+jq . "$(nightgauge layout path checkout run-state.json)"
 
 # Write stdin (or --from FILE) to a file in a class directory; prints the path
 jq -n '{issue_number: 42}' | nightgauge layout write pipeline issue-42.json
@@ -2707,26 +2738,29 @@ nightgauge layout write plans 42-add-widget.md --from /tmp/plan.md
 
 # Append stdin (or --from FILE); creates the file and its parents when absent
 echo '{"event":"x"}' | nightgauge layout append pipeline history/events.jsonl
+echo '{"score":82}' | nightgauge layout append checkout health/trends.jsonl
 ```
 
-| Subcommand                                   | Behaviour                                                                                                                                   |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `layout [--workdir DIR]`                     | Prints the resolved layout as indented JSON. `state`, `cache` and `runtime` are the per-user machine roots (`""` when unresolvable).        |
-| `layout path <class> [name]`                 | Prints the absolute path of the class directory, or of `name` inside it. Read files at this path.                                           |
-| `layout write <class> <name> [--from FILE]`  | Replaces `name` atomically (temporary file + rename, so a reader never sees a partial file), creating parents, and prints the path written. |
-| `layout append <class> <name> [--from FILE]` | Appends to `name`, creating the file and its parents when absent, and prints the path written.                                              |
+| Subcommand                                   | Behaviour                                                                                                                                                                                                                                    |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `layout [--workdir DIR]`                     | Prints the resolved layout as indented JSON. `git_dir` and `checkout` belong to this checkout (a linked worktree's differ from the main checkout's); `state`, `cache` and `runtime` are the per-user machine roots (`""` when unresolvable). |
+| `layout path <class> [name]`                 | Prints the absolute path of the class directory, or of `name` inside it. Read files at this path.                                                                                                                                            |
+| `layout write <class> <name> [--from FILE]`  | Replaces `name` atomically (temporary file + rename, so a reader never sees a partial file), creating parents, and prints the path written.                                                                                                  |
+| `layout append <class> <name> [--from FILE]` | Appends to `name`, creating the file and its parents when absent, and prints the path written.                                                                                                                                               |
 
-Classes are `pipeline`, `plans`, `retros` and `logs`. `name` may contain
-subdirectories (`history/2026-09-29.jsonl`) but never `..` or an absolute path;
-writes are confined to the class directory and refuse a symlink out of it.
+Classes are `pipeline`, `plans`, `retros` and `logs` (per clone) and `checkout`
+(this checkout's `<git-dir>/nightgauge-worktree`). `name` may contain
+subdirectories (`history/2026-09-29.jsonl`, `health/trends.jsonl`) but never
+`..` or an absolute path; writes are confined to the class directory and refuse
+a symlink out of it.
 Every subcommand accepts `--workdir`. Outside a git repository each one fails
 with `not a git repository`; nothing is redirected into the working tree.
 
 ### Run-State Operations (Issue #3238)
 
-Manages the durable pipeline lifecycle record `run-state.json` in the clone's
-pipeline state directory (`nightgauge layout path pipeline`). Single source of
-truth for
+Manages the durable pipeline lifecycle record `run-state.json` in the
+checkout's directory (`nightgauge layout path checkout run-state.json`). Single
+source of truth for
 running / paused / completed / discarded / aborted state. See
 [docs/PIPELINE_STATE_SCHEMA.md](PIPELINE_STATE_SCHEMA.md) for the full
 schema, lifecycle diagram, and recovery decision tree.
@@ -2789,7 +2823,8 @@ to stage-level data.
 _ADR 015 (DecisionRequests) · Epic #88 (repo-scoped attention)._
 
 Readers and lifecycle operations over the Action Center's local-first
-`DecisionRequest` store at `.nightgauge/attention/` — the record the pipeline
+`DecisionRequest` store at `.git/nightgauge-worktree/attention/`
+(`nightgauge layout path checkout attention`) — the record the pipeline
 creates when it needs a human decision at a dead end that is otherwise silent
 or one-way. The Go binary is the single authoritative writer; surfaces never
 write these files directly.
@@ -2945,7 +2980,7 @@ operator to click it.
 **The repo must be one this daemon has configured.** `attention.raise` rejects a
 repo absent from the client resolver's registry. Dedup is per
 `(producer, repo, issue)`, so without that check a caller could fill
-`.nightgauge/attention/` with plausible cards naming repos the workspace has
+the `attention/` store with plausible cards naming repos the workspace has
 never heard of. **The bound is on the repo only** — the issue number is
 validated as positive but not as existing, so the key space is still unbounded
 in that dimension and card injection is reduced, not closed. See
@@ -3612,7 +3647,8 @@ held to a total size cap and a maximum file age, set by machine-tier
 the age cap go first, then the oldest files until the directory is under the
 size cap.
 
-Never deleted: the live files `go-backend.log` and the current UTC day's ledger
+Never deleted: the live file `go-backend.log` (which lives in the checkout's
+directory, `nightgauge layout path checkout go-backend.log`) and the current UTC day's ledger
 segment `github-api-YYYY-MM-DD.jsonl` (earlier segments, size backups and a
 pre-segment `github-api.jsonl` are prunable),
 files written in the last hour, files of a run that is not terminal (running,
@@ -3818,7 +3854,7 @@ embed per provider-release; the embed timestamp is taken from the log's
 # Route the claude-code provider's findings (reads the webhook from the env var)
 export RELEASE_WATCH_DISCORD_WEBHOOK="https://discord.com/api/webhooks/<id>/<token>"
 nightgauge release notify-findings \
-  --creation-log .nightgauge/release-watch/creation-log-claude-code.json --json
+  --creation-log "$(nightgauge layout path checkout release-watch/creation-log-claude-code.json)" --json
 ```
 
 Invoked by the `release-watchdog.yml` workflow after each provider's discovery
@@ -4436,7 +4472,8 @@ error):
   explicitly rather than letting an unmeasurable pair look like a measured zero.
   See
   [SELF_IMPROVEMENT_LOOP.md § Outcome Recording](SELF_IMPROVEMENT_LOOP.md#outcome-recording).
-- `.nightgauge/health/trends.jsonl` — health-monitoring loop
+- `health/trends.jsonl` in the checkout's directory
+  (`nightgauge layout path checkout health/trends.jsonl`) — health-monitoring loop
 
 **Exit codes**: 0 success, 1 error (non-zero workspace root)
 
@@ -4477,10 +4514,10 @@ priorities using the same rules as `continuous-improvement` Phase 4.
 
 **Flags**:
 
-| Flag          | Default     | Description                                                      |
-| ------------- | ----------- | ---------------------------------------------------------------- |
-| `--proposals` | (required)  | Path to JSON array of proposal objects                           |
-| `--lens`      | active lens | Lens name; defaults to active lens from `.nightgauge/focus.yaml` |
+| Flag          | Default     | Description                                                         |
+| ------------- | ----------- | ------------------------------------------------------------------- |
+| `--proposals` | (required)  | Path to JSON array of proposal objects                              |
+| `--lens`      | active lens | Lens name; defaults to active lens from the checkout's `focus.yaml` |
 
 **Proposal input schema** (array of):
 
@@ -4579,7 +4616,8 @@ as `routed_model`.
 The gate reads `dev-{N}.json.files_changed` (created + modified) and matches
 each path against `pipeline.scope_drift_gate.allowlist_docs` /
 `allowlist_chore`. Drift events emit a `scope_drift_detected` pipeline event
-(best-effort) and append to `.nightgauge/audit/scope-drift-stats.json`.
+(best-effort) and append to this checkout's `scope-drift-stats.json`
+(`nightgauge layout path checkout scope-drift-stats.json`).
 See [docs/CONFIGURATION.md#pipelinescope_drift_gate-issue-3040](CONFIGURATION.md#pipelinescope_drift_gate-issue-3040).
 
 **`version-downgrade check` flags**:
@@ -4736,9 +4774,10 @@ A record is rejected unless it:
 | states `test_fails_without_fix`, or why there is no test | a test that passes either way is decoration, and decoration shipped as coverage tells the next person the case is guarded     |
 | links a tracking issue for a landed fix                  | otherwise the work exists only in a session transcript                                                                        |
 
-Records land in `.nightgauge/triage/checks/<id>.json` — under `.nightgauge/`
-rather than `pipeline/`, because an ad-hoc triage has no issue number to be
-scoped by, and under `checks/` because `.nightgauge/triage/` is a **shared**
+Records land in `triage/checks/<id>.json` in the checkout's directory
+(`nightgauge layout path checkout triage/checks`) — per checkout rather than in
+the clone's `pipeline/`, because an ad-hoc triage has no issue number to be
+scoped by, and under `checks/` because `triage/` is a **shared**
 generated-reports directory that `backlog-groom` and the skills' `runs.jsonl`
 already occupied (#1269). Writing flat into it made `triage list` report
 grooming reports as records and `triage check` emit a confident, entirely false
@@ -4842,7 +4881,8 @@ hooks.
 nightgauge health trends [--limit N] [--json]
 ```
 
-Reads the last N entries from `.nightgauge/health/trends.jsonl`. Malformed
+Reads the last N entries from `health/trends.jsonl` in the checkout's directory
+(`nightgauge layout path checkout health/trends.jsonl`). Malformed
 lines are skipped with a warning to stderr (non-fatal).
 
 | Flag | Default | Description |
@@ -4875,7 +4915,8 @@ lines are skipped with a warning to stderr (non-fatal).
 nightgauge health gate-metrics [--json]
 ```
 
-Reads `.nightgauge/health/gate-metrics.jsonl`, groups by `gate_name`, and
+Reads `health/gate-metrics.jsonl` in the checkout's directory
+(`nightgauge layout path checkout health/gate-metrics.jsonl`), groups by `gate_name`, and
 computes hit rates. Output is deterministically sorted by gate name.
 
 | Flag | Default | Description |
@@ -5540,7 +5581,7 @@ pipeline skill calls this as Phase 0 preflight via `skills/_shared/PREFLIGHT.md`
 | `rate_limit`  | API requests remaining (warn < 500, warn < 100) | warning    |
 | `config`      | `.nightgauge/config.yaml` loads; a refused config (for example a plaintext token, #2023) fails here | required\* |
 | `project`     | `project_number` and `owner` set in config      | required\* |
-| `complexity_model` | `.nightgauge/complexity-model.yaml` exists; missing output points to `nightgauge outcome init` | warning |
+| `complexity_model` | this checkout's `complexity-model.yaml` (`nightgauge layout path checkout complexity-model.yaml`) exists; missing output points to `nightgauge outcome init` | warning |
 | `tracked_secrets` | No GitHub token or license key in files git tracks under `.nightgauge/` (#2024); each hit is `path:line`, redacted to its prefix, with structured `findings` in `--json`. Files over 1 MiB and binary files are skipped with a note; skipped outside a git work tree | warning |
 
 Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
@@ -5600,8 +5641,8 @@ There is no verb-shaped class. `serve` had one until **#388** — see below.
   nightgauge file open, and the operator's own shell.
 - **Ownership is a recent-progress sidecar claim, not a PID's presence.** Every
   long-lived verb writes its OWN pid into the sidecar it owns — the scheduler
-  into `.nightgauge/autonomous/state.json`, the runner into
-  `current-run.json` in the pipeline state directory — so a presence test is
+  into `autonomous/state.json`, the runner into `current-run.json`, both in
+  the checkout's directory (`nightgauge layout path checkout`) — so a presence test is
   self-attestation, and the wedged 31-hour scheduler vouched for itself and
   read as owned forever. A claim counts only while the sidecar's own progress
   timestamp is within `staleSidecarClaim` (24h) of now: `lastScanAt` (rewritten
@@ -7344,13 +7385,13 @@ distinguished after the fact; no migration is offered.
 nightgauge modernize aggregate-findings [--workdir DIR] [--out FILE] [--json]
 ```
 
-Reads the three `.nightgauge/` assessment reports (health, security,
-test scaffold), applies severity normalization, deduplicates overlapping
+Reads the three assessment reports (health, security, test scaffold) from
+this checkout's `reports/` (`nightgauge layout path checkout reports`), applies severity normalization, deduplicates overlapping
 findings, and outputs a single stable JSON structure. Replaces the shell+jq
 extraction previously inlined in modernize-plan SKILL.md Phase 2.1–2.4
 (audit row **B31**).
 
-**Input files** (read from `--workdir/.nightgauge/`):
+**Input files** (read from the `--workdir` checkout's `reports/`):
 
 | File | Produced by |
 | ---- | ----------- |
@@ -7365,7 +7406,7 @@ At least one input file must be present. Missing files are listed in
 
 | Flag | Default | Behavior |
 | ---- | ------- | -------- |
-| `--workdir DIR` | cwd | Project root containing `.nightgauge/` |
+| `--workdir DIR` | cwd | Checkout whose `reports/` holds the inputs |
 | `--out FILE` | — | Write JSON output to file instead of stdout |
 | `--json` | `false` | Emit JSON to stdout (skills always set this) |
 

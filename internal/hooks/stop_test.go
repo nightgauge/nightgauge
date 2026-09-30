@@ -92,22 +92,31 @@ func TestStopFallbackPlanMD(t *testing.T) {
 	}
 }
 
-func TestStopPipelinePlanFallback(t *testing.T) {
+func TestStopCheckoutPlanFallback(t *testing.T) {
 	dir := t.TempDir()
-	pipelineDir := layouttest.PipelineDir(t, dir)
-	if err := os.MkdirAll(pipelineDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-
 	plan := `- [ ] Incomplete task
 `
-	if err := os.WriteFile(filepath.Join(pipelineDir, "PLAN.md"), []byte(plan), 0644); err != nil {
+	// The fallback PLAN.md is the checkout's (ADR-024 § 7), not the clone's.
+	if err := os.WriteFile(layouttest.CheckoutPath(t, dir, "PLAN.md"), []byte(plan), 0644); err != nil {
 		t.Fatal(err)
 	}
 
 	result := EvaluateStop(dir)
 	if result.OK {
-		t.Error("expected OK=false for incomplete pipeline PLAN.md")
+		t.Error("expected OK=false for incomplete checkout PLAN.md")
+	}
+}
+
+// A PLAN.md in the clone's pipeline directory is not read: the fallback is
+// per checkout, and there is no second location.
+func TestStopIgnoresAPipelineDirPlan(t *testing.T) {
+	dir := t.TempDir()
+	pipelineDir := layouttest.MkPipelineDir(t, dir)
+	if err := os.WriteFile(filepath.Join(pipelineDir, "PLAN.md"), []byte("- [ ] Incomplete task\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if result := EvaluateStop(dir); !result.OK {
+		t.Errorf("a PLAN.md in the pipeline directory was read: %+v", result)
 	}
 }
 

@@ -1,15 +1,19 @@
 /**
- * RefreshTriggerService - Watches .nightgauge/.refresh-trigger for refresh signals
+ * RefreshTriggerService - Watches the checkout's `.refresh-trigger` for refresh signals
  *
  * Enables CLI tools and hooks to trigger VSCode extension refresh by touching
- * the .nightgauge/.refresh-trigger file. When detected, all tree providers are
- * refreshed to show updated GitHub issues and project board state.
+ * `.refresh-trigger` in the checkout's per-checkout directory
+ * (`.git/nightgauge-worktree/.refresh-trigger` for a main checkout, ADR-024 § 7).
+ * When detected, all tree providers are refreshed to show updated GitHub
+ * issues and project board state.
  *
  * @see Issue #308 - Add auto-refresh when GitHub issues are created via CLI
  */
 
+import * as fs from "fs";
 import * as vscode from "vscode";
 import type { Logger } from "../utils/logger";
+import { CHECKOUT_ENTRIES, checkoutDir, isUsableWorkspaceRoot } from "../utils/cloneLayout";
 
 /**
  * Tree provider interface for refresh
@@ -30,7 +34,7 @@ interface RefreshableTreeProvider {
  * service.registerTreeProvider(projectBoardProvider);
  * service.registerTreeProvider(pipelineProvider);
  *
- * // CLI script triggers refresh by touching .nightgauge/.refresh-trigger
+ * // CLI script triggers refresh by touching <checkout dir>/.refresh-trigger
  * // Service automatically refreshes all registered providers
  * ```
  */
@@ -49,21 +53,32 @@ export class RefreshTriggerService implements vscode.Disposable {
     private workspaceRoot: string,
     private logger: Logger
   ) {
-    if (workspaceRoot) {
-      this.initializeWatcher();
-    }
+    this.initializeWatcher();
   }
 
   /**
-   * Initialize file system watcher for .refresh-trigger file
+   * Initialize file system watcher for the checkout's .refresh-trigger file.
+   * Skipped when the workspace root is not a usable checkout (unset, relative,
+   * or not inside a git repository).
    */
   private initializeWatcher(): void {
+    if (!isUsableWorkspaceRoot(this.workspaceRoot)) {
+      this.logger.debug("RefreshTriggerService skipped: workspace root is not a git checkout", {
+        workspaceRoot: this.workspaceRoot,
+      });
+      return;
+    }
     try {
-      const triggerFile = ".nightgauge/.refresh-trigger";
+      const triggerFile = CHECKOUT_ENTRIES.refreshTrigger;
+      const dir = checkoutDir(this.workspaceRoot);
+      // The watcher needs its base directory to exist; the per-checkout
+      // directory is inside the git directory, so creating it is harmless.
+      fs.mkdirSync(dir, { recursive: true });
 
-      // Use RelativePattern to watch only .nightgauge/.refresh-trigger
-      // This prevents false positives from workspace-wide file changes
-      const pattern = new vscode.RelativePattern(this.workspaceRoot, triggerFile);
+      // A RelativePattern over the per-checkout directory (outside the
+      // workspace folders: files.exclude hides .git from workspace-wide
+      // watchers and findFiles) watches only the trigger file.
+      const pattern = new vscode.RelativePattern(vscode.Uri.file(dir), triggerFile);
       this.watcher = vscode.workspace.createFileSystemWatcher(pattern);
 
       // Use unified event handler for onCreate and onChange (delete not needed)
@@ -74,6 +89,7 @@ export class RefreshTriggerService implements vscode.Disposable {
 
       this.logger.debug("RefreshTriggerService initialized", {
         workspaceRoot: this.workspaceRoot,
+        base: dir,
         pattern: triggerFile,
       });
     } catch (error) {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
@@ -90,18 +91,47 @@ func TestSetState_RejectsBogus(t *testing.T) {
 	}
 }
 
-// TestDefaultDirIsTheClonesPipelineStateDir: without --dir, every subcommand
-// reads the pipeline state directory of the clone the working directory is
-// in; outside a git repository that is an error, never the working directory.
-func TestDefaultDirIsTheClonesPipelineStateDir(t *testing.T) {
+// TestDefaultDirIsTheCheckoutsDir: without --dir, run-state.json is read from
+// the CHECKOUT of the checkout the working directory is in (ADR-024 § 7). A
+// linked worktree has its own, while the context files and archive stay in
+// the pipeline state directory the two share. Outside a git repository it is
+// an error, never the working directory.
+func TestDefaultDirIsTheCheckoutsDir(t *testing.T) {
 	repo := layouttest.Repo(t)
+	gittest.Run(t, repo, "commit", "-q", "--allow-empty", "-m", "init")
+	linked := filepath.Join(t.TempDir(), "wt")
+	gittest.Run(t, repo, "worktree", "add", "-q", "--detach", linked)
+
 	t.Chdir(repo)
-	got, err := resolveBaseDir(getCmd())
+	mainDir, err := resolveBaseDir(getCmd())
 	if err != nil {
 		t.Fatalf("resolveBaseDir: %v", err)
 	}
-	if want := layouttest.PipelineDir(t, repo); got != want {
-		t.Errorf("default dir = %q, want %q", got, want)
+	if want := layouttest.CheckoutDir(t, repo); mainDir != want {
+		t.Errorf("default dir = %q, want %q", mainDir, want)
+	}
+	mainPipeline, err := resolvePipelineDir(getCmd())
+	if err != nil {
+		t.Fatalf("resolvePipelineDir: %v", err)
+	}
+
+	t.Chdir(linked)
+	linkedDir, err := resolveBaseDir(getCmd())
+	if err != nil {
+		t.Fatalf("resolveBaseDir in the linked worktree: %v", err)
+	}
+	if linkedDir == mainDir {
+		t.Errorf("linked worktree's run-state dir = main checkout's %q, want its own", mainDir)
+	}
+	if want := layouttest.CheckoutDir(t, linked); linkedDir != want {
+		t.Errorf("linked default dir = %q, want %q", linkedDir, want)
+	}
+	linkedPipeline, err := resolvePipelineDir(getCmd())
+	if err != nil {
+		t.Fatalf("resolvePipelineDir in the linked worktree: %v", err)
+	}
+	if linkedPipeline != mainPipeline {
+		t.Errorf("pipeline dir differs across checkouts: %q vs %q", linkedPipeline, mainPipeline)
 	}
 
 	t.Chdir(t.TempDir())

@@ -59,6 +59,8 @@ func writeRuntimeExhaust(t *testing.T, root string) {
 		".nightgauge/attention/card.json",
 		".nightgauge/plans/7-x.md",
 		".nightgauge/worktrees/issue-7/file.go",
+		".nightgauge/config.local.yaml",
+		".nightgauge/anything-new.json",
 	} {
 		p := filepath.Join(root, rel)
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
@@ -91,40 +93,37 @@ func ensure(t *testing.T, root string, want IgnoreAction) IgnoreResult {
 	return res
 }
 
-// #2042: the knowledge tree is committed by default. A scaffolded PRD shows as a
-// new file to commit, the derived recall cache stays ignored, and a team opts
-// out in its root .gitignore.
-func TestKnowledgeTreeIsCommittedByDefault(t *testing.T) {
+// ADR-024 § 12: the knowledge tree is ignored by default, like everything
+// under .nightgauge/ that the allowlist does not name. A team commits it by
+// adding !/knowledge/ below the Local additions marker, and the writer keeps
+// that line.
+func TestKnowledgeTreeIsIgnoredByDefault(t *testing.T) {
 	root := initializedRepo(t)
 	ensure(t, root, IgnoreCreated)
-	kdir := filepath.Join(root, ".nightgauge", "knowledge", "features", "7-x")
-	cache := filepath.Join(root, ".nightgauge", "knowledge", ".recall-cache")
-	for _, d := range []string{kdir, cache} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatal(err)
-		}
+	kdir := filepath.Join(root, ".nightgauge", "knowledge", "features", "1-x")
+	if err := os.MkdirAll(kdir, 0o755); err != nil {
+		t.Fatal(err)
 	}
-	for _, f := range []string{filepath.Join(kdir, "PRD.md"), filepath.Join(cache, "index.jsonl")} {
-		if err := os.WriteFile(f, []byte("x\n"), 0o644); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.WriteFile(filepath.Join(kdir, "PRD.md"), []byte("x\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	status := func() string {
 		return gittest.Run(t, root, "status", "--porcelain", "--untracked-files=all")
 	}
-	got := status()
-	if !strings.Contains(got, ".nightgauge/knowledge/features/7-x/PRD.md") {
-		t.Fatalf("PRD.md is ignored, want it shown as a new file:\n%s", got)
-	}
-	if strings.Contains(got, ".recall-cache") {
-		t.Fatalf("recall cache is not ignored:\n%s", got)
+	if got := status(); strings.Contains(got, "knowledge/") {
+		t.Fatalf("knowledge tree is not ignored by default:\n%s", got)
 	}
 
-	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("/.nightgauge/knowledge/\n"), 0o644); err != nil {
+	ignorePath := filepath.Join(root, ".nightgauge", ".gitignore")
+	if err := os.WriteFile(ignorePath, []byte(GitignoreTemplate+"!/knowledge/\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if got := status(); strings.Contains(got, "knowledge/") {
-		t.Fatalf("root .gitignore opt-out did not hide the knowledge tree:\n%s", got)
+	if got := status(); !strings.Contains(got, ".nightgauge/knowledge/features/1-x/PRD.md") {
+		t.Fatalf("the Local additions opt-in did not un-ignore PRD.md:\n%s", got)
+	}
+	ensure(t, root, IgnoreCurrent)
+	if got := read(t, ignorePath); got != GitignoreTemplate+"!/knowledge/\n" {
+		t.Fatalf("the opt-in line was not kept:\n%s", got)
 	}
 }
 
@@ -196,7 +195,7 @@ func TestEnsureIgnoreRules(t *testing.T) {
 			t.Fatalf("operator's info/exclude lines were not kept:\n%s", exclude)
 		}
 		if !strings.Contains(exclude, excludeBlockBegin(ExcludeBlockID)) ||
-			!strings.Contains(exclude, "/.nightgauge/pipeline/*\n") {
+			!strings.Contains(exclude, "\n/.nightgauge/*\n") {
 			t.Fatalf("info/exclude lacks the rules block:\n%s", exclude)
 		}
 
@@ -440,7 +439,7 @@ func TestEnsureIgnoreRulesCarriesCustomRules(t *testing.T) {
 
 	// A marker-bearing file: rules above the marker are carried after the
 	// existing local additions, without duplicates.
-	withMarker := strings.Replace(withVersion("3"), "/improvement-runs/\n", "/improvement-runs/\n/above/\n/dup/\n", 1) +
+	withMarker := strings.Replace(withVersion("3"), "!/skill-smoke/\n", "!/skill-smoke/\n/above/\n/dup/\n", 1) +
 		"/below/\n/dup/\n"
 	if err := os.WriteFile(ignorePath, []byte(withMarker), 0o644); err != nil {
 		t.Fatal(err)

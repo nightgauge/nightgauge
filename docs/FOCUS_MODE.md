@@ -11,7 +11,9 @@ focus lens is active, the pipeline boosts issues, proposals, and release-feature
 scores that align with that lens. Unrelated work is still processed — it just
 sorts lower.
 
-The active lens is persisted in `.nightgauge/focus.yaml` and read by every
+The active lens is persisted in `focus.yaml` in this checkout's git directory
+(`.git/nightgauge-worktree/focus.yaml` for the main checkout; a linked worktree
+has its own — `nightgauge layout path checkout focus.yaml` prints it) and read by every
 component that participates in prioritization:
 
 | Component                | How focus is applied                                    |
@@ -153,7 +155,8 @@ Proposal categories and their associated focus lenses:
 
 ## Focus Configuration File
 
-Focus state is stored in `.nightgauge/focus.yaml`:
+Focus state is stored in the checkout's `focus.yaml`
+(`nightgauge layout path checkout focus.yaml`); it is never committed:
 
 ```yaml
 active_lens: security
@@ -217,7 +220,7 @@ keys must match valid assessment dimension names:
 
 ### `nightgauge focus set <name>`
 
-Activate a named lens. Persists to `.nightgauge/focus.yaml`.
+Activate a named lens. Persists to the checkout's `focus.yaml`.
 
 ```bash
 nightgauge focus set quality

@@ -8,7 +8,7 @@
  * @see docs/ARCHITECTURE.md for WebView patterns
  */
 
-import { isUsableWorkspaceRoot, pipelineStateDir } from "../../utils/cloneLayout";
+import { checkoutPath, isUsableWorkspaceRoot, pipelineStateDir } from "../../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -2287,7 +2287,7 @@ export class DashboardState {
 
       // Estimate each epic
       const estimator = new EpicEstimator(
-        `${this.workspaceRoot}/.nightgauge/complexity-model.yaml`,
+        checkoutPath(this.workspaceRoot, "complexityModel"),
         this.workspaceRoot
       );
       const entries: EpicDisplayEntry[] = [];
@@ -3006,7 +3006,7 @@ export class DashboardState {
     accuracyPercent: number;
   } | null> {
     try {
-      const feedbackPath = `${workspacePath}/.nightgauge/complexity-model.yaml`;
+      const feedbackPath = checkoutPath(workspacePath, "complexityModel");
       const { readWorkTimeFeedback } = await import("../../utils/workTimeFeedback");
       const feedback = await readWorkTimeFeedback(feedbackPath);
 
@@ -3066,7 +3066,7 @@ export class DashboardState {
     hasEnoughData: boolean;
   } | null> {
     try {
-      const feedbackPath = `${workspacePath}/.nightgauge/complexity-model.yaml`;
+      const feedbackPath = checkoutPath(workspacePath, "complexityModel");
       const { readWorkTimeFeedback } = await import("../../utils/workTimeFeedback");
       const feedback = await readWorkTimeFeedback(feedbackPath);
 
@@ -3144,7 +3144,7 @@ export class DashboardState {
     workspacePath: string
   ): Promise<{ accuracyPercent: number; totalPredictions: number } | null> {
     try {
-      const yamlPath = `${workspacePath}/.nightgauge/complexity-model.yaml`;
+      const yamlPath = checkoutPath(workspacePath, "complexityModel");
       const raw = await fs.readFile(yamlPath, "utf-8");
       const { load } = await import("js-yaml");
       const model = load(raw) as Record<string, unknown>;

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/skills"
 )
 
@@ -580,7 +581,7 @@ func TestSkillToolCallFailsOpen(t *testing.T) {
 func TestSkillToolCallLogsUsage(t *testing.T) {
 	node := requireNode(t)
 	bin := buildNightgaugeBin(t)
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	before, err := skills.ReadUsage(root)
 	if err != nil {

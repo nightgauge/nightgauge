@@ -6,8 +6,9 @@ if [ -z "$FILE_PATH" ]; then
   exit 0
 fi
 
-# ".git/" also covers per-clone state under <git-common-dir>/nightgauge/
-# (ADR-024 § 7): agents write it through `nightgauge layout write`, never by path.
+# ".git/" also covers per-clone state under <git-common-dir>/nightgauge/ and
+# per-checkout state under <git-dir>/nightgauge-worktree/ (ADR-024 § 7): agents
+# write it through `nightgauge layout write|append`, never by path.
 PROTECTED_PATTERNS=(".env" "package-lock.json" ".git/" "secrets" "credentials")
 
 for pattern in "${PROTECTED_PATTERNS[@]}"; do

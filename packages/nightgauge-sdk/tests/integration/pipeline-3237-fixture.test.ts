@@ -31,7 +31,9 @@ describe("#3237 fixture — orphaned state without run-state.json", () => {
 
   beforeEach(async () => {
     dir = await tmpDir();
-    mgr = new RunStateManager(dir);
+    // Context files in the pipeline dir; run-state.json in the checkout's own
+    // directory (ADR-024 § 7).
+    mgr = new RunStateManager({ pipeline: dir, checkout: path.join(dir, "checkout") });
   });
 
   it("surfaces orphaned + restart/manual-pickup when only a branch is present", async () => {

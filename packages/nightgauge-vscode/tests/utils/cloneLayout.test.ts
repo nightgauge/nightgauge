@@ -13,6 +13,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+  CHECKOUT_DISPLAY,
+  checkoutDir,
+  checkoutPath,
   clearCloneLayoutCache,
   cloneLogsDir,
   CLONE_LOGS_DISPLAY,
@@ -92,6 +95,23 @@ describe("cloneLayout", () => {
       expect(fs.statSync(clone).mode & 0o777).toBe(0o700);
       expect(fs.readdirSync(clone)).toEqual([]);
       expect(fs.existsSync(path.join(root, ".nightgauge"))).toBe(false);
+    });
+
+    it("gives the main checkout and a linked worktree separate checkout dirs", () => {
+      const root = repoWithCommit();
+      const wt = path.join(tmp("ng-clone-wt-"), "wt");
+      git(root, "worktree", "add", "-q", "-b", "feat-checkout", wt);
+      const common = path.join(root, ".git");
+      expect(checkoutDir(root)).toBe(path.join(common, "nightgauge-worktree"));
+      expect(checkoutDir(wt)).toBe(path.join(common, "worktrees", "wt", "nightgauge-worktree"));
+      expect(checkoutPath(wt, "currentRun")).toBe(
+        path.join(common, "worktrees", "wt", "nightgauge-worktree", "current-run.json")
+      );
+      expect(checkoutPath(root, "attention", "cards", "x.json")).toBe(
+        path.join(common, "nightgauge-worktree", "attention", "cards", "x.json")
+      );
+      expect(pipelineStateDir(wt)).toBe(pipelineStateDir(root));
+      expect(CHECKOUT_DISPLAY).toBe(".git/nightgauge-worktree");
     });
 
     it("resolves a linked worktree to the main clone's directory", () => {
@@ -214,14 +234,16 @@ describe("cloneLayout", () => {
         const gitDir = path.join(tmp("ng-clone-bin-git-"), "common");
         const clone = path.join(gitDir, "nightgauge");
         const json = JSON.stringify({
-          schema_version: 1,
+          schema_version: 2,
           root,
           git_common_dir: gitDir,
+          git_dir: gitDir,
           clone,
           pipeline: path.join(clone, "pipeline"),
           plans: path.join(clone, "plans"),
           retros: path.join(clone, "retros"),
           logs: path.join(clone, "logs"),
+          checkout: path.join(gitDir, "nightgauge-worktree"),
         });
         const fake = path.join(tmp("ng-clone-bin-"), "nightgauge");
         fs.writeFileSync(fake, `#!/bin/sh\ncat <<'EOF'\n${json}\nEOF\n`, { mode: 0o755 });
@@ -229,6 +251,7 @@ describe("cloneLayout", () => {
         await primeCloneLayouts([root]);
         expect(pipelineStateDir(root)).toBe(path.join(clone, "pipeline"));
         expect(cloneLogsDir(root)).toBe(path.join(clone, "logs"));
+        expect(checkoutDir(root)).toBe(path.join(gitDir, "nightgauge-worktree"));
       }
     );
 

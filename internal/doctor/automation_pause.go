@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // Recorded pauses for scheduled automations (#2090). Pausing is the operator's
@@ -27,16 +29,25 @@ type automationPauseFile struct {
 	Pauses []AutomationPause `json:"pauses"`
 }
 
-// AutomationPausePath is the per-checkout pause record for workspaceRoot.
-func AutomationPausePath(workspaceRoot string) string {
-	return filepath.Join(workspaceRoot, ".nightgauge", "doctor", "automation-pauses.json")
+// AutomationPausePath is the per-checkout pause record for workspaceRoot:
+// CHECKOUT/doctor/automation-pauses.json (ADR-024 § 7). A root outside git has
+// none and returns the resolver's error.
+func AutomationPausePath(workspaceRoot string) (string, error) {
+	return layout.CheckoutPath(workspaceRoot, layout.CheckoutAutomationPauses)
 }
 
 // LoadAutomationPauses reads the recorded pauses, keyed by automation ID. A
-// missing file is no pauses.
+// missing file, or a root outside git (no per-checkout directory), is no
+// pauses.
 func LoadAutomationPauses(workspaceRoot string) (map[string]AutomationPause, error) {
 	out := map[string]AutomationPause{}
-	path := AutomationPausePath(workspaceRoot)
+	path, err := AutomationPausePath(workspaceRoot)
+	if errors.Is(err, layout.ErrNotGitRepository) {
+		return out, nil
+	}
+	if err != nil {
+		return out, err
+	}
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
 		return out, fmt.Errorf("automation pause record %s is not a regular file", path)
 	}
@@ -87,14 +98,13 @@ func ResumeAutomation(workspaceRoot, id string) (bool, error) {
 // writeAutomationPauses writes the record atomically: directory 0700, file
 // 0600, and never through a symlinked directory (ADR-025 § 8).
 func writeAutomationPauses(workspaceRoot string, pauses map[string]AutomationPause) error {
-	path := AutomationPausePath(workspaceRoot)
-	dir := filepath.Dir(path)
-	for _, d := range []string{filepath.Dir(dir), dir} {
-		if info, err := os.Lstat(d); err == nil && info.Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("refusing to write through symlinked directory %s", d)
-		}
+	path, err := AutomationPausePath(workspaceRoot)
+	if err != nil {
+		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	// CheckoutSubdir creates the directory 0700 and refuses a symlink.
+	dir, err := layout.CheckoutSubdir(workspaceRoot, filepath.Dir(layout.CheckoutAutomationPauses))
+	if err != nil {
 		return err
 	}
 	f := automationPauseFile{Pauses: make([]AutomationPause, 0, len(pauses))}

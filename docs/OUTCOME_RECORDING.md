@@ -8,7 +8,7 @@
 > **Not to be confused with the learning outcome corpus.** Two subsystems are
 > both called "outcome recording". _This_ document covers the shared
 > **complexity model** (SDK `OutcomeRecorder` and Go `OutcomeService` →
-> `.nightgauge/complexity-model.yaml`, success-only, driven by pipeline
+> the checkout's `complexity-model.yaml`, success-only, driven by pipeline
 > completion). The **learning/calibration
 > corpus** is a separate, Go-owned system
 > (`internal/intelligence/learning.Recorder` → `history/outcomes.jsonl` in the
@@ -239,7 +239,7 @@ Two recording paths feed `ComplexityModelService`:
               (atomic write — temp file + verify)
                         │
                         ▼
-              .nightgauge/complexity-model.yaml
+              <checkout>/complexity-model.yaml
                         │
                         ▼
               future feature-pickup estimation
@@ -499,7 +499,7 @@ The command emits JSON containing `created` and `path`. It is idempotent and
 never replaces an existing file; malformed or unreadable existing models are
 not silently reset and still fail when a recorder loads them.
 `PostPipelineAnalyzer` constructs the SDK service with the full
-`<workspace>/.nightgauge/complexity-model.yaml` path and saves each non-skipped
+`<git-dir>/nightgauge-worktree/complexity-model.yaml` path and saves each non-skipped
 model returned by `OutcomeRecorder` through the Go transaction broker. The two
 mid-pipeline feedback writers use the same broker.
 
@@ -514,7 +514,7 @@ Direct SDK `save(model)` calls protect against partial writes:
 
 The Go initializer writes and syncs a private (`0600`) sibling temp file, then
 installs it with an exclusive hard link. Go model mutations and SDK transactions
-share the advisory `.nightgauge/complexity-model.lock`. For SDK transactions,
+share the advisory `complexity-model.lock` beside it. For SDK transactions,
 the Go broker owns both that lock and the final validated atomic install; if the
 broker exits, JavaScript has no independent write to continue after lock loss.
 Concurrent first-run recorders therefore converge without overwriting
@@ -599,8 +599,8 @@ PR merge. Its effects:
 
 **Related issue:** #1182
 
-`ComplexityModelService` maintains a JSONL recovery log at
-`.nightgauge/outcome-recovery.jsonl`. Its purpose is to preserve outcomes
+`ComplexityModelService` maintains a JSONL recovery log, this checkout's
+`outcome-recovery.jsonl`. Its purpose is to preserve outcomes
 that were computed but not yet written to the model — for example, if a process
 crashes between computing an outcome and writing the YAML.
 
@@ -637,8 +637,9 @@ Each line is a standalone JSON object:
 { "issueNumber": 1400, "outcomeData": { ... } }
 ```
 
-The file path is returned by `getRecoveryFilePath()` and is always
-`.nightgauge/outcome-recovery.jsonl` relative to the workspace root.
+The file path is returned by `getRecoveryFilePath()` and is always the
+checkout's `outcome-recovery.jsonl`
+(`nightgauge layout path checkout outcome-recovery.jsonl`).
 
 ## Configuration
 
@@ -652,8 +653,8 @@ The file path is returned by `getRecoveryFilePath()` and is always
 | `lines_changed_thresholds.L`  | `1850`  | Lines-changed upper bound for L bucket                              |
 | `lines_changed_thresholds.XL` | `2500`  | Lines-changed upper bound for XL bucket (anything above maps to XL) |
 
-The model file path defaults to `.nightgauge/complexity-model.yaml`
-relative to the workspace root. It can be overridden by passing an explicit
+The model file path defaults to this checkout's `complexity-model.yaml`
+(`nightgauge layout path checkout complexity-model.yaml`). It can be overridden by passing an explicit
 `modelPath` to the `ComplexityModelService` constructor.
 
 ## Key Constants

@@ -12,6 +12,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"strings"
 	"sync"
 	"testing"
@@ -259,7 +260,7 @@ func TestStatus_BoardTailIsZeroWhileTheRefinementLoopRuns(t *testing.T) {
 	cfg.RefinementInterval = 10 * time.Millisecond
 	// A real (if empty) inner Scheduler: Run() wires its pipeline-complete
 	// callback unconditionally, so a nil one panics before the first cycle.
-	as := NewAutonomousScheduler(&Scheduler{}, nil, nil, nil, cfg, t.TempDir())
+	as := NewAutonomousScheduler(&Scheduler{}, nil, nil, nil, cfg, layouttest.Repo(t))
 	t.Cleanup(as.drainBackground)
 	stubGraphFn(as) // keeps the cycle off the network
 

@@ -14,7 +14,7 @@
 #
 # Usage:
 #   scripts/apply-proposal-artifact.sh --kind <release-watch|continuous-improvement> \
-#       --file proposals.json --record .nightgauge/.../record.json [--dry-run]
+#       --file proposals.json --record "$NG_CHECKOUT"/.../record.json [--dry-run]
 #
 # The record's `issues_created` (release-watch) or `proposals_created`
 # (continuous-improvement) list gains one {number,title,url} per filed issue,

@@ -179,7 +179,7 @@ func TestFeatureValidateGate_LeavesACleanRunAlone(t *testing.T) {
 // as an accusation. This is the fail-safe direction: the check exists to stop a
 // run overclaiming, so it must never itself overclaim.
 func TestFeatureValidateGate_SilentWhenTheDiffIsUncomputable(t *testing.T) {
-	ws := t.TempDir() // no git repo at all
+	ws := layouttest.Repo(t) // a repository with no commits: no base ref to diff against
 	writeGateMetrics(t, ws, 152, []map[string]any{{"gate_name": "build", "result": "pass"}})
 	writeValidateArtifact(t, ws, 152, passingArtifact())
 

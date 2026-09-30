@@ -20,7 +20,8 @@
  *    Markdown that graduates into `docs/`; the extension has no write path to
  *    it at all (writes are skill-side `nightgauge knowledge` verbs). This is
  *    machine state a scheduler reads, not reader-facing prose.
- *  - **Not `.nightgauge/attention/`.** The decision-request store is the
+ *  - **Not the checkout's `attention/` store** (`.git/nightgauge-worktree/`,
+ *    ADR-024 § 7). The decision-request store is the
  *    daemon's to write, and its records are the *presentation* of a condition
  *    (dedup, journal, lifecycle). The finding is the condition itself, and it
  *    must be readable with no daemon running.

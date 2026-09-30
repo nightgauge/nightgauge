@@ -12,8 +12,11 @@ import (
 )
 
 // ArchiveRun moves every live context file for this run's issue into
-// history/<runId>/ under the pipeline state directory and writes a final
-// run-state.json snapshot inside the archive directory for forensics.
+// history/<runId>/ under baseDir, the clone's pipeline state directory
+// (layout.PipelineStateDir), and writes a final run-state.json snapshot inside
+// the archive directory for forensics. The archive is keyed by run id, so it
+// stays in CLONE with the context files; only the live, unkeyed run-state.json
+// is per checkout (ADR-024 § 7).
 //
 // Idempotent: if a file is missing it is skipped. Returns the absolute
 // archive directory path on success.
@@ -42,8 +45,9 @@ func ArchiveRun(baseDir string, rs *RunState) (string, error) {
 		}
 		name := ent.Name()
 		if name == FileName {
-			// run-state.json itself stays in place (final snapshot is also
-			// written into the archive dir below).
+			// A run-state.json here (a caller that keeps everything in one
+			// directory) stays in place; the final snapshot is written into
+			// the archive dir below.
 			continue
 		}
 		if !strings.HasSuffix(name, suffix) {

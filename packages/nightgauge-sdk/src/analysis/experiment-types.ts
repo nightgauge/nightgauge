@@ -166,7 +166,8 @@ export interface ExperimentEvaluationResult {
  * Persisted conclusion state written to disk when an experiment concludes.
  *
  * Written by ExperimentEvaluator.writeConclusion() to:
- * `.nightgauge/analysis/experiments/{name}-conclusion.json`
+ * `analysis/experiments/{name}-conclusion.json` in the checkout's per-checkout
+ * directory (`.git/nightgauge-worktree/` for a main checkout, ADR-024 § 7).
  */
 export interface ExperimentConclusion {
   experiment_name: string;

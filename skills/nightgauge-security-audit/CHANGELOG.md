@@ -17,6 +17,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   the single-agent prose stays the portability floor for providers without an
   orchestration capability. Skill version bumped to 1.2.0.
 
+### Changed
+
+- The JSON report is written to this checkout's `reports/security-audit.json`
+  inside the git directory (`nightgauge layout path checkout
+reports/security-audit.json`) through `nightgauge layout write checkout`, not to
+  `.nightgauge/security-audit.json`; the health-check report is read from
+  `reports/health-report.json` there too (#2037, ADR-024 § 7).
+
 ## [1.0.0] - 2026-02
 
 ### Added

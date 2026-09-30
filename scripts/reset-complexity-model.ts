@@ -17,8 +17,10 @@
 
 import { ComplexityModelService } from "../packages/nightgauge-sdk/src/services/ComplexityModelService.js";
 import type { ComplexityModel } from "../packages/nightgauge-sdk/src/context/schemas/complexity-model.js";
+import { checkoutPath } from "../packages/nightgauge-sdk/src/context/cloneLayout.js";
 
-const MODEL_PATH = ".nightgauge/complexity-model.yaml";
+// This checkout's complexity model, <git-dir>/nightgauge-worktree (ADR-024 § 7).
+const MODEL_PATH = checkoutPath("complexityModel");
 
 function parseArgs(): { dryRun: boolean } {
   return { dryRun: process.argv.includes("--dry-run") };

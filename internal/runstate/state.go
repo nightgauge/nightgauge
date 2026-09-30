@@ -1,6 +1,8 @@
 // Package runstate manages the durable pipeline lifecycle record at
-// run-state.json in the clone's pipeline state directory
-// (.git/nightgauge/pipeline, resolved by internal/layout). It is the single
+// run-state.json in the checkout's per-checkout directory
+// (.git/nightgauge-worktree for the main checkout, resolved by
+// layout.CheckoutDir; ADR-024 § 7). The record is an unkeyed singleton, so
+// each checkout's orchestrator owns its own. It is the single
 // source of truth for whether a given issue's pipeline is running, paused,
 // completed, discarded, or aborted — used by both the Go scheduler and the
 // TypeScript SDK (via the same on-disk file format).
@@ -20,13 +22,16 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // SchemaVersion is the current major.minor on-disk schema version.
 const SchemaVersion = "1.0"
 
-// FileName is the canonical filename in the pipeline state directory.
-const FileName = "run-state.json"
+// FileName is the canonical filename in the per-checkout directory
+// (layout.CheckoutRunState).
+const FileName = layout.CheckoutRunState
 
 // Lifecycle is the enumerated set of states the run can be in.
 type Lifecycle string
@@ -156,8 +161,8 @@ func splitMajorMinor(v string) (int, int, bool) {
 	return maj, min, true
 }
 
-// Path returns the canonical run-state.json path for a base directory
-// (typically the clone's pipeline state directory, layout.PipelineStateDir).
+// Path returns the canonical run-state.json path for a base directory: the
+// checkout's per-checkout directory (layout.CheckoutDir) in production.
 func Path(baseDir string) string {
 	return filepath.Join(baseDir, FileName)
 }

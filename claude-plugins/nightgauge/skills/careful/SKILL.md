@@ -35,7 +35,8 @@ by adding the **prod-data-destruction** set that you only want guarded
 occasionally.
 
 > Implementation note: skill-frontmatter session hooks are not wired into this
-> codebase, so careful mode is a sentinel lock (`.nightgauge/careful.lock`)
+> codebase, so careful mode is a sentinel lock (`careful.lock` in this
+> checkout's directory, `nightgauge layout path checkout careful.lock`)
 > that the always-registered gate consults — opt-in via `careful on`, cleared via
 > `careful off`, with a TTL backstop so a forgotten lock can't block forever.
 

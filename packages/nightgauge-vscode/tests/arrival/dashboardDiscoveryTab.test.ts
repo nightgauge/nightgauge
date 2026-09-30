@@ -32,6 +32,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createMockMemento } from "../mocks/memento";
+import { initGitRepo } from "../helpers/cloneLayout";
+import { checkoutPath } from "../../src/utils/cloneLayout";
 
 vi.mock("vscode", async () => (await import("./dashboardHarness")).vscodeMockModule());
 vi.mock("../../src/services/IpcClient", async () =>
@@ -77,9 +79,16 @@ const BACKLOG_TITLE = "Status line supports a custom template";
 let dashboard: Dashboard | undefined;
 const tempRoots: string[] = [];
 
-function makeWorkspace(prefix: string): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+/**
+ * A temp workspace with a config. The discovery records are per-checkout
+ * runtime state in `<git-dir>/nightgauge-worktree` (ADR-024 § 7), so by
+ * default the workspace is a git repository of its own; pass `git: false`
+ * for a directory the caller turns into a repository itself.
+ */
+function makeWorkspace(prefix: string, { git = true }: { git?: boolean } = {}): string {
+  let root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   tempRoots.push(root);
+  if (git) root = initGitRepo(root);
   fs.mkdirSync(path.join(root, ".nightgauge"), { recursive: true });
   fs.writeFileSync(
     path.join(root, ".nightgauge", "config.yaml"),
@@ -124,7 +133,7 @@ function recordReleaseWatchRun(root: string): void {
   // `close` verb must preserve it — a producer that rewrote the record from
   // scratch would erase every issue the run had just filed, and the tab would
   // report a run that created nothing.
-  const logPath = path.join(root, ".nightgauge", "release-watch", "creation-log-claude-code.json");
+  const logPath = checkoutPath(root, "releaseWatch", "creation-log-claude-code.json");
   const log = JSON.parse(fs.readFileSync(logPath, "utf-8"));
   log.issues_created = [
     {
@@ -156,7 +165,7 @@ function recordReleaseWatchRun(root: string): void {
   // backlog.json is the skill's own output, not the run record's — the service
   // reads it separately to populate the pending-backlog table.
   fs.writeFileSync(
-    path.join(root, ".nightgauge", "release-watch", "backlog.json"),
+    checkoutPath(root, "releaseWatch", "backlog.json"),
     JSON.stringify([{ title: BACKLOG_TITLE, score: 41, reason: "below score_threshold" }], null, 2),
     "utf-8"
   );
@@ -213,7 +222,7 @@ afterEach(async () => {
 // The records the scheduled workflows write
 // ---------------------------------------------------------------------------
 
-describe("arrival: Discovery tab (.nightgauge/release-watch + improvement-runs)", () => {
+describe("arrival: Discovery tab (checkout release-watch/ + improvement-runs/)", () => {
   it("reaches a populated state from records the real producer wrote", async () => {
     const root = makeWorkspace("ng-arrival-discovery-");
     recordReleaseWatchRun(root);
@@ -310,12 +319,12 @@ describe("arrival: discovery state transport (discovery-state branch)", () => {
     // (which syncs and reads). Anything less than this cannot catch the
     // failure the issue describes — a workflow that runs, writes state on a
     // disposable disk, and leaves every local Discovery tab empty.
-    const remote = makeWorkspace("ng-arrival-discovery-remote-");
+    const remote = makeWorkspace("ng-arrival-discovery-remote-", { git: false });
     fs.rmSync(remote, { recursive: true, force: true });
     fs.mkdirSync(remote, { recursive: true });
     git(remote, "init", "--quiet", "--bare");
 
-    const runner = makeWorkspace("ng-arrival-discovery-runner-");
+    const runner = makeWorkspace("ng-arrival-discovery-runner-", { git: false });
     git(runner, "init", "--quiet", "--initial-branch", "trunk");
     fs.writeFileSync(path.join(runner, "README.md"), "runner\n", "utf-8");
     git(runner, "add", "-A");
@@ -329,7 +338,7 @@ describe("arrival: discovery state transport (discovery-state branch)", () => {
       stdio: "pipe",
     });
 
-    const local = makeWorkspace("ng-arrival-discovery-local-");
+    const local = makeWorkspace("ng-arrival-discovery-local-", { git: false });
     fs.rmSync(local, { recursive: true, force: true });
     git(path.dirname(local), "clone", "--quiet", remote, local);
     git(local, "checkout", "--quiet", "trunk");
@@ -342,16 +351,13 @@ describe("arrival: discovery state transport (discovery-state branch)", () => {
 
     // Nothing has fetched the state yet: this is the state the tab was stuck
     // in for the whole life of the feature.
-    expect(fs.existsSync(path.join(local, ".nightgauge", "release-watch"))).toBe(false);
+    expect(fs.existsSync(checkoutPath(local, "releaseWatch"))).toBe(false);
 
     execFileSync("bash", [stateSync], { cwd: local, stdio: "pipe" });
 
-    const synced = path.join(
-      local,
-      ".nightgauge",
-      "release-watch",
-      "creation-log-claude-code.json"
-    );
+    // The sync lands in the checkout's own directory, never the working tree.
+    const synced = checkoutPath(local, "releaseWatch", "creation-log-claude-code.json");
+    expect(fs.existsSync(path.join(local, ".nightgauge", "release-watch"))).toBe(false);
     expect(fs.existsSync(synced)).toBe(true);
     const record = JSON.parse(fs.readFileSync(synced, "utf-8"));
     expect(record.new_version).toBe(NEW_VERSION);

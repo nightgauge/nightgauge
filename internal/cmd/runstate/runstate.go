@@ -20,8 +20,10 @@ func Cmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "state",
 		Short: "Inspect or mutate the durable pipeline run-state.json (Issue #3238)",
-		Long: `Manage ` + layout.PipelineStateDisplay() + `/run-state.json — the single source of truth
+		Long: `Manage ` + layout.CheckoutDisplay(layout.CheckoutRunState) + ` — the single source of truth
 for the pipeline lifecycle (running / paused / completed / discarded / aborted).
+The record is per checkout: a linked worktree has its own under
+.git/worktrees/<name>/nightgauge-worktree/.
 
 Mirrors the TypeScript-side RunStateManager. Both runtimes write the same
 file format using the atomic+fsync write contract.`,
@@ -30,19 +32,38 @@ file format using the atomic+fsync write contract.`,
 	return cmd
 }
 
+// resolveBaseDir is the directory run-state.json is read from and written to:
+// --dir when given, else the working directory's checkout's CHECKOUT.
 func resolveBaseDir(cmd *cobra.Command) (string, error) {
 	if v, _ := cmd.Flags().GetString("dir"); v != "" {
 		return v, nil
 	}
-	return mainCheckoutBaseDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve the working directory: %w", err)
+	}
+	return checkoutBaseDir(cwd)
 }
 
-// mainCheckoutBaseDir is the default --dir: the pipeline state directory of
-// the clone the working directory is in, which is where the orchestrator
-// writes run-state.json (#1964). The directory lives under the git common dir
-// (ADR-024 § 7), so `run state get` from a run's worktree reads the same
-// record as the main checkout. Outside a git repository it is an error.
-func mainCheckoutBaseDir() (string, error) {
+// checkoutBaseDir is the default --dir: the per-checkout directory of the
+// checkout root is in (layout.CheckoutDir), where that checkout's
+// orchestrator writes run-state.json (ADR-024 § 7). run-state.json is an
+// unkeyed singleton, so each checkout owns its own: `run state get` in a
+// linked worktree reads that worktree's record, not the main checkout's.
+// Outside a git repository it is an error.
+func checkoutBaseDir(root string) (string, error) {
+	return layout.CheckoutDir(root)
+}
+
+// resolvePipelineDir is the directory the issue's context files live in and
+// the history/<runId>/ archive is written under: --dir when given (a test or
+// recovery flow that keeps everything in one directory), else the clone's
+// pipeline state directory (layout.PipelineStateDir). Those files are keyed by
+// issue and run, so they stay shared by every checkout of the clone.
+func resolvePipelineDir(cmd *cobra.Command) (string, error) {
+	if v, _ := cmd.Flags().GetString("dir"); v != "" {
+		return v, nil
+	}
 	cwd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("resolve the working directory: %w", err)
@@ -75,7 +96,7 @@ func getCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().String("dir", "", "override base directory (default: the clone's "+layout.PipelineStateDisplay()+")")
+	cmd.Flags().String("dir", "", "override base directory (default: the checkout's "+layout.CheckoutDisplay()+")")
 	return cmd
 }
 
@@ -191,7 +212,11 @@ remote-if-pushed). Protected branches (main, master) are never deleted.`,
 				return err
 			}
 			if archive {
-				if _, err := runstate.ArchiveRun(baseDir, rs); err != nil {
+				pipelineDir, err := resolvePipelineDir(cmd)
+				if err != nil {
+					return err
+				}
+				if _, err := runstate.ArchiveRun(pipelineDir, rs); err != nil {
 					return fmt.Errorf("archive run: %w", err)
 				}
 			}
@@ -233,7 +258,11 @@ no context, no run-state) returns kind=orphaned with choices=[restart, manual-pi
 			}
 			has := hasContextFlag
 			if autoDetectFiles && issue > 0 {
-				has = runstate.HasContextFiles(baseDir, issue)
+				pipelineDir, err := resolvePipelineDir(cmd)
+				if err != nil {
+					return err
+				}
+				has = runstate.HasContextFiles(pipelineDir, issue)
 			}
 			det, err := runstate.DetectResume(baseDir, branch, has)
 			if err != nil {

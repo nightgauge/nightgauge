@@ -265,7 +265,7 @@ fi
 Detect existing health-check output for coverage data reuse:
 
 ```bash
-HEALTH_REPORT_PATH=".nightgauge/health-report.json"
+HEALTH_REPORT_PATH="$(nightgauge layout path checkout reports/health-report.json)"
 HEALTH_CHECK_AVAILABLE=false
 
 if [ -f "$HEALTH_REPORT_PATH" ]; then
@@ -727,13 +727,10 @@ echo "  Pass rate: ${PASS_RATE}%"
 
 #### Step 6.1: Write JSON Report
 
-Ensure the `.nightgauge/` directory exists, then write the structured
-report to `.nightgauge/test-scaffold-report.json` (or the custom `--output`
-path):
-
-```bash
-mkdir -p .nightgauge
-```
+Write the structured report to this checkout's
+`reports/test-scaffold-report.json`
+(`nightgauge layout path checkout reports/test-scaffold-report.json`, inside the
+git directory, ADR-024 § 7), or to the custom `--output` path:
 
 ```json
 {
@@ -794,6 +791,13 @@ mkdir -p .nightgauge
   },
   "created_at": "2026-02-21T00:00:00Z"
 }
+```
+
+Build the JSON in a temporary file; Step 6.3 validates and writes it.
+
+```bash
+REPORT_TMP="$(mktemp)"
+# ... write the JSON report to "$REPORT_TMP" ...
 ```
 
 #### Step 6.2: Write Markdown Summary
@@ -857,18 +861,28 @@ Replace with proper tests after refactoring is complete.
 Delete tests/scaffold/ when no longer needed.
 
 ----------------------------------------------------------------
-Report saved: .nightgauge/test-scaffold-report.json
+Report saved: .git/nightgauge-worktree/reports/test-scaffold-report.json
 ```
 
 If `--format json`, write only JSON. If `--format summary`, output only the
 markdown summary. If `--format both`, write JSON and output the markdown
 summary.
 
-#### Step 6.3: Verify JSON Report
+#### Step 6.3: Verify and Write JSON Report
+
+Validate the JSON, then write it. The default report goes through
+`nightgauge layout write`; never write under `.git` by path:
 
 ```bash
-python3 -m json.tool .nightgauge/test-scaffold-report.json > /dev/null && \
-  echo "Report written: .nightgauge/test-scaffold-report.json"
+python3 -m json.tool "$REPORT_TMP" > /dev/null || { echo "Invalid report JSON" >&2; exit 1; }
+if [ -n "$OUTPUT_FILE" ]; then
+  cp "$REPORT_TMP" "$OUTPUT_FILE"
+  REPORT_PATH="$OUTPUT_FILE"
+else
+  REPORT_PATH="$(nightgauge layout write checkout reports/test-scaffold-report.json --from "$REPORT_TMP")"
+fi
+rm -f "$REPORT_TMP"
+echo "Report written: $REPORT_PATH"
 ```
 
 ---
@@ -940,11 +954,15 @@ See Phase 6 Step 6.1 for the complete JSON report structure.
 
 ### Report Files
 
-| File                                    | Format   | When Written               |
-| --------------------------------------- | -------- | -------------------------- |
-| `.nightgauge/test-scaffold-report.json` | JSON     | `--format json/both`       |
-| Console output                          | Markdown | `--format summary/both`    |
-| `tests/scaffold/*.scaffold.test.*`      | Tests    | Unless `--skip-generation` |
+| File                                         | Format   | When Written               |
+| -------------------------------------------- | -------- | -------------------------- |
+| `checkout reports/test-scaffold-report.json` | JSON     | `--format json/both`       |
+| Console output                               | Markdown | `--format summary/both`    |
+| `tests/scaffold/*.scaffold.test.*`           | Tests    | Unless `--skip-generation` |
+
+`checkout` paths are inside this checkout's git directory (ADR-024 § 7):
+`nightgauge layout path checkout reports/test-scaffold-report.json` prints the
+resolved path.
 
 ---
 
@@ -975,14 +993,14 @@ UTILITIES (not part of main pipeline)
 /nightgauge:health-check ────────────────────┐
        |                                           |
   Standalone utility — run anytime          (optional input)
-  Writes: .nightgauge/health-report.json      |
+  Writes: checkout reports/health-report.json |
                                                    v
                                  /nightgauge:test-scaffold
                                         |
                                    Standalone utility — run anytime
                                    Reads: Codebase files (read-only analysis)
-                                   Reads: .nightgauge/health-report.json (optional)
-                                   Writes: .nightgauge/test-scaffold-report.json
+                                   Reads: checkout reports/health-report.json (optional)
+                                   Writes: checkout reports/test-scaffold-report.json
                                    Writes: tests/scaffold/*.scaffold.test.* (generated tests)
 ```
 

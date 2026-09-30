@@ -9,6 +9,7 @@ import (
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/acparse"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -268,10 +269,18 @@ func (v *Validator) CheckGreenfield(workdir string) []BacklogFinding {
 		detail     string
 		suggestion string
 	}
+	// The complexity model is per-checkout state in the git dir (ADR-024 § 7).
+	// A workdir outside git has none: an empty path reports it absent.
+	modelPath := ""
+	if abs, err := filepath.Abs(workdir); err == nil {
+		if p, err := layout.CheckoutPath(abs, layout.CheckoutComplexityModel); err == nil {
+			modelPath = p
+		}
+	}
 	checks := []check{
 		{
-			path:       filepath.Join(workdir, ".nightgauge", "complexity-model.yaml"),
-			detail:     "Missing .nightgauge/complexity-model.yaml — pipeline size gate has no calibration data",
+			path:       modelPath,
+			detail:     "Missing " + layout.CheckoutDisplay(layout.CheckoutComplexityModel) + " — pipeline size gate has no calibration data",
 			suggestion: "Run: nightgauge outcome init to generate the complexity model",
 		},
 		{
@@ -295,7 +304,7 @@ func (v *Validator) CheckGreenfield(workdir string) []BacklogFinding {
 
 	var findings []BacklogFinding
 	for _, c := range checks {
-		if _, err := os.Stat(c.path); os.IsNotExist(err) {
+		if _, err := os.Stat(c.path); c.path == "" || os.IsNotExist(err) {
 			findings = append(findings, BacklogFinding{
 				IssueNumber: 0, // not issue-specific
 				IssueTitle:  "",

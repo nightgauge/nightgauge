@@ -64,7 +64,12 @@ export const AuditConfigSchema = z.object({
   apiKey: z.string().optional(),
   batchSize: z.number().int().min(1).max(1000).default(100),
   flushIntervalMs: z.number().int().default(30_000),
-  offlineQueuePath: z.string().default(".nightgauge/audit-queue.json"),
+  /**
+   * Offline queue file. Unset: `audit-queue.json` in the per-checkout
+   * directory of the checkout containing the process cwd (ADR-024 § 7). A
+   * relative value resolves against the process cwd.
+   */
+  offlineQueuePath: z.string().optional(),
   offlineQueueMaxSize: z.number().int().default(10_000),
   retryMaxAttempts: z.number().int().default(3),
   retryBackoffMs: z.number().int().default(1_000),

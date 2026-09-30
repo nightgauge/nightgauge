@@ -108,12 +108,12 @@ export const arrivalFixtures = {
   prList: () => loadFixture<Record<string, unknown>[]>("github/pr-list.json"),
   /** issue.list (label type:epic) → Epics tab */
   epicIssues: () => loadFixture<Record<string, unknown>[]>("github/issue-list-epics.json"),
-  /** .nightgauge/release-watch/creation-log.json → Discovery tab */
+  /** <checkout>/release-watch/creation-log.json → Discovery tab */
   discoveryCreationLog: () => loadFixture<Record<string, unknown>>("discovery/creation-log.json"),
-  /** .nightgauge/improvement-runs/latest.json → Discovery tab */
+  /** <checkout>/improvement-runs/latest.json → Discovery tab */
   discoveryImprovementRun: () =>
     loadFixture<Record<string, unknown>>("discovery/improvement-runs-latest.json"),
-  /** .nightgauge/release-watch/backlog.json → Discovery tab */
+  /** <checkout>/release-watch/backlog.json → Discovery tab */
   discoveryBacklog: () => loadFixture<Record<string, unknown>[]>("discovery/backlog.json"),
 };
 

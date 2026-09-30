@@ -360,8 +360,8 @@ func gitToplevel(dir string) string {
 //
 // A caller that derives on-disk STATE from a root must canonicalize with this
 // and not with gitToplevel (#410). Inside a linked worktree gitToplevel reports
-// the worktree, whose `.nightgauge/pipeline` directory EXISTS — the `.gitkeep`
-// is tracked, so every checkout has one — and is empty. A destructive caller
+// the worktree, whose `.nightgauge/pipeline` directory EXISTED — before
+// ADR-024 § 13 its `.gitkeep` was tracked, so every checkout had one — and was empty. A destructive caller
 // then reads a DETERMINED EMPTY in-flight set with no error and no warning,
 // while `git worktree list` from that same directory still enumerates every
 // worktree of the repository: total blindness with undiminished reach. That is

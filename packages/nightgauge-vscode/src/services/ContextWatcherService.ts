@@ -6,7 +6,7 @@
  * Claude Code terminal (e.g., when /nightgauge:issue-pickup completes).
  */
 
-import { isUsableWorkspaceRoot, pipelineStateDir } from "../utils/cloneLayout";
+import { checkoutPath, isUsableWorkspaceRoot, pipelineStateDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -327,8 +327,6 @@ export class ContextWatcherService implements vscode.Disposable {
     const contextDir = pipelineStateDir(this.workspaceRoot);
 
     try {
-      const files = await fs.readdir(contextDir);
-
       // Guard: if no durable run state exists, the pipeline was already
       // completed and cleared. Do not re-initialize from stale issue-*.json
       // context files — that is how a reload resurrects a completed pipeline
@@ -338,13 +336,19 @@ export class ContextWatcherService implements vscode.Disposable {
       // so it matched on EVERY run and this method returned before doing any
       // work at all. Repointed to `run-state.json`, which the Go runstate
       // package actually writes (internal/runstate/state.go), so the guard
-      // expresses the condition it always meant to.
-      if (!files.includes("run-state.json")) {
+      // expresses the condition it always meant to. run-state.json is this
+      // checkout's own singleton, in CHECKOUT rather than beside the shared
+      // context files (ADR-024 § 7).
+      try {
+        await fs.access(checkoutPath(this.workspaceRoot, "runState"));
+      } catch {
         this.logger.debug(
           "No run-state.json found — pipeline previously completed, skipping context scan"
         );
         return;
       }
+
+      const files = await fs.readdir(contextDir);
 
       // Find the most recent issue-*.json file
       const issueFiles = files.filter((f) => f.startsWith("issue-"));
@@ -426,9 +430,10 @@ export class ContextWatcherService implements vscode.Disposable {
    *
    * Removes: issue-*.json, planning-*.json, dev-*.json, validate-*.json,
    * pr-*.json, merge-*.json (plus the checkpoint/winddown/budget signal files).
-   * Preserves: run-state.json, queue-state.json, batch-state.json,
-   * health-history.jsonl, calibration.json, history/, and other non-context
-   * files.
+   * Preserves: health-history.jsonl, calibration.json, history/, and other
+   * non-context files. The run-control singletons (run-state.json,
+   * queue-state.json, batch-state.json) are not in this directory at all: they
+   * live in the checkout's CHECKOUT (ADR-024 § 7).
    *
    * A disjunct naming the writer-less pipeline state file was removed by
    * #471: nothing writes it, so it never selected anything for deletion.

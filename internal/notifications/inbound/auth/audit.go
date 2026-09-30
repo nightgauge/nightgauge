@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 const (
@@ -30,15 +32,25 @@ type AuditEntry struct {
 // Rotation triggers when the current file exceeds auditMaxBytes; the writer
 // keeps at most auditKeepFiles rotated copies (numbered .1 through .5).
 type AuditWriter struct {
-	mu  sync.Mutex
-	dir string
-	f   *os.File
+	mu   sync.Mutex
+	dir  string
+	root string // resolve dir from this checkout on first Append when dir is ""
+	f    *os.File
 }
 
 // NewAuditWriter returns an AuditWriter that writes to dir/audit.jsonl.
 // The directory is created on first Append if it does not exist.
 func NewAuditWriter(dir string) *AuditWriter {
 	return &AuditWriter{dir: dir}
+}
+
+// NewCheckoutAuditWriter returns an AuditWriter for the checkout root is in:
+// it writes CHECKOUT/notifications/audit.jsonl
+// (.git/nightgauge-worktree/notifications, ADR-024 § 7). The directory is
+// resolved and created (0700) on first Append; outside a git checkout Append
+// returns the error rather than writing anywhere else.
+func NewCheckoutAuditWriter(root string) *AuditWriter {
+	return &AuditWriter{root: root}
 }
 
 // Append encodes entry as a JSON line and appends it to the audit log,
@@ -77,6 +89,16 @@ func (w *AuditWriter) Append(entry AuditEntry) error {
 func (w *AuditWriter) ensureOpen() error {
 	if w.f != nil {
 		return nil
+	}
+	if w.dir == "" {
+		if w.root == "" {
+			return fmt.Errorf("audit: no directory configured")
+		}
+		dir, err := layout.CheckoutSubdir(w.root, layout.CheckoutNotifications)
+		if err != nil {
+			return fmt.Errorf("audit dir: %w", err)
+		}
+		w.dir = dir
 	}
 	if err := os.MkdirAll(w.dir, 0o750); err != nil {
 		return fmt.Errorf("audit mkdir: %w", err)

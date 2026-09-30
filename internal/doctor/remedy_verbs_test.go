@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/flock"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -313,8 +315,8 @@ func TestHygieneRemedies_ServeLeaseReclaim(t *testing.T) {
 }
 
 func TestComplexityModelRemedyPreview_EndToEnd(t *testing.T) {
-	root := t.TempDir()
-	modelPath := filepath.Join(root, ".nightgauge", "complexity-model.yaml")
+	root := layouttest.Repo(t)
+	modelPath := layouttest.CheckoutPath(t, root, layout.CheckoutComplexityModel)
 	fx := hygieneFixer(t, root, verbDeps{}, "complexity_model")
 	fx.Env.Now = time.Now()
 

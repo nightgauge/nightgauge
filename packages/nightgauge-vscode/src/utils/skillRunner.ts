@@ -39,7 +39,7 @@ import { EventEmitter } from "events";
 import { countOpenCodeCompactions } from "./openCodeEvents";
 import * as fs from "fs";
 import * as path from "path";
-import { pipelineStateDir, isUsableWorkspaceRoot } from "./cloneLayout";
+import { checkoutDir, pipelineStateDir, isUsableWorkspaceRoot } from "./cloneLayout";
 import * as os from "os";
 import { randomUUID } from "crypto";
 import type { PipelineStage } from "@nightgauge/sdk";
@@ -1417,7 +1417,8 @@ export function resolveModel(
   const stageEffort = getStageEffort(stage, workspaceRoot, issueMetadata);
 
   // Step 0: Performance mode (Issue #3009, Issue #19)
-  // Reads `NIGHTGAUGE_PERFORMANCE_MODE` env var or `.nightgauge/performance-mode.yaml`.
+  // Reads `NIGHTGAUGE_PERFORMANCE_MODE` env var or the checkout's
+  // `performance-mode.yaml` (`.git/nightgauge-worktree/`, ADR-024 § 7).
   //
   // Modes are policy ENVELOPES (Issue #19): a `[floor, ceiling]` band the
   // adaptive router selects within. A mode that still pins a stage explicitly
@@ -5493,6 +5494,7 @@ function runStageSkillHeadlessImpl(
   const traceRecorder = isUsableWorkspaceRoot(workspaceRoot)
     ? TraceRecorder.open({
         pipelineDir: pipelineStateDir(workspaceRoot),
+        checkoutDir: checkoutDir(workspaceRoot),
         ...(targetRepo ? { repo: targetRepo } : {}),
         ...(issueNumber && issueNumber > 0 ? { issue: issueNumber } : {}),
         ...(runId ? { runId } : {}),

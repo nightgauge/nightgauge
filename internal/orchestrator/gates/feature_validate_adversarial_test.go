@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -13,7 +14,7 @@ import (
 // deterministic writer, the existing FeatureValidateGate fails validation —
 // the gate stays pure while the LLM verdict reaches it through gate-metrics.
 func TestFeatureValidateGate_AdversarialCatchTrips(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 
 	// Deterministic gates all passed...
 	mustAppend(t, ws, 4097, "build", "pass", "")
@@ -34,7 +35,7 @@ func TestFeatureValidateGate_AdversarialCatchTrips(t *testing.T) {
 // TestFeatureValidateGate_AllPassIncludingAdversarial confirms a clean
 // adversarial pass does not block validation.
 func TestFeatureValidateGate_AllPassIncludingAdversarial(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	mustAppend(t, ws, 4097, "build", "pass", "")
 	mustAppend(t, ws, 4097, "adversarial-review", "pass", "")
 

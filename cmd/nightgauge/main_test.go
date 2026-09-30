@@ -13,6 +13,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/intelligence/failure"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/spf13/cobra"
 )
@@ -546,27 +547,27 @@ func TestOutcomeCmdRegistered(t *testing.T) {
 }
 
 func TestOutcomeInitCreatesModelAtWorkdir(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	cmd := rootCmd()
 	cmd.SetArgs([]string{"outcome", "init", "--workdir", dir})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("outcome init failed: %v", err)
 	}
 
-	modelPath := filepath.Join(dir, ".nightgauge", "complexity-model.yaml")
+	modelPath := layouttest.CheckoutPath(t, dir, layout.CheckoutComplexityModel)
 	if _, err := os.Stat(modelPath); err != nil {
 		t.Fatalf("expected model at %s: %v", modelPath, err)
 	}
 }
 
 func TestOutcomeLockCommitsModelDocument(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	initCmd := rootCmd()
 	initCmd.SetArgs([]string{"outcome", "init", "--workdir", dir})
 	if err := initCmd.Execute(); err != nil {
 		t.Fatalf("outcome init failed: %v", err)
 	}
-	modelPath := filepath.Join(dir, ".nightgauge", "complexity-model.yaml")
+	modelPath := layouttest.CheckoutPath(t, dir, layout.CheckoutComplexityModel)
 	data, err := os.ReadFile(modelPath)
 	if err != nil {
 		t.Fatal(err)

@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The grooming reports and the run log live in this checkout's `triage/`
+  directory inside the git directory (`nightgauge layout path checkout triage`)
+  and are written through `nightgauge layout write|append checkout`, not by
+  `.nightgauge/triage/...` path (#2037, ADR-024 § 7).
+
 ## [2.0.0] - 2026-08-29
 
 ### Changed

@@ -196,7 +196,17 @@ func loadThresholds(workspaceRoot string) map[string]int {
 	if workspaceRoot == "" {
 		return nil
 	}
-	data, err := os.ReadFile(filepath.Join(workspaceRoot, ".nightgauge", "complexity-model.yaml"))
+	// The model is per-checkout learned state (ADR-024 § 7). A root outside
+	// git has none, and the default thresholds apply.
+	root, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return nil
+	}
+	path, err := layout.CheckoutPath(root, layout.CheckoutComplexityModel)
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}

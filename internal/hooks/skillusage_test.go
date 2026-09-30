@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/skills"
 )
 
 func TestLogSkillUsageWritesRecord(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	input := fmt.Sprintf(`{"tool_name":"Skill","session_id":"sess-1","cwd":%q,"tool_input":{"skill":"nightgauge-security-audit","args":"."}}`, root)
 
 	got := LogSkillUsage([]byte(input))
@@ -26,7 +27,7 @@ func TestLogSkillUsageWritesRecord(t *testing.T) {
 }
 
 func TestLogSkillUsageFallbackNameField(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	input := fmt.Sprintf(`{"tool_name":"Skill","cwd":%q,"tool_input":{"name":"smart-setup"}}`, root)
 	if got := LogSkillUsage([]byte(input)); got.Decision != "allow" {
 		t.Fatalf("want allow, got %q", got.Decision)
@@ -38,7 +39,7 @@ func TestLogSkillUsageFallbackNameField(t *testing.T) {
 }
 
 func TestLogSkillUsageIgnoresNonSkillTool(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	input := fmt.Sprintf(`{"tool_name":"Bash","cwd":%q,"tool_input":{"command":"ls"}}`, root)
 	if got := LogSkillUsage([]byte(input)); got.Decision != "allow" {
 		t.Fatalf("want allow, got %q", got.Decision)
@@ -56,7 +57,7 @@ func TestLogSkillUsageMalformedAllows(t *testing.T) {
 }
 
 func TestLogSkillUsageNoSkillNameNotLogged(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	input := fmt.Sprintf(`{"tool_name":"Skill","cwd":%q,"tool_input":{}}`, root)
 	LogSkillUsage([]byte(input))
 	recs, _ := skills.ReadUsage(root)

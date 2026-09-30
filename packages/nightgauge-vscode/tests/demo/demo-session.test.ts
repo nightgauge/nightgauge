@@ -8,6 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { STAGED_CHECKOUT_ENTRIES } from "../../demo/workspace-clone";
 import { DEMO_WORKSPACE_NOW, HISTORY_DIR } from "../../demo/workspace-dates";
 import {
   DEMO_DAEMON,
@@ -20,10 +21,12 @@ import {
 } from "../../scripts/demo-session";
 import { getDefaultAuditFilters } from "../../src/services/AuditLogService";
 import { LocalAuditFallbackService } from "../../src/services/LocalAuditFallbackService";
-import { pipelineStateDir } from "../../src/utils/cloneLayout";
+import { checkoutPath, pipelineStateDir } from "../../src/utils/cloneLayout";
 
 /** The source stages the demo's per-clone pipeline data in the tree (#2037). */
 const STAGED_PIPELINE_DIR = path.join(".nightgauge", "pipeline");
+/** The source stages the checkout's health/ entry here (ADR-024 § 7). */
+const STAGED_HEALTH_DIR = path.join(".nightgauge", "health");
 
 let home: string;
 beforeEach(() => {
@@ -150,10 +153,12 @@ describe("preparing a demo session", () => {
     fs.writeFileSync(p.startFile!, "");
     prepareDemoSession(p, DEMO_WORKSPACE, epoch);
     expect(snapshot(p.workspace)).toEqual(first);
-    // The working tree holds the source's files less the staged per-clone
-    // data, and nothing under .git but the clone's data came from the source.
+    // The working tree holds the source's files less the staged per-clone and
+    // per-checkout data, and nothing under .git but that data came from the
+    // source.
     const isGit = (rel: string) => rel === ".git";
-    const isStaged = (rel: string) => rel === STAGED_PIPELINE_DIR;
+    const isStaged = (rel: string) =>
+      rel === STAGED_PIPELINE_DIR || STAGED_CHECKOUT_ENTRIES.some(([staged]) => staged === rel);
     expect(Object.keys(snapshot(p.workspace, isGit))).toEqual(
       Object.keys(snapshot(DEMO_WORKSPACE, isStaged))
     );
@@ -165,6 +170,19 @@ describe("preparing a demo session", () => {
       notHistory(snapshot(path.join(DEMO_WORKSPACE, STAGED_PIPELINE_DIR)))
     );
     expect(fs.existsSync(path.join(p.workspace, STAGED_PIPELINE_DIR))).toBe(false);
+    // The per-checkout health data moved into the checkout's own directory.
+    expect(Object.keys(snapshot(checkoutPath(p.workspace, "health")))).toEqual(
+      Object.keys(snapshot(path.join(DEMO_WORKSPACE, STAGED_HEALTH_DIR)))
+    );
+    expect(fs.existsSync(path.join(p.workspace, STAGED_HEALTH_DIR))).toBe(false);
+    // So did the other per-checkout runtime files the source stages.
+    for (const moved of [
+      checkoutPath(p.workspace, "complexityModel"),
+      checkoutPath(p.workspace, "releaseWatch", "creation-log.json"),
+      checkoutPath(p.workspace, "improvementRuns", "latest.json"),
+    ]) {
+      expect(fs.existsSync(moved)).toBe(true);
+    }
     expect(fs.readFileSync(p.eventLog, "utf8")).toBe("");
     expect(fs.existsSync(p.startFile!)).toBe(false);
   });

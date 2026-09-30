@@ -29,6 +29,7 @@ const mockLogger = {
 
 // Mock fs/promises
 vi.mock("node:fs/promises", () => ({
+  access: vi.fn(),
   readFile: vi.fn(),
   readdir: vi.fn(),
   stat: vi.fn(),
@@ -113,6 +114,8 @@ describe("ContextWatcherService", () => {
   beforeEach(async () => {
     vi.clearAllMocks();
     layout = fakeCloneLayout(workspaceRoot);
+    // run-state.json exists unless a test says otherwise (it lives in CHECKOUT).
+    vi.mocked(fs.access).mockResolvedValue(undefined);
     // Get the mocked vscode module and reset watcher instances
     vscode = await import("vscode");
     watcherInstances = (vscode as any)._testWatcherInstances;
@@ -531,9 +534,13 @@ describe("ContextWatcherService", () => {
       // which Go actually writes, so this case can distinguish a completed run
       // from a live one instead of firing on every run alike.
       vi.mocked(fs.readdir).mockResolvedValue(["issue-42.json"] as any);
+      vi.mocked(fs.access).mockRejectedValue(
+        Object.assign(new Error("absent"), { code: "ENOENT" })
+      );
 
       await service.scanExistingContext();
 
+      expect(fs.access).toHaveBeenCalledWith(path.join(layout.checkout, "run-state.json"));
       expect(issueHandler).not.toHaveBeenCalled();
       expect(mockLogger.debug).toHaveBeenCalledWith(
         "No run-state.json found — pipeline previously completed, skipping context scan"

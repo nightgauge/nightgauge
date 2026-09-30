@@ -14,6 +14,7 @@ import type { PipelineStage } from "@nightgauge/sdk";
 import type { AuditConfig } from "@nightgauge/sdk";
 import { EFFORT_LEVELS, TIER_BANDS, providerFor, type Provider } from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
+import { checkoutPath, isUsableWorkspaceRoot } from "../cloneLayout";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
 import type { DefaultModel } from "./modelResolver";
 import type { ClaudeEffort } from "./stageResolver";
@@ -3429,7 +3430,9 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
     apiKey: undefined,
     batchSize: 50,
     flushIntervalMs: 30_000,
-    offlineQueuePath: ".nightgauge/audit-queue.json",
+    // Set below from the workspace root: audit-queue.json in the checkout's
+    // per-checkout directory (ADR-024 § 7).
+    offlineQueuePath: undefined,
     offlineQueueMaxSize: 10_000,
     retryMaxAttempts: 3,
     retryBackoffMs: 1_000,
@@ -3455,6 +3458,9 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
   const root = workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!root) {
     return defaults;
+  }
+  if (isUsableWorkspaceRoot(root)) {
+    defaults.offlineQueuePath = checkoutPath(root, "auditQueue");
   }
 
   try {
@@ -3548,7 +3554,9 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
         }
         case "offline_queue_path":
         case "offlineQueuePath":
-          defaults.offlineQueuePath = value.trim();
+          // A relative path is relative to the workspace root, never to the
+          // extension host's working directory.
+          defaults.offlineQueuePath = path.resolve(root, value.trim());
           break;
       }
     }
@@ -3578,11 +3586,16 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
 
 import { DEFAULT_PERFORMANCE_MODE, isPerformanceMode, type PerformanceMode } from "../modeProfiles";
 
-const PERFORMANCE_MODE_STATE_FILENAME = "performance-mode.yaml";
 const SUPERCHARGE_STATE_FILENAME = "supercharge.yaml";
 
-function getPerformanceModeStatePath(workspaceRoot: string): string {
-  return path.join(workspaceRoot, ".nightgauge", PERFORMANCE_MODE_STATE_FILENAME);
+/**
+ * The performance-mode state file of the checkout `workspaceRoot` is in:
+ * `<git-dir>/nightgauge-worktree/performance-mode.yaml` (ADR-024 § 7). Each
+ * checkout, linked worktrees included, has its own. Throws when the root is
+ * not a usable checkout; readers guard with `isUsableWorkspaceRoot` first.
+ */
+export function getPerformanceModeStatePath(workspaceRoot: string): string {
+  return checkoutPath(workspaceRoot, "performanceMode");
 }
 
 /**
@@ -3605,6 +3618,9 @@ export function getLegacySuperchargeStatePath(workspaceRoot: string): string {
  * ```
  */
 function readPerformanceModeStateFile(workspaceRoot: string): PerformanceMode | undefined {
+  if (!isUsableWorkspaceRoot(workspaceRoot)) {
+    return undefined;
+  }
   try {
     const statePath = getPerformanceModeStatePath(workspaceRoot);
     if (!fs.existsSync(statePath)) {
@@ -3640,8 +3656,10 @@ export function writePerformanceModeStateFile(workspaceRoot: string, mode: Perfo
  *
  * Precedence:
  * 1. `NIGHTGAUGE_PERFORMANCE_MODE` env var (always wins).
- * 2. `.nightgauge/performance-mode.yaml` in the primary VS Code workspace.
- * 3. Same file under the passed-in `workspaceRoot` (for tests / multi-repo).
+ * 2. The primary VS Code workspace's `performance-mode.yaml`, in its
+ *    per-checkout directory (`.git/nightgauge-worktree/`, ADR-024 § 7).
+ * 3. The same file of the passed-in `workspaceRoot`'s checkout (for tests /
+ *    multi-repo).
  * 4. `DEFAULT_PERFORMANCE_MODE` (`elevated`).
  *
  * The primary-workspace check matches today's Supercharge fallback — the

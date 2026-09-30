@@ -5,7 +5,7 @@
  * feature-validate during each validation run. Used to compute gate
  * hit-rates and surface ROI in PostPipelineAnalyzer and /pipeline-health.
  *
- * File path: .nightgauge/health/gate-metrics.jsonl
+ * File path: .git/nightgauge-worktree/health/gate-metrics.jsonl (per checkout, ADR-024 § 7)
  *
  * @see Issue #1412 - Quality gate hit-rate metrics
  */

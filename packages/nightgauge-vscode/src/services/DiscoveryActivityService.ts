@@ -1,12 +1,14 @@
 /**
  * DiscoveryActivityService — reads autonomous discovery run history for the dashboard.
  *
- * Reads state files written by GitHub Actions workflows:
- * - `.nightgauge/release-watch/creation-log*.json` — release-watch run
+ * Reads state files written by the discovery runs, in the checkout's
+ * per-checkout directory (`.git/nightgauge-worktree/` for a main checkout,
+ * ADR-024 § 7):
+ * - `release-watch/creation-log*.json` — release-watch run
  *   results. Multi-provider (#4054): each provider writes its own
  *   `creation-log-<provider>.json` (legacy single `creation-log.json` is still
  *   read), and they are aggregated across providers for the dashboard.
- * - `.nightgauge/improvement-runs/latest.json` — continuous-improvement run results
+ * - `improvement-runs/latest.json` — continuous-improvement run results
  *
  * Also reads the release-watch backlog to surface pending proposals.
  *
@@ -17,6 +19,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { checkoutPath, isUsableWorkspaceRoot } from "../utils/cloneLayout";
 
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -77,19 +80,17 @@ export interface DiscoveryActivityData {
 }
 
 export class DiscoveryActivityService {
-  private readonly releaseWatchDir: string;
-  private readonly improvementRunLogPath: string;
-  private readonly backlogPath: string;
+  // Empty when the workspace root is not a usable checkout: every read then
+  // reports the pre-first-run state.
+  private readonly releaseWatchDir: string = "";
+  private readonly improvementRunLogPath: string = "";
+  private readonly backlogPath: string = "";
 
   constructor(workspaceRoot: string) {
-    this.releaseWatchDir = path.join(workspaceRoot, ".nightgauge", "release-watch");
-    this.improvementRunLogPath = path.join(
-      workspaceRoot,
-      ".nightgauge",
-      "improvement-runs",
-      "latest.json"
-    );
-    this.backlogPath = path.join(workspaceRoot, ".nightgauge", "release-watch", "backlog.json");
+    if (!isUsableWorkspaceRoot(workspaceRoot)) return;
+    this.releaseWatchDir = checkoutPath(workspaceRoot, "releaseWatch");
+    this.improvementRunLogPath = checkoutPath(workspaceRoot, "improvementRuns", "latest.json");
+    this.backlogPath = checkoutPath(workspaceRoot, "releaseWatch", "backlog.json");
   }
 
   /**
@@ -147,6 +148,7 @@ export class DiscoveryActivityService {
    * files (#4054). Returns an empty array pre-first-run.
    */
   private readReleaseWatchRuns(): ReleaseWatchRunData[] {
+    if (!this.releaseWatchDir) return [];
     let entries: string[];
     try {
       if (!fs.existsSync(this.releaseWatchDir)) {
@@ -204,6 +206,7 @@ export class DiscoveryActivityService {
   }
 
   private readJson<T>(filePath: string): T | null {
+    if (!filePath) return null;
     try {
       if (!fs.existsSync(filePath)) {
         return null;
@@ -217,6 +220,7 @@ export class DiscoveryActivityService {
   }
 
   private readBacklog(): BacklogEntry[] {
+    if (!this.backlogPath) return [];
     try {
       if (!fs.existsSync(this.backlogPath)) {
         return [];

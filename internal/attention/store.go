@@ -17,11 +17,9 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/flock"
 	"github.com/nightgauge/nightgauge/internal/history"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
-
-// Subdir is the workspace-relative directory the attention store lives in.
-const Subdir = ".nightgauge/attention"
 
 // journalFile is the append-only lifecycle audit within the store directory.
 const journalFile = "journal.jsonl"
@@ -38,7 +36,7 @@ var idPattern = regexp.MustCompile(`^dr_[A-Za-z0-9-]{8,80}$`)
 // directory. It is a routing fact, not a rejection.
 //
 // The distinction is load-bearing on the platform-relayed path. A card id is
-// only ever a filename under one workspace's `.nightgauge/attention/`
+// only ever a filename under one checkout's attention directory
 // (pathFor), while the platform addresses a relayed resolve to an agent
 // identity that is per-MACHINE — so a daemon can be handed a resolve for a
 // card that is valid, open, and owned by a different workspace on the same
@@ -298,7 +296,7 @@ func (s *Store) drainEmits(ch chan pendingEmit) {
 // file could not be opened would turn a hardening measure into an outage —
 // on the very path whose job is to tell an operator something is wrong.
 func flockDir(dir string) func() {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil
 	}
 	path := filepath.Join(dir, lockFileName)
@@ -384,13 +382,18 @@ type TransitionListener func(entry JournalEntry, req *DecisionRequest)
 // the resolution.
 type SteerWriter func(req *DecisionRequest, steerText string) error
 
-// Store is the single authoritative writer for `.nightgauge/attention/`. All
+// Store is the single authoritative writer for the checkout's attention
+// directory (layout.CheckoutDisplay("attention"), ADR-024 § 7). All
 // mutations route through one Store type with its serialization discipline;
 // surfaces never write the files directly (ADR-015 §C).
 type Store struct {
 	rootDir string
 	dir     string
-	now     func() time.Time // injectable clock for tests
+	// err is why the store directory could not be resolved (rootDir is not
+	// inside a git checkout, or the entry is unsafe). Every operation returns
+	// it; the store never falls back into the working tree.
+	err error
+	now func() time.Time // injectable clock for tests
 
 	listenerMu   sync.Mutex
 	listeners    []TransitionListener
@@ -405,15 +408,23 @@ type Store struct {
 // reported instead of accumulating without bound.
 const emitQueueDepth = 1024
 
-// New constructs a Store rooted at the workspace root. rootDir is the directory
-// that contains `.nightgauge/`.
+// New constructs a Store for the checkout rootDir is in. The store lives in
+// the checkout's CHECKOUT/attention (ADR-024 § 7). When that cannot be
+// resolved (rootDir is not in a git checkout, or the entry is a symlink) the
+// store is still returned and every operation reports the error.
 func New(rootDir string) *Store {
-	return &Store{
-		rootDir: rootDir,
-		dir:     filepath.Join(rootDir, ".nightgauge", "attention"),
-		now:     time.Now,
+	s := &Store{rootDir: rootDir, now: time.Now}
+	dir, err := layout.CheckoutPath(rootDir, layout.CheckoutAttention)
+	if err != nil {
+		s.err = fmt.Errorf("attention: resolve the store directory: %w", err)
+		return s
 	}
+	s.dir = dir
+	return s
 }
+
+// Err reports why the store directory could not be resolved, or nil.
+func (s *Store) Err() error { return s.err }
 
 // Subscribe registers a transition listener. Safe to call concurrently;
 // listeners fire in registration order after each persisted transition.
@@ -454,13 +465,17 @@ func (s *Store) WithClock(now func() time.Time) *Store {
 	return s
 }
 
-// Dir returns the absolute attention store directory.
+// Dir returns the absolute attention store directory, or "" when it could not
+// be resolved (see Err).
 func (s *Store) Dir() string { return s.dir }
 
 func (s *Store) nowUTC() time.Time { return s.now().UTC() }
 
 // pathFor returns the materialized file path for id, guarding against traversal.
 func (s *Store) pathFor(id string) (string, error) {
+	if s.err != nil {
+		return "", s.err
+	}
 	if !idPattern.MatchString(id) {
 		return "", fmt.Errorf("attention: invalid request id %q", id)
 	}
@@ -527,6 +542,9 @@ const (
 // refreshes the card without re-alerting, and a condition a human already
 // resolved is not handed straight back until its fingerprint moves.
 func (s *Store) Raise(req DecisionRequest) (RaiseOutcome, string, error) {
+	if s.err != nil {
+		return "", "", s.err
+	}
 	if err := validateForRaise(&req); err != nil {
 		return "", "", err
 	}
@@ -769,6 +787,9 @@ type ListFilter struct {
 // List returns requests matching the filter, ordered most-severe-then-newest
 // (the inbox order — ADR-015 §I). Malformed files are skipped.
 func (s *Store) List(filter ListFilter) ([]DecisionRequest, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -875,6 +896,9 @@ func ValidateActor(actor string) error {
 // body is local file IO. Before #1539 this method could park forever on that
 // lock with no way for a caller to give up.
 func (s *Store) Acknowledge(ctx context.Context, id, actor string) (*DecisionRequest, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	if err := ValidateActor(actor); err != nil {
 		// Same contract as Resolve (#1405, #1539): the acknowledgement record
 		// carries an actor the platform validates.
@@ -943,6 +967,9 @@ type ResolveResult struct {
 // mutation, no persist, no journal entry — so the card stays open and a
 // retry after the underlying condition clears hits the same code path fresh.
 func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, note string, exec VerbExecutor) (ResolveResult, error) {
+	if s.err != nil {
+		return ResolveResult{}, s.err
+	}
 	// Refused BEFORE the lock is taken: a resolution that cannot be recorded
 	// must not queue behind anything, and the check needs no state (#1539).
 	if err := ValidateActor(actor); err != nil {
@@ -1056,6 +1083,9 @@ func (s *Store) Resolve(ctx context.Context, id, optionID, actor, steerText, not
 // and joined into the returned error, so a caller that already checks
 // SweepExpired's error (e.g. sweepAttentionExpired) surfaces it (#1450).
 func (s *Store) SweepExpired(ctx context.Context, exec VerbExecutor) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
 	now := s.nowUTC()
 
 	release := s.acquireSection()
@@ -1171,7 +1201,7 @@ func (s *Store) loadLocked(id string) (string, *DecisionRequest, error) {
 // acquireDir, so a concurrent writer in another process can neither share this
 // staging file nor be inside this function at the same time (#1425).
 func (s *Store) writeMaterializedLocked(path string, req *DecisionRequest) error {
-	if err := os.MkdirAll(s.dir, 0o755); err != nil {
+	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return fmt.Errorf("attention: create store dir: %w", err)
 	}
 	normalizeForWire(req)
@@ -1264,6 +1294,9 @@ func (s *Store) emitLocked(entry JournalEntry, req *DecisionRequest) {
 // ReadJournal reads every journal entry in order (oldest first). Used for audit
 // tooling and tests. A missing journal returns (nil, nil).
 func (s *Store) ReadJournal() ([]JournalEntry, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	data, err := os.ReadFile(filepath.Join(s.dir, journalFile))
 	if err != nil {
 		if os.IsNotExist(err) {

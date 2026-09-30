@@ -8,6 +8,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The JSON report is written to this checkout's
+  `reports/test-scaffold-report.json` inside the git directory (`nightgauge
+layout path checkout reports/test-scaffold-report.json`) through `nightgauge layout write checkout`,
+  not to `.nightgauge/test-scaffold-report.json`; the health-check report is
+  read from `reports/health-report.json` there too (#2037, ADR-024 § 7).
+
 ## [1.0.0] - 2026-02-21
 
 ### Added

@@ -98,7 +98,7 @@ vi.mock("../../src/services/RepositoryContextLoader", () => ({
 }));
 
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
-import { CONTAINMENT_DIR, CONTAINMENT_ERROR_MARKER } from "../../src/utils/worktreeContainment";
+import { containmentDir, CONTAINMENT_ERROR_MARKER } from "../../src/utils/worktreeContainment";
 import { createMockChildProcess } from "../mocks/child-process";
 
 function git(args: string[], cwd: string): string {
@@ -261,7 +261,7 @@ describe("runStageSkillHeadless — worktree write containment (#129)", () => {
     await completed;
 
     // The patch is durable, under the canonical root that outlives the worktree.
-    const containmentRoot = path.join(primary, CONTAINMENT_DIR);
+    const containmentRoot = containmentDir(primary);
     expect(fs.existsSync(containmentRoot)).toBe(true);
     const patches = fs
       .readdirSync(containmentRoot, { withFileTypes: true })
@@ -296,7 +296,7 @@ describe("runStageSkillHeadless — worktree write containment (#129)", () => {
 
     expect(result.success).toBe(true);
     expect(result.error).toBeUndefined();
-    expect(fs.existsSync(path.join(primary, CONTAINMENT_DIR))).toBe(false);
+    expect(fs.existsSync(containmentDir(primary))).toBe(false);
   });
 
   it("does not fail a stage because a sibling repo was already dirty with operator work", async () => {
@@ -317,7 +317,7 @@ describe("runStageSkillHeadless — worktree write containment (#129)", () => {
     expect(fs.readFileSync(path.join(sibling, "src", "router.ts"), "utf-8")).toBe(
       "// operator work in progress\n"
     );
-    expect(fs.existsSync(path.join(primary, CONTAINMENT_DIR))).toBe(false);
+    expect(fs.existsSync(containmentDir(primary))).toBe(false);
   });
 
   it("still reports the skill's own failure when the stage exited non-zero and stayed contained", async () => {

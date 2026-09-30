@@ -156,7 +156,8 @@ Tie-breaker: lower issue number (older issues first).
 
 ### Focus Mode Integration
 
-The autonomous scheduler reads `.nightgauge/focus.yaml` at the start of
+The autonomous scheduler reads the checkout's `focus.yaml`
+(`nightgauge layout path checkout focus.yaml`) at the start of
 each `prioritize()` cycle and applies keyword-based boosts to focus-aligned
 issues.
 
@@ -495,7 +496,7 @@ clean again. Only the true→false / false→true transition is logged (at
 `RateLimitPressureActive` and `AvgCycleGraphQLCost` /
 `LastCycleGraphQLCost` are surfaced alongside the existing
 `LastRejectionReasons` wherever autonomous state is already exposed
-(`nightgauge autonomous status --json`, `.nightgauge/autonomous/state.json`),
+(`nightgauge autonomous status --json`, the checkout's `autonomous/state.json`),
 so an operator or a dashboard can treat sustained rate-limit pressure as an
 anomaly rather than a routine, invisible occurrence.
 
@@ -519,8 +520,10 @@ details.
 
 ### 6. State Persistence
 
-The scheduler writes its full state to
-`.nightgauge/autonomous/state.json` after every cycle. This enables:
+The scheduler writes its full state to `autonomous/state.json` in the
+checkout's git directory (`.git/nightgauge-worktree/autonomous/state.json` for
+the main checkout; `nightgauge layout path checkout autonomous/state.json`
+prints it) after every cycle. This enables:
 
 - **Crash recovery**: restart picks up where it left off (running items are
   marked as stopped, completed/failed history is preserved)
@@ -1736,7 +1739,7 @@ an actual promotable count.
 
 ### State file corrupted
 
-- Delete `.nightgauge/autonomous/state.json` and restart
+- Delete `"$(nightgauge layout path checkout autonomous/state.json)"` and restart
 - The scheduler initializes fresh state when no file exists
 - Previously completed/failed history will be lost
 

@@ -1434,6 +1434,15 @@ run_step "Build SDK types (for the test-tree typecheck)" \
   npm run build --workspace=@nightgauge/sdk
 run_step "VSCode test-tree typecheck" npm run typecheck:tests -w nightgauge-vscode
 
+# 4c. Retro engine tests and the model-routing analysis script (#2296, #2297,
+# #2298). Neither is reached by the npm workspaces, so both rotted unnoticed:
+# the engine could not import and the script no longer type-checked. The
+# script imports the SDK source, so it needs the SDK built above.
+run_step "Retro engine pytest suite" python3 -m pytest scripts/retro/tests -q
+run_step "analyze-model-routing.ts typecheck" \
+  npx tsc --noEmit --skipLibCheck --esModuleInterop --module nodenext \
+  --moduleResolution nodenext --target es2022 --types node scripts/analyze-model-routing.ts
+
 # 5. ESLint
 run_step "ESLint" npm run lint
 

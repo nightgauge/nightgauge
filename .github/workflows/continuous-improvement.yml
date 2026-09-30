@@ -1,7 +1,8 @@
 name: Continuous Improvement
 
 # Weekly pipeline-effectiveness review, and the producer of
-# `.nightgauge/improvement-runs/latest.json` — the second file the VSCode
+# `improvement-runs/latest.json` in the checkout directory
+# (`nightgauge layout path checkout improvement-runs`) — the second file the VSCode
 # dashboard's Discovery tab reads.
 #
 # Like its daily sibling (release-watchdog.yml), this workflow was documented
@@ -138,7 +139,11 @@ jobs:
       - name: Carry forward the previous run's state
         # Unauthenticated fetch of the public state branch; see
         # persist-credentials above.
-        run: bash scripts/discovery-state-sync.sh
+        # The state lives in this checkout's directory, CHECKOUT (ADR-024
+        # § 7); later steps address it through NG_CHECKOUT.
+        run: |
+          bash scripts/discovery-state-sync.sh
+          echo "NG_CHECKOUT=$(git rev-parse --absolute-git-dir)/nightgauge-worktree" >> "$GITHUB_ENV"
 
       - name: Start from an empty proposal artifact
         # Written before the model runs, so a skipped or failed review still
@@ -230,13 +235,16 @@ jobs:
       TRIGGERED_BY: ${{ github.event_name }}
       CREATE_ISSUES: ${{ needs.gate.outputs.create_issues }}
       REVIEW_OUTCOME: ${{ needs.analyze.outputs.review_outcome }}
-      RECORD: .nightgauge/improvement-runs/latest.json
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Carry forward the previous run's state
-        run: bash scripts/discovery-state-sync.sh
+        # The state lives in this checkout's directory, CHECKOUT (ADR-024
+        # § 7); later steps address it through NG_CHECKOUT.
+        run: |
+          bash scripts/discovery-state-sync.sh
+          echo "NG_CHECKOUT=$(git rev-parse --absolute-git-dir)/nightgauge-worktree" >> "$GITHUB_ENV"
 
       - name: Open the run record
         # Before anything is filed, for the same reason the watchdog does it: a
@@ -281,7 +289,7 @@ jobs:
           bash scripts/apply-proposal-artifact.sh \
             --kind continuous-improvement \
             --file "$PROPOSAL_FILE" \
-            --record "$RECORD"
+            --record "$NG_CHECKOUT/improvement-runs/latest.json"
 
       - name: Close the run record
         if: ${{ always() }}

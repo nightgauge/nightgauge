@@ -31,7 +31,8 @@ Runs after every successful pipeline completion:
 5. **Gate effectiveness** — measures quality gate hit rates
 6. **Skill effectiveness** — tracks impact of SKILL.md changes on success rates
 7. **Calibration table update** — refines complexity estimation from outcomes
-8. **Store results** in `.nightgauge/analysis/` with retention
+8. **Store results** in this checkout's `analysis/`
+   (`nightgauge layout path checkout analysis`) with retention
 
 ### Outcome Recording
 
@@ -231,7 +232,8 @@ and re-baseline from the first row written after the upgrade.
 
 **File**: `packages/nightgauge-sdk/src/services/OutcomeRecorder.ts`, driven by
 the extension's `PostPipelineAnalyzer`, writing
-`.nightgauge/complexity-model.yaml`. Success-only: it keys off a completed run
+this checkout's `complexity-model.yaml`
+(`nightgauge layout path checkout complexity-model.yaml`). Success-only: it keys off a completed run
 record with a resolvable PR. See [OUTCOME_RECORDING.md](OUTCOME_RECORDING.md).
 
 ### Complexity Calibration
@@ -496,7 +498,7 @@ PostPipelineAnalyzer.analyze()
         ├─ CalibrationService         → updated calibration table
         │
         ▼
-Store in .nightgauge/analysis/
+Store in <checkout>/analysis/
         │
         ▼
 Dashboard displays results
@@ -542,14 +544,16 @@ Generate prioritized improvement proposals
 (`nightgauge layout path pipeline`, resolving to
 `<git-common-dir>/nightgauge/pipeline/`; see
 [ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
+`<checkout>` is this checkout's directory (`nightgauge layout path checkout`,
+`.git/nightgauge-worktree/` for the main checkout).
 
 | File                                          | Purpose                                                      |
 | --------------------------------------------- | ------------------------------------------------------------ |
 | `.nightgauge/execution-history.jsonl`         | Pipeline execution records                                   |
 | `<pipeline>/history/outcomes.jsonl`           | Learning outcome corpus (per target repo, both exec paths)   |
-| `.nightgauge/analysis/latest.json`            | Most recent analysis result                                  |
-| `.nightgauge/analysis/analysis-*.json`        | Timestamped analysis history                                 |
-| `.nightgauge/gate-metrics.jsonl`              | Gate invocation records                                      |
+| `<checkout>/analysis/latest.json`             | Most recent analysis result                                  |
+| `<checkout>/analysis/analysis-*.json`         | Timestamped analysis history                                 |
+| `<checkout>/health/gate-metrics.jsonl`        | Gate invocation records                                      |
 | `.nightgauge/skill-effectiveness.jsonl`       | Skill change effectiveness                                   |
 | `.nightgauge/calibration.json`                | Size estimate calibration                                    |
 | `<pipeline>/stage-model-calibration.json`     | Per-(stage, model) cost calibration (#142)                   |

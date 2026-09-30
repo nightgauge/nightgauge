@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 const testRepo = "octocat/acme"
@@ -77,7 +79,7 @@ func openRequests(t *testing.T, s *Store) []DecisionRequest {
 // ONE alert. Ten is arbitrary — the property is that the counts do not grow
 // with the number of observations.
 func TestTenSweepsOverAnUnchangedConditionYieldOneRequestAndOneNotification(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	obs := standingObservation("default-branch-health:"+testRepo+":main", "check:build=failure")
 
 	const sweeps = 10
@@ -104,7 +106,7 @@ func TestTenSweepsOverAnUnchangedConditionYieldOneRequestAndOneNotification(t *t
 // TestSecondSweepOverAnUnchangedRepoChangesNothing is the #89 idempotency AC
 // stated as a property of the result, independent of how many conditions hold.
 func TestSecondSweepOverAnUnchangedRepoChangesNothing(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	obs := []DecisionRequest{
 		standingObservation("k:branch", "check:build=failure"),
 		standingObservation("k:pr", "pr:41:review_required"),
@@ -127,7 +129,7 @@ func TestSecondSweepOverAnUnchangedRepoChangesNothing(t *testing.T) {
 // TestClearedConditionAutoResolvesDistinguishablyFromHumanResolution covers the
 // terminal-state separation the scorecard depends on.
 func TestClearedConditionAutoResolvesDistinguishablyFromHumanResolution(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	sweepOnce(t, s, standingObservation("k:branch", "check:build=failure"))
 
 	// The next sweep observes nothing: the branch went green.
@@ -164,7 +166,7 @@ func TestClearedConditionAutoResolvesDistinguishablyFromHumanResolution(t *testi
 // TestAutoResolveOnlyAppliesToProducersThatActuallyLooked is the fail-safe: "I
 // could not observe" must never be mistaken for "the condition cleared".
 func TestAutoResolveOnlyAppliesToProducersThatActuallyLooked(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	branch := standingObservation("k:branch", "check:build=failure")
 	gate := standingObservation("k:pr", "pr:41:review_required")
 	gate.Producer = "human-gate"
@@ -190,7 +192,7 @@ func TestAutoResolveOnlyAppliesToProducersThatActuallyLooked(t *testing.T) {
 
 // TestAnotherReposCardsSurviveASweep — reconciliation is repo-scoped.
 func TestAnotherReposCardsSurviveASweep(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	other := standingObservation("k:branch", "check:build=failure")
 	other.Context.Repo = "octocat/other"
 	if _, err := s.ReconcileStanding(StandingSweep{
@@ -215,7 +217,7 @@ func TestAnotherReposCardsSurviveASweep(t *testing.T) {
 // TestContentUpdatesDoNotReNotifyButMaterialChangesDo separates the two kinds
 // of update. This is what keeps duration/detail churn out of the alert stream.
 func TestContentUpdatesDoNotReNotifyButMaterialChangesDo(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	obs := standingObservation("k:branch", "check:build=failure")
 	sweepOnce(t, s, obs)
 	afterCreate := notifications(t, s)
@@ -250,7 +252,7 @@ func TestContentUpdatesDoNotReNotifyButMaterialChangesDo(t *testing.T) {
 // TestMuteSuppressesUntilTheConditionChangesNotUntilATimer is the mute rule
 // stated exactly as the ticket words it.
 func TestMuteSuppressesUntilTheConditionChangesNotUntilATimer(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	obs := standingObservation("k:branch", "check:build=failure")
 	sweepOnce(t, s, obs)
 	id := openRequests(t, s)[0].ID
@@ -286,7 +288,7 @@ func TestMuteSuppressesUntilTheConditionChangesNotUntilATimer(t *testing.T) {
 
 // TestMutedCardsAreSilencedNotHidden — mute governs alerting, not membership.
 func TestMutedCardsAreSilencedNotHidden(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	sweepOnce(t, s, standingObservation("k:branch", "check:build=failure"))
 	id := openRequests(t, s)[0].ID
 	if _, err := s.Mute(context.Background(), id, "octocat"); err != nil {
@@ -316,7 +318,7 @@ func TestMutedCardsAreSilencedNotHidden(t *testing.T) {
 // TestAcknowledgementIsScopedToTheConditionTheOperatorSaw — an ack silences the
 // badge for the condition that was on screen, not for whatever it becomes.
 func TestAcknowledgementIsScopedToTheConditionTheOperatorSaw(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	obs := standingObservation("k:branch", "check:build=failure")
 	sweepOnce(t, s, obs)
 	id := openRequests(t, s)[0].ID
@@ -344,7 +346,7 @@ func TestAcknowledgementIsScopedToTheConditionTheOperatorSaw(t *testing.T) {
 // TestHumanResolutionIsNotUndoneByTheNextSweep — a human who dismissed this
 // exact condition is not handed it back a minute later.
 func TestHumanResolutionIsNotUndoneByTheNextSweep(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	obs := standingObservation("k:branch", "check:build=failure")
 	sweepOnce(t, s, obs)
 	id := openRequests(t, s)[0].ID
@@ -372,7 +374,7 @@ func TestHumanResolutionIsNotUndoneByTheNextSweep(t *testing.T) {
 // TestAConditionThatClearsAndReturnsIsRaisedAgain — an auto-resolution, unlike
 // a human decision, carries no judgement, so it must not suppress.
 func TestAConditionThatClearsAndReturnsIsRaisedAgain(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	obs := standingObservation("k:branch", "check:build=failure")
 	sweepOnce(t, s, obs)
 	sweepOnce(t, s) // clears → auto-resolved
@@ -387,7 +389,7 @@ func TestAConditionThatClearsAndReturnsIsRaisedAgain(t *testing.T) {
 func TestStandingExpiryIsDeclaredAndRefreshedWhileTheConditionHolds(t *testing.T) {
 	base := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 	now := base
-	s := New(t.TempDir()).WithClock(func() time.Time { return now })
+	s := New(layouttest.Repo(t)).WithClock(func() time.Time { return now })
 	obs := standingObservation("k:branch", "check:build=failure")
 
 	sweepOnce(t, s, obs)
@@ -469,7 +471,7 @@ func TestReconcileRejectsCallerMistakesBeforeTouchingTheStore(t *testing.T) {
 	}
 	for name, sw := range cases {
 		t.Run(name, func(t *testing.T) {
-			s := New(t.TempDir())
+			s := New(layouttest.Repo(t))
 			if _, err := s.ReconcileStanding(sw); err == nil {
 				t.Fatalf("expected %s to be rejected", name)
 			}

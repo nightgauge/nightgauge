@@ -16,6 +16,7 @@ import {
 } from "@nightgauge/sdk";
 import { GateMetricsWriter } from "../../src/utils/gateMetricsWriter";
 import { GateMetricRecordSchema, type GateMetricRecord } from "../../src/schemas/gateMetrics";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mock node:fs/promises
 vi.mock("node:fs/promises");
@@ -44,7 +45,8 @@ function judgeNode(
 
 describe("GateMetricsWriter", () => {
   const workspaceRoot = "/test/workspace";
-  const expectedFilePath = "/test/workspace/.nightgauge/health/gate-metrics.jsonl";
+  // Per checkout, in CHECKOUT (ADR-024 § 7).
+  const expectedFilePath = "/test/workspace/.git/nightgauge-worktree/health/gate-metrics.jsonl";
 
   const validRecord: GateMetricRecord = {
     schema_version: "1",
@@ -60,6 +62,7 @@ describe("GateMetricsWriter", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeCloneLayout(workspaceRoot);
     vi.mocked(fs.mkdir).mockResolvedValue(undefined);
     vi.mocked(fs.appendFile).mockResolvedValue();
   });
@@ -69,8 +72,15 @@ describe("GateMetricsWriter", () => {
   });
 
   describe("getFilePath()", () => {
-    it("returns the expected path under workspace root", () => {
+    it("returns the expected path under the checkout's CHECKOUT", () => {
       expect(GateMetricsWriter.getFilePath(workspaceRoot)).toBe(expectedFilePath);
+    });
+
+    it("gives a linked worktree its own file", () => {
+      fakeCloneLayout("/test/wt", "/test/workspace/.git", "/test/workspace/.git/worktrees/wt");
+      expect(GateMetricsWriter.getFilePath("/test/wt")).toBe(
+        "/test/workspace/.git/worktrees/wt/nightgauge-worktree/health/gate-metrics.jsonl"
+      );
     });
   });
 
@@ -78,7 +88,7 @@ describe("GateMetricsWriter", () => {
     it("writes a valid record as a JSONL line", async () => {
       await GateMetricsWriter.appendRecord(workspaceRoot, validRecord);
 
-      expect(fs.mkdir).toHaveBeenCalledWith(expect.stringContaining(".nightgauge/health"), {
+      expect(fs.mkdir).toHaveBeenCalledWith(expect.stringContaining("nightgauge-worktree/health"), {
         recursive: true,
       });
       expect(fs.appendFile).toHaveBeenCalledWith(
@@ -119,7 +129,7 @@ describe("GateMetricsWriter", () => {
     it("creates parent directory if missing", async () => {
       await GateMetricsWriter.appendRecord(workspaceRoot, validRecord);
 
-      expect(fs.mkdir).toHaveBeenCalledWith(expect.stringContaining(".nightgauge/health"), {
+      expect(fs.mkdir).toHaveBeenCalledWith(expect.stringContaining("nightgauge-worktree/health"), {
         recursive: true,
       });
     });

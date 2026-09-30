@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // survivalRec builds a terminal survival record with the given verdict and a
@@ -17,7 +18,7 @@ func survivalRec(n int, verdict survival.Verdict) survival.Record {
 }
 
 func TestApplySurvivalVerdicts_SingleReverted_NoPenaltyBelowFloor(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 	svc := NewOutcomeService(dir)
 
@@ -43,7 +44,7 @@ func TestApplySurvivalVerdicts_SingleReverted_NoPenaltyBelowFloor(t *testing.T) 
 }
 
 func TestApplySurvivalVerdicts_RevertedAtFloor_TriggersPenalty(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 	svc := NewOutcomeService(dir)
 
@@ -71,7 +72,7 @@ func TestApplySurvivalVerdicts_RevertedAtFloor_TriggersPenalty(t *testing.T) {
 }
 
 func TestApplySurvivalVerdicts_SingleSurvived_NoRewardBelowFloor(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 	svc := NewOutcomeService(dir)
 
@@ -86,7 +87,7 @@ func TestApplySurvivalVerdicts_SingleSurvived_NoRewardBelowFloor(t *testing.T) {
 }
 
 func TestApplySurvivalVerdicts_FiveSurvived_TriggersWeakReward(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 	svc := NewOutcomeService(dir)
 
@@ -111,7 +112,7 @@ func TestApplySurvivalVerdicts_FiveSurvived_TriggersWeakReward(t *testing.T) {
 }
 
 func TestApplySurvivalVerdicts_PendingAndUnobserved_NeverAffectCalibration(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 	svc := NewOutcomeService(dir)
 
@@ -146,7 +147,7 @@ func TestApplySurvivalVerdicts_PendingAndUnobserved_NeverAffectCalibration(t *te
 }
 
 func TestApplySurvivalVerdicts_DedupBySHA_IsIdempotent(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 	svc := NewOutcomeService(dir)
 
@@ -172,7 +173,7 @@ func TestApplySurvivalVerdicts_DedupBySHA_IsIdempotent(t *testing.T) {
 }
 
 func TestApplySurvivalVerdicts_EmptyBatchIsNoOp(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	makeTestModel(t, dir)
 	svc := NewOutcomeService(dir)
 

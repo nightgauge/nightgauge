@@ -186,7 +186,7 @@ func seedWorkspace(t *testing.T, ws string, issueNumber int) {
 	t.Helper()
 
 	pipelineDir := layouttest.PipelineDir(t, ws)
-	healthDir := filepath.Join(ws, ".nightgauge", "health")
+	healthDir := layouttest.MkCheckoutSubdir(t, ws, "health")
 	plansDir := layouttest.PlansDir(t, ws)
 
 	for _, dir := range []string{pipelineDir, healthDir, plansDir} {

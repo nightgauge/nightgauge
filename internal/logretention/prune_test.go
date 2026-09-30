@@ -97,8 +97,7 @@ func TestPruneSizeAndAge(t *testing.T) {
 }
 
 // TestPruneDefaultOpenSetIsLiveFiles: with no explicit Open list the live
-// writers' files are never deleted: go-backend.log and only the current day's
-// ledger segment. Earlier segments, size backups and the pre-segment ledger
+// writers' files are never deleted: only the current day's ledger segment. Earlier segments, size backups and the pre-segment ledger
 // are prunable, which is what bounds the ledger.
 func TestPruneDefaultOpenSetIsLiveFiles(t *testing.T) {
 	dir := t.TempDir()
@@ -106,8 +105,8 @@ func TestPruneDefaultOpenSetIsLiveFiles(t *testing.T) {
 	for _, n := range LiveFiles(testNow) {
 		live = append(live, fixture(t, dir, n, 1000, 100*day))
 	}
-	if filepath.Base(live[1]) != "github-api-2026-09-29.jsonl" {
-		t.Fatalf("today's ledger segment = %s", filepath.Base(live[1]))
+	if len(live) != 1 || filepath.Base(live[0]) != "github-api-2026-09-29.jsonl" {
+		t.Fatalf("live files = %v, want today's ledger segment only", live)
 	}
 	var prunable []string
 	for _, n := range []string{

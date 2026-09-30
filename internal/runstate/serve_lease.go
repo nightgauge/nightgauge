@@ -22,8 +22,9 @@ package runstate
 // held on an INODE, so a flock on the sidecar would be silently released by the
 // holder's own next heartbeat — a lock that reports success and protects
 // nothing, which is worse than no lock at all. The lease therefore flocks a
-// `.lock` file that is created once and never renamed, alongside the `.json`
-// the sidecar keeps.
+// lock file that is created once and never renamed: CHECKOUT/serve.lock for a
+// git checkout (ADR-024 § 7, one daemon per checkout), or a `.lock` beside the
+// `.json` claim record for a workspace outside git. See ServeLeasePath.
 //
 // WHY FLOCK IS THE AUTHORITY. The kernel releases an advisory lock when the
 // holding process dies, however it dies — SIGKILL, panic, power loss on the
@@ -108,22 +109,46 @@ func (e *ServeLeaseError) Unwrap() error { return ErrServeLeaseHeld }
 type ServeLease struct {
 	f    *os.File
 	path string
-	// legacy is the lock this lease also holds in the pre-ADR-024
-	// ~/.nightgauge/serve, when that directory exists (see
-	// acquireLegacyServeLock); nil otherwise.
-	legacy *os.File
+	// compat is every lock this lease holds besides path, taken so a daemon
+	// from an earlier release cannot schedule the same workspace alongside
+	// this one (see acquireCompatServeLocks); empty otherwise.
+	compat []*os.File
 }
 
-// ServeLeasePath is the lock file for a workspace: the sidecar's name with a
-// .lock extension, in the same machine-global directory.
+// ServeLeasePath is the lock file `nightgauge serve` holds for its lifetime.
 //
-// That name is reversible (#1426), which matters far more here than it does
-// for the record beside it. A lock file has no contents at all, so its name is
-// the ONLY thing that can say which workspace a lock left behind by a killed
-// daemon belongs to; under the truncated sha256 this replaced, an orphan named
-// a workspace nothing on the machine could recover. See
-// ServeRegistryWorkspaceRoot.
+// For a workspace root inside a git checkout it is CHECKOUT/serve.lock
+// (layout.CheckoutServeLock, ADR-024 § 7 "Locks and ownership"): one daemon
+// per checkout. The file lives in the checkout's own git dir, so it is never
+// renamed or unlinked while any daemon could hold it, and git removes a linked
+// worktree's with the worktree.
+//
+// A workspace root that is not inside a git repository — a parent folder that
+// holds several repositories — has no CHECKOUT. Its lock is the machine-state
+// one, <STATE>/serve/<key>.lock (serveStateLockPath), beside the claim record.
+// That name is reversible (#1426): a lock file has no contents at all, so its
+// name is the ONLY thing that can say which workspace a lock left behind by a
+// killed daemon belongs to. See ServeRegistryWorkspaceRoot.
+//
+// Any other resolver failure (a symlinked CHECKOUT, an unreadable git dir) is
+// an error: falling back to a second lock location would let two daemons each
+// hold "the" lease on a different file.
 func ServeLeasePath(workspaceRoot string) (string, error) {
+	root := normalizeWorkspaceRoot(workspaceRoot)
+	p, err := layout.CheckoutPath(root, layout.CheckoutServeLock)
+	if err == nil {
+		return p, nil
+	}
+	if errors.Is(err, layout.ErrNotGitRepository) {
+		return serveStateLockPath(root)
+	}
+	return "", err
+}
+
+// serveStateLockPath is <STATE>/serve/<key>.lock: the lease lock of a
+// workspace outside git, and the lock a release before the per-checkout lease
+// held for every workspace.
+func serveStateLockPath(workspaceRoot string) (string, error) {
 	dir, err := ServeSidecarDir()
 	if err != nil {
 		return "", err
@@ -156,13 +181,15 @@ func acquireServeLease(workspaceRoot string, now time.Time) (*ServeLease, error)
 		return nil, fmt.Errorf("serve lease: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("serve lease: create claim directory: %w", err)
+		return nil, fmt.Errorf("serve lease: create lock directory: %w", err)
 	}
 
 	// The open and the flock below are ONE operation, and the registry guard
 	// is what makes them one (#1426).
 	//
-	// PruneServeRegistry unlinks lock files nobody holds. Between the two
+	// PruneServeRegistry unlinks <STATE>/serve lock files nobody holds: the
+	// lease lock of a workspace outside git, and the compatibility lock
+	// acquireCompatServeLocks takes for a checkout. Between the two
 	// statements below this process holds an open descriptor on a lock file it
 	// has not locked yet — indistinguishable, to the sweep, from a lock file
 	// nobody holds — so an unlink landing there leaves this process holding a
@@ -185,7 +212,7 @@ func acquireServeLease(workspaceRoot string, now time.Time) (*ServeLease, error)
 		return nil, fmt.Errorf("serve lease: registry guard: %w", guardErr)
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("serve lease: open %s: %w", path, err)
 	}
@@ -198,13 +225,13 @@ func acquireServeLease(workspaceRoot string, now time.Time) (*ServeLease, error)
 	lockErr := flock.Exclusive(f, 0)
 	switch {
 	case lockErr == nil:
-		legacy, err := acquireLegacyServeLock(workspaceRoot, path, now)
+		compat, err := acquireCompatServeLocks(workspaceRoot, path, now)
 		if err != nil {
 			_ = flock.Unlock(f)
 			f.Close()
 			return nil, err
 		}
-		return &ServeLease{f: f, path: path, legacy: legacy}, nil
+		return &ServeLease{f: f, path: path, compat: compat}, nil
 
 	case errors.Is(lockErr, flock.ErrWouldBlock):
 		f.Close()
@@ -237,38 +264,78 @@ func (l *ServeLease) Release() {
 	_ = flock.Unlock(l.f)
 	_ = l.f.Close()
 	l.f = nil
-	if l.legacy != nil {
-		_ = flock.Unlock(l.legacy)
-		_ = l.legacy.Close()
-		l.legacy = nil
+	for _, c := range l.compat {
+		_ = flock.Unlock(c)
+		_ = c.Close()
 	}
+	l.compat = nil
 }
 
-// acquireLegacyServeLock takes this workspace's lock in the pre-ADR-024
-// ~/.nightgauge/serve as well, so a daemon from the previous release and one
-// from this release cannot both schedule the same workspace (#1349, #2031).
-// The previous release locks only there; without this probe it would be
-// invisible to this one, and this one invisible to it.
+// acquireCompatServeLocks takes, besides the lease at currentPath, the locks
+// earlier releases took for this workspace, so a daemon from one of them and a
+// daemon from this release cannot both schedule the workspace (#1349, #2031).
+// An earlier daemon locks only its own location; without these this one would
+// be invisible to it, and it to this one. They are held for the life of the
+// lease, so an earlier daemon started later refuses in turn, and a live holder
+// of one is a held lease (ServeLeaseError, named from the claim record beside
+// it). A lock at the same path as currentPath is not taken twice.
 //
-// A live holder of the legacy lock is a held lease (ServeLeaseError, named
-// from the legacy claim record). A free one is taken and held for the life of
-// the lease, so an older daemon started later refuses in turn. Nothing is
-// done when that directory does not exist: no older daemon ran here, and
-// none is created. A platform without flock has no legacy lock to honour.
-// #2040's migrator retires this once the legacy directory is gone.
-func acquireLegacyServeLock(workspaceRoot, currentPath string, now time.Time) (*os.File, error) {
-	dir := layout.LegacyStatePath(serveSidecarDirName)
-	if dir == "" || filepath.Clean(dir) == filepath.Clean(filepath.Dir(currentPath)) {
-		return nil, nil
-	}
-	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
-		return nil, nil
+//   - <STATE>/serve/<key>.lock: the release before the per-checkout lease
+//     locked it for every workspace, git checkout or not. It is created when
+//     absent, because that release creates the directory itself and would not
+//     otherwise see this daemon. It lives in the registry PruneServeRegistry
+//     sweeps, and the registry guard the caller holds is what makes its open
+//     and flock one operation.
+//   - ~/.nightgauge/serve/<key>.lock: releases before ADR-024. Taken only when
+//     that directory exists (no such daemon ran here otherwise, and none is
+//     created); #2040's migrator retires it once the directory is gone.
+//
+// A platform without flock has no earlier lock to honour.
+func acquireCompatServeLocks(workspaceRoot, currentPath string, now time.Time) ([]*os.File, error) {
+	var held []*os.File
+	release := func() {
+		for _, f := range held {
+			_ = flock.Unlock(f)
+			_ = f.Close()
+		}
 	}
 	base := strings.TrimSuffix(ServeSidecarName(workspaceRoot), serveRecordSuffix)
-	legacyPath := filepath.Join(dir, base+serveLockSuffix)
-	f, err := os.OpenFile(legacyPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if stateLock, err := serveStateLockPath(workspaceRoot); err == nil && filepath.Clean(stateLock) != filepath.Clean(currentPath) {
+		recordPath := strings.TrimSuffix(stateLock, serveLockSuffix) + serveRecordSuffix
+		f, err := holdCompatServeLock(stateLock, recordPath, workspaceRoot, now)
+		if err != nil {
+			return nil, err
+		}
+		if f != nil {
+			held = append(held, f)
+		}
+	}
+	if dir := layout.LegacyStatePath(serveSidecarDirName); dir != "" && filepath.Clean(dir) != filepath.Clean(filepath.Dir(currentPath)) {
+		if info, err := os.Lstat(dir); err == nil && info.IsDir() {
+			f, err := holdCompatServeLock(filepath.Join(dir, base+serveLockSuffix), filepath.Join(dir, base+serveRecordSuffix), workspaceRoot, now)
+			if err != nil {
+				release()
+				return nil, err
+			}
+			if f != nil {
+				held = append(held, f)
+			}
+		}
+	}
+	return held, nil
+}
+
+// holdCompatServeLock takes one earlier release's lock at lockPath, creating
+// its directory 0700 when absent. It returns nil, nil on a platform without
+// flock, and a ServeLeaseError named from the claim record at recordPath when
+// another process holds it.
+func holdCompatServeLock(lockPath, recordPath, workspaceRoot string, now time.Time) (*os.File, error) {
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o700); err != nil {
+		return nil, fmt.Errorf("serve lease: create %s: %w", filepath.Dir(lockPath), err)
+	}
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, fmt.Errorf("serve lease: open legacy lock %s: %w", legacyPath, err)
+		return nil, fmt.Errorf("serve lease: open earlier-release lock %s: %w", lockPath, err)
 	}
 	switch lockErr := flock.Exclusive(f, 0); {
 	case lockErr == nil:
@@ -278,15 +345,15 @@ func acquireLegacyServeLock(workspaceRoot, currentPath string, now time.Time) (*
 		return nil, nil
 	case errors.Is(lockErr, flock.ErrWouldBlock):
 		f.Close()
-		return nil, &ServeLeaseError{Holder: readLegacyServeLeaseHolder(filepath.Join(dir, base+serveRecordSuffix), workspaceRoot, now)}
+		return nil, &ServeLeaseError{Holder: readLegacyServeLeaseHolder(recordPath, workspaceRoot, now)}
 	default:
 		f.Close()
-		return nil, fmt.Errorf("serve lease: lock legacy %s: %w", legacyPath, lockErr)
+		return nil, fmt.Errorf("serve lease: lock earlier-release %s: %w", lockPath, lockErr)
 	}
 }
 
-// readLegacyServeLeaseHolder describes a previous-release daemon from its
-// claim record in the legacy directory; an unreadable record downgrades the
+// readLegacyServeLeaseHolder describes an earlier-release daemon from its
+// claim record beside the lock it holds; an unreadable record downgrades the
 // description, never the refusal.
 func readLegacyServeLeaseHolder(recordPath, workspaceRoot string, now time.Time) ServeLeaseHolder {
 	data, err := os.ReadFile(recordPath)

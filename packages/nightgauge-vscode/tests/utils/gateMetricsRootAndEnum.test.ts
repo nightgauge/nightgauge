@@ -11,9 +11,15 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { GateMetricsWriter } from "../../src/utils/gateMetricsWriter";
+import { mkFakeCloneLayout } from "../helpers/cloneLayout";
+
+/** The checkout's health directory, in CHECKOUT (ADR-024 § 7). */
+function healthDir(root: string): string {
+  return path.join(mkFakeCloneLayout(root).checkout, "health");
+}
 
 async function seed(root: string, gateName: string): Promise<void> {
-  const dir = path.join(root, ".nightgauge", "health");
+  const dir = healthDir(root);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, "gate-metrics.jsonl"),
@@ -61,7 +67,7 @@ describe("#1084 — gate metrics survive the names the shipped skills emit", () 
   // and an absent file produce the identical empty list.
   it("reports dropped records instead of swallowing them", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const dir = path.join(tmp, ".nightgauge", "health");
+    const dir = healthDir(tmp);
     await fs.mkdir(dir, { recursive: true });
     await fs.writeFile(
       path.join(dir, "gate-metrics.jsonl"),
@@ -77,6 +83,7 @@ describe("#1084 — gate metrics survive the names the shipped skills emit", () 
   });
 
   it("an absent file is silent — it is not a dropped record", async () => {
+    mkFakeCloneLayout(tmp);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     expect(await GateMetricsWriter.readAll(tmp)).toHaveLength(0);
     expect(warn).not.toHaveBeenCalled();

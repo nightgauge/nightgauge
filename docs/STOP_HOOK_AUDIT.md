@@ -181,8 +181,9 @@ To reproduce the controlled 10-stage no-op run cited in AC2:
 3. Inspect the resulting session log for the two failure strings:
 
    ```bash
-   grep -c 'stop-hook-error' .nightgauge/autonomous/<run-id>/session.log
-   grep -c 'nightgauge not found' .nightgauge/autonomous/<run-id>/session.log
+   AUTONOMOUS_DIR="$(nightgauge layout path checkout autonomous)"
+   grep -c 'stop-hook-error' "$AUTONOMOUS_DIR/<run-id>/session.log"
+   grep -c 'nightgauge not found' "$AUTONOMOUS_DIR/<run-id>/session.log"
    ```
 
 4. Both counts must be **zero**. The side-channel log

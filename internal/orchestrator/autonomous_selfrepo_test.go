@@ -14,6 +14,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func newSelfRepoTestScheduler(t *testing.T, selfSlug string, allow bool) *AutonomousScheduler {
@@ -22,7 +23,7 @@ func newSelfRepoTestScheduler(t *testing.T, selfSlug string, allow bool) *Autono
 		config:       AutonomousConfig{MaxConcurrent: 5, AllowSelfRepo: allow},
 		state:        &AutonomousState{},
 		selfRepoSlug: selfSlug,
-		attention:    attention.New(t.TempDir()),
+		attention:    attention.New(layouttest.Repo(t)),
 	}
 	t.Cleanup(as.drainBackground) // backstop; see newAutonomousForCascadeTest
 	return as

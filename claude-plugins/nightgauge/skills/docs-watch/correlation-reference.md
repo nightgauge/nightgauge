@@ -45,7 +45,8 @@ Claude Code release date, correlate the change with that release.
 - Future: Check releases up to 7 days after detected change
 - Rationale: Docs are often updated before or after release dates
 
-**Lookup source:** `.nightgauge/release-watch/reports/*.json`
+**Lookup source:** this checkout's `release-watch/reports/*.json`
+(`nightgauge layout path checkout release-watch/reports`)
 
 - Queries the last 5 release reports (most recent first)
 - Extracts `published_at` timestamp from each release entry
@@ -136,7 +137,7 @@ If a page is detected as changed but no correlation found:
 
 ### Missing Release State
 
-If `.nightgauge/release-watch/last-seen.json` doesn't exist:
+If this checkout's `release-watch/last-seen-claude-code.json` doesn't exist:
 
 ```bash
 if [ ! -f "$RELEASE_STATE_FILE" ]; then
@@ -171,7 +172,7 @@ Both skills can detect the same feature:
 ```
 1. release-watch runs first (or already has reports)
    → Creates issue: "feat: Agent Teams (assessment score: 75)"
-   → Stored in: .nightgauge/release-watch/
+   → Stored in: checkout release-watch/
 
 2. docs-watch runs and finds related page changes
    → Correlates changes to same release
@@ -213,7 +214,7 @@ When docs-watch enriches an existing assessment (via `--enrich-assessments`):
 
 **Release-watch → docs-watch:**
 
-- Publishes reports to: `.nightgauge/release-watch/reports/`
+- Publishes reports to: this checkout's `release-watch/reports/`
 - docs-watch reads these reports to find release dates
 
 **docs-watch → release-watch:**
@@ -380,15 +381,16 @@ assert_equals(
 
 **Causes:**
 
-1. `.nightgauge/release-watch/last-seen.json` doesn't exist
-2. No release reports in `.nightgauge/release-watch/reports/`
+1. This checkout's `release-watch/last-seen-claude-code.json` doesn't exist
+2. No release reports in this checkout's `release-watch/reports/`
 3. `--skip-release-correlation` flag passed
 
 **Solution:**
 
 - Run release-watch first: `./nightgauge:release-watch`
-- Check state file exists: `cat .nightgauge/release-watch/last-seen.json`
-- Verify reports directory: `ls .nightgauge/release-watch/reports/`
+- Check state file exists:
+  `cat "$(nightgauge layout path checkout release-watch/last-seen-claude-code.json)"`
+- Verify reports directory: `ls "$(nightgauge layout path checkout release-watch/reports)"`
 
 ### Wrong Release Correlated
 

@@ -75,8 +75,12 @@ func Extract(opts Options) (Result, error) {
 	if err != nil {
 		return result, err
 	}
+	batchPath, err := batchStatePath(workdir)
+	if err != nil {
+		return result, err
+	}
 
-	if err := extractBatchState(dir, opts, &result); err != nil {
+	if err := extractBatchState(batchPath, opts, &result); err != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("batch-state: %v", err))
 	}
 
@@ -91,11 +95,9 @@ func Extract(opts Options) (Result, error) {
 	return result, nil
 }
 
-// extractBatchState reads batch-state.json in the pipeline state directory
-// dir (when present) and appends failure rows to result.BatchFailures.
-// Missing file is not an error.
-func extractBatchState(dir string, opts Options, result *Result) error {
-	path := filepath.Join(dir, "batch-state.json")
+// extractBatchState reads the batch-state.json at path (when present) and
+// appends failure rows to result.BatchFailures. Missing file is not an error.
+func extractBatchState(path string, opts Options, result *Result) error {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -362,6 +364,17 @@ func pipelineStateDir(workdir string) (string, error) {
 		return "", fmt.Errorf("resolve workdir %q: %w", workdir, err)
 	}
 	return layout.PipelineStateDir(abs)
+}
+
+// batchStatePath resolves workdir's batch-state.json: an unkeyed singleton in
+// the checkout's per-checkout directory (layout.CheckoutBatchState, ADR-024
+// § 7), not in the clone's pipeline state directory.
+func batchStatePath(workdir string) (string, error) {
+	abs, err := filepath.Abs(workdir)
+	if err != nil {
+		return "", fmt.Errorf("resolve workdir %q: %w", workdir, err)
+	}
+	return layout.CheckoutPath(abs, layout.CheckoutBatchState)
 }
 
 func fileExists(path string) bool {

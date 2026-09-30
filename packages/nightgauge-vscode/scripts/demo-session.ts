@@ -21,8 +21,9 @@
  * its history falls inside the Audit Trail's default seven days. The copy is
  * made a git repository and the source's per-clone data (staged under
  * `.nightgauge/{pipeline,plans,retros,logs}` because nothing can be committed
- * under `.git/`) is moved into the clone's own directories, where the
- * extension reads it (`demo/workspace-clone.ts`, ADR-024 § 7, #2037).
+ * under `.git/`) is moved into the clone's own directories, and its
+ * per-checkout data (`.nightgauge/health`, ...) into the checkout's, where the
+ * extension reads them (`demo/workspace-clone.ts`, ADR-024 § 7, #2037).
  *
  * VS Code is the build `@vscode/test-electron` downloads and caches (as the
  * `vscode-host` tier uses), or the executable named by `--code`. It is started

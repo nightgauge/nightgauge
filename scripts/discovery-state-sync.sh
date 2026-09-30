@@ -6,8 +6,9 @@
 # WHY THIS SCRIPT EXISTS
 #
 # The Discovery tab reads the LOCAL filesystem (DiscoveryActivityService globs
-# .nightgauge/release-watch/creation-log*.json and reads
-# .nightgauge/improvement-runs/latest.json). The scheduled workflows that
+# release-watch/creation-log*.json and reads improvement-runs/latest.json in
+# this checkout's directory, <git-dir>/nightgauge-worktree — ADR-024 § 7;
+# `nightgauge layout path checkout release-watch`). The scheduled workflows that
 # produce those files run on a GitHub-hosted runner whose disk is discarded
 # when the job ends. Something has to carry the bytes across, and the original
 # design never said what (#753) — which is why the tab would have stayed empty
@@ -16,7 +17,8 @@
 # THE DECISION: a dedicated, unprotected branch, fetched on demand.
 #
 # The state lives on the `discovery-state` branch, one commit per run, and this
-# script copies it into the working tree without touching the index. The three
+# script copies it into this checkout's directory without touching the index or
+# the working tree. The three
 # alternatives were each rejected for a concrete reason:
 #
 #   * Commit to `main`. Not possible. The `main` ruleset carries a
@@ -40,10 +42,14 @@
 # CodeQL and publication-boundary workflows trigger on `main` and on pull
 # requests only), so it costs no minutes and gates nothing.
 #
-# The synced files are gitignored on `main` — see .nightgauge/.gitignore — so a
-# sync leaves `git status` clean. They are fetched runtime state whose source of
-# truth is the state branch, exactly like .nightgauge/health/ and
-# .nightgauge/attention/.
+# The synced files land inside the git directory, never in the working tree, so
+# a sync leaves `git status` clean. They are fetched runtime state whose source
+# of truth is the state branch, never authored in the repository.
+#
+# The branch keeps its tree paths (.nightgauge/release-watch/<file>,
+# .nightgauge/improvement-runs/<file>): they are the transport format, shared
+# with discovery-state-publish.sh. This script maps each one to the same name
+# under the checkout directory (release-watch/<file>, improvement-runs/<file>).
 #
 # Usage:
 #   scripts/discovery-state-sync.sh [--remote origin] [--branch discovery-state]
@@ -68,7 +74,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     -h | --help)
-      sed -n '2,55p' "$0"
+      sed -n '2,59p' "$0"
       exit 0
       ;;
     *)
@@ -81,8 +87,19 @@ done
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-# The paths the Discovery tab reads. Kept in one list so adding a third state
-# file means editing one line, not two scripts.
+# This checkout's directory, CHECKOUT (ADR-024 § 7). The binary is the path
+# source; without it (or with a build that predates CHECKOUT), resolve the same
+# place with git.
+CHECKOUT_DIR=""
+if command -v nightgauge >/dev/null 2>&1; then
+  CHECKOUT_DIR="$(nightgauge layout path checkout --workdir "$ROOT" 2>/dev/null || true)"
+fi
+if [ -z "$CHECKOUT_DIR" ]; then
+  CHECKOUT_DIR="$(git rev-parse --absolute-git-dir)/nightgauge-worktree"
+fi
+
+# The branch paths the Discovery tab's files travel under. Kept in one list so
+# adding a third state directory means editing one line, not two scripts.
 STATE_PATHS=(".nightgauge/release-watch" ".nightgauge/improvement-runs")
 
 # `--depth 1` because the history of the state branch is not interesting to a
@@ -105,9 +122,14 @@ REF="refs/discovery-state/$BRANCH"
 COUNT=0
 while IFS= read -r file; do
   [ -n "$file" ] || continue
-  mkdir -p "$(dirname "$file")"
-  git show "$REF:$file" >"$file"
-  echo "discovery-state-sync: $file"
+  dest="$CHECKOUT_DIR/${file#.nightgauge/}"
+  if [ -L "$dest" ]; then
+    echo "discovery-state-sync: refusing to write through a symlink: $dest" >&2
+    exit 1
+  fi
+  (umask 077 && mkdir -p "$(dirname "$dest")")
+  git show "$REF:$file" >"$dest"
+  echo "discovery-state-sync: $dest"
   COUNT=$((COUNT + 1))
 done < <(git ls-tree -r --name-only "$REF" -- "${STATE_PATHS[@]}" 2>/dev/null || true)
 

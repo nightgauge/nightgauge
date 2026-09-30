@@ -10,6 +10,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // #656. EpicService.ReconcileBoard was correctly designed, correctly
@@ -63,7 +64,7 @@ func recordingBoardReconciler(t *testing.T, as *AutonomousScheduler, err error) 
 
 func newRollupScheduler(t *testing.T, repos ...depgraph.RepoConfig) *AutonomousScheduler {
 	t.Helper()
-	as := NewAutonomousScheduler(nil, nil, repos, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(nil, nil, repos, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.state.Status = "running"
 	as.buildGraphFn = func(context.Context) (*depgraph.Graph, error) {
 		return buildTestGraph(nil, nil), nil

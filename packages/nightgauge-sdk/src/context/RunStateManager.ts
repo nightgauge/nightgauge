@@ -1,6 +1,9 @@
 /**
- * RunStateManager — TypeScript-side manager for `<git-common-dir>/nightgauge/pipeline/run-state.json`
- * (`nightgauge layout path pipeline run-state.json`).
+ * RunStateManager — TypeScript-side manager for a checkout's
+ * `<git-dir>/nightgauge-worktree/run-state.json` (CHECKOUT, ADR-024 § 7): the
+ * checkout's own unkeyed run-control singleton. Each linked worktree has its
+ * own. The per-issue context files {@link RunStateManager.archiveRun} moves
+ * stay in the clone's shared pipeline directory.
  *
  * Backs the same on-disk file the Go binary's `internal/runstate` package
  * writes. Both sides use the atomic+fsync write contract (write-temp →
@@ -18,7 +21,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import * as os from "node:os";
 import { atomicWriteJSON } from "./ContextManager.js";
-import { cloneClassDir } from "./cloneLayout.js";
+import { CHECKOUT_ENTRIES, resolveCloneLayout } from "./cloneLayout.js";
 import {
   RunStateSchema,
   newRunState,
@@ -34,7 +37,7 @@ import {
   WorktreeMissing,
 } from "../errors/PipelineStateErrors.js";
 
-const RUN_STATE_FILENAME = "run-state.json";
+const RUN_STATE_FILENAME = CHECKOUT_ENTRIES.runState;
 const CURRENT_SCHEMA_VERSION = "1.0";
 
 /** Result of `detectResume()` — drives the orchestrator's start path. */
@@ -90,26 +93,48 @@ export function uuidV7(): string {
   ].join("-");
 }
 
+/**
+ * The two directories a run's state spans (ADR-024 § 7). A {@link CloneLayout}
+ * satisfies it.
+ */
+export interface RunStateDirs {
+  /**
+   * The clone's pipeline state directory (`<git-common-dir>/nightgauge/pipeline`):
+   * the per-issue context files, and `history/<run_id>/` they are archived to.
+   */
+  pipeline: string;
+  /**
+   * The checkout's own directory (`<git-dir>/nightgauge-worktree`), which holds
+   * run-state.json.
+   */
+  checkout: string;
+}
+
 export class RunStateManager {
-  private resolvedBasePath?: string;
+  private resolvedDirs?: RunStateDirs;
 
   /**
-   * @param basePath The pipeline state directory. Defaults to the pipeline
-   *   class directory of the working directory's repository
-   *   (`<git-common-dir>/nightgauge/pipeline`, `nightgauge layout path
-   *   pipeline`), resolved on first use; outside a git repository that throws
-   *   `NotAGitRepositoryError`.
+   * @param dirs Where the run's files live. Defaults to the layout of the
+   *   working directory's checkout, resolved on first use; outside a git
+   *   repository that throws `NotAGitRepositoryError`. A {@link CloneLayout}
+   *   satisfies this shape.
    */
-  constructor(basePath?: string) {
-    this.resolvedBasePath = basePath;
+  constructor(dirs?: RunStateDirs) {
+    this.resolvedDirs = dirs;
   }
 
+  private get dirs(): RunStateDirs {
+    return (this.resolvedDirs ??= resolveCloneLayout(path.resolve(process.cwd())));
+  }
+
+  /** The pipeline state directory holding the per-issue context files. */
   get basePath(): string {
-    return (this.resolvedBasePath ??= cloneClassDir("pipeline"));
+    return this.dirs.pipeline;
   }
 
-  private get filePath(): string {
-    return path.join(this.basePath, RUN_STATE_FILENAME);
+  /** The checkout's run-state.json. */
+  get filePath(): string {
+    return path.join(this.dirs.checkout, RUN_STATE_FILENAME);
   }
 
   /**
@@ -155,7 +180,7 @@ export class RunStateManager {
       throw new ContextSchemaError(this.filePath, result.error.message);
     }
     const stamped: RunState = { ...result.data, updated_at: new Date().toISOString() };
-    await fs.mkdir(this.basePath, { recursive: true });
+    await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     await atomicWriteJSON(this.filePath, JSON.stringify(stamped, null, 2) + "\n");
   }
 

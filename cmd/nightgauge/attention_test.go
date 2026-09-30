@@ -44,7 +44,7 @@ func startTestDaemon(t *testing.T, dir string) {
 // cwd on cleanup. Needed because config.Load reads os.Getwd(), not --workdir.
 func chdirTemp(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	orig, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
@@ -102,7 +102,7 @@ func seedRequest(t *testing.T, dir, key, title string, sev attention.Severity) s
 }
 
 func TestAttentionListTable(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	seedRequest(t, dir, "k1", "Fleet stopped", attention.SeverityBlockingFleet)
 	seedRequest(t, dir, "k2", "Budget ceiling hit", attention.SeverityBlockingRun)
 
@@ -127,7 +127,7 @@ func TestAttentionListEmpty(t *testing.T) {
 	cmd := attentionListCmd()
 	var buf bytes.Buffer
 	cmd.SetOut(&buf)
-	cmd.SetArgs([]string{"--workdir", t.TempDir()})
+	cmd.SetArgs([]string{"--workdir", layouttest.Repo(t)})
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestAttentionListEmpty(t *testing.T) {
 }
 
 func TestAttentionResolveCLI(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	id := seedRequest(t, dir, "k1", "Choose", attention.SeverityFYI)
 
 	cmd := attentionResolveCmd()
@@ -168,7 +168,7 @@ func TestAttentionResolveCLI(t *testing.T) {
 // exit non-zero, name the verb and its retryability, and leave the request
 // open on disk (#235).
 func TestAttentionResolveCLI_NoDaemonLeavesCardOpen(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	store := attention.New(dir)
 	id, err := attention.NewID()
 	if err != nil {
@@ -217,7 +217,7 @@ func TestAttentionResolveCLI_NoDaemonLeavesCardOpen(t *testing.T) {
 }
 
 func TestAttentionResolveRejectsUndeclaredOption(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	id := seedRequest(t, dir, "k1", "Choose", attention.SeverityFYI)
 	cmd := attentionResolveCmd()
 	cmd.SetOut(&bytes.Buffer{})
@@ -285,7 +285,7 @@ func shortTempDir(t *testing.T) string {
 		t.Fatalf("MkdirTemp: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return dir
+	return layouttest.Init(t, dir)
 }
 
 // TestAttentionResolveCLI_RoutesThroughDaemon proves Step 3's routing (#263):
@@ -402,7 +402,7 @@ func TestAttentionShowCLI_AnnotatesUnavailableOptions(t *testing.T) {
 // already-cancelled context must produce a *attention.VerbExecutionError and
 // must NOT write the budget-ceiling override file.
 func TestCliVerbExecutor_ExpiredContextRejectsWrite(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	exec := cliVerbExecutor{workspaceRoot: dir}
 
 	req := &attention.DecisionRequest{
@@ -437,7 +437,7 @@ func TestCliVerbExecutor_ExpiredContextRejectsWrite(t *testing.T) {
 // their own executor, which refuses a card the doctor producer did not raise,
 // rather than the "requires the daemon" fallback.
 func TestCliVerbExecutor_DoctorVerbsRunWithoutADaemon(t *testing.T) {
-	exec := cliVerbExecutor{workspaceRoot: t.TempDir()}
+	exec := cliVerbExecutor{workspaceRoot: layouttest.Repo(t)}
 	req := &attention.DecisionRequest{
 		ID:             "dr_doc",
 		Producer:       "human-gate",

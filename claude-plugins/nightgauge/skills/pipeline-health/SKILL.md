@@ -137,19 +137,19 @@ autonomous decisions or fail with clear error.
 The skill reads data from 8 sources in priority order, with graceful fallback
 when sources are unavailable:
 
-| Source                  | Location                                   | What It Provides                                                                                                                                                                                                          |
-| ----------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Execution History       | `pipeline/history/*.jsonl`                 | Per-run tokens, costs, durations, stage breakdowns                                                                                                                                                                        |
-| History Index           | `pipeline/history/index.json`              | Lightweight run summaries for fast filtering                                                                                                                                                                              |
-| Health Score History    | `pipeline/health-history.jsonl`            | Component health scores and trends over time                                                                                                                                                                              |
-| Post-Pipeline Analysis  | `.nightgauge/analysis/*.json`              | Model performance metrics, failure analysis                                                                                                                                                                               |
-| A/B Experiments         | `.nightgauge/analysis/experiments/*.jsonl` | Experiment results and variant comparisons                                                                                                                                                                                |
-| Past Health Reports     | `pipeline/health-report-*.json`            | Historical findings for recommendation tracking                                                                                                                                                                           |
-| Dimension Trend History | `.nightgauge/health/trends.jsonl`          | Per-dimension time-series (HealthTrendEntry records, 90-day retention). Query with `last N runs` using `limit`, or `last N days` using `startDate`/`endDate`. Each entry contains all 7 dimension scores + overall score. |
+| Source                  | Location                                | What It Provides                                                                                                                                                                                                          |
+| ----------------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Execution History       | `pipeline/history/*.jsonl`              | Per-run tokens, costs, durations, stage breakdowns                                                                                                                                                                        |
+| History Index           | `pipeline/history/index.json`           | Lightweight run summaries for fast filtering                                                                                                                                                                              |
+| Health Score History    | `pipeline/health-history.jsonl`         | Component health scores and trends over time                                                                                                                                                                              |
+| Post-Pipeline Analysis  | `checkout/analysis/*.json`              | Model performance metrics, failure analysis                                                                                                                                                                               |
+| A/B Experiments         | `checkout/analysis/experiments/*.jsonl` | Experiment results and variant comparisons                                                                                                                                                                                |
+| Past Health Reports     | `pipeline/health-report-*.json`         | Historical findings for recommendation tracking                                                                                                                                                                           |
+| Dimension Trend History | `checkout/health/trends.jsonl`          | Per-dimension time-series (HealthTrendEntry records, 90-day retention). Query with `last N runs` using `limit`, or `last N days` using `startDate`/`endDate`. Each entry contains all 7 dimension scores + overall score. |
 
 `pipeline/...` locations are in the clone's pipeline state directory
-(`nightgauge layout path pipeline`); `.nightgauge/...` locations are in the
-working tree.
+(`nightgauge layout path pipeline`); `checkout/...` locations are in this
+checkout's directory (`nightgauge layout path checkout`).
 
 Each data source is optional. The skill analyzes whatever is available and notes
 which sources were missing in the output report.
@@ -257,7 +257,8 @@ Effectiveness of the pipeline's self-tuning mechanisms:
 
 The pipeline records outcomes for the 6 core stages, but the other ~37 skills
 have no outcome record. The PreToolUse(Skill) hook closes that gap by logging
-invocations to `.nightgauge/skills/usage.jsonl`. Read the rollup with:
+invocations to `skills/usage.jsonl` in this checkout's directory
+(`nightgauge layout path checkout skills/usage.jsonl`). Read the rollup with:
 
 ```bash
 nightgauge skills usage --json
@@ -390,13 +391,14 @@ else
   SOURCES_MISSING+=("health-history")
 fi
 
-if ls .nightgauge/analysis/*.json 2>/dev/null | head -1 > /dev/null; then
+ANALYSIS_DIR="$(nightgauge layout path checkout analysis)"
+if ls "${ANALYSIS_DIR}"/*.json 2>/dev/null | head -1 > /dev/null; then
   SOURCES_FOUND+=("post-pipeline-analysis")
 else
   SOURCES_MISSING+=("post-pipeline-analysis")
 fi
 
-if ls .nightgauge/analysis/experiments/*.jsonl 2>/dev/null | head -1 > /dev/null; then
+if ls "${ANALYSIS_DIR}"/experiments/*.jsonl 2>/dev/null | head -1 > /dev/null; then
   SOURCES_FOUND+=("ab-experiments")
 else
   SOURCES_MISSING+=("ab-experiments")
@@ -555,10 +557,11 @@ echo "Extracted ${SCORE_COUNT} health trend entries to /tmp/health_scores.json"
 
 ```bash
 # Aggregate analysis files into single summary
+ANALYSIS_DIR="$(nightgauge layout path checkout analysis)"
 python3 -c "
 import json, glob
 analyses = []
-for f in sorted(glob.glob('.nightgauge/analysis/*.json')):
+for f in sorted(glob.glob('${ANALYSIS_DIR}/*.json')):
     try:
         with open(f) as fh:
             analyses.append({'file': f, 'data': json.load(fh)})
@@ -573,10 +576,11 @@ print(f'Extracted {len(analyses)} analysis files')
 #### Step 2.5: Extract A/B Experiment Data
 
 ```bash
+ANALYSIS_DIR="$(nightgauge layout path checkout analysis)"
 python3 -c "
 import json, glob
 experiments = []
-for f in sorted(glob.glob('.nightgauge/analysis/experiments/*.jsonl')):
+for f in sorted(glob.glob('${ANALYSIS_DIR}/experiments/*.jsonl')):
     try:
         with open(f) as fh:
             for line in fh:
@@ -988,8 +992,8 @@ UTILITIES (not part of main pipeline)
   (pipeline/ = the clone's pipeline state dir: nightgauge layout path pipeline)
   Reads: pipeline/history/*.jsonl
   Reads: pipeline/health-history.jsonl
-  Reads: .nightgauge/analysis/*.json
-  Reads: .nightgauge/analysis/experiments/*.jsonl
+  Reads: checkout/analysis/*.json
+  Reads: checkout/analysis/experiments/*.jsonl
   Reads: pipeline/health-report-*.json
   Writes: pipeline/health-report-YYYY-MM-DD.json (via layout write)
   Writes: pipeline/health-report-YYYY-MM-DD.md (via layout write)

@@ -395,9 +395,10 @@ concise — long detail stays in `_includes/`. See
 
 Skills that run on a cadence should remember prior runs and report **deltas, not
 full re-dumps**. Include `<!-- include: ../_shared/RUN_REFLECTION.md -->` and set
-`RUN_LOG` to an in-repo append-only path before it.
+`RUN_LOG_CLASS` and `RUN_LOG_NAME` (a per-clone class or `checkout`, and the
+append-only log's name in it) before it.
 [`nightgauge-release-watch`](nightgauge-release-watch/SKILL.md)
-(`last-seen.json`) is the reference pattern.
+(`last-seen-<provider>.json`) is the reference pattern.
 
 ### Phase Markers and `PHASE_REGISTRY`
 

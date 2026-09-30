@@ -70,20 +70,30 @@ export {
   type PolicyOutcome,
   type PolicyVerdict,
 } from "./context/deliverablePolicy.js";
-export { RunStateManager, uuidV7, type ResumeDetection } from "./context/RunStateManager.js";
-
-// Clone layout — where per-clone data lives (ADR-024 § 7): <git-common-dir>/nightgauge.
 export {
+  RunStateManager,
+  uuidV7,
+  type ResumeDetection,
+  type RunStateDirs,
+} from "./context/RunStateManager.js";
+
+// Clone layout — where per-clone data lives (ADR-024 § 7): <git-common-dir>/nightgauge,
+// and per-checkout data: <git-dir>/nightgauge-worktree.
+export {
+  CHECKOUT_DIR_NAME,
+  CHECKOUT_ENTRIES,
   CLONE_CLASSES,
   CLONE_DIR_NAME,
   NotAGitRepositoryError,
   clearCloneLayoutCache,
+  checkoutPath,
   cloneClassDir,
   cloneLayoutFor,
   cloneLayoutFromJson,
   primeCloneLayout,
   resolveCloneLayout,
   setCloneLayout,
+  type CheckoutEntry,
   type CloneClass,
   type CloneLayout,
 } from "./context/cloneLayout.js";

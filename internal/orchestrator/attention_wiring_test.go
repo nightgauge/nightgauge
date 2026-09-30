@@ -11,6 +11,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/deliverable"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 )
 
@@ -19,7 +20,7 @@ import (
 // with the steer + trace listeners attached).
 func newAttentionProducerScheduler(t *testing.T) *AutonomousScheduler {
 	t.Helper()
-	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	if as.Attention() == nil {
 		t.Fatal("attention store not wired by NewAutonomousScheduler")
 	}
@@ -43,7 +44,7 @@ func openRequests(t *testing.T, as *AutonomousScheduler) []attention.DecisionReq
 func newAttentionProducerRunScheduler(t *testing.T) *Scheduler {
 	t.Helper()
 	s := &Scheduler{}
-	s.SetAttention(attention.New(t.TempDir()))
+	s.SetAttention(attention.New(layouttest.Repo(t)))
 	if s.attention == nil {
 		t.Fatal("attention store not wired")
 	}

@@ -1,7 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import * as path from "node:path";
 import { ComplexityModelService } from "@nightgauge/sdk";
 import { BinaryResolver } from "./BinaryResolver";
+import { checkoutPath } from "../utils/cloneLayout";
 
 const READY_TIMEOUT_MS = 30_000;
 const EXIT_TIMEOUT_MS = 5_000;
@@ -195,15 +195,12 @@ export async function withComplexityModelService<T>(
   action: (modelService: ComplexityModelService) => Promise<T>,
   deps: ComplexityModelLockDeps = defaultDeps
 ): Promise<T> {
+  // The model is per checkout (ADR-024 § 7). Resolved before the broker
+  // starts, so an unusable root fails without spawning anything.
+  const modelPath = checkoutPath(workspaceRoot, "complexityModel");
   return withComplexityModelLock(
     workspaceRoot,
-    async (commit) =>
-      action(
-        new ComplexityModelService(
-          path.join(workspaceRoot, ".nightgauge", "complexity-model.yaml"),
-          commit
-        )
-      ),
+    async (commit) => action(new ComplexityModelService(modelPath, commit)),
     deps
   );
 }

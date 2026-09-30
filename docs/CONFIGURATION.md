@@ -349,8 +349,25 @@ EOF
 ### Gitignore Entry
 
 `.nightgauge/config.local.yaml` is ignored by the generated
-`.nightgauge/.gitignore` (its `/config.local.yaml` rule), so there is nothing to
-add by hand.
+`.nightgauge/.gitignore`, so there is nothing to add by hand. That file is
+deny-by-default (ADR-024 § 13): its first rule, `/*`, ignores everything under
+`.nightgauge/`, and `!` rules re-include only the committed allowlist:
+
+| Committed path                                                    | Why it is safe to commit                                                                         |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `config.yaml`, `config.schema.json`, `pattern-mining-config.yaml` | Team config, changed by pull request; the loader rejects a plaintext GitHub token or license key |
+| `.gitignore`                                                      | The rules themselves                                                                             |
+| `audit/` (except `audit/scope-drift-stats.json`)                  | Authored audit definitions and reports; the counter is per machine                               |
+| `skill-smoke/`                                                    | Authored smoke-test scripts                                                                      |
+| `skill-evals/baseline.jsonl`                                      | The reviewed skill-evaluation reference; other runs stay local                                   |
+| `model-evals/evidence/`                                           | Live runs deliberately promoted as evidence; other runs stay local                               |
+
+Anything else Nightgauge writes under `.nightgauge/`, including a legacy file
+the one-time layout migration has not moved yet and any runtime file a future
+version adds, is ignored until someone deliberately adds a rule for it. The
+knowledge tree is ignored too;
+[KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md#adopting-the-knowledge-base-in-an-existing-repository)
+shows the one-line opt-in.
 
 That file is generator-owned. The VS Code extension ensures it on activation,
 and the CLI does the same from `nightgauge config init` and `nightgauge serve`,
@@ -1650,8 +1667,8 @@ Sonnet (the ceiling caps the raise), while `stage_models.feature-dev: opus` +
 `minimum_model.feature-dev: fable` dispatches Opus (the raise is discarded, the
 operator's own model stands).
 
-The active mode is normally driven by the status-bar QuickPick (writes
-`.nightgauge/performance-mode.yaml`); `pipeline.performance_mode.default`
+The active mode is normally driven by the status-bar QuickPick (writes the
+checkout's `performance-mode.yaml`, `nightgauge layout path checkout performance-mode.yaml`); `pipeline.performance_mode.default`
 applies only when no state file is present. Override per-shell with
 `NIGHTGAUGE_PERFORMANCE_MODE=<mode>`.
 
@@ -1790,7 +1807,7 @@ record. Resume happens via `Scheduler.ResumePausedItems(failedRunID)` (called
 from the dashboard webview's Skip / Discard handlers).
 
 **Crash recovery is independent of `failure_mode`.** A `current-run.json`
-sidecar is written at every stage-start regardless of mode. On scheduler
+sidecar (in the checkout's `nightgauge layout path checkout`) is written at every stage-start regardless of mode. On scheduler
 startup, a stale sidecar always synthesizes a
 `terminal_failure_kind: orchestrator_crash` record and pauses the queue —
 otherwise an in-flight run that died mid-stage would leave the queue dispatching
@@ -2611,7 +2628,7 @@ releases matching items immediately; both callers share one implementation
 (`orchestrator.PromoteBaselineDeferrals`) rather than a copy each.
 
 **The trigger cannot be a CI cron**, which is why it lives in the daemon: the
-queue is `queue-state.json` in the clone's pipeline state directory on the
+queue is `queue-state.json` in the checkout's git directory on the
 operator's machine and is never committed, so a GitHub Actions runner has no queue to promote
 and anything it wrote would die with the runner. A
 scheduled CI sweep was documented for this for some time and never existed
@@ -2772,8 +2789,9 @@ There is no implicit basename fallback. To allow a file at any depth, use a
 - Deleted files are never considered drift — only `files_changed.created` and
   `files_changed.modified` from `dev-{N}.json` are evaluated.
 - Drift events emit a `scope_drift_detected` pipeline event (best-effort —
-  silent when no platform is configured) and append to
-  `.nightgauge/audit/scope-drift-stats.json` for offline counter tuning.
+  silent when no platform is configured) and append to this checkout's
+  `scope-drift-stats.json` (`nightgauge layout path checkout scope-drift-stats.json`)
+  for offline counter tuning.
 
 **Failure classification**: Strict-mode rejections exit `1` with a
 human-readable `Scope drift gate: BLOCKED` banner on stderr. The pr-create
@@ -5089,7 +5107,9 @@ new projects to benefit from existing calibration data.
 
 ### saved-queries
 
-**File**: `.nightgauge/saved-queries.yaml`
+**File**: this checkout's `saved-queries.yaml`
+(`nightgauge layout path checkout saved-queries.yaml`; `.git/nightgauge-worktree/`
+in the main checkout, ADR-024 § 7)
 
 Stores saved queries for quick access from VSCode and CLI. Queries can be
 created manually or saved from the UI.
@@ -5486,7 +5506,8 @@ the first:
 
 Each descent and each hop raises an Action Center card (`cap-fallback`,
 severity `fyi`) naming the stage, the destination and the reason, so the change
-is visible in the product rather than only in `go-backend.log`.
+is visible in the product rather than only in `go-backend.log`
+(`nightgauge layout path checkout go-backend.log`).
 
 ##### `pipeline.auto_router` reference
 
@@ -7281,8 +7302,8 @@ product_audit:
 
 ## Focus Mode Configuration (`focus.yaml`)
 
-Focus mode is configured through a **separate file** at
-`.nightgauge/focus.yaml` — not through `config.yaml`. This file is read
+Focus mode is configured through a **separate file**, `focus.yaml` in this
+checkout's git directory — not through `config.yaml`. This file is read
 by the Go binary and all skills that participate in focus-aware
 prioritization.
 
@@ -7293,14 +7314,20 @@ prioritization.
 
 ```
 .nightgauge/
-├── config.yaml      ← pipeline/project settings (this document)
+└── config.yaml      ← pipeline/project settings (this document)
+.git/nightgauge-worktree/
 └── focus.yaml       ← focus lens state (separate, managed by focus commands)
 ```
+
+`.git/nightgauge-worktree/` is the main checkout's per-checkout directory; a
+linked worktree has its own under `.git/worktrees/<name>/nightgauge-worktree/`.
+`nightgauge layout path checkout focus.yaml` prints the resolved path
+([ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
 
 ### Schema
 
 ```yaml
-# .nightgauge/focus.yaml
+# .git/nightgauge-worktree/focus.yaml
 
 # Active lens name. Built-in: general, quality, features, security,
 # performance, documentation, reliability, ux

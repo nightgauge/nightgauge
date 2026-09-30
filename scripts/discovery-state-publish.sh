@@ -65,11 +65,24 @@ done
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 
-# Keep this list identical to STATE_PATHS in discovery-state-sync.sh.
-# Only top-level *.json is published: .nightgauge/release-watch/reports/ holds
-# transient per-run analysis that nothing reads back and that would grow the
-# branch without bound.
-STATE_DIRS=(".nightgauge/release-watch" ".nightgauge/improvement-runs")
+# The state is read from this checkout's directory, CHECKOUT (ADR-024 § 7):
+# the binary is the path source, and without it (or with a build that predates
+# CHECKOUT) git resolves the same place.
+CHECKOUT_DIR=""
+if command -v nightgauge >/dev/null 2>&1; then
+  CHECKOUT_DIR="$(nightgauge layout path checkout --workdir "$ROOT" 2>/dev/null || true)"
+fi
+if [ -z "$CHECKOUT_DIR" ]; then
+  CHECKOUT_DIR="$(git rev-parse --absolute-git-dir)/nightgauge-worktree"
+fi
+
+# The directories inside CHECKOUT that are published. Each one travels on the
+# branch under .nightgauge/<dir>/, the path STATE_PATHS in
+# discovery-state-sync.sh maps back; keep the two lists in step.
+# Only top-level *.json is published: release-watch/reports/ holds transient
+# per-run analysis that nothing reads back and that would grow the branch
+# without bound.
+STATE_DIRS=("release-watch" "improvement-runs")
 
 # A scratch index, so `git update-index` never touches the caller's real one.
 SCRATCH="$(mktemp -d)"
@@ -87,11 +100,11 @@ fi
 
 FOUND=0
 for dir in "${STATE_DIRS[@]}"; do
-  [ -d "$dir" ] || continue
-  for file in "$dir"/*.json; do
+  [ -d "$CHECKOUT_DIR/$dir" ] || continue
+  for file in "$CHECKOUT_DIR/$dir"/*.json; do
     [ -e "$file" ] || continue
     blob="$(git hash-object -w "$file")"
-    git update-index --add --cacheinfo "100644,$blob,$file"
+    git update-index --add --cacheinfo "100644,$blob,.nightgauge/$dir/$(basename "$file")"
     FOUND=$((FOUND + 1))
   done
 done

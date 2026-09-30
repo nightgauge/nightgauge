@@ -48,6 +48,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -65,22 +67,49 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def checkout_dir(workspace: Path) -> Path:
+    """This checkout's directory, CHECKOUT = <git-dir>/nightgauge-worktree.
+
+    The run records are per-checkout runtime state (ADR-024 § 7). The binary
+    is the path source; without it, or with a build that predates CHECKOUT,
+    git resolves the same place. Outside a git repository there is no
+    CHECKOUT, which is an error.
+    """
+    if shutil.which("nightgauge"):
+        result = subprocess.run(
+            ["nightgauge", "layout", "path", "checkout", "--workdir", str(workspace)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        resolved = result.stdout.strip()
+        if result.returncode == 0 and resolved:
+            return Path(resolved)
+    result = subprocess.run(
+        ["git", "-C", str(workspace), "rev-parse", "--absolute-git-dir"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    git_dir = result.stdout.strip()
+    if result.returncode != 0 or not git_dir:
+        raise OSError(f"{workspace} is not inside a git repository")
+    return Path(git_dir) / "nightgauge-worktree"
+
+
 def record_path(workspace: Path, kind: str, provider: str) -> Path:
     """The exact path DiscoveryActivityService globs for.
 
     Release-watch is per-provider: the service matches
-    `^creation-log.*\\.json$` and aggregates every match, so one file per
-    provider is the supported layout. Continuous-improvement keeps a single
-    `latest.json`.
+    `^creation-log.*\\.json$` in CHECKOUT/release-watch and aggregates every
+    match, so one file per provider is the supported layout.
+    Continuous-improvement keeps a single CHECKOUT/improvement-runs/latest.json.
     """
     if kind == RELEASE_WATCH:
         return (
-            workspace
-            / ".nightgauge"
-            / "release-watch"
-            / f"creation-log-{provider}.json"
+            checkout_dir(workspace) / "release-watch" / f"creation-log-{provider}.json"
         )
-    return workspace / ".nightgauge" / "improvement-runs" / "latest.json"
+    return checkout_dir(workspace) / "improvement-runs" / "latest.json"
 
 
 def read_existing(path: Path) -> dict:
@@ -103,7 +132,14 @@ def write_atomic(path: Path, payload: dict) -> None:
     parses nothing and reports "no discovery runs", which reads exactly like
     the bug this script exists to fix.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise OSError(f"{path} is a symlink; refusing to write through it")
+    # CHECKOUT and its subdirectories are private to the user (0700).
+    previous_umask = os.umask(0o077)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+    finally:
+        os.umask(previous_umask)
     fd, tmp_name = tempfile.mkstemp(
         dir=str(path.parent), prefix=".discovery-", suffix=".tmp"
     )
@@ -192,7 +228,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--kind", required=True, choices=[RELEASE_WATCH, CONTINUOUS_IMPROVEMENT]
     )
     parser.add_argument(
-        "--workspace", default=".", help="Repository root holding .nightgauge/"
+        "--workspace",
+        default=".",
+        help="Checkout whose directory (<git-dir>/nightgauge-worktree) holds the record",
     )
     parser.add_argument(
         "--provider", default="claude-code", help="release-watch provider slug"
@@ -218,7 +256,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     workspace = Path(args.workspace).resolve()
-    path = record_path(workspace, args.kind, args.provider)
+    try:
+        path = record_path(workspace, args.kind, args.provider)
+    except OSError as err:
+        print(f"discovery-run-record: {err}", file=sys.stderr)
+        return 2
 
     if args.verb == "open":
         payload = (

@@ -4,8 +4,9 @@
  * Static utility class following the HealthScoreHistoryWriter pattern:
  * no state, no VSCode dependency, testable in isolation.
  *
- * Persists gate metric records to a single JSONL file:
- *   .nightgauge/health/gate-metrics.jsonl
+ * Persists gate metric records to a single JSONL file in the checkout's own
+ * per-checkout directory (ADR-024 § 7):
+ *   .git/nightgauge-worktree/health/gate-metrics.jsonl
  *
  * Non-critical: all operations log warnings on failure, never throw.
  *
@@ -19,9 +20,10 @@ import { isJudgeVerdict, type JudgeVerdict } from "@nightgauge/sdk";
 
 import { GateMetricRecordSchema, type GateMetricRecord } from "../schemas/gateMetrics";
 import { writeFileAtomic } from "./atomicWrite";
+import { checkoutPath, isUsableWorkspaceRoot } from "./cloneLayout";
 
-/** Relative path from workspace root to the gate metrics file */
-const GATE_METRICS_FILE = ".nightgauge/health/gate-metrics.jsonl";
+/** The gate metrics file's name inside the checkout's `health/` entry. */
+const GATE_METRICS_FILE = "gate-metrics.jsonl";
 
 /**
  * Canonical gate_name for adversarial anti-hallucination judge verdicts (#3918).
@@ -117,6 +119,7 @@ export class GateMetricsWriter {
    * does not exist.
    */
   static async readAll(workspaceRoot: string): Promise<GateMetricRecord[]> {
+    if (!isUsableWorkspaceRoot(workspaceRoot)) return [];
     const filePath = this.getFilePath(workspaceRoot);
     let content: string;
 
@@ -164,10 +167,12 @@ export class GateMetricsWriter {
   }
 
   /**
-   * Returns the absolute path to the gate metrics file.
+   * Returns the absolute path to the gate metrics file:
+   * `<git-dir>/nightgauge-worktree/health/gate-metrics.jsonl`. Throws when
+   * `workspaceRoot` is not in a git checkout.
    */
   static getFilePath(workspaceRoot: string): string {
-    return path.join(workspaceRoot, GATE_METRICS_FILE);
+    return checkoutPath(workspaceRoot, "health", GATE_METRICS_FILE);
   }
 
   /**

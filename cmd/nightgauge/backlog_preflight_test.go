@@ -13,7 +13,7 @@ func TestRenderPreflightHumanIncludesRemediation(t *testing.T) {
 		Findings: []backlogpreflight.BacklogFinding{
 			{
 				FindingType: backlogpreflight.FindingTypeGreenfieldWarning,
-				Detail:      "Missing .nightgauge/complexity-model.yaml",
+				Detail:      "Missing .git/nightgauge-worktree/complexity-model.yaml",
 				Suggestion:  "Run: nightgauge outcome init to generate the complexity model",
 			},
 		},

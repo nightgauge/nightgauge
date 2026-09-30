@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -53,7 +54,7 @@ func gateRecordMetricCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "record-metric",
-		Short: "Append a quality-gate result (pass|catch) to gate-metrics.jsonl",
+		Short: "Append a quality-gate result (pass|catch) to " + layout.CheckoutDisplay(state.GateMetricsName),
 		Long: `Append one quality-gate record consumed by the deterministic
 FeatureValidateGate. Used by the feature-validate adversarial-review phase to
 record an LLM-critic verdict — a "catch" fails validation through the existing
@@ -66,6 +67,9 @@ gate without putting an LLM call inside the gate itself (see docs/STAGE_GATES.md
 				if wd, err := os.Getwd(); err == nil {
 					work = wd
 				}
+			}
+			if abs, err := filepath.Abs(work); err == nil {
+				work = abs
 			}
 			ts := time.Now().UTC().Format(time.RFC3339)
 			if err := state.AppendGateMetric(work, issueNumber, gateName, result, errorSummary, ts); err != nil {

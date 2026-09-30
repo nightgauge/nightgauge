@@ -6,10 +6,12 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestEnableActiveDisable(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if Active(root) {
 		t.Fatal("careful should be off initially")
 	}
@@ -32,20 +34,17 @@ func TestEnableActiveDisable(t *testing.T) {
 }
 
 func TestDisableMissingIsNoError(t *testing.T) {
-	if err := Disable(t.TempDir()); err != nil {
+	if err := Disable(layouttest.Repo(t)); err != nil {
 		t.Fatalf("disabling absent lock should not error: %v", err)
 	}
 }
 
 func TestExpiredLockIsInactive(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	// Write a lock that started 2h ago with a 60-min TTL → expired.
 	stale := Lock{Since: time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339), TTLMinutes: 60}
 	data, _ := json.MarshalIndent(stale, "", "  ")
-	if err := os.MkdirAll(filepath.Dir(LockPath(root)), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(LockPath(root), data, 0o644); err != nil {
+	if err := os.WriteFile(layouttest.CheckoutPath(t, root, "careful.lock"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if Active(root) {
@@ -107,5 +106,28 @@ func TestDestructiveProdReason(t *testing.T) {
 		if r := DestructiveProdReason(tc.pipes); r != "" {
 			t.Errorf("expected %q to be allowed, got reason: %s", tc.name, r)
 		}
+	}
+}
+
+// careful.lock is per-checkout runtime state (ADR-024 § 7): Enable writes it
+// to CHECKOUT, never the working tree; outside a git checkout Enable fails and
+// careful mode reads as off.
+func TestLockLivesInCheckout(t *testing.T) {
+	root := layouttest.Repo(t)
+	if err := Enable(root, 0, ""); err != nil {
+		t.Fatalf("Enable: %v", err)
+	}
+	if _, err := os.Stat(layouttest.CheckoutPath(t, root, "careful.lock")); err != nil {
+		t.Fatalf("careful.lock not in CHECKOUT: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".nightgauge")); !os.IsNotExist(err) {
+		t.Fatalf("Enable wrote into the working tree (stat err %v)", err)
+	}
+	plain := t.TempDir()
+	if err := Enable(plain, 0, ""); err == nil {
+		t.Fatal("Enable outside a git checkout: want an error")
+	}
+	if Active(plain) {
+		t.Fatal("careful mode must read as off outside a git checkout")
 	}
 }

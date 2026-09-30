@@ -1887,7 +1887,7 @@ type BoardChangedParams struct {
 // its required fields are each a distinct ERROR, never a silent no-op. The repo
 // must additionally be one this daemon has configured — an unbounded
 // (repo, issue) pair is an unbounded card-injection primitive into
-// .nightgauge/attention/, since dedup is per (producer, repo, issue).
+// the attention store, since dedup is per (producer, repo, issue).
 type AttentionRaiseParams struct {
 	// Producer is the closed enum — see ipc.RaiseableProducers.
 	Producer string `json:"producer"`

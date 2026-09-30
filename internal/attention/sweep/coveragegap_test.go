@@ -2,6 +2,8 @@ package sweep
 
 import (
 	"context"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -227,7 +229,7 @@ func TestDiscoverLocalCheckouts_FindsSiblings(t *testing.T) {
 // The footer's input is a record of what was SWEPT, never a config read: a
 // missing record must report "nothing looked at", not zero repos.
 func TestCoverage_RoundTripAndMissingRecord(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	if _, ok := ReadCoverage(root); ok {
 		t.Fatal("no sweep has run — ReadCoverage must report absent")
@@ -249,8 +251,14 @@ func TestCoverage_RoundTripAndMissingRecord(t *testing.T) {
 
 	// It must NOT live inside the attention directory, where Store.List parses
 	// every *.json as a DecisionRequest.
-	if _, err := os.Stat(filepath.Join(root, ".nightgauge", "attention", "attention-coverage.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(layouttest.CheckoutPath(t, root, layout.CheckoutAttention), layout.CheckoutAttentionCoverage)); err == nil {
 		t.Error("coverage record must not sit inside the attention store directory")
+	}
+	if _, err := os.Stat(layouttest.CheckoutPath(t, root, layout.CheckoutAttentionCoverage)); err != nil {
+		t.Errorf("coverage record must live in the checkout directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".nightgauge")); err == nil {
+		t.Error("coverage must not write into the working tree")
 	}
 }
 
@@ -286,7 +294,7 @@ func coverageCard(repo string) attention.DecisionRequest {
 
 func workspaceSweeper(t *testing.T, p WorkspaceProducer) (*Sweeper, *attention.Store, string) {
 	t.Helper()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	store := attention.New(root)
 	reg := NewRegistry()
 	reg.RegisterWorkspace(p)
@@ -422,7 +430,7 @@ func writeWorkspaceFixture(t *testing.T, root, configYAML, manifestYAML string) 
 // list made every other repo look uncovered — including four that were
 // configured perfectly well — and raised six cards where three were true.
 func TestSweepWorkspace_ConfiguredReposComeFromConfigNotInvocation(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeWorkspaceFixture(t, root, `
 project:
   owner: acme
@@ -465,7 +473,7 @@ repositories:
 // With no config at all, the invocation list is the only evidence of intent —
 // better than declaring every repo uncovered.
 func TestSweepWorkspace_NoConfig_FallsBackToInvocationList(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	cap := &captureProducer{}
 	reg := NewRegistry()
 	reg.RegisterWorkspace(cap)

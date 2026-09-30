@@ -58,8 +58,9 @@ wastes pipeline cycles or ships a defect when dispatched unchanged.
 
 ## Outcomes
 
-- Markdown report at `.nightgauge/triage/backlog-groom-<timestamp>.md`
-- JSON findings at `.nightgauge/triage/backlog-groom-<timestamp>.json`
+- Markdown report at `triage/backlog-groom-<timestamp>.md` in this checkout's
+  directory (`nightgauge layout path checkout triage`)
+- JSON findings at `triage/backlog-groom-<timestamp>.json` beside it
 - Per-issue verdict from the [vocabulary](#verdict-vocabulary) below
 - Dry-run by default: every verdict is reported, nothing is mutated —
   **except** publication-boundary redaction, which is live exposure and is
@@ -221,7 +222,9 @@ issues) instead of re-dumping the whole backlog.
 
 ```bash
 SKILL_NAME="nightgauge-backlog-groom"
-RUN_LOG=".nightgauge/triage/backlog-groom-runs.jsonl"
+RUN_LOG_CLASS="checkout"
+RUN_LOG_NAME="triage/backlog-groom-runs.jsonl"
+RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"
 ```
 
 <!-- include: ../_shared/RUN_REFLECTION.md -->
@@ -506,7 +509,10 @@ in dry-run, list them in the report with their current status.
 
 ### Phase 7: Report
 
-Write `.nightgauge/triage/backlog-groom-<timestamp>.md` (and `.json`) with:
+Write `triage/backlog-groom-<timestamp>.md` (and `.json`) to this checkout's
+directory through the binary — it is inside the git directory, so pipe the
+content to `nightgauge layout write checkout triage/backlog-groom-<timestamp>.md`
+(and `.json`), never write it by path — with:
 
 1. **Outcome counts** — issues assessed, kept, closed (obsolete / duplicate /
    not-worth), clarified, verification-added, premise-corrected,

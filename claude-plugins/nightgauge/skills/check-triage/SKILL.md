@@ -76,7 +76,7 @@ DIAGNOSED — <one-line cause>
   reproduced: local | ci
   ruled out:  <hypothesis> — <the observation that killed it>
   fix:        <branch> / <PR>   test: <name> (red without the fix: yes|no — <why not>)
-  record:     .nightgauge/triage/checks/<id>.json
+  record:     <checkout>/triage/checks/<id>.json
   tracked:    <issue URL>
 ```
 
@@ -84,7 +84,7 @@ DIAGNOSED — <one-line cause>
 NOT REPRODUCED — no fix proposed
   tried:   <n> approaches (see the record)
   spike:   <issue URL>
-  record:  .nightgauge/triage/checks/<id>.json
+  record:  <checkout>/triage/checks/<id>.json
 ```
 
 There is no third outcome. "Probably X, here is a change that might help" is the
@@ -222,7 +222,9 @@ Land it on a branch and open a PR. Never push to a default branch.
 
 ### Phase 5: Record and Track
 
-Write the record and let the binary check it:
+Write the record and let the binary check it. The binary writes it to
+`triage/checks/<id>.json` in this checkout's directory (`<checkout>` above,
+`nightgauge layout path checkout`):
 
 ```bash
 nightgauge triage record --file "$RECORD_JSON"

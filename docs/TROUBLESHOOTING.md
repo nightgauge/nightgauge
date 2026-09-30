@@ -688,7 +688,8 @@ it's contention, don't assume.)
 
 **Symptom:** `dashboard.nightgauge.dev` shows `0 runs completed / 0 in
 progress / 0 failed in the last 24h` even though the autonomous pipeline is
-actively dispatching and completing issues (the `go-backend.log` shows
+actively dispatching and completing issues (`go-backend.log`, at
+`nightgauge layout path checkout go-backend.log`, shows
 `autonomous: completed …`).
 
 **Data flow (how a run reaches the dashboard):**
@@ -907,7 +908,7 @@ re-dispatched since. Copy them out before re-queuing the issue.
   acme-platform (/Users/you/repos/acme-platform) — 7 path(s):
     src/api/handlers.ts
     ...
-    preserved: /Users/you/repos/acme/.nightgauge/containment/feature-dev-129-2026-07-26T.../acme-platform.patch
+    preserved: /Users/you/repos/acme/.git/nightgauge-worktree/containment/feature-dev-129-2026-07-26T.../acme-platform.patch
 ```
 
 **Root cause:** the issue's work does not live in the repo the issue was filed
@@ -930,13 +931,14 @@ would destroy it silently.
 
 **Recovering the work.** Nothing in the other repo was modified, staged,
 committed or reverted — the files are still on disk exactly as the stage left
-them, and a patch of them is captured under the stage repo's canonical root
-(which outlives the worktree a re-dispatch removes):
+them, and a patch of them is captured in the per-checkout directory of the stage repo's
+canonical root (which outlives the worktree a re-dispatch removes):
 
 ```bash
-ls .nightgauge/containment/                      # one dir per detection
-cat .nightgauge/containment/<dir>/manifest.json  # repos, paths, reason
-git -C <repoPath> apply .nightgauge/containment/<dir>/<repoName>.patch
+C="$(nightgauge layout path checkout containment)"  # run in the canonical root
+ls "$C"                                  # one dir per detection
+cat "$C/<dir>/manifest.json"             # repos, paths, reason
+git -C <repoPath> apply "$C/<dir>/<repoName>.patch"
 ```
 
 **`[containment-ambiguous]` is a warning, not a failure.** It means a path that

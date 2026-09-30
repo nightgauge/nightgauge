@@ -17,6 +17,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
   walks, so the prose stays the portability floor. Skill version bumped to
   1.2.0.
 
+### Changed
+
+- The upstream health-check, security-audit and test-scaffold reports are read
+  from this checkout's `reports/` directory inside the git directory
+  (`nightgauge layout path checkout reports/<name>`), not from `.nightgauge/`
+  (#2037, ADR-024 § 7).
+
 ## [1.0.0] - 2026-02-21
 
 ### Added

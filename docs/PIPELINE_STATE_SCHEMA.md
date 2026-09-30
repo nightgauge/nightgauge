@@ -16,8 +16,16 @@ JSON; see [GO_BINARY.md](GO_BINARY.md)) rather than hard-coding it. Agents and
 scripts write here through `nightgauge layout write pipeline <name>` (or
 `nightgauge layout append`), never by path.
 
+`run-state.json` is the exception. It is one unkeyed file per checkout, so it
+lives in the checkout's own git directory, `<git-dir>/nightgauge-worktree/`:
+`.git/nightgauge-worktree/run-state.json` for the main checkout, and
+`.git/worktrees/<name>/nightgauge-worktree/run-state.json` for a linked
+worktree. Read it at `nightgauge layout path checkout run-state.json`; the
+same directory holds the other run-control singletons (`current-run.json`,
+`batch-state.json`, `queue-state.json`).
+
 > **Single source of truth**: `run-state.json` is the canonical lifecycle
-> record per repo. Every other file in the pipeline state directory is a
+> record per checkout. Every file in the pipeline state directory is a
 > per-stage context handoff (read-only after the producing stage's rename
 > completes). The TypeScript SDK and the Go binary both write the same
 > on-disk format using the same atomic+fsync contract.
@@ -35,7 +43,8 @@ scripts write here through `nightgauge layout write pipeline <name>` (or
 
 ## Atomic write contract
 
-Every JSON file in the pipeline state directory is written via:
+Every JSON file in the pipeline state directory, and `run-state.json` in the
+checkout directory, is written via:
 
 ```
 write-temp → fsync(file) → rename → fsync(parent dir)
@@ -94,18 +103,18 @@ the only destructive transition.
 
 ## Schema catalog
 
-| Filename                   | Schema (Zod)                   | Schema (Go)               | Owning stage / writer                     |
-| -------------------------- | ------------------------------ | ------------------------- | ----------------------------------------- |
-| `run-state.json`           | `RunStateSchema` (1.0)         | `runstate.RunState` (1.0) | `RunStateManager` (TS + Go)               |
-| `issue-<N>.json`           | `IssueContextSchema`           | (read by Go scheduler)    | `/nightgauge-issue-pickup`                |
-| `planning-<N>.json`        | `PlanningContextSchema`        | —                         | `/nightgauge-feature-planning`            |
-| `dev-<N>.json`             | `DevContextSchema`             | —                         | `/nightgauge-feature-dev`                 |
-| `validate-<N>.json`        | `ValidateContextSchema`        | —                         | `/nightgauge-feature-validate`            |
-| `pr-<N>.json`              | `PRContextSchema`              | —                         | `/nightgauge-pr-create`                   |
-| `feedback-<N>.json`        | `FeedbackContextSchema`        | —                         | `/nightgauge-feature-validate` (signals)  |
-| `epic-context-<E>.json`    | `EpicContextSchema`            | —                         | wave orchestrator                         |
-| `runtime-<N>-<runId>.json` | (Go only) `state.RuntimeState` | `state.RuntimeState`      | Go scheduler                              |
-| `workflow-<runId>.jsonl`   | `JournalRecord` (append-only)  | —                         | `WorkflowExecutor` (orchestration engine) |
+| Filename                    | Schema (Zod)                   | Schema (Go)               | Owning stage / writer                     |
+| --------------------------- | ------------------------------ | ------------------------- | ----------------------------------------- |
+| `run-state.json` (checkout) | `RunStateSchema` (1.0)         | `runstate.RunState` (1.0) | `RunStateManager` (TS + Go)               |
+| `issue-<N>.json`            | `IssueContextSchema`           | (read by Go scheduler)    | `/nightgauge-issue-pickup`                |
+| `planning-<N>.json`         | `PlanningContextSchema`        | —                         | `/nightgauge-feature-planning`            |
+| `dev-<N>.json`              | `DevContextSchema`             | —                         | `/nightgauge-feature-dev`                 |
+| `validate-<N>.json`         | `ValidateContextSchema`        | —                         | `/nightgauge-feature-validate`            |
+| `pr-<N>.json`               | `PRContextSchema`              | —                         | `/nightgauge-pr-create`                   |
+| `feedback-<N>.json`         | `FeedbackContextSchema`        | —                         | `/nightgauge-feature-validate` (signals)  |
+| `epic-context-<E>.json`     | `EpicContextSchema`            | —                         | wave orchestrator                         |
+| `runtime-<N>-<runId>.json`  | (Go only) `state.RuntimeState` | `state.RuntimeState`      | Go scheduler                              |
+| `workflow-<runId>.jsonl`    | `JournalRecord` (append-only)  | —                         | `WorkflowExecutor` (orchestration engine) |
 
 ### Workflow journal (`workflow-<runId>.jsonl`)
 

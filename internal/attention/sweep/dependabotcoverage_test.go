@@ -12,6 +12,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // --- fakes ------------------------------------------------------------------
@@ -578,7 +579,7 @@ func TestDependabotCoverage_RegisteredInTheDefaultWorkspaceRegistry(t *testing.T
 
 func coverageSweeper(t *testing.T, p WorkspaceProducer) (*Sweeper, *attention.Store) {
 	t.Helper()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	store := attention.New(root)
 	reg := NewRegistry()
 	reg.RegisterWorkspace(p)

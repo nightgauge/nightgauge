@@ -19,6 +19,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The JSON report is written to this checkout's
+  `reports/dep-modernize-report.json` inside the git directory (`nightgauge
+layout path checkout reports/dep-modernize-report.json`) through `nightgauge layout write checkout`,
+  not to `.nightgauge/dep-modernize-report.json`; the health-check and
+  security-audit reports are read from `reports/` there too (#2037,
+  ADR-024 § 7).
 - Migrate all direct `gh` invocations to `nightgauge forge` (#3363, Wave 4 of forge-abstraction epic #3349). Skill now works against GitLab as well as GitHub via the forge abstraction.
 
 ## [1.0.0] - 2026-02-21

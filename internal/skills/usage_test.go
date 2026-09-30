@@ -4,10 +4,12 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestAppendAndReadUsage(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	if err := AppendRecord(root, Record{TS: "2026-06-01T00:00:00Z", Skill: "nightgauge-security-audit", Session: "s1"}); err != nil {
 		t.Fatalf("AppendRecord: %v", err)
@@ -29,7 +31,7 @@ func TestAppendAndReadUsage(t *testing.T) {
 }
 
 func TestAppendRecordDefaultsTimestamp(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := AppendRecord(root, Record{Skill: "x"}); err != nil {
 		t.Fatalf("AppendRecord: %v", err)
 	}
@@ -40,7 +42,7 @@ func TestAppendRecordDefaultsTimestamp(t *testing.T) {
 }
 
 func TestReadUsageMissingFileIsNotError(t *testing.T) {
-	recs, err := ReadUsage(t.TempDir())
+	recs, err := ReadUsage(layouttest.Repo(t))
 	if err != nil {
 		t.Fatalf("missing file should not error: %v", err)
 	}
@@ -50,11 +52,8 @@ func TestReadUsageMissingFileIsNotError(t *testing.T) {
 }
 
 func TestReadUsageSkipsMalformedLines(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, ".nightgauge", "skills")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	root := layouttest.Repo(t)
+	dir := layouttest.MkCheckoutSubdir(t, root, "skills")
 	content := "{\"ts\":\"t\",\"skill\":\"a\"}\nnot-json\n{\"skill\":\"\"}\n{\"ts\":\"t\",\"skill\":\"b\"}\n"
 	if err := os.WriteFile(filepath.Join(dir, "usage.jsonl"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -120,5 +119,28 @@ func TestCatalogNames(t *testing.T) {
 	}
 	if len(names) != 2 || names[0] != "nightgauge-queue" || names[1] != "smart-setup" {
 		t.Fatalf("unexpected catalog: %+v", names)
+	}
+}
+
+// The usage log is per-checkout runtime state: it lives in CHECKOUT, never in
+// the working tree, and outside a git checkout the append fails instead of
+// writing where it was pointed (ADR-024 § 7).
+func TestUsageLogLivesInCheckout(t *testing.T) {
+	root := layouttest.Repo(t)
+	if err := AppendRecord(root, Record{Skill: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(layouttest.CheckoutPath(t, root, "skills/usage.jsonl")); err != nil {
+		t.Fatalf("usage log not in CHECKOUT: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".nightgauge")); !os.IsNotExist(err) {
+		t.Fatalf("AppendRecord wrote into the working tree (stat err %v)", err)
+	}
+	plain := t.TempDir()
+	if err := AppendRecord(plain, Record{Skill: "a"}); err == nil {
+		t.Fatal("AppendRecord outside a git checkout: want an error")
+	}
+	if _, err := os.Stat(filepath.Join(plain, ".nightgauge")); !os.IsNotExist(err) {
+		t.Fatalf("AppendRecord outside a git checkout wrote into it (stat err %v)", err)
 	}
 }

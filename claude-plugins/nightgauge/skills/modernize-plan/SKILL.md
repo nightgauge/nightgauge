@@ -110,10 +110,12 @@ This skill follows the **deterministic vs probabilistic** principle:
 
 - Bash shell
 - `jq` installed (for JSON processing)
-- At least one assessment output file must exist:
-  - `.nightgauge/health-report.json` (from health-check)
-  - `.nightgauge/security-audit.json` (from security-audit)
-  - `.nightgauge/test-scaffold-report.json` (from test-scaffold)
+- At least one assessment output file must exist in this checkout's `reports/`
+  directory inside the git directory (`nightgauge layout path checkout reports`,
+  ADR-024 § 7):
+  - `reports/health-report.json` (from health-check)
+  - `reports/security-audit.json` (from security-audit)
+  - `reports/test-scaffold-report.json` (from test-scaffold)
 - `gh` CLI authenticated (only required if `--create-issues` is used)
 
 **CRITICAL**: This skill runs headless. Do NOT use AskUserQuestion unless
@@ -162,9 +164,9 @@ SKIP_PHASES=""
 ```bash
 cd "$ASSESS_PATH"
 
-HEALTH_REPORT=".nightgauge/health-report.json"
-SECURITY_REPORT=".nightgauge/security-audit.json"
-SCAFFOLD_REPORT=".nightgauge/test-scaffold-report.json"
+HEALTH_REPORT="$(nightgauge layout path checkout reports/health-report.json)"
+SECURITY_REPORT="$(nightgauge layout path checkout reports/security-audit.json)"
+SCAFFOLD_REPORT="$(nightgauge layout path checkout reports/test-scaffold-report.json)"
 
 HEALTH_AVAILABLE=false
 SECURITY_AVAILABLE=false
@@ -279,12 +281,12 @@ echo "Aggregate findings written to: $AGGREGATE_OUT"
 cat "$AGGREGATE_OUT" | jq '.summary'
 ```
 
-The binary reads:
+The binary reads, from the checkout's `reports/` directory:
 
-- `.nightgauge/health-report.json` — severity mapped from status string
+- `health-report.json` — severity mapped from status string
   (`critical`→critical, `poor`→high, `fair`→medium, `good`→low, `excellent`→info)
-- `.nightgauge/security-audit.json` — severity passed through unchanged
-- `.nightgauge/test-scaffold-report.json` — priority mapped 1:1 to severity
+- `security-audit.json` — severity passed through unchanged
+- `test-scaffold-report.json` — priority mapped 1:1 to severity
 
 Missing files are reported in `sources_missing` (not an error). All absent → exit 2.
 
@@ -471,12 +473,10 @@ total_weeks = total_sprints * sprint_length
 
 #### Step 7.1: Write JSON Output
 
-Ensure the `.nightgauge/` directory exists, then write the structured plan
-to `.nightgauge/modernization-plan.json` (or custom `--output` path):
-
-```bash
-mkdir -p .nightgauge
-```
+Write the structured plan to this checkout's `reports/modernization-plan.json`
+(`nightgauge layout path checkout reports/modernization-plan.json`, inside the
+git directory, ADR-024 § 7), or to the custom `--output` path. Build the JSON in
+a temporary file (`PLAN_TMP="$(mktemp)"`); Step 7.2 validates and writes it.
 
 **JSON Schema** (`modernization-plan.json`):
 
@@ -491,12 +491,12 @@ mkdir -p .nightgauge
   "inputs": {
     "health_check": {
       "available": true,
-      "path": ".nightgauge/health-report.json",
+      "path": ".git/nightgauge-worktree/reports/health-report.json",
       "overall_score": 72
     },
     "security_audit": {
       "available": true,
-      "path": ".nightgauge/security-audit.json",
+      "path": ".git/nightgauge-worktree/reports/security-audit.json",
       "overall_score": 65
     },
     "test_scaffold": {
@@ -576,11 +576,21 @@ mkdir -p .nightgauge
 }
 ```
 
-#### Step 7.2: Verify JSON
+#### Step 7.2: Verify and Write JSON
+
+The default plan goes through `nightgauge layout write`; never write under
+`.git` by path:
 
 ```bash
-python3 -m json.tool .nightgauge/modernization-plan.json > /dev/null && \
-  echo "Plan written: .nightgauge/modernization-plan.json"
+python3 -m json.tool "$PLAN_TMP" > /dev/null || { echo "Invalid plan JSON" >&2; exit 1; }
+if [ -n "$OUTPUT_FILE" ]; then
+  cp "$PLAN_TMP" "$OUTPUT_FILE"
+  PLAN_PATH="$OUTPUT_FILE"
+else
+  PLAN_PATH="$(nightgauge layout write checkout reports/modernization-plan.json --from "$PLAN_TMP")"
+fi
+rm -f "$PLAN_TMP"
+echo "Plan written: $PLAN_PATH"
 ```
 
 #### Step 7.3: Write Markdown Output
@@ -714,7 +724,7 @@ PHASE BREAKDOWN
   Phase 5 - Optimization:    8 pts (1 sprint)   ██░░░░
 
 ----------------------------------------------------------------
-Plan saved: .nightgauge/modernization-plan.json
+Plan saved: .git/nightgauge-worktree/reports/modernization-plan.json
 Roadmap saved: .nightgauge/MODERNIZATION_PLAN.md
 ```
 
@@ -862,11 +872,15 @@ See Phase 7 Step 7.1 for the complete JSON report structure.
 
 ### Report Files
 
-| File                                  | Format   | When Written            |
-| ------------------------------------- | -------- | ----------------------- |
-| `.nightgauge/modernization-plan.json` | JSON     | `--format json/both`    |
-| `.nightgauge/MODERNIZATION_PLAN.md`   | Markdown | `--format summary/both` |
-| Console output                        | Text     | Always                  |
+| File                                       | Format   | When Written            |
+| ------------------------------------------ | -------- | ----------------------- |
+| `checkout reports/modernization-plan.json` | JSON     | `--format json/both`    |
+| `.nightgauge/MODERNIZATION_PLAN.md`        | Markdown | `--format summary/both` |
+| Console output                             | Text     | Always                  |
+
+`checkout` paths are inside this checkout's git directory (ADR-024 § 7):
+`nightgauge layout path checkout reports/modernization-plan.json` prints the
+resolved path.
 
 ---
 
@@ -969,17 +983,17 @@ See Phase 7 Step 7.1 for the complete JSON report structure.
 ```text
 UTILITIES (not part of main pipeline)
 
-/nightgauge:health-check ────────────────────┐
+/nightgauge:health-check ──────────────────────────┐
        |                                           |
-  Writes: .nightgauge/health-report.json      |
+  Writes: checkout reports/health-report.json      |
                                                    |
-/nightgauge:security-audit ──────────────────┤
+/nightgauge:security-audit ────────────────────────┤
        |                                           |
-  Writes: .nightgauge/security-audit.json     |
+  Writes: checkout reports/security-audit.json     |
                                                    ├──► /nightgauge:modernize-plan
-/nightgauge:test-scaffold ───────────────────┤         |
+/nightgauge:test-scaffold ─────────────────────────┤         |
        |                                           |    Reads: all three reports
-  Writes: .nightgauge/test-scaffold-report.json    Writes: modernization-plan.json
+  Writes: checkout reports/test-scaffold-report.json    Writes: reports/modernization-plan.json
                                                         Writes: MODERNIZATION_PLAN.md
                                                         Optional: creates GitHub issues
 ```

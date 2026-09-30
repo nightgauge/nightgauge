@@ -62,7 +62,7 @@ export interface ScoringSignals {
  *
  * @example
  * ```typescript
- * const modelService = new ComplexityModelService();
+ * const modelService = new ComplexityModelService(checkoutPath("complexityModel", workspaceRoot));
  * const engine = new SuggestionEngine(modelService);
  *
  * const suggestion = await engine.generateSuggestion(

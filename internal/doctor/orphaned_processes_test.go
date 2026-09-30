@@ -13,6 +13,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -421,7 +422,7 @@ func TestClassifyProcesses_TheIncidentSpecimenIsAnOrphan(t *testing.T) {
 	// presence test made the specimen vouch for itself and read as owned
 	// forever. Its progress stamp is 31 hours cold.
 	r := newLeakRepo(t)
-	r.write(".nightgauge/autonomous/state.json", fmt.Sprintf(
+	writeCheckoutFile(t, r.dir, "autonomous/state.json", fmt.Sprintf(
 		`{"status":"running","pid":7788,"startedAt":%q,"lastScanAt":%q}`, stamp(31*time.Hour), stamp(31*time.Hour)))
 	procs := parseRows(t, derivedRow(t, 7788, "01-07:12:03", "autonomous run --dry-run"))
 
@@ -453,68 +454,68 @@ func TestSidecarPIDs_AClaimCountsOnlyWhileTheSidecarIsMakingProgress(t *testing.
 	}{
 		{
 			name:      "scheduler scanned minutes ago",
-			path:      ".nightgauge/autonomous/state.json",
+			path:      "checkout/autonomous/state.json",
 			body:      fmt.Sprintf(`{"pid":4001,"startedAt":%q,"lastScanAt":%q}`, stamp(300*time.Hour), stamp(5*time.Minute)),
 			wantClaim: true,
 		},
 		{
 			name:      "scheduler has not scanned in 31h",
-			path:      ".nightgauge/autonomous/state.json",
+			path:      "checkout/autonomous/state.json",
 			body:      fmt.Sprintf(`{"pid":4001,"startedAt":%q,"lastScanAt":%q}`, stamp(31*time.Hour), stamp(31*time.Hour)),
 			wantClaim: false,
 		},
 		{
 			// The first write leaves lastScanAt empty — observed live.
 			name:      "no scan yet, started just now",
-			path:      ".nightgauge/autonomous/state.json",
+			path:      "checkout/autonomous/state.json",
 			body:      fmt.Sprintf(`{"pid":4001,"startedAt":%q,"lastScanAt":""}`, stamp(2*time.Minute)),
 			wantClaim: true,
 		},
 		{
 			name:      "no scan yet, started 31h ago",
-			path:      ".nightgauge/autonomous/state.json",
+			path:      "checkout/autonomous/state.json",
 			body:      fmt.Sprintf(`{"pid":4001,"startedAt":%q,"lastScanAt":""}`, stamp(31*time.Hour)),
 			wantClaim: false,
 		},
 		{
 			name:      "no timestamps at all",
-			path:      ".nightgauge/autonomous/state.json",
+			path:      "checkout/autonomous/state.json",
 			body:      `{"pid":4001}`,
 			wantClaim: false,
 		},
 		{
 			name:      "unparsable timestamp",
-			path:      ".nightgauge/autonomous/state.json",
+			path:      "checkout/autonomous/state.json",
 			body:      `{"pid":4001,"startedAt":"yesterday","lastScanAt":"soon"}`,
 			wantClaim: false,
 		},
 		{
 			name:      "run sidecar entered its stage an hour ago",
-			path:      "pipeline/current-run.json",
+			path:      "checkout/current-run.json",
 			body:      fmt.Sprintf(`{"issue_number":341,"pid":4001,"started_at":%q,"stage_started_at":%q}`, stamp(300*time.Hour), stamp(time.Hour)),
 			wantClaim: true,
 		},
 		{
 			name:      "run sidecar stuck in one stage for 31h",
-			path:      "pipeline/current-run.json",
+			path:      "checkout/current-run.json",
 			body:      fmt.Sprintf(`{"issue_number":341,"pid":4001,"started_at":%q,"stage_started_at":%q}`, stamp(40*time.Hour), stamp(31*time.Hour)),
 			wantClaim: false,
 		},
 		{
 			name:      "run sidecar with no stage stamp yet, just started",
-			path:      "pipeline/current-run.json",
+			path:      "checkout/current-run.json",
 			body:      fmt.Sprintf(`{"issue_number":341,"pid":4001,"started_at":%q}`, stamp(time.Minute)),
 			wantClaim: true,
 		},
 		{
 			name:      "run-state updated minutes ago",
-			path:      "pipeline/run-state.json",
+			path:      "checkout/run-state.json",
 			body:      fmt.Sprintf(`{"schema_version":"1.0","issue_number":341,"created_at":%q,"updated_at":%q,"attempts":[{"run_id":"a","pid":4001}]}`, stamp(300*time.Hour), stamp(9*time.Minute)),
 			wantClaim: true,
 		},
 		{
 			name:      "run-state untouched for 31h",
-			path:      "pipeline/run-state.json",
+			path:      "checkout/run-state.json",
 			body:      fmt.Sprintf(`{"schema_version":"1.0","issue_number":341,"created_at":%q,"updated_at":%q,"attempts":[{"run_id":"a","pid":4001}]}`, stamp(31*time.Hour), stamp(31*time.Hour)),
 			wantClaim: false,
 		},
@@ -522,12 +523,12 @@ func TestSidecarPIDs_AClaimCountsOnlyWhileTheSidecarIsMakingProgress(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newLeakRepo(t)
-			// "pipeline/<name>" is the clone's pipeline state directory.
-			if name, ok := strings.CutPrefix(tt.path, "pipeline/"); ok {
-				r.writePipeline(name, tt.body)
-			} else {
-				r.write(tt.path, tt.body)
+			// "checkout/<name>" is the checkout's per-checkout directory.
+			name, ok := strings.CutPrefix(tt.path, "checkout/")
+			if !ok {
+				t.Fatalf("fixture path %q is not in the per-checkout directory", tt.path)
 			}
+			writeCheckoutFile(t, r.dir, name, tt.body)
 
 			claimed := sidecarPIDs(r.dir, scanClock)
 
@@ -550,7 +551,7 @@ func TestSidecarPIDs_TheClaimWindowIsWiderThanTheProcessAgeFloor(t *testing.T) {
 	}
 
 	r := newLeakRepo(t)
-	r.write(".nightgauge/autonomous/state.json", fmt.Sprintf(
+	writeCheckoutFile(t, r.dir, "autonomous/state.json", fmt.Sprintf(
 		`{"pid":4001,"startedAt":%q,"lastScanAt":%q}`, stamp(300*time.Hour), stamp(3*time.Hour)))
 
 	if !sidecarPIDs(r.dir, scanClock)[4001] {
@@ -559,35 +560,46 @@ func TestSidecarPIDs_TheClaimWindowIsWiderThanTheProcessAgeFloor(t *testing.T) {
 }
 
 func TestSidecarPIDs_ClaimsTheWorkspaceRootScheduler(t *testing.T) {
-	// The scheduler writes .nightgauge/autonomous/state.json relative to the
-	// WORKSPACE root, which in a multi-repo workspace is not a repo root at
-	// all — the one directory config.WorkspaceRepoRoots never yields.
+	// The scheduler writes its state.json in the per-checkout directory of the
+	// WORKSPACE root, which in a multi-repo workspace is not one of the repo
+	// roots — the one directory config.WorkspaceRepoRoots never yields. The
+	// repository inside it is its own checkout, so it cannot answer for it.
 	isolateMachineState(t)
 	ws := t.TempDir()
 	ws, err := filepath.EvalSymlinks(ws)
 	if err != nil {
 		t.Fatalf("resolve temp dir: %v", err)
 	}
+	layouttest.Init(t, ws)
 	if err := os.MkdirAll(filepath.Join(ws, ".vscode"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(ws, ".vscode", "nightgauge-workspace.yaml"), []byte("repositories: []\n"), 0o644); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
-	if err := os.MkdirAll(filepath.Join(ws, ".nightgauge", "autonomous"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(ws, ".nightgauge", "autonomous", "state.json"),
-		[]byte(fmt.Sprintf(`{"pid":4242,"startedAt":%q,"lastScanAt":%q}`, stamp(time.Hour), stamp(time.Minute))), 0o644); err != nil {
-		t.Fatalf("write state: %v", err)
-	}
+	writeCheckoutFile(t, ws, "autonomous/state.json",
+		fmt.Sprintf(`{"pid":4242,"startedAt":%q,"lastScanAt":%q}`, stamp(time.Hour), stamp(time.Minute)))
 	repo := filepath.Join(ws, "some-repo")
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+	layouttest.Init(t, repo)
 
 	if !sidecarPIDs(repo, scanClock)[4242] {
 		t.Error("the workspace-root scheduler sidecar was never read — its process would be reported as an orphan")
+	}
+}
+
+// writeCheckoutFile writes name into root's per-checkout directory
+// (layout.CheckoutDir), where the run-control sidecars live (ADR-024 § 7).
+func writeCheckoutFile(t *testing.T, root, name, content string) {
+	t.Helper()
+	full := layouttest.CheckoutPath(t, root, name)
+	if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
 	}
 }
 
@@ -699,11 +711,11 @@ func TestUnverifiableProcessScan_IsNeverHealthy(t *testing.T) {
 
 func TestSidecarPIDs_ReadsEverySidecarThatCarriesAPID(t *testing.T) {
 	r := newLeakRepo(t)
-	r.write(".nightgauge/autonomous/state.json", fmt.Sprintf(
+	writeCheckoutFile(t, r.dir, "autonomous/state.json", fmt.Sprintf(
 		`{"status":"running","pid":4001,"startedAt":%q,"lastScanAt":%q}`, stamp(time.Hour), stamp(time.Minute)))
-	r.writePipeline("current-run.json", fmt.Sprintf(
+	writeCheckoutFile(t, r.dir, "current-run.json", fmt.Sprintf(
 		`{"issue_number":341,"pid":4002,"started_at":%q,"stage_started_at":%q}`, stamp(time.Hour), stamp(time.Minute)))
-	r.writePipeline("run-state.json", fmt.Sprintf(
+	writeCheckoutFile(t, r.dir, "run-state.json", fmt.Sprintf(
 		`{"schema_version":"1.0","issue_number":341,"created_at":%q,"updated_at":%q,"attempts":[{"run_id":"a","pid":4003},{"run_id":"b","pid":4004}]}`,
 		stamp(time.Hour), stamp(time.Minute)))
 	writeServeSidecar(t, r.dir, 4005, 300*time.Hour, time.Minute)
@@ -722,8 +734,8 @@ func TestSidecarPIDs_AnUnreadableSidecarNarrowsNothingAndBreaksNothing(t *testin
 	// UNOWNED, which fails toward REPORTING — safe only because this carrier
 	// never acts. What it must NOT do is lose the sidecars it CAN read.
 	r := newLeakRepo(t)
-	r.writePipeline("current-run.json", "{ this is not json")
-	r.write(".nightgauge/autonomous/state.json", fmt.Sprintf(
+	writeCheckoutFile(t, r.dir, "current-run.json", "{ this is not json")
+	writeCheckoutFile(t, r.dir, "autonomous/state.json", fmt.Sprintf(
 		`{"status":"running","pid":4001,"lastScanAt":%q}`, stamp(time.Minute)))
 
 	claimed := sidecarPIDs(r.dir, scanClock)

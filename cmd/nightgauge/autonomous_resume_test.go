@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
@@ -19,10 +20,7 @@ import (
 
 func writeAutonomousState(t *testing.T, root string, st orchestrator.AutonomousState) {
 	t.Helper()
-	dir := filepath.Join(root, ".nightgauge", "autonomous")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	dir := layouttest.MkCheckoutSubdir(t, root, "autonomous")
 	data, err := json.Marshal(st)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -34,7 +32,7 @@ func writeAutonomousState(t *testing.T, root string, st orchestrator.AutonomousS
 
 func readAutonomousState(t *testing.T, root string) orchestrator.AutonomousState {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, ".nightgauge", "autonomous", "state.json"))
+	data, err := os.ReadFile(layouttest.CheckoutPath(t, root, "autonomous/state.json"))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -60,7 +58,7 @@ func runAutonomousResume(t *testing.T, root string) string {
 }
 
 func TestAutonomousResumeCmdClearsALatchedHaltOffline(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeAutonomousState(t, root, orchestrator.AutonomousState{
 		// The laundering shape: a graceful shutdown wrote its exit status
 		// over the halted fleet. The latch is what is still true.
@@ -88,7 +86,7 @@ func TestAutonomousResumeCmdClearsALatchedHaltOffline(t *testing.T) {
 }
 
 func TestAutonomousResumeCmdIsANoOpWithNothingLatched(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeAutonomousState(t, root, orchestrator.AutonomousState{Status: "stopped"})
 
 	out := runAutonomousResume(t, root)
@@ -103,7 +101,7 @@ func TestAutonomousResumeCmdIsANoOpWithNothingLatched(t *testing.T) {
 
 func TestAutonomousResumeCmdWithNoStateFile(t *testing.T) {
 	// A workspace that has never run autonomous mode: no file, no error.
-	out := runAutonomousResume(t, t.TempDir())
+	out := runAutonomousResume(t, layouttest.Repo(t))
 	if !strings.Contains(out, "No machine-raised halt") {
 		t.Errorf("output %q, want the nothing-to-do notice", out)
 	}

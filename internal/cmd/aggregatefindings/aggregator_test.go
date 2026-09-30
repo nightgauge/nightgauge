@@ -5,6 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // --- NormalizeSeverity ---
@@ -64,7 +67,7 @@ func TestDedupKey(t *testing.T) {
 // --- LoadHealthReport ---
 
 func TestLoadHealthReport_Missing(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	findings, err := LoadHealthReport(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -75,8 +78,8 @@ func TestLoadHealthReport_Missing(t *testing.T) {
 }
 
 func TestLoadHealthReport_Malformed(t *testing.T) {
-	dir := t.TempDir()
-	ib := filepath.Join(dir, ".nightgauge")
+	dir := layouttest.Repo(t)
+	ib := layouttest.MkCheckoutSubdir(t, dir, layout.CheckoutReports)
 	if err := os.MkdirAll(ib, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -90,8 +93,8 @@ func TestLoadHealthReport_Malformed(t *testing.T) {
 }
 
 func TestLoadHealthReport_Valid(t *testing.T) {
-	dir := t.TempDir()
-	ib := filepath.Join(dir, ".nightgauge")
+	dir := layouttest.Repo(t)
+	ib := layouttest.MkCheckoutSubdir(t, dir, layout.CheckoutReports)
 	if err := os.MkdirAll(ib, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +154,7 @@ func TestLoadHealthReport_Valid(t *testing.T) {
 // --- LoadSecurityAudit ---
 
 func TestLoadSecurityAudit_Missing(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	findings, err := LoadSecurityAudit(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -164,7 +167,7 @@ func TestLoadSecurityAudit_Missing(t *testing.T) {
 // --- LoadTestScaffold ---
 
 func TestLoadTestScaffold_Missing(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	findings, err := LoadTestScaffold(dir)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -178,7 +181,7 @@ func TestLoadTestScaffold_Missing(t *testing.T) {
 
 func writeFixture(t *testing.T, dir, name string, v interface{}) {
 	t.Helper()
-	ib := filepath.Join(dir, ".nightgauge")
+	ib := layouttest.MkCheckoutSubdir(t, dir, layout.CheckoutReports)
 	if err := os.MkdirAll(ib, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +195,7 @@ func writeFixture(t *testing.T, dir, name string, v interface{}) {
 }
 
 func TestAggregate_AllThree(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	writeFixture(t, dir, "health-report.json", map[string]interface{}{
 		"dimensions": map[string]interface{}{
@@ -245,7 +248,7 @@ func TestAggregate_AllThree(t *testing.T) {
 }
 
 func TestAggregate_OnlyHealth(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	writeFixture(t, dir, "health-report.json", map[string]interface{}{
 		"dimensions": map[string]interface{}{
@@ -275,7 +278,7 @@ func TestAggregate_OnlyHealth(t *testing.T) {
 }
 
 func TestAggregate_Deduplication(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	// Same dimension + title in health-check and security-audit → dedup
 	// Security audit has longer recommendation → wins
@@ -333,9 +336,29 @@ func TestAggregate_Deduplication(t *testing.T) {
 }
 
 func TestAggregate_AllMissing(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	_, err := Aggregate(dir)
 	if err == nil {
 		t.Fatal("expected error when all sources missing, got nil")
+	}
+}
+
+// A workdir outside git has no per-checkout directory, so it has no reports:
+// every loader reports them absent and never reads the working tree.
+func TestLoaders_OutsideGitReportAbsent(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, ".nightgauge")
+	if err := os.MkdirAll(legacy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacy, layout.ReportHealth), []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, load := range map[string]func(string) ([]Finding, error){
+		"health": LoadHealthReport, "security": LoadSecurityAudit, "scaffold": LoadTestScaffold,
+	} {
+		if findings, err := load(dir); err != nil || findings != nil {
+			t.Errorf("%s outside git = %v, %v; want absent", name, findings, err)
+		}
 	}
 }

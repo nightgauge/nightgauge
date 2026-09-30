@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "node:fs/promises";
 import type { ExecutionHistoryRunRecord } from "../../src/schemas/executionHistory";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 vi.mock("node:fs/promises");
 
@@ -89,7 +90,9 @@ vi.mock("../../src/utils/SkillEffectivenessWriter", () => ({
     appendRecord: (...args: unknown[]) => mockSkillEffectivenessAppend(...args),
     readAll: vi.fn().mockResolvedValue([]),
     enforceRetention: vi.fn().mockResolvedValue(undefined),
-    getFilePath: vi.fn().mockReturnValue("/workspace/.nightgauge/health/skill-effectiveness.jsonl"),
+    getFilePath: vi
+      .fn()
+      .mockReturnValue("/workspace/.git/nightgauge-worktree/health/skill-effectiveness.jsonl"),
   },
 }));
 
@@ -195,6 +198,8 @@ function mockAnalyzeSuccess() {
 
 describe("PostPipelineAnalyzer — per-(stage, model) calibration (Issue #142)", () => {
   const workspaceRoot = "/test/workspace";
+  // The analysis dir is per checkout (ADR-024 § 7); a fixed layout, no git.
+  fakeCloneLayout(workspaceRoot);
   let logger: ReturnType<typeof createMockLogger>;
 
   beforeEach(() => {

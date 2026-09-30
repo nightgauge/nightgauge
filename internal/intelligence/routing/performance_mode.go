@@ -7,6 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -38,7 +39,8 @@ type performanceModeState struct {
 //
 // Precedence (matches TypeScript getPerformanceMode):
 //  1. NIGHTGAUGE_PERFORMANCE_MODE env var
-//  2. .nightgauge/performance-mode.yaml in workspaceRoot
+//  2. performance-mode.yaml in the checkout's CHECKOUT
+//     (.git/nightgauge-worktree/performance-mode.yaml, ADR-024 § 7)
 //  3. ModeElevated (default — no overrides)
 //
 // Exported (Issue #3215) so the scheduler can capture per-stage mode at
@@ -56,9 +58,13 @@ func resolvePerformanceMode(workspaceRoot string) PerformanceMode {
 		}
 	}
 
+	// Outside a git checkout there is no CHECKOUT and so no mode file: the
+	// default applies, exactly as for a missing file.
 	if workspaceRoot != "" {
-		if m := readPerformanceModeFile(filepath.Join(workspaceRoot, ".nightgauge", "performance-mode.yaml")); m != "" {
-			return m
+		if path, err := layout.CheckoutPath(workspaceRoot, layout.CheckoutPerformanceMode); err == nil {
+			if m := readPerformanceModeFile(path); m != "" {
+				return m
+			}
 		}
 	}
 

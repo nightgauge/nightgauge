@@ -189,7 +189,7 @@
     {
       "path": "discovery/creation-log.json",
       "transport": "filesystem",
-      "method": ".nightgauge/release-watch/creation-log.json",
+      "method": ".git/nightgauge-worktree/release-watch/creation-log.json",
       "upstream": "release-watch GitHub Actions workflow",
       "contract": null,
       "note": "Written by CI, read by DiscoveryActivityService. The shape's only declaration is the TS interface ReleaseWatchRunData; __RECENT_MINUS_*__ placeholders are substituted at load time so the 'this week' rollup is not date-fragile."
@@ -197,7 +197,7 @@
     {
       "path": "discovery/improvement-runs-latest.json",
       "transport": "filesystem",
-      "method": ".nightgauge/improvement-runs/latest.json",
+      "method": ".git/nightgauge-worktree/improvement-runs/latest.json",
       "upstream": "continuous-improvement GitHub Actions workflow",
       "contract": null,
       "note": "Written by CI, read by DiscoveryActivityService. The shape's only declaration is the TS interface ContinuousImprovementRunData."
@@ -205,7 +205,7 @@
     {
       "path": "discovery/backlog.json",
       "transport": "filesystem",
-      "method": ".nightgauge/release-watch/backlog.json",
+      "method": ".git/nightgauge-worktree/release-watch/backlog.json",
       "upstream": "release-watch GitHub Actions workflow",
       "contract": null,
       "note": "Written by CI, read by DiscoveryActivityService.readBacklog(). The shape's only declaration is the TS interface BacklogEntry."

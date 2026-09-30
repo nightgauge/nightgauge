@@ -17,6 +17,16 @@ vi.mock("node:fs/promises", () => ({
 
 import * as fs from "node:fs/promises";
 import { HealthTrendsWriter } from "../../../src/analysis/health/HealthTrendsWriter.js";
+import { cloneLayoutFor, setCloneLayout } from "../../../src/context/cloneLayout.js";
+
+// The trends file is per checkout, in CHECKOUT (ADR-024 § 7). Fixed layouts,
+// so no test here runs git.
+setCloneLayout("/workspace", cloneLayoutFor("/workspace", "/workspace/.git"));
+setCloneLayout("/my/workspace", cloneLayoutFor("/my/workspace", "/my/workspace/.git"));
+setCloneLayout(
+  "/my/wt",
+  cloneLayoutFor("/my/wt", "/my/workspace/.git", "/my/workspace/.git/worktrees/wt")
+);
 
 // ── Test fixtures ────────────────────────────────────────────────────────────
 
@@ -63,7 +73,7 @@ describe("HealthTrendsWriter.append", () => {
     const entry = makeEntry();
     await HealthTrendsWriter.append("/workspace", entry);
 
-    expect(fs.mkdir).toHaveBeenCalledWith(expect.stringContaining(".nightgauge/health"), {
+    expect(fs.mkdir).toHaveBeenCalledWith("/workspace/.git/nightgauge-worktree/health", {
       recursive: true,
     });
     expect(fs.appendFile).toHaveBeenCalledWith(
@@ -254,10 +264,24 @@ describe("HealthTrendsWriter.pruneOldEntries", () => {
 // ── getFilePath() ─────────────────────────────────────────────────────────────
 
 describe("HealthTrendsWriter.getFilePath", () => {
-  it("returns path within .nightgauge/health/", () => {
-    const p = HealthTrendsWriter.getFilePath("/my/workspace");
-    expect(p).toContain(".nightgauge");
-    expect(p).toContain("health");
-    expect(p).toContain("trends.jsonl");
+  it("returns the path in the checkout's CHECKOUT health/ entry", () => {
+    expect(HealthTrendsWriter.getFilePath("/my/workspace")).toBe(
+      "/my/workspace/.git/nightgauge-worktree/health/trends.jsonl"
+    );
+  });
+
+  it("gives a linked worktree its own file", () => {
+    expect(HealthTrendsWriter.getFilePath("/my/wt")).toBe(
+      "/my/workspace/.git/worktrees/wt/nightgauge-worktree/health/trends.jsonl"
+    );
+  });
+
+  it("refuses a relative or empty root instead of resolving against the cwd", async () => {
+    vi.clearAllMocks();
+    expect(() => HealthTrendsWriter.getFilePath("")).toThrow(/not absolute/);
+    expect(() => HealthTrendsWriter.getFilePath("rel/ws")).toThrow(/not absolute/);
+    await expect(HealthTrendsWriter.read("")).resolves.toEqual([]);
+    await expect(HealthTrendsWriter.pruneOldEntries("")).resolves.toBe(0);
+    expect(fs.readFile).not.toHaveBeenCalled();
   });
 });

@@ -269,39 +269,4 @@ describe("Complexity Model Feedback Loop", () => {
     expect(updated.size_calibration.L.sample_count).toBe(3);
     expect(updated.size_calibration.XL).toEqual(model.size_calibration.XL);
   });
-
-  it("should work with real complexity-model.yaml if present", async () => {
-    // This test uses the actual complexity model from the repo if it exists
-    const realModelPath = path.join(process.cwd(), ".nightgauge/complexity-model.yaml");
-
-    try {
-      await fs.access(realModelPath);
-    } catch {
-      // Skip if real model doesn't exist
-      return;
-    }
-
-    const modelService = new ComplexityModelService(realModelPath);
-    const engine = new SuggestionEngine(modelService);
-
-    const model = await modelService.load();
-
-    // Should be valid and have observations (patterns may be empty for young models)
-    expect(model.total_observations).toBeGreaterThan(0);
-    expect(model.patterns).toBeDefined();
-    expect(Array.isArray(model.patterns.high_complexity)).toBe(true);
-    expect(Array.isArray(model.patterns.medium_complexity)).toBe(true);
-    expect(Array.isArray(model.patterns.low_complexity)).toBe(true);
-
-    // Should be able to generate suggestions
-    const suggestion = await engine.generateSuggestion(
-      "Test feature for VSCode extension",
-      "Add a new feature to the VSCode extension pipeline",
-      "feature",
-      "high"
-    );
-
-    expect(suggestion.size).toBeDefined();
-    expect(suggestion.confidence).toBeGreaterThan(0);
-  });
 });

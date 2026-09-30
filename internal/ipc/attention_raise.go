@@ -166,7 +166,7 @@ func (s *Server) handleAttentionRaise(_ context.Context, raw json.RawMessage) (i
 	// A (repo, issue) the daemon knows nothing about is not a condition it can
 	// have observed. Without this, the verb is an unbounded card-injection
 	// primitive: dedup is per (producer, repo, issue) and issue numbers are
-	// unbounded, so a caller could fill .nightgauge/attention/ with plausible
+	// unbounded, so a caller could fill the attention store with plausible
 	// cards naming repos this workspace has never heard of.
 	if !s.isConfiguredRepo(p.Repo) {
 		return nil, fmt.Errorf("attention.raise: repo is not configured in this workspace")

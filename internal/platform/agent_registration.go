@@ -13,9 +13,9 @@ import (
 
 // Action Center agent registration — the daemon self-registers as a platform
 // agent so its DecisionRequest mirror (attention_sync.go) carries a real
-// `agent_id` (nightgauge/nightgauge#341). The Go binary's local
-// `.nightgauge/attention/` store is the authoritative writer; the platform's
-// `decision_requests` table has an FK `decision_requests_agent_id_agents_id_fk`
+// `agent_id` (nightgauge/nightgauge#341). The Go binary's local attention
+// store (in the checkout's CHECKOUT) is the authoritative writer; the
+// platform's `decision_requests` table has an FK `decision_requests_agent_id_agents_id_fk`
 // → `agents.id`, so mirroring a request whose `agent_id` is an unregistered id
 // (the daemon's machine id) throws and 500s the whole sweep. Registering here
 // creates the `agents` row the FK requires, and returns the platform-assigned

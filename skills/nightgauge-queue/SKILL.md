@@ -363,7 +363,7 @@ UTILITIES (not part of main pipeline)
        |
   Queue management tool — feeds issues into the pipeline
   Reads:  GitHub API (issue validation, label queries)
-  Writes: pipeline/queue-state.json (via Go IPC; nightgauge layout path pipeline)
+  Writes: checkout/queue-state.json (via Go IPC; nightgauge layout path checkout)
   Calls:  /nightgauge:assess-epic (when epic detected)
 ```
 

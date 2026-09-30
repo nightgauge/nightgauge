@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/state"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
@@ -88,13 +88,13 @@ func TestRecoverOrchestratorCrash_LiveRunIsLeftAlone(t *testing.T) {
 
 	out := captureLog(t, func() { s.recoverOrchestratorCrash() })
 
-	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, root), currentRunSidecarFile)); err != nil {
+	if _, err := os.Stat(layouttest.CheckoutPath(t, root, layout.CheckoutCurrentRun)); err != nil {
 		t.Errorf("the live run's sidecar was removed (%v) — that file is the extension's index into the run", err)
 	}
 	if hasDailyJSONL(t, root) {
 		t.Error("a terminal-failure RunRecord was synthesized for a run that is still executing")
 	}
-	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, root), queueStateFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(layouttest.CheckoutPath(t, root, layout.CheckoutQueueState)); !os.IsNotExist(err) {
 		t.Errorf("queue-state.json was rewritten during construction (stat err=%v) — the queue must not be paused on behalf of a live run", err)
 	}
 	if got := s.GetState(); len(got.Items) != 1 || got.Items[0].Status != "pending" {
@@ -136,7 +136,7 @@ func TestRecoverOrchestratorCrash_DeadPidStillSynthesizes(t *testing.T) {
 
 	s.recoverOrchestratorCrash()
 
-	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, root), currentRunSidecarFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(layouttest.CheckoutPath(t, root, layout.CheckoutCurrentRun)); !os.IsNotExist(err) {
 		t.Errorf("a crashed run's sidecar must be reconciled away, stat err=%v", err)
 	}
 	records := readDailyJSONLRecords(t, root)

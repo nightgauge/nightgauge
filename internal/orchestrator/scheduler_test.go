@@ -27,6 +27,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
@@ -655,7 +656,7 @@ func TestQueuePersistence(t *testing.T) {
 	)
 
 	// Verify file exists
-	queueFile := filepath.Join(layouttest.PipelineDir(t, tmpDir), "queue-state.json")
+	queueFile := layouttest.CheckoutPath(t, tmpDir, layout.CheckoutQueueState)
 	data, err := os.ReadFile(queueFile)
 	if err != nil {
 		t.Fatalf("queue-state.json not created: %v", err)
@@ -955,7 +956,7 @@ func TestDequeueIndependent_ProducesProcessingStatus(t *testing.T) {
 	}
 
 	// Persisted queue-state.json must also carry the in-flight item.
-	queueFile := filepath.Join(layouttest.PipelineDir(t, tmpDir), "queue-state.json")
+	queueFile := layouttest.CheckoutPath(t, tmpDir, layout.CheckoutQueueState)
 	data, err := os.ReadFile(queueFile)
 	if err != nil {
 		t.Fatalf("queue-state.json not found: %v", err)
@@ -2475,11 +2476,8 @@ func makeIssueContext(t *testing.T, dir string, issueNumber int, devModel string
 
 func makePerfModeFile(t *testing.T, dir, mode string) string {
 	t.Helper()
-	incDir := filepath.Join(dir, ".nightgauge")
-	if err := os.MkdirAll(incDir, 0755); err != nil {
-		t.Fatal(err)
-	}
-	p := filepath.Join(incDir, "performance-mode.yaml")
+	// The operator's pin is per checkout (ADR-024 § 7).
+	p := layouttest.CheckoutPath(t, dir, layout.CheckoutPerformanceMode)
 	if err := os.WriteFile(p, []byte("mode: "+mode+"\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -2497,7 +2495,7 @@ func TestScheduler_ShouldReRoute_PerfModeNewer(t *testing.T) {
 
 	// Verify mtime ordering
 	ctxInfo, _ := os.Stat(contextPath)
-	perfInfo, _ := os.Stat(filepath.Join(tmpDir, ".nightgauge", "performance-mode.yaml"))
+	perfInfo, _ := os.Stat(layouttest.CheckoutPath(t, tmpDir, layout.CheckoutPerformanceMode))
 	if !perfInfo.ModTime().After(ctxInfo.ModTime()) {
 		t.Skip("filesystem mtime resolution too coarse for this test — skipping")
 	}
@@ -2517,7 +2515,7 @@ func TestScheduler_ShouldReRoute_ContextNewer(t *testing.T) {
 
 	// Verify mtime ordering
 	ctxInfo, _ := os.Stat(filepath.Join(layouttest.PipelineDir(t, tmpDir), "issue-3140.json"))
-	perfInfo, _ := os.Stat(filepath.Join(tmpDir, ".nightgauge", "performance-mode.yaml"))
+	perfInfo, _ := os.Stat(layouttest.CheckoutPath(t, tmpDir, layout.CheckoutPerformanceMode))
 	if !ctxInfo.ModTime().After(perfInfo.ModTime()) {
 		t.Skip("filesystem mtime resolution too coarse for this test — skipping")
 	}

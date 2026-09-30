@@ -9,6 +9,8 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // TestRaisePostMergeFailureCard_IsAcceptedByTheStore is the guard that the card
@@ -21,7 +23,7 @@ import (
 // request would be rejected, logged to stderr, and produce exactly the silence
 // this issue is about. Nothing else would ever notice.
 func TestRaisePostMergeFailureCard_IsAcceptedByTheStore(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	raisePostMergeFailureCard(root, "nightgauge", "nightgauge", 206, hooks.PostMergeResult{
 		Reason:     "auto_close_error",
@@ -64,7 +66,7 @@ func TestRaisePostMergeFailureCard_IsAcceptedByTheStore(t *testing.T) {
 // TestRaisePostMergeFailureCard_IsIdempotentPerIssue stops a re-run of the hook
 // from stacking duplicate cards on the same issue.
 func TestRaisePostMergeFailureCard_IsIdempotentPerIssue(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	res := hooks.PostMergeResult{Reason: "auto_close_error", EpicReason: "check_failed", Failed: true}
 
 	raisePostMergeFailureCard(root, "nightgauge", "nightgauge", 206, res)
@@ -100,7 +102,7 @@ func TestPostMergeReportSuffixes(t *testing.T) {
 // red main observed here must land as a card in the store rooted at --workdir,
 // and a later green merge must retract it.
 func TestReportMainChecks_RedMergeReachesTheActionCenter(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	red := hooks.PostMergeResult{
 		BaseRef:         "main",
 		MergedCommitSha: "feedface0000",
@@ -159,19 +161,19 @@ func TestReportMainChecks_RedMergeReachesTheActionCenter(t *testing.T) {
 // sits until it expires. Every other producer supplies a button, and this
 // asserts that this one does too.
 func TestPostMergeCardIsActionable(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	raisePostMergeFailureCard(dir, "octocat", "acme", 4242, hooks.PostMergeResult{
 		Reason: "the board sync failed",
 	})
 
-	entries, err := os.ReadDir(filepath.Join(dir, ".nightgauge", "attention"))
+	entries, err := os.ReadDir(layouttest.CheckoutPath(t, dir, layout.CheckoutAttention))
 	if err != nil {
 		t.Fatalf("the producer raised no card at all: %v", err)
 	}
 	var raw []byte
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "dr_") && strings.HasSuffix(e.Name(), ".json") {
-			raw, err = os.ReadFile(filepath.Join(dir, ".nightgauge", "attention", e.Name()))
+			raw, err = os.ReadFile(filepath.Join(layouttest.CheckoutPath(t, dir, layout.CheckoutAttention), e.Name()))
 			if err != nil {
 				t.Fatalf("read card: %v", err)
 			}

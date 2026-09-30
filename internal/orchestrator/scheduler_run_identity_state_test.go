@@ -10,6 +10,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
@@ -79,7 +80,7 @@ func TestCurrentRunSidecar_RunIdKeyIsAlwaysPresent(t *testing.T) {
 	if err := writeCurrentRunSidecar(root, CurrentRunSidecar{IssueNumber: 1, Repo: "o/r"}); err != nil {
 		t.Fatalf("writeCurrentRunSidecar: %v", err)
 	}
-	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, root), currentRunSidecarFile))
+	data, err := os.ReadFile(layouttest.CheckoutPath(t, root, layout.CheckoutCurrentRun))
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}

@@ -15,7 +15,7 @@ type carefulGateInput struct {
 }
 
 // EvaluateCarefulGate blocks production-destructive Bash commands while careful
-// mode is active (the .nightgauge/careful.lock sentinel is present and
+// mode is active (the checkout's careful.lock sentinel is present and
 // unexpired). When careful mode is off it is a no-op (Allow). It fails open on
 // any parse error so it can never wedge a session.
 func EvaluateCarefulGate(inputJSON []byte) GateDecision {

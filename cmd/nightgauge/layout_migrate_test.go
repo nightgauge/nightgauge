@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +11,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/nightgauge/nightgauge/internal/doctor"
+	"github.com/nightgauge/nightgauge/internal/flock"
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/layout"
 )
@@ -74,7 +78,7 @@ func TestAutoMigrateLayoutAtCLIStart(t *testing.T) {
 	if _, serr := os.Lstat(legacyPlan); !os.IsNotExist(serr) {
 		t.Errorf("legacy plan still present (%v)", serr)
 	}
-	if !strings.Contains(stderr, "layout v1") {
+	if !strings.Contains(stderr, fmt.Sprintf("layout v%d", doctor.LayoutVersion)) {
 		t.Errorf("stderr %q does not report the migration", stderr)
 	}
 }
@@ -101,6 +105,90 @@ func TestAutoMigrateLayoutNeverFailsTheCommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr, "nightgauge doctor --fix") {
 		t.Errorf("stderr %q does not name `nightgauge doctor --fix`", stderr)
+	}
+}
+
+// TestAutoMigrateLayoutBlockedNeverFailsTheCommand pins the ADR-024 § 15
+// amendment of 2026-09-29: when the migration is blocked (here another process
+// holds the migration lock; a run in flight, a busy worktree and a live daemon
+// take the same path) the automatic run leaves the data in place and the
+// user's command still runs and exits 0, while `nightgauge doctor --fix`
+// keeps exit 4 for the same state. The notice names `nightgauge doctor --fix`.
+func TestAutoMigrateLayoutBlockedNeverFailsTheCommand(t *testing.T) {
+	root, legacyPlan, newPlan := layoutMigrateRepo(t)
+	clone, err := layout.CloneDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock, err := os.OpenFile(filepath.Join(clone, ".migrate.lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := flock.Exclusive(lock, 0); err != nil {
+		t.Skipf("advisory locks unavailable: %v", err)
+	}
+	defer func() { _ = flock.Unlock(lock) }()
+
+	err, ran, stderr := runProbe(t, root)
+	if err != nil || !ran {
+		t.Fatalf("a blocked migration changed the command's outcome: err %v, ran %v", err, ran)
+	}
+	if got, _ := os.ReadFile(legacyPlan); string(got) != "old plan\n" {
+		t.Errorf("legacy plan = %q, want it untouched", got)
+	}
+	if _, serr := os.Lstat(newPlan); !os.IsNotExist(serr) {
+		t.Errorf("the plan moved while the migration was blocked (%v)", serr)
+	}
+	if !strings.Contains(stderr, "nightgauge doctor --fix") {
+		t.Errorf("stderr %q does not name `nightgauge doctor --fix`", stderr)
+	}
+	// The same state through doctor --fix is exit 4 (blocked).
+	rep := fixerFor(t, root, doctor.LayoutCheckID).Run(context.Background(), doctor.FixOptions{Yes: true})
+	if rep.ExitCode != 4 {
+		t.Errorf("doctor --fix exit = %d with the migration lock held, want 4; results %+v", rep.ExitCode, rep.Results)
+	}
+}
+
+// TestAutoMigrateLayoutBusyWorktreeNeverFailsTheCommand: a pipeline worktree
+// at an old base with a run in flight on it (a live in-flight sidecar an older
+// build wrote) is skipped by the automatic run, which moves nothing the run
+// holds; the user's command exits 0, while `doctor --fix` exits 4 for the same
+// state (ADR-024 § 15 amendment of 2026-09-29).
+func TestAutoMigrateLayoutBusyWorktreeNeverFailsTheCommand(t *testing.T) {
+	root, legacyPlan, _ := layoutMigrateRepo(t)
+	if err := os.WriteFile(filepath.Join(root, ".gitignore"), []byte("/.nightgauge/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, root, "add", "-A")
+	gittest.Run(t, root, "commit", "-q", "-m", "ignore")
+	busy := filepath.Join(root, ".nightgauge", "worktrees", "repo-issue-7")
+	gittest.Run(t, root, "worktree", "add", "-q", "-b", "issue-7", busy)
+	sidecar := fmt.Sprintf(`{"issue_number":7,"run_id":"run-7","pid":%d}`, os.Getpid())
+	legacyPipeline := filepath.Join(root, ".nightgauge", "pipeline")
+	if err := os.MkdirAll(legacyPipeline, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyPipeline, "current-run.json"), []byte(sidecar), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	err, ran, stderr := runProbe(t, root)
+	if err != nil || !ran {
+		t.Fatalf("a busy worktree changed the command's outcome: err %v, ran %v", err, ran)
+	}
+	if _, serr := os.Stat(filepath.Join(busy, ".gitignore")); serr != nil {
+		t.Errorf("the busy worktree moved: %v", serr)
+	}
+	if got, _ := os.ReadFile(legacyPlan); string(got) != "old plan\n" {
+		t.Errorf("legacy plan = %q, want it held while the run is in flight", got)
+	}
+	if !strings.Contains(stderr, "nightgauge doctor --fix") {
+		t.Errorf("stderr %q does not name `nightgauge doctor --fix`", stderr)
+	}
+	rep := fixerFor(t, root, doctor.LayoutCheckID).Run(context.Background(), doctor.FixOptions{Yes: true})
+	if rep.ExitCode != 4 {
+		t.Errorf("doctor --fix exit = %d with a run in flight, want 4; results %+v", rep.ExitCode, rep.Results)
 	}
 }
 

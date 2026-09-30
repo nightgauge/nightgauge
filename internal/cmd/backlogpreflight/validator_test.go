@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -289,10 +291,9 @@ func TestCheckDependencyCycles_OutOfSetBlocker(t *testing.T) {
 // --- CheckGreenfield ---
 
 func TestCheckGreenfield_CompleteProject(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	// Create all expected files
-	os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0755)
-	os.WriteFile(filepath.Join(dir, ".nightgauge", "complexity-model.yaml"), []byte("v: 1"), 0644)
+	os.WriteFile(layouttest.CheckoutPath(t, dir, layout.CheckoutComplexityModel), []byte("v: 1"), 0644)
 	os.MkdirAll(filepath.Join(dir, "docs"), 0755)
 	os.WriteFile(filepath.Join(dir, "docs", "CODE_STANDARDS.md"), []byte("# standards"), 0644)
 	os.WriteFile(filepath.Join(dir, "docs", "SECURITY.md"), []byte("# security"), 0644)
@@ -305,9 +306,8 @@ func TestCheckGreenfield_CompleteProject(t *testing.T) {
 }
 
 func TestCheckGreenfield_MissingCodeStandards(t *testing.T) {
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0755)
-	os.WriteFile(filepath.Join(dir, ".nightgauge", "complexity-model.yaml"), []byte("v: 1"), 0644)
+	dir := layouttest.Repo(t)
+	os.WriteFile(layouttest.CheckoutPath(t, dir, layout.CheckoutComplexityModel), []byte("v: 1"), 0644)
 	os.MkdirAll(filepath.Join(dir, "docs"), 0755)
 	os.WriteFile(filepath.Join(dir, "docs", "SECURITY.md"), []byte("# security"), 0644)
 	// No CODE_STANDARDS.md
@@ -323,7 +323,7 @@ func TestCheckGreenfield_MissingCodeStandards(t *testing.T) {
 }
 
 func TestCheckGreenfield_EmptyProject(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	v := newValidator()
 	findings := v.CheckGreenfield(dir)
 	// Expect findings for: complexity-model.yaml, docs/, CODE_STANDARDS.md, SECURITY*.md

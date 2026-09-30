@@ -290,7 +290,7 @@ When the gate decides to defer:
   an item immediately.
 
   The trigger has to live in the daemon: the queue is local state
-  (`queue-state.json` in the clone's pipeline state directory, never
+  (`queue-state.json` in the checkout's git directory, never
   committed), so no CI job can reach it, and anything a runner wrote would die with the runner. A scheduled
   workflow was documented for this once and never existed (#881).
 

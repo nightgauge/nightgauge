@@ -2,14 +2,17 @@ package aggregatefindings
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // --- internal JSON shapes ---
 
-// healthReport is the top-level shape of .nightgauge/health-report.json.
+// healthReport is the top-level shape of the health-report.json report.
 // Fields beyond what is extracted are ignored; omitempty guards against missing
 // optional keys in older report versions.
 type healthReport struct {
@@ -27,7 +30,7 @@ type healthFinding struct {
 	Recommendation string `json:"recommendation"`
 }
 
-// securityReport is the top-level shape of .nightgauge/security-audit.json.
+// securityReport is the top-level shape of the security-audit.json report.
 type securityReport struct {
 	Dimensions map[string]securityDimension `json:"dimensions"`
 }
@@ -44,7 +47,7 @@ type securityFinding struct {
 }
 
 // testScaffoldReport is the top-level shape of
-// .nightgauge/test-scaffold-report.json.
+// the test-scaffold-report.json report.
 type testScaffoldReport struct {
 	Gaps            []testGap            `json:"gaps"`
 	Recommendations []testRecommendation `json:"recommendations"`
@@ -66,17 +69,36 @@ type testRecommendation struct {
 
 // --- loaders ---
 
-// LoadHealthReport reads .nightgauge/health-report.json from workdir and
+// openReport opens a generated report of the checkout workdir is in,
+// CHECKOUT/reports/<name> (ADR-024 § 7). It returns (nil, nil) when the report
+// does not exist, including for a workdir outside git, which has no
+// per-checkout directory and so no reports.
+func openReport(workdir, name string) (*os.File, error) {
+	root, err := filepath.Abs(workdir)
+	if err != nil {
+		return nil, err
+	}
+	path, err := layout.ReportPath(root, name)
+	if errors.Is(err, layout.ErrNotGitRepository) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return f, err
+}
+
+// LoadHealthReport reads the checkout's health-report.json and
 // converts each dimension's findings into normalized Finding values. The
 // dimension's status string drives severity (see NormalizeSeverity). Returns
 // (nil, nil) when the file does not exist.
 func LoadHealthReport(workdir string) ([]Finding, error) {
-	path := filepath.Join(workdir, ".nightgauge", "health-report.json")
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+	f, err := openReport(workdir, layout.ReportHealth)
+	if f == nil || err != nil {
 		return nil, err
 	}
 	defer f.Close()
@@ -104,16 +126,12 @@ func LoadHealthReport(workdir string) ([]Finding, error) {
 	return findings, nil
 }
 
-// LoadSecurityAudit reads .nightgauge/security-audit.json from workdir.
+// LoadSecurityAudit reads the checkout's security-audit.json.
 // Security audit findings already carry normalized severity — passed through
 // unchanged. Returns (nil, nil) when the file does not exist.
 func LoadSecurityAudit(workdir string) ([]Finding, error) {
-	path := filepath.Join(workdir, ".nightgauge", "security-audit.json")
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+	f, err := openReport(workdir, layout.ReportSecurityAudit)
+	if f == nil || err != nil {
 		return nil, err
 	}
 	defer f.Close()
@@ -144,17 +162,13 @@ func LoadSecurityAudit(workdir string) ([]Finding, error) {
 	return findings, nil
 }
 
-// LoadTestScaffold reads .nightgauge/test-scaffold-report.json from
-// workdir. Test scaffold priority levels map 1:1 to severity. Both the gaps
-// and recommendations arrays are consumed. Returns (nil, nil) when the file
-// does not exist.
+// LoadTestScaffold reads the checkout's test-scaffold-report.json. Test
+// scaffold priority levels map 1:1 to severity. Both the gaps and
+// recommendations arrays are consumed. Returns (nil, nil) when the file does
+// not exist.
 func LoadTestScaffold(workdir string) ([]Finding, error) {
-	path := filepath.Join(workdir, ".nightgauge", "test-scaffold-report.json")
-	f, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+	f, err := openReport(workdir, layout.ReportTestScaffold)
+	if f == nil || err != nil {
 		return nil, err
 	}
 	defer f.Close()

@@ -1,12 +1,15 @@
 /**
- * Clone layout — the one place the extension addresses per-clone data.
+ * Clone layout — the one place the extension addresses per-clone and
+ * per-checkout data.
  *
  * Per-clone data lives in the clone's git directory, not the working tree
  * (ADR-024 § 7): `CLONE = <git-common-dir>/nightgauge`, with the four classes
  * `pipeline`, `plans`, `retros` and `logs` under it. For a normal clone that is
  * `<root>/.git/nightgauge/<class>`; from a linked worktree it is the main
  * clone's directory, shared by every checkout. Git never tracks its own
- * directory, so nothing here can be committed.
+ * directory, so nothing here can be committed. Each checkout (the main one and
+ * every linked worktree) also has its own `CHECKOUT = <git-dir>/nightgauge-worktree`
+ * for its unkeyed singletons and runtime state ({@link checkoutPath}).
  *
  * The helpers stay synchronous for their many callers, over a per-root cache
  * in `@nightgauge/sdk` (`resolveCloneLayout`). Activation fills the cache for
@@ -29,16 +32,25 @@ import { promises as fsp, type Dirent } from "fs";
 import * as path from "path";
 import { promisify } from "util";
 import {
+  CHECKOUT_ENTRIES,
   clearCloneLayoutCache,
   cloneLayoutFor,
   cloneLayoutFromJson,
   primeCloneLayout,
   resolveCloneLayout,
   setCloneLayout,
+  type CheckoutEntry,
   type CloneLayout,
 } from "@nightgauge/sdk/dist/context/cloneLayout";
 
-export { clearCloneLayoutCache, cloneLayoutFor, setCloneLayout, type CloneLayout };
+export {
+  CHECKOUT_ENTRIES,
+  clearCloneLayoutCache,
+  cloneLayoutFor,
+  setCloneLayout,
+  type CheckoutEntry,
+  type CloneLayout,
+};
 
 /**
  * Display spellings of the four classes for a normal clone, POSIX-separated,
@@ -50,6 +62,13 @@ export const PIPELINE_STATE_DISPLAY = ".git/nightgauge/pipeline";
 export const PLANS_DISPLAY = ".git/nightgauge/plans";
 export const RETROS_DISPLAY = ".git/nightgauge/retros";
 export const CLONE_LOGS_DISPLAY = ".git/nightgauge/logs";
+
+/**
+ * Display spelling of the per-checkout root for the main checkout, matching Go
+ * `layout.CheckoutDisplay()`. A linked worktree's is
+ * `.git/worktrees/<name>/nightgauge-worktree`. For messages only.
+ */
+export const CHECKOUT_DISPLAY = ".git/nightgauge-worktree";
 
 /**
  * True when `root` is absolute under `pathImpl` (default: the host's `path`).
@@ -131,6 +150,32 @@ export function cloneLogsDir(workspaceRoot: string): string {
 }
 
 /**
+ * `<git-dir>/nightgauge-worktree` — this checkout's own run control and
+ * runtime state (ADR-024 § 7). For a linked worktree it is inside that
+ * worktree's git dir, not the main clone's.
+ */
+export function checkoutDir(workspaceRoot: string): string {
+  return layoutOf(workspaceRoot, "checkoutDir").checkout;
+}
+
+/**
+ * The path of a per-checkout entry for `workspaceRoot`:
+ * `<git-dir>/nightgauge-worktree/<CHECKOUT_ENTRIES[entry]>`, optionally with
+ * further path segments under a directory entry (`attention`, `health`, ...).
+ */
+export function checkoutPath(
+  workspaceRoot: string,
+  entry: CheckoutEntry,
+  ...rest: string[]
+): string {
+  return path.join(
+    layoutOf(workspaceRoot, "checkoutPath").checkout,
+    CHECKOUT_ENTRIES[entry],
+    ...rest
+  );
+}
+
+/**
  * Absolute paths of the regular files directly in `dir` whose names satisfy
  * `match`; empty when `dir` does not exist. Use this, not
  * `vscode.workspace.findFiles`, to list a class directory: `findFiles` applies
@@ -185,7 +230,7 @@ async function layoutFromBinary(root: string): Promise<CloneLayout | undefined> 
       windowsHide: true,
     });
     const layout = cloneLayoutFromJson(stdout);
-    const classes = [layout.pipeline, layout.plans, layout.retros, layout.logs];
+    const classes = [layout.pipeline, layout.plans, layout.retros, layout.logs, layout.checkout];
     return classes.every((p) => path.isAbsolute(p)) ? { ...layout, root } : undefined;
   } catch {
     return undefined;

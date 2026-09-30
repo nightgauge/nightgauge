@@ -54,7 +54,7 @@ type BaselinePromoteEntry struct {
 // repair twice over.
 //
 // The trigger must be local. The queue lives in
-// `.git/nightgauge/pipeline/queue-state.json`, which is local-first and
+// the checkout's `.git/nightgauge-worktree/queue-state.json`, which is local-first and
 // gitignored, so a CI cron has no queue to promote and anything it wrote
 // would die with the runner — that is what #881 established when it deleted
 // the claim that such a cron existed.

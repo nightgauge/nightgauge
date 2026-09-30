@@ -1,10 +1,12 @@
 /**
  * ComplexityModelService - YAML file persistence with Zod validation
  *
- * Handles reading and writing the complexity model file.
+ * Handles reading and writing the complexity model file. The model lives in
+ * the checkout's own per-checkout directory (ADR-024 § 7):
+ * `checkoutPath("complexityModel", root)`, which is
+ * `.git/nightgauge-worktree/complexity-model.yaml` for a main checkout.
  *
  * @see docs/ARCHITECTURE.md for design rationale
- * @see .nightgauge/complexity-model.yaml for file format
  */
 
 import * as fs from "node:fs/promises";
@@ -40,7 +42,7 @@ export type SerializedComplexityModelWriter = (content: string) => Promise<void>
  *
  * @example
  * ```typescript
- * const service = new ComplexityModelService('.nightgauge/complexity-model.yaml');
+ * const service = new ComplexityModelService(checkoutPath("complexityModel", workspaceRoot));
  *
  * // Load model
  * const model = await service.load();
@@ -57,10 +59,7 @@ export class ComplexityModelService {
   private modelPath: string;
   private serializedWriter?: SerializedComplexityModelWriter;
 
-  constructor(
-    modelPath: string = ".nightgauge/complexity-model.yaml",
-    serializedWriter?: SerializedComplexityModelWriter
-  ) {
+  constructor(modelPath: string, serializedWriter?: SerializedComplexityModelWriter) {
     this.modelPath = modelPath;
     this.serializedWriter = serializedWriter;
   }

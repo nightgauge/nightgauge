@@ -57,7 +57,8 @@ extension:
 
 ## Go-Path Performance Mode
 
-The Go scheduler reads `.nightgauge/performance-mode.yaml` on every routing
+The Go scheduler reads the checkout's `performance-mode.yaml`
+(`nightgauge layout path checkout performance-mode.yaml`) on every routing
 call via `resolvePerformanceMode()` in `internal/intelligence/routing/performance_mode.go`.
 This ensures mode changes take effect on the next pickup without restarting the
 binary.
@@ -65,7 +66,8 @@ binary.
 ### Precedence
 
 1. `NIGHTGAUGE_PERFORMANCE_MODE` environment variable (highest)
-2. `.nightgauge/performance-mode.yaml` in the workspace root
+2. `performance-mode.yaml` in the checkout's git directory
+   (`.git/nightgauge-worktree/` for the main checkout)
 3. `elevated` default (no model overrides applied)
 
 ### Mode Effects
@@ -81,7 +83,7 @@ with `(performance-mode: <mode>)` so it is visible in cost estimates and logs.
 
 ### File Ownership
 
-The VSCode extension writes `.nightgauge/performance-mode.yaml` via the
+The VSCode extension writes the checkout's `performance-mode.yaml` via the
 performance mode UI. The Go binary only reads it — never writes it. The TypeScript
 `skillRunner.ts` path reads the same file via `getPerformanceMode()` in
 `monitoringResolver.ts`, so both execution paths now honor the same user

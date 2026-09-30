@@ -2,7 +2,7 @@
 /**
  * Audit Complexity Model — Verify prediction accuracy and self-adjustment
  *
- * Reads complexity-model.yaml, independently calculates prediction accuracy
+ * Reads this checkout's complexity-model.yaml, independently calculates prediction accuracy
  * from JSONL history, compares against self-reported accuracy, and generates
  * a detailed audit report with findings and recommendations.
  *
@@ -18,7 +18,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as yaml from "js-yaml";
 import type { ComplexityModel } from "../packages/nightgauge-sdk/src/context/schemas/complexity-model.js";
-import { cloneClassDir } from "../packages/nightgauge-sdk/src/context/cloneLayout.js";
+import { checkoutPath, cloneClassDir } from "../packages/nightgauge-sdk/src/context/cloneLayout.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -67,7 +67,8 @@ interface SizeBucket {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_SINCE = "2026-02-15T00:00:00Z";
-const MODEL_PATH = ".nightgauge/complexity-model.yaml";
+// This checkout's complexity model, <git-dir>/nightgauge-worktree (ADR-024 § 7).
+const MODEL_PATH = checkoutPath("complexityModel");
 const SIZE_ORDER = ["XS", "S", "M", "L", "XL"];
 
 // ---------------------------------------------------------------------------

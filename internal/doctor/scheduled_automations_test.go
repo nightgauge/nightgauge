@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,11 +138,8 @@ func TestScheduledAutomations_MissingProbeIsUnverifiable(t *testing.T) {
 // --- the autonomous-state probe, against the real file shape ---
 
 func TestAutonomousStateEvidence_ReadsLastScanAt(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, ".nightgauge", "autonomous")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	root := layouttest.Repo(t)
+	dir := layouttest.MkCheckoutSubdir(t, root, "autonomous")
 	body, _ := json.Marshal(map[string]string{
 		"status":     "stopped",
 		"lastScanAt": "2026-08-05T11:32:33Z",
@@ -174,7 +173,7 @@ func TestAutonomousStateEvidence_ReadsLastScanAt(t *testing.T) {
 }
 
 func TestAutonomousStateEvidence_MissingFileIsNeverRan(t *testing.T) {
-	got := autonomousStateEvidence(t.TempDir())(context.Background(), cadence.Automation{})
+	got := autonomousStateEvidence(layouttest.Repo(t))(context.Background(), cadence.Automation{})
 	if got.Err != nil {
 		t.Errorf("a missing state file is not an error: %v", got.Err)
 	}
@@ -184,9 +183,8 @@ func TestAutonomousStateEvidence_MissingFileIsNeverRan(t *testing.T) {
 }
 
 func TestAutonomousStateEvidence_UnparseableTimestampIsAnError(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, ".nightgauge", "autonomous")
-	_ = os.MkdirAll(dir, 0o755)
+	root := layouttest.Repo(t)
+	dir := layouttest.MkCheckoutSubdir(t, root, "autonomous")
 	_ = os.WriteFile(filepath.Join(dir, "state.json"),
 		[]byte(`{"lastScanAt":"not-a-time"}`), 0o644)
 
@@ -221,14 +219,11 @@ func TestScheduledAutomations_ConsumerRepoHasNoBuiltins(t *testing.T) {
 }
 
 func TestCadenceScope_AutonomousFromStateFile(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if got := cadenceScope(nil, root); got.Autonomous || got.Repo != "" {
 		t.Fatalf("empty workspace scope = %+v", got)
 	}
-	dir := filepath.Join(root, ".nightgauge", "autonomous")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.MkCheckoutSubdir(t, root, "autonomous")
 	if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +319,7 @@ func TestAutomationFindings_ThreeDistinctCodes(t *testing.T) {
 // TestAutomationFindings_PauseTurnsStoppedIntoInfo: a recorded pause makes the
 // stopped finding info (still reported), and removing it restores the warning.
 func TestAutomationFindings_PauseTurnsStoppedIntoInfo(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	probes := byIDProbes(map[string]cadence.Evidence{
 		"autonomous-loop": {EverRan: true, Newest: testNow.AddDate(0, 0, -17)},
 	})
@@ -349,7 +344,7 @@ func TestAutomationFindings_PauseTurnsStoppedIntoInfo(t *testing.T) {
 	if err := PauseAutomation(root, "autonomous-loop", "maintenance", testNow); err != nil {
 		t.Fatalf("pause: %v", err)
 	}
-	if info, err := os.Stat(AutomationPausePath(root)); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(layouttest.CheckoutPath(t, root, layout.CheckoutAutomationPauses)); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("pause record missing or not 0600: %v", err)
 	}
 	paused := run()

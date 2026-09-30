@@ -6,6 +6,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -843,9 +844,6 @@ func (as *AutonomousScheduler) quotaCooldownActiveLocked() (bool, time.Time) {
 	return true, deadline
 }
 
-// autonomousStateFile is the relative path under workspace root for state persistence.
-const autonomousStateFile = ".nightgauge/autonomous/state.json"
-
 // graphIncompleteThreshold is the fraction of dropped board items above which
 // the scheduler logs a WARNING that its scheduling decisions may be incorrect.
 const graphIncompleteThreshold = 0.10
@@ -1415,7 +1413,7 @@ func NewAutonomousScheduler(
 	}
 
 	// Wire the Action Center DecisionRequest store (ADR 015). The store is the
-	// single authoritative writer for `.nightgauge/attention/`; producers raise
+	// single authoritative writer for the checkout's attention/; producers raise
 	// through it and resolutions execute registry verbs. The steer writer pins
 	// operator steer text as next-stage context; the trace listener audits every
 	// terminal transition of a run-scoped request into the ADR-013 decision
@@ -2978,7 +2976,10 @@ func ClearMachineHalt(workspaceRoot string) (*MachineHaltRecord, error) {
 	if workspaceRoot == "" {
 		return nil, fmt.Errorf("workspace root is required")
 	}
-	p := filepath.Join(workspaceRoot, autonomousStateFile)
+	p, err := AutonomousStatePath(workspaceRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve state: %w", err)
+	}
 	data, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -3024,7 +3025,10 @@ func ClearIssueFailuresOffline(workspaceRoot, key string) (cleared int, found bo
 	if workspaceRoot == "" {
 		return 0, false, fmt.Errorf("workspace root is required")
 	}
-	p := filepath.Join(workspaceRoot, autonomousStateFile)
+	p, err := AutonomousStatePath(workspaceRoot)
+	if err != nil {
+		return 0, false, fmt.Errorf("resolve state: %w", err)
+	}
 	data, readErr := os.ReadFile(p)
 	if os.IsNotExist(readErr) {
 		return 0, false, nil
@@ -7149,19 +7153,12 @@ func (as *AutonomousScheduler) persistStateLocked() {
 		log.Printf("autonomous: failed to marshal state: %v", err)
 		return
 	}
-	p := filepath.Join(as.workspaceRoot, autonomousStateFile)
-	dir := filepath.Dir(p)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Printf("autonomous: failed to create dir: %v", err)
-		return
-	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	// One autonomous scheduler per checkout (ADR-024 § 7): its state is an
+	// unkeyed singleton in CHECKOUT. A workspace root outside a git checkout
+	// has none, and the write is logged and skipped rather than landing in
+	// the working tree.
+	if _, err := layout.WriteCheckoutFile(as.workspaceRoot, AutonomousStateName, bytes.NewReader(data)); err != nil {
 		log.Printf("autonomous: failed to write state: %v", err)
-		return
-	}
-	if err := os.Rename(tmp, p); err != nil {
-		log.Printf("autonomous: failed to rename state file: %v", err)
 	}
 }
 
@@ -7170,7 +7167,11 @@ func (as *AutonomousScheduler) loadState() {
 	if as.workspaceRoot == "" {
 		return
 	}
-	p := filepath.Join(as.workspaceRoot, autonomousStateFile)
+	p, err := AutonomousStatePath(as.workspaceRoot)
+	if err != nil {
+		log.Printf("autonomous: failed to resolve state: %v", err)
+		return
+	}
 	data, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
 		return

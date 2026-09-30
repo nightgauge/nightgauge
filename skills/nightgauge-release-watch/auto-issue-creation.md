@@ -420,8 +420,8 @@ nightgauge project set-field "$ISSUE_NUMBER" Size "M"
 # Step 4: Set Status to Ready (for backlog item)
 nightgauge project sync-status "$ISSUE_NUMBER" ready
 
-# Log success
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | Created issue #$ISSUE_NUMBER on board" >> creation-log.json
+# Log success; the structured entry goes to the creation log (Rail 4)
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) | Created issue #$ISSUE_NUMBER on board"
 ```
 
 ---
@@ -432,13 +432,15 @@ Every auto-created issue includes a link to its assessment file for traceability
 
 ### Assessment File Naming Convention
 
-Store assessments at: `.nightgauge/release-watch/assessments/[feature-name].md`
+Store assessments in this checkout's `release-watch/assessments/[feature-name].md`
+(`nightgauge layout path checkout release-watch/assessments`), written through
+`nightgauge layout write checkout release-watch/assessments/[feature-name].md`.
 
-Example paths:
+Example names:
 
-- `.nightgauge/release-watch/assessments/computer-use.md`
-- `.nightgauge/release-watch/assessments/scheduled-tasks.md`
-- `.nightgauge/release-watch/assessments/agent-teams.md`
+- `release-watch/assessments/computer-use.md`
+- `release-watch/assessments/scheduled-tasks.md`
+- `release-watch/assessments/agent-teams.md`
 
 ### Assessment File Content
 
@@ -560,7 +562,9 @@ Require review before creation:
 
 ### Rail 4: Creation Log for Auditability
 
-Track every creation decision in `.nightgauge/release-watch/creation-log.json`:
+Track every creation decision in this checkout's `release-watch/creation-log.json`
+(`nightgauge layout path checkout release-watch/creation-log.json`), written
+through `nightgauge layout write checkout release-watch/creation-log.json`:
 
 ```json
 {
@@ -750,7 +754,8 @@ Creation log updated:
 
 For medium-priority changes (score 40-69) that are NOT auto-created as issues, log to backlog file:
 
-**File:** `.nightgauge/release-watch/backlog.json`
+**File:** `checkout release-watch/backlog.json` (`nightgauge layout path checkout
+release-watch/backlog.json`; write it through `nightgauge layout write checkout`)
 
 ```json
 {
@@ -880,7 +885,8 @@ When implementing Phase 8 in the release-watch SKILL.md, follow these patterns:
 4. **Dry-run preview:** Build and display preview before actual creation
 5. **Interactive confirmation:** Ask user to confirm before creating (unless `--no-confirm` in CI)
 6. **Error handling:** Log all errors and continue with next change (don't fail entire operation)
-7. **Logging:** Write creation-log.json atomically (update in place, don't delete/recreate)
+7. **Logging:** Read creation-log.json, add the entry, and write the whole file back through
+   `nightgauge layout write checkout release-watch/creation-log.json` (atomic; never delete it first)
 
 ---
 
@@ -889,9 +895,8 @@ When implementing Phase 8 in the release-watch SKILL.md, follow these patterns:
 ### Manual Testing
 
 ```bash
-# 1. Create test environment
+# 1. Enter the test checkout (state goes to its `release-watch/`, created on write)
 cd /path/to/nightgauge
-mkdir -p .nightgauge/release-watch/assessments
 
 # 2. Run dry-run with recent releases
 /nightgauge:release-watch --create-issues --dry-run
@@ -904,7 +909,7 @@ mkdir -p .nightgauge/release-watch/assessments
 gh issue list --label claude-code-release --limit 5
 
 # 6. Check creation log
-cat .nightgauge/release-watch/creation-log.json | jq '.entries[-1]'
+jq '.entries[-1]' "$(nightgauge layout path checkout release-watch/creation-log.json)"
 ```
 
 ### Deduplication Testing

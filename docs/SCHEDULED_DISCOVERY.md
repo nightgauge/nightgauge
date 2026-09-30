@@ -14,10 +14,15 @@ intervention. Two GitHub Actions workflows drive it, and the VSCode dashboard's
 
 ## Overview
 
-| Workflow                     | Schedule                  | Produces                                                 |
-| ---------------------------- | ------------------------- | -------------------------------------------------------- |
-| `release-watchdog.yml`       | Daily at 9 AM UTC         | `.nightgauge/release-watch/creation-log-<provider>.json` |
-| `continuous-improvement.yml` | Weekly on Monday 8 AM UTC | `.nightgauge/improvement-runs/latest.json`               |
+| Workflow                     | Schedule                  | Produces                                                |
+| ---------------------------- | ------------------------- | ------------------------------------------------------- |
+| `release-watchdog.yml`       | Daily at 9 AM UTC         | `<checkout>/release-watch/creation-log-<provider>.json` |
+| `continuous-improvement.yml` | Weekly on Monday 8 AM UTC | `<checkout>/improvement-runs/latest.json`               |
+
+`<checkout>` is the checkout's own directory inside its git directory
+(`nightgauge layout path checkout`; `.git/nightgauge-worktree/` for the main
+checkout, ADR-024 § 7). Scripts resolve it with the binary and fall back to
+`$(git rev-parse --absolute-git-dir)/nightgauge-worktree` when it is absent.
 
 Both are **off by default**, in this repository and in any workspace that has
 not opted in — see [Configuration](#configuration). Both also support
@@ -148,11 +153,13 @@ scripts/discovery-state-sync.sh
 ```
 
 That fetches the tip of `discovery-state` and writes
-`.nightgauge/release-watch/*.json` and `.nightgauge/improvement-runs/*.json`
-into your working tree without touching your index or your branch. Those paths
-are gitignored (`.nightgauge/.gitignore`), so a sync leaves `git status` clean:
-they are local copies of state owned elsewhere, the same class as
-`.nightgauge/health/` and `.nightgauge/attention/`.
+`<checkout>/release-watch/*.json` and `<checkout>/improvement-runs/*.json`
+without touching your index, your branch or your working tree. They live inside
+the git directory, so a sync leaves `git status` clean: they are local copies
+of state owned elsewhere, never authored in the repository. On the branch the
+files keep the paths `.nightgauge/release-watch/` and
+`.nightgauge/improvement-runs/`; that is the transport format
+`scripts/discovery-state-publish.sh` writes and the sync script maps back.
 
 Three alternatives were rejected, each for a concrete reason:
 
@@ -223,7 +230,8 @@ per-task switch).
 
 ## Focus Lens Integration
 
-Both skills read `.nightgauge/focus.yaml` to apply dimension boosts during
+Both skills read the checkout's `focus.yaml`
+(`nightgauge layout path checkout focus.yaml`) to apply dimension boosts during
 scoring:
 
 - **Release-Watch** — the lens boosts relevance scores for change categories
@@ -262,12 +270,12 @@ trigger, not an override.
 
 ## State Files
 
-| File                                                     | Purpose                                | Written by                                    |
-| -------------------------------------------------------- | -------------------------------------- | --------------------------------------------- |
-| `.nightgauge/release-watch/last-seen-<provider>.json`    | Last detected version, per provider    | `release-watchdog.yml`                        |
-| `.nightgauge/release-watch/creation-log-<provider>.json` | Last release-watch run result          | `scripts/discovery-run-record.py` + the skill |
-| `.nightgauge/release-watch/backlog.json`                 | Sub-threshold changes pending review   | release-watch skill                           |
-| `.nightgauge/improvement-runs/latest.json`               | Last continuous-improvement run result | `scripts/discovery-run-record.py` + the skill |
+| File                                                    | Purpose                                | Written by                                    |
+| ------------------------------------------------------- | -------------------------------------- | --------------------------------------------- |
+| `<checkout>/release-watch/last-seen-<provider>.json`    | Last detected version, per provider    | `release-watchdog.yml`                        |
+| `<checkout>/release-watch/creation-log-<provider>.json` | Last release-watch run result          | `scripts/discovery-run-record.py` + the skill |
+| `<checkout>/release-watch/backlog.json`                 | Sub-threshold changes pending review   | release-watch skill                           |
+| `<checkout>/improvement-runs/latest.json`               | Last continuous-improvement run result | `scripts/discovery-run-record.py` + the skill |
 
 The run-record schema is spelled out in exactly one place —
 `scripts/discovery-run-record.py` — and read in exactly one place,

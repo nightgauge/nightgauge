@@ -8,10 +8,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import { ExperimentManager } from "../../src/analysis/ExperimentManager.js";
+import { cloneLayoutFor, setCloneLayout } from "../../src/context/cloneLayout.js";
 import type { ExperimentConfig, ExperimentOutcome } from "../../src/analysis/experiment-types.js";
 
 const WORKSPACE = "/tmp/test-experiment-manager";
-const EXPERIMENTS_DIR = path.join(WORKSPACE, ".nightgauge/analysis/experiments");
+// Experiments live in the checkout's own directory (ADR-024 § 7). A fixed
+// layout, so no test here runs git.
+setCloneLayout(WORKSPACE, cloneLayoutFor(WORKSPACE, path.join(WORKSPACE, ".git")));
+const EXPERIMENTS_DIR = path.join(WORKSPACE, ".git/nightgauge-worktree/analysis/experiments");
 
 const BASE_CONFIG: ExperimentConfig = {
   name: "haiku-vs-sonnet-planning",

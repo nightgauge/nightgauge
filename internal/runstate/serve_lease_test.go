@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/flock"
+	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func leaseWorkspace(t *testing.T) string {
@@ -19,7 +22,9 @@ func leaseWorkspace(t *testing.T) string {
 	return t.TempDir()
 }
 
-func TestServeLeasePathSitsBesideTheSidecar(t *testing.T) {
+// Outside a git repository there is no CHECKOUT, so the lease is the
+// machine-state lock beside the claim record.
+func TestServeLeasePathOutsideGitSitsBesideTheSidecar(t *testing.T) {
 	isolatedHome(t)
 	root := t.TempDir()
 	sidecar, err := ServeSidecarPath(root)
@@ -338,5 +343,128 @@ func TestLeaseCreatesNoLegacyDirectory(t *testing.T) {
 	defer lease.Release()
 	if _, err := os.Lstat(filepath.Join(home, ".nightgauge", "serve")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the lease created the legacy directory: %v", err)
+	}
+}
+
+// checkoutPair returns a git repository and a linked worktree of it: two
+// checkouts sharing one clone.
+func checkoutPair(t *testing.T) (mainRoot, linked string) {
+	t.Helper()
+	mainRoot = layouttest.Repo(t)
+	gittest.Run(t, mainRoot, "commit", "-q", "--allow-empty", "-m", "init")
+	linked = filepath.Join(t.TempDir(), "wt")
+	gittest.Run(t, mainRoot, "worktree", "add", "-q", "--detach", linked)
+	return mainRoot, linked
+}
+
+// Inside a git checkout the lease is CHECKOUT/serve.lock (ADR-024 § 7): one
+// daemon per checkout, so a linked worktree's lock is its own.
+func TestServeLeasePathIsTheCheckoutsLock(t *testing.T) {
+	isolatedHome(t)
+	mainRoot, linked := checkoutPair(t)
+	mainLock, err := ServeLeasePath(mainRoot)
+	if err != nil {
+		t.Fatalf("ServeLeasePath(main): %v", err)
+	}
+	if want := layouttest.CheckoutPath(t, mainRoot, layout.CheckoutServeLock); mainLock != want {
+		t.Errorf("ServeLeasePath(main) = %s, want %s", mainLock, want)
+	}
+	linkedLock, err := ServeLeasePath(linked)
+	if err != nil {
+		t.Fatalf("ServeLeasePath(linked): %v", err)
+	}
+	if want := layouttest.CheckoutPath(t, linked, layout.CheckoutServeLock); linkedLock != want {
+		t.Errorf("ServeLeasePath(linked) = %s, want %s", linkedLock, want)
+	}
+	if mainLock == linkedLock {
+		t.Errorf("main checkout and linked worktree share lease lock %s", mainLock)
+	}
+}
+
+// Two checkouts of one clone each run a daemon; two daemons on one checkout
+// do not.
+func TestCheckoutsOfOneCloneHoldSeparateLeases(t *testing.T) {
+	if !flock.Supported {
+		t.Skip("no advisory file lock on this platform")
+	}
+	isolatedHome(t)
+	mainRoot, linked := checkoutPair(t)
+	a, err := AcquireServeLease(mainRoot)
+	if err != nil {
+		t.Fatalf("AcquireServeLease(main): %v", err)
+	}
+	defer a.Release()
+	b, err := AcquireServeLease(linked)
+	if err != nil {
+		t.Fatalf("AcquireServeLease(linked) beside the main checkout's daemon: %v", err)
+	}
+	defer b.Release()
+	if _, err := AcquireServeLease(linked); !errors.Is(err, ErrServeLeaseHeld) {
+		t.Errorf("second AcquireServeLease(linked) = %v, want ErrServeLeaseHeld", err)
+	}
+	if _, held := InspectServeLease(mainRoot); !held {
+		t.Error("InspectServeLease(main) = not held while a lease is held")
+	}
+}
+
+// The release before the per-checkout lease locked <STATE>/serve/<key>.lock
+// for a git checkout too. A daemon from it must be seen as holding the lease,
+// and a new daemon must hold that lock as well, so an older daemon started
+// afterwards refuses in turn.
+func TestCheckoutLeaseHonoursThePreviousReleasesStateLock(t *testing.T) {
+	if !flock.Supported {
+		t.Skip("no advisory file lock on this platform")
+	}
+	isolatedHome(t)
+	root, _ := checkoutPair(t)
+	stateLock, err := serveStateLockPath(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(stateLock), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteServeSidecar(root, ServeSidecar{PID: 4343, StartedAt: time.Now(), LastHeartbeatAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	old, err := os.OpenFile(stateLock, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := flock.Exclusive(old, 0); err != nil {
+		t.Fatal(err)
+	}
+	_, err = AcquireServeLease(root)
+	var held *ServeLeaseError
+	if !errors.As(err, &held) || held.Holder.PID != 4343 {
+		t.Fatalf("AcquireServeLease beside a previous-release holder = %v, want ServeLeaseError naming pid 4343", err)
+	}
+	if h, ok := InspectServeLease(root); !ok || h.PID != 4343 {
+		t.Errorf("InspectServeLease beside a previous-release holder = %+v, %v; want pid 4343 held", h, ok)
+	}
+	_ = flock.Unlock(old)
+	_ = old.Close()
+
+	// The refusal released the checkout lock it had taken.
+	lease, err := AcquireServeLease(root)
+	if err != nil {
+		t.Fatalf("AcquireServeLease after the old daemon exited: %v", err)
+	}
+	probe, err := os.OpenFile(stateLock, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatalf("the new lease did not create the previous release's lock: %v", err)
+	}
+	defer probe.Close()
+	if err := flock.Exclusive(probe, 0); !errors.Is(err, flock.ErrWouldBlock) {
+		t.Errorf("the new lease does not hold the previous release's lock: %v", err)
+	}
+	// PruneServeRegistry must not unlink a lock a live lease holds.
+	PruneServeRegistry(time.Now())
+	if _, err := os.Stat(stateLock); err != nil {
+		t.Errorf("prune removed a held compatibility lock: %v", err)
+	}
+	lease.Release()
+	if err := flock.Exclusive(probe, 0); err != nil {
+		t.Errorf("Release did not free the previous release's lock: %v", err)
 	}
 }

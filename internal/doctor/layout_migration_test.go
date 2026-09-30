@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -291,8 +293,8 @@ func TestLayoutMigration(t *testing.T) {
 		}
 		assertGone(t, filepath.Join(nd, "worktrees", "repo-issue-8"))
 		assertGone(t, filepath.Join(r.root, ".worktrees", "issue-9"))
-		if got := strings.TrimSpace(readLayoutFile(t, filepath.Join(r.newRoot, layoutMarkerName))); got != "1" {
-			t.Errorf("layout-version marker = %q, want 1", got)
+		if got := strings.TrimSpace(readLayoutFile(t, filepath.Join(r.newRoot, layoutMarkerName))); got != strconv.Itoa(LayoutVersion) {
+			t.Errorf("layout-version marker = %q, want %d", got, LayoutVersion)
 		}
 		if status := gittest.Run(t, r.root, "status", "--porcelain"); status != statusBefore {
 			t.Errorf("git status changed:\nbefore:\n%s\nafter:\n%s", statusBefore, status)
@@ -301,14 +303,14 @@ func TestLayoutMigration(t *testing.T) {
 		// A second run is a no-op that reports the layout version.
 		before := treeDigest(t, r.newRoot)
 		second := m.Migrate(context.Background())
-		if s := second.Summary(); s != "nothing to migrate; layout v1" {
-			t.Errorf("second run summary = %q, want %q", s, "nothing to migrate; layout v1")
+		if s, want := second.Summary(), fmt.Sprintf("nothing to migrate; layout v%d", LayoutVersion); s != want {
+			t.Errorf("second run summary = %q, want %q", s, want)
 		}
 		if after := treeDigest(t, r.newRoot); after != before {
 			t.Errorf("a second run changed the new root:\nbefore:\n%s\nafter:\n%s", before, after)
 		}
-		if found, detail := layoutFindings(m); len(found) != 0 || !strings.HasPrefix(detail, "layout v1") {
-			t.Errorf("after the migration: %d finding(s), detail %q; want none and \"layout v1 ...\"", len(found), detail)
+		if found, detail := layoutFindings(m); len(found) != 0 || !strings.HasPrefix(detail, fmt.Sprintf("layout v%d", LayoutVersion)) {
+			t.Errorf("after the migration: %d finding(s), detail %q; want none and \"layout v%d ...\"", len(found), detail, LayoutVersion)
 		}
 
 	})
@@ -527,7 +529,7 @@ func TestAutoMigrateLayoutUsesTheResolvers(t *testing.T) {
 
 	rep, ran := AutoMigrateLayout(context.Background(), r.root)
 	if !ran || rep.Version != LayoutVersion || rep.Moved != 2 {
-		t.Fatalf("auto-migrate: ran %v, %s; want a run that moves 2 files and reaches layout v1", ran, rep.Summary())
+		t.Fatalf("auto-migrate: ran %v, %s; want a run that moves 2 files and reaches the current layout", ran, rep.Summary())
 	}
 	if got := readLayoutFile(t, filepath.Join(r.newRoot, "plans", "issue-5.md")); got != "plan\n" {
 		t.Errorf("moved plan = %q", got)
@@ -537,8 +539,8 @@ func TestAutoMigrateLayoutUsesTheResolvers(t *testing.T) {
 	}
 	assertGone(t, legacyPlan)
 	assertGone(t, legacyCtx)
-	if got := strings.TrimSpace(readLayoutFile(t, filepath.Join(r.newRoot, layoutMarkerName))); got != "1" {
-		t.Errorf("marker = %q, want 1", got)
+	if got := strings.TrimSpace(readLayoutFile(t, filepath.Join(r.newRoot, layoutMarkerName))); got != strconv.Itoa(LayoutVersion) {
+		t.Errorf("marker = %q, want %d", got, LayoutVersion)
 	}
 }
 
@@ -549,7 +551,7 @@ func TestAutoMigrateLayoutNoOpOnceMarked(t *testing.T) {
 	r := newLayoutRepo(t)
 	legacyPlan := filepath.Join(r.root, ".nightgauge", "plans", "issue-5.md")
 	writeLayoutFile(t, legacyPlan, "plan\n", 0o644)
-	writeLayoutFile(t, filepath.Join(r.newRoot, layoutMarkerName), "1\n", 0o600)
+	writeLayoutFile(t, filepath.Join(r.newRoot, layoutMarkerName), strconv.Itoa(LayoutVersion)+"\n", 0o600)
 
 	mk := func(string) *layoutMigrator {
 		t.Fatal("the migrator was built although the marker is current")
@@ -588,5 +590,214 @@ func TestAutoMigrateLayoutRetryWindow(t *testing.T) {
 	}
 	if _, ran := autoMigrateLayout(context.Background(), r.root, mk, now.Add(autoMigrateRetry+time.Minute)); !ran || calls != 2 {
 		t.Errorf("not retried after the window (ran %v, %d builds)", ran, calls)
+	}
+}
+
+// TestLayoutMigrationPerCheckout (#2037, #2040): a layout-v1 clone migrates
+// again for the v2 rows. Each checkout's per-checkout files (its legacy
+// .nightgauge/ run control and runtime state) move to that checkout's own
+// CHECKOUT, the run-control singletons v1 kept in CLONE move to the main
+// checkout's CHECKOUT, a linked worktree's keyed data merges into the one
+// CLONE, and `git status` stays clean in every checkout.
+func TestLayoutMigrationPerCheckout(t *testing.T) {
+	r := newLayoutRepo(t)
+	writeLayoutFile(t, filepath.Join(r.root, ".gitignore"), "/.nightgauge/\n", 0o644)
+	gittest.Run(t, r.root, "add", "-A")
+	gittest.Run(t, r.root, "commit", "-q", "-m", "ignore .nightgauge")
+	wt := filepath.Join(evalDir(t, t.TempDir()), "wt")
+	gittest.Run(t, r.root, "worktree", "add", "-q", "-b", "feat", wt)
+
+	mainCheckout, err := layout.CheckoutDir(r.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wtCheckout, err := layout.CheckoutDir(wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mainCheckout == wtCheckout {
+		t.Fatalf("the main checkout and the linked worktree share %s", mainCheckout)
+	}
+	clone, err := layout.CloneDir(wt)
+	if err != nil || clone != r.newRoot {
+		t.Fatalf("CloneDir(worktree) = %q, %v; want the main clone's %s", clone, err, r.newRoot)
+	}
+
+	nd, wnd := filepath.Join(r.root, ".nightgauge"), filepath.Join(wt, ".nightgauge")
+	// A layout-v1 clone: the marker, and the singletons v1 kept in CLONE.
+	writeLayoutFile(t, filepath.Join(r.newRoot, layoutMarkerName), "1\n", 0o600)
+	writeLayoutFile(t, filepath.Join(r.newRoot, "pipeline", "batch-state.json"), `{"batch":1}`, 0o600)
+	writeLayoutFile(t, filepath.Join(r.newRoot, "logs", "go-backend.log"), "v1 daemon\n", 0o600)
+	moves := map[string]string{ // legacy -> new
+		filepath.Join(nd, "pipeline", "queue-state.json"):        filepath.Join(mainCheckout, "queue-state.json"),
+		filepath.Join(nd, "attention", "cards", "c1.json"):       filepath.Join(mainCheckout, "attention", "cards", "c1.json"),
+		filepath.Join(nd, "health", "trends.jsonl"):              filepath.Join(mainCheckout, "health", "trends.jsonl"),
+		filepath.Join(nd, "focus.yaml"):                          filepath.Join(mainCheckout, "focus.yaml"),
+		filepath.Join(r.newRoot, "pipeline", "batch-state.json"): filepath.Join(mainCheckout, "batch-state.json"),
+		filepath.Join(r.newRoot, "logs", "go-backend.log"):       filepath.Join(mainCheckout, "go-backend.log"),
+		filepath.Join(wnd, "pipeline", "run-state.json"):         filepath.Join(wtCheckout, "run-state.json"),
+		filepath.Join(wnd, "performance-mode.yaml"):              filepath.Join(wtCheckout, "performance-mode.yaml"),
+		filepath.Join(wnd, "attention", "cards", "c2.json"):      filepath.Join(wtCheckout, "attention", "cards", "c2.json"),
+		filepath.Join(wnd, "plans", "issue-9.md"):                filepath.Join(r.newRoot, "plans", "issue-9.md"),
+		filepath.Join(wnd, "pipeline", "context-9.json"):         filepath.Join(r.newRoot, "pipeline", "context-9.json"),
+	}
+	content := map[string]string{}
+	for legacy := range moves {
+		content[legacy] = "from " + legacy + "\n"
+		if _, seeded := map[string]bool{
+			filepath.Join(r.newRoot, "pipeline", "batch-state.json"): true,
+			filepath.Join(r.newRoot, "logs", "go-backend.log"):       true,
+		}[legacy]; seeded {
+			content[legacy] = readLayoutFile(t, legacy)
+			continue
+		}
+		writeLayoutFile(t, legacy, content[legacy], 0o644)
+	}
+	statusMain, statusWT := gittest.Run(t, r.root, "status", "--porcelain"), gittest.Run(t, wt, "status", "--porcelain")
+
+	rep, ran := AutoMigrateLayout(context.Background(), r.root)
+	if !ran || rep.Version != LayoutVersion {
+		t.Fatalf("auto-migrate of a v1 clone: ran %v, %s; want layout v%d", ran, rep.Summary(), LayoutVersion)
+	}
+	for legacy, dst := range moves {
+		if got := readLayoutFile(t, dst); got != content[legacy] {
+			t.Errorf("%s = %q, want the bytes of %s", dst, got, legacy)
+		}
+		assertGone(t, legacy)
+	}
+	for _, dir := range []string{mainCheckout, wtCheckout} {
+		if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+			t.Errorf("%s mode = %v (err %v), want 0700", dir, info.Mode().Perm(), err)
+		}
+	}
+	if got := strings.TrimSpace(readLayoutFile(t, filepath.Join(r.newRoot, layoutMarkerName))); got != strconv.Itoa(LayoutVersion) {
+		t.Errorf("marker = %q, want %d", got, LayoutVersion)
+	}
+	if s := gittest.Run(t, r.root, "status", "--porcelain"); s != statusMain {
+		t.Errorf("main checkout git status changed:\n%s\nwant\n%s", s, statusMain)
+	}
+	if s := gittest.Run(t, wt, "status", "--porcelain"); s != statusWT {
+		t.Errorf("worktree git status changed:\n%s\nwant\n%s", s, statusWT)
+	}
+	// Once marked, the automatic run is a no-op.
+	if rep, ran := AutoMigrateLayout(context.Background(), r.root); ran {
+		t.Errorf("auto-migrate ran again after v%d: %s", LayoutVersion, rep.Summary())
+	}
+}
+
+// TestLayoutMigrationPerCheckoutConflict: a per-checkout file at both its old
+// location and in CHECKOUT is a conflict like any other: never overwritten,
+// and doctor --fix exits 3.
+func TestLayoutMigrationPerCheckoutConflict(t *testing.T) {
+	r := newLayoutRepo(t)
+	checkout, err := layout.CheckoutDir(r.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := filepath.Join(r.root, ".nightgauge", "focus.yaml")
+	target := filepath.Join(checkout, "focus.yaml")
+	writeLayoutFile(t, legacy, "lens: old\n", 0o644)
+	writeLayoutFile(t, target, "lens: new\n", 0o600)
+	// A movable file beside it: the migration stops for the whole root.
+	card := filepath.Join(r.root, ".nightgauge", "attention", "c.json")
+	writeLayoutFile(t, card, "{}\n", 0o644)
+	m := r.migrator("")
+	m.checkoutEntries = allCheckoutEntries
+	found, _ := layoutFindings(m)
+	if c := findingsWith(found, codeLayoutConflict); len(c) != 1 || c[0].Evidence["target"] != target {
+		t.Errorf("conflict findings = %s, want one naming %s", findingsText(c), target)
+	}
+	if rep := r.fixer(m).Run(context.Background(), FixOptions{}); rep.ExitCode != 3 {
+		t.Errorf("fix exit = %d, want 3 (conflict)", rep.ExitCode)
+	}
+	if readLayoutFile(t, legacy) != "lens: old\n" || readLayoutFile(t, target) != "lens: new\n" {
+		t.Error("a conflicting per-checkout file was changed")
+	}
+	if readLayoutFile(t, card) != "{}\n" {
+		t.Error("a file moved while a conflict stood")
+	}
+}
+
+func evalDir(t *testing.T, dir string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
+// TestLayoutMigrationConflictOnlyExits3: a conflict with nothing else to move
+// still makes `doctor --fix` exit 3 (ADR-024 § 15), not 0, and nothing is
+// overwritten.
+func TestLayoutMigrationConflictOnlyExits3(t *testing.T) {
+	r := newLayoutRepo(t)
+	legacyPlan := filepath.Join(r.root, ".nightgauge", "plans", "issue-5.md")
+	newPlan := filepath.Join(r.newRoot, "plans", "issue-5.md")
+	writeLayoutFile(t, legacyPlan, "old plan\n", 0o644)
+	writeLayoutFile(t, newPlan, "new plan\n", 0o600)
+	m := r.migrator("")
+	found, _ := layoutFindings(m)
+	if len(found) != 1 || found[0].Code != codeLayoutConflict {
+		t.Fatalf("findings = %s, want exactly one %s", findingsText(found), codeLayoutConflict)
+	}
+	rep := r.fixer(m).Run(context.Background(), FixOptions{})
+	if rep.ExitCode != 3 {
+		t.Errorf("fix exit with only a conflict = %d, want 3; results %+v", rep.ExitCode, rep.Results)
+	}
+	if readLayoutFile(t, legacyPlan) != "old plan\n" || readLayoutFile(t, newPlan) != "new plan\n" {
+		t.Error("a conflicting file was changed")
+	}
+}
+
+// TestLayoutMigrationRestOfRuntimeFiles (ADR-024 § 7, "and the rest"): the
+// remaining runtime files the old template ignored one by one move to
+// CHECKOUT (reports into CHECKOUT/reports, backlog-*.md by pattern), while
+// the committed audit/ keeps its tracked files and only loses the per-machine
+// counter.
+func TestLayoutMigrationRestOfRuntimeFiles(t *testing.T) {
+	r := newLayoutRepo(t)
+	nd := filepath.Join(r.root, ".nightgauge")
+	writeLayoutFile(t, filepath.Join(nd, "audit", "features.yaml"), "features: []\n", 0o644)
+	writeLayoutFile(t, filepath.Join(r.root, ".gitignore"), "/.nightgauge/*\n!/.nightgauge/audit/\n/.nightgauge/audit/scope-drift-stats.json\n", 0o644)
+	gittest.Run(t, r.root, "add", "-A")
+	gittest.Run(t, r.root, "commit", "-q", "-m", "audit")
+	checkout, err := layout.CheckoutDir(r.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moves := map[string]string{
+		"complexity-model.yaml":             "complexity-model.yaml",
+		"audit/scope-drift-stats.json":      "scope-drift-stats.json",
+		"health-report.json":                "reports/health-report.json",
+		"backlog-2026-09-29.md":             "reports/backlog-2026-09-29.md",
+		"backlog-triage.md":                 "reports/backlog-triage.md",
+		"session-handoff.md":                "session-handoff.md",
+		"history/brownfield-snapshots.json": "brownfield-history/brownfield-snapshots.json",
+		"release-watch/state.json":          "release-watch/state.json",
+		"doctor/automation-pauses.json":     "doctor/automation-pauses.json",
+		".refresh-trigger":                  ".refresh-trigger",
+	}
+	for legacy := range moves {
+		writeLayoutFile(t, filepath.Join(nd, filepath.FromSlash(legacy)), legacy+"\n", 0o644)
+	}
+	status := gittest.Run(t, r.root, "status", "--porcelain")
+	m := r.migrator("")
+	m.checkoutEntries = allCheckoutEntries
+	rep := m.Migrate(context.Background())
+	if rep.Version != LayoutVersion || len(rep.Errors) > 0 {
+		t.Fatalf("migration: %s", rep.Summary())
+	}
+	for legacy, dst := range moves {
+		if got := readLayoutFile(t, filepath.Join(checkout, filepath.FromSlash(dst))); got != legacy+"\n" {
+			t.Errorf("%s = %q, want the bytes of .nightgauge/%s", dst, got, legacy)
+		}
+		assertGone(t, filepath.Join(nd, filepath.FromSlash(legacy)))
+	}
+	if got := readLayoutFile(t, filepath.Join(nd, "audit", "features.yaml")); got != "features: []\n" {
+		t.Errorf("the tracked audit file changed: %q", got)
+	}
+	if s := gittest.Run(t, r.root, "status", "--porcelain"); s != status {
+		t.Errorf("git status changed:\n%s\nwant\n%s", s, status)
 	}
 }

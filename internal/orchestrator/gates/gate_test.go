@@ -113,7 +113,7 @@ func TestLookupByStageName(t *testing.T) {
 // Issue #3267: also asserts that every gate sets Kind=KindNoOp on this
 // path so the classifier can emit `skill-no-op` deterministically.
 func TestSkillSaidSuccessButGateFailed_AcrossAllGates(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	cases := []struct {
 		stage state.PipelineStage
 		gate  StageGate
@@ -302,13 +302,9 @@ func TestKindFail_AlwaysCarriesTerminalKind(t *testing.T) {
 			name: "feature-validate/gate-metrics unreadable",
 			gate: FeatureValidateGate{},
 			arrange: func(t *testing.T, ws string) {
-				// `.nightgauge/health` as a regular file makes the open of
+				// The checkout's `health` as a regular file makes the open of
 				// health/gate-metrics.jsonl fail ENOTDIR, not ENOENT.
-				dir := filepath.Join(ws, ".nightgauge")
-				if err := os.MkdirAll(dir, 0o755); err != nil {
-					t.Fatalf("mkdir: %v", err)
-				}
-				if err := os.WriteFile(filepath.Join(dir, "health"), []byte("x"), 0o644); err != nil {
+				if err := os.WriteFile(layouttest.CheckoutPath(t, ws, "health"), []byte("x"), 0o644); err != nil {
 					t.Fatalf("write: %v", err)
 				}
 			},

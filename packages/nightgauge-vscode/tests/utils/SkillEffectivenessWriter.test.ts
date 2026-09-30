@@ -12,6 +12,7 @@ import type { SkillEffectivenessRecord } from "../../src/schemas/skillEffectiven
 vi.mock("node:fs/promises");
 
 import { SkillEffectivenessWriter } from "../../src/utils/SkillEffectivenessWriter";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 /**
  * `fs.readFile` is overloaded: with an encoding it resolves a string, without
@@ -25,7 +26,12 @@ import { SkillEffectivenessWriter } from "../../src/utils/SkillEffectivenessWrit
 const readFileUtf8 = vi.mocked(fs.readFile as (path: string, encoding: string) => Promise<string>);
 
 const WORKSPACE = "/workspace";
-const EXPECTED_FILE = path.join(WORKSPACE, ".nightgauge/health/skill-effectiveness.jsonl");
+// Per checkout, in CHECKOUT (ADR-024 § 7).
+const EXPECTED_FILE = path.join(
+  fakeCloneLayout(WORKSPACE).checkout,
+  "health",
+  "skill-effectiveness.jsonl"
+);
 
 function makeRecord(overrides: Partial<SkillEffectivenessRecord> = {}): SkillEffectivenessRecord {
   return {
@@ -56,7 +62,7 @@ beforeEach(() => {
 
 describe("SkillEffectivenessWriter", () => {
   describe("getFilePath()", () => {
-    it("returns correct path under workspace root", () => {
+    it("returns the path under the checkout's CHECKOUT", () => {
       const filePath = SkillEffectivenessWriter.getFilePath(WORKSPACE);
       expect(filePath).toBe(EXPECTED_FILE);
     });
