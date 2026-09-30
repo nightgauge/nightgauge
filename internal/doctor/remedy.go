@@ -408,6 +408,11 @@ func (fx *Fixer) apply(ctx context.Context, f Finding, rem Remedy, verb RemedyVe
 		res.Outcome = refusal(applyErr)
 		res.Detail = redact("refused at apply time: " + applyErr.Error())
 		fx.record(f, rem, res)
+		// A refusal can follow partial work (a migration that moved most of a
+		// clone, then met a conflict). Re-running the check records the world
+		// as it is now, so a later finding that work resolved is reported
+		// already resolved rather than blocked on a precondition (#2307).
+		fx.Recheck(ctx, verify)
 		return res
 	}
 

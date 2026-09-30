@@ -32,9 +32,12 @@ package doctor
 //     followed.
 //   - A target equal byte for byte to its source means the move finished
 //     earlier: the source is deleted. A target that differs is a conflict:
-//     nothing in the root is moved and both paths are reported. Append-only
-//     JSONL (pipeline history, github-api.jsonl) is the one exception: the two
-//     files are merged as the union of their lines, ordered by timestamp.
+//     nothing in the root is moved and both paths are reported. An append-only
+//     log (pipeline history, github-api.jsonl, the daemon log) is the one
+//     exception: the two files are merged as the union of their lines,
+//     ordered by timestamp. The same holds when several checkouts' sources
+//     share one target, and each file is classified again against its target
+//     as it is at move time (#2307).
 //   - Caches are deleted, not moved: they are derived and rebuild on next use.
 //   - Worktrees move with `git worktree move`.
 //   - Sources must resolve inside the checkout they belong to and targets
@@ -637,7 +640,56 @@ func (m *layoutMigrator) scan() (layoutPlan, error) {
 		}
 		plan.Items = append(plan.Items, it)
 	}
+	reconcileSharedTargets(&plan)
 	return plan, nil
+}
+
+// reconcileSharedTargets settles files that several rows move to one target
+// (#2307). Each file is classified against its target as the scan finds it,
+// so two sources for a target that does not exist yet both look like plain
+// moves: the main checkout's and a linked worktree's legacy
+// logs/github-api.jsonl both go to CLONE/logs. The first row moves its file;
+// a later append-only log merges into it, a later file with the same content
+// is removed, and a later file that differs is a conflict naming both
+// sources, so nothing in the clone moves until one is chosen.
+func reconcileSharedTargets(plan *layoutPlan) {
+	first := map[string]layoutFile{}
+	for i := range plan.Items {
+		it := &plan.Items[i]
+		if it.Entry.Kind != LayoutFiles || len(it.Files) == 0 {
+			continue
+		}
+		kept := it.Files[:0]
+		for _, f := range it.Files {
+			prev, claimed := first[f.Dst]
+			switch {
+			case !claimed:
+				first[f.Dst] = f
+			case prev.Done || prev.Merge:
+				// The target existed at scan time, and f was classified
+				// against it.
+			case f.Link == "" && prev.Link == "" && it.Entry.AppendOnly != nil && it.Entry.AppendOnly(f.Rel):
+				f.Merge = true
+			case sameSource(prev, f):
+				f.Done = true
+			default:
+				it.Conflicts = append(it.Conflicts, layoutConflict{Class: it.Entry.Class, Legacy: f.Src, Target: prev.Src})
+				continue
+			}
+			kept = append(kept, f)
+		}
+		it.Files = kept
+	}
+}
+
+// sameSource reports whether two sources hold the same thing: the same link
+// text, or the same bytes.
+func sameSource(a, b layoutFile) bool {
+	if a.Link != "" || b.Link != "" {
+		return a.Link == b.Link
+	}
+	eq, err := filesEqual(a.Src, b.Src)
+	return err == nil && eq
 }
 
 // rowRoot is the checkout a row belongs to.
@@ -939,7 +991,11 @@ type LayoutReport struct {
 // Summary is the one-line account of a migration.
 func (r LayoutReport) Summary() string {
 	var parts []string
-	if len(r.Conflicts) > 0 {
+	switch {
+	case len(r.Conflicts) > 0 && r.Changed():
+		// A conflict found while moving: the rest of the clone did move.
+		parts = append(parts, fmt.Sprintf("%d conflict(s) left in place, never overwritten", len(r.Conflicts)))
+	case len(r.Conflicts) > 0:
 		parts = append(parts, fmt.Sprintf("%d conflict(s), nothing moved", len(r.Conflicts)))
 	}
 	if r.Blocked != "" {
@@ -1106,35 +1162,57 @@ func (m *layoutMigrator) moveFiles(it layoutItem, rep *LayoutReport) {
 			rep.Errors = append(rep.Errors, err.Error())
 			continue
 		}
-		var err error
-		switch {
-		case f.Done:
-			err = os.Remove(f.Src)
-			if err == nil {
-				rep.Removed++
-			}
-		case f.Merge:
-			err = mergeAppendOnly(f)
-			if err == nil {
-				rep.Merged++
-			}
-		default:
-			err = moveOne(f)
-			if errors.Is(err, fs.ErrExist) {
-				rep.Conflicts = append(rep.Conflicts, layoutConflict{Class: it.Entry.Class, Legacy: f.Src, Target: f.Dst})
-				continue
-			}
-			if err == nil {
-				rep.Moved++
-			}
-		}
-		if err != nil {
+		if err := placeFile(it, f, rep); err != nil {
 			rep.Errors = append(rep.Errors, err.Error())
 		}
 	}
 	for i := len(it.Dirs) - 1; i >= 0; i-- {
 		removeEmptyDir(it.Dirs[i])
 	}
+}
+
+// placeFile moves one file, classifying it again against its target as it is
+// now rather than as the scan saw it (#2307). Another row of the same run may
+// have put a file there since (a linked worktree's github-api.jsonl moves into
+// the same CLONE/logs as the main checkout's), or a newer build may have
+// created it: an append-only log then merges by line union, the same bytes
+// mean the move is done, and anything else is a conflict and is never
+// overwritten.
+func placeFile(it layoutItem, f layoutFile, rep *LayoutReport) error {
+	appendOnly := f.Link == "" && it.Entry.AppendOnly != nil && it.Entry.AppendOnly(f.Rel)
+	for attempt := 0; attempt < 2; attempt++ {
+		same, exists, err := sameAtTarget(f)
+		if err != nil {
+			return err
+		}
+		switch {
+		case !exists:
+			err := moveOne(f)
+			if errors.Is(err, fs.ErrExist) {
+				continue // the target appeared since the stat: classify again
+			}
+			if err == nil {
+				rep.Moved++
+			}
+			return err
+		case same:
+			if err := os.Remove(f.Src); err != nil {
+				return err
+			}
+			rep.Removed++
+			return nil
+		case appendOnly && isRegular(f.Dst):
+			if err := mergeAppendOnly(f); err != nil {
+				return err
+			}
+			rep.Merged++
+			return nil
+		default:
+			rep.Conflicts = append(rep.Conflicts, layoutConflict{Class: it.Entry.Class, Legacy: f.Src, Target: f.Dst})
+			return nil
+		}
+	}
+	return fmt.Errorf("%s kept changing while %s was moved to it; left in place", f.Dst, f.Src)
 }
 
 // moveOne moves one file or symlink without ever replacing an existing

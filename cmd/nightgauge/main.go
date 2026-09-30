@@ -12240,7 +12240,7 @@ reads stdin; --fix without --yes then applies only auto remedies.`,
 	cmd.Flags().BoolVar(&noInteractive, "no-interactive", false, "Print the list report and never prompt, even on a terminal")
 	cmd.Flags().StringVar(&adaptersFlag, "adapters", "", "Comma-separated adapters to health-check (e.g. codex,claude); 'all' checks every adapter")
 	addDoctorFixFlags(cmd, &fixFlags)
-	cmd.AddCommand(doctorAutomationCmd())
+	cmd.AddCommand(doctorAutomationCmd(), doctorResolveCmd())
 	return cmd
 }
 

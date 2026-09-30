@@ -473,7 +473,14 @@ use, byte for byte, with mode `0600`. That includes `machine-id`, which is
 moved, not copied, and never regenerated, because a new id is a new device to
 the platform. If both locations hold a `machine-id` and they differ, nothing is
 overwritten: the one in the state directory is used, a warning is logged, and
-`nightgauge doctor` reports the conflict. For any other moved file, if both
+`nightgauge doctor` reports the conflict ([NGD045](DOCTOR.md#ngd045)) with both
+ids, their modification times and the command for each choice. Run
+`nightgauge doctor resolve machine-id --keep state` to keep the id in use, or
+`--keep legacy` to keep the one from `~/.nightgauge/`. Keep the id the platform
+already knows for this machine: any other id counts as a new device. The other
+id is saved as `machine-id.replaced-<UTC time>` in the state directory, never
+deleted, and `nightgauge doctor --fix` then moves the rest. Nothing is chosen
+for you and no id is generated. For any other moved file, if both
 locations hold different contents nothing is overwritten and the error names
 both paths: Nightgauge reads only the new one, so keep it and delete the legacy
 file, or move the legacy file over it if that is the value you need.

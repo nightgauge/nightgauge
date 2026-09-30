@@ -14,6 +14,48 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **`nightgauge doctor resolve machine-id --keep state|legacy` settles a
+  machine-id conflict** (#2308). When `~/.nightgauge/machine-id` and the one in
+  the machine-state directory differ, the NGD045 finding now shows both ids,
+  when each file was last modified, the id the running binary uses, and the
+  command for each choice. The command installs the chosen id byte for byte
+  with mode 0600. It saves the other id beside it as
+  `machine-id.replaced-<UTC time>`, never deleting it, and clears the legacy
+  file so `nightgauge doctor --fix` moves the rest of the machine state. There
+  is no default and no id is generated: a new id is a new device to the
+  platform. See [DOCTOR.md § NGD045](docs/DOCTOR.md#ngd045).
+
+### Fixed
+
+- **`dev-install.sh --from-release` installs this host's VSIX** (#2309). It
+  downloaded every VSIX of the latest release and installed whichever sorted
+  first, which put the linux-x64 build on an arm64 Mac. It now maps
+  `uname -s`/`uname -m` to the release target, downloads only that asset, and
+  fails with the release's VSIX list on a host no release is built for.
+
+- **`nightgauge doctor --fix` merges an append-only log that more than one
+  checkout left behind instead of reporting a conflict** (#2307). When the main
+  checkout and a linked worktree each had a legacy
+  `.nightgauge/logs/github-api.jsonl`, both were planned as plain moves into
+  the one clone logs directory. The second then met the first's file, and the
+  migration stopped with a conflict after moving everything else. Such logs,
+  pipeline history and the daemon log now merge as the union of their lines.
+  Each file is also checked against its target again when it moves. Two
+  different non-log files for one target still conflict, and nothing in the
+  clone moves. The summary no longer says "nothing moved" after files moved,
+  and findings an earlier remedy in the same `--fix` run already resolved are
+  reported as resolved, not BLOCKED.
+
+### Changed
+
+- **`@anthropic-ai/sdk` 0.112.5 → 0.128.0 in the SDK, with the lockfile.**
+  The root `overrides` floor (`^0.112.3`, set to clear advisories in #70) is
+  raised to `^0.128.0`. Dependabot's #2301 changed only the SDK's
+  `package.json`, and the override kept the locked 0.112.5, so its green
+  checks never exercised 0.128.
+
 ## [0.5.1] - 2026-09-30
 
 **0.5.1 is the first 0.5 build on the normal release channel.** 0.5.0 reached

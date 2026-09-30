@@ -686,8 +686,8 @@ clone:
   across filesystems, keeping its mode and mtime. A symlink is recreated as a
   symlink, never followed. A target with the same bytes means an earlier move
   finished; the source is deleted. Append-only JSONL (pipeline history,
-  `github-api.jsonl`) found at both locations is merged as the union of its lines,
-  ordered by timestamp. Files git tracks (the template's `.gitkeep`) stay, so
+  `github-api.jsonl`) found at both locations, or left by more than one checkout,
+  is merged as the union of its lines, ordered by timestamp. Files git tracks (the template's `.gitkeep`) stay, so
   `git status` is unchanged.
 - The old recall cache is deleted, not moved: it rebuilds on next use.
 - New directories are created 0700. When nothing is left at an old location, it
@@ -741,6 +741,39 @@ nothing in the clone (or, for machine state such as `machine-id`, nothing in the
 machine-state directory) until every conflict is resolved; `--fix` exits 3. Manual
 `resolve`: compare the two paths the finding names, keep the one you want at the
 new location, delete the other, and re-run `nightgauge doctor --fix`.
+
+An append-only log is never a conflict. That covers pipeline history,
+`github-api.jsonl` and the daemon log, including when the main checkout and a
+linked worktree each left a copy for the same target: the copies merge as the
+union of their lines.
+
+**`machine-id`.** Two different ids are the one conflict with its own command,
+because the choice decides which device the platform sees. Each id is a device
+the platform may already know, and an id it has not seen is a new device,
+counted against the account's machine limit. Doctor therefore never picks a side
+and never generates an id. The finding shows both ids (`legacy_id`,
+`target_id`) and when each file was last modified (`legacy_modified`,
+`target_modified`). `in_use` names the id the running binary uses: the one in the
+machine-state directory, unless `NIGHTGAUGE_AGENT_ID` overrides both. The finding
+also gives the exact command for each choice (`keep_state`, `keep_legacy`):
+
+```bash
+nightgauge doctor resolve machine-id --keep state   # keep the id this build uses
+nightgauge doctor resolve machine-id --keep legacy  # keep the id in ~/.nightgauge
+```
+
+Keep the id the platform already lists for this machine. It is usually the one
+an older build registered and used longest. The command:
+
+- installs the chosen id at `<state>/machine-id` byte for byte, mode 0600;
+- saves the other id beside it as `<state>/machine-id.replaced-<UTC time>`
+  (mode 0600). The file is never deleted, and no migration or lookup reads it;
+- removes `~/.nightgauge/machine-id`, so `nightgauge doctor --fix` moves the rest
+  of the machine state and a second run changes nothing.
+
+`--keep` is required. Without a conflict, or with an empty chosen id, the command
+changes nothing. It runs under the machine-state migration lock, and `--json`
+prints what it did.
 
 #### NGD046
 

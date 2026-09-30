@@ -29,20 +29,29 @@ if [[ "${1:-}" == "--from-release" ]]; then
     exit 1
   fi
 
+  # A release ships one VSIX per target, each bundling a CLI for that target.
+  # Download only this host's: taking whichever file sorted first once
+  # installed the linux-x64 VSIX on an arm64 Mac (#2309).
+  TARGET=$("$SCRIPT_DIR/vsix-host-target.sh") || exit 1
+
   TMPDIR_RELEASE=$(mktemp -d)
   trap 'rm -rf "$TMPDIR_RELEASE"' EXIT
 
-  # Download the .vsix asset from the latest release
-  gh release download --dir "$TMPDIR_RELEASE" --pattern "*.vsix" --clobber
-
-  VSIX=$(ls -t "$TMPDIR_RELEASE"/*.vsix 2>/dev/null | head -1)
-  if [[ -z "$VSIX" ]]; then
-    echo "ERROR: No .vsix found in latest GitHub release."
+  if ! gh release download --dir "$TMPDIR_RELEASE" --pattern "nightgauge-vscode-$TARGET-*.vsix" --clobber; then
+    echo "ERROR: the latest GitHub release has no $TARGET VSIX. It carries:"
+    gh release view --json assets --jq '.assets[].name | select(endswith(".vsix"))' | sed 's/^/         /' || true
     echo "       Has the Release workflow run? Check: gh release list"
     exit 1
   fi
 
-  echo "==> Installing $VSIX..."
+  VSIX=$(ls "$TMPDIR_RELEASE"/nightgauge-vscode-"$TARGET"-*.vsix 2>/dev/null | head -1)
+  if [[ -z "$VSIX" ]]; then
+    echo "ERROR: No $TARGET .vsix found in latest GitHub release."
+    echo "       Has the Release workflow run? Check: gh release list"
+    exit 1
+  fi
+
+  echo "==> Installing $(basename "$VSIX") ($TARGET)..."
   code --install-extension "$VSIX" --force
 
   echo "==> Done. Reload VS Code window (Cmd+Shift+P → 'Reload Window')."

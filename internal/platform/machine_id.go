@@ -42,7 +42,8 @@ const machineIDMode fs.FileMode = 0o600
 // machine limit (#1883). `nightgauge doctor --fix` and the automatic
 // migration at CLI start move it the same way (ADR-024 § 15, #2041). When
 // both files exist and differ, nothing is moved: the new location is used and
-// a warning is logged, and `nightgauge doctor` reports the conflict. That is
+// a warning is logged, `nightgauge doctor` reports the conflict (NGD045), and
+// `nightgauge doctor resolve machine-id --keep state|legacy` settles it. That is
 // never an error, because an unavailable id silently stops queue sync and
 // agent registration.
 //
@@ -65,7 +66,8 @@ func MachineID() (string, error) {
 			// that exists but could not be moved.
 			return "", fmt.Errorf("machine id: %w", err)
 		}
-		log.Printf("warning: machine id: %v; using %s. Run `nightgauge doctor` to resolve it", err, path)
+		log.Printf("warning: machine id: %v; using %s. Choose one with `nightgauge doctor resolve machine-id --keep state` "+
+			"(the one in use) or `--keep legacy`; the other is saved, never deleted", err, path)
 	}
 	data, err := os.ReadFile(path)
 	switch {

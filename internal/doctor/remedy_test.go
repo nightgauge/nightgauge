@@ -295,6 +295,63 @@ func TestRemedyEngine_ConflictExitsThree(t *testing.T) {
 	}
 }
 
+// TestRemedyEngine_RefusalAfterPartialWorkIsNotACascade (#2307): one remedy
+// covers several findings of a check (a migration moves the whole clone). Its
+// apply does most of the work and then refuses on a conflict; every finding
+// that work resolved is reported already resolved, not BLOCKED on a
+// precondition that no longer holds.
+func TestRemedyEngine_RefusalAfterPartialWorkIsNotACascade(t *testing.T) {
+	var moved atomic.Bool
+	reg := NewRegistry()
+	reg.MustRegister(Check{ID: fakeCheck, Title: "Fake", Group: "hygiene", Code: "NGD017",
+		Run: func(ctx context.Context, env *Env) []Finding {
+			var out []Finding
+			objects := []string{"conflicting"}
+			if !moved.Load() {
+				objects = append(objects, "a", "b", "c")
+			}
+			for _, o := range objects {
+				out = append(out, newFinding(fakeCheck, "NGD017", SeverityHousekeeping, "fake "+o, "a fake object",
+					map[string]string{"object": o}, []string{o},
+					Remedy{ID: "move", Kind: RemedyAuto, Verb: "fake.move-all", Verify: fakeCheck, Summary: "Move all"}))
+			}
+			return out
+		}})
+	verbs := NewVerbRegistry()
+	if err := verbs.Register("fake.move-all", VerbFuncs{
+		PreviewFunc: declaredPreview("fake.move-all"),
+		PreconditionFunc: func(_ context.Context, f Finding) error {
+			if moved.Load() && f.Evidence["object"] != "conflicting" {
+				return errors.New(f.Evidence["object"] + " is no longer at the old location")
+			}
+			return nil
+		},
+		ApplyFunc: func(context.Context, Finding) error {
+			moved.Store(true)
+			return errors.Join(ErrRemedyConflict, errors.New("conflicting exists at both locations"))
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fx := &Fixer{Registry: reg, Verbs: verbs, Env: &Env{Cwd: t.TempDir(), Now: time.Now()}}
+	rep := fx.Run(context.Background(), FixOptions{})
+	if len(rep.Results) != 4 {
+		t.Fatalf("%d results, want 4", len(rep.Results))
+	}
+	for _, r := range rep.Results {
+		want := OutcomeFixed
+		if r.Finding.Evidence["object"] == "conflicting" {
+			want = OutcomeConflict
+		}
+		if r.Outcome != want {
+			t.Errorf("%s: outcome %s (%s), want %s", r.Finding.Title, r.Outcome, r.Detail, want)
+		}
+	}
+	if rep.Counts.Blocked != 0 || rep.ExitCode != 3 {
+		t.Errorf("counts %+v, exit %d; want no blocked outcome and exit 3 for the conflict", rep.Counts, rep.ExitCode)
+	}
+}
+
 func TestRemedyEngine_UnverifiableRecheckIsNotFixed(t *testing.T) {
 	w := &fakeWorld{}
 	w.present.Store(true)

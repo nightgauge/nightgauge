@@ -105,6 +105,8 @@ jobs:
         run: bash scripts/test-workflow-refs-check.sh
       - name: Marketplace channel regression suite
         run: bash scripts/test-marketplace-channel.sh
+      - name: VSIX host-target regression suite
+        run: bash scripts/test-vsix-host-target.sh
       - name: Release channel verification regression suite
         run: bash scripts/test-verify-release-channels.sh
       # adapter-canary.yml's own regression suite (#2229). It ran only in

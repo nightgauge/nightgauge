@@ -35,6 +35,7 @@ Band-vocabulary gate regression suite
 visibility-prose reintroduction gate
 Workflow-reference gate regression suite
 Marketplace channel regression suite
+VSIX host-target regression suite
 Release channel verification regression suite
 nonexistent-workflow-reference gate
 Proposal-artifact validator regression suite
