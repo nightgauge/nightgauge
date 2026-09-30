@@ -12,6 +12,7 @@ import (
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/hometest"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 )
 
@@ -64,15 +65,13 @@ func TestMain(m *testing.M) {
 	os.Setenv("NIGHTGAUGE_GITHUB_API_LOG", filepath.Join(ledgerDir, "github-api.jsonl"))
 	// Pipeline worktrees default to STATE/worktrees/<repo-key> (#2038): keep
 	// every worktree a scheduler test provisions out of the real state root.
-	stateHome, err := os.MkdirTemp("", "orchestrator-state-")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "TestMain: %v\n", err)
-		os.Exit(1)
-	}
-	os.Setenv("NIGHTGAUGE_STATE_HOME", stateHome)
+	// HOME moves with STATE (#2311): a CLI spawned with a temp STATE and the
+	// real HOME once migrated the developer's ~/.nightgauge into the temp
+	// STATE, and this cleanup deleted it.
+	cleanupHome := hometest.Isolate()
 	code := m.Run()
 	os.RemoveAll(ledgerDir)
-	os.RemoveAll(stateHome)
+	cleanupHome()
 	if _, err := os.Stat(".nightgauge"); err == nil {
 		fmt.Fprintln(os.Stderr, "\nFAIL: a test wrote .nightgauge/ into the source tree (internal/orchestrator); use t.TempDir() (#2171)")
 		if code == 0 {

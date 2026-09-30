@@ -9,6 +9,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/hometest"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -41,14 +42,11 @@ func TestMain(m *testing.M) {
 	// inherits os.Environ(): without this, a developer's global
 	// commit.gpgsign=true fails those commits (#2283).
 	gittest.IsolateProcess()
-	// Pipeline worktrees default to STATE/worktrees/<repo-key> (#2038): point
-	// STATE at a per-process directory so no test creates a worktree under
-	// the developer's real machine-state root.
-	stateHome, err := os.MkdirTemp("", "ng-exec-state-")
-	if err != nil {
-		panic(err)
-	}
-	_ = os.Setenv("NIGHTGAUGE_STATE_HOME", stateHome)
+	// Pipeline worktrees default to STATE/worktrees/<repo-key> (#2038), so
+	// STATE points at a per-process directory. HOME moves with it (#2311): a
+	// CLI a test spawns with a temp STATE and the real HOME once migrated the
+	// developer's ~/.nightgauge into that temp STATE, and cleanup deleted it.
+	cleanupHome := hometest.Isolate()
 	restore := adapters.SwapOpenCodeMcpForgeForTest(openCodeMapForge{err: errors.New("the execution test binary reads no forge")})
 	restoreDiscovery := adapters.SwapOpenCodeLocalDiscoveryForTest(func(adapters.OpenCodeEndpoint, string) (models.LocalDescriptor, error) {
 		return models.LocalDescriptor{}, errors.New("the execution test binary asks no model server")
@@ -62,7 +60,7 @@ func TestMain(m *testing.M) {
 	}
 	restoreDiscovery()
 	restore()
-	_ = os.RemoveAll(stateHome)
+	cleanupHome()
 	os.Exit(code)
 }
 

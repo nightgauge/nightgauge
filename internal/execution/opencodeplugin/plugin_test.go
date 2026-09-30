@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/careful"
+	"github.com/nightgauge/nightgauge/internal/hometest"
 	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
@@ -358,10 +359,14 @@ process.stdout.write(JSON.stringify(result));
 // sync.Once, across every test in this package that needs it) once every
 // test in the package has run.
 func TestMain(m *testing.M) {
+	// Tests here set NIGHTGAUGE_STATE_HOME for the CLI they spawn; HOME moves
+	// with it so no spawned CLI pairs a temp STATE with the real HOME (#2311).
+	cleanupHome := hometest.Isolate()
 	code := m.Run()
 	if nightgaugeBinPath != "" {
 		_ = os.Remove(nightgaugeBinPath)
 	}
+	cleanupHome()
 	os.Exit(code)
 }
 
