@@ -9,6 +9,11 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **The listing page shows the demo.** The README now leads with the same
+  31-second tour the repository README shows (#2303).
+
 ## [0.5.0] - 2026-09-30
 
 **Upgrading from 0.4.x: this release moves your files, and you should not
