@@ -506,3 +506,87 @@ func TestLayoutCopyAcrossFilesystems(t *testing.T) {
 		t.Errorf("temporary files left behind: %v", entries)
 	}
 }
+
+// TestAutoMigrateLayoutUsesTheResolvers: the automatic run ADR-024 § 15 puts
+// ahead of every command moves legacy data into the directories the flipped
+// class resolvers return, <repo>/.git/nightgauge/<class>, with nothing
+// injected, and writes the marker.
+func TestAutoMigrateLayoutUsesTheResolvers(t *testing.T) {
+	r := newLayoutRepo(t)
+	legacyPlan := filepath.Join(r.root, ".nightgauge", "plans", "issue-5.md")
+	legacyCtx := filepath.Join(r.root, ".nightgauge", "pipeline", "context-5.json")
+	writeLayoutFile(t, legacyPlan, "plan\n", 0o644)
+	writeLayoutFile(t, legacyCtx, "{}\n", 0o644)
+	want, err := layout.PlansDir(r.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want != filepath.Join(r.newRoot, "plans") {
+		t.Fatalf("layout.PlansDir = %s, want %s: the resolvers are not flipped", want, filepath.Join(r.newRoot, "plans"))
+	}
+
+	rep, ran := AutoMigrateLayout(context.Background(), r.root)
+	if !ran || rep.Version != LayoutVersion || rep.Moved != 2 {
+		t.Fatalf("auto-migrate: ran %v, %s; want a run that moves 2 files and reaches layout v1", ran, rep.Summary())
+	}
+	if got := readLayoutFile(t, filepath.Join(r.newRoot, "plans", "issue-5.md")); got != "plan\n" {
+		t.Errorf("moved plan = %q", got)
+	}
+	if got := readLayoutFile(t, filepath.Join(r.newRoot, "pipeline", "context-5.json")); got != "{}\n" {
+		t.Errorf("moved context = %q", got)
+	}
+	assertGone(t, legacyPlan)
+	assertGone(t, legacyCtx)
+	if got := strings.TrimSpace(readLayoutFile(t, filepath.Join(r.newRoot, layoutMarkerName))); got != "1" {
+		t.Errorf("marker = %q, want 1", got)
+	}
+}
+
+// TestAutoMigrateLayoutNoOpOnceMarked: with the marker in place the automatic
+// run neither scans nor moves anything, even with data at an old location
+// (which `doctor` still reports).
+func TestAutoMigrateLayoutNoOpOnceMarked(t *testing.T) {
+	r := newLayoutRepo(t)
+	legacyPlan := filepath.Join(r.root, ".nightgauge", "plans", "issue-5.md")
+	writeLayoutFile(t, legacyPlan, "plan\n", 0o644)
+	writeLayoutFile(t, filepath.Join(r.newRoot, layoutMarkerName), "1\n", 0o600)
+
+	mk := func(string) *layoutMigrator {
+		t.Fatal("the migrator was built although the marker is current")
+		return nil
+	}
+	if rep, ran := autoMigrateLayout(context.Background(), r.root, mk, time.Now()); ran {
+		t.Errorf("auto-migrate ran with the marker current: %s", rep.Summary())
+	}
+	if got := readLayoutFile(t, legacyPlan); got != "plan\n" {
+		t.Errorf("legacy plan changed: %q", got)
+	}
+}
+
+// TestAutoMigrateLayoutRetryWindow: a run that cannot finish (here, a
+// conflict) moves nothing, and the clone is not rescanned on every command
+// until the retry window has passed.
+func TestAutoMigrateLayoutRetryWindow(t *testing.T) {
+	r := newLayoutRepo(t)
+	legacyPlan := filepath.Join(r.root, ".nightgauge", "plans", "issue-5.md")
+	newPlan := filepath.Join(r.newRoot, "plans", "issue-5.md")
+	writeLayoutFile(t, legacyPlan, "old\n", 0o644)
+	writeLayoutFile(t, newPlan, "new\n", 0o600)
+
+	now := time.Now()
+	calls := 0
+	mk := func(string) *layoutMigrator { calls++; return r.migrator("") }
+	rep, ran := autoMigrateLayout(context.Background(), r.root, mk, now)
+	if !ran || len(rep.Conflicts) != 1 || rep.Version != 0 {
+		t.Fatalf("first run: ran %v, %s; want one conflict and no marker", ran, rep.Summary())
+	}
+	if readLayoutFile(t, legacyPlan) != "old\n" || readLayoutFile(t, newPlan) != "new\n" {
+		t.Error("the conflict was not left untouched")
+	}
+	if _, ran := autoMigrateLayout(context.Background(), r.root, mk, now.Add(time.Minute)); ran || calls != 1 {
+		t.Errorf("rescanned inside the retry window (ran %v, %d builds)", ran, calls)
+	}
+	if _, ran := autoMigrateLayout(context.Background(), r.root, mk, now.Add(autoMigrateRetry+time.Minute)); !ran || calls != 2 {
+		t.Errorf("not retried after the window (ran %v, %d builds)", ran, calls)
+	}
+}

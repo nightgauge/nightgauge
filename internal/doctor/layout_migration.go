@@ -160,16 +160,6 @@ func perCloneLayoutEntries() []LayoutEntry {
 	}
 }
 
-// cloneRoot is CLONE = <git-common-dir>/nightgauge (ADR-024 § 1), where the
-// marker and the lock live.
-func cloneRoot(root string) (string, error) {
-	common, err := layout.GitCommonDir(root)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(common, "nightgauge"), nil
-}
-
 // layoutMigrator migrates one repository. Every effect on the world outside
 // the file system is a field, so tests can point the new paths at a fixture.
 type layoutMigrator struct {
@@ -191,7 +181,7 @@ func newLayoutMigrator(dir string) *layoutMigrator {
 		return nil
 	}
 	return &layoutMigrator{
-		root: root, entries: perCloneLayoutEntries(), newRoot: cloneRoot,
+		root: root, entries: perCloneLayoutEntries(), newRoot: layout.CloneDir,
 		inFlight: snapshotInFlight, daemonLive: serveLeaseLive,
 	}
 }
@@ -1266,6 +1256,70 @@ func withinDir(parent, child string) bool {
 		return false
 	}
 	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel))
+}
+
+// --- the automatic run (ADR-024 § 15) -----------------------------------------
+
+const (
+	// layoutAttemptName records an automatic run that could not finish (a
+	// conflict, a run in flight, a live daemon), so the next commands do not
+	// rescan the clone until autoMigrateRetry has passed. `doctor` keeps
+	// reporting what is left, and `doctor --fix` ignores the record.
+	layoutAttemptName = ".migrate-attempt"
+	autoMigrateRetry  = time.Hour
+)
+
+// AutoMigrateLayout is the automatic migration ADR-024 § 15 runs ahead of a
+// command: the same code as `nightgauge doctor --fix`'s layout.migrate remedy,
+// for the clone dir belongs to. ran is false when nothing was attempted.
+//
+// It is built for the hot path of every command. With the layout-version
+// marker in place it costs the per-clone resolver's cached git call and one
+// file read. It never fails the caller: a conflict, a run in flight or a live
+// daemon leaves the data where it is, reported by `nightgauge doctor`, and the
+// clone is not rescanned for autoMigrateRetry.
+func AutoMigrateLayout(ctx context.Context, dir string) (rep LayoutReport, ran bool) {
+	return autoMigrateLayout(ctx, dir, newLayoutMigrator, time.Now())
+}
+
+func autoMigrateLayout(ctx context.Context, dir string, mk func(string) *layoutMigrator, now time.Time) (rep LayoutReport, ran bool) {
+	defer func() {
+		// A bug in the migration must not take the user's command down.
+		if r := recover(); r != nil {
+			rep, ran = LayoutReport{Errors: []string{fmt.Sprintf("layout migration panicked: %v", r)}}, true
+		}
+	}()
+	if dir == "" || !filepath.IsAbs(dir) {
+		return LayoutReport{}, false
+	}
+	clone, err := layout.CloneDir(dir)
+	if err != nil {
+		return LayoutReport{}, false
+	}
+	if readLayoutMarker(filepath.Join(clone, layoutMarkerName)) >= LayoutVersion {
+		return LayoutReport{}, false
+	}
+	attempt := filepath.Join(clone, layoutAttemptName)
+	if info, err := os.Lstat(attempt); err == nil && now.Sub(info.ModTime()) < autoMigrateRetry {
+		return LayoutReport{}, false
+	}
+	m := mk(dir)
+	if m == nil {
+		return LayoutReport{}, false
+	}
+	rep = m.Migrate(ctx)
+	if rep.Version >= LayoutVersion {
+		_ = os.Remove(attempt)
+	} else if info, err := os.Lstat(clone); err == nil && info.IsDir() {
+		_ = os.WriteFile(attempt, []byte(rep.Summary()+"\n"), 0o600)
+		_ = os.Chtimes(attempt, now, now)
+	}
+	return rep, true
+}
+
+// Changed reports whether the run changed anything on disk.
+func (r LayoutReport) Changed() bool {
+	return r.Moved+r.Merged+r.Removed+r.WorktreesMoved+r.CachesDeleted > 0
 }
 
 // --- the check ----------------------------------------------------------------

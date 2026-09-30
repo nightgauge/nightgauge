@@ -690,6 +690,15 @@ clone:
   writes the `layout-version` marker last. A second pass changes nothing, and the
   check's detail line reads `layout v1`.
 
+The same migration also runs automatically (ADR-024 § 15): the first
+`nightgauge` command on a clone without a current `layout-version` marker runs it
+before doing anything else. Once the marker is in place, that costs one file read.
+`doctor`, `layout`, `version`, `help`, completion, `hook`, `pre-push` and any
+`--dry-run` never trigger it. The automatic run never fails or blocks the command:
+a conflict, a run in flight or a live daemon leaves the data where it is, prints
+one line to stderr naming `nightgauge doctor --fix`, and the clone is not rescanned
+for an hour. A run that moved data prints one line to stderr too.
+
 The finding never changes the exit code of plain `nightgauge doctor`.
 
 #### NGD045

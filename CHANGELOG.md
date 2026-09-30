@@ -29,7 +29,11 @@ changelog, and the release workflow refuses a tag that does not.
   Worktrees move with `git worktree move`, except one a run is in flight on,
   which is skipped and reported (exit 4). The old recall cache is deleted, not
   moved. A `layout-version` marker is written last, and a second pass reports
-  `layout v1` and changes nothing.
+  `layout v1` and changes nothing. The first `nightgauge` command on a clone
+  without the marker runs the same migration automatically before doing
+  anything else (not `doctor`, `layout`, `version`, `help`, completion, hooks or
+  `--dry-run`). It never fails or blocks that command: whatever it cannot move
+  stays for `nightgauge doctor --fix`, and one stderr line says so.
 - **Nightgauge logs are bounded by size and age** (#2029, ADR-024 § 11). Each
   log directory (the clone's `.nightgauge/logs/` and the machine state `logs/`)
   is held to 200 MB and 30 days by default, set by machine-tier

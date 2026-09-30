@@ -693,6 +693,13 @@ func rootCmd() *cobra.Command {
 		// directory the caller happened to be in, or nowhere at all.
 		gh.SetAPILedgerWorkspaceRoot(explicitWorkspaceRoot(cmd))
 
+		// The one-time per-clone layout migration (ADR-024 § 15, #2040),
+		// before anything reads or writes per-clone data. With the
+		// layout-version marker in place it is one file read.
+		if layoutAutoMigrateApplies(cmd) {
+			autoMigrateLayoutAtCLIStart(cmd)
+		}
+
 		// Log retention at CLI start (ADR-024 § 11, #2029): two stats when
 		// the last prune is under a day old, a prune otherwise. `serve` runs
 		// its own at start and daily, so it is skipped here, as is
