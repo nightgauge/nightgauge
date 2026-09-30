@@ -446,6 +446,16 @@ jobs:
       # through.
       - name: Typecheck test tree (VSCode)
         run: npm run -w nightgauge-vscode typecheck:tests
+      # #2296, #2297, #2298: neither the retro engine nor the model-routing
+      # script is reached by the npm workspaces, so both rotted unnoticed.
+      # Seconds each, so ungated like the typecheck above.
+      - name: Test retro engine (pytest)
+        run: python3 -m pip install --quiet pytest && python3 -m pytest scripts/retro/tests -q
+      - name: Typecheck analyze-model-routing script
+        run: >
+          npx tsc --noEmit --skipLibCheck --esModuleInterop --module nodenext
+          --moduleResolution nodenext --target es2022 --types node
+          scripts/analyze-model-routing.ts
       - name: Test (VSCode)
         if: ${{ needs.changes.outputs.run_heavy != 'false' }}
         run: npm run -w nightgauge-vscode test
