@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestBuiltinLenses(t *testing.T) {
@@ -49,7 +51,7 @@ func TestBuiltinLenses(t *testing.T) {
 }
 
 func TestManagerLoadDefault(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	m := NewManager(dir)
 
 	s, err := m.Load()
@@ -62,10 +64,7 @@ func TestManagerLoadDefault(t *testing.T) {
 }
 
 func TestManagerSetAndLoad(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 	m := NewManager(dir)
 
 	// Set focus to quality
@@ -94,7 +93,7 @@ func TestManagerSetAndLoad(t *testing.T) {
 }
 
 func TestManagerSetInvalidLens(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	m := NewManager(dir)
 
 	_, err := m.Set("nonexistent", "test")
@@ -104,10 +103,7 @@ func TestManagerSetInvalidLens(t *testing.T) {
 }
 
 func TestManagerClear(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 	m := NewManager(dir)
 
 	// Set then clear
@@ -124,10 +120,7 @@ func TestManagerClear(t *testing.T) {
 }
 
 func TestManagerShow(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 	m := NewManager(dir)
 
 	if _, err := m.Set("features", "test"); err != nil {
@@ -153,10 +146,7 @@ func TestManagerShow(t *testing.T) {
 }
 
 func TestResolveLensCustom(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 	m := NewManager(dir)
 
 	// Save a custom lens
@@ -197,10 +187,7 @@ func TestResolveLensCustom(t *testing.T) {
 }
 
 func TestAllLenses(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 	m := NewManager(dir)
 
 	// Save a custom lens
@@ -221,7 +208,7 @@ func TestAllLenses(t *testing.T) {
 }
 
 func TestSetEmptyName(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	m := NewManager(dir)
 
 	_, err := m.Set("", "test")
@@ -231,10 +218,7 @@ func TestSetEmptyName(t *testing.T) {
 }
 
 func TestSetNormalizesCase(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 	m := NewManager(dir)
 
 	s, err := m.Set("QUALITY", "test")
@@ -243,5 +227,24 @@ func TestSetNormalizesCase(t *testing.T) {
 	}
 	if s.ActiveLens != "quality" {
 		t.Errorf("expected normalized 'quality', got %q", s.ActiveLens)
+	}
+}
+
+// focus.yaml is per-checkout runtime state (ADR-024 § 7): Save writes CHECKOUT,
+// never the working tree, and outside a git checkout it fails.
+func TestFocusLivesInCheckout(t *testing.T) {
+	dir := layouttest.Repo(t)
+	m := NewManager(dir)
+	if _, err := m.Set("quality", "test"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if _, err := os.Stat(layouttest.CheckoutPath(t, dir, "focus.yaml")); err != nil {
+		t.Fatalf("focus.yaml not in CHECKOUT: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, ".nightgauge")); !os.IsNotExist(err) {
+		t.Fatalf("Save wrote into the working tree (stat err %v)", err)
+	}
+	if err := NewManager(t.TempDir()).Save(&State{ActiveLens: "quality"}); err == nil {
+		t.Fatal("Save outside a git checkout: want an error")
 	}
 }

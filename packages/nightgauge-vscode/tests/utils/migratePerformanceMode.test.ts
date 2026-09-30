@@ -20,6 +20,7 @@ vi.mock("vscode", () => ({
 }));
 
 import { migrateSuperchargeToPerformanceMode } from "../../src/utils/migratePerformanceMode";
+import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 const NEW_FILE = "performance-mode.yaml";
 const LEGACY_FILE = "supercharge.yaml";
@@ -33,9 +34,12 @@ function writeLegacy(root: string, active: boolean): void {
 
 describe("migrateSuperchargeToPerformanceMode", () => {
   let workspaceRoot: string;
+  /** The new file: the checkout's own, in CHECKOUT (ADR-024 § 7). */
+  let newFile: string;
 
   beforeEach(() => {
     workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "perf-migrate-"));
+    newFile = path.join(mkFakeCloneLayout(workspaceRoot).checkout, NEW_FILE);
   });
 
   afterEach(() => {
@@ -49,7 +53,6 @@ describe("migrateSuperchargeToPerformanceMode", () => {
 
     expect(result.migrated).toBe(true);
     expect(result.mode).toBe("maximum");
-    const newFile = path.join(workspaceRoot, ".nightgauge", NEW_FILE);
     expect(fs.existsSync(newFile)).toBe(true);
     expect(fs.readFileSync(newFile, "utf-8")).toContain("mode: maximum");
     expect(fs.existsSync(path.join(workspaceRoot, ".nightgauge", LEGACY_FILE))).toBe(false);
@@ -63,18 +66,12 @@ describe("migrateSuperchargeToPerformanceMode", () => {
 
     expect(result.migrated).toBe(true);
     expect(result.mode).toBe("elevated");
-    const newFile = path.join(workspaceRoot, ".nightgauge", NEW_FILE);
     expect(fs.readFileSync(newFile, "utf-8")).toContain("mode: elevated");
     expect(fs.existsSync(path.join(workspaceRoot, ".nightgauge", LEGACY_BACKUP))).toBe(true);
   });
 
   it("is a no-op when the new file already exists", () => {
-    fs.mkdirSync(path.join(workspaceRoot, ".nightgauge"), { recursive: true });
-    fs.writeFileSync(
-      path.join(workspaceRoot, ".nightgauge", NEW_FILE),
-      "mode: efficiency\n",
-      "utf-8"
-    );
+    fs.writeFileSync(newFile, "mode: efficiency\n", "utf-8");
     writeLegacy(workspaceRoot, true);
 
     const result = migrateSuperchargeToPerformanceMode(workspaceRoot);
@@ -82,15 +79,13 @@ describe("migrateSuperchargeToPerformanceMode", () => {
     expect(result.migrated).toBe(false);
     // Legacy file untouched
     expect(fs.existsSync(path.join(workspaceRoot, ".nightgauge", LEGACY_FILE))).toBe(true);
-    expect(fs.readFileSync(path.join(workspaceRoot, ".nightgauge", NEW_FILE), "utf-8")).toContain(
-      "mode: efficiency"
-    );
+    expect(fs.readFileSync(newFile, "utf-8")).toContain("mode: efficiency");
   });
 
   it("is a no-op when no legacy file is present (first-time install)", () => {
     const result = migrateSuperchargeToPerformanceMode(workspaceRoot);
     expect(result.migrated).toBe(false);
-    expect(fs.existsSync(path.join(workspaceRoot, ".nightgauge", NEW_FILE))).toBe(false);
+    expect(fs.existsSync(newFile)).toBe(false);
   });
 
   it("is idempotent across multiple calls", () => {
@@ -101,5 +96,17 @@ describe("migrateSuperchargeToPerformanceMode", () => {
 
     expect(first.migrated).toBe(true);
     expect(second.migrated).toBe(false);
+  });
+
+  it("is a no-op outside a git checkout and never writes into the working tree", () => {
+    const plain = fs.mkdtempSync(path.join(os.tmpdir(), "perf-migrate-plain-"));
+    try {
+      writeLegacy(plain, true);
+      expect(migrateSuperchargeToPerformanceMode(plain).migrated).toBe(false);
+      expect(fs.existsSync(path.join(plain, ".nightgauge", NEW_FILE))).toBe(false);
+      expect(fs.existsSync(path.join(plain, ".nightgauge", LEGACY_FILE))).toBe(true);
+    } finally {
+      fs.rmSync(plain, { recursive: true, force: true });
+    }
   });
 });

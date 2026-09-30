@@ -14,7 +14,7 @@ import (
 )
 
 // runLifecycleMu serializes every run-state.json read-modify-write this
-// process makes. The record is one file per repository, and concurrent
+// process makes. The record is one file per checkout, and concurrent
 // pipelines in one daemon share it, so the load-check-save sequences below
 // must not interleave (#1964).
 var runLifecycleMu sync.Mutex
@@ -26,9 +26,11 @@ var runLifecycleMu sync.Mutex
 // context was cancelled (SIGTERM/SIGINT reach it through `nightgauge run`'s
 // signal context), aborted otherwise.
 //
-// The record lives in the run root's pipeline state directory
-// (layout.PipelineStateDir), which belongs to the clone; `nightgauge run state`
-// resolves the same directory from a worktree. Only one issue can own the file: a run that finds it held by a
+// The record lives in the run root's per-checkout directory
+// (layout.CheckoutDir, ADR-024 § 7): it is an unkeyed singleton, so each
+// checkout's orchestrator owns its own, and a run in a linked worktree never
+// clobbers the main checkout's. `nightgauge run state` run in the same
+// checkout resolves the same directory. Only one issue can own the file: a run that finds it held by a
 // live run for another issue does not track at all rather than clobbering
 // that run's record. Every write failure is logged and never fails the run.
 //
@@ -51,7 +53,7 @@ func provisionalBranch(issue int) string { return fmt.Sprintf("issue-%d", issue)
 // same issue was found, the stage that attempt recorded as its re-entry point.
 func beginRunLifecycle(workspaceRoot string, issue int, branch string) (*runLifecycle, runstate.Stage) {
 	lc := &runLifecycle{issue: issue}
-	baseDir, err := layout.PipelineStateDir(workspaceRoot)
+	baseDir, err := layout.CheckoutDir(workspaceRoot)
 	if err != nil {
 		log.Printf("#%d: run-state not tracked: %v", issue, err)
 		return lc, ""

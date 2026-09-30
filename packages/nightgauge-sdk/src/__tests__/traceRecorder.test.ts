@@ -27,9 +27,13 @@ async function readEvents(pipelineDir: string, runId: string): Promise<TraceEven
 
 describe("TraceRecorder", () => {
   let pipelineDir: string;
+  /** The checkout's own directory, which holds run-state.json (ADR-024 § 7). */
+  let checkoutDir: string;
 
   beforeEach(async () => {
     pipelineDir = await tmpPipelineDir();
+    checkoutDir = path.join(path.dirname(path.dirname(pipelineDir)), "nightgauge-worktree");
+    await fs.mkdir(checkoutDir, { recursive: true });
   });
 
   it("writes the ADR 013 envelope with monotonic seq and sdk producer", async () => {
@@ -61,7 +65,7 @@ describe("TraceRecorder", () => {
   it("resolves run_id from run-state.json when not given explicitly", async () => {
     await fs.mkdir(pipelineDir, { recursive: true });
     await fs.writeFile(
-      path.join(pipelineDir, "run-state.json"),
+      path.join(checkoutDir, "run-state.json"),
       JSON.stringify({
         schema_version: "1.0",
         issue_number: 180,
@@ -76,7 +80,7 @@ describe("TraceRecorder", () => {
       })
     );
 
-    const recorder = TraceRecorder.open({ pipelineDir, issue: 180 });
+    const recorder = TraceRecorder.open({ pipelineDir, checkoutDir, issue: 180 });
     recorder.emit("stage_start", { stage: "feature-dev" });
     await recorder.flush();
 
@@ -120,7 +124,7 @@ describe("TraceRecorder", () => {
     const runtimeOnlyId = "runtime11-2222-3333-4444-555566667777";
     await fs.mkdir(pipelineDir, { recursive: true });
     await fs.writeFile(
-      path.join(pipelineDir, "run-state.json"),
+      path.join(checkoutDir, "run-state.json"),
       JSON.stringify({
         schema_version: "1.0",
         issue_number: 244,
@@ -139,7 +143,7 @@ describe("TraceRecorder", () => {
       JSON.stringify({ issueNumber: 244, runId: runtimeOnlyId })
     );
 
-    const recorder = TraceRecorder.open({ pipelineDir, issue: 244 });
+    const recorder = TraceRecorder.open({ pipelineDir, checkoutDir, issue: 244 });
     recorder.emit("stage_start", { stage: "feature-dev" });
     await recorder.flush();
 
@@ -149,7 +153,7 @@ describe("TraceRecorder", () => {
   it("is a no-op that logs one debug line when no run-state exists and no run id was given", async () => {
     const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
     try {
-      const recorder = TraceRecorder.open({ pipelineDir, issue: 180 });
+      const recorder = TraceRecorder.open({ pipelineDir, checkoutDir, issue: 180 });
       recorder.emit("stage_start", { stage: "feature-dev" });
       recorder.emit("stage_exit", { stage: "feature-dev" });
       await recorder.flush();

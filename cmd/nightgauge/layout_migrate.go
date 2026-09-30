@@ -11,11 +11,14 @@ import (
 	"github.com/nightgauge/nightgauge/internal/doctor"
 )
 
-// The automatic per-clone layout migration at CLI start (ADR-024 § 15,
-// #2040). The first command run on a clone without the layout-version marker
-// moves its data to the new layout, with the code `nightgauge doctor --fix`
-// runs. It never blocks or fails the command: a conflict, a run in flight or a
-// live daemon leaves the data in place, and `nightgauge doctor` reports it.
+// The automatic layout migration at CLI start (ADR-024 § 15, #2040). The
+// first command run on a clone without a current layout-version marker moves
+// its per-clone data, and every checkout's per-checkout data, to the new
+// layout with the code `nightgauge doctor --fix` runs. It never blocks or
+// fails the command (ADR-024 § 15 amendment of 2026-09-29): a conflict, a run
+// in flight, a busy worktree, a held lock or a live daemon leaves the data in
+// place, prints one line naming `nightgauge doctor --fix`, and `nightgauge
+// doctor` reports it. Only `doctor --fix` exits 3 (conflict) or 4 (blocked).
 
 // layoutAutoMigrateSkip lists the top-level commands that never trigger the
 // migration: doctor reports and fixes it itself, `layout` prints paths and
@@ -55,10 +58,10 @@ func autoMigrateLayoutAtCLIStart(cmd *cobra.Command) {
 	}
 	switch {
 	case rep.Version > 0 && rep.Changed():
-		fmt.Fprintf(cmd.ErrOrStderr(), "nightgauge: moved per-clone data to the new layout (%s)\n", rep.Summary())
+		fmt.Fprintf(cmd.ErrOrStderr(), "nightgauge: moved Nightgauge data to the new layout (%s)\n", rep.Summary())
 	case rep.Version == 0 && (rep.Changed() || len(rep.Conflicts) > 0 || rep.Blocked != "" ||
 		rep.FilesHeld != "" || len(rep.Skipped) > 0 || len(rep.Refused) > 0 || len(rep.Errors) > 0):
-		fmt.Fprintf(cmd.ErrOrStderr(), "nightgauge: per-clone data is still at an old location (%s); "+
+		fmt.Fprintf(cmd.ErrOrStderr(), "nightgauge: Nightgauge data is still at an old location (%s); "+
 			"run `nightgauge doctor --fix`\n", rep.Summary())
 	}
 }

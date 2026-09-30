@@ -1,11 +1,15 @@
 package state
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestAppendGateMetric_RoundTrip(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 
 	if err := AppendGateMetric(ws, 4097, "build", "pass", "", "2026-06-25T00:00:00Z"); err != nil {
 		t.Fatalf("append pass: %v", err)
@@ -42,11 +46,35 @@ func TestAppendGateMetric_RoundTrip(t *testing.T) {
 }
 
 func TestAppendGateMetric_RejectsBadInput(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	if err := AppendGateMetric(ws, 1, "build", "maybe", "", "t"); err == nil {
 		t.Error("expected error for invalid result")
 	}
 	if err := AppendGateMetric(ws, 1, "", "pass", "", "t"); err == nil {
 		t.Error("expected error for empty gate name")
+	}
+}
+
+// The gate-metrics log is per-checkout runtime state: it lives in CHECKOUT,
+// never in the working tree, and outside a git checkout it is an error rather
+// than a write into the directory the caller named (ADR-024 § 7).
+func TestAppendGateMetric_WritesCheckoutNotWorkingTree(t *testing.T) {
+	ws := layouttest.Repo(t)
+	if err := AppendGateMetric(ws, 7, "build", "pass", "", "2026-06-25T00:00:00Z"); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if _, err := os.Stat(layouttest.CheckoutPath(t, ws, GateMetricsName)); err != nil {
+		t.Fatalf("gate-metrics.jsonl not in CHECKOUT: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".nightgauge")); !os.IsNotExist(err) {
+		t.Fatalf("AppendGateMetric wrote into the working tree (stat err %v)", err)
+	}
+
+	plain := t.TempDir()
+	if err := AppendGateMetric(plain, 7, "build", "pass", "", "t"); err == nil {
+		t.Fatal("AppendGateMetric outside a git checkout: want an error")
+	}
+	if _, err := os.Stat(filepath.Join(plain, ".nightgauge")); !os.IsNotExist(err) {
+		t.Fatalf("AppendGateMetric outside a git checkout wrote into it (stat err %v)", err)
 	}
 }

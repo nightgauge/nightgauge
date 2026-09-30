@@ -35,13 +35,14 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // newRestartHaltScheduler builds a scheduler rooted at a CALLER-OWNED
 // workspace root (unlike newAttentionProducerScheduler, which mints its own
 // t.TempDir()). Passing the same root twice is the whole point: both
-// `.nightgauge/autonomous/state.json` and `.nightgauge/attention/` live under
-// it, so a second construction over the same root is a faithful process
+// the autonomous state.json and the attention store live in its per-checkout
+// directory, so a second construction over the same root is a faithful process
 // restart — the constructor's loadState() reads the state the dead process
 // left behind and the attention store re-reads the cards it persisted.
 func newRestartHaltScheduler(t *testing.T, root string) *AutonomousScheduler {
@@ -132,7 +133,7 @@ func runToCompletion(t *testing.T, as *AutonomousScheduler) {
 // with an open card, crash, restart, click Start, and the human gate must still
 // be standing on the other side.
 func TestRestartDoesNotLaunderMachineHalt(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	// --- session 1: a terminal stage failure halts the whole fleet ---------
 	as1 := newRestartHaltScheduler(t, root)
@@ -193,7 +194,7 @@ func TestRestartDoesNotLaunderMachineHalt(t *testing.T) {
 // the suppression guard read false, so the misleading card comes back one cycle
 // after the restart.
 func TestRestartDoesNotResurrectFleetIdleCard(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	as1 := newRestartHaltScheduler(t, root)
 	haltFleet(t, as1, "octocat/acme", 406)
@@ -218,7 +219,7 @@ func TestRestartDoesNotResurrectFleetIdleCard(t *testing.T) {
 // designed #148 flow, now reachable only by answering the card rather than by
 // crashing.
 func TestResumeAfterRestartClearsPreservedHalt(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	as1 := newRestartHaltScheduler(t, root)
 	haltFleet(t, as1, "octocat/acme", 407)
@@ -255,7 +256,7 @@ func TestResumeAfterRestartClearsPreservedHalt(t *testing.T) {
 // enters its loop with the halt still in force: alive, ticking, dispatching
 // nothing — exactly the state the crash interrupted.
 func TestRunOnPreservedHaltStaysDormant(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	as1 := newRestartHaltScheduler(t, root)
 	haltFleet(t, as1, "octocat/acme", 408)
@@ -312,7 +313,7 @@ func TestRunOnPreservedHaltStaysDormant(t *testing.T) {
 // writePriorState persists a state file as a dead process would have left it.
 func writePriorState(t *testing.T, root string, prior AutonomousState) {
 	t.Helper()
-	p := filepath.Join(root, autonomousStateFile)
+	p := autonomousStatePathT(t, root)
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -327,7 +328,7 @@ func writePriorState(t *testing.T, root string, prior AutonomousState) {
 
 func readPersistedState(t *testing.T, root string) AutonomousState {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, autonomousStateFile))
+	data, err := os.ReadFile(autonomousStatePathT(t, root))
 	if err != nil {
 		t.Fatalf("read state: %v", err)
 	}
@@ -449,7 +450,7 @@ func TestLoadStatePreservationIsScopedToMachineRaisedHalts(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := layouttest.Repo(t)
 			writePriorState(t, root, tc.prior)
 
 			as := &AutonomousScheduler{workspaceRoot: root, state: &AutonomousState{}}
@@ -533,7 +534,7 @@ func TestStartGateIsScopedToMachineRaisedHalts(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			as := newRestartHaltScheduler(t, t.TempDir())
+			as := newRestartHaltScheduler(t, layouttest.Repo(t))
 			as.mu.Lock()
 			as.state.Status = tc.status
 			as.state.PauseTriggeredBy = tc.trigger
@@ -572,7 +573,7 @@ func TestStartGateIsScopedToMachineRaisedHalts(t *testing.T) {
 
 // TestGracefulShutdownDoesNotLaunderMachineHalt: SIGTERM on a halted fleet.
 func TestGracefulShutdownDoesNotLaunderMachineHalt(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	as1 := newRestartHaltScheduler(t, root)
 	stubGraphFn(as1)
@@ -615,7 +616,7 @@ func TestGracefulShutdownDoesNotLaunderMachineHalt(t *testing.T) {
 // TestStopThenStartDoesNotLaunderMachineHalt: the operator's own Stop button on
 // a halted fleet, then Start. Stop is not triage either.
 func TestStopThenStartDoesNotLaunderMachineHalt(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	as := newRestartHaltScheduler(t, root)
 	stubGraphFn(as)
@@ -674,7 +675,7 @@ func TestStopThenStartDoesNotLaunderMachineHalt(t *testing.T) {
 // A fleet that comes up halted, is left alone, and dies again must come up
 // halted a third time — the restore must not consume the latch.
 func TestSecondCrashWhileLatchedStillPreservesHalt(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	as1 := newRestartHaltScheduler(t, root)
 	stubGraphFn(as1)
@@ -707,7 +708,7 @@ func TestSecondCrashWhileLatchedStillPreservesHalt(t *testing.T) {
 // graceful shutdown. complete("cancelled") used to write straight over
 // safety_tripped — the same laundering, on the halt the fleet takes hardest.
 func TestGracefulShutdownPreservesSafetyTrip(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_THRESHOLD", "")
 	t.Setenv("NIGHTGAUGE_CASCADE_FAILURE_WINDOW", "")
 
@@ -759,7 +760,7 @@ func TestHaltedFleetDoesNotPromoteOnStartup(t *testing.T) {
 	const promotionRan = "promoteUnblockedOnStartup:"
 
 	t.Run("halted fleet skips promotion", func(t *testing.T) {
-		root := t.TempDir()
+		root := layouttest.Repo(t)
 		as1 := newRestartHaltScheduler(t, root)
 		haltFleet(t, as1, "octocat/acme", 904)
 
@@ -776,7 +777,7 @@ func TestHaltedFleetDoesNotPromoteOnStartup(t *testing.T) {
 	})
 
 	t.Run("control: an un-halted fleet still promotes", func(t *testing.T) {
-		as := newRestartHaltScheduler(t, t.TempDir())
+		as := newRestartHaltScheduler(t, layouttest.Repo(t))
 		stubGraphFn(as)
 		out := captureLog(t, func() { as.recoverOrphanedRunning(context.Background()) })
 		if !strings.Contains(out, promotionRan) {
@@ -794,7 +795,7 @@ func TestHaltedFleetDoesNotPromoteOnStartup(t *testing.T) {
 // working suppression from a deleted one.
 func TestFleetIdleSuppressionAtItsRealCallSite(t *testing.T) {
 	t.Run("halt raised mid-cycle suppresses the idle card", func(t *testing.T) {
-		as := newRestartHaltScheduler(t, t.TempDir())
+		as := newRestartHaltScheduler(t, layouttest.Repo(t))
 		as.mu.Lock()
 		as.state.Status = "running"
 		as.state.LastPromotionEligible = 3
@@ -817,7 +818,7 @@ func TestFleetIdleSuppressionAtItsRealCallSite(t *testing.T) {
 	})
 
 	t.Run("control: an idle un-halted fleet still gets the idle card", func(t *testing.T) {
-		as := newRestartHaltScheduler(t, t.TempDir())
+		as := newRestartHaltScheduler(t, layouttest.Repo(t))
 		stubGraphFn(as)
 		as.mu.Lock()
 		as.state.Status = "running"
@@ -836,7 +837,7 @@ func TestFleetIdleSuppressionAtItsRealCallSite(t *testing.T) {
 // autonomous resume`: the same clearer, applied to the state file, leaving a
 // status that does not claim a process is dispatching.
 func TestClearMachineHaltOffline(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	as := newRestartHaltScheduler(t, root)
 	haltFleet(t, as, "octocat/acme", 906)
 

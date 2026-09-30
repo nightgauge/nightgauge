@@ -33,7 +33,6 @@ Obtain the paths from the binary — `nightgauge layout` prints them all as JSON
 ```
 <git-common-dir>/nightgauge/
 ├── pipeline/                   # Pipeline handoff files (transient)
-│   ├── run-state.json         # Durable run lifecycle state (Go internal/runstate)
 │   ├── runtime-{N}-{runId}.json # Per-run runtime snapshot (issue N, run id)
 │   ├── issue-{N}.json         # Output of /issue-pickup
 │   ├── planning-{N}.json      # Output of /feature-planning
@@ -49,7 +48,18 @@ Obtain the paths from the binary — `nightgauge layout` prints them all as JSON
 │   └── {N}-{description}.md   # Output of /feature-planning
 └── logs/                       # Execution logs (persistent)
     └── nightgauge-output-{N}.json
+
+<git-dir>/nightgauge-worktree/  # This checkout only (.git/nightgauge-worktree
+│                               # for the main checkout)
+├── run-state.json              # Durable run lifecycle state (Go internal/runstate)
+├── current-run.json            # In-flight run sidecar (run id, pid)
+├── batch-state.json            # Batch progress
+└── queue-state.json            # Queue state
 ```
+
+The checkout directory holds what belongs to one checkout; a linked worktree
+has its own under `.git/worktrees/<name>/nightgauge-worktree/`
+(`nightgauge layout path checkout` prints it).
 
 Configuration stays in the working tree at `{git_root}/.nightgauge/config.yaml`.
 
@@ -1183,8 +1193,9 @@ extension's `PipelineStateService`, populated from the Go binary over IPC and
 republished to the UI through `onStateChanged`. Nothing reads it back from disk,
 and no unified pipeline state file is written to the pipeline state directory.
 
-Durability is a separate concern with its own artifacts, all in the clone's
-pipeline state directory (`nightgauge layout path pipeline`):
+Durability is a separate concern with its own artifacts, in the clone's
+pipeline state directory (`nightgauge layout path pipeline`) except
+`run-state.json`, which is per checkout (`nightgauge layout path checkout`):
 
 | Artifact                   | Written by                | Holds                                       |
 | -------------------------- | ------------------------- | ------------------------------------------- |

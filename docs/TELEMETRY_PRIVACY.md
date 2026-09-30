@@ -147,8 +147,9 @@ model or prompt detail, and nothing from the
 
 ### Local skill-usage log (not transmitted)
 
-The PreToolUse(Skill) hook records skill-catalog usage to an **in-repo**,
-local-only file at `.nightgauge/skills/usage.jsonl` (read with
+The PreToolUse(Skill) hook records skill-catalog usage to a local-only file,
+`skills/usage.jsonl` in the checkout's git directory
+(`nightgauge layout path checkout skills/usage.jsonl`; read with
 `nightgauge skills usage`). Each line carries only `{ ts, skill, session }`
 — the skill's name, an RFC3339 timestamp, and the Claude Code session id. It
 records **no** prompt content, file contents, arguments, tokens, secrets, or

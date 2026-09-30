@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -810,31 +811,21 @@ type CurrentRunSidecar struct {
 	PID        int       `json:"pid,omitempty"`
 }
 
-// writeCurrentRunSidecar persists the in-flight run state atomically. Best
-// effort: errors are logged but never block the pipeline.
+// writeCurrentRunSidecar persists the in-flight run state atomically in the
+// checkout's CHECKOUT (layout.CheckoutCurrentRun, ADR-024 § 7): the sidecar is
+// an unkeyed singleton, so each checkout's orchestrator owns its own and a
+// linked worktree's run never overwrites the main checkout's. Best effort:
+// errors are logged but never block the pipeline.
 func writeCurrentRunSidecar(workspaceRoot string, sc CurrentRunSidecar) error {
 	if workspaceRoot == "" {
 		return nil
-	}
-	dir, err := layout.PipelineStateDir(workspaceRoot)
-	if err != nil {
-		return fmt.Errorf("resolve sidecar dir: %w", err)
-	}
-	p := filepath.Join(dir, currentRunSidecarFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create sidecar dir: %w", err)
 	}
 	data, err := json.MarshalIndent(sc, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal sidecar: %w", err)
 	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
-		return fmt.Errorf("write tmp sidecar: %w", err)
-	}
-	if err := os.Rename(tmp, p); err != nil {
-		os.Remove(tmp)
-		return fmt.Errorf("rename sidecar: %w", err)
+	if _, err := layout.WriteCheckoutFile(workspaceRoot, layout.CheckoutCurrentRun, bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("write sidecar: %w", err)
 	}
 	return nil
 }
@@ -844,7 +835,10 @@ func removeCurrentRunSidecar(workspaceRoot string) {
 	if workspaceRoot == "" {
 		return
 	}
-	p := pipelineStatePath(workspaceRoot, currentRunSidecarFile)
+	p := checkoutStatePath(workspaceRoot, layout.CheckoutCurrentRun)
+	if p == "" {
+		return
+	}
 	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 		log.Printf("failure: failed to remove current-run sidecar: %v", err)
 	}
@@ -856,7 +850,7 @@ func readCurrentRunSidecar(workspaceRoot string) (*CurrentRunSidecar, error) {
 	if workspaceRoot == "" {
 		return nil, nil
 	}
-	p := pipelineStatePath(workspaceRoot, currentRunSidecarFile)
+	p := checkoutStatePath(workspaceRoot, layout.CheckoutCurrentRun)
 	data, err := os.ReadFile(p)
 	if os.IsNotExist(err) {
 		return nil, nil

@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 const (
@@ -22,15 +24,19 @@ const (
 	// none should be added.
 	SchemaVersion = 1
 
-	// StoreDir is the workspace-relative graph directory. Gitignored: it is a
-	// derived artifact, and committing it would create the second authored copy
-	// the whole program exists to abolish.
-	StoreDir = ".nightgauge/graph"
-
 	nodesFile = "nodes.jsonl"
 	edgesFile = "edges.jsonl"
 	metaFile  = "meta.json"
 )
+
+// Dir is the graph directory of the checkout root is in: CHECKOUT/graph
+// (.git/nightgauge-worktree/graph, ADR-024 § 7). It lives under the git dir,
+// so it can never be committed: the graph is a derived artifact, and
+// committing it would create the second authored copy the whole program
+// exists to abolish. It errors outside a git checkout.
+func Dir(root string) (string, error) {
+	return layout.CheckoutPath(root, layout.CheckoutGraph)
+}
 
 // Meta is the store's metadata index, written alongside the JSONL files.
 type Meta struct {
@@ -45,7 +51,7 @@ type Meta struct {
 	Extractors []string `json:"extractors"`
 }
 
-// Save writes the graph to <root>/.nightgauge/graph atomically.
+// Save writes the graph to the checkout's graph directory (Dir) atomically.
 //
 // Each file is written to a UNIQUE temp path and renamed. The uniqueness is the
 // point: a fixed "<final>.tmp" path is atomic for a single writer and races
@@ -62,9 +68,9 @@ func Save(root string, g *Graph) (Meta, error) {
 	if g == nil {
 		return Meta{}, fmt.Errorf("graph save: graph is nil")
 	}
-	dir := filepath.Join(root, StoreDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return Meta{}, fmt.Errorf("graph save: create dir: %w", err)
+	dir, err := layout.CheckoutSubdir(root, layout.CheckoutGraph)
+	if err != nil {
+		return Meta{}, fmt.Errorf("graph save: %w", err)
 	}
 
 	nodes := g.Nodes()
@@ -115,7 +121,7 @@ func Save(root string, g *Graph) (Meta, error) {
 	return meta, nil
 }
 
-// Load reads the graph from <root>/.nightgauge/graph.
+// Load reads the graph from the checkout's graph directory (Dir).
 //
 // Returns (nil, nil, nil) — "no graph, rebuild" — when the store is absent, its
 // meta is unreadable, or its schema version does not match. A corrupt JSONL
@@ -126,7 +132,10 @@ func Load(root string) (*Graph, *Meta, error) {
 	if root == "" {
 		return nil, nil, fmt.Errorf("graph load: root is required")
 	}
-	dir := filepath.Join(root, StoreDir)
+	dir, err := Dir(root)
+	if err != nil {
+		return nil, nil, fmt.Errorf("graph load: %w", err)
+	}
 
 	metaBytes, err := os.ReadFile(filepath.Join(dir, metaFile))
 	if err != nil {

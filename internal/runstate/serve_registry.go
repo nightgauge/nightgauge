@@ -4,8 +4,10 @@ package runstate
 // can be READ, not just written into.
 //
 // It holds two kinds of file, both keyed to one workspace root: the `.json`
-// claim record the daemon heartbeats (serve_sidecar.go) and the `.lock` file
-// the scheduler lease flocks (serve_lease.go). Between them they are the only
+// claim record the daemon heartbeats (serve_sidecar.go) and a `.lock` file the
+// scheduler lease flocks (serve_lease.go) — the lease itself for a workspace
+// outside git, and the earlier-release compatibility lock for a git checkout,
+// whose lease is CHECKOUT/serve.lock (ADR-024 § 7). Between them they are the only
 // machine-local record of which workspaces have ever run a daemon, so anything
 // that wants to answer "which workspaces on this machine have one" has to read
 // them.

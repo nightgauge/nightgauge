@@ -22,6 +22,7 @@ import (
 	"time"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -106,8 +107,17 @@ func ledgerDaemonCoverageFindings(workspaceRoot string, now time.Time) ([]Findin
 }
 
 // pipelineActivitySince reports whether any pipeline state file was written
-// inside the window — the independent evidence that the daemon had work to do.
+// inside the window — the independent evidence that the daemon had work to do:
+// the checkout's run-control files (ADR-024 § 7) or any file in the clone's
+// pipeline state directory.
 func pipelineActivitySince(workspaceRoot string, since time.Time) bool {
+	for _, name := range []string{layout.CheckoutCurrentRun, layout.CheckoutQueueState, layout.CheckoutRunState} {
+		if p := checkoutStatePath(workspaceRoot, name); p != "" {
+			if info, err := os.Stat(p); err == nil && info.ModTime().After(since) {
+				return true
+			}
+		}
+	}
 	dir := pipelineStatePath(workspaceRoot, "")
 	if dir == "" {
 		return false

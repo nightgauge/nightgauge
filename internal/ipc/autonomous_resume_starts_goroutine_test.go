@@ -19,19 +19,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
 func TestAutonomousResume_StartsGoroutineWhenNotRunning(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 
 	// Persist state with status="safety_tripped" — the exact shape on disk
 	// after a Go backend respawn following a safety trip. NewAutonomousScheduler
 	// will load it as-is (terminal states are preserved by loadState).
-	autoDir := filepath.Join(tmpDir, ".nightgauge", "autonomous")
-	if err := os.MkdirAll(autoDir, 0o755); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
-	}
+	autoDir := layouttest.MkCheckoutSubdir(t, tmpDir, layout.CheckoutAutonomous)
 	statePath := filepath.Join(autoDir, "state.json")
 	persisted := orchestrator.AutonomousState{Status: "safety_tripped"}
 	data, err := json.Marshal(persisted)
@@ -100,7 +99,7 @@ func TestAutonomousResume_NoGoroutineLeakWhenAlreadyRunning(t *testing.T) {
 	// spawn a second one. Run() refuses re-entry with an error
 	// ("autonomous scheduler is already running"); a duplicate go func()
 	// call would log that error and waste a goroutine.
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	sched := orchestrator.NewScheduler(nil, orchestrator.SchedulerConfig{
 		WorkspaceRoot: tmpDir,
 		Adapter:       nil,

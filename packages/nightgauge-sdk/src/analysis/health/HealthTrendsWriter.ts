@@ -2,7 +2,9 @@
  * HealthTrendsWriter - JSONL append/read/prune for HealthTrendEntry records
  *
  * Persists all 7 SDK health dimension scores + overall score to a single JSONL
- * time-series file: .nightgauge/health/trends.jsonl
+ * time-series file in the checkout's own per-checkout directory (ADR-024 § 7):
+ * `<git-dir>/nightgauge-worktree/health/trends.jsonl`
+ * (`.git/nightgauge-worktree/health/trends.jsonl` for a main checkout).
  *
  * Non-critical: write operations never throw; all errors are logged as warnings.
  *
@@ -13,9 +15,10 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { z } from "zod";
 import type { HealthTrendEntry, HealthTrendsReadOptions } from "./types.js";
+import { checkoutPath } from "../../context/cloneLayout.js";
 
-/** Relative path from workspace root to the trends JSONL file */
-const TRENDS_FILE = path.join(".nightgauge", "health", "trends.jsonl");
+/** The trends file's name inside the checkout's `health/` entry. */
+const TRENDS_FILE = "trends.jsonl";
 
 /** Default retention period in days */
 const DEFAULT_RETENTION_DAYS = 90;
@@ -36,14 +39,34 @@ const HealthTrendEntrySchema = z.object({
 
 export class HealthTrendsWriter {
   /**
-   * Returns the absolute path to the trends JSONL file.
+   * Returns the absolute path to the trends JSONL file of the checkout
+   * `workspaceRoot` (absolute) is in. Throws for a relative or empty root, and
+   * `NotAGitRepositoryError` outside a git repository; it never resolves
+   * against the process working directory.
    */
   static getFilePath(workspaceRoot: string): string {
-    return path.join(workspaceRoot, TRENDS_FILE);
+    if (!workspaceRoot || !path.isAbsolute(workspaceRoot)) {
+      throw new Error(
+        `HealthTrendsWriter: workspace root ${JSON.stringify(workspaceRoot)} is not absolute`
+      );
+    }
+    return path.join(checkoutPath("health", workspaceRoot), TRENDS_FILE);
   }
 
   /**
-   * Append one HealthTrendEntry to .nightgauge/health/trends.jsonl.
+   * The trends file path, or undefined when `workspaceRoot` is not a usable
+   * checkout (readers then report nothing instead of throwing).
+   */
+  private static tryFilePath(workspaceRoot: string): string | undefined {
+    try {
+      return this.getFilePath(workspaceRoot);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Append one HealthTrendEntry to the checkout's health/trends.jsonl.
    * Non-throwing — all errors are logged as warnings.
    */
   static async append(workspaceRoot: string, entry: HealthTrendEntry): Promise<void> {
@@ -77,7 +100,8 @@ export class HealthTrendsWriter {
     workspaceRoot: string,
     opts?: HealthTrendsReadOptions
   ): Promise<HealthTrendEntry[]> {
-    const filePath = this.getFilePath(workspaceRoot);
+    const filePath = this.tryFilePath(workspaceRoot);
+    if (!filePath) return [];
     let content: string;
 
     try {
@@ -134,7 +158,8 @@ export class HealthTrendsWriter {
     workspaceRoot: string,
     retentionDays: number = DEFAULT_RETENTION_DAYS
   ): Promise<number> {
-    const filePath = this.getFilePath(workspaceRoot);
+    const filePath = this.tryFilePath(workspaceRoot);
+    if (!filePath) return 0;
     let content: string;
 
     try {

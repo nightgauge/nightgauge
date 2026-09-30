@@ -15,6 +15,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/careful"
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // --- static import scan (Acceptance Criteria: only node:* and ./nightgauge/*) ---
@@ -511,7 +512,7 @@ func TestNodeHarnessGatesJS(t *testing.T) {
 	bin := buildNightgaugeBin(t)
 
 	t.Run("careful on blocks a destructive command", func(t *testing.T) {
-		root := t.TempDir()
+		root := layouttest.Repo(t)
 		if err := careful.Enable(root, 0, ""); err != nil {
 			t.Fatal(err)
 		}
@@ -525,7 +526,7 @@ func TestNodeHarnessGatesJS(t *testing.T) {
 	})
 
 	t.Run("careful on allows a safe command", func(t *testing.T) {
-		root := t.TempDir()
+		root := layouttest.Repo(t)
 		if err := careful.Enable(root, 0, ""); err != nil {
 			t.Fatal(err)
 		}
@@ -612,7 +613,7 @@ func TestNodeHarnessDeniesTask(t *testing.T) {
 	})
 
 	t.Run("task is denied with careful on", func(t *testing.T) {
-		root := t.TempDir()
+		root := layouttest.Repo(t)
 		bin := buildNightgaugeBin(t)
 		if err := careful.Enable(root, 0, ""); err != nil {
 			t.Fatal(err)
@@ -700,7 +701,7 @@ func TestCarefulGateParity(t *testing.T) {
 
 	for _, row := range rows {
 		t.Run(row.Name, func(t *testing.T) {
-			root := t.TempDir()
+			root := layouttest.Repo(t)
 			if row.Careful {
 				if err := careful.Enable(root, 0, ""); err != nil {
 					t.Fatal(err)

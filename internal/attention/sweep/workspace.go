@@ -27,6 +27,7 @@ package sweep
 // never claimed to be reasoning about.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -39,6 +40,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	yaml "gopkg.in/yaml.v3"
 )
 
@@ -359,22 +361,16 @@ type Coverage struct {
 	SweptAt string `json:"sweptAt"`
 }
 
-// coveragePath is a SIBLING of the attention directory, not a file inside it:
-// Store.List parses every *.json in that directory as a DecisionRequest, and
-// a foreign file there survives only by being silently skipped on parse error.
-func coveragePath(workspaceRoot string) string {
-	return filepath.Join(workspaceRoot, ".nightgauge", "attention-coverage.json")
-}
+// The coverage record (CHECKOUT/attention-coverage.json, ADR-024 § 7) is a
+// SIBLING of the attention directory, not a file inside it: Store.List parses
+// every *.json in that directory as a DecisionRequest, and a foreign file
+// there survives only by being silently skipped on parse error.
 
 // WriteCoverage persists what this sweep covered. Best-effort: a failure to
 // record coverage must never fail the sweep that produced it.
 func WriteCoverage(workspaceRoot string, repos []string, sweptAt time.Time) error {
 	if strings.TrimSpace(workspaceRoot) == "" {
 		return fmt.Errorf("sweep: no workspace root for coverage record")
-	}
-	path := coveragePath(workspaceRoot)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
 	}
 	data, err := json.MarshalIndent(Coverage{
 		Repos:   normalizeRepos(repos),
@@ -383,7 +379,8 @@ func WriteCoverage(workspaceRoot string, repos []string, sweptAt time.Time) erro
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	_, err = layout.WriteCheckoutFile(workspaceRoot, layout.CheckoutAttentionCoverage, bytes.NewReader(data))
+	return err
 }
 
 // ReadCoverage returns the last recorded sweep coverage. A missing file means
@@ -392,7 +389,11 @@ func ReadCoverage(workspaceRoot string) (Coverage, bool) {
 	if strings.TrimSpace(workspaceRoot) == "" {
 		return Coverage{}, false
 	}
-	data, err := os.ReadFile(coveragePath(workspaceRoot))
+	path, err := layout.CheckoutPath(workspaceRoot, layout.CheckoutAttentionCoverage)
+	if err != nil {
+		return Coverage{}, false
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return Coverage{}, false
 	}

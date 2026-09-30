@@ -10,6 +10,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Health trends and skill-usage telemetry are read from this checkout's
+  directory (`nightgauge layout path checkout health/trends.jsonl`,
+  `skills/usage.jsonl`), not from `.nightgauge/` (#2037, ADR-024 § 7).
 - Per-clone pipeline state, plans, retros and logs are read at
   `$(nightgauge layout path <class> <name>)` and written through
   `nightgauge layout write|append`, not by `.nightgauge/...` path (#2037,

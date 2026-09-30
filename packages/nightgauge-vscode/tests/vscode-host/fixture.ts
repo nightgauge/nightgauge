@@ -83,7 +83,8 @@ const DEMO_EPOCH_MS = Date.now();
  * Copy the committed demo workspace (`demo/workspace/`, #2107) over the open
  * workspace folder, re-dated to this window's start as `npm run demo` does
  * (#2285). The folder becomes a git repository and the per-clone data the
- * source stages under `.nightgauge/<class>` lands in its clone directory,
+ * source stages under `.nightgauge/<class>` lands in its clone directory (the
+ * per-checkout data, e.g. `.nightgauge/health`, in its checkout directory),
  * where the extension reads it (`demo/workspace-clone.ts`, ADR-024 § 7).
  * Only the demo window calls this, before its first activation, so the main
  * window's folder stays a plain folder outside any git repository.

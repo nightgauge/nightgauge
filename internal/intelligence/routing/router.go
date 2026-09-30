@@ -84,8 +84,8 @@ type Router struct {
 	workspaceRoot  string
 }
 
-// NewRouter creates a model router. workspaceRoot is the project root used to
-// locate .nightgauge/performance-mode.yaml; pass "" to skip file-based
+// NewRouter creates a model router. workspaceRoot is the checkout used to
+// locate its performance-mode.yaml (in CHECKOUT); pass "" to skip file-based
 // mode resolution (env var and elevated default still apply).
 func NewRouter(client *platform.Client, workspaceRoot string) *Router {
 	return &Router{platformClient: client, workspaceRoot: workspaceRoot}

@@ -7,6 +7,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -19,7 +20,7 @@ import (
 // the registration fails here rather than in production six weeks later.
 func TestNewAutonomousScheduler_WiresEpicCheckpointIntoScheduler(t *testing.T) {
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
-	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 
 	if sched.epicCheckpoint == nil {
 		t.Fatal("NewAutonomousScheduler did not register an epic-checkpoint callback on " +
@@ -61,7 +62,7 @@ func TestEpicCheckpoint_DisabledDoesNotLatch(t *testing.T) {
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
 	cfg := DefaultAutonomousConfig()
 	cfg.SafetyRails = &SafetyConfig{RateLimitPerHour: 100, EpicCheckpoint: false}
-	as := NewAutonomousScheduler(sched, nil, nil, nil, cfg, t.TempDir())
+	as := NewAutonomousScheduler(sched, nil, nil, nil, cfg, layouttest.Repo(t))
 
 	sched.epicCheckpoint(42)
 
@@ -83,7 +84,7 @@ func TestEpicCheckpoint_DisabledDoesNotLatch(t *testing.T) {
 // checkpoint still fires.
 func TestEpicCheckpoint_SurvivesOnEpicCompleteReassignment(t *testing.T) {
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
-	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 
 	// Exactly what the IPC server does on every pipeline.run request.
 	otherCalled := false
@@ -149,8 +150,8 @@ func TestSafetyRailKind_FingerprintsAreStable(t *testing.T) {
 // or Resume explicitly". There was no card. With the epic checkpoint now firing
 // on every epic close, a routine completion reaches this path.
 func TestRaiseSafetyRailTrip_RaisesABlockingFleetCard(t *testing.T) {
-	store := attention.New(t.TempDir())
-	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), t.TempDir())
+	store := attention.New(layouttest.Repo(t))
+	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.attention = store
 
 	as.raiseSafetyRailTrip("paused for epic checkpoint (epic #42 complete — awaiting human review)", 42)
@@ -211,7 +212,7 @@ func TestEpicCheckpointDefaults_AgreeAcrossPackages(t *testing.T) {
 // here.
 func TestCheckEpicCompletion_LatchesTheCheckpoint(t *testing.T) {
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
-	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 
 	sched.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
 		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer,
@@ -240,7 +241,7 @@ func TestCheckEpicCompletion_LatchesTheCheckpoint(t *testing.T) {
 // and stop the fleet on every single merge.
 func TestCheckEpicCompletion_DoesNotLatchWithoutAutoClose(t *testing.T) {
 	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
-	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 
 	sched.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
 		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer,

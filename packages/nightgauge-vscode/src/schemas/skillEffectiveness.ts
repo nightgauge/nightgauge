@@ -5,7 +5,7 @@
  * data written by PostPipelineAnalyzer after each pipeline run.
  * Used to surface skill edit ROI in future pipeline-health dimensions.
  *
- * File path: .nightgauge/health/skill-effectiveness.jsonl
+ * File path: .git/nightgauge-worktree/health/skill-effectiveness.jsonl (per checkout, ADR-024 § 7)
  *
  * @see Issue #1414 - Skill effectiveness tracking
  */

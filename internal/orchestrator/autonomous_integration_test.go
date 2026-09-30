@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // --- Helper: deterministicAutonomousScheduler creates an AutonomousScheduler
@@ -36,7 +36,7 @@ type autonomousTestHarness struct {
 // newTestHarness creates a test harness with the given config and initial graph.
 func newTestHarness(t *testing.T, cfg AutonomousConfig, graphProvider testGraphProvider) *autonomousTestHarness {
 	t.Helper()
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
 		config:               cfg,
@@ -749,7 +749,7 @@ func TestIntegration_PriorityDominatesCriticalPath(t *testing.T) {
 // TestIntegration_StateRecovery verifies that persisted state survives
 // scheduler reconstruction (simulating a restart).
 func TestIntegration_StateRecovery(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 
 	// Create initial scheduler with some state
 	original := &AutonomousScheduler{
@@ -778,7 +778,7 @@ func TestIntegration_StateRecovery(t *testing.T) {
 	original.persistState()
 
 	// Verify file exists
-	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	statePath := autonomousStatePathT(t, tmpDir)
 	if _, err := os.Stat(statePath); os.IsNotExist(err) {
 		t.Fatal("state file was not created")
 	}
@@ -1024,7 +1024,7 @@ func TestIntegration_StatePersistence_AcrossCycles(t *testing.T) {
 	h.runOneCycle(t)
 
 	// Read state file
-	statePath := filepath.Join(h.tmpDir, autonomousStateFile)
+	statePath := autonomousStatePathT(t, h.tmpDir)
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatalf("state file not found: %v", err)

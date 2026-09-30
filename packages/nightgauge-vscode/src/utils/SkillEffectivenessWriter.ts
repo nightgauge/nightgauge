@@ -4,8 +4,9 @@
  * Static utility class following the GateMetricsWriter pattern:
  * no state, no VSCode dependency, testable in isolation.
  *
- * Persists skill effectiveness records to a single JSONL file:
- *   .nightgauge/health/skill-effectiveness.jsonl
+ * Persists skill effectiveness records to a single JSONL file in the
+ * checkout's own per-checkout directory (ADR-024 § 7):
+ *   .git/nightgauge-worktree/health/skill-effectiveness.jsonl
  *
  * Non-critical: all operations log warnings on failure, never throw.
  *
@@ -19,9 +20,10 @@ import {
   SkillEffectivenessRecordSchema,
   type SkillEffectivenessRecord,
 } from "../schemas/skillEffectiveness";
+import { checkoutPath, isUsableWorkspaceRoot } from "./cloneLayout";
 
-/** Relative path from workspace root to the skill effectiveness file */
-const SKILL_EFFECTIVENESS_FILE = ".nightgauge/health/skill-effectiveness.jsonl";
+/** The skill effectiveness file's name inside the checkout's `health/` entry. */
+const SKILL_EFFECTIVENESS_FILE = "skill-effectiveness.jsonl";
 
 /** Default retention period in days */
 const DEFAULT_RETENTION_DAYS = 90;
@@ -63,6 +65,7 @@ export class SkillEffectivenessWriter {
    * does not exist.
    */
   static async readAll(workspaceRoot: string): Promise<SkillEffectivenessRecord[]> {
+    if (!isUsableWorkspaceRoot(workspaceRoot)) return [];
     const filePath = this.getFilePath(workspaceRoot);
     let content: string;
 
@@ -91,10 +94,12 @@ export class SkillEffectivenessWriter {
   }
 
   /**
-   * Returns the absolute path to the skill effectiveness file.
+   * Returns the absolute path to the skill effectiveness file:
+   * `<git-dir>/nightgauge-worktree/health/skill-effectiveness.jsonl`. Throws
+   * when `workspaceRoot` is not in a git checkout.
    */
   static getFilePath(workspaceRoot: string): string {
-    return path.join(workspaceRoot, SKILL_EFFECTIVENESS_FILE);
+    return checkoutPath(workspaceRoot, "health", SKILL_EFFECTIVENESS_FILE);
   }
 
   /**

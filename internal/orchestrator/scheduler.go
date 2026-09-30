@@ -3,6 +3,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -1174,10 +1175,6 @@ type QueueState struct {
 	UpdatedAt     time.Time   `json:"updated_at"`
 }
 
-// queueStateFile is the queue's file name in the pipeline state directory
-// (layout.PipelineStateDir).
-const queueStateFile = "queue-state.json"
-
 // queueSchemaVersion is the persisted queue schema version.
 //
 // 2.0 → 2.1 (Issue #3001): added per-item "paused" status and structured
@@ -1200,14 +1197,6 @@ const queueStateFile = "queue-state.json"
 // readers ignore the unknown kind (it parses as a generic paused item) and the
 // Label field is omitempty, so older records remain valid without a migration.
 const queueSchemaVersion = "2.4"
-
-// currentRunSidecarFile is the file name, in the pipeline state directory
-// (layout.PipelineStateDir), where the
-// scheduler records the in-flight run at stage start. The file is removed on
-// clean pipeline completion. A stale sidecar at scheduler startup means the
-// orchestrator process crashed mid-stage; the loadQueue path synthesizes a
-// terminal-failure RunRecord and pauses the queue. (Issue #3001)
-const currentRunSidecarFile = "current-run.json"
 
 // SchedulerConfig holds configuration for the scheduler.
 type SchedulerConfig struct {
@@ -3132,23 +3121,12 @@ func (s *Scheduler) persistQueue() {
 		log.Printf("queue: failed to marshal state: %v", err)
 		return
 	}
-	dir, err := layout.PipelineStateDir(s.workspaceRoot)
-	if err != nil {
-		log.Printf("queue: failed to resolve state dir: %v", err)
-		return
-	}
-	p := filepath.Join(dir, queueStateFile)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Printf("queue: failed to create dir: %v", err)
-		return
-	}
-	tmp := p + ".tmp"
-	if err := os.WriteFile(tmp, data, 0644); err != nil {
+	// The queue is this checkout's (ADR-024 § 7): one scheduler per checkout,
+	// so the file is an unkeyed singleton in CHECKOUT, never in CLONE where a
+	// linked worktree's scheduler would overwrite it.
+	if _, err := layout.WriteCheckoutFile(s.workspaceRoot, layout.CheckoutQueueState, bytes.NewReader(data)); err != nil {
 		log.Printf("queue: failed to write queue state: %v", err)
 		return
-	}
-	if err := os.Rename(tmp, p); err != nil {
-		log.Printf("queue: failed to rename temp file: %v", err)
 	}
 
 	// Mirror the snapshot to the platform so the web dashboard shows live
@@ -3227,7 +3205,7 @@ func (s *Scheduler) loadQueue() {
 	if s.workspaceRoot == "" {
 		return
 	}
-	p := pipelineStatePath(s.workspaceRoot, queueStateFile)
+	p := checkoutStatePath(s.workspaceRoot, layout.CheckoutQueueState)
 	data, err := os.ReadFile(p)
 	switch {
 	case os.IsNotExist(err):
@@ -3275,7 +3253,7 @@ func (s *Scheduler) loadQueue() {
 	// WHAT CONSTRUCTION STILL WRITES, named rather than implied by a banner:
 	// recoverOrchestratorCrashAt synthesizes a terminal-failure RunRecord into
 	// the daily JSONL, pauses and persists queue-state.json, and unlinks
-	// `.git/nightgauge/pipeline/current-run.json`. That is bookkeeping about a run
+	// the checkout's current-run.json (`.git/nightgauge-worktree/`). That is bookkeeping about a run
 	// whose process is GONE — the gate is runstate.ProcessAlive on the pid the
 	// sidecar carries, so a live run is left entirely alone: no record, no pause,
 	// no unlink. Writing a crash record for a dead orchestrator is not the same
@@ -3846,9 +3824,9 @@ func spliceACReconcile(workspaceRoot string, issueNumber int, planningFile strin
 // subdirectories, consistent with the recovery-action shell-out pattern.
 // Issue #3542.
 //
-// Bookkeeping directories are excluded (#202). Most runs write
-// `.nightgauge/attention/*.json` in the tree, and a consumer repo may not
-// ignore it; before ADR-024 § 7 every run also wrote its pipeline state there. Counting them made the pipeline's own exhaust answer "was
+// Bookkeeping directories are excluded (#202). Before ADR-024 § 7 most runs
+// wrote `.nightgauge/attention/*.json` and their pipeline state in the tree,
+// and a consumer repo may not ignore it; both now live under the git dir. Counting them made the pipeline's own exhaust answer "was
 // work lost?" — which has two costs, both silent. The recovery commit swept
 // pipeline state into the user's branch via `git add -A`, and, worse, ANY
 // failure with an unset terminal kind got reclassified as
@@ -4242,7 +4220,7 @@ func schedulerTerminalOutcome(success bool, terminalFailureKind string) string {
 // StageRunParams.WorktreePath. Returns "" only when neither is available.
 // Issue #3542.
 func loadWorktreePath(workspaceRoot string, issueNumber int) string {
-	if baseDir, err := layout.PipelineStateDir(workspaceRoot); err == nil {
+	if baseDir, err := layout.CheckoutDir(workspaceRoot); err == nil {
 		if rs, err := runstate.Load(baseDir); err == nil && rs != nil &&
 			rs.IssueNumber == issueNumber && rs.WorktreePath != nil && *rs.WorktreePath != "" {
 			return *rs.WorktreePath
@@ -4558,7 +4536,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 		}
 		if runID == "" {
-			if baseDir, dirErr := layout.PipelineStateDir(workspaceRoot); dirErr == nil {
+			if baseDir, dirErr := layout.CheckoutDir(workspaceRoot); dirErr == nil {
 				if rs, err := runstate.Load(baseDir); err == nil && rs != nil && rs.RunID != "" {
 					if runstate.IsIdentity(rs.RunID) {
 						runID = rs.RunID
@@ -8926,8 +8904,9 @@ func loadFeatureBranch(workspaceRoot string, issueNumber int) string {
 	return ctx.Branch
 }
 
-// shouldReRoute returns true if performance-mode.yaml is strictly newer than
-// the issue context file. Non-fatal: missing files return false (no re-route).
+// shouldReRoute returns true if the checkout's performance-mode.yaml
+// (layout.CheckoutPerformanceMode) is strictly newer than the issue context
+// file. Non-fatal: missing files return false (no re-route).
 // resolveIssueContextPath returns the first candidate issue-context path that
 // EXISTS, or "" when none does.
 //
@@ -9146,7 +9125,8 @@ func resolveIssueContextPath(workspaceRoot, worktreeDir, repo string, issueNumbe
 }
 
 func (s *Scheduler) shouldReRoute(workspaceRoot, worktreeDir, repo string, issueNumber int) bool {
-	perfModePath := filepath.Join(workspaceRoot, ".nightgauge", "performance-mode.yaml")
+	// The operator's performance-mode pin is per checkout (ADR-024 § 7).
+	perfModePath := checkoutStatePath(workspaceRoot, layout.CheckoutPerformanceMode)
 	perfModeInfo, err := os.Stat(perfModePath)
 	if err != nil {
 		return false

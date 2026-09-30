@@ -2,18 +2,21 @@
 //
 // Focus lenses steer autonomous enhancement, release-watch scoring, and
 // continuous-improvement proposals toward a specific quality dimension.
-// The active lens is persisted in .nightgauge/focus.yaml and readable
-// by all consumers (Go binary, skills).
+// The active lens is persisted in the checkout's
+// .git/nightgauge-worktree/focus.yaml and readable by all consumers (Go
+// binary, skills).
 package focus
 
 import (
+	"bytes"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // Lens represents a focus configuration with scoring boosts and metadata.
@@ -136,14 +139,20 @@ func NewManager(workspaceRoot string) *Manager {
 	return &Manager{workspaceRoot: workspaceRoot}
 }
 
-// focusPath returns the path to focus.yaml.
-func (m *Manager) focusPath() string {
-	return filepath.Join(m.workspaceRoot, ".nightgauge", "focus.yaml")
+// focusPath returns the path to the checkout's focus.yaml in CHECKOUT
+// (.git/nightgauge-worktree/focus.yaml, ADR-024 § 7). It errors outside a git
+// checkout.
+func (m *Manager) focusPath() (string, error) {
+	return layout.CheckoutPath(m.workspaceRoot, layout.CheckoutFocus)
 }
 
 // Load reads the current focus state. Returns default state if file doesn't exist.
 func (m *Manager) Load() (*State, error) {
-	data, err := os.ReadFile(m.focusPath())
+	path, err := m.focusPath()
+	if err != nil {
+		return nil, fmt.Errorf("locate focus.yaml: %w", err)
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &State{ActiveLens: "general"}, nil
@@ -163,16 +172,11 @@ func (m *Manager) Load() (*State, error) {
 
 // Save writes focus state to focus.yaml.
 func (m *Manager) Save(s *State) error {
-	dir := filepath.Dir(m.focusPath())
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create directory: %w", err)
-	}
-
 	data, err := yaml.Marshal(s)
 	if err != nil {
 		return fmt.Errorf("marshal focus.yaml: %w", err)
 	}
-	if err := os.WriteFile(m.focusPath(), data, 0o644); err != nil {
+	if _, err := layout.WriteCheckoutFile(m.workspaceRoot, layout.CheckoutFocus, bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("write focus.yaml: %w", err)
 	}
 	return nil

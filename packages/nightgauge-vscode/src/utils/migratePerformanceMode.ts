@@ -1,6 +1,7 @@
 /**
- * One-time migration from `.nightgauge/supercharge.yaml` to
- * `.nightgauge/performance-mode.yaml` (Issue #3009).
+ * One-time migration from `.nightgauge/supercharge.yaml` to the checkout's
+ * `performance-mode.yaml` in `.git/nightgauge-worktree/` (Issue #3009,
+ * ADR-024 § 7).
  *
  * Mapping (per ADR-003):
  *   - legacy `active: true`  → `mode: maximum`
@@ -17,10 +18,11 @@ import * as path from "node:path";
 import {
   writePerformanceModeStateFile,
   getLegacySuperchargeStatePath,
+  getPerformanceModeStatePath,
 } from "./resolvers/monitoringResolver";
+import { isUsableWorkspaceRoot } from "./cloneLayout";
 import type { PerformanceMode } from "./modeProfiles";
 
-const PERFORMANCE_MODE_FILENAME = "performance-mode.yaml";
 const LEGACY_MIGRATED_FILENAME = "supercharge.yaml.migrated";
 
 export interface MigrationResult {
@@ -37,6 +39,7 @@ export interface MigrationResult {
  * Run the one-time migration. Idempotent — safe to call on every activation.
  *
  * Returns `{ migrated: false }` when:
+ *   - `workspaceRoot` is not in a git checkout, OR
  *   - the new state file already exists, OR
  *   - the legacy file is absent.
  *
@@ -45,8 +48,12 @@ export interface MigrationResult {
  * surfacing the one-time toast.
  */
 export function migrateSuperchargeToPerformanceMode(workspaceRoot: string): MigrationResult {
+  // Outside a git checkout there is nowhere to write the new state file.
+  if (!isUsableWorkspaceRoot(workspaceRoot)) {
+    return { migrated: false };
+  }
   try {
-    const newStatePath = path.join(workspaceRoot, ".nightgauge", PERFORMANCE_MODE_FILENAME);
+    const newStatePath = getPerformanceModeStatePath(workspaceRoot);
     if (fs.existsSync(newStatePath)) {
       return { migrated: false };
     }

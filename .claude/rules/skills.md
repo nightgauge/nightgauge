@@ -89,8 +89,9 @@ modes Claude hits when using it. Convention:
 
 Skills run on a cadence (weekly/periodic) should remember prior runs and report
 **deltas, not full re-dumps**. Include
-`<!-- include: ../_shared/RUN_REFLECTION.md -->` and set `RUN_LOG` to an in-repo
-append-only path (e.g. `.nightgauge/triage/runs.jsonl`) before the include.
+`<!-- include: ../_shared/RUN_REFLECTION.md -->` and set `RUN_LOG` to an
+append-only path before the include (a log inside the git directory, such as the
+checkout's `triage/runs.jsonl`, also sets `RUN_LOG_CLASS` and `RUN_LOG_NAME`).
 Never store run state in `${CLAUDE_PLUGIN_DATA}` — keep it in-repo (single source
 of truth). `nightgauge-release-watch` (`last-seen-<provider>.json`) is the reference
 pattern.

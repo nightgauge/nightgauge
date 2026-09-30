@@ -6,7 +6,7 @@
 # record a lint `catch` and a failed validation_status — a sycophantic run
 # that writes all-pass fails the deterministic checks.
 set -euo pipefail
-mkdir -p src test .nightgauge/health
+mkdir -p src test
 # The dev handoff lives in the clone's pipeline state directory (ADR-024 § 7),
 # which only exists inside a git repository and is written through the binary.
 command -v nightgauge >/dev/null || { echo "setup: nightgauge must be on PATH" >&2; exit 1; }

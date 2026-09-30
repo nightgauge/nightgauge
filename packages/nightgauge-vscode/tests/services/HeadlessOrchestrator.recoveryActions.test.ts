@@ -33,12 +33,12 @@ function makeOrchestrator(): HeadlessOrchestrator {
 }
 
 describe("HeadlessOrchestrator recovery actions", () => {
-  // Run state lives in the clone's pipeline directory (ADR-024 § 7).
-  let mockRepoPipeline: string;
+  // run-state.json is the checkout's own singleton, in CHECKOUT (ADR-024 § 7).
+  let mockRepoCheckout: string;
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockRepoPipeline = fakeCloneLayout("/mock/repo").pipeline;
+    mockRepoCheckout = fakeCloneLayout("/mock/repo").checkout;
   });
 
   it("opens the run-state directory through VSCode", async () => {
@@ -47,10 +47,10 @@ describe("HeadlessOrchestrator recovery actions", () => {
     const result = await orchestrator.runRecoveryAction("open-run-state-directory");
 
     expect(result).toEqual({ success: true });
-    expect(mocks.uriFile).toHaveBeenCalledWith(mockRepoPipeline);
+    expect(mocks.uriFile).toHaveBeenCalledWith(mockRepoCheckout);
     expect(mocks.executeCommand).toHaveBeenCalledWith(
       "revealFileInOS",
-      expect.objectContaining({ fsPath: mockRepoPipeline })
+      expect.objectContaining({ fsPath: mockRepoCheckout })
     );
   });
 
@@ -81,8 +81,8 @@ describe("HeadlessOrchestrator recovery actions", () => {
 
   it("treats malformed state as no current lifecycle", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-recovery-state-"));
-    const pipelineDir = mkFakeCloneLayout(root).pipeline;
-    const statePath = path.join(pipelineDir, "run-state.json");
+    const checkoutDir = mkFakeCloneLayout(root).checkout;
+    const statePath = path.join(checkoutDir, "run-state.json");
     const orchestrator = makeOrchestrator();
     orchestrator.setWorktreeOverride(root);
     orchestrator.setMainRepoRoot(root);
@@ -97,9 +97,9 @@ describe("HeadlessOrchestrator recovery actions", () => {
 
   it("does not attribute a foreign run-state lifecycle to the requested issue", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-foreign-recovery-state-"));
-    const pipelineDir = mkFakeCloneLayout(root).pipeline;
+    const checkoutDir = mkFakeCloneLayout(root).checkout;
     fs.writeFileSync(
-      path.join(pipelineDir, "run-state.json"),
+      path.join(checkoutDir, "run-state.json"),
       JSON.stringify({ issue_number: 794, state: "running" })
     );
     const orchestrator = makeOrchestrator();
@@ -108,6 +108,33 @@ describe("HeadlessOrchestrator recovery actions", () => {
 
     try {
       expect((orchestrator as any).readRecoveryRunStateView(793).lifecycle).toBe("none");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it("reads a linked worktree's lifecycle from its own CHECKOUT", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-recovery-wt-"));
+    const main = path.join(root, "main");
+    const wt = path.join(root, "wt");
+    const common = path.join(main, ".git");
+    mkFakeCloneLayout(main);
+    const linked = mkFakeCloneLayout(wt, common, path.join(common, "worktrees", "wt"));
+    fs.writeFileSync(
+      path.join(common, "nightgauge-worktree", "run-state.json"),
+      JSON.stringify({ issue_number: 795, state: "running" })
+    );
+    const orchestrator = makeOrchestrator();
+    orchestrator.setWorktreeOverride(wt);
+    orchestrator.setMainRepoRoot(main);
+
+    try {
+      // The main checkout's run-state is not the worktree's.
+      expect((orchestrator as any).readRecoveryRunStateView(795).lifecycle).toBe("none");
+      fs.writeFileSync(
+        path.join(linked.checkout, "run-state.json"),
+        JSON.stringify({ issue_number: 795, state: "paused" })
+      );
+      expect((orchestrator as any).readRecoveryRunStateView(795).lifecycle).toBe("paused");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

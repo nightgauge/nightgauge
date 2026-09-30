@@ -8,23 +8,26 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/clonelock"
 	"github.com/spf13/cobra"
 )
 
 // layoutReport is the JSON `nightgauge layout` prints: every location the
 // binary resolves for one repository root (ADR-024 § 1, § 7, "One path
-// source"). The extension, skills and docs obtain the per-clone paths here
-// instead of hard-coding them. Machine roots are resolved without being
+// source"). The extension, skills and docs obtain the per-clone and
+// per-checkout paths here instead of hard-coding them. Machine roots are resolved without being
 // created; an unresolvable one is reported as "".
 type layoutReport struct {
 	SchemaVersion int    `json:"schema_version"`
 	Root          string `json:"root"`
 	GitCommonDir  string `json:"git_common_dir"`
+	GitDir        string `json:"git_dir"`
 	Clone         string `json:"clone"`
 	Pipeline      string `json:"pipeline"`
 	Plans         string `json:"plans"`
 	Retros        string `json:"retros"`
 	Logs          string `json:"logs"`
+	Checkout      string `json:"checkout"`
 	State         string `json:"state"`
 	Cache         string `json:"cache"`
 	Runtime       string `json:"runtime"`
@@ -42,8 +45,17 @@ func layoutRoot(workdir string) (string, error) {
 	return filepath.Abs(workdir)
 }
 
+// layoutSchemaVersion is the shape of layoutReport: 2 added git_dir and
+// checkout (the per-checkout root, #2037).
+const layoutSchemaVersion = 2
+
+// layoutCheckoutClass names CHECKOUT in `layout path/write/append`: the
+// per-checkout root, whose entries are the unkeyed singletons and runtime
+// files of one checkout (layout.CheckoutEntries).
+const layoutCheckoutClass = "checkout"
+
 func resolveLayoutReport(root string) (layoutReport, error) {
-	rep := layoutReport{SchemaVersion: 1, Root: root}
+	rep := layoutReport{SchemaVersion: layoutSchemaVersion, Root: root}
 	clone, err := layout.CloneDir(root)
 	if err != nil {
 		return rep, err
@@ -62,6 +74,12 @@ func resolveLayoutReport(root string) (layoutReport, error) {
 		}
 		*dst = dir
 	}
+	checkout, err := layout.CheckoutDir(root)
+	if err != nil {
+		return rep, err
+	}
+	rep.Checkout = checkout
+	rep.GitDir = filepath.Dir(checkout)
 	rep.State, _ = layout.StateHomePath()
 	rep.Cache, _ = layout.CacheHomePath()
 	rep.Runtime, _ = layout.RuntimeDir()
@@ -83,10 +101,15 @@ func layoutCmd() *cobra.Command {
   plans     issue-keyed implementation plans             (clone/plans)
   retros    issue-keyed retrospectives                   (clone/retros)
   logs      per-clone logs                               (clone/logs)
+  checkout  <git-dir>/nightgauge-worktree: this checkout's run control
+            (current-run.json, run-state.json, batch-state.json,
+            queue-state.json, serve.lock, go-backend.log) and runtime state
+            (attention/, autonomous/, health/, focus.yaml, ...)
   state, cache, runtime   the per-user machine roots
 
 Per-clone data lives in the git directory, so it is never committed and a
-linked worktree sees the main clone's data. Outside a git repository the
+linked worktree sees the main clone's data. Each linked worktree has its own
+checkout directory inside its own git dir. Outside a git repository the
 command fails with "not a git repository".
 
 Agents and scripts never write under the git directory by path: use
@@ -116,17 +139,28 @@ Agents and scripts never write under the git directory by path: use
 	return cmd
 }
 
-var layoutClassHelp = strings.Join(layout.Classes, ", ")
+var layoutClassHelp = strings.Join(append(append([]string{}, layout.Classes...), layoutCheckoutClass), ", ")
+
+// layoutDirOf resolves a `layout path/write/append` class: a per-clone class
+// or "checkout".
+func layoutDirOf(root, class string) (string, error) {
+	if class == layoutCheckoutClass {
+		return layout.CheckoutDir(root)
+	}
+	return layout.ClassDir(root, class)
+}
 
 func layoutPathCmd(workdir *string) *cobra.Command {
 	return &cobra.Command{
 		Use:   "path <class> [name]",
 		Short: "Print the absolute path of a per-clone class directory or a file in it",
-		Long: `Prints the absolute path of a per-clone class directory (` + layoutClassHelp + `),
-or of the file name inside it. Nothing is created beyond the clone directory.
+		Long: `Prints the absolute path of a per-clone class directory, or of this
+checkout's directory (` + layoutClassHelp + `), or of the file name inside
+it. Nothing is created beyond the clone or checkout directory.
 Read files at the printed path; write them with 'nightgauge layout write'.`,
 		Example: `  jq . "$(nightgauge layout path pipeline issue-42.json)"
-  ls "$(nightgauge layout path plans)"`,
+  ls "$(nightgauge layout path plans)"
+  jq . "$(nightgauge layout path checkout run-state.json)"`,
 		Args:         cobra.RangeArgs(1, 2),
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -135,10 +169,13 @@ Read files at the printed path; write them with 'nightgauge layout write'.`,
 				return err
 			}
 			var p string
-			if len(args) == 2 {
+			switch {
+			case len(args) == 2 && args[0] == layoutCheckoutClass:
+				p, err = layout.CheckoutPath(root, args[1])
+			case len(args) == 2:
 				p, err = layout.ClassFilePath(root, args[0], args[1])
-			} else {
-				p, err = layout.ClassDir(root, args[0])
+			default:
+				p, err = layoutDirOf(root, args[0])
 			}
 			if err != nil {
 				return err
@@ -158,7 +195,8 @@ func layoutWriteCmd(workdir *string, appendMode bool) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   use + " <class> <name>",
 		Short: short,
-		Long: verb + ` <name> inside the per-clone class directory (` + layoutClassHelp + `)
+		Long: verb + ` <name> inside the per-clone class directory or this checkout's
+directory (` + layoutClassHelp + `)
 with the content of stdin, or of the file --from names. name may contain
 subdirectories ("history/2026-09-29.jsonl"), never ".." or an absolute path;
 the write is confined to the class directory and refuses symlinks out of it.
@@ -188,11 +226,27 @@ Prints the absolute path written.`,
 				defer f.Close()
 				in = f
 			}
-			write := layout.WriteClassFile
-			if appendMode {
-				write = layout.AppendClassFile
+			dir, err := layoutDirOf(root, args[0])
+			if err != nil {
+				return err
 			}
-			p, err := write(root, args[0], args[1], in)
+			var p string
+			if appendMode {
+				// A per-clone file is shared by every checkout of the
+				// clone: the append holds CLONE/.lock (ADR-024 § 7).
+				if args[0] != layoutCheckoutClass {
+					if release, lockErr := clonelock.Acquire(filepath.Dir(dir)); lockErr == nil {
+						defer release()
+					}
+					p, err = layout.AppendClassFile(root, args[0], args[1], in)
+				} else {
+					p, err = layout.AppendCheckoutFile(root, args[1], in)
+				}
+			} else if args[0] == layoutCheckoutClass {
+				p, err = layout.WriteCheckoutFile(root, args[1], in)
+			} else {
+				p, err = layout.WriteClassFile(root, args[0], args[1], in)
+			}
 			if err != nil {
 				return err
 			}

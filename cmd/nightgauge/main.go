@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -4910,22 +4911,20 @@ func versionCmd() *cobra.Command {
 // --- serve command (IPC server) ---
 
 // setupServeLogging configures the Go log package to write to both stderr and
-// a persistent log file, go-backend.log in the clone's logs directory
-// (layout.CloneLogsDir). The file is
-// opened in append mode and rotated (truncated) when it exceeds 5 MB.
-// Returns a closer that should be deferred.
+// a persistent log file, go-backend.log in the checkout's per-checkout
+// directory (layout.CheckoutBackendLog, ADR-024 § 7): one daemon per checkout,
+// so each checkout's daemon has its own log. A workspace root outside a git
+// checkout has no such directory and logs to stderr only. The file is opened
+// in append mode and rotated (truncated) when it exceeds 5 MB. Returns a
+// closer that should be deferred.
 func setupServeLogging(workspaceRoot string) func() {
-	logDir, err := cloneDir(layout.CloneLogsDir, workspaceRoot)
+	logPath, err := cloneDir(func(root string) (string, error) {
+		return layout.CheckoutPath(root, layout.CheckoutBackendLog)
+	}, workspaceRoot)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot resolve log dir: %v\n", err)
+		fmt.Fprintf(os.Stderr, "warning: cannot resolve the daemon log file: %v\n", err)
 		return func() {}
 	}
-	if err := os.MkdirAll(logDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cannot create log dir %s: %v\n", logDir, err)
-		return func() {}
-	}
-
-	logPath := filepath.Join(logDir, "go-backend.log")
 
 	// Rotate: if the file exceeds 5 MB, truncate it (keep last 1 MB).
 	if info, err := os.Stat(logPath); err == nil && info.Size() > 5*1024*1024 {
@@ -5024,7 +5023,8 @@ func serveCmd() *cobra.Command {
 
 			// Log retention (ADR-024 § 11, #2029): pruned now and daily for
 			// the life of this daemon, off the startup path. go-backend.log,
-			// opened just above, is a live file and is never deleted.
+			// opened just above, is in the per-checkout directory, not in a
+			// pruned log directory, and only its own 5 MB rotation trims it.
 			retentionCtx := cmd.Context()
 			if retentionCtx == nil {
 				retentionCtx = context.Background()
@@ -5221,8 +5221,8 @@ func serveCmd() *cobra.Command {
 					mappingStore.Reload(cfg)
 				}
 				permCache := auth.NewPermissionCache()
-				auditDir := workspaceRoot + "/.nightgauge/notifications"
-				auditWriter := auth.NewAuditWriter(auditDir)
+				// The audit log is the checkout's (ADR-024 § 7).
+				auditWriter := auth.NewCheckoutAuditWriter(absPathOrEmpty(workspaceRoot))
 				ghChecker := auth.RepoPermissionCheckerFunc(func(ctx context.Context, login, owner, repo string) (bool, error) {
 					return client.HasRepoWriteAccess(ctx, login, owner, repo)
 				})
@@ -5527,7 +5527,7 @@ func serveCmd() *cobra.Command {
 			}
 
 			// Action Center platform bridge (ADR 015 §C/§E, #330). The local
-			// `.nightgauge/attention/` store is the single authoritative writer;
+			// attention store (the checkout's attention/) is the single authoritative writer;
 			// this is the additive client↔platform sync #330 identified as missing.
 			// Gated on a configured platform + license key and offline-safe (each
 			// service no-ops while the client is offline), so a fully local
@@ -10697,7 +10697,10 @@ func autonomousStuckEpicsCmd() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			workdir, _ := os.Getwd()
-			statePath := filepath.Join(workdir, ".nightgauge", "autonomous", "state.json")
+			statePath, err := cloneDir(orchestrator.AutonomousStatePath, workdir)
+			if err != nil {
+				return err
+			}
 			data, err := os.ReadFile(statePath)
 			if os.IsNotExist(err) {
 				fmt.Println("No autonomous scheduler state found. Run 'nightgauge autonomous run' first.")
@@ -11221,7 +11224,10 @@ func autonomousStatusCmd() *cobra.Command {
 						"falling back to the state file, which the running scheduler does not re-read")
 			}
 
-			statePath := filepath.Join(workdir, ".nightgauge", "autonomous", "state.json")
+			statePath, err := cloneDir(orchestrator.AutonomousStatePath, workdir)
+			if err != nil {
+				return err
+			}
 			data, err := os.ReadFile(statePath)
 			if os.IsNotExist(err) {
 				fmt.Println("No autonomous scheduler state found. Run 'nightgauge autonomous run' first.")
@@ -11752,7 +11758,10 @@ func autonomousStopCmd() *cobra.Command {
 				return nil
 			}
 
-			statePath := filepath.Join(workdir, ".nightgauge", "autonomous", "state.json")
+			statePath, err := cloneDir(orchestrator.AutonomousStatePath, workdir)
+			if err != nil {
+				return err
+			}
 			data, err := os.ReadFile(statePath)
 			if os.IsNotExist(err) {
 				fmt.Println("No autonomous scheduler state found.")
@@ -11774,12 +11783,12 @@ func autonomousStopCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("marshal state: %w", err)
 			}
-			tmp := statePath + ".tmp"
-			if err := os.WriteFile(tmp, out, 0644); err != nil {
+			// The state file is the checkout's (ADR-024 § 7); written
+			// confined to its per-checkout directory, as the scheduler does.
+			if _, err := cloneDir(func(root string) (string, error) {
+				return layout.WriteCheckoutFile(root, orchestrator.AutonomousStateName, bytes.NewReader(out))
+			}, workdir); err != nil {
 				return fmt.Errorf("write state: %w", err)
-			}
-			if err := os.Rename(tmp, statePath); err != nil {
-				return fmt.Errorf("rename state: %w", err)
 			}
 			// Say which surface answered. A state-file write is NOT a stop —
 			// no scheduler is listening, so this only marks the file for
@@ -13149,7 +13158,7 @@ func pipelineBatchFailuresCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "batch-failures",
 		Short: "Extract pipeline failure rows from batch-state and history JSONL",
-		Long: `Reads ` + layout.PipelineStateDisplay() + `/batch-state.json AND
+		Long: `Reads ` + layout.CheckoutDisplay(layout.CheckoutBatchState) + ` AND
 ` + layout.PipelineStateDisplay() + `/history/*.jsonl, emitting a stable JSON output that
 unifies failure rows from both sources plus a context-files fallback. Replaces
 ~150 lines of inline Python in retro Phases 2.1, 2.2, and 2.4 (audit row B29).

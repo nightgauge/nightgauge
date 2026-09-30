@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
@@ -29,10 +30,7 @@ import (
 func newHaltedServer(t *testing.T, state orchestrator.AutonomousState) (*Server, *orchestrator.AutonomousScheduler, context.Context) {
 	t.Helper()
 	root := layouttest.Repo(t)
-	autoDir := filepath.Join(root, ".nightgauge", "autonomous")
-	if err := os.MkdirAll(autoDir, 0o755); err != nil {
-		t.Fatalf("mkdir state dir: %v", err)
-	}
+	autoDir := layouttest.MkCheckoutSubdir(t, root, layout.CheckoutAutonomous)
 	data, err := json.Marshal(state)
 	if err != nil {
 		t.Fatalf("marshal state: %v", err)

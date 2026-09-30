@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/complexity"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -135,20 +136,32 @@ func TestEstimateTokens_ScalesWithComplexity(t *testing.T) {
 	}
 }
 
-// writeModeFile writes a performance-mode.yaml to dir/.nightgauge/ and
-// returns dir as the workspaceRoot.
+// writeModeFile writes a performance-mode.yaml to a fresh repository's
+// CHECKOUT and returns the repository as the workspaceRoot.
 func writeModeFile(t *testing.T, mode string) string {
 	t.Helper()
-	dir := t.TempDir()
-	ibDir := filepath.Join(dir, ".nightgauge")
-	if err := os.MkdirAll(ibDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	dir := layouttest.Repo(t)
 	content := "mode: " + mode + "\n"
-	if err := os.WriteFile(filepath.Join(ibDir, "performance-mode.yaml"), []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(layouttest.CheckoutPath(t, dir, "performance-mode.yaml"), []byte(content), 0o644); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 	return dir
+}
+
+// The mode file is read from CHECKOUT only (ADR-024 § 7): a copy left in the
+// working tree's .nightgauge/ is not consulted.
+func TestResolvePerformanceMode_IgnoresWorkingTreeCopy(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "")
+	dir := layouttest.Repo(t)
+	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".nightgauge", "performance-mode.yaml"), []byte("mode: maximum\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := ResolvePerformanceMode(dir); got != ModeElevated {
+		t.Fatalf("ResolvePerformanceMode = %s, want %s (the working-tree copy must be ignored)", got, ModeElevated)
+	}
 }
 
 func TestRouter_EfficiencyMode_DevGetsSonnet(t *testing.T) {
@@ -194,8 +207,8 @@ func TestRouter_ElevatedMode_NoOverride(t *testing.T) {
 }
 
 func TestRouter_MissingFile_DefaultsToElevated(t *testing.T) {
-	// Empty dir — no performance-mode.yaml
-	root := t.TempDir()
+	// Empty repository — no performance-mode.yaml
+	root := layouttest.Repo(t)
 	r := NewRouter(nil, root)
 	// Without file: high complexity feature-dev → opus (elevated behavior)
 	rec := r.Route(context.Background(), "feature-dev", complexity.Score{Value: 9})

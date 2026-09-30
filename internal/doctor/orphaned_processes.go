@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -49,7 +50,7 @@ const staleProcessAge = 1 * time.Hour
 //
 // Ownership is a PROGRESS test, not a presence test. Every long-lived verb
 // writes its OWN pid into the sidecar it owns — `autonomous run` writes
-// state.json (orchestrator.autonomousStateFile), the pipeline runner writes
+// state.json (orchestrator.AutonomousStatePath), the pipeline runner writes
 // current-run.json — so treating a bare pid as ownership is self-attestation:
 // the wedged 31-hour scheduler this check exists for claimed itself and read
 // as owned forever.
@@ -225,14 +226,31 @@ func pipelineStatePath(root, name string) string {
 	return filepath.Join(dir, name)
 }
 
+// checkoutStatePath is the path of name inside root's per-checkout directory
+// (layout.CheckoutPath, ADR-024 § 7), for doctor's read-only probes of the
+// unkeyed run-control singletons. Like pipelineStatePath, a relative root is
+// made absolute first and an unresolvable root (outside a git checkout, or a
+// refused CHECKOUT) returns "", which every read treats as absent.
+func checkoutStatePath(root, name string) string {
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return ""
+	}
+	p, err := layout.CheckoutPath(abs, name)
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
 // sidecarRoots is every directory that can hold a run sidecar: the workspace's
 // repo checkouts plus the WORKSPACE root itself.
 //
 // The two are not the same set and the difference is load-bearing.
 // WorkspaceRepoRoots answers "which repo checkouts must a workspace-wide scan
 // inspect?", and it never includes the workspace root unless a repo happens to
-// live there — but the scheduler writes .nightgauge/autonomous/state.json
-// relative to the WORKSPACE root. In a multi-repo workspace the one sidecar
+// live there — but the scheduler writes its state.json in the per-checkout
+// directory of the WORKSPACE root (orchestrator.AutonomousStatePath). In a multi-repo workspace the one sidecar
 // that can claim the long-lived scheduler sits in a directory the repo-root
 // list does not contain.
 func sidecarRoots(startDir string) []string {
@@ -296,7 +314,7 @@ func sidecarPIDs(startDir string, now time.Time) map[int]bool {
 			StartedAt  string `json:"startedAt"`
 			LastScanAt string `json:"lastScanAt"`
 		}
-		if readJSONFile(filepath.Join(root, ".nightgauge", "autonomous", "state.json"), &autonomous) &&
+		if readJSONFile(checkoutStatePath(root, path.Join(layout.CheckoutAutonomous, "state.json")), &autonomous) &&
 			progressIsFresh(now, autonomous.LastScanAt, autonomous.StartedAt) {
 			claimPID(claimed, autonomous.PID)
 		}
@@ -307,7 +325,7 @@ func sidecarPIDs(startDir string, now time.Time) map[int]bool {
 			StartedAt  string `json:"started_at"`
 			StageStart string `json:"stage_started_at"`
 		}
-		if readJSONFile(pipelineStatePath(root, "current-run.json"), &currentRun) &&
+		if readJSONFile(checkoutStatePath(root, layout.CheckoutCurrentRun), &currentRun) &&
 			progressIsFresh(now, currentRun.StageStart, currentRun.StartedAt) {
 			claimPID(claimed, currentRun.PID)
 		}
@@ -320,7 +338,7 @@ func sidecarPIDs(startDir string, now time.Time) map[int]bool {
 				PID *int `json:"pid"`
 			} `json:"attempts"`
 		}
-		if readJSONFile(pipelineStatePath(root, "run-state.json"), &runState) &&
+		if readJSONFile(checkoutStatePath(root, layout.CheckoutRunState), &runState) &&
 			progressIsFresh(now, runState.UpdatedAt, runState.CreatedAt) {
 			for _, a := range runState.Attempts {
 				if a.PID != nil {

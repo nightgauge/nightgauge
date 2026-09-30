@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -285,11 +287,14 @@ func TestActiveIssuesFromSnapshots_IgnoresNonSnapshotFiles(t *testing.T) {
 // TestCurrentRunSidecar_ProtectsItsIssueThroughTheStateReader in
 // internal/orchestrator, so a field rename fails there rather than silently
 // disarming this arm.
-func writeSidecar(t *testing.T, dir string, issue, pid int, runID string) {
+//
+// The sidecar is per checkout (layout.CheckoutCurrentRun, ADR-024 § 7), so it
+// is written into root's per-checkout directory, not the pipeline directory.
+func writeSidecar(t *testing.T, root string, issue, pid int, runID string) {
 	t.Helper()
 	body := fmt.Sprintf(`{"issue_number":%d,"repo":"owner/repo","run_id":%q,"started_at":%q,"stage":"feature-dev","stage_started_at":%q,"pid":%d}`,
 		issue, runID, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), pid)
-	if err := os.WriteFile(filepath.Join(dir, "current-run.json"), []byte(body), 0o644); err != nil {
+	if err := os.WriteFile(layouttest.CheckoutPath(t, root, "current-run.json"), []byte(body), 0o644); err != nil {
 		t.Fatalf("write sidecar: %v", err)
 	}
 }
@@ -306,16 +311,16 @@ func writeSidecar(t *testing.T, dir string, issue, pid int, runID string) {
 // live run in a long stage therefore has exactly the snapshot below — no usable
 // pid, old mtime — and arms 3 and 4 both decline it. The sidecar is the one
 // signal that path writes while the run is alive (PID: os.Getpid() at stage
-// start, removed on clean completion), and it lives in the very directory this
-// scan already walks.
+// start, removed on clean completion), in the checkout's own directory.
 func TestActiveIssuesFromSnapshots_SidecarWithALivePidProtects(t *testing.T) {
-	dir := t.TempDir()
+	root := layouttest.Repo(t)
+	dir := layouttest.MkPipelineDir(t, root)
 	now := time.Now()
 	runID := mustRunID(t)
 	rs := NewRuntimeState("owner/repo", 510, "item", runID)
 	path := persistSnapshot(t, dir, rs)
 	backdate(t, path, now.Add(-24*time.Hour)) // no stage boundary in a day
-	writeSidecar(t, dir, 510, os.Getpid(), runID)
+	writeSidecar(t, root, 510, os.Getpid(), runID)
 
 	res, err := activeIssuesFromSnapshotsAt(dir, now)
 	if err != nil {
@@ -335,14 +340,15 @@ func TestActiveIssuesFromSnapshots_SidecarWithALivePidProtects(t *testing.T) {
 // would pin the crashed run's worktree until an orchestrator happened to start in
 // that repo again. Existence is not the gate; liveness is.
 func TestActiveIssuesFromSnapshots_SidecarWithADeadPidProtectsNothing(t *testing.T) {
-	dir := t.TempDir()
+	root := layouttest.Repo(t)
+	dir := layouttest.MkPipelineDir(t, root)
 	now := time.Now()
 	runID := mustRunID(t)
 	path := persistSnapshot(t, dir, NewRuntimeState("owner/repo", 511, "item", runID))
 	backdate(t, path, now.Add(-24*time.Hour))
 	// A pid that cannot be alive: 0 is never a live process (runstate.ProcessAlive
 	// rejects it outright), and using a real-but-exited pid would be racy.
-	writeSidecar(t, dir, 511, 0, runID)
+	writeSidecar(t, root, 511, 0, runID)
 
 	res, err := activeIssuesFromSnapshotsAt(dir, now)
 	if err != nil {
@@ -360,8 +366,9 @@ func TestActiveIssuesFromSnapshots_SidecarWithADeadPidProtectsNothing(t *testing
 // and cannot be parsed protects nothing (it cannot name an issue), which is the
 // one shape worth surfacing rather than swallowing.
 func TestActiveIssuesFromSnapshots_UnparseableSidecarIsWarned(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "current-run.json"), []byte("{not json"), 0o644); err != nil {
+	root := layouttest.Repo(t)
+	dir := layouttest.MkPipelineDir(t, root)
+	if err := os.WriteFile(layouttest.CheckoutPath(t, root, "current-run.json"), []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -374,6 +381,37 @@ func TestActiveIssuesFromSnapshots_UnparseableSidecarIsWarned(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(res.Warnings, "\n"), "unparseable") {
 		t.Errorf("the unreadable sidecar must be reported; warnings = %v", res.Warnings)
+	}
+}
+
+// TestActiveIssuesFromSnapshots_ReadsEveryCheckoutsSidecar: the sidecar is per
+// checkout (ADR-024 § 7), so an orchestrator running in a linked worktree
+// writes its own, and the clone's snapshot scan — shared by every checkout —
+// must see it. Otherwise the worktree sweep run from the main checkout would
+// remove the directory that worktree's live run is executing in.
+func TestActiveIssuesFromSnapshots_ReadsEveryCheckoutsSidecar(t *testing.T) {
+	root := layouttest.Repo(t)
+	gittest.Run(t, root, "commit", "-q", "--allow-empty", "-m", "init")
+	linked := filepath.Join(t.TempDir(), "wt")
+	gittest.Run(t, root, "worktree", "add", "-q", "--detach", linked)
+	dir := layouttest.MkPipelineDir(t, root)
+	if linkedDir := layouttest.PipelineDir(t, linked); linkedDir != dir {
+		t.Fatalf("checkouts of one clone resolve different pipeline dirs: %s vs %s", dir, linkedDir)
+	}
+	now := time.Now()
+	runID := mustRunID(t)
+	backdate(t, persistSnapshot(t, dir, NewRuntimeState("owner/repo", 512, "item", runID)), now.Add(-24*time.Hour))
+	writeSidecar(t, linked, 512, os.Getpid(), runID)
+	if layouttest.CheckoutPath(t, linked, "current-run.json") == layouttest.CheckoutPath(t, root, "current-run.json") {
+		t.Fatal("the linked worktree and the main checkout share one current-run.json")
+	}
+
+	res, err := activeIssuesFromSnapshotsAt(dir, now)
+	if err != nil {
+		t.Fatalf("scan: %v", err)
+	}
+	if got := res.Protected[512]; !strings.HasPrefix(got, "live-sidecar") {
+		t.Errorf("a live run in a linked worktree was not protected by its sidecar: protected=%v warnings=%v", res.Protected, res.Warnings)
 	}
 }
 
@@ -475,11 +513,12 @@ func TestActiveIssuesFromSnapshots_CorruptSnapshotAgesOut(t *testing.T) {
 // protection granted by a fortnight-old pause is indistinguishable from one
 // granted by a process that is executing right now.
 func TestActiveIssuesFromSnapshots_ProtectionReasonPerArm(t *testing.T) {
-	dir := t.TempDir()
+	root := layouttest.Repo(t)
+	dir := layouttest.MkPipelineDir(t, root)
 	now := time.Now()
 
 	// Arm: the in-flight sidecar, the only CURRENT evidence on the Go path.
-	writeSidecar(t, dir, 4440, os.Getpid(), mustRunID(t))
+	writeSidecar(t, root, 4440, os.Getpid(), mustRunID(t))
 
 	// Arm: the run's recorded stage child.
 	child := NewRuntimeState("owner/repo", 4441, "item", mustRunID(t))

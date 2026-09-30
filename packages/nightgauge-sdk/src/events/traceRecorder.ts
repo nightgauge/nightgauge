@@ -66,15 +66,19 @@ const RUN_ID_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 export interface TraceRecorderOptions {
   /**
    * The pipeline context directory (normally `nightgauge layout path pipeline`,
-   * i.e. `<git-common-dir>/nightgauge/pipeline`).
-   * `run-state.json` is read from here and the trace is written to its
-   * `trace/` subdirectory — one knob so custom `contextPath` configurations
-   * keep run-state and trace co-located.
+   * i.e. `<git-common-dir>/nightgauge/pipeline`). The trace is written to its
+   * `trace/` subdirectory and `runtime-{issue}.json` is read from here.
    */
   pipelineDir: string;
   /**
+   * The checkout's own directory (`<git-dir>/nightgauge-worktree`, ADR-024
+   * § 7), which holds `run-state.json`. When omitted, `run_id` is not read
+   * from run-state.
+   */
+  checkoutDir?: string;
+  /**
    * Explicit run id. When omitted, the recorder resolves `run_id` from
-   * `<pipelineDir>/run-state.json` and disables itself (silent no-op)
+   * `<checkoutDir>/run-state.json` and disables itself (silent no-op)
    * when no run-state exists — a per-stage caller must never invent a run id
    * or it would split one run's trace across files.
    */
@@ -95,6 +99,7 @@ export interface TraceRecorderOptions {
  */
 export class TraceRecorder {
   private readonly pipelineDir: string;
+  private readonly checkoutDir?: string;
   private readonly repo?: string;
   private readonly issue?: number;
 
@@ -112,6 +117,7 @@ export class TraceRecorder {
 
   private constructor(opts: TraceRecorderOptions) {
     this.pipelineDir = opts.pipelineDir;
+    this.checkoutDir = opts.checkoutDir;
     this.repo = opts.repo;
     this.issue = opts.issue;
     this.pending = this.init(opts.runId);
@@ -138,8 +144,11 @@ export class TraceRecorder {
   private async init(explicitRunId?: string): Promise<void> {
     try {
       let runId = explicitRunId ?? null;
-      if (!runId) {
-        const state = await new RunStateManager(this.pipelineDir).read();
+      if (!runId && this.checkoutDir) {
+        const state = await new RunStateManager({
+          pipeline: this.pipelineDir,
+          checkout: this.checkoutDir,
+        }).read();
         runId = state?.run_id ?? null;
       }
       if (!runId && this.issue !== undefined) {

@@ -18,7 +18,13 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { pipelineStateDir, PIPELINE_STATE_DISPLAY } from "../utils/cloneLayout";
+import {
+  checkoutDir,
+  checkoutPath,
+  isUsableWorkspaceRoot,
+  pipelineStateDir,
+  PIPELINE_STATE_DISPLAY,
+} from "../utils/cloneLayout";
 import { exec, execFile } from "child_process";
 import { promisify } from "util";
 
@@ -1833,10 +1839,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   private readCurrentRunId(issueNumber: number): string {
     try {
-      const runStatePath = path.join(
-        pipelineStateDir(this.getWorkingDirectory()),
-        "run-state.json"
-      );
+      const runStatePath = checkoutPath(this.getWorkingDirectory(), "runState");
       const parsed = JSON.parse(fs.readFileSync(runStatePath, "utf-8")) as {
         run_id?: string;
         issue_number?: number;
@@ -5479,7 +5482,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     lifecycle: "running" | "paused" | "aborted" | "none";
   } {
     const ws = this.getWorkingDirectory();
-    const runStatePath = path.join(pipelineStateDir(ws), "run-state.json");
+    if (!isUsableWorkspaceRoot(ws)) {
+      return { lifecycle: "none" };
+    }
+    const runStatePath = checkoutPath(ws, "runState");
     if (!fs.existsSync(runStatePath)) {
       return { lifecycle: "none" };
     }
@@ -5556,8 +5562,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           return { success: true };
 
         case "open-run-state-directory": {
-          const ws = this.getWorkingDirectory();
-          const dir = pipelineStateDir(ws);
+          // run-state.json is the checkout's own singleton (ADR-024 § 7).
+          const dir = checkoutDir(this.getWorkingDirectory());
           await vscode.commands.executeCommand("revealFileInOS", vscode.Uri.file(dir));
           return { success: true };
         }

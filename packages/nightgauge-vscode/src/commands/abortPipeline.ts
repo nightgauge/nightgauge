@@ -368,9 +368,11 @@ export function registerAbortPipelineCommand(
       // Run clearPipeline and file deletions concurrently.
       //
       // `contextFiles` is EVERY *.json in pipelineStateDir(root)/, not just the
-      // per-issue context files, so this filter is load-bearing: it is what
-      // keeps the durable `run-state.json`, `queue-state.json` and
-      // `batch-state.json` from being deleted on abort. Until #471 the suffix
+      // per-issue context files, so this filter guards any durable
+      // `*-state.json` there from deletion on abort. The run-control
+      // singletons (`run-state.json`, `queue-state.json`, `batch-state.json`)
+      // now live in the checkout's own directory instead (ADR-024 § 7), out of
+      // this listing entirely. Until #471 the suffix
       // it tested was two characters shorter, so it protected those three only
       // as a side effect of also naming a phantom file nothing writes.
       // Narrowing it to `-state.json` is behaviourally identical for every file

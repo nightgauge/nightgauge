@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
@@ -58,9 +60,12 @@ import (
 //
 // The one live signal that path does write is the crash-recovery sidecar
 // `current-run.json` (internal/orchestrator's writeCurrentRunSidecar), stamped
-// with `PID: os.Getpid()` at stage START and removed on clean completion. It
-// lives in the very directory this scan already walks. So it is an ARM here:
-// a sidecar whose process is alive protects the issue it names.
+// with `PID: os.Getpid()` at stage START and removed on clean completion. It is
+// an unkeyed singleton, so it lives in each checkout's per-checkout directory
+// (layout.CheckoutCurrentRun, ADR-024 § 7), one per orchestrator; the scan
+// reads the sidecar of every checkout of the clone whose snapshot directory it
+// walks. So it is an ARM here: a sidecar whose process is alive protects the
+// issue it names.
 
 // ActiveIssues is a snapshot scan's answer about which issues have a run in
 // flight, together with everything the scan could not read.
@@ -96,7 +101,8 @@ type ActiveIssues struct {
 // (its pipeline state directory, layout.PipelineStateDir) and returns the
 // issues whose run is in flight. Every checkout of one clone, main or linked
 // worktree, resolves to the same directory under the git common dir
-// (ADR-024 § 7); ActiveIssuesForRoot resolves it from a root.
+// (ADR-024 § 7); ActiveIssuesForRoot resolves it from a root. The in-flight
+// sidecar arm reads the current-run.json of every checkout of that clone.
 //
 // An absent directory is a determined empty answer, not an error: a repo that
 // has never run the pipeline has no snapshot dir. Any OTHER read failure IS an
@@ -125,23 +131,31 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 		return res, errors.New("scan runtime snapshots: no pipeline state directory resolved")
 	}
 
+	// THE GO-SCHEDULER LIVENESS ARM, read before the snapshots because it is the
+	// only arm whose evidence is CURRENT (see the block comment above): the
+	// sidecar's pid is the running orchestrator's, stamped at stage start, while
+	// a snapshot's pid is either 0 (the stage-start write clears it, #534) or a
+	// stage child that had already exited when the file was written. Each
+	// checkout's orchestrator writes its own, so every checkout is read; one
+	// that could not be enumerated is an error, never "no sidecar" (#296).
+	sidecars, err := checkoutSidecarPaths(stateDir)
+	if err != nil {
+		return res, fmt.Errorf("scan in-flight sidecars for %s: %w", stateDir, err)
+	}
+	for _, p := range sidecars {
+		if issue, pid, warning := sidecarInFlightIssue(p); issue > 0 {
+			res.protect(issue, "live-sidecar", fmt.Sprintf("pid %d", pid))
+		} else if warning != "" {
+			res.Warnings = append(res.Warnings, warning)
+		}
+	}
+
 	entries, err := os.ReadDir(stateDir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return res, nil
 		}
 		return res, fmt.Errorf("scan runtime snapshots in %s: %w", stateDir, err)
-	}
-
-	// THE GO-SCHEDULER LIVENESS ARM, read before the snapshots because it is the
-	// only arm whose evidence is CURRENT (see the block comment above): the
-	// sidecar's pid is the running orchestrator's, stamped at stage start, while
-	// a snapshot's pid is either 0 (the stage-start write clears it, #534) or a
-	// stage child that had already exited when the file was written.
-	if issue, pid, warning := sidecarInFlightIssue(stateDir); issue > 0 {
-		res.protect(issue, "live-sidecar", fmt.Sprintf("pid %d", pid))
-	} else if warning != "" {
-		res.Warnings = append(res.Warnings, warning)
 	}
 
 	for _, entry := range entries {
@@ -154,8 +168,8 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 			// Not a snapshot: the history dir's siblings, exit-records, the
 			// pause-restore claim artifacts. A claim artifact deliberately does
 			// NOT protect an issue here — it is another host's working state and
-			// the reconciler owns its rows. The current-run sidecar is not a
-			// snapshot either, and it is read above as its own arm.
+			// the reconciler owns its rows. The current-run sidecar lives in
+			// each checkout's own directory and is read above as its own arm.
 			continue
 		}
 
@@ -306,11 +320,65 @@ func activeIssuesFromSnapshotsAt(stateDir string, now time.Time) (ActiveIssues, 
 	return res, nil
 }
 
-// currentRunSidecarName is the in-flight sidecar's filename inside the pipeline
-// state dir. The name is owned by internal/orchestrator
-// (currentRunSidecarFile); it is repeated here because the scan already holds
-// the directory.
-const currentRunSidecarName = "current-run.json"
+// checkoutSidecarPaths is the in-flight sidecar path (layout.CheckoutCurrentRun)
+// of every checkout of the clone stateDir is in: the main checkout and each
+// linked worktree `git worktree list` names. A stateDir outside a clone (a
+// fixture directory, a --dir override) has no checkouts and yields none. A
+// worktree whose directory is gone cannot run an orchestrator and is skipped;
+// failing to enumerate the checkouts at all is an error.
+func checkoutSidecarPaths(stateDir string) ([]string, error) {
+	clone, ok := layout.CloneRootOf(stateDir)
+	if !ok {
+		return nil, nil
+	}
+	roots, err := checkoutRoots(filepath.Dir(clone))
+	if err != nil {
+		return nil, err
+	}
+	var paths []string
+	for _, root := range roots {
+		p, err := layout.CheckoutPath(root, layout.CheckoutCurrentRun)
+		if err != nil {
+			continue
+		}
+		paths = append(paths, p)
+	}
+	return paths, nil
+}
+
+// checkoutRoots lists the working-tree root of every checkout of the
+// repository whose git common dir is commonDir, from `git worktree list
+// --porcelain`. A bare main entry has no working tree and is not listed.
+func checkoutRoots(commonDir string) ([]string, error) {
+	cmd := exec.Command("git", "--git-dir="+commonDir, "worktree", "list", "--porcelain")
+	cmd.Dir = commonDir
+	cmd.Env = withoutGitLocationEnv(os.Environ())
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, fmt.Errorf("git worktree list in %s: %w", commonDir, err)
+	}
+	var roots []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if p, ok := strings.CutPrefix(line, "worktree "); ok && filepath.IsAbs(p) {
+			roots = append(roots, filepath.Clean(p))
+		}
+	}
+	return roots, nil
+}
+
+// withoutGitLocationEnv drops the variables that would point git somewhere
+// other than the --git-dir it is given.
+func withoutGitLocationEnv(env []string) []string {
+	out := env[:0:0]
+	for _, kv := range env {
+		switch k, _, _ := strings.Cut(kv, "="); k {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
 
 // currentRunSidecar is a MINIMAL decode of the in-flight sidecar written by
 // internal/orchestrator's writeCurrentRunSidecar (type
@@ -328,8 +396,8 @@ type currentRunSidecar struct {
 	PID         int    `json:"pid,omitempty"`
 }
 
-// sidecarInFlightIssue reports the issue number the in-flight sidecar vouches
-// for and the live pid that vouches for it, or 0 when nothing does. The last
+// sidecarInFlightIssue reports the issue number the in-flight sidecar at path
+// vouches for and the live pid that vouches for it, or 0 when nothing does. The last
 // result is a warning for the one shape worth surfacing: a sidecar that exists
 // and cannot be parsed.
 //
@@ -337,8 +405,7 @@ type currentRunSidecar struct {
 // (that is what it is for — the crash synthesizer reads it at the next startup),
 // so protecting on existence alone would pin the crashed run's worktree until an
 // orchestrator happened to start again in that repo.
-func sidecarInFlightIssue(stateDir string) (int, int, string) {
-	path := filepath.Join(stateDir, currentRunSidecarName)
+func sidecarInFlightIssue(path string) (int, int, string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		// Absent is the normal case: no run is executing here.
@@ -348,7 +415,7 @@ func sidecarInFlightIssue(stateDir string) (int, int, string) {
 	if err := json.Unmarshal(data, &sc); err != nil {
 		return 0, 0, fmt.Sprintf(
 			"%s: in-flight sidecar is present but unparseable (%v) — it cannot name the issue it belongs to, so it protects nothing",
-			currentRunSidecarName, err)
+			path, err)
 	}
 	if sc.IssueNumber <= 0 || !runstate.ProcessAlive(sc.PID) {
 		return 0, 0, ""

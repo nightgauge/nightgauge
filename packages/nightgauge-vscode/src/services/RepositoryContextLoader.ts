@@ -12,7 +12,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { pipelineStateDir, plansDir as clonePlansDir } from "../utils/cloneLayout";
+import { checkoutPath, pipelineStateDir, plansDir as clonePlansDir } from "../utils/cloneLayout";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import type { Repository } from "../models/Repository";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
@@ -209,18 +209,19 @@ export class RepositoryContextLoader implements vscode.Disposable {
    * @returns Absolute path to context directory
    */
   getContextDir(repository?: Repository): string {
+    return pipelineStateDir(this.contextRoot(repository));
+  }
+
+  /**
+   * The checkout root whose data the context files belong to: the given or
+   * current repository, else the first workspace folder. With no workspace
+   * folder the root is empty and the layout helpers throw rather than resolve
+   * against the host's cwd (#2036). Only pipeline execution reaches this, and
+   * it cannot run without a workspace.
+   */
+  private contextRoot(repository?: Repository): string {
     const repo = repository ?? this.getCurrentRepository();
-
-    if (!repo) {
-      // Fallback to workspace root if no repository
-      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
-      // No workspace folder: the helper throws rather than resolve against
-      // the host's cwd (#2036). Only pipeline execution reaches this, and it
-      // cannot run without a workspace.
-      return pipelineStateDir(workspaceRoot);
-    }
-
-    return pipelineStateDir(repo.path);
+    return repo ? repo.path : (vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "");
   }
 
   /**
@@ -232,14 +233,17 @@ export class RepositoryContextLoader implements vscode.Disposable {
    * @returns Absolute path to the context file
    */
   getContextFile(type: ContextFileType, issueNumber?: number, repository?: Repository): string {
+    // batch-state.json is the checkout's own unkeyed singleton, in CHECKOUT
+    // rather than beside the per-issue context files (ADR-024 § 7).
+    if (type === "batch-state") {
+      return checkoutPath(this.contextRoot(repository), "batchState");
+    }
     const contextDir = this.getContextDir(repository);
 
     switch (type) {
       // A `case "state"` returning `<dir>/state.json` sat here until #471. No
       // live caller ever passed "state" — the stage→ContextFileType maps only
       // name per-issue types — and nothing writes that file either way.
-      case "batch-state":
-        return path.join(contextDir, "batch-state.json");
       case "issue":
         return path.join(contextDir, `issue-${issueNumber}.json`);
       case "planning":

@@ -384,7 +384,8 @@ heuristic (keyword matching) and the assessment-engine semantics.
 
 **How boosts are applied:**
 
-The active focus lens (from `.nightgauge/focus.yaml`) defines a
+The active focus lens (from the checkout's `focus.yaml`,
+`nightgauge layout path checkout focus.yaml`) defines a
 `ScoringBoosts` map of `dimension → bonus_points`. When a change's text
 (description + tags) matches keywords for a dimension that has a boost, the
 bonus is added to the base quick-pass score.

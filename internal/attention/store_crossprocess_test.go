@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/flock"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
 
@@ -119,7 +120,7 @@ func TestStoreSerialisesMutationsAcrossProcesses(t *testing.T) {
 	if !flock.Supported {
 		t.Skip("no advisory file lock on this platform")
 	}
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := New(root)
 
 	held := mustID(t)
@@ -217,7 +218,7 @@ func TestMaterializedTempPathIsUniquePerWriter(t *testing.T) {
 // per-writer temp file that is never renamed or removed accumulates one
 // carcass per write in a directory the sweep walks on every tick.
 func TestWritesLeaveNoTempResidue(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := New(root)
 	id := mustID(t)
 	if _, _, err := s.Raise(validRequest(id, "cond:residue")); err != nil {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # capture-attention-fixture.sh — capture the REAL DecisionRequest envelope
-# grammar from a live `.nightgauge/attention/` store, as the evidence corpus
+# grammar from a live `attention/` store, as the evidence corpus
 # for the #305 run-scoped raise verb.
 #
 # Issue #166's evidence rule: a test must not hand-author the shape it claims to
@@ -53,12 +53,23 @@
 #   scripts/capture-attention-fixture.sh [SOURCE_STORE_DIR] [OUT_FILE]
 #
 # Defaults:
-#   SOURCE_STORE_DIR  .nightgauge/attention  (relative to the repo root)
+#   SOURCE_STORE_DIR  this checkout's attention store, <git-dir>/nightgauge-worktree/attention
+#                     (ADR-024 § 7; `nightgauge layout path checkout attention`)
 #   OUT_FILE          internal/attention/testdata/captured-envelopes.json
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC="${1:-$REPO_ROOT/.nightgauge/attention}"
+default_store() {
+  local p=""
+  if command -v nightgauge >/dev/null 2>&1; then
+    p="$(nightgauge layout path checkout attention --workdir "$REPO_ROOT" 2>/dev/null || true)"
+  fi
+  if [[ -z "$p" ]]; then
+    p="$(git -C "$REPO_ROOT" rev-parse --absolute-git-dir 2>/dev/null)/nightgauge-worktree/attention"
+  fi
+  printf '%s\n' "$p"
+}
+SRC="${1:-$(default_store)}"
 OUT="${2:-$REPO_ROOT/internal/attention/testdata/captured-envelopes.json}"
 
 if [[ ! -d "$SRC" ]]; then

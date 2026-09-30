@@ -209,8 +209,8 @@ a clone reads the same snapshots.
 
 Runs in flight are protected by their runtime snapshots
 (` + layout.PipelineStateDisplay() + `/runtime-<issue>-<runId>.json), read per canonicalized root,
-plus the in-flight sidecar (` + layout.PipelineStateDisplay() + `/current-run.json) when the
-process it names is alive: an issue with a live run is never reclaimed however
+plus each checkout's in-flight sidecar (` + layout.CheckoutDisplay(layout.CheckoutCurrentRun) + `, one per
+checkout of the clone) when the process it names is alive: an issue with a live run is never reclaimed however
 merged its branch looks. A root whose snapshot directory cannot be read, or that
 resolves to no main checkout at all, is skipped entirely rather than swept blind.
 

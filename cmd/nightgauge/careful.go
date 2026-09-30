@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/nightgauge/nightgauge/internal/careful"
 	"github.com/spf13/cobra"
@@ -22,7 +23,11 @@ func carefulCmd() *cobra.Command {
 
 func resolveRoot(workdir string) (string, error) {
 	if workdir != "" {
-		return workdir, nil
+		abs, err := filepath.Abs(workdir)
+		if err != nil {
+			return "", fmt.Errorf("resolve --workdir %q: %w", workdir, err)
+		}
+		return abs, nil
 	}
 	wd, err := os.Getwd()
 	if err != nil {

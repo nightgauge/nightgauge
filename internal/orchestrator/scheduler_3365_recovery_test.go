@@ -381,7 +381,7 @@ func TestBudgetOverrunPathResolution_UsesWorktree(t *testing.T) {
 
 	// Set up run-state that points to the worktree, mirroring what the
 	// scheduler writes at stage start.
-	baseDir := filepath.Join(root, ".nightgauge", "pipeline")
+	baseDir := layouttest.MkCheckoutDir(t, root)
 	now := time.Now().UTC().Format(time.RFC3339)
 	rs := &runstate.RunState{
 		SchemaVersion:   runstate.SchemaVersion,
@@ -430,7 +430,7 @@ func TestLoadWorktreePath(t *testing.T) {
 	}
 
 	// run-state.json with worktree_path — prefers it.
-	baseDir := layouttest.MkPipelineDir(t, root)
+	baseDir := layouttest.MkCheckoutDir(t, root)
 	wt := filepath.Join(root, ".worktrees", "issue-3542")
 	now := time.Now().UTC().Format(time.RFC3339)
 	rs := &runstate.RunState{

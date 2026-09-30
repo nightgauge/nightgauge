@@ -1,5 +1,5 @@
 // Package health implements CLI-layer reading and aggregation of pipeline
-// health data files (.nightgauge/health/*.jsonl).
+// health data files (the checkout's .git/nightgauge-worktree/health/*.jsonl).
 package health
 
 // HealthTrendEntry mirrors the schema written by the SDK's HealthTrendsWriter.

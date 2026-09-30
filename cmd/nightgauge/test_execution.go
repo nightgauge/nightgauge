@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/ci"
@@ -171,6 +172,9 @@ recording a "fail" is honest and still leaves the gate red.`,
 
 func resolveWorkdir(workdir string) string {
 	if workdir != "" {
+		if abs, err := filepath.Abs(workdir); err == nil {
+			return abs
+		}
 		return workdir
 	}
 	wd, err := os.Getwd()

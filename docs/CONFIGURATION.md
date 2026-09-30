@@ -1650,8 +1650,8 @@ Sonnet (the ceiling caps the raise), while `stage_models.feature-dev: opus` +
 `minimum_model.feature-dev: fable` dispatches Opus (the raise is discarded, the
 operator's own model stands).
 
-The active mode is normally driven by the status-bar QuickPick (writes
-`.nightgauge/performance-mode.yaml`); `pipeline.performance_mode.default`
+The active mode is normally driven by the status-bar QuickPick (writes the
+checkout's `performance-mode.yaml`, `nightgauge layout path checkout performance-mode.yaml`); `pipeline.performance_mode.default`
 applies only when no state file is present. Override per-shell with
 `NIGHTGAUGE_PERFORMANCE_MODE=<mode>`.
 
@@ -1790,7 +1790,7 @@ record. Resume happens via `Scheduler.ResumePausedItems(failedRunID)` (called
 from the dashboard webview's Skip / Discard handlers).
 
 **Crash recovery is independent of `failure_mode`.** A `current-run.json`
-sidecar is written at every stage-start regardless of mode. On scheduler
+sidecar (in the checkout's `nightgauge layout path checkout`) is written at every stage-start regardless of mode. On scheduler
 startup, a stale sidecar always synthesizes a
 `terminal_failure_kind: orchestrator_crash` record and pauses the queue —
 otherwise an in-flight run that died mid-stage would leave the queue dispatching
@@ -2611,7 +2611,7 @@ releases matching items immediately; both callers share one implementation
 (`orchestrator.PromoteBaselineDeferrals`) rather than a copy each.
 
 **The trigger cannot be a CI cron**, which is why it lives in the daemon: the
-queue is `queue-state.json` in the clone's pipeline state directory on the
+queue is `queue-state.json` in the checkout's git directory on the
 operator's machine and is never committed, so a GitHub Actions runner has no queue to promote
 and anything it wrote would die with the runner. A
 scheduled CI sweep was documented for this for some time and never existed
@@ -5486,7 +5486,8 @@ the first:
 
 Each descent and each hop raises an Action Center card (`cap-fallback`,
 severity `fyi`) naming the stage, the destination and the reason, so the change
-is visible in the product rather than only in `go-backend.log`.
+is visible in the product rather than only in `go-backend.log`
+(`nightgauge layout path checkout go-backend.log`).
 
 ##### `pipeline.auto_router` reference
 
@@ -7281,8 +7282,8 @@ product_audit:
 
 ## Focus Mode Configuration (`focus.yaml`)
 
-Focus mode is configured through a **separate file** at
-`.nightgauge/focus.yaml` — not through `config.yaml`. This file is read
+Focus mode is configured through a **separate file**, `focus.yaml` in this
+checkout's git directory — not through `config.yaml`. This file is read
 by the Go binary and all skills that participate in focus-aware
 prioritization.
 
@@ -7293,14 +7294,20 @@ prioritization.
 
 ```
 .nightgauge/
-├── config.yaml      ← pipeline/project settings (this document)
+└── config.yaml      ← pipeline/project settings (this document)
+.git/nightgauge-worktree/
 └── focus.yaml       ← focus lens state (separate, managed by focus commands)
 ```
+
+`.git/nightgauge-worktree/` is the main checkout's per-checkout directory; a
+linked worktree has its own under `.git/worktrees/<name>/nightgauge-worktree/`.
+`nightgauge layout path checkout focus.yaml` prints the resolved path
+([ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
 
 ### Schema
 
 ```yaml
-# .nightgauge/focus.yaml
+# .git/nightgauge-worktree/focus.yaml
 
 # Active lens name. Built-in: general, quality, features, security,
 # performance, documentation, reliability, ux

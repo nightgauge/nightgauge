@@ -10,6 +10,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `queue-state.json` is described as living in the checkout's git directory,
+  not the clone's pipeline state directory (#2037, ADR-024 § 7).
 - The clone's pipeline context files are read at `$(nightgauge layout path <class> <name>)`
   and written through `nightgauge layout write|append`, never by a
   `.nightgauge/...` path: they now live in the git directory (#2037, ADR-024

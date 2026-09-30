@@ -14,6 +14,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/hooks"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -59,7 +60,7 @@ func TestSchedulerStatusMovesInvalidateSharedBoardCache(t *testing.T) {
 			defer srv.Close()
 
 			repos := []depgraph.RepoConfig{{Owner: "O", Name: "a", Project: 7}}
-			as := NewAutonomousScheduler(nil, gh.NewClientWithURL("test-token", srv.URL), repos, nil, DefaultAutonomousConfig(), t.TempDir())
+			as := NewAutonomousScheduler(nil, gh.NewClientWithURL("test-token", srv.URL), repos, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 			cache := boardcache.New(0)
 			as.SetBoardCache(cache)
 
@@ -97,7 +98,7 @@ func TestSchedulerWithoutBoardCacheStillWrites(t *testing.T) {
 	defer srv.Close()
 
 	repos := []depgraph.RepoConfig{{Owner: "O", Name: "a", Project: 7}}
-	as := NewAutonomousScheduler(nil, gh.NewClientWithURL("test-token", srv.URL), repos, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(nil, gh.NewClientWithURL("test-token", srv.URL), repos, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.revertFailedIssueStatus(context.Background(), "O/a", 1)
 	if requests.Load() == 0 {
 		t.Fatal("no forge request without a board cache")
@@ -151,7 +152,7 @@ func TestEpicPostMergeBoardSyncInvalidatesSharedBoardCache(t *testing.T) {
 
 	client := gh.NewClientWithURL("test-token", srv.URL)
 	sched := NewScheduler(client, SchedulerConfig{WorkspaceRoot: t.TempDir(), ProjectNumber: 7})
-	as := NewAutonomousScheduler(sched, client, nil, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(sched, client, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	cache := boardcache.New(0)
 	as.SetBoardCache(cache)
 

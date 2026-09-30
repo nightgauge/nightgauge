@@ -49,10 +49,12 @@ func logsPruneCmd() *cobra.Command {
 		Long: `Prunes each Nightgauge log directory (the clone's ` + layout.CloneLogsDisplay() + `/ and the
 machine state logs/) to its caps: machine-tier pipeline.logs.max_size_mb
 (default 200) and pipeline.logs.max_age_days (default 30). Oldest files go
-first. Live files (go-backend.log and the current UTC day's ledger segment
+first. The live file (the current UTC day's ledger segment
 github-api-YYYY-MM-DD.jsonl), files written in the last hour and files of a
 run that is not terminal are never deleted; nor are symlinks, subdirectories
-or anything outside the directory.`,
+or anything outside the directory. The daemon's log,
+` + layout.CheckoutDisplay(layout.CheckoutBackendLog) + `, is not in a pruned
+directory; serve trims it to 1 MB when it passes 5 MB.`,
 		Example: `  nightgauge logs prune --dry-run
   nightgauge logs prune --json`,
 		SilenceUsage: true,

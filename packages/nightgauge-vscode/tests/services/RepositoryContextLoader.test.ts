@@ -230,7 +230,8 @@ describe("RepositoryContextLoader", () => {
 
       const filePath = loader.getContextFile("batch-state");
 
-      expect(filePath).toBe(path.join(repoLayout().pipeline, "batch-state.json"));
+      // A per-checkout singleton: CHECKOUT, not the shared pipeline class.
+      expect(filePath).toBe(path.join(repoLayout().checkout, "batch-state.json"));
     });
 
     it("should return correct paths for all context file types", async () => {

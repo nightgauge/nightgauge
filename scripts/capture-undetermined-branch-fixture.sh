@@ -39,7 +39,7 @@
 #
 #  2. crash-record.jsonl — `orchestrator.SynthesizeOrchestratorCrashRecord`, the
 #     second site. The workspace holds one artifact: a `current-run.json`
-#     sidecar in the clone's pipeline directory (`.git/nightgauge/pipeline/`,
+#     sidecar in the checkout's directory (`.git/nightgauge-worktree/`,
 #     ADR-024 § 7) naming a pid that is no longer alive, which is exactly the
 #     on-disk state a killed orchestrator leaves behind. Any command that constructs a Scheduler then runs the real
 #     startup recovery (`loadQueue` → `recoverOrchestratorCrash` →
@@ -343,7 +343,7 @@ wait "$DEAD_PID" 2>/dev/null || true
 RUN_STARTED_AT="$(python3 -c 'import datetime;print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(minutes=42)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 STAGE_STARTED_AT="$(python3 -c 'import datetime;print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(minutes=7)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 
-cat > "$PIPELINE_DIR/current-run.json" <<JSON
+"$BIN" layout --workdir "$WS" write checkout current-run.json >/dev/null <<JSON
 {
   "issue_number": 397,
   "repo": "acme/widgets",

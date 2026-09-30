@@ -632,7 +632,8 @@ confirm what it is and close the session that owns it.
 
 **A stale serve lease blocks `serve`.** `serve_lease` · `warning`.
 
-The pid holding the workspace's scheduler lease is running but has stopped
+The pid holding this checkout's scheduler lease (`serve.lock`, at
+`nightgauge layout path checkout serve.lock`) is running but has stopped
 heartbeating, so every `nightgauge serve` and `nightgauge autonomous run` here is
 refused. `confirm` `reclaim` stops that pid.
 

@@ -3,6 +3,8 @@ package attention
 import (
 	"context"
 	"encoding/json"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,8 +30,8 @@ import (
 // readPersisted returns the raw JSON the store wrote for id.
 func readPersisted(t *testing.T, dir, id string) string {
 	t.Helper()
-	// New(root) nests its store at <root>/.nightgauge/attention.
-	data, err := os.ReadFile(filepath.Join(dir, ".nightgauge", "attention", id+".json"))
+	// New(root) keeps its store in the checkout's CHECKOUT/attention.
+	data, err := os.ReadFile(filepath.Join(layouttest.CheckoutPath(t, dir, layout.CheckoutAttention), id+".json"))
 	if err != nil {
 		t.Fatalf("read persisted card: %v", err)
 	}
@@ -43,7 +45,7 @@ func readPersisted(t *testing.T, dir, id string) string {
 // platform rejected every such card on arrival and retried forever, so 27 cards
 // were invisible on every remote surface with nothing failing anywhere.
 func TestPersistedCardNeverCarriesNullOptions(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := New(dir)
 
 	req := validRequest(mustID(t), "k:no-options")
@@ -80,7 +82,7 @@ func TestPersistedCardNeverCarriesNullOptions(t *testing.T) {
 // that DID supply options — otherwise the fix would silently disarm every card
 // that has buttons.
 func TestPersistedCardKeepsRealOptions(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := New(dir)
 
 	req := validRequest(mustID(t), "k:real-options")
@@ -106,7 +108,7 @@ func TestPersistedCardKeepsRealOptions(t *testing.T) {
 // know who the operator is, and inventing a name puts a false entry in an audit
 // record. The callers that DO know supply it.
 func TestResolveRefusesAnEmptyActor(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := New(dir)
 
 	req := validRequest(mustID(t), "k:empty-actor")
@@ -133,7 +135,7 @@ func TestResolveRefusesAnEmptyActor(t *testing.T) {
 
 // TestAcknowledgeRefusesAnEmptyActor: the ack record carries an actor too.
 func TestAcknowledgeRefusesAnEmptyActor(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	req := validRequest(mustID(t), "k:empty-ack-actor")
 	if _, _, err := s.Raise(req); err != nil {
 		t.Fatalf("Raise: %v", err)

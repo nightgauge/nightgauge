@@ -211,11 +211,14 @@ func findPlanFile(workdir string) string {
 		}
 	}
 
-	// Fallback: PLAN.md in pipeline directory
-	if pipelineDir, err := cloneDir(layout.PipelineStateDir, workdir); err == nil {
-		pipelinePlan := filepath.Join(pipelineDir, "PLAN.md")
-		if _, err := os.Stat(pipelinePlan); err == nil {
-			return pipelinePlan
+	// Fallback: the checkout's PLAN.md (layout.CheckoutPlan, ADR-024 § 7). It
+	// is not keyed by issue, so it is per checkout rather than in the clone's
+	// pipeline directory.
+	if checkoutPlan, err := cloneDir(func(root string) (string, error) {
+		return layout.CheckoutPath(root, layout.CheckoutPlan)
+	}, workdir); err == nil {
+		if _, err := os.Stat(checkoutPlan); err == nil {
+			return checkoutPlan
 		}
 	}
 

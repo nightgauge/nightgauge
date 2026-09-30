@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -416,7 +417,7 @@ func TestBuildMainRedCard_RequiredFailureIsBlockingFleet(t *testing.T) {
 // Raise → refresh → update → retract, through the real store: the properties
 // the AC asks for are properties of the diff, not of the builder.
 func TestReportMainChecks_RedRaisesGreenRetracts(t *testing.T) {
-	store := attention.New(t.TempDir())
+	store := attention.New(layouttest.Repo(t))
 	failing := FailingCheck{Name: "e2e", Conclusion: "failure"}
 
 	// Pending and no_checks say nothing about the branch: no card.

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func sampleGraph(t *testing.T) *Graph {
@@ -38,7 +40,7 @@ func sampleGraph(t *testing.T) *Graph {
 }
 
 func TestSaveLoadRoundTrip(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	want := sampleGraph(t)
 
 	meta, err := Save(root, want)
@@ -107,7 +109,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 }
 
 func TestLoadMissingStoreIsNoGraph(t *testing.T) {
-	g, meta, err := Load(t.TempDir())
+	g, meta, err := Load(layouttest.Repo(t))
 	if err != nil {
 		t.Fatalf("a missing store must not be an error: %v", err)
 	}
@@ -119,11 +121,11 @@ func TestLoadMissingStoreIsNoGraph(t *testing.T) {
 // TestSchemaVersionMismatchIsNoGraph is the AC: a mismatch means "no graph",
 // triggering a rebuild — never a migration and never a partial read.
 func TestSchemaVersionMismatchIsNoGraph(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if _, err := Save(root, sampleGraph(t)); err != nil {
 		t.Fatal(err)
 	}
-	metaPath := filepath.Join(root, StoreDir, metaFile)
+	metaPath := filepath.Join(storeDir(t, root), metaFile)
 	raw, err := os.ReadFile(metaPath)
 	if err != nil {
 		t.Fatal(err)
@@ -148,11 +150,11 @@ func TestSchemaVersionMismatchIsNoGraph(t *testing.T) {
 }
 
 func TestCorruptMetaIsNoGraphButCorruptJSONLIsAnError(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if _, err := Save(root, sampleGraph(t)); err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(root, StoreDir)
+	dir := storeDir(t, root)
 
 	// A corrupt JSONL line must NOT be silently swallowed as "no graph":
 	// rebuilding past corruption makes a store that is wrong every time look
@@ -180,11 +182,11 @@ func TestCorruptMetaIsNoGraphButCorruptJSONLIsAnError(t *testing.T) {
 // record on disk with no provenance must not enter the graph, or the mandatory
 // guard stops at the process boundary.
 func TestLoadRejectsUnprovenancedRecords(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if _, err := Save(root, sampleGraph(t)); err != nil {
 		t.Fatal(err)
 	}
-	nodes := filepath.Join(root, StoreDir, nodesFile)
+	nodes := filepath.Join(storeDir(t, root), nodesFile)
 	raw, _ := os.ReadFile(nodes)
 	line := `{"id":"issue:smuggled","kind":"issue"}` + "\n"
 	if err := os.WriteFile(nodes, append(raw, []byte(line)...), 0o644); err != nil {
@@ -207,7 +209,7 @@ func TestLoadRejectsUnprovenancedRecords(t *testing.T) {
 // is the fixed-temp-path race #777 fixed in TelemetryStore.writeIndex, and it
 // is invisible to any test with a single writer.
 func TestConcurrentSavesDoNotRace(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	g := sampleGraph(t)
 
 	const writers = 24
@@ -243,13 +245,13 @@ func TestConcurrentSavesDoNotRace(t *testing.T) {
 // TestNoTempFilesSurvive guards the other half of the temp-path contract: each
 // writer cleans up after itself, so a store directory never accretes debris.
 func TestNoTempFilesSurvive(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	for i := 0; i < 5; i++ {
 		if _, err := Save(root, sampleGraph(t)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	entries, err := os.ReadDir(filepath.Join(root, StoreDir))
+	entries, err := os.ReadDir(storeDir(t, root))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -283,7 +285,7 @@ func TestUniqueTempPathIsUnique(t *testing.T) {
 }
 
 func TestSaveEmptyGraph(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	meta, err := Save(root, New())
 	if err != nil {
 		t.Fatalf("saving an empty graph must work: %v", err)
@@ -316,15 +318,21 @@ func TestSaveRejectsBadInput(t *testing.T) {
 }
 
 func TestStorePathIsTheADRPath(t *testing.T) {
-	if StoreDir != ".nightgauge/graph" {
-		t.Errorf("StoreDir = %q, want .nightgauge/graph per ADR-005 Decision 3", StoreDir)
-	}
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if _, err := Save(root, sampleGraph(t)); err != nil {
 		t.Fatal(err)
 	}
+	if got, want := storeDir(t, root), layouttest.CheckoutPath(t, root, "graph"); got != want {
+		t.Errorf("Dir = %q, want CHECKOUT/graph %q (ADR-024 § 7)", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".nightgauge")); !os.IsNotExist(err) {
+		t.Errorf("Save wrote into the working tree (stat err %v)", err)
+	}
+	if _, err := Save(t.TempDir(), sampleGraph(t)); err == nil {
+		t.Error("Save outside a git checkout: want an error")
+	}
 	for _, f := range []string{nodesFile, edgesFile, metaFile} {
-		if _, err := os.Stat(filepath.Join(root, StoreDir, f)); err != nil {
+		if _, err := os.Stat(filepath.Join(storeDir(t, root), f)); err != nil {
 			t.Errorf("expected %s in the store: %v", f, err)
 		}
 	}
@@ -333,11 +341,11 @@ func TestStorePathIsTheADRPath(t *testing.T) {
 // TestNodesFileIsOneJSONObjectPerLine keeps the format greppable — the reason
 // JSONL was chosen over one big JSON document.
 func TestNodesFileIsOneJSONObjectPerLine(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if _, err := Save(root, sampleGraph(t)); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(filepath.Join(root, StoreDir, nodesFile))
+	raw, err := os.ReadFile(filepath.Join(storeDir(t, root), nodesFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,4 +359,14 @@ func TestNodesFileIsOneJSONObjectPerLine(t *testing.T) {
 			t.Errorf("line %d is not a standalone JSON object: %v", i+1, err)
 		}
 	}
+}
+
+// storeDir is Dir(root), failing the test on error.
+func storeDir(t *testing.T, root string) string {
+	t.Helper()
+	dir, err := Dir(root)
+	if err != nil {
+		t.Fatalf("graph.Dir(%s): %v", root, err)
+	}
+	return dir
 }

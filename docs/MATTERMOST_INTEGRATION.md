@@ -359,7 +359,8 @@ single-source-of-truth table at
 ### Audit log
 
 Every inbound command authorization decision is appended to
-`.nightgauge/notifications/audit.jsonl`:
+`notifications/audit.jsonl` in the checkout's git directory
+(`nightgauge layout path checkout notifications/audit.jsonl`):
 
 ```json
 {
@@ -466,7 +467,7 @@ limited to channels that legitimately receive pipeline notifications.
 
 ### 11.5 Audit log retention
 
-`.nightgauge/notifications/audit.jsonl` rotates at 10 MB with 5 rotated
+`notifications/audit.jsonl` rotates at 10 MB with 5 rotated
 copies (≈ 50 MB total ceiling). For longer retention, ship the file to a
 SIEM or central log store via your existing log-shipping agent. The format
 is JSON-lines so any standard shipper (Fluent Bit, Vector, etc.) can ingest

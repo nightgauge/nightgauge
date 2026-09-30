@@ -139,7 +139,8 @@ autonomous_discovery:
   kill_switch: true # Disables --create-issues even in scheduled runs
 ```
 
-**Focus Lens Integration**: The skill reads `.nightgauge/focus.yaml` and
+**Focus Lens Integration**: The skill reads the checkout's `focus.yaml`
+(`nightgauge layout path checkout focus.yaml`) and
 applies dimension boosts to proposal ranking. With an active focus lens,
 proposals in the focused area are prioritized for issue creation. For example,
 with `active_lens: performance`, performance-related proposals are ranked higher
@@ -220,13 +221,14 @@ adapts to available data.
 ```bash
 DATA_SOURCES=""
 PIPELINE_DIR="$(nightgauge layout path pipeline)"
+CHECKOUT_DIR="$(nightgauge layout path checkout)"
 [ -f ".nightgauge/execution-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES execution-history"
 [ -d "${PIPELINE_DIR}/assessments" ] && DATA_SOURCES="$DATA_SOURCES assessments"
 [ -f ".nightgauge/calibration.json" ] && DATA_SOURCES="$DATA_SOURCES calibration"
 [ -d ".nightgauge/analysis" ] && DATA_SOURCES="$DATA_SOURCES analysis"
-[ -f ".nightgauge/gate-metrics.jsonl" ] && DATA_SOURCES="$DATA_SOURCES gate-metrics"
+[ -f "${CHECKOUT_DIR}/health/gate-metrics.jsonl" ] && DATA_SOURCES="$DATA_SOURCES gate-metrics"
 [ -f ".nightgauge/skill-effectiveness.jsonl" ] && DATA_SOURCES="$DATA_SOURCES skill-effectiveness"
-[ -d ".nightgauge/health" ] && DATA_SOURCES="$DATA_SOURCES health-trends"
+[ -d "${CHECKOUT_DIR}/health" ] && DATA_SOURCES="$DATA_SOURCES health-trends"
 [ -f ".nightgauge/complexity-model.yaml" ] && DATA_SOURCES="$DATA_SOURCES complexity-model"
 [ -f "${PIPELINE_DIR}/recommendation-history.jsonl" ] && DATA_SOURCES="$DATA_SOURCES recommendations"
 ```
@@ -236,11 +238,11 @@ be limited but continue.
 
 ### Step 1.4 — Load Focus Lens
 
-Load the active focus lens from `.nightgauge/focus.yaml`. This is optional
+Load the active focus lens from the checkout's `focus.yaml`. This is optional
 — missing file or parse errors default to `general` (no weighting applied).
 
 ```bash
-FOCUS_FILE=".nightgauge/focus.yaml"
+FOCUS_FILE="$(nightgauge layout path checkout focus.yaml)"
 ACTIVE_LENS="general"
 FOCUS_DESCRIPTION="Balanced improvement across all dimensions — no specific bias."
 
@@ -307,7 +309,7 @@ Parse and validate each against the `AssessmentRecordSchema`. Run
 
 ### Signal Group 2: Health Dimensions (SHARED)
 
-Read health trend entries from `.nightgauge/health/trends.jsonl` (last N
+Read health trend entries from `checkout/health/trends.jsonl` (last N
 entries matching the analysis period).
 
 **Key metrics to extract per dimension:**
@@ -368,7 +370,7 @@ activations:
 - Model escalation count
 - Ralph Loop activation count
 - Ralph Loop success rate (fixed vs escalated to human)
-- Gate effectiveness (hit rates from `.nightgauge/gate-metrics.jsonl`)
+- Gate effectiveness (hit rates from `checkout/health/gate-metrics.jsonl`)
 - Skill effectiveness deltas (from `.nightgauge/skill-effectiveness.jsonl`)
 
 <!-- phase:end name="signal-gathering" -->
@@ -997,17 +999,18 @@ This skill reads configuration from `.nightgauge/config.yaml`:
 | Source                                  | Signal Group         | Required? |
 | --------------------------------------- | -------------------- | --------- |
 | `pipeline/assessments/*.json`           | Skill Friction       | No        |
-| `.nightgauge/health/trends.jsonl`       | Health Dimensions    | No        |
+| `checkout/health/trends.jsonl`          | Health Dimensions    | No        |
 | `.nightgauge/complexity-model.yaml`     | Calibration          | No        |
 | `pipeline/recommendation-history.jsonl` | Recommendations      | No        |
 | `.nightgauge/execution-history.jsonl`   | Execution Efficiency | No        |
-| `.nightgauge/gate-metrics.jsonl`        | Feedback & Recovery  | No        |
+| `checkout/health/gate-metrics.jsonl`    | Feedback & Recovery  | No        |
 | `.nightgauge/skill-effectiveness.jsonl` | Feedback & Recovery  | No        |
 | `.nightgauge/analysis/latest.json`      | Health Dimensions    | No        |
 | `.nightgauge/calibration.json`          | Calibration          | No        |
 
 `pipeline/...` sources are in the clone's pipeline state directory
-(`nightgauge layout path pipeline`). All sources are optional. The skill adapts gracefully — missing sources reduce
+(`nightgauge layout path pipeline`); `checkout/...` sources are in this
+checkout's directory (`nightgauge layout path checkout`). All sources are optional. The skill adapts gracefully — missing sources reduce
 the number of analyzable loops but never prevent the skill from running.
 
 ## Output Files

@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // gateMetricRecord is the raw JSONL record format written by the TypeScript
@@ -28,7 +29,10 @@ type gateMetricRecord struct {
 // Malformed lines are skipped. Errors during reading log a warning and return
 // the records collected so far.
 func ReadGateMetricsForIssue(workspaceRoot string, issueNumber int) ([]GateResult, error) {
-	filePath := filepath.Join(workspaceRoot, ".nightgauge", "health", "gate-metrics.jsonl")
+	filePath, err := layout.CheckoutPath(workspaceRoot, GateMetricsName)
+	if err != nil {
+		return nil, fmt.Errorf("locate gate-metrics.jsonl: %w", err)
+	}
 
 	f, err := os.Open(filePath)
 	if err != nil {

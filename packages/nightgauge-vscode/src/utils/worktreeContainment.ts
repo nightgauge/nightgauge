@@ -52,8 +52,9 @@
  * ## Preservation — capture, never mutate
  *
  * On detection the attributed changes are written out as a `git apply`-able
- * patch under `.nightgauge/containment/` in the stage repo's canonical root
- * (which outlives the worktree a re-dispatch tears down). **Nothing in the
+ * patch under `containment/` in the per-checkout directory of the stage repo's
+ * canonical root (`.git/nightgauge-worktree/containment/`, ADR-024 § 7), which
+ * outlives the worktree a re-dispatch tears down. **Nothing in the
  * sibling repo is modified**: no `git add`, no commit, no stash, no checkout,
  * no revert. The files are left exactly where the stage put them.
  *
@@ -77,6 +78,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs/promises";
 import * as path from "path";
+import { checkoutPath } from "./cloneLayout";
 
 const execFileAsync = promisify(execFile);
 
@@ -92,8 +94,14 @@ const GIT_TIMEOUT_MS = 20_000;
  */
 const PIPELINE_OWNED_PREFIX = ".nightgauge/";
 
-/** Directory under the canonical root that holds patches and the ledger. */
-export const CONTAINMENT_DIR = path.join(".nightgauge", "containment");
+/**
+ * The directory that holds patches and the ledger: `containment/` in the
+ * canonical root's per-checkout directory (ADR-024 § 7). Throws when
+ * `artifactRoot` is not in a git checkout; every caller is best-effort.
+ */
+export function containmentDir(artifactRoot: string): string {
+  return checkoutPath(artifactRoot, "containment");
+}
 
 /** Ledger of paths a previous attempt already attributed to the pipeline. */
 const LEDGER_FILE = "attributed.json";
@@ -472,7 +480,7 @@ type ContainmentLedger = Record<string, Record<string, string>>;
 
 async function readLedger(artifactRoot: string): Promise<ContainmentLedger> {
   try {
-    const raw = await fs.readFile(path.join(artifactRoot, CONTAINMENT_DIR, LEDGER_FILE), "utf-8");
+    const raw = await fs.readFile(path.join(containmentDir(artifactRoot), LEDGER_FILE), "utf-8");
     const parsed: unknown = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed as ContainmentLedger;
@@ -484,7 +492,7 @@ async function readLedger(artifactRoot: string): Promise<ContainmentLedger> {
 }
 
 async function writeLedger(artifactRoot: string, ledger: ContainmentLedger): Promise<void> {
-  const dir = path.join(artifactRoot, CONTAINMENT_DIR);
+  const dir = containmentDir(artifactRoot);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(path.join(dir, LEDGER_FILE), JSON.stringify(ledger, null, 2), "utf-8");
 }
@@ -699,13 +707,16 @@ export async function detectContainmentBreach(
   // ── Preserve: write patches OUTSIDE the repos that were written to. ──
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const dirName = `${stage}-${issueNumber ?? "unknown"}-${stamp}`;
-  const artifactDir = path.join(baseline.artifactRoot, CONTAINMENT_DIR, dirName);
+  let artifactDir: string;
   try {
+    artifactDir = path.join(containmentDir(baseline.artifactRoot), dirName);
     await fs.mkdir(artifactDir, { recursive: true });
     report.artifactDir = artifactDir;
   } catch (err) {
     for (const breach of report.breaches) {
-      breach.patchError = `could not create ${artifactDir}: ${errText(err)}`;
+      breach.patchError =
+        `could not create the containment directory ${dirName} for ` +
+        `${baseline.artifactRoot}: ${errText(err)}`;
     }
     return report;
   }

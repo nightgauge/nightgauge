@@ -69,9 +69,15 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
-// LayoutVersion is the per-clone layout this build reads and writes. The
-// marker in the new root records the version a migration last completed.
-const LayoutVersion = 1
+// LayoutVersion is the data layout this build reads and writes. The marker
+// in the per-clone root records the version a migration last completed:
+//
+//   - 1: the per-clone classes (pipeline, plans, retros, logs) live in CLONE.
+//   - 2: every checkout's unkeyed singletons and per-checkout runtime files
+//     (layout.CheckoutEntries) live in its own CHECKOUT, and each linked
+//     worktree's legacy .nightgauge/ is migrated too (#2037, #2040). A v1
+//     clone migrates again for these rows.
+const LayoutVersion = 2
 
 // LayoutCheckID is the registry ID of the data-layout check, whose detail
 // line names the layout version once nothing is left at an old location.
@@ -112,18 +118,33 @@ const (
 
 // LayoutEntry is one row of the migration table: a data class, where an older
 // build kept it, and where this build keeps it. Legacy and Target take the
-// repository's main checkout root.
+// root of the checkout the row belongs to (Checkout; the main checkout when
+// empty).
 type LayoutEntry struct {
 	Class  string
 	Kind   LayoutKind
 	Legacy func(root string) (string, error)
-	// Target is the new directory. For LayoutWorktrees it is the worktree
-	// base; for LayoutCache it is nil.
+	// Target is the new directory (the new file for a File row). For
+	// LayoutWorktrees it is the worktree base; for LayoutCache it is nil.
 	Target func(root string) (string, error)
 	// AppendOnly reports whether a file (by its path relative to Legacy, with
 	// forward slashes) is an append-only JSONL log whose two copies are merged
 	// by line union instead of being a conflict.
 	AppendOnly func(rel string) bool
+
+	// Checkout is the checkout the row belongs to: a linked worktree's root
+	// for its own rows, "" for the main checkout.
+	Checkout string
+	// File marks a row whose legacy location is one file, not a directory.
+	File bool
+	// Exclude reports a file (relative to Legacy, forward slashes) another row
+	// owns: the per-checkout singletons inside the legacy pipeline directory.
+	Exclude func(rel string) bool
+	// SourceRoot is the directory the legacy location must resolve inside;
+	// nil means the checkout's working tree.
+	SourceRoot func(root string) (string, error)
+	// TargetRoot is the root the target must resolve inside; nil means CLONE.
+	TargetRoot func(root string) (string, error)
 }
 
 // legacyDir is <root>/.nightgauge/<elem...>.
@@ -136,15 +157,108 @@ func legacyDir(elem ...string) func(string) (string, error) {
 	}
 }
 
-// perCloneLayoutEntries is the per-clone migration table (ADR-024 § 2, § 15).
-func perCloneLayoutEntries() []LayoutEntry {
+// checkoutSingletonIn reports whether rel, a path inside the legacy class
+// directory class, is a per-checkout singleton (current-run.json, ...) that a
+// per-checkout row moves to CHECKOUT instead.
+func checkoutSingletonIn(class string) func(rel string) bool {
+	return func(rel string) bool {
+		for _, e := range layout.CheckoutEntries {
+			if e.CloneLegacyClass == class && rel == e.Name {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// perCloneFileEntries are the per-clone class rows of one checkout's legacy
+// .nightgauge/ (ADR-024 § 2, § 15): every checkout's keyed data merges into
+// the one CLONE.
+func perCloneFileEntries() []LayoutEntry {
 	return []LayoutEntry{
 		{Class: "pipeline", Kind: LayoutFiles, Legacy: legacyDir("pipeline"), Target: layout.PipelineStateDir,
-			AppendOnly: func(rel string) bool { return strings.HasPrefix(rel, "history/") && strings.HasSuffix(rel, ".jsonl") }},
+			AppendOnly: func(rel string) bool { return strings.HasPrefix(rel, "history/") && strings.HasSuffix(rel, ".jsonl") },
+			Exclude:    checkoutSingletonIn(layout.ClassPipeline)},
 		{Class: "plans", Kind: LayoutFiles, Legacy: legacyDir("plans"), Target: layout.PlansDir},
 		{Class: "retros", Kind: LayoutFiles, Legacy: legacyDir("retros"), Target: layout.RetrosDir},
 		{Class: "logs", Kind: LayoutFiles, Legacy: legacyDir("logs"), Target: layout.CloneLogsDir,
-			AppendOnly: func(rel string) bool { return strings.HasPrefix(rel, "github-api") && strings.HasSuffix(rel, ".jsonl") }},
+			AppendOnly: func(rel string) bool { return strings.HasPrefix(rel, "github-api") && strings.HasSuffix(rel, ".jsonl") },
+			Exclude:    checkoutSingletonIn(layout.ClassLogs)},
+	}
+}
+
+// checkoutTarget is the new location of a per-checkout entry.
+func checkoutTarget(name string) func(string) (string, error) {
+	return func(root string) (string, error) {
+		dir, err := layout.CheckoutDir(root)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(dir, name), nil
+	}
+}
+
+// appendOnlyLog marks the daemon log mergeable: the old and the new build may
+// both have written it, and a log is never a reason to stop the migration.
+func appendOnlyLog(name string) func(string) bool {
+	return func(rel string) bool { return name == layout.CheckoutBackendLog && rel == name }
+}
+
+// perCheckoutLayoutEntries are the rows of one checkout's per-checkout data
+// (layout.CheckoutEntries): its legacy .nightgauge/ copy moves to its own
+// CHECKOUT. checkout is "" for the main checkout. For the main checkout, the
+// run-control singletons a layout-v1 build kept in CLONE/pipeline and
+// CLONE/logs move to its CHECKOUT as well.
+func perCheckoutLayoutEntries(checkout string, main bool) []LayoutEntry {
+	var out []LayoutEntry
+	for _, ce := range layout.CheckoutEntries {
+		ce := ce
+		out = append(out, LayoutEntry{
+			Class: ce.Name, Kind: LayoutFiles, Checkout: checkout, File: !ce.Dir,
+			Legacy:     legacyDir(strings.Split(strings.TrimPrefix(ce.Legacy, legacyDataDirName+"/"), "/")...),
+			Target:     checkoutTarget(ce.Name),
+			TargetRoot: layout.CheckoutDir,
+			AppendOnly: appendOnlyLog(ce.Name),
+		})
+		if main && ce.CloneLegacyClass != "" {
+			out = append(out, LayoutEntry{
+				Class: ce.Name, Kind: LayoutFiles, Checkout: checkout, File: true,
+				Legacy: func(root string) (string, error) {
+					dir, err := layout.ClassDir(root, ce.CloneLegacyClass)
+					if err != nil {
+						return "", err
+					}
+					return filepath.Join(dir, ce.Name), nil
+				},
+				SourceRoot: layout.CloneDir,
+				Target:     checkoutTarget(ce.Name),
+				TargetRoot: layout.CheckoutDir,
+				AppendOnly: appendOnlyLog(ce.Name),
+			})
+		}
+	}
+	return out
+}
+
+// linkedCheckoutEntries are the rows of a linked worktree: its per-checkout
+// entries to its own CHECKOUT, its keyed per-clone data into the one CLONE,
+// and its old recall cache deleted.
+func linkedCheckoutEntries(checkout string) []LayoutEntry {
+	out := perCheckoutLayoutEntries(checkout, false)
+	for _, e := range perCloneFileEntries() {
+		e.Checkout = checkout
+		out = append(out, e)
+	}
+	return append(out, LayoutEntry{Class: "recall cache", Kind: LayoutCache, Checkout: checkout,
+		Legacy: legacyDir("knowledge", ".recall-cache")})
+}
+
+// perCloneLayoutEntries is the main checkout's migration table (ADR-024 § 2,
+// § 15): its per-clone classes, the legacy worktree bases and the old recall
+// cache. The per-checkout rows of every checkout are added at scan time,
+// when `git worktree list` names the checkouts.
+func perCloneLayoutEntries() []LayoutEntry {
+	return append(perCloneFileEntries(), []LayoutEntry{
 		// Worktrees: the Go manager's base before #2038 and the extension's
 		// repo-relative `.worktrees` default (ADR-024 § 9).
 		{Class: "worktrees", Kind: LayoutWorktrees, Legacy: legacyDir("worktrees"), Target: config.ResolveWorktreeBase},
@@ -157,7 +271,7 @@ func perCloneLayoutEntries() []LayoutEntry {
 			}},
 		// The recall index moved to CACHE/recall/<root-key> (#2028).
 		{Class: "recall cache", Kind: LayoutCache, Legacy: legacyDir("knowledge", ".recall-cache")},
-	}
+	}...)
 }
 
 // layoutMigrator migrates one repository. Every effect on the world outside
@@ -165,7 +279,10 @@ func perCloneLayoutEntries() []LayoutEntry {
 type layoutMigrator struct {
 	root    string // the main checkout
 	entries []LayoutEntry
-	newRoot func(root string) (string, error)
+	// checkoutEntries adds the per-checkout rows for the main checkout and
+	// every linked worktree `git worktree list` names; nil adds none.
+	checkoutEntries func(main string, linked []string) []LayoutEntry
+	newRoot         func(root string) (string, error)
 	// inFlight returns the issues with a run in flight, each with the arm
 	// that vouched for it, scanning every pipeline-state directory given.
 	inFlight func(dirs []string) (map[int]string, error)
@@ -181,14 +298,27 @@ func newLayoutMigrator(dir string) *layoutMigrator {
 		return nil
 	}
 	return &layoutMigrator{
-		root: root, entries: perCloneLayoutEntries(), newRoot: layout.CloneDir,
-		inFlight: snapshotInFlight, daemonLive: serveLeaseLive,
+		root: root, entries: perCloneLayoutEntries(), checkoutEntries: allCheckoutEntries,
+		newRoot: layout.CloneDir, inFlight: snapshotInFlight, daemonLive: serveLeaseLive,
 	}
+}
+
+// allCheckoutEntries is the production per-checkout table: the main
+// checkout's rows first, then each linked worktree's (#2040: every checkout's
+// legacy .nightgauge/ is migrated, not only the main one).
+func allCheckoutEntries(main string, linked []string) []LayoutEntry {
+	out := perCheckoutLayoutEntries("", true)
+	for _, wt := range linked {
+		out = append(out, linkedCheckoutEntries(wt)...)
+	}
+	return out
 }
 
 // snapshotInFlight is the worktree sweep's in-flight detection over several
 // pipeline-state directories: the old and the new one both hold snapshots
-// until the migration has run.
+// until the migration has run. A current-run.json sidecar directly in one of
+// the directories (a legacy .nightgauge/pipeline, a layout-v1 CLONE/pipeline,
+// or a CHECKOUT) is read too, so a run an older build started still counts.
 func snapshotInFlight(dirs []string) (map[int]string, error) {
 	out := map[int]string{}
 	for _, dir := range dirs {
@@ -199,6 +329,11 @@ func snapshotInFlight(dirs []string) (map[int]string, error) {
 		for n := range active.Issues {
 			if _, seen := out[n]; !seen {
 				out[n] = active.Protected[n]
+			}
+		}
+		if n, pid, _ := state.InFlightSidecar(filepath.Join(dir, layout.CheckoutCurrentRun)); n > 0 {
+			if _, seen := out[n]; !seen {
+				out[n] = fmt.Sprintf("live-sidecar (pid %d)", pid)
 			}
 		}
 	}
@@ -243,7 +378,9 @@ type layoutWorktree struct {
 // layoutItem is one row of the table, scanned.
 type layoutItem struct {
 	Entry          LayoutEntry
+	Root           string // the checkout the row belongs to
 	Legacy, Target string
+	TargetRoot     string // the root the target must lie in (CLONE or CHECKOUT)
 	InPlace        bool   // the resolver still returns the old location
 	Refused        string // why the row cannot be migrated safely
 	Files          []layoutFile
@@ -332,20 +469,81 @@ func (m *layoutMigrator) scan() (layoutPlan, error) {
 	plan.NewRoot = filepath.Clean(newRoot)
 	plan.Version = readLayoutMarker(filepath.Join(plan.NewRoot, layoutMarkerName))
 
-	resolvedRoot, err := filepath.EvalSymlinks(m.root)
-	if err != nil {
-		return plan, fmt.Errorf("resolve %s: %w", m.root, err)
+	resolvedRoots := map[string]string{}
+	resolveRoot := func(root string) (string, error) {
+		if r, ok := resolvedRoots[root]; ok {
+			return r, nil
+		}
+		r, err := filepath.EvalSymlinks(root)
+		if err != nil {
+			return "", fmt.Errorf("resolve %s: %w", root, err)
+		}
+		resolvedRoots[root] = r
+		return r, nil
+	}
+	if _, err := resolveRoot(m.root); err != nil {
+		return plan, err
 	}
 
+	var worktrees []gitWorktree
+	listed := false
+	listWorktrees := func() ([]gitWorktree, error) {
+		if !listed {
+			list, err := listGitWorktrees(m.root)
+			if err != nil {
+				return nil, err
+			}
+			worktrees, listed = list, true
+		}
+		return worktrees, nil
+	}
+
+	// The per-checkout rows come first: they take the run-control singletons
+	// out of the legacy pipeline and logs directories before those rows prune
+	// the emptied directories.
+	entries := m.entries
+	var checkouts []string
+	if m.checkoutEntries != nil {
+		list, err := listWorktrees()
+		if err != nil {
+			return plan, err
+		}
+		var linked []string
+		for _, wt := range list {
+			if wt.IsPrimary || wt.Prunable {
+				continue
+			}
+			if info, err := os.Stat(wt.Path); err != nil || !info.IsDir() {
+				continue
+			}
+			linked = append(linked, wt.Path)
+		}
+		checkouts = append([]string{m.root}, linked...)
+		entries = append(m.checkoutEntries(m.root, linked), m.entries...)
+	}
+
+	// Every place a run in flight may have left its state: each checkout's
+	// legacy pipeline directory, CLONE/pipeline, and each CHECKOUT (the
+	// in-flight sidecar).
 	var stateDirs []string
-	for _, e := range m.entries {
+	addStateDir := func(dir string) {
+		if dir != "" && !slices.Contains(stateDirs, dir) {
+			stateDirs = append(stateDirs, dir)
+		}
+	}
+	for _, e := range entries {
 		if e.Class != "pipeline" || e.Kind != LayoutFiles {
 			continue
 		}
 		for _, f := range []func(string) (string, error){e.Legacy, e.Target} {
-			if dir, err := f(m.root); err == nil && !slices.Contains(stateDirs, dir) {
-				stateDirs = append(stateDirs, dir)
+			if dir, err := f(rowRoot(m.root, e)); err == nil {
+				addStateDir(dir)
 			}
+		}
+	}
+	for _, c := range checkouts {
+		if dir, err := layout.CheckoutDir(c); err == nil {
+			addStateDir(dir)
 		}
 	}
 	plan.InFlight = map[int]string{}
@@ -358,22 +556,30 @@ func (m *layoutMigrator) scan() (layoutPlan, error) {
 		plan.InFlight = active
 	}
 
-	var worktrees []gitWorktree
-	listed := false
-	for _, e := range m.entries {
-		it := layoutItem{Entry: e}
-		legacy, err := e.Legacy(m.root)
+	for _, e := range entries {
+		root := rowRoot(m.root, e)
+		it := layoutItem{Entry: e, Root: root}
+		legacy, err := e.Legacy(root)
 		if err != nil {
 			return plan, fmt.Errorf("resolve the old %s location: %w", e.Class, err)
 		}
 		it.Legacy = filepath.Clean(legacy)
 		var targetErr error
 		if e.Target != nil {
-			target, err := e.Target(m.root)
+			target, err := e.Target(root)
 			if err != nil {
 				targetErr = err
 			} else {
 				it.Target = filepath.Clean(target)
+			}
+		}
+		it.TargetRoot = plan.NewRoot
+		if e.TargetRoot != nil && targetErr == nil {
+			tr, err := e.TargetRoot(root)
+			if err != nil {
+				targetErr = err
+			} else {
+				it.TargetRoot = filepath.Clean(tr)
 			}
 		}
 		info, err := os.Lstat(it.Legacy)
@@ -386,38 +592,65 @@ func (m *layoutMigrator) scan() (layoutPlan, error) {
 		case err != nil:
 			it.Refused = fmt.Sprintf("cannot read %s: %v", it.Legacy, err)
 		case e.Kind == LayoutCache:
-			if reason := confineSource(resolvedRoot, it.Legacy); reason != "" {
+			if reason := m.confineRow(e, root, it.Legacy, resolveRoot); reason != "" {
 				it.Refused = reason
 			} else {
 				it.CacheExists = true
 			}
 		case info.Mode()&fs.ModeSymlink != 0:
-			it.Refused = fmt.Sprintf("%s is a symlink; the migration moves only a real directory, so a link cannot aim it elsewhere", it.Legacy)
-		case !info.IsDir():
+			it.Refused = fmt.Sprintf("%s is a symlink; the migration moves only a real file or directory, so a link cannot aim it elsewhere", it.Legacy)
+		case e.File && !info.Mode().IsRegular():
+			it.Refused = fmt.Sprintf("%s is not a regular file", it.Legacy)
+		case !e.File && !info.IsDir():
 			it.Refused = fmt.Sprintf("%s is not a directory", it.Legacy)
 		default:
-			if reason := confineSource(resolvedRoot, it.Legacy); reason != "" {
+			if reason := m.confineRow(e, root, it.Legacy, resolveRoot); reason != "" {
 				it.Refused = reason
 				break
 			}
 			switch e.Kind {
 			case LayoutFiles:
-				if err := m.scanFiles(&it, plan.NewRoot); err != nil {
+				if err := m.scanFiles(&it); err != nil {
 					return plan, err
 				}
 			case LayoutWorktrees:
-				if !listed {
-					if worktrees, err = listGitWorktrees(m.root); err != nil {
-						return plan, err
-					}
-					listed = true
+				list, err := listWorktrees()
+				if err != nil {
+					return plan, err
 				}
-				m.scanWorktrees(&it, worktrees, plan.InFlight)
+				m.scanWorktrees(&it, list, plan.InFlight)
 			}
 		}
 		plan.Items = append(plan.Items, it)
 	}
 	return plan, nil
+}
+
+// rowRoot is the checkout a row belongs to.
+func rowRoot(main string, e LayoutEntry) string {
+	if e.Checkout != "" {
+		return e.Checkout
+	}
+	return main
+}
+
+// confineRow refuses an old location that resolves outside the directory the
+// row's data must come from: the checkout's working tree, or the row's
+// SourceRoot (CLONE, for the singletons a layout-v1 build kept there).
+func (m *layoutMigrator) confineRow(e LayoutEntry, root, legacy string, resolveRoot func(string) (string, error)) string {
+	src := root
+	if e.SourceRoot != nil {
+		dir, err := e.SourceRoot(root)
+		if err != nil {
+			return fmt.Sprintf("cannot resolve the directory %s must lie in: %v", legacy, err)
+		}
+		src = dir
+	}
+	resolved, err := resolveRoot(src)
+	if err != nil {
+		return err.Error()
+	}
+	return confineSource(resolved, legacy)
 }
 
 // confineSource refuses an old location that resolves outside the checkout.
@@ -434,23 +667,30 @@ func confineSource(resolvedRoot, legacy string) string {
 
 // scanFiles lists a LayoutFiles row's untracked files and classifies each
 // against its target.
-func (m *layoutMigrator) scanFiles(it *layoutItem, newRoot string) error {
+func (m *layoutMigrator) scanFiles(it *layoutItem) error {
 	resolvedTarget, err := layout.EvalExisting(it.Target)
 	if err != nil {
 		return fmt.Errorf("resolve %s: %w", it.Target, err)
 	}
-	resolvedNewRoot, err := layout.EvalExisting(newRoot)
+	resolvedTargetRoot, err := layout.EvalExisting(it.TargetRoot)
 	if err != nil {
-		return fmt.Errorf("resolve %s: %w", newRoot, err)
+		return fmt.Errorf("resolve %s: %w", it.TargetRoot, err)
 	}
-	if !withinDir(resolvedNewRoot, resolvedTarget) {
+	if !withinDir(resolvedTargetRoot, resolvedTarget) {
 		it.Refused = fmt.Sprintf("the new %s location %s resolves to %s, outside the new root %s",
-			it.Entry.Class, it.Target, resolvedTarget, resolvedNewRoot)
+			it.Entry.Class, it.Target, resolvedTarget, resolvedTargetRoot)
 		return nil
 	}
-	tracked, err := trackedFiles(m.root, it.Legacy)
+	tracked, err := trackedFiles(it.Root, it.Legacy)
 	if err != nil {
 		return err
+	}
+	if it.Entry.File {
+		// A tracked file is the repository's, not run data: it stays.
+		if tracked[it.Legacy] {
+			return nil
+		}
+		return m.classifyFile(it, filepath.Base(it.Legacy), it.Legacy, it.Target)
 	}
 	return filepath.WalkDir(it.Legacy, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -465,41 +705,50 @@ func (m *layoutMigrator) scanFiles(it *layoutItem, newRoot string) error {
 		if tracked[path] {
 			return nil
 		}
-		info, err := d.Info()
-		if err != nil {
-			return fmt.Errorf("stat %s: %w", path, err)
-		}
 		rel, err := filepath.Rel(it.Legacy, path)
 		if err != nil {
 			return err
 		}
-		f := layoutFile{Rel: filepath.ToSlash(rel), Src: path, Dst: filepath.Join(it.Target, rel), Mode: info.Mode()}
-		switch {
-		case info.Mode()&fs.ModeSymlink != 0:
-			if f.Link, err = os.Readlink(path); err != nil {
-				return fmt.Errorf("read link %s: %w", path, err)
-			}
-		case !info.Mode().IsRegular():
-			// A socket or a pipe is recreated by whoever owns it.
+		if it.Entry.Exclude != nil && it.Entry.Exclude(filepath.ToSlash(rel)) {
 			return nil
 		}
-		same, exists, err := sameAtTarget(f)
-		if err != nil {
-			return err
-		}
-		switch {
-		case !exists:
-		case same:
-			f.Done = true
-		case f.Link == "" && it.Entry.AppendOnly != nil && it.Entry.AppendOnly(f.Rel) && isRegular(f.Dst):
-			f.Merge = true
-		default:
-			it.Conflicts = append(it.Conflicts, layoutConflict{Class: it.Entry.Class, Legacy: f.Src, Target: f.Dst})
-			return nil
-		}
-		it.Files = append(it.Files, f)
-		return nil
+		return m.classifyFile(it, rel, path, filepath.Join(it.Target, rel))
 	})
+}
+
+// classifyFile adds one source file to a row: to move, already done, to
+// merge, or a conflict.
+func (m *layoutMigrator) classifyFile(it *layoutItem, rel, path, dst string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	f := layoutFile{Rel: filepath.ToSlash(rel), Src: path, Dst: dst, Mode: info.Mode()}
+	switch {
+	case info.Mode()&fs.ModeSymlink != 0:
+		if f.Link, err = os.Readlink(path); err != nil {
+			return fmt.Errorf("read link %s: %w", path, err)
+		}
+	case !info.Mode().IsRegular():
+		// A socket or a pipe is recreated by whoever owns it.
+		return nil
+	}
+	same, exists, err := sameAtTarget(f)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !exists:
+	case same:
+		f.Done = true
+	case f.Link == "" && it.Entry.AppendOnly != nil && it.Entry.AppendOnly(f.Rel) && isRegular(f.Dst):
+		f.Merge = true
+	default:
+		it.Conflicts = append(it.Conflicts, layoutConflict{Class: it.Entry.Class, Legacy: f.Src, Target: f.Dst})
+		return nil
+	}
+	it.Files = append(it.Files, f)
+	return nil
 }
 
 // sameAtTarget compares a source with its target: the same bytes for a
@@ -788,7 +1037,7 @@ func (m *layoutMigrator) Migrate(ctx context.Context) LayoutReport {
 				rep.FilesHeld = fmt.Sprintf("a run is in flight (%s), so no file is moved until it ends", inFlight)
 				continue
 			}
-			m.moveFiles(it, plan.NewRoot, &rep)
+			m.moveFiles(it, &rep)
 		case LayoutWorktrees:
 			for _, wt := range it.Worktrees {
 				if wt.Busy != "" {
@@ -823,10 +1072,14 @@ func (m *layoutMigrator) Migrate(ctx context.Context) LayoutReport {
 }
 
 // moveFiles moves one row's files and prunes the emptied old directories.
-func (m *layoutMigrator) moveFiles(it layoutItem, newRoot string, rep *LayoutReport) {
-	resolvedLegacy, err := filepath.EvalSymlinks(it.Legacy)
+func (m *layoutMigrator) moveFiles(it layoutItem, rep *LayoutReport) {
+	legacyDir := it.Legacy
+	if it.Entry.File {
+		legacyDir = filepath.Dir(it.Legacy)
+	}
+	resolvedLegacy, err := filepath.EvalSymlinks(legacyDir)
 	if err != nil {
-		rep.Errors = append(rep.Errors, fmt.Sprintf("resolve %s: %v", it.Legacy, err))
+		rep.Errors = append(rep.Errors, fmt.Sprintf("resolve %s: %v", legacyDir, err))
 		return
 	}
 	for _, f := range it.Files {
@@ -835,7 +1088,7 @@ func (m *layoutMigrator) moveFiles(it layoutItem, newRoot string, rep *LayoutRep
 			rep.Errors = append(rep.Errors, fmt.Sprintf("%s no longer resolves inside %s; left in place", f.Src, it.Legacy))
 			continue
 		}
-		if err := ensureConfinedDir(newRoot, filepath.Dir(f.Dst)); err != nil {
+		if err := ensureConfinedDir(it.TargetRoot, filepath.Dir(f.Dst)); err != nil {
 			rep.Errors = append(rep.Errors, err.Error())
 			continue
 		}

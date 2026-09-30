@@ -39,14 +39,16 @@ const (
 // another process, and "written in the last hour" is the portable stand-in.
 const RecentWindow = time.Hour
 
-// LiveFiles are the logs a long-lived process holds open at now: `serve`'s
-// go-backend.log (truncated at 5 MB on serve start) and the current UTC day's
-// GitHub request ledger segment, github-api-YYYY-MM-DD.jsonl. Retention never
-// deletes them. Earlier segments, every size backup (*.1) and a pre-segment
-// github-api.jsonl are ordinary prunable files: the ledger is written in
-// dated segments precisely so whole-file pruning can bound it.
+// LiveFiles are the logs in a pruned directory that a long-lived process holds
+// open at now: the current UTC day's GitHub request ledger segment,
+// github-api-YYYY-MM-DD.jsonl. Retention never deletes it. Earlier segments,
+// every size backup (*.1) and a pre-segment github-api.jsonl are ordinary
+// prunable files: the ledger is written in dated segments precisely so
+// whole-file pruning can bound it. `serve`'s go-backend.log is not here: it
+// lives in the per-checkout directory (ADR-024 § 7), which retention does not
+// prune, and is bounded by its own 5 MB rotation on serve start.
 func LiveFiles(now time.Time) []string {
-	return []string{"go-backend.log", github.LedgerSegmentName(now)}
+	return []string{github.LedgerSegmentName(now)}
 }
 
 // Policy is the pair of caps applied to each log directory.

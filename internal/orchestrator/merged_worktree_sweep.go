@@ -52,8 +52,9 @@ import (
 // answers the question above with a different source: `state.
 // ActiveIssuesFromSnapshots`, which scans each repo's own
 // `.git/nightgauge/pipeline/` directory — the `runtime-{issue}-{runId}.json`
-// snapshots plus the in-flight `current-run.json` sidecar when the process it
-// names is alive. That is the one machine-wide in-flight source there is (ADR-017
+// snapshots — plus the in-flight `current-run.json` sidecar of every checkout
+// of that clone (`.git/nightgauge-worktree/`, one per checkout) when the
+// process it names is alive. That is the one machine-wide in-flight source there is (ADR-017
 // Decision 8 built the layout to be readable "by a process with no registry"),
 // and it is what makes the CLI's `ActiveIssues` mean something instead of being
 // the empty map it used to pass. It reads that directory at each repo's MAIN

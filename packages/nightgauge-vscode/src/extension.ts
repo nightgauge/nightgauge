@@ -10,7 +10,12 @@
  * @see docs/ARCHITECTURE.md for architectural overview
  */
 
-import { CLONE_LOGS_DISPLAY, primeCloneLayouts, refreshCloneLayouts } from "./utils/cloneLayout";
+import {
+  CHECKOUT_DISPLAY,
+  CLONE_LOGS_DISPLAY,
+  primeCloneLayouts,
+  refreshCloneLayouts,
+} from "./utils/cloneLayout";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { getStageLabel, killAllActiveProcesses } from "./utils/skillRunner";
@@ -924,8 +929,8 @@ export function deactivate(): void {
 
   logger?.info(
     "Deactivating Nightgauge extension — " +
-      `persistent pipeline logs in ${CLONE_LOGS_DISPLAY}/ ` +
-      "(go-backend.log, autonomous-exits.jsonl); " +
+      `persistent pipeline logs in ${CLONE_LOGS_DISPLAY}/ (autonomous-exits.jsonl) ` +
+      `and ${CHECKOUT_DISPLAY}/ (go-backend.log); ` +
       "extension-only logs in " +
       `${extensionContext?.logUri.fsPath ?? "the extension's logUri"} ` +
       "(ipc-client.log) (#2030)"

@@ -12,7 +12,7 @@ import * as fs from "fs";
 import { EventBus, PipelineRunEmitter, PipelineStage } from "../events/EventBus.js";
 import { TokenTracker } from "../tracking/TokenTracker.js";
 import { ContextManager } from "../context/ContextManager.js";
-import { cloneClassDir } from "../context/cloneLayout.js";
+import { cloneClassDir, resolveCloneLayout } from "../context/cloneLayout.js";
 import {
   StageExecutor,
   buildStagePrompt,
@@ -288,6 +288,18 @@ export class PipelineOrchestrator {
    * Install a fresh per-run workflow emitter for an issue and wire it into the
    * executor. Returns the emitter so the caller can drive run-level lifecycle.
    */
+  /**
+   * The working directory's per-checkout directory (`<git-dir>/nightgauge-worktree`,
+   * ADR-024 § 7), or undefined outside a git checkout.
+   */
+  private checkoutDir(): string | undefined {
+    try {
+      return resolveCloneLayout(path.resolve(this.config.cwd)).checkout;
+    } catch {
+      return undefined;
+    }
+  }
+
   private newEmitter(issueNumber: number): PipelineRunEmitter {
     this.emitter = new PipelineRunEmitter(
       this.events,
@@ -571,13 +583,19 @@ export class PipelineOrchestrator {
     // SDK events interleave with the Go writer's; a standalone SDK run with
     // no run-state gets a locally generated UUID v7 (same fallback the Go
     // scheduler applies) so the run is still traced coherently.
-    const runStateRunId = await new RunStateManager(this.config.contextPath)
-      .read()
-      .then((s) => s?.run_id ?? null)
-      .catch(() => null);
+    // run-state.json is the checkout's own singleton (CHECKOUT, ADR-024 § 7);
+    // outside a git checkout there is none to join.
+    const checkoutDir = this.checkoutDir();
+    const runStateRunId = checkoutDir
+      ? await new RunStateManager({ pipeline: this.config.contextPath, checkout: checkoutDir })
+          .read()
+          .then((s) => s?.run_id ?? null)
+          .catch(() => null)
+      : null;
     this.runId = runStateRunId ?? uuidV7();
     this.traceRecorder = TraceRecorder.open({
       pipelineDir: this.config.contextPath,
+      ...(checkoutDir ? { checkoutDir } : {}),
       runId: this.runId,
       issue: issueNumber,
     });

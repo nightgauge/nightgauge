@@ -388,7 +388,8 @@ If the release-watch skill isn't available:
 
 ## Focus-Aware Scheduling
 
-When a focus lens is active in `.nightgauge/focus.yaml`, scheduled tasks
+When a focus lens is active in the checkout's `focus.yaml`
+(`nightgauge layout path checkout focus.yaml`), scheduled tasks
 apply focus-based weighting to their output:
 
 ### Release Watch + Focus

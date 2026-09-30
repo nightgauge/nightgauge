@@ -1,20 +1,24 @@
 // Package skills provides deterministic readers and writers for skill-usage
-// telemetry stored at .nightgauge/skills/usage.jsonl. The log is appended
+// telemetry stored in the checkout's .git/nightgauge-worktree/skills/usage.jsonl
+// (ADR-024 § 7). The log is appended
 // by the PreToolUse(Skill) hook and aggregated by `nightgauge skills usage`.
 package skills
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
-// usageRelPath is the in-repo location of the append-only usage log.
-const usageRelPath = ".nightgauge/skills/usage.jsonl"
+// usageName is the append-only usage log's name inside CHECKOUT.
+const usageName = layout.CheckoutSkills + "/usage.jsonl"
 
 // Record is one skill invocation, one JSON object per line.
 type Record struct {
@@ -32,9 +36,10 @@ type Stats struct {
 	NeverSeen    bool   `json:"never_seen"`
 }
 
-// UsageFilePath returns the absolute path to the usage log for the given root.
-func UsageFilePath(root string) string {
-	return filepath.Join(root, usageRelPath)
+// UsageFilePath returns the absolute path to the usage log of the checkout
+// root is in. It errors outside a git checkout.
+func UsageFilePath(root string) (string, error) {
+	return layout.CheckoutPath(root, usageName)
 }
 
 // AppendRecord appends one record to the usage log, creating parent dirs as
@@ -44,20 +49,11 @@ func AppendRecord(root string, rec Record) error {
 	if rec.TS == "" {
 		rec.TS = time.Now().UTC().Format(time.RFC3339)
 	}
-	path := UsageFilePath(root)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create skills usage dir: %w", err)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open skills usage log: %w", err)
-	}
-	defer f.Close()
 	line, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("marshal usage record: %w", err)
 	}
-	if _, err := fmt.Fprintf(f, "%s\n", line); err != nil {
+	if _, err := layout.AppendCheckoutFile(root, usageName, bytes.NewReader(append(line, '\n'))); err != nil {
 		return fmt.Errorf("write usage record: %w", err)
 	}
 	return nil
@@ -66,7 +62,10 @@ func AppendRecord(root string, rec Record) error {
 // ReadUsage parses every record from the usage log. A missing file is not an
 // error (returns nil). Malformed lines are skipped, not fatal.
 func ReadUsage(root string) ([]Record, error) {
-	path := UsageFilePath(root)
+	path, err := UsageFilePath(root)
+	if err != nil {
+		return nil, fmt.Errorf("locate skills usage log: %w", err)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {

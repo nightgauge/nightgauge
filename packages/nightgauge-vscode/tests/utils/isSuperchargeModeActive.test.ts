@@ -24,9 +24,11 @@ vi.mock("vscode", () => ({
 
 import * as vscode from "vscode";
 import { isSuperchargeModeActive } from "../../src/utils/resolvers/monitoringResolver";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
+/** Writes `dir`'s performance-mode.yaml in its CHECKOUT (ADR-024 § 7). */
 function writePerformanceMode(dir: string, mode: "efficiency" | "elevated" | "maximum"): void {
-  const filePath = path.join(dir, ".nightgauge", "performance-mode.yaml");
+  const filePath = path.join(fakeCloneLayout(dir).checkout, "performance-mode.yaml");
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `mode: ${mode}\n`, "utf-8");
 }
@@ -39,6 +41,8 @@ describe("isSuperchargeModeActive — primary-workspace-first lookup (deprecated
   beforeEach(() => {
     primaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), "primary-"));
     stageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "stage-"));
+    fakeCloneLayout(primaryRoot);
+    fakeCloneLayout(stageRoot);
     vi.mocked(vscode.workspace).workspaceFolders = [
       { uri: { fsPath: primaryRoot } } as vscode.WorkspaceFolder,
     ];

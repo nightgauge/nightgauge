@@ -233,8 +233,11 @@ func writeGatePassingSkillOutput(workDir, worktreeDir string, issueNumber int, s
 		if checkout == "" {
 			checkout = workDir
 		}
-		healthDir := filepath.Join(checkout, ".nightgauge", "health")
-		os.MkdirAll(healthDir, 0o755) //nolint:errcheck
+		// The gate reads the checkout's health/ (ADR-024 § 7).
+		healthDir, err := layout.CheckoutSubdir(checkout, layout.CheckoutHealth)
+		if err != nil {
+			return
+		}
 		f, err := os.OpenFile(filepath.Join(healthDir, "gate-metrics.jsonl"),
 			os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 		if err == nil {

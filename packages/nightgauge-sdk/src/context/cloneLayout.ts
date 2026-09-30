@@ -4,13 +4,16 @@
  * `CLONE = <git-common-dir>/nightgauge` holds the four per-clone classes
  * (`pipeline`, `plans`, `retros`, `logs`). Git never tracks its own
  * directory, so nothing here can be committed, and every linked worktree of a
- * clone resolves to the main clone's directory.
+ * clone resolves to the main clone's directory. `CHECKOUT =
+ * <git-dir>/nightgauge-worktree` holds one checkout's unkeyed singletons and
+ * runtime state ({@link CHECKOUT_ENTRIES}); each linked worktree has its own.
  *
  * The Go binary is the path source (`nightgauge layout` prints the same
  * object as JSON). This module is the TypeScript side of that contract for
  * code that cannot ask the binary synchronously: it runs the same git command
- * the Go resolver runs (`git rev-parse --path-format=absolute
- * --git-common-dir`, with the inherited GIT_* location variables cleared) once
+ * the Go resolvers run (`git rev-parse --path-format=absolute
+ * --git-common-dir --absolute-git-dir`, with the inherited GIT_* location
+ * variables cleared) once
  * per root and caches the answer for the life of the process. A parity test
  * pins the two. `setCloneLayout` fills the cache from the binary's JSON (or,
  * in tests, from a fixture), so a caller that primes it never spawns git.
@@ -30,18 +33,56 @@ export type CloneClass = (typeof CLONE_CLASSES)[number];
 /** CLONE's directory name inside the git common dir. */
 export const CLONE_DIR_NAME = "nightgauge";
 
+/** CHECKOUT's directory name inside a checkout's own git dir. */
+export const CHECKOUT_DIR_NAME = "nightgauge-worktree";
+
+/**
+ * Per-checkout entries under CHECKOUT (ADR-024 § 7), matching the Go
+ * `layout.Checkout*` constants: the unkeyed singletons and runtime state of
+ * one checkout. Join one onto {@link CloneLayout.checkout}; never onto a root.
+ */
+export const CHECKOUT_ENTRIES = {
+  currentRun: "current-run.json",
+  runState: "run-state.json",
+  batchState: "batch-state.json",
+  queueState: "queue-state.json",
+  plan: "PLAN.md",
+  serveLock: "serve.lock",
+  backendLog: "go-backend.log",
+  attention: "attention",
+  attentionCoverage: "attention-coverage.json",
+  autonomous: "autonomous",
+  health: "health",
+  graph: "graph",
+  containment: "containment",
+  notifications: "notifications",
+  skills: "skills",
+  triage: "triage",
+  focus: "focus.yaml",
+  performanceMode: "performance-mode.yaml",
+  carefulLock: "careful.lock",
+} as const;
+export type CheckoutEntry = keyof typeof CHECKOUT_ENTRIES;
+
 /** The resolved per-clone layout of one repository root. */
 export interface CloneLayout {
   /** The root the layout was resolved for. */
   root: string;
   /** Absolute, symlink-evaluated git common dir. */
   gitCommonDir: string;
+  /**
+   * Absolute, symlink-evaluated git dir of the checkout: the git common dir
+   * for the main checkout, `<gitCommonDir>/worktrees/<name>` for a linked one.
+   */
+  gitDir: string;
   /** `<gitCommonDir>/nightgauge`. */
   clone: string;
   pipeline: string;
   plans: string;
   retros: string;
   logs: string;
+  /** `<gitDir>/nightgauge-worktree`: this checkout's own runtime state. */
+  checkout: string;
 }
 
 /** Thrown when a root is not inside a git repository. */
@@ -73,35 +114,49 @@ function gitEnv(): NodeJS.ProcessEnv {
   return env;
 }
 
-const GIT_ARGS = ["rev-parse", "--path-format=absolute", "--git-common-dir"];
+const GIT_ARGS = ["rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir"];
 
 const cache = new Map<string, CloneLayout | NotAGitRepositoryError>();
 
-/** Builds the layout object for a resolved git common dir. */
-export function cloneLayoutFor(root: string, gitCommonDir: string): CloneLayout {
+/**
+ * Builds the layout object for a resolved git common dir and the checkout's
+ * git dir (default: the common dir, i.e. the main checkout).
+ */
+export function cloneLayoutFor(
+  root: string,
+  gitCommonDir: string,
+  gitDir: string = gitCommonDir
+): CloneLayout {
   const clone = path.join(gitCommonDir, CLONE_DIR_NAME);
   return {
     root,
     gitCommonDir,
+    gitDir,
     clone,
     pipeline: path.join(clone, "pipeline"),
     plans: path.join(clone, "plans"),
     retros: path.join(clone, "retros"),
     logs: path.join(clone, "logs"),
+    checkout: path.join(gitDir, CHECKOUT_DIR_NAME),
   };
 }
 
-function fromGitOutput(root: string, stdout: string): CloneLayout {
-  let common = stdout.trim();
-  if (!common || !path.isAbsolute(common)) {
-    throw new NotAGitRepositoryError(root, `git returned ${JSON.stringify(common)}`);
+function canonicalGitPath(root: string, raw: string | undefined): string {
+  let p = (raw ?? "").trim();
+  if (!p || !path.isAbsolute(p)) {
+    throw new NotAGitRepositoryError(root, `git returned ${JSON.stringify(p)}`);
   }
   try {
-    common = fs.realpathSync(common);
+    p = fs.realpathSync(p);
   } catch {
     // Keep git's answer; it is absolute.
   }
-  return cloneLayoutFor(root, path.normalize(common));
+  return path.normalize(p);
+}
+
+function fromGitOutput(root: string, stdout: string): CloneLayout {
+  const [common, gitDir] = stdout.split(/\r?\n/);
+  return cloneLayoutFor(root, canonicalGitPath(root, common), canonicalGitPath(root, gitDir));
 }
 
 /**
@@ -111,27 +166,33 @@ function fromGitOutput(root: string, stdout: string): CloneLayout {
  * git directory is not an error here: a writer's own error names the path.
  */
 function ensureCloneRoot(layout: CloneLayout): void {
+  ensureRoot(layout.clone, layout.gitCommonDir, "per-clone");
+  ensureRoot(layout.checkout, layout.gitDir, "per-checkout");
+}
+
+/** Creates one root (CLONE or CHECKOUT) inside `gitDir`; see ensureCloneRoot. */
+function ensureRoot(dir: string, gitDir: string, what: string): void {
   let st: fs.Stats | undefined;
   try {
-    st = fs.lstatSync(layout.clone);
+    st = fs.lstatSync(dir);
   } catch {
     let mode = 0o700;
     try {
-      if ((fs.statSync(layout.gitCommonDir).mode & 0o020) !== 0) mode = 0o2770;
+      if ((fs.statSync(gitDir).mode & 0o020) !== 0) mode = 0o2770;
     } catch {
       // Default mode.
     }
     try {
-      fs.mkdirSync(layout.clone, { mode: mode & 0o777 });
-      fs.chmodSync(layout.clone, mode);
+      fs.mkdirSync(dir, { mode: mode & 0o777 });
+      fs.chmodSync(dir, mode);
     } catch {
       return;
     }
-    st = fs.lstatSync(layout.clone);
+    st = fs.lstatSync(dir);
   }
   if (st.isSymbolicLink() || !st.isDirectory()) {
     throw new Error(
-      `unsafe per-clone directory: ${layout.clone} is ${
+      `unsafe ${what} directory: ${dir} is ${
         st.isSymbolicLink() ? "a symlink" : "not a directory"
       }; remove it`
     );
@@ -195,6 +256,16 @@ export function cloneClassDir(cls: CloneClass, cwd: string = process.cwd()): str
 }
 
 /**
+ * The path of a per-checkout entry (`current-run.json`, `attention`, ...) for
+ * the checkout containing `cwd` (default: the process working directory):
+ * `<git-dir>/nightgauge-worktree/<entry>`. Throws
+ * {@link NotAGitRepositoryError} outside a git repository.
+ */
+export function checkoutPath(entry: CheckoutEntry, cwd: string = process.cwd()): string {
+  return path.join(resolveCloneLayout(path.resolve(cwd)).checkout, CHECKOUT_ENTRIES[entry]);
+}
+
+/**
  * Async variant for activation: resolves without blocking the event loop and
  * fills the cache, so the synchronous helpers never spawn git afterwards.
  */
@@ -242,11 +313,13 @@ export function cloneLayoutFromJson(json: string): CloneLayout {
   return {
     root: str("root"),
     gitCommonDir: str("git_common_dir"),
+    gitDir: str("git_dir"),
     clone: str("clone"),
     pipeline: str("pipeline"),
     plans: str("plans"),
     retros: str("retros"),
     logs: str("logs"),
+    checkout: str("checkout"),
   };
 }
 

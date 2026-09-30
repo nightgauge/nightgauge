@@ -72,7 +72,7 @@ func (s *Store) loadStreaksLocked() streakFile {
 }
 
 func (s *Store) saveStreaksLocked(f streakFile) error {
-	if err := os.MkdirAll(s.streakDir(), 0o755); err != nil {
+	if err := os.MkdirAll(s.streakDir(), 0o700); err != nil {
 		return fmt.Errorf("attention: create streak dir: %w", err)
 	}
 	f.SchemaVersion = streakSchemaVersion
@@ -105,6 +105,9 @@ func (s *Store) saveStreaksLocked(f streakFile) error {
 // The count is independent of any card's lifecycle: it survives the card being
 // acknowledged, muted, or expired. Only ResetStreak clears it.
 func (s *Store) IncrementStreak(key string) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
 	if strings.TrimSpace(key) == "" {
 		return 0, fmt.Errorf("attention: increment streak requires a key")
 	}
@@ -125,6 +128,9 @@ func (s *Store) IncrementStreak(key string) (int, error) {
 // This is the only way a streak returns to zero — it belongs to the path that
 // observed the underlying condition actually clear, never to a card dismissal.
 func (s *Store) ResetStreak(key string) error {
+	if s.err != nil {
+		return s.err
+	}
 	if strings.TrimSpace(key) == "" {
 		return fmt.Errorf("attention: reset streak requires a key")
 	}
@@ -142,6 +148,9 @@ func (s *Store) ResetStreak(key string) error {
 
 // StreakCount reports the current count for key without changing it.
 func (s *Store) StreakCount(key string) int {
+	if s.err != nil {
+		return 0
+	}
 	release := s.acquireSection()
 	defer release()
 

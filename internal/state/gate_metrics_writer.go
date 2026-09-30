@@ -1,14 +1,19 @@
 package state
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
-// AppendGateMetric appends one quality-gate record to
-// .nightgauge/health/gate-metrics.jsonl — the canonical signal the
+// GateMetricsName is the gate-metrics log's name inside CHECKOUT
+// (.git/nightgauge-worktree/health/gate-metrics.jsonl, ADR-024 § 7).
+const GateMetricsName = layout.CheckoutHealth + "/gate-metrics.jsonl"
+
+// AppendGateMetric appends one quality-gate record to the checkout's
+// health/gate-metrics.jsonl — the canonical signal the
 // deterministic FeatureValidateGate already consumes
 // (ReadGateMetricsForIssue).
 //
@@ -29,11 +34,6 @@ func AppendGateMetric(workspaceRoot string, issueNumber int, gateName, result, e
 		return fmt.Errorf("gate metric requires a non-empty gate name")
 	}
 
-	dir := filepath.Join(workspaceRoot, ".nightgauge", "health")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create health dir: %w", err)
-	}
-
 	rec := gateMetricRecord{
 		SchemaVersion: "1.0",
 		Timestamp:     timestamp,
@@ -50,12 +50,7 @@ func AppendGateMetric(workspaceRoot string, issueNumber int, gateName, result, e
 		return fmt.Errorf("marshal gate metric: %w", err)
 	}
 
-	f, err := os.OpenFile(filepath.Join(dir, "gate-metrics.jsonl"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return fmt.Errorf("open gate-metrics.jsonl: %w", err)
-	}
-	defer f.Close()
-	if _, err := f.Write(append(line, '\n')); err != nil {
+	if _, err := layout.AppendCheckoutFile(workspaceRoot, GateMetricsName, bytes.NewReader(append(line, '\n'))); err != nil {
 		return fmt.Errorf("write gate metric: %w", err)
 	}
 	return nil

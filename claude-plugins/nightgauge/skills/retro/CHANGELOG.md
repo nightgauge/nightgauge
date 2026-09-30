@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Changed
 
+- `batch-state.json` is read from this checkout's directory
+  (`nightgauge layout path checkout batch-state.json`), not the clone's
+  pipeline state directory (#2037, ADR-024 § 7).
 - Per-clone pipeline state, plans, retros and logs are read at
   `$(nightgauge layout path <class> <name>)` and written through
   `nightgauge layout write|append`, not by `.nightgauge/...` path (#2037,

@@ -142,7 +142,9 @@ vi.mock("../../src/utils/SkillEffectivenessWriter", () => ({
     appendRecord: (...args: unknown[]) => mockSkillEffectivenessAppend(...args),
     readAll: vi.fn().mockResolvedValue([]),
     enforceRetention: vi.fn().mockResolvedValue(undefined),
-    getFilePath: vi.fn().mockReturnValue("/workspace/.nightgauge/health/skill-effectiveness.jsonl"),
+    getFilePath: vi
+      .fn()
+      .mockReturnValue("/workspace/.git/nightgauge-worktree/health/skill-effectiveness.jsonl"),
   },
 }));
 

@@ -9,6 +9,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // countingBoard is a forge.BoardService that counts full board reads and
@@ -30,7 +31,7 @@ func newStartupGraphScheduler(t *testing.T) (*AutonomousScheduler, *countingBoar
 		{Owner: "O", Name: "b", Project: 7},
 		{Owner: "O", Name: "c", Project: 7},
 	}
-	as := NewAutonomousScheduler(nil, nil, repos, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(nil, nil, repos, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	board := &countingBoard{}
 	// The default provider is what production uses; only the board behind
 	// it is substituted, so the build path under test is the real one.

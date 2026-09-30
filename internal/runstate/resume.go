@@ -28,8 +28,9 @@ type ResumeDetection struct {
 	Reason  string   // populated for ResumeRunning ("concurrent_run" | "stale_writer")
 }
 
-// DetectResume inspects run-state.json plus context-file presence and tells
-// the caller what to do. `branch` and `hasContextFiles` are caller-provided
+// DetectResume inspects run-state.json in baseDir (the checkout's
+// layout.CheckoutDir) plus context-file presence and tells the caller what to
+// do. `branch` and `hasContextFiles` are caller-provided
 // because they require git/IO outside this package's responsibility.
 //
 // The result.Choices ordering matches the precedence the recovery UX should
@@ -81,7 +82,9 @@ func DetectResume(baseDir, branch string, hasContextFiles bool) (*ResumeDetectio
 }
 
 // HasContextFiles reports whether any pipeline context files for this issue
-// still live in baseDir. Used by callers building a DetectResume invocation.
+// still live in baseDir, the clone's pipeline state directory
+// (layout.PipelineStateDir). Used by callers building a DetectResume
+// invocation.
 //
 // Matches names ending with `-<issueNumber>.json` so it picks up
 // issue-NNN.json, planning-NNN.json, dev-NNN.json, etc., but ignores

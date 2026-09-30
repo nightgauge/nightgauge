@@ -39,7 +39,8 @@ prevent those mistakes.
 Every mechanism in the pipeline learning system is classified below. When adding
 a new mechanism, add it to this table before implementing.
 `<pipeline>` is the clone's pipeline state directory
-(`nightgauge layout path pipeline`).
+(`nightgauge layout path pipeline`); `<checkout>` is this checkout's directory
+(`nightgauge layout path checkout`).
 
 | Mechanism                           | Beneficiary | Modifies Code?                            | Data Location                           | Status                   |
 | ----------------------------------- | ----------- | ----------------------------------------- | --------------------------------------- | ------------------------ |
@@ -50,19 +51,19 @@ a new mechanism, add it to this table before implementing.
 | Outcome Recording                   | SHARED      | No                                        | `<pipeline>/history/outcomes.jsonl`     | Active (see note)        |
 | Complexity Calibration              | SHARED      | No (updates prediction model)             | `.nightgauge/complexity-model.yaml`     | Active                   |
 | Post-Pipeline Analysis              | SHARED      | No (read-only insights)                   | `.nightgauge/analysis/`                 | Active                   |
-| Health Dashboard (8 dims)           | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                   | Active                   |
-| Learning Effectiveness Dimension    | EXTERNAL    | No (measures learning system health)      | `.nightgauge/health/`                   | Active                   |
-| Gate Metrics                        | EXTERNAL    | No (observability)                        | `.nightgauge/gate-metrics.jsonl`        | Active                   |
+| Health Dashboard (8 dims)           | EXTERNAL    | No (read-only display)                    | `<checkout>/health/`                    | Active                   |
+| Learning Effectiveness Dimension    | EXTERNAL    | No (measures learning system health)      | `<checkout>/health/`                    | Active                   |
+| Gate Metrics                        | EXTERNAL    | No (observability)                        | `<checkout>/health/gate-metrics.jsonl`  | Active                   |
 | Skill Effectiveness Tracking        | EXTERNAL    | No (before/after comparison)              | `.nightgauge/skill-effectiveness.jsonl` | Active                   |
-| Skill Drift Dashboard Dimension     | EXTERNAL    | No (read-only display)                    | `.nightgauge/health/`                   | Active                   |
+| Skill Drift Dashboard Dimension     | EXTERNAL    | No (read-only display)                    | `<checkout>/health/`                    | Active                   |
 | Skill Drift Auto-Issue Creation     | INTERNAL    | No (creates GitHub issues)                | GitHub Issues                           | Active (config-gated)    |
 | Scheduled Discovery Loops           | SHARED      | No (creates GitHub issues)                | GitHub Issues + `.nightgauge/` records  | Active (off by default)  |
 | Spike Materialization               | SHARED      | No (creates GitHub issues)                | GitHub Issues                           | Active (ungated)         |
 | Continuous Improvement Skill        | SHARED      | No (read-only analysis + optional issues) | `<pipeline>/`                           | Active                   |
 | Adaptive Policy Engine              | DISABLED    | Was: yes (`config.yaml`)                  | N/A (SDK-only)                          | Removed from extension   |
-| Workspace Knowledge Graph           | SHARED      | No (derived index, rebuilt)               | `.nightgauge/graph/`                    | Planned                  |
-| Impact-Set Computation              | SHARED      | No (read-only neighborhood walk)          | `.nightgauge/graph/`                    | Planned                  |
-| Strategic Assumption Contract       | SHARED      | No (reads ADR metadata)                   | ADR files + `.nightgauge/graph/`        | Planned                  |
+| Workspace Knowledge Graph           | SHARED      | No (derived index, rebuilt)               | `<checkout>/graph/`                     | Planned                  |
+| Impact-Set Computation              | SHARED      | No (read-only neighborhood walk)          | `<checkout>/graph/`                     | Planned                  |
+| Strategic Assumption Contract       | SHARED      | No (reads ADR metadata)                   | ADR files + `<checkout>/graph/`         | Planned                  |
 | Decision Log                        | SHARED      | No (append-only record)                   | `.nightgauge/decisions/`                | Planned                  |
 | Operator Alerting                   | EXTERNAL    | No (surfaces, never mutates)              | Action Center + configured notifier     | Planned                  |
 | Backlog Alignment Actions           | SHARED      | No (mutates issues/board, never code)     | GitHub Issues + project board           | Planned (autonomy-gated) |

@@ -5,10 +5,11 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/careful"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestCarefulGateOffAllowsEverything(t *testing.T) {
-	root := t.TempDir() // careful not enabled
+	root := layouttest.Repo(t) // careful not enabled
 	input := fmt.Sprintf(`{"tool_name":"Bash","cwd":%q,"tool_input":{"command":"docker compose down -v"}}`, root)
 	if got := EvaluateCarefulGate([]byte(input)); got.Decision != "allow" {
 		t.Fatalf("careful off must allow, got %q", got.Decision)
@@ -16,7 +17,7 @@ func TestCarefulGateOffAllowsEverything(t *testing.T) {
 }
 
 func TestCarefulGateOnBlocksDestructive(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := careful.Enable(root, 0, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +32,7 @@ func TestCarefulGateOnBlocksDestructive(t *testing.T) {
 }
 
 func TestCarefulGateOnAllowsSafe(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := careful.Enable(root, 0, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +43,7 @@ func TestCarefulGateOnAllowsSafe(t *testing.T) {
 }
 
 func TestCarefulGateIgnoresNonBash(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := careful.Enable(root, 0, ""); err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +64,7 @@ func TestCarefulGateMalformedAllows(t *testing.T) {
 // commit message, --body) is allowed because the real program is not a
 // destructive op. A genuine destructive op is still blocked.
 func TestCarefulGateAllowsProse(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := careful.Enable(root, 0, ""); err != nil {
 		t.Fatal(err)
 	}

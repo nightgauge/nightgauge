@@ -44,12 +44,29 @@ describe("uuidV7", () => {
 });
 
 describe("RunStateManager", () => {
+  /** The clone's pipeline directory: context files and their archive. */
   let dir: string;
+  /** The checkout's own directory: run-state.json (ADR-024 § 7). */
+  let checkout: string;
   let mgr: RunStateManager;
 
   beforeEach(async () => {
     dir = await tmpDir();
-    mgr = new RunStateManager(dir);
+    checkout = await tmpDir();
+    mgr = new RunStateManager({ pipeline: dir, checkout });
+  });
+
+  it("keeps run-state.json in the checkout, apart from the shared context files", async () => {
+    await mgr.markRunning({ issue_number: 7, branch: "feat/7" });
+    expect(mgr.filePath).toBe(path.join(checkout, "run-state.json"));
+    await expect(fs.access(path.join(checkout, "run-state.json"))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(dir, "run-state.json"))).rejects.toThrow();
+
+    // A linked worktree of the same clone shares the pipeline directory but
+    // has its own checkout directory, so it sees no run.
+    const worktreeCheckout = await tmpDir();
+    const other = new RunStateManager({ pipeline: dir, checkout: worktreeCheckout });
+    expect(await other.read()).toBeNull();
   });
 
   describe("markRunning", () => {
@@ -171,7 +188,7 @@ describe("RunStateManager", () => {
 
   describe("schema_version gating", () => {
     it("rejects a major-version skew with SchemaVersionMismatch", async () => {
-      const file = path.join(dir, "run-state.json");
+      const file = path.join(checkout, "run-state.json");
       await fs.writeFile(
         file,
         JSON.stringify({
@@ -261,7 +278,7 @@ describe("RunStateManager", () => {
       };
       fixture.run_id = runId;
       for (const attempt of fixture.attempts) attempt.run_id = runId;
-      const file = path.join(dir, "run-state.json");
+      const file = path.join(checkout, "run-state.json");
       await fs.writeFile(file, JSON.stringify(fixture, null, 2) + "\n", "utf-8");
       return file;
     }
@@ -406,7 +423,7 @@ describe("RunStateManager", () => {
 
       // run-state.json itself is never matched/moved by the suffix scan —
       // only the fresh snapshot written directly into the archive dir.
-      await expect(fs.access(path.join(dir, "run-state.json"))).resolves.toBeUndefined();
+      await expect(fs.access(path.join(checkout, "run-state.json"))).resolves.toBeUndefined();
     });
   });
 });

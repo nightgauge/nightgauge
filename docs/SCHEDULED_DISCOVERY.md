@@ -151,8 +151,8 @@ That fetches the tip of `discovery-state` and writes
 `.nightgauge/release-watch/*.json` and `.nightgauge/improvement-runs/*.json`
 into your working tree without touching your index or your branch. Those paths
 are gitignored (`.nightgauge/.gitignore`), so a sync leaves `git status` clean:
-they are local copies of state owned elsewhere, the same class as
-`.nightgauge/health/` and `.nightgauge/attention/`.
+they are local copies of state owned elsewhere, never authored in the
+repository.
 
 Three alternatives were rejected, each for a concrete reason:
 
@@ -223,7 +223,8 @@ per-task switch).
 
 ## Focus Lens Integration
 
-Both skills read `.nightgauge/focus.yaml` to apply dimension boosts during
+Both skills read the checkout's `focus.yaml`
+(`nightgauge layout path checkout focus.yaml`) to apply dimension boosts during
 scoring:
 
 - **Release-Watch** — the lens boosts relevance scores for change categories

@@ -6,7 +6,7 @@
  * only accepts a runtime snapshot when the root's current-run sidecar agrees
  * on repository + issue and the owning process is still alive.
  */
-import { isUsableWorkspaceRoot, pipelineStateDir } from "../utils/cloneLayout";
+import { checkoutPath, isUsableWorkspaceRoot, pipelineStateDir } from "../utils/cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Disposable } from "vscode";
@@ -153,8 +153,10 @@ async function readActiveRun(
 ): Promise<ReconciledCliRun | null> {
   const stateDir = pipelineStateDir(root.path);
   try {
+    // The sidecar is the checkout's unkeyed run-control singleton (CHECKOUT,
+    // ADR-024 § 7); the keyed runtime snapshot it names is per-clone.
     const sidecar = JSON.parse(
-      await fs.readFile(path.join(stateDir, "current-run.json"), "utf8")
+      await fs.readFile(checkoutPath(root.path, "currentRun"), "utf8")
     ) as CurrentRunSidecar;
     if (
       !Number.isInteger(sidecar.issue_number) ||

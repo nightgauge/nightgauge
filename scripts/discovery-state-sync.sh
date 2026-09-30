@@ -42,8 +42,7 @@
 #
 # The synced files are gitignored on `main` — see .nightgauge/.gitignore — so a
 # sync leaves `git status` clean. They are fetched runtime state whose source of
-# truth is the state branch, exactly like .nightgauge/health/ and
-# .nightgauge/attention/.
+# truth is the state branch, never authored in the repository.
 #
 # Usage:
 #   scripts/discovery-state-sync.sh [--remote origin] [--branch discovery-state]

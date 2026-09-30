@@ -542,6 +542,8 @@ Generate prioritized improvement proposals
 (`nightgauge layout path pipeline`, resolving to
 `<git-common-dir>/nightgauge/pipeline/`; see
 [ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
+`<checkout>` is this checkout's directory (`nightgauge layout path checkout`,
+`.git/nightgauge-worktree/` for the main checkout).
 
 | File                                          | Purpose                                                      |
 | --------------------------------------------- | ------------------------------------------------------------ |
@@ -549,7 +551,7 @@ Generate prioritized improvement proposals
 | `<pipeline>/history/outcomes.jsonl`           | Learning outcome corpus (per target repo, both exec paths)   |
 | `.nightgauge/analysis/latest.json`            | Most recent analysis result                                  |
 | `.nightgauge/analysis/analysis-*.json`        | Timestamped analysis history                                 |
-| `.nightgauge/gate-metrics.jsonl`              | Gate invocation records                                      |
+| `<checkout>/health/gate-metrics.jsonl`        | Gate invocation records                                      |
 | `.nightgauge/skill-effectiveness.jsonl`       | Skill change effectiveness                                   |
 | `.nightgauge/calibration.json`                | Size estimate calibration                                    |
 | `<pipeline>/stage-model-calibration.json`     | Per-(stage, model) cost calibration (#142)                   |

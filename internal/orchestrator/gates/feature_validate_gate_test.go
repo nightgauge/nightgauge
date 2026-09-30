@@ -6,16 +6,17 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
-// writeGateMetrics writes JSONL records to .nightgauge/health/gate-metrics.jsonl.
-// Mirrors the format ReadGateMetricsForIssue parses.
+// writeGateMetrics writes JSONL records to the checkout's
+// health/gate-metrics.jsonl (ADR-024 § 7), making workspace a git repository
+// first when it is not one. Mirrors the format ReadGateMetricsForIssue parses.
 func writeGateMetrics(t *testing.T, workspace string, issueNumber int, records []map[string]any) {
 	t.Helper()
-	dir := filepath.Join(workspace, ".nightgauge", "health")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	dir := layouttest.MkCheckoutSubdir(t, workspace, layout.CheckoutHealth)
 	f, err := os.Create(filepath.Join(dir, "gate-metrics.jsonl"))
 	if err != nil {
 		t.Fatalf("create: %v", err)
@@ -43,7 +44,7 @@ func writeGateMetrics(t *testing.T, workspace string, issueNumber int, records [
 }
 
 func TestFeatureValidateGate_Pass(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	writeGateMetrics(t, ws, 42, []map[string]any{
 		{"gate_name": "build", "result": "pass"},
 		{"gate_name": "lint", "result": "pass"},
@@ -57,7 +58,7 @@ func TestFeatureValidateGate_Pass(t *testing.T) {
 }
 
 func TestFeatureValidateGate_Fail_OneCatch(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	writeGateMetrics(t, ws, 42, []map[string]any{
 		{"gate_name": "build", "result": "pass"},
 		{"gate_name": "lint", "result": "catch"},
@@ -76,7 +77,7 @@ func TestFeatureValidateGate_Fail_OneCatch(t *testing.T) {
 // scenario: feature-validate exited 0 but emitted no quality-gate records,
 // meaning it skipped the gates entirely.
 func TestFeatureValidateGate_SkillSaidSuccessButNoMetrics(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	gr := FeatureValidateGate{}.Verify(context.Background(), 42, ws)
 	if gr.Passed {
 		t.Fatalf("expected fail when no gate-metrics records exist")
@@ -92,7 +93,7 @@ func TestFeatureValidateGate_SkillSaidSuccessButNoMetrics(t *testing.T) {
 // EXISTING r.Result != "pass" loop without tripping the gate. This is the
 // zero-Go-change contract: the judge gate is just another gate-metrics record.
 func TestFeatureValidateGate_JudgeVerdict_Pass(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	writeGateMetrics(t, ws, 3918, []map[string]any{
 		{"gate_name": "build", "result": "pass"},
 		// Byte-for-byte the record the TS writer appends for a "pass" verdict.
@@ -115,7 +116,7 @@ func TestFeatureValidateGate_JudgeVerdict_Pass(t *testing.T) {
 // loop and yields KindFail, with NO new Go struct and NO LLM in internal/. A
 // hallucinated "done" the judge rejects therefore fails the deterministic gate.
 func TestFeatureValidateGate_JudgeVerdict_FailTripsGate(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	writeGateMetrics(t, ws, 3918, []map[string]any{
 		{"gate_name": "build", "result": "pass"},
 		{"gate_name": "lint", "result": "pass"},

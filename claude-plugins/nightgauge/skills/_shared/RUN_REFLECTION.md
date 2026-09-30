@@ -6,10 +6,11 @@ memory, every run re-surfaces the same findings and can't say "what changed sinc
 last time." This mirrors `nightgauge-release-watch`'s `last-seen.json`.
 
 > Set `RUN_LOG` to this skill's append-only log path **before** this section,
-> e.g. `RUN_LOG=".nightgauge/triage/runs.jsonl"`. Keep all state in-repo
-> under `.nightgauge/` — never `${CLAUDE_PLUGIN_DATA}` (single source of
-> truth). A log in a per-clone class directory (pipeline, plans, retros, logs)
-> also sets `RUN_LOG_CLASS` and `RUN_LOG_NAME`, with
+> e.g. `RUN_LOG=".nightgauge/doc-snapshots/runs.jsonl"`. Keep all state with
+> the repository — never `${CLAUDE_PLUGIN_DATA}` (single source of truth). A
+> log in a per-clone class directory (pipeline, plans, retros, logs) or in this
+> checkout's directory (`checkout`, e.g. `triage/runs.jsonl`) also sets
+> `RUN_LOG_CLASS` and `RUN_LOG_NAME`, with
 > `RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"`: that
 > directory is inside the git directory, so the append goes through
 > `nightgauge layout append`, never a redirect.

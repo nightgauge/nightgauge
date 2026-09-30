@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // TestAttentionSync_ValidationRejectionIsQuarantined: a rejection that names a
@@ -162,7 +163,7 @@ func TestLocalResolveSurvivesAnUnreachableMirror(t *testing.T) {
 	defer srv.Close()
 	defer close(hang)
 
-	store := attention.New(t.TempDir())
+	store := attention.New(layouttest.Repo(t))
 	svc := NewAttentionSyncService(onlineClient(t, srv.URL))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

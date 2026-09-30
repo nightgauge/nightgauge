@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/cadence"
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // #2090: a stopped autonomous loop is restarted through the daemon's own start
@@ -54,7 +56,13 @@ func useStarter(t *testing.T, s AutonomousStarter) {
 // writeAutonomousState writes the scheduler's state file the way the
 // scheduler persists it (status and lastScanAt, RFC 3339).
 func writeAutonomousState(t *testing.T, root string, lastScan time.Time) {
-	path := filepath.Join(root, ".nightgauge", "autonomous", "state.json")
+	path, err := layout.CheckoutPath(root, "autonomous/state.json")
+	if err != nil {
+		if t != nil {
+			t.Fatal(err)
+		}
+		return
+	}
 	data, _ := json.Marshal(map[string]string{"status": "stopped", "lastScanAt": lastScan.UTC().Format(time.RFC3339)})
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err == nil {
 		err = os.WriteFile(path, data, 0o600)
@@ -68,7 +76,7 @@ func writeAutonomousState(t *testing.T, root string, lastScan time.Time) {
 
 func stateBytes(t *testing.T, root string) string {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join(root, ".nightgauge", "autonomous", "state.json"))
+	b, err := os.ReadFile(layouttest.CheckoutPath(t, root, "autonomous/state.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +87,7 @@ func stateBytes(t *testing.T, root string) string {
 func stoppedLoop(t *testing.T) (string, *Fixer) {
 	t.Helper()
 	isolateMachineState(t)
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeAutonomousState(t, root, time.Now().AddDate(0, 0, -17))
 	env := &Env{Cwd: root, Now: time.Now()}
 	return root, &Fixer{

@@ -5,14 +5,24 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
-// ReadTrends reads the last N entries from .nightgauge/health/trends.jsonl.
+// Health logs inside CHECKOUT (.git/nightgauge-worktree/health/, ADR-024 § 7).
+const (
+	trendsName      = layout.CheckoutHealth + "/trends.jsonl"
+	gateMetricsName = layout.CheckoutHealth + "/gate-metrics.jsonl"
+)
+
+// ReadTrends reads the last N entries from the checkout's health/trends.jsonl.
 // When limit is 0 all entries are returned. If the file does not exist an empty
 // slice is returned without error.
 func ReadTrends(workspaceRoot string, limit int) ([]HealthTrendEntry, error) {
-	filePath := filepath.Join(workspaceRoot, ".nightgauge", "health", "trends.jsonl")
+	filePath, err := layout.CheckoutPath(workspaceRoot, trendsName)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -49,10 +59,13 @@ func ReadTrends(workspaceRoot string, limit int) ([]HealthTrendEntry, error) {
 	return entries, nil
 }
 
-// ReadGateMetrics reads all entries from .nightgauge/health/gate-metrics.jsonl.
+// ReadGateMetrics reads all entries from the checkout's health/gate-metrics.jsonl.
 // If the file does not exist an empty slice is returned without error.
 func ReadGateMetrics(workspaceRoot string) ([]GateMetricsEntry, error) {
-	filePath := filepath.Join(workspaceRoot, ".nightgauge", "health", "gate-metrics.jsonl")
+	filePath, err := layout.CheckoutPath(workspaceRoot, gateMetricsName)
+	if err != nil {
+		return nil, err
+	}
 	f, err := os.Open(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {

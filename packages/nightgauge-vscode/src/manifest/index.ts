@@ -816,8 +816,8 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
     },
     {
       // Issue #3446 — manual escape hatch for the global Anthropic-quota
-      // cooldown (#3431) so the user can resume dispatch without editing
-      // .nightgauge/autonomous/state.json by hand.
+      // cooldown (#3431) so the user can resume dispatch without editing the
+      // checkout's autonomous/state.json (.git/nightgauge-worktree/) by hand.
       command: "nightgauge.autonomousClearQuotaCooldown",
       title: "Autonomous: Clear Quota Cooldown",
       category: "Nightgauge",

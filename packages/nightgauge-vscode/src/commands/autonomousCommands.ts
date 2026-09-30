@@ -1076,8 +1076,8 @@ export function describeReloadSafety(runningCount: number): string {
  * output channel or quick-pick display.
  *
  * The `completed` and `failed` arrays in the status result are LIFETIME
- * state — they persist across Start/Stop cycles in `.nightgauge/
- * autonomous/state.json`. Previously the formatter printed them verbatim
+ * state — they persist across Start/Stop cycles in the checkout's
+ * `autonomous/state.json` (`.git/nightgauge-worktree/`). Previously the formatter printed them verbatim
  * under a header saying "Started: 1s ago", which made every session start
  * look like 8 failures had just happened. This formatter separates:
  *

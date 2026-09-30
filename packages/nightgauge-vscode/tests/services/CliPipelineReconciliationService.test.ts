@@ -6,7 +6,7 @@ import {
   CliPipelineReconciliationService,
   type ReconciledCliRun,
 } from "../../src/services/CliPipelineReconciliationService";
-import { pipelineStateDir } from "../../src/utils/cloneLayout";
+import { checkoutPath, pipelineStateDir } from "../../src/utils/cloneLayout";
 import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 const tempRoots: string[] = [];
@@ -32,10 +32,11 @@ async function fixture(
 ): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "nightgauge-cli-run-"));
   tempRoots.push(root);
-  const stateDir = mkFakeCloneLayout(root).pipeline;
+  const layout = mkFakeCloneLayout(root);
+  const stateDir = layout.pipeline;
   await mkdir(stateDir, { recursive: true });
   await writeFile(
-    path.join(stateDir, "current-run.json"),
+    path.join(layout.checkout, "current-run.json"),
     JSON.stringify(
       scheme === "identity"
         ? { issue_number: issueNumber, repo, pid, run_id: runId }
@@ -124,6 +125,40 @@ describe("CliPipelineReconciliationService", () => {
     service.dispose();
   });
 
+  // ADR-024 § 7: current-run.json is per checkout. A linked worktree shares
+  // the main checkout's CLONE (and so its runtime snapshots) but has its own
+  // CHECKOUT, so the main checkout's sidecar never surfaces as the worktree's.
+  it("reads the sidecar from each checkout's own CHECKOUT, not the shared clone", async () => {
+    const main = await fixture("acme/app", 8, runIdFor(8));
+    const worktree = await mkdtemp(path.join(tmpdir(), "nightgauge-cli-wt-"));
+    tempRoots.push(worktree);
+    const common = path.join(main, ".git");
+    const linked = mkFakeCloneLayout(worktree, common, path.join(common, "worktrees", "wt"));
+    expect(linked.pipeline).toBe(pipelineStateDir(main));
+    expect(checkoutPath(worktree, "currentRun")).toBe(
+      path.join(common, "worktrees", "wt", "nightgauge-worktree", "current-run.json")
+    );
+    expect(checkoutPath(worktree, "currentRun")).not.toBe(checkoutPath(main, "currentRun"));
+
+    const events = callbacks();
+    const service = new CliPipelineReconciliationService(
+      () => [{ path: worktree, repo: "acme/app" }],
+      events.value,
+      { isProcessAlive: () => true }
+    );
+    await service.scan();
+    expect(events.discovered).toHaveLength(0);
+
+    await writeFile(
+      checkoutPath(worktree, "currentRun"),
+      JSON.stringify({ issue_number: 8, repo: "acme/app", pid: 123, run_id: runIdFor(8) })
+    );
+    await service.scan();
+    expect(events.discovered).toHaveLength(1);
+    expect(events.discovered[0].root).toBe(worktree);
+    service.dispose();
+  });
+
   it("skips a root outside a git repository instead of rejecting every interval", async () => {
     const primary = await fixture("acme/primary", 1, runIdFor(1));
     const plainFolder = await mkdtemp(path.join(tmpdir(), "nightgauge-not-a-repo-"));
@@ -173,7 +208,7 @@ describe("CliPipelineReconciliationService", () => {
     );
     await service.scan();
     await service.scan();
-    await rm(path.join(pipelineStateDir(root), "current-run.json"));
+    await rm(checkoutPath(root, "currentRun"));
     await service.scan();
 
     expect(events.discovered).toHaveLength(1);
@@ -236,11 +271,12 @@ describe("CliPipelineReconciliationService", () => {
     const runId = runIdFor(372);
     const root = await mkdtemp(path.join(tmpdir(), "nightgauge-cli-run-"));
     tempRoots.push(root);
-    const stateDir = mkFakeCloneLayout(root).pipeline;
+    const layout = mkFakeCloneLayout(root);
+    const stateDir = layout.pipeline;
     await mkdir(stateDir, { recursive: true });
     // Sidecar from the NEW binary…
     await writeFile(
-      path.join(stateDir, "current-run.json"),
+      path.join(layout.checkout, "current-run.json"),
       JSON.stringify({ issue_number: 372, repo: "acme/app", pid: 123, run_id: runId })
     );
     // …snapshot from the OLD one.

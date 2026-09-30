@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // fakeResolver records the resolve call and returns a canned outcome/error.
@@ -355,7 +356,7 @@ func (r storeResolver) ApplyRelayedResolve(ctx context.Context, id, opt, actor, 
 // store is never corrupted. (ADR 015 §D: local resolution wins; the late command
 // is acked as already-resolved.)
 func TestAttentionResolve_RaceLocalVsCommand(t *testing.T) {
-	store := attention.New(t.TempDir())
+	store := attention.New(layouttest.Repo(t))
 	req := attention.DecisionRequest{
 		ID:             "dr_race-00000001",
 		IdempotencyKey: "race:fleet",

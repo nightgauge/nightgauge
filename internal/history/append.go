@@ -11,12 +11,14 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/nightgauge/nightgauge/internal/layout/clonelock"
 )
 
-// mu serializes appends inside a single process. Cross-process atomicity is
-// provided by the kernel's O_APPEND semantics on POSIX; the mutex is required
-// only to keep concurrent goroutines inside one binary from interleaving
-// partial line writes when telemetry and run-record paths fire together.
+// mu serializes appends inside a single process. Across processes, an append
+// to a file inside a per-clone root (CLONE, shared by every checkout of the
+// clone) also holds CLONE/.lock for the write (ADR-024 § 7); the kernel's
+// O_APPEND semantics keep a single write whole on POSIX either way.
 var mu sync.Mutex
 
 // AppendJSONL appends a single JSON-encoded record followed by '\n' to the
@@ -40,6 +42,8 @@ func AppendJSONL(path string, record any) error {
 
 	mu.Lock()
 	defer mu.Unlock()
+	release := clonelock.ForPath(path)
+	defer release()
 
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return fmt.Errorf("history: create parent dir: %w", err)

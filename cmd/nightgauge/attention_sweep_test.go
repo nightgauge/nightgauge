@@ -10,6 +10,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/attention/sweep"
 	"github.com/nightgauge/nightgauge/internal/forge"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // nilForge satisfies forge.ForgeClient without any transport. The CLI tests
@@ -77,7 +78,7 @@ func runSweep(t *testing.T, dir string, extra ...string) (string, error) {
 }
 
 func TestAttentionSweepRaisesAndIsIdempotent(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	withRegisteredProducer(t, cliObservation("k:branch", "check:build=failure", "default branch is red"))
 
 	out, err := runSweep(t, dir)
@@ -103,7 +104,7 @@ func TestAttentionSweepRaisesAndIsIdempotent(t *testing.T) {
 }
 
 func TestAttentionSweepJSONReportsTheReconciliation(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	withRegisteredProducer(t, cliObservation("k:branch", "f1", "default branch is red"))
 
 	out, err := runSweep(t, dir, "--json")
@@ -123,14 +124,14 @@ func TestAttentionSweepRequiresARepo(t *testing.T) {
 	cmd := attentionSweepCmd()
 	cmd.SetOut(&bytes.Buffer{})
 	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs([]string{"--workdir", t.TempDir()})
+	cmd.SetArgs([]string{"--workdir", layouttest.Repo(t)})
 	if err := cmd.Execute(); err == nil {
 		t.Error("expected --repo to be required")
 	}
 }
 
 func TestAttentionSweepWithNoProducersReportsCleanly(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	prevRegistry, prevClient := sweep.Default, sweepForgeClient
 	t.Cleanup(func() { sweep.Default, sweepForgeClient = prevRegistry, prevClient })
 	sweep.Default = sweep.NewRegistry()
@@ -146,7 +147,7 @@ func TestAttentionSweepWithNoProducersReportsCleanly(t *testing.T) {
 }
 
 func TestAttentionMuteAndUnmuteCLI(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	withRegisteredProducer(t, cliObservation("k:branch", "f1", "default branch is red"))
 	if _, err := runSweep(t, dir); err != nil {
 		t.Fatalf("sweep: %v", err)
@@ -185,7 +186,7 @@ func TestAttentionMuteAndUnmuteCLI(t *testing.T) {
 }
 
 func TestAttentionAckCLIKeepsTheCard(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	id := seedRequest(t, dir, "k-ack", "Fleet stopped", attention.SeverityBlockingFleet)
 
 	cmd := attentionAckCmd()
@@ -229,7 +230,7 @@ func TestAttentionSweepRootCommand_BareConfigRepoStillRequiresFlag(t *testing.T)
 }
 
 func TestAttentionListMarksMutedCards(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	id := seedRequest(t, dir, "k-muted", "Fleet stopped", attention.SeverityBlockingFleet)
 	if _, err := attention.New(dir).Mute(context.Background(), id, "octocat"); err != nil {
 		t.Fatalf("Mute: %v", err)

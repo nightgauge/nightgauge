@@ -588,8 +588,9 @@ export async function initializeServices(
   // Initialize status bar
   const statusBar = new StatusBarManager();
 
-  // Migrate the legacy `.nightgauge/supercharge.yaml` to the new
-  // `.nightgauge/performance-mode.yaml` on first activation (Issue #3009).
+  // Migrate the legacy `.nightgauge/supercharge.yaml` to the checkout's
+  // `performance-mode.yaml` (in `.git/nightgauge-worktree/`, ADR-024 § 7) on
+  // first activation (Issue #3009).
   // Idempotent: short-circuits when the new file already exists. Surfaces a
   // one-time toast when migration actually runs so users see the mapping
   // (active=true → Maximum, active=false → Elevated).

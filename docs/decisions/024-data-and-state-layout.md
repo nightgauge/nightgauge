@@ -19,6 +19,10 @@ knowledge default)
 > `openai-compatible` backend. The body below is kept as the record of the
 > decision; see [DEPRECATIONS.md](../DEPRECATIONS.md#lm-studio-and-ollama-adapters--opencode-and-openai-compatible).
 
+> **Amended by #2037 and #2040 (2026-09-29):** § 15's automatic run never fails
+> the command that triggered it; only `nightgauge doctor --fix` exits 3 or 4.
+> See the amendment at the end of § 15.
+
 ## Executive Summary
 
 Nightgauge had a decision for where _settings_ live
@@ -549,6 +553,31 @@ File modes are preserved; symlinks are recreated as symlinks, never followed.
 nothing to do; `3` conflict, nothing overwritten; `4` blocked (a run in flight, a live daemon, a
 held lock, or an unwritable target). Plain `nightgauge doctor` reports legacy files with their
 targets as warnings and keeps its existing exit status.
+
+> **Amendment (2026-09-29, #2037, #2040): the automatic run never fails the triggering
+> command.** Point 4 above and the "any command that triggered the migration" clause of the exit
+> codes are replaced. When the automatic run at CLI start meets a conflict, a run in flight, a busy
+> worktree, a held migration lock or a live daemon, it moves nothing that is blocked, leaves the
+> data in place, prints one line to stderr naming `nightgauge doctor --fix`, and the user's
+> command runs and exits with its own status. `nightgauge doctor` keeps reporting what is left
+> (NGD044–NGD046), and `nightgauge doctor --fix` keeps exits `3` (conflict) and `4` (blocked). A
+> blocked attempt is not retried by later commands for an hour.
+>
+> Reason: the automatic run happens before an unrelated command (`status`, `serve`, a hook's
+> caller). Failing that command for a migration the user did not ask for would turn an upgrade into
+> an outage of every command until the blocker clears, and a run in flight is the normal state of
+> a busy clone, not an error. Nothing is lost by continuing: runtime code reads only the new
+> location, the old data stays byte for byte where it was, and the doctor finding says what to do.
+> Tests: `TestAutoMigrateLayoutNeverFailsTheCommand` and
+> `TestAutoMigrateLayoutBlockedNeverFailsTheCommand` (`cmd/nightgauge`).
+>
+> **Layout version 2.** The marker in `CLONE` records `2` once every checkout's per-checkout data
+> is in its own `CHECKOUT` (`layout.CheckoutEntries`); a clone marked `1` migrates again for those
+> rows. The run-control singletons a version-1 build kept in `CLONE/pipeline` and `CLONE/logs`
+> move to the main checkout's `CHECKOUT`. Each linked worktree that `git worktree list` reports is
+> migrated in the same pass: its per-checkout files to its own `CHECKOUT`, its keyed data merged
+> into `CLONE`. `go-backend.log` is merged like append-only JSONL, so a log both builds wrote never
+> stops the migration. The marker is kept only in `CLONE`: the one pass covers every checkout.
 
 **Releases.** A relocation and its migration ship in the same release. `main` may carry the gap
 between the two merges; a release tag may not.

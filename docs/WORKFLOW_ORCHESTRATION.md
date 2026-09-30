@@ -359,7 +359,8 @@ Adversarial judge verdicts become **deterministic gate evidence** with zero new
 Go scaffolding. `GateMetricsWriter.appendJudgeVerdicts`
 (`packages/nightgauge-vscode/src/utils/gateMetricsWriter.ts`) folds the
 `JudgeVerdict` nodes of an orchestrated `feature-validate` run into
-`.nightgauge/health/gate-metrics.jsonl` as
+the checkout's `health/gate-metrics.jsonl`
+(`nightgauge layout path checkout health/gate-metrics.jsonl`) as
 `{ gate_name: "judges", result }` records, which the existing Go
 `FeatureValidateGate.Verify()` loop already consumes. The verdict → result mapping
 is **fail-closed**: only an explicit `pass` yields `result: "pass"`; both `fail`

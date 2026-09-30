@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+	"path"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/cadence"
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
 // cadenceProbe resolves one automation's freshness evidence.
@@ -25,8 +26,13 @@ type cadenceProbe func(ctx context.Context, a cadence.Automation) cadence.Eviden
 // naming on a workspace that is supposed to be running unattended.
 func autonomousStateEvidence(workspaceRoot string) cadenceProbe {
 	return func(context.Context, cadence.Automation) cadence.Evidence {
-		path := filepath.Join(workspaceRoot, ".nightgauge", "autonomous", "state.json")
-		data, err := os.ReadFile(path)
+		// Outside a git checkout there is no CHECKOUT, so no loop can have
+		// recorded state there: the same answer as a missing file.
+		statePath := checkoutStatePath(workspaceRoot, path.Join(layout.CheckoutAutonomous, "state.json"))
+		if statePath == "" {
+			return cadence.Evidence{EverRan: false}
+		}
+		data, err := os.ReadFile(statePath)
 		if os.IsNotExist(err) {
 			return cadence.Evidence{EverRan: false}
 		}
@@ -239,7 +245,7 @@ func scheduledAutomationFindings(ctx context.Context, probes map[cadence.Evidenc
 				ev, identity,
 				manualRemedy("probe", "Make the automation's evidence readable", check,
 					"Check GitHub authentication (`nightgauge doctor` github checks) for workflow evidence",
-					"Check that .nightgauge/autonomous/state.json is readable for the autonomous loop")))
+					"Check that "+layout.CheckoutDisplay(layout.CheckoutAutonomous, "state.json")+" is readable for the autonomous loop")))
 		}
 	}
 	// A malformed entry is reported, never dropped. An operator who declared an

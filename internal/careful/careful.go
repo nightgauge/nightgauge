@@ -1,23 +1,24 @@
 // Package careful implements the opt-in destructive-operation guardrail behind
 // the /nightgauge-careful skill. Because skill-frontmatter session hooks
 // are not wired into this codebase, "careful mode" is a sentinel lock file
-// (.nightgauge/careful.lock) that the always-registered PreToolUse(Bash)
+// (careful.lock in the checkout's .git/nightgauge-worktree, ADR-024 § 7) that
+// the always-registered PreToolUse(Bash)
 // careful-gate hook consults: when the lock is present (and unexpired) the gate
 // blocks the documented production-destructive commands. A TTL bounds a forgotten
 // lock so it cannot block forever.
 package careful
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
-)
 
-const lockRelPath = ".nightgauge/careful.lock"
+	"github.com/nightgauge/nightgauge/internal/layout"
+)
 
 // DefaultTTLMinutes bounds a forgotten lock (12h) so careful mode can't outlive
 // a working session indefinitely.
@@ -30,19 +31,16 @@ type Lock struct {
 	Note       string `json:"note,omitempty"`
 }
 
-// LockPath returns the absolute lock path for the given project root.
-func LockPath(root string) string {
-	return filepath.Join(root, lockRelPath)
+// LockPath returns the absolute lock path for the checkout root is in. It
+// errors outside a git checkout.
+func LockPath(root string) (string, error) {
+	return layout.CheckoutPath(root, layout.CheckoutCarefulLock)
 }
 
 // Enable writes (or refreshes) the careful lock.
 func Enable(root string, ttlMinutes int, note string) error {
 	if ttlMinutes <= 0 {
 		ttlMinutes = DefaultTTLMinutes
-	}
-	path := LockPath(root)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create careful dir: %w", err)
 	}
 	data, err := json.MarshalIndent(Lock{
 		Since:      time.Now().UTC().Format(time.RFC3339),
@@ -52,7 +50,7 @@ func Enable(root string, ttlMinutes int, note string) error {
 	if err != nil {
 		return fmt.Errorf("marshal lock: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if _, err := layout.WriteCheckoutFile(root, layout.CheckoutCarefulLock, bytes.NewReader(data)); err != nil {
 		return fmt.Errorf("write careful lock: %w", err)
 	}
 	return nil
@@ -60,7 +58,11 @@ func Enable(root string, ttlMinutes int, note string) error {
 
 // Disable removes the careful lock. A missing lock is not an error.
 func Disable(root string) error {
-	err := os.Remove(LockPath(root))
+	path, err := LockPath(root)
+	if err != nil {
+		return fmt.Errorf("locate careful lock: %w", err)
+	}
+	err = os.Remove(path)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove careful lock: %w", err)
 	}
@@ -68,9 +70,14 @@ func Disable(root string) error {
 }
 
 // Read returns the lock and whether careful mode is currently active (present and
-// unexpired). A missing/expired/unparseable lock is inactive.
+// unexpired). A missing/expired/unparseable lock is inactive, and so is a root
+// outside a git checkout, which has no CHECKOUT to hold one.
 func Read(root string) (*Lock, bool) {
-	data, err := os.ReadFile(LockPath(root))
+	path, err := LockPath(root)
+	if err != nil {
+		return nil, false
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, false
 	}

@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/clonelock"
 )
 
 // apiLedgerEnv names the env var that overrides the GitHub API call ledger.
@@ -483,7 +485,11 @@ func (l *apiLedger) record(rec APILedgerRecord, remainingHdr string) {
 			l.prevAt[rec.Kind] = now
 		}
 	}
+	// Every checkout of a clone appends to the same ledger segment, so the
+	// write holds CLONE/.lock (ADR-024 § 7).
+	release := clonelock.ForPath(l.file())
 	_ = l.enc.Encode(&rec)
+	release()
 	l.rotateIfFull()
 }
 

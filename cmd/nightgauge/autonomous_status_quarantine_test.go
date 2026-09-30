@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
@@ -32,7 +33,7 @@ func runAutonomousStatus(t *testing.T, root string) string {
 }
 
 func TestAutonomousStatusShowsLifetimeCountsAndQuarantine(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeAutonomousState(t, root, orchestrator.AutonomousState{
 		Status: "running",
 		LifetimeIssueFailures: map[string]int{
@@ -61,7 +62,7 @@ func TestAutonomousStatusShowsLifetimeCountsAndQuarantine(t *testing.T) {
 }
 
 func TestAutonomousStatusOmitsTheSectionWithNoFailures(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeAutonomousState(t, root, orchestrator.AutonomousState{Status: "running"})
 
 	if out := runAutonomousStatus(t, root); strings.Contains(out, "Lifetime failures") {

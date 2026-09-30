@@ -22,7 +22,7 @@ import (
 // assertions are on the file other processes read, not on in-memory values.
 func readRunStateFile(t *testing.T, root string) map[string]any {
 	t.Helper()
-	dir, err := layout.PipelineStateDir(root)
+	dir, err := layout.CheckoutDir(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestRunLifecycle_CancelPausesAndReinvocationResumes(t *testing.T) {
 
 func TestRunLifecycle_HardKilledRecordIsResumed(t *testing.T) {
 	root := layouttest.Repo(t)
-	dir, _ := layout.PipelineStateDir(root)
+	dir, _ := layout.CheckoutDir(root)
 	if _, err := runstate.MarkRunning(dir, runstate.MarkRunningOptions{IssueNumber: 9, Branch: "fix/9"}); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +163,7 @@ type cancellingRunner struct {
 func (r *cancellingRunner) RunStage(ctx context.Context, params StageRunParams) (*StageRunResult, error) {
 	r.mu.Lock()
 	r.stages = append(r.stages, params.Stage)
-	if dir, err := layout.PipelineStateDir(r.root); err == nil {
+	if dir, err := layout.CheckoutDir(r.root); err == nil {
 		if data, err := os.ReadFile(runstate.Path(dir)); err == nil {
 			var m map[string]any
 			_ = json.Unmarshal(data, &m)

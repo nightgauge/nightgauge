@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // validRequest builds a well-formed request for tests (noop option, so it needs
@@ -42,7 +44,7 @@ func mustID(t *testing.T) string {
 }
 
 func TestRaiseRejectsIdentitylessRecords(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	cases := map[string]func(r *DecisionRequest){
 		"empty id":              func(r *DecisionRequest) { r.ID = "" },
 		"bad id":                func(r *DecisionRequest) { r.ID = "not-a-dr-id" },
@@ -65,7 +67,7 @@ func TestRaiseRejectsIdentitylessRecords(t *testing.T) {
 }
 
 func TestRaiseAndGet(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	id := mustID(t)
 	if _, _, err := s.Raise(validRequest(id, "cond:1")); err != nil {
 		t.Fatalf("Raise: %v", err)
@@ -86,7 +88,7 @@ func TestRaiseAndGet(t *testing.T) {
 }
 
 func TestRaiseDedupsOnIdempotencyKey(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	first := mustID(t)
 	if _, _, err := s.Raise(validRequest(first, "same-cond")); err != nil {
 		t.Fatalf("Raise 1: %v", err)
@@ -124,7 +126,7 @@ func standingRaise(id, key, fingerprint string) DecisionRequest {
 }
 
 func TestRaiseRejectsAStandingRequestWithNoFingerprint(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	r := standingRaise(mustID(t), "cond", "")
 	if _, _, err := s.Raise(r); err == nil {
 		t.Fatal("a standing request with no fingerprint must be rejected at the boundary")
@@ -138,7 +140,7 @@ func TestRaiseRejectsAStandingRequestWithNoFingerprint(t *testing.T) {
 // number of distinct problems.
 func TestReRaisingAnExpiredKeyRevivesTheSameRecord(t *testing.T) {
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
-	s := New(t.TempDir()).WithClock(func() time.Time { return now })
+	s := New(layouttest.Repo(t)).WithClock(func() time.Time { return now })
 
 	// The producer re-detects the same condition, generating a fresh candidate
 	// id every time — exactly as the fail-open raise path does.
@@ -189,7 +191,7 @@ func TestReRaisingAnExpiredKeyRevivesTheSameRecord(t *testing.T) {
 // next raise must fold into the newest and add nothing, so an affected store
 // stops growing without a migration.
 func TestRaiseIntoAStoreThatAlreadyAccumulatedDuplicates(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	var ids []string
 	for i := 0; i < 4; i++ {
 		r := standingRaise(mustID(t), "stuck-epic:octocat/acme#100", "stall:#101")
@@ -228,7 +230,7 @@ func TestRaiseIntoAStoreThatAlreadyAccumulatedDuplicates(t *testing.T) {
 // Raise path: prose moves on every observation, so only a moved fingerprint is
 // a genuine change worth interrupting an operator for.
 func TestRaiseRefreshesAStandingConditionWithoutReAlerting(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	raise := func(title, fingerprint string) {
 		t.Helper()
 		r := standingRaise(mustID(t), "cond", fingerprint)
@@ -273,7 +275,7 @@ func TestRaiseRefreshesAStandingConditionWithoutReAlerting(t *testing.T) {
 // TestRaiseDoesNotHandBackAConditionAHumanJustResolved — dismissing a card for
 // a condition that is still true must not return it on the next cycle.
 func TestRaiseDoesNotHandBackAConditionAHumanJustResolved(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	_, id, err := s.Raise(standingRaise(mustID(t), "cond", "fp:1"))
 	if err != nil {
 		t.Fatalf("Raise: %v", err)
@@ -309,7 +311,7 @@ func TestRaiseDoesNotHandBackAConditionAHumanJustResolved(t *testing.T) {
 // the retraction half of standing semantics for the run-loop producers: a
 // condition that stopped being true clears its card, and nothing else moves.
 func TestAutoResolveUnobservedRetractsOnlyTheProducersOwnUnseenConditions(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	mk := func(key, producer string, standing bool) string {
 		t.Helper()
 		r := standingRaise(mustID(t), key, "fp")
@@ -362,7 +364,7 @@ func TestAutoResolveUnobservedRetractsOnlyTheProducersOwnUnseenConditions(t *tes
 // AutoResolveUnobserved would make if misused for this shape of producer,
 // since an empty/partial observed set would read as "nothing else is true".
 func TestAutoResolveKeyRetractsOnlyTheTargetedKey(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	mk := func(key, producer string, standing bool) string {
 		t.Helper()
 		r := standingRaise(mustID(t), key, "fp")
@@ -445,7 +447,7 @@ func (e *spyExecutor) ExecuteVerb(_ context.Context, _ *DecisionRequest, opt Opt
 }
 
 func TestResolveIsIdempotentAndExecutesOnce(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	id := mustID(t)
 	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
@@ -479,7 +481,7 @@ func TestResolveIsIdempotentAndExecutesOnce(t *testing.T) {
 }
 
 func TestResolveRejectsUnknownOption(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	id := mustID(t)
 	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
@@ -495,7 +497,7 @@ func TestResolveRejectsUnknownOption(t *testing.T) {
 }
 
 func TestResolveLeavesRequestUntouchedWhenVerbFails(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	id := mustID(t)
 	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
@@ -529,7 +531,7 @@ func TestResolveLeavesRequestUntouchedWhenVerbFails(t *testing.T) {
 }
 
 func TestAcknowledgeIsNonBlocking(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	id := mustID(t)
 	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
@@ -552,7 +554,7 @@ func TestAcknowledgeIsNonBlocking(t *testing.T) {
 }
 
 func TestExpirySweepAppliesDefault(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	// One request already past expiry, one still valid.
 	expired := validRequest(mustID(t), "stale")
 	expired.ExpiresAt = time.Now().UTC().Add(-time.Minute).Format(tsLayout)
@@ -589,7 +591,7 @@ func TestExpirySweepAppliesDefault(t *testing.T) {
 // must not be discarded — the returned error must reflect it, and a durable
 // journal record must name the request.
 func TestExpirySweepRecordsVerbFailure(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	req := validRequest(mustID(t), "stale-verb")
 	req.ExpiresAt = time.Now().UTC().Add(-time.Minute).Format(tsLayout)
 	if _, _, err := s.Raise(req); err != nil {
@@ -640,7 +642,7 @@ func TestExpirySweepRecordsVerbFailure(t *testing.T) {
 }
 
 func TestListOrdersBySeverityThenNewest(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	mk := func(sev Severity, key string) {
 		r := validRequest(mustID(t), key)
 		r.Severity = sev
@@ -668,7 +670,7 @@ func TestListOrdersBySeverityThenNewest(t *testing.T) {
 }
 
 func TestJournalRecordsEveryTransition(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	id := mustID(t)
 	if _, _, err := s.Raise(validRequest(id, "cond")); err != nil {
 		t.Fatalf("Raise: %v", err)
@@ -704,7 +706,7 @@ func TestJournalRecordsEveryTransition(t *testing.T) {
 // parses (no tear), and a given request's verb executes exactly once despite
 // many concurrent resolvers.
 func TestConcurrentProducersAndResolvesNoTear(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 
 	// Pre-create one request that many goroutines will race to resolve.
 	hot := mustID(t)
@@ -762,7 +764,7 @@ func TestConcurrentProducersAndResolvesNoTear(t *testing.T) {
 // architecture-approval, the unverified-deliverable streak — are modelled here
 // by a standing request whose fingerprint moves (or does not).
 func TestRaiseOutcomesCoverAllFourValues(t *testing.T) {
-	s := New(t.TempDir())
+	s := New(layouttest.Repo(t))
 	const key = "standing:octocat/acme#7"
 
 	standing := func(fingerprint string) DecisionRequest {

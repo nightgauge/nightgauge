@@ -2,7 +2,8 @@ package main
 
 // `nightgauge attention list|show|resolve` — the local CLI surface over the
 // Action Center DecisionRequest store (ADR 015). It reads and mutates the same
-// `.nightgauge/attention/` store the daemon writes, through the one Store type
+// store the daemon writes (the checkout's .git/nightgauge-worktree/attention),
+// through the one Store type
 // (single-writer discipline: atomic temp+rename + terminal-state CAS make a
 // standalone CLI resolve safe against a concurrent daemon writer).
 //
@@ -18,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -74,7 +76,11 @@ and resolve it — each option maps to a deterministic, audited verb.`,
 // resolveAttentionWorkdir returns --workdir when set, else the cwd.
 func resolveAttentionWorkdir(workdir string) (string, error) {
 	if workdir != "" {
-		return workdir, nil
+		abs, err := filepath.Abs(workdir)
+		if err != nil {
+			return "", fmt.Errorf("resolve --workdir %q: %w", workdir, err)
+		}
+		return abs, nil
 	}
 	cwd, err := os.Getwd()
 	if err != nil {

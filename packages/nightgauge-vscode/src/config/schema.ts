@@ -1084,7 +1084,8 @@ export const PipelineConfigSchema = z.object({
       self_check_enabled: z.boolean().optional(),
       /**
        * Retention period in days for health dimension trends time-series.
-       * Controls how long entries in .nightgauge/health/trends.jsonl are kept.
+       * Controls how long entries in the checkout's health/trends.jsonl
+       * (.git/nightgauge-worktree/health/, ADR-024 § 7) are kept.
        * Default: 90
        *
        * @see Issue #1411 - Health trend persistence and dashboard sparklines
@@ -1401,7 +1402,8 @@ export const PipelineConfigSchema = z.object({
    * - `maximum`:    Opus + effort=high across every stage, raised stall multiplier,
    *                 disabled budget ceiling. Replicates today's Supercharge envelope.
    *
-   * Selection is persisted in `.nightgauge/performance-mode.yaml` and can
+   * Selection is persisted in the checkout's `performance-mode.yaml`
+   * (`.git/nightgauge-worktree/`, ADR-024 § 7) and can
    * be overridden per-shell via `NIGHTGAUGE_PERFORMANCE_MODE=<mode>`.
    *
    * @see docs/PERFORMANCE_MODES.md

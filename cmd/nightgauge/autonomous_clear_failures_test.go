@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
@@ -33,7 +34,7 @@ func runAutonomousClearFailures(t *testing.T, root string, args ...string) strin
 }
 
 func TestAutonomousClearFailuresClearsOneIssueOffline(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeAutonomousState(t, root, orchestrator.AutonomousState{
 		Status: "stopped",
 		LifetimeIssueFailures: map[string]int{
@@ -61,7 +62,7 @@ func TestAutonomousClearFailuresClearsOneIssueOffline(t *testing.T) {
 }
 
 func TestAutonomousClearFailuresAllOffline(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeAutonomousState(t, root, orchestrator.AutonomousState{
 		Status: "stopped",
 		LifetimeIssueFailures: map[string]int{
@@ -116,7 +117,7 @@ func TestAutonomousClearFailuresRoundTripsThroughTheDaemon(t *testing.T) {
 }
 
 func TestAutonomousClearFailuresRejectsAMalformedKey(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeAutonomousState(t, root, orchestrator.AutonomousState{Status: "stopped"})
 	t.Chdir(root)
 
@@ -138,7 +139,7 @@ func TestAutonomousClearFailuresRejectsAMalformedKey(t *testing.T) {
 }
 
 func TestAutonomousClearFailuresNeedsATarget(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	t.Chdir(root)
 	cmd := autonomousClearFailuresCmd()
 	var out bytes.Buffer
@@ -151,7 +152,7 @@ func TestAutonomousClearFailuresNeedsATarget(t *testing.T) {
 }
 
 func TestAutonomousClearFailuresWithNoStateFile(t *testing.T) {
-	out := runAutonomousClearFailures(t, t.TempDir(), "--all")
+	out := runAutonomousClearFailures(t, layouttest.Repo(t), "--all")
 	if !strings.Contains(out, "No autonomous scheduler state") {
 		t.Errorf("output %q, want the no-state notice", out)
 	}

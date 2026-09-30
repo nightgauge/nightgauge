@@ -47,23 +47,26 @@ func ClassFilePath(root, class, name string) (string, error) {
 	return filepath.Join(dir, clean), nil
 }
 
-// openClassRoot creates the class directory and opens it as an os.Root, so
-// every later operation is confined to it: a symlink anywhere under it that
-// points outside is refused by the kernel-level walk, not by a check that a
-// racing writer could invalidate.
-func openClassRoot(root, class string) (*os.Root, string, error) {
-	dir, err := ClassDir(root, class)
-	if err != nil {
-		return nil, "", err
-	}
+// openConfinedRoot creates dir and opens it as an os.Root, so every later
+// operation is confined to it: a symlink anywhere under it that points
+// outside is refused by the kernel-level walk, not by a check that a racing
+// writer could invalidate. dir itself must not be a symlink.
+func openConfinedRoot(dir string) (*os.Root, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return nil, "", fmt.Errorf("create %s: %w", dir, err)
+		return nil, fmt.Errorf("create %s: %w", dir, err)
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", dir, err)
+	}
+	if err := refuseUnsafeDir(dir, info); err != nil {
+		return nil, err
 	}
 	r, err := os.OpenRoot(dir)
 	if err != nil {
-		return nil, "", fmt.Errorf("open %s: %w", dir, err)
+		return nil, fmt.Errorf("open %s: %w", dir, err)
 	}
-	return r, dir, nil
+	return r, nil
 }
 
 // refuseSymlinkTarget reports an error when name exists in r as a symlink.
@@ -81,22 +84,56 @@ func refuseSymlinkTarget(r *os.Root, dir, name string) error {
 // write is confined to the class directory (ADR-024 § 7, § 17). It returns
 // the absolute path written.
 func WriteClassFile(root, class, name string, data io.Reader) (string, error) {
+	dir, err := ClassDir(root, class)
+	if err != nil {
+		return "", err
+	}
+	return writeConfined(dir, name, data, false)
+}
+
+// AppendClassFile appends data to name inside class for the repository root
+// is in, creating the file and its parents when absent. The append is
+// confined to the class directory and refuses a symlinked target. It returns
+// the absolute path appended to.
+func AppendClassFile(root, class, name string, data io.Reader) (string, error) {
+	dir, err := ClassDir(root, class)
+	if err != nil {
+		return "", err
+	}
+	return writeConfined(dir, name, data, true)
+}
+
+// writeConfined writes (or appends) data to name inside dir, confined to dir
+// through os.Root. A write goes to a temporary file renamed into place.
+func writeConfined(dir, name string, data io.Reader, appendMode bool) (string, error) {
 	clean, err := cleanClassFileName(name)
 	if err != nil {
 		return "", err
 	}
-	r, dir, err := openClassRoot(root, class)
+	r, err := openConfinedRoot(dir)
 	if err != nil {
 		return "", err
 	}
 	defer r.Close()
 	if parent := filepath.Dir(clean); parent != "." {
-		if err := r.MkdirAll(parent, 0o755); err != nil {
+		if err := r.MkdirAll(parent, 0o700); err != nil {
 			return "", fmt.Errorf("create %s: %w", filepath.Join(dir, parent), err)
 		}
 	}
 	if err := refuseSymlinkTarget(r, dir, clean); err != nil {
 		return "", err
+	}
+	if appendMode {
+		f, err := r.OpenFile(clean, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+		if err != nil {
+			return "", fmt.Errorf("open %s: %w", filepath.Join(dir, clean), err)
+		}
+		_, copyErr := io.Copy(f, data)
+		closeErr := f.Close()
+		if err := errors.Join(copyErr, closeErr); err != nil {
+			return "", fmt.Errorf("append %s: %w", filepath.Join(dir, clean), err)
+		}
+		return filepath.Join(dir, clean), nil
 	}
 	var suffix [6]byte
 	_, _ = rand.Read(suffix[:])
@@ -115,40 +152,6 @@ func WriteClassFile(root, class, name string, data io.Reader) (string, error) {
 	if err := r.Rename(tmp, clean); err != nil {
 		_ = r.Remove(tmp)
 		return "", fmt.Errorf("rename into %s: %w", filepath.Join(dir, clean), err)
-	}
-	return filepath.Join(dir, clean), nil
-}
-
-// AppendClassFile appends data to name inside class for the repository root
-// is in, creating the file and its parents when absent. The append is
-// confined to the class directory and refuses a symlinked target. It returns
-// the absolute path appended to.
-func AppendClassFile(root, class, name string, data io.Reader) (string, error) {
-	clean, err := cleanClassFileName(name)
-	if err != nil {
-		return "", err
-	}
-	r, dir, err := openClassRoot(root, class)
-	if err != nil {
-		return "", err
-	}
-	defer r.Close()
-	if parent := filepath.Dir(clean); parent != "." {
-		if err := r.MkdirAll(parent, 0o755); err != nil {
-			return "", fmt.Errorf("create %s: %w", filepath.Join(dir, parent), err)
-		}
-	}
-	if err := refuseSymlinkTarget(r, dir, clean); err != nil {
-		return "", err
-	}
-	f, err := r.OpenFile(clean, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
-	if err != nil {
-		return "", fmt.Errorf("open %s: %w", filepath.Join(dir, clean), err)
-	}
-	_, copyErr := io.Copy(f, data)
-	closeErr := f.Close()
-	if err := errors.Join(copyErr, closeErr); err != nil {
-		return "", fmt.Errorf("append %s: %w", filepath.Join(dir, clean), err)
 	}
 	return filepath.Join(dir, clean), nil
 }

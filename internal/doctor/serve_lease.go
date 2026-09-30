@@ -10,7 +10,9 @@ package doctor
 // something — an operator whose queue simply stopped moving never sees it.
 //
 // This arm reports the same fact from the other direction: what holds the
-// lease for THIS workspace, and whether it still looks alive.
+// lease for THIS workspace, and whether it still looks alive. For a git
+// checkout the lease is the checkout's CHECKOUT/serve.lock (one daemon per
+// checkout, ADR-024 § 7); runstate.ServeLeasePath owns the location.
 //
 // Deliberately distinct from `orphaned_processes` (#341), which reads the same
 // claim directory. That arm asks a machine-wide question — which processes are

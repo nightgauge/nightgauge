@@ -22,6 +22,15 @@ func writePipelineFile(t *testing.T, workdir, name, content string) {
 	}
 }
 
+// writeBatchState writes workdir's batch-state.json, which lives in the
+// checkout's per-checkout directory (layout.CheckoutBatchState).
+func writeBatchState(t *testing.T, workdir, content string) {
+	t.Helper()
+	if err := os.WriteFile(layouttest.CheckoutPath(t, workdir, "batch-state.json"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write batch-state.json: %v", err)
+	}
+}
+
 // writeHistoryFile writes a file in the history/ subdirectory of workdir's
 // pipeline state directory.
 func writeHistoryFile(t *testing.T, workdir, name, content string) {
@@ -65,7 +74,7 @@ func TestExtract_OutsideGitRepositoryIsAnError(t *testing.T) {
 
 func TestExtract_BatchStateOnly(t *testing.T) {
 	dir := layouttest.Repo(t)
-	writePipelineFile(t, dir, "batch-state.json", `{
+	writeBatchState(t, dir, `{
 		"status": "partial",
 		"started_at": "2026-05-01T12:00:00Z",
 		"updated_at": "2026-05-01T13:00:00Z",
@@ -245,7 +254,7 @@ func TestExtract_ContextFilesFallback(t *testing.T) {
 // the shape.
 func TestExtract_JSONSchemaStability(t *testing.T) {
 	dir := layouttest.Repo(t)
-	writePipelineFile(t, dir, "batch-state.json", `{
+	writeBatchState(t, dir, `{
 		"status": "partial",
 		"started_at": "2026-05-01T12:00:00Z",
 		"updated_at": "2026-05-01T13:00:00Z",

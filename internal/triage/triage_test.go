@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // grounded is a record that meets the contract, used as the baseline every
@@ -206,7 +208,7 @@ func TestNewID(t *testing.T) {
 // the next session needs most, and would push the author toward writing
 // whatever the validator accepts rather than what happened.
 func TestWrite_PersistsAnInvalidRecord(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	rec := grounded()
 	rec.Hypotheses = []Hypothesis{rec.Hypotheses[1]}
 
@@ -234,21 +236,17 @@ func TestWrite_PersistsAnInvalidRecord(t *testing.T) {
 }
 
 func TestList_MissingDirIsEmpty(t *testing.T) {
-	ids, err := List(t.TempDir())
+	ids, err := List(layouttest.Repo(t))
 	if err != nil || len(ids) != 0 {
 		t.Fatalf("List = %v (%v), want empty and no error", ids, err)
 	}
 }
 
-// writeForeign drops a file into the SHARED parent directory that
-// `.nightgauge/triage/` already was before #1262 — where backlog-groom writes
-// its reports and skills append `runs.jsonl`.
+// writeForeign drops a file into the SHARED parent triage directory — where
+// backlog-groom writes its reports and skills append `runs.jsonl`.
 func writeForeign(t *testing.T, workspace, name, body string) {
 	t.Helper()
-	dir := filepath.Join(workspace, ".nightgauge", "triage")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	dir := layouttest.MkCheckoutSubdir(t, workspace, "triage")
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -267,7 +265,7 @@ func writeForeign(t *testing.T, workspace, name, body string) {
 // is pinned separately by TestDirIsNamespacedUnderChecks — two properties, two
 // tests, so a mutation to either is caught by name.
 func TestForeignFilesInTheSharedDirAreInvisible(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	writeForeign(t, ws, "backlog-groom-2026-08-29.json", `{"run":"wf_x","counts":{"keep":18}}`)
 	writeForeign(t, ws, "backlog-groom-runs.jsonl", "{}\n")
 	if _, _, err := Write(ws, grounded()); err != nil {
@@ -291,11 +289,9 @@ func TestForeignFilesInTheSharedDirAreInvisible(t *testing.T) {
 // every field zero, and validating that produces violations that are wrong,
 // specific and authoritative-sounding.
 func TestReadRejectsAForeignDocumentInChecks(t *testing.T) {
-	ws := t.TempDir()
-	if err := os.MkdirAll(Dir(ws), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(Dir(ws), "stray.json"), []byte(`{"run":"wf_x"}`), 0o644); err != nil {
+	ws := layouttest.Repo(t)
+	dir := layouttest.MkCheckoutSubdir(t, ws, "triage/checks")
+	if err := os.WriteFile(filepath.Join(dir, "stray.json"), []byte(`{"run":"wf_x"}`), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -316,9 +312,38 @@ func TestReadRejectsAForeignDocumentInChecks(t *testing.T) {
 // the shared parent and tightened List instead — which fixes the listing and
 // leaves `triage check --id <neighbour>` reachable.
 func TestDirIsNamespacedUnderChecks(t *testing.T) {
-	got := Dir("/ws")
-	want := filepath.Join("/ws", ".nightgauge", "triage", "checks")
+	ws := layouttest.Repo(t)
+	got, err := Dir(ws)
+	if err != nil {
+		t.Fatalf("Dir: %v", err)
+	}
+	want := layouttest.CheckoutPath(t, ws, "triage/checks")
 	if got != want {
 		t.Fatalf("Dir = %q, want %q", got, want)
+	}
+}
+
+// Triage records are per-checkout runtime state (ADR-024 § 7): never written
+// into the working tree, refused outside a git checkout, and an id cannot
+// name a path outside the checks directory.
+func TestRecordsLiveInCheckoutOnly(t *testing.T) {
+	ws := layouttest.Repo(t)
+	path, _, err := Write(ws, grounded())
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if want := layouttest.CheckoutPath(t, ws, "triage/checks/"+grounded().ID+".json"); path != want {
+		t.Errorf("Write path = %q, want %q", path, want)
+	}
+	if _, err := os.Stat(filepath.Join(ws, ".nightgauge")); !os.IsNotExist(err) {
+		t.Errorf("Write touched the working tree (stat err %v)", err)
+	}
+	if _, _, err := Write(t.TempDir(), grounded()); err == nil {
+		t.Error("Write outside a git checkout: want an error")
+	}
+	for _, id := range []string{"../escape", "a/b", ".."} {
+		if _, err := Read(ws, id); err == nil {
+			t.Errorf("Read(%q): want an error for a non-plain id", id)
+		}
 	}
 }

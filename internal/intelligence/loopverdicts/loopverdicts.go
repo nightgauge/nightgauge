@@ -444,7 +444,10 @@ type healthTrendEntry struct {
 }
 
 func analyzeHealthMonitoring(root string, since time.Time) LoopResult {
-	path := filepath.Join(root, ".nightgauge", "health", "trends.jsonl")
+	path, err := layout.CheckoutPath(root, layout.CheckoutHealth+"/trends.jsonl")
+	if err != nil {
+		return noDataResult("health-monitoring", "no health trend history available: "+err.Error())
+	}
 	entries, err := readHealthTrends(path, since)
 	if err != nil || len(entries) == 0 {
 		return noDataResult("health-monitoring", "no health trend history available")

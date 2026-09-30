@@ -3,8 +3,10 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/skills"
 	"github.com/spf13/cobra"
 )
@@ -28,7 +30,7 @@ func skillsUsageCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "usage",
-		Short: "Aggregate skill-usage telemetry (.nightgauge/skills/usage.jsonl)",
+		Short: "Aggregate skill-usage telemetry (" + layout.CheckoutDisplay(layout.CheckoutSkills, "usage.jsonl") + ")",
 		Long: `Aggregate the skill-usage log written by the PreToolUse(Skill) hook into
 per-skill trigger counts and last-seen timestamps, and (against the skills/
 catalog) flag never-triggered skills — usually a sign a skill's description is
@@ -43,6 +45,10 @@ not triggering. Missing log → empty report, never an error.`,
 					return fmt.Errorf("getcwd: %w", err)
 				}
 				root = wd
+			}
+			root, err := filepath.Abs(root)
+			if err != nil {
+				return fmt.Errorf("resolve --workdir: %w", err)
 			}
 
 			records, err := skills.ReadUsage(root)

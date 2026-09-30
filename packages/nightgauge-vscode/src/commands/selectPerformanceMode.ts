@@ -3,8 +3,9 @@
  *
  * Opens a QuickPick that lets the user pick a performance mode
  * (Efficiency / Elevated / Maximum / Frontier) or, via the "Custom…" entry, pin
- * an explicit model per pipeline stage. Preset selections persist to
- * `.nightgauge/performance-mode.yaml`; the Custom flow persists to the
+ * an explicit model per pipeline stage. Preset selections persist to the
+ * checkout's `performance-mode.yaml` in `.git/nightgauge-worktree/`
+ * (ADR-024 § 7); the Custom flow persists to the
  * existing `model_routing.mode` + `pipeline.stage_models` config surface. The
  * status bar refreshes immediately.
  *

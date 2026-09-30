@@ -16,6 +16,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/pkg/types"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
@@ -1428,7 +1429,7 @@ func TestAllComplete_Detection(t *testing.T) {
 }
 
 func TestStatePersistence(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
 		config:        AutonomousConfig{MaxConcurrent: 3},
@@ -1456,7 +1457,7 @@ func TestStatePersistence(t *testing.T) {
 	as.persistState()
 
 	// Read back
-	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	statePath := autonomousStatePathT(t, tmpDir)
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatalf("failed to read state file: %v", err)
@@ -1497,10 +1498,7 @@ func TestStateLoadOnConstruction(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Write state file
-	stateDir := filepath.Join(tmpDir, ".nightgauge", "autonomous")
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
-		t.Fatal(err)
-	}
+	stateDir := layouttest.MkCheckoutSubdir(t, tmpDir, layout.CheckoutAutonomous)
 	state := AutonomousState{
 		Status:      "running", // will be loaded as "stopped"
 		CyclesRun:   10,
@@ -1533,10 +1531,7 @@ func TestStateLoadOnConstruction(t *testing.T) {
 
 func TestStateLoadPreservesTerminalStatus(t *testing.T) {
 	tmpDir := t.TempDir()
-	stateDir := filepath.Join(tmpDir, ".nightgauge", "autonomous")
-	if err := os.MkdirAll(stateDir, 0755); err != nil {
-		t.Fatal(err)
-	}
+	stateDir := layouttest.MkCheckoutSubdir(t, tmpDir, layout.CheckoutAutonomous)
 
 	// Write a terminal state
 	state := AutonomousState{Status: "complete", CyclesRun: 20}
@@ -2721,7 +2716,7 @@ func TestRefinementIsViable_NoDispatcherNoAdapter_False(t *testing.T) {
 		WorkspaceRoot: t.TempDir(),
 		Adapter:       nil, // mirrors cmd/nightgauge/main.go in IPC mode
 	})
-	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 
 	if as.refinementIsViable() {
 		t.Error("expected viability=false when adapter is nil and no dispatcher is registered")
@@ -2733,7 +2728,7 @@ func TestRefinementIsViable_DispatcherRegistered_True(t *testing.T) {
 		WorkspaceRoot: t.TempDir(),
 		Adapter:       nil,
 	})
-	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), t.TempDir())
+	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.WithRefinementRunner(func(_ context.Context, owner, repo string, issueNumber int) error { return nil })
 
 	if !as.refinementIsViable() {
@@ -2892,7 +2887,7 @@ func TestRefineIssueFailure_StateTransitions(t *testing.T) {
 }
 
 func TestRefinementState_Persistence(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
 		config:        AutonomousConfig{},
@@ -2916,7 +2911,7 @@ func TestRefinementState_Persistence(t *testing.T) {
 	as.persistState()
 
 	// Read back
-	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	statePath := autonomousStatePathT(t, tmpDir)
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatalf("failed to read state file: %v", err)
@@ -3018,7 +3013,7 @@ func TestRecoverOrphanedRunning_ClearsState(t *testing.T) {
 	// When the session crashes, state.Running has items from the previous session.
 	// On startup, recoverOrphanedRunning should clear them all from state.Running
 	// and persist the updated state.
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
 		config:        AutonomousConfig{MaxConcurrent: 3},
@@ -3046,7 +3041,7 @@ func TestRecoverOrphanedRunning_ClearsState(t *testing.T) {
 	}
 
 	// Verify state was persisted
-	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	statePath := autonomousStatePathT(t, tmpDir)
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatalf("failed to read persisted state: %v", err)
@@ -3066,7 +3061,7 @@ func TestRecoverOrphanedRunning_CompletesDespiteCancelledCaller(t *testing.T) {
 	// rate-limit dip waits out the reset instead of dying at a short caller
 	// deadline. As a guard, an already-cancelled caller context must NOT prevent
 	// recovery from clearing and persisting the orphaned items.
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 
 	as := &AutonomousScheduler{
 		config:        AutonomousConfig{MaxConcurrent: 3},
@@ -3093,7 +3088,7 @@ func TestRecoverOrphanedRunning_CompletesDespiteCancelledCaller(t *testing.T) {
 		t.Errorf("expected 0 running items after recovery with cancelled caller ctx, got %d", remaining)
 	}
 
-	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	statePath := autonomousStatePathT(t, tmpDir)
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatalf("failed to read persisted state: %v", err)
@@ -3235,8 +3230,8 @@ func TestDedupeFailedItems_Idempotent(t *testing.T) {
 // The field is also `omitempty`, so an emptied map serialises to nothing at
 // all — the loss would leave no trace in state.json to notice later. (#150)
 func TestLifetimeIssueFailures_SurvivesPersistLoadRoundTrip(t *testing.T) {
-	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	tmpDir := layouttest.Repo(t)
+	statePath := autonomousStatePathT(t, tmpDir)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -3320,10 +3315,7 @@ func TestClearIssueFailures_ReportsCircuitBreakerTrippedIndependently(t *testing
 
 // Manual triage is the documented escape hatch, and it must be the only one.
 func TestLifetimeIssueFailures_ClearedOnlyByExplicitTriage(t *testing.T) {
-	tmpDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge/autonomous"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	tmpDir := layouttest.Repo(t)
 	const key = "acme/web#315"
 
 	as := &AutonomousScheduler{
@@ -3356,8 +3348,8 @@ func TestLoadState_PreservesRunningForRecovery(t *testing.T) {
 	// board kept items stuck "In progress" after every crash. loadState now
 	// carries Running forward; RecoverOrphanedRunning is the single owner of
 	// the clear-and-persist side effect.
-	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	tmpDir := layouttest.Repo(t)
+	statePath := autonomousStatePathT(t, tmpDir)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -3396,8 +3388,8 @@ func TestLoadState_PreservesRunningForRecovery(t *testing.T) {
 // scan cycle left state.json claiming "running" forever. Assert against the
 // on-disk file, not as.state, since the whole bug was an in-memory-only fix.
 func TestLoadState_PersistsRunningToStoppedReconcileToDisk(t *testing.T) {
-	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	tmpDir := layouttest.Repo(t)
+	statePath := autonomousStatePathT(t, tmpDir)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -3431,8 +3423,8 @@ func TestLoadState_PersistsRunningToStoppedReconcileToDisk(t *testing.T) {
 
 // Same reconcile-to-disk regression, but from a "paused" prior status.
 func TestLoadState_PersistsPausedToStoppedReconcileToDisk(t *testing.T) {
-	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	tmpDir := layouttest.Repo(t)
+	statePath := autonomousStatePathT(t, tmpDir)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -3467,8 +3459,8 @@ func TestLoadState_PersistsPausedToStoppedReconcileToDisk(t *testing.T) {
 // A clean stop (already "stopped" on disk) must never be mislabeled as a
 // restart recovery.
 func TestLoadState_CleanStopDoesNotSetRestartedFromRunning(t *testing.T) {
-	tmpDir := t.TempDir()
-	statePath := filepath.Join(tmpDir, autonomousStateFile)
+	tmpDir := layouttest.Repo(t)
+	statePath := autonomousStatePathT(t, tmpDir)
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -4482,7 +4474,7 @@ func TestRunCycle_ResumesAfterQuotaCooldownExpires(t *testing.T) {
 // `autonomous.clearQuotaCooldown` IPC handler wraps.
 func TestClearQuotaCooldown_ClearsAndPersists(t *testing.T) {
 	t.Run("clears in-memory + disk when active", func(t *testing.T) {
-		tmp := t.TempDir()
+		tmp := layouttest.Repo(t)
 		until := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
 		as := &AutonomousScheduler{
 			workspaceRoot: tmp,
@@ -4509,7 +4501,7 @@ func TestClearQuotaCooldown_ClearsAndPersists(t *testing.T) {
 		}
 		// Confirm persistence — the on-disk file must reflect the cleared
 		// state so a backend restart doesn't restore the cooldown.
-		p := filepath.Join(tmp, autonomousStateFile)
+		p := autonomousStatePathT(t, tmp)
 		data, err := os.ReadFile(p)
 		if err != nil {
 			t.Fatalf("read persisted state: %v", err)
@@ -4647,7 +4639,7 @@ func TestRunCycle_GraphCacheMissAfterTTL(t *testing.T) {
 // callback as a cycle tick waited forever whenever the build errored, and the
 // cycle's own CyclesRun/LastScanAt increment never reached disk. Issue #1446.
 func TestRunCycle_GraphBuildFailure_FiresOnCycleComplete(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	cycleCompletes := 0
 	as := &AutonomousScheduler{
 		config: AutonomousConfig{
@@ -4670,7 +4662,7 @@ func TestRunCycle_GraphBuildFailure_FiresOnCycleComplete(t *testing.T) {
 	if cycleCompletes != 1 {
 		t.Errorf("onCycleComplete fired %d times after a failed graph build, want 1", cycleCompletes)
 	}
-	if _, err := os.Stat(filepath.Join(root, autonomousStateFile)); err != nil {
+	if _, err := os.Stat(autonomousStatePathT(t, root)); err != nil {
 		t.Errorf("expected state persisted after a failed graph build, stat: %v", err)
 	}
 }

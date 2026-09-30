@@ -9,8 +9,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { STAGED_CLONE_CLASSES, placeCloneData } from "../../demo/workspace-clone";
 import {
+  STAGED_CHECKOUT_ENTRIES,
+  STAGED_CLONE_CLASSES,
+  placeCloneData,
+} from "../../demo/workspace-clone";
+import {
+  checkoutPath,
   clearCloneLayoutCache,
   cloneLogsDir,
   isUsableWorkspaceRoot,
@@ -42,6 +47,11 @@ function stagedTree(root: string): void {
   write(root, ".nightgauge/plans/1.md", "plan\n");
   write(root, ".nightgauge/retros/1.md", "retro\n");
   write(root, ".nightgauge/logs/run.log", "log\n");
+  // Per-checkout entries: a directory, a file, and a run-control singleton
+  // staged in the class directory it sat in before ADR-024 § 7.
+  write(root, ".nightgauge/health/trends.jsonl", '{"t":1}\n');
+  write(root, ".nightgauge/focus.yaml", "focus: 1\n");
+  write(root, ".nightgauge/pipeline/current-run.json", '{"issue_number":1}\n');
 }
 
 const read = (file: string) => fs.readFileSync(file, "utf8");
@@ -75,9 +85,16 @@ describe("placeCloneData", () => {
     expect(read(path.join(plansDir(target), "1.md"))).toBe("plan\n");
     expect(read(path.join(retrosDir(target), "1.md"))).toBe("retro\n");
     expect(read(path.join(cloneLogsDir(target), "run.log"))).toBe("log\n");
+    expect(read(path.join(checkoutPath(target, "health"), "trends.jsonl"))).toBe('{"t":1}\n');
+    expect(read(checkoutPath(target, "focus"))).toBe("focus: 1\n");
+    expect(read(checkoutPath(target, "currentRun"))).toBe('{"issue_number":1}\n');
+    expect(fs.existsSync(path.join(pipelineStateDir(target), "current-run.json"))).toBe(false);
+    expect(checkoutPath(target, "focus")).toBe(
+      path.join(target, ".git", "nightgauge-worktree", "focus.yaml")
+    );
 
-    // The staging directories are gone; working-tree files are untouched.
-    for (const [staged] of STAGED_CLONE_CLASSES) {
+    // The staging paths are gone; working-tree files are untouched.
+    for (const [staged] of [...STAGED_CLONE_CLASSES, ...STAGED_CHECKOUT_ENTRIES]) {
       expect(fs.existsSync(path.join(tree, staged))).toBe(false);
     }
     expect(read(path.join(tree, ".nightgauge", "config.yaml"))).toBe("project: demo\n");

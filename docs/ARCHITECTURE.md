@@ -1903,8 +1903,8 @@ transition to the Go backend over IPC. There is no unified pipeline state file:
 nothing has ever written one to the pipeline state directory (#427).
 The durable per-run record is the Go runtime snapshot
 `runtime-{issue}-{runId}.json` in the clone's pipeline state directory
-(`nightgauge layout path pipeline`), with `run-state.json` there for the
-workspace-level view, and that is what recovery, UI rendering, and analytics
+(`nightgauge layout path pipeline`), with the checkout's `run-state.json`
+(`nightgauge layout path checkout run-state.json`) for the checkout-level view, and that is what recovery, UI rendering, and analytics
 read.
 
 **Per-stage status values:**

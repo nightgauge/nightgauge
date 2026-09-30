@@ -23,6 +23,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 
+	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
@@ -747,10 +748,6 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 	}
 
 	// Pre-seed a queue file with one downstream item — recovery should pause it.
-	queueDir := layouttest.PipelineDir(t, tmpDir)
-	if err := os.MkdirAll(queueDir, 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
 	queueState := QueueState{
 		SchemaVersion: queueSchemaVersion,
 		Status:        "waiting",
@@ -760,7 +757,7 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 		UpdatedAt: time.Now().UTC(),
 	}
 	qb, _ := json.MarshalIndent(queueState, "", "  ")
-	if err := os.WriteFile(filepath.Join(queueDir, "queue-state.json"), qb, 0644); err != nil {
+	if err := os.WriteFile(layouttest.CheckoutPath(t, tmpDir, layout.CheckoutQueueState), qb, 0644); err != nil {
 		t.Fatalf("write queue: %v", err)
 	}
 
@@ -774,7 +771,7 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 	s.loadQueue()
 
 	// Sidecar must be cleared so a second NewScheduler doesn't double-synthesize.
-	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, tmpDir), currentRunSidecarFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(layouttest.CheckoutPath(t, tmpDir, layout.CheckoutCurrentRun)); !os.IsNotExist(err) {
 		t.Errorf("sidecar should be removed after recovery, stat err=%v", err)
 	}
 
@@ -882,7 +879,7 @@ func TestSidecarRecoverySkipsFutureStartedAt(t *testing.T) {
 
 	// Sidecar removed even when synthesis is skipped — otherwise a stale
 	// future-dated sidecar would block the queue forever.
-	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, tmpDir), currentRunSidecarFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(layouttest.CheckoutPath(t, tmpDir, layout.CheckoutCurrentRun)); !os.IsNotExist(err) {
 		t.Errorf("sidecar should be removed; stat err=%v", err)
 	}
 

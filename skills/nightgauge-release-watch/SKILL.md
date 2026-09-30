@@ -290,8 +290,8 @@ The engine scores changes across six dimensions (Pipeline Stage Impact, Automati
 
 #### Step 5.3: Implement Quick-Pass Filter in Code
 
-Apply quick-pass filter to all changes. Also loads `.nightgauge/focus.yaml`
-to apply focus-based score boosts after the base score is calculated.
+Apply quick-pass filter to all changes. Also loads the checkout's `focus.yaml`
+(`nightgauge layout path checkout focus.yaml`) to apply focus-based score boosts after the base score is calculated.
 
 **Focus integration:** The active lens's `ScoringBoosts` map is applied after
 the base quick-pass score. Each change's keywords are mapped to assessment
@@ -310,7 +310,7 @@ applied and `focus_adjusted` is `false`.
 
 ```bash
 SCORED_FILE="/tmp/release-watch-scored.json"
-FOCUS_YAML=".nightgauge/focus.yaml"
+export FOCUS_YAML="$(nightgauge layout path checkout focus.yaml)"
 
 python3 << 'PYTHON_EOF'
 import json
@@ -455,7 +455,7 @@ def score_relevance(description, change_type, tags):
     return min(score, 100)
 
 # Load focus state
-focus_yaml_path = os.environ.get('FOCUS_YAML', '.nightgauge/focus.yaml')
+focus_yaml_path = os.environ.get('FOCUS_YAML', '')
 lens_name, scoring_boosts = load_focus_state(focus_yaml_path)
 if lens_name != 'general':
     print(f"Focus lens active: {lens_name} (boosts: {scoring_boosts})")

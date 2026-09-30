@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
@@ -16,7 +17,7 @@ import (
 // wiring as the stdio-transport tests.
 func newSocketTestServer(t *testing.T) (*Server, string) {
 	t.Helper()
-	as := orchestrator.NewAutonomousScheduler(nil, nil, nil, nil, orchestrator.DefaultAutonomousConfig(), t.TempDir())
+	as := orchestrator.NewAutonomousScheduler(nil, nil, nil, nil, orchestrator.DefaultAutonomousConfig(), layouttest.Repo(t))
 	s := &Server{autonomousScheduler: as, writer: io.Discard, methods: make(map[string]Handler)}
 	s.methods["attention.list"] = s.handleAttentionList
 

@@ -145,11 +145,12 @@ when sources are unavailable:
 | Post-Pipeline Analysis  | `.nightgauge/analysis/*.json`              | Model performance metrics, failure analysis                                                                                                                                                                               |
 | A/B Experiments         | `.nightgauge/analysis/experiments/*.jsonl` | Experiment results and variant comparisons                                                                                                                                                                                |
 | Past Health Reports     | `pipeline/health-report-*.json`            | Historical findings for recommendation tracking                                                                                                                                                                           |
-| Dimension Trend History | `.nightgauge/health/trends.jsonl`          | Per-dimension time-series (HealthTrendEntry records, 90-day retention). Query with `last N runs` using `limit`, or `last N days` using `startDate`/`endDate`. Each entry contains all 7 dimension scores + overall score. |
+| Dimension Trend History | `checkout/health/trends.jsonl`             | Per-dimension time-series (HealthTrendEntry records, 90-day retention). Query with `last N runs` using `limit`, or `last N days` using `startDate`/`endDate`. Each entry contains all 7 dimension scores + overall score. |
 
 `pipeline/...` locations are in the clone's pipeline state directory
-(`nightgauge layout path pipeline`); `.nightgauge/...` locations are in the
-working tree.
+(`nightgauge layout path pipeline`); `checkout/...` locations are in this
+checkout's directory (`nightgauge layout path checkout`); `.nightgauge/...`
+locations are in the working tree.
 
 Each data source is optional. The skill analyzes whatever is available and notes
 which sources were missing in the output report.
@@ -257,7 +258,8 @@ Effectiveness of the pipeline's self-tuning mechanisms:
 
 The pipeline records outcomes for the 6 core stages, but the other ~37 skills
 have no outcome record. The PreToolUse(Skill) hook closes that gap by logging
-invocations to `.nightgauge/skills/usage.jsonl`. Read the rollup with:
+invocations to `skills/usage.jsonl` in this checkout's directory
+(`nightgauge layout path checkout skills/usage.jsonl`). Read the rollup with:
 
 ```bash
 nightgauge skills usage --json

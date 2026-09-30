@@ -1,22 +1,29 @@
 package triage
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
-// Dir is the run-scoped artifact area for triage records.
+// checksName is the triage records' directory inside CHECKOUT.
+const checksName = layout.CheckoutTriage + "/checks"
+
+// Dir is the run-scoped artifact area for triage records: the checkout's
+// .git/nightgauge-worktree/triage/checks (ADR-024 § 7). It errors outside a git
+// checkout.
 //
-// Under `.nightgauge/` rather than `.nightgauge/pipeline/` because an ad-hoc
-// triage has no issue number to be scoped by — the entire premise of #1262 is a
-// red check that no issue exists for.
+// Per-checkout rather than in the per-clone pipeline directory because an
+// ad-hoc triage has no issue number to be scoped by — the entire premise of
+// #1262 is a red check that no issue exists for.
 //
-// The `checks/` segment is not decoration (#1269). `.nightgauge/triage/` already
+// The `checks/` segment is not decoration (#1269). The triage directory already
 // existed and already had tenants: `backlog-groom` writes its report JSON and
 // Markdown there, and `_shared/RUN_REFLECTION.md` points skills at
 // `runs.jsonl` in the same directory. Writing records flat into that namespace
@@ -25,13 +32,17 @@ import (
 // violation list against it — every line false, stated confidently. That is the
 // misreporting probe from #1263's worked example, reproduced inside the tooling
 // built to prevent it.
-func Dir(workspace string) string {
-	return filepath.Join(workspace, ".nightgauge", "triage", "checks")
+func Dir(workspace string) (string, error) {
+	return layout.CheckoutPath(workspace, checksName)
 }
 
-// Path is the file for one record id.
-func Path(workspace, id string) string {
-	return filepath.Join(Dir(workspace), id+".json")
+// Path is the file for one record id. An id that is not a plain name (a path
+// separator, "." or "..") is refused.
+func Path(workspace, id string) (string, error) {
+	if id == "" || strings.ContainsAny(id, `/\`) {
+		return "", fmt.Errorf("invalid triage record id %q", id)
+	}
+	return layout.CheckoutPath(workspace, checksName+"/"+id+".json")
 }
 
 // Write persists a record, stamping V and CreatedAt when unset.
@@ -51,15 +62,15 @@ func Write(workspace string, rec Record) (string, []Violation, error) {
 	if strings.TrimSpace(rec.ID) == "" {
 		rec.ID = NewID(rec.Target.Value, time.Now())
 	}
-	if err := os.MkdirAll(Dir(workspace), 0o755); err != nil {
-		return "", nil, fmt.Errorf("create triage dir: %w", err)
+	if _, err := Path(workspace, rec.ID); err != nil {
+		return "", nil, err
 	}
 	data, err := json.MarshalIndent(rec, "", "  ")
 	if err != nil {
 		return "", nil, fmt.Errorf("encode triage record: %w", err)
 	}
-	path := Path(workspace, rec.ID)
-	if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
+	path, err := layout.WriteCheckoutFile(workspace, checksName+"/"+rec.ID+".json", bytes.NewReader(append(data, '\n')))
+	if err != nil {
 		return "", nil, fmt.Errorf("write triage record: %w", err)
 	}
 	return path, rec.Validate(), nil
@@ -79,7 +90,11 @@ func Write(workspace string, rec Record) (string, []Violation, error) {
 // same branch, and the message says so.
 func Read(workspace, id string) (Record, error) {
 	var rec Record
-	data, err := os.ReadFile(Path(workspace, id))
+	path, err := Path(workspace, id)
+	if err != nil {
+		return rec, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return rec, err
 	}
@@ -104,7 +119,11 @@ func Read(workspace, id string) (Record, error) {
 // filename — the same shape of unchecked assertion this package exists to
 // refuse.
 func List(workspace string) ([]string, error) {
-	entries, err := os.ReadDir(Dir(workspace))
+	dir, err := Dir(workspace)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

@@ -12,13 +12,12 @@ package focus_test
 // persistence contract that all consumers depend on.
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/focus"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // ---------------------------------------------------------------------------
@@ -29,10 +28,7 @@ import (
 // round-trip. This is the contract all consumers depend on: when a component
 // sets a focus lens, other components reading focus.yaml see the same lens.
 func TestFocusIntegration_SetPersistsAndLoads(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 
 	m := focus.NewManager(dir)
 
@@ -66,10 +62,7 @@ func TestFocusIntegration_SetPersistsAndLoads(t *testing.T) {
 // TestFocusIntegration_ClearResetsToGeneral verifies that Clear() writes
 // active_lens: general to the file so all consumers see the cleared state.
 func TestFocusIntegration_ClearResetsToGeneral(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 
 	m := focus.NewManager(dir)
 
@@ -102,8 +95,8 @@ func TestFocusIntegration_ClearResetsToGeneral(t *testing.T) {
 // reading a missing focus.yaml get the general (no-boost) lens — ensuring
 // backward compatibility with repos that have never used focus mode.
 func TestFocusIntegration_MissingFileDefaultsToGeneral(t *testing.T) {
-	dir := t.TempDir()
-	// Deliberately do NOT create .nightgauge/ or focus.yaml
+	dir := layouttest.Repo(t)
+	// Deliberately do NOT create focus.yaml
 
 	m := focus.NewManager(dir)
 	state, err := m.Load()
@@ -127,10 +120,7 @@ func TestFocusIntegration_MissingFileDefaultsToGeneral(t *testing.T) {
 // in focus.yaml are persisted and resolved correctly — enabling teams to define
 // project-specific lenses (e.g., "mobile") beyond the built-in set.
 func TestFocusIntegration_CustomLensRoundTrip(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 
 	m := focus.NewManager(dir)
 
@@ -200,10 +190,7 @@ func TestFocusIntegration_CustomLensRoundTrip(t *testing.T) {
 // validates the data flow by exercising the Manager directly with the same
 // patterns the scheduler uses.
 func TestFocusIntegration_AutonomousScheduler_ReadsYAML(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 
 	m := focus.NewManager(dir)
 
@@ -254,8 +241,8 @@ func TestFocusIntegration_AutonomousScheduler_ReadsYAML(t *testing.T) {
 // exist, Load() returns a default state with ActiveLens="general" and zero
 // alignment scores for all issues.
 func TestFocusIntegration_AutonomousScheduler_MissingYAMLBackwardCompat(t *testing.T) {
-	dir := t.TempDir()
-	// No .nightgauge/ directory and no focus.yaml
+	dir := layouttest.Repo(t)
+	// No focus.yaml
 
 	m := focus.NewManager(dir)
 	state, err := m.Load()
@@ -285,10 +272,7 @@ func TestFocusIntegration_AutonomousScheduler_MissingYAMLBackwardCompat(t *testi
 // ScoringBoosts map is accessible and contains the expected values that the
 // release-watch assessment engine uses to compute score boosts.
 func TestFocusIntegration_ReleaseWatch_ScoreBoost(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 
 	m := focus.NewManager(dir)
 	if _, err := m.Set("security", "cli"); err != nil {
@@ -334,7 +318,7 @@ func TestFocusIntegration_ReleaseWatch_ScoreBoost(t *testing.T) {
 // lens is active, the release-watch assessment receives zero boosts — ensuring
 // backward-compatible scoring for projects that haven't set a focus lens.
 func TestFocusIntegration_ReleaseWatch_GeneralNoBoost(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	m := focus.NewManager(dir)
 
 	// No focus.yaml — defaults to general
@@ -359,10 +343,7 @@ func TestFocusIntegration_ReleaseWatch_GeneralNoBoost(t *testing.T) {
 // TestFocusIntegration_ReleaseWatch_PerformanceLensBoost verifies the
 // performance lens boosts performance-related release features.
 func TestFocusIntegration_ReleaseWatch_PerformanceLensBoost(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 	m := focus.NewManager(dir)
 	if _, err := m.Set("performance", "cli"); err != nil {
 		t.Fatal(err)
@@ -397,10 +378,7 @@ func TestFocusIntegration_ReleaseWatch_PerformanceLensBoost(t *testing.T) {
 // the focus lens's keywords can be used to classify proposals as focus-aligned.
 // This mirrors Phase 4 of the continuous-improvement skill.
 func TestFocusIntegration_ContinuousImprovement_ProposalWeighting(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 	m := focus.NewManager(dir)
 	if _, err := m.Set("reliability", "cli"); err != nil {
 		t.Fatal(err)
@@ -451,7 +429,7 @@ func TestFocusIntegration_ContinuousImprovement_ProposalWeighting(t *testing.T) 
 // the general lens does not weight any proposals — all proposals are treated
 // equally, maintaining backward compatibility.
 func TestFocusIntegration_ContinuousImprovement_GeneralNoEffect(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	m := focus.NewManager(dir)
 
 	// No focus.yaml — default general
@@ -472,10 +450,7 @@ func TestFocusIntegration_ContinuousImprovement_GeneralNoEffect(t *testing.T) {
 // TestFocusIntegration_ContinuousImprovement_MultiLensAlignment verifies that
 // different lenses produce different alignment results for the same proposal set.
 func TestFocusIntegration_ContinuousImprovement_MultiLensAlignment(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".nightgauge"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	dir := layouttest.Repo(t)
 	m := focus.NewManager(dir)
 
 	proposal := []string{"test", "coverage", "lint", "quality"}

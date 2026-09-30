@@ -38,7 +38,10 @@ export interface HealthReportOptions {
     issueUrl: string;
   }[];
   recommendationReport?: RecommendationReport;
-  /** If provided, append a HealthTrendEntry to .nightgauge/health/trends.jsonl (Issue #1411) */
+  /**
+   * If provided, append a HealthTrendEntry to the checkout's health/trends.jsonl
+   * (`.git/nightgauge-worktree/health/`, ADR-024 § 7; Issue #1411)
+   */
   workspaceRoot?: string;
   /** Issue number for the trend entry (default: 0) */
   issueNumber?: number;

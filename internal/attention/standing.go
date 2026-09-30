@@ -157,6 +157,9 @@ func (r StandingResult) Changed() bool {
 // I/O failures are skipped so one unreadable record cannot abort a sweep.
 func (s *Store) ReconcileStanding(sw StandingSweep) (StandingResult, error) {
 	res := StandingResult{Repo: sw.Repo}
+	if s.err != nil {
+		return res, s.err
+	}
 	if strings.TrimSpace(sw.Repo) == "" {
 		return res, fmt.Errorf("attention: reconcile requires a repo scope")
 	}
@@ -245,6 +248,9 @@ func (s *Store) ReconcileStanding(sw StandingSweep) (StandingResult, error) {
 // Retracting a real card because a scan failed is the exact failure mode that
 // makes an inbox untrustworthy.
 func (s *Store) AutoResolveUnobserved(producer string, observed []string) (int, error) {
+	if s.err != nil {
+		return 0, s.err
+	}
 	if strings.TrimSpace(producer) == "" {
 		return 0, fmt.Errorf("attention: auto-resolve requires a producer")
 	}
@@ -290,6 +296,9 @@ func (s *Store) AutoResolveUnobserved(producer string, observed []string) (int, 
 // exactly the failure invariant 1 exists to prevent. This is the scoped
 // counterpart for that shape of producer.
 func (s *Store) AutoResolveKey(producer, idempotencyKey string) (bool, error) {
+	if s.err != nil {
+		return false, s.err
+	}
 	if strings.TrimSpace(producer) == "" {
 		return false, fmt.Errorf("attention: auto-resolve requires a producer")
 	}
@@ -562,6 +571,9 @@ func latestResolvedByKey(stored []storedRequest, key string) (*DecisionRequest, 
 // Resolve validates it — the mute record is mirrored and a too-short actor can
 // never be accepted.
 func (s *Store) Mute(ctx context.Context, id, actor string) (*DecisionRequest, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	if err := ValidateActor(actor); err != nil {
 		return nil, fmt.Errorf("attention: muting %s: %w", id, err)
 	}
@@ -599,6 +611,9 @@ func (s *Store) Mute(ctx context.Context, id, actor string) (*DecisionRequest, e
 
 // Unmute restores alerting. Unmuting an unmuted request is a no-op.
 func (s *Store) Unmute(ctx context.Context, id, actor string) (*DecisionRequest, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
 	if err := ValidateActor(actor); err != nil {
 		return nil, fmt.Errorf("attention: unmuting %s: %w", id, err)
 	}

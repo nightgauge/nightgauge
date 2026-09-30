@@ -1,0 +1,35 @@
+{
+  "_comment": "Shared by the Go `nightgauge layout` tests (cmd/nightgauge/layout_cmd_test.go, internal/layout) and the SDK cloneLayout tests: every path field of the layout JSON, derived from the git common dir ({common}) and the checkout's own git dir ({gitdir}), and the per-checkout entry names. ADR-024 § 7.",
+  "schema_version": 2,
+  "fields": {
+    "git_common_dir": "{common}",
+    "git_dir": "{gitdir}",
+    "clone": "{common}/nightgauge",
+    "pipeline": "{common}/nightgauge/pipeline",
+    "plans": "{common}/nightgauge/plans",
+    "retros": "{common}/nightgauge/retros",
+    "logs": "{common}/nightgauge/logs",
+    "checkout": "{gitdir}/nightgauge-worktree"
+  },
+  "checkout_entries": {
+    "currentRun": "current-run.json",
+    "runState": "run-state.json",
+    "batchState": "batch-state.json",
+    "queueState": "queue-state.json",
+    "plan": "PLAN.md",
+    "serveLock": "serve.lock",
+    "backendLog": "go-backend.log",
+    "attention": "attention",
+    "attentionCoverage": "attention-coverage.json",
+    "autonomous": "autonomous",
+    "health": "health",
+    "graph": "graph",
+    "containment": "containment",
+    "notifications": "notifications",
+    "skills": "skills",
+    "triage": "triage",
+    "focus": "focus.yaml",
+    "performanceMode": "performance-mode.yaml",
+    "carefulLock": "careful.lock"
+  }
+}
