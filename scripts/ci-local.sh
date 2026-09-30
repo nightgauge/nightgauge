@@ -371,6 +371,8 @@ REQUIRED_FILES=(
   scripts/lib/ci_local_failures.sh
   scripts/test-ci-local-concurrency.sh
   scripts/test-ci-local-changed-scope.sh
+  scripts/state-backstop.sh
+  scripts/test-state-backstop.sh
 )
 
 # Makefile targets the gate invokes. `[ -f Makefile ] && grep -q '^t:' Makefile`
@@ -617,6 +619,12 @@ on_exit() {
   [ "${BASHPID:-$$}" = "$MAIN_PID" ] || return 0
   reap_group_children
   release_own_slots
+  # A run that ended before its last step still says whether it touched the
+  # machine state (#2311). Its exit code is already non-zero.
+  if [ "${BACKSTOP_DONE:-1}" -eq 0 ]; then
+    BACKSTOP_DONE=1
+    bash scripts/state-backstop.sh verify "$BACKSTOP_DIR/before" "$BACKSTOP_DIR/after" >&2 || true
+  fi
   return 0
 }
 
@@ -1094,6 +1102,26 @@ if [ "$LIST_STEPS" -eq 0 ]; then
   echo "CI-parity local validation — order mirrors .github/workflows/ci.yml"
 fi
 
+# ── The machine-state backstop (#2311) ───────────────────────────────────────
+#
+# A gate run once moved a developer's legacy ~/.nightgauge data into a test's
+# temporary STATE, and test cleanup deleted it: a test overrode STATE, left
+# HOME real, and a CLI it spawned ran the one-time migration. The product guard
+# and the hermeticity lint fix that; this makes the next leak loud. Both roots
+# are recorded now and compared by the LAST step, and an interrupted run
+# compares them on exit. It records only: it never restores or deletes.
+BACKSTOP_DIR="$LOG_DIR/state-backstop"
+BACKSTOP_DONE=1
+if [ "$LIST_STEPS" -eq 0 ]; then
+  rm -rf "$BACKSTOP_DIR"
+  if bash scripts/state-backstop.sh snapshot "$BACKSTOP_DIR/before"; then
+    BACKSTOP_DONE=0
+  else
+    echo "✗ could not record ~/.nightgauge before the run (scripts/state-backstop.sh)" >&2
+    exit 1
+  fi
+fi
+
 # 0. Step-inventory guard (#983) — FIRST, because it is the only check that can
 #    tell whether the rest of this file is still the gate it claims to be. The
 #    steps below used to be guarded by `if [ -f <script> ]` with no `else`, so a
@@ -1123,6 +1151,11 @@ run_step "ci-local.sh concurrency and failure-reporting contract" \
 #     second full gate.
 run_step "ci-local.sh change-scoping contract" \
   bash scripts/test-ci-local-changed-scope.sh
+
+# 0d. The machine-state backstop's own regression suite (#2311), before the
+#     steps it watches: the last step trusts it to go red when a run removes or
+#     changes the developer's ~/.nightgauge data. Seconds, against a fake HOME.
+run_step "state-backstop.sh regression suite" bash scripts/test-state-backstop.sh
 
 # 1. Go build + tests (internal/ + cmd/)
 # -json so the skip accounting has events to read (#474): a package whose tests
@@ -1595,6 +1628,12 @@ else
   run_step "OpenCode integration (opencode_integration tag)" \
     bash scripts/opencode-integration.sh
 fi
+
+# LAST: nothing above changed the developer's machine state (#2311). The
+# before-listing was recorded ahead of the first step.
+run_step "machine state untouched by the run (~/.nightgauge, default STATE)" \
+  bash scripts/state-backstop.sh verify "$BACKSTOP_DIR/before" "$BACKSTOP_DIR/after"
+BACKSTOP_DONE=1
 
 if [ "$LIST_STEPS" -eq 1 ]; then
   exit 0

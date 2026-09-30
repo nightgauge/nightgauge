@@ -7,6 +7,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
+import { realHome } from "../isolateHome";
 import {
   BEFORE_FIRST_CASE,
   buildInventory,
@@ -273,7 +274,7 @@ describe("demo/ipc-inventory.json", () => {
 
   it("carries no machine-local path or credential", () => {
     const text = JSON.stringify(inventory);
-    expect(text).not.toContain(os.homedir());
+    expect(text).not.toContain(realHome);
     expect(text).not.toMatch(/\/(Users|home)\/|nightgauge-host-/);
     const samples = JSON.stringify(inventory.methods.map((entry) => entry.sampleParams));
     expect(samples).not.toMatch(

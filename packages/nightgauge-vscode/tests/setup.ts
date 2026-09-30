@@ -1,6 +1,9 @@
 /**
  * Test setup - mocks for VSCode API
  */
+// First: HOME and machine state are isolated before any module under test
+// is evaluated (#2311). ES modules evaluate in import order.
+import "./isolateHome";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";

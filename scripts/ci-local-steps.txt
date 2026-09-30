@@ -1,6 +1,7 @@
 ci-local.sh step inventory
 ci-local.sh concurrency and failure-reporting contract
 ci-local.sh change-scoping contract
+state-backstop.sh regression suite
 go build ./...
 go test ./... -count=1 (with skip accounting)
 go test -race -count=1 ./...
@@ -71,3 +72,4 @@ Plugin skills mirror in sync
 Mirror link gate regression suite
 Mirror link integrity
 OpenCode integration (opencode_integration tag)
+machine state untouched by the run (~/.nightgauge, default STATE)
