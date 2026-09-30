@@ -53,23 +53,28 @@ describe("ensureGitignore", () => {
     expect(generated).toBe(committed);
   });
 
-  it("ignores the runtime state that would otherwise pollute git status", () => {
-    const generated = renderGeneratedGitignore();
-
-    // Each of these is per-machine runtime state carrying local run ids.
-    // Dropping any from the template makes the pipeline's own output surface as
-    // untracked changes in the user's repository.
-    for (const rule of [
-      "/attention/",
-      "/attention-coverage.json",
-      "/containment/",
-      "/health/",
-      "/autonomous/",
-      "/complexity-model.lock",
-      "/worktrees/",
-    ]) {
-      expect(generated).toContain(rule);
-    }
+  it("is deny-by-default: /* first, then only the ADR-024 § 13 allowlist", () => {
+    // Any runtime file, including one a future version adds, stays out of
+    // git unless someone deliberately allowlists it (#2043). The Go
+    // TestTemplateAllowlist checks each rule's verdict with git itself.
+    const rules = renderGeneratedGitignore()
+      .split("# ─── Local additions")[0]
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l !== "" && !l.startsWith("#"));
+    expect(rules[0]).toBe("/*");
+    expect(rules.filter((r) => r.startsWith("!"))).toEqual([
+      "!/config.yaml",
+      "!/config.schema.json",
+      "!/pattern-mining-config.yaml",
+      "!/.gitignore",
+      "!/audit/",
+      "!/skill-smoke/",
+      "!/skill-evals/",
+      "!/skill-evals/baseline.jsonl",
+      "!/model-evals/",
+      "!/model-evals/evidence/",
+    ]);
   });
 
   it("writes exactly the Go binary's embedded template (#2026)", async () => {
@@ -156,7 +161,7 @@ describe("ensureWorkspaceGitignores", () => {
     ]);
     const siblingGitignore = path.join(primary, "..", "sibling", ".nightgauge", ".gitignore");
 
-    expect(fs.readFileSync(siblingGitignore, "utf8")).not.toContain("/knowledge/");
+    expect(fs.readFileSync(siblingGitignore, "utf8").split("\n")).not.toContain("/*");
 
     const results = await ensureWorkspaceGitignores(primary);
 
@@ -165,8 +170,7 @@ describe("ensureWorkspaceGitignores", () => {
     // The side effect, not the return value: the rule that would have
     // deadlocked the sweep has to be on disk.
     const written = fs.readFileSync(siblingGitignore, "utf8");
-    expect(written).toContain("/knowledge/");
-    expect(written).toContain("/containment/");
+    expect(written.split("\n")).toContain("/*");
     expect(written).toBe(renderGeneratedGitignore());
   });
 
@@ -252,6 +256,8 @@ describe("ensureGitignore on a git checkout (#1875)", () => {
     await fsp.writeFile(path.join(root, ".nightgauge", "complexity-model.lock"), "");
     await fsp.mkdir(path.join(root, ".nightgauge", "pipeline", "history"), { recursive: true });
     await fsp.writeFile(path.join(root, ".nightgauge", "pipeline", "history", "x.jsonl"), "{}\n");
+    // v17 is deny-by-default: a file no rule names is ignored too.
+    await fsp.writeFile(path.join(root, ".nightgauge", "anything-new.json"), "{}\n");
     expect(git(root, "status", "--porcelain", "--untracked-files=all")).toBe("");
 
     // Idempotent: a second activation does not grow the exclude file.
@@ -282,11 +288,10 @@ describe("ensureGitignore on a git checkout (#1875)", () => {
     );
   });
 
-  it("ignores plans but not knowledge by default, and the documented root opt-out hides knowledge", async () => {
-    // #1090. Plans are per-run exhaust (docs/ARCHITECTURE.md § Cleanup deletes
-    // them at merge, with no git history behind them), and the knowledge tree
-    // is committed (#2042) unless the team opts out in its root .gitignore,
-    // exactly as docs/KNOWLEDGE_BASE.md step 5 instructs.
+  it("ignores plans and knowledge by default, and the documented Local-additions opt-in commits knowledge", async () => {
+    // ADR-024 § 12/§ 13. Plans are per-run exhaust, and the knowledge tree is
+    // ignored unless the team adds !/knowledge/ under Local additions, exactly
+    // as docs/KNOWLEDGE_BASE.md step 5 instructs.
     const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-optin-"));
     git(root, "init", "-q");
     await ensureGitignore(root);
@@ -303,11 +308,14 @@ describe("ensureGitignore on a git checkout (#1875)", () => {
         .filter(Boolean)
         .map((l) => l.slice(3));
     expect(status()).not.toContain(".nightgauge/plans/7-x.md");
-    expect(status()).toContain(".nightgauge/knowledge/index.md");
-
-    await fsp.writeFile(path.join(root, ".gitignore"), "/.nightgauge/knowledge/\n");
     expect(status()).not.toContain(".nightgauge/knowledge/index.md");
+
+    await fsp.writeFile(ignorePath, renderGeneratedGitignore() + "!/knowledge/\n");
+    expect(status()).toContain(".nightgauge/knowledge/index.md");
     expect(status()).not.toContain(".nightgauge/plans/7-x.md");
+    // Current version: the writer leaves the opt-in in place.
+    expect(await ensureGitignore(root)).toEqual({ created: false, updated: false });
+    expect(fs.readFileSync(ignorePath, "utf8")).toBe(renderGeneratedGitignore() + "!/knowledge/\n");
   });
 
   it("keeps local additions when it rewrites an untracked older file", async () => {
@@ -376,7 +384,7 @@ describe("ensureGitignore version ordering and carried rules", () => {
     const own = fs.readFileSync(exclude, "utf8");
     expect(own).toContain(
       "(managed per machine; never committed, #1875)\n" +
-        `# nightgauge-gitignore-version: ${current}\n/.nightgauge/pipeline/*\n`
+        `# nightgauge-gitignore-version: ${current}\n/.nightgauge/*\n`
     );
 
     const future =
@@ -402,7 +410,7 @@ describe("ensureGitignore version ordering and carried rules", () => {
 
   it("carries rules above the marker after the kept local additions, once", async () => {
     const root = await untracked(
-      withVersion("3").replace("/improvement-runs/\n", "/improvement-runs/\n/above/\n/dup/\n") +
+      withVersion("3").replace("!/skill-smoke/\n", "!/skill-smoke/\n/above/\n/dup/\n") +
         "/below/\n/dup/\n"
     );
     await ensureGitignore(root);

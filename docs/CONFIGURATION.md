@@ -349,8 +349,25 @@ EOF
 ### Gitignore Entry
 
 `.nightgauge/config.local.yaml` is ignored by the generated
-`.nightgauge/.gitignore` (its `/config.local.yaml` rule), so there is nothing to
-add by hand.
+`.nightgauge/.gitignore`, so there is nothing to add by hand. That file is
+deny-by-default (ADR-024 § 13): its first rule, `/*`, ignores everything under
+`.nightgauge/`, and `!` rules re-include only the committed allowlist:
+
+| Committed path                                                    | Why it is safe to commit                                                                         |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `config.yaml`, `config.schema.json`, `pattern-mining-config.yaml` | Team config, changed by pull request; the loader rejects a plaintext GitHub token or license key |
+| `.gitignore`                                                      | The rules themselves                                                                             |
+| `audit/` (except `audit/scope-drift-stats.json`)                  | Authored audit definitions and reports; the counter is per machine                               |
+| `skill-smoke/`                                                    | Authored smoke-test scripts                                                                      |
+| `skill-evals/baseline.jsonl`                                      | The reviewed skill-evaluation reference; other runs stay local                                   |
+| `model-evals/evidence/`                                           | Live runs deliberately promoted as evidence; other runs stay local                               |
+
+Anything else Nightgauge writes under `.nightgauge/`, including a legacy file
+the one-time layout migration has not moved yet and any runtime file a future
+version adds, is ignored until someone deliberately adds a rule for it. The
+knowledge tree is ignored too;
+[KNOWLEDGE_BASE.md](KNOWLEDGE_BASE.md#adopting-the-knowledge-base-in-an-existing-repository)
+shows the one-line opt-in.
 
 That file is generator-owned. The VS Code extension ensures it on activation,
 and the CLI does the same from `nightgauge config init` and `nightgauge serve`,

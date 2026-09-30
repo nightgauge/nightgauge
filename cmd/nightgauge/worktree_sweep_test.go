@@ -307,8 +307,8 @@ func addWorktree(t *testing.T, root string, issue int) string {
 // Every pipeline stage runs INSIDE a worktree, so "cwd is a linked worktree" is
 // the normal case, not an edge. `git worktree list` from there enumerates the
 // whole repository — so the sweep's reach is undiminished — while the worktree's
-// own .nightgauge/pipeline directory exists (the .gitkeep is tracked) and is
-// always empty, so the in-flight scan returned a DETERMINED empty set with no
+// own .nightgauge/pipeline directory existed (its .gitkeep was tracked before
+// ADR-024 § 13) and was always empty, so the in-flight scan returned a DETERMINED empty set with no
 // error and no warning. Agent A, standing in its own worktree and running the
 // documented bare command, deleted the directory live run B was executing in.
 func TestWorktreeSweep_FromInsideALinkedWorktreeStillProtectsTheLiveRun(t *testing.T) {

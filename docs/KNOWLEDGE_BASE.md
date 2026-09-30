@@ -102,8 +102,10 @@ Set `knowledge.enabled: false` in your project config to **opt out**. There are
 exactly two legitimate reasons to:
 
 - **Repo footprint** — the knowledge base writes files under
-  `.nightgauge/knowledge/`, where they show up as new files to commit, so the
-  tree and its history grow.
+  `.nightgauge/knowledge/`. They are ignored by default; a team that commits
+  them (step 5 of
+  [Adopting the knowledge base](#adopting-the-knowledge-base-in-an-existing-repository))
+  grows the tree and its history.
 - **Per-run token cost** — recall and enrichment add tokens to every pipeline
   run.
 
@@ -1477,17 +1479,19 @@ personalized and recognizable to teammates.
    [naming conventions](#naming-conventions) and [file schemas](#file-schema)
    above.
 
-5. **Git tracking (your choice)**: The managed `.nightgauge/.gitignore`
-   ignores only the derived `/knowledge/.recall-cache/`, so scaffolded PRDs and
-   decisions show as new files to commit. To keep the knowledge tree out of git
-   instead, add this to your repository's root `.gitignore`:
+5. **Git tracking (your choice)**: The managed `.nightgauge/.gitignore` is
+   deny-by-default (ADR-024 § 13): it ignores everything under `.nightgauge/`
+   except team config and a short committed allowlist, so the knowledge tree
+   stays out of git by default. To commit it, add this line below the file's
+   `Local additions (kept on upgrade)` marker, which template upgrades keep:
 
    ```gitignore
-   /.nightgauge/knowledge/
+   !/knowledge/
    ```
 
    Committed knowledge files provide a durable record of decisions even after
-   issues are closed.
+   issues are closed. The recall index lives in the cache directory, not under
+   `knowledge/`, so the opt-in commits only authored files.
 
 ---
 
@@ -1694,9 +1698,8 @@ knowledge:
 
 Workspace knowledge follows the same rule as repo-level knowledge: when the
 workspace root is an initialized repository, its generated
-`.nightgauge/.gitignore` ignores only `/knowledge/.recall-cache/`, so the
-workspace knowledge tree shows as new files to commit. To keep it out of git,
-add the root `.gitignore` rule from step 5 of
+`.nightgauge/.gitignore` ignores the workspace knowledge tree by default. To
+commit it, add the `!/knowledge/` Local-additions line from step 5 of
 [Adopting the knowledge base](#adopting-the-knowledge-base-in-an-existing-repository).
 Workspace knowledge is separate from each repo's knowledge directories — each
 has its own git tracking decision.
