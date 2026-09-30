@@ -83,7 +83,7 @@ func builtinVerbs(env *Env, deps verbDeps) *VerbRegistry {
 	must(verbBuildCLI, v.buildCLIPrecondition, v.buildCLIApply)
 	must(verbGHAuthRefresh, v.authRefreshPrecondition, v.authRefreshApply)
 	must(verbAutomationRestart, v.restartPrecondition, v.restartApply)
-	if err := reg.Register(verbLayoutMigrate, layoutMigrateVerb(newLayoutMigrator)); err != nil {
+	if err := reg.Register(verbLayoutMigrate, layoutMigrateVerb(newLayoutMigrator, newMachineStateMigrator)); err != nil {
 		panic(err)
 	}
 	return reg

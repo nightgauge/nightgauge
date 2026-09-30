@@ -167,7 +167,7 @@ the current scan).
 | `binary.build_cli`    | NGD001                 | Runs `make build-cli` in the source checkout                     |
 | `github.auth_refresh` | NGD006, NGD034, NGD041 | `gh auth refresh -h github.com -s <scopes>`                      |
 | `automation.restart`  | NGD029                 | Starts the autonomous scheduler through the running daemon       |
-| `layout.migrate`      | NGD044                 | Moves per-clone data to its ADR-024 location; never overwrites   |
+| `layout.migrate`      | NGD044                 | Moves per-clone and machine state to ADR-024; never overwrites   |
 
 `repo.init` (NGD010, NGD011) is declared but deliberately not registered: the
 command is interactive, so `--fix` reports it `blocked` and names the command to
@@ -703,6 +703,27 @@ a conflict, a run in flight or a live daemon leaves the data where it is, prints
 one line to stderr naming `nightgauge doctor --fix`, and the clone is not rescanned
 for an hour. A run that moved data prints one line to stderr too.
 
+**Machine state** is reported by the same check, wherever doctor runs: each
+class still under `~/.nightgauge` (serve claims, `rate-limit.json`, the GitLab
+rate-limit files, `machine-id`, `telemetry-notice-v1`, `usage/`, OpenCode's
+`runs/`, `evidence/`, `last-dispatch.json` and `endpoint-slots.json`, and the
+machine `logs/`) with its target in the machine-state directory (`nightgauge
+layout` prints it as `state`). `migrate` moves them under `.migrate.lock` in that
+directory with the mechanics above and writes its own `layout-version` marker:
+
+- `machine-id` is moved byte for byte, ends mode 0600 and is never regenerated.
+- A hint found at both locations (the rate-limit files, the telemetry notice, the
+  usage readings, the last-dispatch record, the endpoint slots, a serve claim)
+  keeps the copy in the state directory and deletes the old one.
+- While a daemon holds a serve lease (a held lock in `~/.nightgauge/serve/`), the
+  serve claims and the OpenCode run roots stay and are reported (exit 4); the
+  other classes still move.
+- The old OpenCode self-test records are deleted; nothing reads them.
+- `config.yaml` and `tools/` are not machine state and never move.
+
+The same machine-state migration runs automatically at CLI start, under the
+same never-fail rule.
+
 The finding never changes the exit code of plain `nightgauge doctor`.
 
 #### NGD045
@@ -711,7 +732,8 @@ The finding never changes the exit code of plain `nightgauge doctor`.
 `housekeeping`.
 
 The two copies differ, and the migration never overwrites a file, so it moves
-nothing in the clone until every conflict is resolved; `--fix` exits 3. Manual
+nothing in the clone (or, for machine state such as `machine-id`, nothing in the
+machine-state directory) until every conflict is resolved; `--fix` exits 3. Manual
 `resolve`: compare the two paths the finding names, keep the one you want at the
 new location, delete the other, and re-run `nightgauge doctor --fix`.
 
@@ -720,7 +742,8 @@ new location, delete the other, and re-run `nightgauge doctor --fix`.
 **An old location cannot be migrated safely.** `layout_migration` ·
 `housekeeping`.
 
-The old directory is a symlink, resolves outside the checkout, or its new location
+The old directory is a symlink, resolves outside the checkout (for machine state,
+outside `~/.nightgauge` or the machine-state directory), or its new location
 cannot be resolved (for example, `pipeline.worktree_base` set in the committed team
 config). Nothing there is moved or deleted; the other classes still migrate.
 Manual `inspect`: remove the reason the evidence names, then re-run

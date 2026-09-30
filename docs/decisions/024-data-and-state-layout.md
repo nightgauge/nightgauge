@@ -594,6 +594,35 @@ targets as warnings and keeps its existing exit status.
 > `config.yaml.tmp`, the config writer's temporary file, which must sit beside `config.yaml` for an
 > atomic rename.
 
+> **Amendment (2026-09-30, #2032, #2041): the machine-state migration.** `STATE` gets its own
+> marker (`STATE/layout-version`, machine-state layout `1`) and lock (`STATE/.migrate.lock`), and
+> the same automatic run at CLI start under the 2026-09-29 rule: it never fails the command, and
+> `doctor --fix` exits `3` on a conflict and `4` when blocked. Its rows are the § 2 machine-state
+> rows, each moved from `~/.nightgauge/<name>` to `STATE/<name>`, plus two OpenCode files the § 2
+> row did not name: `opencode/evidence/` (preserved failure evidence, #2171) and
+> `opencode/endpoint-slots.json` (the published slot ledger). Per class:
+>
+> - **Hints keep the new copy.** The rate-limit files, `telemetry-notice-v1`, the `usage/`
+>   readings, `opencode/last-dispatch.json`, `opencode/endpoint-slots.json` and the serve claims:
+>   a copy at both locations keeps the one under `STATE`, which this build wrote since, and deletes
+>   the old one. A hint is never a conflict.
+> - **`machine-id`** is moved byte for byte, ends mode 0600, and a differing copy is a conflict.
+> - **A live daemon holds two classes.** The migration reads the serve lease through the lock files
+>   in the old `serve/` directory (an older daemon's own lease, or the compatibility lock a daemon
+>   of this build takes there). While one is held, the serve claims and `opencode/runs` (the run
+>   roots a daemon's stage may be using) stay in place and are reported; every other class moves.
+> - **`opencode/self-test/`** has had no reader since #2148, so it is deleted, like a cache.
+> - **Machine logs** merge like append-only JSONL, so a log is never a conflict.
+> - `config.yaml` and `tools/` are not rows: `CONFIG` has its own resolver, and on macOS it is
+>   `~/.nightgauge` itself.
+>
+> **The extension resolves `STATE` itself.** The § 2 row said the extension reads `usage/` through
+> the binary. It resolves the root with the same order instead (`resolveStateHome`,
+> `NIGHTGAUGE_STATE_HOME`, `XDG_STATE_HOME/nightgauge`, the platform default), because the store
+> is read synchronously on every usage snapshot and `nightgauge layout` answers only inside a git
+> repository. `tests/utils/machineStateDir.test.ts` pins the TypeScript resolver to the Go table
+> (`TestStateHomePathResolution`). Tests: `TestLayoutMigrationMachineState` (`internal/doctor`).
+
 **Releases.** A relocation and its migration ship in the same release. `main` may carry the gap
 between the two merges; a release tag may not.
 

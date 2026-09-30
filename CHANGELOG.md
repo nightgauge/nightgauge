@@ -16,6 +16,26 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge doctor --fix` moves machine state out of `~/.nightgauge`
+  once, keeping `machine-id`** (#2041, ADR-024 § 15). Plain
+  `nightgauge doctor` reports each machine-state class still under
+  `~/.nightgauge` (serve claims, `rate-limit.json`, the GitLab rate-limit
+  files, `machine-id`, `telemetry-notice-v1`, `usage/`, OpenCode's run roots,
+  evidence, last-dispatch record and endpoint slots, and the machine logs)
+  with its target in the machine-state directory (`NGD044`); `--fix` moves
+  them under `.migrate.lock` there and writes a `layout-version` marker, and
+  a second run changes nothing. `machine-id` is moved byte for byte, ends mode
+  0600 and is never regenerated, so the platform keeps seeing the same device;
+  a differing copy at both locations is a conflict (`NGD045`, exit 3). A hint
+  at both locations keeps the newer copy. While a daemon holds a serve lease
+  the serve claims and the OpenCode run roots stay in place and are reported
+  (exit 4); everything else still moves. The old OpenCode self-test records
+  are deleted. `config.yaml` and the `tools/` OpenCode install are not moved.
+  Moves are confined to `~/.nightgauge` and the state directory after symlink
+  evaluation, a symlinked class is refused, and new directories are 0700. The
+  first `nightgauge` command without the marker runs the same migration and
+  never fails because of it.
+
 - **`nightgauge doctor --fix` moves per-clone data to its new location once**
   (#2040, ADR-024 § 15). Plain `nightgauge doctor` reports each class still at
   an old location (pipeline state, plans, retros, logs, pipeline worktrees
