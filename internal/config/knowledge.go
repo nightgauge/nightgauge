@@ -175,7 +175,8 @@ func (k *KnowledgeConfig) IsWorkspaceScoped() bool {
 // base, because a feature that adds value to a workspace must not ship hidden
 // behind an opt-in. `knowledge.enabled: false` is the explicit opt-out, and
 // exists for two reasons only: repo footprint (the KB writes files under
-// .nightgauge/knowledge/ that show up as new files to commit) and per-run token cost.
+// .nightgauge/knowledge/, ignored by default; commit it by adding !/knowledge/
+// under Local additions) and per-run token cost.
 //
 // A nil receiver resolves the same way as an unset field. `Config.Knowledge`
 // is a pointer, so nil is precisely the "no `knowledge:` section at all" case —

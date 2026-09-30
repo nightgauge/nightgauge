@@ -18,6 +18,10 @@ All notable changes to this skill are documented here.
 
 ### Changed
 
+- The `.nightgauge/.gitignore` block is template version 17, deny-by-default:
+  `/*` ignores everything under `.nightgauge/` and `!` rules re-include only
+  team config, `audit/`, `skill-smoke/`, `skill-evals/baseline.jsonl` and
+  `model-evals/evidence/` (#2043, ADR-024 § 13).
 - No longer creates `.nightgauge/pipeline/history`, `.nightgauge/plans`,
   `.nightgauge/logs` or their `.gitkeep` files: per-clone data lives under the
   git directory and the binary creates it on first write (#2037, ADR-024 § 7).
