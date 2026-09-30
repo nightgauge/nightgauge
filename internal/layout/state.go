@@ -226,10 +226,8 @@ const staleTempAge = 10 * time.Minute
 const movedFileMode fs.FileMode = 0o600
 
 // conflictError reports a legacy file and its new location holding different
-// contents. It names both paths and the manual remedy.
-//
-// #2040 adds `nightgauge doctor --fix` and its migrator; that change replaces
-// this message with one naming the command.
+// contents. It names both paths and the manual remedy; `nightgauge doctor`
+// reports the same conflict (NGD045).
 func conflictError(legacy, target, why string) error {
 	return fmt.Errorf("%w: %s and %s (%s); nothing was overwritten. Nightgauge now reads only %s: "+
 		"keep it and delete %s; or, if %s holds the value you need, move it over %s",
@@ -281,42 +279,6 @@ func MoveLegacyStateFile(name, root string) error {
 		return fmt.Errorf("move %s: remove legacy file after copying it: %w", legacy, err)
 	}
 	return nil
-}
-
-// CopyLegacyStateFile installs a copy of $HOME/.nightgauge/name at root/name
-// when root/name does not exist, and KEEPS the legacy file, narrowed to mode
-// 0600, as a compatibility copy for an older binary still running on the
-// machine (machine-id: an older binary that found no legacy file would mint a
-// new id and bind a new seat). #2040's migrator owns removing the legacy copy.
-//
-// root/name is authoritative. When both exist and differ, root/name is kept,
-// nothing is changed, and diverged is true so the caller can warn; the
-// legacy file can only differ if something other than this binary rewrote
-// it. A legacy symlink or non-regular file is never followed; it is an error.
-func CopyLegacyStateFile(name, root string) (diverged bool, err error) {
-	legacy, target, src, err := readLegacyForTarget(name, root)
-	if err != nil || src == nil {
-		return false, err
-	}
-	if _, err := os.Lstat(target); errors.Is(err, fs.ErrNotExist) {
-		removeStaleStateTemps(root, name)
-		won, ierr := installExclusive(target, src, movedFileMode)
-		if ierr != nil {
-			return false, fmt.Errorf("copy %s: install %s: %w", legacy, target, ierr)
-		}
-		if won {
-			_ = os.Chmod(legacy, movedFileMode)
-			return false, nil
-		}
-	} else if err != nil {
-		return false, fmt.Errorf("copy %s: stat %s: %w", legacy, target, err)
-	}
-	dst, err := os.ReadFile(target)
-	if err != nil {
-		return false, fmt.Errorf("copy %s: read %s: %w", legacy, target, err)
-	}
-	_ = os.Chmod(legacy, movedFileMode)
-	return !bytes.Equal(dst, src), nil
 }
 
 // readLegacyForTarget reads the legacy file for name. src is nil (with a nil

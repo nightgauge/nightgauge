@@ -975,8 +975,8 @@ func TestLayoutMigrationMachineState(t *testing.T) {
 			t.Errorf("machine-id mode = %v (%v), want 0600", info.Mode().Perm(), err)
 		}
 		assertGone(t, filepath.Join(f.legacy, "machine-id"))
-		if diverged, err := layout.CopyLegacyStateFile("machine-id", f.state); diverged || err != nil {
-			t.Errorf("after the move the legacy copy check reports diverged=%v err=%v", diverged, err)
+		if err := layout.MoveLegacyStateFile("machine-id", f.state); err != nil {
+			t.Errorf("after the move the machine-id lookup still reports %v", err)
 		}
 		t.Setenv("NIGHTGAUGE_AGENT_ID", "")
 		if id, err := platform.MachineID(); err != nil || id != "11111111-2222-4333-8444-555555555555" {
@@ -1125,6 +1125,93 @@ func TestLayoutMigrationMachineState(t *testing.T) {
 			t.Error("the legacy tree changed")
 		}
 	})
+}
+
+// TestLayoutMigrationLinuxLegacyConfig (#2041, ADR-024 § 4, § 15): on Linux
+// the ~/.nightgauge/config.yaml an older loader read is moved to the XDG
+// machine-config directory once, byte for byte, mode 0600 in a 0700
+// directory; two differing files are a conflict and neither is touched.
+func TestLayoutMigrationLinuxLegacyConfig(t *testing.T) {
+	withConfig := func(f machineStateFixture) (*machineStateMigrator, string) {
+		dir := filepath.Join(filepath.Dir(f.home), "xdg-config", "nightgauge")
+		m := f.migrator()
+		m.configDir = func() (string, error) { return dir, nil }
+		return m, dir
+	}
+	t.Run("moves once", func(t *testing.T) {
+		f := newMachineStateFixture(t)
+		m, dir := withConfig(f)
+		var seen bool
+		for _, fd := range mustMachineFindings(t, m) {
+			if fd.Evidence["class"] == "machine config" {
+				seen = true
+				if fd.Evidence["target"] != filepath.Join(dir, "config.yaml") {
+					t.Errorf("config target = %q", fd.Evidence["target"])
+				}
+				if strings.Contains(fd.Cause+fd.Title, "owner: someone") {
+					t.Error("the finding prints the config file's content")
+				}
+			}
+		}
+		if !seen {
+			t.Fatal("no finding for the Linux legacy config.yaml")
+		}
+		if rep := f.fixer(m).Run(context.Background(), FixOptions{}); rep.ExitCode != 0 {
+			t.Fatalf("fix exit = %d; results %+v", rep.ExitCode, rep.Results)
+		}
+		dst := filepath.Join(dir, "config.yaml")
+		if got := readLayoutFile(t, dst); got != "owner: someone\n" {
+			t.Errorf("config.yaml = %q, want the legacy bytes", got)
+		}
+		if info, err := os.Stat(dst); err != nil || info.Mode().Perm() != 0o600 {
+			t.Errorf("config.yaml mode = %v (%v), want 0600", info.Mode().Perm(), err)
+		}
+		if info, err := os.Stat(dir); err != nil || info.Mode().Perm() != 0o700 {
+			t.Errorf("config dir mode = %v (%v), want 0700", info.Mode().Perm(), err)
+		}
+		assertGone(t, filepath.Join(f.legacy, "config.yaml"))
+		if got := readLayoutFile(t, filepath.Join(f.legacy, "tools", "opencode", "package.json")); got != "{}\n" {
+			t.Errorf("tools/ changed: %q", got)
+		}
+		if again := mustMachineFindings(t, m); len(again) != 0 {
+			t.Errorf("findings after the move:\n%s", findingsText(again))
+		}
+	})
+	t.Run("two differing files are a conflict", func(t *testing.T) {
+		f := newMachineStateFixture(t)
+		m, dir := withConfig(f)
+		writeLayoutFile(t, filepath.Join(dir, "config.yaml"), "owner: other\n", 0o600)
+		if rep := f.fixer(m).Run(context.Background(), FixOptions{}); rep.ExitCode != 3 {
+			t.Errorf("fix exit = %d, want 3 (conflict)", rep.ExitCode)
+		}
+		if got := readLayoutFile(t, filepath.Join(f.legacy, "config.yaml")); got != "owner: someone\n" {
+			t.Errorf("legacy config.yaml changed: %q", got)
+		}
+		if got := readLayoutFile(t, filepath.Join(dir, "config.yaml")); got != "owner: other\n" {
+			t.Errorf("the XDG config.yaml was overwritten: %q", got)
+		}
+	})
+}
+
+// TestLegacyConfigTargetOnlyOnLinuxWithoutOverrides: the machine-config row
+// exists only where an older loader read the legacy file.
+func TestLegacyConfigTargetOnlyOnLinuxWithoutOverrides(t *testing.T) {
+	env := func(kv map[string]string) func(string) string { return func(k string) string { return kv[k] } }
+	for _, tc := range []struct {
+		goos string
+		env  map[string]string
+		want bool
+	}{
+		{"linux", nil, true},
+		{"darwin", nil, false},
+		{"windows", nil, false},
+		{"linux", map[string]string{"NIGHTGAUGE_CONFIG_HOME": "/c"}, false},
+		{"linux", map[string]string{"XDG_CONFIG_HOME": "/x"}, false},
+	} {
+		if got := legacyConfigTarget(tc.goos, env(tc.env)) != nil; got != tc.want {
+			t.Errorf("%s %v: row present = %v, want %v", tc.goos, tc.env, got, tc.want)
+		}
+	}
 }
 
 // TestAutoMigrateMachineStateCreatesNothingWithoutLegacyData: on a machine an

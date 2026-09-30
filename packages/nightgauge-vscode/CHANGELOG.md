@@ -55,6 +55,10 @@ and this project adheres to
   `~/.local/state/nightgauge` on Linux) instead of `~/.nightgauge/usage/`,
   the same place the `nightgauge hook claude-statusline` writer now uses.
   `nightgauge doctor --fix` moves an existing file.
+- The extension reads the machine-tier `config.yaml` only where the binary
+  does (`NIGHTGAUGE_CONFIG_HOME`, `$XDG_CONFIG_HOME/nightgauge`, then the
+  platform default). On Linux it no longer falls back to a legacy
+  `~/.nightgauge/config.yaml`; `nightgauge doctor --fix` moves that file.
 
 - The extension's own diagnostic logs — the "Nightgauge" output channel's disk
   sink and the IPC transport log (`ipc-client.log`) — now write under VS

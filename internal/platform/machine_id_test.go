@@ -61,10 +61,10 @@ func TestResolveMachineID_PersistsAndReuses(t *testing.T) {
 	}
 }
 
-// TestMachineIDCopiedFromLegacyAndKept: a pre-ADR-024 id is copied byte for
-// byte and kept, never regenerated (a new id is a new device to the platform,
-// #1883); the legacy file stays, narrowed to 0600, for an older binary.
-func TestMachineIDCopiedFromLegacyAndKept(t *testing.T) {
+// TestMachineIDMovedFromLegacy: a pre-ADR-024 id is moved byte for byte,
+// never regenerated (a new id is a new device to the platform, #1883), and
+// ends mode 0600; the legacy file is gone (ADR-024 § 15, #2041).
+func TestMachineIDMovedFromLegacy(t *testing.T) {
 	legacy, path := isolateMachineIDState(t)
 	const content = "3f2c9a1e-legacy-id\n"
 	writeLegacyMachineID(t, legacy, content)
@@ -76,16 +76,17 @@ func TestMachineIDCopiedFromLegacyAndKept(t *testing.T) {
 	if id != strings.TrimSpace(content) {
 		t.Fatalf("MachineID = %q, want the legacy id %q", id, strings.TrimSpace(content))
 	}
-	for _, p := range []string{path, legacy} {
-		got, err := os.ReadFile(p)
-		if err != nil || string(got) != content {
-			t.Errorf("%s = %q (%v), want %q", p, got, err, content)
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != content {
+		t.Errorf("%s = %q (%v), want %q", path, got, err, content)
+	}
+	if runtime.GOOS != "windows" {
+		if info, _ := os.Stat(path); info.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode = %v, want 0600", path, info.Mode().Perm())
 		}
-		if runtime.GOOS != "windows" {
-			if info, _ := os.Stat(p); info.Mode().Perm() != 0o600 {
-				t.Errorf("%s mode = %v, want 0600", p, info.Mode().Perm())
-			}
-		}
+	}
+	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
+		t.Errorf("the legacy %s is still there (%v); it is moved, not copied", legacy, err)
 	}
 }
 
@@ -135,9 +136,9 @@ func TestMachineIDEmptyFileIsNotRegenerated(t *testing.T) {
 	}
 }
 
-// A fresh id is also written as the legacy compatibility copy when
-// ~/.nightgauge exists, so an older binary on the machine reads the same id.
-func TestMachineIDMintWritesCompatibilityCopy(t *testing.T) {
+// TestMachineIDMintWritesNoLegacyCopy: a fresh id is written only at the new
+// location, even when ~/.nightgauge exists; nothing reads the old one.
+func TestMachineIDMintWritesNoLegacyCopy(t *testing.T) {
 	legacy, path := isolateMachineIDState(t)
 	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
 		t.Fatal(err)
@@ -146,10 +147,11 @@ func TestMachineIDMintWritesCompatibilityCopy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MachineID: %v", err)
 	}
-	for _, p := range []string{path, legacy} {
-		if got, _ := os.ReadFile(p); strings.TrimSpace(string(got)) != id {
-			t.Errorf("%s = %q, want %q", p, got, id)
-		}
+	if got, _ := os.ReadFile(path); strings.TrimSpace(string(got)) != id {
+		t.Errorf("%s = %q, want %q", path, got, id)
+	}
+	if _, err := os.Lstat(legacy); !os.IsNotExist(err) {
+		t.Errorf("a legacy copy was written at %s (%v)", legacy, err)
 	}
 }
 

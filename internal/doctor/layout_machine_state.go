@@ -12,10 +12,15 @@ package doctor
 // per-clone migration's mechanics: the same lock, marker, confinement and
 // per-file move (moveOne, mergeAppendOnly, ensureConfinedDir).
 //
-// Machine config (config.yaml) is not a row: CONFIG is its own root with its
-// own resolver (internal/configpath), and on macOS it IS $HOME/.nightgauge.
-// Nor is tools/, the operator-installed OpenCode pin (ADR-024 § 2, the
-// "Operator-installed tools" exception).
+// Machine config (config.yaml) is a row on Linux only (ADR-024 § 4, § 15):
+// an older build there read ~/.nightgauge/config.yaml when the XDG file was
+// absent, and that fallback is gone, so the file moves to CONFIG
+// (configpath.MachineConfigPath) with mode 0600 in a 0700 directory. Two
+// files are never merged: both present is a conflict. Its content is never
+// printed. Where no override was set is the only case the old loader read it,
+// so that is the only case it moves. On macOS CONFIG IS $HOME/.nightgauge,
+// and nothing moves. tools/, the operator-installed OpenCode pin, is never a
+// row (ADR-024 § 2, the "Operator-installed tools" exception).
 //
 // Rules the per-clone rows do not need:
 //
@@ -41,11 +46,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/configpath"
 	"github.com/nightgauge/nightgauge/internal/flock"
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
@@ -91,8 +98,12 @@ type machineStateEntry struct {
 	// while a serve lease is held.
 	Daemon bool
 	// Mode, when non-zero, is the mode every migrated file of the row ends
-	// with (machine-id: 0600).
+	// with (machine-id, config.yaml: 0600).
 	Mode fs.FileMode
+	// Config marks the Linux legacy machine-config row: its target is Name
+	// under the machine-config directory (machineStateMigrator.configDir),
+	// not under STATE. The row exists only when configDir is set.
+	Config bool
 }
 
 // machineStateEntries is the machine-state migration table (ADR-024 § 2).
@@ -110,6 +121,7 @@ func machineStateEntries() []machineStateEntry {
 		{Class: "OpenCode endpoint slots", Name: layout.StateOpenCode + "/endpoint-slots.json", Kind: machineHint},
 		{Class: "OpenCode self-test records", Name: layout.StateOpenCode + "/self-test", Dir: true, Kind: machineObsolete},
 		{Class: "machine logs", Name: layout.StateLogs, Dir: true, Kind: machineAppend},
+		{Class: "machine config", Name: "config.yaml", Kind: machineMove, Mode: 0o600, Config: true},
 	}
 }
 
@@ -124,7 +136,10 @@ type machineStateMigrator struct {
 	statePath, stateHome func() (string, error)
 	// daemonLive names a live daemon from the legacy serve directory.
 	daemonLive func(legacyServe string) (string, bool)
-	entries    []machineStateEntry
+	// configDir is the machine-config directory the Linux legacy
+	// config.yaml moves to; nil when that row does not apply.
+	configDir func() (string, error)
+	entries   []machineStateEntry
 }
 
 // newMachineStateMigrator is the production machine-state migrator. A
@@ -135,7 +150,25 @@ var newMachineStateMigrator = func() *machineStateMigrator {
 		statePath:  layout.StateHomePath,
 		stateHome:  layout.StateHome,
 		daemonLive: legacyServeLeaseLive,
+		configDir:  legacyConfigTarget(runtime.GOOS, os.Getenv),
 		entries:    machineStateEntries(),
+	}
+}
+
+// legacyConfigTarget is the machine-config directory the legacy
+// ~/.nightgauge/config.yaml moves to, or nil when it does not move: only on
+// Linux with neither NIGHTGAUGE_CONFIG_HOME nor XDG_CONFIG_HOME set, the one
+// case an older loader read the legacy file (ADR-024 § 15).
+func legacyConfigTarget(goos string, getenv func(string) string) func() (string, error) {
+	if goos != "linux" || getenv("NIGHTGAUGE_CONFIG_HOME") != "" || getenv("XDG_CONFIG_HOME") != "" {
+		return nil
+	}
+	return func() (string, error) {
+		path, err := configpath.ForGOOS(goos)
+		if err != nil {
+			return "", err
+		}
+		return filepath.Dir(path), nil
 	}
 }
 
@@ -181,6 +214,7 @@ func legacyServeLeaseLive(dir string) (string, bool) {
 type machineItem struct {
 	Entry          machineStateEntry
 	Legacy, Target string
+	TargetRoot     string // the root the target must lie in: STATE, or CONFIG
 	InPlace        bool   // the legacy path is the target
 	Refused        string // why the row cannot be migrated safely
 	Held           string // the live daemon that holds a Daemon row
@@ -252,9 +286,27 @@ func (m *machineStateMigrator) scan(state string) (machinePlan, error) {
 	}
 	for _, e := range m.expand() {
 		it := machineItem{
-			Entry:  e,
-			Legacy: filepath.Join(m.legacyRoot, filepath.FromSlash(e.Name)),
-			Target: filepath.Join(plan.State, filepath.FromSlash(e.Name)),
+			Entry:      e,
+			Legacy:     filepath.Join(m.legacyRoot, filepath.FromSlash(e.Name)),
+			Target:     filepath.Join(plan.State, filepath.FromSlash(e.Name)),
+			TargetRoot: plan.State,
+		}
+		resolvedRoot := resolvedState
+		if e.Config {
+			dir, err := m.configDir()
+			if err == nil && !filepath.IsAbs(dir) {
+				err = fmt.Errorf("%q is not absolute", dir)
+			}
+			if err != nil {
+				it.Refused = fmt.Sprintf("the machine-config directory cannot be resolved: %v", err)
+				plan.Items = append(plan.Items, it)
+				continue
+			}
+			it.TargetRoot = filepath.Clean(dir)
+			it.Target = filepath.Join(it.TargetRoot, filepath.FromSlash(e.Name))
+			if resolvedRoot, err = layout.EvalExisting(it.TargetRoot); err != nil {
+				return plan, fmt.Errorf("resolve %s: %w", it.TargetRoot, err)
+			}
 		}
 		if filepath.Clean(it.Legacy) == filepath.Clean(it.Target) {
 			it.InPlace = true
@@ -276,7 +328,7 @@ func (m *machineStateMigrator) scan(state string) (machinePlan, error) {
 			it.Refused = fmt.Sprintf("%s is not a regular file", it.Legacy)
 		}
 		if it.Refused == "" {
-			it.Refused = confineMachineRow(resolvedLegacy, resolvedState, it)
+			it.Refused = confineMachineRow(resolvedLegacy, resolvedRoot, it)
 		}
 		if it.Refused == "" {
 			switch {
@@ -313,6 +365,9 @@ func (m *machineStateMigrator) hasLegacyData() bool {
 func (m *machineStateMigrator) expand() []machineStateEntry {
 	var out []machineStateEntry
 	for _, e := range m.entries {
+		if e.Config && m.configDir == nil {
+			continue
+		}
 		if !e.Glob {
 			out = append(out, e)
 			continue
@@ -330,8 +385,9 @@ func (m *machineStateMigrator) expand() []machineStateEntry {
 }
 
 // confineMachineRow refuses a row whose old location resolves outside the
-// legacy root or whose new location resolves outside STATE, both after
-// symlink evaluation (ADR-024 § 17).
+// legacy root or whose new location resolves outside its root (STATE, or
+// CONFIG for the machine-config row), both after symlink evaluation
+// (ADR-024 § 17).
 func confineMachineRow(resolvedLegacy, resolvedState string, it machineItem) string {
 	src, err := filepath.EvalSymlinks(it.Legacy)
 	if err != nil {
@@ -345,7 +401,7 @@ func confineMachineRow(resolvedLegacy, resolvedState string, it machineItem) str
 		return fmt.Sprintf("cannot resolve %s: %v", it.Target, err)
 	}
 	if !withinDir(resolvedState, dst) {
-		return fmt.Sprintf("the new %s location %s resolves to %s, outside the machine-state directory %s",
+		return fmt.Sprintf("the new %s location %s resolves to %s, outside %s",
 			it.Entry.Class, it.Target, dst, resolvedState)
 	}
 	return ""
@@ -467,7 +523,7 @@ func (m *machineStateMigrator) Migrate(ctx context.Context) LayoutReport {
 				rep.CachesDeleted++
 			}
 		case len(it.Files) > 0 || len(it.Dirs) > 0:
-			m.moveFiles(plan.State, it, &rep)
+			m.moveFiles(it.TargetRoot, it, &rep)
 		}
 	}
 	if len(held) > 0 {
@@ -494,7 +550,7 @@ func (m *machineStateMigrator) Migrate(ctx context.Context) LayoutReport {
 
 // moveFiles moves one row's files into STATE, confined to it, and prunes the
 // emptied legacy directories.
-func (m *machineStateMigrator) moveFiles(state string, it machineItem, rep *LayoutReport) {
+func (m *machineStateMigrator) moveFiles(root string, it machineItem, rep *LayoutReport) {
 	legacyDir := it.Legacy
 	if !it.Entry.Dir {
 		legacyDir = filepath.Dir(it.Legacy)
@@ -510,7 +566,7 @@ func (m *machineStateMigrator) moveFiles(state string, it machineItem, rep *Layo
 			rep.Errors = append(rep.Errors, fmt.Sprintf("%s no longer resolves inside %s; left in place", f.Src, it.Legacy))
 			continue
 		}
-		if err := ensureConfinedDir(state, filepath.Dir(f.Dst)); err != nil {
+		if err := ensureConfinedDir(root, filepath.Dir(f.Dst)); err != nil {
 			rep.Errors = append(rep.Errors, err.Error())
 			continue
 		}
@@ -537,8 +593,8 @@ func (m *machineStateMigrator) moveFiles(state string, it machineItem, rep *Layo
 			}
 		}
 		if err == nil && it.Entry.Mode != 0 && f.Link == "" {
-			// machine-id identifies this device: private whatever mode the
-			// old copy had (ADR-024 § 17).
+			// machine-id identifies this device and config.yaml may hold a
+			// credential: private whatever mode the old copy had (ADR-024 § 17).
 			err = os.Chmod(f.Dst, it.Entry.Mode)
 		}
 		if err != nil {
@@ -677,8 +733,11 @@ func machineItemFindings(plan machinePlan, it machineItem) []Finding {
 			break
 		}
 		why := "the two copies differ and the migration never overwrites a file, so no machine state is moved until you choose one"
-		if it.Entry.Mode != 0 {
+		switch {
+		case it.Entry.Name == "machine-id":
 			why += ". It is never regenerated: a new id is a new device to the platform"
+		case it.Entry.Config:
+			why += ". Two config files are never merged; neither file's content is shown here"
 		}
 		out = append(out, newFinding(checkLayout, codeLayoutConflict, SeverityHousekeeping,
 			fmt.Sprintf("layout-conflict: a %s file exists at both %s and %s", class, c.Legacy, c.Target),
@@ -709,8 +768,12 @@ func machineItemFindings(plan machinePlan, it machineItem) []Finding {
 		case machineAppend:
 			cause += "; a log at both locations is merged as the union of its lines"
 		}
-		if it.Entry.Mode != 0 {
+		switch {
+		case it.Entry.Name == "machine-id":
 			cause += fmt.Sprintf("; it is moved byte for byte with mode %04o and never regenerated", it.Entry.Mode)
+		case it.Entry.Config:
+			cause += fmt.Sprintf("; the loader no longer reads the old file, so its settings are ignored until it moves. "+
+				"It is moved byte for byte with mode %04o into a 0700 directory", it.Entry.Mode)
 		}
 		out = append(out, newFinding(checkLayout, codeLayoutLegacy, SeverityHousekeeping,
 			fmt.Sprintf("legacy-layout: %d %s file(s) at the old location %s", len(it.Files), class, it.Legacy),

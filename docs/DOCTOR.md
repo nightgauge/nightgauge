@@ -719,7 +719,12 @@ directory with the mechanics above and writes its own `layout-version` marker:
   serve claims and the OpenCode run roots stay and are reported (exit 4); the
   other classes still move.
 - The old OpenCode self-test records are deleted; nothing reads them.
-- `config.yaml` and `tools/` are not machine state and never move.
+- On Linux only, with neither `NIGHTGAUGE_CONFIG_HOME` nor `XDG_CONFIG_HOME` set,
+  a legacy `~/.nightgauge/config.yaml` moves to `~/.config/nightgauge/config.yaml`
+  (mode 0600, directory 0700). The loader no longer reads the old file. Two
+  differing files are a conflict and are never merged, and no finding shows
+  either file's content. On macOS `~/.nightgauge/config.yaml` is the machine
+  config and never moves; `tools/` never moves.
 
 The same machine-state migration runs automatically at CLI start, under the
 same never-fail rule.

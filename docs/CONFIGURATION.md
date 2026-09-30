@@ -227,7 +227,7 @@ machine-state and cache directories from their own rows.
 | License key                                                                                                                                                                                                                      | Secret Service                                                                                           | Keychain                       | Credential Manager                 | `NIGHTGAUGE_LICENSE_KEY`                                                                                                   | Never; see [the license key](#the-license-key-nightgauge-auth-license)                           |
 | GitHub tokens                                                                                                                                                                                                                    | gh's credential store                                                                                    | same                           | same                               | `GITHUB_TOKEN`, `GH_TOKEN`, or an `env:` reference                                                                         | Never; see [plaintext secrets](#plaintext-secrets-in-repository-config-are-refused)              |
 | Machine state (`STATE`): the serve registry `serve/`, `rate-limit.json`, `ratelimit-gitlab-<host>.json`, `machine-id`, `telemetry-notice-v1`, the doctor fix log `doctor/fix-log.jsonl`, the GitHub App installation-token cache | `~/.local/state/nightgauge/`                                                                             | `~/.nightgauge/state/`         | `%LOCALAPPDATA%\nightgauge\state\` | `NIGHTGAUGE_STATE_HOME`, `XDG_STATE_HOME`                                                                                  | Never                                                                                            |
-| Usage readings and OpenCode run state: `usage/`, `opencode/runs/`, `opencode/self-test/`, `opencode/last-dispatch.json`                                                                                                          | `STATE/`                                                                                                 | same                           | same                               | follows `STATE`                                                                                                            | Never                                                                                            |
+| Usage readings and OpenCode state: `usage/`, `opencode/runs/`, `opencode/evidence/`, `opencode/last-dispatch.json`, `opencode/endpoint-slots.json`                                                                               | `STATE/`                                                                                                 | same                           | same                               | follows `STATE`                                                                                                            | Never                                                                                            |
 | Machine logs                                                                                                                                                                                                                     | `STATE/logs/`                                                                                            | same                           | same                               | follows `STATE`                                                                                                            | Never                                                                                            |
 | Caches (`CACHE`): the GitHub conditional-request store `github-conditional/`, the recall index `recall/<root-key>/`                                                                                                              | `~/.cache/nightgauge/`                                                                                   | `~/Library/Caches/nightgauge/` | `%LOCALAPPDATA%\nightgauge\cache\` | `NIGHTGAUGE_CACHE_HOME`, `XDG_CACHE_HOME`                                                                                  | Never; disposable                                                                                |
 | Pipeline state (`pipeline/`: history, stage contexts and results, decision traces, `runtime-<issue>-<run>.json`), `plans/`, `retros/`                                                                                            | `<git-common-dir>/nightgauge/`                                                                           | same                           | same                               | none                                                                                                                       | Never (inside the git directory)                                                                 |
@@ -261,9 +261,14 @@ root, so each checkout reaches its own daemon.
   a command that needs it fails with an error naming `NIGHTGAUGE_STATE_HOME`;
   a cache that cannot be created is kept in memory for the call. Nothing falls
   back into the working tree.
-- On Linux the loader still reads a legacy `~/.nightgauge/config.yaml` when
-  `~/.config/nightgauge/config.yaml` does not exist. On macOS
-  `~/.nightgauge/config.yaml` is the machine config itself and is never moved.
+- The machine config is read from one place only. On Linux, a
+  `~/.nightgauge/config.yaml` an earlier release read (when
+  `~/.config/nightgauge/config.yaml` did not exist and neither
+  `NIGHTGAUGE_CONFIG_HOME` nor `XDG_CONFIG_HOME` was set) is not read any more:
+  the migration moves it to `~/.config/nightgauge/config.yaml`, mode `0600` in a
+  `0700` directory, and reports a conflict if both files exist and differ; it
+  never merges them. On macOS `~/.nightgauge/config.yaml` is the machine config
+  itself and is never moved.
 - A `pipeline.worktree_base` that is relative, set in the committed team file,
   or inside the working tree is refused with an error naming the file, the line
   and the fix; `nightgauge doctor` reports it.
@@ -367,21 +372,29 @@ fallback afterwards.
   every checkout's per-checkout data (each linked worktree included) and its
   idle pipeline worktrees before doing anything else. `doctor`, `layout`,
   `version`, `help`, completion, `hook`, `pre-push` and any `--dry-run` never
-  trigger it. It never fails or blocks your command: whatever it cannot move (a
-  conflict, a run in flight, a live daemon) stays where it is, one line on
-  stderr names `nightgauge doctor --fix`, and it does not retry for an hour.
+  trigger it. The same commands also move this user's machine state out of
+  `~/.nightgauge/` once, wherever they run. It never fails or blocks your
+  command: whatever it cannot move (a conflict, a run in flight, a live daemon)
+  stays where it is, one line on stderr names `nightgauge doctor --fix`, and it
+  does not retry for an hour.
 - **`nightgauge doctor`** reports what is still at an old location, with the
   exact target: [NGD044](DOCTOR.md#ngd044) (data to move), NGD045 (a file at
   both locations that differs) and NGD046 (an old location that cannot be moved
   safely). Its exit status is unchanged by them.
 - **`nightgauge doctor --dry-run`** previews every move and changes nothing.
 - **`nightgauge doctor --fix`** runs the one migration for the clone and for
-  machine state: files left in `~/.nightgauge/` by an earlier release (usage
-  readings, OpenCode run state, machine logs, the serve registry while no daemon
-  is running, the rate-limit hints) move to `STATE`, and `machine-id` moves byte
-  for byte with mode `0600`. It is never regenerated, because a new id is a new
-  device to the platform. A `layout-version` marker is written last, in the
-  per-clone directory and in `STATE`, so a second run changes nothing.
+  machine state. Files left in `~/.nightgauge/` by an earlier release move to
+  `STATE`: the rate-limit hints, `telemetry-notice-v1`, usage readings,
+  OpenCode state (`opencode/runs/`, `evidence/`, `last-dispatch.json`,
+  `endpoint-slots.json`), machine logs, and the serve registry. While a daemon
+  holds a serve lease, the serve registry and `opencode/runs/` stay where they
+  are and `--fix` exits 4; everything else still moves. A hint found at both
+  locations keeps the copy in `STATE`. `machine-id` moves byte for byte with
+  mode `0600`; it is never regenerated, because a new id is a new device to the
+  platform. The old `opencode/self-test/` records are deleted. On Linux a
+  legacy `~/.nightgauge/config.yaml` moves to `~/.config/nightgauge/`. A
+  `layout-version` marker is written last, in the per-clone directory and in
+  `STATE`, so a second run changes nothing.
 
 The migration takes `.migrate.lock` in the target directory, moves each file by
 a rename or a synced copy then a delete, keeps modes, recreates symlinks without
@@ -456,14 +469,14 @@ Every other location is in
 | 3        | Windows default             | `%LOCALAPPDATA%/nightgauge/state`   |
 
 Files an earlier release kept directly in `~/.nightgauge/` are moved on first
-use, byte for byte, with mode `0600`. `machine-id` is copied instead and the
-legacy file kept (mode `0600`) so an older binary still running on the machine
-reads the same id; it is never regenerated, because a new id is a new device to
-the platform. The new location is authoritative: if the two `machine-id` files
-differ, the new one is used and a warning is logged. For any other moved file,
-if both locations hold different contents nothing is overwritten and the error
-names both paths: Nightgauge reads only the new one, so keep it and delete the
-legacy file, or move the legacy file over it if that is the value you need.
+use, byte for byte, with mode `0600`. That includes `machine-id`, which is
+moved, not copied, and never regenerated, because a new id is a new device to
+the platform. If both locations hold a `machine-id` and they differ, nothing is
+overwritten: the one in the state directory is used, a warning is logged, and
+`nightgauge doctor` reports the conflict. For any other moved file, if both
+locations hold different contents nothing is overwritten and the error names
+both paths: Nightgauge reads only the new one, so keep it and delete the legacy
+file, or move the legacy file over it if that is the value you need.
 `nightgauge doctor --fix` moves everything still left in `~/.nightgauge/`,
 including the serve registry once no daemon is running; see
 [Moving an existing install](#moving-an-existing-install-nightgauge-doctor---fix).
@@ -1046,9 +1059,10 @@ every repository. The binary and the VS Code extension resolve it the same way:
 1. `$NIGHTGAUGE_CONFIG_HOME/config.yaml`, when set;
 2. `$XDG_CONFIG_HOME/nightgauge/config.yaml`, when set;
 3. otherwise `~/.nightgauge/config.yaml` on macOS,
-   `~/.config/nightgauge/config.yaml` on Linux (or the legacy
-   `~/.nightgauge/config.yaml` when only that file exists), and
-   `%APPDATA%\nightgauge\config.yaml` on Windows.
+   `~/.config/nightgauge/config.yaml` on Linux, and
+   `%APPDATA%\nightgauge\config.yaml` on Windows. A Linux
+   `~/.nightgauge/config.yaml` from an earlier release is never read; the
+   migration moves it.
 
 Run from the home directory, `.nightgauge/config.yaml` is that machine file,
 not a repository tier. To keep a GitHub token out of files entirely, run

@@ -45,7 +45,10 @@ This document classifies every settings key from three orthogonal sources
 The machine-tier file is `~/.config/nightgauge/config.yaml` on Linux,
 `~/.nightgauge/config.yaml` on macOS and `%APPDATA%\nightgauge\config.yaml` on
 Windows, overridable with `NIGHTGAUGE_CONFIG_HOME` or `XDG_CONFIG_HOME`; this
-document writes `~/.nightgauge/config.yaml` for short. Where everything that is
+document writes `~/.nightgauge/config.yaml` for short. There is no fallback: on
+Linux a `~/.nightgauge/config.yaml` an earlier release read is not read any
+more, and `nightgauge doctor --fix` (or the first command) moves it to the XDG
+path. Where everything that is
 not a setting lives (state, caches, logs, worktrees, secrets) is in
 [CONFIGURATION.md § Where Nightgauge keeps its data](CONFIGURATION.md#where-nightgauge-keeps-its-data)
 and [ADR-024](decisions/024-data-and-state-layout.md).

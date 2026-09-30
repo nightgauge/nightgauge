@@ -26,6 +26,7 @@ import { PlatformCredentialBridge } from "../platform/PlatformCredentialBridge";
 import { redactSecrets } from "../utils/redaction";
 import type { SanitizationMode } from "../config/schema";
 import { logDiagnosticMirror } from "../utils/logger";
+import { getGlobalConfigPath } from "../utils/globalConfigResolver";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -2369,13 +2370,12 @@ export abstract class IpcClientBase implements vscode.Disposable {
   private resolveGitHubUserFromConfig(): string | null {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const os = require("os") as typeof import("os");
 
     const configPaths: string[] = [];
     if (this.workspaceRoot) {
       configPaths.push(path.join(this.workspaceRoot, ".nightgauge", "config.yaml"));
     }
-    configPaths.push(path.join(os.homedir(), ".nightgauge", "config.yaml"));
+    configPaths.push(getGlobalConfigPath());
 
     let githubUser: string | null = null;
     let owner: string | null = null;
@@ -2478,13 +2478,12 @@ export abstract class IpcClientBase implements vscode.Disposable {
   private resolveOwnerFromConfig(): string | null {
     const fsModule = require("fs") as typeof import("fs");
     const pathModule = require("path") as typeof import("path");
-    const os = require("os") as typeof import("os");
 
     const configPaths: string[] = [];
     if (this.workspaceRoot) {
       configPaths.push(pathModule.join(this.workspaceRoot, ".nightgauge", "config.yaml"));
     }
-    configPaths.push(pathModule.join(os.homedir(), ".nightgauge", "config.yaml"));
+    configPaths.push(getGlobalConfigPath());
 
     for (const configPath of configPaths) {
       if (!fsModule.existsSync(configPath)) continue;
@@ -2684,7 +2683,6 @@ export abstract class IpcClientBase implements vscode.Disposable {
   private forwardPlatformEnv(env: Record<string, string | undefined>): void {
     const fs = require("fs") as typeof import("fs");
     const path = require("path") as typeof import("path");
-    const os = require("os") as typeof import("os");
 
     // Inject license key from SecretStorage (resolved asynchronously in start()).
     // This takes priority over any YAML-based value.
@@ -2698,7 +2696,7 @@ export abstract class IpcClientBase implements vscode.Disposable {
     if (this.workspaceRoot) {
       configPaths.push(path.join(this.workspaceRoot, ".nightgauge", "config.yaml"));
     }
-    const globalConfig = path.join(os.homedir(), ".nightgauge", "config.yaml");
+    const globalConfig = getGlobalConfigPath();
     configPaths.push(globalConfig);
 
     // Simple YAML key extraction — avoids importing a YAML parser in the

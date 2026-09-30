@@ -30,8 +30,15 @@ changelog, and the release workflow refuses a tag that does not.
   at both locations keeps the newer copy. While a daemon holds a serve lease
   the serve claims and the OpenCode run roots stay in place and are reported
   (exit 4); everything else still moves. The old OpenCode self-test records
-  are deleted. `config.yaml` and the `tools/` OpenCode install are not moved.
-  Moves are confined to `~/.nightgauge` and the state directory after symlink
+  are deleted. The `tools/` OpenCode install is not moved. On Linux, a legacy
+  `~/.nightgauge/config.yaml` moves to `~/.config/nightgauge/config.yaml` (mode
+  0600 in a 0700 directory; two differing files are a conflict, never merged),
+  and the loader's fallback that read it when the XDG file was absent is
+  removed, in the binary and in the extension, whose machine-config readers
+  now resolve through one resolver. On macOS `~/.nightgauge/config.yaml` stays
+  the machine config. At runtime `machine-id` is now moved into the state
+  directory on first use rather than copied, and a new id is no longer written
+  to `~/.nightgauge`. Moves are confined to the old and new roots after symlink
   evaluation, a symlinked class is refused, and new directories are 0700. The
   first `nightgauge` command without the marker runs the same migration and
   never fails because of it.

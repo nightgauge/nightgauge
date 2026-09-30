@@ -36,19 +36,20 @@ const machineIDMode fs.FileMode = 0o600
 //  2. A UUID persisted at <STATE>/machine-id, generated once and reused so
 //     the same machine always replaces its own cloud snapshot.
 //
-// A pre-ADR-024 ~/.nightgauge/machine-id is COPIED into place byte for byte
-// on first use and the legacy file is kept, mode 0600, as a compatibility copy
-// (layout.CopyLegacyStateFile): an older binary still running on this machine
-// reads it, and would otherwise mint a new id and bind a new seat against the
-// account's machine limit (#1883). #2040's migrator removes the legacy copy.
-// The new location is authoritative: when both exist and differ, the new
-// file's id is used and a warning is logged. That is never an error, because
-// an unavailable id silently stops queue sync and agent registration.
+// A pre-ADR-024 ~/.nightgauge/machine-id is MOVED into place byte for byte
+// on first use (layout.MoveLegacyStateFile), mode 0600, and never regenerated:
+// a new id is a new device to the platform, counted against the account's
+// machine limit (#1883). `nightgauge doctor --fix` and the automatic
+// migration at CLI start move it the same way (ADR-024 § 15, #2041). When
+// both files exist and differ, nothing is moved: the new location is used and
+// a warning is logged, and `nightgauge doctor` reports the conflict. That is
+// never an error, because an unavailable id silently stops queue sync and
+// agent registration.
 //
 // An id is minted only when neither file exists; it is installed atomically,
-// so two processes starting together agree on one id, and a compatibility
-// copy is written to ~/.nightgauge when that directory already exists. An
-// existing but empty or unreadable file is an error, never a reason to mint.
+// so two processes starting together agree on one id. An existing but empty
+// or unreadable file, or a legacy path that cannot be moved while nothing is
+// at the new location, is an error, never a reason to mint.
 func MachineID() (string, error) {
 	if v := strings.TrimSpace(os.Getenv(machineIDEnv)); v != "" {
 		return v, nil
@@ -58,14 +59,13 @@ func MachineID() (string, error) {
 		return "", fmt.Errorf("machine id: %w", err)
 	}
 	path := filepath.Join(root, machineIDFileName)
-	diverged, err := layout.CopyLegacyStateFile(machineIDFileName, root)
-	if err != nil {
-		return "", fmt.Errorf("machine id: %w", err)
-	}
-	if diverged {
-		log.Printf("warning: machine id: %s differs from the legacy %s; using %s (the authoritative copy). "+
-			"An older nightgauge binary may have rewritten the legacy file",
-			path, layout.LegacyStatePath(machineIDFileName), path)
+	if err := layout.MoveLegacyStateFile(machineIDFileName, root); err != nil {
+		if _, statErr := os.Lstat(path); !errors.Is(err, layout.ErrStateMoveConflict) || statErr != nil {
+			// Nothing usable at the new location: never mint over an id
+			// that exists but could not be moved.
+			return "", fmt.Errorf("machine id: %w", err)
+		}
+		log.Printf("warning: machine id: %v; using %s. Run `nightgauge doctor` to resolve it", err, path)
 	}
 	data, err := os.ReadFile(path)
 	switch {
@@ -83,7 +83,7 @@ func MachineID() (string, error) {
 		return "", fmt.Errorf("machine id: read %s: %w", path, err)
 	}
 	minted := []byte(uuid.NewString() + "\n")
-	got, won, err := layout.WriteStateFileExclusive(path, minted, machineIDMode)
+	got, _, err := layout.WriteStateFileExclusive(path, minted, machineIDMode)
 	if err != nil {
 		return "", fmt.Errorf("machine id: write %s: %w", path, err)
 	}
@@ -91,24 +91,7 @@ func MachineID() (string, error) {
 	if id == "" {
 		return "", fmt.Errorf("machine id: %s is empty", path)
 	}
-	if won {
-		writeLegacyMachineIDCopy(got)
-	}
 	return id, nil
-}
-
-// writeLegacyMachineIDCopy writes the compatibility copy an older binary
-// reads, only when ~/.nightgauge already exists (an older release ran here)
-// and holds no machine-id. It never overwrites.
-func writeLegacyMachineIDCopy(data []byte) {
-	legacy := layout.LegacyStatePath(machineIDFileName)
-	if legacy == "" {
-		return
-	}
-	if info, err := os.Lstat(filepath.Dir(legacy)); err != nil || !info.IsDir() {
-		return
-	}
-	_, _, _ = layout.WriteStateFileExclusive(legacy, data, machineIDMode)
 }
 
 // ResolveMachineID is MachineID for callers that treat the id as optional:
