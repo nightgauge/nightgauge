@@ -13,9 +13,10 @@
  *   3. Acquire VSCode — resolve the version and download the build — with a
  *      bounded retry, then launch it with `--extensionDevelopmentPath` at this
  *      package and `--extensionTestsPath` at the bundled entry point.
- *      This happens twice: the main window runs every suite but demo mode;
- *      the demo window opens a copy of the demo workspace and plays the
- *      reference scenario (#2105, #2106, #2108).
+ *      This happens twice: the main window runs every suite but the two
+ *      demo ones, in a folder outside any git repository; the demo window
+ *      makes its folder a git repository holding a copy of the demo
+ *      workspace and plays the reference scenario (#2105, #2106, #2108).
  *   4. Verify the in-host module actually ran. A window that dies before
  *      loading it can still exit 0; without this check, that is a green tier
  *      that observed nothing.
@@ -217,10 +218,12 @@ async function main(): Promise<void> {
   // activation happens on the demo workspace, the way a demo session opens
   // (#2110), so every view resolves the demo repository. The folder starts
   // empty for the same reason the main one does (the observers must be in
-  // place before activation); the demo-mode suite copies the demo workspace
-  // in and activates. The scenario arrives through the environment, since a
-  // setting cannot carry arguments; its steps wait for the start file, which
-  // only the demo-mode suite creates.
+  // place before activation); the demo suites copy the demo workspace in,
+  // making the folder a git repository whose clone directory holds the
+  // demo's per-clone data (ADR-024 § 7), and activate. The main window's
+  // folder stays outside any git repository. The scenario arrives through the
+  // environment, since a setting cannot carry arguments; its steps wait for
+  // the start file, which only the demo-mode suite creates.
   const demoWorkspace = path.join(scratch, "demo-workspace");
   fs.mkdirSync(demoWorkspace, { recursive: true });
   const demoCode = await runWindow("demo", demoWorkspace, {

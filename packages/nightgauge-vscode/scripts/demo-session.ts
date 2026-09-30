@@ -19,10 +19,10 @@
  * the workspace is copied fresh each time, so every run starts identically,
  * and its dates are moved to the launch (`demo/workspace-dates.ts`, #2285), so
  * its history falls inside the Audit Trail's default seven days. The copy is
- * made a git repository and the source's per-clone data (committed under
+ * made a git repository and the source's per-clone data (staged under
  * `.nightgauge/{pipeline,plans,retros,logs}` because nothing can be committed
  * under `.git/`) is moved into the clone's own directories, where the
- * extension reads it (ADR-024 § 7, #2037).
+ * extension reads it (`demo/workspace-clone.ts`, ADR-024 § 7, #2037).
  *
  * VS Code is the build `@vscode/test-electron` downloads and caches (as the
  * `vscode-host` tier uses), or the executable named by `--code`. It is started
@@ -47,13 +47,13 @@
  * second launch on the same profile to the running window.
  */
 
-import { execFileSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { redateWorkspace } from "../demo/workspace-dates";
-import { cloneLogsDir, pipelineStateDir, plansDir, retrosDir } from "../src/utils/cloneLayout";
+import { placeCloneData } from "../demo/workspace-clone";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PACKAGE_ROOT = path.resolve(here, "..");
@@ -190,32 +190,6 @@ export function planDemoSession(options: DemoSessionOptions): DemoSessionPlan {
   };
 }
 
-/** The source's in-tree staging directory for each per-clone class. */
-const STAGED_CLONE_CLASSES: Array<[string, (root: string) => string]> = [
-  ["pipeline", pipelineStateDir],
-  ["plans", plansDir],
-  ["retros", retrosDir],
-  ["logs", cloneLogsDir],
-];
-
-/**
- * Make the workspace copy a git repository and move the per-clone data the
- * source stages under `.nightgauge/<class>` to where the extension reads it:
- * the clone's own directories under the git directory (ADR-024 § 7).
- */
-function moveCloneDataIntoGit(workspace: string): void {
-  const env = { ...process.env };
-  for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE"]) delete env[k];
-  execFileSync("git", ["init", "-q"], { cwd: workspace, env, stdio: "pipe" });
-  for (const [cls, resolve] of STAGED_CLONE_CLASSES) {
-    const staged = path.join(workspace, ".nightgauge", cls);
-    if (!fs.existsSync(staged)) continue;
-    const target = resolve(workspace);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.renameSync(staged, target);
-  }
-}
-
 /**
  * Lay the session out on disk: a fresh workspace copy re-dated to `epochMs`
  * (the launch, by default) and made a git repository holding the demo's
@@ -230,7 +204,7 @@ export function prepareDemoSession(
   fs.rmSync(plan.workspace, { recursive: true, force: true });
   fs.cpSync(workspaceSource, plan.workspace, { recursive: true });
   redateWorkspace(plan.workspace, epochMs);
-  moveCloneDataIntoGit(plan.workspace);
+  placeCloneData(plan.workspace);
   fs.mkdirSync(plan.extensionsDir, { recursive: true });
   fs.mkdirSync(path.dirname(plan.settingsFile), { recursive: true });
   let existing: Record<string, unknown> = {};

@@ -219,6 +219,10 @@ changelog, and the release workflow refuses a tag that does not.
   `nightgauge serve` creates `.nightgauge/pipeline`, `plans` or `logs`
   directories or `.gitkeep` files in the working tree any more. Existing
   in-tree files are not read; `nightgauge doctor --fix` moves them (#2040).
+  The demo workspace (`npm run demo` and the VS Code host tier's demo window)
+  is materialized as a git repository, with its per-clone seed data placed in
+  the clone's directory by one shared helper, so the dashboard's file-backed
+  tabs still show its runs.
 
 - **Every Go caller resolves its per-clone directories through `internal/layout`
   (#2034, #2035).** The CLI (`cmd/nightgauge`) and the remaining internal

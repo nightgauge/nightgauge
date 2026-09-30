@@ -24,9 +24,9 @@ import { rebaseValue } from "./daemon/scenario.cjs";
 export const DEMO_WORKSPACE_NOW = "2026-01-15T09:30:00.000Z";
 
 /**
- * Where the demo source stages run history under its workspace root. A session
- * re-dates it here, then moves it into the clone's pipeline directory
- * (`scripts/demo-session.ts`, ADR-024 § 7).
+ * Where the demo source stages run history under its workspace root. A copy is
+ * re-dated here, then moved into the clone's pipeline directory
+ * (`demo/workspace-clone.ts`, ADR-024 § 7).
  */
 export const HISTORY_DIR = path.join(".nightgauge", "pipeline", "history");
 

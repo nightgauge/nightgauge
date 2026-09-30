@@ -1,7 +1,8 @@
 /**
  * Demo mode against the real extension (#2105, #2106, #2108, ADR-026).
  *
- * Runs alone in the launcher's demo window (launch.ts): a fresh VSCode whose
+ * Runs in the launcher's demo window (launch.ts), after the demo-workspace
+ * suite, which reads the same seed before playback: a fresh VSCode whose
  * first activation is on the demo workspace, as in a demo session (#2110).
  * The demo daemon arrives through `nightgauge.backend.binaryPath`, and the
  * reference scenario through the environment (`NIGHTGAUGE_DEMO_SCENARIO`),
