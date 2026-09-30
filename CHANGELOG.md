@@ -221,6 +221,22 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **Nightgauge now keeps only team config in your repository** (epic #2021,
+  ADR-024). Pipeline state, plans, retros and logs live in the clone's git
+  directory; caches, machine state, usage readings and pipeline worktrees live
+  in per-user directories that follow each OS's conventions (with
+  `NIGHTGAUGE_CACHE_HOME`, `NIGHTGAUGE_STATE_HOME` and `NIGHTGAUGE_RUNTIME_DIR`
+  overrides); the daemon socket is in a private runtime directory; the license
+  key is in the OS keychain (`nightgauge auth license set|status|clear`); and a
+  plaintext token or license key in `.nightgauge/config.yaml` or
+  `config.local.yaml` is refused. The first `nightgauge` command on each clone
+  moves that clone's files to the new locations without failing your command;
+  `nightgauge doctor --fix` moves whatever it left behind, and the machine
+  state under `~/.nightgauge/`, and reports any conflict instead of
+  overwriting. Log retention now prunes session logs older than 30 days (and
+  caps each log directory at 200 MB). Every location, per OS, is listed in
+  [CONFIGURATION.md § Where Nightgauge keeps its data](docs/CONFIGURATION.md#where-nightgauge-keeps-its-data)
+  (#2045).
 - **Claude usage readings, OpenCode run state and the machine logs live in the
   machine-state directory** (#2032, ADR-024 § 2). `usage/claude-rate-limits.json`,
   OpenCode's per-run roots, preserved failure evidence, last-dispatch record and
@@ -234,7 +250,6 @@ changelog, and the release workflow refuses a tag that does not.
   stay 0700, and a symlink planted as any of these directories is refused
   rather than written through. The OpenCode binary pin under
   `~/.nightgauge/tools/` is unchanged.
-
 - **Each checkout keeps its own run control and runtime state in
   `<git-dir>/nightgauge-worktree/`** (#2037, ADR-024 § 7). `current-run.json`,
   `run-state.json`, batch and queue state, `serve.lock`, `go-backend.log`,

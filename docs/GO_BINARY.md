@@ -1597,7 +1597,8 @@ file the skip was permanent. Since the worktree held the branch, `git branch -D`
 refused too: cleanup blocked at both ends by the pipeline's own exhaust.
 
 **Why "just exclude `.nightgauge`" is the wrong fix.** `.worktrees/issue-701`
-held 209 **staged deletions** under `.nightgauge/pipeline/assessments/` — that
+held 209 **staged deletions** under `.nightgauge/pipeline/assessments/` (a
+pre-ADR-024 in-tree path) — that
 _is_ the deliverable of an open issue, with `origin/main` still tracking 45 of
 those files. A sweep that excluded the directory wholesale would have destroyed
 it and reported success. #237/#248 taught the dev gate that a bookkeeping-only
@@ -2411,7 +2412,8 @@ per-population table.
 
 **This ladder is the only scanner that CLOSES a stale run (#427).** A second
 closer lived in the extension — `StaleSlotRecoveryService`, which on activation
-scanned every worktree for `<worktree>/.nightgauge/pipeline/state.json`, looked
+scanned every worktree for `<worktree>/.nightgauge/pipeline/state.json` (a
+pre-ADR-024 in-tree path), looked
 for a stage still marked `running`, and "repaired" it. It was inert end to end:
 nothing in the tree has ever written that `state.json`, so the scan returned
 `[]` on every activation, and its repair built an identity-less
@@ -5047,7 +5049,7 @@ seconds of the drop.
 - **The `serve` daemon's own traffic.** `serve --workspace <root>` threads that
   root through config, the IPC server and the scheduler, but never calls
   `os.Chdir`, and the extension spawned the binary with no `cwd`. The ledger
-  resolved `.nightgauge/logs/github-api.jsonl` against the process working
+  resolved `.nightgauge/logs/github-api.jsonl` (its pre-ADR-024 path) against the process working
   directory — the extension host's — which is not a workspace, so the
   greenfield guard opened no file at all. `github.SetAPILedgerWorkspaceRoot`
   makes the explicitly-named workspace authoritative for that path (applied
@@ -5594,7 +5596,7 @@ Plus the leaked-machine-state checks (#330 / #332 / #341), all **warning-only**:
 | `worktree_leaks`     | Registered pipeline worktrees older than 24h that `sweep` cannot reclaim, with repo, age, skip reason, and the paths that blocked them |
 | `stranded_branches`  | Local branches whose content is already in `origin/<default>` and that **no worktree holds**, per repo — report only, nothing is deleted |
 | `pipeline_stashes`   | Stashes carrying the `nightgauge:` marker that were never reclaimed, per repo, with age |
-| `orphaned_processes` | Running `nightgauge` processes older than 1h that no live sidecar claims, with PID, age, and argv — plus (#519) any process, regardless of parentage, whose cwd sits inside a pipeline worktree base (`.nightgauge/worktrees`, `.worktrees`, `.claude/worktrees`) |
+| `orphaned_processes` | Running `nightgauge` processes older than 1h that no live sidecar claims, with PID, age, and argv — plus (#519) any process, regardless of parentage, whose cwd sits inside a pipeline worktree base (the resolved base, the pre-ADR-024 `.nightgauge/worktrees` and `.worktrees`, and `.claude/worktrees`) |
 
 The worktree and stash carriers exist because a 2026-08-04 workspace audit found
 **9 leaked worktrees and 5 leaked stashes** — all of them by running `git
@@ -5750,7 +5752,8 @@ spawned — it filters to `argv[0]`'s basename being `nightgauge`. But a
 pipeline worktree directory is also where **interactive** agent harnesses
 (Claude Code, Codex, the VSCode extension) run their own shells, and those
 harnesses can leak a detached one: an operator found several `/bin/zsh`
-processes still parked with cwd inside `.nightgauge/worktrees/issue-488`, held
+processes still parked with cwd inside `.nightgauge/worktrees/issue-488` (the
+pre-ADR-024 worktree base), held
 open by a VSCode extension-host background task long after the session ended
 and the worktree itself was already removed. None of those shells was ever a
 nightgauge process, so the argv-basename filter could never have seen them.
@@ -5775,7 +5778,8 @@ nightgauge process, so the argv-basename filter could never have seen them.
   default), `.worktrees` (the VSCode extension's pre-#2038 default), and
   `.claude/worktrees` (Claude Code's own base).
 - **Containment is decided lexically, and cwd need not exist.** Only the
-  worktree-base directory (e.g. `<repo>/.nightgauge/worktrees`) is resolved
+  worktree-base directory (e.g. `STATE/worktrees/<repo-key>`, or the pre-ADR-024
+  `<repo>/.nightgauge/worktrees`) is resolved
   with `filepath.EvalSymlinks` — it still exists whenever this scan has
   anything to find, even once the specific worktree subdirectory inside it is
   gone. cwd itself is only `filepath.Clean`ed and made absolute, deliberately

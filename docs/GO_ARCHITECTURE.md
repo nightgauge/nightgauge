@@ -157,7 +157,8 @@ Replaces: `HeadlessOrchestrator`, `runStage`, `WorktreeManager`,
 **Key design:**
 
 - Each execution is a goroutine with its own context (cancelable)
-- Worktree path scoped: `{repo}/.nightgauge/worktrees/{issue-N}/`
+- Worktree path scoped: `{worktree base}/{repo}-issue-{N}/`, outside the
+  working tree (default `STATE/worktrees/<repo-key>/`, ADR-024 § 9)
 - Skill invocation is adapter-based: Claude, Codex, Gemini adapters implement a
   common `SkillRunner` interface
 - No state writes — execution manager reports events to orchestrator, which

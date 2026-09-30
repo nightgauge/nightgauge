@@ -673,7 +673,7 @@ is refused (`warning`): manual `replace`.
 working tree, and this build reads each class only at its new location. One
 finding per class names the old directory and the exact target: pipeline state,
 plans, retros and logs (to the per-clone directory under the git common dir), each
-pipeline worktree under `.nightgauge/worktrees/` or `.worktrees/` (to the worktree
+pipeline worktree under the pre-ADR-024 `.nightgauge/worktrees/` or `.worktrees/` (to the worktree
 base), and the old recall cache. `auto` `migrate` runs the one migration for the
 clone:
 
