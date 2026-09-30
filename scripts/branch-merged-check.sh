@@ -7,7 +7,8 @@
 #   NO_PR=1 scripts/branch-merged-check.sh ...         # skip the forge lookup (offline)
 #
 # Verdicts / exit codes (single-branch mode):
-#   0  SAFE-DELETE  content is in base, or the branch is exactly what a merged PR merged
+#   0  SAFE-DELETE  content is in base, or the branch is exactly what a merged PR merged,
+#                   or its tip is inside a merged PR's head (folded in by merge commit)
 #   1  KEEP         carries content base does not have, or has commits past the merge
 #   2  UNKNOWN      undecidable — do NOT delete
 #
@@ -52,13 +53,16 @@
 # tip (which never advances past "previous branch tip" — update-branch runs on
 # the forge side, not in a local checkout) against a base that has since
 # evolved the SAME files the branch touched reads as unmerged even though the
-# branch is fully landed. Set NO_PR=1 to skip the forge lookup entirely; the
-# result is then conservative by design.
+# branch is fully landed. A branch folded into ANOTHER branch's PR by a merge
+# commit (the batching rule) has no PR of its own; the forge's commit -> PRs
+# lookup finds the PR that carried it, and an ancestry compare against that
+# PR's head proves the tip landed (#2313). Set NO_PR=1 to skip the forge
+# lookup entirely; the result is then conservative by design.
 
 set -uo pipefail
 
 usage() {
-  sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -128,6 +132,33 @@ merged_pr_head_parents() {
   [ "${NO_PR:-0}" = "1" ] && return 0
   command -v gh >/dev/null 2>&1 || return 0
   gh api "repos/{owner}/{repo}/commits/$1" --jq '.parents[].sha' 2>/dev/null
+}
+
+# folded_into_merged_pr <tip> <base-branch> -> prints the number of a merged PR
+# that took this tip in through ANOTHER branch (#2313). The batching rule folds
+# a sub-branch into one PR with a merge commit, so the sub-branch never has a
+# PR of its own and merged_pr_for finds nothing. The forge still knows which
+# PRs contain the commit; the tip counts as landed only when that PR merged
+# into the same base and the tip is an ancestor of the PR's head (compare
+# status `ahead` or `identical`). Any lookup failure, including a tip that was
+# never pushed, returns non-zero: the caller stays KEEP.
+folded_into_merged_pr() {
+  [ "${NO_PR:-0}" = "1" ] && return 1
+  command -v gh >/dev/null 2>&1 || return 1
+  local rows num head pbase status
+  rows=$(gh api "repos/{owner}/{repo}/commits/$1/pulls" \
+    --jq '.[] | select(.merged_at != null) | "\(.number)\t\(.head.sha)\t\(.base.ref)"' 2>/dev/null) || return 1
+  while IFS=$'\t' read -r num head pbase; do
+    [ -n "$num" ] && [ -n "$head" ] && [ "$pbase" = "$2" ] || continue
+    status=$(gh api "repos/{owner}/{repo}/compare/$1...$head" --jq .status 2>/dev/null) || continue
+    case "$status" in
+    ahead | identical)
+      printf '%s' "$num"
+      return 0
+      ;;
+    esac
+  done <<<"$rows"
+  return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -318,6 +349,7 @@ classify() {
 
   # Content differs — ask the forge whether this branch already merged.
   tip=$(git rev-parse "$ref" 2>/dev/null)
+  pr_num=""
   if pr=$(merged_pr_for "$branch"); then
     pr_sha=$(printf '%s' "$pr" | cut -f1)
     pr_num=$(printf '%s' "$pr" | cut -f2)
@@ -340,6 +372,18 @@ classify() {
       return 0
     fi
 
+  fi
+
+  # No merged PR of its own at this tip: it may have landed inside another
+  # PR's squash (#2313). Also covers commits added after the branch's own PR
+  # merged, when those commits were folded into a later PR.
+  local folded_num
+  if folded_num=$(folded_into_merged_pr "$tip" "${base#origin/}"); then
+    echo "SAFE-DELETE  ${remote_note}folded into PR #$folded_num, which merged into ${base#origin/}; tip is an ancestor of its head — $base moved on since"
+    return 0
+  fi
+
+  if [ -n "${pr_num:-}" ]; then
     echo "KEEP         ${remote_note}PR #$pr_num merged a DIFFERENT tip (${pr_sha:0:7} vs ${tip:0:7}) — commits past the merge"
     return 1
   fi

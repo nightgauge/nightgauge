@@ -224,8 +224,18 @@ func TestInstallNightgaugePluginNeverWritesOperatorHomeOpenCode(t *testing.T) {
 	if entries, err := os.ReadDir(operatorOpenCode); err != nil || len(entries) != 1 || entries[0].Name() != "bin" {
 		t.Errorf("$HOME/.opencode changed: entries=%v err=%v, want only the pre-existing bin/", entries, err)
 	}
-	if got := run.Env[opencodeplugin.EnvOperatorInstallRisk]; got != operatorOpenCode {
-		t.Errorf("run.Env[%s] = %q, want %q (a pre-existing, unsatisfied $HOME/.opencode)", opencodeplugin.EnvOperatorInstallRisk, got, operatorOpenCode)
+	if got := run.OperatorInstallRisk; got != operatorOpenCode {
+		t.Errorf("run.OperatorInstallRisk = %q, want %q (a pre-existing, unsatisfied $HOME/.opencode)", got, operatorOpenCode)
+	} // #1802: the marker is the manager's alone. It never enters the run's
+	// Env, which is both the child's environment and the config verb's
+	// printed env.
+	if got, ok := run.Env["NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK"]; ok {
+		t.Errorf("run.Env carries NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK = %q; the install-risk marker must reach only the manager", got)
+	}
+	for k, v := range run.Env {
+		if v == operatorOpenCode {
+			t.Errorf("run.Env[%s] = %q names the operator's flagged directory; it must reach only the manager", k, v)
+		}
 	}
 }
 
@@ -254,8 +264,8 @@ func TestInstallNightgaugePluginNeverCreatesOperatorHomeOpenCode(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".opencode")); err == nil {
 		t.Error("InstallNightgaugePlugin created $HOME/.opencode, which did not exist before it ran")
 	}
-	if got := run.Env[opencodeplugin.EnvOperatorInstallRisk]; got != "" {
-		t.Errorf("run.Env[%s] = %q, want \"\": an absent $HOME/.opencode is not a risk", opencodeplugin.EnvOperatorInstallRisk, got)
+	if got := run.OperatorInstallRisk; got != "" {
+		t.Errorf("run.OperatorInstallRisk = %q, want \"\": an absent $HOME/.opencode is not a risk", got)
 	}
 }
 
@@ -289,8 +299,8 @@ func TestInstallNightgaugePluginNeverWritesInheritedConfigDir(t *testing.T) {
 	if _, err := os.Stat(operatorConfig); err == nil {
 		t.Errorf("InstallNightgaugePlugin created the absent inherited %s, which it must never do", operatorConfig)
 	}
-	if got := run.Env[opencodeplugin.EnvOperatorInstallRisk]; got != operatorConfig {
-		t.Errorf("run.Env[%s] = %q, want %q (opencode creates and installs into OPENCODE_CONFIG_DIR itself)", opencodeplugin.EnvOperatorInstallRisk, got, operatorConfig)
+	if got := run.OperatorInstallRisk; got != operatorConfig {
+		t.Errorf("run.OperatorInstallRisk = %q, want %q (opencode creates and installs into OPENCODE_CONFIG_DIR itself)", got, operatorConfig)
 	}
 }
 
@@ -333,8 +343,8 @@ func TestInstallNightgaugePluginDoesNotRiskASatisfiedOperatorDir(t *testing.T) {
 	if err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81631"); err != nil {
 		t.Fatal(err)
 	}
-	if got := run.Env[opencodeplugin.EnvOperatorInstallRisk]; got != "" {
-		t.Errorf("run.Env[%s] = %q, want \"\": a $HOME/.opencode already satisfying opencode's own check gets the local, instant fast path, so the watchdog must not be armed for it", opencodeplugin.EnvOperatorInstallRisk, got)
+	if got := run.OperatorInstallRisk; got != "" {
+		t.Errorf("run.OperatorInstallRisk = %q, want \"\": a $HOME/.opencode already satisfying opencode's own check gets the local, instant fast path, so the watchdog must not be armed for it", got)
 	}
 }
 
@@ -367,7 +377,7 @@ func TestInstallNightgaugePluginStillRisksAnUnsatisfiedOperatorDir(t *testing.T)
 	if err := InstallNightgaugePlugin(context.Background(), run, "", "01890a5d-ac96-774b-bcce-b30209a81632"); err != nil {
 		t.Fatal(err)
 	}
-	if got := run.Env[opencodeplugin.EnvOperatorInstallRisk]; got != operatorOpenCode {
-		t.Errorf("run.Env[%s] = %q, want %q: the version marker alone does not satisfy opencode's own install check, so the watchdog must still be armed for it", opencodeplugin.EnvOperatorInstallRisk, got, operatorOpenCode)
+	if got := run.OperatorInstallRisk; got != operatorOpenCode {
+		t.Errorf("run.OperatorInstallRisk = %q, want %q: the version marker alone does not satisfy opencode's own install check, so the watchdog must still be armed for it", got, operatorOpenCode)
 	}
 }

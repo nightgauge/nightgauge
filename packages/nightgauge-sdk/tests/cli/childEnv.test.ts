@@ -277,12 +277,10 @@ describe("curateOpenCodeChildEnv (#1637)", () => {
   // fail-closed CONFIG_INVALID on a machine where an operator's OpenCode
   // install directory happens to be at risk (a condition the operator neither
   // set nor controls), while withholding it mirrors the Go adapter's own
-  // BuildCommand, which deletes opencodeplugin.EnvOperatorInstallRisk from
-  // the child's env right before returning it (opencode.go, pinned by
-  // TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild) —
-  // #1802's child-env leak is already closed there; only the config verb's
-  // printed env still carries the name, since the verb prints RunRoot.Env
-  // directly rather than BuildCommand's output.
+  // BuildCommand, which never gives the child the manager-only install-risk
+  // flag (TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild).
+  // Since #1802 the verb no longer prints the name; a pre-#1802 binary still
+  // does, so accepting it stays.
   it("accepts NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK but never forwards it", () => {
     const name = "NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK";
     expect(isOpenCodeRunEnvAccepted(name)).toBe(true);

@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
-	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -76,21 +75,26 @@ func TestOpenCodeBuildCommandArgv(t *testing.T) {
 }
 
 // TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild (#1635/A11
-// round 8): EnvOperatorInstallRisk is manager-only — manager.go reads it back
-// from opts.RunRoot.Env directly, before BuildCommand ever runs — so
-// BuildCommand's own returned env, which becomes the opencode child
-// process's environment, must not carry it.
+// round 8, #1802): the install-risk marker is manager-only. It travels in
+// RunRoot.OperatorInstallRisk, which manager.go reads before BuildCommand
+// runs, so BuildCommand's returned env, the opencode child's environment,
+// carries neither the old variable name nor the flagged directory.
 func TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild(t *testing.T) {
+	const flagged = "/home/operator/.opencode"
 	_, _, env := NewOpenCodeAdapter().BuildCommand(RunOptions{
 		Model: "lmstudio/qwen/qwen3.8-27b",
 		RunRoot: &RunRoot{
-			Env: map[string]string{
-				opencodeplugin.EnvOperatorInstallRisk: "/home/operator/.opencode",
-			},
+			Env:                 map[string]string{},
+			OperatorInstallRisk: flagged,
 		},
 	})
-	if got, ok := env[opencodeplugin.EnvOperatorInstallRisk]; ok {
-		t.Errorf("child env carries %s = %q; this marker is manager-only and must not reach the opencode child process", opencodeplugin.EnvOperatorInstallRisk, got)
+	if got, ok := env["NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK"]; ok {
+		t.Errorf("child env carries NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK = %q; this marker is manager-only and must not reach the opencode child process", got)
+	}
+	for k, v := range env {
+		if v == flagged {
+			t.Errorf("child env[%s] = %q names the flagged operator directory; it must reach only the manager", k, v)
+		}
 	}
 }
 

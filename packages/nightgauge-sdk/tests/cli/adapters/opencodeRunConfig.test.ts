@@ -247,10 +247,8 @@ describe("SDK/Go parity through the golden (#1648)", () => {
       expect(child[name], name).toBe(value);
     }
     // Every variable the verb's env names reaches the child with the verb's
-    // value (GH_CONFIG_DIR and NIGHTGAUGE_CONFIG_HOME included), except the
-    // one the Go spawn also withholds.
+    // value (GH_CONFIG_DIR and NIGHTGAUGE_CONFIG_HOME included).
     for (const [name, value] of Object.entries(golden.verb.env)) {
-      if (name === "NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK") continue;
       expect(child[name], name).toBe(value);
     }
     // No XDG_*, OPENCODE_* or NIGHTGAUGE_OPENCODE_* variable, and none of the

@@ -29,6 +29,43 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The SDK's eval and CLI spawn helpers survive a child that never reads
+  stdin** (#2314). Writing the prompt to a child that had already exited
+  raised an uncaught `EPIPE` instead of returning the child's exit code. The
+  live-cell executor, the model runner and `runCliCommand` now handle the
+  stdin error, and the exit code is reported as before.
+
+- **`scripts/branch-merged-check.sh` recognises a branch folded into another
+  pull request** (#2313). A branch merged into a batch branch and landed
+  through that branch's squash merge has no PR of its own, so the checker kept
+  it for ever. When no merged PR has the branch as its head, the checker now
+  asks the forge which PRs contain the branch tip. It reports `SAFE-DELETE`
+  only for a PR merged into the same base whose head contains the tip. Every
+  lookup failure stays `KEEP`.
+
+- **The OpenCode operator-install-risk flag stays with the manager** (#1802).
+  The path of an operator's OpenCode config directory that may wait on
+  OpenCode's own plugin install now reaches the manager's watchdog through the
+  run root, not the run's environment. `nightgauge opencode config --json` no
+  longer prints `NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK` in its `env`, so
+  that output again holds only isolation variables and
+  `OPENCODE_CONFIG_CONTENT`. The opencode child never received it, and the
+  watchdog arms exactly as before. The SDK still accepts the name from an
+  older binary and never passes it to the child.
+
+- **OpenCode refuses case variants of a denied path** (#1827). opencode's
+  permission matcher is case-sensitive, so on macOS's default filesystem a
+  stage could read `.ENV` or edit `OPENCODE.JSON` while matching no deny. The
+  Nightgauge plugin now refuses a read, edit or write whose path matches the
+  secret or project-config denies once letter case is ignored. ADR-022 and
+  the skill portability guide now say the skills tree is read-only for the
+  file tools only: a stage granted Bash can still change it.
+- **The OpenCode tamper gate no longer runs the worktree's git hooks or
+  fsmonitor** (#1826). Its git commands run in the orchestrator process, and
+  a stage could set `core.fsmonitor` in the worktree to a command the next
+  `git status` executed. They now override `core.fsmonitor` and
+  `core.hooksPath` on the command line and skip the system git config.
+
 - **A test run can no longer move, and lose, the developer's machine state**
   (#2311). A process with the real `HOME` and `NIGHTGAUGE_STATE_HOME` pointed
   at a temporary directory ran the machine-state migration into that directory,

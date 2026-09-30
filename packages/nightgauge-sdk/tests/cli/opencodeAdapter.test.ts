@@ -438,17 +438,13 @@ describe("OpenCodeAdapter run config (#1637, #1648)", () => {
     }
   });
 
-  // #1802's child-env half (the Go adapter forwarding this operator directory
-  // path to the opencode child) is already closed: BuildCommand deletes
-  // opencodeplugin.EnvOperatorInstallRisk from the child's env right before
-  // returning it (opencode.go, pinned by
-  // TestOpenCodeBuildCommandWithholdsOperatorInstallRiskFromTheChild). Only
-  // the config verb's *printed* env still carries it, because the verb prints
-  // RunRoot.Env directly, not BuildCommand's output. checkRunConfig must
-  // accept the name — refusing it would fail CONFIG_INVALID closed on every
-  // machine where an operator's $HOME/.opencode happens to be unsatisfied,
-  // which the operator neither set nor controls — while never letting it
-  // reach the child, mirroring BuildCommand's own delete. The spawn-level
+  // Since #1802 the Go binary keeps the operator-install-risk flag out of
+  // both the child's env and the config verb's printed env
+  // (RunRoot.OperatorInstallRisk). A pre-#1802 binary still prints it, so
+  // checkRunConfig must accept the name — refusing it would fail
+  // CONFIG_INVALID closed on every machine where an operator's
+  // $HOME/.opencode happens to be unsatisfied, which the operator neither set
+  // nor controls — while never letting it reach the child. The spawn-level
   // proof (the value is absent from the actual child env) lives in the
   // "OpenCodeAdapter spawn" describe block below.
   it("accepts NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK, an operator directory path, without forwarding it", async () => {
