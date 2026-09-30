@@ -4,6 +4,7 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { execFileSync, spawn } from "node:child_process";
 import { validateCodexStagePostconditions } from "../../src/cli/commands/stage.js";
+import { initCloneRepo } from "../../src/__tests__/helpers/gitRepo.js";
 
 // Mock spawn to handle git commands without requiring a real git repo
 vi.mock("node:child_process", async (importOriginal) => {
@@ -48,20 +49,17 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 describe("validateCodexStagePostconditions", () => {
   let tempRoot: string;
+  let pipelineDir: string;
   const issueNumber = 614;
 
   beforeEach(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "stage-post-"));
-    await fs.mkdir(path.join(tempRoot, ".nightgauge", "pipeline"), {
-      recursive: true,
-    });
+    // A real repository: context files resolve through its git common dir
+    // (ADR-024 § 7). The branch queries (spawn) stay mocked.
+    pipelineDir = initCloneRepo(tempRoot).pipeline;
+    await fs.mkdir(pipelineDir, { recursive: true });
 
     await fs.writeFile(path.join(tempRoot, "README.md"), "test\n", "utf-8");
-
-    // Create a minimal git directory structure
-    // The git commands are mocked, so we just need this for file existence checks
-    await fs.mkdir(path.join(tempRoot, ".git"), { recursive: true });
-    await fs.writeFile(path.join(tempRoot, ".git", "HEAD"), "ref: refs/heads/master\n", "utf-8");
   });
 
   afterEach(async () => {
@@ -80,7 +78,7 @@ describe("validateCodexStagePostconditions", () => {
 
   it("fails issue-pickup when branch mismatch exists", async () => {
     await fs.writeFile(
-      path.join(tempRoot, ".nightgauge", "pipeline", `issue-${issueNumber}.json`),
+      path.join(pipelineDir, `issue-${issueNumber}.json`),
       JSON.stringify({ branch: "feat/614-test" }),
       "utf-8"
     );
@@ -95,11 +93,7 @@ describe("validateCodexStagePostconditions", () => {
   });
 
   it("fails pr-merge when cleanup did not remove context files", async () => {
-    await fs.writeFile(
-      path.join(tempRoot, ".nightgauge", "pipeline", `pr-${issueNumber}.json`),
-      "{}",
-      "utf-8"
-    );
+    await fs.writeFile(path.join(pipelineDir, `pr-${issueNumber}.json`), "{}", "utf-8");
 
     await expect(
       validateCodexStagePostconditions({

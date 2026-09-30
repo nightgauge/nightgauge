@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // These tests drive REAL git repositories rather than stubbing the git calls.
@@ -58,7 +60,7 @@ func writeFile(t *testing.T, path, content string) {
 // uses the SAME passing self-report, so the only variable is what git sees.
 func devContext(t *testing.T, ws string, issue int) {
 	t.Helper()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(issue)), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), devContextName(issue)), map[string]any{
 		"files_changed": map[string]any{
 			"created":  []string{"src/added.go"},
 			"modified": []string{"src/changed.go"},
@@ -150,13 +152,13 @@ func TestFeatureDevGate_GroundTruth_CommittedWorkPasses(t *testing.T) {
 }
 
 // TestFeatureDevGate_GroundTruth_BookkeepingOnlyFails is the silent-disable
-// case. The stage's own dev-{N}.json lands under .nightgauge/pipeline/, which
-// THIS repo gitignores and a consumer repo may not. Counting it as work would
-// make every empty workspace read as productive, turning the gate off in
-// exactly the repos nobody would think to check.
+// case. Bookkeeping directories (here .claude/) may be untracked and not
+// gitignored in a consumer repo. Counting them as work would make every empty
+// workspace read as productive, turning the gate off in exactly the repos
+// nobody would think to check.
 func TestFeatureDevGate_GroundTruth_BookkeepingOnlyFails(t *testing.T) {
 	ws := gitRepo(t)
-	devContext(t, ws, 42) // untracked: no .nightgauge/.gitignore in this fixture
+	devContext(t, ws, 42)
 	writeFile(t, filepath.Join(ws, ".claude", "settings.local.json"), "{}\n")
 
 	gr := FeatureDevGate{}.Verify(context.Background(), 42, ws)
@@ -174,7 +176,7 @@ func TestFeatureDevGate_GroundTruth_BookkeepingOnlyFails(t *testing.T) {
 // produces when its entire deliverable is removing bookkeeping paths (#237).
 func devContextDeleted(t *testing.T, ws string, issue int, deleted []string) {
 	t.Helper()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(issue)), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), devContextName(issue)), map[string]any{
 		"files_changed": map[string]any{
 			"created":  []string{},
 			"modified": []string{},
@@ -335,15 +337,14 @@ func TestFeatureDevGate_GroundTruth_SelfNotReportedAsStranded(t *testing.T) {
 }
 
 // A stage's own dev-{N}.json is never its deliverable. Declaring only that file
-// satisfied #237's bookkeeping probe on both halves — it is a bookkeeping path,
-// and git confirms it because the stage just wrote it — so a run that produced
-// nothing passed the gate reporting "declared=1 confirmed=1" (#249).
-//
-// This is #202 through a new door: the exclusion still stands, but a
-// declaration naming the pipeline's own exhaust routes around it.
+// once satisfied #237's bookkeeping probe on both halves — it was a bookkeeping
+// path in the working tree, and git confirmed it because the stage had just
+// written it — so a run that produced nothing passed (#249). Since ADR-024 § 7
+// the handoff lives under the git directory, so git cannot confirm a
+// declaration naming its old in-tree path, and the run still fails.
 func TestFeatureDevGate_GroundTruth_OwnHandoffAloneIsNotWork(t *testing.T) {
 	ws := gitRepo(t)
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(42)), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), devContextName(42)), map[string]any{
 		"files_changed": map[string]any{
 			"created":  []string{".nightgauge/pipeline/dev-42.json"},
 			"modified": []string{},
@@ -363,8 +364,8 @@ func TestFeatureDevGate_GroundTruth_OwnHandoffAloneIsNotWork(t *testing.T) {
 	}
 }
 
-// The same filter must not disturb #237's motivating case: untracking ANOTHER
-// issue's context file is real work and still passes.
+// #237's motivating case: untracking ANOTHER issue's context file that a repo
+// still tracks in the working tree is real work and passes.
 func TestFeatureDevGate_GroundTruth_OtherIssuesHandoffIsStillWork(t *testing.T) {
 	ws := gitRepo(t)
 	writeFile(t, filepath.Join(ws, ".nightgauge", "pipeline", "dev-1.json"), "{}\n")
@@ -381,37 +382,5 @@ func TestFeatureDevGate_GroundTruth_OtherIssuesHandoffIsStillWork(t *testing.T) 
 
 	if !res.Passed {
 		t.Fatalf("gate failed on a real bookkeeping deliverable: reason=%q evidence=%v", res.Reason, res.Evidence)
-	}
-}
-
-// A declaration mixing the stage's own handoff with real bookkeeping work is
-// judged on the real work alone.
-func TestFeatureDevGate_GroundTruth_OwnHandoffFilteredFromMixedDeclaration(t *testing.T) {
-	ws := gitRepo(t)
-	writeFile(t, filepath.Join(ws, ".nightgauge", "pipeline", "dev-1.json"), "{}\n")
-	git(t, ws, "add", ".nightgauge/pipeline/dev-1.json")
-	git(t, ws, "commit", "-m", "track dev-1")
-	git(t, ws, "rm", "--cached", ".nightgauge/pipeline/dev-1.json")
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(42)), map[string]any{
-		"files_changed": map[string]any{
-			"created":  []string{".nightgauge/pipeline/dev-42.json"},
-			"modified": []string{},
-			"deleted":  []string{".nightgauge/pipeline/dev-1.json"},
-		},
-		"build_verification": map[string]any{"ran": true, "status": "passed"},
-	})
-
-	gate, ok := LookupByStageName("feature-dev")
-	if !ok {
-		t.Fatal("no gate registered for feature-dev")
-	}
-	res := gate.Verify(context.Background(), 42, ws)
-
-	if !res.Passed {
-		t.Fatalf("gate failed despite a real bookkeeping deletion alongside the handoff: reason=%q evidence=%v", res.Reason, res.Evidence)
-	}
-	joined := strings.Join(res.Evidence, " ")
-	if !strings.Contains(joined, "declared=1") {
-		t.Errorf("evidence should report the filtered declaration (declared=1), got %v", res.Evidence)
 	}
 }

@@ -61,14 +61,57 @@ function inputString(input: unknown, key: string): string {
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
 
-/** Paths that represent pipeline bookkeeping rather than feature source code. */
-function isPipelineArtifactPath(path: string): boolean {
-  return /(^|\/)\.nightgauge\//.test(path);
+/**
+ * Paths that are bookkeeping rather than feature source code: the in-tree
+ * `.nightgauge/` files (config.yaml, knowledge/, ...) and the per-clone data
+ * directory `<git-common-dir>/nightgauge/` (ADR-024 § 7).
+ */
+function isBookkeepingPath(path: string): boolean {
+  return /(^|\/)(\.nightgauge|\.git\/nightgauge)\//.test(path);
 }
 
 /** The dev-context handoff file written near the end of feature-dev. */
 function isDevContextPath(path: string): boolean {
-  return /(^|\/)dev-\d+\.json$/.test(path) || /\.nightgauge\/pipeline\/dev-/.test(path);
+  return /(^|\/)dev-\d+\.json$|\.git\/nightgauge\/pipeline\/dev-/.test(path);
+}
+
+/** Zero or more `--flag value` / `--flag=value` pairs; every layout flag takes a value. */
+const LAYOUT_FLAGS = String.raw`(?:--?[\w-]+(?:=\S+|\s+\S+)\s+)*`;
+
+/**
+ * `nightgauge layout write|append <class> <name>` in a Bash command, the way
+ * agents store per-clone files (ADR-024 § 7). Flags may sit before or after
+ * the verb. Mirrors layoutWriteRe in internal/execution/phase_inference.go.
+ */
+const LAYOUT_WRITE = new RegExp(
+  String.raw`\bnightgauge\s+layout\s+` +
+    LAYOUT_FLAGS +
+    String.raw`(?:write|append)\s+` +
+    LAYOUT_FLAGS +
+    String.raw`(pipeline|plans|retros|logs)\s+["']?([^\s"'|;&<>()]+)`,
+  "g"
+);
+
+/**
+ * The paths a tool call writes, for the rules that recognise a handoff or plan
+ * file: an edit tool's `file_path`, or, for Bash,
+ * `.git/nightgauge/<class>/<name>` for every `nightgauge layout write|append`
+ * in the command, so both forms meet the same path patterns.
+ */
+function writtenPaths(toolName: string, input: unknown): string[] {
+  if (EDIT_TOOLS.has(toolName)) {
+    const path = inputString(input, "file_path");
+    return path ? [path] : [];
+  }
+  if (toolName !== "Bash") return [];
+  return [...inputString(input, "command").matchAll(LAYOUT_WRITE)].map(
+    (m) => `.git/nightgauge/${m[1]}/${m[2]}`
+  );
+}
+
+/** Whether the tool call writes a path the predicate accepts. */
+function writes(toolName: string, input: unknown, isTarget: (path: string) => boolean): boolean {
+  return writtenPaths(toolName, input).some(isTarget);
 }
 
 /**
@@ -129,18 +172,18 @@ function isStatusSyncCommand(cmd: string): boolean {
   return /\b(move-status|gh\s+project)\b/.test(cmd);
 }
 
-/** The plan file written mid-way through feature-planning (`.nightgauge/plans/{N}-*.md`). */
+/** The plan file written mid-way through feature-planning (`plans/{N}-*.md` in the clone). */
 function isPlanFilePath(path: string): boolean {
-  return /(^|\/)\.nightgauge\/plans\/.+\.md$/.test(path);
+  return /(^|\/)\.git\/nightgauge\/plans\/.+\.md$/.test(path);
 }
 
 /** The planning-context handoff file written near the end of feature-planning. */
 function isPlanningContextPath(path: string): boolean {
-  return /(^|\/)planning-\d+\.json$/.test(path) || /\.nightgauge\/pipeline\/planning-/.test(path);
+  return /(^|\/)planning-\d+\.json$|\.git\/nightgauge\/pipeline\/planning-/.test(path);
 }
 
 function isValidateContextPath(path: string): boolean {
-  return /(^|\/)validate-\d+\.json$/.test(path) || /\.nightgauge\/pipeline\/validate-/.test(path);
+  return /(^|\/)validate-\d+\.json$|\.git\/nightgauge\/pipeline\/validate-/.test(path);
 }
 
 /**
@@ -171,7 +214,7 @@ const STAGE_RULES: Partial<Record<ExecutionStage, PhaseInferenceRule[]>> = {
       match: (name, input) => {
         if (!EDIT_TOOLS.has(name)) return false;
         const path = inputString(input, "file_path") || inputString(input, "notebook_path");
-        return !!path && !isPipelineArtifactPath(path) && !isDevContextPath(path);
+        return !!path && !isBookkeepingPath(path) && !isDevContextPath(path);
       },
     },
     // Running the test/build suite → testing.
@@ -185,8 +228,7 @@ const STAGE_RULES: Partial<Record<ExecutionStage, PhaseInferenceRule[]>> = {
     {
       index: 14,
       after: 8,
-      match: (name, input) =>
-        EDIT_TOOLS.has(name) && isDevContextPath(inputString(input, "file_path")),
+      match: (name, input) => writes(name, input, isDevContextPath),
     },
     // Syncing project board status → sync-project-status.
     {
@@ -204,17 +246,12 @@ const STAGE_RULES: Partial<Record<ExecutionStage, PhaseInferenceRule[]>> = {
     // Reading docs/standards/source → documentation-analysis, where planning
     // spends the bulk of its time. Covers the fast early phases 0-6.
     { index: 6, match: (name) => READ_TOOLS.has(name) },
-    // Writing the plan file (.nightgauge/plans/{N}-*.md) → produce-plan.
-    {
-      index: 9,
-      match: (name, input) =>
-        EDIT_TOOLS.has(name) && isPlanFilePath(inputString(input, "file_path")),
-    },
+    // Writing the plan file (plans/{N}-*.md in the clone) → produce-plan.
+    { index: 9, match: (name, input) => writes(name, input, isPlanFilePath) },
     // Writing the planning-context handoff → write-planning-context.
     {
       index: 10,
-      match: (name, input) =>
-        EDIT_TOOLS.has(name) && isPlanningContextPath(inputString(input, "file_path")),
+      match: (name, input) => writes(name, input, isPlanningContextPath),
     },
   ],
   // feature-validate (23 phases). Left out of the rules above and the
@@ -246,8 +283,7 @@ const STAGE_RULES: Partial<Record<ExecutionStage, PhaseInferenceRule[]>> = {
     // Writing the validate-context handoff -> write-validate-context.
     {
       index: 19,
-      match: (name, input) =>
-        EDIT_TOOLS.has(name) && isValidateContextPath(inputString(input, "file_path")),
+      match: (name, input) => writes(name, input, isValidateContextPath),
     },
     // Syncing project board status -> sync-project-status, the stage's last
     // observable act before it narrates.

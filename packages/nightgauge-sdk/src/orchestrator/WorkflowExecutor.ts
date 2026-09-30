@@ -27,7 +27,8 @@
  *     fanned-out run's cost rolls up into the pipeline totals.
  *
  *  4. **Writes a durable append-only journal** (one record per `WorkflowEvent`
- *     emission) under `.nightgauge/pipeline/workflow-{runId}.jsonl` so a
+ *     emission) under `<pipeline>/workflow-{runId}.jsonl` (the pipeline class
+ *     directory, `nightgauge layout path pipeline`) so a
  *     crashed/killed run can `resume(runId)`: the journal is replayed to rebuild
  *     the node tree and only pending/running nodes are re-dispatched. Completed
  *     nodes replay their `outputRef` from disk. Replay + re-dispatch is the
@@ -50,6 +51,7 @@
  */
 
 import type { ICliAdapter } from "../cli/adapters/ICliAdapter.js";
+import { cloneClassDir } from "../context/cloneLayout.js";
 import {
   zeroUsage,
   type WorkflowAgentUsage,
@@ -157,7 +159,11 @@ export interface WorkflowExecutorDeps {
   versionPreflight?: VersionPreflight;
   /** Filesystem seam for the durable journal. */
   fs: JournalFs;
-  /** Base dir for the journal. Defaults to `.nightgauge/pipeline`. */
+  /**
+   * Base dir for the journal. Defaults to the working directory's pipeline
+   * class directory (`<git-common-dir>/nightgauge/pipeline`), resolved on
+   * first use.
+   */
   journalDir?: string;
 }
 
@@ -178,8 +184,6 @@ export interface WorkflowExecutionResult {
   /** Path of the durable journal written for this run. */
   journalPath: string;
 }
-
-const DEFAULT_JOURNAL_DIR = ".nightgauge/pipeline";
 
 /**
  * Clamp a spec's ceiling to the {@link ABSOLUTE_CEILING} and the config's
@@ -313,7 +317,7 @@ export class WorkflowExecutor {
   private readonly quotaProvider?: QuotaStateProvider;
   private readonly versionPreflight: VersionPreflight;
   private readonly fs: JournalFs;
-  private readonly journalDir: string;
+  private resolvedJournalDir?: string;
 
   constructor(deps: WorkflowExecutorDeps) {
     this.adapter = deps.adapter;
@@ -323,7 +327,11 @@ export class WorkflowExecutor {
     this.quotaProvider = deps.quotaProvider;
     this.versionPreflight = deps.versionPreflight ?? DENY_NATIVE_PREFLIGHT;
     this.fs = deps.fs;
-    this.journalDir = deps.journalDir ?? DEFAULT_JOURNAL_DIR;
+    this.resolvedJournalDir = deps.journalDir;
+  }
+
+  private get journalDir(): string {
+    return (this.resolvedJournalDir ??= cloneClassDir("pipeline"));
   }
 
   /** The durable journal path for a run. */

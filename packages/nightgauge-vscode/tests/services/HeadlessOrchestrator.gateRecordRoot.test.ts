@@ -6,7 +6,7 @@
  * The writer and the reader were wrong in the SAME direction, so they agreed
  * with each other and both disagreed with the daemon:
  *
- *   - `gate verify --record` writes DIRECTLY to `<workdir>/.nightgauge/pipeline`
+ *   - `gate verify --record` writes DIRECTLY to the workdir's pipeline directory
  *     when it has no run identity to address the daemon with. The extension
  *     passed `--workdir <worktree>` and never passed `--run-id`, so the record
  *     went to a directory that holds no runtime snapshot.
@@ -19,9 +19,11 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import * as path from "path";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { Logger } from "../../src/utils/logger";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 vi.mock("../../src/utils/nightgaugeConfig", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/utils/nightgaugeConfig")>()),
@@ -116,6 +118,11 @@ describe("gate records address the daemon's root (#1021)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     gateSpawns.length = 0;
+    // Per-clone data resolves under each clone's git dir (ADR-024 § 7); the
+    // worktree is a linked worktree of the run's repo.
+    fakeCloneLayout(LAUNCH_ROOT);
+    fakeCloneLayout(REPO_ROOT);
+    fakeCloneLayout(WORKTREE, path.join(REPO_ROOT, ".git"));
   });
 
   it("passes --run-id so the record routes through the daemon, not a direct worktree write", async () => {

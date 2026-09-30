@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // stubExecGitForGate swaps the package-level execGitForGate for the duration
@@ -20,7 +22,7 @@ func stubExecGitForGate(t *testing.T, fn func(ctx context.Context, dir string, a
 
 func TestPrMergeGate_Pass_StateMerged(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -38,7 +40,7 @@ func TestPrMergeGate_Pass_StateMerged(t *testing.T) {
 // The reason must include "state=OPEN" so the TS shim can substring-match.
 func TestPrMergeGate_SkillSaidSuccessButPrIsOpen(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -63,7 +65,7 @@ func TestPrMergeGate_SkillSaidSuccessButPrIsOpen(t *testing.T) {
 // rebase-before-merge machinery is unreachable in production.
 func TestPrMergeGate_BehindEmitsMergeStateEvidence(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -90,7 +92,7 @@ func TestPrMergeGate_Fail_ContextMissing(t *testing.T) {
 
 func TestPrMergeGate_Fail_NoPrNumber(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{})
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{})
 	gr := PrMergeGate{}.Verify(context.Background(), 42, ws)
 	if gr.Passed {
 		t.Fatalf("expected fail when pr_number absent")
@@ -99,7 +101,7 @@ func TestPrMergeGate_Fail_NoPrNumber(t *testing.T) {
 
 func TestPrMergeGate_Fail_GhRetryThenSucceedFails(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -123,7 +125,7 @@ func TestPrMergeGate_Fail_GhRetryThenSucceedFails(t *testing.T) {
 // the squash-merge convention.
 func TestPrMergeGate_RateLimit_LocalGitFallback_PR(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -151,7 +153,7 @@ func TestPrMergeGate_RateLimit_LocalGitFallback_PR(t *testing.T) {
 // recent commit, the gate accepts that as proof of merge.
 func TestPrMergeGate_GhError_LocalGitFallback_IssueNumber(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -174,7 +176,7 @@ func TestPrMergeGate_GhError_LocalGitFallback_IssueNumber(t *testing.T) {
 // pass — it should surface the real problem so the operator can act.
 func TestPrMergeGate_RateLimit_LocalGitFallback_GitFails(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -195,7 +197,7 @@ func TestPrMergeGate_RateLimit_LocalGitFallback_GitFails(t *testing.T) {
 
 func TestPrMergeGate_Fail_InvalidJSON(t *testing.T) {
 	ws := t.TempDir()
-	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, ws)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -216,7 +218,7 @@ func TestPrMergeGate_Fail_InvalidJSON(t *testing.T) {
 // TerminalKindValidationError (Issue #9's named mismatch).
 func TestPrMergeGate_Fail_GhReturnsUnparseableJSON(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {

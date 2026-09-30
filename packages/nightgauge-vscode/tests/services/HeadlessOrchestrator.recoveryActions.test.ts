@@ -20,6 +20,7 @@ vi.mock("vscode", () => ({
 
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { Logger } from "../../src/utils/logger";
+import { fakeCloneLayout, mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 function makeOrchestrator(): HeadlessOrchestrator {
   const logger = {
@@ -32,8 +33,12 @@ function makeOrchestrator(): HeadlessOrchestrator {
 }
 
 describe("HeadlessOrchestrator recovery actions", () => {
+  // Run state lives in the clone's pipeline directory (ADR-024 § 7).
+  let mockRepoPipeline: string;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    mockRepoPipeline = fakeCloneLayout("/mock/repo").pipeline;
   });
 
   it("opens the run-state directory through VSCode", async () => {
@@ -42,10 +47,10 @@ describe("HeadlessOrchestrator recovery actions", () => {
     const result = await orchestrator.runRecoveryAction("open-run-state-directory");
 
     expect(result).toEqual({ success: true });
-    expect(mocks.uriFile).toHaveBeenCalledWith("/mock/repo/.nightgauge/pipeline");
+    expect(mocks.uriFile).toHaveBeenCalledWith(mockRepoPipeline);
     expect(mocks.executeCommand).toHaveBeenCalledWith(
       "revealFileInOS",
-      expect.objectContaining({ fsPath: "/mock/repo/.nightgauge/pipeline" })
+      expect.objectContaining({ fsPath: mockRepoPipeline })
     );
   });
 
@@ -76,8 +81,7 @@ describe("HeadlessOrchestrator recovery actions", () => {
 
   it("treats malformed state as no current lifecycle", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-recovery-state-"));
-    const pipelineDir = path.join(root, ".nightgauge", "pipeline");
-    fs.mkdirSync(pipelineDir, { recursive: true });
+    const pipelineDir = mkFakeCloneLayout(root).pipeline;
     const statePath = path.join(pipelineDir, "run-state.json");
     const orchestrator = makeOrchestrator();
     orchestrator.setWorktreeOverride(root);
@@ -93,8 +97,7 @@ describe("HeadlessOrchestrator recovery actions", () => {
 
   it("does not attribute a foreign run-state lifecycle to the requested issue", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "nightgauge-foreign-recovery-state-"));
-    const pipelineDir = path.join(root, ".nightgauge", "pipeline");
-    fs.mkdirSync(pipelineDir, { recursive: true });
+    const pipelineDir = mkFakeCloneLayout(root).pipeline;
     fs.writeFileSync(
       path.join(pipelineDir, "run-state.json"),
       JSON.stringify({ issue_number: 794, state: "running" })

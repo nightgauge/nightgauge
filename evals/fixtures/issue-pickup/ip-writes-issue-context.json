@@ -1,14 +1,14 @@
 {
   "haiku": {
-    "text": "issue-pickup writes `.nightgauge/pipeline/issue-{N}.json` containing issue_number, labels, and knowledge_path so feature-planning can read its input contract.",
+    "text": "issue-pickup writes `issue-{N}.json` to the clone's pipeline state directory (`nightgauge layout write pipeline issue-{N}.json`) containing issue_number, labels, and knowledge_path so feature-planning can read its input contract.",
     "exit_code": 0
   },
   "sonnet": {
-    "text": "issue-pickup writes `.nightgauge/pipeline/issue-{N}.json` containing issue_number, labels, and knowledge_path so feature-planning can read its input contract.",
+    "text": "issue-pickup writes `issue-{N}.json` to the clone's pipeline state directory (`nightgauge layout write pipeline issue-{N}.json`) containing issue_number, labels, and knowledge_path so feature-planning can read its input contract.",
     "exit_code": 0
   },
   "opus": {
-    "text": "issue-pickup writes `.nightgauge/pipeline/issue-{N}.json` containing issue_number, labels, and knowledge_path so feature-planning can read its input contract.",
+    "text": "issue-pickup writes `issue-{N}.json` to the clone's pipeline state directory (`nightgauge layout write pipeline issue-{N}.json`) containing issue_number, labels, and knowledge_path so feature-planning can read its input contract.",
     "exit_code": 0
   }
 }

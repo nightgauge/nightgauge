@@ -35,17 +35,60 @@ var stagePhaseTables = map[string][]string{
 }
 
 var (
-	editToolRe        = regexp.MustCompile(`^(Edit|Write|MultiEdit|NotebookEdit)$`)
-	readToolRe        = regexp.MustCompile(`^(Read|Grep|Glob)$`)
-	pipelinePathRe    = regexp.MustCompile(`(^|/)\.nightgauge/`)
-	devContextRe      = regexp.MustCompile(`(^|/)dev-\d+\.json$|\.nightgauge/pipeline/dev-`)
+	editToolRe = regexp.MustCompile(`^(Edit|Write|MultiEdit|NotebookEdit)$`)
+	readToolRe = regexp.MustCompile(`^(Read|Grep|Glob)$`)
+	// bookkeepingPathRe is a write that is not a source edit: the in-tree
+	// .nightgauge/ files (config.yaml, knowledge/, ...) and the per-clone data
+	// directory <git-common-dir>/nightgauge/ (ADR-024 § 7).
+	bookkeepingPathRe = regexp.MustCompile(`(^|/)(\.nightgauge|\.git/nightgauge)/`)
+	devContextRe      = regexp.MustCompile(`(^|/)dev-\d+\.json$|\.git/nightgauge/pipeline/dev-`)
 	testBuildRe       = regexp.MustCompile(`\b(vitest|jest|go\s+test|go\s+build|npm\s+(run\s+)?(-w\s+\S+\s+)?(test|build)|pytest|cargo\s+test)\b`)
 	statusSyncRe      = regexp.MustCompile(`\b(move-status|gh\s+project)\b`)
-	planFileRe        = regexp.MustCompile(`(^|/)\.nightgauge/plans/.+\.md$`)
-	planningContextRe = regexp.MustCompile(`(^|/)planning-\d+\.json$|\.nightgauge/pipeline/planning-`)
-	validateContextRe = regexp.MustCompile(`(^|/)validate-\d+\.json$|\.nightgauge/pipeline/validate-`)
+	planFileRe        = regexp.MustCompile(`(^|/)\.git/nightgauge/plans/.+\.md$`)
+	planningContextRe = regexp.MustCompile(`(^|/)planning-\d+\.json$|\.git/nightgauge/pipeline/planning-`)
+	validateContextRe = regexp.MustCompile(`(^|/)validate-\d+\.json$|\.git/nightgauge/pipeline/validate-`)
 	gitPushRe         = regexp.MustCompile(`\bgit\s+push\b`)
+	// layoutWriteRe finds `nightgauge layout write|append <class> <name>` in a
+	// Bash command, the way agents store per-clone files (ADR-024 § 7). Each
+	// flag (--from, --workdir) takes a value, before or after the verb.
+	layoutWriteRe = regexp.MustCompile(`\bnightgauge\s+layout\s+` + layoutFlags +
+		`(?:write|append)\s+` + layoutFlags +
+		`(pipeline|plans|retros|logs)\s+["']?([^\s"'|;&<>()]+)`)
 )
+
+// layoutFlags matches zero or more `--flag value` / `--flag=value` pairs.
+const layoutFlags = `(?:--?[\w-]+(?:=\S+|\s+\S+)\s+)*`
+
+// writtenPaths returns the paths a tool call writes, for the rules that
+// recognise a handoff or plan file: an edit tool's file_path, or, for Bash,
+// `.git/nightgauge/<class>/<name>` for every `nightgauge layout write|append`
+// in the command, so both forms meet the same path patterns.
+func writtenPaths(toolName string, input map[string]any) []string {
+	if editToolRe.MatchString(toolName) {
+		if p := inputStr(input, "file_path"); p != "" {
+			return []string{p}
+		}
+		return nil
+	}
+	if toolName != "Bash" {
+		return nil
+	}
+	var out []string
+	for _, m := range layoutWriteRe.FindAllStringSubmatch(inputStr(input, "command"), -1) {
+		out = append(out, ".git/nightgauge/"+m[1]+"/"+m[2])
+	}
+	return out
+}
+
+// writes reports whether the tool call writes a path re matches.
+func writes(toolName string, input map[string]any, re *regexp.Regexp) bool {
+	for _, p := range writtenPaths(toolName, input) {
+		if re.MatchString(p) {
+			return true
+		}
+	}
+	return false
+}
 
 // inferenceRule maps an observed tool call to a target phase index.
 type inferenceRule struct {
@@ -87,7 +130,7 @@ func stageRules(stage string) []inferenceRule {
 				if path == "" {
 					path = inputStr(input, "notebook_path")
 				}
-				return path != "" && !pipelinePathRe.MatchString(path) && !devContextRe.MatchString(path)
+				return path != "" && !bookkeepingPathRe.MatchString(path) && !devContextRe.MatchString(path)
 			}},
 			// Tests, the dev handoff and the status sync each count only once
 			// an implementation edit has been seen (after: 8).
@@ -95,7 +138,7 @@ func stageRules(stage string) []inferenceRule {
 				return name == "Bash" && testBuildRe.MatchString(inputStr(input, "command"))
 			}},
 			{index: 14, after: 8, match: func(name string, input map[string]any) bool {
-				return editToolRe.MatchString(name) && devContextRe.MatchString(inputStr(input, "file_path"))
+				return writes(name, input, devContextRe)
 			}},
 			{index: 15, after: 8, match: func(name string, input map[string]any) bool {
 				return name == "Bash" && statusSyncRe.MatchString(inputStr(input, "command"))
@@ -106,13 +149,14 @@ func stageRules(stage string) []inferenceRule {
 			// Reading docs/standards/source → documentation-analysis, where
 			// planning spends the bulk of its time. Covers early phases 0-6.
 			{index: 6, match: func(name string, _ map[string]any) bool { return readToolRe.MatchString(name) }},
-			// Writing the plan file (.nightgauge/plans/{N}-*.md) → produce-plan.
+			// Writing the plan file (plans/{N}-*.md in the per-clone data
+			// directory) → produce-plan.
 			{index: 9, match: func(name string, input map[string]any) bool {
-				return editToolRe.MatchString(name) && planFileRe.MatchString(inputStr(input, "file_path"))
+				return writes(name, input, planFileRe)
 			}},
 			// Writing the planning-context handoff → write-planning-context.
 			{index: 10, match: func(name string, input map[string]any) bool {
-				return editToolRe.MatchString(name) && planningContextRe.MatchString(inputStr(input, "file_path"))
+				return writes(name, input, planningContextRe)
 			}},
 		}
 	case "feature-validate":
@@ -136,7 +180,7 @@ func stageRules(stage string) []inferenceRule {
 			}},
 			// Writing the validate-context handoff → write-validate-context.
 			{index: 19, match: func(name string, input map[string]any) bool {
-				return editToolRe.MatchString(name) && validateContextRe.MatchString(inputStr(input, "file_path"))
+				return writes(name, input, validateContextRe)
 			}},
 			// Board status sync → sync-project-status, the stage's last
 			// observable act before it narrates.

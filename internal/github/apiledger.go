@@ -16,7 +16,8 @@ import (
 
 // apiLedgerEnv names the env var that overrides the GitHub API call ledger.
 // Set it to a path to choose the file, to "1" to force the default location
-// under the workspace's .nightgauge/logs/, or to "0" to switch the ledger off.
+// in the workspace's per-clone logs directory (layout.CloneLogsDir), or to "0"
+// to switch the ledger off.
 //
 // The ledger exists because every previous attempt to cut this repo's GitHub
 // API consumption reasoned from a code audit — counting call sites and
@@ -355,8 +356,18 @@ func openAPILedger() *apiLedger {
 		}
 		if explicitPath {
 			path = filepath.Join(base, path)
-		} else if path = DefaultLedgerPath(base); path == "" {
-			return nil
+		} else {
+			// The per-clone logs directory lives under the git directory
+			// (ADR-024 § 7), which every git repository has, so "is this a
+			// workspace" (below) is asked of the base: a Nightgauge workspace
+			// has its .nightgauge/ team-config directory at the root. It is
+			// asked before resolving, which creates the clone directory.
+			if info, err := os.Stat(filepath.Join(base, ".nightgauge")); err != nil || !info.IsDir() {
+				return nil // no .nightgauge/ here — this is not a workspace
+			}
+			if path, err = DefaultLedgerPath(base); err != nil {
+				return nil
+			}
 		}
 	}
 	// At the DEFAULT path, the ledger writes into an existing workspace and
@@ -370,11 +381,6 @@ func openAPILedger() *apiLedger {
 	//
 	// An explicitly configured path is a different statement: the operator
 	// named a file, so the directories for it are created.
-	if !explicitPath {
-		if _, err := os.Stat(filepath.Dir(filepath.Dir(path))); err != nil {
-			return nil // no .nightgauge/ here — this is not a workspace
-		}
-	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil
 	}

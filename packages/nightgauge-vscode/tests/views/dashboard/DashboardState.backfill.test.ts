@@ -14,6 +14,7 @@ import { createMockMemento } from "../../mocks/memento";
 import type * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { fakeCloneLayout } from "../../helpers/cloneLayout";
 
 // Mock fs module
 vi.mock("node:fs/promises");
@@ -26,6 +27,12 @@ vi.mock("vscode", () => ({
     }),
   },
 }));
+
+// Every suite's workspace root resolves to a deterministic per-clone layout
+// (ADR-024 § 7); fs is mocked, so nothing touches disk.
+beforeEach(() => {
+  fakeCloneLayout("/test/workspace");
+});
 
 /**
  * Create a mock pipeline state-42.json content for testing

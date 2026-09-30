@@ -31,6 +31,8 @@ import {
 } from "../../cli/workflow/index.js";
 import { createSuccessQueryFn } from "../integration/helpers/query-mocks.js";
 import type { ICliAdapter, NightgaugeAdapter } from "../../cli/adapters/ICliAdapter.js";
+import { resolveCloneLayout } from "../../context/cloneLayout.js";
+import { initCloneRepo } from "../helpers/gitRepo.js";
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -136,7 +138,7 @@ async function makeWorkspace(fanoutStages: string[]): Promise<{
     const content = fanoutStages.includes(stage) ? FANOUT_SKILL : PLAIN_SKILL;
     await fs.writeFile(path.join(d, "SKILL.md"), content, "utf-8");
   }
-  await fs.mkdir(path.join(dir, ".nightgauge", "pipeline"), { recursive: true });
+  await fs.mkdir(initCloneRepo(dir).pipeline, { recursive: true });
   return { dir, cleanup: () => fs.rm(dir, { recursive: true, force: true }) };
 }
 
@@ -148,7 +150,7 @@ function makeOrchestrator(
   return new PipelineOrchestrator(createSuccessQueryFn(), {
     cwd: workspaceDir,
     skillsPath: path.join(workspaceDir, "skills"),
-    contextPath: path.join(workspaceDir, ".nightgauge", "pipeline"),
+    contextPath: resolveCloneLayout(workspaceDir).pipeline,
     ...over,
   });
 }

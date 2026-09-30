@@ -36,10 +36,13 @@ installObservers();
 
 /**
  * The launcher opens two windows (launch.ts). The demo window opens the demo
- * workspace and plays the reference scenario, so it runs only the demo-mode
- * suite; the main window runs everything else.
+ * workspace and plays the reference scenario, so it runs the demo-workspace
+ * suite (whose dashboard tabs read per-clone data, which only a git repository
+ * holds, ADR-024 § 7) against the seed, then the demo-mode suite, which plays
+ * the scenario. The main window runs everything else, in a folder outside any
+ * git repository.
  */
-const DEMO_WINDOW_SUITES = ["demo mode"];
+const DEMO_WINDOW_SUITES = ["demo workspace", "demo mode"];
 const isDemoWindow = process.env.NIGHTGAUGE_HOST_WINDOW === "demo";
 const runsSuite = (name: string): boolean => DEMO_WINDOW_SUITES.includes(name) === isDemoWindow;
 
@@ -53,7 +56,6 @@ const REQUIRED_SUITES = isDemoWindow
       "tree views (populated workspace)",
       "webviews",
       "ipc inventory",
-      "demo workspace",
     ];
 
 export async function run(): Promise<void> {

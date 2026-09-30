@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func seedCorpus(t *testing.T, root string, outcomes ...learning.Outcome) {
@@ -36,7 +37,7 @@ func row(issue int, predicted, actual string) learning.Outcome {
 // with an empty predictedModel — which every consumer reported politely as "no
 // data" while the model-routing feedback signal had never once been produced.
 func TestCorpusCalibration_ReportsAnUnmeasurableCorpus(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	var rows []learning.Outcome
 	for i := 1; i <= 12; i++ {
 		rows = append(rows, row(i, "", "")) // both halves empty, as in the real corpus
@@ -62,7 +63,7 @@ func TestCorpusCalibration_ReportsAnUnmeasurableCorpus(t *testing.T) {
 // TestCorpusCalibration_OneMeasurablePairIsEnough is the control the AC names
 // explicitly: a corpus with >= 1 measurable pair must produce no finding.
 func TestCorpusCalibration_OneMeasurablePairIsEnough(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	var rows []learning.Outcome
 	for i := 1; i <= 11; i++ {
 		rows = append(rows, row(i, "", ""))
@@ -84,7 +85,7 @@ func TestCorpusCalibration_OneMeasurablePairIsEnough(t *testing.T) {
 // fresh workspace legitimately has no measurable pairs, and an arm that fired
 // on those would be muted before it ever caught the real defect.
 func TestCorpusCalibration_YoungCorpusIsNotAFinding(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	var rows []learning.Outcome
 	for i := 1; i < minCorpusRowsForCalibrationFinding; i++ {
 		rows = append(rows, row(i, "", ""))
@@ -104,7 +105,7 @@ func TestCorpusCalibration_YoungCorpusIsNotAFinding(t *testing.T) {
 
 // TestCorpusCalibration_EmptyWorkspaceIsHealthy guards the common case.
 func TestCorpusCalibration_EmptyWorkspaceIsHealthy(t *testing.T) {
-	fs, _ := corpusCalibrationFindings(t.TempDir())
+	fs, _ := corpusCalibrationFindings(layouttest.Repo(t))
 	warning := findingsText(fs)
 	if len(fs) != 0 {
 		t.Errorf("empty workspace reported a finding: findings=%q", warning)
@@ -116,7 +117,7 @@ func TestCorpusCalibration_EmptyWorkspaceIsHealthy(t *testing.T) {
 // denominator by Calibrate — counting it here would report health the
 // calibrator does not see.
 func TestCorpusCalibration_HalfAPairIsNotAPair(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	var rows []learning.Outcome
 	for i := 1; i <= 6; i++ {
 		rows = append(rows, row(i, "sonnet", "")) // prediction, no measurement

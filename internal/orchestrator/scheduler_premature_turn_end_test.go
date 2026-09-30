@@ -27,7 +27,7 @@ import (
 // a success.
 func TestScheduler_FeaturePlanning_PrematureTurnEnd_FailsPipeline(t *testing.T) {
 	stubReconcileGhUnreachable(t)
-	root := t.TempDir()
+	root := gitWorkspace(t)
 
 	for _, dir := range []string{
 		"nightgauge-issue-pickup",

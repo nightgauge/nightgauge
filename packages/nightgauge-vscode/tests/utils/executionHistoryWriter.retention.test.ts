@@ -22,6 +22,8 @@ import {
   type HistoryIndex,
   type HistoryIndexEntry,
 } from "../../src/utils/executionHistoryWriter";
+import { pipelineStateDir } from "../../src/utils/cloneLayout";
+import { initGitRepo } from "../helpers/cloneLayout";
 
 function writeProjectConfig(root: string, contents: string): void {
   const dir = path.join(root, ".nightgauge");
@@ -30,7 +32,7 @@ function writeProjectConfig(root: string, contents: string): void {
 }
 
 function historyDir(root: string): string {
-  return path.join(root, ".nightgauge", "pipeline", "history");
+  return path.join(pipelineStateDir(root), "history");
 }
 
 function daysAgo(n: number): Date {
@@ -60,7 +62,7 @@ describe("ExecutionHistoryWriter retention config threading (#674)", () => {
   let root: string;
 
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "history-retention-"));
+    root = initGitRepo(fs.mkdtempSync(path.join(os.tmpdir(), "history-retention-")));
   });
 
   afterEach(() => {

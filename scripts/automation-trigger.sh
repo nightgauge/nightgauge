@@ -89,18 +89,14 @@ export AUTOMATION_DRY_RUN="$DRY_RUN"
 # ---------------------------------------------------------------------------
 # Log file
 # ---------------------------------------------------------------------------
-LOG_FILE=$(yq -r '.automations.log_file // ".nightgauge/logs/automation.log"' "$CONFIG_FILE")
-if [ "${NIGHTGAUGE_AUTOMATIONS_LOG_FILE:-}" != "" ]; then
-  LOG_FILE="$NIGHTGAUGE_AUTOMATIONS_LOG_FILE"
-fi
-
-# Validate log_file path: reject traversal and absolute paths
-if echo "$LOG_FILE" | grep -qE '(^/|\.\.)'; then
-  echo "ERROR: log_file path must be relative and cannot contain '..': $LOG_FILE" >&2
+# automation.log in the clone's logs directory (ADR-024 § 7); per-clone data
+# has no location override.
+if ! AUTOMATION_LOG_FILE=$(nightgauge layout --workdir "$REPO_ROOT" \
+  path logs automation.log); then
+  echo "ERROR: cannot resolve the logs directory with 'nightgauge layout path logs'" >&2
   exit 2
 fi
-
-export AUTOMATION_LOG_FILE="${REPO_ROOT}/${LOG_FILE}"
+export AUTOMATION_LOG_FILE
 mkdir -p "$(dirname "$AUTOMATION_LOG_FILE")"
 
 # ---------------------------------------------------------------------------

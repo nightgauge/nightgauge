@@ -161,6 +161,8 @@ import {
   PostPipelineAnalyzer,
   type PostPipelineAnalysisResult,
 } from "../../src/services/PostPipelineAnalyzer";
+import type { CloneLayout } from "../../src/utils/cloneLayout";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mock logger
 function createMockLogger() {
@@ -247,9 +249,11 @@ function createRunRecord(
 describe("PostPipelineAnalyzer", () => {
   const workspaceRoot = "/test/workspace";
   let logger: ReturnType<typeof createMockLogger>;
+  let layout: CloneLayout;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    layout = fakeCloneLayout(workspaceRoot);
     logger = createMockLogger();
 
     // Default: fs.mkdir succeeds
@@ -474,7 +478,7 @@ describe("PostPipelineAnalyzer", () => {
         },
       });
       vi.mocked(fs.readFile).mockImplementation(async (file) => {
-        if (String(file).endsWith(".nightgauge/pipeline/pr-100.json")) {
+        if (String(file) === path.join(layout.pipeline, "pr-100.json")) {
           return JSON.stringify({ pr_number: 200 });
         }
         throw new Error("ENOENT");
@@ -1469,7 +1473,7 @@ describe("PostPipelineAnalyzer", () => {
       });
 
       vi.mocked(fs.readdir).mockImplementation(async (p: any) => {
-        if (String(p).endsWith(".nightgauge/pipeline")) {
+        if (String(p) === layout.pipeline) {
           return ["workflow-r1.jsonl"] as any;
         }
         return [] as any;

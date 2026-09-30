@@ -16,6 +16,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import * as path from "node:path";
 import { ContextWatcherService } from "../../src/services/ContextWatcherService";
+import type { CloneLayout } from "../../src/utils/cloneLayout";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mock logger to avoid console noise in tests
 const mockLogger = {
@@ -106,9 +108,11 @@ describe("ContextWatcherService", () => {
   const workspaceRoot = "/test/workspace";
   let vscode: any;
   let watcherInstances: any[];
+  let layout: CloneLayout;
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    layout = fakeCloneLayout(workspaceRoot);
     // Get the mocked vscode module and reset watcher instances
     vscode = await import("vscode");
     watcherInstances = (vscode as any)._testWatcherInstances;
@@ -134,7 +138,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       expect(issueWatcher).toBeDefined();
-      expect(issueWatcher?.pattern.base).toBe(path.join(workspaceRoot, ".nightgauge", "pipeline"));
+      expect(issueWatcher?.pattern.base).toBe(layout.pipeline);
 
       service.dispose();
     });
@@ -219,7 +223,7 @@ describe("ContextWatcherService", () => {
       // Trigger file creation
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       };
       await issueWatcher?.callbacks.onCreate?.(mockUri);
 
@@ -254,7 +258,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       };
       await issueWatcher?.callbacks.onCreate?.(mockUri);
 
@@ -285,7 +289,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       };
       await issueWatcher?.callbacks.onChange?.(mockUri);
 
@@ -306,7 +310,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       };
       issueWatcher?.callbacks.onDelete?.(mockUri);
 
@@ -326,7 +330,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       };
       await issueWatcher?.callbacks.onCreate?.(mockUri);
 
@@ -353,7 +357,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       };
       await issueWatcher?.callbacks.onCreate?.(mockUri);
 
@@ -375,7 +379,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       };
       await issueWatcher?.callbacks.onCreate?.(mockUri);
 
@@ -404,7 +408,7 @@ describe("ContextWatcherService", () => {
 
       const stageWatcher = watcherInstances.find((w) => w.pattern.pattern === `${prefix}-*.json`);
       const mockUri = {
-        fsPath: `/test/workspace/.nightgauge/pipeline/${prefix}-42.json`,
+        fsPath: path.join(layout.pipeline, `${prefix}-42.json`),
       };
       await stageWatcher?.callbacks.onCreate?.(mockUri);
 
@@ -424,7 +428,7 @@ describe("ContextWatcherService", () => {
 
       const devWatcher = watcherInstances.find((w) => w.pattern.pattern === "dev-*.json");
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/pipeline/dev-42.json",
+        fsPath: path.join(layout.pipeline, "dev-42.json"),
       };
 
       await devWatcher?.callbacks.onCreate?.(mockUri);
@@ -444,7 +448,7 @@ describe("ContextWatcherService", () => {
       const devWatcher = watcherInstances.find((w) => w.pattern.pattern === "dev-*.json");
       // Invalid filename - no number
       const mockUri = {
-        fsPath: "/test/workspace/.nightgauge/pipeline/dev-abc.json",
+        fsPath: path.join(layout.pipeline, "dev-abc.json"),
       };
       await devWatcher?.callbacks.onCreate?.(mockUri);
 
@@ -474,7 +478,7 @@ describe("ContextWatcherService", () => {
       // Only issue files trigger onIssueCleared, but we can verify extraction
       // by triggering the delete handler
       const mockUri = {
-        fsPath: `/test/workspace/.nightgauge/pipeline/${filename}`,
+        fsPath: path.join(layout.pipeline, `${filename}`),
       };
 
       // For issue files, deletion fires the event. `filename` is a bare
@@ -499,10 +503,10 @@ describe("ContextWatcherService", () => {
 
       // Invalid filename patterns
       const invalidUris = [
-        { fsPath: "/test/workspace/.nightgauge/pipeline/issue-.json" },
-        { fsPath: "/test/workspace/.nightgauge/pipeline/issue-abc.json" },
-        { fsPath: "/test/workspace/.nightgauge/pipeline/unknown-42.json" },
-        { fsPath: "/test/workspace/.nightgauge/pipeline/state.json" },
+        { fsPath: path.join(layout.pipeline, "issue-.json") },
+        { fsPath: path.join(layout.pipeline, "issue-abc.json") },
+        { fsPath: path.join(layout.pipeline, "unknown-42.json") },
+        { fsPath: path.join(layout.pipeline, "state.json") },
       ];
 
       for (const uri of invalidUris) {
@@ -776,7 +780,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       await issueWatcher?.callbacks.onCreate?.({
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       });
 
       expect(issueHandler).toHaveBeenCalledWith({
@@ -800,7 +804,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       await issueWatcher?.callbacks.onCreate?.({
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       });
 
       expect(issueHandler).not.toHaveBeenCalled();
@@ -881,7 +885,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       await issueWatcher?.callbacks.onCreate?.({
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       });
 
       expect(issueHandler).not.toHaveBeenCalled();
@@ -900,7 +904,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       await issueWatcher?.callbacks.onChange?.({
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       });
 
       expect(issueHandler).not.toHaveBeenCalled();
@@ -918,7 +922,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       issueWatcher?.callbacks.onDelete?.({
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       });
 
       expect(clearedHandler).not.toHaveBeenCalled();
@@ -936,7 +940,7 @@ describe("ContextWatcherService", () => {
 
       const devWatcher = watcherInstances.find((w) => w.pattern.pattern === "dev-*.json");
       await devWatcher?.callbacks.onCreate?.({
-        fsPath: "/test/workspace/.nightgauge/pipeline/dev-42.json",
+        fsPath: path.join(layout.pipeline, "dev-42.json"),
       });
 
       expect(stageHandler).not.toHaveBeenCalled();
@@ -985,7 +989,7 @@ describe("ContextWatcherService", () => {
 
       const issueWatcher = watcherInstances.find((w) => w.pattern.pattern === "issue-*.json");
       await issueWatcher?.callbacks.onCreate?.({
-        fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
+        fsPath: path.join(layout.pipeline, "issue-42.json"),
       });
 
       expect(issueHandler).toHaveBeenCalledTimes(1);

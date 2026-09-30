@@ -16,6 +16,8 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // ---------------------------------------------------------------------------
@@ -110,7 +112,10 @@ func (r *ownRunPRRunner) RunStage(_ context.Context, params StageRunParams) (*St
 		if err := stagecontext.Validate(sc); err != nil {
 			r.t.Fatalf("fixture stage context for %s is invalid: %v", params.Stage, err)
 		}
-		path := stagecontext.ContextPath(r.worktree, params.IssueNumber, ctxType)
+		path, err := stagecontext.ContextPath(r.worktree, params.IssueNumber, ctxType)
+		if err != nil {
+			r.t.Fatalf("resolve %s context path: %v", ctxType, err)
+		}
 		if err := stagecontext.WriteContext(path, sc); err != nil {
 			r.t.Fatalf("write %s context into worktree: %v", ctxType, err)
 		}
@@ -124,7 +129,7 @@ func (r *ownRunPRRunner) RunStage(_ context.Context, params StageRunParams) (*St
 // PR: "the PR I opened is #num".
 func writeRecordedPRContext(t *testing.T, workspace string, issueNumber, num int) {
 	t.Helper()
-	dir := filepath.Join(workspace, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, workspace)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir pipeline dir: %v", err)
 	}

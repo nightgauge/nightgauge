@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // writeTestRecord is a thin shim so tests can scatter records across days
@@ -18,7 +19,7 @@ func writeTestRecord(t *testing.T, root string, ts time.Time, rec diagnostics.St
 }
 
 func TestTailExitRecords_DefaultLimit_NewestFirst(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Now().UTC()
 
 	// 3 records today, oldest first
@@ -47,7 +48,7 @@ func TestTailExitRecords_DefaultLimit_NewestFirst(t *testing.T) {
 }
 
 func TestTailExitRecords_RespectsLimit(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	for i := 0; i < 10; i++ {
 		writeTestRecord(t, root, time.Now(), diagnostics.StageExitRecord{
 			Repo: "r", Issue: i, Stage: "feature-dev", Success: true,
@@ -63,7 +64,7 @@ func TestTailExitRecords_RespectsLimit(t *testing.T) {
 }
 
 func TestTailExitRecords_FiltersByIssue(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeTestRecord(t, root, time.Now(), diagnostics.StageExitRecord{
 		Repo: "r", Issue: 3591, Stage: "feature-planning", Success: false,
 	})
@@ -89,7 +90,7 @@ func TestTailExitRecords_FiltersByIssue(t *testing.T) {
 }
 
 func TestTailExitRecords_NoDirectoryReturnsEmpty(t *testing.T) {
-	root := t.TempDir() // no exit-records subdir
+	root := layouttest.Repo(t) // no exit-records subdir
 	got, err := tailExitRecords(root, 0, 20)
 	if err != nil {
 		t.Fatalf("tail: %v", err)

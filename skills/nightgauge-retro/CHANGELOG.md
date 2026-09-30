@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Changed
 
+- Per-clone pipeline state, plans, retros and logs are read at
+  `$(nightgauge layout path <class> <name>)` and written through
+  `nightgauge layout write|append`, not by `.nightgauge/...` path (#2037,
+  ADR-024 § 7).
 - Outcomes always land in `decisions.md`. The `outcomes.md` fallback is gone: it
   split the retro learning loop across two filenames while `decisions.md` was
   the only one anything read back, and it never produced a file in this tree. A

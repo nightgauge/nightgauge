@@ -87,8 +87,9 @@ type Target struct {
 }
 
 // Targets returns the log directories retention covers for workspaceRoot:
-// CLONE/logs of that root (when the root is absolute) and STATE/logs. It
-// resolves paths only; nothing is created.
+// CLONE/logs of that root (when the root is absolute and in a git repository)
+// and STATE/logs. Neither log directory is created; resolving CLONE/logs
+// creates the empty CLONE root (mode 0700) as every per-clone resolution does.
 func Targets(workspaceRoot string) []Target {
 	var out []Target
 	if workspaceRoot != "" {
@@ -113,8 +114,8 @@ func (t Target) InFlight() func(int) bool {
 	if main == "" {
 		main = t.root
 	}
-	dir := state.PipelineStateDir(main)
-	if dir == "" {
+	dir, err := state.PipelineStateDir(main)
+	if err != nil {
 		return nil
 	}
 	active, err := state.ActiveIssuesFromSnapshots(dir)

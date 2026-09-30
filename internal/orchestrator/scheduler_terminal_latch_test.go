@@ -26,6 +26,8 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // TestRunPipeline_LatchesTerminalAndSealsTheSnapshot is the direct
@@ -38,7 +40,7 @@ func TestRunPipeline_LatchesTerminalAndSealsTheSnapshot(t *testing.T) {
 	s := newRunIdentityTestScheduler(t, root, runner)
 
 	item := types.BoardItem{Number: 8810, Repo: "nightgauge/nightgauge", ID: "item-8810", Title: "terminal latch"}
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, root)
 
 	// Mid-run the snapshot must exist and must NOT be terminal — otherwise the
 	// post-run assertions below would pass against a run that never wrote one,

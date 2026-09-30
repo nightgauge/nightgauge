@@ -12,13 +12,15 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // writeBaseline writes a minimal auto-fix-baseline-{PR}.json into the given
 // workspace. The shape mirrors what Step 2.5 of the auto-fix loop produces.
 func writeBaseline(t *testing.T, workspace string, prNumber int, body string) {
 	t.Helper()
-	dir := filepath.Join(workspace, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, workspace)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +44,7 @@ func jsonNumber(n int) []byte {
 // PR may proceed past the human-approval gate in tests that exercise creation.
 func grantHealBaseApproval(t *testing.T, workspace string, prNumber int) {
 	t.Helper()
-	dir := filepath.Join(workspace, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, workspace)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +115,7 @@ func TestPipelineHealBase_Execute_NoBaselineFile(t *testing.T) {
 }
 
 func TestPipelineHealBase_Execute_MixedBatchRefuses(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	writeBaseline(t, workspace, 42, `{"failures":[
 		{"name":"a","classification":"inherited","details":""},
 		{"name":"b","classification":"regression","details":""}
@@ -129,7 +131,7 @@ func TestPipelineHealBase_Execute_MixedBatchRefuses(t *testing.T) {
 }
 
 func TestPipelineHealBase_Execute_ThrottleActiveLimit(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	writeBaseline(t, workspace, 42, `{"failures":[
 		{"name":"users.test","classification":"inherited","details":"ENOENT: no such file test/fixtures/users.json"}
 	]}`)
@@ -157,7 +159,7 @@ func TestPipelineHealBase_Execute_ThrottleActiveLimit(t *testing.T) {
 }
 
 func TestPipelineHealBase_Execute_Throttle24hLimit(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	writeBaseline(t, workspace, 42, `{"failures":[
 		{"name":"users.test","classification":"inherited","details":"ENOENT: no such file test/fixtures/users.json"}
 	]}`)
@@ -193,7 +195,7 @@ func TestPipelineHealBase_Execute_Throttle24hLimit(t *testing.T) {
 }
 
 func TestPipelineHealBase_Execute_NoPatternMatch(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	// Cluster matches no built-in pattern — just an unrelated assertion.
 	writeBaseline(t, workspace, 42, `{"failures":[
 		{"name":"some.test","classification":"inherited","details":"AssertionError: expected 1 to equal 2"}
@@ -217,7 +219,7 @@ func TestPipelineHealBase_Execute_NoPatternMatch(t *testing.T) {
 }
 
 func TestPipelineHealBase_Execute_DeterministicFix_CreatesPR(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	writeBaseline(t, workspace, 42, `{"failures":[
 		{"name":"users.test","classification":"inherited","details":"ENOENT: no such file or directory test/fixtures/users.json"}
 	]}`)
@@ -296,7 +298,7 @@ func TestPipelineHealBase_Execute_DeterministicFix_CreatesPR(t *testing.T) {
 }
 
 func TestPipelineHealBase_Execute_FirstOccurrenceDowngrades(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	writeBaseline(t, workspace, 42, `{"failures":[
 		{"name":"users.test","classification":"inherited","details":"ENOENT: no such file or directory test/fixtures/users.json"}
 	]}`)
@@ -335,7 +337,7 @@ func TestPipelineHealBase_Execute_FirstOccurrenceDowngrades(t *testing.T) {
 }
 
 func TestPipelineHealBase_Execute_CrossRepoFix(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	// Failure carries a TargetRepo hint, so the heal PR must be created with
 	// --repo <target>.
 	writeBaseline(t, workspace, 42, `{"failures":[
@@ -381,7 +383,7 @@ func TestPipelineHealBase_Execute_CrossRepoFix(t *testing.T) {
 }
 
 func TestPipelineHealBase_Execute_GhCreateFailsBubblesUp(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	writeBaseline(t, workspace, 42, `{"failures":[
 		{"name":"users.test","classification":"inherited","details":"ENOENT: no such file test/fixtures/users.json"}
 	]}`)
@@ -414,7 +416,7 @@ func TestPipelineHealBase_Execute_GhCreateFailsBubblesUp(t *testing.T) {
 // #4136 — without an out-of-band approval, the heal action must NOT create a PR
 // or push any branch; it returns human-triage with an approval-required reason.
 func TestPipelineHealBase_Execute_RequiresApproval(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	writeBaseline(t, workspace, 42, `{"failures":[
 		{"name":"users.test","classification":"inherited","details":"ENOENT: no such file or directory test/fixtures/users.json"}
 	]}`)
@@ -457,7 +459,7 @@ func TestPipelineHealBase_Execute_RequiresApproval(t *testing.T) {
 // #4136 — the approval LABEL on the failing PR is a valid (durable) approval
 // surface: it lets the heal PR proceed even with no local approval file.
 func TestPipelineHealBase_Execute_ApprovalViaLabel(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	writeBaseline(t, workspace, 42, `{"failures":[
 		{"name":"users.test","classification":"inherited","details":"ENOENT: no such file or directory test/fixtures/users.json"}
 	]}`)

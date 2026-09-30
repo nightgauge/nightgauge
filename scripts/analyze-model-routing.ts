@@ -26,6 +26,7 @@ import {
 import { DEFAULT_MODEL_COST_RATES } from "../packages/nightgauge-sdk/src/analysis/types.js";
 import { ESCALATION_CEILING_BAND } from "../packages/nightgauge-sdk/src/eval/selectionQuery.js";
 import { TIER_BANDS } from "../packages/nightgauge-sdk/src/eval/tierBands.js";
+import { cloneClassDir } from "../packages/nightgauge-sdk/src/context/cloneLayout.js";
 
 // Band anchors derived from the TIER_BANDS authority (#581) instead of
 // re-spelled literals (#582). Semantics are unchanged: "light" is the weakest
@@ -181,7 +182,6 @@ const PIPELINE_STAGES = [
 ] as const;
 
 const DEFAULT_SINCE = "2026-02-15T00:00:00Z";
-const HISTORY_DIR = ".nightgauge/pipeline/history";
 
 // ---------------------------------------------------------------------------
 // CLI Argument Parsing
@@ -1161,8 +1161,10 @@ function generateReport(
 async function main(): Promise<void> {
   const { since, output } = parseArgs();
 
-  console.log(`Loading JSONL records from ${HISTORY_DIR} (since ${since})...`);
-  const records = await loadRunRecords(HISTORY_DIR, since);
+  // Run history lives in the clone's pipeline directory (ADR-024 § 7).
+  const historyDir = path.join(cloneClassDir("pipeline"), "history");
+  console.log(`Loading JSONL records from ${historyDir} (since ${since})...`);
+  const records = await loadRunRecords(historyDir, since);
   console.log(`Loaded ${records.length} run records.`);
 
   if (records.length === 0) {

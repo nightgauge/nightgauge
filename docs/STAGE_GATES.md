@@ -261,9 +261,8 @@ its base lacks. Two rules make it safe to run after the money is spent:
   branch is not `main` fails and the safety rails halt the queue.
 - **Bookkeeping is not the deliverable.** `.nightgauge/` and `.claude/` are
   excluded (`ci.BookkeepingDirs`). Whether they show in `git status` is a
-  per-repo accident — this repo ignores `.nightgauge/pipeline` but not
-  `.nightgauge/attention` — so counting them would let the run's own exhaust
-  answer "did this produce work?" and quietly disable the gate.
+  per-repo accident of each repository's ignore rules, so counting them would
+  let the run's own exhaust answer "did this produce work?" and quietly disable the gate.
 
 When it fails it reports `dev_produced_no_changes` and names any sibling
 worktree still holding uncommitted work, so the stranded implementation can be
@@ -363,7 +362,8 @@ legitimate future NoOp/skipped stage cannot become a false failure.
 `nightgauge gate verify <stage> <N> --record` additionally appends the
 `GateResult` onto the run record via
 `internal/state.AppendStageGateResultToDisk`, which loads
-`{workdir}/.nightgauge/pipeline/runtime-{N}.json` (falling back to a fresh
+`runtime-{N}.json` from the pipeline state directory resolved for `{workdir}`
+(`nightgauge layout path pipeline`; falling back to a fresh
 `RuntimeState` when absent), appends through the same
 `RuntimeState.AppendStageGateResult` the in-process scheduler loop uses, and
 persists via `RuntimeState.Persist` — the same file the scheduler itself
@@ -390,7 +390,7 @@ isolation with `scripts/check-boundary-allowlist-isolation.sh`.
 
 1. **Implement `StageGate`** — add `internal/orchestrator/gates/<stage>_gate.go`.
    The body should be deterministic and read whatever skill output the
-   stage produces under `.nightgauge/pipeline/`. Use the `timed(...)`
+   stage produces in the clone's pipeline state directory. Use the `timed(...)`
    helper to fill in `DurationMs` and `Timestamp` automatically.
 2. **Register** — add an entry to `gates.Default()` keyed by the stage's
    `state.PipelineStage` constant.

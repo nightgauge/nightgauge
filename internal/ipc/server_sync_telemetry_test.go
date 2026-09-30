@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -91,8 +92,8 @@ func TestPlatformSyncTelemetry_Success(t *testing.T) {
 	}))
 	defer mock.Close()
 
-	root := t.TempDir()
-	historyDir := filepath.Join(root, ".nightgauge", "pipeline", "history")
+	root := layouttest.Repo(t)
+	historyDir := filepath.Join(layouttest.PipelineDir(t, root), "history")
 	// Records carry a real stage + duration so CanonicalizeRuns keeps them
 	// (zero-stage/zero-cost/zero-duration records are dropped as synthetic noise).
 	writeV2TestRecord(t, historyDir, "2026-03-15", []state.V2RunRecord{
@@ -150,7 +151,7 @@ func TestPlatformSyncTelemetry_DefaultParams(t *testing.T) {
 	}))
 	defer mock.Close()
 
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := newSyncTelemetryServer(t, mock.URL, root)
 
 	result, err := callHandler(t, s, "platform.syncTelemetry", PlatformSyncTelemetryParams{})

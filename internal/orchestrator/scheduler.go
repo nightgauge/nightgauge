@@ -1174,7 +1174,9 @@ type QueueState struct {
 	UpdatedAt     time.Time   `json:"updated_at"`
 }
 
-const queueStateFile = ".nightgauge/pipeline/queue-state.json"
+// queueStateFile is the queue's file name in the pipeline state directory
+// (layout.PipelineStateDir).
+const queueStateFile = "queue-state.json"
 
 // queueSchemaVersion is the persisted queue schema version.
 //
@@ -1199,12 +1201,13 @@ const queueStateFile = ".nightgauge/pipeline/queue-state.json"
 // Label field is omitempty, so older records remain valid without a migration.
 const queueSchemaVersion = "2.4"
 
-// currentRunSidecarFile is the path (relative to workspaceRoot) where the
+// currentRunSidecarFile is the file name, in the pipeline state directory
+// (layout.PipelineStateDir), where the
 // scheduler records the in-flight run at stage start. The file is removed on
 // clean pipeline completion. A stale sidecar at scheduler startup means the
 // orchestrator process crashed mid-stage; the loadQueue path synthesizes a
 // terminal-failure RunRecord and pauses the queue. (Issue #3001)
-const currentRunSidecarFile = ".nightgauge/pipeline/current-run.json"
+const currentRunSidecarFile = "current-run.json"
 
 // SchedulerConfig holds configuration for the scheduler.
 type SchedulerConfig struct {
@@ -3129,8 +3132,12 @@ func (s *Scheduler) persistQueue() {
 		log.Printf("queue: failed to marshal state: %v", err)
 		return
 	}
-	p := filepath.Join(s.workspaceRoot, queueStateFile)
-	dir := filepath.Dir(p)
+	dir, err := layout.PipelineStateDir(s.workspaceRoot)
+	if err != nil {
+		log.Printf("queue: failed to resolve state dir: %v", err)
+		return
+	}
+	p := filepath.Join(dir, queueStateFile)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Printf("queue: failed to create dir: %v", err)
 		return
@@ -3220,7 +3227,7 @@ func (s *Scheduler) loadQueue() {
 	if s.workspaceRoot == "" {
 		return
 	}
-	p := filepath.Join(s.workspaceRoot, queueStateFile)
+	p := pipelineStatePath(s.workspaceRoot, queueStateFile)
 	data, err := os.ReadFile(p)
 	switch {
 	case os.IsNotExist(err):
@@ -3268,7 +3275,7 @@ func (s *Scheduler) loadQueue() {
 	// WHAT CONSTRUCTION STILL WRITES, named rather than implied by a banner:
 	// recoverOrchestratorCrashAt synthesizes a terminal-failure RunRecord into
 	// the daily JSONL, pauses and persists queue-state.json, and unlinks
-	// `.nightgauge/pipeline/current-run.json`. That is bookkeeping about a run
+	// `.git/nightgauge/pipeline/current-run.json`. That is bookkeeping about a run
 	// whose process is GONE — the gate is runstate.ProcessAlive on the pid the
 	// sidecar carries, so a live run is left entirely alone: no record, no pause,
 	// no unlink. Writing a crash record for a dead orchestrator is not the same
@@ -3764,7 +3771,10 @@ func validateStageOutput(stage state.PipelineStage, workspaceRoot string, issueN
 	if !ok {
 		return nil // terminal stage — no output context expected
 	}
-	outputFile := stagecontext.ContextPath(workspaceRoot, issueNumber, ctxType)
+	outputFile, err := stagecontext.ContextPath(workspaceRoot, issueNumber, ctxType)
+	if err != nil {
+		return fmt.Errorf("stage %s: %w", stage, err)
+	}
 	if _, statErr := os.Stat(outputFile); os.IsNotExist(statErr) {
 		return fmt.Errorf("stage %s exited 0 but did not write expected output context: %s", stage, outputFile)
 	}
@@ -3790,7 +3800,10 @@ func validateStageOutput(stage state.PipelineStage, workspaceRoot string, issueN
 // rather than failing a stage that succeeded. The stage is instructed not to
 // write the field, so "left alone" means the skeleton's null.
 func spliceACReconcile(workspaceRoot string, issueNumber int, planningFile string) {
-	reportPath := stagecontext.ContextPath(workspaceRoot, issueNumber, "ac-reconcile")
+	reportPath, err := stagecontext.ContextPath(workspaceRoot, issueNumber, "ac-reconcile")
+	if err != nil {
+		return
+	}
 	reportRaw, err := os.ReadFile(reportPath)
 	if err != nil {
 		return
@@ -3833,10 +3846,9 @@ func spliceACReconcile(workspaceRoot string, issueNumber int, planningFile strin
 // subdirectories, consistent with the recovery-action shell-out pattern.
 // Issue #3542.
 //
-// Bookkeeping directories are excluded (#202). Every run writes
-// `.nightgauge/pipeline/*.json` and most write `.nightgauge/attention/*.json`;
-// this repo gitignores the former but not the latter, and a consumer repo may
-// ignore neither. Counting them made the pipeline's own exhaust answer "was
+// Bookkeeping directories are excluded (#202). Most runs write
+// `.nightgauge/attention/*.json` in the tree, and a consumer repo may not
+// ignore it; before ADR-024 § 7 every run also wrote its pipeline state there. Counting them made the pipeline's own exhaust answer "was
 // work lost?" — which has two costs, both silent. The recovery commit swept
 // pipeline state into the user's branch via `git add -A`, and, worse, ANY
 // failure with an unset terminal kind got reclassified as
@@ -5430,8 +5442,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// in the worktree where the stage executed, not the main root.
 		prereqCtxType, prereqCtxOK := effectivePrereqContextType(stage, runtime)
 		if prereqCtxOK {
-			ctxPath := stagecontext.ContextPath(stageWorkspace(runtime, workspaceRoot), item.Number, prereqCtxType)
-			if _, err := os.Stat(ctxPath); os.IsNotExist(err) {
+			ctxPath, ctxErr := stagecontext.ContextPath(stageWorkspace(runtime, workspaceRoot), item.Number, prereqCtxType)
+			if ctxErr != nil {
+				ctxPath = ctxErr.Error()
+			}
+			if _, err := os.Stat(ctxPath); ctxErr != nil || os.IsNotExist(err) {
 				// "missing prerequisite" is load-bearing prose, not decoration
 				// (#620): internal/terminalkind/table.json already routes it to
 				// validation_error, and the corpus row that pins it names THIS
@@ -5854,7 +5869,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		ws := stageWorkspace(runtime, workspaceRoot)
 		var contextFile string
 		if prereqCtxOK {
-			contextFile = stagecontext.ContextPath(ws, item.Number, prereqCtxType)
+			// The prerequisite gate above already refused an unresolvable
+			// workspace, so an error here leaves the path unset.
+			contextFile, _ = stagecontext.ContextPath(ws, item.Number, prereqCtxType)
 		}
 
 		// Build prompt for stdin delivery. The absolute skill dir rewrites
@@ -5891,7 +5908,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// (input) was already resolved above alongside effectiveContextType.
 		var outputFile string
 		if ctxType, ok := stageOutputContextType[stage]; ok {
-			outputFile = stagecontext.ContextPath(ws, item.Number, ctxType)
+			// "" on a resolver error: validateStageOutput reports that error
+			// after the stage.
+			outputFile, _ = stagecontext.ContextPath(ws, item.Number, ctxType)
 		}
 
 		// Behavioral preamble for the Haiku tier (#77 → #106): measured
@@ -6840,7 +6859,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		}
 
 		// Issue #3605: persist per-stage forensic record (success or failure)
-		// to .nightgauge/pipeline/exit-records/<UTC-day>.jsonl. Healthy
+		// to .git/nightgauge/pipeline/exit-records/<UTC-day>.jsonl. Healthy
 		// runs anchor what "normal" looks like for ratio-based health analysis;
 		// failed runs make the next post-mortem debuggable in 30 seconds
 		// instead of an hour. Best-effort — a write failure logs but never
@@ -7277,7 +7296,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				// and never the model-authored stdout transcript, which the
 				// matchers would otherwise pattern-match against.
 				stageErrText := stageFailureText(err, result)
-				// Recovery actions read `.nightgauge/pipeline/*-{N}.json` and run git/
+				// Recovery actions read `.git/nightgauge/pipeline/*-{N}.json` and run git/
 				// gh against the tree the stages executed in. On worktree-isolated
 				// runs that is the worktree, not the canonical root — so resolve it
 				// the same way the deterministic dispatch and the LLM path do (#275).
@@ -9258,7 +9277,10 @@ func loadGateResults(workspaceRoot string, issueNumber int) []state.GateResult {
 // (pr-<N>.json — prefix "pr", matching stageOutputContextType[StagePRCreate]
 // and loadPRNumberForRecovery, not "pr-create").
 func loadPrUrl(workspaceRoot string, issueNumber int) string {
-	path := stagecontext.ContextPath(workspaceRoot, issueNumber, "pr")
+	path, err := stagecontext.ContextPath(workspaceRoot, issueNumber, "pr")
+	if err != nil {
+		return ""
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return ""
@@ -10249,7 +10271,7 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 	//
 	// LAUNCH-ROOTED ON PURPOSE — this is NOT the breadcrumb's bug repeated (#441
 	// adjudication). The survival journal is a single append-only file at
-	// <root>/survival.StoreRelPath whose records are self-describing: each one
+	// survival.NewStore(<root>).Path() whose records are self-describing: each one
 	// carries its own Repo + Number (survival.NewPending(item.Repo, …)) and the
 	// detector resolves the repo to query from rec.Repo, never from the store's
 	// root. Both readers are launch-root global and there is no per-repo scan to

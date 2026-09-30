@@ -38,10 +38,10 @@
 #     this.
 #
 #  2. crash-record.jsonl — `orchestrator.SynthesizeOrchestratorCrashRecord`, the
-#     second site. The workspace holds one artifact: a
-#     `.nightgauge/pipeline/current-run.json` sidecar naming a pid that is no
-#     longer alive, which is exactly the on-disk state a killed orchestrator
-#     leaves behind. Any command that constructs a Scheduler then runs the real
+#     second site. The workspace holds one artifact: a `current-run.json`
+#     sidecar in the clone's pipeline directory (`.git/nightgauge/pipeline/`,
+#     ADR-024 § 7) naming a pid that is no longer alive, which is exactly the
+#     on-disk state a killed orchestrator leaves behind. Any command that constructs a Scheduler then runs the real
 #     startup recovery (`loadQueue` → `recoverOrchestratorCrash` →
 #     `SynthesizeOrchestratorCrashRecord` → `WriteRecord`); `queue list` is the
 #     cheapest such command, and the record is written during construction,
@@ -87,8 +87,9 @@
 #     real `gh`. Neither path makes a request — that is verified, not assumed —
 #     but the identity would be real.
 #
-# The workspaces have no project config, so no board or history store is read,
-# and no network call is made.
+# The workspaces are fresh `git init` repositories (per-clone state resolves
+# from the git directory, ADR-024 § 7) with no remote and no project config, so
+# no board or history store is read, and no network call is made.
 #
 # Timestamps and durations ARE captured verbatim (the binary stamps them from
 # the wall clock), so regenerating produces a different-but-equivalent file.
@@ -133,11 +134,13 @@ mkdir -p "$STAGE_DIR"
 # ---------------------------------------------------------------------------
 
 IPC_WS="$WORK/ipc-workspace"
-mkdir -p "$IPC_WS"
+git init -q "$IPC_WS"
+IPC_HIST_DIR="$("$BIN" layout --workdir "$IPC_WS" path pipeline history)"
 
 echo "capture-undetermined-branch-fixture: driving the real IPC notifyComplete path…" >&2
 SERVE_ERR="$WORK/serve.err"
-if ! BIN="$BIN" WS="$IPC_WS" STAGE_DIR="$STAGE_DIR" SERVE_ERR="$SERVE_ERR" python3 - <<'PY'
+if ! BIN="$BIN" WS="$IPC_WS" HIST_DIR="$IPC_HIST_DIR" STAGE_DIR="$STAGE_DIR" \
+  SERVE_ERR="$SERVE_ERR" python3 - <<'PY'
 import json
 import os
 import subprocess
@@ -146,6 +149,7 @@ import time
 
 BIN = os.environ["BIN"]
 WS = os.environ["WS"]
+HIST_DIR = os.environ["HIST_DIR"]
 STAGE_DIR = os.environ["STAGE_DIR"]
 SERVE_ERR = os.environ["SERVE_ERR"]
 
@@ -251,7 +255,7 @@ call("pipeline.notifyComplete", {
 proc.stdin.close()
 proc.wait(timeout=30)
 
-hist_dir = os.path.join(WS, ".nightgauge", "pipeline", "history")
+hist_dir = HIST_DIR
 day_files = sorted(f for f in os.listdir(hist_dir)
                    if f.endswith(".jsonl") and f != "outcomes.jsonl")
 if len(day_files) != 1:
@@ -321,7 +325,9 @@ fi
 # ---------------------------------------------------------------------------
 
 WS="$WORK/workspace"
-mkdir -p "$WS/.nightgauge/pipeline"
+git init -q "$WS"
+PIPELINE_DIR="$("$BIN" layout --workdir "$WS" path pipeline)"
+mkdir -p "$PIPELINE_DIR"
 
 # A pid that is definitively NOT alive: spawn a trivial process, reap it, reuse
 # its id. The liveness guard in recoverOrchestratorCrashAt treats a live pid as
@@ -337,7 +343,7 @@ wait "$DEAD_PID" 2>/dev/null || true
 RUN_STARTED_AT="$(python3 -c 'import datetime;print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(minutes=42)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 STAGE_STARTED_AT="$(python3 -c 'import datetime;print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(minutes=7)).strftime("%Y-%m-%dT%H:%M:%SZ"))')"
 
-cat > "$WS/.nightgauge/pipeline/current-run.json" <<JSON
+cat > "$PIPELINE_DIR/current-run.json" <<JSON
 {
   "issue_number": 397,
   "repo": "acme/widgets",
@@ -365,7 +371,7 @@ if ! grep -q "synthesized terminal-failure RunRecord for #397" "$WORK/queue.err"
   exit 1
 fi
 
-HIST_DIR="$WS/.nightgauge/pipeline/history"
+HIST_DIR="$PIPELINE_DIR/history"
 JSONL="$(find "$HIST_DIR" -name '*.jsonl' -type f | head -1)"
 if [ -z "$JSONL" ]; then
   echo "capture-undetermined-branch-fixture: no daily JSONL was written" >&2

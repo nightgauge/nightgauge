@@ -10,8 +10,9 @@
 subagents with JSON context handoff files.
 
 **Execution model**: Each pipeline stage runs in a fresh conversation. Context
-is passed exclusively through `.nightgauge/pipeline/*.json` files — never
-through conversation history. Every stage reads its predecessor's context file
+is passed exclusively through JSON files in the clone's pipeline state
+directory (`nightgauge layout path pipeline`) — never through conversation
+history. Every stage reads its predecessor's context file
 and writes its own.
 
 **Configuration**: 6-tier config system — built-in defaults → global config →
@@ -75,11 +76,12 @@ on disk.
 
 An epic whose sub-issues touch overlapping files can be run once instead of N
 times. `/nightgauge-assess-epic` makes that call and writes
-`.nightgauge/pipeline/epic-assessment-{E}.json` with a `strategy` of
-`parallel`, `mixed`, or `sequential`. When the pipeline acts on a `parallel`
-(or the independent part of a `mixed`) assessment, it carries **one shared
-feature branch and one PR for the whole group**, and each stage writes a batch
-context file alongside — never instead of — its normal single-issue output.
+`epic-assessment-{E}.json` to the clone's pipeline state directory with a
+`strategy` of `parallel`, `mixed`, or `sequential`. When the pipeline acts on a
+`parallel` (or the independent part of a `mixed`) assessment, it carries **one
+shared feature branch and one PR for the whole group**, and each stage writes a
+batch context file alongside — never instead of — its normal single-issue
+output.
 
 **The batch key is the EPIC number `E`, never a sub-issue number.** Every batch
 context file is keyed on it and the shared branch is named for it. A stage that
@@ -97,7 +99,10 @@ never look for, and the batch silently degrades to a single issue.
 | `pr-create`        | `dev-batch-{E}.json`                | `pr-{E}.json`                     |
 | `pr-merge`         | `dev-batch-{E}.json`, `pr-{E}.json` | — (removes all five, in Step 7.8) |
 
-All paths are relative to `.nightgauge/pipeline/`. `batch-{E}.json`,
+All files live in the clone's pipeline state directory
+(`nightgauge layout path pipeline`): read them at
+`$(nightgauge layout path pipeline <file>)` and write them with
+`nightgauge layout write pipeline <file>`. `batch-{E}.json`,
 `planning-batch-{E}.json` and `dev-batch-{E}.json` have explicit schemas — every
 field, every required key, worked examples — in `docs/CONTEXT_ARCHITECTURE.md`
 under the batch context file sections. `validate-{E}.json` and `pr-{E}.json`
@@ -125,7 +130,7 @@ Resolve `E`, test for this stage's batch input, and branch:
 ```bash
 # E is the epic number: `.parent_issue` from the issue context when this stage
 # has one, otherwise the leading number in the branch name.
-BATCH_INPUT=".nightgauge/pipeline/<this stage's batch input, from the table above>"
+BATCH_INPUT="$(nightgauge layout path pipeline <this stage's batch input, from the table above>)"
 if [ -f "$BATCH_INPUT" ]; then
   BATCH_MODE=true
 else
@@ -362,14 +367,15 @@ are not defined. Use the inline `yq` patterns above.
 
 ## Input Contract
 
-This skill requires `.nightgauge/pipeline/pr-{N}.json` from
-`/nightgauge-pr-create`.
+This skill requires `pr-{N}.json` from `/nightgauge-pr-create`. Every context
+file named here lives in the clone's pipeline state directory: read it at
+`$(nightgauge layout path pipeline <file>)`.
 
 It also reads prior pipeline context for history and validation:
 
-- `.nightgauge/pipeline/issue-{N}.json` (from issue-pickup)
-- `.nightgauge/pipeline/planning-{N}.json` (from feature-planning)
-- `.nightgauge/pipeline/dev-{N}.json` (from feature-dev)
+- `nightgauge layout path pipeline issue-{N}.json` (from issue-pickup)
+- `nightgauge layout path pipeline planning-{N}.json` (from feature-planning)
+- `nightgauge layout path pipeline dev-{N}.json` (from feature-dev)
 
 **Full schema**: See
 [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md) for complete
@@ -592,9 +598,9 @@ invocations) or already matches the current repo.
 printf '<!-- phase:start name="read-pr-context" index=0 total=14 stage="pr-merge" -->\n'
 ```
 
-Read PR context: resolve the issue number from the branch, load
-`.nightgauge/pipeline/pr-{N}.json`, signal stage start, and reconstruct the
-context file from GitHub if it is missing.
+Read PR context: resolve the issue number from the branch,
+load `"$(nightgauge layout path pipeline pr-{N}.json)"`, signal stage start,
+and reconstruct the context file from GitHub if it is missing.
 
 > **Read `<REPO_ROOT>/skills/nightgauge-pr-merge/_includes/context-bootstrap.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 
@@ -617,7 +623,7 @@ not assigned until Phase 1 and each Bash call is a fresh shell.
 BRANCH=$(git branch --show-current)
 [ -z "$BRANCH" ] && BRANCH=$(git name-rev --name-only HEAD 2>/dev/null | sed 's|remotes/origin/||')
 EPIC_NUMBER=$(printf '%s' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-BATCH_DEV=".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
+BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
 if [ -n "$EPIC_NUMBER" ] && [ -f "$BATCH_DEV" ]; then echo "BATCH_CONTEXT_FOUND=$BATCH_DEV"; else echo "SINGLE_ISSUE"; fi
 ```
 
@@ -740,7 +746,8 @@ if [ -z "$BINARY" ]; then
 fi
 
 CI_CHUNK_PENDING=false
-CI_DEADLINE_FILE=".nightgauge/pipeline/ci-wait-deadline-${PR_NUMBER}"
+CI_DEADLINE_NAME="ci-wait-deadline-${PR_NUMBER}"
+CI_DEADLINE_FILE="$(nightgauge layout path pipeline "$CI_DEADLINE_NAME")"
 
 if [ "$CI_EPIC_SKIP" = "true" ]; then
   echo "Skipping ci wait (epic branch PR)"
@@ -751,9 +758,9 @@ else
   # Cumulative budget bookkeeping (#187): first chunk writes the deadline;
   # later chunks (fresh Bash calls) read it back.
   _CI_NOW=$(date +%s)
-  if [ ! -f "$CI_DEADLINE_FILE" ]; then
-    mkdir -p "$(dirname "$CI_DEADLINE_FILE")"
-    echo $(( _CI_NOW + TIMEOUT * 60 )) > "$CI_DEADLINE_FILE"
+  if [ ! -s "$CI_DEADLINE_FILE" ]; then
+    echo $(( _CI_NOW + TIMEOUT * 60 )) \
+      | nightgauge layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
   fi
   _CI_DEADLINE=$(cat "$CI_DEADLINE_FILE" 2>/dev/null || echo $(( _CI_NOW + TIMEOUT * 60 )))
   _CI_REMAINING=$(( _CI_DEADLINE - _CI_NOW ))
@@ -783,10 +790,11 @@ else
   fi
 fi
 
-# Terminal outcome (green/failed/cumulative-timeout) — drop the deadline file
-# so the next PR (or a re-run after fixes) starts a fresh budget.
+# Terminal outcome (green/failed/cumulative-timeout) — empty the deadline file
+# so the next PR (or a re-run after fixes) starts a fresh budget. An empty file
+# reads as "no deadline" above; nothing is deleted under the git directory.
 if [ "$CI_CHUNK_PENDING" != "true" ]; then
-  rm -f "$CI_DEADLINE_FILE"
+  printf '' | nightgauge layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
 fi
 
 CI_ALL_PASSED=$(printf '%s\n' "$CI_RESULT" | jq -r 'if .state == "SUCCESS" then "true" else "false" end')
@@ -1056,7 +1064,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Read transient-failure flags from the prior stage's handoff.
 # pr-merge reads pr-{N}.json (written by pr-create Phase 4).
-PR_CONTEXT=".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json"
+PR_CONTEXT="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
 if [ -f "$PR_CONTEXT" ]; then
   ALL_TRANSIENT=$(jq -r '
     (.ci_monitoring.failures // []) as $f
@@ -1180,13 +1188,14 @@ retro for why making this advisory burned a sham `[skip build]` commit).
    - **`inherited`** — fails on both base and HEAD. Pre-existing on main; the
      PR did not introduce it. Do **not** ask the LLM to repair main from
      within a dependent PR (see step 9).
-8. Persist the classification to `.nightgauge/pipeline/auto-fix-baseline-{PR}.json`
+8. Persist the classification as `auto-fix-baseline-{PR}.json` with
+   `nightgauge layout write pipeline auto-fix-baseline-{PR}.json` (JSON on stdin)
    so subsequent iterations can read it without re-running.
 9. **Inherited-only exit gate (deterministic, mandatory).** Count failures by
    classification:
 
    ```bash
-   BASELINE=".nightgauge/pipeline/auto-fix-baseline-${PR_NUMBER}.json"
+   BASELINE="$(nightgauge layout path pipeline auto-fix-baseline-${PR_NUMBER}.json)"
    if [ -f "$BASELINE" ]; then
      INHERITED=$(jq '[.failures[]? | select(.classification == "inherited")] | length' "$BASELINE" 2>/dev/null || echo 0)
      REGRESSIONS=$(jq '[.failures[]? | select(.classification == "regression")] | length' "$BASELINE" 2>/dev/null || echo 0)
@@ -1255,11 +1264,12 @@ Fix generation process:
 
 1. Read the failure logs to understand the specific error
 2. If Step 2.5 ran, read
-   `.nightgauge/pipeline/auto-fix-baseline-{PR}.json`. **Only attempt to
-   fix failures whose `classification` is `regression`.** Inherited failures
-   were already handled by Step 2.5's exit gate (inherited-only) or are
-   intentionally being ignored by Step 2.5's mixed-batch branch — touching
-   them here re-introduces the same wasted-spend pattern.
+   `"$(nightgauge layout path pipeline auto-fix-baseline-{PR}.json)"`.
+   **Only attempt to fix failures whose `classification` is `regression`.**
+   Inherited failures were already handled by Step 2.5's exit gate
+   (inherited-only) or are intentionally being ignored by Step 2.5's
+   mixed-batch branch — touching them here re-introduces the same
+   wasted-spend pattern.
 3. Identify the affected file(s) and line number(s)
 4. Make the minimal fix required to address the failure
 5. Ensure fix doesn't break other functionality
@@ -1765,14 +1775,17 @@ goal is silence when everything works.
 
 #### Step 2: Write Assessment Record
 
-Only if friction was detected in Step 1. Write a single JSON file:
+Only if friction was detected in Step 1. Write a single JSON file,
+`assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json` in the clone's pipeline state
+directory, through the binary (JSON on stdin; never a direct file write):
 
 ```bash
-ASSESSMENT_DIR=".nightgauge/pipeline/assessments"
-mkdir -p "$ASSESSMENT_DIR"
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+nightgauge layout write pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json" <<'JSON'
+{ ... the record below ... }
+JSON
 ```
-
-**File**: `$ASSESSMENT_DIR/{STAGE_NAME}-${ISSUE_NUMBER}.json`
 
 The assessment record MUST follow this schema:
 
@@ -1822,6 +1835,9 @@ The assessment record MUST follow this schema:
 
 ```bash
 # Validate JSON if written
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+ASSESSMENT_FILE="$(nightgauge layout path pipeline "assessments/{STAGE_NAME}-${ISSUE_NUMBER}.json")"
 if [ -f "$ASSESSMENT_FILE" ]; then
   python3 -m json.tool "$ASSESSMENT_FILE" > /dev/null 2>&1 || \
     echo "WARNING: Assessment record is not valid JSON" >&2

@@ -9,20 +9,25 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // writeIssueContext writes a well-formed issue-{N}.json — the shape the
-// issue-pickup stage actually produces in the field — at the given root.
+// issue-pickup stage actually produces in the field — in the given root's
+// pipeline state directory. root is made its own git repository, so a
+// worktree-layout fixture nested under a workspace root has a pipeline
+// directory distinct from the root's, and each candidate is observable.
 //
 // The route's key is `suggested_route` (#1484). This fixture wrote `path`, a
 // key no producer has ever emitted into an issue context, which is precisely
 // why the reader's matching mistake survived: the fixture agreed with the bug.
 func writeIssueContext(t *testing.T, root string, issue int, devModel string, complexity int) {
 	t.Helper()
-	dir := filepath.Join(root, ".nightgauge", "pipeline")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
+	dir := layouttest.MkPipelineDir(t, layouttest.Init(t, root))
 	body := `{"routing":{"complexity_score":` + strconv.Itoa(complexity) +
 		`,"suggested_route":"standard","pickup_recommendation":{"dev_model":"` + devModel + `"}}}`
 	if err := os.WriteFile(filepath.Join(dir, "issue-"+strconv.Itoa(issue)+".json"), []byte(body), 0o644); err != nil {
@@ -46,7 +51,7 @@ func TestLoadIssueContext_FindsGoManagerWorktree(t *testing.T) {
 	writeIssueContext(t, wt, 42, "sonnet", 3)
 
 	// Deliberately NOT at the workspace root — that is the whole point.
-	if _, err := os.Stat(filepath.Join(root, ".nightgauge", "pipeline", "issue-42.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, root), "issue-42.json")); err == nil {
 		t.Fatal("fixture wrote to the workspace root; the test proves nothing")
 	}
 
@@ -124,7 +129,7 @@ func TestResolveIssueContextPath_FindsTheFileTheStagesUse(t *testing.T) {
 	writeIssueContext(t, wt, 42, "sonnet", 3)
 
 	got := resolveIssueContextPath(root, "", "acme/widget", 42)
-	want := filepath.Join(wt, ".nightgauge", "pipeline", "issue-42.json")
+	want := filepath.Join(layouttest.PipelineDir(t, wt), "issue-42.json")
 	if got != want {
 		t.Errorf("resolveIssueContextPath = %q, want %q", got, want)
 	}
@@ -202,7 +207,7 @@ func TestResolveOutcomePrediction_UpgradesEachHalfIndependently(t *testing.T) {
 // This drives recordOutcome and reads the row back out of the corpus, so
 // removing the call site fails here.
 func TestRecordOutcome_RecordsThePredictionFromTheWorktree(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	// The context exists ONLY in the run's worktree — the real-world shape.
 	wt := filepath.Join(root, ".nightgauge", "worktrees", "widget-issue-42")
 	writeIssueContext(t, wt, 42, "sonnet", 3)

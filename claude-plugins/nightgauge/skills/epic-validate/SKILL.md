@@ -40,8 +40,8 @@ implementation produced, plus more — see
 - Sub-issue linking, project board membership, `blockedBy` alignment, body
   section completeness, cross-repo consistency, and knowledge scaffold
   validation
-- Severity-tiered Markdown report at
-  `.nightgauge/pipeline/issue-audit-<timestamp>.md`
+- Severity-tiered Markdown report `issue-audit-<timestamp>.md` in the clone's
+  pipeline state directory (`nightgauge layout path pipeline`)
 - JSON findings for CI consumption
 - `--fix` / `--fix-interactive` repair via existing Go binary primitives
 - Exit 0 when verdict is READY; exit 1 when CRITICAL findings remain

@@ -10,6 +10,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import type { Logger } from "../../../src/utils/logger";
+import { fakeCloneLayout } from "../../helpers/cloneLayout";
 
 const { execFileResponses, binaryPath } = vi.hoisted(() => ({
   execFileResponses: { checkDeps: "" as string },
@@ -77,6 +78,8 @@ describe("ContextAssembler deterministic issue-pickup — blockedBy enforcement 
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ng-189-"));
+    // Per-clone data lives under the clone's git dir (ADR-024 § 7).
+    fakeCloneLayout(tmpDir);
     assembler = new ContextAssembler(makeLogger(), () => tmpDir, null);
     binaryPath.value = "/fake/nightgauge";
     execFileResponses.checkDeps = "";
@@ -88,7 +91,7 @@ describe("ContextAssembler deterministic issue-pickup — blockedBy enforcement 
   });
 
   function contextPath(): string {
-    return path.join(tmpDir, ".nightgauge", "pipeline", "issue-233.json");
+    return path.join(fakeCloneLayout(tmpDir).pipeline, "issue-233.json");
   }
 
   it("populates dependencies.blockedBy from GitHub's native edges when blockers are closed", async () => {

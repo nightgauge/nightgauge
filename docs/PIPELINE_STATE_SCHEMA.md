@@ -1,12 +1,23 @@
 # Pipeline State Schema
 
-Catalog of every JSON schema under `.nightgauge/pipeline/`, the durable
-write contract that produces them, and the migration semantics for upgrades.
-Introduced by Issue #3238 (Gap 1 — graceful pipeline stop with durable,
-resumable per-stage context state).
+Catalog of every JSON schema in the clone's pipeline state directory
+(`nightgauge layout path pipeline`), the durable write contract that produces
+them, and the migration semantics for upgrades. Introduced by Issue #3238
+(Gap 1 — graceful pipeline stop with durable, resumable per-stage context
+state).
+
+The pipeline state directory resolves to `<git-common-dir>/nightgauge/pipeline/`:
+`.git/nightgauge/pipeline/` for a normal clone, and the main clone's directory
+for every linked worktree, which shares it. It lives inside the git directory,
+so it is never committed
+([ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
+Obtain the path from the binary (`nightgauge layout` prints the whole layout as
+JSON; see [GO_BINARY.md](GO_BINARY.md)) rather than hard-coding it. Agents and
+scripts write here through `nightgauge layout write pipeline <name>` (or
+`nightgauge layout append`), never by path.
 
 > **Single source of truth**: `run-state.json` is the canonical lifecycle
-> record per repo. Every other file under `.nightgauge/pipeline/` is a
+> record per repo. Every other file in the pipeline state directory is a
 > per-stage context handoff (read-only after the producing stage's rename
 > completes). The TypeScript SDK and the Go binary both write the same
 > on-disk format using the same atomic+fsync contract.
@@ -24,7 +35,7 @@ resumable per-stage context state).
 
 ## Atomic write contract
 
-Every JSON file under `.nightgauge/pipeline/` is written via:
+Every JSON file in the pipeline state directory is written via:
 
 ```
 write-temp → fsync(file) → rename → fsync(parent dir)
@@ -348,7 +359,7 @@ On terminal success (`pr-merge` finishes) or on `discarded`, every live
 context file for the issue is moved into:
 
 ```
-.nightgauge/pipeline/history/<run_id>/
+<git-common-dir>/nightgauge/pipeline/history/<run_id>/
 ├── issue-<N>.json
 ├── planning-<N>.json
 ├── dev-<N>.json

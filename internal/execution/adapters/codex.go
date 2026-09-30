@@ -165,7 +165,9 @@ func (a *CodexAdapter) BuildCommand(opts RunOptions) (string, []string, map[stri
 	// are never locked out; tightens to `--sandbox <mode> --ask-for-approval never`
 	// for read-only / file-edit-only stages.
 	args := []string{"exec"}
-	args = append(args, codexSandboxFlags(resolveCodexSandboxMode(opts.AllowedTools))...)
+	mode := resolveCodexSandboxMode(opts.AllowedTools)
+	args = append(args, codexSandboxFlags(mode)...)
+	args = append(args, codexCloneWritableRoot(mode, opts.WorktreeDir)...)
 	args = append(args, "--json")
 
 	if opts.Model != "" {

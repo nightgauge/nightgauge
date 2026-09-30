@@ -182,16 +182,14 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 # NO branch deletion). Call BEFORE `git rebase --abort`. Requires bash.
 capture_conflict_and_signal() {
   _CCS_REASON="$1"
-  # Resolve THIS worktree's root for the pipeline dir — `rev-parse
-  # --show-toplevel`, the same call every sibling include uses, NEVER
-  # `git worktree list | head -1`. `worktree list` always prints the MAIN
-  # worktree first, so on a worktree-isolated run (the pipeline's normal mode)
-  # the capture landed in the main checkout while every reader resolves the
-  # STAGE worktree: the recovery loop reads `<stage worktree>/.nightgauge/
-  # pipeline/` (#275), and feature-dev's intake plus this skill's own
-  # context-bootstrap use the relative `.nightgauge/pipeline/`. The document was
-  # written faithfully, nothing ever saw it, and every skill-captured conflict
-  # escalated "conflict-context-{N}.json not found" (#301).
+  # Resolve THIS worktree's root and hand it to the binary as --workdir, which
+  # resolves the clone's pipeline state directory (ADR-024 § 7) — the same
+  # directory the recovery loop (#275), feature-dev's intake and this skill's
+  # own context-bootstrap read. Use `rev-parse --show-toplevel`, NEVER
+  # `git worktree list | head -1`: before the per-clone layout the capture
+  # landed in the main checkout while every reader looked in the stage
+  # worktree, and every skill-captured conflict escalated
+  # "conflict-context-{N}.json not found" (#301).
   #
   # Command substitution, never `awk '{print $2}'` over a path: awk splits on
   # whitespace, so a repo under `/src/has space/repo` yielded `/src/has` and the
@@ -201,9 +199,10 @@ capture_conflict_and_signal() {
   # docs/MULTI_REPO_WORKSPACE.md#write-containment-issue-129).
   _CCS_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
   [ -z "$_CCS_ROOT" ] && _CCS_ROOT=$(pwd)
-  mkdir -p "$_CCS_ROOT/.nightgauge/pipeline" 2>/dev/null || true
-  _CCS_CTX="$_CCS_ROOT/.nightgauge/pipeline/conflict-context-${ISSUE_NUMBER}.json"
-  _CCS_FB="$_CCS_ROOT/.nightgauge/pipeline/feedback-${ISSUE_NUMBER}.json"
+  _CCS_CTX_NAME="conflict-context-${ISSUE_NUMBER}.json"
+  _CCS_FB_NAME="feedback-${ISSUE_NUMBER}.json"
+  _CCS_CTX=$(nightgauge layout path pipeline "$_CCS_CTX_NAME" --workdir "$_CCS_ROOT")
+  _CCS_FB=$(nightgauge layout path pipeline "$_CCS_FB_NAME" --workdir "$_CCS_ROOT")
   _CCS_TMP=$(mktemp -d) || return 1
   _CCS_FAILED=false
   _CCS_WHY=""
@@ -413,7 +412,9 @@ capture_conflict_and_signal() {
       '{schema_version:$sv, issue_number:$issue, pr_number:$pr, branch:$branch, base_ref:$base,
         conflict_operation:$op, capture_failed:$failed, conflicting_files:$files, created_at:$ts}
        + (if $why != "" then {capture_error:$why} else {} end)' \
-      >"$_CCS_CTX" 2>/dev/null || rm -f "$_CCS_CTX"
+      >"$_CCS_TMP/ctx.json" 2>/dev/null &&
+      nightgauge layout write pipeline "$_CCS_CTX_NAME" --workdir "$_CCS_ROOT" \
+        --from "$_CCS_TMP/ctx.json" >/dev/null 2>&1 || rm -f "$_CCS_CTX"
   else
     rm -f "$_CCS_CTX" 2>/dev/null || true
   fi
@@ -432,15 +433,17 @@ capture_conflict_and_signal() {
     '{signal_type:"CONFLICT_RESOLUTION_NEEDED", emitted_by_stage:"pr-merge", backtrack_target_stage:"feature-dev", rationale:("pr-merge rebase conflict — " + $reason), evidence:$ev, severity:"blocking"}')
   if [ -f "$_CCS_FB" ]; then
     jq --argjson sig "$_CCS_NEW_SIGNAL" \
-      '.signals = ((.signals // []) + [$sig])' "$_CCS_FB" > "$_CCS_FB.tmp" 2>/dev/null \
-      && mv "$_CCS_FB.tmp" "$_CCS_FB"
+      '.signals = ((.signals // []) + [$sig])' "$_CCS_FB" > "$_CCS_TMP/fb.json" 2>/dev/null \
+      && nightgauge layout write pipeline "$_CCS_FB_NAME" --workdir "$_CCS_ROOT" \
+        --from "$_CCS_TMP/fb.json" >/dev/null 2>&1
   else
     jq -n \
       --argjson issue "${ISSUE_NUMBER:-0}" \
       --argjson sig "$_CCS_NEW_SIGNAL" \
       --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
       '{schema_version:"1.1", issue_number:$issue, signals:[$sig], created_at:$ts}' \
-      > "$_CCS_FB" 2>/dev/null || true
+      2>/dev/null | nightgauge layout write pipeline "$_CCS_FB_NAME" --workdir "$_CCS_ROOT" \
+        >/dev/null 2>&1 || true
   fi
   rm -rf "$_CCS_TMP" 2>/dev/null || true
   if [ "$_CCS_FAILED" = "true" ]; then

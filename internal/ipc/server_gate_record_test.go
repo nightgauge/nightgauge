@@ -17,10 +17,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -28,7 +28,7 @@ import (
 // methods registered.
 func gateRecordServer(t *testing.T) (*Server, string) {
 	t.Helper()
-	workspaceRoot := t.TempDir()
+	workspaceRoot := layouttest.Repo(t)
 	var buf bytes.Buffer
 	s := &Server{
 		writer:         &buf,
@@ -82,7 +82,7 @@ func TestRecordStageGateResult_ServerPersistsTheResult(t *testing.T) {
 		t.Fatalf("recordStageGateResult: %v", err)
 	}
 
-	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, workspaceRoot)
 	rs, err := state.LoadPersistedState(stateDir, runID)
 	if err != nil {
 		t.Fatalf("load the run's own snapshot: %v", err)
@@ -160,7 +160,7 @@ func TestGateRecord_TheRenameRaceLosesAFieldOnTheDirectPath(t *testing.T) {
 	s, workspaceRoot := gateRecordServer(t)
 	const issue = 4715
 	runID := newTestRunID()
-	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, workspaceRoot)
 
 	// "running" then "complete": CompleteStageWithCost books onto the stage
 	// BeginStage opened, so a complete with no running before it banks nothing
@@ -236,7 +236,7 @@ func TestGateRecord_RoutingThroughTheServerLosesNothing(t *testing.T) {
 	s, workspaceRoot := gateRecordServer(t)
 	const issue = 4716
 	runID := newTestRunID()
-	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, workspaceRoot)
 
 	// "running" then "complete": CompleteStageWithCost books onto the stage
 	// BeginStage opened, so a complete with no running before it banks nothing

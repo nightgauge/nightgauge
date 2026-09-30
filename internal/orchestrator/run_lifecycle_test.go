@@ -14,6 +14,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // readRunStateFile decodes the persisted run-state.json directly, so the
@@ -36,7 +38,7 @@ func readRunStateFile(t *testing.T, root string) map[string]any {
 }
 
 func TestRunLifecycle_FreshRunTracksStagesAndCompletes(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	lc, from := beginRunLifecycle(root, 42, "")
 	if from != "" {
 		t.Fatalf("fresh run resumeFrom = %q, want empty", from)
@@ -73,7 +75,7 @@ func TestRunLifecycle_FreshRunTracksStagesAndCompletes(t *testing.T) {
 }
 
 func TestRunLifecycle_CancelPausesAndReinvocationResumes(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	lc, _ := beginRunLifecycle(root, 7, "fix/7")
 	lc.stage(state.StageIssuePickup, "")
 	lc.stage(state.StageFeatureValidate, "")
@@ -110,7 +112,7 @@ func TestRunLifecycle_CancelPausesAndReinvocationResumes(t *testing.T) {
 }
 
 func TestRunLifecycle_HardKilledRecordIsResumed(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	dir, _ := layout.PipelineStateDir(root)
 	if _, err := runstate.MarkRunning(dir, runstate.MarkRunningOptions{IssueNumber: 9, Branch: "fix/9"}); err != nil {
 		t.Fatal(err)
@@ -133,7 +135,7 @@ func TestRunLifecycle_HardKilledRecordIsResumed(t *testing.T) {
 }
 
 func TestRunLifecycle_LiveRunOfAnotherIssueIsNotClobbered(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	lc1, _ := beginRunLifecycle(root, 1, "")
 	lc2, _ := beginRunLifecycle(root, 2, "")
 	lc2.stage(state.StageFeatureDev, "")

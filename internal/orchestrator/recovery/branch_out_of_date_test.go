@@ -14,6 +14,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func stubExecGit(t *testing.T, fn func(ctx context.Context, dir string, args ...string) ([]byte, error)) {
@@ -293,7 +295,7 @@ func TestAction_BranchOutOfDate_NoMatch_FallsThrough(t *testing.T) {
 // moving the branch resolution back inside the failure handler makes the branch
 // unresolvable and this test fails.
 func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	aborted := false
 	rebasing := false
 	capturedBeforeAbort := false
@@ -357,7 +359,7 @@ func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
 	}
 
 	// conflict-context-77.json must have been written, naming the REAL branch.
-	ctxPath := filepath.Join(ws, ".nightgauge", "pipeline", "conflict-context-77.json")
+	ctxPath := filepath.Join(layouttest.PipelineDir(t, ws), "conflict-context-77.json")
 	ctxData, err := os.ReadFile(ctxPath)
 	if err != nil {
 		t.Fatalf("expected conflict-context-77.json written, read err: %v", err)
@@ -386,7 +388,7 @@ func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
 		t.Errorf("theirs = %v, want %q (index stage 2 — the rebase upstream)", entry["theirs"], stubStage2Content)
 	}
 	// feedback-77.json must carry a CONFLICT_RESOLUTION_NEEDED signal.
-	fbData, err := os.ReadFile(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-77.json"))
+	fbData, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, ws), "feedback-77.json"))
 	if err != nil {
 		t.Fatalf("read feedback-77.json: %v", err)
 	}
@@ -419,7 +421,7 @@ func TestAction_BranchOutOfDate_RebaseConflict(t *testing.T) {
 // The real-git tests cover the states git produces on its own; this one covers
 // the probe itself failing, which needs a stub to provoke.
 func TestAction_BranchOutOfDate_ConflictProbeFails(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	aborted := false
 	rebasing := false
 	stubExecGit(t, func(_ context.Context, _ string, args ...string) ([]byte, error) {
@@ -450,10 +452,10 @@ func TestAction_BranchOutOfDate_ConflictProbeFails(t *testing.T) {
 	if aborted {
 		t.Error("a failed capture must NOT abort — the conflicted index is the only evidence left")
 	}
-	if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "conflict-context-77.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, ws), "conflict-context-77.json")); err == nil {
 		t.Error("a failed capture must not write a conflict context that reads as a successful one")
 	}
-	if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-77.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, ws), "feedback-77.json")); err == nil {
 		t.Error("a failed capture must not emit CONFLICT_RESOLUTION_NEEDED")
 	}
 	if res.FollowUp != FollowUpHumanTriageRequired {
@@ -509,7 +511,7 @@ func blobsUnreadableStub(t *testing.T, dumpOK bool, aborted *bool) {
 // failed AND the raw index could not be copied out either, so the in-index
 // stages are the last copy of the conflict. Do not abort.
 func TestAction_BranchOutOfDate_ConflictBlobsUnreadable_NoEvidence(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	aborted := false
 	blobsUnreadableStub(t, false, &aborted)
 
@@ -521,7 +523,7 @@ func TestAction_BranchOutOfDate_ConflictBlobsUnreadable_NoEvidence(t *testing.T)
 	if aborted {
 		t.Error("nothing was preserved — aborting would leave zero record of the conflict")
 	}
-	if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "conflict-context-77.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, ws), "conflict-context-77.json")); err == nil {
 		t.Error("a name-only capture with no blobs must not be written as a successful capture")
 	}
 	if res.FollowUp != FollowUpHumanTriageRequired {
@@ -539,7 +541,7 @@ func TestAction_BranchOutOfDate_ConflictBlobsUnreadable_NoEvidence(t *testing.T)
 // Leaving the worktree mid-rebase is not a safe alternative in this system — the
 // scheduler's terminal defer stages the conflicted index away seconds later.
 func TestAction_BranchOutOfDate_ConflictBlobsUnreadable_EvidencePreserved(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	aborted := false
 	blobsUnreadableStub(t, true, &aborted)
 
@@ -551,16 +553,16 @@ func TestAction_BranchOutOfDate_ConflictBlobsUnreadable_EvidencePreserved(t *tes
 	if !aborted {
 		t.Error("with the raw index preserved, the abort is non-destructive and must run")
 	}
-	if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "conflict-context-77.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, ws), "conflict-context-77.json")); err == nil {
 		t.Error("a failed capture must still not write a conflict context")
 	}
-	if _, err := os.Stat(filepath.Join(ws, ".nightgauge", "pipeline", "feedback-77.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, ws), "feedback-77.json")); err == nil {
 		t.Error("a failed capture must not emit CONFLICT_RESOLUTION_NEEDED")
 	}
 	if res.FollowUp != FollowUpHumanTriageRequired {
 		t.Errorf("FollowUp = %q, want %q — preserved evidence is still not a resolvable conflict", res.FollowUp, FollowUpHumanTriageRequired)
 	}
-	manifest := filepath.Join(ws, ".nightgauge", "pipeline", "conflict-evidence-77", "manifest.json")
+	manifest := filepath.Join(layouttest.PipelineDir(t, ws), "conflict-evidence-77", "manifest.json")
 	if _, err := os.Stat(manifest); err != nil {
 		t.Errorf("expected a durable evidence manifest at %s: %v", manifest, err)
 	}
@@ -576,7 +578,7 @@ func TestAction_BranchOutOfDate_ConflictBlobsUnreadable_EvidencePreserved(t *tes
 // the refusal's effect on the git call sequence; the real-git test proves the
 // operator's staged work survives.
 func TestAction_BranchOutOfDate_PreexistingRebaseRefused(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	if err := os.MkdirAll(filepath.Join(ws, ".git", "rebase-merge"), 0o755); err != nil {
 		t.Fatal(err)
 	}

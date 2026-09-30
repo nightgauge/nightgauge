@@ -18,6 +18,8 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // readExitRecords loads every JSONL line from today's exit-records file.
@@ -55,7 +57,7 @@ func readExitRecords(t *testing.T, rootDir string) []diagnostics.StageExitRecord
 // The record carries success=true, the actual cost, and an elapsed_ms ≥ 0.
 func TestWriteStageExitRecord_Success(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := testRunID()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3605, "item-id", runID)
 	item := types.BoardItem{Number: 3605, Repo: "nightgauge/nightgauge"}
@@ -115,7 +117,7 @@ func TestWriteStageExitRecord_Success(t *testing.T) {
 // the canonical TerminalKindStallKill.
 func TestWriteStageExitRecord_FailureClassifiesTerminalKind(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := testRunID()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3605, "item-id", runID)
 	item := types.BoardItem{Number: 3605, Repo: "nightgauge/nightgauge"}
@@ -150,7 +152,7 @@ func TestWriteStageExitRecord_FailureClassifiesTerminalKind(t *testing.T) {
 // from StageRunResult into the persisted record.
 func TestWriteStageExitRecord_ForwardsTSDiagnosticFields(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := testRunID()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3591, "item-id", runID)
 	item := types.BoardItem{Number: 3591, Repo: "nightgauge/nightgauge"}
@@ -223,7 +225,7 @@ func TestWriteStageExitRecord_ForwardsTSDiagnosticFields(t *testing.T) {
 // longer can.
 func TestWriteStageExitRecord_CLIFailureCarriesTerminalKindAndStderrTail(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := testRunID()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 563, "item-id", runID)
 	item := types.BoardItem{Number: 563, Repo: "nightgauge/nightgauge"}
@@ -270,7 +272,7 @@ func TestWriteStageExitRecord_CLIFailureCarriesTerminalKindAndStderrTail(t *test
 // nothing.
 func TestWriteStageExitRecord_SuccessCarriesNoTerminalKindOrStderrTail(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := testRunID()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 564, "item-id", runID)
 	item := types.BoardItem{Number: 564, Repo: "nightgauge/nightgauge"}
@@ -302,7 +304,7 @@ func TestWriteStageExitRecord_SuccessCarriesNoTerminalKindOrStderrTail(t *testin
 // unset, never to overwrite it.
 func TestWriteStageExitRecord_IPCStderrTailWinsOverCLICarry(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := testRunID()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 565, "item-id", runID)
 	item := types.BoardItem{Number: 565, Repo: "nightgauge/nightgauge"}
@@ -337,7 +339,7 @@ func TestWriteStageExitRecord_IPCStderrTailWinsOverCLICarry(t *testing.T) {
 // derived at runtime (`stall warn threshold × 8`) and configured nowhere.
 func TestWriteStageExitRecord_ForwardsKillCeiling(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := testRunID()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 161, "item-id", runID)
 	item := types.BoardItem{Number: 161, Repo: "nightgauge/nightgauge"}
@@ -386,7 +388,7 @@ func TestWriteStageExitRecord_ForwardsKillCeiling(t *testing.T) {
 // shows the suite ran first, and shows it failed.
 func TestWriteStageExitRecord_ForwardsRecentBash(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := testRunID()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 156, "item-id", runID)
 	item := types.BoardItem{Number: 156, Repo: "nightgauge/nightgauge"}
@@ -445,7 +447,7 @@ func TestWriteStageExitRecord_ForwardsRecentBash(t *testing.T) {
 // so a record cannot grow without limit from either direction. (#156)
 func TestWriteStageExitRecord_BoundsRecentBash(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 156, "item-id", testRunID())
 	item := types.BoardItem{Number: 156, Repo: "nightgauge/nightgauge"}
 
@@ -479,7 +481,7 @@ func TestWriteStageExitRecord_BoundsRecentBash(t *testing.T) {
 // truth (timestamp, repo, issue, stage, success, exit_code, tokens, elapsed).
 func TestWriteStageExitRecord_PreUpdateTSStillWrites(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3605, "item-id", testRunID())
 	item := types.BoardItem{Number: 3605, Repo: "nightgauge/nightgauge"}
 
@@ -514,7 +516,7 @@ func TestWriteStageExitRecord_PreUpdateTSStillWrites(t *testing.T) {
 // gate result for the stage is the one recorded.
 func TestWriteStageExitRecord_GateNoOpSnapshot(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := testRunID()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id", runID)
 	item := types.BoardItem{Number: 3863, Repo: "nightgauge/nightgauge"}
@@ -558,7 +560,7 @@ func TestWriteStageExitRecord_GateNoOpSnapshot(t *testing.T) {
 // so retros can jq the ended-on-a-promise exits straight from the file.
 func TestWriteStageExitRecord_PrematureTurnEndClassified(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := testRunID()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 74, "item-id", runID)
 	item := types.BoardItem{Number: 74, Repo: "nightgauge/nightgauge"}
@@ -596,7 +598,7 @@ func TestWriteStageExitRecord_PrematureTurnEndClassified(t *testing.T) {
 // latest one wins (the reconcile path can append a second result).
 func TestWriteStageExitRecord_GatePassedSnapshot(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id", testRunID())
 	item := types.BoardItem{Number: 3863, Repo: "nightgauge/nightgauge"}
 
@@ -630,7 +632,7 @@ func TestWriteStageExitRecord_GatePassedSnapshot(t *testing.T) {
 // gate_kind/gate_reason — omitempty keeps the daily line terse.
 func TestWriteStageExitRecord_NoGateLeavesGateFieldsEmpty(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 3863, "item-id", testRunID())
 	item := types.BoardItem{Number: 3863, Repo: "nightgauge/nightgauge"}
 
@@ -720,10 +722,10 @@ func TestRateLimitRemainingAtExit_NoClientReturnsSentinel(t *testing.T) {
 }
 
 // TestWriteStageExitRecord_DailyPathHasOwnerSlashName confirms the on-disk
-// path stays `.nightgauge/pipeline/exit-records/YYYY-MM-DD.jsonl` —
+// path stays `<pipeline state dir>/exit-records/YYYY-MM-DD.jsonl` —
 // any rename of this path would break the `exit-records tail` CLI reader.
 func TestWriteStageExitRecord_DailyPathHasOwnerSlashName(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := newSchedulerForDeterministicTest()
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 1, "id", testRunID())
 	item := types.BoardItem{Number: 1, Repo: "nightgauge/nightgauge"}
@@ -732,7 +734,7 @@ func TestWriteStageExitRecord_DailyPathHasOwnerSlashName(t *testing.T) {
 		&StageRunResult{ExitCode: 0}, 0, nil, 0, "sonnet-4-5",
 		0, 0, 0, time.Now(), root, "", "")
 
-	expected := filepath.Join(root, ".nightgauge", "pipeline", "exit-records")
+	expected := filepath.Join(layouttest.PipelineDir(t, root), "exit-records")
 	entries, err := os.ReadDir(expected)
 	if err != nil {
 		t.Fatalf("read dir %s: %v", expected, err)
@@ -816,7 +818,7 @@ func TestWriteStageExitRecord_NamesUnreclaimedPipelineStashes(t *testing.T) {
 // always carries the key trains readers to ignore it.
 func TestWriteStageExitRecord_OmitsStashFieldWhenNothingLeaked(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runtime := state.NewRuntimeState("nightgauge/nightgauge", 693, "item-id", testRunID())
 	item := types.BoardItem{Number: 693, Repo: "nightgauge/nightgauge"}
 

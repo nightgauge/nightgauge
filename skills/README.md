@@ -275,10 +275,16 @@ When invoked, a skill:
 
 ### Context Handoff
 
-Pipeline skills communicate via **JSON context files** stored in `.nightgauge/pipeline/`:
+Pipeline skills communicate via **JSON context files** stored in the clone's
+pipeline state directory, `<git-common-dir>/nightgauge/pipeline/` (for a normal
+clone `.git/nightgauge/pipeline/`; linked worktrees share the main clone's). A
+skill never hard-codes it: it reads a file at
+`$(nightgauge layout path pipeline <name>)` and writes one with
+`nightgauge layout write pipeline <name>`
+([ADR-024 § 7](../docs/decisions/024-data-and-state-layout.md)).
 
 ```
-.nightgauge/pipeline/
+$(nightgauge layout path pipeline)/
 ├── issue-42.json                  # Initial issue context (issue-pickup output)
 ├── issue-42-plan.json             # Implementation plan (feature-planning output)
 ├── issue-42-dev.json              # Implementation state (feature-dev output)
@@ -316,7 +322,8 @@ every stage; the fallbacks cover an interactive run. The `:?` line matters as
 much as the derivation: `${ISSUE_NUMBER:-}` turns a missing value into a blank
 that a later command records as if it were real (#1919, #1932). After a
 checkout moves `HEAD` off the feature branch, read the branch from the pickup
-context (`jq -r .branch .nightgauge/pipeline/issue-<N>.json`) instead.
+context (`jq -r .branch "$(nightgauge layout path pipeline issue-<N>.json)"`)
+instead.
 
 `nightgauge preflight skill-shell-state` fails a stage-skill block that reads
 `$ISSUE_NUMBER`, `$BRANCH`, `$BRANCH_NAME` or `$REPO` without deriving it, or

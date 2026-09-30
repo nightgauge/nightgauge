@@ -170,12 +170,16 @@ function makeSpec(agents: number, over: Partial<WorkflowSpec> = {}, judges = 0):
   };
 }
 
+/** The journal directory the tests pin (the clone's pipeline class directory). */
+const JOURNAL_DIR = "/repo/.git/nightgauge/pipeline";
+
 function baseDeps(over: Partial<WorkflowExecutorDeps>): WorkflowExecutorDeps {
   return {
     adapter: fakeAdapter({ capability: "sdk-fanout" }),
     config: RESOLVED_ON,
     bindings: passingBindings(),
     fs: new FakeFs(),
+    journalDir: JOURNAL_DIR,
     ...over,
   };
 }
@@ -513,7 +517,7 @@ describe("WorkflowExecutor — durable journal + resume", () => {
     // "killed" before a1 ran. We hand-craft a journal with a0 terminal and a1
     // never emitted, then resume.
     const fs = new FakeFs();
-    const journalPath = ".nightgauge/pipeline/workflow-r1.jsonl";
+    const journalPath = `${JOURNAL_DIR}/workflow-r1.jsonl`;
     const rec = (event: WorkflowEvent): string => JSON.stringify({ event }) + "\n";
     const ts = new Date().toISOString();
     const lines =
@@ -573,7 +577,7 @@ describe("WorkflowExecutor — durable journal + resume", () => {
 
   it("resume rejects a poisoned (path-traversal) outputRef — never trusts it", async () => {
     const fs = new FakeFs();
-    const journalPath = ".nightgauge/pipeline/workflow-r1.jsonl";
+    const journalPath = `${JOURNAL_DIR}/workflow-r1.jsonl`;
     const ts = new Date().toISOString();
     const poisoned =
       JSON.stringify({

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
@@ -15,6 +14,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // The merged PR the fixture's GraphQL server describes. The URL's owner/repo
@@ -142,7 +143,7 @@ func newBreadcrumbScheduler(t *testing.T, launchRoot, targetRoot string) *Schedu
 //
 // The consequence is a misfiled identity, not merely a misplaced file. Since
 // #410 state.ActiveIssuesFromSnapshots treats each repo root's own
-// .nightgauge/pipeline/ as THAT root's in-flight source, and infers the owning
+// pipeline state directory as THAT root's in-flight source, and infers the owning
 // repo from where the snapshot sits. A cross-repo run's breadcrumb landing in
 // the launch root therefore gives the launch repo a phantom in-flight issue and
 // leaves the target repo's scan one real run short — the same
@@ -155,8 +156,8 @@ func newBreadcrumbScheduler(t *testing.T, launchRoot, targetRoot string) *Schedu
 // post-run scan of either root would find nothing and every assertion here
 // would be vacuous.
 func TestVerifyPRMergeForStage_BreadcrumbLandsInTheRunsTargetRepo(t *testing.T) {
-	launchRoot := t.TempDir()
-	targetRoot := t.TempDir()
+	launchRoot := layouttest.Repo(t)
+	targetRoot := layouttest.Repo(t)
 
 	s := newBreadcrumbScheduler(t, launchRoot, targetRoot)
 	runtime := state.NewRuntimeState(breadcrumbTargetRepo, breadcrumbIssue, "item-441", testRunID())
@@ -168,8 +169,8 @@ func TestVerifyPRMergeForStage_BreadcrumbLandsInTheRunsTargetRepo(t *testing.T) 
 			"not the assertion (stage error: %q)", runtime.Snapshot().StageErrors)
 	}
 
-	targetStateDir := filepath.Join(targetRoot, ".nightgauge", "pipeline")
-	launchStateDir := filepath.Join(launchRoot, ".nightgauge", "pipeline")
+	targetStateDir := layouttest.PipelineDir(t, targetRoot)
+	launchStateDir := layouttest.PipelineDir(t, launchRoot)
 
 	inTarget, err := state.FindPersistedStatesForIssue(targetStateDir, breadcrumbIssue)
 	if err != nil {
@@ -214,7 +215,7 @@ func TestVerifyPRMergeForStage_BreadcrumbLandsInTheRunsTargetRepo(t *testing.T) 
 // too.
 //
 // The survival journal is not a per-run snapshot. It is one append-only file at
-// <root>/survival.StoreRelPath whose records are self-describing — each carries
+// launch root's pipeline state directory whose records are self-describing — each carries
 // its own Repo + Number, and gh.SurvivalDetector.Observe resolves the repo to
 // query from rec.Repo, never from the store's root. Both readers are
 // launch-root global with no per-repo scan to pair with:
@@ -227,8 +228,8 @@ func TestVerifyPRMergeForStage_BreadcrumbLandsInTheRunsTargetRepo(t *testing.T) 
 // So the two writes SPLIT here by design, and this test is what makes that
 // design a fact about the code rather than a claim in a comment.
 func TestVerifyPRMergeForStage_SurvivalRecordStaysAtTheLaunchRoot(t *testing.T) {
-	launchRoot := t.TempDir()
-	targetRoot := t.TempDir()
+	launchRoot := layouttest.Repo(t)
+	targetRoot := layouttest.Repo(t)
 
 	s := newBreadcrumbScheduler(t, launchRoot, targetRoot)
 	runtime := state.NewRuntimeState(breadcrumbTargetRepo, breadcrumbIssue, "item-441", testRunID())
@@ -260,7 +261,7 @@ func TestVerifyPRMergeForStage_SurvivalRecordStaysAtTheLaunchRoot(t *testing.T) 
 
 	// And nothing was ALSO written under the target root: one writer, one
 	// journal. A second copy would double-count the merge in calibration.
-	if _, statErr := os.Stat(filepath.Join(targetRoot, survival.StoreRelPath)); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(survival.NewStore(targetRoot).Path()); !os.IsNotExist(statErr) {
 		t.Errorf("a survival journal exists under the run's target root %s (stat err: %v) — the survival "+
 			"writer must stay launch-rooted to agree with its launch-rooted readers",
 			targetRoot, statErr)

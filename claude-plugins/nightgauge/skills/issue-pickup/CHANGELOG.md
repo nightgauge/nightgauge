@@ -10,6 +10,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The clone's pipeline context files are read at `$(nightgauge layout path <class> <name>)`
+  and written through `nightgauge layout write|append`, never by a
+  `.nightgauge/...` path: they now live in the git directory (#2037, ADR-024
+  § 7).
 - **Phase 2.7 checks capacity (#1655, 1.21.0).** The size gate now asks
   `nightgauge size-gate capacity --json` for the repository's target adapter
   and model and passes them to `size-gate check`, which rejects an issue

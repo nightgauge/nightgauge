@@ -14,6 +14,7 @@ import * as os from "os";
 import * as path from "path";
 import { PHASE_REGISTRY } from "@nightgauge/sdk";
 import type { Logger } from "../../../src/utils/logger";
+import { fakeCloneLayout } from "../../helpers/cloneLayout";
 import {
   createDeterministicPhaseReporter,
   DETERMINISTIC_PICKUP_SKIP_REASON,
@@ -119,6 +120,8 @@ describe("deterministic issue-pickup phase reporting (#1534)", () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ng-1534-"));
+    // Per-clone data lives under the clone's git dir (ADR-024 § 7).
+    fakeCloneLayout(tmpDir);
     assembler = new ContextAssembler(makeLogger(), () => tmpDir, null);
     binaryPath.value = "/fake/nightgauge";
     execFileResponses.branch = "fix/1534-pickup-phases";

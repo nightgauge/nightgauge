@@ -586,8 +586,9 @@ Step 8.5 verifies the final context file:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-jq . ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" > /dev/null && \
-  echo "Context file written: .nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
+jq . "$CONTEXT_FILE" > /dev/null && \
+  echo "Context file written: $CONTEXT_FILE"
 ```
 
 **CRITICAL - CONTEXT ISOLATION RULES**: this skill terminates after Step 8.7.
@@ -602,8 +603,8 @@ agent MUST NOT continue to feature planning in this conversation.
 
 ## Output Contract
 
-This skill outputs `.nightgauge/pipeline/issue-{N}.json` for use by
-downstream skills.
+This skill outputs `issue-{N}.json` in the clone's pipeline state directory
+(`nightgauge layout path pipeline`) for use by downstream skills.
 
 **Schema**: See
 [docs/CONTEXT_ARCHITECTURE.md](../../../docs/CONTEXT_ARCHITECTURE.md) for full

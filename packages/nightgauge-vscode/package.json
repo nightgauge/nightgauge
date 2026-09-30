@@ -45,8 +45,7 @@
     "theme": "dark"
   },
   "activationEvents": [
-    "workspaceContains:.nightgauge/pipeline",
-    "workspaceContains:.nightgauge/plans"
+    "workspaceContains:.nightgauge/config.yaml"
   ],
   "type": "module",
   "main": "./dist/extension.cjs",

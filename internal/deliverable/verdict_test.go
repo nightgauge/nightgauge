@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // reportedArtifact is the validate context from the run in #152, trimmed to the
@@ -128,16 +130,14 @@ func TestApply_NoOpWhenEverythingRan(t *testing.T) {
 // drop everything this package does not model — which is nearly the whole
 // artifact, and which downstream stages read.
 func TestWriteValidateContext_PreservesUnknownFields(t *testing.T) {
-	ws := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(ws, ".nightgauge", "pipeline"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	ws := layouttest.Repo(t)
+	pipelineDir := layouttest.MkPipelineDir(t, ws)
 
 	original := reportedArtifact()
 	original["gate_metrics"] = []any{map[string]any{"gate_name": "lint", "result": "pass"}}
 	original["commit_sha"] = "abc123"
 	raw, _ := json.MarshalIndent(original, "", "  ")
-	path := filepath.Join(ws, ".nightgauge", "pipeline", "validate-4318.json")
+	path := filepath.Join(pipelineDir, "validate-4318.json")
 	if err := os.WriteFile(path, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}

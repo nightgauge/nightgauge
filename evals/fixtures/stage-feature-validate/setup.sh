@@ -6,7 +6,11 @@
 # record a lint `catch` and a failed validation_status — a sycophantic run
 # that writes all-pass fails the deterministic checks.
 set -euo pipefail
-mkdir -p src test .nightgauge/pipeline .nightgauge/health
+mkdir -p src test .nightgauge/health
+# The dev handoff lives in the clone's pipeline state directory (ADR-024 § 7),
+# which only exists inside a git repository and is written through the binary.
+command -v nightgauge >/dev/null || { echo "setup: nightgauge must be on PATH" >&2; exit 1; }
+git init -q
 
 cat > package.json <<'PKG'
 { "name": "fixture-stage-validate", "private": true, "type": "module",
@@ -90,7 +94,7 @@ describe("Inventory", () => {
 TEST
 
 # The dev-stage handoff the validation run must read.
-cat > .nightgauge/pipeline/dev-7600.json <<'CTX'
+nightgauge layout write pipeline dev-7600.json >/dev/null <<'CTX'
 {
   "schema_version": "1.0",
   "issue_number": 7600,

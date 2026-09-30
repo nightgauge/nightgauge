@@ -7,14 +7,16 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // writeEpicCtx writes an epic-context file under a temp workspace and returns
 // the workspace root.
 func writeEpicCtx(t *testing.T, epicNumber int, ec epicContext) string {
 	t.Helper()
-	root := t.TempDir()
-	dir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := layouttest.Repo(t)
+	dir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

@@ -6,7 +6,8 @@ Consumes the output of the retro pipeline (classified + cross-referenced failure
 events) and produces:
   - A structured JSON report conforming to schema_version "1.0"
   - A human-readable Markdown report suitable for terminal display or file output
-  - A JSON file written to .nightgauge/pipeline/retro-report-YYYY-MM-DD.json
+  - A JSON file written to <pipeline>/retro-report-YYYY-MM-DD.json, where
+    <pipeline> is the clone's pipeline directory (ADR-024 § 7)
 
 No external dependencies. Requires Python 3.8+.
 """
@@ -138,13 +139,18 @@ class ReportGenerator:
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
-    def generate_markdown_report(self, report: dict) -> str:
+    def generate_markdown_report(
+        self, report: dict, report_path: Optional[str] = None
+    ) -> str:
         """Generate a human-readable Markdown report from a JSON report dict.
 
         Parameters
         ----------
         report:
             JSON report dict as produced by :meth:`generate_json_report`.
+        report_path:
+            Where :meth:`write_json_report` saved the JSON report. The footer
+            names it; when None (nothing was saved) the footer is omitted.
 
         Returns
         -------
@@ -285,10 +291,9 @@ class ReportGenerator:
         # ----------------------------------------------------------------
         # Footer — report file path
         # ----------------------------------------------------------------
-        lines.append("-" * 55)
-        report_date = self._extract_report_date(report)
-        report_path = f".nightgauge/pipeline/retro-report-{report_date}.json"
-        lines.append(f"Report saved: {report_path}")
+        if report_path:
+            lines.append("-" * 55)
+            lines.append(f"Report saved: {report_path}")
 
         return "\n".join(lines)
 
@@ -303,8 +308,8 @@ class ReportGenerator:
         report:
             JSON report dict as produced by :meth:`generate_json_report`.
         output_dir:
-            Directory path to write the file into.  Typically
-            ``.nightgauge/pipeline``.
+            Directory path to write the file into.  Typically the clone's
+            pipeline directory, ``<git-common-dir>/nightgauge/pipeline``.
 
         Returns
         -------

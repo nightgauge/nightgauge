@@ -64,7 +64,7 @@ Expected output:
 └─────────────────────────────────────┘
 ```
 
-**What happens next:** You're on a new branch with issue context saved to `.nightgauge/pipeline/issue-42.json`. For small bugs, you can skip feature-planning and go directly to feature-dev.
+**What happens next:** You're on a new branch with issue context saved to `issue-42.json` in the clone's pipeline state directory (`nightgauge layout path pipeline`). For small bugs, you can skip feature-planning and go directly to feature-dev.
 
 ---
 
@@ -267,7 +267,7 @@ What happens:
   - Implementation approach (with rationale)
   - Files to modify and create
   - Test strategy
-- Saves plan to `.nightgauge/plans/78-feature-name.md`
+- Saves plan `78-feature-name.md` to the clone's plans directory (`nightgauge layout path plans`)
 - Outputs summary and asks for approval
 
 Expected output:
@@ -280,7 +280,7 @@ Expected output:
 │ Status:   Awaiting Your Approval                    │
 │                                                     │
 │ Plan saved to:                                      │
-│ .nightgauge/plans/78-photo-upload.md           │
+│ .git/nightgauge/plans/78-photo-upload.md            │
 │                                                     │
 │ Proposed approach: Pragmatic Balance                │
 │                                                     │
@@ -303,7 +303,7 @@ Expected output:
 
 ```bash
 # Review the plan
-cat .nightgauge/plans/78-photo-upload.md
+cat "$(nightgauge layout path plans 78-photo-upload.md)"
 
 # If you like it, proceed to step 3
 # If you want changes, ask the agent to revise and re-run feature-planning
@@ -666,7 +666,7 @@ Expected output:
 │ 2. 15% untested code paths (risky)       │
 │ 3. Missing API docs in 3 modules         │
 │                                          │
-│ Report saved: .nightgauge/logs/...  │
+│ Report saved: .git/nightgauge/logs/...   │
 └──────────────────────────────────────────┘
 ```
 
@@ -714,7 +714,7 @@ Expected output:
 │ 2. Missing CSRF protection on POST forms │
 │    → Add CSRF token validation           │
 │                                          │
-│ Report: .nightgauge/logs/...        │
+│ Report: .git/nightgauge/logs/...         │
 └──────────────────────────────────────────┘
 ```
 
@@ -982,7 +982,7 @@ Expected output:
 │ → Projected score: 88/100                │
 │                                          │
 │ Roadmap saved to:                        │
-│ .nightgauge/logs/roadmap-{date}.md  │
+│ .git/nightgauge/logs/roadmap-{date}.md   │
 └──────────────────────────────────────────┘
 ```
 
@@ -1169,7 +1169,7 @@ Or use interactive mode:
 What happens:
 
 - Adds all sub-issues to the processing queue
-- Stores queue state in `.nightgauge/pipeline/queue.json`
+- Stores queue state in `queue.json` in the clone's pipeline state directory
 - Shows queue order and upcoming waves
 
 Expected output:
@@ -1472,7 +1472,7 @@ Expected output:
 │    • Trend: Slightly down (-33%)           │
 │    • Likely due to larger features         │
 │                                            │
-│ Detailed Report: .nightgauge/logs/... │
+│ Detailed Report: .git/nightgauge/logs/...  │
 └────────────────────────────────────────────┘
 ```
 

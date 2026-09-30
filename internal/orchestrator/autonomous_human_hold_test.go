@@ -10,6 +10,8 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // Regression suite for #1486 — the graph reconcile re-admitted every still-OPEN
@@ -123,7 +125,7 @@ func TestArchitectureApprovalHold_ReleasedByApprovalFile(t *testing.T) {
 		Kind: TerminalKindArchitectureApprovalRequired,
 	}}
 
-	dir := filepath.Join(as.workspaceRoot, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, as.workspaceRoot)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -148,7 +150,7 @@ func TestArchitectureApprovalHold_UnapprovedFileDoesNotRelease(t *testing.T) {
 		Repo: "acme/flutter", Number: 530, FailedAt: "2026-09-05T16:53:15Z",
 		Kind: TerminalKindArchitectureApprovalRequired,
 	}}
-	dir := filepath.Join(as.workspaceRoot, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, as.workspaceRoot)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

@@ -69,7 +69,7 @@ func TestCompactFeatureDev_KeepsContractAndRules(t *testing.T) {
 		fdStopAndDeclareRule,
 		// The dev-{N}.json handoff contract fields the derived-handoff gate
 		// (#1076) reconciles.
-		"`.nightgauge/pipeline/dev-{N}.json`",
+		"**`dev-{N}.json`** (written with `nightgauge layout write pipeline`)",
 		"files_changed",
 		"tests_status",
 		// Build-before-tests and tests-alongside discipline.

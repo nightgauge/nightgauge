@@ -5,12 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // writeIssueContext drops an issue-{N}.json under root's pipeline dir.
 func writeIssueContext(t *testing.T, root string, issueNumber int, body string) {
 	t.Helper()
-	dir := filepath.Join(root, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -21,7 +23,7 @@ func writeIssueContext(t *testing.T, root string, issueNumber int, body string) 
 }
 
 func TestLoadIssueClassificationFromRepoRoot(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeIssueContext(t, root, 112, `{
 	  "type": "bug",
 	  "labels": ["type:bug", "priority:high", "size:M", "area:vscode"]
@@ -44,7 +46,7 @@ func TestLoadIssueClassificationFromRepoRoot(t *testing.T) {
 // files there — never into the canonical root — so the worktree layout must be
 // searched even when the Go side never learned the worktree path.
 func TestLoadIssueClassificationFromExtensionWorktree(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	worktree := filepath.Join(root, ".worktrees", "issue-112")
 	writeIssueContext(t, worktree, 112, `{"type":"feature","labels":["size:L"]}`)
 
@@ -61,7 +63,7 @@ func TestLoadIssueClassificationFromExtensionWorktree(t *testing.T) {
 // A runtime-supplied worktree path is the run's real workdir and wins over the
 // stale copy that may still sit in the repo root.
 func TestLoadIssueClassificationPrefersRuntimeWorktree(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	worktree := t.TempDir()
 	writeIssueContext(t, root, 112, `{"type":"chore","labels":["size:XS"]}`)
 	writeIssueContext(t, worktree, 112, `{"type":"feature","labels":["size:XL"]}`)
@@ -74,7 +76,7 @@ func TestLoadIssueClassificationPrefersRuntimeWorktree(t *testing.T) {
 }
 
 func TestLoadIssueClassificationLabelObjects(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeIssueContext(t, root, 7, `{
 	  "labels": [{"name": "type:docs"}, {"name": "size:S"}, 42]
 	}`)
@@ -94,7 +96,7 @@ func TestLoadIssueClassificationLabelObjects(t *testing.T) {
 }
 
 func TestLoadIssueClassificationMissingOrUnparseable(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	if cls := loadIssueClassification(root, "", 999); cls.Size != "" || cls.Type != "" || cls.Labels != nil {
 		t.Errorf("missing context = %+v, want zero value", cls)
@@ -109,7 +111,7 @@ func TestLoadIssueClassificationMissingOrUnparseable(t *testing.T) {
 // An issue with no size:* label must leave Size empty rather than defaulting —
 // a wrong bucket poisons calibration for every future run of that size.
 func TestLoadIssueClassificationNoSizeLabel(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeIssueContext(t, root, 10, `{"type":"bug","labels":["type:bug","area:vscode"]}`)
 
 	cls := loadIssueClassification(root, "", 10)

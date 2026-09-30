@@ -69,10 +69,10 @@ GROUP_B_PID=$!
 
 # Group C: Context file reads (1-2s)
 (
-  ISSUE=$(jq . ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null || echo '{}')
-  PLANNING=$(jq . ".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json" 2>/dev/null || echo '{}')
-  DEV=$(jq . ".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json" 2>/dev/null || echo '{}')
-  VALIDATE=$(jq . ".nightgauge/pipeline/validate-${ISSUE_NUMBER}.json" 2>/dev/null || echo '{}')
+  ISSUE=$(jq . "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
+  PLANNING=$(jq . "$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
+  DEV=$(jq . "$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
+  VALIDATE=$(jq . "$(nightgauge layout path pipeline validate-${ISSUE_NUMBER}.json)" 2>/dev/null || echo '{}')
   PLAN=$(cat PLAN.md 2>/dev/null || true)
   jq -n \
     --argjson issue "$ISSUE" \
@@ -170,7 +170,7 @@ single PR with multi-issue closing keywords.
 BRANCH=$(git branch --show-current)
 : "${BRANCH:?detached HEAD: check out the issue branch}"
 EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-BATCH_DEV=".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
+BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
 
 if [ -f "$BATCH_DEV" ]; then
   BATCH_MODE=true

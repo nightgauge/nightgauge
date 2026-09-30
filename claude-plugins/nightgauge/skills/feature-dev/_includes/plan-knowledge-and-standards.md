@@ -48,11 +48,11 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Look for plan matching issue number first
 if [ -n "$ISSUE_NUMBER" ]; then
-  ls .nightgauge/plans/${ISSUE_NUMBER}-*.md 2>/dev/null
+  ls "$(nightgauge layout path plans)"/${ISSUE_NUMBER}-*.md 2>/dev/null
 fi
 
 # Fall back to common locations
-ls PLAN.md .nightgauge/plans/*.md 2>/dev/null
+ls PLAN.md "$(nightgauge layout path plans)"/*.md 2>/dev/null
 ```
 
 If no plan found: decide to run `/feature-planning` first, implement without
@@ -82,9 +82,9 @@ proceeding.
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Read knowledge_path from planning context, fall back to issue context
-KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' ".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json" 2>/dev/null)
+KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' "$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)" 2>/dev/null)
 if [ -z "$KNOWLEDGE_PATH" ]; then
-  KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' ".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json" 2>/dev/null)
+  KNOWLEDGE_PATH=$(jq -r '.knowledge_path // empty' "$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)" 2>/dev/null)
 fi
 
 if [ -n "$KNOWLEDGE_PATH" ] && [ -d "$KNOWLEDGE_PATH" ]; then
@@ -160,7 +160,7 @@ pre-load the referenced sibling-repo knowledge files before implementing.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CROSS_REPO=$(jq -r '.cross_repo_knowledge // []' ".nightgauge/pipeline/planning-${ISSUE_NUMBER}.json" 2>/dev/null)
+CROSS_REPO=$(jq -r '.cross_repo_knowledge // []' "$(nightgauge layout path pipeline planning-${ISSUE_NUMBER}.json)" 2>/dev/null)
 REPO_COUNT=$(printf '%s\n' "$CROSS_REPO" | jq 'length' 2>/dev/null || echo "0")
 
 if [ "$REPO_COUNT" -gt 0 ]; then

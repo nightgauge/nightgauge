@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -210,7 +211,10 @@ func (s *Server) registerGetStateMethod() {
 			return current.rs.Snapshot(), nil
 		}
 		if s.workspaceRoot != "" {
-			stateDir := s.workspaceRoot + "/.nightgauge/pipeline"
+			stateDir, err := state.PipelineStateDir(s.workspaceRoot)
+			if err != nil {
+				return nil, err
+			}
 			persisted, err := state.PickPersistedStateForIssue(stateDir, p.IssueNumber)
 			if err == nil {
 				return persisted, nil
@@ -341,7 +345,7 @@ func TestNotifyStageProgressHandler_DoesNotMutateCompletedStages(t *testing.T) {
 func TestGetStateFallback(t *testing.T) {
 	// Create a server with a persisted state file
 	tmpDir := t.TempDir()
-	stateDir := tmpDir + "/.nightgauge/pipeline"
+	stateDir := layouttest.PipelineDir(t, tmpDir)
 
 	rs := state.NewRuntimeState("nightgauge/nightgauge", 1899, "item-1", newTestRunID())
 	rs.BeginStage("feature-dev")

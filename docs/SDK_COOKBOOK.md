@@ -248,11 +248,14 @@ async function debugPlanning() {
   const result = await orchestrator.runStage("feature-planning", 42);
 
   if (result.success) {
-    // Inspect the generated plan file
+    // Inspect the generated plan file in the clone's plans directory
     const fs = require("fs");
-    const planPath = ".nightgauge/plans/42-*.md";
+    const path = require("path");
+    const { cloneClassDir } = require("@nightgauge/sdk");
+    const plansDir = cloneClassDir("plans", "/path/to/repo");
+    const plan = fs.readdirSync(plansDir).find((f) => f.startsWith("42-"));
     console.log("Generated plan:");
-    console.log(fs.readFileSync(planPath, "utf-8"));
+    console.log(fs.readFileSync(path.join(plansDir, plan), "utf-8"));
   }
 }
 ```
@@ -599,7 +602,9 @@ async function executeWithRetry(options: ResumableExecution) {
 
 // Resume from last successful stage
 async function resumeFromLastStage(issueNumber: number) {
-  const ctx = new ContextManager(".nightgauge/pipeline");
+  // Defaults to the clone's pipeline state directory
+  // (<git-common-dir>/nightgauge/pipeline).
+  const ctx = new ContextManager();
 
   // Find the last completed stage by checking which context files exist
   const stageOrder = ["issue", "planning", "dev", "validate", "pr"];
@@ -649,9 +654,10 @@ executeWithRetry({
 **Use case:** Compose stages with custom pre/post validators.
 
 ```typescript
-import { PipelineOrchestrator } from "@nightgauge/sdk";
+import { PipelineOrchestrator, cloneClassDir } from "@nightgauge/sdk";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import * as fs from "fs/promises";
+import * as path from "path";
 
 interface StageValidator {
   name: string;
@@ -687,7 +693,7 @@ const postValidators: StageValidator[] = [
     name: "Context file exists",
     validate: async (issueNumber) => {
       try {
-        await fs.stat(`.nightgauge/pipeline/dev-${issueNumber}.json`);
+        await fs.stat(path.join(cloneClassDir("pipeline"), `dev-${issueNumber}.json`));
         return { valid: true };
       } catch {
         return { valid: false, reason: "Context file missing" };

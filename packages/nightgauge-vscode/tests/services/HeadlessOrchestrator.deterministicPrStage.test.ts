@@ -22,6 +22,7 @@ import type { PipelineStateService } from "../../src/services/PipelineStateServi
 import type { Logger } from "../../src/utils/logger";
 import type { SkillRunResult } from "../../src/utils/skillRunner";
 import { runStageSkillHeadless } from "../../src/utils/skillRunner";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // Skip the live-adapter auth preflight (no CLI auth in the test env).
 vi.mock("../../src/utils/nightgaugeConfig", async (importOriginal) => ({
@@ -373,6 +374,8 @@ describe("HeadlessOrchestrator deterministic-first pr-stage (Issue #300)", () =>
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // The worktree's per-clone data resolves under its git dir (ADR-024 § 7).
+    fakeCloneLayout(WORKTREE);
     prStageCalls.value = [];
     prStagePhaseLines.value = [];
     gatePrMergePassed.value = true;

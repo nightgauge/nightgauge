@@ -5,10 +5,11 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestSurvivalListCommand(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	store := survival.NewStore(dir)
 	if _, err := store.Append(survival.NewPending("nightgauge/nightgauge", 4151, 4200, "sha-list", "2026-06-01T12:00:00Z", "main")); err != nil {
 		t.Fatal(err)
@@ -32,7 +33,7 @@ func TestSurvivalListCommand(t *testing.T) {
 }
 
 func TestSurvivalListVerdictFilter(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	store := survival.NewStore(dir)
 	if _, err := store.Append(survival.NewPending("nightgauge/r", 1, 1, "p", "2026-06-01T12:00:00Z", "main")); err != nil {
 		t.Fatal(err)
@@ -61,7 +62,7 @@ func TestSurvivalListVerdictFilter(t *testing.T) {
 }
 
 func TestSurvivalSweepEmptyStoreIsNoOp(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	cmd := survivalSweepCmd()
 	cmd.SetArgs([]string{"--workdir", dir})
 	out := captureStdout(t, func() {

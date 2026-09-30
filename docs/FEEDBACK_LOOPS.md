@@ -112,11 +112,12 @@ stage failure, and leaves three things behind:
 
 | Artifact                                             | Why                                                                                              |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `.nightgauge/pipeline/blocked-findings/<issue>.json` | So the NEXT dispatch defers at `issue-pickup` for zero tokens instead of re-running three stages |
+| `blocked-findings/<issue>.json` (pipeline state dir) | So the NEXT dispatch defers at `issue-pickup` for zero tokens instead of re-running three stages |
 | An issue comment carrying the rationale and evidence | So a human sees why it stopped without reading a session log                                     |
 | An `out-of-scope-blocker` Action Center card         | So the finding is in the operator's inbox with a one-click way to clear it                       |
 
-The finding lives in a **subdirectory** of `.nightgauge/pipeline/` on purpose:
+The finding lives in a **subdirectory** of the clone's pipeline state directory
+(`nightgauge layout path pipeline`) on purpose:
 `runstate.ArchiveRun` moves every flat `*-<issue>.json` there into
 `pipeline/history/<runId>/` at run end, and skips directories — a finding
 written flat would be archived away by the run that produced it.
@@ -275,19 +276,20 @@ A `conflict-context-{N}.json` is written **only** for a capture that found at
 least one conflicting path, and the Go writer writes one only when EVERY such
 path is representable and the `branch` resolved. `conflicting_files` is never
 empty (`ConflictContextSchema` requires ≥ 1). A non-captured outcome also
-REMOVES a document a previous attempt left behind — `.nightgauge/pipeline/`
+REMOVES a document a previous attempt left behind — the pipeline state directory
 outlives the run, and a stale context reads exactly like a fresh one.
 
-**Both writers write into the worktree the stage is running in**, never the
-main checkout: the Go writer uses the run's workspace and the skill writer
-`git rev-parse --show-toplevel`. On a worktree-isolated run — the pipeline's
-normal mode — the readers all resolve the STAGE worktree
-(`<workspace>/.nightgauge/pipeline/` for the recovery loop, the relative
-`.nightgauge/pipeline/` for feature-dev's intake and pr-merge's own
-context-bootstrap), so a capture written to the main worktree is invisible and
-every conflict escalates "conflict-context-{N}.json not found" no matter how
-faithfully it was recorded. `git worktree list` is not a way to find that
-directory — it prints the MAIN worktree first from anywhere (#301).
+**Every writer and reader resolves the same directory.** The pipeline state
+directory is per clone (`<git-common-dir>/nightgauge/pipeline`,
+[ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)),
+so the main checkout and every linked worktree share it: the Go writer resolves
+it from the run's workspace, the skill writer hands the document to
+`nightgauge layout write pipeline conflict-context-{N}.json`, and the recovery
+loop, feature-dev's intake and pr-merge's context-bootstrap read it through the
+same resolver. Before ADR-024 each checkout had its own in-tree
+`.nightgauge/pipeline/`, and a capture written to the main worktree was
+invisible to the stage worktree, so every conflict escalated
+"conflict-context-{N}.json not found" (#301).
 
 There are two writers and they fail differently, on purpose:
 
@@ -381,9 +383,9 @@ mode is different and is stated after it:
 | `failed`            | enumeration errored, branch unresolvable, or a path unrepresentable   | `conflict-evidence-{N}/` dump | yes, once the dump succeeded          | human triage  |
 
 **A failed Go capture preserves the raw index and then aborts.** The `:2:`/`:3:`
-stages are copied out verbatim to `.nightgauge/pipeline/conflict-evidence-{N}/`
-(content-addressed `blobs/<sha>` plus a `manifest.json` naming which stage of
-which path each blob was) before `git rebase --abort` runs. Evidence carries
+stages are copied out verbatim to `conflict-evidence-{N}/` in the pipeline state
+directory (content-addressed `blobs/<sha>` plus a `manifest.json` naming which
+stage of which path each blob was) before `git rebase --abort` runs. Evidence carries
 `evidence_preserved=true` and `evidence_dir=…`.
 
 **The skill writer does not do this, and there is nothing to triage from after

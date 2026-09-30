@@ -154,6 +154,13 @@ func renderFixReport(w io.Writer, rep doctor.FixReport) {
 	}
 	fmt.Fprintf(w, "%s: %d blocker, %d warning, %d housekeeping, %d info (exit %d)\n",
 		state, s.Blocker, s.Warning, s.Housekeeping, s.Info, rep.ExitCode)
+	// The per-clone layout version (#2040): a no-op pass still says which
+	// layout the clone is on.
+	for _, r := range rep.Doctor.Results {
+		if r.ID == doctor.LayoutCheckID && r.Detail != "" {
+			fmt.Fprintf(w, "Data layout: %s\n", r.Detail)
+		}
+	}
 }
 
 func evidenceLine(ev map[string]string) string {

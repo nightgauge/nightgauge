@@ -92,7 +92,8 @@ export function summarizeCodexJsonOutput(output: string): CodexJsonSummary {
   );
   const criticalOutputPattern =
     /(error connecting to api\.github\.com|cannot write inside `?\.git`?|could not determine repository owner\/name|permission denied|operation not permitted|failed to fetch dependencies)/i;
-  const contextWriteSignalPattern = /context file written:\s*\.nightgauge\/pipeline\//i;
+  // The skill echoes the resolved path: <git-common-dir>/nightgauge/pipeline/<name>.
+  const contextWriteSignalPattern = /context file written:\s*\S*\/nightgauge\/pipeline\//i;
   const issuePickupCompleteSignalPattern =
     /pipeline state updated:\s*issue-pickup\s*[→>-]\s*complete/i;
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -98,7 +99,7 @@ func writeLiveSnapshot(t *testing.T, root string, issue, pid int) string {
 	if pid > 0 {
 		rs.SetProcess(pid, filepath.Join(root, ".worktrees", "issue-"+strconv.Itoa(issue)))
 	}
-	dir := filepath.Join(root, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, root)
 	if err := rs.Persist(dir); err != nil {
 		t.Fatalf("persist snapshot: %v", err)
 	}
@@ -416,7 +417,8 @@ func TestWorktreeSweep_JSONContractMatchesTheExtensionParser(t *testing.T) {
 	if idErr != nil {
 		t.Fatalf("mint run id: %v", idErr)
 	}
-	corrupt := filepath.Join(state.PipelineStateDir(root), state.SnapshotFilename(909, corruptRunID))
+	corrupt := filepath.Join(layouttest.PipelineDir(t, root),
+		state.SnapshotFilename(909, corruptRunID))
 	if err := os.MkdirAll(filepath.Dir(corrupt), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -682,7 +684,7 @@ func pauseSnapshot(t *testing.T, root, path string) {
 	if !ok {
 		t.Fatalf("parse snapshot filename %q", path)
 	}
-	dir := state.PipelineStateDir(root)
+	dir := layouttest.PipelineDir(t, root)
 	rs, err := state.LoadSnapshotByIdentity(dir, issue, runID)
 	if err != nil || rs == nil {
 		t.Fatalf("load snapshot: %v", err)

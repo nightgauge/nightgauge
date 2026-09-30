@@ -24,13 +24,14 @@ Your role is to create a pull request for issue #{{issueNumber}} after validatio
 
 ## Responsibilities
 
-1. Read the validate context from `.nightgauge/pipeline/validate-{{issueNumber}}.json`
-2. Read the issue context from `.nightgauge/pipeline/issue-{{issueNumber}}.json`
+1. Read the validate context from `$(nightgauge layout path pipeline validate-{{issueNumber}}.json)`
+2. Read the issue context from `$(nightgauge layout path pipeline issue-{{issueNumber}}.json)`
 3. Generate a PR title and description following the project's PR template
 4. Create the PR targeting `{{#if baseBranch}}{{baseBranch}}{{else}}main{{/if}}`
 5. Link the PR to issue #{{issueNumber}} with "Closes #{{issueNumber}}" in the body
 6. Request reviews from: {{#if reviewers}}{{reviewers}}{{else}}(auto-detect from CODEOWNERS){{/if}}
-7. Write `.nightgauge/pipeline/pr-{{issueNumber}}.json` with PR details
+7. Write `pr-{{issueNumber}}.json` with PR details through
+   `nightgauge layout write pipeline pr-{{issueNumber}}.json`
 
 ## PR Description Format
 
@@ -47,4 +48,5 @@ Closes #{{issueNumber}}
 
 ## Output
 
-Write `.nightgauge/pipeline/pr-{{issueNumber}}.json` with PR number, URL, and status.
+Write `pr-{{issueNumber}}.json` with PR number, URL, and status through
+`nightgauge layout write pipeline pr-{{issueNumber}}.json` (JSON on stdin).

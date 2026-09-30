@@ -17,6 +17,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func fakePickupRunner(ensureErr error) (*deterministicIssuePickup, *int32) {
@@ -53,7 +55,7 @@ func pickupInput(dir string) IssuePickupInput {
 // The runner produces a context file the real IssuePickupGate accepts, with no
 // model anywhere in the path.
 func TestDeterministicIssuePickup_WritesGatePassingContext(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	r, pushes := fakePickupRunner(nil)
 	res, err := r.Run(context.Background(), pickupInput(dir))
 	if err != nil {
@@ -112,8 +114,8 @@ func TestDeterministicIssuePickup_WritesGatePassingContext(t *testing.T) {
 // Keys the runner does not author (knowledge_path stamped on a prior attempt)
 // survive; keys it does author are replaced, including a malformed branch.
 func TestDeterministicIssuePickup_MergesOverExistingContext(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, ".nightgauge", "pipeline", "issue-1904.json")
+	dir := layouttest.Repo(t)
+	path := filepath.Join(layouttest.PipelineDir(t, dir), "issue-1904.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -144,14 +146,14 @@ func TestDeterministicIssuePickup_MergesOverExistingContext(t *testing.T) {
 // A reader polling the file while the runner rewrites it never sees it empty
 // or unparseable.
 func TestDeterministicIssuePickup_ContextNeverObservedPartial(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	r, _ := fakePickupRunner(nil)
 	in := pickupInput(dir)
 	in.Issue.Body = strings.Repeat("body line\n", 20000) // large enough to span writes
 	if _, err := r.Run(context.Background(), in); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, ".nightgauge", "pipeline", "issue-1904.json")
+	path := filepath.Join(layouttest.PipelineDir(t, dir), "issue-1904.json")
 
 	stop := make(chan struct{})
 	var bad atomic.Value
@@ -194,12 +196,12 @@ func TestDeterministicIssuePickup_ContextNeverObservedPartial(t *testing.T) {
 // A branch-creation failure is an error (the scheduler punts to the skill),
 // and no context file is written for a branch that does not exist.
 func TestDeterministicIssuePickup_BranchFailureWritesNothing(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	r, _ := fakePickupRunner(errors.New("boom"))
 	if _, err := r.Run(context.Background(), pickupInput(dir)); err == nil {
 		t.Fatal("expected an error")
 	}
-	if _, err := os.Stat(filepath.Join(dir, ".nightgauge", "pipeline", "issue-1904.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, dir), "issue-1904.json")); !os.IsNotExist(err) {
 		t.Fatalf("no context file may be written when the branch was not created (stat err %v)", err)
 	}
 }

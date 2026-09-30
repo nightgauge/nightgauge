@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/knowledge/recall"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // Related Decisions used to render rows like `decisions 0.69` (#1207).
@@ -20,7 +21,7 @@ import (
 
 func writeRelatedContextFile(t *testing.T, root string, issueNumber int, body string) {
 	t.Helper()
-	dir := filepath.Join(root, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -31,7 +32,7 @@ func writeRelatedContextFile(t *testing.T, root string, issueNumber int, body st
 }
 
 func TestRelatedIssueQuery_UsesTheTitleNotTheDigits(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeRelatedContextFile(t, root, 390, `{"issue_number":390,"title":"cost cache token counts"}`)
 
 	got := relatedIssueQuery(root, 390)
@@ -45,7 +46,7 @@ func TestRelatedIssueQuery_UsesTheTitleNotTheDigits(t *testing.T) {
 }
 
 func TestRelatedIssueQuery_AddsSubjectLabelsOnly(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeRelatedContextFile(t, root, 390, `{"issue_number":390,"title":"token counts",
 		"labels":["component:go-binary","priority:high","size:L","area:recall"]}`)
 
@@ -65,7 +66,7 @@ func TestRelatedIssueQuery_AddsSubjectLabelsOnly(t *testing.T) {
 }
 
 func TestRelatedIssueQuery_EmptyWhenThereIsNothingToAsk(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	// No context file: the pickup stage has not run. Ranking digit collisions
 	// here would be worse than reporting nothing.
 	if got := relatedIssueQuery(root, 390); got != "" {
@@ -104,7 +105,7 @@ func TestIsOwnKnowledgeDir_AnchorsOnTheDirectorySegment(t *testing.T) {
 // The end-to-end claim: a title query ranks the semantically related KB first,
 // where the digit query it replaced does not rank it at all.
 func TestRelatedDecisions_TitleQueryBeatsTheDigitQuery(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	mk := func(slug, body string) {
 		dir := filepath.Join(root, ".nightgauge", "knowledge", "features", slug)
 		if err := os.MkdirAll(dir, 0o755); err != nil {

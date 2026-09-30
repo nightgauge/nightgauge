@@ -30,6 +30,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/trace"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // fullStageOrder mirrors the stage list runPipeline builds before any
@@ -60,7 +62,7 @@ type fastTrackHarness struct {
 
 func newFastTrackHarness(t *testing.T) *fastTrackHarness {
 	t.Helper()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	// Satisfies trace's run-id pattern (^[A-Za-z0-9_-]{8,128}$); a rejected id
 	// yields a nil writer whose Emit is a silent no-op, which would make the
 	// trace assertions below vacuous.

@@ -10,7 +10,7 @@
  * @see docs/ARCHITECTURE.md for architectural overview
  */
 
-import { RELATIVE_CLONE_LOGS_DIR } from "./utils/cloneLayout";
+import { CLONE_LOGS_DISPLAY, primeCloneLayouts, refreshCloneLayouts } from "./utils/cloneLayout";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { getStageLabel, killAllActiveProcesses } from "./utils/skillRunner";
@@ -58,6 +58,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // the machine-global `gh auth` active account. This is what lets concurrent
   // windows owned by different GitHub users coexist. Fail-safe — never throws.
   applyPerRepoGitHubTokenEnv(context);
+  // Resolve every workspace folder's per-clone layout once (ADR-024 § 7), so
+  // the synchronous clone-layout helpers read a cache instead of spawning
+  // git. Folders added or removed later are re-primed or forgotten.
+  await primeCloneLayouts((vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath));
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeWorkspaceFolders((e) => {
+      void refreshCloneLayouts(
+        e.added.map((f) => f.uri.fsPath),
+        e.removed.map((f) => f.uri.fsPath)
+      );
+    })
+  );
   // Initialize all services, tree views, and event wiring
   try {
     services = await initializeServices(context);
@@ -912,7 +924,7 @@ export function deactivate(): void {
 
   logger?.info(
     "Deactivating Nightgauge extension — " +
-      `persistent pipeline logs in ${RELATIVE_CLONE_LOGS_DIR}/ ` +
+      `persistent pipeline logs in ${CLONE_LOGS_DISPLAY}/ ` +
       "(go-backend.log, autonomous-exits.jsonl); " +
       "extension-only logs in " +
       `${extensionContext?.logUri.fsPath ?? "the extension's logUri"} ` +

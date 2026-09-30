@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The clone's pipeline state and plans are read at `$(nightgauge layout path <class> <name>)`
+  and written through `nightgauge layout write|append`, never by a
+  `.nightgauge/...` path: they now live in the git directory (#2037, ADR-024
+  § 7).
+
 ### Fixed
 
 - **Every shell block derives the pipeline identifiers it reads (#1932).** Each

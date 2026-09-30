@@ -1011,7 +1011,7 @@ func (s *Server) repoRoot(repo string) string {
 	return s.workspaceRootPath()
 }
 
-// pipelineStateDir resolves the .nightgauge/pipeline directory a run's
+// pipelineStateDir resolves the .git/nightgauge/pipeline directory a run's
 // runtime-{issue}-{runId}.json belongs in, scoped to the run's target repo via repoRoot.
 // Returns "" when no root resolves (e.g. an unconfigured server).
 //
@@ -1024,7 +1024,12 @@ func (s *Server) pipelineStateDir(repo string) string {
 	if root == "" {
 		return ""
 	}
-	return state.PipelineStateDir(root)
+	dir, err := state.PipelineStateDir(root)
+	if err != nil {
+		log.Printf("ipc: pipeline state directory for %s: %v", repo, err)
+		return ""
+	}
+	return dir
 }
 
 // workspacePipelineStateDir is the workspace root's pipeline state directory
@@ -1036,9 +1041,9 @@ func (s *Server) workspacePipelineStateDir() (string, error) {
 	if root == "" {
 		return "", fmt.Errorf("no workspace root configured")
 	}
-	dir := state.PipelineStateDir(root)
-	if dir == "" {
-		return "", fmt.Errorf("cannot resolve the pipeline state directory for workspace root %q", root)
+	dir, err := state.PipelineStateDir(root)
+	if err != nil {
+		return "", fmt.Errorf("pipeline state directory for workspace root %q: %w", root, err)
 	}
 	return dir, nil
 }
@@ -1214,7 +1219,7 @@ func (s *Server) registerMethods() {
 			return nil, fmt.Errorf("root must not be empty")
 		}
 		s.setWorkspaceRoot(p.Root)
-		// A multi-repo workspace switch exposes a different .nightgauge/pipeline
+		// A multi-repo workspace switch exposes a different .git/nightgauge/pipeline
 		// dir — close out any runs orphaned there too (#44). Idempotent: each
 		// reconciled snapshot is removed after its terminal event is emitted.
 		//
@@ -3869,7 +3874,7 @@ func (s *Server) registerMethods() {
 			}
 			// #304: derive the learning/calibration outcome from the SAME
 			// record about to be written. Until this, the outcome corpus
-			// (.nightgauge/pipeline/history/outcomes.jsonl — the input to the
+			// (.git/nightgauge/pipeline/history/outcomes.jsonl — the input to the
 			// calibration, cost-optimization and reliability loop verdicts and
 			// to `nightgauge learn tune`) had exactly ONE writer,
 			// scheduler.recordOutcome, reachable only from

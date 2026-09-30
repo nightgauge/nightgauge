@@ -17,7 +17,8 @@ Phase 0.6 Step 0.6.1 (the `type:docs` label detection) stays inline in
 
 ## Phase 0: Read Dev Context
 
-Extract issue number from branch. Load `.nightgauge/pipeline/dev-{N}.json`.
+Extract issue number from branch. Load
+`"$(nightgauge layout path pipeline dev-{N}.json)"`.
 Parse COMMIT_SHA, FILES_CREATED, FILES_MODIFIED, TESTS_PASSED, TESTS_FAILED, and
 dev-stage build/quality results for redundancy elimination. Signal stage start
 via Go binary `project move-status`. If the context file is missing, ask git
@@ -28,7 +29,7 @@ this is "no implementation work" — see below.
 BRANCH=$(git branch --show-current)
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE=".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)"
 
 # Resolve the nightgauge binary now — needed both for the missing-context
 # ground-truth check below and for project move-status.
@@ -85,7 +86,7 @@ if [ ! -f "$CONTEXT_FILE" ]; then
     # never produced anything to validate — distinct wording from the
     # "missing file" case above so operators can tell "stage never ran" apart
     # from "context malformed".
-    echo "ERROR: No dev context (.nightgauge/pipeline/dev-${ISSUE_NUMBER}.json) and no git evidence of implementation work (clean tree, branch level with base). feature-dev has not produced anything to validate. Run pipeline in order: issue-pickup → feature-planning → feature-dev → feature-validate"
+    echo "ERROR: No dev context ($CONTEXT_FILE) and no git evidence of implementation work (clean tree, branch level with base). feature-dev has not produced anything to validate. Run pipeline in order: issue-pickup → feature-planning → feature-dev → feature-validate"
     exit 1
   fi
 else
@@ -116,7 +117,7 @@ consolidated validation — run build and tests once for all changes.
 BRANCH=$(git branch --show-current)
 : "${BRANCH:?detached HEAD: check out the issue branch}"
 EPIC_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-BATCH_DEV=".nightgauge/pipeline/dev-batch-${EPIC_NUMBER}.json"
+BATCH_DEV="$(nightgauge layout path pipeline dev-batch-${EPIC_NUMBER}.json)"
 
 if [ -f "$BATCH_DEV" ]; then
   BATCH_MODE=true

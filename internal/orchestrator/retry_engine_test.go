@@ -9,6 +9,8 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/models"
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestRetryEngine_EvaluateBacktrack_NoFile(t *testing.T) {
@@ -25,7 +27,7 @@ func TestRetryEngine_EvaluateBacktrack_NoFile(t *testing.T) {
 func TestRetryEngine_EvaluateBacktrack_BlockingSignal(t *testing.T) {
 	engine := NewRetryEngine(DefaultRetryConfig())
 
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	feedbackFile := filepath.Join(dir, "feedback-42.json")
 	content := `{
 		"schema_version": "1.0",
@@ -62,7 +64,7 @@ func TestRetryEngine_EvaluateBacktrack_MaxBacktracksExceeded(t *testing.T) {
 	engine := NewRetryEngine(cfg)
 	engine.RecordBacktrack("feature-dev", "feature-planning", "")
 
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	feedbackFile := filepath.Join(dir, "feedback-42.json")
 	content := `{
 		"schema_version": "1.0",
@@ -95,7 +97,7 @@ func TestRetryEngine_EvaluateBacktrack_OscillationDetected(t *testing.T) {
 	// Record a prior backtrack on the same edge
 	engine.RecordBacktrack("feature-dev", "feature-planning", "")
 
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	feedbackFile := filepath.Join(dir, "feedback-42.json")
 	content := `{
 		"schema_version": "1.0",
@@ -126,7 +128,7 @@ func TestRetryEngine_EvaluateBacktrack_OscillationDetected(t *testing.T) {
 func TestRetryEngine_EvaluateBacktrack_IgnoresEscalationSignals(t *testing.T) {
 	engine := NewRetryEngine(DefaultRetryConfig())
 
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	feedbackFile := filepath.Join(dir, "feedback-42.json")
 	content := `{
 		"schema_version": "1.0",
@@ -332,7 +334,7 @@ func TestRetryEngine_ConcurrentAccess(t *testing.T) {
 	engine := NewRetryEngine(cfg)
 
 	// Pre-create a feedback file shared by all goroutines for EvaluateBacktrack.
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	feedbackFile := filepath.Join(dir, "feedback.json")
 	feedback := `{
 		"schema_version": "1.0",
@@ -393,8 +395,8 @@ func TestRetryEngine_ConcurrentAccess(t *testing.T) {
 }
 
 func TestLoadLatestRetro(t *testing.T) {
-	dir := t.TempDir()
-	retroDir := filepath.Join(dir, ".nightgauge", "retros")
+	dir := layouttest.Repo(t)
+	retroDir := layouttest.RetrosDir(t, dir)
 	if err := os.MkdirAll(retroDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +431,7 @@ func TestLoadLatestRetro(t *testing.T) {
 }
 
 func TestLoadLatestRetro_NoFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	result := loadLatestRetro(dir, 999, "feature-dev")
 	if result != "" {
 		t.Errorf("expected empty for missing retro, got: %s", result)

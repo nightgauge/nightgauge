@@ -79,7 +79,10 @@ func Export(rootDir, runID string) (*ExportDoc, error) {
 // readExitRecordsForRun scans every daily exit-records file and returns the
 // records whose run_id matches, in timestamp order.
 func readExitRecordsForRun(rootDir, runID string) ([]diagnostics.StageExitRecord, error) {
-	dir := diagnostics.ExitRecordsDir(rootDir)
+	dir, err := diagnostics.ExitRecordsDir(rootDir)
+	if err != nil {
+		return nil, fmt.Errorf("trace: %w", err)
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

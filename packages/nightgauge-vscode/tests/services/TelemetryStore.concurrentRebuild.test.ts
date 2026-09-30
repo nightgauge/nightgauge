@@ -23,6 +23,7 @@ import * as path from "node:path";
 
 import { TelemetryStore } from "../../src/services/TelemetryStore";
 import { ExecutionHistoryReader } from "../../src/utils/executionHistoryReader";
+import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 /** How many rebuilds race. Two reproduces it; more makes the ordering blunt. */
 const CONCURRENT_REBUILDS = 8;
@@ -67,7 +68,7 @@ function runRecordLine(issueNumber: number): string {
 
 beforeEach(() => {
   workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-index-race-"));
-  historyDir = path.join(workspaceRoot, ".nightgauge", "pipeline", "history");
+  historyDir = path.join(mkFakeCloneLayout(workspaceRoot).pipeline, "history");
   fs.mkdirSync(historyDir, { recursive: true });
   const lines = Array.from({ length: RUN_COUNT }, (_, i) => runRecordLine(700 + i));
   fs.writeFileSync(path.join(historyDir, "2026-08-12.jsonl"), lines.join("\n") + "\n", "utf-8");

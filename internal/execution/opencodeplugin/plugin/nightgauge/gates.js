@@ -278,6 +278,13 @@ const WRITE_COMMANDS = new Set(["tee", "mkdir", "cp", "mv"]);
 // every command is one of these is phase-marker output, not exploration.
 const MARKER_COMMANDS = new Set(["printf", "echo", "cd", "true", ":"]);
 
+// LAYOUT_PATH_SUBST matches `$(nightgauge layout path <class> [name])`, the
+// way a stage names per-clone state it reads (ADR-024 § 7). bashExplorationPaths
+// replaces each match with LAYOUT_PATH_TARGET, which isExemptPath exempts.
+const LAYOUT_PATH_SUBST =
+  /\$\(\s*nightgauge\s+layout\s+path\s+(?:pipeline|plans|retros|logs)(?:\s+[^\s()`$]+)?\s*\)/g;
+const LAYOUT_PATH_TARGET = "nightgauge-layout:/";
+
 // explorationCount is this process's count of budgeted calls. One opencode
 // process runs one stage, so the count is the stage's.
 let explorationCount = 0;
@@ -290,11 +297,14 @@ export function resetExplorationCount() {
 // isExemptPath reports whether p is skill-directed or pipeline context
 // (#2190): a path through a skills/_shared/, _includes/ or *feature-planning/
 // directory, one under a .nightgauge/knowledge/ directory or the configured
-// knowledge base (#2193), or one under the worktree's own .nightgauge/. Other
-// skill sources (skills/nightgauge-*/ in the core repository) are code under
-// exploration and count.
+// knowledge base (#2193), one under the worktree's own .nightgauge/, or
+// per-clone state (ADR-024 § 7): a path under a .git/nightgauge/ directory
+// or a `$(nightgauge layout path ...)` reference. Other skill sources
+// (skills/nightgauge-*/ in the core repository) are code under exploration
+// and count.
 export function isExemptPath(p, cwd) {
   if (typeof p !== "string" || p === "") return false;
+  if (p.startsWith(LAYOUT_PATH_TARGET)) return true;
   const abs = path.resolve(cwd, p);
   const knowledge = process.env[KNOWLEDGE_DIR_ENV];
   if (typeof knowledge === "string" && path.isAbsolute(knowledge)) {
@@ -305,6 +315,7 @@ export function isExemptPath(p, cwd) {
   const dirs = segs.slice(0, -1);
   for (let i = 0; i < dirs.length; i++) {
     if (dirs[i] === ".nightgauge" && dirs[i + 1] === "knowledge") return true;
+    if (dirs[i] === ".git" && dirs[i + 1] === "nightgauge") return true;
     if (dirs[i] === "_includes" || dirs[i].endsWith("feature-planning")) return true;
     if (dirs[i] === "skills" && dirs[i + 1] === "_shared") return true;
   }
@@ -314,12 +325,22 @@ export function isExemptPath(p, cwd) {
 }
 
 // bashWritesFile reports whether command clearly writes a file: a redirect
-// to a path other than /dev/null (a heredoc into a file included), or a
-// tee, mkdir, cp or mv.
+// to a path other than /dev/null (a heredoc into a file included), a tee,
+// mkdir, cp or mv, or a `nightgauge layout write|append` (ADR-024 § 7).
 function bashWritesFile(command, segments) {
   const stripped = command.replace(/[0-9&]?>>?\s*\/dev\/null|[0-9]?>&[0-9-]/g, "");
   if (/>>?\s*[^\s&|;]/.test(stripped)) return true;
-  return segments.some((words) => WRITE_COMMANDS.has(words[0]));
+  return segments.some((words) => WRITE_COMMANDS.has(words[0]) || isLayoutWrite(words));
+}
+
+// isLayoutWrite reports whether words run `nightgauge layout write` or
+// `nightgauge layout append`, the way a stage writes per-clone state.
+function isLayoutWrite(words) {
+  return (
+    words[0] === "nightgauge" &&
+    words[1] === "layout" &&
+    (words[2] === "write" || words[2] === "append")
+  );
 }
 
 // bashSegments splits command into its commands' words, skipping leading
@@ -342,8 +363,9 @@ function bashSegments(command) {
 // counts as exploration, or null when it is clearly not exploration (#2190):
 // a write, or only phase-marker output. Anything uncertain (command
 // substitution, loops, jq, python -c, ...) counts.
-function bashExplorationPaths(command) {
-  if (typeof command !== "string" || command.trim() === "") return null;
+function bashExplorationPaths(raw) {
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  const command = raw.replace(LAYOUT_PATH_SUBST, LAYOUT_PATH_TARGET);
   const segments = bashSegments(command);
   if (segments.length === 0) return null;
   if (bashWritesFile(command, segments)) return null;
@@ -385,7 +407,7 @@ function explorationTarget(tool, args) {
 // enforceExplorationBudget counts exploration calls against the stage's
 // budget (#2188) and, once the budget is spent, refuses further ones with
 // an error telling the model to write the plan. A call whose every target
-// is a skill file or .nightgauge/ context is exempt. Writes, edits and any
+// is a skill file, .nightgauge/ or per-clone context is exempt. Writes, edits and any
 // non-read command are never counted or refused.
 export function enforceExplorationBudget(ctx, input, output) {
   const budget = Number.parseInt(process.env[EXPLORATION_BUDGET_ENV] || "", 10);
@@ -399,7 +421,7 @@ export function enforceExplorationBudget(ctx, input, output) {
   if (explorationCount >= budget) {
     const issue = process.env.NIGHTGAUGE_ISSUE_NUMBER || "{N}";
     throw new Error(
-      `${EXPLORATION_BUDGET_MARKER} exploration budget of ${budget} reads spent; write the plan now to .nightgauge/plans/ and planning-${issue}.json`
+      `${EXPLORATION_BUDGET_MARKER} exploration budget of ${budget} reads spent; write the plan now with nightgauge layout write plans <name>, then planning-${issue}.json with nightgauge layout write pipeline`
     );
   }
   explorationCount++;

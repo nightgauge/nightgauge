@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/deliverable"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // #223. These are the inverse of the #202 tests in dev_ground_truth_test.go.
@@ -32,7 +34,7 @@ import (
 // having recorded nothing — the `fileTouches == 0` path.
 func emptyDevContext(t *testing.T, ws string, issue int) {
 	t.Helper()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(issue)), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), devContextName(issue)), map[string]any{
 		"files_changed": map[string]any{
 			"created":  []string{},
 			"modified": []string{},
@@ -169,11 +171,9 @@ func TestFeatureDevGate_EmptyContext_CommittedWork_IsDerived(t *testing.T) {
 	writeFile(t, filepath.Join(ws, "src", "committed.go"), "package src\n")
 	git(t, ws, "add", ".")
 	git(t, ws, "commit", "-m", "work")
+	// The context file lives under the git directory (ADR-024 § 7), so the
+	// only deliverable git sees is the commit.
 	emptyDevContext(t, ws, 221)
-	// The context file itself is bookkeeping and is excluded, so the only
-	// deliverable git sees is the commit.
-	git(t, ws, "add", "-A")
-	git(t, ws, "commit", "-m", "bookkeeping")
 
 	gr := FeatureDevGate{}.Verify(context.Background(), 221, ws)
 
@@ -198,7 +198,7 @@ func TestDevHandoffMissing_DirtyTree_ReportsFiles(t *testing.T) {
 	writeFile(t, filepath.Join(ws, "internal", "scan", "testcmd.go"), "package scan\n")
 	writeFile(t, filepath.Join(ws, "cmd", "nightgauge", "main.go"), "package main\n")
 
-	v := devHandoffMissing(ws, "dev context file missing", filepath.Join(ws, ".nightgauge", "pipeline", "dev-221.json"))
+	v := devHandoffMissing(ws, "dev context file missing", filepath.Join(layouttest.PipelineDir(t, ws), "dev-221.json"))
 
 	if !v.OK {
 		t.Fatal("expected OK=true: dirty tree with deliverable files")
@@ -221,7 +221,7 @@ func TestDevHandoffMissing_CommittedWork_ReportsFiles(t *testing.T) {
 	git(t, ws, "add", ".")
 	git(t, ws, "commit", "-m", "work")
 
-	v := devHandoffMissing(ws, "dev context file missing", filepath.Join(ws, ".nightgauge", "pipeline", "dev-221.json"))
+	v := devHandoffMissing(ws, "dev context file missing", filepath.Join(layouttest.PipelineDir(t, ws), "dev-221.json"))
 
 	if !v.OK {
 		t.Fatal("expected OK=true: branch carries commits ahead of base")
@@ -239,7 +239,7 @@ func TestDevHandoffMissing_CommittedWork_ReportsFiles(t *testing.T) {
 func TestDevHandoffMissing_CleanTree_NoFiles(t *testing.T) {
 	ws := gitRepo(t)
 
-	v := devHandoffMissing(ws, "dev context file missing", filepath.Join(ws, ".nightgauge", "pipeline", "dev-221.json"))
+	v := devHandoffMissing(ws, "dev context file missing", filepath.Join(layouttest.PipelineDir(t, ws), "dev-221.json"))
 
 	if v.OK {
 		t.Fatalf("expected OK=false: clean tree, branch level with base; verdict=%+v", v)
@@ -310,7 +310,7 @@ func TestFeatureDevGate_EmptyContext_NonRepo_StaysNoOp(t *testing.T) {
 // artifact as a handoff a later stage can consume.
 func readDevContext(t *testing.T, ws string, issue int) map[string]any {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(ws, ".nightgauge", "pipeline", devContextName(issue)))
+	raw, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, ws), devContextName(issue)))
 	if err != nil {
 		t.Fatalf("dev context not on disk after the gate ran: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestDerivedHandoff_MatchesInspectDevWork(t *testing.T) {
 // must survive, in the same document.
 func TestDerivedHandoff_PreservesAuthoredNarrative(t *testing.T) {
 	ws := gitRepo(t)
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(1076)), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), devContextName(1076)), map[string]any{
 		"files_changed": map[string]any{
 			"created": []string{}, "modified": []string{}, "deleted": []string{},
 		},
@@ -478,7 +478,7 @@ func TestDerivedHandoff_SurvivesTheDeliverablePolicy(t *testing.T) {
 	if gr := (FeatureDevGate{}).Verify(context.Background(), 1076, ws); !gr.Passed {
 		t.Fatalf("expected pass; reason=%q", gr.Reason)
 	}
-	path := filepath.Join(ws, ".nightgauge", "pipeline", devContextName(1076))
+	path := filepath.Join(layouttest.PipelineDir(t, ws), devContextName(1076))
 	outcome, err := deliverable.ApplyPolicyToFile("dev", path, time.Now())
 	if err != nil {
 		t.Fatalf("policy could not read the derived deliverable: %v", err)

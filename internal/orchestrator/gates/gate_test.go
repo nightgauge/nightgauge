@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // writeJSON is a test helper for laying out fake skill output JSON.
@@ -145,7 +147,7 @@ func TestSkillSaidSuccessButGateFailed_AcrossAllGates(t *testing.T) {
 // the others are covered in their per-file tests with mocked dependencies.
 func TestKindOnPass_IssuePickup(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "issue-7.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "issue-7.json"), map[string]any{
 		"issue_number": 7,
 		"branch":       "feat/7-x",
 	})
@@ -163,7 +165,7 @@ func TestKindOnPass_IssuePickup(t *testing.T) {
 // the skill produced nothing; fail means it produced something broken).
 func TestKindFailOnMalformedJSON(t *testing.T) {
 	ws := t.TempDir()
-	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, ws)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -248,7 +250,7 @@ func TestKindFail_AlwaysCarriesTerminalKind(t *testing.T) {
 			arrange: func(t *testing.T, ws string) {
 				// A path whose parent is a regular file stats ENOTDIR, which
 				// is not IsNotExist — the only way past the no-op branch.
-				parent := filepath.Join(ws, "plan.md")
+				parent := filepath.Join(layouttest.MkPlansDir(t, ws), "plan.md")
 				if err := os.WriteFile(parent, []byte("# plan"), 0o644); err != nil {
 					t.Fatalf("write: %v", err)
 				}
@@ -346,7 +348,7 @@ func TestKindFail_AlwaysCarriesTerminalKind(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			ws := t.TempDir()
+			ws := layouttest.Repo(t)
 			tc.arrange(t, ws)
 			// Relaxed: pr-merge's retry loop sleeps between attempts; one
 			// attempt is enough to reach the branch under test.

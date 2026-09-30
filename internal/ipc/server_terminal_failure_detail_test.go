@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -44,7 +45,7 @@ func readExitRecords(t *testing.T, root string) []diagnostics.StageExitRecord {
 // the raw error text. The record's detail must equal the forwarded message and
 // the run must leave an exit record even though no stage exited.
 func TestNotifyComplete_PreStageFailurePersistsFailureDetail(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -103,7 +104,7 @@ func TestNotifyComplete_PreStageFailurePersistsFailureDetail(t *testing.T) {
 // and writes no synthetic pre-dispatch exit record — the stage's real exit
 // record (written by diagnostics.recordStageExit) is the one that counts.
 func TestNotifyComplete_StageFailureKeepsStageErrorAsDetail(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]

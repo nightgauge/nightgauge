@@ -129,7 +129,10 @@ func (r *deterministicIssuePickup) Run(_ context.Context, in IssuePickupInput) (
 		}
 	}
 
-	path := stagecontext.ContextPath(in.Dir, in.Issue.Number, "issue")
+	path, err := stagecontext.ContextPath(in.Dir, in.Issue.Number, "issue")
+	if err != nil {
+		return res, err
+	}
 	doc := buildIssueContext(in, res.Branch, res.BaseBranch, r.now())
 	if err := writeIssueContextMerged(path, doc); err != nil {
 		return res, err

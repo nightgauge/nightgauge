@@ -49,6 +49,7 @@ import { ExecutionHistoryReader } from "./executionHistoryReader";
 import type { NormalizedRunRecord } from "./executionHistoryReader";
 import { p75 } from "./adaptiveBudgetLoader";
 import { toModelEnvelope } from "./modeProfiles";
+import { isUsableWorkspaceRoot } from "./cloneLayout";
 
 /**
  * Resolve the main repository root from a path that may be a worktree.
@@ -374,8 +375,13 @@ export async function captureEstimatorInputs(
   workspaceRoot: string
 ): Promise<EstimatorInputSnapshot> {
   const historyRoot = await resolveMainRepoRoot(workspaceRoot);
-  const calibrationPath = StageModelCalibrationService.getDefaultPath(historyRoot);
-  const stageModelCalibration = await StageModelCalibrationService.load(calibrationPath);
+  // The calibration table lives in the clone's pipeline directory; outside a
+  // git repository there is none, and the estimator runs uncalibrated.
+  const stageModelCalibration = isUsableWorkspaceRoot(historyRoot)
+    ? await StageModelCalibrationService.load(
+        StageModelCalibrationService.getDefaultPath(historyRoot)
+      )
+    : null;
   const { getPerformanceMode } = await import("./resolvers/monitoringResolver");
   const mode = getPerformanceMode(historyRoot);
 

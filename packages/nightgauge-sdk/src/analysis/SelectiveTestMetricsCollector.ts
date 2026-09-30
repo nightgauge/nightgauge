@@ -2,7 +2,9 @@
  * SelectiveTestMetricsCollector — records per-PR selective test metrics to a
  * JSONL file and provides read/filter operations.
  *
- * Default storage: `.nightgauge/pipeline/selective-metrics.jsonl`
+ * Default storage: `<git-common-dir>/nightgauge/pipeline/selective-metrics.jsonl`
+ * (`nightgauge layout path pipeline selective-metrics.jsonl`) of the working
+ * directory's repository.
  *
  * Each line is a `SelectiveTestMetricRecord` JSON object. Malformed lines are
  * silently skipped during reads. Writes are non-blocking appends.
@@ -18,6 +20,8 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
+import { cloneClassDir } from "../context/cloneLayout.js";
+
 import type { SelectiveTestResult } from "../tools/selective-test-runner/types.js";
 import {
   SelectiveTestMetricRecordSchema,
@@ -28,8 +32,8 @@ import {
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Default path relative to the repo root */
-export const DEFAULT_METRICS_PATH = ".nightgauge/pipeline/selective-metrics.jsonl";
+/** Default file name inside the pipeline class directory */
+export const DEFAULT_METRICS_FILE = "selective-metrics.jsonl";
 
 /** Conservative estimate: tokens consumed per test run by the agent */
 export const AVG_TOKENS_PER_TEST = 500;
@@ -48,7 +52,20 @@ export const AVG_MS_PER_TEST = 2000;
 // ---------------------------------------------------------------------------
 
 export class SelectiveTestMetricsCollector {
-  constructor(private readonly metricsPath: string = DEFAULT_METRICS_PATH) {}
+  private resolvedPath?: string;
+
+  /**
+   * @param metricsPath JSONL file. Defaults to {@link DEFAULT_METRICS_FILE} in
+   *   the working directory's pipeline class directory, resolved on first use
+   *   (throws `NotAGitRepositoryError` outside a git repository).
+   */
+  constructor(metricsPath?: string) {
+    this.resolvedPath = metricsPath;
+  }
+
+  private get metricsPath(): string {
+    return (this.resolvedPath ??= path.join(cloneClassDir("pipeline"), DEFAULT_METRICS_FILE));
+  }
 
   /**
    * Append one metric record to the JSONL file.

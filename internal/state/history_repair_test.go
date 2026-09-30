@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // seedHistory writes raw records into a workspace's daily history file,
@@ -13,7 +15,7 @@ import (
 // corrupt — which is the only interesting input for the repair.
 func seedHistory(t *testing.T, root string, day string, recs ...V2RunRecord) string {
 	t.Helper()
-	dir := filepath.Join(root, ".nightgauge", "pipeline", "history")
+	dir := filepath.Join(layouttest.PipelineDir(t, root), "history")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +67,7 @@ func countLines(t *testing.T, path string) int {
 // matters most: the default mode must be able to describe destructive work
 // without doing any of it.
 func TestRepairHistory_DryRunReportsButWritesNothing(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	full := withTokens(makeRunRec("run-1", 7, "2026-07-19T09:00:00Z", "issue-pickup", "feature-dev"), "issue-pickup", "feature-dev")
 	dup := makeRunRec("run-1", 7, "2026-07-19T09:00:00Z", "issue-pickup")
 	skeleton := makeRunRec("run-1", 7, "2026-07-19T09:00:00Z")
@@ -87,7 +89,7 @@ func TestRepairHistory_DryRunReportsButWritesNothing(t *testing.T) {
 	if after := countLines(t, path); after != before {
 		t.Errorf("dry run rewrote the file: %d lines before, %d after", before, after)
 	}
-	if _, statErr := os.Stat(filepath.Join(root, ".nightgauge", "pipeline", "history", "index.json")); statErr == nil {
+	if _, statErr := os.Stat(filepath.Join(layouttest.PipelineDir(t, root), "history", "index.json")); statErr == nil {
 		t.Error("dry run wrote an index.json — it must touch nothing")
 	}
 }
@@ -96,7 +98,7 @@ func TestRepairHistory_DryRunReportsButWritesNothing(t *testing.T) {
 // carrying per-stage token data. Keeping a skeleton would discard the only copy
 // of the run's cost, which is worse than leaving the duplicates in place.
 func TestRepairHistory_ApplyKeepsRichestRecord(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	// Deliberately ordered skeleton-first so the repair cannot pass by
 	// accidentally keeping the first or last line.
 	skeleton := makeRunRec("run-1", 7, "2026-07-19T09:00:00Z")
@@ -143,7 +145,7 @@ func TestRepairHistory_ApplyKeepsRichestRecord(t *testing.T) {
 // carry no run_id and spell the same instant differently. Exact-match dedup
 // leaves them all in place, which is why the repair compares instants.
 func TestRepairHistory_CollapsesDifferingTimestampFormats(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	goStyle := withTokens(makeRunRec("", 141, "2026-06-06T14:54:43.559048-06:00", "issue-pickup", "feature-dev"), "issue-pickup")
 	tsStyle := makeRunRec("", 141, "2026-06-06T20:54:43.624Z", "issue-pickup", "feature-dev")
 	path := seedHistory(t, root, "2026-06-06", goStyle, tsStyle)
@@ -163,7 +165,7 @@ func TestRepairHistory_CollapsesDifferingTimestampFormats(t *testing.T) {
 // TestRepairHistory_PreservesNonRunRecords: outcome records and unparseable
 // lines are not the repair's business and must survive it untouched.
 func TestRepairHistory_PreservesNonRunRecords(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	full := withTokens(makeRunRec("run-1", 7, "2026-07-19T09:00:00Z", "issue-pickup"), "issue-pickup")
 	dup := makeRunRec("run-1", 7, "2026-07-19T09:00:00Z", "issue-pickup")
 	path := seedHistory(t, root, "2026-07-19", full, dup)
@@ -203,7 +205,7 @@ func TestRepairHistory_PreservesNonRunRecords(t *testing.T) {
 // and must NOT relocate anything — nothing on an unattributed record says where
 // it belongs, so a move would be a guess.
 func TestRepairHistory_ReportsForeignAndUnattributedRecords(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	own := withTokens(makeRunRec("run-own", 1, "2026-07-19T09:00:00Z", "issue-pickup"), "issue-pickup")
 	own.Repo = "example/repo-a"
 	own2 := withTokens(makeRunRec("run-own-2", 2, "2026-07-19T09:10:00Z", "issue-pickup"), "issue-pickup")

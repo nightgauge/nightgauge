@@ -27,6 +27,7 @@ var extraCheckCodes = map[string][]string{
 	"orphaned_processes":    {"NGD032"},
 	"complexity_model":      {"NGD033"},
 	"scheduled_automations": {"NGD030", "NGD031"},
+	"layout_migration":      {"NGD045", "NGD046"},
 	"adapters": {"NGD100", "NGD101", "NGD102", "NGD103", "NGD104", "NGD105",
 		"NGD106", "NGD107", "NGD108", "NGD109", "NGD110", "NGD111"},
 }

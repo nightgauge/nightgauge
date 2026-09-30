@@ -10,6 +10,8 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // setupLinkedWorktreeForMerge builds the exact topology every pipeline run
@@ -176,11 +178,9 @@ func TestExecGhClient_Merge_SucceedsFromLinkedWorktree(t *testing.T) {
 	mainDir, worktreeDir := setupLinkedWorktreeForMerge(t, headBranch)
 	writeFakeGh(t, headBranch)
 
-	// pr-{N}.json — what pr-create leaves behind in the worktree.
-	pipelineDir := filepath.Join(worktreeDir, ".nightgauge", "pipeline")
-	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
+	// pr-{N}.json — what pr-create leaves behind, resolved from the worktree
+	// (the clone's pipeline state directory, shared by every worktree).
+	pipelineDir := layouttest.MkPipelineDir(t, worktreeDir)
 	if err := os.WriteFile(filepath.Join(pipelineDir, "pr-589.json"), []byte(`{"pr_number":42}`), 0o644); err != nil {
 		t.Fatalf("write pr context: %v", err)
 	}

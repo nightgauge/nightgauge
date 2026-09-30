@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // stubExecGh swaps the package-level execGh for the duration of the test.
@@ -19,7 +21,7 @@ func stubExecGh(t *testing.T, fn func(ctx context.Context, args ...string) ([]by
 
 func TestPrCreateGate_Pass(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 		"pr_url":    "https://github.com/o/r/pull/100",
 	})
@@ -35,7 +37,7 @@ func TestPrCreateGate_Pass(t *testing.T) {
 
 func TestPrCreateGate_Fail_PrClosed(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -52,7 +54,7 @@ func TestPrCreateGate_Fail_PrClosed(t *testing.T) {
 // "skill reported success but no pr_number was recorded" scenario.
 func TestPrCreateGate_SkillSaidSuccessButNoPR(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_url": "https://github.com/o/r/pull/0",
 	})
 	gr := PrCreateGate{}.Verify(context.Background(), 42, ws)
@@ -63,7 +65,7 @@ func TestPrCreateGate_SkillSaidSuccessButNoPR(t *testing.T) {
 
 func TestPrCreateGate_Retries_OnTransientGhFailure(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	calls := 0
@@ -86,7 +88,7 @@ func TestPrCreateGate_Retries_OnTransientGhFailure(t *testing.T) {
 
 func TestPrCreateGate_Fail_GhFailsAllRetries(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {
@@ -107,7 +109,7 @@ func TestPrCreateGate_Fail_GhFailsAllRetries(t *testing.T) {
 // `repos/{owner}/{repo}/pulls/{N}` endpoint, not a `--repo` flag.
 func TestPrCreateGate_PinsRepoFromPRURL(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-45.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-45.json"), map[string]any{
 		"pr_number": 67,
 		"pr_url":    "https://github.com/nightgauge/acmeapp-platform/pull/67",
 	})
@@ -141,7 +143,7 @@ func TestPrCreateGate_PinsRepoFromPRURL(t *testing.T) {
 // false-failure was the gate consuming the exhausted GraphQL bucket.
 func TestPrCreateGate_VerifiesOverREST(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-99.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-99.json"), map[string]any{
 		"pr_number": 112,
 		"pr_url":    "https://github.com/nightgauge/acmeapp-platform/pull/112",
 	})
@@ -169,7 +171,7 @@ func TestPrCreateGate_VerifiesOverREST(t *testing.T) {
 // passes (KindOK) — an environmental rate-limit is not a skill/code defect.
 func TestPrCreateGate_BothTransportsRateLimited_InconclusivePass(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-99.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-99.json"), map[string]any{
 		"pr_number": 112,
 		"pr_url":    "https://github.com/nightgauge/acmeapp-platform/pull/112",
 	})
@@ -193,7 +195,7 @@ func TestPrCreateGate_BothTransportsRateLimited_InconclusivePass(t *testing.T) {
 // GraphQL transport still confirms the PR when REST is rate-limited.
 func TestPrCreateGate_RestRateLimited_FallsBackToGraphQL(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-99.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-99.json"), map[string]any{
 		"pr_number": 112,
 		"pr_url":    "https://github.com/nightgauge/acmeapp-platform/pull/112",
 	})
@@ -221,7 +223,7 @@ func TestPrCreateGate_RestRateLimited_FallsBackToGraphQL(t *testing.T) {
 // trip the synthetic skill-no-op regression guard).
 func TestPrCreateGate_RestReportsAbsent_Fail(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-99.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-99.json"), map[string]any{
 		"pr_number": 112,
 		"pr_url":    "https://github.com/nightgauge/acmeapp-platform/pull/112",
 	})
@@ -243,7 +245,7 @@ func TestPrCreateGate_RestReportsAbsent_Fail(t *testing.T) {
 
 func TestPrCreateGate_Fail_InvalidJSON(t *testing.T) {
 	ws := t.TempDir()
-	dir := filepath.Join(ws, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, ws)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -265,7 +267,7 @@ func TestPrCreateGate_Fail_InvalidJSON(t *testing.T) {
 // the final synthesized Reason doesn't mention JSON at all.
 func TestPrCreateGate_BothTransportsUnparseableJSON_TerminalKindValidationError(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-99.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-99.json"), map[string]any{
 		"pr_number": 112,
 		"pr_url":    "https://github.com/nightgauge/acmeapp-platform/pull/112",
 	})
@@ -299,7 +301,7 @@ func TestRepoSlugFromPRURL(t *testing.T) {
 
 func TestPrCreateGate_Fail_PrNumberMismatch(t *testing.T) {
 	ws := t.TempDir()
-	writeJSON(t, filepath.Join(ws, ".nightgauge", "pipeline", "pr-42.json"), map[string]any{
+	writeJSON(t, filepath.Join(layouttest.PipelineDir(t, ws), "pr-42.json"), map[string]any{
 		"pr_number": 100,
 	})
 	stubExecGh(t, func(_ context.Context, _ ...string) ([]byte, error) {

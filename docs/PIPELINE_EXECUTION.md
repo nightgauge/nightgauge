@@ -64,20 +64,22 @@ full control over each stage with explicit approval gates.
 
 ### Context File Inspection
 
-Between stages, you can inspect the handoff files:
+Between stages, you can inspect the handoff files. They live in the clone's
+pipeline state directory (`nightgauge layout path pipeline`), inside the git
+directory, so ask the binary for the path:
 
 ```bash
 # View issue context
-cat .nightgauge/pipeline/issue-42.json | jq
+jq . "$(nightgauge layout path pipeline issue-42.json)"
 
 # View planning decisions
-cat .nightgauge/pipeline/planning-42.json | jq '.decisions'
+jq '.decisions' "$(nightgauge layout path pipeline planning-42.json)"
 
 # View implementation summary (commit_sha is null — commit happens in validate)
-cat .nightgauge/pipeline/dev-42.json | jq '.files_changed'
+jq '.files_changed' "$(nightgauge layout path pipeline dev-42.json)"
 
 # View validation results and commit SHA
-cat .nightgauge/pipeline/validate-42.json | jq '.commit_sha'
+jq '.commit_sha' "$(nightgauge layout path pipeline validate-42.json)"
 ```
 
 ### Stage Resumption
@@ -217,11 +219,12 @@ The automated mode uses `HeadlessOrchestrator` which:
 │           ▼                                      ▼                           │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                    SAME CONTEXT FILES                                │   │
-│  │  .nightgauge/pipeline/issue-42.json                                       │   │
-│  │  .nightgauge/pipeline/planning-42.json                                    │   │
-│  │  .nightgauge/pipeline/dev-42.json      (commit_sha=null)                  │   │
-│  │  .nightgauge/pipeline/validate-42.json (commit_sha set after validation) │   │
-│  │  .nightgauge/plans/42-feature-description.md                             │   │
+│  │  (in <git-common-dir>/nightgauge/)                                   │   │
+│  │  pipeline/issue-42.json                                              │   │
+│  │  pipeline/planning-42.json                                           │   │
+│  │  pipeline/dev-42.json      (commit_sha=null)                         │   │
+│  │  pipeline/validate-42.json (commit_sha set after validation)         │   │
+│  │  plans/42-feature-description.md                                     │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘

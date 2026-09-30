@@ -68,6 +68,14 @@ vi.mock("node:fs", () => ({
 }));
 
 import * as fsModule from "node:fs";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
+
+// The workspace is a clone whose per-clone data lives in `/workspace/.git`
+// (ADR-024 § 7). fs is mocked, so the mapping is faked rather than resolved.
+const WORKSPACE_LAYOUT = () => fakeCloneLayout("/workspace");
+beforeEach(() => {
+  WORKSPACE_LAYOUT();
+});
 
 function makePipelineState(issueNumber: number | null): PipelineStateService {
   return {
@@ -337,15 +345,20 @@ describe("KnowledgeTreeProvider (three-section model #2964)", () => {
 
   // --- worktree-resident context files (#1206) ---
   //
-  // On the scheduler path issue-{N}.json is written INSIDE the run's worktree.
-  // The provider read `<root>/.nightgauge/pipeline/issue-N.json` only, so it
+  // On the scheduler path issue-{N}.json is written by the run's worktree.
+  // The provider read the workspace root's pipeline directory only, so it
   // found nothing on every real run and the section read "No knowledge base
   // scaffolded for this issue" for the life of the view. Go fixed the same
-  // defect for its own readers in #994; this is the port.
+  // defect for its own readers in #994; this is the port. Every candidate root
+  // resolves through the clone layout: a linked worktree of this clone lands
+  // in the clone's own directory, and a worktree root that resolves to a
+  // different git directory is read there. The cases below give each worktree
+  // root its own git directory so they pin that the candidate is consulted.
 
   it("resolves a context file in the VSCode worktree layout, with nothing at the root", async () => {
+    const wt = fakeCloneLayout("/workspace/.worktrees/issue-42", "/elsewhere/wt-42.git");
     stubFsAt({
-      contextFileAt: "/workspace/.worktrees/issue-42/.nightgauge/pipeline/issue-42.json",
+      contextFileAt: path.join(wt.pipeline, "issue-42.json"),
       knowledgePath: KB_PATH,
     });
     const provider = new KnowledgeTreeProvider(
@@ -362,9 +375,12 @@ describe("KnowledgeTreeProvider (three-section model #2964)", () => {
   it("resolves a context file in the Go manager worktree layout", async () => {
     // `.nightgauge/worktrees/{repoName}-issue-N` — the leaf carries the repo
     // name so two repos' issue #N cannot collide in one workspace.
+    const wt = fakeCloneLayout(
+      "/workspace/.nightgauge/worktrees/nightgauge-issue-42",
+      "/elsewhere/go-wt-42.git"
+    );
     stubFsAt({
-      contextFileAt:
-        "/workspace/.nightgauge/worktrees/nightgauge-issue-42/.nightgauge/pipeline/issue-42.json",
+      contextFileAt: path.join(wt.pipeline, "issue-42.json"),
       knowledgePath: KB_PATH,
     });
     const provider = new KnowledgeTreeProvider(
@@ -383,7 +399,25 @@ describe("KnowledgeTreeProvider (three-section model #2964)", () => {
     // A run that never took a worktree. Adding candidates must not lose the
     // one layout that already worked.
     stubFsAt({
-      contextFileAt: "/workspace/.nightgauge/pipeline/issue-42.json",
+      contextFileAt: path.join(WORKSPACE_LAYOUT().pipeline, "issue-42.json"),
+      knowledgePath: KB_PATH,
+    });
+    const provider = new KnowledgeTreeProvider(
+      "/workspace",
+      makePipelineState(42),
+      makeIpcClient()
+    );
+    const root = await provider.getChildren();
+    const children = await provider.getChildren(root[0]);
+    expect(children.map((c) => c.label)).toEqual(["PRD.md", "decisions.md"]);
+    provider.dispose();
+  });
+
+  it("resolves a linked worktree's context file in the main clone's directory", async () => {
+    // The real shape after ADR-024 § 7: the worktree shares the clone's dir.
+    fakeCloneLayout("/workspace/.worktrees/issue-42", "/workspace/.git");
+    stubFsAt({
+      contextFileAt: path.join(WORKSPACE_LAYOUT().pipeline, "issue-42.json"),
       knowledgePath: KB_PATH,
     });
     const provider = new KnowledgeTreeProvider(
@@ -398,8 +432,9 @@ describe("KnowledgeTreeProvider (three-section model #2964)", () => {
   });
 
   it("highlights knowledge_read entries from a worktree-resident planning file", async () => {
+    const wt = fakeCloneLayout("/workspace/.worktrees/issue-42", "/elsewhere/wt-42.git");
     stubFsAt({
-      contextFileAt: "/workspace/.worktrees/issue-42/.nightgauge/pipeline/issue-42.json",
+      contextFileAt: path.join(wt.pipeline, "issue-42.json"),
       knowledgePath: KB_PATH,
       knowledgeRead: [`${KB_PATH}/PRD.md`],
     });

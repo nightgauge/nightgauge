@@ -30,6 +30,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The clone's pipeline context files are read at `$(nightgauge layout path <class> <name>)`
+  and written through `nightgauge layout write|append`, never by a
+  `.nightgauge/...` path: they now live in the git directory (#2037, ADR-024
+  § 7).
 - The Exit Contract heading, its Gotcha and the Phase 8 comment drop a
   predecessor-tracker issue citation that cannot resolve in this repository.
 

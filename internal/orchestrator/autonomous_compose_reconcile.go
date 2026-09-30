@@ -128,10 +128,10 @@ func (as *AutonomousScheduler) sweepOrphanedComposeProjects(ctx context.Context)
 // snapshotInFlightIssues reads the machine-wide in-flight set from every root's
 // runtime snapshots, plus whether that answer is DETERMINED.
 //
-// Each root is canonicalized to its main checkout first (config.MainCheckoutRoot):
-// a linked worktree's `.nightgauge/pipeline` exists and is always empty, so an
-// un-canonicalized root answers "nothing is running" with no error — the exact
-// silent-blindness this pass cannot afford (#410). A root that does not exist is
+// Each root is canonicalized to its main checkout first (config.MainCheckoutRoot).
+// Before ADR-024 § 7 a linked worktree had its own, always empty, in-tree
+// pipeline directory, so an un-canonicalized root answered "nothing is running"
+// with no error — the exact silent-blindness this pass cannot afford (#410). A root that does not exist is
 // skipped, mirroring execution.ActiveWorktreeIssues: a deleted sibling holds no
 // runs and must not permanently disable reconciliation. A root that exists but
 // canonicalizes to nothing, or whose state dir cannot be read, is a FAILED READ
@@ -171,7 +171,7 @@ func (as *AutonomousScheduler) snapshotInFlightIssues(roots []string) (map[int]b
 			log.Printf("%s: WARN %s resolves to no main checkout (not a git work tree) — the snapshot half of the in-flight set is UNDETERMINED", composeReconcileLogPrefix, root)
 			return nil, false
 		}
-		res, err := state.ActiveIssuesFromSnapshots(state.PipelineStateDir(main))
+		res, err := state.ActiveIssuesForRoot(main)
 		if err != nil {
 			log.Printf("%s: WARN snapshot scan failed at %s: %v — the snapshot half of the in-flight set is UNDETERMINED", composeReconcileLogPrefix, main, err)
 			return nil, false

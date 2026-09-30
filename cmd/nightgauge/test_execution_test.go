@@ -5,11 +5,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/testexec"
 )
 
 func TestGateRecordTestExecution_WritesRecord(t *testing.T) {
-	ws := t.TempDir()
+	ws := layouttest.Repo(t)
 	cmd := gateRecordTestExecutionCmd()
 	cmd.SetArgs([]string{
 		"--issue", "1261", "--workdir", ws,

@@ -1,9 +1,14 @@
 package orchestrator
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
+)
 
 func TestBudgetCeilingOverrideHonoredByResolver(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	// No override → default ceiling.
 	if got := PipelineBudgetCeilingUSD(root); got != 75.0 {
@@ -39,7 +44,7 @@ func TestBudgetCeilingOverrideHonoredByResolver(t *testing.T) {
 // spent, no signal that the click did nothing. If either half of this pair is
 // changed alone, the paths diverge again in exactly that silent way.
 func TestBudgetCeilingOverrideIsTheSameContractTheExtensionReads(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	if got := PipelineBudgetCeilingUSD(root); got != 75.0 {
 		t.Fatalf("configured ceiling = %.2f, want 75.00", got)
@@ -68,7 +73,7 @@ func TestBudgetCeilingOverrideRejectsNonPositive(t *testing.T) {
 }
 
 func TestEscalationOverrideConsumeOnce(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := WriteEscalationOverride(root, 42, "opus", "octocat"); err != nil {
 		t.Fatalf("WriteEscalationOverride: %v", err)
 	}
@@ -84,14 +89,14 @@ func TestEscalationOverrideConsumeOnce(t *testing.T) {
 }
 
 func TestOperatorSteerWritesWarningSignal(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := WriteOperatorSteer(root, 7, "skip the flaky test this run", "feature-dev"); err != nil {
 		t.Fatalf("WriteOperatorSteer: %v", err)
 	}
 	// The synthetic signal must be warning severity with no backtrack target, so
 	// EvaluateBacktrack ignores it (context, never a rewind).
 	engine := NewRetryEngine(DefaultRetryConfig())
-	dec, err := engine.EvaluateBacktrack(root + "/.nightgauge/pipeline/feedback-7.json")
+	dec, err := engine.EvaluateBacktrack(filepath.Join(layouttest.PipelineDir(t, root), "feedback-7.json"))
 	if err != nil {
 		t.Fatalf("EvaluateBacktrack: %v", err)
 	}

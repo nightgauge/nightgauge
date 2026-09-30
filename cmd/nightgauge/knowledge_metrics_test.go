@@ -10,12 +10,13 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/knowledge/metrics"
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestKnowledgeMetricsCmd_JSONOutput(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
-	histDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	histDir := filepath.Join(layouttest.PipelineDir(t, dir), "history")
 	if err := os.MkdirAll(histDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -75,7 +76,7 @@ func TestKnowledgeMetricsCmd_JSONOutput(t *testing.T) {
 }
 
 func TestKnowledgeMetricsCmd_MissingFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	cmd := knowledgeMetricsCmd()
 	cmd.SetArgs([]string{"--workdir", dir, "--window", "7", "--json"})
 

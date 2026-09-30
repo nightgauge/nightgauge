@@ -21,12 +21,17 @@ needs from files.
 
 ## Directory Structure
 
-All pipeline files are stored relative to the **git repository root** (not the
-VSCode workspace root). This ensures consistent file placement even when VSCode
-is opened in a subdirectory.
+Pipeline files are per-clone data and live in the **git directory**, not the
+working tree: `<git-common-dir>/nightgauge/` (for a normal clone
+`.git/nightgauge/`; a linked worktree shares the main clone's), so they are never
+committed and consistent placement does not depend on where VSCode is opened.
+Obtain the paths from the binary — `nightgauge layout` prints them all as JSON,
+`nightgauge layout path <class> [name]` prints one — and write through
+`nightgauge layout write` / `append`, never by path under `.git/`
+([ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
 
 ```
-{git_root}/.nightgauge/
+<git-common-dir>/nightgauge/
 ├── pipeline/                   # Pipeline handoff files (transient)
 │   ├── run-state.json         # Durable run lifecycle state (Go internal/runstate)
 │   ├── runtime-{N}-{runId}.json # Per-run runtime snapshot (issue N, run id)
@@ -42,10 +47,11 @@ is opened in a subdirectory.
 │   └── epic-context-{E}.json  # Epic context accumulator (persistent across sub-issues)
 ├── plans/                      # Feature plans (cleaned up after PR)
 │   └── {N}-{description}.md   # Output of /feature-planning
-├── logs/                       # Execution logs (persistent)
-│   └── nightgauge-output-{N}.json
-└── config.yaml                # Configuration
+└── logs/                       # Execution logs (persistent)
+    └── nightgauge-output-{N}.json
 ```
+
+Configuration stays in the working tree at `{git_root}/.nightgauge/config.yaml`.
 
 **Note**: Context files are transient working documents. They are cleaned up by
 `/pr-merge` after successful merge. The GitHub issue and PR preserve the
@@ -223,7 +229,7 @@ runs whose own trace showed the fast-track firing. That was the state of
 {
   "schema_version": "1.1",
   "issue_number": 42,
-  "plan_file": ".nightgauge/plans/42-user-photo-upload.md",
+  "plan_file": "/path/to/repo/.git/nightgauge/plans/42-user-photo-upload.md",
   "approach": "pragmatic",
   "files_to_create": ["src/services/PhotoService.ts", "tests/photo.test.ts"],
   "files_to_modify": ["src/routes/users.ts"],
@@ -783,8 +789,8 @@ issue #1608)
 
 Batch context files carry requirements, plans, and results for multiple issues
 processed together as part of an epic. They live alongside single-issue context
-files in `.nightgauge/pipeline/` and use the **epic number** as the file
-key (e.g., `batch-799.json`).
+files in the clone's pipeline state directory (`nightgauge layout path pipeline`)
+and use the **epic number** as the file key (e.g., `batch-799.json`).
 
 > **Note**: Batch context is additive — existing single-issue pipeline paths
 > remain unchanged. See Issue #801.
@@ -876,7 +882,7 @@ key (e.g., `batch-799.json`).
   "schema_version": "1.0",
   "epic_number": 799,
   "issue_numbers": [801, 802],
-  "plan_file": ".nightgauge/plans/799-epic-batch-pipeline.md",
+  "plan_file": "/path/to/repo/.git/nightgauge/plans/799-epic-batch-pipeline.md",
   "approach": "batch",
   "per_issue_plans": [
     {
@@ -1175,15 +1181,16 @@ OutputWindow via the `onStateChanged` event
 Live pipeline state is **not a file**. It is an in-memory object held by the
 extension's `PipelineStateService`, populated from the Go binary over IPC and
 republished to the UI through `onStateChanged`. Nothing reads it back from disk,
-and no unified pipeline state file is written under `.nightgauge/pipeline/`.
+and no unified pipeline state file is written to the pipeline state directory.
 
-Durability is a separate concern with its own artifacts:
+Durability is a separate concern with its own artifacts, all in the clone's
+pipeline state directory (`nightgauge layout path pipeline`):
 
-| Artifact                                        | Written by                | Holds                                       |
-| ----------------------------------------------- | ------------------------- | ------------------------------------------- |
-| `.nightgauge/pipeline/run-state.json`           | Go `internal/runstate`    | Canonical run lifecycle state               |
-| `.nightgauge/pipeline/runtime-{N}-{runId}.json` | Go runtime snapshot write | Per-run snapshot for issue `N`, run `runId` |
-| `.nightgauge/history/*.jsonl`                   | Go history writer         | Append-only per-run records for retro/audit |
+| Artifact                   | Written by                | Holds                                       |
+| -------------------------- | ------------------------- | ------------------------------------------- |
+| `run-state.json`           | Go `internal/runstate`    | Canonical run lifecycle state               |
+| `runtime-{N}-{runId}.json` | Go runtime snapshot write | Per-run snapshot for issue `N`, run `runId` |
+| `history/*.jsonl`          | Go history writer         | Append-only per-run records for retro/audit |
 
 See [PIPELINE_STATE_SCHEMA.md](PIPELINE_STATE_SCHEMA.md) for the durable
 schemas. The shape below documents the **in-memory** object the UI consumes; it
@@ -1414,7 +1421,8 @@ When a required context file is missing, skills display helpful errors:
 ```
 Error: Missing context file for issue #42
 
-Expected: .nightgauge/pipeline/issue-42.json
+Expected: issue-42.json in the pipeline state directory
+          ($(nightgauge layout path pipeline issue-42.json))
 Created by: /nightgauge-issue-pickup
 
 Please run the pipeline in order:
@@ -1431,19 +1439,21 @@ After successful merge, `/nightgauge-pr-merge` removes all context files
 via `cleanup-context-files.sh`:
 
 ```bash
-rm -f .nightgauge/pipeline/issue-{N}.json
-rm -f .nightgauge/pipeline/planning-{N}.json
-rm -f .nightgauge/pipeline/dev-{N}.json
-rm -f .nightgauge/pipeline/validate-{N}.json
+PIPELINE_DIR="$(nightgauge layout path pipeline)"
+PLANS_DIR="$(nightgauge layout path plans)"
+rm -f "$PIPELINE_DIR/issue-{N}.json"
+rm -f "$PIPELINE_DIR/planning-{N}.json"
+rm -f "$PIPELINE_DIR/dev-{N}.json"
+rm -f "$PIPELINE_DIR/validate-{N}.json"
 # validate-{N}-*.md covers checklist files (e.g. validate-{N}-checklist.md)
-find .nightgauge/pipeline -name "validate-{N}-*.md" -delete
-rm -f .nightgauge/pipeline/pr-{N}.json
-rm -f .nightgauge/plans/{N}-*.md
+find "$PIPELINE_DIR" -name "validate-{N}-*.md" -delete
+rm -f "$PIPELINE_DIR/pr-{N}.json"
+rm -f "$PLANS_DIR/{N}-"*.md
 
 # Batch context cleanup (when epic completes)
-rm -f .nightgauge/pipeline/batch-{E}.json
-rm -f .nightgauge/pipeline/planning-batch-{E}.json
-rm -f .nightgauge/pipeline/dev-batch-{E}.json
+rm -f "$PIPELINE_DIR/batch-{E}.json"
+rm -f "$PIPELINE_DIR/planning-batch-{E}.json"
+rm -f "$PIPELINE_DIR/dev-batch-{E}.json"
 ```
 
 **All file patterns handled by `cleanup-context-files.sh`:**
@@ -1893,7 +1903,7 @@ to revert to a prior stage.
 | ---------------------------------------- | -------------------- | -------------------- |
 | `dev-{N}.json`                           | `feedback` (nullish) | DevContext v1.2      |
 | `validate-{N}.json`                      | `feedback` (nullish) | ValidateContext v1.6 |
-| `.nightgauge/pipeline/feedback-{N}.json` | `signals` array      | FeedbackContext v1.0 |
+| `feedback-{N}.json` (pipeline state dir) | `signals` array      | FeedbackContext v1.0 |
 
 ### Canonical Schema
 
@@ -1933,7 +1943,7 @@ All types are re-exported from the barrel:
 ## Trace Lifecycle
 
 Every run accumulates a durable **lifecycle decision trace** — one append-only
-JSONL per run at `.nightgauge/pipeline/trace/<run_id>.jsonl` capturing every
+JSONL per run at `trace/<run_id>.jsonl` in the pipeline state directory, capturing every
 stage boundary and every decision with structured rationale and rejected
 alternatives. The public schema and CLI surface are documented under
 `nightgauge trace show|export` in [GO_BINARY.md](GO_BINARY.md).

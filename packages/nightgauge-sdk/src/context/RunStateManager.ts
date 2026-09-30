@@ -1,5 +1,6 @@
 /**
- * RunStateManager — TypeScript-side manager for `.nightgauge/pipeline/run-state.json`.
+ * RunStateManager — TypeScript-side manager for `<git-common-dir>/nightgauge/pipeline/run-state.json`
+ * (`nightgauge layout path pipeline run-state.json`).
  *
  * Backs the same on-disk file the Go binary's `internal/runstate` package
  * writes. Both sides use the atomic+fsync write contract (write-temp →
@@ -17,6 +18,7 @@ import * as path from "node:path";
 import * as crypto from "node:crypto";
 import * as os from "node:os";
 import { atomicWriteJSON } from "./ContextManager.js";
+import { cloneClassDir } from "./cloneLayout.js";
 import {
   RunStateSchema,
   newRunState,
@@ -89,10 +91,25 @@ export function uuidV7(): string {
 }
 
 export class RunStateManager {
-  private readonly filePath: string;
+  private resolvedBasePath?: string;
 
-  constructor(public readonly basePath: string = ".nightgauge/pipeline") {
-    this.filePath = path.join(basePath, RUN_STATE_FILENAME);
+  /**
+   * @param basePath The pipeline state directory. Defaults to the pipeline
+   *   class directory of the working directory's repository
+   *   (`<git-common-dir>/nightgauge/pipeline`, `nightgauge layout path
+   *   pipeline`), resolved on first use; outside a git repository that throws
+   *   `NotAGitRepositoryError`.
+   */
+  constructor(basePath?: string) {
+    this.resolvedBasePath = basePath;
+  }
+
+  get basePath(): string {
+    return (this.resolvedBasePath ??= cloneClassDir("pipeline"));
+  }
+
+  private get filePath(): string {
+    return path.join(this.basePath, RUN_STATE_FILENAME);
   }
 
   /**

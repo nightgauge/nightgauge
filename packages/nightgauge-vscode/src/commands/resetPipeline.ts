@@ -8,7 +8,7 @@
  * @see Issue #115 - Reset pipeline should verify PR merged and cleanup local branch
  */
 
-import { pipelineStateDir, plansDir as clonePlansDir } from "../utils/cloneLayout";
+import { listCloneFiles, pipelineStateDir, plansDir as clonePlansDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import type { Logger } from "../utils/logger";
 import type { PipelineStateService } from "../services/PipelineStateService";
@@ -281,16 +281,22 @@ export function registerResetPipelineCommand(
         // Always scan ALL *.json files in the pipeline dir so that stale context
         // files from previously completed issues (#1209) are also removed.
         // Files are filtered below to target only pipeline context files.
-        const [allContextFiles, planFiles, corruptFiles] = await Promise.all([
-          vscode.workspace.findFiles(new vscode.RelativePattern(contextDir, "*.json")),
-          issueNumber
-            ? vscode.workspace.findFiles(
-                new vscode.RelativePattern(plansDir, `${issueNumber}-*.md`)
-              )
-            : Promise.resolve([]),
-          // Delete ALL corrupt backup files on reset (Issue #872)
-          vscode.workspace.findFiles(new vscode.RelativePattern(contextDir, "*.corrupt-*")),
-        ]);
+        // Listed from disk: the class dirs live under the git directory, which
+        // `findFiles` never searches (#2037).
+        const toUris = (paths: string[]) => paths.map((p) => vscode.Uri.file(p));
+        const [allContextFiles, planFiles, corruptFiles] = (
+          await Promise.all([
+            listCloneFiles(contextDir, (n) => n.endsWith(".json")),
+            issueNumber
+              ? listCloneFiles(
+                  plansDir,
+                  (n) => n.startsWith(`${issueNumber}-`) && n.endsWith(".md")
+                )
+              : Promise.resolve([]),
+            // Delete ALL corrupt backup files on reset (Issue #872)
+            listCloneFiles(contextDir, (n) => n.includes(".corrupt-")),
+          ])
+        ).map(toUris);
 
         // Keep only pipeline context files: issue-N, planning-N, dev-N,
         // validate-N, pr-N, merge-N, dev-batch-N, planning-batch-N.

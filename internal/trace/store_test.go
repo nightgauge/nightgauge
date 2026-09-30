@@ -3,8 +3,11 @@ package trace
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestFilePathRejectsUnsafeRunIDs(t *testing.T) {
@@ -22,7 +25,7 @@ func TestFilePathRejectsUnsafeRunIDs(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := FilePath(t.TempDir(), tt.runID)
+			_, err := FilePath(layouttest.Repo(t), tt.runID)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("FilePath(%q) error = %v, wantErr %v", tt.runID, err, tt.wantErr)
 			}
@@ -56,7 +59,7 @@ func TestNewWriterNilSafety(t *testing.T) {
 }
 
 func TestWriterEmitAndReadRun(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := "01890a5d-ac96-774b-bcce-b302099a8057"
 	w := NewWriter(root, runID, "nightgauge/nightgauge", 179)
 	if w == nil {
@@ -125,7 +128,7 @@ func TestWriterEmitAndReadRun(t *testing.T) {
 }
 
 func TestWriterSeqResumesFromExistingFile(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := "01890a5d-ac96-774b-bcce-b302099a8057"
 
 	w1 := NewWriter(root, runID, "o/r", 7)
@@ -150,7 +153,7 @@ func TestWriterSeqResumesFromExistingFile(t *testing.T) {
 }
 
 func TestReadRunMissingFileReturnsEmpty(t *testing.T) {
-	events, err := ReadRun(t.TempDir(), "01890a5d-ac96-774b-bcce-b302099a8057")
+	events, err := ReadRun(layouttest.Repo(t), "01890a5d-ac96-774b-bcce-b302099a8057")
 	if err != nil {
 		t.Fatalf("ReadRun on missing file: %v", err)
 	}
@@ -160,7 +163,7 @@ func TestReadRunMissingFileReturnsEmpty(t *testing.T) {
 }
 
 func TestReadRunSkipsMalformedLines(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := "01890a5d-ac96-774b-bcce-b302099a8057"
 	w := NewWriter(root, runID, "o/r", 1)
 	w.Emit(KindStageStart, "issue-pickup", nil)
@@ -251,7 +254,7 @@ func TestSortEvents_WholeSecondBoundaryOrdersByTime(t *testing.T) {
 }
 
 func TestFindLatestRunIDForIssue(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	older := NewWriter(root, "01890a5d-ac96-774b-bcce-b30209900001", "o/r", 42)
 	older.Emit(KindStageStart, "issue-pickup", nil)
@@ -285,7 +288,7 @@ func TestFindLatestRunIDForIssue(t *testing.T) {
 }
 
 func TestListRunIDsEmptyDir(t *testing.T) {
-	ids, err := ListRunIDs(t.TempDir())
+	ids, err := ListRunIDs(layouttest.Repo(t))
 	if err != nil {
 		t.Fatalf("ListRunIDs: %v", err)
 	}
@@ -309,11 +312,25 @@ func TestKindValidation(t *testing.T) {
 }
 
 func TestDirLayout(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	w := NewWriter(root, "01890a5d-ac96-774b-bcce-b302099a8057", "o/r", 1)
 	w.Emit(KindStageStart, "issue-pickup", nil)
-	want := filepath.Join(root, ".nightgauge", "pipeline", "trace", "01890a5d-ac96-774b-bcce-b302099a8057.jsonl")
+	want := filepath.Join(layouttest.PipelineDir(t, root), "trace",
+		"01890a5d-ac96-774b-bcce-b302099a8057.jsonl")
 	if _, err := os.Stat(want); err != nil {
 		t.Errorf("expected trace file at %s: %v", want, err)
+	}
+}
+
+func TestDirOutsideGitRepositoryIsAnError(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Dir(root); err == nil || !strings.Contains(err.Error(), "not a git repository") {
+		t.Fatalf("Dir outside a repository: err = %v, want not a git repository", err)
+	}
+	if _, err := ListRunIDs(root); err == nil {
+		t.Error("ListRunIDs outside a repository must report the error, not an empty list")
+	}
+	if w := NewWriter(root, "01890a5d-ac96-774b-bcce-b302099a8057", "o/r", 1); w != nil {
+		t.Error("NewWriter outside a repository must be disabled (nil)")
 	}
 }

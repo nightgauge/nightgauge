@@ -9,13 +9,14 @@ Each stage follows a consistent pattern:
    ```
 
 2. **Load the predecessor's context file** from
-   `.nightgauge/pipeline/<prefix>-{N}.json`
+   `"$(nightgauge layout path pipeline <prefix>-{N}.json)"` (the clone's
+   pipeline state directory)
 
 3. **Parse required fields** using `jq` or equivalent JSON parsing
 
 4. **Fail fast** if the context file is missing:
    ```
-   ERROR: Missing context file: .nightgauge/pipeline/<file>.json
+   ERROR: Missing context file: <file>.json (nightgauge layout path pipeline)
    Created by: /nightgauge-<previous-stage>
    Please run the pipeline in order.
    ```
@@ -56,12 +57,12 @@ Valid statuses: `running`, `complete`, `failed`
 After completing stage work, write the output context file:
 
 ```bash
-cat > .nightgauge/pipeline/<output>.json << EOF
+nightgauge layout write pipeline <output>.json >/dev/null << EOF
 { ... }
 EOF
 
 # Validate JSON
-python3 -m json.tool .nightgauge/pipeline/<output>.json > /dev/null && \
+python3 -m json.tool "$(nightgauge layout path pipeline <output>.json)" > /dev/null && \
   echo "Context written successfully"
 ```
 

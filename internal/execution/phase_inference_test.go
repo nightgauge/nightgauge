@@ -1,7 +1,9 @@
 package execution
 
 import (
+	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -33,7 +35,7 @@ func TestPhaseInferer_AdvancesThroughWaypoints(t *testing.T) {
 		{"Read", map[string]any{"file_path": "PLAN.md"}, "read-planning-context", 1},
 		{"Write", map[string]any{"file_path": "src/feature.ts"}, "implementation", 8},
 		{"Bash", map[string]any{"command": "go test ./..."}, "testing", 9},
-		{"Write", map[string]any{"file_path": ".nightgauge/pipeline/dev-42.json"}, "write-dev-context", 14},
+		{"Write", map[string]any{"file_path": "/repo/.git/nightgauge/pipeline/dev-42.json"}, "write-dev-context", 14},
 		{"Bash", map[string]any{"command": "nightgauge project move-status 42"}, "sync-project-status", 15},
 	}
 	for _, c := range cases {
@@ -68,13 +70,13 @@ func TestPhaseInferer_DevContextWriteIsNotImplementation(t *testing.T) {
 	inf.Start()
 	// Before any implementation edit it is not implementation, and not yet
 	// write-dev-context either (#2181).
-	if m, _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": ".nightgauge/pipeline/dev-42.json"}); ok {
+	if m, _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": "/repo/.git/nightgauge/pipeline/dev-42.json"}); ok {
 		t.Fatalf("dev-context write before implementation advanced to %s/%d", m.Name, m.Index)
 	}
 	if _, _, ok := inf.ObserveToolUse("Edit", map[string]any{"file_path": "src/feature.ts"}); !ok {
 		t.Fatal("an implementation edit did not advance")
 	}
-	m, _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": ".nightgauge/pipeline/dev-42.json"})
+	m, _, ok := inf.ObserveToolUse("Write", map[string]any{"file_path": "/repo/.git/nightgauge/pipeline/dev-42.json"})
 	if !ok {
 		t.Fatal("expected advancement")
 	}
@@ -140,7 +142,7 @@ func TestPhaseInferer_FeatureValidateInfersFromItsRealWork(t *testing.T) {
 		t.Fatalf("a branch push should map to commit-and-push, got %+v ok=%v", m, ok)
 	}
 	if m, _, ok := inf.ObserveToolUse("Write", map[string]any{
-		"file_path": ".nightgauge/pipeline/validate-42.json",
+		"file_path": "/repo/.git/nightgauge/pipeline/validate-42.json",
 	}); !ok || m.Name != "write-validate-context" {
 		t.Fatalf("the validate-context write should map to write-validate-context, got %+v ok=%v", m, ok)
 	}
@@ -169,8 +171,8 @@ func TestPhaseInferer_FeaturePlanningWaypoints(t *testing.T) {
 		index int
 	}{
 		{"Grep", map[string]any{"pattern": "x", "path": "docs/"}, "documentation-analysis", 6},
-		{"Write", map[string]any{"file_path": ".nightgauge/plans/6-flutter-ia-nav.md"}, "produce-plan", 9},
-		{"Write", map[string]any{"file_path": ".nightgauge/pipeline/planning-6.json"}, "write-planning-context", 10},
+		{"Write", map[string]any{"file_path": "/repo/.git/nightgauge/plans/6-flutter-ia-nav.md"}, "produce-plan", 9},
+		{"Write", map[string]any{"file_path": "/repo/.git/nightgauge/pipeline/planning-6.json"}, "write-planning-context", 10},
 	}
 	for _, c := range cases {
 		m, _, ok := inf.ObserveToolUse(c.tool, c.input)
@@ -310,7 +312,7 @@ func TestPhaseInferer_LatePhasesWaitForImplementation(t *testing.T) {
 	}{
 		{"Bash", map[string]any{"command": "nightgauge project move-status 42 'In Progress'"}},
 		{"Bash", map[string]any{"command": "go build ./..."}},
-		{"Write", map[string]any{"file_path": ".nightgauge/pipeline/dev-42.json"}},
+		{"Write", map[string]any{"file_path": "/repo/.git/nightgauge/pipeline/dev-42.json"}},
 	} {
 		if m, passed, ok := inf.ObserveToolUse(c.tool, c.input); ok {
 			t.Fatalf("%s %v before any implementation edit advanced to %s/%d (passing %d phases)", c.tool, c.input, m.Name, m.Index, len(passed))
@@ -323,5 +325,52 @@ func TestPhaseInferer_LatePhasesWaitForImplementation(t *testing.T) {
 	m, _, ok = inf.ObserveToolUse("Bash", map[string]any{"command": "nightgauge project move-status 42 Done"})
 	if !ok || m.Index != 15 {
 		t.Fatalf("a status move after implementation did not reach sync-project-status: %+v %v", m, ok)
+	}
+}
+
+// TestPhaseInferer_PerCloneWrites replays the shared fixture the SDK's
+// phaseInference.test.ts replays too, so both inferers reach the same phase
+// for every way an agent writes a per-clone file (ADR-024 § 7): `nightgauge
+// layout write|append` in a Bash call, or an edit under
+// <git-common-dir>/nightgauge/.
+func TestPhaseInferer_PerCloneWrites(t *testing.T) {
+	type call struct {
+		Tool  string         `json:"tool"`
+		Input map[string]any `json:"input"`
+	}
+	var fixture struct {
+		Cases []struct {
+			Name  string `json:"name"`
+			Stage string `json:"stage"`
+			Setup []call `json:"setup"`
+			call
+			Want int `json:"want"`
+		} `json:"cases"`
+	}
+	raw, err := os.ReadFile(filepath.Join("testdata", "phase_inference_writes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if len(fixture.Cases) == 0 {
+		t.Fatal("fixture has no cases")
+	}
+	for _, c := range fixture.Cases {
+		t.Run(c.Name, func(t *testing.T) {
+			inf := NewPhaseInferer(c.Stage)
+			inf.Start()
+			for _, s := range c.Setup {
+				inf.ObserveToolUse(s.Tool, s.Input)
+			}
+			got := -1
+			if m, _, ok := inf.ObserveToolUse(c.Tool, c.Input); ok {
+				got = m.Index
+			}
+			if got != c.Want {
+				t.Fatalf("%s %v: phase %d, want %d", c.Tool, c.Input, got, c.Want)
+			}
+		})
 	}
 }

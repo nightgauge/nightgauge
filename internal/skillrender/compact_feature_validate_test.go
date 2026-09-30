@@ -94,9 +94,9 @@ func TestCompactFeatureValidate_KeepsHonestyAndGates(t *testing.T) {
 		fvHonestyRule,
 		fvNoFlakyRule,
 		// The validate-{N}.json contract, both enforcement points.
-		"**This stage is NOT complete until `.nightgauge/pipeline/validate-{N}.json` exists on disk.**",
-		`test -s ".nightgauge/pipeline/validate-${ISSUE_NUMBER}.json"`,
-		`CONTEXT_FILE=".nightgauge/pipeline/validate-${ISSUE_NUMBER}.json"`,
+		"**This stage is NOT complete until `validate-{N}.json` exists in the clone's pipeline state directory",
+		`test -s "$(nightgauge layout path pipeline validate-${ISSUE_NUMBER}.json)"`,
+		`CONTEXT_FILE="$(nightgauge layout path pipeline validate-${ISSUE_NUMBER}.json)"`,
 		// Build, test and lint (CI parity) gates.
 		"**Build hard gate**",
 		"### Phase 2: Run Tests (Redundancy-Aware)",

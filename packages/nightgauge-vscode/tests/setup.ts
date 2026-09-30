@@ -1,11 +1,13 @@
 /**
  * Test setup - mocks for VSCode API
  */
+import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { beforeEach, vi } from "vitest";
+import { afterAll, beforeEach, vi } from "vitest";
 import { sharedBoardSnapshots } from "../src/services/BoardSnapshotStore";
 import { DEFAULT_CONFIG } from "../src/config/schema";
+import { cloneLayoutFor, setCloneLayout } from "../src/utils/cloneLayout";
 
 // Hermetic config tiers: resolver reads merge the machine tier
 // (~/.nightgauge/config.yaml on macOS) via mergedConfigReader. Tests must
@@ -15,6 +17,32 @@ import { DEFAULT_CONFIG } from "../src/config/schema";
 // exercise the machine tier explicitly set NIGHTGAUGE_CONFIG_HOME to
 // their own fixture directory.
 process.env.NIGHTGAUGE_CONFIG_HOME ??= path.join(os.tmpdir(), "nightgauge-tests-no-machine-tier");
+
+// Hermetic clone layout (#2037): per-clone data resolves to the git common
+// dir, and this suite runs inside a checkout, so any code path that falls back
+// to the process cwd (or is handed the package or repository root) would
+// write into the developer's real clone under .git/nightgauge. Pin those roots
+// to a per-file temporary git directory before any test runs. Tests that
+// exercise resolution use their own temporary repositories.
+{
+  const fakeGitCommonDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "ng-vscode-test-git-"))
+  );
+  const packageRoot = path.resolve(__dirname, "..");
+  const pinned = new Set<string>();
+  for (const dir of [process.cwd(), packageRoot, path.resolve(packageRoot, "../..")]) {
+    pinned.add(path.resolve(dir));
+    try {
+      pinned.add(fs.realpathSync(dir));
+    } catch {
+      // Keep the lexical spelling only.
+    }
+  }
+  for (const root of pinned) setCloneLayout(root, cloneLayoutFor(root, fakeGitCommonDir));
+  afterAll(() => {
+    fs.rmSync(fakeGitCommonDir, { recursive: true, force: true });
+  });
+}
 
 // Hermetic git (#2283): tests that commit in temporary repositories, and the
 // code under test they exercise, must not read the developer's global or

@@ -18,8 +18,9 @@ type ContextResult struct {
 	LastCommit       string `json:"last_commit,omitempty"`
 	UncommittedCount int    `json:"uncommitted_changes,omitempty"`
 	PlanProgress     string `json:"plan_progress,omitempty"`
-	// StageArtifacts are the issue's pipeline handoff files already on disk
-	// in the worktree. Injected on compaction so a multi-phase stage resumes
+	// StageArtifacts are the issue's pipeline handoff files already on disk,
+	// as absolute paths in the clone's pipeline state and plans directories
+	// (ADR-024 § 7). Injected on compaction so a multi-phase stage resumes
 	// after its last finished phase instead of starting over: a local model
 	// whose planning stage compacted at phase 12 went back to phase 5 and
 	// rewrote a plan it had already written.
@@ -121,8 +122,10 @@ func getPlanProgress(workdir string) string {
 	return fmt.Sprintf("%d/%d tasks (%.0f%%)", status.Complete, status.Total, pct)
 }
 
-// stageArtifacts lists the issue's pipeline handoff files present under the
-// worktree's .nightgauge/ (paths relative to workdir), in pipeline order.
+// stageArtifacts lists the issue's pipeline handoff files present in the
+// clone's pipeline state and plans directories, in pipeline order. The paths
+// are absolute: those directories live under the git common dir (ADR-024 § 7),
+// which from a linked worktree is not beneath workdir.
 func stageArtifacts(workdir, issue string) []string {
 	if issue == "" {
 		return nil
@@ -136,19 +139,13 @@ func stageArtifacts(workdir, issue string) []string {
 		for _, name := range []string{"issue", "ac-reconcile", "planning", "dev", "validate", "pr"} {
 			path := filepath.Join(pipelineDir, name+"-"+issue+".json")
 			if fi, err := os.Stat(path); err == nil && fi.Size() > 0 {
-				if rel, err := filepath.Rel(absWorkdir, path); err == nil {
-					found = append(found, rel)
-				}
+				found = append(found, path)
 			}
 		}
 	}
 	if plansDir, err := layout.PlansDir(absWorkdir); err == nil {
 		plans, _ := filepath.Glob(filepath.Join(plansDir, issue+"-*.md"))
-		for _, p := range plans {
-			if rel, err := filepath.Rel(absWorkdir, p); err == nil {
-				found = append(found, rel)
-			}
-		}
+		found = append(found, plans...)
 	}
 	return found
 }

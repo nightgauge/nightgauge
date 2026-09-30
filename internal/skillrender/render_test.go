@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
@@ -931,10 +932,26 @@ func TestPRMergeBatchProbeSignalsContextPresence(t *testing.T) {
 
 	repo := t.TempDir()
 	gittest.Run(t, repo, "init", "-q", "-b", "fix/367-test")
+	pipelineDir := layouttest.PipelineDir(t, repo)
+	// The probe asks the binary where the clone's pipeline state lives
+	// (ADR-024 § 7). A stub stands in for `nightgauge layout path pipeline
+	// <name>`: it answers the resolved directory for exactly that form and
+	// fails for anything else, so a probe that hard-codes a path, or asks for
+	// another class, cannot pass.
+	binDir := t.TempDir()
+	stub := "#!/bin/sh\n" +
+		"[ \"$1 $2 $3\" = \"layout path pipeline\" ] && [ -n \"$4\" ] || exit 2\n" +
+		"printf '%s/%s\\n' \"$NG_TEST_PIPELINE_DIR\" \"$4\"\n"
+	if err := os.WriteFile(filepath.Join(binDir, "nightgauge"), []byte(stub), 0o755); err != nil {
+		t.Fatalf("write nightgauge stub: %v", err)
+	}
 	runProbe := func() string {
 		t.Helper()
 		cmd := exec.Command("bash", "-c", probe)
 		cmd.Dir = repo
+		cmd.Env = append(os.Environ(),
+			"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"NG_TEST_PIPELINE_DIR="+pipelineDir)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Fatalf("run Phase 0.5 probe: %v\n%s", err, out)
@@ -945,14 +962,14 @@ func TestPRMergeBatchProbeSignalsContextPresence(t *testing.T) {
 	if got := runProbe(); got != "SINGLE_ISSUE" {
 		t.Fatalf("probe without a batch file = %q, want SINGLE_ISSUE", got)
 	}
-	batchPath := filepath.Join(repo, ".nightgauge", "pipeline", "dev-batch-367.json")
-	if err := os.MkdirAll(filepath.Dir(batchPath), 0o755); err != nil {
+	batchPath := filepath.Join(pipelineDir, "dev-batch-367.json")
+	if err := os.MkdirAll(pipelineDir, 0o700); err != nil {
 		t.Fatalf("create pipeline directory: %v", err)
 	}
 	if err := os.WriteFile(batchPath, []byte(`{"issue_numbers":[367]}`), 0o644); err != nil {
 		t.Fatalf("write batch fixture: %v", err)
 	}
-	if got := runProbe(); got != "BATCH_CONTEXT_FOUND=.nightgauge/pipeline/dev-batch-367.json" {
+	if got := runProbe(); got != "BATCH_CONTEXT_FOUND="+batchPath {
 		t.Fatalf("probe with a batch file = %q, want the batch context signal", got)
 	}
 }

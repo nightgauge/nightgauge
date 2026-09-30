@@ -10,7 +10,18 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
+
+// telemetryPath is telemetry.Path(root), failing the test on error.
+func telemetryPath(t *testing.T, root string) string {
+	t.Helper()
+	p, err := telemetry.Path(root)
+	if err != nil {
+		t.Fatalf("telemetry path: %v", err)
+	}
+	return p
+}
 
 // writeTelemetryEnabledConfig writes a minimal .nightgauge/config.yaml
 // that turns on knowledge + knowledge.telemetry so emitKnowledgeTelemetry
@@ -42,7 +53,7 @@ func TestKnowledgeTelemetryCmd_HasRecordSubcommand(t *testing.T) {
 }
 
 func TestKnowledgeTelemetryRecord_RejectsUnknownType(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	cmd := knowledgeTelemetryRecordCmd()
 	cmd.SetArgs([]string{"--type=bogus", "--workdir=" + root})
 	cmd.SetOut(&strings.Builder{})
@@ -53,7 +64,7 @@ func TestKnowledgeTelemetryRecord_RejectsUnknownType(t *testing.T) {
 }
 
 func TestKnowledgeTelemetryRecord_EmitsEvent(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	cmd := knowledgeTelemetryRecordCmd()
 	cmd.SetArgs([]string{
 		"--type=read",
@@ -69,7 +80,7 @@ func TestKnowledgeTelemetryRecord_EmitsEvent(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 
-	jsonlPath := telemetry.Path(root)
+	jsonlPath := telemetryPath(t, root)
 	data, err := os.ReadFile(jsonlPath)
 	if err != nil {
 		t.Fatalf("read events: %v", err)
@@ -94,7 +105,7 @@ func TestKnowledgeTelemetryRecord_EmitsEvent(t *testing.T) {
 }
 
 func TestKnowledgeTelemetryRecord_PreservesExplicitZeroHitIndex(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	cmd := knowledgeTelemetryRecordCmd()
 	cmd.SetArgs([]string{
 		"--type=recall_hit",
@@ -107,7 +118,7 @@ func TestKnowledgeTelemetryRecord_PreservesExplicitZeroHitIndex(t *testing.T) {
 		t.Fatalf("execute: %v", err)
 	}
 
-	data, err := os.ReadFile(telemetry.Path(root))
+	data, err := os.ReadFile(telemetryPath(t, root))
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -121,16 +132,16 @@ func TestKnowledgeTelemetryRecord_PreservesExplicitZeroHitIndex(t *testing.T) {
 }
 
 func TestEmitKnowledgeTelemetry_SilentWhenConfigDisabled(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	// Config absent → no opt-in → no emit.
 	emitKnowledgeTelemetry(root, telemetry.Event{Type: telemetry.EventScaffold})
-	if _, err := os.Stat(telemetry.Path(root)); err == nil {
+	if _, err := os.Stat(telemetryPath(t, root)); err == nil {
 		t.Fatalf("telemetry file should not exist when knowledge config is absent")
 	}
 }
 
 func TestEmitKnowledgeTelemetry_RespectsEnabledConfig(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeTelemetryEnabledConfig(t, root)
 
 	emitKnowledgeTelemetry(root, telemetry.Event{
@@ -139,7 +150,7 @@ func TestEmitKnowledgeTelemetry_RespectsEnabledConfig(t *testing.T) {
 		IssueNumber: 7,
 	})
 
-	data, err := os.ReadFile(telemetry.Path(root))
+	data, err := os.ReadFile(telemetryPath(t, root))
 	if err != nil {
 		t.Fatalf("read events: %v", err)
 	}
@@ -149,7 +160,7 @@ func TestEmitKnowledgeTelemetry_RespectsEnabledConfig(t *testing.T) {
 }
 
 func TestStaleADRReport_FlagsNeverReadAndOldReads(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	// Set up three ADRs.
 	mkADR := func(rel string) string {
@@ -204,7 +215,7 @@ func TestStaleADRReport_FlagsNeverReadAndOldReads(t *testing.T) {
 }
 
 func TestBuildStaleReport_HandlesMissingKnowledgeDir(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	report, err := buildStaleReport(root, 30)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
@@ -219,7 +230,7 @@ func TestBuildStaleReport_HandlesMissingKnowledgeDir(t *testing.T) {
 // the JSONL with the correct stage. Matches the integration assertion in the
 // plan's test plan ("integration — exec the binary in a tmpdir...").
 func TestKnowledgeIntegration_AllEventTypesEmitted(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeTelemetryEnabledConfig(t, root)
 	t.Setenv("NIGHTGAUGE_STAGE", "feature-dev")
 	t.Setenv("NIGHTGAUGE_TELEMETRY_REDACT_QUERIES", "")
@@ -242,7 +253,7 @@ func TestKnowledgeIntegration_AllEventTypesEmitted(t *testing.T) {
 	emit("--type=recall_hit", "--scope=issue:9", "--issue=9", "--recall-id=r-1", "--hit-index=2")
 	emit("--type=graduate", "--scope=issue:9", "--issue=9", "--path=docs/ARCHITECTURE.md")
 
-	f, err := os.Open(telemetry.Path(root))
+	f, err := os.Open(telemetryPath(t, root))
 	if err != nil {
 		t.Fatalf("open events: %v", err)
 	}

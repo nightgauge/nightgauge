@@ -12,6 +12,7 @@ import * as fs from "fs";
 import { EventBus, PipelineRunEmitter, PipelineStage } from "../events/EventBus.js";
 import { TokenTracker } from "../tracking/TokenTracker.js";
 import { ContextManager } from "../context/ContextManager.js";
+import { cloneClassDir } from "../context/cloneLayout.js";
 import {
   StageExecutor,
   buildStagePrompt,
@@ -59,9 +60,15 @@ export const APPROVAL_STAGES: PipelineStage[] = ["feature-planning"];
  * Configuration for PipelineOrchestrator
  */
 export interface PipelineConfig {
-  /** Base path for context files (default: '.nightgauge/pipeline') */
+  /**
+   * Base path for context files (default: the `cwd` repository's
+   * `<git-common-dir>/nightgauge/pipeline`, `nightgauge layout path pipeline`)
+   */
   contextPath?: string;
-  /** Base path for plan files (default: '.nightgauge/plans') */
+  /**
+   * Base path for plan files (default: the `cwd` repository's
+   * `<git-common-dir>/nightgauge/plans`, `nightgauge layout path plans`)
+   */
   plansPath?: string;
   /** Base path for skill files (default: 'skills') */
   skillsPath?: string;
@@ -238,17 +245,21 @@ export class PipelineOrchestrator {
   constructor(queryFn: SDKQueryFunction, config?: PipelineConfig) {
     this.events = new EventBus();
     this.usage = new TokenTracker();
-    this.context = new ContextManager(config?.contextPath ?? ".nightgauge/pipeline");
+    // Per-clone defaults resolve from the working directory's repository
+    // (ADR-024 § 7); outside one this throws NotAGitRepositoryError.
+    const cwd = config?.cwd ?? process.cwd();
+    const contextPath = config?.contextPath ?? cloneClassDir("pipeline", cwd);
+    this.context = new ContextManager(contextPath);
 
     this.config = {
-      contextPath: config?.contextPath ?? ".nightgauge/pipeline",
-      plansPath: config?.plansPath ?? ".nightgauge/plans",
+      contextPath,
+      plansPath: config?.plansPath ?? cloneClassDir("plans", cwd),
       skillsPath: config?.skillsPath ?? "skills",
       defaultModel: config?.defaultModel ?? "sonnet",
       adapter: config?.adapter,
       stages: config?.stages ?? DEFAULT_STAGES,
       maxTurnsPerStage: config?.maxTurnsPerStage ?? 50,
-      cwd: config?.cwd ?? process.cwd(),
+      cwd,
       autoApprove: config?.autoApprove ?? false,
       globalTimeoutMs: config?.globalTimeoutMs ?? 3600000, // 1 hour
       stageTimeoutMs: config?.stageTimeoutMs ?? 900000, // 15 minutes

@@ -11,7 +11,7 @@
  * @see Issue #1621 - Git worktree-based concurrent pipeline execution
  */
 
-import { RELATIVE_CLONE_LOGS_DIR } from "../utils/cloneLayout";
+import { CLONE_LOGS_DISPLAY } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import { redactSecrets } from "../utils/redaction";
 import type { PipelineStage } from "@nightgauge/sdk";
@@ -257,7 +257,7 @@ export class SlotOutputManager implements vscode.Disposable {
       try {
         slot.channel.appendLine("");
         slot.channel.appendLine(
-          `[Extension deactivating — full logs persisted to ${RELATIVE_CLONE_LOGS_DIR}/]`
+          `[Extension deactivating — full logs persisted to ${CLONE_LOGS_DISPLAY}/]`
         );
       } catch {
         // Channel may already be invalid

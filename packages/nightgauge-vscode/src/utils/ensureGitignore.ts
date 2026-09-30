@@ -242,17 +242,15 @@ pipeline/queue-state.json
 /**
  * Ensure .nightgauge/.gitignore exists and its current rules are in force.
  *
- * - Missing: writes it, plus the `.gitkeep` files its `!…/.gitkeep` rules
- *   anchor to (this is the initial scaffold, which repo-init commits).
+ * - Missing: writes it (the initial scaffold, which repo-init commits).
+ *   Per-clone data lives under the git common dir (ADR-024 § 7), so no class
+ *   directories or `.gitkeep` anchors are created in the working tree.
  * - Current version marker: does nothing.
  * - Older version, TRACKED: leaves the committed file alone and writes the
  *   current rules to the repository's info/exclude (`deferred`), so pipeline
  *   exhaust stays out of `git status` without dirtying the checkout. The
  *   committed file is upgraded through a pull request.
  * - Older version, untracked: rewrites it, keeping any local additions.
- *
- * `.gitkeep` files are only written with a new file: on every activation they
- * reappeared as untracked files in repositories that never committed them.
  */
 export async function ensureGitignore(nightgaugeRoot: string): Promise<{
   created: boolean;
@@ -264,12 +262,9 @@ export async function ensureGitignore(nightgaugeRoot: string): Promise<{
   const nightgaugeDir = path.join(nightgaugeRoot, ".nightgauge");
   const gitignorePath = path.join(nightgaugeDir, ".gitignore");
 
-  // Ensure .nightgauge/ and standard subdirectories exist. An empty directory
-  // is invisible to git, so this never dirties a checkout.
-  const subdirs = ["pipeline/history", "plans", "logs"];
-  for (const sub of subdirs) {
-    await fs.mkdir(path.join(nightgaugeDir, sub), { recursive: true });
-  }
+  // Ensure .nightgauge/ exists. An empty directory is invisible to git, so
+  // this never dirties a checkout.
+  await fs.mkdir(nightgaugeDir, { recursive: true });
 
   // Check existing .gitignore
   let existing: string | null = null;
@@ -281,14 +276,6 @@ export async function ensureGitignore(nightgaugeRoot: string): Promise<{
 
   if (existing === null) {
     await fs.writeFile(gitignorePath, GITIGNORE_CONTENT, "utf8");
-    for (const sub of [...subdirs, "pipeline"]) {
-      const gitkeep = path.join(nightgaugeDir, sub, ".gitkeep");
-      try {
-        await fs.access(gitkeep);
-      } catch {
-        await fs.writeFile(gitkeep, "");
-      }
-    }
     return { created: true, updated: false };
   }
 
@@ -389,7 +376,7 @@ export interface WorkspaceGitignoreResult {
  * file current means the exhaust never reaches `git status` at all.
  *
  * A repo is skipped unless it is already initialized. `ensureGitignore`
- * creates `.nightgauge/` and its subdirectories as a side effect, and
+ * creates `.nightgauge/` as a side effect, and
  * resurrecting that folder in a repo the user never onboarded is the behaviour
  * the primary-root call site deliberately gated on `isRepoInitialized` — the
  * gate has to travel with the propagation or this reintroduces it N times over.

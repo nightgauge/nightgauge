@@ -4,7 +4,10 @@
  * @see src/commands/resetPipeline.ts
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import * as vscode from "vscode";
 import { registerResetPipelineCommand } from "../../src/commands/resetPipeline";
 import type { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
@@ -13,6 +16,8 @@ import type { StatusBarManager } from "../../src/utils/statusBar";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { PipelineTreeProvider } from "../../src/views";
 import type { CompletedIssuesService } from "../../src/services/CompletedIssuesService";
+import type { CloneLayout } from "../../src/utils/cloneLayout";
+import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mock vscode
 vi.mock("vscode", () => ({
@@ -26,12 +31,8 @@ vi.mock("vscode", () => ({
     executeCommand: vi.fn(),
   },
   workspace: {
-    findFiles: vi.fn(),
     fs: { delete: vi.fn().mockResolvedValue(undefined) },
   },
-  RelativePattern: vi.fn(function (base, pattern) {
-    return { base, pattern };
-  }),
   Uri: { file: vi.fn((path) => ({ fsPath: path })) },
 }));
 
@@ -74,13 +75,24 @@ describe("resetPipeline Command", () => {
     skipConfirm?: boolean;
     skipGitCleanup?: boolean;
   }) => Promise<void>;
+  // The workspace is a temp dir whose per-clone classes resolve to its own
+  // `.git/nightgauge/<class>`; the command lists them from disk (#2037).
+  let workspaceRoot: string;
+  let layout: CloneLayout;
+  const seed = (dir: string, ...names: string[]) => {
+    for (const name of names) fs.writeFileSync(path.join(dir, name), "{}");
+  };
+  const deletedPaths = () =>
+    vi.mocked(vscode.workspace.fs.delete).mock.calls.map((c) => (c[0] as any).fsPath as string);
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ng-reset-"));
+    layout = mkFakeCloneLayout(workspaceRoot);
 
     // Restore module-level mock implementations
     const { getWorkspaceRoot } = await import("../../src/config/settings");
-    vi.mocked(getWorkspaceRoot).mockReturnValue("/test/workspace");
+    vi.mocked(getWorkspaceRoot).mockReturnValue(workspaceRoot);
 
     const { resetGitHubStatus } = await import("../../src/utils/githubStatusSync");
     vi.mocked(resetGitHubStatus).mockResolvedValue({ success: true });
@@ -88,8 +100,7 @@ describe("resetPipeline Command", () => {
     const { hasActiveProcess } = await import("../../src/utils/skillRunner");
     vi.mocked(hasActiveProcess).mockReturnValue(false);
 
-    // Ensure findFiles and fs.delete return proper defaults
-    vi.mocked(vscode.workspace.findFiles).mockResolvedValue([]);
+    // Ensure fs.delete returns its default
     vi.mocked(vscode.workspace.fs.delete).mockResolvedValue(undefined);
 
     mockOrchestrator = {
@@ -137,6 +148,10 @@ describe("resetPipeline Command", () => {
       mockCompletedIssuesService
     );
     commandHandler = (disposable as any).handler;
+  });
+
+  afterEach(() => {
+    fs.rmSync(workspaceRoot, { recursive: true, force: true });
   });
 
   describe("Prerequisites Validation", () => {
@@ -317,128 +332,65 @@ describe("resetPipeline Command", () => {
   });
 
   describe("File Deletion (parallel)", () => {
-    it("should always use broad *.json glob for context files to catch stale issues (#1209)", async () => {
-      vi.mocked(vscode.workspace.findFiles)
-        .mockResolvedValueOnce([
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
-          } as any,
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/planning-42.json",
-          } as any,
-        ])
-        .mockResolvedValueOnce([]);
+    it("should scan every *.json in the pipeline dir to catch stale issues (#1209)", async () => {
+      seed(layout.pipeline, "issue-42.json", "planning-42.json", "notes.txt");
 
       await commandHandler({ skipConfirm: true });
 
-      // Should always use broad *.json glob to catch stale files from other issues
-      expect(vscode.RelativePattern).toHaveBeenCalledWith(
-        expect.stringContaining("pipeline"),
-        "*.json"
-      );
-      expect(vscode.workspace.fs.delete).toHaveBeenCalledTimes(2);
-      expect(vscode.workspace.fs.delete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
-        })
-      );
-      expect(vscode.workspace.fs.delete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          fsPath: "/test/workspace/.nightgauge/pipeline/planning-42.json",
-        })
+      expect(deletedPaths().sort()).toEqual(
+        [
+          path.join(layout.pipeline, "issue-42.json"),
+          path.join(layout.pipeline, "planning-42.json"),
+        ].sort()
       );
     });
 
     it("should preserve state.json and non-pipeline files via regex filter", async () => {
-      vi.mocked(vscode.workspace.findFiles)
-        .mockResolvedValueOnce([
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
-          } as any,
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/state.json",
-          } as any,
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/queue-state.json",
-          } as any,
-        ])
-        .mockResolvedValueOnce([]);
+      seed(layout.pipeline, "issue-42.json", "state.json", "queue-state.json");
 
       await commandHandler({ skipConfirm: true });
 
       // state.json and queue-state.json must NOT be deleted — only pipeline context files
-      expect(vscode.workspace.fs.delete).toHaveBeenCalledTimes(1);
-      expect(vscode.workspace.fs.delete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
-        })
-      );
+      expect(deletedPaths()).toEqual([path.join(layout.pipeline, "issue-42.json")]);
     });
 
     it("should delete stale context files from previous issues (#1209)", async () => {
-      // Simulate leftover files from issue #1187 alongside current issue #42 files
-      vi.mocked(vscode.workspace.findFiles)
-        .mockResolvedValueOnce([
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
-          } as any,
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/dev-42.json",
-          } as any,
-          // Stale files from a previously completed issue
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/issue-1187.json",
-          } as any,
-          {
-            fsPath: "/test/workspace/.nightgauge/pipeline/pr-1187.json",
-          } as any,
-        ])
-        .mockResolvedValueOnce([]);
+      // Leftover files from issue #1187 alongside current issue #42 files
+      seed(layout.pipeline, "issue-42.json", "dev-42.json", "issue-1187.json", "pr-1187.json");
 
       await commandHandler({ skipConfirm: true });
 
       // All four pipeline context files should be deleted, including stale ones
-      expect(vscode.workspace.fs.delete).toHaveBeenCalledTimes(4);
-      const deletedPaths = vi
-        .mocked(vscode.workspace.fs.delete)
-        .mock.calls.map((c) => (c[0] as any).fsPath);
-      expect(deletedPaths).toContain("/test/workspace/.nightgauge/pipeline/issue-1187.json");
-      expect(deletedPaths).toContain("/test/workspace/.nightgauge/pipeline/pr-1187.json");
+      expect(deletedPaths()).toHaveLength(4);
+      expect(deletedPaths()).toContain(path.join(layout.pipeline, "issue-1187.json"));
+      expect(deletedPaths()).toContain(path.join(layout.pipeline, "pr-1187.json"));
     });
 
-    it("should delete plan files in parallel", async () => {
-      vi.mocked(vscode.workspace.findFiles).mockImplementation(async (pattern: any) => {
-        if (pattern?.pattern === "42-*.md") {
-          return [
-            {
-              fsPath: "/test/workspace/.nightgauge/plans/42-photo-upload.md",
-            } as any,
-          ];
-        }
-        return [];
-      });
+    it("should delete the issue's plan files, and only them", async () => {
+      seed(layout.plans, "42-photo-upload.md", "421-other.md", "7-unrelated.md");
 
       await commandHandler({ skipConfirm: true });
 
-      expect(vscode.workspace.fs.delete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          fsPath: "/test/workspace/.nightgauge/plans/42-photo-upload.md",
-        })
-      );
+      expect(deletedPaths()).toEqual([path.join(layout.plans, "42-photo-upload.md")]);
     });
 
     it("should continue cleanup even if file deletion fails", async () => {
-      vi.mocked(vscode.workspace.findFiles).mockResolvedValue([
-        {
-          fsPath: "/test/workspace/.nightgauge/pipeline/issue-42.json",
-        } as any,
-      ]);
+      seed(layout.pipeline, "issue-42.json");
       vi.mocked(vscode.workspace.fs.delete).mockRejectedValue(new Error("File not found"));
 
       await commandHandler({ skipConfirm: true });
 
       // Should not throw — pipeline reset should complete
       expect(mockLogger.info).toHaveBeenCalledWith("Pipeline manually reset", expect.any(Object));
+    });
+
+    it("should complete when the class directories do not exist yet", async () => {
+      fs.rmSync(layout.clone, { recursive: true, force: true });
+
+      await commandHandler({ skipConfirm: true });
+
+      expect(vscode.workspace.fs.delete).not.toHaveBeenCalled();
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith("Pipeline reset complete");
     });
 
     it("should run clearPipeline concurrently with file deletion", async () => {
@@ -492,64 +444,28 @@ describe("resetPipeline Command", () => {
   });
 
   describe("Corrupt Backup File Cleanup (Issue #872)", () => {
+    const stateBackup = "state.json.corrupt-2026-01-01T00-00-00-000Z";
+    const batchBackup = "batch-state.json.corrupt-2026-01-02T00-00-00-000Z";
+
     it("should find and delete corrupt backup files during reset", async () => {
-      vi.mocked(vscode.workspace.findFiles).mockImplementation(async (pattern: any) => {
-        if (pattern?.pattern === "*.corrupt-*") {
-          return [
-            {
-              fsPath:
-                "/test/workspace/.nightgauge/pipeline/state.json.corrupt-2026-01-01T00-00-00-000Z",
-            } as any,
-            {
-              fsPath:
-                "/test/workspace/.nightgauge/pipeline/batch-state.json.corrupt-2026-01-02T00-00-00-000Z",
-            } as any,
-          ];
-        }
-        return [];
-      });
+      seed(layout.pipeline, stateBackup, batchBackup);
 
       await commandHandler({ skipConfirm: true });
 
-      expect(vscode.workspace.fs.delete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          fsPath:
-            "/test/workspace/.nightgauge/pipeline/state.json.corrupt-2026-01-01T00-00-00-000Z",
-        })
-      );
-      expect(vscode.workspace.fs.delete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          fsPath:
-            "/test/workspace/.nightgauge/pipeline/batch-state.json.corrupt-2026-01-02T00-00-00-000Z",
-        })
+      expect(deletedPaths().sort()).toEqual(
+        [path.join(layout.pipeline, stateBackup), path.join(layout.pipeline, batchBackup)].sort()
       );
     });
 
-    it("should use *.corrupt-* glob pattern when searching for corrupt backup files", async () => {
-      vi.mocked(vscode.workspace.findFiles).mockImplementation(async (pattern: any) => {
-        if (pattern?.pattern === "*.corrupt-*") {
-          return [
-            {
-              fsPath:
-                "/test/workspace/.nightgauge/pipeline/state.json.corrupt-2026-01-01T00-00-00-000Z",
-            } as any,
-          ];
-        }
-        return [];
-      });
+    it("should match only *.corrupt-* names when searching for corrupt backup files", async () => {
+      seed(layout.pipeline, stateBackup, "corrupt-notes.txt", "state.json");
 
       await commandHandler({ skipConfirm: true });
 
-      expect(vscode.RelativePattern).toHaveBeenCalledWith(
-        expect.stringContaining("pipeline"),
-        "*.corrupt-*"
-      );
+      expect(deletedPaths()).toEqual([path.join(layout.pipeline, stateBackup)]);
     });
 
     it("should handle no corrupt files gracefully and still complete the reset", async () => {
-      // All findFiles calls return empty — no corrupt files present
-      vi.mocked(vscode.workspace.findFiles).mockResolvedValue([]);
-
       await commandHandler({ skipConfirm: true });
 
       // Reset should complete successfully

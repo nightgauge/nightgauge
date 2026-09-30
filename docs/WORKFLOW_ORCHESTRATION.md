@@ -234,7 +234,8 @@ resolved orchestration config it:
    (`recordWorkflowNode`) so a fanned-out run's cost rolls into the pipeline
    totals.
 5. **Writes a durable append-only journal** —
-   `.nightgauge/pipeline/workflow-{runId}.jsonl`, one `JournalRecord`
+   `workflow-{runId}.jsonl` in the clone's pipeline state directory
+   (`nightgauge layout path pipeline`), one `JournalRecord`
    (`{ event }`) per emission, via a `JournalingSink` that wraps the
    downstream sink. `resume(runId, spec, sink)` replays the journal
    (`replayJournal`), re-emits the historical tree so a fresh consumer sees the

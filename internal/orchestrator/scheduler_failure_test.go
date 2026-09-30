@@ -22,6 +22,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/orchestrator/gates"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // mustMkdirAll creates dir or fails the test.
@@ -97,7 +99,7 @@ func countLines(s string) int {
 // and returns parsed V2RunRecord values. Test helper.
 func readDailyJSONLRecords(t *testing.T, workspaceRoot string) []state.V2RunRecord {
 	t.Helper()
-	dir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history")
+	dir := filepath.Join(layouttest.PipelineDir(t, workspaceRoot), "history")
 	day := time.Now().Format("2006-01-02") + ".jsonl"
 	data, err := os.ReadFile(filepath.Join(dir, day))
 	if err != nil {
@@ -725,7 +727,7 @@ func TestSynthesizeOrchestratorCrashRecord_NeverFabricatesABranch(t *testing.T) 
 //     PausedReason linking back to the synthesized run id
 //  4. the sidecar is removed (so a subsequent restart doesn't re-synthesize)
 func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 
 	// Pre-seed a stale sidecar — simulates the previous orchestrator crashing
 	// mid-stage. StartedAt deliberately in the past so the in-future-skip
@@ -745,7 +747,7 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 	}
 
 	// Pre-seed a queue file with one downstream item — recovery should pause it.
-	queueDir := filepath.Join(tmpDir, ".nightgauge", "pipeline")
+	queueDir := layouttest.PipelineDir(t, tmpDir)
 	if err := os.MkdirAll(queueDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -772,7 +774,7 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 	s.loadQueue()
 
 	// Sidecar must be cleared so a second NewScheduler doesn't double-synthesize.
-	if _, err := os.Stat(filepath.Join(tmpDir, currentRunSidecarFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, tmpDir), currentRunSidecarFile)); !os.IsNotExist(err) {
 		t.Errorf("sidecar should be removed after recovery, stat err=%v", err)
 	}
 
@@ -798,7 +800,7 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 	if rec.TerminalFailureKind != TerminalKindOrchestratorCrash {
 		t.Errorf("rec.TerminalFailureKind = %q, want %q", rec.TerminalFailureKind, TerminalKindOrchestratorCrash)
 	}
-	indexBytes, err := os.ReadFile(filepath.Join(tmpDir, ".nightgauge", "pipeline", "history", "index.json"))
+	indexBytes, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, tmpDir), "history", "index.json"))
 	if err != nil {
 		t.Fatalf("read crash-recovery index: %v", err)
 	}
@@ -862,7 +864,7 @@ func TestSidecarRoundTripAndOrchestratorCrashRecovery(t *testing.T) {
 // (clock skew, workspace move). The synthesizer must refuse and remove a
 // sidecar with a future StartedAt rather than write a phantom record.
 func TestSidecarRecoverySkipsFutureStartedAt(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	if err := writeCurrentRunSidecar(tmpDir, CurrentRunSidecar{
 		RunID:       testRunID(),
 		IssueNumber: 1,
@@ -880,12 +882,12 @@ func TestSidecarRecoverySkipsFutureStartedAt(t *testing.T) {
 
 	// Sidecar removed even when synthesis is skipped — otherwise a stale
 	// future-dated sidecar would block the queue forever.
-	if _, err := os.Stat(filepath.Join(tmpDir, currentRunSidecarFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, tmpDir), currentRunSidecarFile)); !os.IsNotExist(err) {
 		t.Errorf("sidecar should be removed; stat err=%v", err)
 	}
 
 	// Daily JSONL must NOT contain a synthesized record for the future sidecar.
-	histDir := filepath.Join(tmpDir, ".nightgauge", "pipeline", "history")
+	histDir := filepath.Join(layouttest.PipelineDir(t, tmpDir), "history")
 	if entries, err := os.ReadDir(histDir); err == nil {
 		for _, e := range entries {
 			if !e.IsDir() {
@@ -918,7 +920,7 @@ func TestGetPipelineFailureModeDefaults(t *testing.T) {
 // TestGetPipelineFailureModeFromConfigYAML covers the YAML reader so a typo
 // in the config-file scanner doesn't silently drop the operator's choice.
 func TestGetPipelineFailureModeFromConfigYAML(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	cfgDir := filepath.Join(tmpDir, ".nightgauge")
 	if err := os.MkdirAll(cfgDir, 0755); err != nil {
 		t.Fatal(err)
@@ -993,7 +995,7 @@ func (r *ipcStallStageRunner) RunStage(_ context.Context, params StageRunParams)
 // must write a V3 RunRecord with terminal_failure_kind=stall_kill and a
 // populated last_output_lines snippet on the failed stage.
 func TestStallKillJSONLRecord_IPCMode(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 
 	stallErrText := "[stall-killed] pr-create terminated: exceeded stall idle threshold (1200s without output)"
 	tail := "[skillRunner] Stage exceeded stall idle threshold (20m 0s without output) — forcibly terminating process after 1h 20m 0s (idle for 20m 0s).\n[skillRunner] last claude api response: tool_use Read /tmp/x"
@@ -1098,7 +1100,7 @@ func TestStallKillJSONLRecord_IPCMode(t *testing.T) {
 // The canonical [cost-cap-exceeded] marker MUST take precedence over any
 // stall-shaped substring in the error text.
 func TestCostCapKillJSONLRecord_IPCMode(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 
 	costCapErrText := "[cost-cap-exceeded] pr-create terminated ($5.21 ≥ $5.00 cap)"
 	tail := "[skillRunner] cost cap polling tick: $5.21 ≥ $5.00 — terminating subagent for pr-create"
@@ -1195,7 +1197,7 @@ const grokNotSignedInStderr = `Error: Not signed in. To authenticate without a b
 // assigned in the ExecutionManagerRunner.RunStage literal, so both are "" and
 // ClassifyTerminalKind falls back to subagent_crash.
 func TestCLIStageErrorTextReachesClassification_GrokUnknownModel(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	stubCLI := writeFailingStubCLI(t, root, "", grokUnknownModelStderr, 1)
 	t.Setenv("NIGHTGAUGE_GROK_CLI_COMMAND", stubCLI)
 
@@ -1318,7 +1320,7 @@ func (r *cliFailureStageRunner) RunStage(_ context.Context, params StageRunParam
 // This test MUST fail at 8dbbeb95 — with err==nil, failText stayed "" and
 // terminalReason was literally "exit 1: <nil>".
 func TestCLIModelUnavailableRoutesToDowngrade_NotSubagentCrash(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 
 	tail := "some earlier stdout chatter\n" + strings.TrimSpace(grokUnknownModelStderr)
 	runner := &cliFailureStageRunner{
@@ -1419,7 +1421,7 @@ func TestCLIModelUnavailableRoutesToDowngrade_NotSubagentCrash(t *testing.T) {
 // cannot authenticate a CLI whose credentials are absent, so escalating is
 // pure wasted spend on a failure only the operator fixing credentials clears.
 func TestCLIAdapterAuthFailedExcludedFromEscalation_NotSubagentCrash(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 
 	runner := &cliFailureStageRunner{
 		failStage:       state.StagePRCreate,
@@ -1503,7 +1505,7 @@ func TestCLIAdapterAuthFailedExcludedFromEscalation_NotSubagentCrash(t *testing.
 // this path, so the branch is asserted here rather than left to inspection.
 func TestCLIStallKill_RewindsAndPersistsTheRealReason(t *testing.T) {
 	stubReconcileGhUnreachable(t)
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	enableAdaptiveStallRecovery(t, root)
 
 	const stallText = "[stall-killed] feature-dev terminated: exceeded stall idle threshold (1200s without output)"
@@ -1524,7 +1526,7 @@ func TestCLIStallKill_RewindsAndPersistsTheRealReason(t *testing.T) {
 
 	// 1. The rewind fired at all — the synthetic feedback context only exists
 	//    if isStallKill was true, which requires stallErrMsg to be non-empty.
-	feedbackPath := filepath.Join(root, ".nightgauge", "pipeline", "feedback-8534.json")
+	feedbackPath := filepath.Join(layouttest.PipelineDir(t, root), "feedback-8534.json")
 	if _, statErr := os.Stat(feedbackPath); statErr != nil {
 		t.Fatalf("no synthetic feedback context at %s (%v) — a CLI-mode stall never "+
 			"reached adaptive stall recovery, so stallErrMsg was still empty (#533)",
@@ -1579,7 +1581,7 @@ func TestCLIStallKill_RewindsAndPersistsTheRealReason(t *testing.T) {
 // `complete` feature-dev carrying a crash transcript.
 func TestSupersededStageTailIsCleared(t *testing.T) {
 	stubReconcileGhUnreachable(t)
-	root := t.TempDir()
+	root := gitWorkspace(t)
 
 	const crashTail = "…transcript…\nError: Cannot read properties of undefined (reading 'text')"
 	runner := &cliFailureStageRunner{
@@ -1758,7 +1760,7 @@ func TestCLIFailureTail_UsesTheStateCaps(t *testing.T) {
 // (via StageDetail.last_output_lines), and CLI mode's source for them is the
 // stage's ENTIRE captured output. A ~10MB run must not write a ~10MB record.
 func TestCLIStageOutputCarry_BoundedForHugeStdout(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	var sb strings.Builder
 	sb.Grow(11 << 20)
@@ -2201,7 +2203,7 @@ func TestCLIRunnerCarriesFailureTextForEveryAdapter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.binary+"/non-zero exit carries the reason", func(t *testing.T) {
-			root := t.TempDir()
+			root := layouttest.Repo(t)
 			stubDir := t.TempDir()
 			// claude and codex hardcode their command name (no CLI_COMMAND
 			// override), so the stub is injected by name on PATH.
@@ -2237,7 +2239,7 @@ func TestCLIRunnerCarriesFailureTextForEveryAdapter(t *testing.T) {
 		})
 
 		t.Run(tt.binary+"/exit 0 carries nothing", func(t *testing.T) {
-			root := t.TempDir()
+			root := layouttest.Repo(t)
 			stubDir := t.TempDir()
 			// A successful stage whose stderr still has content: deprecation
 			// notices and progress chatter routinely land there. None of it is

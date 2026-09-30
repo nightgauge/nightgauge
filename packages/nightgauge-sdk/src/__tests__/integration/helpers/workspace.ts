@@ -8,6 +8,7 @@
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+import { initCloneRepo } from "../../helpers/gitRepo.js";
 
 export interface TestWorkspace {
   dir: string;
@@ -17,13 +18,13 @@ export interface TestWorkspace {
 }
 
 /**
- * Create a temporary workspace directory for a test.
+ * Create a temporary workspace repository for a test; pipelineDir and
+ * plansDir are its resolved per-clone class directories (ADR-024 § 7).
  * Returns cleanup function that removes all created files.
  */
 export async function createTestWorkspace(): Promise<TestWorkspace> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "sdk-integration-"));
-  const pipelineDir = path.join(dir, ".nightgauge", "pipeline");
-  const plansDir = path.join(dir, ".nightgauge", "plans");
+  const { pipeline: pipelineDir, plans: plansDir } = initCloneRepo(dir);
 
   await fs.mkdir(pipelineDir, { recursive: true });
   await fs.mkdir(plansDir, { recursive: true });

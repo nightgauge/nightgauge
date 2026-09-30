@@ -58,7 +58,7 @@ to dispatch them — Phase 4.6 promotes them to Ready in bulk after that.
 
 ```bash
 # 0. Read the routing manifest written in Phase 2.4
-MANIFEST=".nightgauge/pipeline/issue-create-routing-<epic-number>.json"
+MANIFEST="$(nightgauge layout path pipeline issue-create-routing-<epic-number>.json)"
 test -f "$MANIFEST" || { echo "ERROR: routing-manifest-missing"; exit 1; }
 
 # 1. Add the epic itself to the board (always lives in the workspace primary repo)
@@ -187,7 +187,7 @@ the same resolver at audit time catches that drift instead of trusting
 either the manifest or the live board blindly:
 
 ```bash
-MANIFEST=".nightgauge/pipeline/issue-create-routing-<epic-number>.json"
+MANIFEST="$(nightgauge layout path pipeline issue-create-routing-<epic-number>.json)"
 EXIT_CODE=0
 jq -c '.sub_issues[]' "$MANIFEST" | while read -r row; do
   NUM=$(printf '%s\n' "$row" | jq -r .number)
@@ -332,14 +332,12 @@ read by the `nightgauge:issue-audit` skill (`--manifest <path>`) in Phase 6.
 
 ```bash
 TS=$(date -u +%Y%m%dT%H%M%SZ)
-MANIFEST_PATH=".nightgauge/pipeline/issue-create-manifest-${TS}.json"
-mkdir -p .nightgauge/pipeline
 
 # ENTRIES_JSON is built progressively as each issue is created (Phase 3) and
 # field-set (Phase 4). One entry per issue, conforming to
 # CreationManifestEntrySchema. For epics, include the epic plus every
 # sub-issue with parent_epic / blocked_by / sub_issues populated.
-jq -n \
+MANIFEST_PATH=$(jq -n \
   --argjson project "$PROJECT_NUMBER_OR_NULL" \
   --argjson entries "$ENTRIES_JSON" \
   --arg created_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
@@ -349,7 +347,7 @@ jq -n \
     created_by_skill: "nightgauge-issue-create",
     project_number: $project,
     entries: $entries
-  }' > "$MANIFEST_PATH"
+  }' | nightgauge layout write pipeline "issue-create-manifest-${TS}.json")
 
 # Validate the manifest can be parsed back as JSON
 jq . "$MANIFEST_PATH" > /dev/null || {
@@ -405,7 +403,7 @@ called from a Bash block:
 The audit's result is authoritative: READY (exit 0) continues; NEEDS FIXES
 (exit 1: CRITICAL findings remain) or a skill-level failure (exit 2) stops this
 skill with that status. On NEEDS FIXES, point the user at the report
-(`.nightgauge/pipeline/issue-audit-*.md`), offer the audit's `--fix` run, then
+(`issue-audit-*.md` in `nightgauge layout path pipeline`), offer the audit's `--fix` run, then
 re-run. `MISSING_REQUIRED_HEADING` has no repair primitive — `--fix` will not
 touch it; fix the body to match the Phase 2 per-type heading table instead.
 

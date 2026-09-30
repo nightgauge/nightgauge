@@ -10,6 +10,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/learning"
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func seedSurvival(t *testing.T, root string, recs ...survival.Record) {
@@ -35,7 +36,7 @@ func pendingRec(repo string, issue int, mergedAt time.Time) survival.Record {
 // STOPPED running, which is how the sweep stayed dead for weeks while the
 // writer kept appending.
 func TestSurvivalBacklog_ReportsRecordsPastTwiceTheWindow(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	// 30 days old against a 7-day window: well past 2x, so its verdict is
 	// already folding to "unobserved".
@@ -66,7 +67,7 @@ func TestSurvivalBacklog_ReportsRecordsPastTwiceTheWindow(t *testing.T) {
 // inside its window is the NORMAL state — every merge creates one. An arm that
 // fired on those would be noise on every healthy repo and would be muted.
 func TestSurvivalBacklog_FreshRecordIsNotAFinding(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	seedSurvival(t, root,
 		pendingRec("o/r", 1, now.AddDate(0, 0, -1)),  // 1d — fresh
@@ -90,7 +91,7 @@ func TestSurvivalBacklog_FreshRecordIsNotAFinding(t *testing.T) {
 // TestSurvivalBacklog_EmptyStoreIsHealthy guards the common case: a repo that
 // has never merged anything through the pipeline.
 func TestSurvivalBacklog_EmptyStoreIsHealthy(t *testing.T) {
-	fs, _ := survivalBacklogFindings(t.TempDir(), time.Now(), 7)
+	fs, _ := survivalBacklogFindings(layouttest.Repo(t), time.Now(), 7)
 	warning := findingsText(fs)
 	if len(fs) != 0 {
 		t.Errorf("empty store reported a finding: findings=%q", warning)
@@ -101,7 +102,7 @@ func TestSurvivalBacklog_EmptyStoreIsHealthy(t *testing.T) {
 // skipping a record that can never be finalized either — the arm must not
 // quietly drop the one record that is most stuck.
 func TestSurvivalBacklog_UnparseableTimestampIsReported(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	rec := pendingRec("o/r", 9, time.Now())
 	rec.MergedAt = "not-a-timestamp"
 	seedSurvival(t, root, rec)
@@ -120,7 +121,7 @@ func TestSurvivalBacklog_UnparseableTimestampIsReported(t *testing.T) {
 // TestSurvivalBacklog_WindowScalesTheThreshold proves the threshold tracks the
 // configured window rather than a hardcoded number of days.
 func TestSurvivalBacklog_WindowScalesTheThreshold(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	seedSurvival(t, root, pendingRec("o/r", 5, now.AddDate(0, 0, -20)))
 
@@ -138,7 +139,7 @@ func TestSurvivalBacklog_WindowScalesTheThreshold(t *testing.T) {
 // coverage and calibration are manual and name `nightgauge learn report`.
 func TestLearningFindings_Remedies(t *testing.T) {
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	seedSurvival(t, root, pendingRec("o/r", 42, now.AddDate(0, 0, -30)))
 	fs, _ := survivalBacklogFindings(root, now, 7)
 	if len(fs) != 1 || fs[0].Code != "NGD026" || fs[0].Severity != SeverityInfo {
@@ -151,7 +152,7 @@ func TestLearningFindings_Remedies(t *testing.T) {
 		t.Errorf("backlog evidence lacks counts or cadence: %v", fs[0].Evidence)
 	}
 
-	corpus := t.TempDir()
+	corpus := layouttest.Repo(t)
 	var rows []learning.Outcome
 	for i := 1; i <= 12; i++ {
 		rows = append(rows, row(i, "", ""))

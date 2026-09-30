@@ -125,38 +125,6 @@ describe("automations.behavior", () => {
   });
 
   // ============================================================================
-  // automations.log_file - Behavior Tests
-  // ============================================================================
-
-  describe("log_file", () => {
-    it("specifies log output location", () => {
-      const config = createMockAutomationsConfig({
-        log_file: "/var/log/nightgauge-automations.log",
-      });
-
-      const getLogPath = (cfg: typeof config): string => {
-        return cfg.log_file || ".nightgauge/automations.log";
-      };
-
-      expect(getLogPath(config)).toBe("/var/log/nightgauge-automations.log");
-    });
-
-    it("falls back to default when not specified", () => {
-      const config = createMockAutomationsConfig({ log_file: undefined });
-
-      const getLogPath = (cfg: typeof config): string => {
-        return cfg.log_file || ".nightgauge/automations.log";
-      };
-
-      expect(getLogPath(config)).toBe(".nightgauge/automations.log");
-    });
-
-    it("defaults to .nightgauge/automations.log", () => {
-      expect(DEFAULT_AUTOMATIONS_CONFIG.log_file).toBe(".nightgauge/automations.log");
-    });
-  });
-
-  // ============================================================================
   // automations.triggers - Behavior Tests
   // ============================================================================
 
@@ -367,9 +335,6 @@ describe("automations.behavior", () => {
       expect(BEHAVIOR_CONFIG_ENV_MAPPINGS["automations.dry_run"]).toBe(
         "NIGHTGAUGE_AUTOMATIONS_DRY_RUN"
       );
-      expect(BEHAVIOR_CONFIG_ENV_MAPPINGS["automations.log_file"]).toBe(
-        "NIGHTGAUGE_AUTOMATIONS_LOG_FILE"
-      );
     });
   });
 
@@ -436,7 +401,6 @@ describe("automations.behavior", () => {
     it("DEFAULT_AUTOMATIONS_CONFIG has correct defaults", () => {
       expect(DEFAULT_AUTOMATIONS_CONFIG.enabled).toBe(true);
       expect(DEFAULT_AUTOMATIONS_CONFIG.dry_run).toBe(false);
-      expect(DEFAULT_AUTOMATIONS_CONFIG.log_file).toBe(".nightgauge/automations.log");
       expect(DEFAULT_AUTOMATIONS_CONFIG.triggers).toEqual([]);
     });
 

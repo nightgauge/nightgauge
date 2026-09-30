@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // --- helpers ---
@@ -45,7 +47,7 @@ func writeJSON(t *testing.T, path string, v interface{}) {
 // --- tests ---
 
 func TestAnalyze_EmptyWorkspace_AllNoData(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	report, err := Analyze(AnalyzeInput{WorkspaceRoot: dir, Period: 30})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -67,7 +69,7 @@ func TestAnalyze_EmptyWorkspace_AllNoData(t *testing.T) {
 }
 
 func TestAnalyze_DefaultPeriod(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	report, err := Analyze(AnalyzeInput{WorkspaceRoot: dir}) // Period 0 → defaults to 30
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -78,9 +80,9 @@ func TestAnalyze_DefaultPeriod(t *testing.T) {
 }
 
 func TestAnalyze_CalibrationBootstrapping(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	// Write 3 outcomes → below the 10 threshold → bootstrapping
-	outcomesPath := filepath.Join(dir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	outcomesPath := filepath.Join(layouttest.PipelineDir(t, dir), "history", "outcomes.jsonl")
 	now := time.Now().UTC()
 	records := []interface{}{
 		map[string]interface{}{"predictedSize": "S", "actualSize": "S", "success": true, "completedAt": now},
@@ -113,8 +115,8 @@ func TestAnalyze_CalibrationBootstrapping(t *testing.T) {
 }
 
 func TestAnalyze_SkillDrift_NoData_LessThan5(t *testing.T) {
-	dir := t.TempDir()
-	assessDir := filepath.Join(dir, ".nightgauge", "pipeline", "assessments")
+	dir := layouttest.Repo(t)
+	assessDir := filepath.Join(layouttest.PipelineDir(t, dir), "assessments")
 	if err := os.MkdirAll(assessDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -145,8 +147,8 @@ func TestAnalyze_SkillDrift_NoData_LessThan5(t *testing.T) {
 }
 
 func TestAnalyze_SkillDrift_Closing_LowFrictionRate(t *testing.T) {
-	dir := t.TempDir()
-	assessDir := filepath.Join(dir, ".nightgauge", "pipeline", "assessments")
+	dir := layouttest.Repo(t)
+	assessDir := filepath.Join(layouttest.PipelineDir(t, dir), "assessments")
 	if err := os.MkdirAll(assessDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -179,8 +181,8 @@ func TestAnalyze_SkillDrift_Closing_LowFrictionRate(t *testing.T) {
 }
 
 func TestAnalyze_SkillDrift_Degrading_HighFrictionRate(t *testing.T) {
-	dir := t.TempDir()
-	assessDir := filepath.Join(dir, ".nightgauge", "pipeline", "assessments")
+	dir := layouttest.Repo(t)
+	assessDir := filepath.Join(layouttest.PipelineDir(t, dir), "assessments")
 	if err := os.MkdirAll(assessDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -301,7 +303,7 @@ func TestVerdictPoints(t *testing.T) {
 }
 
 func TestAnalyze_ReportSchemaVersion(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	report, err := Analyze(AnalyzeInput{WorkspaceRoot: dir, Period: 30})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -315,8 +317,8 @@ func TestAnalyze_ReportSchemaVersion(t *testing.T) {
 }
 
 func TestAnalyze_Reliability_Closing(t *testing.T) {
-	dir := t.TempDir()
-	outcomesPath := filepath.Join(dir, ".nightgauge", "pipeline", "history", "outcomes.jsonl")
+	dir := layouttest.Repo(t)
+	outcomesPath := filepath.Join(layouttest.PipelineDir(t, dir), "history", "outcomes.jsonl")
 	now := time.Now().UTC()
 	// 10 records: first 5 have 3 failures, last 5 have 0 failures → rate improving
 	records := []interface{}{}

@@ -35,9 +35,8 @@ JSON construction, then validate with `jq`:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE=".nightgauge/pipeline/dev-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline dev-${ISSUE_NUMBER}.json)"
 TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-mkdir -p .nightgauge/pipeline
 
 jq -n \
   --argjson issue_number "$ISSUE_NUMBER" \
@@ -106,7 +105,7 @@ jq -n \
     knowledge_path: $knowledge_path,
     architectural_constraints: $architectural_constraints,
     created_at: $created_at
-  }' > "$CONTEXT_FILE"
+  }' | nightgauge layout write pipeline "dev-${ISSUE_NUMBER}.json" >/dev/null
 
 jq . "$CONTEXT_FILE" > /dev/null || \
   { echo "ERROR: dev context JSON invalid" >&2; exit 1; }

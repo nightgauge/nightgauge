@@ -3,12 +3,14 @@ package survival
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // The immediate post-merge observation (#1249) rides on the survival record
 // next to the days-later Verdict, and must survive the journal's fold.
 func TestRecord_MainCheckFieldsRoundTripThroughTheStore(t *testing.T) {
-	store := NewStore(t.TempDir())
+	store := NewStore(layouttest.Repo(t))
 	rec := NewPending("nightgauge/nightgauge", 1249, 1360, "feedface", testMergedAt, "main")
 	rec.MainCheckVerdict = "red"
 	rec.MainCheckFailing = []string{"e2e"}

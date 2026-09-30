@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/survival"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func seedPending(t *testing.T, root, repo string, issue int, mergedAt time.Time) {
@@ -44,7 +46,7 @@ func pendingCount(t *testing.T, root string) int {
 // identical argument was never applied here.
 func TestRunCycle_SweepsSurvivalWithZeroFreeSlots(t *testing.T) {
 	stubSurvivalSweepNoForge(t)
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), root)
 
 	// Saturate the fleet: every slot consumed, so runCycle returns at the slot
@@ -75,7 +77,7 @@ func TestRunCycle_SweepsSurvivalWithZeroFreeSlots(t *testing.T) {
 // back to riding `graphWasFresh`, and against it running on every 30s tick.
 func TestSweepSurvivalRecords_IsPacedIndependently(t *testing.T) {
 	stubSurvivalSweepNoForge(t)
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), root)
 	seedPending(t, root, "o/r", 7, time.Now().AddDate(0, 0, -30))
 
@@ -114,7 +116,7 @@ func TestSweepSurvivalRecords_IsPacedIndependently(t *testing.T) {
 // TestSweepSurvivalRecords_NoPendingCostsNothing guards the property that makes
 // this safe to call from the post-merge hook on every single merge.
 func TestSweepSurvivalRecords_NoPendingCostsNothing(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), root)
 
 	// No records at all. Must not panic and must not need a client.

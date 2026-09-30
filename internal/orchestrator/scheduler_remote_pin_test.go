@@ -108,7 +108,7 @@ func dispatchedStages(calls []StageRunParams) map[state.PipelineStage]bool {
 // marked as requested, and the run's record carries the requested pair.
 func TestRemotePinDispatchesEveryStageOnTheRequestedPair(t *testing.T) {
 	stubReconcileGhUnreachable(t)
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	runner := &pinRecordingRunner{}
 	s, item := newPinScheduler(t, root, runner, "opencode", pinnedModel)
 	s.runPipeline(context.Background(), item)
@@ -163,7 +163,7 @@ func TestNoRemotePinDispatchesAsBefore(t *testing.T) {
 // original: the record shows what was asked for next to what served.
 func TestRemotePinCapHopIsRecordedAndTheRequestStands(t *testing.T) {
 	stubReconcileGhUnreachable(t)
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	if err := os.MkdirAll(filepath.Join(root, ".nightgauge"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +234,7 @@ func TestRemotePinCapHopIsRecordedAndTheRequestStands(t *testing.T) {
 // refusal names the pin (#1656).
 func TestRemotePinContextBudgetRefusesInsteadOfReRouting(t *testing.T) {
 	stubReconcileGhUnreachable(t)
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	writeBigSkillFile(t, root, "nightgauge-issue-pickup", contextBudgetMediumBytes)
 
 	runner := newRefusalCapturingStageRunner()

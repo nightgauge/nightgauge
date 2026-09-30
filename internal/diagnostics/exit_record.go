@@ -12,7 +12,8 @@
 //
 // Design:
 //
-//	One JSONL file per UTC day under `.nightgauge/pipeline/exit-records/`.
+//	One JSONL file per UTC day under exit-records/ in the clone's pipeline
+//	state directory (`.git/nightgauge/pipeline/exit-records/`).
 //	Each line is one StageExitRecord. Records are written for BOTH success
 //	and failure exits so healthy runs anchor what "normal" looks like. The
 //	on-disk format reuses the existing internal/history.AppendJSONL primitive
@@ -258,11 +259,6 @@ func BoundFailureDetail(s string) string {
 	return "…" + string(r[len(r)-PreDispatchDetailMaxRunes:])
 }
 
-// exitRecordsSubdir is the project-relative directory the daily JSONL files
-// live in. Exported as a package constant so the CLI reader uses the same
-// path without re-deriving it.
-const exitRecordsSubdir = ".nightgauge/pipeline/exit-records"
-
 // RecentBashMaxEntries caps how many Bash commands a record retains. Kept in
 // lock-step with RECENT_BASH_MAX_ENTRIES in the TS skillRunner.
 const RecentBashMaxEntries = 10
@@ -307,35 +303,36 @@ func truncRunes(s string, maxRunes int) string {
 
 // ExitRecordsDir returns the absolute path to the per-project exit-records
 // directory, under rootDir's pipeline state directory
-// (layout.PipelineStateDir). A relative rootDir is made absolute first, so it
-// names the same directory as before. If that fails it returns "": a read
-// finds nothing and a write fails, rather than landing somewhere else. The
-// directory itself is not created — WriteStageExitRecord creates it on first
-// append.
-func ExitRecordsDir(rootDir string) string {
+// (layout.PipelineStateDir). A relative rootDir is made absolute first. The
+// resolver's error ("not a git repository" outside one) is returned, never a
+// path somewhere else. The directory itself is not created —
+// WriteStageExitRecord creates it on first append.
+func ExitRecordsDir(rootDir string) (string, error) {
 	abs, err := filepath.Abs(rootDir)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("diagnostics: resolve %q: %w", rootDir, err)
 	}
 	dir, err := layout.PipelineStateDir(abs)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("diagnostics: exit-records directory: %w", err)
 	}
-	return filepath.Join(dir, "exit-records")
+	return filepath.Join(dir, "exit-records"), nil
 }
 
 // DailyFilePath returns the absolute path of the daily JSONL file for the
 // given UTC date. The on-disk filename is always YYYY-MM-DD.jsonl so
 // glob/sort lexicographically equals chronologically. It returns "" when
-// ExitRecordsDir cannot resolve rootDir.
+// ExitRecordsDir cannot resolve rootDir; a writer uses ExitRecordsDir and
+// reports its error.
 func DailyFilePath(rootDir string, day time.Time) string {
-	dir := ExitRecordsDir(rootDir)
-	if dir == "" {
+	dir, err := ExitRecordsDir(rootDir)
+	if err != nil {
 		return ""
 	}
-	stamp := day.UTC().Format("2006-01-02")
-	return filepath.Join(dir, stamp+".jsonl")
+	return filepath.Join(dir, dailyFileName(day))
 }
+
+func dailyFileName(day time.Time) string { return day.UTC().Format("2006-01-02") + ".jsonl" }
 
 // WriteStageExitRecord appends one StageExitRecord to today's daily file.
 // Atomic single-line semantics are inherited from internal/history.AppendJSONL
@@ -352,6 +349,9 @@ func WriteStageExitRecord(rootDir string, rec StageExitRecord) error {
 	if rec.Timestamp == "" {
 		rec.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
 	}
-	path := DailyFilePath(rootDir, time.Now())
-	return history.AppendJSONL(path, rec)
+	dir, err := ExitRecordsDir(rootDir)
+	if err != nil {
+		return err
+	}
+	return history.AppendJSONL(filepath.Join(dir, dailyFileName(time.Now())), rec)
 }

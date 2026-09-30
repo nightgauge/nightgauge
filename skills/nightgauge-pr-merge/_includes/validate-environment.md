@@ -90,7 +90,7 @@ than this local check).
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Check if pre-push validation already passed vet
-PRE_PUSH_FILE=".nightgauge/pipeline/pre-push-${ISSUE_NUMBER}.json"
+PRE_PUSH_FILE="$(nightgauge layout path pipeline pre-push-${ISSUE_NUMBER}.json)"
 SKIP_VET=false
 if [ -f "$PRE_PUSH_FILE" ]; then
   PREPUSH_VET=$(jq -r '.validation_phases.vet // "skipped"' "$PRE_PUSH_FILE")

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -87,7 +88,7 @@ func TestHistoryWriter_HeadlessPruneRespectsConfiguredRetention(t *testing.T) {
 	})
 	defer restore()
 
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeProjectConfig(t, dir, 10) // 10-day retention, far below the 90-day default
 
 	hw := newWriterWithConfiguredRetention(t, dir)
@@ -103,7 +104,7 @@ func TestHistoryWriter_HeadlessPruneRespectsConfiguredRetention(t *testing.T) {
 		t.Fatalf("WriteRecord(recent): %v", err)
 	}
 
-	historyDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	historyDir := filepath.Join(layouttest.PipelineDir(t, dir), "history")
 	oldFile := oldTime.Local().Format("2006-01-02") + ".jsonl"
 	recentFile := recentTime.Local().Format("2006-01-02") + ".jsonl"
 
@@ -150,7 +151,7 @@ func TestHistoryWriter_DefaultRetentionWhenUnconfigured(t *testing.T) {
 	})
 	defer restore()
 
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeProjectConfig(t, dir, 0) // no history_retention_days key
 
 	hw := newWriterWithConfiguredRetention(t, dir)
@@ -160,7 +161,7 @@ func TestHistoryWriter_DefaultRetentionWhenUnconfigured(t *testing.T) {
 		t.Fatalf("WriteRecord: %v", err)
 	}
 
-	historyDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	historyDir := filepath.Join(layouttest.PipelineDir(t, dir), "history")
 	fname := survivingTime.Local().Format("2006-01-02") + ".jsonl"
 	if _, err := os.Stat(filepath.Join(historyDir, fname)); err != nil {
 		t.Errorf("expected file %s to survive under the 90-day default, stat err = %v", fname, err)
@@ -176,7 +177,7 @@ func TestHistoryWriter_DefaultRetentionWhenUnconfigured(t *testing.T) {
 // 90-day default via effectiveRetentionDays, not prune everything (a bare
 // zero) or keep everything forever (#674).
 func TestHistoryWriter_FallsBackToDefaultWhenRetentionNeverConfigured(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := state.NewHistoryWriter(dir) // SetRetentionDays deliberately never called
 
 	survivingTime := time.Now().AddDate(0, 0, -40)
@@ -184,7 +185,7 @@ func TestHistoryWriter_FallsBackToDefaultWhenRetentionNeverConfigured(t *testing
 		t.Fatalf("WriteRecord: %v", err)
 	}
 
-	historyDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	historyDir := filepath.Join(layouttest.PipelineDir(t, dir), "history")
 	fname := survivingTime.Local().Format("2006-01-02") + ".jsonl"
 	if _, err := os.Stat(filepath.Join(historyDir, fname)); err != nil {
 		t.Errorf("expected file %s to survive under the un-configured 90-day default, stat err = %v", fname, err)

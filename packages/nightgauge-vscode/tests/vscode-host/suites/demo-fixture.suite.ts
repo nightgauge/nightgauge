@@ -2,7 +2,10 @@
  * The demo workspace (`demo/workspace/`, #2107, ADR-026): does every dashboard
  * tab that reads local files render at least one populated row from it?
  *
- * The fixture is copied over the open workspace, the real Dashboard is opened,
+ * The suite runs first in the launcher's demo window, before the scenario
+ * plays: the fixture's per-clone data is only read from a git repository
+ * (ADR-024 § 7), and the main window's folder is not one. The fixture is
+ * copied over the open workspace, the real Dashboard is opened,
  * and each file-backed tab is selected the way the webview does it (a
  * `selectTab` message). The tab's panel markup is then read from the webview
  * HTML and must contain content only the demo files carry, so an empty-state

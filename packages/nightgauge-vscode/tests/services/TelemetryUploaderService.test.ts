@@ -26,6 +26,7 @@ import {
 import type { WatermarkValue } from "../../src/services/TelemetryUploaderService";
 import type { TelemetryStream } from "../../src/services/telemetry/types";
 import * as vscode from "vscode";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // ─── vscode mock ──────────────────────────────────────────────────────────────
 
@@ -226,7 +227,7 @@ function setupFs(
  * configured root a path falls under, so history and trace files in
  * different repo roots (e.g. the primary workspace root vs. a target repo)
  * can carry independent content and independent watermark stores, mirroring
- * how each repo root has its own `.nightgauge/pipeline/` directory on disk.
+ * how each repo root has its own pipeline state directory on disk.
  */
 function setupMultiRootFs(
   roots: Array<{
@@ -308,6 +309,9 @@ describe("TelemetryUploaderService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fetchMock = vi.mocked(fetch);
+    // Each repo root's pipeline dir resolves under its own git dir (#2037).
+    fakeCloneLayout("/workspace");
+    fakeCloneLayout("/target-repo");
   });
 
   // ── Test 1: Watermark advance ────────────────────────────────────────────

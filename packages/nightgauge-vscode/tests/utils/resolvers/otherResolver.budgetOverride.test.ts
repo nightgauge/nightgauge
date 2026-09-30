@@ -5,7 +5,7 @@
  * path #305 wired it onto.
  *
  * Resolving "Raise to $X & retry" runs `orchestrator.WriteBudgetCeilingOverride`,
- * which writes `.nightgauge/pipeline/budget-override.json`. Exactly one function
+ * which writes `budget-override.json` in the clone's pipeline directory. Exactly one function
  * in the tree read that file back: Go's `PipelineBudgetCeilingUSD`, as
  * `max(config, override)`. The extension resolved its ceiling through
  * `getPipelineCeilingConfig`, which read env vars and config.yaml only — so the
@@ -32,6 +32,8 @@ vi.mock("vscode", () => ({
 
 import { getPipelineCeilingConfig } from "../../../src/utils/resolvers/otherResolver";
 import { PipelineBudgetCeiling } from "../../../src/utils/pipelineBudgetCeiling";
+import { pipelineStateDir } from "../../../src/utils/cloneLayout";
+import { initGitRepo } from "../../helpers/cloneLayout";
 
 const ENV_KEYS = [
   "NIGHTGAUGE_PIPELINE_TOKEN_BUDGET_CEILING_ENABLED",
@@ -55,7 +57,7 @@ function writeConfiguredCeiling(ceilingUsd: number): void {
 
 /** Byte-for-byte what `WriteBudgetCeilingOverride` persists. */
 function writeRuntimeOverride(ceilingUsd: number): void {
-  const dir = path.join(root, ".nightgauge", "pipeline");
+  const dir = pipelineStateDir(root);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
     path.join(dir, "budget-override.json"),
@@ -81,7 +83,9 @@ function effectiveCeiling(): number {
 
 describe("getPipelineCeilingConfig honors the Action Center's runtime ceiling override (#305)", () => {
   beforeEach(() => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "ng-budget-override-"));
+    // A real repository: the override lives in the clone's git directory
+    // (ADR-024 § 7), and which repo it belongs to is git's answer.
+    root = initGitRepo(fs.mkdtempSync(path.join(os.tmpdir(), "ng-budget-override-")));
     for (const key of ENV_KEYS) delete process.env[key];
   });
 
@@ -143,7 +147,7 @@ describe("getPipelineCeilingConfig honors the Action Center's runtime ceiling ov
     // `Server.repoRoot(card.context.repo)` writing), which makes this test
     // expressible: the raise for A must move A and leave B alone.
     const repoA = root;
-    const repoB = fs.mkdtempSync(path.join(os.tmpdir(), "ng-budget-override-b-"));
+    const repoB = initGitRepo(fs.mkdtempSync(path.join(os.tmpdir(), "ng-budget-override-b-")));
     try {
       writeConfiguredCeiling(75); // repo A
       fs.mkdirSync(path.join(repoB, ".nightgauge"), { recursive: true });
@@ -181,7 +185,7 @@ describe("getPipelineCeilingConfig honors the Action Center's runtime ceiling ov
     writeConfiguredCeiling(75);
     expect(effectiveCeiling()).toBe(75); // missing
 
-    const file = path.join(root, ".nightgauge", "pipeline", "budget-override.json");
+    const file = path.join(pipelineStateDir(root), "budget-override.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
 
     fs.writeFileSync(file, "{ not json", "utf-8");

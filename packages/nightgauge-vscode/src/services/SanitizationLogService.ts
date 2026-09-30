@@ -14,7 +14,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { cloneLogsDir } from "../utils/cloneLayout";
+import { cloneLogsDir, isUsableWorkspaceRoot } from "../utils/cloneLayout";
 import type {
   SanitizationEvent,
   RawSanitizationLogEntry,
@@ -27,18 +27,8 @@ import type {
 } from "../views/dashboard/FirewallTypes";
 import { EMPTY_FIREWALL_AGGREGATES } from "../views/dashboard/FirewallTypes";
 
-/**
- * The watcher glob for `logFilePath`, relative to `workspaceRoot`. VS Code
- * glob patterns take forward slashes on every OS, so the native separator is
- * normalised (#2036). `pathImpl` is injectable to test the win32 case.
- */
-export function logWatchGlob(
-  workspaceRoot: string,
-  logFilePath: string,
-  pathImpl: Pick<typeof path, "relative" | "sep"> = path
-): string {
-  return pathImpl.relative(workspaceRoot, logFilePath).split(pathImpl.sep).join("/");
-}
+/** The sanitization log's file name inside the clone's logs directory. */
+const SANITIZATION_LOG_FILENAME = "sanitization.log";
 
 /**
  * SanitizationLogService manages reading and watching the sanitization log file.
@@ -72,14 +62,17 @@ export class SanitizationLogService implements vscode.Disposable {
   private events: SanitizationEvent[] = [];
   private watcher: vscode.FileSystemWatcher | null = null;
   private disposables: vscode.Disposable[] = [];
-  private logFilePath: string;
+  /** `<clone logs>/sanitization.log`; undefined outside a git repository. */
+  private readonly logFilePath: string | undefined;
   private isInitialized = false;
 
   private readonly _onEventsChanged = new vscode.EventEmitter<SanitizationEvent[]>();
   public readonly onEventsChanged = this._onEventsChanged.event;
 
-  constructor(private readonly workspaceRoot: string) {
-    this.logFilePath = path.join(cloneLogsDir(workspaceRoot), "sanitization.log");
+  constructor(workspaceRoot: string) {
+    this.logFilePath = isUsableWorkspaceRoot(workspaceRoot)
+      ? path.join(cloneLogsDir(workspaceRoot), SANITIZATION_LOG_FILENAME)
+      : undefined;
   }
 
   /**
@@ -104,7 +97,7 @@ export class SanitizationLogService implements vscode.Disposable {
    */
   async loadEvents(): Promise<SanitizationEvent[]> {
     try {
-      if (!fs.existsSync(this.logFilePath)) {
+      if (!this.logFilePath || !fs.existsSync(this.logFilePath)) {
         this.events = [];
         return this.events;
       }
@@ -228,12 +221,19 @@ export class SanitizationLogService implements vscode.Disposable {
    * Start watching the log file for changes
    */
   private startWatching(): void {
-    // Base stays the workspace root (it exists before the log dir does); the
-    // glob is the helper-resolved log path relative to it (#2036). #2037 must
-    // revisit this if the log dir leaves the working tree.
+    if (!this.logFilePath) return;
+    // The log lives in the clone's logs directory under the git directory,
+    // outside the workspace, so the watcher's base is that directory itself;
+    // it is created first because a watcher needs an existing base (#2037).
+    const logDir = path.dirname(this.logFilePath);
+    try {
+      fs.mkdirSync(logDir, { recursive: true, mode: 0o700 });
+    } catch {
+      // Unwritable git directory: nothing will be logged here to watch.
+    }
     const pattern = new vscode.RelativePattern(
-      this.workspaceRoot,
-      logWatchGlob(this.workspaceRoot, this.logFilePath)
+      vscode.Uri.file(logDir),
+      path.basename(this.logFilePath)
     );
 
     this.watcher = vscode.workspace.createFileSystemWatcher(pattern);
@@ -469,13 +469,13 @@ export class SanitizationLogService implements vscode.Disposable {
    * Check if the log file exists
    */
   logFileExists(): boolean {
-    return fs.existsSync(this.logFilePath);
+    return this.logFilePath !== undefined && fs.existsSync(this.logFilePath);
   }
 
   /**
    * Get the log file path
    */
-  getLogFilePath(): string {
+  getLogFilePath(): string | undefined {
     return this.logFilePath;
   }
 

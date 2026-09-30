@@ -5,11 +5,12 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
 func TestExportJoinsTraceRunRecordAndExitRecords(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := "01890a5d-ac96-774b-bcce-b302099a8057"
 
 	w := NewWriter(root, runID, "nightgauge/nightgauge", 179)
@@ -89,7 +90,7 @@ func TestExportJoinsTraceRunRecordAndExitRecords(t *testing.T) {
 }
 
 func TestExportWithoutJoinTargets(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	runID := "01890a5d-ac96-774b-bcce-b302099a8057"
 	w := NewWriter(root, runID, "o/r", 1)
 	w.Emit(KindStageStart, "issue-pickup", nil)
@@ -107,7 +108,7 @@ func TestExportWithoutJoinTargets(t *testing.T) {
 }
 
 func TestExportMissingTraceErrors(t *testing.T) {
-	if _, err := Export(t.TempDir(), "01890a5d-ac96-774b-bcce-b302099a8057"); err == nil {
+	if _, err := Export(layouttest.Repo(t), "01890a5d-ac96-774b-bcce-b302099a8057"); err == nil {
 		t.Fatal("Export on a run with no trace should error")
 	}
 }

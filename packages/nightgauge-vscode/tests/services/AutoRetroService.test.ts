@@ -17,6 +17,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
 vi.mock("node:fs/promises");
 
@@ -49,6 +50,7 @@ vi.mock("../../src/utils/configPathResolver", () => ({
 
 import { AutoRetroService } from "../../src/services/AutoRetroService";
 import { stageContextFileName } from "../../src/orchestrator/context/stageContextFiles";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 function createMockLogger() {
   return {
@@ -60,6 +62,8 @@ function createMockLogger() {
 }
 
 const WORKSPACE = "/test/workspace";
+/** Per-clone data lives under the clone's git directory (ADR-024 § 7). */
+const WS_LAYOUT = fakeCloneLayout(WORKSPACE);
 const ISSUE_NUMBER = 42;
 const FAILED_STAGE = "feature-dev";
 
@@ -69,6 +73,7 @@ describe("AutoRetroService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     logger = createMockLogger();
+    fakeCloneLayout(WORKSPACE);
 
     // Default: config file not found
     vi.mocked(fs.readFile).mockRejectedValue(
@@ -1648,7 +1653,7 @@ describe("AutoRetroService", () => {
       expect(result!.retroFile).toContain(String(ISSUE_NUMBER));
     });
 
-    it("retroFile is written under .nightgauge/retros/", async () => {
+    it("retroFile is written under the clone's retros directory", async () => {
       const result = await AutoRetroService.runAfterFailure(
         WORKSPACE,
         ISSUE_NUMBER,
@@ -1657,7 +1662,7 @@ describe("AutoRetroService", () => {
       );
 
       expect(result).not.toBeNull();
-      expect(result!.retroFile).toContain(".nightgauge/retros");
+      expect(path.dirname(result!.retroFile)).toBe(WS_LAYOUT.retros);
     });
   });
 
@@ -1795,7 +1800,7 @@ describe("AutoRetroService", () => {
     }
 
     const deliverablePath = (name: string) =>
-      `${WORKSPACE}/.nightgauge/pipeline/${name}-${ISSUE_NUMBER}.json`;
+      path.join(WS_LAYOUT.pipeline, `${name}-${ISSUE_NUMBER}.json`);
 
     it("resolves the deliverable filename for every pipeline stage", () => {
       for (const [stage, prefix] of STAGE_DELIVERABLE) {
@@ -1871,7 +1876,9 @@ describe("AutoRetroService", () => {
 
       await AutoRetroService.runAfterFailure(WORKSPACE, ISSUE_NUMBER, "pr-merge", logger as never);
 
-      expect(requested.some((p) => p.includes("/.nightgauge/pipeline/pr-merge-"))).toBe(false);
+      expect(requested.some((p) => p.startsWith(path.join(WS_LAYOUT.pipeline, "pr-merge-")))).toBe(
+        false
+      );
     });
   });
 
@@ -1900,9 +1907,18 @@ describe("AutoRetroService", () => {
   // ===========================================================================
 
   describe("#1178 — deliverable resolution in worktree mode", () => {
+    // Since ADR-024 § 7 a linked worktree of the workspace's own clone shares
+    // its pipeline directory, so the two roots only differ when the run's
+    // checkout belongs to another clone (a cross-repo run). That is the case
+    // modelled here: the deliverable root has its own git directory.
     const WORKTREE = `${WORKSPACE}/.worktrees/issue-${ISSUE_NUMBER}`;
-    const worktreeDeliverable = `${WORKTREE}/.nightgauge/pipeline/dev-${ISSUE_NUMBER}.json`;
-    const repoRootDeliverable = `${WORKSPACE}/.nightgauge/pipeline/dev-${ISSUE_NUMBER}.json`;
+    const WORKTREE_LAYOUT = fakeCloneLayout(WORKTREE);
+    const worktreeDeliverable = path.join(WORKTREE_LAYOUT.pipeline, `dev-${ISSUE_NUMBER}.json`);
+    const repoRootDeliverable = path.join(WS_LAYOUT.pipeline, `dev-${ISSUE_NUMBER}.json`);
+
+    beforeEach(() => {
+      fakeCloneLayout(WORKTREE);
+    });
 
     /**
      * The real worktree-mode layout: the repo root's `pipeline/` directory
@@ -2105,7 +2121,7 @@ describe("AutoRetroService", () => {
     // "budget-exceeded" — the exact defect.
     it("classifies from a blocking feedback[] signal and never reaches the keyword table", async () => {
       vi.mocked(fs.readFile).mockImplementation((async (target: unknown) => {
-        if (String(target) === `${WORKSPACE}/.nightgauge/pipeline/validate-${ISSUE_NUMBER}.json`) {
+        if (String(target) === path.join(WS_LAYOUT.pipeline, `validate-${ISSUE_NUMBER}.json`)) {
           return deliverableWithFeedback;
         }
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
@@ -2172,11 +2188,11 @@ describe("AutoRetroService", () => {
       ].join("\n");
 
       vi.mocked(fs.readdir).mockImplementation((async (target: unknown) => {
-        if (String(target) === `${WORKSPACE}/.nightgauge/logs`) return [logFileName];
+        if (String(target) === WS_LAYOUT.logs) return [logFileName];
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       }) as never);
       vi.mocked(fs.readFile).mockImplementation((async (target: unknown) => {
-        if (String(target) === `${WORKSPACE}/.nightgauge/logs/${logFileName}`) return sessionLog;
+        if (String(target) === path.join(WS_LAYOUT.logs, logFileName)) return sessionLog;
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       }) as never);
 

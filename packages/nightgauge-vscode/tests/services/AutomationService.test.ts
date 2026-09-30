@@ -16,7 +16,10 @@
  * 12. dispose — disposes EventEmitter without throwing
  */
 
+import * as os from "node:os";
+import * as path from "node:path";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 import { AutomationService } from "../../src/services/AutomationService";
 
 // ---------------------------------------------------------------------------
@@ -93,7 +96,7 @@ vi.mock("../../src/utils/configPathResolver", () => ({
 // ---------------------------------------------------------------------------
 
 const WORKSPACE_ROOT = "/workspace";
-const DEFAULT_LOG_PATH = `${WORKSPACE_ROOT}/.nightgauge/logs/automation.log`;
+let DEFAULT_LOG_PATH = "";
 
 function makeEntry(
   overrides: Partial<{
@@ -135,6 +138,7 @@ function makeMockPipelineStateService() {
 describe("AutomationService", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    DEFAULT_LOG_PATH = path.join(fakeCloneLayout(WORKSPACE_ROOT).logs, "automation.log");
     // Default: config does not exist → logPath falls back to default
     mockResolveConfigPath.mockResolvedValue({ exists: false });
     mockStat.mockRejectedValue(new Error("ENOENT"));
@@ -310,7 +314,7 @@ describe("AutomationService", () => {
   // initialize — default log path when config not found
   // -------------------------------------------------------------------------
 
-  it("initialize — uses default log path when config does not exist", async () => {
+  it("initialize — reads automation.log in the clone's logs directory", async () => {
     mockResolveConfigPath.mockResolvedValue({ exists: false });
     mockReadFile.mockResolvedValue("");
 
@@ -320,6 +324,15 @@ describe("AutomationService", () => {
     // After initialize, getLogEntries should use the default path
     await service.getLogEntries();
     expect(mockReadFile).toHaveBeenCalledWith(DEFAULT_LOG_PATH, "utf-8");
+  });
+
+  it("initialize — reads nothing outside a git repository (#2037)", async () => {
+    const notARepo = path.join(os.tmpdir(), `ng-automation-nogit-${process.pid}`);
+    const service = new AutomationService(makeMockPipelineStateService() as never, notARepo);
+    await service.initialize();
+
+    expect(await service.getLogEntries()).toEqual([]);
+    expect(mockReadFile).not.toHaveBeenCalled();
   });
 
   // -------------------------------------------------------------------------

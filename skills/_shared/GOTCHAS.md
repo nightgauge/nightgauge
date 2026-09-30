@@ -24,9 +24,9 @@
   `allowed-tools`, the skill runs headless — make autonomous decisions or fail
   with a clear error. A blocked prompt hangs the whole pipeline run.
 - **Write your handoff/context file before exiting — even on failure.** Pipeline
-  stages that exit without their `.nightgauge/pipeline/{stage}-{N}.json`
-  force the orchestrator onto a repo-blind deterministic fallback that may
-  misreport state (#3114). Do not rely on the fallback.
+  stages that exit without their `{stage}-{N}.json` in the clone's pipeline
+  state directory (`nightgauge layout path pipeline`) force the orchestrator
+  onto a repo-blind deterministic fallback that may misreport state (#3114). Do not rely on the fallback.
 - **An assertion that cannot go red is decoration.** A test that passes both
   before and after a fix constrains nothing — a regression test written for an
   SSH-push bug asserted "a push succeeds with no auth configured" and passed

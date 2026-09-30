@@ -152,7 +152,7 @@ Check for issue context from the current branch:
 ```bash
 BRANCH=$(git branch --show-current)
 ISSUE_NUMBER=$(printf '%s\n' "$BRANCH" | grep -oE '[0-9]+' | head -1)
-CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
 
 if [ -f "$CONTEXT_FILE" ]; then
   # Load acceptance criteria to help infer source files and content requirements

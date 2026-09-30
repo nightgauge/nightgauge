@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/state"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // #410. Two halves of the same fact — the in-flight sidecar carries a PID, and
@@ -31,7 +33,7 @@ import (
 // the other. A rename of `issue_number` or `pid` fails HERE rather than silently
 // disarming the reader's Go-scheduler arm.
 func TestCurrentRunSidecar_ProtectsItsIssueThroughTheStateReader(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := writeCurrentRunSidecar(root, CurrentRunSidecar{
 		RunID:       testRunID(),
 		IssueNumber: 771,
@@ -44,7 +46,7 @@ func TestCurrentRunSidecar_ProtectsItsIssueThroughTheStateReader(t *testing.T) {
 		t.Fatalf("write sidecar: %v", err)
 	}
 
-	res, err := state.ActiveIssuesFromSnapshots(state.PipelineStateDir(root))
+	res, err := state.ActiveIssuesForRoot(root)
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -61,7 +63,7 @@ func TestCurrentRunSidecar_ProtectsItsIssueThroughTheStateReader(t *testing.T) {
 // TypeScript side's index into that run — fabricated a terminal-failure
 // RunRecord for it, and paused the queue.
 func TestRecoverOrchestratorCrash_LiveRunIsLeftAlone(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	if err := writeCurrentRunSidecar(root, CurrentRunSidecar{
 		RunID:       testRunID(),
 		IssueNumber: 778,
@@ -86,13 +88,13 @@ func TestRecoverOrchestratorCrash_LiveRunIsLeftAlone(t *testing.T) {
 
 	out := captureLog(t, func() { s.recoverOrchestratorCrash() })
 
-	if _, err := os.Stat(filepath.Join(root, currentRunSidecarFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, root), currentRunSidecarFile)); err != nil {
 		t.Errorf("the live run's sidecar was removed (%v) — that file is the extension's index into the run", err)
 	}
 	if hasDailyJSONL(t, root) {
 		t.Error("a terminal-failure RunRecord was synthesized for a run that is still executing")
 	}
-	if _, err := os.Stat(filepath.Join(root, queueStateFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, root), queueStateFile)); !os.IsNotExist(err) {
 		t.Errorf("queue-state.json was rewritten during construction (stat err=%v) — the queue must not be paused on behalf of a live run", err)
 	}
 	if got := s.GetState(); len(got.Items) != 1 || got.Items[0].Status != "pending" {
@@ -107,7 +109,7 @@ func TestRecoverOrchestratorCrash_LiveRunIsLeftAlone(t *testing.T) {
 // disable recovery, which is the whole point of the sidecar. A pid that is gone —
 // the actual crash — still produces the terminal record, the pause and the unlink.
 func TestRecoverOrchestratorCrash_DeadPidStillSynthesizes(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	startedAt := time.Now().UTC().Add(-30 * time.Second)
 	if err := writeCurrentRunSidecar(root, CurrentRunSidecar{
 		RunID:       testRunID(),
@@ -134,7 +136,7 @@ func TestRecoverOrchestratorCrash_DeadPidStillSynthesizes(t *testing.T) {
 
 	s.recoverOrchestratorCrash()
 
-	if _, err := os.Stat(filepath.Join(root, currentRunSidecarFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, root), currentRunSidecarFile)); !os.IsNotExist(err) {
 		t.Errorf("a crashed run's sidecar must be reconciled away, stat err=%v", err)
 	}
 	records := readDailyJSONLRecords(t, root)

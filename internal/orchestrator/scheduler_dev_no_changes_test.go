@@ -219,12 +219,13 @@ func TestHasUncommittedWork_IgnoresBookkeeping(t *testing.T) {
 		t.Fatalf("clean repo reported uncommitted work")
 	}
 
-	// Pipeline exhaust only — deliberately NOT gitignored, as in a consumer
-	// repo (and as `.nightgauge/attention/` already is in this one).
-	if err := os.MkdirAll(filepath.Join(repo, ".nightgauge", "pipeline"), 0o755); err != nil {
+	// In-tree bookkeeping only — deliberately NOT gitignored, as in a
+	// consumer repo. (Pipeline state lives under the git directory since
+	// ADR-024 § 7; the attention cards still live in the tree.)
+	if err := os.MkdirAll(filepath.Join(repo, ".nightgauge", "attention"), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repo, ".nightgauge", "pipeline", "dev-202.json"), []byte("{}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(repo, ".nightgauge", "attention", "card-202.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 	if hasUncommittedWork(repo) {

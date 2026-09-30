@@ -1,8 +1,9 @@
 /**
  * Context File Tool Handlers
  *
- * Server-side handlers for reading and listing pipeline context files
- * in `.nightgauge/pipeline/`. These handlers execute when Claude's
+ * Server-side handlers for reading and listing pipeline context files in
+ * the pipeline class directory of `cwd`'s repository
+ * (`<git-common-dir>/nightgauge/pipeline`, `nightgauge layout path pipeline`). These handlers execute when Claude's
  * Python code invokes `read_context_file` or `list_context_files` via PTC.
  *
  * @see Issue #1070 - Optimize context file and git batch operations
@@ -10,10 +11,22 @@
  */
 
 import { readFileSync, readdirSync, statSync } from "fs";
-import { join, resolve } from "path";
+import { join, resolve, sep } from "path";
+import { cloneClassDir } from "../context/cloneLayout.js";
 import type { ToolHandler, ToolResult } from "./tool-handlers.js";
 
-const PIPELINE_DIR = ".nightgauge/pipeline";
+/**
+ * The pipeline directory of `cwd`'s repository, or a failed tool result when
+ * `cwd` is not in a git repository.
+ */
+function pipelineDirOf(cwd: string): { dir: string } | { failure: ToolResult } {
+  try {
+    return { dir: cloneClassDir("pipeline", cwd) };
+  } catch (err: unknown) {
+    const error = err instanceof Error ? err.message : String(err);
+    return { failure: { success: false, output: { success: false, error } } };
+  }
+}
 
 /** Handler for `read_context_file` tool */
 export class ReadContextFileHandler implements ToolHandler {
@@ -31,10 +44,13 @@ export class ReadContextFileHandler implements ToolHandler {
       };
     }
 
+    const resolved = pipelineDirOf(cwd);
+    if ("failure" in resolved) return resolved.failure;
+    const pipelineDir = resolved.dir;
+
     // Prevent path traversal
-    const pipelineDir = resolve(cwd, PIPELINE_DIR);
     const filePath = resolve(pipelineDir, filename);
-    if (!filePath.startsWith(pipelineDir)) {
+    if (!filePath.startsWith(pipelineDir + sep)) {
       return {
         success: false,
         output: {
@@ -85,7 +101,9 @@ export class ListContextFilesHandler implements ToolHandler {
   async execute(input: Record<string, unknown>, cwd: string): Promise<ToolResult> {
     const pattern = typeof input.pattern === "string" ? input.pattern : undefined;
 
-    const pipelineDir = resolve(cwd, PIPELINE_DIR);
+    const resolved = pipelineDirOf(cwd);
+    if ("failure" in resolved) return resolved.failure;
+    const pipelineDir = resolved.dir;
 
     let entries: string[];
     try {

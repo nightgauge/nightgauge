@@ -24,7 +24,7 @@ sequenceDiagram
     participant User
     participant Ext as VSCode Extension
     participant CLI as Claude CLI
-    participant FS as .nightgauge/pipeline/
+    participant FS as Pipeline state dir
     participant PSS as PipelineStateService
     participant Tree as TreeProvider
     participant Out as OutputWindow
@@ -57,8 +57,11 @@ sequenceDiagram
 
 ### Context File Lifecycle
 
+Both directories are per-clone and live in the git directory
+(`nightgauge layout path pipeline`, `nightgauge layout path plans`).
+
 ```
-.nightgauge/
+<git-common-dir>/nightgauge/
 ├── pipeline/
 │   ├── issue-{N}.json            # Output of issue-pickup
 │   ├── planning-{N}.json         # Output of feature-planning
@@ -83,7 +86,7 @@ to state changes.
 flowchart TD
     subgraph Sources["Event Sources"]
         CLI["Claude CLI<br/>(stream-json output)"]
-        FS["File System<br/>(.nightgauge/pipeline/*.json)"]
+        FS["File System<br/>(pipeline state dir *.json)"]
         CMD["User Commands<br/>(run/stop/retry)"]
     end
 

@@ -123,7 +123,7 @@ const outcomeNotApplicable = "not_applicable"
 // This type is the fix for the round-2 security finding, and its existence is
 // the point: before it, `costUsd` and `ceilingUsd` were params. A card's option
 // args are executed verbatim by Server.ExecuteVerb on resolve, and
-// `budget.raiseCeiling` writes .nightgauge/pipeline/budget-override.json, which
+// `budget.raiseCeiling` writes .git/nightgauge/pipeline/budget-override.json, which
 // orchestrator.PipelineBudgetCeilingUSD takes as max(config, override) — a
 // workspace-global spend control. Accepting either number over the socket (#263
 // — reachable by any local process, including a pipeline agent's Bash, which is
@@ -286,7 +286,7 @@ func (s *Server) isConfiguredRepo(repo string) bool {
 //
 // Two sources, checked in order: the live RuntimeState the extension path
 // accumulates through `pipeline.notifyStageTransition`, and the same runtime
-// persisted to the run's own repo `.nightgauge/pipeline` dir. Both go through
+// persisted to the run's own repo `.git/nightgauge/pipeline` dir. Both go through
 // the identical predicate, because the persisted file is written from the same
 // runtime.
 func (s *Server) recordedRunSpendUSD(repo string, issue int) (float64, bool) {

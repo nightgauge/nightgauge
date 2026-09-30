@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // #240 shipped a complete, well-formed dev context whose files_changed was an
@@ -19,7 +21,7 @@ func TestFeatureDevGate_SchemaMismatchIsNotReportedAsInvalidJSON(t *testing.T) {
   "files_changed": ["internal/e2e/e2e.go", "internal/e2e/e2e_test.go"],
   "build_verification": {"ran": true, "status": "passed"}
 }`
-	writeFile(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(42)), body)
+	writeFile(t, filepath.Join(layouttest.PipelineDir(t, ws), devContextName(42)), body)
 
 	gate, ok := LookupByStageName("feature-dev")
 	if !ok {
@@ -61,7 +63,7 @@ func TestFeatureDevGate_SchemaMismatchIsNotReportedAsInvalidJSON(t *testing.T) {
 // causes and the distinction is the whole point.
 func TestFeatureDevGate_TruncatedContextIsStillInvalidJSON(t *testing.T) {
 	ws := gitRepo(t)
-	writeFile(t, filepath.Join(ws, ".nightgauge", "pipeline", devContextName(42)),
+	writeFile(t, filepath.Join(layouttest.PipelineDir(t, ws), devContextName(42)),
 		`{"schema_version": "1.8", "files_changed": {"created": ["a.go"`)
 
 	gate, ok := LookupByStageName("feature-dev")

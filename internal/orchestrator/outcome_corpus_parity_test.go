@@ -1,6 +1,6 @@
 // Corpus parity between the two writers (#304).
 //
-// The learning corpus (.nightgauge/pipeline/history/outcomes.jsonl) is read by
+// The learning corpus (history/outcomes.jsonl in the pipeline state directory) is read by
 // one set of consumers that cannot tell which path produced a row: the
 // calibration / cost / reliability loop verdicts and `nightgauge learn tune`.
 // So the two writers — Scheduler.recordOutcome here, and the Go side of
@@ -23,6 +23,8 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // TestRecordOutcome_UsesPreMergeLinesCapturedAtPRCreate pins the autonomous
@@ -79,7 +81,7 @@ func TestRecordOutcome_UsesPreMergeLinesCapturedAtPRCreate(t *testing.T) {
 
 func readCorpus(t *testing.T, root string) []learning.Outcome {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(root, ".nightgauge", "pipeline", "history", "outcomes.jsonl"))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, root), "history", "outcomes.jsonl"))
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -106,8 +108,8 @@ func readCorpus(t *testing.T, root string) []learning.Outcome {
 // #215/#232 already scope per-repo) described runs the corpus beside it never
 // saw.
 func TestRecordOutcome_LandsInTheRunsTargetRepo(t *testing.T) {
-	launchRoot := t.TempDir()
-	targetRepoRoot := t.TempDir()
+	launchRoot := layouttest.Repo(t)
+	targetRepoRoot := layouttest.Repo(t)
 
 	s := &Scheduler{recordOutcomes: true}
 	item := types.BoardItem{Number: 77, Repo: "acme/widget", Size: types.SizeM}
@@ -181,7 +183,7 @@ func TestRecordOutcome_SizePresenceFollowsTheRoutersResolutionOrder(t *testing.T
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := layouttest.Repo(t)
 			s := &Scheduler{recordOutcomes: true}
 			item := types.BoardItem{Number: 79, Repo: "acme/widget", Size: tc.size, Labels: tc.labels}
 			snap := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID()).Snapshot()
@@ -243,7 +245,7 @@ func TestRecordOutcome_ModelPairIsMeasuredNotCopied(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
+			root := layouttest.Repo(t)
 			s := &Scheduler{recordOutcomes: true}
 			item := types.BoardItem{Number: 80, Repo: "acme/widget"}
 			rs := state.NewRuntimeState(item.Repo, item.Number, "item-id", testRunID())
@@ -272,8 +274,8 @@ func TestRecordOutcome_ModelPairIsMeasuredNotCopied(t *testing.T) {
 // pickup_recommendation.dev_model used to yield "sonnet", which reached the
 // corpus indistinguishable from a router that genuinely chose sonnet.
 func TestLoadIssueContext_DoesNotFabricateAPrediction(t *testing.T) {
-	root := t.TempDir()
-	dir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := layouttest.Repo(t)
+	dir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

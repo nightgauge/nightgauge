@@ -520,13 +520,13 @@ Every kind above is retryable by the autonomous scheduler's graph reconcile —
 that is what recovers a crashed run — with two groups of exceptions: the two
 kinds that halt on purpose and say so, and the three parked kinds (#1631):
 
-| Kind                             | Held for                                             | Released by                                                                                         |
-| -------------------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `architecture_approval_required` | A human approving a high-impact decision             | The approval label (`approved:architecture` by default) or `.nightgauge/pipeline/approval-<n>.json` |
-| `not_pipeline_actionable`        | A human doing the thing the pipeline cannot          | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                   |
-| `context_window_exceeded`        | A larger context, another model, or a split          | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
-| `adapter_permission_rejected`    | A changed `ask` rule or issue text                   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
-| `adapter_incompatible`           | A binary at or above the floor, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause |
+| Kind                             | Held for                                             | Released by                                                                                                    |
+| -------------------------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `architecture_approval_required` | A human approving a high-impact decision             | The approval label (`approved:architecture` by default) or `approval-<n>.json` in the pipeline state directory |
+| `not_pipeline_actionable`        | A human doing the thing the pipeline cannot          | An explicit `autonomous resume` (fleet or repo), or clearing the issue's failures                              |
+| `context_window_exceeded`        | A larger context, another model, or a split          | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `adapter_permission_rejected`    | A changed `ask` rule or issue text                   | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
+| `adapter_incompatible`           | A binary at or above the floor, installed and pinned | `nightgauge autonomous clear-failures <owner/repo#N>`; a resume only releases it by lifting a pause            |
 
 The scheduler records the kind on the `failed` entry (`FailedItem.Kind`) and
 derives the hold from it via `HoldForTerminalKind`, so retryability has one
@@ -1248,7 +1248,7 @@ stage, nothing more.
 The categories above (`infrastructure`, `agent`, `organic`) feed weighted
 reliability scoring. A separate, finer-grained taxonomy is emitted by
 `AutoRetroService.classifyFailure()` and written to `*_retro.json` files
-under `.nightgauge/retros/`. These categories drive the retro
+in the clone's retros directory (`nightgauge layout path retros`). These categories drive the retro
 dashboard view, auto-issue creation, and recommendations surfaced to
 operators.
 

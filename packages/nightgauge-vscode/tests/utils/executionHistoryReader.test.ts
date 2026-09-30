@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import { ExecutionHistoryReader } from "../../src/utils/executionHistoryReader";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mock node:fs/promises
 vi.mock("node:fs/promises");
@@ -18,6 +19,7 @@ describe("ExecutionHistoryReader", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeCloneLayout(workspaceRoot);
     ExecutionHistoryReader.clearCache();
     // Default fs.stat mock — returns a stable mtime/size per path with a
     // random seed so each test starts from a clean cache state. Tests that

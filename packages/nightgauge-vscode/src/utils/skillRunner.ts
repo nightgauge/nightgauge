@@ -5285,9 +5285,7 @@ function runStageSkillHeadlessImpl(
   if (adapter === "opencode" && runId) {
     try {
       const dir = path.join(
-        workspaceRoot,
-        ".nightgauge",
-        "pipeline",
+        pipelineStateDir(workspaceRoot),
         "opencode-events",
         `${stage}-${issueNumber ?? "no-issue"}-${Date.now()}-${process.pid}`
       );

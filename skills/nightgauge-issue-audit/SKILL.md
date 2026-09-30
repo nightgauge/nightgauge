@@ -35,11 +35,11 @@ encodes the orchestration; the doc encodes the spec.
 
 ## Outcomes
 
-- Markdown finding report at
-  `.nightgauge/pipeline/issue-audit-<timestamp>.md`
-- JSON findings at `.nightgauge/pipeline/issue-audit-<timestamp>.json`
-- JSONL audit trail at
-  `.nightgauge/pipeline/issue-audit-<timestamp>.audit.jsonl`
+- Markdown finding report `issue-audit-<timestamp>.md`, JSON findings
+  `issue-audit-<timestamp>.json` and JSONL audit trail
+  `issue-audit-<timestamp>.audit.jsonl`, all in the clone's pipeline state
+  directory (`nightgauge layout path pipeline`), written through
+  `nightgauge layout write|append pipeline`
 - Exit 0 (READY) when no CRITICAL findings remain; exit 1 (NEEDS FIXES) when
   any CRITICAL persists; exit 2 on skill-level failure
 - Auto-repair via `--fix` for safe categories (board, fields, links,
@@ -128,8 +128,9 @@ manifest as the source of truth.
 
 ```bash
 TS=$(date -u +%Y%m%dT%H%M%SZ)
-REPORT_DIR=".nightgauge/pipeline"
-mkdir -p "$REPORT_DIR"
+# Read-only paths for display; every write goes through
+# `nightgauge layout write|append pipeline <name>`.
+REPORT_DIR="$(nightgauge layout path pipeline)"
 REPORT_MD="$REPORT_DIR/issue-audit-${TS}.md"
 REPORT_JSON="$REPORT_DIR/issue-audit-${TS}.json"
 TRAIL_JSONL="$REPORT_DIR/issue-audit-${TS}.audit.jsonl"
@@ -515,7 +516,8 @@ primitive (see `docs/ISSUE_AUDIT.md` repair-primitive table). Each repair
 appends one JSON line to the audit trail:
 
 ```bash
-echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","issue":"'$ISSUE'","finding":"'$TYPE'","action":"'$ACTION'","before":'$BEFORE',"after":'$AFTER',"actor":"nightgauge-issue-audit"}' >> "$TRAIL_JSONL"
+echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","issue":"'$ISSUE'","finding":"'$TYPE'","action":"'$ACTION'","before":'$BEFORE',"after":'$AFTER',"actor":"nightgauge-issue-audit"}' \
+  | nightgauge layout append pipeline "issue-audit-${TS}.audit.jsonl" >/dev/null
 ```
 
 #### Hard rules (encoded; pinned by negative test fixture)
@@ -572,9 +574,11 @@ jq -n \
   --arg completed "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   '{schema_version:"1.0",verdict:$verdict,summary:$summary,
     audited:$audited,findings:$findings,
-    started_at:$started,completed_at:$completed}' > "$REPORT_JSON"
+    started_at:$started,completed_at:$completed}' \
+  | nightgauge layout write pipeline "issue-audit-${TS}.json" >/dev/null
 
-# Markdown — written line-by-line (omitted here for brevity)
+# Markdown — assembled line-by-line, then piped into
+# `nightgauge layout write pipeline "issue-audit-${TS}.md"` (omitted for brevity)
 # ...
 
 # stdout: verdict line and report paths

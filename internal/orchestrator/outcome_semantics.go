@@ -12,7 +12,7 @@ import (
 )
 
 // Corpus semantics for the learning/calibration outcome corpus
-// (`<targetRepoRoot>/.nightgauge/pipeline/history/outcomes.jsonl`), shared by
+// (`<targetRepoRoot>/.git/nightgauge/pipeline/history/outcomes.jsonl`), shared by
 // its TWO writers — Scheduler.recordOutcome on the autonomous path and the
 // `pipeline.notifyComplete` handler in internal/ipc on the extension path.
 //

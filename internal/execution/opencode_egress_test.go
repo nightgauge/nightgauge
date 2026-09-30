@@ -19,8 +19,8 @@ package execution
 // The fixture extends openCodeGitWorktree with a local bare remote (so any
 // git push/fetch OpenCode's tools attempt stays on local disk and never
 // reaches a forge) and a pre-seeded context file at
-// .nightgauge/pipeline/issue-9999.json inside the worktree (docs/CONTEXT_ARCHITECTURE.md's
-// issue-{N}.json schema), so the stage needs no `gh` call and no GitHub
+// issue-9999.json in the worktree's pipeline state directory, under its git
+// directory (ADR-024 § 7; docs/CONTEXT_ARCHITECTURE.md's issue-{N}.json schema), so the stage needs no `gh` call and no GitHub
 // credentials to have a context to read.
 //
 // AC3 (fake cloud keys produce no cloud-provider connection attempt) is
@@ -51,6 +51,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // openCodeEgressContextFixture is a minimal, schema-valid issue-9999.json
@@ -75,7 +76,7 @@ const openCodeEgressContextFixture = `{
 // against: an issue-9999 worktree cloned from a local bare remote (so any
 // git push/fetch the stage's tools attempt stays on local disk), with the
 // stub script's edit target (calc.py) committed and a pre-seeded context
-// file written into the worktree's own .nightgauge/pipeline/ directory. It
+// file written into the worktree's own pipeline state directory. It
 // returns the workspace root RunStage needs and the worktree's own path (for
 // assertions, if any are ever added).
 func openCodeEgressWorktree(t *testing.T) (workspace, worktree string) {
@@ -99,10 +100,7 @@ func openCodeEgressWorktree(t *testing.T) (workspace, worktree string) {
 	gittest.Run(t, parent, "clone", "-q", origin, "nightgauge-issue-9999")
 	worktree = filepath.Join(parent, "nightgauge-issue-9999")
 
-	pipelineDir := filepath.Join(worktree, ".nightgauge", "pipeline")
-	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	pipelineDir := layouttest.MkPipelineDir(t, worktree)
 	contextPath := filepath.Join(pipelineDir, "issue-9999.json")
 	if err := os.WriteFile(contextPath, []byte(openCodeEgressContextFixture), 0o644); err != nil {
 		t.Fatal(err)
@@ -130,7 +128,7 @@ func TestOpenCodeEgressCheck(t *testing.T) {
 	writeOpenCodeMachineConfig(t, strings.Replace(openCodeMachineConfig, "http://127.0.0.1:1234/v1", base, 1))
 
 	workspace, worktree := openCodeEgressWorktree(t)
-	contextFile := filepath.Join(worktree, ".nightgauge", "pipeline", "issue-9999.json")
+	contextFile := filepath.Join(layouttest.PipelineDir(t, worktree), "issue-9999.json")
 
 	opts := openCodeStageOptions(openCodeCanaryModel, nil)
 	opts.IssueNumber = 9999

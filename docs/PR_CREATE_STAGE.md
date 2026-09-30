@@ -17,8 +17,9 @@ The `pr-create` pipeline stage runs in one of two modes:
    deterministic runner punts (sparse context, spike, batch, security or
    scope concern, push failure, …).
 
-The skill's downstream contract is unchanged: it writes
-`.nightgauge/pipeline/pr-{N}.json` with the same schema today's skill
+The skill's downstream contract is unchanged: it writes `pr-{N}.json` to the
+clone's pipeline state directory (`nightgauge layout path pipeline`) with the
+same schema today's skill
 emits. The deterministic runner produces a superset-compatible payload —
 `preflight_results` and `ci_monitoring` are populated with conservative
 zero-values that downstream consumers (the pr-merge deterministic runner from
@@ -252,13 +253,15 @@ release.
 
 ### Context resolution (worktree mode) — #275
 
-The runner reads its snapshot from
-`<workdir>/.nightgauge/pipeline/{issue,dev,validate,planning}-{N}.json`. On
-worktree-isolated runs (`pipeline.worktree_base` set — the autonomous/`nightgauge
-run` default), the stages write those files **only** into the run's worktree
-(`.worktrees/issue-{N}/.nightgauge/pipeline/`); they are gitignored per-worktree
-local state and never appear in the canonical repo root. The scheduler therefore
-hands the runner the **worktree** path via `stageWorkspace(runtime,
+The runner reads its snapshot, `{issue,dev,validate,planning}-{N}.json`, from
+the pipeline state directory resolved for `<workdir>`:
+`<git-common-dir>/nightgauge/pipeline/`
+([ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
+On worktree-isolated runs (`pipeline.worktree_base` set — the
+autonomous/`nightgauge run` default), the run's worktree resolves to the main
+clone's directory, so the stages and the runner see the same files whichever
+checkout they start from; nothing is written into either working tree. The
+scheduler hands the runner the **worktree** path via `stageWorkspace(runtime,
 workspaceRoot)` — the same resolution the LLM path and the post-condition gates
 use — not the bare `workspaceRoot`.
 

@@ -23,7 +23,7 @@ func TestComposeFeatureDevStepPromptSkipsRepeatedPhases(t *testing.T) {
 		{1, 1, true, false, false},
 	}
 	for _, c := range cases {
-		got := composeFeatureDevStepPrompt("BASE", 3, c.k, c.total, c.last, "do the step", "")
+		got := composeFeatureDevStepPrompt("BASE", "3-plan.md", 3, c.k, c.total, c.last, "do the step", "")
 		if strings.Contains(got, skipSetup) != c.wantSkip {
 			t.Errorf("step %d/%d: skip-setup line present = %v, want %v", c.k, c.total, !c.wantSkip, c.wantSkip)
 		}
@@ -32,6 +32,22 @@ func TestComposeFeatureDevStepPromptSkipsRepeatedPhases(t *testing.T) {
 		}
 		if !strings.HasPrefix(got, "BASE") {
 			t.Errorf("step %d/%d: the stable prefix must come first", c.k, c.total)
+		}
+	}
+}
+
+// TestComposeFeatureDevStepPromptChecksTheBoxThroughLayout: the plan lives
+// under the git directory (ADR-024 § 7), so the session is told to read it at
+// `nightgauge layout path` and write it back through `nightgauge layout write`,
+// never to edit it by path.
+func TestComposeFeatureDevStepPromptChecksTheBoxThroughLayout(t *testing.T) {
+	got := composeFeatureDevStepPrompt("BASE", "3-plan.md", 3, 1, 2, false, "do the step", "")
+	for _, want := range []string{
+		"`$(nightgauge layout path plans 3-plan.md)`",
+		"`nightgauge layout write plans 3-plan.md`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("step prompt lacks %s:\n%s", want, got)
 		}
 	}
 }

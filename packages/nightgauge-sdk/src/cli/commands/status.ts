@@ -9,6 +9,7 @@
  * - Plan file location
  */
 
+import { cloneClassDir } from "../../context/cloneLayout.js";
 import type { CAC } from "cac";
 import * as fs from "fs/promises";
 import * as path from "path";
@@ -93,8 +94,11 @@ export function registerStatusCommand(cli: CAC, config: CLIConfig): void {
     .command("status <issue>", "Check pipeline status for an issue")
     .option("--format <format>", "Output format (text, json)")
     .option("--log-level <level>", "Log level (debug, info, warn, error)")
-    .option("--context-path <path>", "Path to context files")
-    .option("--plans-path <path>", "Path to plan files")
+    .option(
+      "--context-path <path>",
+      "Path to context files (default: `nightgauge layout path pipeline`)"
+    )
+    .option("--plans-path <path>", "Path to plan files (default: `nightgauge layout path plans`)")
     .action(async (issueArg: string, options: StatusOptions) => {
       // Validate issue number
       const issueNumber = parseInt(issueArg, 10);
@@ -105,12 +109,13 @@ export function registerStatusCommand(cli: CAC, config: CLIConfig): void {
 
       const outputFormat = (options.format as CLIConfig["outputFormat"]) ?? config.outputFormat;
       const logLevel = (options.logLevel as CLIConfig["logLevel"]) ?? config.logLevel;
-      const contextPath = options.contextPath ?? ".nightgauge/pipeline";
-      const plansPath = options.plansPath ?? ".nightgauge/plans";
-
       const formatter = new OutputFormatter(outputFormat, logLevel);
 
       try {
+        // Defaults: the working directory's per-clone class directories
+        // (ADR-024 § 7); outside a git repository this fails.
+        const contextPath = options.contextPath ?? cloneClassDir("pipeline");
+        const plansPath = options.plansPath ?? cloneClassDir("plans");
         const contextFiles = await findContextFiles(issueNumber, contextPath);
         const planFile = await findPlanFile(issueNumber, plansPath);
         const currentStage = inferCurrentStage(contextFiles);

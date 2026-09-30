@@ -7,11 +7,16 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func writeEvents(t *testing.T, root string, events []Event) {
 	t.Helper()
-	p := Path(root)
+	p, err := Path(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +34,7 @@ func writeEvents(t *testing.T, root string, events []Event) {
 }
 
 func TestWriteLogMarkdown(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	now := time.Now().UTC()
 	day1 := now.Add(-48 * time.Hour).Format(time.RFC3339)
 	day2 := now.Add(-24 * time.Hour).Format(time.RFC3339)
@@ -89,7 +94,7 @@ func TestWriteLogMarkdown(t *testing.T) {
 }
 
 func TestWriteLogMarkdown_DeduplicatesWithinADay(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	ts := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339)
 	writeEvents(t, root, []Event{
 		{Timestamp: ts, Type: EventWrite, Path: ".nightgauge/knowledge/features/1-a/decisions.md"},
@@ -110,7 +115,7 @@ func TestWriteLogMarkdown_DeduplicatesWithinADay(t *testing.T) {
 }
 
 func TestWriteLogMarkdown_NoEventStreamIsAnErrorNotAPanic(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	// The index generator ignores this error on purpose: log.md renders data
 	// that is already queryable elsewhere, so it must never fail the index the
 	// pipeline depends on.
@@ -120,7 +125,7 @@ func TestWriteLogMarkdown_NoEventStreamIsAnErrorNotAPanic(t *testing.T) {
 }
 
 func TestWriteLogMarkdown_EmptyEventStreamRendersAnEmptyLog(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeEvents(t, root, nil)
 
 	out := filepath.Join(root, "log.md")

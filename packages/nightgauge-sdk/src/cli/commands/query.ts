@@ -11,6 +11,7 @@
  * @see docs/QUERY_LANGUAGE.md for query syntax
  */
 
+import { cloneClassDir } from "../../context/cloneLayout.js";
 import type { CAC } from "cac";
 import * as fs from "fs";
 import * as path from "path";
@@ -267,15 +268,16 @@ async function fetchIssues(workingDir: string): Promise<QueryableIssue[]> {
   // by the VSCode extension's ProjectBoardService
 
   // Try to read from a cache file if it exists
-  const cachePath = path.join(workingDir, ".nightgauge", "pipeline", "project-items.json");
-  if (fs.existsSync(cachePath)) {
-    try {
+  // (the pipeline class directory of workingDir's repository; none outside one)
+  try {
+    const cachePath = path.join(cloneClassDir("pipeline", workingDir), "project-items.json");
+    if (fs.existsSync(cachePath)) {
       const content = fs.readFileSync(cachePath, "utf-8");
       const data = JSON.parse(content);
       return data.items ?? [];
-    } catch {
-      // Ignore cache errors
     }
+  } catch {
+    // Ignore cache errors
   }
 
   return [];

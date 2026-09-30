@@ -8,7 +8,7 @@
  * @see Issue #1621 - Git worktree-based concurrent pipeline execution
  */
 
-import { pipelineStateDir } from "../utils/cloneLayout";
+import { isUsableWorkspaceRoot, pipelineStateDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -2312,7 +2312,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // value the failure-comment + cwd paths use at lines ~978/1007) so the read
     // lands on the file Go actually wrote. Fall back to this.repoRoot.
     const root = slot.worktreeManager?.getRepoRoot() || this.repoRoot;
-    if (!root) return false;
+    if (!isUsableWorkspaceRoot(root)) return false;
 
     const dir = path.join(pipelineStateDir(root), "exit-records");
     const dayFiles = this.recentExitRecordDayFiles();

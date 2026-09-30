@@ -490,31 +490,31 @@ func TestSidecarPIDs_AClaimCountsOnlyWhileTheSidecarIsMakingProgress(t *testing.
 		},
 		{
 			name:      "run sidecar entered its stage an hour ago",
-			path:      ".nightgauge/pipeline/current-run.json",
+			path:      "pipeline/current-run.json",
 			body:      fmt.Sprintf(`{"issue_number":341,"pid":4001,"started_at":%q,"stage_started_at":%q}`, stamp(300*time.Hour), stamp(time.Hour)),
 			wantClaim: true,
 		},
 		{
 			name:      "run sidecar stuck in one stage for 31h",
-			path:      ".nightgauge/pipeline/current-run.json",
+			path:      "pipeline/current-run.json",
 			body:      fmt.Sprintf(`{"issue_number":341,"pid":4001,"started_at":%q,"stage_started_at":%q}`, stamp(40*time.Hour), stamp(31*time.Hour)),
 			wantClaim: false,
 		},
 		{
 			name:      "run sidecar with no stage stamp yet, just started",
-			path:      ".nightgauge/pipeline/current-run.json",
+			path:      "pipeline/current-run.json",
 			body:      fmt.Sprintf(`{"issue_number":341,"pid":4001,"started_at":%q}`, stamp(time.Minute)),
 			wantClaim: true,
 		},
 		{
 			name:      "run-state updated minutes ago",
-			path:      ".nightgauge/pipeline/run-state.json",
+			path:      "pipeline/run-state.json",
 			body:      fmt.Sprintf(`{"schema_version":"1.0","issue_number":341,"created_at":%q,"updated_at":%q,"attempts":[{"run_id":"a","pid":4001}]}`, stamp(300*time.Hour), stamp(9*time.Minute)),
 			wantClaim: true,
 		},
 		{
 			name:      "run-state untouched for 31h",
-			path:      ".nightgauge/pipeline/run-state.json",
+			path:      "pipeline/run-state.json",
 			body:      fmt.Sprintf(`{"schema_version":"1.0","issue_number":341,"created_at":%q,"updated_at":%q,"attempts":[{"run_id":"a","pid":4001}]}`, stamp(31*time.Hour), stamp(31*time.Hour)),
 			wantClaim: false,
 		},
@@ -522,7 +522,12 @@ func TestSidecarPIDs_AClaimCountsOnlyWhileTheSidecarIsMakingProgress(t *testing.
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newLeakRepo(t)
-			r.write(tt.path, tt.body)
+			// "pipeline/<name>" is the clone's pipeline state directory.
+			if name, ok := strings.CutPrefix(tt.path, "pipeline/"); ok {
+				r.writePipeline(name, tt.body)
+			} else {
+				r.write(tt.path, tt.body)
+			}
 
 			claimed := sidecarPIDs(r.dir, scanClock)
 
@@ -696,9 +701,9 @@ func TestSidecarPIDs_ReadsEverySidecarThatCarriesAPID(t *testing.T) {
 	r := newLeakRepo(t)
 	r.write(".nightgauge/autonomous/state.json", fmt.Sprintf(
 		`{"status":"running","pid":4001,"startedAt":%q,"lastScanAt":%q}`, stamp(time.Hour), stamp(time.Minute)))
-	r.write(".nightgauge/pipeline/current-run.json", fmt.Sprintf(
+	r.writePipeline("current-run.json", fmt.Sprintf(
 		`{"issue_number":341,"pid":4002,"started_at":%q,"stage_started_at":%q}`, stamp(time.Hour), stamp(time.Minute)))
-	r.write(".nightgauge/pipeline/run-state.json", fmt.Sprintf(
+	r.writePipeline("run-state.json", fmt.Sprintf(
 		`{"schema_version":"1.0","issue_number":341,"created_at":%q,"updated_at":%q,"attempts":[{"run_id":"a","pid":4003},{"run_id":"b","pid":4004}]}`,
 		stamp(time.Hour), stamp(time.Minute)))
 	writeServeSidecar(t, r.dir, 4005, 300*time.Hour, time.Minute)
@@ -717,7 +722,7 @@ func TestSidecarPIDs_AnUnreadableSidecarNarrowsNothingAndBreaksNothing(t *testin
 	// UNOWNED, which fails toward REPORTING — safe only because this carrier
 	// never acts. What it must NOT do is lose the sidecars it CAN read.
 	r := newLeakRepo(t)
-	r.write(".nightgauge/pipeline/current-run.json", "{ this is not json")
+	r.writePipeline("current-run.json", "{ this is not json")
 	r.write(".nightgauge/autonomous/state.json", fmt.Sprintf(
 		`{"status":"running","pid":4001,"lastScanAt":%q}`, stamp(time.Minute)))
 

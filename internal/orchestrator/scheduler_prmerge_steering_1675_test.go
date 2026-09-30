@@ -12,6 +12,8 @@ import (
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // TestScheduler_PRMerge_RefusedNeverFallsThroughToLLM_1675 pins the gate half
@@ -44,14 +46,14 @@ func TestScheduler_PRMerge_RefusedNeverFallsThroughToLLM_1675(t *testing.T) {
 // pipeline: the pr-merge LLM skill must never run after a refusal, and the
 // run fails carrying the reason.
 func TestScheduler_PRMerge_RefusalFailsRunWithoutLLM_1675(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	for _, dir := range []string{
 		"nightgauge-issue-pickup", "nightgauge-feature-planning", "nightgauge-feature-dev",
 		"nightgauge-feature-validate", "nightgauge-pr-create", "nightgauge-pr-merge",
 	} {
 		writeSkillFile(t, root, dir)
 	}
-	pcDir := filepath.Join(root, ".nightgauge", "pipeline", "issue-9101")
+	pcDir := filepath.Join(layouttest.PipelineDir(t, root), "issue-9101")
 	if err := os.MkdirAll(pcDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

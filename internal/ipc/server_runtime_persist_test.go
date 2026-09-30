@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -20,7 +20,7 @@ import (
 // the issue (cross-contamination). Once a repo-carrying "running" transition
 // arrives, the runtime persists to that repo's dir.
 func TestNotifyStageTransition_SkipsPersistForEmptyRepo(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	var buf bytes.Buffer
 	s := &Server{
 		writer:         &buf,
@@ -33,7 +33,7 @@ func TestNotifyStageTransition_SkipsPersistForEmptyRepo(t *testing.T) {
 	const issue = 304
 	// The identity is minted inside the handler, so "did it persist?" is asked
 	// of the DIRECTORY (ADR-017 Decision 8) rather than of a composed name.
-	stateDir := filepath.Join(tmpDir, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, tmpDir)
 	snapshotCount := func() int {
 		found, err := state.FindPersistedStatesForIssue(stateDir, issue)
 		if err != nil {
@@ -76,7 +76,7 @@ func TestNotifyStageTransition_SkipsPersistForEmptyRepo(t *testing.T) {
 // "the write is skipped because the repo is unknown" but "there is nothing to
 // write, because there is no run".
 func TestSetPaused_RefusesAnUnknownRunAndWritesNothing(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	var buf bytes.Buffer
 	s := &Server{
 		writer:         &buf,
@@ -87,7 +87,7 @@ func TestSetPaused_RefusesAnUnknownRunAndWritesNothing(t *testing.T) {
 	s.registerMethods()
 
 	const issue = 209
-	stateDir := filepath.Join(tmpDir, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, tmpDir)
 
 	pauseParams := json.RawMessage(`{"issueNumber":209,"paused":true,"runId":"` + newTestRunID() + `"}`)
 	_, err := s.methods["pipeline.setPaused"](context.Background(), pauseParams)
@@ -129,7 +129,7 @@ func TestSetPaused_RefusesAnUnknownRunAndWritesNothing(t *testing.T) {
 // through the live object is what makes rs.mu serialise it against the run's
 // own Persist calls rather than racing a detached read-modify-write.
 func TestSetPaused_AdoptsAnExistingSnapshotWithoutVouchingForIt(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	var buf bytes.Buffer
 	s := &Server{
 		writer:         &buf,
@@ -143,7 +143,7 @@ func TestSetPaused_AdoptsAnExistingSnapshotWithoutVouchingForIt(t *testing.T) {
 		repo  = "acme/platform"
 		issue = 4242
 	)
-	stateDir := filepath.Join(tmpDir, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, tmpDir)
 	runID := newTestRunID()
 
 	// A run of this issue left a snapshot behind (the modal case: the IPC

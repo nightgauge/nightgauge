@@ -12,6 +12,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // stallStageRunner is a StageRunner test double for adaptive stall-recovery
@@ -112,7 +114,7 @@ func enableAdaptiveStallRecovery(t *testing.T, root string) {
 // rewinds to feature-planning, and succeeds on the retry.
 func TestStallRecovery_FirstStallTriggersRewind(t *testing.T) {
 	stubReconcileGhUnreachable(t)
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	enableAdaptiveStallRecovery(t, root)
 
 	runner := newStallStageRunner(map[state.PipelineStage]int{
@@ -124,7 +126,7 @@ func TestStallRecovery_FirstStallTriggersRewind(t *testing.T) {
 	s.runPipeline(context.Background(), item)
 
 	// feedback-{N}.json must have been written by the synthetic-signal path.
-	feedbackPath := filepath.Join(root, ".nightgauge", "pipeline", "feedback-7001.json")
+	feedbackPath := filepath.Join(layouttest.PipelineDir(t, root), "feedback-7001.json")
 	data, err := os.ReadFile(feedbackPath)
 	if err != nil {
 		t.Fatalf("expected synthetic feedback file at %s: %v", feedbackPath, err)
@@ -164,7 +166,7 @@ func TestStallRecovery_FirstStallTriggersRewind(t *testing.T) {
 // stall-killed-after-retry on the failed stage.
 func TestStallRecovery_SecondStallIsTerminal(t *testing.T) {
 	stubReconcileGhUnreachable(t)
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	enableAdaptiveStallRecovery(t, root)
 
 	runner := newStallStageRunner(map[state.PipelineStage]int{
@@ -218,7 +220,7 @@ func TestStallRecovery_SecondStallIsTerminal(t *testing.T) {
 // `adaptive_stall_recovery: false` to assert the opt-out path.
 func TestStallRecovery_DisabledFlagDoesNotRetry(t *testing.T) {
 	stubReconcileGhUnreachable(t)
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	// Explicit opt-out: the default is now true, so we must write
 	// `adaptive_stall_recovery: false` to disable.
 	dir := filepath.Join(root, ".nightgauge")
@@ -249,7 +251,7 @@ func TestStallRecovery_DisabledFlagDoesNotRetry(t *testing.T) {
 	}
 
 	// No synthetic feedback file should exist.
-	feedbackPath := filepath.Join(root, ".nightgauge", "pipeline", "feedback-7003.json")
+	feedbackPath := filepath.Join(layouttest.PipelineDir(t, root), "feedback-7003.json")
 	if _, err := os.Stat(feedbackPath); err == nil {
 		t.Errorf("expected no feedback file when flag disabled, but %s exists", feedbackPath)
 	}
@@ -265,7 +267,7 @@ func TestStallRecovery_DisabledFlagDoesNotRetry(t *testing.T) {
 // adaptive stall-recovery is enabled.
 func TestStallRecovery_CostCapKillIsNeverRetried(t *testing.T) {
 	stubReconcileGhUnreachable(t)
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	enableAdaptiveStallRecovery(t, root)
 
 	// Error contains BOTH cost-cap and stall-kill markers (defensive case).
@@ -285,7 +287,7 @@ func TestStallRecovery_CostCapKillIsNeverRetried(t *testing.T) {
 	if got := runner.callCount[state.StageFeatureDev]; got != 1 {
 		t.Errorf("feature-dev call count = %d, want 1 (cost-cap never retried)", got)
 	}
-	feedbackPath := filepath.Join(root, ".nightgauge", "pipeline", "feedback-7004.json")
+	feedbackPath := filepath.Join(layouttest.PipelineDir(t, root), "feedback-7004.json")
 	if _, err := os.Stat(feedbackPath); err == nil {
 		t.Errorf("expected no feedback file for cost-cap kill, but %s exists", feedbackPath)
 	}
@@ -295,7 +297,7 @@ func TestStallRecovery_CostCapKillIsNeverRetried(t *testing.T) {
 // stall in pr-create (whose backtrack_target_stage is not feature-planning)
 // does NOT trigger a retry — the heuristic skips the rewind branch.
 func TestStallRecovery_StallInNonRewindableStageIsTerminal(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 	enableAdaptiveStallRecovery(t, root)
 
 	runner := newStallStageRunner(map[state.PipelineStage]int{
@@ -314,7 +316,7 @@ func TestStallRecovery_StallInNonRewindableStageIsTerminal(t *testing.T) {
 	if got := runner.callCount[state.StagePRCreate]; got != 1 {
 		t.Errorf("pr-create call count = %d, want 1 (non-rewindable stall is terminal)", got)
 	}
-	feedbackPath := filepath.Join(root, ".nightgauge", "pipeline", "feedback-7005.json")
+	feedbackPath := filepath.Join(layouttest.PipelineDir(t, root), "feedback-7005.json")
 	if _, err := os.Stat(feedbackPath); err == nil {
 		t.Errorf("expected no feedback file for pr-create stall, but %s exists", feedbackPath)
 	}

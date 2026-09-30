@@ -115,6 +115,13 @@ const { gitComposeBranchName } = vi.hoisted(() => ({
 }));
 
 import { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipelineManager";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
+
+// Per-clone data resolves under the git directory (ADR-024 § 7); map the
+// fake roots (and their worktrees) to a clone without running git.
+beforeEach(() => {
+  fakeCloneLayout("/test-repo");
+});
 
 /**
  * Real terminal-run shapes (#166) — see tests/fixtures/terminal/README.md. A

@@ -21,6 +21,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- The clone's pipeline context files are read at `$(nightgauge layout path <class> <name>)`
+  and written through `nightgauge layout write|append`, never by a
+  `.nightgauge/...` path: they now live in the git directory (#2037, ADR-024
+  § 7).
 - **Phase 3.5 no longer waits for CI.** It takes one non-blocking snapshot of
   the check rollup and records it into `ci_monitoring` (`final_status: pending`
   while checks run); the blocking `nightgauge ci wait` is gone. The wait emitted

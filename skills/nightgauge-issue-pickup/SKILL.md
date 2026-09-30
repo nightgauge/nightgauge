@@ -13,7 +13,7 @@ agent: pipeline-researcher
 model: haiku
 inputs: []
 outputs:
-  - .nightgauge/pipeline/issue-{N}.json
+  - pipeline/issue-{N}.json
 ---
 
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
@@ -407,8 +407,8 @@ detailed in the reference file already loaded for this phase (Steps 8.3–8.7).
 
 ## Output Contract
 
-This skill outputs `.nightgauge/pipeline/issue-{N}.json` for use by
-downstream skills.
+This skill outputs `issue-{N}.json` in the clone's pipeline state directory
+(`nightgauge layout path pipeline`) for use by downstream skills.
 
 **Schema**: See
 [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md) for full

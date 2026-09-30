@@ -16,6 +16,7 @@
  */
 
 import * as fs from "node:fs/promises";
+import { cloneClassDir } from "../context/cloneLayout.js";
 import * as path from "node:path";
 import { atomicWriteJSON } from "../context/ContextManager.js";
 
@@ -68,7 +69,7 @@ export interface BucketCalibration {
 }
 
 /**
- * The full calibration table stored in `.nightgauge/pipeline/calibration.json`.
+ * The full calibration table stored in `<git-common-dir>/nightgauge/pipeline/calibration.json`.
  *
  * Schema v2 nests buckets under a mode key first, then size, so per-mode
  * calibration baselines are tracked independently.
@@ -454,9 +455,11 @@ export class CalibrationService {
   }
 
   /**
-   * Get the default calibration file path for a workspace.
+   * Get the default calibration file path for a workspace: `calibration.json` in the
+   * pipeline class directory of its repository (ADR-024 § 7). Throws
+   * `NotAGitRepositoryError` when `workspaceRoot` is not in a repository.
    */
   static getDefaultPath(workspaceRoot: string): string {
-    return path.join(workspaceRoot, ".nightgauge", "pipeline", "calibration.json");
+    return path.join(cloneClassDir("pipeline", workspaceRoot), "calibration.json");
   }
 }

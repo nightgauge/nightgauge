@@ -6,7 +6,7 @@
  * Claude Code terminal (e.g., when /nightgauge:issue-pickup completes).
  */
 
-import { pipelineStateDir } from "../utils/cloneLayout";
+import { isUsableWorkspaceRoot, pipelineStateDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
@@ -114,7 +114,8 @@ export class ContextWatcherService implements vscode.Disposable {
     private workspaceRoot: string,
     private logger: Logger
   ) {
-    if (workspaceRoot) {
+    // Outside a git repository there is no pipeline directory to watch.
+    if (isUsableWorkspaceRoot(workspaceRoot)) {
       this.initializeWatchers();
     }
   }
@@ -319,7 +320,7 @@ export class ContextWatcherService implements vscode.Disposable {
    * This handles the case where VS Code is restarted mid-pipeline.
    */
   async scanExistingContext(): Promise<void> {
-    if (!this.workspaceRoot || this._suspended) {
+    if (!isUsableWorkspaceRoot(this.workspaceRoot) || this._suspended) {
       return;
     }
 
@@ -433,7 +434,7 @@ export class ContextWatcherService implements vscode.Disposable {
    * #471: nothing writes it, so it never selected anything for deletion.
    */
   async cleanStaleContextFiles(): Promise<number> {
-    if (!this.workspaceRoot) return 0;
+    if (!isUsableWorkspaceRoot(this.workspaceRoot)) return 0;
 
     const contextDir = pipelineStateDir(this.workspaceRoot);
 

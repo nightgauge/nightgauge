@@ -9,6 +9,7 @@
  * - Custom pipeline flows
  */
 
+import { cloneClassDir } from "../../context/cloneLayout.js";
 import type { CAC } from "cac";
 import { resolveAdapter } from "../adapter.js";
 import { readFile } from "node:fs/promises";
@@ -69,7 +70,7 @@ async function fileExists(filePath: string): Promise<boolean> {
 }
 
 function getContextPath(cwd: string, stageFile: string, issueNumber: number): string {
-  return path.join(cwd, ".nightgauge", "pipeline", `${stageFile}-${issueNumber}.json`);
+  return path.join(cloneClassDir("pipeline", cwd), `${stageFile}-${issueNumber}.json`);
 }
 
 async function getCurrentBranch(cwd: string): Promise<string | null> {

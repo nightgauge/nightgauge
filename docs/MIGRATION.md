@@ -350,9 +350,9 @@ Reference: `docs/strategy/codex/CROSS_TOOL_COMMAND_CONTRACT.md`
 
 ### Notes
 
-- Stage artifacts are unchanged (`.nightgauge/pipeline/*.json`,
-  `.nightgauge/plans/*.md`), so an issue started under the old wrappers
-  continues cleanly under the stage runner.
+- Stage artifacts are unchanged (the `*.json` contexts in the clone's pipeline
+  state directory and the `*.md` plans in its plans directory), so an issue
+  started under the old wrappers continues cleanly under the stage runner.
 - The deterministic project-board and config logic that previously lived in
   shell scripts now lives in the `nightgauge` Go binary
   (see [GO_BINARY.md](GO_BINARY.md)).

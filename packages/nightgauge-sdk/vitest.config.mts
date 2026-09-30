@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    setupFiles: ["tests/setup/hermeticCloneLayout.ts"],
     include: ["tests/**/*.test.ts", "src/__tests__/**/*.test.ts", "src/**/__tests__/**/*.test.ts"],
     coverage: {
       provider: "v8",

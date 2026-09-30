@@ -234,7 +234,7 @@ func TestCompactIssuePickup_KeepsGatesAndContracts(t *testing.T) {
 		"signal=deferred",
 		// The artifact contract.
 		"## Output Contract",
-		"This skill outputs `.nightgauge/pipeline/issue-{N}.json`",
+		"This skill outputs `issue-{N}.json` in the clone's pipeline state directory",
 	} {
 		if !strings.Contains(compact.Content, want) {
 			t.Errorf("compact render is missing %q", want)

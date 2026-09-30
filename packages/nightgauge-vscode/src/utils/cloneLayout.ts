@@ -1,39 +1,55 @@
 /**
  * Clone layout — the one place the extension addresses per-clone data.
  *
- * Mirrors the Go class resolvers of ADR-024 § 1 and § 7 (`PipelineStateDir`,
- * `PlansDir`, `RetrosDir`, `CloneLogsDir`). Every caller in the extension
- * builds a per-clone path through these helpers, so the later move of the
- * location out of the working tree (#2037) edits this module alone.
+ * Per-clone data lives in the clone's git directory, not the working tree
+ * (ADR-024 § 7): `CLONE = <git-common-dir>/nightgauge`, with the four classes
+ * `pipeline`, `plans`, `retros` and `logs` under it. For a normal clone that is
+ * `<root>/.git/nightgauge/<class>`; from a linked worktree it is the main
+ * clone's directory, shared by every checkout. Git never tracks its own
+ * directory, so nothing here can be committed.
  *
- * Today the classes live in the working tree, at `<root>/.nightgauge/<class>`.
- * The helpers return that, joined with `path.join`: every caller resolves the
- * same file it did before, with native separators. (A few callers used to
- * build the path with a template string, which on Windows mixed `\\` and `/`;
- * the string differs there, the file does not.)
+ * The helpers stay synchronous for their many callers, over a per-root cache
+ * in `@nightgauge/sdk` (`resolveCloneLayout`). Activation fills the cache for
+ * every workspace folder ({@link primeCloneLayouts}), asking the binary
+ * (`nightgauge layout --workdir <root>`) when one is installed and git
+ * otherwise; a root nobody primed resolves on first use with one git call. A
+ * cache hit never spawns anything.
  *
  * The workspace root must be a non-empty absolute path: a relative or empty
  * root would resolve against the extension host's cwd (ADR-024 § 7, "no caller
- * resolves against the process cwd"), so the helpers throw instead.
+ * resolves against the process cwd"), so the helpers throw instead. Outside a
+ * git repository they throw `NotAGitRepositoryError` ("not a git
+ * repository"); nothing falls back to the working tree.
  *
- * @see Issue #2036
+ * @see Issue #2036, #2037
  */
 
+import * as childProcess from "child_process";
+import { promises as fsp, type Dirent } from "fs";
 import * as path from "path";
+import { promisify } from "util";
+import {
+  clearCloneLayoutCache,
+  cloneLayoutFor,
+  cloneLayoutFromJson,
+  primeCloneLayout,
+  resolveCloneLayout,
+  setCloneLayout,
+  type CloneLayout,
+} from "@nightgauge/sdk/dist/context/cloneLayout";
 
-/** The per-clone data directory name inside the working tree today. */
-const CLONE_DIR_NAME = ".nightgauge";
+export { clearCloneLayoutCache, cloneLayoutFor, setCloneLayout, type CloneLayout };
 
 /**
- * Root-relative spellings of the four classes, POSIX-separated. For display
- * text (messages, remediation hints, setting defaults) and for callers that
- * join them onto a root themselves; `path.join` normalises the separator on
- * Windows. Prefer the functions below when a root is available.
+ * Display spellings of the four classes for a normal clone, POSIX-separated,
+ * matching the Go `layout.*Display()` helpers. For messages and remediation
+ * hints only: never join one onto a root (from a linked worktree the real
+ * directory is the main clone's); build paths with the functions below.
  */
-export const RELATIVE_PIPELINE_STATE_DIR = `${CLONE_DIR_NAME}/pipeline`;
-export const RELATIVE_PLANS_DIR = `${CLONE_DIR_NAME}/plans`;
-export const RELATIVE_RETROS_DIR = `${CLONE_DIR_NAME}/retros`;
-export const RELATIVE_CLONE_LOGS_DIR = `${CLONE_DIR_NAME}/logs`;
+export const PIPELINE_STATE_DISPLAY = ".git/nightgauge/pipeline";
+export const PLANS_DISPLAY = ".git/nightgauge/plans";
+export const RETROS_DISPLAY = ".git/nightgauge/retros";
+export const CLONE_LOGS_DISPLAY = ".git/nightgauge/logs";
 
 /**
  * True when `root` is absolute under `pathImpl` (default: the host's `path`).
@@ -52,9 +68,7 @@ export function isAbsoluteRoot(
   return true;
 }
 
-/**
- * Throws unless `workspaceRoot` is a non-empty absolute path.
- */
+/** Throws unless `workspaceRoot` is a non-empty absolute path. */
 function requireAbsoluteRoot(workspaceRoot: string, helper: string): string {
   if (typeof workspaceRoot !== "string" || workspaceRoot.trim() === "") {
     throw new Error(`${helper}: workspace root is empty; an absolute path is required`);
@@ -67,78 +81,146 @@ function requireAbsoluteRoot(workspaceRoot: string, helper: string): string {
   return workspaceRoot;
 }
 
+/** The cached layout of an absolute root; throws outside a git repository. */
+function layoutOf(workspaceRoot: string, helper: string): CloneLayout {
+  return resolveCloneLayout(requireAbsoluteRoot(workspaceRoot, helper));
+}
+
 /**
- * True when `workspaceRoot` is acceptable to the helpers below. Lets a caller
- * whose root may be unset keep its previous fallback instead of throwing.
+ * True when `workspaceRoot` is acceptable to the helpers below: a non-empty
+ * absolute path inside a git repository. Lets a caller whose root may be
+ * unset, or not a repository, skip per-clone data instead of throwing. The
+ * git answer is cached per root, so repeated checks never spawn git.
  */
 export function isUsableWorkspaceRoot(
   workspaceRoot: string | undefined | null
 ): workspaceRoot is string {
-  return (
-    typeof workspaceRoot === "string" &&
-    workspaceRoot.trim() !== "" &&
-    isAbsoluteRoot(workspaceRoot)
-  );
+  if (
+    typeof workspaceRoot !== "string" ||
+    workspaceRoot.trim() === "" ||
+    !isAbsoluteRoot(workspaceRoot)
+  ) {
+    return false;
+  }
+  try {
+    resolveCloneLayout(workspaceRoot);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
-/** `<root>/.nightgauge/pipeline` — run state, contexts, history, traces. */
+/** `<git-common-dir>/nightgauge/pipeline` — run state, contexts, history, traces. */
 export function pipelineStateDir(workspaceRoot: string): string {
-  return path.join(
-    requireAbsoluteRoot(workspaceRoot, "pipelineStateDir"),
-    RELATIVE_PIPELINE_STATE_DIR
-  );
+  return layoutOf(workspaceRoot, "pipelineStateDir").pipeline;
 }
 
-/** `<root>/.nightgauge/plans` — issue-keyed plans. */
+/** `<git-common-dir>/nightgauge/plans` — issue-keyed plans. */
 export function plansDir(workspaceRoot: string): string {
-  return path.join(requireAbsoluteRoot(workspaceRoot, "plansDir"), RELATIVE_PLANS_DIR);
+  return layoutOf(workspaceRoot, "plansDir").plans;
 }
 
-/** `<root>/.nightgauge/retros` — issue-keyed retros. */
+/** `<git-common-dir>/nightgauge/retros` — issue-keyed retros. */
 export function retrosDir(workspaceRoot: string): string {
-  return path.join(requireAbsoluteRoot(workspaceRoot, "retrosDir"), RELATIVE_RETROS_DIR);
+  return layoutOf(workspaceRoot, "retrosDir").retros;
 }
 
-/** `<root>/.nightgauge/logs` — per-clone logs. */
+/** `<git-common-dir>/nightgauge/logs` — per-clone logs. */
 export function cloneLogsDir(workspaceRoot: string): string {
-  return path.join(requireAbsoluteRoot(workspaceRoot, "cloneLogsDir"), RELATIVE_CLONE_LOGS_DIR);
-}
-
-/** Normalises a root-relative setting value for comparison with a default. */
-function normaliseRelative(value: string): string {
-  return value
-    .replace(/\\/g, "/")
-    .replace(/^(\.\/)+/, "")
-    .replace(/\/+$/, "");
+  return layoutOf(workspaceRoot, "cloneLogsDir").logs;
 }
 
 /**
- * Resolves a user-configurable per-clone directory setting (for example
- * `core.context_path` or `pipeline.logs.dir`).
- *
- * - Unset, empty, or equal to its default (`defaultRel`, compared after
- *   normalising separators, a leading `./` and a trailing `/`): resolves
- *   through `resolver`, so the location follows this module when it moves.
- * - Any other value is a user override and is joined onto the root with
- *   `join` (default `path.join`), exactly as the caller did before.
- *
- * The root is validated either way: an unusable root throws rather than
- * resolving against the host's cwd.
+ * Absolute paths of the regular files directly in `dir` whose names satisfy
+ * `match`; empty when `dir` does not exist. Use this, not
+ * `vscode.workspace.findFiles`, to list a class directory: `findFiles` applies
+ * `files.exclude` (which hides every `.git` directory by default) and searches
+ * only the workspace folders, so it never finds files under the git directory.
  */
-export function resolveCloneSetting(
-  workspaceRoot: string,
-  value: string | undefined | null,
-  defaultRel: string,
-  resolver: (workspaceRoot: string) => string,
-  join: (root: string, rel: string) => string = path.join
-): string {
-  if (
-    value === undefined ||
-    value === null ||
-    value.trim() === "" ||
-    normaliseRelative(value) === normaliseRelative(defaultRel)
-  ) {
-    return resolver(workspaceRoot);
+export async function listCloneFiles(
+  dir: string,
+  match: (name: string) => boolean
+): Promise<string[]> {
+  let entries: Dirent[];
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
   }
-  return join(requireAbsoluteRoot(workspaceRoot, "resolveCloneSetting"), value);
+  return entries.filter((e) => e.isFile() && match(e.name)).map((e) => path.join(dir, e.name));
+}
+
+/** Resolves the nightgauge binary; null when none is installed. */
+export type LayoutBinaryResolver = () => Promise<string | null>;
+
+let binaryResolver: LayoutBinaryResolver = async () => {
+  // Imported lazily: BinaryResolver reads VS Code settings, and the pure
+  // path helpers here must stay importable without a VS Code host.
+  const { BinaryResolver } = await import("../services/BinaryResolver");
+  return BinaryResolver.fromVSCode().resolve();
+};
+
+/** Replace how the binary is found (tests, or a host without VS Code). */
+export function setCloneLayoutBinaryResolver(resolver: LayoutBinaryResolver): void {
+  binaryResolver = resolver;
+}
+
+const LAYOUT_TIMEOUT_MS = 10_000;
+
+/** `nightgauge layout --workdir <root>`, or undefined when it cannot answer. */
+async function layoutFromBinary(root: string): Promise<CloneLayout | undefined> {
+  let bin: string | null;
+  try {
+    bin = await binaryResolver();
+  } catch {
+    return undefined;
+  }
+  if (!bin) return undefined;
+  try {
+    // Promisified per call, not at import: suites that mock child_process
+    // partially still import the pure helpers here.
+    const execFileAsync = promisify(childProcess.execFile);
+    const { stdout } = await execFileAsync(bin, ["layout", "--workdir", root], {
+      timeout: LAYOUT_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    const layout = cloneLayoutFromJson(stdout);
+    const classes = [layout.pipeline, layout.plans, layout.retros, layout.logs];
+    return classes.every((p) => path.isAbsolute(p)) ? { ...layout, root } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Fills the layout cache for each absolute root without blocking the host:
+ * the binary's answer when it gives one, else git's (the two are pinned by a
+ * parity test). A root that is not in a git repository is remembered as such.
+ * Never rejects.
+ */
+export async function primeCloneLayouts(roots: readonly string[]): Promise<void> {
+  const unique = [...new Set(roots.filter((r) => typeof r === "string" && isAbsoluteRoot(r)))];
+  await Promise.all(
+    unique.map(async (root) => {
+      const fromBinary = await layoutFromBinary(root);
+      if (fromBinary) {
+        setCloneLayout(root, fromBinary);
+        return;
+      }
+      await primeCloneLayout(root).catch(() => undefined);
+    })
+  );
+}
+
+/**
+ * Forgets `removed` roots and primes `added` ones — the workspace-folder
+ * change handler.
+ */
+export async function refreshCloneLayouts(
+  added: readonly string[],
+  removed: readonly string[]
+): Promise<void> {
+  for (const root of removed) clearCloneLayoutCache(root);
+  for (const root of added) clearCloneLayoutCache(root);
+  await primeCloneLayouts(added);
 }

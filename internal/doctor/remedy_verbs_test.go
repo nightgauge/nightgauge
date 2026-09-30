@@ -357,7 +357,11 @@ func writeRunSnapshot(t *testing.T, root string, issue int) {
 	}
 	rs := state.NewRuntimeState("owner/repo", issue, "item-"+strconv.Itoa(issue), runID)
 	rs.SetProcess(os.Getpid(), filepath.Join(root, ".worktrees", "issue-"+strconv.Itoa(issue)))
-	if err := rs.Persist(state.PipelineStateDir(root)); err != nil {
+	dir, err := state.PipelineStateDir(root)
+	if err != nil {
+		t.Fatalf("pipeline state dir: %v", err)
+	}
+	if err := rs.Persist(dir); err != nil {
 		t.Fatalf("persist snapshot: %v", err)
 	}
 }

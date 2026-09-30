@@ -157,8 +157,9 @@ describe("Codex stage validation coverage", () => {
     expect(captured.prompt).toContain(
       "- [ ] Codex stage happy-path tests are added for MVP stages"
     );
-    expect(captured.prompt).toContain(".nightgauge/plans/553-*.md");
-    expect(captured.prompt).toContain(".nightgauge/pipeline/planning-553.json");
+    expect(captured.prompt).toContain("nightgauge layout write plans 553-<slug>.md");
+    expect(captured.prompt).toContain("nightgauge layout write pipeline planning-553.json");
+    expect(captured.prompt).not.toContain(".nightgauge/");
   });
 
   it("should execute feature-dev happy path", async () => {

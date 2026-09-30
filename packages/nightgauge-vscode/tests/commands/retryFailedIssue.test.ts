@@ -71,6 +71,13 @@ vi.mock("../../src/services/CompletedIssuesService", () => ({
 }));
 
 import { registerRetryFailedIssueCommand } from "../../src/commands/retryFailedIssue";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
+
+// Per-clone data resolves under the git directory (ADR-024 § 7); map the
+// fake workspace to a clone without running git.
+beforeEach(() => {
+  fakeCloneLayout("/mock/workspace");
+});
 
 // Helper types for mocks
 interface MockPipelineState {

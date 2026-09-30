@@ -1,6 +1,13 @@
 package adapters
 
-import "strings"
+import (
+	"fmt"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
+)
 
 // Codex sandbox mapping (#4026) — mirror of the SDK `codexSandbox.ts`.
 //
@@ -78,4 +85,24 @@ func codexSandboxFlags(mode string) []string {
 		return []string{codexBypassFlag}
 	}
 	return []string{"--sandbox", mode, "--ask-for-approval", "never"}
+}
+
+// codexCloneWritableRoot makes the clone's per-clone directory (ADR-024 § 7,
+// <git-common-dir>/nightgauge) writable under the workspace-write sandbox.
+// Codex keeps every `.git` inside a writable root read-only, so without it a
+// stage could not store its context, plan or retro through
+// `nightgauge layout write` — verified: the write fails with "operation not
+// permitted" — while the working tree stays writable. Only CLONE is added,
+// not the git directory. Other modes need nothing: read-only writes nowhere
+// and danger-full-access has no sandbox. An unresolvable workdir adds
+// nothing; the stage's own write then reports the error.
+func codexCloneWritableRoot(mode, workdir string) []string {
+	if mode != codexSandboxWorkspaceWrite || workdir == "" || !filepath.IsAbs(workdir) {
+		return nil
+	}
+	clone, err := layout.CloneDir(workdir)
+	if err != nil {
+		return nil
+	}
+	return []string{"-c", fmt.Sprintf("sandbox_workspace_write.writable_roots=[%s]", strconv.Quote(clone))}
 }

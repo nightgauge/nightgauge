@@ -64,12 +64,6 @@ export interface CoreSettings {
   /** Default model for pipeline stages */
   defaultModel: ModelSelection;
 
-  /** Path to context files relative to workspace root */
-  contextPath: string;
-
-  /** Path to plan files relative to workspace root */
-  plansPath: string;
-
   /** Gemini authentication method (Issue #1056) */
   geminiAuthMethod: GeminiAuthMethod;
 
@@ -100,8 +94,6 @@ function mapToLegacyShape(config?: UICoreConfig): CoreSettings {
     executionAdapter: config?.adapter ?? defaults.adapter!,
     authProvider: config?.auth_provider ?? defaults.auth_provider!,
     defaultModel: config?.default_model ?? defaults.default_model!,
-    contextPath: config?.context_path ?? defaults.context_path!,
-    plansPath: config?.plans_path ?? defaults.plans_path!,
     geminiAuthMethod: config?.gemini?.auth_method ?? defaults.gemini!.auth_method!,
     geminiModel: config?.gemini?.model ?? defaults.gemini!.model!,
     copilotModel: config?.copilot?.model,

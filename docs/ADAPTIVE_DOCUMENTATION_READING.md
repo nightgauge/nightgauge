@@ -99,7 +99,7 @@ Added to `skills/nightgauge-feature-planning/SKILL.md`:
 
 ```bash
 # Read issue context
-CONTEXT_FILE=".nightgauge/pipeline/issue-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline issue-${ISSUE_NUMBER}.json)"
 
 # Extract labels
 SIZE=$(jq -r '.labels[] | select(startswith("size:")) | sub("size:"; "")' "$CONTEXT_FILE")
@@ -196,7 +196,7 @@ Planning context now includes `complexity_assessment` field:
     "rationale": "Medium-sized feature requires full documentation review",
     "estimated_token_savings": 0
   },
-  "plan_file": ".nightgauge/plans/162-adaptive-documentation-reading.md",
+  "plan_file": "/path/to/repo/.git/nightgauge/plans/162-adaptive-documentation-reading.md",
   "approach": "Embedded Complexity Assessment in Feature-Planning",
   "files_to_create": [...],
   "files_to_modify": [...]

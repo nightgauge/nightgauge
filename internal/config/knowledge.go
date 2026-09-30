@@ -41,7 +41,8 @@ type KnowledgeConfig struct {
 	// enabled=false is a no-op.
 	WorkspaceScoped *bool `yaml:"workspace_scoped" json:"workspace_scoped,omitempty"`
 	// Telemetry controls the knowledge telemetry emitter — one JSONL event per
-	// KB operation written to .nightgauge/pipeline/history/knowledge-events.jsonl.
+	// KB operation written to history/knowledge-events.jsonl in the clone's
+	// pipeline state directory (.git/nightgauge/pipeline).
 	// Resolved via IsTelemetryEnabled(): defaults on when Enabled is true and
 	// Telemetry.Enabled is unset; always off when Enabled is false.
 	Telemetry *KnowledgeTelemetryConfig `yaml:"telemetry" json:"telemetry,omitempty"`

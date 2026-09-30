@@ -2,7 +2,10 @@ package context
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestWriteAndReadContext(t *testing.T) {
@@ -92,10 +95,25 @@ func TestValidate(t *testing.T) {
 
 func TestContextPath(t *testing.T) {
 	// Flat convention shared with the gates (registry.contextFilePath) and the
-	// SDK (stage.ts getContextPath): .nightgauge/pipeline/<stage>-<N>.json.
-	path := ContextPath("/workspace", 1311, "dev")
-	expected := filepath.Join("/workspace", ".nightgauge", "pipeline", "dev-1311.json")
+	// SDK (stage.ts getContextPath): <pipeline state dir>/<stage>-<N>.json, where
+	// the pipeline state dir lives under the git common dir (ADR-024 § 7).
+	root := layouttest.Repo(t)
+	path, err := ContextPath(root, 1311, "dev")
+	if err != nil {
+		t.Fatalf("ContextPath: %v", err)
+	}
+	expected := filepath.Join(layouttest.PipelineDir(t, root), "dev-1311.json")
 	if path != expected {
 		t.Errorf("ContextPath = %q, want %q", path, expected)
+	}
+}
+
+func TestContextPathOutsideARepositoryIsAnError(t *testing.T) {
+	path, err := ContextPath(t.TempDir(), 1311, "dev")
+	if err == nil || !strings.Contains(err.Error(), "not a git repository") {
+		t.Fatalf("ContextPath = %q, %v; want a not-a-git-repository error", path, err)
+	}
+	if path != "" {
+		t.Errorf("ContextPath = %q, want \"\" on error", path)
 	}
 }

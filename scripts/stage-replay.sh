@@ -142,9 +142,10 @@ printf '{"label": "%s", "stage": "%s", "issue": %s, "adapter": "%s", "profile": 
   "$label" "$stage" "$issue" "$adapter" "$profile" "$(date -u +%FT%TZ)" > "$run_dir/meta.json"
 
 # 1. A standalone copy of the working state: clone the source's repository at
-#    its HEAD, then lay the working tree (tracked edits and untracked pipeline
-#    files alike) over it. node_modules is left out, as a fresh pipeline
-#    worktree has none.
+#    its HEAD, lay the working tree (tracked and untracked edits alike) over
+#    it, and copy the source clone's per-clone state (pipeline context, plans,
+#    retros, logs; <git-common-dir>/nightgauge/, ADR-024 § 7) into the copy's.
+#    node_modules is left out, as a fresh pipeline worktree has none.
 head_sha="$(git -C "$worktree" rev-parse HEAD)"
 src_git="$(git -C "$worktree" rev-parse --path-format=absolute --git-common-dir)"
 git clone --quiet --local --no-checkout "$src_git" "$copy"
@@ -157,6 +158,13 @@ src_origin="$(git -C "$worktree" remote get-url origin 2>/dev/null || true)"
 [ -n "$src_origin" ] && git -C "$copy" remote set-url origin "$src_origin"
 git -C "$copy" remote set-url --push origin "replay-push-disabled://$label"
 rsync -a --exclude .git --exclude node_modules "$worktree"/ "$copy"/
+for class in pipeline plans retros logs; do
+  src_dir="$("$ng" layout --workdir "$worktree" path "$class")"
+  [ -d "$src_dir" ] || continue
+  dst_dir="$("$ng" layout --workdir "$copy" path "$class")"
+  mkdir -p "$dst_dir"
+  rsync -a "$src_dir"/ "$dst_dir"/
+done
 
 # 2. Write guards: wrappers for nightgauge and gh that skip forge and board
 #    writes (logging them to blocked.log) and pass everything else through.
@@ -205,7 +213,8 @@ chmod +x "$shims/nightgauge" "$shims/gh"
 roots=()
 [ -n "$skills_root" ] && roots=(--skills-root "$skills_root")
 ctx_file=""
-[ -n "$ctx_type" ] && ctx_file="$copy/.nightgauge/pipeline/$ctx_type-$issue.json"
+[ -n "$ctx_type" ] &&
+  ctx_file="$("$ng" layout --workdir "$copy" path pipeline "$ctx_type-$issue.json")"
 render_args=(skill render --stage "$stage" --profile "$profile" --issue "$issue" ${roots[@]+"${roots[@]}"})
 [ "$profile" = compact ] && render_args+=(--supply-includes)
 [ -n "$ctx_type" ] && render_args+=(--context-type "$ctx_type" --context-file "$ctx_file")

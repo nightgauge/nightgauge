@@ -51,7 +51,8 @@ production code changes are expected. Full contract: Read
 
 ## Input Contract
 
-This skill requires `.nightgauge/pipeline/planning-{N}.json` from
+This skill requires `planning-{N}.json` (in the clone's pipeline state
+directory, `nightgauge layout path pipeline`) from
 `/nightgauge-feature-planning`. Schema, full configuration table and env
 overrides: Read [docs/CONTEXT_ARCHITECTURE.md](../../../../../docs/CONTEXT_ARCHITECTURE.md),
 `skills/nightgauge-feature-dev/SKILL.md` (## Configuration) and
@@ -185,7 +186,8 @@ if [ -n "$BINARY" ]; then
   "$BINARY" approval-gate "$ISSUE_NUMBER" || {
     echo "ARCHITECTURE APPROVAL REQUIRED — do NOT implement. A human must review the"
     echo "decision (the plan / decisions.md ADR) and add the approval label, or write"
-    echo ".nightgauge/pipeline/approval-${ISSUE_NUMBER}.json with {\"approved\": true}."
+    echo "{\"approved\": true} to approval-${ISSUE_NUMBER}.json with"
+    echo "'nightgauge layout write pipeline approval-${ISSUE_NUMBER}.json'."
     exit 1
   }
 fi
@@ -259,8 +261,8 @@ dressed as progress.
 **Stop here and declare it.** Do not implement, do not commit, and do not
 simply end your turn with an explanation: prose in a final message is
 invisible to every gate downstream. What the pipeline reads is the
-deliverable, so write `.nightgauge/pipeline/dev-{N}.json` with empty
-`files_changed` and this signal:
+deliverable, so write `dev-{N}.json` (`nightgauge layout write pipeline
+dev-{N}.json`) with empty `files_changed` and this signal:
 
 ```json
 {
@@ -480,7 +482,8 @@ context file path, and next step (`/nightgauge-feature-validate`).
 
 1. **Code changes** — left on disk in this worktree, NOT committed (see
    Gotchas)
-2. **`.nightgauge/pipeline/dev-{N}.json`** — `files_changed`
+2. **`dev-{N}.json`** (written with `nightgauge layout write pipeline`) —
+   `files_changed`
    (`created`/`modified`/`deleted`) and `tests_status`, the two fields the
    derived-handoff gate (#1076) reconciles against git ground truth. Schema:
    Read [docs/CONTEXT_ARCHITECTURE.md](../../../../../docs/CONTEXT_ARCHITECTURE.md)

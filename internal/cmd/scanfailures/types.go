@@ -1,5 +1,6 @@
 // Package scanfailures implements deterministic scanning of pipeline session
-// logs under .nightgauge/logs/ for known failure-signal patterns. It is
+// logs in the clone's logs directory (.git/nightgauge/logs, resolved by
+// internal/layout) for known failure-signal patterns. It is
 // the Go-backed implementation of the inline-Python regex scan previously
 // embedded in skills/nightgauge-retro/SKILL.md Phase 2.3.
 //

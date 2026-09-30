@@ -238,7 +238,7 @@ files are modified on disk. Click any file item to open it in the editor.
 ## Knowledge Value Dashboard
 
 Opens a webview that aggregates
-`.nightgauge/pipeline/history/knowledge-events.jsonl` into a single
+`.git/nightgauge/pipeline/history/knowledge-events.jsonl` into a single
 "Is my Knowledge doing anything?" view.
 
 Surfaces:
@@ -277,12 +277,14 @@ nightgauge knowledge metrics --window 7 --stale-days 30 --json
 
 Configure the extension via VS Code Settings (`Preferences > Settings`):
 
-| Setting                   | Default                | Description                                  |
-| ------------------------- | ---------------------- | -------------------------------------------- |
-| `nightgauge.authProvider` | `max`                  | Authentication provider (max/bedrock/vertex) |
-| `nightgauge.defaultModel` | `sonnet`               | Default model (sonnet/opus/haiku)            |
-| `nightgauge.contextPath`  | `.nightgauge/pipeline` | Path to pipeline context files (git root)    |
-| `nightgauge.plansPath`    | `.nightgauge/plans`    | Path to plan files (git root)                |
+| Setting                   | Default  | Description                                  |
+| ------------------------- | -------- | -------------------------------------------- |
+| `nightgauge.authProvider` | `max`    | Authentication provider (max/bedrock/vertex) |
+| `nightgauge.defaultModel` | `sonnet` | Default model (sonnet/opus/haiku)            |
+
+Run state, contexts, plans, retros and pipeline logs live in the clone's git
+directory (`.git/nightgauge/`, shared by every worktree of the clone), never
+in the working tree; `nightgauge layout` prints their paths.
 
 The full settings surface (adapters, orchestration budgets, notifications,
 telemetry, and more) is best browsed through

@@ -39,7 +39,7 @@
 #     unknown/default case. Shapes record which miner produced them in
 #     `origin` ("pipeline-log" / "result-envelope").
 #
-# The `.nightgauge/logs/*_session.log` files also contain raw agent session
+# The clone's `logs/*_session.log` files also contain raw agent session
 # output — which includes agents READING AND EDITING the classifier source.
 # A naive grep for `[cost-cap-exceeded]` therefore hits the classifier's own
 # source code as often as it hits a real failure, and a fixture built that way
@@ -76,7 +76,8 @@
 #   scripts/capture-terminal-kind-fixture.sh [WORKSPACE_ROOT ...]
 #
 # Roots default to the repository this script lives in. Each root is scanned
-# for `.nightgauge/logs/*.log`. Output is written to
+# for `*.log` in its clone's logs directory, <git-common-dir>/nightgauge/logs
+# (ADR-024 § 7); a root outside a git repository is an error. Output is written to
 # internal/terminalkind/testdata/captured-shapes.json.
 
 set -euo pipefail
@@ -96,11 +97,34 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 
 out_dir = os.environ["OUT_DIR"]
 table_json = os.environ["TABLE_JSON"]
 roots = sorted(os.path.abspath(r) for r in sys.argv[1:])
+
+
+# Variables that redirect which repository git reads; cleared for the lookup.
+GIT_LOCATION_ENV = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+)
+
+
+def logs_dir(root):
+    """The clone's logs directory: <git-common-dir>/nightgauge/logs."""
+    env = {k: v for k, v in os.environ.items() if k not in GIT_LOCATION_ENV}
+    res = subprocess.run(
+        ["git", "-C", root, "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        capture_output=True, text=True, env=env,
+    )
+    if res.returncode != 0:
+        sys.exit("capture-terminal-kind-fixture: %s is not a git repository" % root)
+    return os.path.join(os.path.realpath(res.stdout.strip()), "nightgauge", "logs")
+
+
+# Worktrees of one clone share its logs directory: scan it once.
+log_dirs = sorted(set(logs_dir(r) for r in roots))
 
 # --- 1. vocabulary, taken from the canonical rule table -------------------
 #
@@ -325,8 +349,8 @@ def shape_key(text: str) -> str:
     return DIGITS_RE.sub("N", text)
 
 
-for root in roots:
-    for path in sorted(glob.glob(os.path.join(root, ".nightgauge", "logs", "*.log"))):
+for ldir in log_dirs:
+    for path in sorted(glob.glob(os.path.join(ldir, "*.log"))):
         log_files += 1
         try:
             fh = open(path, encoding="utf-8", errors="replace")
@@ -452,7 +476,7 @@ payload = {
     "telemetry_last_seen": max((r["last_seen"] for r in selected), default=""),
     "generator": "scripts/capture-terminal-kind-fixture.sh",
     "source": (
-        ".nightgauge/logs/*.log — structured pipeline-logger lines and adapter "
+        "<git-common-dir>/nightgauge/logs/*.log — structured pipeline-logger lines and adapter "
         "result envelopes (see `origin` on each shape)"
     ),
     "roots_scanned": len(roots),

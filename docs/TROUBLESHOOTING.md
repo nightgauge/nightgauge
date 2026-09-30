@@ -596,8 +596,8 @@ all, leaving nothing to anchor the rescale — the fix for that is `size:*` labe
 per the root cause below.
 
 Neither form is a substitute for the per-`(stage, model)` table. Once
-`.nightgauge/pipeline/stage-model-calibration.json` has ≥5 samples in a cell the
-source becomes `stage-model` and the cross-size path stops being consulted; if
+`stage-model-calibration.json` in the clone's pipeline state directory
+(`nightgauge layout path pipeline`) has ≥5 samples in a cell the source becomes `stage-model` and the cross-size path stops being consulted; if
 that never happens after many runs, check that the table is being written to
 **this** repo and not a sibling's (#1229 — see
 [SELF_IMPROVEMENT_LOOP.md](SELF_IMPROVEMENT_LOOP.md)).
@@ -695,7 +695,7 @@ actively dispatching and completing issues (the `go-backend.log` shows
 
 ```
 Go history producer (internal/state/history.go)
-  └─ writes V2 JSONL → .nightgauge/pipeline/history/YYYY-MM-DD.jsonl
+  └─ writes V2 JSONL → <pipeline state dir>/history/YYYY-MM-DD.jsonl
        └─ TelemetryUploaderService (extension, every 15 min + on completion)
             └─ maps V2→V4 (pipelineRunV4Mapper.ts) → POST /v1/telemetry/pipeline-run
                  └─ platform TelemetryIngestService.ingest()
@@ -703,6 +703,11 @@ Go history producer (internal/state/history.go)
                       └─ pipeline_runs                                   (run list + /stats)
                            └─ dashboard GET /v1/pipeline-runs + /stats
 ```
+
+`<pipeline state dir>` is the clone's pipeline state directory
+(`nightgauge layout path pipeline`): `<git-common-dir>/nightgauge/pipeline/`,
+which linked worktrees share with the main clone and git never commits
+([ADR-024 § 7](decisions/024-data-and-state-layout.md#7-per-clone-and-per-checkout-data)).
 
 Note the autonomous path does **not** use the Go scheduler's direct
 `ingestRun` push or the live `/v1/pipelines/events` emitter — both are bypassed

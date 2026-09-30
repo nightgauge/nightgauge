@@ -12,7 +12,7 @@ is missing.
 - [Auto-reconstruct missing context file](#auto-reconstruct-missing-context-file)
 
 Extract issue number from branch (`grep -oE '[0-9]+' | head -1`). Load
-`.nightgauge/pipeline/pr-{N}.json`. Parse `PR_NUMBER`, `PR_URL`,
+`"$(nightgauge layout path pipeline pr-{N}.json)"`. Parse `PR_NUMBER`, `PR_URL`,
 `BASE_BRANCH`. Signal stage start via Go binary `project move-status`:
 
 #### Signal stage start
@@ -52,7 +52,7 @@ not history — start from it instead of re-deriving everything from scratch.
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-FEEDBACK_FILE=".nightgauge/pipeline/feedback-${ISSUE_NUMBER}.json"
+FEEDBACK_FILE="$(nightgauge layout path pipeline feedback-${ISSUE_NUMBER}.json)"
 PR_MERGE_RETRY_CONTEXT=""
 if [ -f "$FEEDBACK_FILE" ]; then
   PR_MERGE_RETRY_CONTEXT=$(jq -r '[.signals[]? | select(.signal_type == "PR_MERGE_RETRY")] | (last // empty) | .rationale' "$FEEDBACK_FILE" 2>/dev/null || echo "")
@@ -83,9 +83,15 @@ file):
 ```bash
 # CLASSIFICATION example: "required-check-config-mismatch:Sentry Smoke (integration)"
 # REMEDIATION example: "remove 'Sentry Smoke' from required checks or drop continue-on-error"
+ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+: "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+CONTEXT_FILE="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
+CONTEXT_FILE_TMP=$(mktemp)
 jq --arg cls "$CLASSIFICATION" --arg rem "$REMEDIATION" \
   '.blocker = {classification: $cls, remediation: $rem, non_retryable: true}' \
-  "$CONTEXT_FILE" > "$CONTEXT_FILE.tmp" && mv "$CONTEXT_FILE.tmp" "$CONTEXT_FILE"
+  "$CONTEXT_FILE" > "$CONTEXT_FILE_TMP" &&
+  nightgauge layout write pipeline "pr-${ISSUE_NUMBER}.json" --from "$CONTEXT_FILE_TMP" >/dev/null
+rm -f "$CONTEXT_FILE_TMP"
 ```
 
 #### Auto-reconstruct missing context file
@@ -95,7 +101,7 @@ If context file missing, attempt auto-reconstruction from GitHub before failing:
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-CONTEXT_FILE=".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
 if [ ! -f "$CONTEXT_FILE" ]; then
   echo "WARNING: pr-${ISSUE_NUMBER}.json not found. Attempting to reconstruct from GitHub..."
 
@@ -126,7 +132,6 @@ if [ ! -f "$CONTEXT_FILE" ]; then
   AUTO_PR_NUMBER=$(printf '%s\n' "$PR_DATA" | jq -r '.number // empty' 2>/dev/null || echo "")
 
   if [ -n "$AUTO_PR_NUMBER" ] && [ "$AUTO_PR_NUMBER" != "null" ]; then
-    mkdir -p .nightgauge/pipeline
     jq -n \
       --argjson pr_data "$PR_DATA" \
       --argjson issue_number "$ISSUE_NUMBER" \
@@ -145,7 +150,7 @@ if [ ! -f "$CONTEXT_FILE" ]; then
         ci_monitoring: { monitored: false, final_status: "unknown" },
         created_at: $created_at,
         reconstructed: true
-      }' > "$CONTEXT_FILE"
+      }' | nightgauge layout write pipeline "pr-${ISSUE_NUMBER}.json" >/dev/null
     echo "Reconstructed pr-${ISSUE_NUMBER}.json from Go binary pr view (pr-create may not have run)."
   else
     echo "ERROR: pr-${ISSUE_NUMBER}.json missing and could not reconstruct from GitHub."

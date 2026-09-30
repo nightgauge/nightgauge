@@ -7,11 +7,21 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/knowledge/telemetry"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
+
+func eventsPath(t *testing.T, root string) string {
+	t.Helper()
+	path, err := telemetry.Path(root)
+	if err != nil {
+		t.Fatalf("telemetry.Path: %v", err)
+	}
+	return path
+}
 
 func writeEventsFixture(t *testing.T, root string, events []telemetry.Event) {
 	t.Helper()
-	path := knowledgeEventsPathFor(root)
+	path := eventsPath(t, root)
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -32,7 +42,7 @@ func writeEventsFixture(t *testing.T, root string, events []telemetry.Event) {
 }
 
 func TestAggregateKnowledge_MissingFile(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	agg, err := AggregateKnowledge(root)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -46,7 +56,7 @@ func TestAggregateKnowledge_MissingFile(t *testing.T) {
 }
 
 func TestAggregateKnowledge_CountsByTypeStageScope(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeEventsFixture(t, root, []telemetry.Event{
 		{Type: telemetry.EventScaffold, Stage: "issue-pickup", Scope: "issue:42"},
 		{Type: telemetry.EventRead, Stage: "feature-dev", Scope: "issue:42"},
@@ -81,7 +91,7 @@ func TestAggregateKnowledge_CountsByTypeStageScope(t *testing.T) {
 }
 
 func TestAggregateKnowledge_RecallHitRate(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeEventsFixture(t, root, []telemetry.Event{
 		{Type: telemetry.EventRecall, Stage: "feature-dev"},
 		{Type: telemetry.EventRecall, Stage: "feature-dev"},
@@ -100,7 +110,7 @@ func TestAggregateKnowledge_RecallHitRate(t *testing.T) {
 }
 
 func TestAggregateKnowledge_RecallHitRateZeroWhenNoRecall(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeEventsFixture(t, root, []telemetry.Event{
 		{Type: telemetry.EventScaffold, Stage: "issue-pickup"},
 	})
@@ -114,8 +124,8 @@ func TestAggregateKnowledge_RecallHitRateZeroWhenNoRecall(t *testing.T) {
 }
 
 func TestAggregateKnowledge_SkipsMalformedLines(t *testing.T) {
-	root := t.TempDir()
-	path := knowledgeEventsPathFor(root)
+	root := layouttest.Repo(t)
+	path := eventsPath(t, root)
 	_ = os.MkdirAll(filepath.Dir(path), 0755)
 	// Mix valid + malformed lines.
 	data := []byte(`{"type":"read","stage":"feature-dev","scope":"issue:1"}
@@ -135,7 +145,7 @@ this is not json
 }
 
 func TestAggregateKnowledge_UnknownStageBucket(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	writeEventsFixture(t, root, []telemetry.Event{
 		{Type: telemetry.EventRead, Stage: "", Scope: "issue:7"},
 	})

@@ -10,6 +10,7 @@ import {
 import { createMockQuery, createFailingQuery, createMockResult } from "../mocks/agent-sdk.js";
 import type { SDKQueryFunction } from "../../src/orchestrator/StageExecutor.js";
 import { RUN_IDENTITY_PATTERN } from "../../src/context/runIdentity.js";
+import { resolveCloneLayout } from "../../src/context/cloneLayout.js";
 
 /**
  * Wait until the orchestrator is parked on its approval gate (#1423).
@@ -47,7 +48,10 @@ describe("PipelineOrchestrator", () => {
       const orchestrator = new PipelineOrchestrator(createMockQuery());
 
       const config = orchestrator.getConfig();
-      expect(config.contextPath).toBe(".nightgauge/pipeline");
+      // The working directory's per-clone pipeline directory (pinned to a
+      // temporary directory by tests/setup/hermeticCloneLayout.ts).
+      expect(config.contextPath).toBe(resolveCloneLayout(process.cwd()).pipeline);
+      expect(config.plansPath).toBe(resolveCloneLayout(process.cwd()).plans);
       expect(config.defaultModel).toBe("sonnet");
       expect(config.stages).toEqual(DEFAULT_STAGES);
     });

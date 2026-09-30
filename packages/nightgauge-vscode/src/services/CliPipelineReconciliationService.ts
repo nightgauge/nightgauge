@@ -6,7 +6,7 @@
  * only accepts a runtime snapshot when the root's current-run sidecar agrees
  * on repository + issue and the owning process is still alive.
  */
-import { pipelineStateDir } from "../utils/cloneLayout";
+import { isUsableWorkspaceRoot, pipelineStateDir } from "../utils/cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import type { Disposable } from "vscode";
@@ -113,6 +113,9 @@ export class CliPipelineReconciliationService implements Disposable {
       }
 
       for (const root of dedupedRoots.values()) {
+        // A folder outside a git repository has no per-clone state, so no CLI
+        // run to reconcile; resolving it would throw on every interval.
+        if (!isUsableWorkspaceRoot(root.path)) continue;
         const run = await readActiveRun(root, this.isProcessAlive, this.onLegacySnapshotName);
         if (!run) continue;
         seen.add(run.key);

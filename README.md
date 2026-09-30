@@ -237,8 +237,8 @@ switching is a supported beta workflow; inspect the handoff files before
 continuing because it has less live coverage than a single-provider run.
 
 1. Run a stage in Claude or Codex.
-2. Confirm handoff files under `.nightgauge/pipeline/` and plans under
-   `.nightgauge/plans/`.
+2. Confirm handoff files in `nightgauge layout path pipeline` and plans in
+   `nightgauge layout path plans` (per-clone, in the git directory).
 3. Continue with the next stage in the other adapter.
 
 Example:
@@ -439,7 +439,8 @@ What it does:
 
 - Reads `docs/` folder to understand existing patterns
 - Analyzes codebase architecture
-- Creates `.nightgauge/plans/<issue>-<title>.md` with:
+- Creates `<issue>-<title>.md` in the clone's plans directory
+  (`nightgauge layout path plans`) with:
   - Implementation phases
   - File change summary
   - Test strategy

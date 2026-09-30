@@ -204,10 +204,8 @@ ancestry: a squash merge leaves the branch tip a non-ancestor of the default
 branch, so an ancestry check reports a false negative for every merged branch.
 
 Every root is canonicalized to its repository's MAIN checkout first, including an
-explicit --workdir. A linked worktree has a ` + layout.PipelineStateDisplay() + ` directory of its
-own (the .gitkeep is tracked) and it is always empty, so a sweep rooted there
-would read "no runs in flight" while git still listed — and this command still
-removed — every worktree of the repository.
+explicit --workdir. Run state lives under the git common dir, so every worktree of
+a clone reads the same snapshots.
 
 Runs in flight are protected by their runtime snapshots
 (` + layout.PipelineStateDisplay() + `/runtime-<issue>-<runId>.json), read per canonicalized root,
@@ -248,7 +246,7 @@ created for a run about to start), and any issue with a run in flight.`,
 				// precondition ActiveIssuesFromSnapshots documents: a linked
 				// worktree's state dir exists, is empty, and answers "nothing is
 				// running" with no error at all.
-				active, scanErr := state.ActiveIssuesFromSnapshots(state.PipelineStateDir(root))
+				active, scanErr := state.ActiveIssuesForRoot(root)
 				if scanErr != nil {
 					// "I could not look" is never "nothing is running" (#296).
 					// The only protection this command has against destroying a

@@ -39,19 +39,18 @@ var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{8,128}$`)
 
 // Dir returns the absolute per-project trace directory, under rootDir's
 // pipeline state directory (layout.PipelineStateDir). A relative rootDir is
-// made absolute first, so it names the same directory as before; if that
-// fails Dir returns "", which reads as absent. Not created here — the writer
-// creates it on first append.
-func Dir(rootDir string) string {
+// made absolute first. The resolver's error ("not a git repository" outside
+// one) is returned. Not created here — the writer creates it on first append.
+func Dir(rootDir string) (string, error) {
 	abs, err := filepath.Abs(rootDir)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("trace: resolve %q: %w", rootDir, err)
 	}
 	dir, err := layout.PipelineStateDir(abs)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("trace: trace directory: %w", err)
 	}
-	return filepath.Join(dir, "trace")
+	return filepath.Join(dir, "trace"), nil
 }
 
 // FilePath returns the absolute path of the per-run trace JSONL for runID,
@@ -61,9 +60,9 @@ func FilePath(rootDir, runID string) (string, error) {
 	if !runIDPattern.MatchString(runID) {
 		return "", fmt.Errorf("trace: invalid run id %q", runID)
 	}
-	dir := Dir(rootDir)
-	if dir == "" {
-		return "", fmt.Errorf("trace: cannot resolve trace directory for root %q", rootDir)
+	dir, err := Dir(rootDir)
+	if err != nil {
+		return "", err
 	}
 	return filepath.Join(dir, runID+".jsonl"), nil
 }
@@ -222,7 +221,11 @@ func SortEvents(events []Event) {
 // ListRunIDs returns run ids with a trace file under rootDir, newest first
 // by file modification time.
 func ListRunIDs(rootDir string) ([]string, error) {
-	entries, err := os.ReadDir(Dir(rootDir))
+	dir, err := Dir(rootDir)
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil

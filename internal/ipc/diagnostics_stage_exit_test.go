@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // readDailyRecords returns the records in today's daily file (or an empty
@@ -284,7 +285,7 @@ func TestBuildStageExitRecordFromIPC_BoundsRecentBash(t *testing.T) {
 // place. This is the regression guard that would have caught the #3608 gap
 // (where the Go scheduler write path was the only path).
 func TestRecordStageExitIPC_EndToEnd_WritesDailyJSONL(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	srv := &Server{
 		workspaceRoot: dir,
@@ -349,8 +350,8 @@ func TestRecordStageExitIPC_EndToEnd_WritesDailyJSONL(t *testing.T) {
 // for the pre-#232 behavior where the handler ignored p.Repo and always wrote
 // to srv.workspaceRoot.
 func TestRecordStageExitIPC_ScopedToTargetRepo(t *testing.T) {
-	launchRoot := t.TempDir() // IPC server workspaceRoot (launch root)
-	targetRoot := t.TempDir() // the run's registered target repo
+	launchRoot := layouttest.Repo(t) // IPC server workspaceRoot (launch root)
+	targetRoot := layouttest.Repo(t) // the run's registered target repo
 	s := NewServer(nil, WithWorkspaceRoot(launchRoot))
 	s.RegisterRepo("owner", "repo", targetRoot)
 
@@ -379,7 +380,7 @@ func TestRecordStageExitIPC_ScopedToTargetRepo(t *testing.T) {
 	if got := readDailyRecords(t, targetRoot); len(got) != 1 {
 		t.Fatalf("expected 1 record under the target repo, got %d", len(got))
 	}
-	expectedDir := filepath.Join(targetRoot, ".nightgauge", "pipeline", "exit-records")
+	expectedDir := filepath.Join(layouttest.PipelineDir(t, targetRoot), "exit-records")
 	if _, err := os.Stat(expectedDir); err != nil {
 		t.Errorf("expected target-repo exit-records dir %s: %v", expectedDir, err)
 	}
@@ -416,7 +417,7 @@ func TestRecordStageExitIPC_RejectsEmptyWorkspaceRoot(t *testing.T) {
 // TestRecordStageExitIPC_AppendSemantics — multiple calls in one day append
 // to the same daily file (no overwrites). Pins the file-format contract.
 func TestRecordStageExitIPC_AppendSemantics(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	srv := &Server{
 		workspaceRoot: dir,
 		methods:       map[string]Handler{},
@@ -449,7 +450,7 @@ func TestRecordStageExitIPC_AppendSemantics(t *testing.T) {
 		t.Errorf("daily file missing at %s: %v", dailyPath, err)
 	}
 	// And the parent directory matches the documented path
-	expectedDir := filepath.Join(dir, ".nightgauge", "pipeline", "exit-records")
+	expectedDir := filepath.Join(layouttest.PipelineDir(t, dir), "exit-records")
 	if _, err := os.Stat(expectedDir); err != nil {
 		t.Errorf("expected directory %s missing: %v", expectedDir, err)
 	}
@@ -467,7 +468,7 @@ func TestRecordStageExitIPC_AppendSemantics(t *testing.T) {
 // record so the on-disk shape (what `nightgauge exit-records tail`, the
 // pipeline-audit skill, and ad-hoc `jq` all read) is what is pinned.
 func TestRecordStageExitIPC_TokenConsumingStageWritesNonEmptyTokens(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	srv := &Server{
 		workspaceRoot: dir,
@@ -539,7 +540,7 @@ func TestRecordStageExitIPC_TokenConsumingStageWritesNonEmptyTokens(t *testing.T
 // the deterministic path) consumed nothing, so it must record nothing. The fix
 // forwards real figures — it never synthesizes them.
 func TestRecordStageExitIPC_DeterministicStageStillRecordsZero(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	srv := &Server{
 		workspaceRoot: dir,

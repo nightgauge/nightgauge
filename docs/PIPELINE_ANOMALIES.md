@@ -38,7 +38,8 @@ row to this table.
 The issue-pickup runner reads the issue, derives the branch name with the same
 function `nightgauge git branch-create --issue` uses, creates the branch through
 the same code, pushes it (best-effort; pr-create pushes again), and writes
-`.nightgauge/pipeline/issue-{N}.json` with a temp-file-plus-rename write, so the
+`issue-{N}.json` to the clone's pipeline state directory
+(`nightgauge layout path pipeline`) with a temp-file-plus-rename write, so the
 file is never observable empty or partial and `branch` is always a string. The
 routing object comes from the same deterministic routing Decision the scheduler
 applies to the run's stage list (`nightgauge issue route` computes the same

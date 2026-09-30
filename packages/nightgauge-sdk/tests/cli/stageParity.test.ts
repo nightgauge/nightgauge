@@ -72,47 +72,54 @@ const PLUGIN_SKILL_PATH_BY_STAGE: Record<PipelineStage, string> = {
   "pipeline-finish": "",
 };
 
-const REQUIRED_SKILL_CONTRACTS: Record<PipelineStage, string[]> = {
+/**
+ * A pipeline context file reached through the layout CLI (ADR-024 § 7):
+ * `nightgauge layout path|write|append pipeline <kind>-<issue>.json`, with the
+ * issue number as `{N}`, a shell variable, or a template parameter.
+ */
+function pipelineFile(kind: string): RegExp {
+  return new RegExp(
+    `nightgauge layout (?:path|write|append) pipeline "?${kind}-` +
+      "(?:\\{N\\}|\\$\\{?[A-Z_]+\\}?|\\{\\{issueNumber\\}\\})\\.json"
+  );
+}
+
+const REQUIRED_SKILL_CONTRACTS: Record<PipelineStage, Array<string | RegExp>> = {
   "pipeline-start": [],
-  "issue-pickup": [
-    ".nightgauge/pipeline/issue-{N}.json",
-    "project move-status",
-    "running",
-    "complete",
-  ],
+  "issue-pickup": [pipelineFile("issue"), "project move-status", "running", "complete"],
   "feature-planning": [
     "PLAN.md",
-    ".nightgauge/pipeline/planning-{N}.json",
+    pipelineFile("planning"),
     "project move-status",
     "running",
     "complete",
   ],
   "feature-dev": [
-    ".nightgauge/pipeline/planning-{N}.json",
-    ".nightgauge/pipeline/dev-{N}.json",
+    pipelineFile("planning"),
+    pipelineFile("dev"),
     "project move-status",
     "running",
     "complete",
   ],
   "feature-validate": [
-    ".nightgauge/pipeline/dev-{N}.json",
-    ".nightgauge/pipeline/validate-{N}.json",
+    pipelineFile("dev"),
+    pipelineFile("validate"),
     "project move-status",
     "running",
     "complete",
   ],
   "pr-create": [
-    ".nightgauge/pipeline/dev-{N}.json",
-    ".nightgauge/pipeline/validate-{N}.json",
+    pipelineFile("dev"),
+    pipelineFile("validate"),
     "project move-status",
     "in-progress",
     "in-review",
   ],
   "pr-merge": [
-    ".nightgauge/pipeline/pr-{N}.json",
-    ".nightgauge/pipeline/issue-{N}.json",
-    ".nightgauge/pipeline/planning-{N}.json",
-    ".nightgauge/pipeline/dev-{N}.json",
+    pipelineFile("pr"),
+    pipelineFile("issue"),
+    pipelineFile("planning"),
+    pipelineFile("dev"),
     "project move-status",
     "running",
     "complete",
@@ -181,11 +188,18 @@ describe("stage parity regression matrix", () => {
       const requiredContracts = REQUIRED_SKILL_CONTRACTS[stage];
 
       for (const requiredContract of requiredContracts) {
-        expect(
-          skillContent,
-          `Skill contract drift for stage '${stage}': expected '${requiredContract}'.`
-        ).toContain(requiredContract);
+        const message = `Skill contract drift for stage '${stage}': expected '${requiredContract}'.`;
+        if (typeof requiredContract === "string") {
+          expect(skillContent, message).toContain(requiredContract);
+        } else {
+          expect(skillContent, message).toMatch(requiredContract);
+        }
       }
+      // Per-clone data left the working tree; agents never address it by path.
+      expect(
+        skillContent,
+        `Stage '${stage}' still names the in-tree .nightgauge/pipeline location`
+      ).not.toContain(".nightgauge/pipeline/");
     }
   });
 

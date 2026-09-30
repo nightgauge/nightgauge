@@ -16,6 +16,24 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge doctor --fix` moves per-clone data to its new location once**
+  (#2040, ADR-024 § 15). Plain `nightgauge doctor` reports each class still at
+  an old location (pipeline state, plans, retros, logs, pipeline worktrees
+  under `.nightgauge/worktrees/` or `.worktrees/`, and the old recall cache)
+  with the exact target, as `housekeeping` (`NGD044`), so the exit status is
+  unchanged. The `layout.migrate` remedy moves them under `.migrate.lock`:
+  a rename on one filesystem, or a synced copy then a delete across
+  filesystems, keeping modes; symlinks are recreated, never followed; new
+  directories are 0700. It never overwrites a file: a file at both locations
+  is reported with both paths (`NGD045`) and nothing moves (exit 3).
+  Worktrees move with `git worktree move`, except one a run is in flight on,
+  which is skipped and reported (exit 4). The old recall cache is deleted, not
+  moved. A `layout-version` marker is written last, and a second pass reports
+  `layout v1` and changes nothing. The first `nightgauge` command on a clone
+  without the marker runs the same migration automatically before doing
+  anything else (not `doctor`, `layout`, `version`, `help`, completion, hooks or
+  `--dry-run`). It never fails or blocks that command: whatever it cannot move
+  stays for `nightgauge doctor --fix`, and one stderr line says so.
 - **Nightgauge logs are bounded by size and age** (#2029, ADR-024 § 11). Each
   log directory (the clone's `.nightgauge/logs/` and the machine state `logs/`)
   is held to 200 MB and 30 days by default, set by machine-tier
@@ -182,6 +200,29 @@ changelog, and the release workflow refuses a tag that does not.
   from it. It ships in no package.
 
 ### Changed
+
+- **Run state, plans, retros and per-clone logs live in the git directory, not
+  the working tree** (#2037, ADR-024 § 7). The pipeline, plans, retros and logs
+  classes moved from `<repo>/.nightgauge/<class>` to
+  `<git-common-dir>/nightgauge/<class>` (`.git/nightgauge/` in a normal clone),
+  so `git add -A`, watchers, search indexes, linters and Docker build contexts
+  no longer see them, and every linked worktree of a clone shares the main
+  clone's data. The directory is created with mode 0700 (git's group mode in a
+  `core.sharedRepository` clone), and a symlinked class directory is refused.
+  Outside a git repository these commands fail with "not a git repository"
+  instead of writing into the current directory. The new `nightgauge layout`
+  command prints every resolved location as JSON, `nightgauge layout path`
+  prints one, and `nightgauge layout write` / `append` store a file there
+  (atomic, confined to the class directory); skills write stage contexts, plans
+  and retros through it instead of by path. The VS Code extension resolves the
+  same directory once per workspace folder, and neither it nor
+  `nightgauge serve` creates `.nightgauge/pipeline`, `plans` or `logs`
+  directories or `.gitkeep` files in the working tree any more. Existing
+  in-tree files are not read; `nightgauge doctor --fix` moves them (#2040).
+  The demo workspace (`npm run demo` and the VS Code host tier's demo window)
+  is materialized as a git repository, with its per-clone seed data placed in
+  the clone's directory by one shared helper, so the dashboard's file-backed
+  tabs still show its runs.
 
 - **Every Go caller resolves its per-clone directories through `internal/layout`
   (#2034, #2035).** The CLI (`cmd/nightgauge`) and the remaining internal

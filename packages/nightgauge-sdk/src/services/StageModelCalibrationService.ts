@@ -20,6 +20,7 @@
  */
 
 import * as fs from "node:fs/promises";
+import { cloneClassDir } from "../context/cloneLayout.js";
 import * as path from "node:path";
 import { TIER_BANDS } from "../eval/tierBands.js";
 import { getModelDescriptor, isLocalProvider, parseOpenCodeModel } from "../eval/modelRegistry.js";
@@ -106,7 +107,7 @@ export interface StageModelBucketCalibration {
 
 /**
  * The full calibration table stored in
- * `.nightgauge/pipeline/stage-model-calibration.json`.
+ * `<git-common-dir>/nightgauge/pipeline/stage-model-calibration.json`.
  */
 export interface StageModelCalibrationTable {
   schema_version: "1";
@@ -269,9 +270,11 @@ export class StageModelCalibrationService {
   }
 
   /**
-   * Get the default calibration file path for a workspace.
+   * Get the default calibration file path for a workspace: `stage-model-calibration.json` in the
+   * pipeline class directory of its repository (ADR-024 § 7). Throws
+   * `NotAGitRepositoryError` when `workspaceRoot` is not in a repository.
    */
   static getDefaultPath(workspaceRoot: string): string {
-    return path.join(workspaceRoot, ".nightgauge", "pipeline", "stage-model-calibration.json");
+    return path.join(cloneClassDir("pipeline", workspaceRoot), "stage-model-calibration.json");
   }
 }

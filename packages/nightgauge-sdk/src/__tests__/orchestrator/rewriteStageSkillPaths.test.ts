@@ -35,11 +35,18 @@ describe("rewriteStageSkillPaths — skill directory normalisation", () => {
 
   it("trims a long separator run in linear time", () => {
     const base = "/extension/dist/skills/nightgauge-feature-planning";
+    // The fastest of several samples: one wall-clock sample absorbs any
+    // preemption or GC pause, which under a loaded machine alone could exceed
+    // the ratio below. The minimum measures the code, not the scheduler.
     const time = (separators: number) => {
       const directory = base + "/".repeat(separators);
-      const started = performance.now();
-      rewriteStageSkillPaths(CONTENT, "feature-planning", directory);
-      return performance.now() - started;
+      let best = Infinity;
+      for (let i = 0; i < 5; i++) {
+        const started = performance.now();
+        rewriteStageSkillPaths(CONTENT, "feature-planning", directory);
+        best = Math.min(best, performance.now() - started);
+      }
+      return best;
     };
 
     time(10_000); // warm up the JIT before measuring

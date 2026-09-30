@@ -8,6 +8,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Per-clone pipeline state, plans, retros and logs are read at
+  `$(nightgauge layout path <class> <name>)` and written through
+  `nightgauge layout write|append`, not by `.nightgauge/...` path (#2037,
+  ADR-024 § 7).
+
 ## [1.1.1] - 2026-09-27
 
 ### Fixed

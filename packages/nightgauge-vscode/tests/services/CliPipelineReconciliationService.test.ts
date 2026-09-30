@@ -6,6 +6,8 @@ import {
   CliPipelineReconciliationService,
   type ReconciledCliRun,
 } from "../../src/services/CliPipelineReconciliationService";
+import { pipelineStateDir } from "../../src/utils/cloneLayout";
+import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 const tempRoots: string[] = [];
 
@@ -30,7 +32,7 @@ async function fixture(
 ): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "nightgauge-cli-run-"));
   tempRoots.push(root);
-  const stateDir = path.join(root, ".nightgauge", "pipeline");
+  const stateDir = mkFakeCloneLayout(root).pipeline;
   await mkdir(stateDir, { recursive: true });
   await writeFile(
     path.join(stateDir, "current-run.json"),
@@ -122,6 +124,26 @@ describe("CliPipelineReconciliationService", () => {
     service.dispose();
   });
 
+  it("skips a root outside a git repository instead of rejecting every interval", async () => {
+    const primary = await fixture("acme/primary", 1, runIdFor(1));
+    const plainFolder = await mkdtemp(path.join(tmpdir(), "nightgauge-not-a-repo-"));
+    tempRoots.push(plainFolder);
+    const events = callbacks();
+    const service = new CliPipelineReconciliationService(
+      () => [
+        { path: plainFolder, repo: "acme/plain" },
+        { path: primary, repo: "acme/primary" },
+      ],
+      events.value,
+      { isProcessAlive: () => true }
+    );
+
+    await expect(service.scan()).resolves.toBeUndefined();
+
+    expect(events.discovered.map((run) => run.snapshot.repo)).toEqual(["acme/primary"]);
+    service.dispose();
+  });
+
   it("rejects stale processes, malformed identity, and cross-repository snapshots", async () => {
     const stale = await fixture("acme/stale", 3, runIdFor(3));
     const crossRepo = await fixture("acme/wrong", 4, runIdFor(4));
@@ -151,7 +173,7 @@ describe("CliPipelineReconciliationService", () => {
     );
     await service.scan();
     await service.scan();
-    await rm(path.join(root, ".nightgauge", "pipeline", "current-run.json"));
+    await rm(path.join(pipelineStateDir(root), "current-run.json"));
     await service.scan();
 
     expect(events.discovered).toHaveLength(1);
@@ -214,7 +236,7 @@ describe("CliPipelineReconciliationService", () => {
     const runId = runIdFor(372);
     const root = await mkdtemp(path.join(tmpdir(), "nightgauge-cli-run-"));
     tempRoots.push(root);
-    const stateDir = path.join(root, ".nightgauge", "pipeline");
+    const stateDir = mkFakeCloneLayout(root).pipeline;
     await mkdir(stateDir, { recursive: true });
     // Sidecar from the NEW binary…
     await writeFile(

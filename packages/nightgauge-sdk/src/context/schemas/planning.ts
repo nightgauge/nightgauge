@@ -269,7 +269,7 @@ export const PlanningContextSchema = z
      *
      * Populated when the feature-planning ac-reconcile sub-step ran. Null or
      * absent when the issue body had no checkboxes, or when the binary was
-     * unavailable. Same shape as `.nightgauge/pipeline/ac-reconcile-{N}.json`.
+     * unavailable. Same shape as `<git-common-dir>/nightgauge/pipeline/ac-reconcile-{N}.json`.
      */
     ac_reconcile: ACReconcileContextSchema.nullish(),
     /**

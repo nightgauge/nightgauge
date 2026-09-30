@@ -6,12 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
-// writePipelineFile writes a file under workdir/.nightgauge/pipeline/.
+// writePipelineFile writes a file in workdir's pipeline state directory.
 func writePipelineFile(t *testing.T, workdir, name, content string) {
 	t.Helper()
-	dir := filepath.Join(workdir, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, workdir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", dir, err)
 	}
@@ -20,10 +22,11 @@ func writePipelineFile(t *testing.T, workdir, name, content string) {
 	}
 }
 
-// writeHistoryFile writes a file under workdir/.nightgauge/pipeline/history/.
+// writeHistoryFile writes a file in the history/ subdirectory of workdir's
+// pipeline state directory.
 func writeHistoryFile(t *testing.T, workdir, name, content string) {
 	t.Helper()
-	dir := filepath.Join(workdir, ".nightgauge", "pipeline", "history")
+	dir := filepath.Join(layouttest.PipelineDir(t, workdir), "history")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", dir, err)
 	}
@@ -33,7 +36,7 @@ func writeHistoryFile(t *testing.T, workdir, name, content string) {
 }
 
 func TestExtract_EmptyWorkdir(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	res, err := Extract(Options{Workdir: dir})
 	if err != nil {
 		t.Fatalf("Extract: %v", err)
@@ -53,8 +56,15 @@ func TestExtract_EmptyWorkdir(t *testing.T) {
 	}
 }
 
+func TestExtract_OutsideGitRepositoryIsAnError(t *testing.T) {
+	_, err := Extract(Options{Workdir: t.TempDir()})
+	if err == nil || !strings.Contains(err.Error(), "not a git repository") {
+		t.Fatalf("Extract outside a repository: err = %v, want not a git repository", err)
+	}
+}
+
 func TestExtract_BatchStateOnly(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writePipelineFile(t, dir, "batch-state.json", `{
 		"status": "partial",
 		"started_at": "2026-05-01T12:00:00Z",
@@ -107,7 +117,7 @@ func TestExtract_BatchStateOnly(t *testing.T) {
 }
 
 func TestExtract_HistoryOnly(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeHistoryFile(t, dir, "2026-04-22.jsonl", strings.Join([]string{
 		`{"record_type":"run","issue_number":300,"title":"ok","outcome":"complete","started_at":"2026-04-22T10:00:00Z","total_duration_ms":1000,"stages":{"feature-dev":{"status":"complete"}},"tokens":{"estimated_cost_usd":0.5}}`,
 		`{"record_type":"run","issue_number":400,"title":"failed run","outcome":"failed","started_at":"2026-04-22T11:00:00Z","total_duration_ms":2000,"stages":{"feature-dev":{"status":"complete"},"feature-validate":{"status":"failed"}},"tokens":{"estimated_cost_usd":1.5}}`,
@@ -136,7 +146,7 @@ func TestExtract_HistoryOnly(t *testing.T) {
 }
 
 func TestExtract_HistorySinceFilter(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	failedLine := `{"record_type":"run","issue_number":900,"outcome":"failed","stages":{},"tokens":{}}`
 	writeHistoryFile(t, dir, "2026-04-01.jsonl", failedLine)
 	writeHistoryFile(t, dir, "2026-04-22.jsonl", failedLine)
@@ -157,7 +167,7 @@ func TestExtract_HistorySinceFilter(t *testing.T) {
 }
 
 func TestExtract_HistoryIssueFilter(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeHistoryFile(t, dir, "2026-04-22.jsonl", strings.Join([]string{
 		`{"record_type":"run","issue_number":501,"outcome":"failed","stages":{},"tokens":{}}`,
 		`{"record_type":"run","issue_number":502,"outcome":"failed","stages":{},"tokens":{}}`,
@@ -173,7 +183,7 @@ func TestExtract_HistoryIssueFilter(t *testing.T) {
 }
 
 func TestExtract_HistoryMalformedLineSkipped(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writeHistoryFile(t, dir, "2026-04-22.jsonl", strings.Join([]string{
 		`{"record_type":"run","issue_number":701,"outcome":"failed","stages":{},"tokens":{}}`,
 		`not-json`,
@@ -194,8 +204,8 @@ func TestExtract_HistoryMalformedLineSkipped(t *testing.T) {
 }
 
 func TestExtract_ContextFilesFallback(t *testing.T) {
-	dir := t.TempDir()
-	pipelineDir := filepath.Join(dir, ".nightgauge", "pipeline")
+	dir := layouttest.Repo(t)
+	pipelineDir := layouttest.PipelineDir(t, dir)
 	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +244,7 @@ func TestExtract_ContextFilesFallback(t *testing.T) {
 // consumes. Field-name regressions break the skill silently — this test pins
 // the shape.
 func TestExtract_JSONSchemaStability(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	writePipelineFile(t, dir, "batch-state.json", `{
 		"status": "partial",
 		"started_at": "2026-05-01T12:00:00Z",

@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/reclaim"
 )
 
@@ -758,10 +759,7 @@ func TestResetPipeline_PreservesUnlandedDeliverable(t *testing.T) {
 	if err := os.WriteFile(deliverablePath, []byte("package internal\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pipelineDir := filepath.Join(dir, ".nightgauge", "pipeline")
-	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	pipelineDir := layouttest.MkPipelineDir(t, dir)
 	handoff := `{"files_changed":{"created":["internal/widget.go"],"modified":[]}}`
 	if err := os.WriteFile(filepath.Join(pipelineDir, "dev-289.json"), []byte(handoff), 0o644); err != nil {
 		t.Fatal(err)
@@ -816,10 +814,7 @@ func writeFileTest(t *testing.T, dir, rel, content string) string {
 
 func writeDevHandoff(t *testing.T, dir string, issue int, body string) {
 	t.Helper()
-	pipelineDir := filepath.Join(dir, ".nightgauge", "pipeline")
-	if err := os.MkdirAll(pipelineDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	pipelineDir := layouttest.MkPipelineDir(t, dir)
 	name := fmt.Sprintf("dev-%d.json", issue)
 	if err := os.WriteFile(filepath.Join(pipelineDir, name), []byte(body), 0o644); err != nil {
 		t.Fatal(err)

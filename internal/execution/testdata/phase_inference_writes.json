@@ -1,0 +1,219 @@
+{
+  "_comment": "Shared by internal/execution/phase_inference_test.go and packages/nightgauge-sdk/src/__tests__/phaseInference.test.ts: both inferers must reach the same phase for every case. Per-clone files are written with `nightgauge layout write|append <class> <name>` or at <git-common-dir>/nightgauge/<class>/ (ADR-024 § 7). Each case: Start(), replay setup, observe the call; want is the phase index it advances to, or -1 for none.",
+  "cases": [
+    {
+      "name": "dev handoff via layout write heredoc",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Edit", "input": { "file_path": "src/a.go" } }],
+      "tool": "Bash",
+      "input": {
+        "command": "nightgauge layout write pipeline dev-42.json <<'EOF'\n{\"issue\":42}\nEOF"
+      },
+      "want": 14
+    },
+    {
+      "name": "dev handoff via piped layout write",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Edit", "input": { "file_path": "src/a.go" } }],
+      "tool": "Bash",
+      "input": { "command": "jq -n '{issue:42}' | nightgauge layout write pipeline dev-42.json" },
+      "want": 14
+    },
+    {
+      "name": "dev handoff via layout write --from",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Edit", "input": { "file_path": "src/a.go" } }],
+      "tool": "Bash",
+      "input": { "command": "nightgauge layout write pipeline dev-42.json --from /tmp/dev.json" },
+      "want": 14
+    },
+    {
+      "name": "dev handoff with flags before the class and a quoted name",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Edit", "input": { "file_path": "src/a.go" } }],
+      "tool": "Bash",
+      "input": {
+        "command": "nightgauge layout --workdir /repo write --from=/tmp/d.json pipeline \"dev-42.json\""
+      },
+      "want": 14
+    },
+    {
+      "name": "dev handoff named through a shell variable",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Edit", "input": { "file_path": "src/a.go" } }],
+      "tool": "Bash",
+      "input": {
+        "command": "nightgauge layout write pipeline \"dev-${ISSUE}.json\" --from /tmp/dev.json"
+      },
+      "want": 14
+    },
+    {
+      "name": "dev handoff edited in the clone data dir",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Edit", "input": { "file_path": "src/a.go" } }],
+      "tool": "Write",
+      "input": { "file_path": "/repo/.git/nightgauge/pipeline/dev-42.json" },
+      "want": 14
+    },
+    {
+      "name": "layout path only reads the dev handoff",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Edit", "input": { "file_path": "src/a.go" } }],
+      "tool": "Bash",
+      "input": { "command": "cat \"$(nightgauge layout path pipeline dev-42.json)\"" },
+      "want": -1
+    },
+    {
+      "name": "a retro written through layout is not the dev handoff",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Edit", "input": { "file_path": "src/a.go" } }],
+      "tool": "Bash",
+      "input": { "command": "nightgauge layout write retros 42.md --from /tmp/r.md" },
+      "want": -1
+    },
+    {
+      "name": "source edit is implementation",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Read", "input": { "file_path": "PLAN.md" } }],
+      "tool": "Edit",
+      "input": { "file_path": "/repo/internal/feature.go" },
+      "want": 8
+    },
+    {
+      "name": "clone data dir write is not a source edit",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Read", "input": { "file_path": "PLAN.md" } }],
+      "tool": "Write",
+      "input": { "file_path": "/repo/.git/nightgauge/logs/run.log" },
+      "want": -1
+    },
+    {
+      "name": "clone data dir plan edit is not a source edit",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Read", "input": { "file_path": "PLAN.md" } }],
+      "tool": "Edit",
+      "input": { "file_path": "/repo/.git/nightgauge/plans/42-x.md" },
+      "want": -1
+    },
+    {
+      "name": "in-tree config edit is not a source edit",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Read", "input": { "file_path": "PLAN.md" } }],
+      "tool": "Edit",
+      "input": { "file_path": ".nightgauge/config.yaml" },
+      "want": -1
+    },
+    {
+      "name": "layout write is not a source edit",
+      "stage": "feature-dev",
+      "setup": [{ "tool": "Read", "input": { "file_path": "PLAN.md" } }],
+      "tool": "Bash",
+      "input": { "command": "nightgauge layout write plans 42-x.md --from /tmp/p.md" },
+      "want": -1
+    },
+    {
+      "name": "plan via layout write heredoc",
+      "stage": "feature-planning",
+      "setup": [],
+      "tool": "Bash",
+      "input": { "command": "nightgauge layout write plans 42-add-widget.md <<'EOF'\n# Plan\nEOF" },
+      "want": 9
+    },
+    {
+      "name": "plan via layout write --from",
+      "stage": "feature-planning",
+      "setup": [],
+      "tool": "Bash",
+      "input": { "command": "nightgauge layout write plans 42-add-widget.md --from /tmp/plan.md" },
+      "want": 9
+    },
+    {
+      "name": "plan edited in the clone data dir",
+      "stage": "feature-planning",
+      "setup": [],
+      "tool": "Write",
+      "input": { "file_path": "/repo/.git/nightgauge/plans/42-add-widget.md" },
+      "want": 9
+    },
+    {
+      "name": "in-tree plan path is no longer the plan",
+      "stage": "feature-planning",
+      "setup": [],
+      "tool": "Write",
+      "input": { "file_path": ".nightgauge/plans/42-add-widget.md" },
+      "want": -1
+    },
+    {
+      "name": "non-markdown plans file is not the plan",
+      "stage": "feature-planning",
+      "setup": [],
+      "tool": "Bash",
+      "input": { "command": "nightgauge layout write plans 42-notes.txt --from /tmp/n.txt" },
+      "want": -1
+    },
+    {
+      "name": "planning handoff via piped layout write",
+      "stage": "feature-planning",
+      "setup": [],
+      "tool": "Bash",
+      "input": {
+        "command": "jq -n '{issue:42}' | nightgauge layout write pipeline planning-42.json"
+      },
+      "want": 10
+    },
+    {
+      "name": "planning handoff via layout append",
+      "stage": "feature-planning",
+      "setup": [],
+      "tool": "Bash",
+      "input": {
+        "command": "nightgauge layout append pipeline planning-42.json --from /tmp/c.json"
+      },
+      "want": 10
+    },
+    {
+      "name": "planning handoff edited in the clone data dir",
+      "stage": "feature-planning",
+      "setup": [],
+      "tool": "Write",
+      "input": { "file_path": "/repo/.git/nightgauge/pipeline/planning-42.json" },
+      "want": 10
+    },
+    {
+      "name": "plan and planning handoff in one command reach the later phase",
+      "stage": "feature-planning",
+      "setup": [],
+      "tool": "Bash",
+      "input": {
+        "command": "nightgauge layout write plans 42-x.md --from /tmp/p.md && nightgauge layout write pipeline planning-42.json --from /tmp/c.json"
+      },
+      "want": 10
+    },
+    {
+      "name": "validate handoff via layout write heredoc",
+      "stage": "feature-validate",
+      "setup": [],
+      "tool": "Bash",
+      "input": {
+        "command": "nightgauge layout write pipeline validate-42.json <<'EOF'\n{\"issue\":42}\nEOF"
+      },
+      "want": 19
+    },
+    {
+      "name": "validate handoff edited in the clone data dir",
+      "stage": "feature-validate",
+      "setup": [],
+      "tool": "Write",
+      "input": { "file_path": "/repo/.git/nightgauge/pipeline/validate-42.json" },
+      "want": 19
+    },
+    {
+      "name": "a validate log is not the validate handoff",
+      "stage": "feature-validate",
+      "setup": [],
+      "tool": "Bash",
+      "input": { "command": "nightgauge layout append logs validate-42.log --from /tmp/v.log" },
+      "want": -1
+    }
+  ]
+}

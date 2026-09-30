@@ -118,14 +118,21 @@ export class FeaturePlanningStage extends BaseStage<IssueContext, PlanningContex
     sections.push("");
     sections.push("1. Follow the documentation-first approach");
     sections.push("2. Read docs/ files BEFORE exploring code");
-    sections.push(`3. Create the plan file at .nightgauge/plans/${issueNumber}-*.md (required)`);
+    sections.push(
+      `3. Create the plan file with \`nightgauge layout write plans ${issueNumber}-<slug>.md\`` +
+        " (Markdown on stdin, required); it prints the plan's absolute path"
+    );
     sections.push(
       "4. Do NOT write PLAN.md at repository root; root PLAN.md is legacy/invalid for this stage"
     );
-    sections.push(`5. Write the context file to .nightgauge/pipeline/planning-${issueNumber}.json`);
+    sections.push(
+      "5. Write the context file with " +
+        `\`nightgauge layout write pipeline planning-${issueNumber}.json\` (JSON on stdin)`
+    );
     sections.push("6. The context file must include all required fields from the schema");
     sections.push(
-      "7. planning-{N}.json plan_file must point to the .nightgauge/plans path, not PLAN.md"
+      "7. planning-{N}.json plan_file must be the absolute path `nightgauge layout write plans`" +
+        " printed, not PLAN.md; never write under the git directory by path"
     );
     sections.push("8. Wait for user approval of the plan before indicating completion");
 
@@ -240,10 +247,12 @@ export class FeaturePlanningStage extends BaseStage<IssueContext, PlanningContex
       "### complexity_assessment.documentation_scope — one of: minimal | targeted | standard | extended",
       "",
       "## Instructions",
-      `1. Read .nightgauge/pipeline/planning-${issueNumber}.json`,
+      `1. Read "$(nightgauge layout path pipeline planning-${issueNumber}.json)"`,
       "2. Fix only the fields that appear in the validation errors above",
-      "3. Write the corrected file back to the same path",
-      `4. Verify with: jq . .nightgauge/pipeline/planning-${issueNumber}.json`,
+      "3. Write the corrected JSON back with " +
+        `\`nightgauge layout write pipeline planning-${issueNumber}.json\` (JSON on stdin);` +
+        " never edit the file under the git directory by path",
+      `4. Verify with: jq . "$(nightgauge layout path pipeline planning-${issueNumber}.json)"`,
     ].join("\n");
   }
 }

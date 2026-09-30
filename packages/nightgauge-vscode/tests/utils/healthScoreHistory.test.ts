@@ -8,13 +8,21 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import {
   HealthScoreHistoryWriter,
   HealthScoreHistoryReader,
 } from "../../src/utils/healthScoreHistory";
 import type { HealthScoreSnapshot } from "../../src/schemas/healthScoreHistory";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 vi.mock("node:fs/promises");
+
+/** `/test/workspace`'s pipeline state dir, under its (fake) git dir (#2037). */
+const PIPELINE_DIR = fakeCloneLayout("/test/workspace").pipeline;
+beforeEach(() => {
+  fakeCloneLayout("/test/workspace");
+});
 
 function createValidSnapshot(overrides: Partial<HealthScoreSnapshot> = {}): HealthScoreSnapshot {
   return {
@@ -48,7 +56,7 @@ describe("HealthScoreHistoryWriter", () => {
   describe("getFilePath()", () => {
     it("should return the correct path", () => {
       expect(HealthScoreHistoryWriter.getFilePath(workspaceRoot)).toBe(
-        "/test/workspace/.nightgauge/pipeline/health-history.jsonl"
+        path.join(PIPELINE_DIR, "health-history.jsonl")
       );
     });
   });
@@ -59,7 +67,7 @@ describe("HealthScoreHistoryWriter", () => {
 
       await HealthScoreHistoryWriter.appendSnapshot(workspaceRoot, snapshot);
 
-      expect(fs.mkdir).toHaveBeenCalledWith(expect.stringContaining(".nightgauge/pipeline"), {
+      expect(fs.mkdir).toHaveBeenCalledWith(PIPELINE_DIR, {
         recursive: true,
       });
       expect(fs.appendFile).toHaveBeenCalledWith(
@@ -368,7 +376,7 @@ describe("HealthScoreHistoryWriter.appendRecalibrationMarker()", () => {
       "Systemic fixes completed"
     );
 
-    expect(fs.mkdir).toHaveBeenCalledWith(expect.stringContaining(".nightgauge/pipeline"), {
+    expect(fs.mkdir).toHaveBeenCalledWith(PIPELINE_DIR, {
       recursive: true,
     });
 

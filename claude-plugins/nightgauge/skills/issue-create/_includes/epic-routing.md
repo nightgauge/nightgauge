@@ -150,8 +150,10 @@ Refusing to create issues until resolved.
 
 #### Step 2.4.4: Persist the manifest
 
-Write the routing manifest to `.nightgauge/pipeline/issue-create-routing-<epic-number>.json`
-(temp file; deleted after Phase 4.8 audit succeeds). Phase 3 reads this file
+Write the routing manifest with
+`nightgauge layout write pipeline issue-create-routing-<epic-number>.json`
+(content on stdin, or `--from FILE` after writing a temp file outside the git
+directory; deleted after Phase 4.8 audit succeeds). Phase 3 reads this file
 to dispatch `gh issue create` with the correct `--repo`. Phase 4 reads it to
 pass `--repo` and `--project` to `nightgauge project add`. Phase 4.8
 re-reads it to perform the post-creation audit.

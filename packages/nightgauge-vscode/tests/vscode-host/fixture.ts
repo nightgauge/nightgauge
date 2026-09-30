@@ -24,6 +24,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import * as vscode from "vscode";
+import { placeCloneData } from "../../demo/workspace-clone";
 import { redateWorkspace } from "../../demo/workspace-dates";
 
 /** Absolute path of the (temp) folder VSCode opened as the workspace. */
@@ -62,7 +63,10 @@ export function isPopulated(): boolean {
  * Copy the committed `populated` fixture into the open workspace folder.
  *
  * Deliberately additive and idempotent: providers may already hold a handle
- * to the folder, and nothing here should invalidate it.
+ * to the folder, and nothing here should invalidate it. The main window's
+ * folder is not a git repository, so the fixture's `.nightgauge/pipeline/`
+ * is working-tree content the extension does not read as per-clone data
+ * (ADR-024 § 7); no case asserts on it.
  */
 export function materializePopulatedFixture(): void {
   const root = workspaceRoot();
@@ -78,8 +82,11 @@ const DEMO_EPOCH_MS = Date.now();
 /**
  * Copy the committed demo workspace (`demo/workspace/`, #2107) over the open
  * workspace folder, re-dated to this window's start as `npm run demo` does
- * (#2285). Used by the demo-fixture suite, which runs last, so the smaller
- * `populated` fixture the earlier suites saw is not disturbed.
+ * (#2285). The folder becomes a git repository and the per-clone data the
+ * source stages under `.nightgauge/<class>` lands in its clone directory,
+ * where the extension reads it (`demo/workspace-clone.ts`, ADR-024 § 7).
+ * Only the demo window calls this, before its first activation, so the main
+ * window's folder stays a plain folder outside any git repository.
  */
 export function materializeDemoWorkspace(): void {
   const source = process.env.NIGHTGAUGE_HOST_DEMO_WORKSPACE;
@@ -91,6 +98,7 @@ export function materializeDemoWorkspace(): void {
   try {
     copyTree(source, staged);
     redateWorkspace(staged, DEMO_EPOCH_MS);
+    placeCloneData(staged, workspaceRoot());
     copyTree(staged, workspaceRoot());
   } finally {
     fs.rmSync(staged, { recursive: true, force: true });

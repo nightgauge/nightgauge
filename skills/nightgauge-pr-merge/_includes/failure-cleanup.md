@@ -71,8 +71,7 @@ cleanup_failed_pr() {
     > /dev/null 2>&1 || true
 
   # 4. Write failure record for continuous improvement ingestion
-  FAILURE_LOG=".nightgauge/pipeline/failures/pr-merge-$(date -u +%Y%m%dT%H%M%SZ).json"
-  mkdir -p "$(dirname "$FAILURE_LOG")" 2>/dev/null || true
+  FAILURE_LOG="failures/pr-merge-$(date -u +%Y%m%dT%H%M%SZ).json"
   echo "{
     \"pr_number\": $PR_NUMBER,
     \"issue_number\": ${ISSUE_NUMBER:-0},
@@ -80,7 +79,7 @@ cleanup_failed_pr() {
     \"stage\": \"pr-merge\",
     \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",
     \"branch\": \"$(git branch --show-current 2>/dev/null || echo unknown)\"
-  }" > "$FAILURE_LOG" 2>/dev/null || true
+  }" | nightgauge layout write pipeline "$FAILURE_LOG" >/dev/null 2>&1 || true
 
   # 3. Move issue back to Ready on the project board so it's visible
   BINARY="${NIGHTGAUGE_BIN:-}"

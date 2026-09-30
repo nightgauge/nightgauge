@@ -121,7 +121,10 @@ export class PRCreateStage extends BaseStage<DevContext, PRContext> {
     sections.push("3. Generate comprehensive PR description");
     sections.push(`4. Create PR that closes #${issueNumber}`);
     sections.push("5. Request appropriate reviewers");
-    sections.push(`6. Write the context file to .nightgauge/pipeline/pr-${issueNumber}.json`);
+    sections.push(
+      `6. Write the context file with \`nightgauge layout write pipeline pr-${issueNumber}.json\`` +
+        " (JSON on stdin); never write under the git directory by path"
+    );
     sections.push("7. The context file must include PR number, URL, and preflight results");
 
     return sections.join("\n");

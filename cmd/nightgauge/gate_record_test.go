@@ -14,12 +14,15 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/ipc"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
-// daemonWorkspace returns a temp workspace for a test daemon. Its socket is
-// placed in the runtime directory TestMain isolates (ADR-024 § 10), so the
-// workspace path's length no longer matters.
+// daemonWorkspace returns a temp workspace for a test daemon: a git
+// repository, because the run snapshots live in its clone's pipeline state
+// directory (ADR-024 § 7). Its socket is placed in the runtime directory
+// TestMain isolates (ADR-024 § 10), so the workspace path's length no longer
+// matters.
 func daemonWorkspace(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "ngd")
@@ -27,7 +30,7 @@ func daemonWorkspace(t *testing.T) string {
 		t.Fatalf("temp workspace: %v", err)
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	return dir
+	return layouttest.Init(t, dir)
 }
 
 // startGateRecordDaemon brings up a real socket-listening server rooted at
@@ -74,6 +77,26 @@ func seedRun(t *testing.T, workspace string, issue int) string {
 	return runID
 }
 
+// daemonGateResults reads the run's gate results for stage from the daemon's
+// live runtime (pipeline.getState), not from the snapshot file: the durable
+// record is built from that runtime, so a result only a file holds is lost.
+func daemonGateResults(t *testing.T, workspace string, issue int, stage string) int {
+	t.Helper()
+	c, err := ipc.DialDaemon(context.Background(), workspace, time.Second)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer c.Close()
+	var got struct {
+		StageGateResults map[string][]state.StageGateResult `json:"stageGateResults"`
+	}
+	params := ipc.PipelineGetStateParams{Owner: "acme", Repo: "platform", IssueNumber: issue}
+	if err := c.Call(context.Background(), "pipeline.getState", params, &got); err != nil {
+		t.Fatalf("getState: %v", err)
+	}
+	return len(got.StageGateResults[stage])
+}
+
 // TestRecordGateResult_RoutesThroughTheDaemonWhenOneIsReachable is AC1: with a
 // server up, the result arrives over IPC and is persisted by the single writer.
 func TestRecordGateResult_RoutesThroughTheDaemonWhenOneIsReachable(t *testing.T) {
@@ -86,7 +109,7 @@ func TestRecordGateResult_RoutesThroughTheDaemonWhenOneIsReachable(t *testing.T)
 		GateName: "pr-create", Passed: true, Timestamp: "2026-08-23T00:00:00Z",
 	})
 
-	stateDir := filepath.Join(workspace, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, workspace)
 	rs, err := state.LoadPersistedState(stateDir, runID)
 	if err != nil {
 		t.Fatalf("load the run's snapshot: %v", err)
@@ -116,7 +139,7 @@ func TestRecordGateResult_TakesTheRunIDFromTheStageEnvironment(t *testing.T) {
 		GateName: "pr-create", Passed: true, Timestamp: "2026-08-23T00:00:00Z",
 	})
 
-	rs, err := state.LoadPersistedState(filepath.Join(workspace, ".nightgauge", "pipeline"), runID)
+	rs, err := state.LoadPersistedState(layouttest.PipelineDir(t, workspace), runID)
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
@@ -130,13 +153,10 @@ func TestRecordGateResult_TakesTheRunIDFromTheStageEnvironment(t *testing.T) {
 // the direct path is racing nothing and keeps every one of ADR-017 Decision 5's
 // three rules.
 func TestRecordGateResult_FallsBackToTheDirectWriteWithNoDaemon(t *testing.T) {
-	workspace := t.TempDir()
+	workspace := layouttest.Repo(t)
 	const issue = 5503
 	runID := "01a02f24-498e-7364-bb8a-c96fa3739901"
-	stateDir := filepath.Join(workspace, ".nightgauge", "pipeline")
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
+	stateDir := layouttest.MkPipelineDir(t, workspace)
 
 	// A snapshot must already exist: load-or-skip means the direct path never
 	// CREATES one, which is the rule that stops it resurrecting a sealed run.
@@ -176,7 +196,7 @@ func TestRecordGateResult_DoesNotWriteDirectlyWhenTheDaemonRefuses(t *testing.T)
 	startGateRecordDaemon(t, workspace)
 	const issue = 5504
 	runID := seedRun(t, workspace, issue)
-	stateDir := filepath.Join(workspace, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, workspace)
 
 	// Close the run: its terminal claim seals and removes the snapshot, and the
 	// id lands in closedRuns.
@@ -237,23 +257,26 @@ func TestGateVerify_RunIDFlagIsWired(t *testing.T) {
 //
 // Before --record-root existed, this function used `workspace` for both: the
 // dial at <worktree>/.nightgauge/daemon.sock always failed, and the direct
-// write then targeted <worktree>/.nightgauge/pipeline, which has a pipeline
-// directory but no runtime-{issue}-{runID}.json — so the append took its
+// write then targeted the worktree's own pipeline directory, which held stage
+// context but no runtime-{issue}-{runID}.json — so the append took its
 // load-or-skip branch and wrote nothing. Every gate on every worktree run
 // recorded nowhere, which is why the end-of-run audit reported
 // [gate-not-invoked] for stages whose gates had demonstrably passed.
 //
-// Passing "" for recordRoot here reproduces the pre-fix behaviour and fails.
+// Per-clone state is shared by every root of a clone now (ADR-024 § 7), so the
+// direct write would find the snapshot; it is still the second writer, and
+// the daemon's live runtime would never see the result. Passing "" for
+// recordRoot here takes that path and fails the daemon-side assertion.
 func TestRecordGateResult_FilesUnderTheRecordRootWhenWorkdirIsAWorktree(t *testing.T) {
 	repo := daemonWorkspace(t)
 	startGateRecordDaemon(t, repo)
 	const issue = 5505
 	runID := seedRun(t, repo, issue)
 
-	// The real worktree shape: a .nightgauge/pipeline directory holding stage
-	// context files, but never a run snapshot.
+	// The worktree the gate reads its inputs from. Its stage context lives in
+	// the clone's pipeline state directory, never in the working tree.
 	worktree := filepath.Join(repo, ".worktrees", "issue-5505")
-	if err := os.MkdirAll(filepath.Join(worktree, ".nightgauge", "pipeline"), 0o755); err != nil {
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -262,7 +285,7 @@ func TestRecordGateResult_FilesUnderTheRecordRootWhenWorkdirIsAWorktree(t *testi
 	})
 
 	// The record must land on the run snapshot at the REPO root.
-	stateDir := filepath.Join(repo, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, repo)
 	rs, loadErr := state.LoadPersistedState(stateDir, runID)
 	if loadErr != nil {
 		t.Fatalf("load the run's snapshot at the repo root: %v", loadErr)
@@ -270,14 +293,13 @@ func TestRecordGateResult_FilesUnderTheRecordRootWhenWorkdirIsAWorktree(t *testi
 	if got := rs.StageGateResultsFor(state.PipelineStage("pr-create")); len(got) != 1 {
 		t.Fatalf("gate results recorded on the run = %d, want 1 — the record did not reach the authoritative snapshot", len(got))
 	}
+	if n := daemonGateResults(t, repo, issue, "pr-create"); n != 1 {
+		t.Fatalf("gate results on the daemon's live run = %d, want 1 — the record bypassed the daemon", n)
+	}
 
 	// And nothing may be written into the worktree.
-	if entries, err := os.ReadDir(filepath.Join(worktree, ".nightgauge", "pipeline")); err == nil {
-		for _, e := range entries {
-			if len(e.Name()) >= 8 && e.Name()[:8] == "runtime-" {
-				t.Errorf("a run snapshot was created in the worktree: %s", e.Name())
-			}
-		}
+	if _, err := os.Stat(filepath.Join(worktree, ".nightgauge")); !os.IsNotExist(err) {
+		t.Errorf("per-clone state was written into the worktree (stat err = %v)", err)
 	}
 }
 
@@ -303,13 +325,11 @@ func TestRecordGateResult_ReachesTheDaemonWhenItServesADifferentRoot(t *testing.
 	runID := seedRun(t, serveRoot, issue)
 
 	// A sibling repo: the run's own root, with a pipeline dir but NO socket.
-	repo := filepath.Join(filepath.Dir(serveRoot), "sibling-repo")
-	if err := os.MkdirAll(filepath.Join(repo, ".nightgauge", "pipeline"), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	repo := daemonWorkspace(t)
+	layouttest.MkPipelineDir(t, repo)
 	// And the worktree the gate reads its inputs from.
 	worktree := filepath.Join(repo, ".worktrees", "issue-5506")
-	if err := os.MkdirAll(filepath.Join(worktree, ".nightgauge", "pipeline"), 0o755); err != nil {
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -321,7 +341,7 @@ func TestRecordGateResult_ReachesTheDaemonWhenItServesADifferentRoot(t *testing.
 		state.StageGateResult{GateName: "pr-create", Passed: true, Timestamp: "2026-08-28T00:00:00Z"})
 
 	// The daemon owns the snapshot; the result must be on it.
-	rs, loadErr := state.LoadPersistedState(filepath.Join(serveRoot, ".nightgauge", "pipeline"), runID)
+	rs, loadErr := state.LoadPersistedState(layouttest.PipelineDir(t, serveRoot), runID)
 	if loadErr != nil {
 		t.Fatalf("load the run's snapshot at the serve root: %v", loadErr)
 	}

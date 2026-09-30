@@ -2,9 +2,11 @@
 # Re-inject pipeline context after compaction
 # stdout is added to Claude's context
 
-# Check for active pipeline state
-PIPELINE_DIR=".nightgauge/pipeline"
-if [ -f "$PIPELINE_DIR/current-stage.json" ]; then
+# Check for active pipeline state. It lives in the clone's git directory
+# (ADR-024 § 7); resolved with git so the hook works without the binary.
+GIT_COMMON_DIR=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+PIPELINE_DIR="$GIT_COMMON_DIR/nightgauge/pipeline"
+if [ -n "$GIT_COMMON_DIR" ] && [ -f "$PIPELINE_DIR/current-stage.json" ]; then
   echo "=== PIPELINE STATE (re-injected after compaction) ==="
   cat "$PIPELINE_DIR/current-stage.json" 2>/dev/null
   echo ""

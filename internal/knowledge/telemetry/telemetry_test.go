@@ -3,15 +3,24 @@ package telemetry
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func readEvents(t *testing.T, root string) []Event {
 	t.Helper()
-	f, err := os.Open(Path(root))
+	p, err := Path(root)
+	if err != nil {
+		t.Fatalf("resolve events path: %v", err)
+	}
+	f, err := os.Open(p)
 	if err != nil {
 		t.Fatalf("open events: %v", err)
 	}
@@ -29,7 +38,7 @@ func readEvents(t *testing.T, root string) []Event {
 }
 
 func TestEmit_AutofillsTimestampAndStage(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_STAGE", "feature-dev")
 	t.Setenv("NIGHTGAUGE_TELEMETRY_REDACT_QUERIES", "")
 
@@ -54,7 +63,7 @@ func TestEmit_AutofillsTimestampAndStage(t *testing.T) {
 }
 
 func TestEmit_StageFallsBackToUnknown(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_STAGE", "")
 
 	if err := Emit(root, Event{Type: EventRead}); err != nil {
@@ -67,7 +76,7 @@ func TestEmit_StageFallsBackToUnknown(t *testing.T) {
 }
 
 func TestEmit_TruncatesQuerySummary(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_TELEMETRY_REDACT_QUERIES", "")
 	long := strings.Repeat("x", QuerySummaryMaxChars*2)
 	if err := Emit(root, Event{Type: EventRecall, QuerySummary: long}); err != nil {
@@ -80,7 +89,7 @@ func TestEmit_TruncatesQuerySummary(t *testing.T) {
 }
 
 func TestEmit_RedactsQuerySummary(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_TELEMETRY_REDACT_QUERIES", "1")
 	if err := Emit(root, Event{Type: EventRecall, QuerySummary: "secret data here"}); err != nil {
 		t.Fatalf("emit: %v", err)
@@ -92,7 +101,7 @@ func TestEmit_RedactsQuerySummary(t *testing.T) {
 }
 
 func TestEmit_RedactionSkippedWhenQueryEmpty(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_TELEMETRY_REDACT_QUERIES", "1")
 	if err := Emit(root, Event{Type: EventStats}); err != nil {
 		t.Fatalf("emit: %v", err)
@@ -104,7 +113,7 @@ func TestEmit_RedactionSkippedWhenQueryEmpty(t *testing.T) {
 }
 
 func TestEmit_RoundTripAllOptionalFields(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_STAGE", "feature-validate")
 	t.Setenv("NIGHTGAUGE_TELEMETRY_REDACT_QUERIES", "")
 	hit := 2
@@ -138,7 +147,7 @@ func TestEmit_RoundTripAllOptionalFields(t *testing.T) {
 }
 
 func TestEmit_AllEventTypesAccepted(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	t.Setenv("NIGHTGAUGE_STAGE", "test")
 	for _, name := range AllEventTypes() {
 		if err := Emit(root, Event{Type: EventType(name)}); err != nil {
@@ -161,9 +170,23 @@ func TestIsValidEventType(t *testing.T) {
 }
 
 func TestPath_Stable(t *testing.T) {
-	got := Path("/root")
-	if !strings.HasSuffix(got, "/.nightgauge/pipeline/history/knowledge-events.jsonl") {
-		t.Fatalf("unexpected path: %s", got)
+	root := layouttest.Repo(t)
+	got, err := Path(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(layouttest.PipelineDir(t, root), "history", "knowledge-events.jsonl")
+	if got != want {
+		t.Fatalf("Path = %s, want %s", got, want)
+	}
+}
+
+func TestPath_OutsideAGitRepositoryIsAnError(t *testing.T) {
+	if _, err := Path(t.TempDir()); !errors.Is(err, layout.ErrNotGitRepository) {
+		t.Fatalf("Path outside a repository: err = %v, want ErrNotGitRepository", err)
+	}
+	if err := Emit(t.TempDir(), Event{Type: EventRead}); !errors.Is(err, layout.ErrNotGitRepository) {
+		t.Fatalf("Emit outside a repository: err = %v, want ErrNotGitRepository", err)
 	}
 }
 

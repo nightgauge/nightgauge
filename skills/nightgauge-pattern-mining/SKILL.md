@@ -157,7 +157,7 @@ For each set of matching files, analyze patterns:
 
 ### Phase 4: Similar Issues Detection
 
-1. List existing plan files: `Glob: .nightgauge/plans/*.md`
+1. List existing plan files: `ls "$(nightgauge layout path plans)"/*.md`
 2. For each plan file, extract the issue number and title from the filename
 3. For each plan, check if the issue's keywords overlap with the plan's filename
    keywords

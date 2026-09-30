@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -46,7 +47,7 @@ type capturedRequest struct {
 // and optionally writes V2RunRecord history files. Returns the workDir path.
 func setupTelemetryWorkspace(t *testing.T, records []state.V2RunRecord) string {
 	t.Helper()
-	workDir := t.TempDir()
+	workDir := layouttest.Repo(t)
 	configDir := filepath.Join(workDir, ".nightgauge")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatalf("mkdir config dir: %v", err)
@@ -56,7 +57,7 @@ func setupTelemetryWorkspace(t *testing.T, records []state.V2RunRecord) string {
 		t.Fatalf("write config: %v", err)
 	}
 	if len(records) > 0 {
-		historyDir := filepath.Join(workDir, ".nightgauge", "pipeline", "history")
+		historyDir := filepath.Join(layouttest.PipelineDir(t, workDir), "history")
 		writeV2TestRecord(t, historyDir, "2026-03-15", records)
 	}
 	return workDir

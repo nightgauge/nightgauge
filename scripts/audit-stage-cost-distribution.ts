@@ -3,7 +3,8 @@
  * Audit Stage Cost Distribution — Compute per-stage cost percentiles from
  * pipeline run history.
  *
- * Reads `.nightgauge/pipeline/history/*.jsonl`, extracts
+ * Reads the clone's `<git-common-dir>/nightgauge/pipeline/history/*.jsonl`
+ * (ADR-024 § 7; override with --history), extracts
  * `tokens.per_stage[<stage>].cost_usd` for every recorded run, and prints
  * p50 / p95 / p99 per stage along with sample size and recommended
  * `pipeline.stage_cost_caps` defaults (target = p95 × 2 rounded to nearest
@@ -24,6 +25,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { cloneClassDir } from "../packages/nightgauge-sdk/src/context/cloneLayout.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -66,7 +68,7 @@ interface StageStats {
 
 function parseArgs(argv: string[]): { days: number; historyDir: string } {
   let days = 90;
-  let historyDir = path.resolve(process.cwd(), ".nightgauge", "pipeline", "history");
+  let historyDir: string | undefined;
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--days" && argv[i + 1]) {
@@ -76,7 +78,8 @@ function parseArgs(argv: string[]): { days: number; historyDir: string } {
       historyDir = argv[++i];
     }
   }
-  return { days, historyDir };
+  // Default: the clone's run history (ADR-024 § 7), resolved from the cwd.
+  return { days, historyDir: historyDir ?? path.join(cloneClassDir("pipeline"), "history") };
 }
 
 // ---------------------------------------------------------------------------

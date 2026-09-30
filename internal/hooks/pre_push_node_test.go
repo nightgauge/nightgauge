@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // setupNodeBranchMock is setupCleanBranchMock with the npm phases mapped as
@@ -37,9 +39,7 @@ func writeNodeFixture(t *testing.T, pkgJSON string) (string, *mockCmdRunner) {
 	if err := os.WriteFile(filepath.Join(tmpDir, "package.json"), []byte(pkgJSON), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(tmpDir, ".nightgauge", "pipeline"), 0755); err != nil {
-		t.Fatal(err)
-	}
+	layouttest.MkPipelineDir(t, tmpDir)
 	return tmpDir, setupNodeBranchMock()
 }
 
@@ -173,7 +173,7 @@ func TestPrePushResult_NotApplicablePhaseIsRecordedOnDisk(t *testing.T) {
 	// EvaluatePrePush writes pre-push-<N>.json itself.
 	_ = EvaluatePrePush(context.Background(), runner, nodeInput(tmpDir))
 
-	raw, err := os.ReadFile(filepath.Join(tmpDir, ".nightgauge", "pipeline", "pre-push-42.json"))
+	raw, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, tmpDir), "pre-push-42.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

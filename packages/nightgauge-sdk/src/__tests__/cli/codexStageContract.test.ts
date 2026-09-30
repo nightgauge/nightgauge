@@ -6,6 +6,7 @@ import { createAdapterQueryFunction } from "../../cli/adapterQuery.js";
 import { defaultRegistry } from "../../cli/adapters/AdapterRegistry.js";
 import { validateCodexStagePostconditions } from "../../cli/commands/stage.js";
 import { rewriteStageSkillPaths } from "../../orchestrator/StageExecutor.js";
+import { initCloneRepo } from "../helpers/gitRepo.js";
 
 describe("Codex stage contract", () => {
   const temporaryDirectories: string[] = [];
@@ -40,6 +41,7 @@ describe("Codex stage contract", () => {
   it("preserves the final Codex response when the handoff artifact is missing", async () => {
     const cwd = await mkdtemp(path.join(tmpdir(), "nightgauge-codex-contract-"));
     temporaryDirectories.push(cwd);
+    initCloneRepo(cwd);
 
     await expect(
       validateCodexStagePostconditions({

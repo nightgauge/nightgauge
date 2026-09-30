@@ -15,6 +15,8 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/batch"
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // mockEpicIssueSvc implements issueGetter with epic sub-issue support.
@@ -196,7 +198,7 @@ Also touches packages/vscode/src/services/IpcClient.ts`
 }
 
 func TestWaveOrchestrator_FetchSubIssueDetails(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
 
 	// Set up epic with 3 sub-issues (1 closed, 2 open)
@@ -334,7 +336,7 @@ func TestWaveOrchestrator_BuildSummary(t *testing.T) {
 }
 
 func TestWaveOrchestrator_PersistWavePlan(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
 		execMgr: execution.NewManager(tmpDir, nil),
 	}
@@ -357,7 +359,7 @@ func TestWaveOrchestrator_PersistWavePlan(t *testing.T) {
 
 	wo.persistWavePlan(tmpDir)
 
-	planPath := filepath.Join(tmpDir, ".nightgauge", "pipeline", "wave-plan-100.json")
+	planPath := filepath.Join(layouttest.PipelineDir(t, tmpDir), "wave-plan-100.json")
 	data, err := os.ReadFile(planPath)
 	if err != nil {
 		t.Fatalf("wave plan not written: %v", err)
@@ -385,7 +387,7 @@ func TestWaveOrchestrator_PersistWavePlan(t *testing.T) {
 }
 
 func TestWaveOrchestrator_PersistWaveStatus(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	s := &Scheduler{
 		execMgr: execution.NewManager(tmpDir, nil),
 	}
@@ -402,7 +404,7 @@ func TestWaveOrchestrator_PersistWaveStatus(t *testing.T) {
 	}
 	wo.persistWaveStatus(tmpDir, summary)
 
-	statusPath := filepath.Join(tmpDir, ".nightgauge", "pipeline", "wave-status-100.json")
+	statusPath := filepath.Join(layouttest.PipelineDir(t, tmpDir), "wave-status-100.json")
 	data, err := os.ReadFile(statusPath)
 	if err != nil {
 		t.Fatalf("wave status not written: %v", err)
@@ -428,7 +430,7 @@ func TestWaveOrchestrator_PersistWaveStatus(t *testing.T) {
 }
 
 func TestWaveOrchestrator_DispatchItem_NonEpic(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := gitWorkspace(t)
 	issueSvc := newMockEpicIssueSvc()
 	runner := &trackingStageRunner{behavior: "succeed"}
 	s := buildWaveTestScheduler(t, tmpDir, issueSvc, runner)
@@ -452,7 +454,7 @@ func TestWaveOrchestrator_DispatchItem_NonEpic(t *testing.T) {
 }
 
 func TestWaveOrchestrator_DispatchItem_EpicSequentialFallback(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
 	runner := &trackingStageRunner{behavior: "succeed"}
 	s := buildWaveTestScheduler(t, tmpDir, issueSvc, runner)
@@ -502,7 +504,7 @@ func TestWaveOrchestrator_DispatchItem_EpicSequentialFallback(t *testing.T) {
 }
 
 func TestWaveOrchestrator_RunEpicWaves_ParallelExecution(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := gitWorkspace(t)
 	issueSvc := newMockEpicIssueSvc()
 	runner := &trackingStageRunner{behavior: "succeed"}
 	s := buildWaveTestScheduler(t, tmpDir, issueSvc, runner)
@@ -556,20 +558,20 @@ func TestWaveOrchestrator_RunEpicWaves_ParallelExecution(t *testing.T) {
 	}
 
 	// Verify wave plan was persisted
-	planPath := filepath.Join(tmpDir, ".nightgauge", "pipeline", "wave-plan-200.json")
+	planPath := filepath.Join(layouttest.PipelineDir(t, tmpDir), "wave-plan-200.json")
 	if _, err := os.Stat(planPath); os.IsNotExist(err) {
 		t.Error("wave plan should have been persisted")
 	}
 
 	// Verify wave status was persisted
-	statusPath := filepath.Join(tmpDir, ".nightgauge", "pipeline", "wave-status-200.json")
+	statusPath := filepath.Join(layouttest.PipelineDir(t, tmpDir), "wave-status-200.json")
 	if _, err := os.Stat(statusPath); os.IsNotExist(err) {
 		t.Error("wave status should have been persisted")
 	}
 }
 
 func TestWaveOrchestrator_RunEpicWaves_NoOpenSubIssues(t *testing.T) {
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
 	runner := &trackingStageRunner{behavior: "succeed"}
 	s := buildWaveTestScheduler(t, tmpDir, issueSvc, runner)
@@ -767,7 +769,7 @@ func TestScaleAgents_DefaultConfig(t *testing.T) {
 
 func TestRunWaveScaled_FastPath(t *testing.T) {
 	// When concurrency >= wave size, should delegate to runWaveParallel
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
 	runner := &trackingStageRunner{behavior: "succeed"}
 	s := buildWaveTestScheduler(t, tmpDir, issueSvc, runner)
@@ -792,7 +794,7 @@ func TestRunWaveScaled_FastPath(t *testing.T) {
 
 func TestRunWaveScaled_Batching(t *testing.T) {
 	// When concurrency < wave size, should batch
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
 	runner := &trackingStageRunner{behavior: "succeed"}
 	s := buildWaveTestScheduler(t, tmpDir, issueSvc, runner)
@@ -830,7 +832,7 @@ func TestRunWaveScaled_Batching(t *testing.T) {
 
 func TestRunWaveScaled_ConcurrencyOne(t *testing.T) {
 	// Concurrency = 1 should run all issues sequentially (1 per batch)
-	tmpDir := t.TempDir()
+	tmpDir := layouttest.Repo(t)
 	issueSvc := newMockEpicIssueSvc()
 	runner := &trackingStageRunner{behavior: "succeed"}
 	s := buildWaveTestScheduler(t, tmpDir, issueSvc, runner)

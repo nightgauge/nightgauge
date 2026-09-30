@@ -99,7 +99,10 @@ func exitRecordsTailCmd() *cobra.Command {
 // once we've collected `limit` records. This is cheap for a daily file —
 // each line is ≤ a few KB and we never read more days than necessary.
 func tailExitRecords(root string, issueFilter, limit int) ([]diagnostics.StageExitRecord, error) {
-	dir := diagnostics.ExitRecordsDir(root)
+	dir, err := diagnostics.ExitRecordsDir(root)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {

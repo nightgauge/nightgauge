@@ -3,10 +3,12 @@ package learning
 import (
 	"math"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 func TestTuneBasic(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	tuner := NewTuner(dir, DefaultTunerConfig())
 
 	param := TuningParam{
@@ -31,7 +33,7 @@ func TestTuneBasic(t *testing.T) {
 }
 
 func TestTuneConvergence(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	config := TunerConfig{
 		InitialLearningRate: 0.1,
 		Decay:               1.0, // no decay
@@ -61,7 +63,7 @@ func TestTuneConvergence(t *testing.T) {
 }
 
 func TestTuneClamping(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	config := DefaultTunerConfig()
 	config.InitialLearningRate = 10.0 // Very aggressive
 	tuner := NewTuner(dir, config)
@@ -81,7 +83,7 @@ func TestTuneClamping(t *testing.T) {
 }
 
 func TestLearningRateDecay(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	config := TunerConfig{
 		InitialLearningRate: 1.0,
 		Decay:               0.5,
@@ -107,7 +109,7 @@ func TestLearningRateDecay(t *testing.T) {
 }
 
 func TestAuditTrail(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	tuner := NewTuner(dir, DefaultTunerConfig())
 
 	param := TuningParam{Name: "test", Current: 0.5, Target: 0.8, MinValue: 0, MaxValue: 1}

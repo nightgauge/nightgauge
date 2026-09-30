@@ -2,7 +2,7 @@
 history_parser.py — JSONL execution history parser for the retro engine.
 
 Parses daily JSONL files written by the TypeScript ExecutionHistoryWriter:
-  .nightgauge/pipeline/history/YYYY-MM-DD.jsonl
+  <git-common-dir>/nightgauge/pipeline/history/YYYY-MM-DD.jsonl (ADR-024 § 7)
 
 Each line is one JSON object conforming to the ExecutionHistoryRunRecordV2 or
 ExecutionOutcomeRecordV2 schema (schema_version "1" records are also accepted).
@@ -107,7 +107,7 @@ class HistoryParser:
         ----------
         history_dir:
             Path to the directory containing YYYY-MM-DD.jsonl files
-            (e.g. ``.nightgauge/pipeline/history``).
+            (e.g. ``<git-common-dir>/nightgauge/pipeline/history``).
         since_date:
             ISO date string ``YYYY-MM-DD``.  Files dated before this value are
             skipped unless ``all_failures`` is True.

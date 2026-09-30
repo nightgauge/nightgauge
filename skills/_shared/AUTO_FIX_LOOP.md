@@ -96,7 +96,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
 # Read transient-failure flags from the prior stage's handoff.
 # pr-merge reads pr-{N}.json (written by pr-create Phase 4).
-PR_CONTEXT=".nightgauge/pipeline/pr-${ISSUE_NUMBER}.json"
+PR_CONTEXT="$(nightgauge layout path pipeline pr-${ISSUE_NUMBER}.json)"
 if [ -f "$PR_CONTEXT" ]; then
   ALL_TRANSIENT=$(jq -r '
     (.ci_monitoring.failures // []) as $f
@@ -220,13 +220,14 @@ retro for why making this advisory burned a sham `[skip build]` commit).
    - **`inherited`** — fails on both base and HEAD. Pre-existing on main; the
      PR did not introduce it. Do **not** ask the LLM to repair main from
      within a dependent PR (see step 9).
-8. Persist the classification to `.nightgauge/pipeline/auto-fix-baseline-{PR}.json`
+8. Persist the classification as `auto-fix-baseline-{PR}.json` with
+   `nightgauge layout write pipeline auto-fix-baseline-{PR}.json` (JSON on stdin)
    so subsequent iterations can read it without re-running.
 9. **Inherited-only exit gate (deterministic, mandatory).** Count failures by
    classification:
 
    ```bash
-   BASELINE=".nightgauge/pipeline/auto-fix-baseline-${PR_NUMBER}.json"
+   BASELINE="$(nightgauge layout path pipeline auto-fix-baseline-${PR_NUMBER}.json)"
    if [ -f "$BASELINE" ]; then
      INHERITED=$(jq '[.failures[]? | select(.classification == "inherited")] | length' "$BASELINE" 2>/dev/null || echo 0)
      REGRESSIONS=$(jq '[.failures[]? | select(.classification == "regression")] | length' "$BASELINE" 2>/dev/null || echo 0)
@@ -295,11 +296,12 @@ Fix generation process:
 
 1. Read the failure logs to understand the specific error
 2. If Step 2.5 ran, read
-   `.nightgauge/pipeline/auto-fix-baseline-{PR}.json`. **Only attempt to
-   fix failures whose `classification` is `regression`.** Inherited failures
-   were already handled by Step 2.5's exit gate (inherited-only) or are
-   intentionally being ignored by Step 2.5's mixed-batch branch — touching
-   them here re-introduces the same wasted-spend pattern.
+   `"$(nightgauge layout path pipeline auto-fix-baseline-{PR}.json)"`.
+   **Only attempt to fix failures whose `classification` is `regression`.**
+   Inherited failures were already handled by Step 2.5's exit gate
+   (inherited-only) or are intentionally being ignored by Step 2.5's
+   mixed-batch branch — touching them here re-introduces the same
+   wasted-spend pattern.
 3. Identify the affected file(s) and line number(s)
 4. Make the minimal fix required to address the failure
 5. Ensure fix doesn't break other functionality

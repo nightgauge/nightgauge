@@ -12,7 +12,7 @@ import (
 )
 
 // ArchiveRun moves every live context file for this run's issue into
-// .nightgauge/pipeline/history/<runId>/ and writes a final
+// history/<runId>/ under the pipeline state directory and writes a final
 // run-state.json snapshot inside the archive directory for forensics.
 //
 // Idempotent: if a file is missing it is skipped. Returns the absolute

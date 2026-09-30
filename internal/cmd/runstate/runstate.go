@@ -7,10 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
-	"path/filepath"
 	"strconv"
-	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/layout"
 	"github.com/nightgauge/nightgauge/internal/runstate"
@@ -23,7 +20,7 @@ func Cmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "state",
 		Short: "Inspect or mutate the durable pipeline run-state.json (Issue #3238)",
-		Long: `Manage .nightgauge/pipeline/run-state.json — the single source of truth
+		Long: `Manage ` + layout.PipelineStateDisplay() + `/run-state.json — the single source of truth
 for the pipeline lifecycle (running / paused / completed / discarded / aborted).
 
 Mirrors the TypeScript-side RunStateManager. Both runtimes write the same
@@ -33,48 +30,24 @@ file format using the atomic+fsync write contract.`,
 	return cmd
 }
 
-func resolveBaseDir(cmd *cobra.Command) string {
+func resolveBaseDir(cmd *cobra.Command) (string, error) {
 	if v, _ := cmd.Flags().GetString("dir"); v != "" {
-		return v
+		return v, nil
 	}
 	return mainCheckoutBaseDir()
 }
 
 // mainCheckoutBaseDir is the default --dir: the pipeline state directory of
-// the repository's MAIN checkout, which is where the orchestrator writes
-// run-state.json (#1964). Resolving through git's common directory makes
-// `run state get` from a run's worktree read the same record as the main
-// checkout. Outside a git repository it falls back to the working directory's
-// pipeline state directory.
-func mainCheckoutBaseDir() string {
-	out, err := exec.Command("git", "rev-parse", "--path-format=absolute", "--git-common-dir").Output()
-	if err != nil {
-		return cwdBaseDir()
-	}
-	common := strings.TrimSpace(string(out))
-	if filepath.Base(common) != ".git" {
-		return cwdBaseDir() // bare repository: no checkout owns the state
-	}
-	dir, err := layout.PipelineStateDir(filepath.Dir(common))
-	if err != nil {
-		return cwdBaseDir()
-	}
-	return dir
-}
-
-// cwdBaseDir is the working directory's pipeline state directory
-// (layout.PipelineStateDir), the fallback when no main checkout resolves. It
-// returns "" only when the working directory itself cannot be determined.
-func cwdBaseDir() string {
+// the clone the working directory is in, which is where the orchestrator
+// writes run-state.json (#1964). The directory lives under the git common dir
+// (ADR-024 § 7), so `run state get` from a run's worktree reads the same
+// record as the main checkout. Outside a git repository it is an error.
+func mainCheckoutBaseDir() (string, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("resolve the working directory: %w", err)
 	}
-	dir, err := layout.PipelineStateDir(cwd)
-	if err != nil {
-		return ""
-	}
-	return dir
+	return layout.PipelineStateDir(cwd)
 }
 
 func getCmd() *cobra.Command {
@@ -82,7 +55,10 @@ func getCmd() *cobra.Command {
 		Use:   "get",
 		Short: "Print the current run-state.json as JSON (or empty when absent)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			baseDir := resolveBaseDir(cmd)
+			baseDir, err := resolveBaseDir(cmd)
+			if err != nil {
+				return err
+			}
 			rs, err := runstate.Load(baseDir)
 			if err != nil {
 				return err
@@ -99,7 +75,7 @@ func getCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().String("dir", "", "override base directory (default: the main checkout's .nightgauge/pipeline)")
+	cmd.Flags().String("dir", "", "override base directory (default: the clone's "+layout.PipelineStateDisplay()+")")
 	return cmd
 }
 
@@ -122,7 +98,10 @@ func setCmd() *cobra.Command {
   # Mark paused with a reason (useful from automation)
   nightgauge run state set --state paused --reason "user stop"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			baseDir := resolveBaseDir(cmd)
+			baseDir, err := resolveBaseDir(cmd)
+			if err != nil {
+				return err
+			}
 			switch runstate.Lifecycle(state) {
 			case runstate.StateRunning:
 				if issue == 0 || branch == "" {
@@ -169,7 +148,10 @@ func resumeCmd() *cobra.Command {
 		Use:   "resume",
 		Short: "Transition paused → running and print the resume_from_stage",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			baseDir := resolveBaseDir(cmd)
+			baseDir, err := resolveBaseDir(cmd)
+			if err != nil {
+				return err
+			}
 			rs, err := runstate.Resume(baseDir)
 			if err != nil {
 				return err
@@ -196,11 +178,14 @@ func discardCmd() *cobra.Command {
 		Use:   "discard",
 		Short: "Transition to discarded, archive context files, and tear down branch/worktree",
 		Long: `Discard is the only destructive transition. It archives every live
-context file for the issue under .nightgauge/pipeline/history/<runId>/
+context file for the issue under ` + layout.PipelineStateDisplay() + `/history/<runId>/
 and removes the recorded worktree plus the feature branch (locally and
 remote-if-pushed). Protected branches (main, master) are never deleted.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			baseDir := resolveBaseDir(cmd)
+			baseDir, err := resolveBaseDir(cmd)
+			if err != nil {
+				return err
+			}
 			rs, err := runstate.MarkDiscarded(baseDir, reason)
 			if err != nil {
 				return err
@@ -242,7 +227,10 @@ Used by the autonomous orchestrator to skip-on-paused and by the user-driven
 runner to surface a recovery quick-pick. The #3237 fixture (branch present,
 no context, no run-state) returns kind=orphaned with choices=[restart, manual-pickup].`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			baseDir := resolveBaseDir(cmd)
+			baseDir, err := resolveBaseDir(cmd)
+			if err != nil {
+				return err
+			}
 			has := hasContextFlag
 			if autoDetectFiles && issue > 0 {
 				has = runstate.HasContextFiles(baseDir, issue)
@@ -265,22 +253,6 @@ no context, no run-state) returns kind=orphaned with choices=[restart, manual-pi
 	cmd.Flags().BoolVar(&hasContextFlag, "has-context", false, "set true when context files exist for the issue")
 	cmd.Flags().BoolVar(&autoDetectFiles, "auto-detect-files", true, "auto-detect context files via --issue")
 	return cmd
-}
-
-// AbsoluteDir resolves a possibly-relative dir against the cwd. Exposed so
-// downstream callers can pre-resolve and avoid races where tests cd into a
-// temp dir between flag-parse and exec.
-func AbsoluteDir(dir string) string {
-	if dir == "" {
-		dir = mainCheckoutBaseDir()
-	}
-	if filepath.IsAbs(dir) {
-		return dir
-	}
-	if cwd, err := os.Getwd(); err == nil {
-		return filepath.Join(cwd, dir)
-	}
-	return dir
 }
 
 // ParseIssueArg lifts a positional arg → int. Shared with tests.

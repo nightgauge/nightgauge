@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
@@ -21,7 +22,7 @@ var testRepos = []string{"octocat/acme", "o/r"}
 // and pointed at that same root.
 func newAttentionTestServer(t *testing.T) *Server {
 	t.Helper()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	as := orchestrator.NewAutonomousScheduler(nil, nil, nil, nil, orchestrator.DefaultAutonomousConfig(), root)
 	if as.Attention() == nil {
 		t.Fatal("attention store not wired")

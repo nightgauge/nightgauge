@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -36,19 +37,18 @@ func IsEnabled(telemetryEnabled bool) bool { return telemetryEnabled }
 // to read events without rerunning the emit path.
 //
 // The file lives in workspaceRoot's pipeline history directory
-// (layout.PipelineStateDir). A relative workspaceRoot is made absolute first,
-// so it names the same file as before; if that fails Path returns "", on
-// which a read finds nothing and Emit fails.
-func Path(workspaceRoot string) string {
+// (layout.PipelineStateDir). A relative workspaceRoot is made absolute first.
+// The resolver's error ("not a git repository" outside one) is returned.
+func Path(workspaceRoot string) (string, error) {
 	abs, err := filepath.Abs(workspaceRoot)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("knowledge telemetry: resolve %q: %w", workspaceRoot, err)
 	}
 	dir, err := layout.PipelineStateDir(abs)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("knowledge telemetry: %w", err)
 	}
-	return filepath.Join(dir, "history", "knowledge-events.jsonl")
+	return filepath.Join(dir, "history", "knowledge-events.jsonl"), nil
 }
 
 // Emit writes one Event to knowledge-events.jsonl under workspaceRoot.
@@ -82,5 +82,9 @@ func Emit(workspaceRoot string, ev Event) error {
 		}
 	}
 
-	return history.AppendJSONL(Path(workspaceRoot), ev)
+	path, err := Path(workspaceRoot)
+	if err != nil {
+		return err
+	}
+	return history.AppendJSONL(path, ev)
 }

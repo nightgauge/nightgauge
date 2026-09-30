@@ -187,8 +187,7 @@ describe("ensureWorkspaceGitignores", () => {
   });
 
   it("never scaffolds into a repo the user has not onboarded", async () => {
-    // ensureGitignore creates .nightgauge/ and its subdirectories as a side
-    // effect. The primary call site gates on isRepoInitialized precisely so the
+    // ensureGitignore creates .nightgauge/ as a side effect. The primary call site gates on isRepoInitialized precisely so the
     // extension does not litter every repo it touches; propagating without
     // carrying that gate would reintroduce the bug once per sibling.
     const primary = await workspace([
@@ -202,7 +201,7 @@ describe("ensureWorkspaceGitignores", () => {
     expect(fs.existsSync(path.join(primary, "..", "untouched", ".nightgauge", ".gitignore"))).toBe(
       false
     );
-    expect(fs.existsSync(path.join(primary, "..", "untouched", ".nightgauge", "logs"))).toBe(false);
+    expect(fs.readdirSync(path.join(primary, "..", "untouched", ".nightgauge"))).toEqual([]);
   });
 
   it("returns nothing outside a multi-repo workspace", async () => {
@@ -268,6 +267,21 @@ describe("ensureGitignore on a git checkout (#1875)", () => {
     expect(fs.existsSync(path.join(root, ".nightgauge", "plans", ".gitkeep"))).toBe(false);
   });
 
+  it("scaffolds only the ignore file: no class directories or .gitkeep in the tree (#2037)", async () => {
+    // Per-clone data lives under the git common dir (ADR-024 § 7), so the
+    // initial scaffold creates nothing in the working tree beyond the file.
+    const root = await fsp.mkdtemp(path.join(os.tmpdir(), "ng-fresh-"));
+    git(root, "init", "-q");
+
+    const result = await ensureGitignore(root);
+
+    expect(result).toEqual({ created: true, updated: false });
+    expect(fs.readdirSync(path.join(root, ".nightgauge"))).toEqual([".gitignore"]);
+    expect(git(root, "status", "--porcelain", "--untracked-files=all")).toBe(
+      "?? .nightgauge/.gitignore\n"
+    );
+  });
+
   it("ignores plans but not knowledge by default, and the documented root opt-out hides knowledge", async () => {
     // #1090. Plans are per-run exhaust (docs/ARCHITECTURE.md § Cleanup deletes
     // them at merge, with no git history behind them), and the knowledge tree
@@ -279,6 +293,8 @@ describe("ensureGitignore on a git checkout (#1875)", () => {
     const ignorePath = path.join(root, ".nightgauge", ".gitignore");
     await fsp.mkdir(path.join(root, ".nightgauge", "knowledge"), { recursive: true });
     await fsp.writeFile(path.join(root, ".nightgauge", "knowledge", "index.md"), "# k\n");
+    // A stale in-tree plan from before ADR-024 § 7 stays ignored.
+    await fsp.mkdir(path.join(root, ".nightgauge", "plans"), { recursive: true });
     await fsp.writeFile(path.join(root, ".nightgauge", "plans", "7-x.md"), "plan\n");
 
     const status = () =>
@@ -288,7 +304,6 @@ describe("ensureGitignore on a git checkout (#1875)", () => {
         .map((l) => l.slice(3));
     expect(status()).not.toContain(".nightgauge/plans/7-x.md");
     expect(status()).toContain(".nightgauge/knowledge/index.md");
-    expect(status()).toContain(".nightgauge/plans/.gitkeep");
 
     await fsp.writeFile(path.join(root, ".gitignore"), "/.nightgauge/knowledge/\n");
     expect(status()).not.toContain(".nightgauge/knowledge/index.md");

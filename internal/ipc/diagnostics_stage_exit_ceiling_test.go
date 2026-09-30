@@ -23,13 +23,14 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // TestRecordStageExitIPC_PersistsKillCeiling is the #161 regression guard: the
 // record must name the ceiling and its configured value, not leave them to be
 // deduced from signal_source.
 func TestRecordStageExitIPC_PersistsKillCeiling(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	srv := &Server{
 		workspaceRoot: dir,
@@ -89,7 +90,7 @@ func TestRecordStageExitIPC_PersistsKillCeiling(t *testing.T) {
 // diagnostic contract — retros grep them and historical records already carry
 // them, so a rename silently breaks every query written against them.
 func TestStageExitRecord_KillCeilingJSONTags(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	srv := &Server{workspaceRoot: dir, methods: map[string]Handler{}}
 	srv.methods["diagnostics.recordStageExit"] = makeDiagnosticsRecordStageExitHandler(srv)
@@ -123,7 +124,7 @@ func TestStageExitRecord_KillCeilingJSONTags(t *testing.T) {
 // carry no ceiling. Emitting an empty pair would assert a limit fired when none
 // did, which is worse than silence.
 func TestStageExitRecord_KillCeilingOmittedWhenAbsent(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	srv := &Server{workspaceRoot: dir, methods: map[string]Handler{}}
 	srv.methods["diagnostics.recordStageExit"] = makeDiagnosticsRecordStageExitHandler(srv)

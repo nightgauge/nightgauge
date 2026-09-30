@@ -88,13 +88,14 @@ func FailOpenResult(reason string) ClassifyResult {
 var DefaultDiffBases = []string{"origin/main", "main"}
 
 // BookkeepingDirs are the agent/pipeline state directories that a run always
-// writes and that are never part of the deliverable: stage context files land
-// in `.nightgauge/pipeline/`, attention cards in `.nightgauge/attention/`, and
-// adapters scribble in `.claude/`.
+// writes and that are never part of the deliverable: attention cards land in
+// `.nightgauge/attention/` and adapters scribble in `.claude/`. (Stage context
+// files live under the git directory, ADR-024 § 7, so they never appear in
+// the tree.)
 //
-// Whether these show up in `git status` is a per-repo accident — this repo
-// ignores `.nightgauge/pipeline` (nested `.nightgauge/.gitignore`) but NOT
-// `.nightgauge/attention`, and a consumer repo may ignore neither. Any check
+// Whether these show up in `git status` is a per-repo accident — a repo may
+// ignore some of `.nightgauge/` but not `.nightgauge/attention`, and a consumer
+// repo may ignore none of it. Any check
 // that asks "did this run produce work?" must therefore exclude them
 // explicitly rather than rely on the repo's ignore rules, or the pipeline's own
 // exhaust answers the question for it. Issue #202.

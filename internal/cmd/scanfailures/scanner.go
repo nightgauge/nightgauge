@@ -66,9 +66,10 @@ type Options struct {
 	Since string
 }
 
-// Scan walks .nightgauge/logs/*_session.log under workdir and returns
-// the consolidated Result. Missing logs directory is treated as zero matches
-// (matches the existing Python behavior). Per-file IO errors are recorded as
+// Scan walks *_session.log in workdir's clone logs directory
+// (layout.CloneLogsDir) and returns the consolidated Result. Missing logs
+// directory is treated as zero matches (matches the existing Python
+// behavior); an unresolvable workdir (not a git repository) is an error. Per-file IO errors are recorded as
 // warnings; only structural errors (e.g., unreadable workdir) fail.
 //
 // Log retention (#2029) deletes whole session logs by age and size, so a

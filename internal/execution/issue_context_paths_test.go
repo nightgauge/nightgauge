@@ -1,100 +1,94 @@
 package execution
 
 import (
+	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
-// TestIssueContextCandidates_CoversBothWorktreeLayouts is the guard for the
-// defect's root cause: two writers, two worktree layouts, and every reader
-// knowing at most one of them (#994).
-func TestIssueContextCandidates_CoversBothWorktreeLayouts(t *testing.T) {
-	got := IssueContextCandidates("/repo", "", "acme/widget", 42)
-	joined := strings.Join(got, "\n")
+// The pipeline state directory lives under the git common dir (ADR-024 § 7),
+// so every root of one clone — the checkout, a Go-manager worktree, a legacy
+// in-tree worktree, the VSCode extension's worktree — resolves to the SAME
+// issue-{N}.json. The candidate list therefore collapses to that one path
+// after de-duplication, whichever worktree layout the run used (#994).
 
-	// Go manager layout — must match worktreePath's construction exactly, or
-	// the search misses every worktree the Go scheduler creates.
-	goLayout := filepath.Join("/repo", ".nightgauge", "worktrees", "widget-issue-42",
-		".nightgauge", "pipeline", "issue-42.json")
-	if !strings.Contains(joined, goLayout) {
-		t.Errorf("Go manager worktree layout missing.\nwant a path containing: %s\ngot:\n%s", goLayout, joined)
-	}
+// issueContextFile is the one path every root of root's clone resolves to.
+func issueContextFile(t *testing.T, root string) string {
+	t.Helper()
+	return filepath.Join(layouttest.PipelineDir(t, root), "issue-42.json")
+}
 
-	// VSCode extension layout.
-	vsLayout := filepath.Join("/repo", ".worktrees", "issue-42",
-		".nightgauge", "pipeline", "issue-42.json")
-	if !strings.Contains(joined, vsLayout) {
-		t.Errorf("VSCode worktree layout missing.\nwant a path containing: %s\ngot:\n%s", vsLayout, joined)
-	}
-
-	// The plain repo root — a run that never took a worktree.
-	rootLayout := filepath.Join("/repo", ".nightgauge", "pipeline", "issue-42.json")
-	if !strings.Contains(joined, rootLayout) {
-		t.Errorf("plain repo root missing.\nwant: %s\ngot:\n%s", rootLayout, joined)
+// TestIssueContextCandidates_RepoRootResolvesUnderTheGitDir: a run that never
+// took a worktree reads the context from the clone's pipeline state directory.
+func TestIssueContextCandidates_RepoRootResolvesUnderTheGitDir(t *testing.T) {
+	root := layouttest.Repo(t)
+	got := IssueContextCandidates(root, "", "acme/widget", 42)
+	want := issueContextFile(t, root)
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("candidates = %v, want exactly [%s]", got, want)
 	}
 }
 
-// TestIssueContextCandidates_MatchesWorktreePath pins the shared list against
-// the function that actually CREATES the directory. A list that merely looks
-// right is worthless: the two must agree byte for byte, or the search misses
-// the file on exactly the runs it was added for.
-func TestIssueContextCandidates_MatchesWorktreePath(t *testing.T) {
+// TestIssueContextCandidates_WorktreeSharesTheCloneFile pins the list against
+// the function that actually CREATES the worktree: a run in the Go manager's
+// worktree reads and writes the same file as the checkout, so the list has
+// exactly one entry and it is the clone's.
+func TestIssueContextCandidates_WorktreeSharesTheCloneFile(t *testing.T) {
+	hermeticConfigHome(t)
 	root := initTestGitRepo(t, "main")
 	m := &Manager{workspaceRoot: root}
 	created := mustWorktreePath(t, m, "acme/widget", 42)
-	want := filepath.Join(created, IssueContextRelPath(42))
+	if err := os.MkdirAll(filepath.Dir(created), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, root, "worktree", "add", "--detach", created)
 
-	for _, got := range IssueContextCandidates(root, "", "acme/widget", 42) {
-		if got == want {
-			return
+	want := issueContextFile(t, root)
+	if got := issueContextFile(t, created); got != want {
+		t.Fatalf("worktree resolves %s, want the clone's %s", got, want)
+	}
+	for _, wt := range []string{"", created} {
+		got := IssueContextCandidates(root, wt, "acme/widget", 42)
+		if len(got) != 1 || got[0] != want {
+			t.Errorf("worktreeDir=%q: candidates = %v, want exactly [%s]", wt, got, want)
 		}
 	}
-	t.Errorf("worktreePath produces %s, but no candidate matches %s", created, want)
 }
 
 // TestIssueContextCandidates_ExplicitWorktreeWins guards ordering: a caller
-// that KNOWS the run's worktree must have it searched first, so a stale file at
-// the repo root cannot shadow the live one.
+// that KNOWS the run's worktree has it searched first, even when the repo root
+// it was given belongs to another clone.
 func TestIssueContextCandidates_ExplicitWorktreeWins(t *testing.T) {
-	got := IssueContextCandidates("/repo", "/explicit/wt", "acme/widget", 42)
-	if len(got) == 0 {
-		t.Fatal("no candidates")
-	}
-	want := filepath.Join("/explicit/wt", ".nightgauge", "pipeline", "issue-42.json")
-	if got[0] != want {
-		t.Errorf("first candidate = %s, want the explicit worktree %s", got[0], want)
+	root := layouttest.Repo(t)
+	other := layouttest.Repo(t)
+	got := IssueContextCandidates(root, other, "acme/widget", 42)
+	want := []string{issueContextFile(t, other), issueContextFile(t, root)}
+	if len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("candidates = %v, want %v", got, want)
 	}
 }
 
 // TestIssueContextCandidates_DegradesWithoutRepo proves the list still works
-// for callers that do not know the repo name — it simply cannot name the
-// Go-manager layout, which is honest rather than wrong.
+// for callers that do not know the repo name.
 func TestIssueContextCandidates_DegradesWithoutRepo(t *testing.T) {
-	got := IssueContextCandidates("/repo", "", "", 42)
-	if len(got) == 0 {
-		t.Fatal("no candidates without a repo name")
-	}
-	joined := strings.Join(got, "\n")
-	if !strings.Contains(joined, filepath.Join("/repo", ".worktrees", "issue-42")) {
-		t.Error("VSCode layout should still be enumerated without a repo name")
-	}
-	if strings.Contains(joined, "-issue-42") {
-		t.Error("a Go-manager path was emitted without a repo name to build it from")
+	root := layouttest.Repo(t)
+	got := IssueContextCandidates(root, "", "", 42)
+	want := issueContextFile(t, root)
+	if len(got) != 1 || got[0] != want {
+		t.Errorf("candidates = %v, want exactly [%s]", got, want)
 	}
 }
 
-// TestIssueContextCandidates_NoDuplicates keeps the search from stat-ing the
-// same path twice when the explicit worktree equals a derived one.
-func TestIssueContextCandidates_NoDuplicates(t *testing.T) {
-	wt := filepath.Join("/repo", ".worktrees", "issue-42")
-	got := IssueContextCandidates("/repo", wt, "acme/widget", 42)
-	seen := map[string]bool{}
-	for _, p := range got {
-		if seen[p] {
-			t.Errorf("duplicate candidate: %s", p)
-		}
-		seen[p] = true
+// TestIssueContextCandidates_NotARepositoryHasNoCandidates: a root the
+// pipeline state directory cannot be resolved for names no path, rather than
+// one in the working tree the data no longer lives in.
+func TestIssueContextCandidates_NotARepositoryHasNoCandidates(t *testing.T) {
+	dir := t.TempDir()
+	if got := IssueContextCandidates(dir, dir, "acme/widget", 42); len(got) != 0 {
+		t.Errorf("expected no candidates outside a repository, got %v", got)
 	}
 }
 

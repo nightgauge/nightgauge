@@ -1459,8 +1459,9 @@ numbers). Non-pipeline branches pass through.
 
 ### Reading the Context File
 
-The gate writes `.nightgauge/pipeline/pre-push-{N}.json` with validation
-results. Downstream stages read this file to skip redundant checks:
+The gate writes `pre-push-{N}.json` to the clone's pipeline state directory
+(`nightgauge layout path pipeline`) with validation results. Downstream stages
+read this file to skip redundant checks:
 
 - **pr-create Phase 2.5**: Skips security re-scan if gate security passed
 - **pr-merge Phase 1.5**: Skips `go vet` if gate vet passed

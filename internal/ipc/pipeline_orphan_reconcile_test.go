@@ -12,6 +12,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
@@ -201,8 +202,8 @@ func TestCollectReconcileActions_MissingDirIsNoop(t *testing.T) {
 // Emission and removal are split. The scan and every removal rule run
 // unconditionally; only the emission is skipped.
 func TestOrphanReconcile_RunsAndRemovesWithoutAnalytics(t *testing.T) {
-	root := t.TempDir()
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := layouttest.Repo(t)
+	stateDir := layouttest.PipelineDir(t, root)
 	now := time.Now()
 	file := staleSnapshot(t, stateDir, 303, newTestRunID(), now)
 
@@ -225,8 +226,8 @@ func TestOrphanReconcile_RunsAndRemovesWithoutAnalytics(t *testing.T) {
 	// No workspace root: pipelineStateScanRoots yields nothing, so a second
 	// server touches no directory at all. This arm was VACUOUS before the split
 	// (the nil-analytics early return fired first); it is a real assertion now.
-	other := t.TempDir()
-	survivor := staleSnapshot(t, filepath.Join(other, ".nightgauge", "pipeline"), 304, newTestRunID(), now)
+	other := layouttest.Repo(t)
+	survivor := staleSnapshot(t, layouttest.PipelineDir(t, other), 304, newTestRunID(), now)
 	rootless := NewServer(nil)
 	if got := rootless.pipelineStateScanRoots(); len(got) != 0 {
 		t.Fatalf("a rootless server must scan nothing, got %v", got)
@@ -244,8 +245,8 @@ func TestOrphanReconcile_RunsAndRemovesWithoutAnalytics(t *testing.T) {
 // platform client; event emission itself is covered by the guard test above
 // and the builder assertions.
 func TestOrphanReconcile_CrashReopenFlowIsIdempotent(t *testing.T) {
-	workspaceRoot := t.TempDir()
-	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	workspaceRoot := layouttest.Repo(t)
+	stateDir := layouttest.PipelineDir(t, workspaceRoot)
 
 	// Session 1 "crashes" after persisting mid-run state.
 	rt := newInterruptedRuntime(205, newTestRunID())
@@ -274,9 +275,9 @@ func TestOrphanReconcile_CrashReopenFlowIsIdempotent(t *testing.T) {
 // transition persists the runtime snapshot (so a crash leaves the RunID on
 // disk), and the terminal pipeline.notifyComplete removes it.
 func TestNotifyStageTransition_PersistsSnapshotAndNotifyCompleteRemovesIt(t *testing.T) {
-	workspaceRoot := t.TempDir()
+	workspaceRoot := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(workspaceRoot))
-	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, workspaceRoot)
 
 	transition := s.methods["pipeline.notifyStageTransition"]
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"issue-pickup","status":"running","runId":"019000cd-0000-7000-8000-000000000205"}`)); err != nil {
@@ -307,9 +308,9 @@ func TestNotifyStageTransition_PersistsSnapshotAndNotifyCompleteRemovesIt(t *tes
 // carry the real values, with cache reads folded into InputTokens (matching
 // the scheduler path via CompleteStageWithCost).
 func TestNotifyStageTransition_CompletePersistsTokensAndCost(t *testing.T) {
-	workspaceRoot := t.TempDir()
+	workspaceRoot := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(workspaceRoot))
-	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, workspaceRoot)
 
 	transition := s.methods["pipeline.notifyStageTransition"]
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":205,"stage":"feature-dev","status":"running","runId":"019000cd-0000-7000-8000-000000000205"}`)); err != nil {
@@ -356,9 +357,9 @@ func TestNotifyStageTransition_CompletePersistsTokensAndCost(t *testing.T) {
 // handler still records the threaded token counts via CompleteStage (cost is
 // then derived from the model rate rather than being lost as zeros).
 func TestNotifyStageTransition_CompleteWithoutCostStillRecordsTokens(t *testing.T) {
-	workspaceRoot := t.TempDir()
+	workspaceRoot := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(workspaceRoot))
-	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, workspaceRoot)
 
 	transition := s.methods["pipeline.notifyStageTransition"]
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":207,"stage":"feature-dev","status":"running","runId":"019000cf-0000-7000-8000-000000000207"}`)); err != nil {
@@ -404,9 +405,9 @@ func TestNotifyStageTransition_CompleteWithoutCostStillRecordsTokens(t *testing.
 // the terminal claim's SealAndRemove, the reconciler, and the pause-restore
 // claim rename — and a failed stage transition is none of them.
 func TestNotifyStageTransition_FailedKeepsTheSnapshotForTheTerminalClaim(t *testing.T) {
-	workspaceRoot := t.TempDir()
+	workspaceRoot := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(workspaceRoot))
-	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, workspaceRoot)
 	runID := newTestRunID()
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -447,13 +448,13 @@ func TestNotifyStageTransition_FailedKeepsTheSnapshotForTheTerminalClaim(t *test
 // the same root its stage context files use — not the IPC server's launch
 // root, and the terminal notifyComplete must remove it from there.
 func TestNotifyStageTransition_PersistsSnapshotIntoTargetRepo(t *testing.T) {
-	launchRoot := t.TempDir() // e.g. acmeapp-infra — workspaceFolders[0]
-	targetRoot := t.TempDir() // e.g. acmeapp-flutter — the run's repo
+	launchRoot := layouttest.Repo(t) // e.g. acmeapp-infra — workspaceFolders[0]
+	targetRoot := layouttest.Repo(t) // e.g. acmeapp-flutter — the run's repo
 	s := NewServer(nil, WithWorkspaceRoot(launchRoot))
 	s.RegisterRepo("nightgauge", "acmeapp", targetRoot)
 
-	targetDir := filepath.Join(targetRoot, ".nightgauge", "pipeline")
-	launchDir := filepath.Join(launchRoot, ".nightgauge", "pipeline")
+	targetDir := layouttest.PipelineDir(t, targetRoot)
+	launchDir := layouttest.PipelineDir(t, launchRoot)
 
 	transition := s.methods["pipeline.notifyStageTransition"]
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":244,"stage":"issue-pickup","status":"running","runId":"019000f4-0000-7000-8000-000000000244"}`)); err != nil {
@@ -477,8 +478,8 @@ func TestNotifyStageTransition_PersistsSnapshotIntoTargetRepo(t *testing.T) {
 // setPaused must persist into the run's target repo too — the snapshot
 // powers the pause-restore prompt, so writing it anywhere else strands it.
 func TestSetPaused_PersistsIntoTargetRepo(t *testing.T) {
-	launchRoot := t.TempDir()
-	targetRoot := t.TempDir()
+	launchRoot := layouttest.Repo(t)
+	targetRoot := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(launchRoot))
 	s.RegisterRepo("nightgauge", "acmeapp", targetRoot)
 
@@ -488,7 +489,7 @@ func TestSetPaused_PersistsIntoTargetRepo(t *testing.T) {
 	if _, err := transition(t.Context(), []byte(`{"repo":"nightgauge/acmeapp","issueNumber":245,"stage":"issue-pickup","status":"running","runId":"019000f5-0000-7000-8000-000000000245"}`)); err != nil {
 		t.Fatalf("notifyStageTransition: %v", err)
 	}
-	targetDir := filepath.Join(targetRoot, ".nightgauge", "pipeline")
+	targetDir := layouttest.PipelineDir(t, targetRoot)
 	seeded := onlySnapshotForIssue(t, targetDir, 245)
 	if err := os.Remove(filepath.Join(targetDir, state.SnapshotFilename(245, seeded.RunID))); err != nil {
 		t.Fatalf("remove seeded snapshot: %v", err)
@@ -502,7 +503,7 @@ func TestSetPaused_PersistsIntoTargetRepo(t *testing.T) {
 	if !rt.Paused {
 		t.Fatal("persisted snapshot must record paused=true")
 	}
-	if got, _ := state.FindPersistedStatesForIssue(filepath.Join(launchRoot, ".nightgauge", "pipeline"), 245); len(got) != 0 {
+	if got, _ := state.FindPersistedStatesForIssue(layouttest.PipelineDir(t, launchRoot), 245); len(got) != 0 {
 		t.Fatalf("no paused snapshot may leak into the launch root, found %d", len(got))
 	}
 }
@@ -510,14 +511,14 @@ func TestSetPaused_PersistsIntoTargetRepo(t *testing.T) {
 // getState's persisted-file fallback must read from the target repo's state
 // dir, where the snapshot now lives (#215).
 func TestGetState_FallbackReadsFromTargetRepo(t *testing.T) {
-	launchRoot := t.TempDir()
-	targetRoot := t.TempDir()
+	launchRoot := layouttest.Repo(t)
+	targetRoot := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(launchRoot))
 	s.RegisterRepo("nightgauge", "acmeapp", targetRoot)
 
 	runID := newTestRunID()
 	rt := newInterruptedRuntime(246, runID)
-	writeRuntimeSnapshot(t, filepath.Join(targetRoot, ".nightgauge", "pipeline"), rt)
+	writeRuntimeSnapshot(t, layouttest.PipelineDir(t, targetRoot), rt)
 
 	getState := s.methods["pipeline.getState"]
 	result, err := getState(t.Context(), []byte(`{"owner":"nightgauge","repo":"acmeapp","issueNumber":246}`))
@@ -541,8 +542,8 @@ func TestGetState_FallbackReadsFromTargetRepo(t *testing.T) {
 // The orphan scan must cover every registered repo root, deduped against the
 // launch root, or crash recovery misses cross-repo runs (#215).
 func TestPipelineStateScanRoots_CoversRegisteredReposDeduped(t *testing.T) {
-	launchRoot := t.TempDir()
-	siblingRoot := t.TempDir()
+	launchRoot := layouttest.Repo(t)
+	siblingRoot := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(launchRoot))
 	s.RegisterRepo("nightgauge", "infra", launchRoot) // same as launch root — must dedupe
 	s.RegisterRepo("nightgauge", "acmeapp", siblingRoot)
@@ -851,8 +852,8 @@ func TestServerWithoutPlatformClient_AnalyticsSvcIsNilInterface(t *testing.T) {
 // identity, and the snapshot is gone. Deleting the emit in
 // applyReconcileAction's dispositionEmitAndRemove arm must turn this red.
 func TestApplyReconcileAction_EmitAndRemoveEmitsExactlyOnce(t *testing.T) {
-	root := t.TempDir()
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := layouttest.Repo(t)
+	stateDir := layouttest.PipelineDir(t, root)
 	now := time.Now()
 	runID := newTestRunID()
 	file := staleSnapshot(t, stateDir, 472, runID, now)
@@ -896,8 +897,8 @@ func TestApplyReconcileAction_EmitAndRemoveEmitsExactlyOnce(t *testing.T) {
 // The sibling arm: the two dispositions whose whole point is that the platform
 // was ALREADY told (or has nothing terminal to be told) must emit nothing.
 func TestApplyReconcileAction_RemoveDoesNotEmit(t *testing.T) {
-	root := t.TempDir()
-	stateDir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := layouttest.Repo(t)
+	stateDir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(stateDir, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

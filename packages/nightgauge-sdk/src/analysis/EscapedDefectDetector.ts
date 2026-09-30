@@ -5,7 +5,7 @@
  * validate context. Any failing test file that was NOT in the selected set
  * is an "escaped defect" — evidence that the dependency graph has a gap.
  *
- * Gap records are appended to `.nightgauge/pipeline/graph-gaps.jsonl`
+ * Gap records are appended to `<git-common-dir>/nightgauge/pipeline/graph-gaps.jsonl`
  * for downstream analysis by `SourceToTestGraph.buildSourceToTestGraph()`.
  *
  * Requires `gh` CLI with GitHub Actions access. When `gh` is unavailable,
@@ -19,6 +19,7 @@ import * as path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
+import { cloneClassDir } from "../context/cloneLayout.js";
 import { GraphGapRecordSchema, type GraphGapRecord } from "./selective-test-metrics-types.js";
 
 const execFileAsync = promisify(execFile);
@@ -27,8 +28,8 @@ const execFileAsync = promisify(execFile);
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Default path relative to the repo root */
-export const DEFAULT_GAP_LOG_PATH = ".nightgauge/pipeline/graph-gaps.jsonl";
+/** Default file name inside the pipeline class directory */
+export const DEFAULT_GAP_LOG_FILE = "graph-gaps.jsonl";
 
 /**
  * Regex for extracting test file paths from CI job output text.
@@ -42,7 +43,20 @@ const TEST_FILE_REGEX = /(?:packages|src)\/[^\s,'"]+\.(?:test|spec)\.[jt]sx?/g;
 // ---------------------------------------------------------------------------
 
 export class EscapedDefectDetector {
-  constructor(private readonly gapLogPath: string = DEFAULT_GAP_LOG_PATH) {}
+  private resolvedPath?: string;
+
+  /**
+   * @param gapLogPath JSONL file. Defaults to {@link DEFAULT_GAP_LOG_FILE} in
+   *   the working directory's pipeline class directory, resolved on first use
+   *   (throws `NotAGitRepositoryError` outside a git repository).
+   */
+  constructor(gapLogPath?: string) {
+    this.resolvedPath = gapLogPath;
+  }
+
+  private get gapLogPath(): string {
+    return (this.resolvedPath ??= path.join(cloneClassDir("pipeline"), DEFAULT_GAP_LOG_FILE));
+  }
 
   /**
    * Query GitHub Actions check runs for a merged PR's commit SHA and return

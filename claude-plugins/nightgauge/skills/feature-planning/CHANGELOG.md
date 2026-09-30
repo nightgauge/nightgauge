@@ -8,6 +8,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- The clone's pipeline state and plans are read at `$(nightgauge layout path <class> <name>)`
+  and written through `nightgauge layout write|append`, never by a
+  `.nightgauge/...` path: they now live in the git directory (#2037, ADR-024
+  § 7).
+  The plan is stored with `nightgauge layout write plans`, and `plan_file` in
+  `planning-{N}.json` is the absolute path that command prints.
+
 ### Added
 
 - **Exploration budget (#2186).** Planning's exploration (Phases 2.5-3.7) is

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -23,7 +24,7 @@ import (
 // under root/.nightgauge/pipeline/history (or an empty slice when absent).
 func readHistoryRecords(t *testing.T, root string) []state.V2RunRecord {
 	t.Helper()
-	path := filepath.Join(root, ".nightgauge", "pipeline", "history", time.Now().Format("2006-01-02")+".jsonl")
+	path := filepath.Join(layouttest.PipelineDir(t, root), "history", time.Now().Format("2006-01-02")+".jsonl")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -63,7 +64,7 @@ func splitLinesTest(data []byte) [][]byte {
 // A successful interactive run must write exactly one V2 RunRecord to the
 // target repo's history JSONL, carrying the run's stable UUID and issue number.
 func TestNotifyComplete_WritesSuccessRunRecord(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -102,7 +103,7 @@ func TestNotifyComplete_WritesSuccessRunRecord(t *testing.T) {
 // the scheduler path does. An empty branch is honest persisted state (#397),
 // but silently producing it hides a branch-resolution gap from operators.
 func TestNotifyComplete_AnnouncesUndeterminedBranch(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -126,7 +127,7 @@ func TestNotifyComplete_AnnouncesUndeterminedBranch(t *testing.T) {
 }
 
 func TestNotifyComplete_DoesNotAnnounceResolvedBranch(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -153,7 +154,7 @@ func TestNotifyComplete_DoesNotAnnounceResolvedBranch(t *testing.T) {
 // pipeline_events.adapter, the Adapter Mix donut). Before this fix the
 // VSCode-orchestrated notify path recorded neither, so both were null/'unknown'.
 func TestNotifyComplete_AttributesStageModelAndAdapter(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -200,7 +201,7 @@ func TestNotifyComplete_AttributesStageModelAndAdapter(t *testing.T) {
 // transition must no longer eagerly drop the runtime, so notifyComplete can
 // still find it and build the V3 failure record (terminal_failure_kind set).
 func TestNotifyComplete_WritesFailureRunRecordAndRuntimeSurvivesFailedTransition(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -256,8 +257,8 @@ func TestNotifyComplete_WritesFailureRunRecordAndRuntimeSurvivesFailedTransition
 // Multi-repo scoping (#232): the RunRecord must land in the run's registered
 // target repo history dir, not the IPC server's launch root.
 func TestNotifyComplete_WritesRunRecordIntoTargetRepo(t *testing.T) {
-	launchRoot := t.TempDir()
-	targetRoot := t.TempDir()
+	launchRoot := layouttest.Repo(t)
+	targetRoot := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(launchRoot))
 	s.RegisterRepo("nightgauge", "acmeapp", targetRoot)
 
@@ -317,7 +318,7 @@ func TestReconcilePrMergeGroundTruth(t *testing.T) {
 // stage failed, the recording boundary must write a COMPLETE RunRecord with NO
 // terminal_failure_kind — never a phantom stall_kill.
 func TestNotifyComplete_MergedPrMergeFailureRecordedComplete(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -356,7 +357,7 @@ func TestNotifyComplete_MergedPrMergeFailureRecordedComplete(t *testing.T) {
 // a genuine pr-merge runaway kill must STILL record as failed with the transient
 // runaway_progress kind. The ground-truth override must not over-fire.
 func TestNotifyComplete_UnmergedPrMergeFailureStaysFailed(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -396,7 +397,7 @@ func TestNotifyComplete_UnmergedPrMergeFailureStaysFailed(t *testing.T) {
 // evidence: pr-merge ran deterministically ($0), pr-create punted to the LLM —
 // yet the record was silent on both until this fix.
 func TestNotifyComplete_ThreadsStageExecutionPathsFromParams(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]
@@ -458,7 +459,7 @@ func TestNotifyComplete_ThreadsStageExecutionPathsFromParams(t *testing.T) {
 // estimated_cost_usd (the value the halt card reports), and the V2 RunRecord
 // all carry the run's TRUE total: X (succeeded stage) + Y (failing stage).
 func TestFailedStageTransition_BooksTerminatingStageCost(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(dir))
 
 	transition := s.methods["pipeline.notifyStageTransition"]

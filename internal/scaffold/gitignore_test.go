@@ -137,9 +137,11 @@ func TestEnsureIgnoreRules(t *testing.T) {
 		if got := read(t, ignorePath); got != GitignoreTemplate {
 			t.Fatal("written .nightgauge/.gitignore differs from the embedded template")
 		}
-		for _, sub := range gitkeepDirs {
-			if _, err := os.Stat(filepath.Join(root, ".nightgauge", sub, ".gitkeep")); err != nil {
-				t.Errorf("missing %s/.gitkeep: %v", sub, err)
+		// Per-clone data lives under the git common dir (ADR-024 § 7): no
+		// class directory or .gitkeep anchor is created in the working tree.
+		for _, sub := range []string{"pipeline", "plans", "retros", "logs"} {
+			if _, err := os.Stat(filepath.Join(root, ".nightgauge", sub)); !os.IsNotExist(err) {
+				t.Errorf(".nightgauge/%s created in the working tree (stat err %v)", sub, err)
 			}
 		}
 
@@ -148,9 +150,7 @@ func TestEnsureIgnoreRules(t *testing.T) {
 		for _, line := range strings.Split(status, "\n") {
 			path := strings.TrimSpace(strings.TrimPrefix(line, "??"))
 			switch path {
-			case ".nightgauge/config.yaml", ".nightgauge/.gitignore",
-				".nightgauge/pipeline/.gitkeep", ".nightgauge/pipeline/history/.gitkeep",
-				".nightgauge/plans/.gitkeep", ".nightgauge/logs/.gitkeep":
+			case ".nightgauge/config.yaml", ".nightgauge/.gitignore":
 			default:
 				t.Errorf("runtime path not ignored: %q", path)
 			}

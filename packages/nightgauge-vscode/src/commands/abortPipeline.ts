@@ -15,7 +15,7 @@
  * @see docs/ARCHITECTURE.md - Context-Isolated Pipeline Architecture
  */
 
-import { pipelineStateDir, plansDir as clonePlansDir } from "../utils/cloneLayout";
+import { listCloneFiles, pipelineStateDir, plansDir as clonePlansDir } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import type { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
 import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
@@ -349,15 +349,19 @@ export function registerAbortPipelineCommand(
       const contextDir = pipelineStateDir(workspaceRoot);
       const plansDir = clonePlansDir(workspaceRoot);
 
-      // Collect file lists for ALL affected issues
+      // Collect file lists for ALL affected issues. Listed from disk: the
+      // class dirs live under the git directory, which `findFiles` never
+      // searches (#2037).
       const allPlanPatterns = affectedIssues.map((num) =>
-        vscode.workspace.findFiles(new vscode.RelativePattern(plansDir, `${num}-*.md`))
+        listCloneFiles(plansDir, (n) => n.startsWith(`${num}-`) && n.endsWith(".md"))
       );
 
-      const [contextFiles, ...planFileArrays] = await Promise.all([
-        vscode.workspace.findFiles(new vscode.RelativePattern(contextDir, "*.json")),
-        ...allPlanPatterns,
-      ]);
+      const [contextFiles, ...planFileArrays] = (
+        await Promise.all([
+          listCloneFiles(contextDir, (n) => n.endsWith(".json")),
+          ...allPlanPatterns,
+        ])
+      ).map((paths) => paths.map((p) => vscode.Uri.file(p)));
 
       const allPlanFiles = planFileArrays.flat();
 

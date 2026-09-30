@@ -277,7 +277,8 @@ The `RepositoryContextLoader` service
 (`packages/nightgauge-vscode/src/services/RepositoryContextLoader.ts`)
 provides repository-scoped paths for:
 
-- Pipeline context files (`.nightgauge/pipeline/`)
+- Pipeline context files (the repository's pipeline state directory,
+  `<git-common-dir>/nightgauge/pipeline`)
 - CLAUDE.md files
 - Documentation (`docs/`)
 - Standards (`standards/`)
@@ -289,11 +290,11 @@ await loader.initialize(workspaceManager);
 
 // Get context directory for current repo
 const contextDir = loader.getContextDir();
-// Returns: /path/to/repo/.nightgauge/pipeline
+// Returns: /path/to/repo/.git/nightgauge/pipeline
 
 // Get specific context file
 const issuePath = loader.getContextFile("issue", 42);
-// Returns: /path/to/repo/.nightgauge/pipeline/issue-42.json
+// Returns: /path/to/repo/.git/nightgauge/pipeline/issue-42.json
 
 // Load docs with precedence
 const claudeMd = await loader.loadClaudeMd();
@@ -884,11 +885,12 @@ Sub-issue #501: SDK license check hook → nightgauge
 Sub-issue #502: Platform license API endpoint → acme-platform
 ```
 
-Each sub-issue gets its own pipeline context in its target repo:
+Each sub-issue gets its own pipeline context in its target repo's pipeline
+state directory:
 
 ```
-nightgauge/.nightgauge/pipeline/planning-501.json
-acme-platform/.nightgauge/pipeline/planning-502.json
+nightgauge/.git/nightgauge/pipeline/planning-501.json
+acme-platform/.git/nightgauge/pipeline/planning-502.json
 ```
 
 **Step 5 — Isolated pipeline execution per repo**:
@@ -911,13 +913,15 @@ for details and a real-world example.
 
 ### Repository-Scoped Context Files
 
-Each repository maintains isolated pipeline context:
+Each repository maintains isolated pipeline context. Configuration is committed
+in the working tree; pipeline context and plans are per-clone data in the git
+directory (`nightgauge layout --workdir <repo>` prints them):
 
 ```
 frontend/.nightgauge/
-├── config.yaml            # Repository config
+└── config.yaml            # Repository config
+frontend/.git/nightgauge/
 ├── pipeline/
-│   ├── state.json         # Pipeline state
 │   ├── issue-42.json      # Issue context
 │   ├── planning-42.json   # Planning context
 │   └── dev-42.json        # Development context
@@ -925,9 +929,9 @@ frontend/.nightgauge/
     └── 42-login-form.md   # Feature plan
 
 backend/.nightgauge/
-├── config.yaml            # Separate repository config
+└── config.yaml            # Separate repository config
+backend/.git/nightgauge/
 ├── pipeline/
-│   ├── state.json         # Separate pipeline state
 │   ├── issue-43.json      # Backend issue context
 │   └── ...
 └── plans/
@@ -938,8 +942,8 @@ backend/.nightgauge/
 
 Each pipeline execution is isolated to the current repository:
 
-- Context files read/written to current repo's `.nightgauge/pipeline/`
-- Plans stored in current repo's `.nightgauge/plans/`
+- Context files read/written in the current repo's pipeline state directory
+- Plans stored in the current repo's plans directory
 - Git operations in current repo's working directory
 - CLAUDE.md and docs loaded from current repo
 
@@ -1353,7 +1357,8 @@ declaring the workspace broken.
 
 1. Verify current repository (check status bar)
 2. Switch to correct repository before running pipeline
-3. Check `.nightgauge/pipeline/` exists in target repo
+3. Check the target repo's pipeline state directory
+   (`nightgauge layout --workdir <repo>`)
 4. Delete stale context files and re-run pipeline
 
 ### Auto-Detection Not Working
@@ -1406,7 +1411,7 @@ The legacy `project.number` form remains supported as a one-project shorthand.
 ### What happens to existing context files after switching repos?
 
 Context files remain in their respective repositories. Switching repos changes
-which `.nightgauge/pipeline/` directory is used, but doesn't affect other
+which pipeline state directory is used, but doesn't affect other
 repos.
 
 ---

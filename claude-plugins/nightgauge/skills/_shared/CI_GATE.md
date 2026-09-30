@@ -89,7 +89,8 @@ if [ -z "$BINARY" ]; then
 fi
 
 CI_CHUNK_PENDING=false
-CI_DEADLINE_FILE=".nightgauge/pipeline/ci-wait-deadline-${PR_NUMBER}"
+CI_DEADLINE_NAME="ci-wait-deadline-${PR_NUMBER}"
+CI_DEADLINE_FILE="$(nightgauge layout path pipeline "$CI_DEADLINE_NAME")"
 
 if [ "$CI_EPIC_SKIP" = "true" ]; then
   echo "Skipping ci wait (epic branch PR)"
@@ -100,9 +101,9 @@ else
   # Cumulative budget bookkeeping (#187): first chunk writes the deadline;
   # later chunks (fresh Bash calls) read it back.
   _CI_NOW=$(date +%s)
-  if [ ! -f "$CI_DEADLINE_FILE" ]; then
-    mkdir -p "$(dirname "$CI_DEADLINE_FILE")"
-    echo $(( _CI_NOW + TIMEOUT * 60 )) > "$CI_DEADLINE_FILE"
+  if [ ! -s "$CI_DEADLINE_FILE" ]; then
+    echo $(( _CI_NOW + TIMEOUT * 60 )) \
+      | nightgauge layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
   fi
   _CI_DEADLINE=$(cat "$CI_DEADLINE_FILE" 2>/dev/null || echo $(( _CI_NOW + TIMEOUT * 60 )))
   _CI_REMAINING=$(( _CI_DEADLINE - _CI_NOW ))
@@ -132,10 +133,11 @@ else
   fi
 fi
 
-# Terminal outcome (green/failed/cumulative-timeout) — drop the deadline file
-# so the next PR (or a re-run after fixes) starts a fresh budget.
+# Terminal outcome (green/failed/cumulative-timeout) — empty the deadline file
+# so the next PR (or a re-run after fixes) starts a fresh budget. An empty file
+# reads as "no deadline" above; nothing is deleted under the git directory.
 if [ "$CI_CHUNK_PENDING" != "true" ]; then
-  rm -f "$CI_DEADLINE_FILE"
+  printf '' | nightgauge layout write pipeline "$CI_DEADLINE_NAME" >/dev/null
 fi
 
 CI_ALL_PASSED=$(printf '%s\n' "$CI_RESULT" | jq -r 'if .state == "SUCCESS" then "true" else "false" end')

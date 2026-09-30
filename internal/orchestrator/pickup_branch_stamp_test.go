@@ -9,6 +9,8 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // Recovering a branch the pickup skill lost between shells (#1919).
@@ -54,7 +56,7 @@ func branchStampFixture(t *testing.T, branchName string) (string, string) {
 // omit it entirely with absent=true).
 func writeContextWithBranch(t *testing.T, worktree string, issue int, branch string, absent bool) string {
 	t.Helper()
-	dir := filepath.Join(worktree, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, worktree)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

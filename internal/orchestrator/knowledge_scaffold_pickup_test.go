@@ -9,6 +9,8 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // Knowledge scaffolding at pickup (#1205).
@@ -79,7 +81,7 @@ func boolLit(b bool) string {
 // nothing at the root, so a root-only stamp cannot pass by accident.
 func writeWorktreeContextFile(t *testing.T, worktree string, issue int) string {
 	t.Helper()
-	dir := filepath.Join(worktree, ".nightgauge", "pipeline")
+	dir := layouttest.PipelineDir(t, worktree)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}

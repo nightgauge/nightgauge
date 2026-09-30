@@ -13,7 +13,8 @@
  *   - A `skill-no-op` extractor was added for pr-merge runs whose
  *     post-merge verification reported "PR is not merged".
  *
- * This script walks `.nightgauge/retros/*_retro.json` from the last
+ * This script walks the clone's `retros/*_retro.json` (under
+ * `<git-common-dir>/nightgauge/`, ADR-024 § 7) from the last
  * 30 days, attempts to re-load each retro's recorded `sources_analyzed` from
  * disk (best-effort — sources may have rotated), and re-applies the post-#3275
  * structural signals to the original primary finding. It writes a
@@ -43,13 +44,18 @@
 
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import {
+  resolveCloneLayout,
+  type CloneLayout,
+} from "../../packages/nightgauge-sdk/src/context/cloneLayout.js";
 
 interface CliOptions {
   days: number;
   force: boolean;
   dryRun: boolean;
-  retrosDir: string;
   workspaceRoot: string;
+  /** The workspace's per-clone directories; throws outside a git repository. */
+  layout: CloneLayout;
 }
 
 interface OriginalFinding {
@@ -85,12 +91,11 @@ interface BackfillResult {
 // =============================================================================
 
 function parseArgs(argv: string[]): CliOptions {
-  const opts: CliOptions = {
+  const opts: Omit<CliOptions, "layout"> = {
     days: 30,
     force: false,
     dryRun: false,
     workspaceRoot: process.cwd(),
-    retrosDir: path.join(process.cwd(), ".nightgauge", "retros"),
   };
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
@@ -102,10 +107,9 @@ function parseArgs(argv: string[]): CliOptions {
       opts.dryRun = true;
     } else if (arg === "--workspace") {
       opts.workspaceRoot = argv[++i];
-      opts.retrosDir = path.join(opts.workspaceRoot, ".nightgauge", "retros");
     }
   }
-  return opts;
+  return { ...opts, layout: resolveCloneLayout(path.resolve(opts.workspaceRoot)) };
 }
 
 // =============================================================================
@@ -210,7 +214,7 @@ async function listRetroFiles(dir: string, days: number): Promise<string[]> {
 }
 
 async function reconstructEvidenceText(
-  workspaceRoot: string,
+  layout: CloneLayout,
   original: OriginalRetro
 ): Promise<string> {
   const parts: string[] = [];
@@ -222,31 +226,14 @@ async function reconstructEvidenceText(
     if (source === "session_log") {
       const dateMatch = original.created_at?.slice(0, 10);
       if (dateMatch) {
-        candidatePath = path.join(
-          workspaceRoot,
-          ".nightgauge",
-          "logs",
-          `${dateMatch}_${issueNumber}_session.log`
-        );
+        candidatePath = path.join(layout.logs, `${dateMatch}_${issueNumber}_session.log`);
       }
     } else if (source === "pipeline_context") {
-      candidatePath = path.join(
-        workspaceRoot,
-        ".nightgauge",
-        "pipeline",
-        `${failedStage}-${issueNumber}.json`
-      );
+      candidatePath = path.join(layout.pipeline, `${failedStage}-${issueNumber}.json`);
     } else if (source === "execution_history") {
       continue;
     } else if (source.endsWith(".log")) {
-      candidatePath = path.join(
-        workspaceRoot,
-        ".nightgauge",
-        "pipeline",
-        "history",
-        String(issueNumber),
-        source
-      );
+      candidatePath = path.join(layout.pipeline, "history", String(issueNumber), source);
     }
 
     if (!candidatePath) continue;
@@ -269,7 +256,7 @@ async function reconstructEvidenceText(
 
 async function processOne(
   filePath: string,
-  workspaceRoot: string,
+  layout: CloneLayout,
   opts: CliOptions
 ): Promise<BackfillResult> {
   const sidecar = filePath.replace(/\.json$/, ".v2.json");
@@ -307,7 +294,7 @@ async function processOne(
     };
   }
 
-  const text = await reconstructEvidenceText(workspaceRoot, original);
+  const text = await reconstructEvidenceText(layout, original);
   const originalCategory = original.findings[0]?.category ?? "unknown";
   const { category: newCategory, reason } = reclassify(
     text,
@@ -361,21 +348,21 @@ async function main(): Promise<void> {
   const opts = parseArgs(process.argv);
 
   console.log(`Backfill #3275 — last ${opts.days} days of retros`);
-  console.log(`  retros dir: ${opts.retrosDir}`);
+  console.log(`  retros dir: ${opts.layout.retros}`);
   console.log(`  workspace:  ${opts.workspaceRoot}`);
   console.log(`  dry-run:    ${opts.dryRun}`);
   console.log(`  force:      ${opts.force}`);
   console.log("");
 
-  const files = await listRetroFiles(opts.retrosDir, opts.days);
+  const files = await listRetroFiles(opts.layout.retros, opts.days);
   if (files.length === 0) {
-    console.log(`No retro files found in ${opts.retrosDir} within ${opts.days} days.`);
+    console.log(`No retro files found in ${opts.layout.retros} within ${opts.days} days.`);
     return;
   }
 
   const results: BackfillResult[] = [];
   for (const f of files) {
-    const r = await processOne(f, opts.workspaceRoot, opts);
+    const r = await processOne(f, opts.layout, opts);
     results.push(r);
   }
 

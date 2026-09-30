@@ -1703,7 +1703,7 @@ type KnowledgeRelatedToIssueResult struct {
 // round-trips Go's scheduler, so no record was written for IPC-mode
 // failures — every failure went into a black box. This IPC method is the
 // parallel write path: TS calls it after each stage exit so the JSONL at
-// `.nightgauge/pipeline/exit-records/<UTC-day>.jsonl` carries records
+// `.git/nightgauge/pipeline/exit-records/<UTC-day>.jsonl` carries records
 // from BOTH dispatch paths.
 //
 // Field semantics overlap with StageResultParams + StageExitRecord — TS

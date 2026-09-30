@@ -18,10 +18,13 @@ import type { ExecutionHistoryRunRecordV2 } from "../../src/schemas/executionHis
 import type { HealthScoreSnapshot } from "../../src/schemas/healthScoreHistory";
 import type { ExperimentOutcome } from "@nightgauge/sdk";
 import type { DateRangeFilter } from "../../src/types/aggregation";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 vi.mock("node:fs/promises");
 
 const WORKSPACE = "/test/workspace";
+/** The workspace's pipeline state dir, under its (fake) git dir (#2037). */
+const PIPELINE_DIR = fakeCloneLayout(WORKSPACE).pipeline;
 
 /** Build a mock v2 execution history run record */
 function buildRunRecord(
@@ -98,6 +101,7 @@ function buildFilter(startStr: string, endStr: string): DateRangeFilter {
 describe("DataAggregator", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fakeCloneLayout(WORKSPACE);
     // Default mocks — no data available
     vi.mocked(fs.readdir).mockRejectedValue(Object.assign(new Error("ENOENT"), { code: "ENOENT" }));
     vi.mocked(fs.readFile).mockRejectedValue(
@@ -392,7 +396,7 @@ describe("DataAggregator", () => {
 
   describe("aggregate — with health reports", () => {
     it("should read and filter health reports by period overlap", async () => {
-      const pipelineDir = `${WORKSPACE}/.nightgauge/pipeline`;
+      const pipelineDir = PIPELINE_DIR;
       vi.mocked(fs.readdir).mockImplementation(async (dirPath) => {
         const p = typeof dirPath === "string" ? dirPath : dirPath.toString();
         if (p === pipelineDir) {
@@ -610,7 +614,7 @@ describe("DataAggregator", () => {
       // Analysis reports
       const analysisDir = `${WORKSPACE}/.nightgauge/analysis`;
       const experimentsDir = `${WORKSPACE}/.nightgauge/analysis/experiments`;
-      const pipelineDir = `${WORKSPACE}/.nightgauge/pipeline`;
+      const pipelineDir = PIPELINE_DIR;
 
       vi.mocked(fs.readdir).mockImplementation(async (dirPath) => {
         const p = typeof dirPath === "string" ? dirPath : dirPath.toString();

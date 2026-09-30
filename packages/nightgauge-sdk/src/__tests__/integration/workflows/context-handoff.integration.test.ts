@@ -62,7 +62,7 @@ describe("Context Handoff Workflow", () => {
       const planningData = {
         schema_version: "1.5",
         issue_number: 42,
-        plan_file: ".nightgauge/plans/42-plan.md",
+        plan_file: "/repo/.git/nightgauge/plans/42-plan.md",
         approach: "Add TokenTracker to orchestrator",
         files_to_create: ["src/tracking/TokenTracker.ts"],
         files_to_modify: ["src/orchestrator/PipelineOrchestrator.ts"],
@@ -76,7 +76,7 @@ describe("Context Handoff Workflow", () => {
       const loaded = await ctx.read(PlanningContextSchema, "planning-42.json");
 
       expect(loaded.issue_number).toBe(42);
-      expect(loaded.plan_file).toBe(".nightgauge/plans/42-plan.md");
+      expect(loaded.plan_file).toBe("/repo/.git/nightgauge/plans/42-plan.md");
       expect(loaded.files_to_create).toContain("src/tracking/TokenTracker.ts");
     });
   });
@@ -149,7 +149,7 @@ describe("Context Handoff Workflow", () => {
       const planningOutput = {
         schema_version: "1.5",
         issue_number: 100,
-        plan_file: ".nightgauge/plans/100-plan.md",
+        plan_file: "/repo/.git/nightgauge/plans/100-plan.md",
         approach: "Implement context handoff tests",
         files_to_create: ["src/__tests__/integration/workflows/context-handoff.test.ts"],
         files_to_modify: [],
@@ -172,7 +172,7 @@ describe("Context Handoff Workflow", () => {
       const data1 = {
         schema_version: "1.5",
         issue_number: 1,
-        plan_file: ".nightgauge/plans/1.md",
+        plan_file: "/repo/.git/nightgauge/plans/1.md",
         approach: "First write",
         decisions: ["decision A"],
         revision_count: 0,
@@ -182,7 +182,7 @@ describe("Context Handoff Workflow", () => {
       const data2 = {
         schema_version: "1.5",
         issue_number: 2,
-        plan_file: ".nightgauge/plans/2.md",
+        plan_file: "/repo/.git/nightgauge/plans/2.md",
         approach: "Second write",
         decisions: ["decision B"],
         revision_count: 0,

@@ -196,7 +196,6 @@ the YAML and produces a normal commit.
 | `autonomous.safety_rails.*`                                                                     | team YAML          | Team        | Circuit-breaker and rate-limit guardrails — team policy.                                                                                     |
 | `automations.enabled`                                                                           | team YAML          | Team        | Team policy. Explicitly named in epic #3313 as team-tier.                                                                                    |
 | `automations.dry_run`                                                                           | team YAML          | Team        | Team policy.                                                                                                                                 |
-| `automations.log_file`                                                                          | team YAML          | Team        | Repo-relative path — team-shared.                                                                                                            |
 | `automations.triggers`                                                                          | team YAML          | Team        | Team-defined automation triggers.                                                                                                            |
 | `autonomous_discovery.enabled`                                                                  | team YAML          | Team        | Team policy.                                                                                                                                 |
 | `autonomous_discovery.kill_switch`                                                              | team YAML          | Team        | Team kill-switch — reviewed.                                                                                                                 |
@@ -522,7 +521,8 @@ than "block on answer".
   **Resolved by deletion (#968).** These were contributed VSCode settings that
   no extension code ever read, so the tier question was moot: the effective
   values always came from the schema and team YAML via merge precedence. The
-  inert VSCode surface is gone; the YAML keys remain and are Team.
+  inert VSCode surface is gone. The YAML keys were removed too (#2037): per-clone
+  data has no location override (ADR-024 § 7).
   **Stakeholder**: @octocat.
 
 ## Phase Hand-off

@@ -14,7 +14,8 @@ labels. Capture issue number from command output.
 
 **MANDATORY ROUTING SOURCE OF TRUTH**: For epics with sub-issues, this phase
 reads the routing manifest written by Phase 2.4
-(`.nightgauge/pipeline/issue-create-routing-<epic-number>.json`). EVERY
+(`issue-create-routing-<epic-number>.json` in the clone's pipeline state
+directory, `nightgauge layout path pipeline`). EVERY
 sub-issue creation MUST use the manifest's `target_repo` for that sub-issue.
 Never re-derive routing here — drift between Phase 2.4 and Phase 3 reintroduces
 the #3232 silent-misroute bug. If the manifest file is missing for an epic,

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/ipc"
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 )
 
@@ -426,7 +427,7 @@ func TestCliVerbExecutor_ExpiredContextRejectsWrite(t *testing.T) {
 		t.Fatalf("expected a *attention.VerbExecutionError, got %T: %v", err, err)
 	}
 
-	overridePath := filepath.Join(dir, ".nightgauge", "pipeline", "budget-override.json")
+	overridePath := filepath.Join(layouttest.PipelineDir(t, dir), "budget-override.json")
 	if _, statErr := os.Stat(overridePath); !os.IsNotExist(statErr) {
 		t.Errorf("override file must not be written for a cancelled context; stat err = %v", statErr)
 	}

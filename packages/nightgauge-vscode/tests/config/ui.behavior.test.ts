@@ -38,8 +38,6 @@ describe("ui.behavior", () => {
           adapter: "claude",
           auth_provider: "max",
           default_model: "sonnet",
-          context_path: ".nightgauge/pipeline",
-          plans_path: ".nightgauge/plans",
         },
         dashboard: {
           time_savings: {
@@ -154,8 +152,9 @@ describe("ui.behavior", () => {
       expect(DEFAULT_CONFIG.ui?.core?.auth_provider).toBe("max");
       expect(DEFAULT_CONFIG.ui?.core?.adapter).toBe("claude");
       expect(DEFAULT_CONFIG.ui?.core?.default_model).toBe("sonnet");
-      expect(DEFAULT_CONFIG.ui?.core?.context_path).toBe(".nightgauge/pipeline");
-      expect(DEFAULT_CONFIG.ui?.core?.plans_path).toBe(".nightgauge/plans");
+      // Per-clone locations have no setting (ADR-024 § 7, #2037).
+      expect(DEFAULT_CONFIG.ui?.core).not.toHaveProperty("context_path");
+      expect(DEFAULT_CONFIG.ui?.core).not.toHaveProperty("plans_path");
 
       expect(DEFAULT_CONFIG.ui?.dashboard?.time_savings?.issue_pickup).toBe(5);
       expect(DEFAULT_CONFIG.ui?.dashboard?.time_savings?.feature_planning).toBe(30);

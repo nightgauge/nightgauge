@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // hasDailyJSONL reports whether workspaceRoot has any history JSONL file — used
@@ -19,7 +21,7 @@ import (
 // repo root.
 func hasDailyJSONL(t *testing.T, workspaceRoot string) bool {
 	t.Helper()
-	dir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline", "history")
+	dir := filepath.Join(layouttest.PipelineDir(t, workspaceRoot), "history")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false
@@ -38,8 +40,8 @@ func hasDailyJSONL(t *testing.T, workspaceRoot string) bool {
 // removed, and the downstream queue is paused — none of which happened before
 // the reconciler learned to scan registered repo roots.
 func TestRecoverOrchestratorCrash_ReconcilesCrossRepoSidecar(t *testing.T) {
-	launchRoot := t.TempDir()
-	targetRoot := t.TempDir() // a different, non-primary repo root
+	launchRoot := layouttest.Repo(t)
+	targetRoot := layouttest.Repo(t) // a different, non-primary repo root
 
 	startedAt := time.Now().UTC().Add(-30 * time.Second)
 	stageStart := startedAt.Add(5 * time.Second)
@@ -73,7 +75,7 @@ func TestRecoverOrchestratorCrash_ReconcilesCrossRepoSidecar(t *testing.T) {
 	s.recoverOrchestratorCrash()
 
 	// The sidecar under the non-launch repo root must be gone (reconciled).
-	if _, err := os.Stat(filepath.Join(targetRoot, currentRunSidecarFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, targetRoot), currentRunSidecarFile)); !os.IsNotExist(err) {
 		t.Errorf("cross-repo sidecar should be removed after recovery, stat err=%v", err)
 	}
 
@@ -116,7 +118,7 @@ func TestRecoverOrchestratorCrash_ReconcilesCrossRepoSidecar(t *testing.T) {
 // a registered path, so repoScanRoots must dedup and reconcile the single
 // sidecar exactly once (one synthesized record, not two).
 func TestRecoverOrchestratorCrash_NoDuplicateWhenPrimaryIsRegistered(t *testing.T) {
-	launchRoot := t.TempDir()
+	launchRoot := layouttest.Repo(t)
 
 	startedAt := time.Now().UTC().Add(-30 * time.Second)
 	if err := writeCurrentRunSidecar(launchRoot, CurrentRunSidecar{
@@ -145,7 +147,7 @@ func TestRecoverOrchestratorCrash_NoDuplicateWhenPrimaryIsRegistered(t *testing.
 	if len(records) != 1 {
 		t.Fatalf("expected exactly 1 synthesized record (no duplicate), got %d", len(records))
 	}
-	if _, err := os.Stat(filepath.Join(launchRoot, currentRunSidecarFile)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, launchRoot), currentRunSidecarFile)); !os.IsNotExist(err) {
 		t.Errorf("sidecar should be removed after recovery, stat err=%v", err)
 	}
 }
@@ -155,8 +157,8 @@ func TestRecoverOrchestratorCrash_NoDuplicateWhenPrimaryIsRegistered(t *testing.
 // scanned. A sidecar sitting under an unregistered non-launch directory is left
 // untouched — recovery never reaches beyond the launch root.
 func TestRecoverOrchestratorCrash_LaunchRootOnlyWhenResolverNil(t *testing.T) {
-	launchRoot := t.TempDir()
-	strayRoot := t.TempDir()
+	launchRoot := layouttest.Repo(t)
+	strayRoot := layouttest.Repo(t)
 
 	startedAt := time.Now().UTC().Add(-30 * time.Second)
 	if err := writeCurrentRunSidecar(strayRoot, CurrentRunSidecar{
@@ -181,7 +183,7 @@ func TestRecoverOrchestratorCrash_LaunchRootOnlyWhenResolverNil(t *testing.T) {
 
 	// The stray sidecar must be untouched (not reconciled, not removed) because
 	// its root was never registered.
-	if _, err := os.Stat(filepath.Join(strayRoot, currentRunSidecarFile)); err != nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, strayRoot), currentRunSidecarFile)); err != nil {
 		t.Errorf("unregistered sidecar should remain untouched, stat err=%v", err)
 	}
 	if hasDailyJSONL(t, strayRoot) {

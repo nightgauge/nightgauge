@@ -111,6 +111,17 @@ vi.mock("../../src/services/IpcClient", () => ({
 
 import { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipelineManager";
 import { WorktreeManager } from "../../src/utils/WorktreeManager";
+import { fakeCloneLayout } from "../helpers/cloneLayout";
+import * as path from "node:path";
+
+// Per-clone data resolves under the git directory (ADR-024 § 7); map the
+// fake roots (and their worktrees) to a clone without running git.
+beforeEach(() => {
+  fakeCloneLayout("/workspace/repo-a");
+  fakeCloneLayout("/workspace/repo-a/.worktrees/issue-10", path.join("/workspace/repo-a", ".git"));
+  fakeCloneLayout("/workspace/repo-b");
+  fakeCloneLayout("/workspace/repo-b/.worktrees/issue-20", path.join("/workspace/repo-b", ".git"));
+});
 
 // ---------------------------------------------------------------------------
 // Helpers

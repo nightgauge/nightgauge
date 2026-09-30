@@ -15,6 +15,8 @@ import (
 	pmstages "github.com/nightgauge/nightgauge/internal/orchestrator/stages"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // successStageRunner is a StageRunner test double that always reports success
@@ -134,11 +136,11 @@ func (alwaysPuntPRCreateRunner) Run(_ context.Context, _ int, _, _ string) (pmst
 // fires SkillExitedWithoutMerging, and the run completes with one recovery
 // attempt recorded on the runtime.
 func TestRecoveryRegistry_PRMergeSelfHeal(t *testing.T) {
-	root := t.TempDir()
+	root := gitWorkspace(t)
 
 	// Pre-write pr-{N}.json so loadPRNumberForRecovery and the gate context
 	// path agree on the PR number.
-	prDir := filepath.Join(root, ".nightgauge", "pipeline")
+	prDir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(prDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -339,8 +341,8 @@ func (alwaysPuntPRMergeRunner) Run(_ context.Context, _ int, _, _ string) (pmsta
 // rewind and fail the pipeline; the self-bounded BacktrackTargetStage path must
 // bypass that guard so feature-dev re-runs both times and the run lands.
 func TestRecoveryRegistry_ConflictRecoveryRewindsTwice(t *testing.T) {
-	root := t.TempDir()
-	prDir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := gitWorkspace(t)
+	prDir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(prDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
@@ -406,8 +408,8 @@ func TestRecoveryRegistry_ConflictRecoveryRewindsTwice(t *testing.T) {
 // error must name the conflicting files — and survive a model-escalation retry
 // (MaxEscalationsPerStage:1) that re-runs pr-merge before the loop gives up.
 func TestRecoveryRegistry_ConflictExhaustionNamesFiles(t *testing.T) {
-	root := t.TempDir()
-	prDir := filepath.Join(root, ".nightgauge", "pipeline")
+	root := gitWorkspace(t)
+	prDir := layouttest.PipelineDir(t, root)
 	if err := os.MkdirAll(prDir, 0755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

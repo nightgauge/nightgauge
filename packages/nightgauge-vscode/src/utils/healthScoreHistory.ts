@@ -10,7 +10,7 @@
  * @see Issue #789 - Persist Health Scores to Disk with 30-Day Trend
  */
 
-import { pipelineStateDir } from "./cloneLayout";
+import { isUsableWorkspaceRoot, pipelineStateDir } from "./cloneLayout";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
@@ -144,6 +144,8 @@ export class HealthScoreHistoryReader {
   static async getMostRecentRecalibration(
     workspaceRoot: string
   ): Promise<RecalibrationMarker | null> {
+    // Outside a git repository there is no clone, so no history.
+    if (!isUsableWorkspaceRoot(workspaceRoot)) return null;
     const filePath = HealthScoreHistoryWriter.getFilePath(workspaceRoot);
     let content: string;
 
@@ -181,6 +183,8 @@ export class HealthScoreHistoryReader {
    * Skips malformed lines with a warning.
    */
   static async readAll(workspaceRoot: string): Promise<HealthScoreSnapshot[]> {
+    // Outside a git repository there is no clone, so no history.
+    if (!isUsableWorkspaceRoot(workspaceRoot)) return [];
     const filePath = HealthScoreHistoryWriter.getFilePath(workspaceRoot);
     let content: string;
 

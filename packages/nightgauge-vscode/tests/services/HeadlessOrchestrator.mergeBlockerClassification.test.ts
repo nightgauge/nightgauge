@@ -20,6 +20,7 @@ import * as os from "os";
 import * as path from "path";
 import { HeadlessOrchestrator } from "../../src/services/HeadlessOrchestrator";
 import type { Logger } from "../../src/utils/logger";
+import { mkFakeCloneLayout } from "../helpers/cloneLayout";
 
 // Mutable stub state shared with the hoisted child_process factory.
 const { precheckResponse, binaryPath } = vi.hoisted(() => ({
@@ -66,11 +67,13 @@ function createMockLogger(): Logger {
 
 describe("HeadlessOrchestrator #185 merge-blocker retry gate", () => {
   let tmpDir: string;
+  let pipelineDir: string;
   let orchestrator: HeadlessOrchestrator;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ng-185-"));
-    fs.mkdirSync(path.join(tmpDir, ".nightgauge", "pipeline"), { recursive: true });
+    // Contexts live in the clone's pipeline directory (ADR-024 § 7).
+    pipelineDir = mkFakeCloneLayout(tmpDir).pipeline;
     orchestrator = new HeadlessOrchestrator(null, createMockLogger());
     orchestrator.setWorktreeOverride(tmpDir);
     binaryPath.value = "/fake/nightgauge";
@@ -84,7 +87,7 @@ describe("HeadlessOrchestrator #185 merge-blocker retry gate", () => {
 
   function writePrContext(issueNumber: number, prNumber: number | null): void {
     fs.writeFileSync(
-      path.join(tmpDir, ".nightgauge", "pipeline", `pr-${issueNumber}.json`),
+      path.join(pipelineDir, `pr-${issueNumber}.json`),
       JSON.stringify(prNumber ? { pr_number: prNumber } : {})
     );
   }
@@ -181,7 +184,7 @@ describe("HeadlessOrchestrator #185 merge-blocker retry gate", () => {
   describe("readPrBlockerRecord (#190)", () => {
     it("returns the structured blocker record when present", () => {
       fs.writeFileSync(
-        path.join(tmpDir, ".nightgauge", "pipeline", "pr-233.json"),
+        path.join(pipelineDir, "pr-233.json"),
         JSON.stringify({
           pr_number: 276,
           blocker: {
@@ -207,7 +210,7 @@ describe("HeadlessOrchestrator #185 merge-blocker retry gate", () => {
 
     it("returns null when the context file is missing or malformed", () => {
       expect((orchestrator as any).readPrBlockerRecord(999)).toBeNull();
-      fs.writeFileSync(path.join(tmpDir, ".nightgauge", "pipeline", "pr-233.json"), "{not json");
+      fs.writeFileSync(path.join(pipelineDir, "pr-233.json"), "{not json");
       expect((orchestrator as any).readPrBlockerRecord(233)).toBeNull();
     });
   });
@@ -216,7 +219,7 @@ describe("HeadlessOrchestrator #185 merge-blocker retry gate", () => {
     it("creates feedback-{N}.json with a warning-severity PR_MERGE_RETRY signal", () => {
       (orchestrator as any).writePrMergeRetryFeedback(233, "attempt 1 blocked", ["state: OPEN"]);
 
-      const feedbackPath = path.join(tmpDir, ".nightgauge", "pipeline", "feedback-233.json");
+      const feedbackPath = path.join(pipelineDir, "feedback-233.json");
       const ctx = JSON.parse(fs.readFileSync(feedbackPath, "utf-8"));
       expect(ctx.issue_number).toBe(233);
       expect(ctx.signals).toHaveLength(1);
@@ -230,7 +233,7 @@ describe("HeadlessOrchestrator #185 merge-blocker retry gate", () => {
     });
 
     it("preserves existing signals when merging", () => {
-      const feedbackPath = path.join(tmpDir, ".nightgauge", "pipeline", "feedback-233.json");
+      const feedbackPath = path.join(pipelineDir, "feedback-233.json");
       fs.writeFileSync(
         feedbackPath,
         JSON.stringify({

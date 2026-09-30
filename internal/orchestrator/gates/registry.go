@@ -32,18 +32,19 @@ func LookupByStageName(name string) (StageGate, bool) {
 	return gate, ok
 }
 
-// contextFilePath builds the workspace-relative path to a flat skill-output
+// contextFilePath builds the path to a flat skill-output
 // context file. Per ContextAssembler convention the layout is:
 //
-//	{workspace}/.nightgauge/pipeline/{type}-{issue}.json
+//	<git-common-dir>/nightgauge/pipeline/{type}-{issue}.json
 //
 // Type strings match the ContextFileType union in
 // `packages/nightgauge-vscode/src/services/RepositoryContextLoader.ts`
 // (`issue`, `planning`, `dev`, `validate`, `pr`).
 //
-// For an empty or relative workspace it returns "" (layout.PipelineStateDir
-// refuses to resolve one), which every gate reads as a missing context rather
-// than resolving against the process's working directory.
+// For an empty or relative workspace, or one outside a git repository, it
+// returns "" (layout.PipelineStateDir refuses to resolve one), which every
+// gate reads as a missing context rather than resolving against the process's
+// working directory.
 func contextFilePath(workspace, contextType string, issueNumber int) string {
 	dir, err := layout.PipelineStateDir(workspace)
 	if err != nil {

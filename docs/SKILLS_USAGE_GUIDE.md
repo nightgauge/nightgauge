@@ -84,7 +84,7 @@ Claim a GitHub issue, extract requirements, and set up the development environme
 | Cursor      | Agent Skills or direct SKILL.md             |
 
 **Input:** GitHub issue number (or auto-select highest priority)
-**Output:** Feature branch + context file `.nightgauge/pipeline/issue-{N}.json`
+**Output:** Feature branch + context file `issue-{N}.json` in the clone's pipeline state directory (`nightgauge layout path pipeline`)
 
 **Runs Before:** feature-planning
 
@@ -109,8 +109,8 @@ Design a complete implementation plan by reading docs before source code explora
 | Copilot     | Invoke via Agent Skills                     |
 | Cursor      | Agent Skills or direct SKILL.md             |
 
-**Input:** Context from issue-pickup (`.nightgauge/pipeline/issue-{N}.json`)
-**Output:** Plan file + planning context `.nightgauge/pipeline/planning-{N}.json`
+**Input:** Context from issue-pickup (`issue-{N}.json`)
+**Output:** Plan file (clone's plans directory, `nightgauge layout path plans`) + planning context `planning-{N}.json`
 
 **Runs Before:** feature-dev | **Runs After:** issue-pickup
 
@@ -136,7 +136,7 @@ Implement features following the approved PLAN.md. Includes code generation, tes
 | Cursor      | Agent Skills or direct SKILL.md        |
 
 **Input:** Plan file + planning context
-**Output:** Code + tests + dev context `.nightgauge/pipeline/dev-{N}.json`
+**Output:** Code + tests + dev context `dev-{N}.json`
 
 **Arguments:**
 
@@ -168,7 +168,7 @@ Validate feature implementation using integration/E2E tests with Ralph Loop self
 | Cursor      | Agent Skills or direct SKILL.md             |
 
 **Input:** Dev context from feature-dev
-**Output:** Validation context `.nightgauge/pipeline/validate-{N}.json`
+**Output:** Validation context `validate-{N}.json`
 
 **Arguments:**
 
@@ -201,7 +201,7 @@ Create a high-quality pull request with correct base/head, issue linkage, valida
 | Cursor      | Agent Skills or direct SKILL.md      |
 
 **Input:** Dev + optional validation context
-**Output:** Opened PR + context `.nightgauge/pipeline/pr-{N}.json`
+**Output:** Opened PR + context `pr-{N}.json`
 
 **Runs Before:** pr-merge | **Runs After:** feature-dev (or feature-validate)
 
@@ -1674,7 +1674,7 @@ After running pipeline, analyze with:
 ## Architecture Notes
 
 - **Deterministic vs Probabilistic:** Skills separate deterministic tool commands (bash, jq, graphql) from probabilistic AI interpretation. Deterministic steps are reproducible and debuggable.
-- **Context Handoff:** Core pipeline skills communicate via JSON context files in `.nightgauge/pipeline/`, not conversation history.
+- **Context Handoff:** Core pipeline skills communicate via JSON context files in the clone's pipeline state directory (`nightgauge layout path pipeline`), not conversation history.
 - **No Reinvention:** Skills reuse the Go binary (`cmd/nightgauge/`) for deterministic operations rather than reimplementing logic.
 - **Headless by Default:** Skills can run in automated/headless mode. Some support `AskUserQuestion` for interactive mode when needed.
 - **Phase Markers:** Skills emit structured HTML comments to track progress (`<!-- phase:start ... -->`).

@@ -1,7 +1,8 @@
 // Package telemetry emits one JSONL event per knowledge-base operation to
-// .nightgauge/pipeline/history/knowledge-events.jsonl. The package is
-// deliberately small: it owns the event schema and the Emit entrypoint that
-// every knowledge subcommand calls at its success path.
+// history/knowledge-events.jsonl in the clone's pipeline state directory
+// (layout.PipelineStateDir; see Path). The package is deliberately small: it
+// owns the event schema and the Emit entrypoint that every knowledge
+// subcommand calls at its success path.
 //
 // The package is decoupled from internal/config to avoid an import cycle —
 // the resolver method `KnowledgeConfig.IsTelemetryEnabled()` lives on the

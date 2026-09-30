@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // fixedNow dates every record in these tests into one daily JSONL file so the
@@ -41,7 +43,7 @@ func makeRunRec(runID string, issue int, startedAt string, stageNames ...string)
 // appended", independent of any reader-side de-duplication.
 func rawDailyLines(t *testing.T, dir string) []V2RunRecord {
 	t.Helper()
-	path := filepath.Join(dir, ".nightgauge", "pipeline", "history", fixedNow.Format("2006-01-02")+".jsonl")
+	path := filepath.Join(layouttest.PipelineDir(t, dir), "history", fixedNow.Format("2006-01-02")+".jsonl")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -65,7 +67,7 @@ func rawDailyLines(t *testing.T, dir string) []V2RunRecord {
 
 func readIndexFile(t *testing.T, dir string) V2Index {
 	t.Helper()
-	path := filepath.Join(dir, ".nightgauge", "pipeline", "history", "index.json")
+	path := filepath.Join(layouttest.PipelineDir(t, dir), "history", "index.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read index: %v", err)
@@ -80,7 +82,7 @@ func readIndexFile(t *testing.T, dir string) V2Index {
 // TestIdempotency_DuplicateRunIDDropped: a second write for the same run_id is
 // dropped — exactly one JSONL line and one index entry survive.
 func TestIdempotency_DuplicateRunIDDropped(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 	rec := makeRunRec("run-abc", 313, "2026-07-19T09:00:00Z", "issue-pickup", "feature-dev", "pr-merge")
 
@@ -103,7 +105,7 @@ func TestIdempotency_DuplicateRunIDDropped(t *testing.T) {
 }
 
 func TestIndexV1RebuildRetainsOrchestratorCrashIdentity(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 	crash := makeRunRec("run-crash", 447, "2026-07-19T08:00:00Z")
 	crash.SchemaVersion = "3"
@@ -113,7 +115,7 @@ func TestIndexV1RebuildRetainsOrchestratorCrashIdentity(t *testing.T) {
 		"feature-dev": {Status: "failed"},
 	}
 
-	historyDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	historyDir := filepath.Join(layouttest.PipelineDir(t, dir), "history")
 	if err := os.MkdirAll(historyDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +177,7 @@ func TestIndexV1RebuildRetainsOrchestratorCrashIdentity(t *testing.T) {
 // TestIdempotency_SkeletonAfterFullDropped: once a full record exists, a
 // later skeleton (empty stages) for the same run never appends or overwrites.
 func TestIdempotency_SkeletonAfterFullDropped(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 	full := makeRunRec("run-xyz", 163, "2026-07-19T09:00:00Z", "issue-pickup", "feature-dev")
 	skeleton := makeRunRec("run-xyz", 163, "2026-07-19T09:00:00Z") // no stages
@@ -211,7 +213,7 @@ func TestIdempotency_SkeletonAfterFullDropped(t *testing.T) {
 // record. This ordering does not occur once the skeleton emitter is removed at
 // source, but the writer stays correct if it ever does.
 func TestIdempotency_FullAfterSkeletonUpgrades(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 	skeleton := makeRunRec("run-up", 42, "2026-07-19T09:00:00Z")
 	full := makeRunRec("run-up", 42, "2026-07-19T09:00:00Z", "issue-pickup", "feature-dev", "pr-merge")
@@ -253,7 +255,7 @@ func TestIdempotency_FullAfterSkeletonUpgrades(t *testing.T) {
 // on-disk index and still drops a duplicate/degraded record for a run that a
 // previous process already recorded.
 func TestIdempotency_SeedsFromIndexAcrossProcess(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 	full := makeRunRec("run-seed", 99, "2026-07-19T09:00:00Z", "issue-pickup", "feature-dev")
 	if err := hw.WriteV2Record(full, fixedNow); err != nil {
@@ -282,7 +284,7 @@ func TestIdempotency_SeedsFromIndexAcrossProcess(t *testing.T) {
 // the index.json read-modify-write from interleaving: the file stays parseable
 // and every run is present exactly once.
 func TestUpdateIndex_ConcurrentAppendsNoTear(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 
 	const n = 40
 	var wg sync.WaitGroup
@@ -324,7 +326,7 @@ func TestUpdateIndex_ConcurrentAppendsNoTear(t *testing.T) {
 // TestUpdateIndex_ConcurrentSameRunSingleEntry: many writers racing on ONE run
 // (the reported #313 shape) collapse to a single JSONL line and index entry.
 func TestUpdateIndex_ConcurrentSameRunSingleEntry(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	rec := makeRunRec("run-solo", 313, "2026-07-19T09:00:00Z", "issue-pickup", "feature-dev", "pr-merge")
 
 	var wg sync.WaitGroup
@@ -353,7 +355,7 @@ func TestUpdateIndex_ConcurrentSameRunSingleEntry(t *testing.T) {
 // rebuilt from the JSONL source of truth on the next write, not silently
 // discarded — automating the operator's manual rebuild.
 func TestUpdateIndex_RebuildsFromJSONLWhenCorrupt(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 
 	// Record three distinct runs — index now has three entries.
@@ -366,7 +368,7 @@ func TestUpdateIndex_RebuildsFromJSONLWhenCorrupt(t *testing.T) {
 	}
 
 	// Corrupt the index (the failure mode #313 reports: torn/garbage index).
-	indexPath := filepath.Join(dir, ".nightgauge", "pipeline", "history", "index.json")
+	indexPath := filepath.Join(layouttest.PipelineDir(t, dir), "history", "index.json")
 	if err := os.WriteFile(indexPath, []byte("{ this is not valid json "), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -398,8 +400,8 @@ func TestUpdateIndex_RebuildsFromJSONLWhenCorrupt(t *testing.T) {
 // that already contains legacy duplicate/skeleton lines for one run yields a
 // single index entry — the richest one.
 func TestUpdateIndex_RebuildDedupesLegacyDuplicates(t *testing.T) {
-	dir := t.TempDir()
-	histDir := filepath.Join(dir, ".nightgauge", "pipeline", "history")
+	dir := layouttest.Repo(t)
+	histDir := filepath.Join(layouttest.PipelineDir(t, dir), "history")
 	if err := os.MkdirAll(histDir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -457,7 +459,7 @@ func TestUpdateIndex_RebuildDedupesLegacyDuplicates(t *testing.T) {
 // never collide, so every finalize appended another record instead of being
 // dropped as a duplicate. Exactly one record must survive.
 func TestIdempotency_SameRunDifferentTimestampFormats(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 
 	// 2026-06-06T14:54:43.559048-06:00 and 2026-06-06T20:54:43.624Z are the
@@ -487,7 +489,7 @@ func TestIdempotency_SameRunDifferentTimestampFormats(t *testing.T) {
 // above: bucketing started_at to the second must not fuse two genuinely
 // different runs of one issue into a single record.
 func TestIdempotency_DistinctRunsSameIssueStillSeparate(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 
 	first := makeRunRec("", 141, "2026-06-06T20:54:43.624Z", "issue-pickup")
@@ -511,8 +513,8 @@ func TestIdempotency_DistinctRunsSameIssueStillSeparate(t *testing.T) {
 // that writes to a shared "launch root" instead is what let one repository's
 // history absorb the whole workspace's runs.
 func TestHistory_RunIsWrittenOnlyToItsOwnRepo(t *testing.T) {
-	repoA := t.TempDir()
-	repoB := t.TempDir()
+	repoA := layouttest.Repo(t)
+	repoB := layouttest.Repo(t)
 
 	recA := makeRunRec("run-in-a", 11, "2026-07-19T09:00:00Z", "issue-pickup", "feature-dev")
 	recA.Repo = "example/repo-a"
@@ -551,7 +553,7 @@ func TestHistory_RunIsWrittenOnlyToItsOwnRepo(t *testing.T) {
 // discriminator collapses two dispatches that begin inside the same second,
 // which is exactly what a force-clear-then-requeue produces.
 func TestHistory_TwoRunsOfOneIssueProduceTwoRecords(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 
 	const issue = 370
@@ -609,7 +611,7 @@ func TestHistory_TwoRunsOfOneIssueProduceTwoRecords(t *testing.T) {
 // is inside a 7-day window whenever the test runs, so the assertion no longer
 // depends on the calendar or on the host's timezone.
 func TestAppendAndIndex_PruneMeasuresRetentionFromTheWritesOwnClock(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 	hw.SetRetentionDays(7)
 
@@ -641,7 +643,7 @@ func TestAppendAndIndex_PruneMeasuresRetentionFromTheWritesOwnClock(t *testing.T
 // demonstrably on disk. The record just appended is authoritative and is never
 // pruned by its own write.
 func TestAppendAndIndex_JustWrittenEntrySurvivesItsOwnRetentionPrune(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 	hw.SetRetentionDays(7)
 
@@ -668,7 +670,7 @@ func TestAppendAndIndex_JustWrittenEntrySurvivesItsOwnRetentionPrune(t *testing.
 // entry from an earlier write is still dropped when a later write's cutoff
 // passes it.
 func TestAppendAndIndex_PruneStillDropsStaleEntriesOtherThanTheOneBeingWritten(t *testing.T) {
-	dir := t.TempDir()
+	dir := layouttest.Repo(t)
 	hw := NewHistoryWriter(dir)
 	hw.SetRetentionDays(7)
 

@@ -51,7 +51,7 @@ export type FrictionRecord = z.infer<typeof FrictionRecordSchema>;
 
 // ---------------------------------------------------------------------------
 // Assessment record — one per skill execution, written to
-// .nightgauge/pipeline/assessments/<stage>-<issue>.json
+// <git-common-dir>/nightgauge/pipeline/assessments/<stage>-<issue>.json
 // ---------------------------------------------------------------------------
 
 export const AssessmentRecordSchema = z.object({

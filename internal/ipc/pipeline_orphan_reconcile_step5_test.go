@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -26,9 +27,9 @@ import (
 // through s.resolver, which only the constructor builds.
 func reconcileServer(t *testing.T) (*Server, string, string) {
 	t.Helper()
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 	s := NewServer(nil, WithWorkspaceRoot(root))
-	return s, root, filepath.Join(root, ".nightgauge", "pipeline")
+	return s, root, layouttest.PipelineDir(t, root)
 }
 
 // claimTokenAt mints a UUIDv7 whose 48-bit timestamp prefix names `when`,

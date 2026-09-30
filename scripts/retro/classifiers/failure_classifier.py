@@ -421,7 +421,7 @@ class FailureClassifier:
         ----------
         context_file_path:
             Absolute or relative path to a pipeline context JSON file (e.g.
-            ``.nightgauge/pipeline/dev-42.json``).
+            ``<git-common-dir>/nightgauge/pipeline/dev-42.json``).
 
         Returns
         -------

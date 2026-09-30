@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
@@ -28,7 +29,7 @@ import (
 // terminal removal and the registry key are all composed from a value the run
 // itself chose.
 func TestRunIdentity_SuccessorWithoutInitializedRecordsNormally(t *testing.T) {
-	workspaceRoot := t.TempDir()
+	workspaceRoot := layouttest.Repo(t)
 	var buf bytes.Buffer
 	s := &Server{
 		writer:         &buf,
@@ -54,7 +55,7 @@ func TestRunIdentity_SuccessorWithoutInitializedRecordsNormally(t *testing.T) {
 		}
 	}
 
-	stateDir := filepath.Join(workspaceRoot, ".nightgauge", "pipeline")
+	stateDir := layouttest.PipelineDir(t, workspaceRoot)
 	found, err := state.FindPersistedStatesForIssue(stateDir, issue)
 	if err != nil {
 		t.Fatalf("FindPersistedStatesForIssue: %v", err)

@@ -1,8 +1,9 @@
 // Package runstate manages the durable pipeline lifecycle record at
-// .nightgauge/pipeline/run-state.json. It is the single source of truth
-// for whether a given issue's pipeline is running, paused, completed,
-// discarded, or aborted — used by both the Go scheduler and the TypeScript
-// SDK (via the same on-disk file format).
+// run-state.json in the clone's pipeline state directory
+// (.git/nightgauge/pipeline, resolved by internal/layout). It is the single
+// source of truth for whether a given issue's pipeline is running, paused,
+// completed, discarded, or aborted — used by both the Go scheduler and the
+// TypeScript SDK (via the same on-disk file format).
 //
 // Mirrors packages/nightgauge-sdk/src/context/schemas/run-state.ts
 // field-for-field. The schema_version on disk gates compatibility — see
@@ -24,7 +25,7 @@ import (
 // SchemaVersion is the current major.minor on-disk schema version.
 const SchemaVersion = "1.0"
 
-// FileName is the canonical filename under .nightgauge/pipeline/.
+// FileName is the canonical filename in the pipeline state directory.
 const FileName = "run-state.json"
 
 // Lifecycle is the enumerated set of states the run can be in.
@@ -156,7 +157,7 @@ func splitMajorMinor(v string) (int, int, bool) {
 }
 
 // Path returns the canonical run-state.json path for a base directory
-// (typically .nightgauge/pipeline).
+// (typically the clone's pipeline state directory, layout.PipelineStateDir).
 func Path(baseDir string) string {
 	return filepath.Join(baseDir, FileName)
 }

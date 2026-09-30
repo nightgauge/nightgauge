@@ -359,7 +359,7 @@ func (s *Server) ExecuteVerb(ctx context.Context, req *attention.DecisionRequest
 		// focused editor (`workspace.setRoot` ← `resolveActiveRepository`), so
 		// in a multi-repo workspace the override landed under whatever the
 		// operator happened to be looking at when they clicked — while the run
-		// that needs it reads its OWN repo's `.nightgauge/pipeline/`. Same
+		// that needs it reads its OWN repo's `.git/nightgauge/pipeline/`. Same
 		// per-repo registry that scopes run state (#215/#307), and the same root
 		// the raise resolved its enforced ceiling from, so proposal and
 		// persistence cannot disagree about which file is live.

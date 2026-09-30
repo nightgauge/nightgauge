@@ -49,6 +49,7 @@ vi.mock("../../../src/utils/skillRunner", () => ({
 
 import { ContextAssembler } from "../../../src/orchestrator/context/ContextAssembler";
 import type { Logger } from "../../../src/utils/logger";
+import { pipelineStateDir } from "../../../src/utils/cloneLayout";
 
 const ISSUE = 1241;
 
@@ -152,7 +153,7 @@ async function generatedFilesChanged(
   expect(ok).toBe(true);
 
   const written = JSON.parse(
-    fs.readFileSync(path.join(root, ".nightgauge", "pipeline", `dev-${ISSUE}.json`), "utf-8")
+    fs.readFileSync(path.join(pipelineStateDir(root), `dev-${ISSUE}.json`), "utf-8")
   ) as { files_changed: { created: string[]; modified: string[]; deleted: string[] } };
   return written.files_changed;
 }

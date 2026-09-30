@@ -11,6 +11,7 @@ import type {
   DimensionResult,
 } from "../../../analysis/health/types.js";
 import { DEFAULT_HEALTH_CONFIG } from "../../../analysis/health/types.js";
+import { cloneLayoutFor, setCloneLayout } from "../../../context/cloneLayout.js";
 
 vi.mock("node:fs/promises");
 vi.mock("node:child_process");
@@ -95,7 +96,9 @@ function makeIssueResult(generatedIssues: Partial<GeneratedIssue>[] = []): Findi
 }
 
 const WORKSPACE = "/tmp/test-workspace";
-const FILE_PATH = path.join(WORKSPACE, ".nightgauge/pipeline/recommendation-history.jsonl");
+// The history lives in the repository's pipeline class directory (ADR-024 § 7).
+setCloneLayout(WORKSPACE, cloneLayoutFor(WORKSPACE, path.join(WORKSPACE, ".git")));
+const FILE_PATH = path.join(WORKSPACE, ".git/nightgauge/pipeline/recommendation-history.jsonl");
 
 // ── Tests ──────────────────────────────────────────────────────────
 
@@ -112,7 +115,7 @@ describe("RecommendationTracker", () => {
   });
 
   describe("getFilePath()", () => {
-    it("returns the correct JSONL path under workspace root", () => {
+    it("returns the JSONL path in the repository's pipeline class directory", () => {
       const result = RecommendationTracker.getFilePath(WORKSPACE);
       expect(result).toBe(FILE_PATH);
     });

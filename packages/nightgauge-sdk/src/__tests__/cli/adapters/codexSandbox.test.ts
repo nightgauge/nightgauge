@@ -8,7 +8,12 @@ import {
   codexSandboxFlags,
   applyCodexSandboxProfile,
   CODEX_BYPASS_FLAG,
+  codexCloneWritableRoot,
 } from "../../../cli/adapters/codexSandbox.js";
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { initCloneRepo } from "../../helpers/gitRepo.js";
 
 describe("resolveCodexSandboxMode (#4026)", () => {
   it("defaults to danger-full-access with no positive evidence (undefined/empty)", () => {
@@ -102,5 +107,32 @@ describe("applyCodexSandboxProfile (#4026)", () => {
     const copy = [...input];
     applyCodexSandboxProfile(input, ["Read"]);
     expect(input).toEqual(copy);
+  });
+});
+
+describe("codexCloneWritableRoot (ADR-024 § 7)", () => {
+  it("adds the clone directory as a writable root under workspace-write only", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ng-codex-clone-"));
+    try {
+      const { clone } = initCloneRepo(dir);
+      const want = ["-c", `sandbox_workspace_write.writable_roots=[${JSON.stringify(clone)}]`];
+      expect(codexCloneWritableRoot("workspace-write", dir)).toEqual(want);
+      expect(codexCloneWritableRoot("read-only", dir)).toEqual([]);
+      expect(codexCloneWritableRoot("danger-full-access", dir)).toEqual([]);
+      expect(codexCloneWritableRoot("workspace-write", undefined)).toEqual([]);
+      expect(
+        applyCodexSandboxProfile(["exec", CODEX_BYPASS_FLAG, "--json"], ["Read", "Edit"], dir)
+      ).toEqual([
+        "exec",
+        "--sandbox",
+        "workspace-write",
+        "--ask-for-approval",
+        "never",
+        ...want,
+        "--json",
+      ]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

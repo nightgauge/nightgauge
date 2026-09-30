@@ -38,9 +38,9 @@ model: sonnet
 # (spike #33 D2, #55). Do not reintroduce hooks here — the portability
 # linter rejects them.
 inputs:
-  - .nightgauge/pipeline/dev-{N}.json
+  - pipeline/dev-{N}.json
 outputs:
-  - .nightgauge/pipeline/validate-{N}.json
+  - pipeline/validate-{N}.json
 ---
 
 <!-- include: ../_shared/PIPELINE_CONTEXT.md -->
@@ -51,7 +51,7 @@ outputs:
 
 Trusts the dev context handoff (no build/unit-test/security re-runs that already passed), runs integration/E2E tests with Ralph Loop self-healing (up to 3 auto-fix attempts, [docs/RALPH_LOOP.md](../../docs/RALPH_LOOP.md)), excludes pre-existing failures via baseline comparison, and writes validation context for `/nightgauge-pr-create`.
 
-**Invoke**: `/nightgauge-feature-validate` (Claude Code plugin), `$nightgauge-feature-validate` (Codex), or via Agent Skills (Copilot/Cursor). **Requires**: `.nightgauge/pipeline/dev-{N}.json` from `/nightgauge-feature-dev`, on the feature branch from `/nightgauge-issue-pickup` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md)). **Config**: `.nightgauge/config.yaml` ([docs/CONFIGURATION.md](../../docs/CONFIGURATION.md)); per-key defaults and env overrides in `_includes/configuration.md` (read when needed).
+**Invoke**: `/nightgauge-feature-validate` (Claude Code plugin), `$nightgauge-feature-validate` (Codex), or via Agent Skills (Copilot/Cursor). **Requires**: `dev-{N}.json` (in the clone's pipeline state directory, `nightgauge layout path pipeline`) from `/nightgauge-feature-dev`, on the feature branch from `/nightgauge-issue-pickup` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md)). **Config**: `.nightgauge/config.yaml` ([docs/CONFIGURATION.md](../../docs/CONFIGURATION.md)); per-key defaults and env overrides in `_includes/configuration.md` (read when needed).
 
 ## Arguments
 
@@ -65,12 +65,12 @@ Trusts the dev context handoff (no build/unit-test/security re-runs that already
 
 ## Exit Contract — Read This First
 
-**This stage is NOT complete until `.nightgauge/pipeline/validate-{N}.json` exists on disk.** On any error, budget exhaustion, or bail-out, STILL execute Phase 6 and write it (`validation_status: "failed"` plus the matching `errorCategory` — enum: `build-failed`, `tests-failed`, `integration-failed`, `dead-code-blocked`, `mobile-apk-build-failed`, `mobile-mcp-tests-failed`, `verify-ui-gate-failed`). Exiting without it triggers a repo-blind orchestrator fallback that may misreport tests. The very last act before signaling completion MUST be:
+**This stage is NOT complete until `validate-{N}.json` exists in the clone's pipeline state directory (written with `nightgauge layout write pipeline validate-{N}.json`).** On any error, budget exhaustion, or bail-out, STILL execute Phase 6 and write it (`validation_status: "failed"` plus the matching `errorCategory` — enum: `build-failed`, `tests-failed`, `integration-failed`, `dead-code-blocked`, `mobile-apk-build-failed`, `mobile-mcp-tests-failed`, `verify-ui-gate-failed`). Exiting without it triggers a repo-blind orchestrator fallback that may misreport tests. The very last act before signaling completion MUST be:
 
 ```bash
 ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
 : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
-test -s ".nightgauge/pipeline/validate-${ISSUE_NUMBER}.json" || \
+test -s "$(nightgauge layout path pipeline validate-${ISSUE_NUMBER}.json)" || \
   { echo "ERROR: validate-${ISSUE_NUMBER}.json missing — Phase 6 was skipped" >&2; exit 1; }
 ```
 
@@ -130,7 +130,7 @@ printf '<!-- phase:start name="validate-environment" index=0 total=23 stage="fea
 printf '<!-- phase:start name="read-dev-context" index=1 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/context-load.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Extract the issue number from the branch; load `.nightgauge/pipeline/dev-{N}.json`. Missing file → ask git ground truth via `gate verify feature-dev` (#134); proceed against the working tree if git finds changes, otherwise exit 1.
+> **Read `_includes/context-load.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Extract the issue number from the branch; load `"$(nightgauge layout path pipeline dev-{N}.json)"`. Missing file → ask git ground truth via `gate verify feature-dev` (#134); proceed against the working tree if git finds changes, otherwise exit 1.
 
 ### Phase 0.5: Batch Dev Context Detection
 
@@ -282,7 +282,7 @@ printf '<!-- phase:start name="commit-and-push" index=18 total=23 stage="feature
 printf '<!-- phase:start name="write-validate-context" index=19 total=23 stage="feature-validate" -->\n'
 ```
 
-> **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Write `.nightgauge/pipeline/validate-{N}.json` for `/nightgauge-pr-create` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md)) — **every run, even on failure** (Exit Contract above).
+> **Read `_includes/context-and-board.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.** Write `validate-{N}.json` with `nightgauge layout write pipeline validate-{N}.json` for `/nightgauge-pr-create` (schema: [docs/CONTEXT_ARCHITECTURE.md](../../docs/CONTEXT_ARCHITECTURE.md)) — **every run, even on failure** (Exit Contract above).
 
 ### Phase 7: Sync Project Board Status
 
@@ -309,7 +309,7 @@ ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's
 # Enforce the Exit Contract — fail loudly if Phase 6 was skipped (the
 # orchestrator's repo-blind fallback may misreport test status; always write
 # the file ourselves).
-CONTEXT_FILE=".nightgauge/pipeline/validate-${ISSUE_NUMBER}.json"
+CONTEXT_FILE="$(nightgauge layout path pipeline validate-${ISSUE_NUMBER}.json)"
 if [ ! -s "$CONTEXT_FILE" ]; then
   echo "ERROR: ${CONTEXT_FILE} missing — Phase 6 (Write Validate Context) did not run." >&2
   echo "Re-run Phase 6 before exiting; do NOT rely on the orchestrator fallback." >&2

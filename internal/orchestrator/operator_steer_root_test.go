@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
+
+	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 )
 
 // The operator steer must land in the root the RUN reads (#1407).
@@ -53,7 +55,7 @@ func TestSteerRootFor_PrefersThePerRepoRunRoot(t *testing.T) {
 // ever reads. This workspace already holds 20+ such cards, at least one
 // resolved.
 func TestWriteOperatorSteer_RefusesARunlessCard(t *testing.T) {
-	root := t.TempDir()
+	root := layouttest.Repo(t)
 
 	for _, issue := range []int{0, -1} {
 		if err := WriteOperatorSteer(root, issue, "please retry", "feature-dev"); err == nil {
@@ -62,7 +64,7 @@ func TestWriteOperatorSteer_RefusesARunlessCard(t *testing.T) {
 		}
 	}
 
-	if _, err := os.Stat(filepath.Join(root, ".nightgauge", "pipeline", "feedback-0.json")); err == nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, root), "feedback-0.json")); err == nil {
 		t.Error("feedback-0.json was written despite the refusal")
 	}
 
@@ -70,7 +72,7 @@ func TestWriteOperatorSteer_RefusesARunlessCard(t *testing.T) {
 	if err := WriteOperatorSteer(root, 7, "please retry", "feature-dev"); err != nil {
 		t.Fatalf("WriteOperatorSteer(7): %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".nightgauge", "pipeline", "feedback-7.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, root), "feedback-7.json")); err != nil {
 		t.Errorf("feedback-7.json was not written: %v", err)
 	}
 }

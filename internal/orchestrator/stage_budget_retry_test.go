@@ -24,7 +24,7 @@ import (
 func TestStageBudgetStopIsBudgetExceededAndNeverRetried(t *testing.T) {
 	for _, dimension := range []string{execution.StageBudgetTurns, execution.StageBudgetWallClock, execution.StageBudgetTokens} {
 		t.Run(dimension, func(t *testing.T) {
-			root := t.TempDir()
+			root := gitWorkspace(t)
 			notice := execution.StageBudgetNotice(adapters.StageBudgetBreach{Dimension: dimension, Observed: 5, Limit: 5})
 			errText, lastOutput := cliFailureText("", "some earlier stderr chatter\n"+notice+"\n")
 			if kind := ClassifyTerminalKind(errText); kind != TerminalKindBudgetExceeded {

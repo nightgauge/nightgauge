@@ -8,12 +8,16 @@ last time." This mirrors `nightgauge-release-watch`'s `last-seen.json`.
 > Set `RUN_LOG` to this skill's append-only log path **before** this section,
 > e.g. `RUN_LOG=".nightgauge/triage/runs.jsonl"`. Keep all state in-repo
 > under `.nightgauge/` — never `${CLAUDE_PLUGIN_DATA}` (single source of
-> truth).
+> truth). A log in a per-clone class directory (pipeline, plans, retros, logs)
+> also sets `RUN_LOG_CLASS` and `RUN_LOG_NAME`, with
+> `RUN_LOG="$(nightgauge layout path "$RUN_LOG_CLASS" "$RUN_LOG_NAME")"`: that
+> directory is inside the git directory, so the append goes through
+> `nightgauge layout append`, never a redirect.
 
 #### Step 1: Load the previous run
 
 ```bash
-mkdir -p "$(dirname "$RUN_LOG")"
+[ -n "${RUN_LOG_CLASS:-}" ] || mkdir -p "$(dirname "$RUN_LOG")"
 if [ -f "$RUN_LOG" ]; then
   PREV=$(tail -n 1 "$RUN_LOG")
   PREV_TS=$(printf '%s\n' "$PREV" | jq -r '.ts // "never"')
@@ -41,9 +45,14 @@ if [[ "$*" == *"--dry-run"* ]]; then
   echo "Dry-run: not appending to $RUN_LOG"
 else
   NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  jq -nc --arg ts "$NOW" --arg skill "$SKILL_NAME" \
+  RECORD=$(jq -nc --arg ts "$NOW" --arg skill "$SKILL_NAME" \
         --argjson counts "${RUN_COUNTS:-{}}" --arg summary "${RUN_SUMMARY:-}" \
-        '{ts:$ts, skill:$skill, counts:$counts, summary:$summary}' >> "$RUN_LOG"
+        '{ts:$ts, skill:$skill, counts:$counts, summary:$summary}')
+  if [ -n "${RUN_LOG_CLASS:-}" ]; then
+    printf '%s\n' "$RECORD" | nightgauge layout append "$RUN_LOG_CLASS" "$RUN_LOG_NAME" >/dev/null
+  else
+    printf '%s\n' "$RECORD" >> "$RUN_LOG"
+  fi
   echo "Appended run record to $RUN_LOG"
 fi
 ```
