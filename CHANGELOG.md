@@ -47,6 +47,19 @@ changelog, and the release workflow refuses a tag that does not.
   watchdog arms exactly as before. The SDK still accepts the name from an
   older binary and never passes it to the child.
 
+- **OpenCode refuses case variants of a denied path** (#1827). opencode's
+  permission matcher is case-sensitive, so on macOS's default filesystem a
+  stage could read `.ENV` or edit `OPENCODE.JSON` while matching no deny. The
+  Nightgauge plugin now refuses a read, edit or write whose path matches the
+  secret or project-config denies once letter case is ignored. ADR-022 and
+  the skill portability guide now say the skills tree is read-only for the
+  file tools only: a stage granted Bash can still change it.
+- **The OpenCode tamper gate no longer runs the worktree's git hooks or
+  fsmonitor** (#1826). Its git commands run in the orchestrator process, and
+  a stage could set `core.fsmonitor` in the worktree to a command the next
+  `git status` executed. They now override `core.fsmonitor` and
+  `core.hooksPath` on the command line and skip the system git config.
+
 - **A test run can no longer move, and lose, the developer's machine state**
   (#2311). A process with the real `HOME` and `NIGHTGAUGE_STATE_HOME` pointed
   at a temporary directory ran the machine-state migration into that directory,

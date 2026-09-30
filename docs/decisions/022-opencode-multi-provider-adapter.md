@@ -3229,6 +3229,39 @@ failure of an attempt that compacted names its compaction count in the
 reason. The stage's turn and wall-clock budgets and #2176's stall watchdog
 still bound a resumed session.
 
+## Letter case, and what "read-only" means for the skill directory (amendment 2026-09-30, #1826, #1827)
+
+opencode's permission matcher is case-sensitive, and it escapes `[` and `]`,
+so a pattern cannot name a character class. On a case-insensitive
+filesystem, APFS's default, `.ENV` and `apps/web/.ENV.local` name the same
+files as `.env` and `.env.local` but match none of the secret denies, and
+`OPENCODE.JSON` or `.OpenCode/plugins/x.ts` pass the project-config denies.
+Listing every case variant in the map is not practical: `opencode.json*`
+alone has 4,096.
+
+**Decision.** The plugin refuses these paths itself. Before a `read`, `edit`
+or `write` runs, `gates.js` lower-cases the path and matches it against the
+secret denies, and for `edit` and `write` also the project-config denies,
+using opencode's own wildcard rule. A path inside the worktree is matched in
+its worktree-relative form; a path outside it in its absolute form. The
+check runs on every platform. A Go test holds the plugin's pattern lists
+equal to `openCodeSecretDenyBackstop` and `openCodeProjectConfigDenyBackstop`.
+
+The skill directory, the skills tree and `NIGHTGAUGE_BIN` are read-only for
+the file tools only: `edit` denies them. `external_directory` also answers
+the shell tool's check of a command's path arguments, so a stage granted
+Bash can still change files there with `sed -i` or `rm`. Closing that needs
+a shell-level rule and is not done here; the tamper gate and the stage's
+own diff review are the controls that remain.
+
+The tamper gate's git commands run in the orchestrator process, outside
+every OpenCode boundary, against a worktree a Bash-capable stage could
+configure: `git config core.fsmonitor '<script>'` needs no path argument,
+and the gate's `git status` then ran the script. Every git command the gate
+runs now passes `-c core.fsmonitor=false -c core.hooksPath=/dev/null` with
+`GIT_CONFIG_NOSYSTEM=1`, and its `git diff` passes `--no-ext-diff
+--no-textconv`.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

@@ -21,6 +21,10 @@
 //                      map matches a tool call's filePath lexically, so a
 //                      symlink planted inside an allow-listed directory
 //                      after the config is written is invisible to it.
+//   - "read", "edit", "write" also refuse a path that matches the
+//                      permission map's secret (and, for edit/write,
+//                      project-config) deny patterns once letter case is
+//                      ignored (#1827; see caseFoldedDeny).
 //   - "task"        -> always denied (AC9 fallback below), independent of
 //                      every other gate.
 //   - every other tool id in TOOL_CLASSIFICATION -> passthrough (read-only,
@@ -76,6 +80,70 @@ const UNKNOWN_TOOL_MARKER = "[nightgauge-gate:unknown-tool]";
 // Read whose resolved (symlink-followed) target falls outside the worktree
 // and every OpenCode external_directory allow-listed root (#1816).
 const EXTERNAL_DIRECTORY_MARKER = "[nightgauge-gate:external-directory]";
+
+// CASE_FOLD_MARKER prefixes a case-folded deny (#1827): a read, edit or
+// write whose path matches the permission map's secret or project-config
+// deny patterns only once letter case is ignored.
+const CASE_FOLD_MARKER = "[nightgauge-gate:case-folded-deny]";
+
+// SECRET_DENY_PATTERNS and PROJECT_CONFIG_DENY_PATTERNS mirror
+// openCodeSecretDenyBackstop and openCodeProjectConfigDenyBackstop
+// (internal/execution/adapters/opencode_guard.go); a Go test holds the two
+// lists equal. opencode's own permission matcher (Wildcard.match) is
+// case-sensitive and escapes "[" and "]", so the map cannot say ".env" in
+// any case: on a case-insensitive filesystem (APFS's default) a read of
+// ".ENV" or an edit of "OPENCODE.JSON" reaches the same file while matching
+// neither deny. caseFoldedDeny closes that here, before the tool runs.
+export const SECRET_DENY_PATTERNS = Object.freeze([
+  "*.env",
+  ".env*",
+  "**/*.env",
+  "**/.env*",
+  "*.env.*",
+  "**/*.env.*",
+  "**/.ssh/**",
+  "**/id_rsa*",
+  "**/gh/hosts.yml",
+]);
+export const PROJECT_CONFIG_DENY_PATTERNS = Object.freeze(["opencode.json*", ".opencode/**"]);
+
+// wildcardMatch is opencode 1.18.30's own Wildcard.match (the same rule
+// openCodeWildcardMatch models in Go): regex metacharacters other than "*"
+// and "?" are escaped, "*" becomes ".*" (crossing "/"), "?" becomes ".", and
+// the result is anchored at both ends.
+export function wildcardMatch(target, pattern) {
+  const re = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".");
+  return new RegExp("^" + re + "$", "s").test(target);
+}
+
+// caseFoldedDeny returns the first of patterns that filePath matches with
+// both sides lower-cased, or "" when none does. A path inside cwd is matched
+// in its worktree-relative form, as opencode matches it; a path outside cwd
+// in its absolute form.
+export function caseFoldedDeny(filePath, cwd, patterns) {
+  if (typeof filePath !== "string" || filePath === "") return "";
+  const base = cwd || process.cwd();
+  const abs = path.resolve(base, filePath);
+  const rel = path.relative(base, abs);
+  const outside = rel === ".." || rel.startsWith(".." + path.sep) || path.isAbsolute(rel);
+  const target = (outside ? abs : rel).split(path.sep).join("/").toLowerCase();
+  for (const pattern of patterns) {
+    if (wildcardMatch(target, pattern.toLowerCase())) return pattern;
+  }
+  return "";
+}
+
+function enforceCaseFoldedDeny(tool, filePath, cwd, patterns) {
+  const hit = caseFoldedDeny(filePath, cwd, patterns);
+  if (hit) {
+    throw new Error(
+      `${CASE_FOLD_MARKER} ${tool} of ${filePath} is denied: it matches the permission map's ${JSON.stringify(hit)} deny once letter case is ignored`
+    );
+  }
+}
 
 // TASK_MARKER prefixes the AC9 fallback's own error, distinct from every
 // other marker, so a stage's remediation output can tell a careful-mode/
@@ -466,6 +534,10 @@ export async function toolExecuteBefore(ctx, input, output) {
       tool_input: { file_path: filePath },
     };
     runGateVerb(["hook", "workflow-gate"], payload, cwd, WORKFLOW_MARKER);
+    enforceCaseFoldedDeny(input.tool, filePath, cwd, [
+      ...SECRET_DENY_PATTERNS,
+      ...PROJECT_CONFIG_DENY_PATTERNS,
+    ]);
     return;
   }
 
@@ -488,6 +560,7 @@ export async function toolExecuteBefore(ctx, input, output) {
       tool_input: { file_path: filePath },
     };
     runGateVerb(["hook", "external-directory-gate"], payload, cwd, EXTERNAL_DIRECTORY_MARKER);
+    enforceCaseFoldedDeny(input.tool, filePath, cwd, SECRET_DENY_PATTERNS);
     capReadLimit(output);
     return;
   }

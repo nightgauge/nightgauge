@@ -827,3 +827,45 @@ func TestGatesParityCorpus(t *testing.T) {
 		})
 	}
 }
+
+// --- #1827: case variants of a denied path are refused before the tool runs ---
+
+func TestCaseFoldedDeny(t *testing.T) {
+	node := requireNode(t)
+	bin := buildNightgaugeBin(t)
+	home := isolatedHomeEnv(t)
+
+	cases := []struct {
+		name  string
+		tool  string
+		args  map[string]any
+		block bool
+	}{
+		{"reading .ENV is blocked", "read", map[string]any{"filePath": ".ENV"}, true},
+		{"reading a nested .ENV.local is blocked", "read", map[string]any{"filePath": "apps/web/.ENV.local"}, true},
+		{"editing OPENCODE.JSON is blocked", "edit", map[string]any{"filePath": "OPENCODE.JSON", "oldString": "a", "newString": "b"}, true},
+		{"writing under .OpenCode is blocked", "write", map[string]any{"filePath": ".OpenCode/plugins/x.ts", "content": "x"}, true},
+		{"reading README.md is allowed", "read", map[string]any{"filePath": "README.md"}, false},
+		{"writing a nested opencode.json is allowed", "write", map[string]any{"filePath": "apps/Opencode.json", "content": "{}"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			args := map[string]any{}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			args["filePath"] = filepath.Join(root, tc.args["filePath"].(string))
+			res := runToolHarness(t, node, root, tc.tool, marshalJSON(t, args), bin, home)
+			if tc.block && !res.Threw {
+				t.Fatal("want a throw, got none")
+			}
+			if tc.block && !strings.HasPrefix(res.Message, "[nightgauge-gate:case-folded-deny]") {
+				t.Errorf("message = %q, want the [nightgauge-gate:case-folded-deny] marker", res.Message)
+			}
+			if !tc.block && res.Threw {
+				t.Fatalf("want no throw, got %q", res.Message)
+			}
+		})
+	}
+}

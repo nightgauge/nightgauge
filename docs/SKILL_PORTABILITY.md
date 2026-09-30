@@ -210,6 +210,9 @@ How the `opencode` adapter
   The tree is allow-listed in place rather than copied into the worktree: a
   copy would land in the consumer's working tree as untracked files a stage
   could commit, and would drift from the binary that rendered the prompt.
+  "Read-only" holds for the file tools only: a stage granted Bash can still
+  change files there, because `external_directory` also admits a shell
+  command's path arguments (ADR-022, amendment 2026-09-30).
 - **Knowledge base access.** Every run has one knowledge base: the main
   checkout's `.nightgauge/knowledge`, resolved from the worktree through
   `git rev-parse --git-common-dir` (#2194). Stages receive it as
