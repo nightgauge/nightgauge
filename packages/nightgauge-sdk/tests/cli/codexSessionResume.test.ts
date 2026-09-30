@@ -57,7 +57,7 @@ function makeChildProcess(stdout: string, exitCode = 0) {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
-  child.stdin = { write: vi.fn(), end: vi.fn() };
+  child.stdin = { write: vi.fn(), end: vi.fn(), on: vi.fn() };
   process.nextTick(() => {
     child.stdout.emit("data", Buffer.from(stdout));
     child.emit("close", exitCode);

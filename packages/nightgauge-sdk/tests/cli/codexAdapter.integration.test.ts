@@ -45,6 +45,7 @@ function createMockProcess(options: {
   proc.stdin = {
     write: vi.fn(),
     end: vi.fn(),
+    on: vi.fn(),
   } as unknown as ReturnType<typeof spawn>["stdin"];
 
   // Emit data and close asynchronously so callers can attach listeners first
