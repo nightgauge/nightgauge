@@ -29,6 +29,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`scripts/branch-merged-check.sh` recognises a branch folded into another
+  pull request** (#2313). A branch merged into a batch branch and landed
+  through that branch's squash merge has no PR of its own, so the checker kept
+  it for ever. When no merged PR has the branch as its head, the checker now
+  asks the forge which PRs contain the branch tip. It reports `SAFE-DELETE`
+  only for a PR merged into the same base whose head contains the tip. Every
+  lookup failure stays `KEEP`.
+
 - **A test run can no longer move, and lose, the developer's machine state**
   (#2311). A process with the real `HOME` and `NIGHTGAUGE_STATE_HOME` pointed
   at a temporary directory ran the machine-state migration into that directory,

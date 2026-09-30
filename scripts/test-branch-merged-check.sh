@@ -136,6 +136,21 @@ if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
   exit 0
 fi
 if [ "$1" = "api" ]; then
+  # commits/<sha>/pulls: FAKE_FOLD_ROWS ("<num>\t<head>\t<base>" per line,
+  # already in the --jq shape) when <sha> is FAKE_FOLD_TIP; compare/<a>...<b>:
+  # FAKE_FOLD_STATUS. Both empty otherwise (#2313).
+  case "$2" in
+  */pulls)
+    tip="${2%/pulls}"
+    tip="${tip##*/}"
+    [ "$tip" = "${FAKE_FOLD_TIP:-}" ] && [ -n "${FAKE_FOLD_ROWS:-}" ] && printf '%b\n' "$FAKE_FOLD_ROWS"
+    exit 0
+    ;;
+  */compare/*)
+    [ -n "${FAKE_FOLD_STATUS:-}" ] && printf '%s\n' "$FAKE_FOLD_STATUS"
+    exit 0
+    ;;
+  esac
   sha="${2##*/}"
   if [ "$sha" = "${FAKE_PR_SHA:-}" ]; then
     for p in ${FAKE_PR_PARENTS:-}; do
@@ -433,6 +448,45 @@ expect 1 "local epic branch with its issue open is KEEP" \
   "epic branch for open issue #2085" \
   -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_ISSUE_STATE=OPEN \
   "$SCRIPT" epic/2085-doctor origin/main
+
+# ── (p) a branch folded into another PR by a merge commit (#2313) ─────────
+# The batching shape: fix/801-sub is merged into feat/800-batch, which is
+# squash-merged as its own PR; main then changes the same file. The sub-branch
+# has no PR, is not an ancestor of main, and its content differs from main.
+new_fixture
+root="$TMP/clone"
+sub="$(add_worktree "$root" 801 fix/801-sub)"
+commit_in "$sub" fix.txt "sub-branch work
+"
+batch="$(add_worktree "$root" 800 feat/800-batch)"
+git_in "$batch" merge -q --no-ff fix/801-sub -m "merge fix/801-sub"
+commit_in "$batch" other.txt "batch work
+"
+squash_merge_to_main "$root" feat/800-batch
+commit_to_main "$root" fix.txt "main moved on
+"
+fold_tip="$(git -C "$root" rev-parse fix/801-sub)"
+fold_head="$(git -C "$root" rev-parse feat/800-batch)"
+git_in "$root" worktree remove "$sub" --force
+git_in "$root" worktree remove "$batch" --force
+expect 1 "a folded branch without the forge is KEEP" "" \
+  -- run_in "$root" env NO_PR=1 "$SCRIPT" fix/801-sub origin/main
+expect 0 "a tip inside a merged PR's head is SAFE-DELETE (folded)" \
+  "folded into PR #900" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_FOLD_TIP="$fold_tip" \
+  FAKE_FOLD_ROWS="900\t$fold_head\tmain" FAKE_FOLD_STATUS=ahead \
+  "$SCRIPT" fix/801-sub origin/main
+expect 1 "a folded tip the PR head does not contain stays KEEP" "" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_FOLD_TIP="$fold_tip" \
+  FAKE_FOLD_ROWS="900\t$fold_head\tmain" FAKE_FOLD_STATUS=diverged \
+  "$SCRIPT" fix/801-sub origin/main
+expect 1 "a PR that merged into another base stays KEEP" "" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_FOLD_TIP="$fold_tip" \
+  FAKE_FOLD_ROWS="900\t$fold_head\trelease" FAKE_FOLD_STATUS=ahead \
+  "$SCRIPT" fix/801-sub origin/main
+expect 1 "a tip the forge knows no PR for stays KEEP" "" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_FOLD_STATUS=ahead \
+  "$SCRIPT" fix/801-sub origin/main
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then
