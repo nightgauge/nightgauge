@@ -22,6 +22,19 @@ changelog, and the release workflow refuses a tag that does not.
   `uname -s`/`uname -m` to the release target, downloads only that asset, and
   fails with the release's VSIX list on a host no release is built for.
 
+- **`nightgauge doctor --fix` merges an append-only log that more than one
+  checkout left behind instead of reporting a conflict** (#2307). When the main
+  checkout and a linked worktree each had a legacy
+  `.nightgauge/logs/github-api.jsonl`, both were planned as plain moves into
+  the one clone logs directory. The second then met the first's file, and the
+  migration stopped with a conflict after moving everything else. Such logs,
+  pipeline history and the daemon log now merge as the union of their lines.
+  Each file is also checked against its target again when it moves. Two
+  different non-log files for one target still conflict, and nothing in the
+  clone moves. The summary no longer says "nothing moved" after files moved,
+  and findings an earlier remedy in the same `--fix` run already resolved are
+  reported as resolved, not BLOCKED.
+
 ### Changed
 
 - **`@anthropic-ai/sdk` 0.112.5 → 0.128.0 in the SDK, with the lockfile.**
