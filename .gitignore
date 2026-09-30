@@ -16,6 +16,7 @@ Desktop.ini
 
 # Logs
 *.log
+!scripts/retro/tests/fixtures/*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

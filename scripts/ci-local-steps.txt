@@ -42,6 +42,8 @@ CLA gate regression suite
 Cache-boundary measurement smoke
 Build SDK types (for the test-tree typecheck)
 VSCode test-tree typecheck
+Retro engine pytest suite
+analyze-model-routing.ts typecheck
 ESLint
 Prettier format:check
 npm run build (all workspaces)
