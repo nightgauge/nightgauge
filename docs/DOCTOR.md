@@ -165,6 +165,7 @@ the current scan).
 | `binary.build_cli`    | NGD001                 | Runs `make build-cli` in the source checkout                     |
 | `github.auth_refresh` | NGD006, NGD034, NGD041 | `gh auth refresh -h github.com -s <scopes>`                      |
 | `automation.restart`  | NGD029                 | Starts the autonomous scheduler through the running daemon       |
+| `layout.migrate`      | NGD044                 | Moves per-clone data to its ADR-024 location; never overwrites   |
 
 `repo.init` (NGD010, NGD011) is declared but deliberately not registered: the
 command is interactive, so `--fix` reports it `blocked` and names the command to
@@ -659,6 +660,58 @@ retention may delete (`housekeeping`): manual `prune`, run
 last hour, or files of a run that is not terminal (`warning`): manual `review`,
 finish or cancel the runs the evidence names. A log directory that is a symlink
 is refused (`warning`): manual `replace`.
+
+#### NGD044
+
+**Per-clone data at an old location.** `layout_migration` · `housekeeping`.
+
+[ADR-024](decisions/024-data-and-state-layout.md) moves per-clone data out of the
+working tree, and this build reads each class only at its new location. One
+finding per class names the old directory and the exact target: pipeline state,
+plans, retros and logs (to the per-clone directory under the git common dir), each
+pipeline worktree under `.nightgauge/worktrees/` or `.worktrees/` (to the worktree
+base), and the old recall cache. `auto` `migrate` runs the one migration for the
+clone:
+
+- It takes `.migrate.lock` in the per-clone directory and re-scans under it.
+- A live daemon of any checkout of the clone blocks it (exit 4). While a run is in
+  flight (the in-flight detection `worktree sweep` uses) no file is moved, and the
+  worktree that run is on is skipped and reported (exit 4); idle worktrees still
+  move, with `git worktree move`.
+- Each file moves by a rename on one filesystem, or a synced copy then a delete
+  across filesystems, keeping its mode and mtime. A symlink is recreated as a
+  symlink, never followed. A target with the same bytes means an earlier move
+  finished; the source is deleted. Append-only JSONL (pipeline history,
+  `github-api.jsonl`) found at both locations is merged as the union of its lines,
+  ordered by timestamp. Files git tracks (the template's `.gitkeep`) stay, so
+  `git status` is unchanged.
+- The old recall cache is deleted, not moved: it rebuilds on next use.
+- New directories are created 0700. When nothing is left at an old location, it
+  writes the `layout-version` marker last. A second pass changes nothing, and the
+  check's detail line reads `layout v1`.
+
+The finding never changes the exit code of plain `nightgauge doctor`.
+
+#### NGD045
+
+**A file exists at both the old and the new location.** `layout_migration` ·
+`housekeeping`.
+
+The two copies differ, and the migration never overwrites a file, so it moves
+nothing in the clone until every conflict is resolved; `--fix` exits 3. Manual
+`resolve`: compare the two paths the finding names, keep the one you want at the
+new location, delete the other, and re-run `nightgauge doctor --fix`.
+
+#### NGD046
+
+**An old location cannot be migrated safely.** `layout_migration` ·
+`housekeeping`.
+
+The old directory is a symlink, resolves outside the checkout, or its new location
+cannot be resolved (for example, `pipeline.worktree_base` set in the committed team
+config). Nothing there is moved or deleted; the other classes still migrate.
+Manual `inspect`: remove the reason the evidence names, then re-run
+`nightgauge doctor --fix`.
 
 ### Credentials
 

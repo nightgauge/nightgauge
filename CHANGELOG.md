@@ -16,6 +16,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge doctor --fix` moves per-clone data to its new location once**
+  (#2040, ADR-024 § 15). Plain `nightgauge doctor` reports each class still at
+  an old location (pipeline state, plans, retros, logs, pipeline worktrees
+  under `.nightgauge/worktrees/` or `.worktrees/`, and the old recall cache)
+  with the exact target, as `housekeeping` (`NGD044`), so the exit status is
+  unchanged. The `layout.migrate` remedy moves them under `.migrate.lock`:
+  a rename on one filesystem, or a synced copy then a delete across
+  filesystems, keeping modes; symlinks are recreated, never followed; new
+  directories are 0700. It never overwrites a file: a file at both locations
+  is reported with both paths (`NGD045`) and nothing moves (exit 3).
+  Worktrees move with `git worktree move`, except one a run is in flight on,
+  which is skipped and reported (exit 4). The old recall cache is deleted, not
+  moved. A `layout-version` marker is written last, and a second pass reports
+  `layout v1` and changes nothing.
 - **Nightgauge logs are bounded by size and age** (#2029, ADR-024 § 11). Each
   log directory (the clone's `.nightgauge/logs/` and the machine state `logs/`)
   is held to 200 MB and 30 days by default, set by machine-tier

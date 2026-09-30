@@ -1472,12 +1472,13 @@ start writing.
 is supplied by the caller, and each caller must answer "is my set authoritative
 for the runs whose directories I am about to delete?"
 
-| Caller                                              | In-flight source                                                                                             |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Autonomous reconcile                                | `state.Running` — authoritative for the runs this process dispatched.                                        |
-| `nightgauge worktree sweep`                         | `state.ActiveIssuesFromSnapshots`, per root — the machine-wide snapshot scan (see below).                    |
-| `nightgauge doctor` (scan)                          | None, by design: substitutes `staleWorktreeAge` and never removes anything.                                  |
-| `nightgauge doctor --fix` (`worktree.sweep` remedy) | `state.ActiveIssuesFromSnapshots`, per root, re-read at apply time; removes only the finding's own worktree. |
+| Caller                                              | In-flight source                                                                                                  |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| Autonomous reconcile                                | `state.Running` — authoritative for the runs this process dispatched.                                             |
+| `nightgauge worktree sweep`                         | `state.ActiveIssuesFromSnapshots`, per root — the machine-wide snapshot scan (see below).                         |
+| `nightgauge doctor` (scan)                          | None, by design: substitutes `staleWorktreeAge` and never removes anything.                                       |
+| `nightgauge doctor --fix` (`worktree.sweep` remedy) | `state.ActiveIssuesFromSnapshots`, per root, re-read at apply time; removes only the finding's own worktree.      |
+| `nightgauge doctor --fix` (`layout.migrate` remedy) | `state.ActiveIssuesFromSnapshots` over the old and new pipeline-state directories; moves no worktree a run is on. |
 
 **The CLI's in-flight set comes from the runtime snapshots** (#410). Before that
 it passed nothing, so `active-run` was structurally unreachable from the command
