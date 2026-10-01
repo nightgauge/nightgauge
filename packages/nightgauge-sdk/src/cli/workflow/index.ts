@@ -65,6 +65,7 @@ export {
   type AgentExecutionResult,
   type JudgeExecutionResult,
   type WorkflowExecutorBindings,
+  type WorkflowUnitContext,
   type WorkflowPhaseSummary,
   type WorkflowRunSummary,
   type RunSdkFanoutOptions,

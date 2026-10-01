@@ -26,6 +26,7 @@ import {
 import { clampSpecCeiling, type JournalFs } from "../../orchestrator/WorkflowExecutor.js";
 import {
   zeroUsage,
+  EphemeralTimeoutError,
   type WorkflowExecutorBindings,
   type WorkflowAgentUsage,
 } from "../../cli/workflow/index.js";
@@ -327,6 +328,74 @@ describe("PipelineOrchestrator.selectExecutor", () => {
       const result = await orch.runStage("feature-dev", 42);
       expect(result.success).toBe(true);
       expect(agentRuns).toBe(0);
+    });
+  });
+
+  describe("the stage's stop reaches the fan-out units (#1765)", () => {
+    /** Bindings whose units run until their signal fires, recording each signal. */
+    function blockingBindings(signals: Array<AbortSignal | undefined>): {
+      bindings: WorkflowExecutorBindings;
+      started: Promise<void>;
+    } {
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => (markStarted = resolve));
+      const bindings: WorkflowExecutorBindings = {
+        async runAgent(_agent, unit) {
+          signals.push(unit?.abortSignal);
+          markStarted();
+          await new Promise<void>((resolve) => {
+            if (!unit?.abortSignal) return; // never ends: the bug
+            if (unit.abortSignal.aborted) resolve();
+            unit.abortSignal.addEventListener("abort", () => resolve(), { once: true });
+          });
+          return { usage: usage(), terminalKind: "error" as const };
+        },
+        async runJudge() {
+          return { verdict: "pass" as const, usage: usage() };
+        },
+      };
+      return { bindings, started };
+    }
+
+    it("stop() aborts a running fan-out stage's units", async () => {
+      ws = await makeWorkspace(["feature-dev"]);
+      const signals: Array<AbortSignal | undefined> = [];
+      const { bindings, started } = blockingBindings(signals);
+      const orch = makeOrchestrator(ws.dir, {
+        workflowAdapter: fakeAdapter(),
+        workflowBindings: bindings,
+        workflowJournalFs: new FakeFs(),
+        orchestration: { disabled: false },
+      });
+
+      const result = orch.runStage("feature-dev", 42);
+      await started;
+      await orch.stop();
+      await result;
+
+      expect(signals).toHaveLength(2);
+      for (const signal of signals) expect(signal?.aborted).toBe(true);
+    });
+
+    it("the stage timeout aborts the units, with a timeout reason", async () => {
+      ws = await makeWorkspace(["feature-dev"]);
+      const signals: Array<AbortSignal | undefined> = [];
+      const { bindings } = blockingBindings(signals);
+      const orch = makeOrchestrator(ws.dir, {
+        workflowAdapter: fakeAdapter(),
+        workflowBindings: bindings,
+        workflowJournalFs: new FakeFs(),
+        orchestration: { disabled: false },
+        stageTimeoutMs: 50,
+      });
+
+      await orch.runStage("feature-dev", 42);
+
+      expect(signals).toHaveLength(2);
+      for (const signal of signals) {
+        expect(signal?.aborted).toBe(true);
+        expect(signal?.reason).toBeInstanceOf(EphemeralTimeoutError);
+      }
     });
   });
 

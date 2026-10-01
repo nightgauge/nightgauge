@@ -278,6 +278,7 @@ export {
   type AgentExecutionResult,
   type JudgeExecutionResult,
   type WorkflowExecutorBindings,
+  type WorkflowUnitContext,
   type WorkflowPhaseSummary,
   type WorkflowRunSummary,
   type RunSdkFanoutOptions,
@@ -318,6 +319,7 @@ export {
   type JournalRecord,
   type WorkflowExecutorDeps,
   type WorkflowExecutionResult,
+  type WorkflowRunOptions,
 } from "./orchestrator/WorkflowExecutor.js";
 
 // Token Tracking

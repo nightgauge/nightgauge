@@ -75,6 +75,7 @@ import {
   type JudgeExecutionResult,
   type WorkflowExecutorBindings,
   type WorkflowRunSummary,
+  type WorkflowUnitContext,
 } from "../cli/workflow/SdkFanoutRunner.js";
 import {
   prefersNativeOffload,
@@ -165,6 +166,16 @@ export interface WorkflowExecutorDeps {
    * first use.
    */
   journalDir?: string;
+}
+
+/** Per-run options for `execute()` / `resume()`. */
+export interface WorkflowRunOptions {
+  /**
+   * The stage's stop. The sdk-fanout floor hands it to every unit's binding,
+   * so `PipelineOrchestrator.stop()` and the stage timeout end the units'
+   * queries. @see Issue #1765
+   */
+  abortSignal?: AbortSignal;
 }
 
 /** What `execute()` / `resume()` return. */
@@ -394,7 +405,11 @@ export class WorkflowExecutor {
    * @throws OrchestrationDisabledError if `config.disabled`.
    * @throws if the (clamped) spec fails `validateWorkflowSpec`.
    */
-  async execute(spec: WorkflowSpec, sink: WorkflowEventSink): Promise<WorkflowExecutionResult> {
+  async execute(
+    spec: WorkflowSpec,
+    sink: WorkflowEventSink,
+    options: WorkflowRunOptions = {}
+  ): Promise<WorkflowExecutionResult> {
     if (this.config.disabled) {
       throw new OrchestrationDisabledError();
     }
@@ -412,7 +427,7 @@ export class WorkflowExecutor {
     const journalFile = this.journalPathFor(clamped.runId);
     await this.ensureJournalDir(journalFile);
 
-    return this.drive(clamped, sink, backend, journalFile, new Set());
+    return this.drive(clamped, sink, backend, journalFile, new Set(), undefined, options);
   }
 
   /**
@@ -428,7 +443,8 @@ export class WorkflowExecutor {
   async resume(
     runId: string,
     spec: WorkflowSpec,
-    sink: WorkflowEventSink
+    sink: WorkflowEventSink,
+    options: WorkflowRunOptions = {}
   ): Promise<WorkflowExecutionResult> {
     if (this.config.disabled) {
       throw new OrchestrationDisabledError();
@@ -463,7 +479,7 @@ export class WorkflowExecutor {
 
     // Drive only the not-yet-terminal nodes; terminal agent nodes replay their
     // sanitized outputRef from the journal instead of re-running.
-    return this.drive(clamped, sink, backend, journalFile, terminalNodeIds, latestByNode);
+    return this.drive(clamped, sink, backend, journalFile, terminalNodeIds, latestByNode, options);
   }
 
   /** Ensure the journal directory exists (idempotent). */
@@ -488,7 +504,8 @@ export class WorkflowExecutor {
     backend: WorkflowBackend,
     journalFile: string,
     terminalNodeIds: ReadonlySet<string>,
-    priorNodes?: ReadonlyMap<string, WorkflowNode>
+    priorNodes?: ReadonlyMap<string, WorkflowNode>,
+    options: WorkflowRunOptions = {}
   ): Promise<WorkflowExecutionResult> {
     const budget = this.budgetFor(spec);
 
@@ -536,6 +553,7 @@ export class WorkflowExecutor {
       // unconditionally — the hard ceiling still applies.
       summary = await runSdkFanout(spec, journaling, guarded, {
         quotaProvider: this.quotaProvider,
+        abortSignal: options.abortSignal,
       });
     }
 
@@ -609,7 +627,10 @@ export class WorkflowExecutor {
       typeof ctx.budget === "number" && ctx.getAccruedCost() + costUsd > ctx.budget;
 
     return {
-      runAgent: async (agent: WorkflowAgentSpec): Promise<AgentExecutionResult> => {
+      runAgent: async (
+        agent: WorkflowAgentSpec,
+        unit?: WorkflowUnitContext
+      ): Promise<AgentExecutionResult> => {
         // Resume: replay a completed agent's sanitized output instead of running.
         const replay = terminalAgentByAgentId.get(agent.agentId);
         if (replay) {
@@ -630,7 +651,7 @@ export class WorkflowExecutor {
         // we zero the terminal's usage (keeping `estimated`) so the aggregated
         // `totalCostUsd` can never exceed `budgetUsd`. The accrual itself is
         // added by the JournalingSink on the (now-zeroed) terminal emission.
-        const result = await bindings.runAgent(agent);
+        const result = await bindings.runAgent(agent, unit);
         if (result.terminalKind === "success" && wouldExceedBudget(result.usage.costUsd)) {
           ctx.onBudgetStop();
           return {
@@ -644,14 +665,15 @@ export class WorkflowExecutor {
 
       runJudge: async (
         judge: WorkflowJudgeSpec,
-        targetNodeId: string
+        targetNodeId: string,
+        unit?: WorkflowUnitContext
       ): Promise<JudgeExecutionResult> => {
         // Judges consume budget like any agent — skip once the cap is reached.
         if (budgetExhausted()) {
           ctx.onBudgetStop();
           return { verdict: "uncertain", usage: zeroUsage(true) };
         }
-        return bindings.runJudge(judge, targetNodeId);
+        return bindings.runJudge(judge, targetNodeId, unit);
       },
     };
   }
