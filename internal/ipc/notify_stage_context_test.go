@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,17 +101,56 @@ func TestNotifyStageTransitionWithoutContextRecordsAsBefore(t *testing.T) {
 func TestNotifyStageContextBaselineMatchesNoFieldRecord(t *testing.T) {
 	base, _ := completeFeatureDev(t, ``)
 	dropped, _ := completeFeatureDev(t, `,"peakStepInputTokens":-1,"contextWindowTokens":131072`)
-	for _, m := range []map[string]any{base, dropped} {
-		for k := range m {
-			if k == "started_at" || k == "completed_at" || k == "duration_ms" || k == "duration_seconds" {
-				delete(m, k)
-			}
-		}
-	}
+	stripClockValues(base)
+	stripClockValues(dropped)
 	a, _ := json.Marshal(base)
 	b, _ := json.Marshal(dropped)
 	if string(a) != string(b) {
 		t.Errorf("record differs:\n no fields: %s\n dropped:   %s", a, b)
+	}
+}
+
+// stripClockValues deletes the clock-derived keys at every depth. Each
+// phases[] entry carries its own second-resolution timestamps, so two records
+// built a moment apart differ there whenever they straddle a second (#2326).
+func stripClockValues(v any) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, child := range x {
+			switch k {
+			case "started_at", "completed_at", "duration_ms", "duration_seconds":
+				delete(x, k)
+			default:
+				stripClockValues(child)
+			}
+		}
+	case []any:
+		for _, child := range x {
+			stripClockValues(child)
+		}
+	}
+}
+
+// TestStripClockValuesReachesPhases pins that a phase timestamp a second
+// apart no longer makes two otherwise equal records differ (#2326).
+func TestStripClockValuesReachesPhases(t *testing.T) {
+	rec := func(ts string) map[string]any {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(`{"started_at":"`+ts+`","status":"complete","phases":[{"name":"x","started_at":"`+ts+`","completed_at":"`+ts+`","status":"unreported"}]}`), &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	a, b := rec("2026-10-01T11:17:48-06:00"), rec("2026-10-01T11:17:49-06:00")
+	stripClockValues(a)
+	stripClockValues(b)
+	ja, _ := json.Marshal(a)
+	jb, _ := json.Marshal(b)
+	if string(ja) != string(jb) {
+		t.Errorf("records still differ after stripping:\n%s\n%s", ja, jb)
+	}
+	if !strings.Contains(string(ja), `"name":"x"`) || !strings.Contains(string(ja), `"status":"unreported"`) {
+		t.Errorf("stripping removed more than the clock values: %s", ja)
 	}
 }
 

@@ -41,6 +41,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A stage-context test no longer fails when its two records straddle a
+  second** (#2326). It stripped clock-derived keys only at the top level, but
+  each `phases[]` entry carries its own second-resolution timestamps; it now
+  strips them at every depth.
 - **Six follow-ups from the OpenCode adapter review** (#1708). Every stage
   of an `opencode` run now starts with no cached model catalog: OpenCode
   prefers a cached catalog to the one bundled in the binary, the stages of a
