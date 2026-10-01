@@ -597,14 +597,17 @@ const (
 	// the capacity check) are classified into it too, and the issue is parked
 	// with the remediation.
 	TerminalKindContextWindowExceeded = "context_window_exceeded"
-	// TerminalKindAdapterPermissionRejected: the adapter auto-rejected a tool
-	// the stage's allowed tools grant (#1624's
-	// `[adapter-permission-rejected]` marker) under an `ask` rule. The
-	// permission map Nightgauge generates (#1815) holds only `allow` and
-	// `deny`, and denies reading `*.env` and `*.env.*` outright, so the rule
-	// comes from OpenCode config outside that map, such as a repository's or
-	// the user's opencode.json. Whatever permission the marker
-	// names, the kind is the same and parks: a `read` rejection retried would
+	// TerminalKindAdapterPermissionRejected: the adapter rejected a call to a
+	// tool the stage's allowed tools grant (#1624's
+	// `[adapter-permission-rejected]` marker). The usual source is an
+	// explicit `deny` in the permission map Nightgauge generates (#1638,
+	// #1815): a `*.env` read, an edit under the skill or binary directory, a
+	// destructive bash pattern. A `deny` prints no stderr notice, so the
+	// parser names the permission from the stream's rejected tool_use event.
+	// The narrower case is an `ask` rule from OpenCode config outside that
+	// map, such as a repository's or the user's opencode.json, which opencode
+	// auto-rejects headless; the generated map never holds `ask`. Whatever
+	// permission the marker names, the kind is the same and parks: a `read` rejection retried would
 	// let the model or the issue text that sent it to a secret file loop the
 	// issue. Distinct from TerminalKindPermissionDenied, the harness refusing
 	// a tool the stage was NOT allowed, which retries.
