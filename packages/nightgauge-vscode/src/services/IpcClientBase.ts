@@ -879,6 +879,16 @@ export interface AgentAcknowledgeCommandResult {
 }
 
 /**
+ * Result from agent.executionProfile (#1567): the profile the agent
+ * advertises, and whether its adapter can host a conversational turn (false
+ * for every adapter until the conversation spike #1568 records one).
+ */
+export interface AgentExecutionProfileResult {
+  profile: import("./executionProfile").ExecutionProfile;
+  conversation: boolean;
+}
+
+/**
  * Result from queue.validatePin (#1656): whether this machine can serve a
  * remote run request's adapter and model, and, when it cannot, the reason the
  * rejected ack carries as its `detail`.

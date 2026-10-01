@@ -177,9 +177,18 @@ opencode:
     output: 8192
 EOF
 
+# The capture roots are replaced as literal strings (\Q…\E on values passed
+# through the environment), so a `#` or a regex character such as the `.` in
+# the mktemp template cannot break or widen the match. The resolved root goes
+# first: on macOS the unresolved root is a suffix of it.
 redact() {
-  sed -e $'s/\x1b\\[[0-9;]*[A-Za-z]//g' -e "s#${root_resolved}#<capture-root>#g" -e "s#${root}#<capture-root>#g" \
-    -e "s#127\\.0\\.0\\.1:${stub_port}#127.0.0.1:1#g" -e 's/[[:space:]]*$//'
+  CAPTURE_ROOT_RESOLVED="$root_resolved" CAPTURE_ROOT="$root" CAPTURE_STUB_PORT="$stub_port" perl -pe '
+    s/\x1b\[[0-9;]*[A-Za-z]//g;
+    s/\Q$ENV{CAPTURE_ROOT_RESOLVED}\E/<capture-root>/g;
+    s/\Q$ENV{CAPTURE_ROOT}\E/<capture-root>/g;
+    s/127\.0\.0\.1:\Q$ENV{CAPTURE_STUB_PORT}\E(?!\d)/127.0.0.1:1/g;
+    s/[ \t\r\f\x0B]+$//;
+  '
 }
 
 # debug config: unchanged, an unknown top-level key, and a wrong-typed value.

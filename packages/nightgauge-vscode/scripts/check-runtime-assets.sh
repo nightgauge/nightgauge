@@ -22,6 +22,9 @@ if [[ "$TARGET" == *.vsix ]]; then
   # what got the Marketplace publisher blocked.
   grep -qx "extension/dist/vendor/marked.umd.js" <<<"$CONTENTS" \
     || { echo "ERROR: $TARGET is missing extension/dist/vendor/marked.umd.js" >&2; exit 1; }
+  # No shipped file may carry a fetch-piped-to-shell or decode-and-run shape
+  # (#2320, #2321), whichever package it was bundled from.
+  bash "$(dirname "${BASH_SOURCE[0]}")/check-shipped-code.sh" "$TARGET"
   echo "Runtime assets verified in $TARGET"
   exit 0
 fi
@@ -32,4 +35,5 @@ test -f "$TARGET/sdk-cli.cjs" \
   || { echo "ERROR: packaged SDK CLI missing: $TARGET/sdk-cli.cjs" >&2; exit 1; }
 test -f "$TARGET/vendor/marked.umd.js" \
   || { echo "ERROR: vendored webview asset missing: $TARGET/vendor/marked.umd.js (run scripts/vendor-webview-assets.mjs)" >&2; exit 1; }
+bash "$(dirname "${BASH_SOURCE[0]}")/check-shipped-code.sh" "$TARGET"
 echo "Runtime assets verified in $TARGET"

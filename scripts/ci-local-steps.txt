@@ -11,6 +11,7 @@ post-merge-check.sh regression suite
 publish-vsix-set.sh regression suite
 sign-macos-binaries.sh regression suite
 malware-scan.sh regression suite
+check-shipped-code.sh regression suite
 scrub-evidence.sh regression suite
 capture-cli-help.sh regression suite
 adapter-canary.sh regression suite

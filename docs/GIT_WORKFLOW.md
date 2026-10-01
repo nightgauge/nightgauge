@@ -1015,10 +1015,46 @@ gh attestation verify /tmp/rel/nightgauge-vscode-darwin-arm64-*.vsix --owner nig
 #     release, never assumed. Upload every VSIX (and the bare binaries) at
 #     https://www.virustotal.com/gui/home/upload and keep each report URL
 #     (https://www.virustotal.com/gui/file/<sha256>, the sha256 from
-#     checksums.txt). A detection on a VSIX stops the release here: do not
-#     publish that file; remove the asset and cut the next patch.
+#     checksums.txt).
 gh release download v0.4.0 -p '*.vsix' -p 'checksums.txt' -D /tmp/rel
 (cd /tmp/rel && shasum -a 256 -c checksums.txt --ignore-missing)
+
+#     The two JS bundles are submitted as files of their own (#2322).
+#     VirusTotal does not report every file it unpacks from a VSIX, so a
+#     clean VSIX report says nothing about dist/extension.cjs, the largest
+#     code file in the package, or dist/sdk-cli.cjs. Both are the same bytes
+#     in every target VSIX; assert that, then submit one copy of each:
+for f in extension.cjs sdk-cli.cjs; do
+  n=$(for v in /tmp/rel/*.vsix; do unzip -p "$v" "extension/dist/$f" | shasum -a 256; done | sort -u | wc -l)
+  [ "$n" -eq 1 ] || { echo "dist/$f differs between the target VSIXs: submit each copy"; break; }
+  unzip -p "$(ls /tmp/rel/*.vsix | head -1)" "extension/dist/$f" > "/tmp/rel/$f"
+  shasum -a 256 "/tmp/rel/$f"     # its report: https://www.virustotal.com/gui/file/<sha256>
+done
+
+#     The bundles are about 10 MB and 3 MB. If the web uploader refuses a file
+#     for its size, submit it through the VirusTotal API (direct upload takes
+#     files up to 32 MB) with the release owner's API key, read from the
+#     release session's environment and never written to a file or a log.
+#     Using a key needs the owner's approval; without one, stop here and the
+#     owner submits the file.
+curl -s https://www.virustotal.com/api/v3/files -H "x-apikey: $VT_API_KEY" -F file=@/tmp/rel/extension.cjs
+
+#     Record three things from EVERY report (each VSIX, each binary, each
+#     bundle) beside its URL: the engine detection count, the Code insights
+#     verdict, and the name of every community YARA rule that matched (the
+#     report's "Crowdsourced YARA rules" section; THOR is one such source).
+#     With a key, the same three are in the file object:
+curl -s "https://www.virustotal.com/api/v3/files/<sha256>" -H "x-apikey: $VT_API_KEY" | jq '.data.attributes |
+  {detections: (.last_analysis_stats.malicious + .last_analysis_stats.suspicious),
+   code_insights: .crowdsourced_ai_results, yara: [.crowdsourced_yara_results[]?.rule_name]}'
+
+#     Then decide:
+#     - Any engine detection stops the release: do not publish that file;
+#       remove the asset and cut the next patch.
+#     - A Code insights verdict of "Suspicious", or any YARA rule match, stops
+#       the release for an owner decision before step 10. Quote the verdict
+#       text and the rule names in that request; the owner decides whether to
+#       publish, fix first, or file a false-positive report.
 
 # 10. Publish to the registries — ON THE TAG, never from a branch. The run
 #     verifies VSCE_PAT / OVSX_PAT, downloads the release's VSIXs, checks each

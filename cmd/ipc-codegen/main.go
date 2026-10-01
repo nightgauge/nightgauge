@@ -407,6 +407,7 @@ func collectImportTypes(methods []MethodDef) []string {
 		"KnowledgeRelatedToIssueResult":      true, // Issue #2964
 		"RecordStageExitResult":              true, // Issue #3619
 		"AgentAcknowledgeCommandResult":      true, // Issue #3551
+		"AgentExecutionProfileResult":        true, // Issue #1567
 		"QueueValidatePinResult":             true, // #1656 — remote run request pin
 		"ConfigTierAuditResult":              true, // Issue #3645
 		"WorkflowQuotaStateResult":           true, // Issue #3909

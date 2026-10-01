@@ -24,6 +24,11 @@
  *   2. A `curl … | bash` string anywhere in shipped source. It was only ever a
  *      help message, but a static scanner cannot know that, and a trust review
  *      is the wrong venue in which to explain it.
+ *
+ * This is the early, source-level half. It reads the extension's own source
+ * and the SDK's, which esbuild bundles into it. The authoritative check runs
+ * on what ships (`scripts/check-shipped-code.sh`, against the built dist and
+ * every packaged VSIX, #2320): a source walk only sees the packages it names.
  */
 
 import { describe, it, expect } from "vitest";
@@ -32,6 +37,8 @@ import { join } from "node:path";
 
 const PKG_ROOT = join(__dirname, "..");
 const SRC = join(PKG_ROOT, "src");
+// The SDK is bundled into dist/extension.cjs and dist/sdk-cli.cjs (#2320).
+const SDK_SRC = join(PKG_ROOT, "..", "nightgauge-sdk", "src");
 
 function walk(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
@@ -41,6 +48,7 @@ function walk(dir: string): string[] {
 }
 
 const tsFiles = walk(SRC);
+const shippedSourceFiles = [...tsFiles, ...walk(SDK_SRC)];
 
 /**
  * Marks owned by others that must never appear in `keywords`. Deliberately not
@@ -87,9 +95,10 @@ describe("listing metadata carries no third-party trademark", () => {
 describe("shipped source contains no pipe-to-shell install command", () => {
   it("finds source files to scan (guard is not vacuous)", () => {
     expect(tsFiles.length).toBeGreaterThan(0);
+    expect(shippedSourceFiles.length).toBeGreaterThan(tsFiles.length);
   });
 
-  it.each(tsFiles)("%s has no curl/wget/iwr piped into a shell", (file) => {
+  it.each(shippedSourceFiles)("%s has no curl/wget/iwr piped into a shell", (file) => {
     const body = readFileSync(file, "utf8");
     // Match the shapes a scanner matches: a fetch of a URL piped into an
     // interpreter. Tolerates flag ordering and both quote styles.
@@ -97,6 +106,8 @@ describe("shipped source contains no pipe-to-shell install command", () => {
       /curl[^\n`"']*https?:\/\/[^\n`"']*\|\s*(ba)?sh\b/i,
       /wget[^\n`"']*https?:\/\/[^\n`"']*\|\s*(ba)?sh\b/i,
       /\b(iwr|invoke-webrequest)[^\n`"']*\|\s*(iex|invoke-expression)\b/i,
+      // The decode-then-run dropper shape the Codex launch used (#2321).
+      /\bbase64\s+(-d|--decode|-D)\b/,
     ];
     const hits = patterns.filter((re) => re.test(body)).map((re) => String(re));
     expect(hits).toEqual([]);

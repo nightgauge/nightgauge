@@ -227,6 +227,7 @@ var contractTestedMethods = map[string]bool{
 	"notifications.checkAuthorization": true,
 	// Agent
 	"agent.acknowledgeCommand": true, // Issue #3551
+	"agent.executionProfile":   true, // Issue #1567
 	// Workflow
 	"workflow.quotaState": true, // Issue #3909
 }
@@ -1631,6 +1632,11 @@ func TestContract_Diagnostics(t *testing.T) {
 func TestContract_Agent(t *testing.T) {
 	h := newIpcTestHarness(t)
 	h.awaitReady()
+
+	t.Run("agent.executionProfile/registered", func(t *testing.T) {
+		id := h.sendRequest("agent.executionProfile", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "agent.executionProfile")
+	})
 
 	t.Run("agent.acknowledgeCommand/registered", func(t *testing.T) {
 		// Send with empty params — expect method-not-found (-32601) to be absent;

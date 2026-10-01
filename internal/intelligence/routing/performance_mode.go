@@ -52,9 +52,26 @@ func ResolvePerformanceMode(workspaceRoot string) PerformanceMode {
 }
 
 func resolvePerformanceMode(workspaceRoot string) PerformanceMode {
+	m, _ := ResolvePerformanceModeWithSource(workspaceRoot)
+	return m
+}
+
+// Provenance of a resolved performance mode: which layer of the precedence
+// chain answered. The agent execution profile advertises it (#1567) so a
+// surface can say why a workspace runs in a mode.
+const (
+	PerformanceModeSourceEnv     = "env"
+	PerformanceModeSourceFile    = "file"
+	PerformanceModeSourceDefault = "default"
+)
+
+// ResolvePerformanceModeWithSource is ResolvePerformanceMode plus the layer
+// that answered. It IS the resolver — ResolvePerformanceMode delegates here —
+// so the provenance can never describe a different chain than the value.
+func ResolvePerformanceModeWithSource(workspaceRoot string) (PerformanceMode, string) {
 	if env := strings.TrimSpace(strings.ToLower(os.Getenv("NIGHTGAUGE_PERFORMANCE_MODE"))); env != "" {
 		if m := parseMode(env); m != "" {
-			return m
+			return m, PerformanceModeSourceEnv
 		}
 	}
 
@@ -63,12 +80,12 @@ func resolvePerformanceMode(workspaceRoot string) PerformanceMode {
 	if workspaceRoot != "" {
 		if path, err := layout.CheckoutPath(workspaceRoot, layout.CheckoutPerformanceMode); err == nil {
 			if m := readPerformanceModeFile(path); m != "" {
-				return m
+				return m, PerformanceModeSourceFile
 			}
 		}
 	}
 
-	return ModeElevated
+	return ModeElevated, PerformanceModeSourceDefault
 }
 
 // DashboardPerformanceMode maps a resolved PerformanceMode to the web

@@ -8504,32 +8504,78 @@ export function sendInputToActiveProcess(input: string): boolean {
  * @see Issue #495
  */
 /**
- * Build the shell command that launches the Codex TUI seeded with a stage
- * prompt (#4024). The prompt is base64 in `promptB64File`; it is decoded
- * in-shell into a single positional argument. Because base64 output and the
- * UUID temp-file path are both shell-safe, a markdown prompt containing
- * backticks, `$`, or quotes cannot break out of the argument. `openssl base64
- * -d -A` is used as the decoder (present on macOS/BSD and Linux/GNU; `-A`
- * treats the whole file as a single base64 stream).
- *
- * Exported for unit testing the quote-safe seeding.
- */
-/**
- * A single safe shell token: command names, absolute paths, and model ids only.
+ * A single safe token: command names, absolute paths, and model ids only.
  * Anything with whitespace or shell metacharacters (`;`, `|`, `$`, backtick,
- * `&`, quotes, …) is rejected so a malicious `.nightgauge/config.yaml`
- * (this tool runs on cloned repos) cannot inject commands into the launch
- * string. (#4024 — commit security review)
+ * `&`, quotes, …) is rejected. The launch no longer goes through a shell
+ * (#2321), but `.nightgauge/config.yaml` is untrusted on a cloned repo, so the
+ * configured command and model are still held to one plain token.
+ * (#4024 — commit security review)
  */
 const CODEX_SAFE_TOKEN = /^[A-Za-z0-9._/-]+$/;
 
-export function buildCodexInteractiveLaunchCommand(
+/** Linux caps one argv string at 32 pages (MAX_ARG_STRLEN), NUL included. */
+export const LINUX_MAX_ARG_STRLEN = 131072;
+/** macOS caps argv plus the environment together (ARG_MAX), with no per-string cap. */
+export const DARWIN_ARG_MAX = 1048576;
+/** Room left for the executable path, the other arguments and pointer overhead. */
+const ARG_HEADROOM_BYTES = 16384;
+
+/** Bytes the environment takes from ARG_MAX: each `KEY=value` plus its NUL. */
+export function environmentArgBytes(env: NodeJS.ProcessEnv = process.env): number {
+  let total = 0;
+  for (const [key, value] of Object.entries(env)) {
+    if (value !== undefined) total += Buffer.byteLength(`${key}=${value}`) + 1;
+  }
+  return total;
+}
+
+/**
+ * The largest prompt, in UTF-8 bytes, that can be passed to Codex as one argv
+ * string on `platform` (#2321). Linux's limit is per string; macOS's is the
+ * whole argv and environment together, so it shrinks as the environment grows.
+ */
+export function codexPromptArgLimit(platform: NodeJS.Platform, envBytes: number): number {
+  if (platform === "linux") return LINUX_MAX_ARG_STRLEN - 1;
+  // darwin, and the conservative default for anything else.
+  return Math.max(0, DARWIN_ARG_MAX - envBytes - ARG_HEADROOM_BYTES);
+}
+
+export interface CodexInteractiveLaunch {
+  /** The Codex executable; VS Code starts it directly, with no shell. */
+  shellPath: string;
+  /** argv after the executable: the model flag, then the prompt or its seed. */
+  shellArgs: string[];
+  /**
+   * Set only when the prompt was over the platform's argument limit: the
+   * prompt goes in this file, and the argument tells Codex to read it.
+   */
+  promptFile?: { path: string; content: string };
+}
+
+/**
+ * Build the argv that launches the Codex TUI seeded with a stage prompt
+ * (#4024, #2321). There is no shell string: VS Code starts `codexCmd`
+ * directly with these arguments, so a markdown prompt full of backticks, `$`
+ * and quotes is one argument, byte for byte, and needs no encoding.
+ *
+ * A prompt over the platform's argument limit (Linux allows 128 KiB per
+ * argument, and the pr-merge prompt is larger) cannot go in argv. Codex then
+ * gets a short instruction to read the prompt from `oversizePromptPath`, a
+ * plain markdown file the caller writes and removes; Codex reads it with its
+ * own file tool. Nothing is decoded and nothing is executed from it.
+ *
+ * Exported for unit testing.
+ */
+export function buildCodexInteractiveLaunch(
   codexCmd: string,
   model: string | undefined,
-  promptB64File: string
-): string {
-  // codexCmd is interpolated into a shell command — refuse anything that isn't a
-  // single safe token (command name or absolute path).
+  prompt: string,
+  options: {
+    platform?: NodeJS.Platform;
+    envBytes?: number;
+    oversizePromptPath?: string;
+  } = {}
+): CodexInteractiveLaunch {
   if (!CODEX_SAFE_TOKEN.test(codexCmd)) {
     throw new Error(
       `Unsafe Codex CLI command "${codexCmd}" — only a single command name or ` +
@@ -8537,21 +8583,33 @@ export function buildCodexInteractiveLaunchCommand(
     );
   }
   // model is already validated against the closed Codex model set upstream; this
-  // is defense-in-depth — drop a malformed value rather than interpolate it.
-  const modelFlag = model && CODEX_SAFE_TOKEN.test(model) ? `--model ${model} ` : "";
-  // 1. Decode the base64 prompt into a shell variable, then `rm` the temp file
-  //    immediately — the file's lifetime is tied to the decode, with no
-  //    host-side timer that could race a slow shell (#4024 review #2).
-  // 2. Launch the Codex TUI with the prompt as a single quoted argument (`"$P"`
-  //    is quote-safe regardless of prompt content).
-  // 3. `; exit` so the terminal closes when Codex exits, giving the host a
-  //    completion signal via onDidCloseTerminal rather than waiting for the user
-  //    to close the pane manually (#4024 review #1).
-  return (
-    `P="$(openssl base64 -d -A -in '${promptB64File}')"; ` +
-    `rm -f '${promptB64File}'; ` +
-    `${codexCmd} ${modelFlag}"$P"; exit`
+  // is defense-in-depth — drop a malformed value rather than pass it.
+  const modelArgs = model && CODEX_SAFE_TOKEN.test(model) ? ["--model", model] : [];
+
+  const limit = codexPromptArgLimit(
+    options.platform ?? process.platform,
+    options.envBytes ?? environmentArgBytes()
   );
+  if (Buffer.byteLength(prompt, "utf-8") <= limit) {
+    return { shellPath: codexCmd, shellArgs: [...modelArgs, prompt] };
+  }
+
+  const promptPath = options.oversizePromptPath;
+  if (!promptPath) {
+    throw new Error(
+      `Codex prompt is ${Buffer.byteLength(prompt, "utf-8")} bytes, over the ${limit}-byte ` +
+        "argument limit, and no prompt file path was given."
+    );
+  }
+  const seed =
+    `Your instructions for this pipeline stage are in the file ${promptPath}. ` +
+    "They are too long to pass on the command line. Read that whole file before doing " +
+    "anything else, then carry out the instructions in it as your task.";
+  return {
+    shellPath: codexCmd,
+    shellArgs: [...modelArgs, seed],
+    promptFile: { path: promptPath, content: prompt },
+  };
 }
 
 /**
@@ -8563,10 +8621,10 @@ export function buildCodexInteractiveLaunchCommand(
  * turn. AGENTS.md steering (#4028) and MCP servers (#4025) are provisioned first
  * so the interactive session has the same context a headless Codex stage gets.
  *
- * The prompt is delivered quote-safely: a markdown prompt contains backticks,
- * `$`, and quotes that would break a raw shell argument, so it is base64-encoded
- * to a temp file and decoded in-shell (`openssl base64 -d` — present on macOS
- * and Linux). The temp file path is a UUID, so it is itself shell-safe.
+ * The prompt is one argv string to the Codex executable, which VS Code starts
+ * directly (`shellPath`/`shellArgs`), so no shell parses it (#2321). A prompt
+ * over the platform's argument limit is written to a plain file Codex is told
+ * to read; see buildCodexInteractiveLaunch.
  */
 function launchCodexInteractiveTerminal(
   stage: PipelineStage,
@@ -8581,10 +8639,10 @@ function launchCodexInteractiveTerminal(
   const processKey = `interactive-${stage}-${issueNumber ?? "no-issue"}`;
   const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-  // Validate the configured Codex CLI command BEFORE any side effects: it is
-  // interpolated into the shell launch string, and `.nightgauge/config.yaml`
-  // is untrusted on a cloned repo, so an unsafe value must abort the launch
-  // rather than inject commands. (#4024 — commit security review)
+  // Validate the configured Codex CLI command BEFORE any side effects: it
+  // becomes the terminal's executable, and `.nightgauge/config.yaml` is
+  // untrusted on a cloned repo, so an unsafe value must abort the launch.
+  // (#4024 — commit security review)
   const codexCmd = getCodexCliCommand(workspaceRoot);
   if (!CODEX_SAFE_TOKEN.test(codexCmd)) {
     const error = new Error(
@@ -8636,36 +8694,54 @@ function launchCodexInteractiveTerminal(
     callbacks?.onStderr?.(`[skillRunner] Warning: Codex MCP provisioning failed: ${errText(e)}\n`);
   }
 
-  // Seed the prompt quote-safely via a base64 temp file decoded in-shell.
-  // (codexCmd was resolved + validated above, before any side effects.)
-  const promptFile = path.join(os.tmpdir(), `codex-interactive-${randomUUID()}.b64`);
-  try {
-    fs.writeFileSync(promptFile, Buffer.from(prompt, "utf-8").toString("base64"), "utf-8");
-  } catch (e) {
-    const error = new Error(`Failed to write Codex interactive prompt file: ${errText(e)}`);
-    callbacks?.onError?.(error);
-    callbacks?.onComplete?.({ success: false, exitCode: null, error });
-    return {
-      process: null as unknown as ChildProcess,
-      stage,
-      issueNumber,
-      kill: () => {},
-      isInteractive: true,
-    };
+  // Build the argv (codexCmd was resolved + validated above, before any side
+  // effects). Only a prompt over the argument limit is written to a file.
+  const launch = buildCodexInteractiveLaunch(codexCmd, model, prompt, {
+    oversizePromptPath: path.join(os.tmpdir(), `codex-interactive-${randomUUID()}.md`),
+  });
+  const promptFile = launch.promptFile?.path;
+  if (launch.promptFile) {
+    try {
+      fs.writeFileSync(launch.promptFile.path, launch.promptFile.content, {
+        encoding: "utf-8",
+        mode: 0o600,
+      });
+    } catch (e) {
+      const error = new Error(`Failed to write Codex interactive prompt file: ${errText(e)}`);
+      callbacks?.onError?.(error);
+      callbacks?.onComplete?.({ success: false, exitCode: null, error });
+      return {
+        process: null as unknown as ChildProcess,
+        stage,
+        issueNumber,
+        kill: () => {},
+        isInteractive: true,
+      };
+    }
   }
 
   const terminalName = issueNumber ? `Codex: Issue #${issueNumber} (${stage})` : `Codex: ${stage}`;
-  const terminal = vscode.window.createTerminal({ name: terminalName, cwd: workspaceRoot });
-  const launchCmd = buildCodexInteractiveLaunchCommand(codexCmd, model, promptFile);
+  // shellPath/shellArgs: VS Code starts Codex itself, so the terminal closes
+  // when Codex exits and onDidCloseTerminal carries its exit code (#4024
+  // review #1).
+  const terminal = vscode.window.createTerminal({
+    name: terminalName,
+    cwd: workspaceRoot,
+    shellPath: launch.shellPath,
+    shellArgs: launch.shellArgs,
+  });
 
   callbacks?.onStderr?.(
     `[skillRunner] Stage: ${stage} (interactive) | Adapter: codex | Launching TUI in "${terminalName}"\n`
   );
-  callbacks?.onStderr?.(`[skillRunner] (seed prompt file: ${promptFile})\n`);
+  if (promptFile) {
+    callbacks?.onStderr?.(
+      `[skillRunner] Prompt over the argument limit; Codex reads it from ${promptFile}\n`
+    );
+  }
   callbacks?.onMode?.("interactive");
 
   terminal.show(true);
-  terminal.sendText(launchCmd);
 
   let completed = false;
   let closeListener: vscode.Disposable | undefined;
@@ -8683,12 +8759,14 @@ function launchCodexInteractiveTerminal(
     } catch {
       /* best-effort */
     }
-    // Backstop the in-shell `rm` (the prompt file is normally deleted by the
-    // launch command itself) — covers a pane closed before the command ran.
-    try {
-      fs.unlinkSync(promptFile);
-    } catch {
-      /* already removed in-shell, or never written */
+    // Remove the oversize prompt file, if one was written. Codex has exited,
+    // so nothing still needs to read it.
+    if (promptFile) {
+      try {
+        fs.unlinkSync(promptFile);
+      } catch {
+        /* already gone */
+      }
     }
     // Interactive mode is user-driven: a clean (0 / unknown) exit is success; a
     // non-zero exit, or an explicit abort, is a failure.
@@ -8699,7 +8777,7 @@ function launchCodexInteractiveTerminal(
     });
   };
 
-  // The launch command ends in `; exit`, so the terminal closes when Codex
+  // Codex is the terminal's own process, so the terminal closes when Codex
   // exits and this fires with Codex's exit code (#4024 review #1).
   closeListener = vscode.window.onDidCloseTerminal((closed) => {
     if (closed === terminal) {

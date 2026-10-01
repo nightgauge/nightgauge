@@ -57,7 +57,7 @@ const SUGGESTED_FIX: Record<NightgaugeAdapter, string> = {
     "Start the OpenAI-compatible server named by NIGHTGAUGE_OPENAI_COMPATIBLE_BASE_URL and load or pull the model.",
   copilot:
     "Set COPILOT_GITHUB_TOKEN, or run `gh auth login` then `gh extension install github/gh-copilot`.",
-  grok: "Run `grok login`, or set XAI_API_KEY (install via `curl -fsSL https://x.ai/cli/install.sh | bash`).",
+  grok: "Run `grok login`, or set XAI_API_KEY (install: https://docs.x.ai/build/overview).",
   // ADR-022 § 17: every hosted provider authenticates with its own API-key
   // variable from the environment, and anthropic/* only with ANTHROPIC_API_KEY.
   // Never suggest an interactive provider login here: a pipeline run does not

@@ -4,6 +4,7 @@ import type { Logger } from "../utils/logger";
 import type { IOnDemandTokenRefresher } from "../platform/TokenRefreshManager";
 import type { ReportedUsage } from "./usage/usageReporting";
 import { isDemoMode } from "./DemoModeController";
+import type { ExecutionProfile } from "./executionProfile";
 
 /**
  * Supplies the adapter usage report to attach to a beat, or `null` to send
@@ -16,6 +17,13 @@ import { isDemoMode } from "./DemoModeController";
  * leaves the heartbeat exactly as it was before reporting existed.
  */
 export type UsageReportProvider = () => Promise<ReportedUsage | null>;
+
+/**
+ * Supplies the execution profile to advertise on a beat, or `null` for none
+ * (#1567). Called on every beat, so a changed adapter, performance mode or
+ * default effort reaches the platform within one heartbeat interval.
+ */
+export type ExecutionProfileProvider = () => Promise<ExecutionProfile | null>;
 
 /**
  * How one heartbeat attempt ended. `rejected-after-downgrade` is a failure
@@ -64,7 +72,9 @@ export class AgentHeartbeatService implements vscode.Disposable {
      * Optional. Absent, or returning null, means the bodiless PUT — the only
      * behaviour that existed before Issue #736 and still the default.
      */
-    private readonly getUsageReport?: UsageReportProvider
+    private readonly getUsageReport?: UsageReportProvider,
+    /** Optional (#1567). Absent, or returning null, sends no profile. */
+    private readonly getExecutionProfile?: ExecutionProfileProvider
   ) {}
 
   /** Call once agentId is available from registration. No-op if already started. */
@@ -115,14 +125,15 @@ export class AgentHeartbeatService implements vscode.Disposable {
       if (!token || !this.agentId) return "failed";
 
       const usage = await this.usageReport();
-      let response = await this.putHeartbeat(token, usage);
+      const profile = await this.executionProfile();
+      let response = await this.putHeartbeat(token, usage, profile);
 
       // On 401/403, refresh once and retry (mirrors registration fix #3697).
       if ((response.status === 401 || response.status === 403) && this.tokenRefresher) {
         const refreshed = await this.refreshAccessToken();
         if (refreshed) {
           token = refreshed;
-          response = await this.putHeartbeat(token, usage);
+          response = await this.putHeartbeat(token, usage, profile);
         }
       }
 
@@ -141,7 +152,7 @@ export class AgentHeartbeatService implements vscode.Disposable {
           `AgentHeartbeatService: the server rejected usage plan "local" (HTTP ${response.status}); ` +
             'reporting plan "unknown" for the rest of this session'
         );
-        response = await this.putHeartbeat(token, downgradeLocalPlan(usage));
+        response = await this.putHeartbeat(token, downgradeLocalPlan(usage), profile);
         return response.ok ? "ok" : "rejected-after-downgrade";
       }
 
@@ -151,15 +162,39 @@ export class AgentHeartbeatService implements vscode.Disposable {
     }
   }
 
-  private async putHeartbeat(token: string, usage: ReportedUsage | null): Promise<Response> {
+  private async putHeartbeat(
+    token: string,
+    usage: ReportedUsage | null,
+    profile: ExecutionProfile | null
+  ): Promise<Response> {
+    const body = {
+      ...(usage === null ? {} : { usage }),
+      ...(profile === null ? {} : { execution_profile: profile }),
+    };
     return fetch(`${this.getPlatformUrl()}/v1/agents/${this.agentId!}/heartbeat`, {
       method: "PUT",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      ...(usage === null ? {} : { body: JSON.stringify({ usage }) }),
+      ...(usage === null && profile === null ? {} : { body: JSON.stringify(body) }),
     });
+  }
+
+  /**
+   * The execution profile for this beat, or `null` to send none. Like the
+   * usage report, a provider failure must never cost the agent its presence.
+   */
+  private async executionProfile(): Promise<ExecutionProfile | null> {
+    if (!this.getExecutionProfile) {
+      return null;
+    }
+    try {
+      return await this.getExecutionProfile();
+    } catch (error) {
+      this.logger.warn(`AgentHeartbeatService: execution profile skipped — ${String(error)}`);
+      return null;
+    }
   }
 
   /**

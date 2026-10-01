@@ -204,13 +204,8 @@ func stageEffortConfig(workspaceRoot string, stage state.PipelineStage) string {
 			return v
 		}
 	}
-	if v := validEffortLevel(strings.TrimSpace(os.Getenv("NIGHTGAUGE_MODEL_ROUTING_DEFAULT_EFFORT"))); v != "" {
+	if v, _ := config.ResolveDefaultEffort(cfg, os.Getenv); v != "" {
 		return v
-	}
-	if cfg != nil && cfg.ModelRouting != nil {
-		if v := validEffortLevel(strings.TrimSpace(cfg.ModelRouting.DefaultEffort)); v != "" {
-			return v
-		}
 	}
 	if modelRoutingMode(cfg) == "manual" {
 		return defaultStageEfforts[stage]

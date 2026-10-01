@@ -120,21 +120,52 @@ func (r *Registry) List() []AdapterInfo {
 // canonical precedence chain shared with the SDK CLI and VSCode resolver —
 // an exported API key no longer silently changes which adapter runs.
 func (r *Registry) Resolve(explicit, configDefault string) (SkillRunner, error) {
-	name := explicit
-
-	if name == "" {
-		name = os.Getenv("NIGHTGAUGE_ADAPTER")
-	}
-
-	if name == "" {
-		name = configDefault
-	}
-
-	if name == "" {
-		name = "claude-headless"
-	}
-
+	name, _ := r.resolveName(explicit, configDefault)
 	return r.Get(name)
+}
+
+// Provenance of a resolved adapter: which layer of Resolve's precedence chain
+// answered. Advertised in the agent execution profile (#1567).
+const (
+	AdapterSourceFlag    = "flag"
+	AdapterSourceEnv     = "env"
+	AdapterSourceConfig  = "config"
+	AdapterSourceDefault = "default"
+)
+
+// ResolveName runs Resolve's precedence chain and returns the canonical
+// adapter name (aliases collapsed) and the layer that answered, without
+// constructing the adapter. It errors exactly where Resolve does: a retired
+// or unknown name.
+func (r *Registry) ResolveName(explicit, configDefault string) (name, source string, err error) {
+	name, source = r.resolveName(explicit, configDefault)
+	if err := config.RetiredAdapterError(name, "adapter"); err != nil {
+		return "", "", err
+	}
+	canonical := r.resolve(name)
+	if _, ok := r.factories[canonical]; !ok {
+		return "", "", fmt.Errorf("unknown adapter %q (available: %s)", name, strings.Join(r.Names(), ", "))
+	}
+	return canonical, source, nil
+}
+
+// resolveName is the one precedence chain behind Resolve and ResolveName.
+func (r *Registry) resolveName(explicit, configDefault string) (string, string) {
+	if explicit != "" {
+		return explicit, AdapterSourceFlag
+	}
+	if env := os.Getenv("NIGHTGAUGE_ADAPTER"); env != "" {
+		return env, AdapterSourceEnv
+	}
+	if configDefault != "" {
+		return configDefault, AdapterSourceConfig
+	}
+	return "claude-headless", AdapterSourceDefault
+}
+
+// DisplayName returns the human-readable name for a canonical adapter name.
+func DisplayName(name string) string {
+	return adapterDisplayName(name)
 }
 
 // resolve resolves aliases to canonical names.

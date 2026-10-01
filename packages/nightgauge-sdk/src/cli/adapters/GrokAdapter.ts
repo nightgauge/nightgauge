@@ -29,7 +29,9 @@ import { ADAPTER_COMPAT } from "./adapterCompat.generated.js";
 
 const ADAPTER_NAME = "Grok";
 const GROK_DOCS_URL = "https://docs.x.ai/build/overview";
-const GROK_INSTALL_CMD = "curl -fsSL https://x.ai/cli/install.sh | bash";
+// No pipe-to-shell command here (#2320): this string is bundled into the
+// extension, and a static scanner cannot tell a help message from a payload.
+const GROK_INSTALL_CMD = `Install the Grok CLI by following ${GROK_DOCS_URL}`;
 export const GROK_MIN_KNOWN_VERSION = ADAPTER_COMPAT.grok.minVersion;
 
 function compareVersions(a: string, b: string): number {

@@ -16,6 +16,35 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge handoff` and `nightgauge next`: handoff roll-up and ranked
+  work order in the binary** (#1481). `nightgauge handoff <file-or-dir>...`
+  parses each `<!-- nightgauge:handoff -->` header and reports a tip behind
+  `origin/main` in the repo's local checkout, an `updated` date older than
+  `--max-age-days`, and `needs`/`provides` rows with no issue. It exits 0
+  clean, 1 on findings and 2 when it could not run. `nightgauge next
+--programs <file>` reads an ordered programs file, each program selecting
+  issues by a label, and lists per program the board-Ready issues that the
+  cross-repo dependency graph shows unblocked, then the Ready ones that are
+  blocked and why, then Ready work no program selects. Neither verb calls an
+  LLM. Both take `--json`; the shapes are in
+  [GO_BINARY.md § Handoff and Work-Order Operations](docs/GO_BINARY.md#handoff-and-work-order-operations).
+
+- **Agent registration and heartbeat advertise the workspace's execution
+  profile** (#1567). Both the extension's and the daemon's registration body,
+  and every heartbeat, now carry `execution_profile`: the resolved adapter and
+  its display name, the performance mode, and the default effort, each with
+  the layer that produced it (`flag`, `env`, `config`, `file`, `mode` or
+  `default`). The Go resolvers the pipeline dispatches with produce the
+  values, and the extension asks for them over a new `agent.executionProfile`
+  IPC method on every beat. Editing `ui.core.adapter`,
+  `performance-mode.yaml` or `model_routing.default_effort` therefore reaches
+  the platform within one heartbeat, with no restart. Each field is a short
+  token that is validated before it is sent, so no path or credential can
+  ride along. The `conversation` capability is wired, but no workspace
+  advertises it yet. An adapter qualifies only once spike #1568 records that
+  it passes the viability bar. The platform drops the field until it stores
+  it.
+
 - **`nightgauge doctor resolve machine-id --keep state|legacy` settles a
   machine-id conflict** (#2308). When `~/.nightgauge/machine-id` and the one in
   the machine-state directory differ, the NGD045 finding now shows both ids,
@@ -40,6 +69,38 @@ changelog, and the release workflow refuses a tag that does not.
   [CONFIGURATION.md § Pointing at another platform deployment](docs/CONFIGURATION.md#pointing-at-another-platform-deployment).
 
 ### Fixed
+
+- **`capture.sh` redacts its capture roots as literal strings** (#2328). The
+  `redact` step put the mktemp roots into a `sed` regular expression, so the
+  `.` in the template matched any character and a `#` in `TMPDIR` broke the
+  expression. It now replaces them literally, and the stub-port substitution
+  no longer rewrites a longer port that begins with the same digits. ADR-025
+  also lists NGD043–NGD047, which the doctor emitted without a table row.
+
+- **No shipped bundle carries a pipe-to-shell command, and the check now reads
+  what ships** (#2320). Two Grok install hints in the SDK, which esbuild
+  bundles into `dist/extension.cjs` and `dist/sdk-cli.cjs`, still read
+  `curl … | bash` after #1858 removed the extension's own copy; both now point
+  at the Grok documentation. The source test only walked the extension's
+  `src/`, so a string from another workspace package was invisible to it.
+  `packages/nightgauge-vscode/scripts/check-shipped-code.sh` now scans every
+  text file the extension ships (the two bundles, `dist/opencode-plugin/**`,
+  every shipped `.sh`, and anything a later build adds under `dist/`) for a
+  fetch piped into a shell or a base64 decode. It runs on every VSIX
+  `release.yml`, `staging.yml` and `marketplace-publish.yml` verify, and from
+  `check-runtime-assets.sh`; `scripts/test-check-shipped-code.sh` proves it
+  fails on seeded fixtures. The source test also reads the SDK's source now.
+
+- **The interactive Codex launch uses no shell string** (#2321). It typed
+  `P="$(openssl base64 -d -A -in <tmp>)"; rm -f <tmp>; codex … "$P"; exit`
+  into a terminal: safe, but the decode-delete-execute shape static scanners
+  match on. VS Code now starts `codex` as the terminal's own process with the
+  prompt as one argument, so there is no shell, no base64 and, for a normal
+  prompt, no temporary file. A prompt over the platform's argument limit
+  (Linux allows 128 KiB per argument and the rendered pr-merge prompt is about
+  155 KB) is written to a private file Codex is told to read, and removed when
+  the terminal closes. The command and model are still checked against the
+  safe-token pattern before anything else happens.
 
 - **A stage-context test no longer fails when its two records straddle a
   second** (#2326). It stripped clock-derived keys only at the top level, but
@@ -211,6 +272,15 @@ changelog, and the release workflow refuses a tag that does not.
   reported as resolved, not BLOCKED.
 
 ### Changed
+
+- **Release step 9a scans the JS bundles and records more than the engine
+  count** (#2322). VirusTotal does not report every file it unpacks from a
+  VSIX, so `dist/extension.cjs` and `dist/sdk-cli.cjs` are now submitted as
+  files of their own, after asserting every target VSIX carries the same
+  bytes. Each report records its detection count, its Code insights verdict
+  and any community YARA rule names. A "Suspicious" verdict or a YARA match
+  stops the release for an owner decision before publishing. The step also
+  says how to submit a file the web uploader refuses for its size.
 
 - **"Green" means every check on the PR, required or not** (workspace rule).
   The ruleset blocks a merge only on required checks, so a red optional check,

@@ -24,6 +24,7 @@ import { CONTEXT_URI_SCHEME } from "./views";
 import { initializeServices, type ExtensionServices } from "./bootstrap/services";
 import { registerAllCommands } from "./commands/register-all";
 import { IpcClient } from "./services/IpcClient";
+import { agentCapabilities, resolveExecutionProfile } from "./services/executionProfile";
 import { DemoModeController } from "./services/DemoModeController";
 import { ProjectEventSubscriber } from "./services/ProjectEventSubscriber";
 import { setProjectEventSubscriber } from "./commands/autonomousCommands";
@@ -704,13 +705,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           workspaceSyncStatusItem.setStatus("syncing");
           syncSidebarStatus("syncing", 0);
         }
+        const executionProfile = await resolveExecutionProfile(IpcClient.getInstance());
         const agentId = await services!.agentRegistrationService!.register({
           agent_version: agentVersion,
-          capabilities: ["headless", "interactive"],
+          capabilities: agentCapabilities(executionProfile),
           repos,
           machine_id: machineId,
           vscode_version: vsCodeVersion,
           workspace: workspaceMeta,
+          ...(executionProfile ? { execution_profile: executionProfile.profile } : {}),
         });
 
         if (agentId) {
@@ -847,13 +850,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               workspaceSyncStatusItem.setStatus("syncing");
               syncSidebarStatus("syncing", 0);
             }
+            const executionProfile = await resolveExecutionProfile(IpcClient.getInstance());
             const agentId = await services!.agentRegistrationService!.register({
               agent_version: agentVersion,
-              capabilities: ["headless", "interactive"],
+              capabilities: agentCapabilities(executionProfile),
               repos: workspaceRepos,
               machine_id: services!.machineFingerprint?.getMachineId() ?? "",
               vscode_version: vscode.version,
               workspace: workspaceMeta,
+              ...(executionProfile ? { execution_profile: executionProfile.profile } : {}),
             });
             if (agentId) {
               await context.globalState.update("nightgauge.agentId", agentId);
