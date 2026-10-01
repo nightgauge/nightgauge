@@ -490,6 +490,18 @@ names: a suspended installation (`unsuspend`), an App lacking Projects
 Project numbers are never reused, and the owner has projects numbered above this
 one. Manual `renumber`.
 
+#### NGD047
+
+**The resolved platform URL is not a safe endpoint.** `platform_url` · `warning`.
+
+The check's detail line always prints the platform URL `nightgauge serve` would
+use and where it came from: `NIGHTGAUGE_PLATFORM_URL` (which the VS Code
+`nightgauge.platform.url` setting sets for the daemon it starts), then the
+machine-tier `platform.api_url` when `platform.enabled` is true, then the
+production default. A non-default URL is marked `non-default`. The finding fires
+when that URL is not absolute, or is plain HTTP to a host other than `localhost`
+or `127.0.0.1`. Manual `fix`: correct the source the evidence names, or unset it.
+
 ### Learning and scheduled automations
 
 #### NGD014

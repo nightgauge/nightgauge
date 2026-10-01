@@ -7356,6 +7356,25 @@ through the Go binary via IPC.
   resolution order and the keychain entry are in
   [GO_BINARY.md § Platform license key](GO_BINARY.md#platform-license-key).
 
+### Pointing at another platform deployment
+
+The platform URL resolves in this order, highest first, in both the extension
+and the daemon it starts (#1474):
+
+1. `NIGHTGAUGE_PLATFORM_URL` in the environment
+2. the VS Code setting `nightgauge.platform.url` (machine scope, so a
+   repository's workspace settings cannot set it; the extension hands it to the
+   daemon as `NIGHTGAUGE_PLATFORM_URL`, which takes effect when the daemon next
+   starts)
+3. `platform.environment` / `platform.api_url` from the config files (the
+   daemon reads `platform.api_url` only when `platform.enabled: true`)
+4. the production API, `https://api.nightgauge.dev`
+
+The platform environment status bar item marks any URL other than production as
+non-default, and its tooltip names the URL and the variable or setting that set
+it. `nightgauge doctor` prints the URL the daemon would use in its
+`platform_url` check ([DOCTOR.md § NGD047](DOCTOR.md#ngd047)).
+
 ### Environment Variables
 
 | Variable                                      | Default                      | Description                                              |

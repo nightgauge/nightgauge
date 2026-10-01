@@ -626,6 +626,47 @@ describe("IpcClientBase", () => {
       // Pre-existing env var must not be overwritten.
       expect(spawnEnv?.NIGHTGAUGE_PLATFORM_URL).toBe("https://already-set.example.com");
     });
+
+    // #1474: the setting sits between the process environment and config.yaml.
+    function withPlatformUrlSetting(url: string): void {
+      (vscode.workspace.getConfiguration as unknown as MockInstance).mockImplementation(
+        (section?: string) => ({
+          get: vi.fn(<T>(key: string, defaultValue?: T): T | undefined => {
+            if (section === "nightgauge.platform" && key === "url") return url as unknown as T;
+            if (key === "binaryPath") return "" as unknown as T;
+            if (key === "timeoutSeconds") return 30 as unknown as T;
+            return defaultValue;
+          }),
+        })
+      );
+    }
+
+    it("forwards nightgauge.platform.url over platform.api_url in config.yaml", async () => {
+      const { spawn } = await import("child_process");
+
+      withPlatformUrlSetting("https://from-setting.example.com");
+      existsSyncSpy.mockReturnValue(true);
+      readFileSyncSpy.mockReturnValue("platform:\n  api_url: https://from-config.example.com\n");
+
+      await startTestClient(client);
+
+      const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as
+        Record<string, string> | undefined;
+      expect(spawnEnv?.NIGHTGAUGE_PLATFORM_URL).toBe("https://from-setting.example.com");
+    });
+
+    it("lets NIGHTGAUGE_PLATFORM_URL in process.env win over the setting", async () => {
+      const { spawn } = await import("child_process");
+
+      withPlatformUrlSetting("https://from-setting.example.com");
+      process.env.NIGHTGAUGE_PLATFORM_URL = "https://already-set.example.com";
+
+      await startTestClient(client);
+
+      const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as
+        Record<string, string> | undefined;
+      expect(spawnEnv?.NIGHTGAUGE_PLATFORM_URL).toBe("https://already-set.example.com");
+    });
   });
 
   // ── dispose() ─────────────────────────────────────────────────────────────

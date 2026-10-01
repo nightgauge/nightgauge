@@ -26,6 +26,18 @@ changelog, and the release workflow refuses a tag that does not.
   file so `nightgauge doctor --fix` moves the rest of the machine state. There
   is no default and no id is generated: a new id is a new device to the
   platform. See [DOCTOR.md § NGD045](docs/DOCTOR.md#ngd045).
+- **A `nightgauge.platform.url` setting, a non-default indicator, and the
+  platform URL in `nightgauge doctor`** (#1474). The platform endpoint no
+  longer needs an exported variable or a hand-edited `platform.api_url`. The
+  machine-scoped setting sits below `NIGHTGAUGE_PLATFORM_URL` and above the
+  config files, in the extension and in the daemon it starts. The platform
+  environment status bar item now derives the environment from the URL calls
+  actually go to, so a bare non-production `platform.api_url` no longer shows
+  as production. Its tooltip names the URL, marks it non-default, and names
+  what set it. A new `platform_url` doctor check prints the URL the daemon
+  would use and its source, and warns (NGD047) when that URL is not absolute
+  or is plain HTTP to a host other than localhost. See
+  [CONFIGURATION.md § Pointing at another platform deployment](docs/CONFIGURATION.md#pointing-at-another-platform-deployment).
 
 ### Fixed
 

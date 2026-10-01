@@ -44,7 +44,7 @@ func TestRegistryDefaultRegistersEveryADRCheck(t *testing.T) {
 		"serve_lease": "NGD022", "ledger_daemon_coverage": "NGD023", "tracked_secrets": "NGD024",
 		"ci_machine_credentials": "NGD025", "survival_backlog": "NGD026", "survival_coverage": "NGD027",
 		"corpus_calibration": "NGD028", "scheduled_automations": "NGD029",
-		"log_retention": "NGD043",
+		"log_retention": "NGD043", "platform_url": "NGD047",
 	}
 	got := map[string]string{}
 	for _, c := range DefaultRegistry().Checks() {
