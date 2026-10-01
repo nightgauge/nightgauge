@@ -243,7 +243,9 @@ for f in "$root"/staging/*.txt; do
   # Every dotted quad on its own line, so 127.0.0.1 on the same line cannot
   # hide another address. No `grep -q`: its early exit would SIGPIPE the first
   # grep, and pipefail would turn a found address into a pass.
-  others="$(grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' "$f" | grep -vxF '127.0.0.1' || true)"
+  # -a and LC_ALL=C: a capture holding a NUL or invalid UTF-8 is otherwise
+  # "binary" to grep, which then prints no address and the guard passes.
+  others="$(LC_ALL=C grep -aoE '([0-9]{1,3}\.){3}[0-9]{1,3}' "$f" | LC_ALL=C grep -avxF '127.0.0.1' || true)"
   if [ -n "$others" ]; then
     echo "capture.sh: $(basename "$f") names an IPv4 address other than 127.0.0.1; no fixture was written" >&2
     exit 1

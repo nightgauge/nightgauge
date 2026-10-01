@@ -29,6 +29,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Six follow-ups from the OpenCode adapter review** (#1708). Every stage
+  of an `opencode` run now starts with no cached model catalog: OpenCode
+  prefers a cached catalog to the one bundled in the binary, the stages of a
+  run share its cache directory, and the reserved endpoint ids are captured
+  from the bundled one. A `cache/opencode` that is a symbolic link is refused.
+  Captured output is redacted of each declared endpoint's `host:port` as well
+  as its `base_url`, so a connection error that names the address without
+  the URL no longer keeps it. `NIGHTGAUGE_DISPATCH_MODEL` carries the same
+  trimmed model as `-m`. The cap-hop gate test runs against a stub `opencode`
+  on a controlled `PATH`, so it fails wherever the gate check is removed. The
+  fixture capture scripts replace `HOME` as a literal string and find an IPv4
+  address in a capture that holds a NUL byte or invalid UTF-8. ADR-022 states
+  the catalog precondition and what of an endpoint's address is redacted.
 - **`stop()` and the stage timeout reach the units of a fan-out stage**
   (#1765). On the `sdk-fanout` path, `PipelineOrchestrator.stop()` and the
   per-stage timeout used to leave each unit's `opencode` query running. The

@@ -1748,7 +1748,8 @@ func TestCaptureOpenCodeFixtureRefusesCredentials(t *testing.T) {
 // base_url names a LAN address, the run record's endpoint is the id alone,
 // never the address, and the address never survives into stderr, the
 // manager's own log, or a JSON error event's metadata.url field — the leak
-// ADR-022 § 22 assigns to this issue's RedactedLiterals hook.
+// ADR-022 § 22 assigns to this issue's RedactedLiterals hook. Nor does it
+// survive as the bare address:port of a connection error (#1708).
 func TestRunRecordEndpointLabelNoHost(t *testing.T) {
 	const address = "10.9.8.7"
 	machineConfig := `opencode:
@@ -1765,7 +1766,9 @@ func TestRunRecordEndpointLabelNoHost(t *testing.T) {
 	out := openCodeStageRunWith(t, openCodeStage{
 		machineConfig: machineConfig,
 		stdout:        errorEvent + "\n",
-		stderr:        "ERROR request to http://" + address + ":1234/v1/chat/completions failed: connect: connection refused\n",
+		stderr: "ERROR request to http://" + address + ":1234/v1/chat/completions failed: connect: connection refused\n" +
+			// #1708: a connection error names the address and port with no URL around them.
+			"Error: connect ECONNREFUSED " + address + ":1234\n",
 	})
 	res := out.result
 	if res.Endpoint != "lmstudio" {

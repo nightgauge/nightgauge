@@ -408,6 +408,11 @@ func ensureOpenCodeStateDirs(state string, elems ...string) (string, error) {
 // finds no $HOME/.opencode to read or install into, because home/.opencode
 // never exists.
 //
+// Every call removes a model catalog cached in cache/opencode/
+// (removeOpenCodeCatalogCache), so each stage loads the catalog bundled in the
+// binary, the one the reserved endpoint ids are captured from (ADR-022
+// § Endpoints, #1708).
+//
 // Every call refreshes the root's modification time, which is what
 // SweepOpenCodeRunRoots ages.
 func EnsureOpenCodeRunRoot(state, home, id string, lookup func(string) (string, bool)) (root string, created bool, err error) {
@@ -435,11 +440,56 @@ func EnsureOpenCodeRunRoot(state, home, id string, lookup func(string) (string, 
 	if err := linkOperatorHome(root, home); err != nil {
 		return "", false, err
 	}
+	if err := removeOpenCodeCatalogCache(root); err != nil {
+		return "", false, err
+	}
 	now := time.Now()
 	if err := os.Chtimes(root, now, now); err != nil {
 		return "", false, fmt.Errorf("opencode run root: %w", err)
 	}
 	return root, created, nil
+}
+
+// openCodeCatalogCacheFiles matches the model catalog OpenCode caches in
+// $XDG_CACHE_HOME/opencode: models.json, or models-<hash>.json when
+// OPENCODE_MODELS_URL names another source. Read from the bundled source of
+// 1.18.30 and 1.18.32.
+var openCodeCatalogCacheFiles = []string{"models.json", "models-*.json"}
+
+// removeOpenCodeCatalogCache deletes every catalog cache file in the run's
+// cache/opencode/. OpenCode loads a cached catalog in preference to the one
+// bundled in the binary, and the stages of a run share the cache directory,
+// so a catalog one stage left behind (written by a tool it ran, or by a
+// version that fetches despite OPENCODE_DISABLE_MODELS_FETCH) would be the
+// next stage's. Only the bundled catalog is the one the reserved endpoint ids
+// are captured from (ADR-022 § Endpoints). A cache/opencode that is a symbolic
+// link or not a directory is refused, so no catalog is read through a link
+// planted in the root; a link in place of a cache file is removed, never
+// followed.
+func removeOpenCodeCatalogCache(root string) error {
+	dir := filepath.Join(root, "cache", "opencode")
+	fi, err := os.Lstat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("opencode run root: %w", err)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("opencode run root: %s exists and is not a directory (a symbolic link is refused)", dir)
+	}
+	for _, pattern := range openCodeCatalogCacheFiles {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			return fmt.Errorf("opencode run root: %w", err)
+		}
+		for _, m := range matches {
+			if err := os.Remove(m); err != nil && !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("opencode run root: removing the cached model catalog: %w", err)
+			}
+		}
+	}
+	return nil
 }
 
 // ensurePrivateDir makes path a directory of mode 0700 and reports whether it

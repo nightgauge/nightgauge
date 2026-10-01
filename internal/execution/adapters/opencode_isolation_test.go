@@ -2,7 +2,9 @@ package adapters
 
 import (
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"os/exec"
@@ -653,6 +655,63 @@ func TestOpenCodeRunStartsWithNoStoredLogin(t *testing.T) {
 // symbolic links inside it (config/git points at the operator's git config)
 // and never deletes what they point at; a root that is itself a link is
 // refused and left alone; a root that is already gone is not an error.
+// TestEnsureOpenCodeRunRootRemovesACachedCatalog pins #1708: OpenCode loads a
+// cached model catalog in preference to the bundled one, and the stages of a
+// run share cache/, so every stage starts with no catalog cache file. A link in
+// place of one is removed without touching its target, and a cache/opencode
+// that is a link is refused.
+func TestEnsureOpenCodeRunRootRemovesACachedCatalog(t *testing.T) {
+	home := t.TempDir()
+	root, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(root, "cache", "opencode")
+	if err := os.MkdirAll(filepath.Join(dir, "bin"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"models.json", "models-3f2a.json"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(`{"lmstudio":{}}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	target := filepath.Join(t.TempDir(), "catalog.json")
+	if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, "models-linked.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "bin", "keep"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(nil)); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"models.json", "models-3f2a.json", "models-linked.json"} {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("%s survived the next stage's run root (err=%v); that stage would load it instead of the bundled catalog", name, err)
+		}
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Errorf("the link's target was touched: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "bin", "keep")); err != nil {
+		t.Errorf("an entry that is not a catalog was removed: %v", err)
+	}
+
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := EnsureOpenCodeRunRoot(testStateHome(home), home, testRunID, envLookup(nil)); err == nil {
+		t.Error("a cache/opencode that is a symbolic link was accepted; a catalog could be read through it")
+	}
+}
+
 func TestRemoveOpenCodeRunRootNeverFollowsALink(t *testing.T) {
 	home := t.TempDir()
 	operatorGit := filepath.Join(home, ".config", "git")

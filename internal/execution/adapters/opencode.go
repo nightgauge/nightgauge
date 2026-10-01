@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -475,8 +477,10 @@ func (a *OpenCodeAdapter) BuildCommand(opts RunOptions) (string, []string, map[s
 	}
 	// The model this stage was dispatched to run on, as dispatched; see the
 	// same export in grok.go for why the stamp needs it before the stage ends.
-	if opts.Model != "" {
-		env["NIGHTGAUGE_DISPATCH_MODEL"] = opts.Model
+	// Trimmed as -m's value is (OpenCodeModelArg), so the two never differ by
+	// surrounding whitespace (#1708).
+	if model := strings.TrimSpace(opts.Model); model != "" {
+		env["NIGHTGAUGE_DISPATCH_MODEL"] = model
 	}
 	if opts.ContextFile != "" {
 		env["NIGHTGAUGE_CONTEXT_FILE"] = opts.ContextFile
@@ -774,7 +778,9 @@ func (a *OpenCodeAdapter) RedactedEnv(opts RunOptions) []string {
 // It returns the base_url of every endpoint this run declared
 // (opts.RunRoot.Endpoints), resolved back against the machine-tier
 // opencode: block, so a run that never touched a declared endpoint (a hosted
-// dispatch, or one with no RunRoot) returns none.
+// dispatch, or one with no RunRoot) returns none. Each base_url's authority
+// is returned with it (openCodeEndpointAuthority, #1708), because a connection
+// error names the address and port without the URL around them.
 func (a *OpenCodeAdapter) RedactedLiterals(opts RunOptions) []string {
 	if opts.RunRoot == nil || len(opts.RunRoot.Endpoints) == 0 {
 		return nil
@@ -791,9 +797,32 @@ func (a *OpenCodeAdapter) RedactedLiterals(opts RunOptions) []string {
 	for _, id := range opts.RunRoot.Endpoints {
 		if ep, ok := findOpenCodeEndpoint(endpoints, id); ok && ep.BaseURL != "" {
 			values = append(values, ep.BaseURL)
+			if authority := openCodeEndpointAuthority(ep.BaseURL); authority != "" {
+				values = append(values, authority)
+			}
 		}
 	}
 	return values
+}
+
+// openCodeEndpointAuthority is the part of an endpoint's base_url that names
+// the machine: host:port when the URL carries a port, the address alone when
+// the host is an IP literal, and "" otherwise. A bare host name is not
+// returned, because redacting a word such as "localhost" from all of a
+// stage's output would rewrite text that never named the endpoint (ADR-022
+// § Endpoints says what is and is not redacted).
+func openCodeEndpointAuthority(baseURL string) string {
+	u, err := url.Parse(baseURL)
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Port() != "" {
+		return u.Host
+	}
+	if net.ParseIP(u.Hostname()) != nil {
+		return u.Hostname()
+	}
+	return ""
 }
 
 // StreamIdleBound is the manager's idle-stream watchdog bound for a stage

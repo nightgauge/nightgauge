@@ -102,7 +102,7 @@ capture script and the full observation table are in
 | Read from the bundled source: OpenCode exports `OPENCODE_AUTH_CONTENT`, holding every login it has stored, to the processes it starts for a workspace                          | § 17                       |
 | A config provider block whose key is in OpenCode's bundled catalog inherits that provider's API-key variables, and sends the key to the block's `baseURL`                      | § Endpoints                |
 | With `env: []` or an explicit `apiKey`, the same block sends no key; a key outside the catalog binds no variable                                                               | § Endpoints                |
-| The catalog a run loads is the one bundled in the binary; no run fetched one                                                                                                   | § Endpoints                |
+| With no catalog cache file in the cache directory, the catalog a run loads is the one bundled in the binary; no run fetched one                                                | § Endpoints                |
 | A `--format json` `error` event for a failed model request carries the request's full URL                                                                                      | § Endpoints                |
 | `--print-logs` adds stderr but still writes `log/opencode.log` in the data directory, and an error goes to both                                                                | The command, § 22          |
 | The four XDG base variables move config, data, cache and state; `home` does not move, and `tmp` stays at `$TMPDIR/opencode`                                                    | § 8                        |
@@ -1761,8 +1761,9 @@ removal.
   tokens, bearer and authorization credentials, a URL's user and password, and
   a credential query parameter, also where a JSON escape or a terminal colour
   code comes right before one. Each string of a JSON event is redacted decoded
-  as well as escaped. A secret of no recognizable shape stays, and an
-  endpoint's `base_url` is #1678's.
+  as well as escaped. A secret of no recognizable shape stays. An endpoint's
+  `base_url` is #1678's and its authority #1708's (§ Endpoints, which states
+  what of an endpoint's address is not redacted).
 
 ### 23. Promotion criteria
 
@@ -1831,11 +1832,20 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
   #1678 refuses a reserved id at config load, naming the catalog key it
   collides with. The reserved set is captured from the max-tested binary into
   `testdata/opencode-cli/`, and § 20 re-captures it whenever max-tested rises.
-  A run on the max-tested version sees exactly that catalog: 1.18.30 loads the
-  catalog from its cache file and otherwise from the snapshot bundled in the
-  binary (read from its bundled source), the per-run cache starts empty, and
-  `OPENCODE_MODELS_PATH` goes with every inherited `OPENCODE_*` variable (§ 8).
-  No observed run wrote a catalog to its cache. A newer binary can bundle a key
+  A run on the max-tested version sees exactly that catalog, on one
+  precondition: no catalog cache file is present in the run's cache directory.
+  1.18.30 loads the catalog from its cache file, `opencode/models.json` under
+  `XDG_CACHE_HOME` (`models-<hash>.json` when `OPENCODE_MODELS_URL` names
+  another source), and otherwise from the snapshot bundled in the binary (read
+  from its bundled source). `OPENCODE_MODELS_PATH` and `OPENCODE_MODELS_URL` go
+  with every inherited `OPENCODE_*` variable (§ 8). No observed run wrote a
+  catalog to its cache, but the stages of a run share the cache directory, so
+  a catalog one stage left (written by a tool it ran, or by a version that
+  fetches regardless) would be the next stage's. The per-run isolation
+  guarantees the precondition instead of observing it: the run root starts
+  with an empty cache, and every stage's `EnsureOpenCodeRunRoot` removes any
+  catalog cache file before the spawn and refuses a `cache/opencode` that is a
+  symbolic link (#1708). A newer binary can bundle a key
   equal to an endpoint id, or give `lmstudio` a custom loader, and only a
   re-capture shows it. Endpoint dispatch is nevertheless not gated on the
   version (§ 20, 2026-09-25 amendment): the complete blocks below cut the
@@ -1853,15 +1863,25 @@ Studio beside Ollama. Each is a named **endpoint** in `opencode.endpoints[]`
 - **The `endpoint` wire label** is the endpoint id and nothing else. It is the
   nullable `endpoint` field of § 2, and it is how every log line, trace event,
   doctor finding and error names an endpoint ("endpoint `lmstudio-remote` is
-  not answering"). The `base_url`, host, address and port never appear in any
-  record, log, trace, telemetry field, fixture, test or committed file; they
-  live only in the machine-tier config. An id cannot carry an address, because
-  a dot is not a legal id character. OpenCode itself does not keep to this.
-  Observed: when a model request fails, the `--format json` `error` event
-  carries the request's full URL in `metadata.url`, while stderr and the log
-  file did not name it. The parser (#1624) never copies a URL from an OpenCode
-  event, and captured output is redacted of every endpoint's `base_url` before
-  it is persisted (#1678, through the output redaction of § 22).
+  not answering"). Nightgauge never writes an endpoint's `base_url`, host,
+  address or port into a record, log, trace, telemetry field, fixture, test or
+  committed file; they live only in the machine-tier config. An id cannot carry
+  an address, because a dot is not a legal id character. OpenCode itself does
+  not keep to this. Observed: when a model request fails, the `--format json`
+  `error` event carries the request's full URL in `metadata.url`, while stderr
+  and the log file did not name it. The parser (#1624) never copies a URL from
+  an OpenCode event. What the child process writes is redacted, before it is
+  persisted, of exactly these literals of every endpoint the run declared: the
+  `base_url` (#1678), and its authority, `host:port` when the URL carries a
+  port and the address alone when the host is an IP literal (#1708), so a
+  connection error that names the address and port without the URL is
+  redacted too. Both go through the output redaction of § 22. A bare host name
+  is not redacted, because removing a word such as `localhost` from all of a
+  stage's output would rewrite text that never named the endpoint; so a host
+  name that a stage's own output prints without its port, or an address
+  spelled differently from the `base_url` (a resolved name, another IPv6
+  form), can reach the captured output. The rule for what the child writes is
+  that narrower one.
 - **Endpoints on the local network.** An endpoint is loopback by default. A
   `base_url` whose host resolves to anything other than loopback is refused
   unless the entry sets `allow_lan: true`. Even then the address must be a
