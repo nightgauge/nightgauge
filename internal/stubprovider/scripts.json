@@ -391,5 +391,10 @@
       { "tool_call": { "name": "read", "arguments": { "filePath": "calc.py" } } },
       { "content": "Read calc.py 150 times." }
     ]
+  },
+  "tools-forever": {
+    "models": ["stub/stub-model"],
+    "kind": "turns",
+    "turns": [{ "tool_call": { "name": "read", "arguments": { "filePath": "calc.py" } } }]
   }
 }

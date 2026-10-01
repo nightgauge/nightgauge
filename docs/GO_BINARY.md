@@ -7645,7 +7645,8 @@ spawned with, is left out, and a dispatch whose `ANTHROPIC_API_KEY` holds one
 is refused. Without `--run-id` a
 new root is minted, and a root no stage uses for 7 days is swept.
 `--max-turns` becomes the steps cap of the build agent and each subagent, 200
-when it is 0. The model defaults to
+when it is 0. The cap is advisory on OpenCode 1.18.30 (ADR-022 § 7): the
+caller enforces the turn budget on the stream. The model defaults to
 `opencode.model` from the machine-tier config; see
 [SETTINGS_ARCHITECTURE.md](SETTINGS_ARCHITECTURE.md#the-opencode-block). The
 adapter's warning and notices go to stderr.

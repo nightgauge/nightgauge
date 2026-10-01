@@ -646,12 +646,40 @@ opencode:
 ```
 
 A stage's turn cap becomes the steps cap of the build agent and each
-subagent, and a stage with none gets 200 steps, room for a long stage on a
-local model that still ends a session caught in a loop. Since #1652 every
-stage has one, its `max_turns` stage budget (ADR-023 Q8), whose zero-cost
-default is the same 200. A hosted stage whose `max_turns` is set to -1
-passes none, so it gets these 200 steps. The steps cap is not a hard stop (#1811), so the manager also counts
-`step_finish` events and stops the stage itself. A dispatch to an
+subagent, and a stage with none gets 200 steps. Since #1652 every stage has
+one, its `max_turns` stage budget (ADR-023 Q8), whose zero-cost default is
+the same 200. A hosted stage whose `max_turns` is set to -1 passes none, so
+it gets these 200 steps.
+
+**The steps cap does not end a session (#1811).** On 1.18.30 the session
+loop computes `L=_>=oe` with `oe=Y.steps??1/0` and, when `L` holds, sends
+`messages:[...an,...L?[{role:"assistant",content:<max-steps prompt>}]:[]]`
+with `tools:le` unchanged. From the step that reaches the cap, every request
+carries an assistant message that opens "CRITICAL - MAXIMUM STEPS REACHED"
+and says tools are disabled, and every request still offers every tool. The
+loop does not break on the cap. A model that heeds the nudge replies in text
+and the session ends; a model that does not keeps calling tools. Measured
+by `TestOpenCodeIntegrationStepsCapIsNotAHardStop` against the pinned binary
+and the #1618 stub provider's `tools-forever` script, with `steps: 4`:
+without the manager's stop, the session made 206 tool-offering requests,
+every one from the fourth on carrying the nudge, and ended only when the
+stub stopped answering. The cap is therefore advisory, and it stays because
+it is the one signal a cooperative model gets.
+
+**The enforcement is the turn budget.** The manager counts the stream's
+`step_finish` events (`stageBudgetEnforcer`, `internal/execution/stage_budget.go`)
+and stops the stage when its last allowed step asks for another: SIGTERM to
+the process group, SIGKILL after the grace period, a check once the stage is
+reaped that no member is left, and the stamp `stage_budget_exceeded:turns`,
+which classifies as `budget_exceeded`. The extension's dispatch counts the
+same events (`packages/nightgauge-vscode/src/utils/stageBudget.ts`, #1668).
+The wall-clock and token budgets bound the stage the same way. In the test
+above, with a turn budget of 12, the stage made 12 requests and was stopped
+in about 6 s. A subagent's steps never reach the stream (§ 3), so the turn
+budget does not count them; while a subagent runs, the stage's wall-clock
+budget is what bounds it.
+
+A dispatch to an
 endpoint model whose `limit.context` or `limit.output` neither the machine-tier
 `limit` nor discovery from the server (§ 13) gives is refused before spawn, as
 is a local provider key no endpoint declares, and any other
@@ -2322,9 +2350,10 @@ this plugin is unverified**, now for a documented reason (AC9's denial)
 rather than an unimplemented `child` field.
 
 **#1625's steps cap is not opencode's own hard stop.** AC2 read "a run forced
-into compaction ends without it and within #1625's steps cap", and ADR-022
-(the section above) assumed "#1625's steps cap remains the hard stop
-underneath this either way." On 1.18.30, a step at or past `agent.*.steps`
+into compaction ends without it and within #1625's steps cap", and #1641's
+issue body (not this ADR) assumed "#1625's steps cap remains the hard stop
+underneath this either way." #1811 measured the cap's semantics and named
+the enforcement; § 7 now records both. On 1.18.30, a step at or past `agent.*.steps`
 only appends an assistant nudge message (`let oe=Y.steps??1/0,L=_>=oe;
 ...messages:[...an,...L?[{role:"assistant",content:lh}]:[]],tools:le` in the
 binary's own minified loop) and still passes every tool — the loop does not
