@@ -29,6 +29,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The docs link check re-probes an HTTP 408 instead of failing on it**
+  (#2317). A shields.io badge in `README.md` answered 408 Request Timeout and
+  failed the required `link-check` job on a pull request that did not touch
+  the file. A 408 now takes the same curl re-probe as a 5xx (#1404); every
+  other 4xx, and so every missing relative link, stays fatal on the first
+  answer.
 - **The OpenCode tamper gate compares against the worktree's creation commit**
   (#1825). The project-config tamper gate used to diff `opencode.json` and
   `.opencode/` against the merge-base with the live `origin/<default>` ref.

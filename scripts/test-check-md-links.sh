@@ -163,6 +163,8 @@ printf '# case 4\n\n[a closed port](http://127.0.0.1:%s/docs)\n' "$CLOSED_PORT" 
   > "$FIX/closed-port.md"
 printf '# case 5\n\n[a host having a bad day](http://127.0.0.1:%s/status/500)\n' "$PORT" \
   > "$FIX/server-error.md"
+printf '# case 6\n\n[a host timing out the request](http://127.0.0.1:%s/status/408)\n' "$PORT" \
+  > "$FIX/request-timeout.md"
 printf '# case 7\n\n[a genuinely missing page](http://127.0.0.1:%s/status/404)\n' "$PORT" \
   > "$FIX/not-found.md"
 
@@ -230,6 +232,14 @@ run_gate server-error.md
 RC=$?
 check "a 5xx does not fail the gate" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
 check "a 5xx is classed alive-after-reprobe, not dead" \
+  "$(grep -qE 'Link classes: 0 dead, 0 unreachable-from-runner, [1-9]' "$TMP/out" && echo 0 || echo 1)"
+
+# Case 6 (#2317): 408 Request Timeout is the same "come back later" class. A
+# shields.io badge answered it and failed the required job on PR #2316.
+run_gate request-timeout.md
+RC=$?
+check "a 408 does not fail the gate" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
+check "a 408 is classed alive-after-reprobe, not dead" \
   "$(grep -qE 'Link classes: 0 dead, 0 unreachable-from-runner, [1-9]' "$TMP/out" && echo 0 || echo 1)"
 
 run_gate not-found.md

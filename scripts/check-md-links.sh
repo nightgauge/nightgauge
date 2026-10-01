@@ -197,7 +197,11 @@ while IFS= read -r f; do
   # three-class vocabulary is unchanged. Everything else — every 4xx, and
   # therefore every missing relative link — stays fatal on the first answer.
   #
-  # ONLY 5xx, and that is not an oversight. The other "come back later" statuses
+  # And 408 (#2317). Request Timeout is the server saying "come back later",
+  # not the document being missing: shields.io answered it for a README badge
+  # and failed the required job on a PR that did not touch README.md.
+  #
+  # ONLY 5xx and 408, and that is not an oversight. The other "come back later" statuses
   # are already handled one layer up: `.markdown-link-check.json` lists
   # 401/403/429 in `aliveStatusCodes`, so they are never reported as failures
   # and can never reach this branch. An arm for them here would be unreachable
@@ -209,7 +213,7 @@ while IFS= read -r f; do
       url="${line% *}"
       code="${line##* }"
       case "$code" in
-        5??)
+        5?? | 408)
           record_reprobe "$f" "$url"
           ;;
         *)
