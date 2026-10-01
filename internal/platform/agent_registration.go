@@ -48,10 +48,24 @@ type AgentRegistration struct {
 // RegisterAgentSchema (zod) requires `machine_id`; `agent_version` is optional
 // (omitted when the build version is unknown) and `capabilities` is always sent.
 type agentRegisterBody struct {
-	MachineID    string   `json:"machine_id"`
-	AgentVersion string   `json:"agent_version,omitempty"`
-	Capabilities []string `json:"capabilities"`
+	MachineID        string            `json:"machine_id"`
+	AgentVersion     string            `json:"agent_version,omitempty"`
+	Capabilities     []string          `json:"capabilities"`
+	ExecutionProfile *ExecutionProfile `json:"execution_profile,omitempty"`
 }
+
+// agentHeartbeatBody is the PUT /v1/agents/:agentId/heartbeat body. It is only
+// sent when a profile resolved; otherwise the beat stays the bodiless PUT the
+// platform has always accepted.
+type agentHeartbeatBody struct {
+	ExecutionProfile *ExecutionProfile `json:"execution_profile,omitempty"`
+}
+
+// ProfileFunc resolves the execution profile to advertise and whether the
+// workspace can host a conversational turn (#1567). It is called on every
+// registration and every heartbeat, so a changed adapter, mode or effort
+// reaches the platform within one beat. An error advertises no profile.
+type ProfileFunc func() (profile ExecutionProfile, conversation bool, err error)
 
 // AgentRegistrationService registers this daemon as a platform agent and keeps
 // it alive with heartbeats. It holds no id itself — the caller (the serve
@@ -59,6 +73,7 @@ type agentRegisterBody struct {
 type AgentRegistrationService struct {
 	client       *Client
 	agentVersion string
+	profile      ProfileFunc
 }
 
 // NewAgentRegistrationService builds a registration service bound to the platform
@@ -66,6 +81,27 @@ type AgentRegistrationService struct {
 // to omit it — e.g. an unknown/dev build).
 func NewAgentRegistrationService(client *Client, agentVersion string) *AgentRegistrationService {
 	return &AgentRegistrationService{client: client, agentVersion: agentVersion}
+}
+
+// WithExecutionProfile sets the profile source advertised on registration and
+// heartbeat. Without one, both bodies are exactly what they were before #1567.
+func (s *AgentRegistrationService) WithExecutionProfile(fn ProfileFunc) *AgentRegistrationService {
+	s.profile = fn
+	return s
+}
+
+// resolveProfile runs the profile source and re-validates what it returned:
+// the bound on what leaves the machine is enforced here, at the wire, not
+// trusted to the source.
+func (s *AgentRegistrationService) resolveProfile() (*ExecutionProfile, bool) {
+	if s.profile == nil {
+		return nil, false
+	}
+	p, conversation, err := s.profile()
+	if err != nil || p.Validate() != nil {
+		return nil, false
+	}
+	return &p, conversation
 }
 
 // RegisterAgent POSTs the daemon's machine id + capabilities to
@@ -84,6 +120,12 @@ func (s *AgentRegistrationService) RegisterAgent(ctx context.Context) (AgentRegi
 		MachineID:    machineID,
 		AgentVersion: s.agentVersion,
 		Capabilities: []string{AgentRegisterCapabilityResolve},
+	}
+	if p, conversation := s.resolveProfile(); p != nil {
+		body.ExecutionProfile = p
+		if conversation {
+			body.Capabilities = append(body.Capabilities, AgentCapabilityConversation)
+		}
 	}
 	data, err := json.Marshal(body)
 	if err != nil {
@@ -133,11 +175,20 @@ func (s *AgentRegistrationService) Heartbeat(ctx context.Context, agentID string
 	if agentID == "" {
 		return fmt.Errorf("agent heartbeat: agentId not set")
 	}
-	req, err := s.client.newRequest(ctx, requestSpec{
+	spec := requestSpec{
 		Op:       api.OpAgentsHeartbeat,
 		PathArgs: []string{agentID},
 		Headers:  map[string]string{"Accept": "application/json"},
-	})
+	}
+	if p, _ := s.resolveProfile(); p != nil {
+		data, err := json.Marshal(agentHeartbeatBody{ExecutionProfile: p})
+		if err != nil {
+			return fmt.Errorf("agent heartbeat: marshal: %w", err)
+		}
+		spec.Body = data
+		spec.Headers["Content-Type"] = "application/json"
+	}
+	req, err := s.client.newRequest(ctx, spec)
 	if err != nil {
 		return fmt.Errorf("agent heartbeat: request: %w", err)
 	}

@@ -117,6 +117,7 @@ import { TelemetryConsentService } from "../services/TelemetryConsentService";
 import { TelemetryUploaderService } from "../services/TelemetryUploaderService";
 import { AgentHeartbeatService } from "../services/AgentHeartbeatService";
 import { buildUsageReport, getUsageReportingLevel } from "../services/usage/usageReporting";
+import { resolveExecutionProfile } from "../services/executionProfile";
 import { AgentCommandStreamService } from "../services/AgentCommandStreamService";
 import type { CommandHandler } from "../services/AgentCommandStreamService";
 import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
@@ -4201,7 +4202,11 @@ export async function initializeServices(
           return null;
         }
         return buildUsageReport(await adapterUsageService.getSnapshot(), level);
-      }
+      },
+      // Execution profile (#1567): resolved by Go on every beat, so editing
+      // ui.core.adapter, performance-mode.yaml or model_routing.default_effort
+      // reaches the platform within one heartbeat, with no watcher or restart.
+      async () => (await resolveExecutionProfile(ipcClient))?.profile ?? null
     );
     context.subscriptions.push(agentHeartbeatService);
   }

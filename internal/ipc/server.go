@@ -22,6 +22,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/doctor"
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/executionprofile"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
@@ -5748,6 +5749,26 @@ func (s *Server) registerMethods() {
 
 	//ipc:method agentAcknowledgeCommand params:AgentAcknowledgeCommandParams result:AgentAcknowledgeCommandResult
 	s.methods["agent.acknowledgeCommand"] = s.handleAgentAcknowledgeCommand
+
+	// The execution profile the extension advertises on agent registration and
+	// every heartbeat (#1567). Resolved fresh on each call through the Go
+	// resolvers the pipeline dispatches with, so the extension holds no second
+	// implementation of any of the three precedence chains.
+	//ipc:method agentExecutionProfile params:none result:AgentExecutionProfileResult
+	s.methods["agent.executionProfile"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
+		root := s.workspaceRootPath()
+		if root == "" {
+			return nil, fmt.Errorf("no workspace root configured")
+		}
+		p, err := executionprofile.Resolve(root)
+		if err != nil {
+			return nil, err
+		}
+		return &AgentExecutionProfileResult{
+			Profile:      p,
+			Conversation: executionprofile.ConversationViable(p.Adapter),
+		}, nil
+	}
 
 	// --- Workspace repository management (#705) ---
 

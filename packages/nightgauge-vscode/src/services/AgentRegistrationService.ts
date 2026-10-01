@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import type { ITokenStorage } from "../platform/TokenStorage";
 import type { Logger } from "../utils/logger";
 import type { IOnDemandTokenRefresher } from "../platform/TokenRefreshManager";
+import type { ExecutionProfile } from "./executionProfile";
 
 export interface WorkspaceRegisterMetadata {
   slug: string;
@@ -15,6 +16,8 @@ export interface AgentRegistrationPayload {
   machine_id: string;
   vscode_version: string;
   workspace?: WorkspaceRegisterMetadata;
+  /** What this workspace would run a turn with (#1567); omitted when unresolved. */
+  execution_profile?: ExecutionProfile;
 }
 
 export class AgentRegistrationService implements vscode.Disposable {

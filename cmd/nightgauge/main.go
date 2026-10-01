@@ -35,6 +35,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/doctor"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/execution/opencodeplugin"
+	"github.com/nightgauge/nightgauge/internal/executionprofile"
 	"github.com/nightgauge/nightgauge/internal/focus"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/internal/forge/boardcache"
@@ -5561,7 +5562,11 @@ func serveCmd() *cobra.Command {
 					// the platform-assigned agent id onto the sync + command poller +
 					// heartbeat. Runs in a goroutine so an offline start self-heals
 					// without blocking IPC startup.
-					reg := platform.NewAgentRegistrationService(platformClient, version)
+					reg := platform.NewAgentRegistrationService(platformClient, version).
+						WithExecutionProfile(func() (platform.ExecutionProfile, bool, error) {
+							p, err := executionprofile.Resolve(workspaceRoot)
+							return p, err == nil && executionprofile.ConversationViable(p.Adapter), err
+						})
 					go runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, server)
 				}
 			}

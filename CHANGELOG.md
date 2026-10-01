@@ -28,6 +28,23 @@ changelog, and the release workflow refuses a tag that does not.
   blocked and why, then Ready work no program selects. Neither verb calls an
   LLM. Both take `--json`; the shapes are in
   [GO_BINARY.md § Handoff and Work-Order Operations](docs/GO_BINARY.md#handoff-and-work-order-operations).
+
+- **Agent registration and heartbeat advertise the workspace's execution
+  profile** (#1567). Both the extension's and the daemon's registration body,
+  and every heartbeat, now carry `execution_profile`: the resolved adapter and
+  its display name, the performance mode, and the default effort, each with
+  the layer that produced it (`flag`, `env`, `config`, `file`, `mode` or
+  `default`). The Go resolvers the pipeline dispatches with produce the
+  values, and the extension asks for them over a new `agent.executionProfile`
+  IPC method on every beat. Editing `ui.core.adapter`,
+  `performance-mode.yaml` or `model_routing.default_effort` therefore reaches
+  the platform within one heartbeat, with no restart. Each field is a short
+  token that is validated before it is sent, so no path or credential can
+  ride along. The `conversation` capability is wired, but no workspace
+  advertises it yet. An adapter qualifies only once spike #1568 records that
+  it passes the viability bar. The platform drops the field until it stores
+  it.
+
 - **`nightgauge doctor resolve machine-id --keep state|legacy` settles a
   machine-id conflict** (#2308). When `~/.nightgauge/machine-id` and the one in
   the machine-state directory differ, the NGD045 finding now shows both ids,

@@ -9,6 +9,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/diagnostics"
 	"github.com/nightgauge/nightgauge/internal/doctor"
+	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 )
 
@@ -193,6 +194,15 @@ type ConfigGetHealthThresholdsResult struct {
 	PoliciesEnabled     bool    `json:"policiesEnabled"`
 	ActionsEnabled      bool    `json:"actionsEnabled"`
 	FeedbackLoopEnabled bool    `json:"feedbackLoopEnabled"`
+}
+
+// AgentExecutionProfileResult is the result for agent.executionProfile (#1567).
+type AgentExecutionProfileResult struct {
+	Profile platform.ExecutionProfile `json:"profile"`
+	// Conversation reports whether the workspace may advertise the
+	// `conversation` capability: its adapter passed the conversation spike's
+	// viability bar (#1568). False for every adapter until that spike runs.
+	Conversation bool `json:"conversation"`
 }
 
 // ConfigTierAuditParams optionally scopes the audit to a workspace root.
