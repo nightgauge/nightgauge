@@ -27,6 +27,11 @@ import { redactSecrets } from "../utils/redaction";
 import type { SanitizationMode } from "../config/schema";
 import { logDiagnosticMirror } from "../utils/logger";
 import { getGlobalConfigPath } from "../utils/globalConfigResolver";
+import {
+  readPlatformUrlOverride,
+  PLATFORM_URL_ENV_VAR,
+  PLATFORM_URL_SETTING,
+} from "../platform/platformUrlSetting";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -2689,6 +2694,15 @@ export abstract class IpcClientBase implements vscode.Disposable {
     if (this.resolvedLicenseKey && !env.NIGHTGAUGE_LICENSE_KEY) {
       env.NIGHTGAUGE_LICENSE_KEY = this.resolvedLicenseKey;
       this.log("Platform config: NIGHTGAUGE_LICENSE_KEY set from SecretStorage");
+    }
+
+    // The `nightgauge.platform.url` setting sits between the process
+    // environment and the config files (#1474), so the daemon resolves the
+    // same endpoint the extension shows.
+    const urlOverride = readPlatformUrlOverride(env);
+    if (urlOverride?.source === PLATFORM_URL_SETTING) {
+      env[PLATFORM_URL_ENV_VAR] = urlOverride.url;
+      this.log(`Platform config: ${PLATFORM_URL_ENV_VAR} set from ${PLATFORM_URL_SETTING}`);
     }
 
     // Collect candidate config paths: workspace first, global second

@@ -1326,6 +1326,13 @@
           "description": "Enable cloud features (hosted dashboard, team management, remote pipeline control, accounts, billing). Off by default while cloud is in development — the entire local pipeline runs free without it. Turning this on reveals the account, subscription, and team command surface.",
           "order": 1
         },
+        "nightgauge.platform.url": {
+          "type": "string",
+          "scope": "machine",
+          "default": "",
+          "markdownDescription": "Base URL of the Nightgauge platform API. Empty uses `platform.environment` / `platform.api_url` from the config files, else the production API (`https://api.nightgauge.dev`). The `NIGHTGAUGE_PLATFORM_URL` environment variable takes precedence over this setting. Must be HTTPS unless the host is `localhost` or `127.0.0.1`. A non-default URL is marked in the platform status bar item; the Go backend picks it up when it next starts.",
+          "order": 6
+        },
         "nightgauge.dashboardUrl": {
           "type": "string",
           "scope": "machine",

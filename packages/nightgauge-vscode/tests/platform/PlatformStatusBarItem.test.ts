@@ -251,6 +251,30 @@ describe("PlatformStatusBarItem", () => {
       expect(details).toContain("https://api.nightgauge.dev");
       sbi.dispose();
     });
+
+    it("shows the URL calls go to when an environment preset overrides api_url", () => {
+      const { client } = createMockClient("connected");
+      const sbi = new PlatformStatusBarItem(client, {
+        enabled: true,
+        environment: "local",
+        api_url: "https://api.nightgauge.dev",
+      } as never);
+      const details = sbi.getConnectionDetails();
+      expect(details).not.toContain("URL: https://api.nightgauge.dev");
+      expect(details).toMatch(/URL: http:\/\/(localhost|127\.0\.0\.1)/);
+      sbi.dispose();
+    });
+
+    it("says the URL was refused instead of naming a host calls never reach", () => {
+      const { client } = createMockClient("connected");
+      const sbi = new PlatformStatusBarItem(client, {
+        enabled: true,
+        environment: "custom",
+        api_url: "http://platform.example.test",
+      } as never);
+      expect(sbi.getConnectionDetails()).toContain("URL: refused (");
+      sbi.dispose();
+    });
   });
 
   describe("visual styling", () => {

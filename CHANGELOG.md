@@ -26,9 +26,45 @@ changelog, and the release workflow refuses a tag that does not.
   file so `nightgauge doctor --fix` moves the rest of the machine state. There
   is no default and no id is generated: a new id is a new device to the
   platform. See [DOCTOR.md § NGD045](docs/DOCTOR.md#ngd045).
+- **A `nightgauge.platform.url` setting, a non-default indicator, and the
+  platform URL in `nightgauge doctor`** (#1474). The platform endpoint no
+  longer needs an exported variable or a hand-edited `platform.api_url`. The
+  machine-scoped setting sits below `NIGHTGAUGE_PLATFORM_URL` and above the
+  config files, in the extension and in the daemon it starts. The platform
+  environment status bar item now derives the environment from the URL calls
+  actually go to, so a bare non-production `platform.api_url` no longer shows
+  as production. Its tooltip names the URL, marks it non-default, and names
+  what set it. A new `platform_url` doctor check prints the URL the daemon
+  would use and its source, and warns (NGD047) when that URL is not absolute
+  or is plain HTTP to a host other than localhost. See
+  [CONFIGURATION.md § Pointing at another platform deployment](docs/CONFIGURATION.md#pointing-at-another-platform-deployment).
 
 ### Fixed
 
+- **Six follow-ups from the OpenCode adapter review** (#1708). Every stage
+  of an `opencode` run now starts with no cached model catalog: OpenCode
+  prefers a cached catalog to the one bundled in the binary, the stages of a
+  run share its cache directory, and the reserved endpoint ids are captured
+  from the bundled one. A `cache/opencode` that is a symbolic link is refused.
+  Captured output is redacted of each declared endpoint's `host:port` as well
+  as its `base_url`, so a connection error that names the address without
+  the URL no longer keeps it. `NIGHTGAUGE_DISPATCH_MODEL` carries the same
+  trimmed model as `-m`. The cap-hop gate test runs against a stub `opencode`
+  on a controlled `PATH`, so it fails wherever the gate check is removed. The
+  fixture capture scripts replace `HOME` as a literal string and find an IPv4
+  address in a capture that holds a NUL byte or invalid UTF-8. ADR-022 states
+  the catalog precondition and what of an endpoint's address is redacted.
+- **The graceful-stop test no longer fails or stalls under load** (#2323).
+  `TestRunStage_GracefulStopExitZeroIsReportedCancelled`'s fake CLI was a
+  shell that trapped SIGTERM while waiting on a background `sleep`. macOS's
+  `/bin/sh` (bash 3.2) segfaulted handling that signal in 4 of 1000 spawns,
+  which the stage reported as exit code -1. In 8 of 1000 the background `sleep`
+  missed the group's SIGTERM between its fork and its exec and held the pipes
+  for 30 s. The fake CLI is now the test binary itself, which installs its
+  handler before it signals ready and starts no child. Under load with tight
+  polling: 1 failure and 43 runs of ~30 s in 200 before, none in 200 after.
+  The two OpenCode stop tests that held their fake stage with the same kind of
+  bash trap now exec the same helper.
 - **`stop()` and the stage timeout reach the units of a fan-out stage**
   (#1765). On the `sdk-fanout` path, `PipelineOrchestrator.stop()` and the
   per-stage timeout used to leave each unit's `opencode` query running. The
@@ -38,6 +74,15 @@ changelog, and the release workflow refuses a tag that does not.
 - **A failed fan-out stage emits one `failed` terminal, not two** (#2318).
   `runStageWorkflow` emitted the stage's failed agent and phase events before
   throwing, and its own `catch` emitted them again.
+- **The OpenCode config-schema contract checks nested keys under `agent.*`,
+  `mode.*` and `provider.*.options`** (#1766). The pinned schema lists the
+  properties of an agent entry and of a provider's options but leaves extra
+  keys open, so a misspelled `stpes` or `baseUrl` there validated, and OpenCode
+  would have ignored it. A new test fails on any key the schema does not
+  declare in such an object. **Correction to the 0.4.2 entry for #1634:** it
+  said the contract test fails on any key the schema does not define. That
+  held only for objects the schema closes, such as the top level, not for
+  these nested ones.
 - **An OpenCode isolation test no longer fails its cleanup under load**
   (#1783). `TestOpenCodeIsolationKeepsTheOperatorsGitAndGh` runs the real `gh`.
   For a sampled call, `gh` starts a background `send-telemetry` process that

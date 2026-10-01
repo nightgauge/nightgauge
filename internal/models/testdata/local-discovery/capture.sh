@@ -85,7 +85,9 @@ show "$ollama_model" >"$staging/ollama-api-show-no-num-ctx.json"
 names="lmstudio-api-v0-models.json lmstudio-api-v1-models.json ollama-api-show-num-ctx.json ollama-api-show-no-num-ctx.json"
 for name in $names; do
   f="$staging/$name"
-  sed -i.bak -e "s#${HOME}#~#g" "$f" && rm -f "$f.bak"
+  # HOME as a literal string (\Q...\E): a `#` or a regex character in it
+  # cannot break or widen the match, and an empty HOME replaces nothing.
+  perl -pi -e 'BEGIN { $h = $ENV{HOME} // "" } s/\Q$h\E/~/g if length $h' "$f"
   if [ -n "$(tail -c 1 "$f")" ]; then
     printf '\n' >>"$f"
   fi
@@ -94,7 +96,9 @@ for name in $names; do
   # Every dotted quad on its own line, so 127.0.0.1 on the same line cannot
   # hide another address. No `grep -q`: its early exit would SIGPIPE the first
   # grep, and pipefail would turn a found address into a pass.
-  others="$(grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' "$f" | grep -vxF '127.0.0.1' || true)"
+  # -a and LC_ALL=C: a capture holding a NUL or invalid UTF-8 is otherwise
+  # "binary" to grep, which then prints no address and the guard passes.
+  others="$(LC_ALL=C grep -aoE '([0-9]{1,3}\.){3}[0-9]{1,3}' "$f" | LC_ALL=C grep -avxF '127.0.0.1' || true)"
   if [ -n "$others" ]; then
     echo "capture.sh: the $name capture names an IPv4 address other than 127.0.0.1; no fixture was written" >&2
     exit 1

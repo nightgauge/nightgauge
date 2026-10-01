@@ -19,6 +19,7 @@ import * as vscode from "vscode";
 import type { SessionManager, SessionState, SessionData } from "./SessionManager";
 import type { TrialStateStore, TrialStatus } from "./TrialState";
 import type { PlatformConfig } from "../config/schema";
+import { describePlatformEndpoint } from "./platformUrlSetting";
 
 /** Operational connection state (formerly from PlatformApiClient). */
 type ConnectionState = "connected" | "disconnected" | "degraded";
@@ -156,7 +157,10 @@ export class PlatformStatusBarItem implements vscode.Disposable {
     );
     this.item.command = "nightgauge.showPlatformStatus";
 
-    this.apiUrl = config?.api_url ?? "https://api.nightgauge.dev";
+    // The URL calls actually go to, not the raw api_url: an
+    // `environment` preset or the nightgauge.platform.url override wins.
+    const endpoint = describePlatformEndpoint(config);
+    this.apiUrl = endpoint.baseUrl ?? `refused (${endpoint.error ?? "invalid platform URL"})`;
 
     const platformEnabled = config?.enabled ?? false;
 

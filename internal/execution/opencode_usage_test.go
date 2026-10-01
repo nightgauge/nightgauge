@@ -476,13 +476,15 @@ type openCodeStage struct {
 }
 
 // holdUntilStopped holds a stage until the stop's SIGTERM, which the stop
-// sends to the stage's process group. dash, the /bin/sh of CI's runners, runs
-// a trap only between commands, so a SIGTERM that landed after `touch` and
-// before the next command forked its child was handled after the fork, and
-// that child never saw the group's signal: it held the stage's stdout open for
-// 30 s, past the stop's 5 s grace (#1627). So the child is started before
-// ready is touched, and the trap SIGKILLs it.
-const holdUntilStopped = "trap 'kill -KILL $! 2>/dev/null; exit 0' TERM\nsleep 30 &\ntouch \"$READY\"\nwait"
+// sends to the stage's process group. The shell execs this test binary as
+// sigtermTrapAdapter's helper (runSigtermTrapHelperIfAsked), which installs
+// its handler before it touches ready and starts no child. A shell that
+// trapped TERM while it waited on a background child failed two ways: dash
+// ran the trap only after the next fork, so that child missed the group's
+// signal and held stdout past the grace (#1627); and macOS's bash 3.2
+// segfaulted handling the trapped signal during `wait`, which the stage
+// reported as exit -1 (#2323).
+const holdUntilStopped = `exec env ` + sigtermTrapHelperEnv + `="$READY" "$NG_TEST_BIN"`
 
 // openCodeStageOutcome is what one stage left behind.
 type openCodeStageOutcome struct {
@@ -542,7 +544,11 @@ func openCodeStageRunWith(t *testing.T, stage openCodeStage) openCodeStageOutcom
 	readyFile, hold := pidFile, ""
 	if stage.hold != "" {
 		readyFile = filepath.Join(dir, "ready")
-		hold = fmt.Sprintf("READY=%q\n%s", readyFile, stage.hold)
+		testBin, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		hold = fmt.Sprintf("READY=%q\nNG_TEST_BIN=%q\n%s", readyFile, testBin, stage.hold)
 	}
 	script := fmt.Sprintf(`#!/bin/sh
 case "$1" in
@@ -1530,17 +1536,23 @@ func TestOpenCodeStopOutlivedByItsOutputIsAStop(t *testing.T) {
 		t.Fatalf("perl holds the stage's output from outside its process group: %v", err)
 	}
 	// The holder leaves the stage's process group, so neither the stop's
-	// SIGTERM nor its SIGKILL reaches it, and only then touches ready. It
-	// holds the stage's stdout until the test releases it, or for 20 s.
+	// SIGTERM nor its SIGKILL reaches it, and only then touches its own
+	// file. It holds the stage's stdout until the test releases it, or for
+	// 20 s. The stage waits for it, then holds as holdUntilStopped does: the
+	// helper touches ready once it traps the stop.
 	holder := `perl -e 'setpgrp(0, 0); open(my $r, ">", $ARGV[0]) or die; close($r); ` +
-		`for (1 .. 1000) { last if -e "$ARGV[0].release"; select(undef, undef, undef, 0.02) }' "$READY" &`
+		`for (1 .. 1000) { last if -e $ARGV[1]; select(undef, undef, undef, 0.02) }' "$READY.held" "$READY.release" &` +
+		"\nwhile [ ! -e \"$READY.held\" ]; do sleep 0.01; done"
 	graceful := true
 	out := openCodeStageRunWith(t, openCodeStage{
 		stdout: readTestdata(t, "opencode_stream_research_sample.jsonl"),
-		hold:   "trap 'exit 0' TERM\n" + holder + "\nwait",
+		hold:   holder + "\n" + holdUntilStopped,
 		during: func(m *Manager, ready string) {
 			var err error
-			graceful, err = m.CancelWithGrace("nightgauge/nightgauge#1612", 50*time.Millisecond)
+			// The grace only has to outlast the helper's own exit on the
+			// SIGTERM; the holder keeps the output open past any grace, and
+			// a SIGKILL that beat the helper's exit would report -1.
+			graceful, err = m.CancelWithGrace("nightgauge/nightgauge#1612", 5*time.Second)
 			if err != nil {
 				t.Errorf("CancelWithGrace: %v", err)
 			}
@@ -1748,7 +1760,8 @@ func TestCaptureOpenCodeFixtureRefusesCredentials(t *testing.T) {
 // base_url names a LAN address, the run record's endpoint is the id alone,
 // never the address, and the address never survives into stderr, the
 // manager's own log, or a JSON error event's metadata.url field — the leak
-// ADR-022 § 22 assigns to this issue's RedactedLiterals hook.
+// ADR-022 § 22 assigns to this issue's RedactedLiterals hook. Nor does it
+// survive as the bare address:port of a connection error (#1708).
 func TestRunRecordEndpointLabelNoHost(t *testing.T) {
 	const address = "10.9.8.7"
 	machineConfig := `opencode:
@@ -1765,7 +1778,9 @@ func TestRunRecordEndpointLabelNoHost(t *testing.T) {
 	out := openCodeStageRunWith(t, openCodeStage{
 		machineConfig: machineConfig,
 		stdout:        errorEvent + "\n",
-		stderr:        "ERROR request to http://" + address + ":1234/v1/chat/completions failed: connect: connection refused\n",
+		stderr: "ERROR request to http://" + address + ":1234/v1/chat/completions failed: connect: connection refused\n" +
+			// #1708: a connection error names the address and port with no URL around them.
+			"Error: connect ECONNREFUSED " + address + ":1234\n",
 	})
 	res := out.result
 	if res.Endpoint != "lmstudio" {

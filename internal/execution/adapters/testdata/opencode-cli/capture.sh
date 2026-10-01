@@ -11,8 +11,8 @@
 # Redaction, and why each step exists:
 #   - ANSI colour codes are stripped, so a capture from a terminal and one from
 #     a pipe are byte-identical.
-#   - The capturing user's home directory is replaced with `~`, in case a
-#     future help text prints a resolved default path.
+#   - The capturing user's home directory is replaced with `~`, as a literal
+#     string, in case a future help text prints a resolved default path.
 #   - Trailing whitespace is trimmed and a final newline is ensured (the CLI
 #     prints none), matching .editorconfig so editors leave the file alone.
 #   - The capture is refused if it names any IPv4 address other than 127.0.0.1:
@@ -40,8 +40,12 @@ bounded() {
   perl -e 'alarm 30; exec @ARGV' -- "$@" </dev/null
 }
 
+# perl, not sed: it reads the capture as bytes, so a NUL or invalid UTF-8 in it
+# cannot stop it, and \Q...\E matches HOME as a literal string, so a `#` or a
+# regex character in it cannot break or widen the match. An empty HOME
+# replaces nothing.
 redact() {
-  sed -e $'s/\x1b\\[[0-9;]*[A-Za-z]//g' -e "s#${HOME}#~#g" -e 's/[[:space:]]*$//'
+  perl -pe 'BEGIN { $h = $ENV{HOME} // "" } s/\e\[[0-9;]*[A-Za-z]//g; s/\Q$h\E/~/g if length $h; s/[^\S\n]+$//'
 }
 
 bounded opencode --version 2>&1 | redact >"$staging/version.txt"
@@ -55,7 +59,9 @@ for name in version.txt run-help.txt; do
   # Every dotted quad on its own line, so 127.0.0.1 on the same line cannot
   # hide another address. No `grep -q`: its early exit would SIGPIPE the first
   # grep, and pipefail would turn a found address into a pass.
-  others="$(grep -oE '([0-9]{1,3}\.){3}[0-9]{1,3}' "$f" | grep -vxF '127.0.0.1' || true)"
+  # -a and LC_ALL=C: a capture holding a NUL or invalid UTF-8 is otherwise
+  # "binary" to grep, which then prints no address and the guard passes.
+  others="$(LC_ALL=C grep -aoE '([0-9]{1,3}\.){3}[0-9]{1,3}' "$f" | LC_ALL=C grep -avxF '127.0.0.1' || true)"
   if [ -n "$others" ]; then
     echo "capture.sh: the $name capture names an IPv4 address other than 127.0.0.1; no fixture was written" >&2
     exit 1

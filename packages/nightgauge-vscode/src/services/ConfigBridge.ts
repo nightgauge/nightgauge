@@ -59,6 +59,12 @@ import type {
   ConfigValidationError,
 } from "../config/schema";
 import { resolvePlatformHostKey } from "../config/schema";
+import {
+  applyPlatformUrlOverride,
+  readPlatformUrlOverride,
+  PLATFORM_URL_SETTING,
+  type PlatformUrlOverride,
+} from "../platform/platformUrlSetting";
 
 /** Payload emitted when the effective platform host key changes after reload(). */
 export interface PlatformHostChangedEvent {
@@ -94,6 +100,9 @@ export class ConfigBridge implements vscode.Disposable {
 
   /** Cached merge result */
   private cachedResult: ConfigMergeResult | null = null;
+
+  /** NIGHTGAUGE_PLATFORM_URL or `nightgauge.platform.url`, read at reload() (#1474) */
+  private platformUrlOverride: PlatformUrlOverride | undefined;
 
   /** Whether initialization has completed */
   private _initialized = false;
@@ -178,6 +187,17 @@ export class ConfigBridge implements vscode.Disposable {
     );
     this.disposables.push(fileChangeSubscription);
 
+    // The platform URL setting moves the endpoint like a config edit does
+    // (#1474), so it reloads and re-runs the host-change detection.
+    const settingSubscription = vscode.workspace.onDidChangeConfiguration?.((e) => {
+      if (e.affectsConfiguration(PLATFORM_URL_SETTING)) {
+        void this.reload();
+      }
+    });
+    if (settingSubscription) {
+      this.disposables.push(settingSubscription);
+    }
+
     // The old `onRepositoryChanged` subscription was removed along with the
     // workspace-global current-repo pointer. ConfigBridge is now keyed to
     // whichever repo the workspace root points at; cross-repo callers pass
@@ -225,6 +245,7 @@ export class ConfigBridge implements vscode.Disposable {
 
       // Update cache
       this.cachedResult = result;
+      this.platformUrlOverride = readPlatformUrlOverride();
 
       // Fire change event
       this._onConfigChanged.fire(result);
@@ -442,7 +463,15 @@ export class ConfigBridge implements vscode.Disposable {
    * @see Issue #1461 - Platform connection status indicator
    */
   getPlatform(): PlatformConfig | undefined {
-    return this.cachedResult?.config.platform;
+    return applyPlatformUrlOverride(this.cachedResult?.config.platform, this.platformUrlOverride);
+  }
+
+  /**
+   * The environment variable or setting that overrides the config files'
+   * platform endpoint, if any (#1474).
+   */
+  getPlatformUrlOverride(): PlatformUrlOverride | undefined {
+    return this.platformUrlOverride;
   }
 
   // ============================================================================

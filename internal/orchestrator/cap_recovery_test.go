@@ -2,6 +2,9 @@ package orchestrator
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -370,19 +373,58 @@ func TestClearDowngradesGivesTheHoppedProviderItsOwnLadder(t *testing.T) {
 // the dispatch. The doctor's opencode row (#1627) reports the closed gate as
 // its one blocking finding, and the verdict carries that remediation.
 //
-// The probe is called for real, not injected: the row returns at the gate,
-// before any binary lookup, so this stays hermetic even on a machine with
-// opencode installed.
+// The probe is called for real, but on a controlled machine (#1708): a stub
+// opencode is the only binary on PATH and HOME and the config directories are
+// the test's own. With the stub found, the gate is the only thing between the
+// probe and an opencode it recognizes, so removing the gate check fails this
+// test on every machine, including one with opencode installed. The open-gate
+// half proves it: the same machine with the gate open is usable, so a probe
+// that never found the binary cannot pass the closed-gate half for the wrong
+// reason.
 func TestOpenCodeIsNeverACapHopTargetWhileGated(t *testing.T) {
+	stubOpenCodeMachine(t)
+
 	t.Setenv("NIGHTGAUGE_EXPERIMENTAL_OPENCODE", "")
 	usable, reason := AdapterUsableForCapHop("opencode")
 	if usable {
 		t.Fatal("AdapterUsableForCapHop(\"opencode\") = true with the enable gate closed; " +
 			"a cap hop would land on an adapter whose dispatch is refused")
 	}
-	if !strings.Contains(reason, "NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1") {
-		t.Errorf("the unusable verdict says %q; it must name the enable switch the doctor reports", reason)
+	if !strings.Contains(reason, "NIGHTGAUGE_EXPERIMENTAL_OPENCODE=1") || !strings.Contains(reason, "no other OpenCode check ran") {
+		t.Errorf("the unusable verdict says %q; it must be the closed gate the doctor reports, naming the enable switch", reason)
 	}
+
+	t.Setenv("NIGHTGAUGE_EXPERIMENTAL_OPENCODE", "1")
+	if openUsable, openReason := AdapterUsableForCapHop("opencode"); !openUsable {
+		t.Fatalf("with the gate open the stub machine is not usable (%q); the closed-gate verdict above is not attributable to the gate alone", openReason)
+	}
+}
+
+// stubOpenCodeMachine gives the test a machine whose only opencode is a stub
+// that reports the manifest's tested version and a one-model catalog, and
+// whose home and config directories are the test's own.
+func stubOpenCodeMachine(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the stub opencode is a shell script")
+	}
+	bin := t.TempDir()
+	stub := "#!/bin/sh\n" +
+		"case \"$1\" in\n" +
+		"  --version) echo 1.18.30 ;;\n" +
+		"  models) echo anthropic/claude-sonnet-4-5 ;;\n" +
+		"esac\n"
+	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	t.Setenv("XDG_DATA_HOME", filepath.Join(home, ".local", "share"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".local", "state"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, ".cache"))
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", filepath.Join(home, ".nightgauge"))
 }
 
 // TestAdapterUsableForCapHop_SelectsRowByNameNotPosition pins #1712's second

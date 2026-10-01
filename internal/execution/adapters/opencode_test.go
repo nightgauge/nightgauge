@@ -441,8 +441,9 @@ func TestOpenCodeSubagentCostGapNotesAC9Denial(t *testing.T) {
 // fake opencode, from a copy of its directory. The fixtures it writes are
 // committed, so a capture naming an IPv4 address other than 127.0.0.1, on a
 // line of its own or beside 127.0.0.1, must fail and leave the fixtures exactly
-// as they were, with nothing left behind in staging. A clean capture replaces
-// them.
+// as they were, with nothing left behind in staging, and so must one whose
+// address follows a NUL byte or invalid UTF-8 (#1708). A clean capture
+// replaces them, with the home directory replaced by ~ as a literal string.
 func TestOpenCodeCaptureScriptWritesOnlyAClearedCapture(t *testing.T) {
 	for _, tool := range []string{"bash", "perl"} {
 		if _, err := exec.LookPath(tool); err != nil {
@@ -455,7 +456,7 @@ func TestOpenCodeCaptureScriptWritesOnlyAClearedCapture(t *testing.T) {
 	}
 	const oldVersion, oldHelp = "previous version\n", "previous help\n"
 
-	capture := func(t *testing.T, help string) (string, []byte, error) {
+	capture := func(t *testing.T, help string, env ...string) (string, []byte, error) {
 		t.Helper()
 		dir := t.TempDir() // stands in for testdata/opencode-cli
 		for name, body := range map[string]string{"capture.sh": string(script), "version.txt": oldVersion, "run-help.txt": oldHelp} {
@@ -464,8 +465,13 @@ func TestOpenCodeCaptureScriptWritesOnlyAClearedCapture(t *testing.T) {
 			}
 		}
 		bin := t.TempDir()
-		fake := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 9.9.9; else printf '%s' \"$FAKE_OPENCODE_HELP\"; fi\n"
+		// The help is a file, not a variable, so it can hold a NUL byte.
+		fake := "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 9.9.9; else cat \"$FAKE_OPENCODE_HELP_FILE\"; fi\n"
 		if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(fake), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		helpFile := filepath.Join(bin, "help.txt")
+		if err := os.WriteFile(helpFile, []byte(help), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		staging := t.TempDir()
@@ -473,7 +479,8 @@ func TestOpenCodeCaptureScriptWritesOnlyAClearedCapture(t *testing.T) {
 		cmd.Env = append(os.Environ(),
 			"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 			"TMPDIR="+staging,
-			"FAKE_OPENCODE_HELP="+help)
+			"FAKE_OPENCODE_HELP_FILE="+helpFile)
+		cmd.Env = append(cmd.Env, env...)
 		out, runErr := cmd.CombinedOutput()
 
 		if left, err := os.ReadDir(staging); err != nil || len(left) != 0 {
@@ -508,9 +515,11 @@ func TestOpenCodeCaptureScriptWritesOnlyAClearedCapture(t *testing.T) {
 	for name, help := range map[string]string{
 		"address on its own line":  "opencode run [message..]\n  --attach  e.g., http://192.0.2.10:4096\n",
 		"address beside 127.0.0.1": "opencode run [message..]\n  --attach  e.g., http://127.0.0.1:4096 or http://192.0.2.10:4096\n",
+		"address after a NUL byte": "opencode run [message..]\n  --attach \x00 e.g., http://192.0.2.10:4096\n",
+		"address after bad UTF-8":  "opencode run [message..]\n  --attach \xff\xfe e.g., http://192.0.2.10:4096\n",
 	} {
 		t.Run("refused/"+name, func(t *testing.T) {
-			dir, out, err := capture(t, help)
+			dir, out, err := capture(t, help, "LC_ALL=en_US.UTF-8")
 			if err == nil {
 				t.Errorf("capture.sh accepted a capture naming 192.0.2.10; want a non-zero exit\n%s", out)
 			}
@@ -530,6 +539,30 @@ func TestOpenCodeCaptureScriptWritesOnlyAClearedCapture(t *testing.T) {
 		got := fixtures(t, dir)
 		if got["version.txt"] != "9.9.9\n" || got["run-help.txt"] != help {
 			t.Errorf("a clean capture was not written as captured: %q", got)
+		}
+	})
+	// #1708: HOME is replaced as a literal string. A `#` in it would break a
+	// sed s#…#~# expression, and a `.` there would match any character.
+	t.Run("home with # and regex characters", func(t *testing.T) {
+		const home = "/tmp/user#1.x"
+		help := "opencode run [message..]\n  --dir  default " + home + "/work, not /tmp/user#1Xx/work\n"
+		dir, out, err := capture(t, help, "HOME="+home)
+		if err != nil {
+			t.Fatalf("capture.sh refused a clean capture: %v\n%s", err, out)
+		}
+		if got, want := fixtures(t, dir)["run-help.txt"], "opencode run [message..]\n  --dir  default ~/work, not /tmp/user#1Xx/work\n"; got != want {
+			t.Errorf("run-help.txt = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("empty home", func(t *testing.T) {
+		const help = "opencode run [message..]\n  --dir  default /work\n"
+		dir, out, err := capture(t, help, "HOME=")
+		if err != nil {
+			t.Fatalf("capture.sh refused a clean capture with HOME empty: %v\n%s", err, out)
+		}
+		if got := fixtures(t, dir)["run-help.txt"]; got != help {
+			t.Errorf("with HOME empty, run-help.txt = %q, want it unchanged %q", got, help)
 		}
 	})
 }
@@ -929,5 +962,43 @@ func TestOpenCodeBuildCommandRejectsInjectionInVariantAndSession(t *testing.T) {
 				t.Errorf("argv %q emitted --variant for rejected value %q", args, v)
 			}
 		})
+	}
+}
+
+// TestOpenCodeEndpointAuthority pins the part of a base_url redacted with it
+// (#1708): host:port when there is a port, an IP literal alone, never a bare
+// host name.
+func TestOpenCodeEndpointAuthority(t *testing.T) {
+	for _, tc := range []struct{ baseURL, want string }{
+		{"http://10.9.8.7:1234/v1", "10.9.8.7:1234"},
+		{"http://localhost:11434/v1", "localhost:11434"},
+		{"http://[fd00::7]:1234/v1", "[fd00::7]:1234"},
+		{"http://10.9.8.7/v1", "10.9.8.7"},
+		{"http://[fd00::7]/v1", "fd00::7"},
+		{"http://lmstudio.lan/v1", ""},
+		{"not a url", ""},
+		{"", ""},
+	} {
+		if got := openCodeEndpointAuthority(tc.baseURL); got != tc.want {
+			t.Errorf("openCodeEndpointAuthority(%q) = %q, want %q", tc.baseURL, got, tc.want)
+		}
+	}
+}
+
+// TestOpenCodeDispatchModelMatchesTheModelFlag pins #1708: the model exported
+// as NIGHTGAUGE_DISPATCH_MODEL is the trimmed value -m gets, never the
+// untrimmed one, and a model of whitespace alone exports nothing.
+func TestOpenCodeDispatchModelMatchesTheModelFlag(t *testing.T) {
+	_, args, env := NewOpenCodeAdapter().BuildCommand(RunOptions{Model: "  lmstudio/qwen/qwen3.8-27b \n"})
+	i := slices.Index(args, "-m")
+	if i < 0 || i+1 >= len(args) {
+		t.Fatalf("no -m in %q", args)
+	}
+	if got := env["NIGHTGAUGE_DISPATCH_MODEL"]; got != args[i+1] || got != "lmstudio/qwen/qwen3.8-27b" {
+		t.Errorf("NIGHTGAUGE_DISPATCH_MODEL = %q, -m = %q; want both lmstudio/qwen/qwen3.8-27b", got, args[i+1])
+	}
+	_, _, env = NewOpenCodeAdapter().BuildCommand(RunOptions{Model: " \t "})
+	if v, ok := env["NIGHTGAUGE_DISPATCH_MODEL"]; ok {
+		t.Errorf("a whitespace-only model exported NIGHTGAUGE_DISPATCH_MODEL=%q", v)
 	}
 }

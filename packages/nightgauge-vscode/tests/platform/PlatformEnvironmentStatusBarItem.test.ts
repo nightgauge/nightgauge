@@ -66,6 +66,7 @@ let mockPlatformConfig: { environment?: string; api_url?: string } | undefined =
 
 const mockConfigBridgeInstance = {
   getPlatform: vi.fn(() => mockPlatformConfig),
+  getPlatformUrlOverride: vi.fn<() => { url: string; source: string } | undefined>(() => undefined),
   onConfigChanged: vi.fn((listener: ConfigChangedListener) => {
     mockConfigChangedListeners.push(listener);
     return {
@@ -112,7 +113,9 @@ describe("PlatformEnvironmentStatusBarItem", () => {
 
       expect(item.text).toBe("$(globe) Platform: prod");
       expect(item.backgroundColor).toBeUndefined();
-      expect(item.tooltip).toBe("Platform environment: Production");
+      expect(item.tooltip).toBe(
+        "Platform environment: Production\nPlatform URL: https://api.nightgauge.dev (default)"
+      );
 
       sbi.dispose();
     });
@@ -124,7 +127,10 @@ describe("PlatformEnvironmentStatusBarItem", () => {
 
       expect(item.text).toBe("$(beaker) Platform: canary");
       expect((item.backgroundColor as { id: string }).id).toBe("statusBarItem.warningBackground");
-      expect(item.tooltip).toBe("Platform environment: Canary — pre-release API");
+      expect(item.tooltip).toBe(
+        "Platform environment: Canary — pre-release API\n" +
+          "Platform URL: https://canary.api.nightgauge.dev — non-default"
+      );
 
       sbi.dispose();
     });
@@ -136,7 +142,10 @@ describe("PlatformEnvironmentStatusBarItem", () => {
 
       expect(item.text).toBe("$(home) Platform: local");
       expect((item.backgroundColor as { id: string }).id).toBe("statusBarItem.prominentBackground");
-      expect(item.tooltip).toBe("Platform environment: Local (http://localhost:8787)");
+      expect(item.tooltip).toBe(
+        "Platform environment: Local (http://localhost:8787)\n" +
+          "Platform URL: http://localhost:8787 — non-default"
+      );
 
       sbi.dispose();
     });
@@ -148,7 +157,10 @@ describe("PlatformEnvironmentStatusBarItem", () => {
 
       expect(item.text).toBe("$(settings-gear) Platform: custom");
       expect((item.backgroundColor as { id: string }).id).toBe("statusBarItem.prominentBackground");
-      expect(item.tooltip).toBe("Platform environment: Custom (https://my.api.dev)");
+      expect(item.tooltip).toBe(
+        "Platform environment: Custom (https://my.api.dev)\n" +
+          "Platform URL: https://my.api.dev — non-default"
+      );
 
       sbi.dispose();
     });
@@ -160,17 +172,62 @@ describe("PlatformEnvironmentStatusBarItem", () => {
       const sbi = new PlatformEnvironmentStatusBarItem();
       const item = getItem();
 
-      expect(item.tooltip).toBe("Platform environment: Custom (http://localhost:9000)");
+      expect(item.tooltip).toBe(
+        "Platform environment: Custom (http://localhost:9000)\n" +
+          "Platform URL: http://localhost:9000 — non-default"
+      );
 
       sbi.dispose();
     });
 
-    it("falls back to 'unknown URL' when api_url is missing for custom", () => {
+    // Custom with no api_url resolves to production, so it is shown as
+    // production: the indicator names where calls go, not what was typed (#1474).
+    it("shows production when custom has no api_url", () => {
       mockPlatformConfig = { environment: "custom" };
       const sbi = new PlatformEnvironmentStatusBarItem();
       const item = getItem();
 
-      expect(item.tooltip).toBe("Platform environment: Custom (unknown URL)");
+      expect(item.text).toBe("$(globe) Platform: prod");
+      expect(item.tooltip).toContain("Platform URL: https://api.nightgauge.dev (default)");
+
+      sbi.dispose();
+    });
+  });
+
+  describe("non-default indicator (#1474)", () => {
+    it("marks a bare non-production api_url as custom", () => {
+      mockPlatformConfig = { api_url: "https://staging.example.test" };
+      const sbi = new PlatformEnvironmentStatusBarItem();
+      const item = getItem();
+
+      expect(item.text).toBe("$(settings-gear) Platform: custom");
+      expect((item.backgroundColor as { id: string }).id).toBe("statusBarItem.prominentBackground");
+      expect(item.tooltip).toContain("Platform URL: https://staging.example.test — non-default");
+
+      sbi.dispose();
+    });
+
+    it("names the setting that set the URL", () => {
+      mockPlatformConfig = { environment: "custom", api_url: "https://staging.example.test" };
+      mockConfigBridgeInstance.getPlatformUrlOverride.mockReturnValueOnce({
+        url: "https://staging.example.test",
+        source: "nightgauge.platform.url",
+      });
+      const sbi = new PlatformEnvironmentStatusBarItem();
+      const item = getItem();
+
+      expect(item.tooltip).toContain("Set by nightgauge.platform.url");
+
+      sbi.dispose();
+    });
+
+    it("reports a refused URL instead of hiding it", () => {
+      mockPlatformConfig = { environment: "custom", api_url: "http://staging.example.test" };
+      const sbi = new PlatformEnvironmentStatusBarItem();
+      const item = getItem();
+
+      expect(item.text).toBe("$(settings-gear) Platform: custom");
+      expect(item.tooltip).toContain("Platform URL refused: Platform custom URL must use HTTPS");
 
       sbi.dispose();
     });

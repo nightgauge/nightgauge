@@ -18,6 +18,12 @@
       "storage": "vscode"
     },
     {
+      "setting": "nightgauge.platform.url",
+      "schema_path": "platform.api_url",
+      "runtime_consumer": "src/platform/platformUrlSetting.ts",
+      "storage": "vscode"
+    },
+    {
       "setting": "nightgauge.readyItems.*",
       "schema_path": "ui.ready_items",
       "runtime_consumer": "src/commands/filterProjectBoard.ts",
