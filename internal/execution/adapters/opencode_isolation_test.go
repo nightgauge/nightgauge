@@ -810,9 +810,16 @@ func TestOpenCodeIsolationKeepsTheOperatorsGitAndGh(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
+			// GH_TELEMETRY=0: for a sampled invocation gh starts a detached
+			// `gh send-telemetry` that outlives it and, finding no device id,
+			// writes $XDG_STATE_HOME/gh/device-id (here ~/.local/state/gh).
+			// Under load it starts after the TempDir cleanup has begun and
+			// recreates the directory, so RemoveAll fails with "directory not
+			// empty" (#1783). With telemetry off gh starts no child.
 			outside := map[string]string{
 				"HOME": home, "PATH": filepath.Dir(gitBin) + string(os.PathListSeparator) + "/usr/bin:/bin",
 				"GIT_CONFIG_NOSYSTEM": "1", "GH_NO_UPDATE_NOTIFIER": "1", "GH_PROMPT_DISABLED": "1",
+				"GH_TELEMETRY": "0",
 			}
 			if ghBin != "" {
 				outside["PATH"] = filepath.Dir(ghBin) + string(os.PathListSeparator) + outside["PATH"]
