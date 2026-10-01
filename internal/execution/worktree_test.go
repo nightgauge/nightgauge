@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/gitworktree"
 	"github.com/nightgauge/nightgauge/internal/layout"
 )
 
@@ -71,6 +72,28 @@ func TestEnsureWorktree_DoesNotCollideWithMainRepoBranch(t *testing.T) {
 	// Detached HEAD is a bare SHA, not a `ref: refs/heads/...` line.
 	if strings.HasPrefix(strings.TrimSpace(string(headContents)), "ref:") {
 		t.Errorf("worktree HEAD should be detached, got %q", headContents)
+	}
+}
+
+// TestEnsureWorktree_RecordsCreationCommit: the OpenCode tamper gate diffs
+// against the commit the worktree was created at (#1825), so ensureWorktree
+// must record the primary checkout's HEAD in the worktree's own admin dir.
+func TestEnsureWorktree_RecordsCreationCommit(t *testing.T) {
+	repoRoot := initTestGitRepo(t, "main")
+	head := strings.TrimSpace(gittest.Run(t, repoRoot, "rev-parse", "HEAD"))
+	m := &Manager{workspaceRoot: repoRoot}
+
+	wt, err := m.ensureWorktree("nightgauge/nightgauge", 1825)
+	if err != nil {
+		t.Fatalf("ensureWorktree: %v", err)
+	}
+	gitDir := strings.TrimSpace(gittest.Run(t, wt, "rev-parse", "--absolute-git-dir"))
+	got, err := os.ReadFile(filepath.Join(gitDir, gitworktree.BaseCommitFile))
+	if err != nil {
+		t.Fatalf("no recorded creation commit: %v", err)
+	}
+	if strings.TrimSpace(string(got)) != head {
+		t.Errorf("recorded %q, want the primary checkout's HEAD %s", got, head)
 	}
 }
 

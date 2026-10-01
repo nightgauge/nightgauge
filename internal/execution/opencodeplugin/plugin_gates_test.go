@@ -238,13 +238,26 @@ func runToolHarness(t *testing.T, node, cwd, tool, argsJSON, nightgaugeBin strin
 // command.execute.before-shaped input/output pair.
 func runCommandHarness(t *testing.T, node, cwd, commandName, arguments string, parts []string, nightgaugeBin string, extraEnv map[string]string) nodeHarnessResult {
 	t.Helper()
-	_, gatesPath := writePluginTreeForGatesTest(t)
-	driver := writeGatesDriver(t, nodeCommandDriver)
+	return runCommandPartsHarness(t, node, cwd, commandName, arguments, textParts(parts), nightgaugeBin, extraEnv)
+}
 
+// textParts wraps each string as a `type:"text"` command part.
+func textParts(parts []string) []map[string]string {
 	partObjs := make([]map[string]string, 0, len(parts))
 	for _, p := range parts {
 		partObjs = append(partObjs, map[string]string{"type": "text", "text": p})
 	}
+	return partObjs
+}
+
+// runCommandPartsHarness is runCommandHarness with the command's parts
+// given verbatim, so a test can send a part that is not `type:"text"` — the
+// `type:"subtask"` part opencode 1.18.30 sends for a subagent command (#1818).
+func runCommandPartsHarness(t *testing.T, node, cwd, commandName, arguments string, partObjs []map[string]string, nightgaugeBin string, extraEnv map[string]string) nodeHarnessResult {
+	t.Helper()
+	_, gatesPath := writePluginTreeForGatesTest(t)
+	driver := writeGatesDriver(t, nodeCommandDriver)
+
 	env := append(os.Environ(),
 		"NG_GATES_PATH="+gatesPath,
 		"NG_CWD="+cwd,
@@ -542,9 +555,10 @@ func TestMCPResourceToolsPassthrough(t *testing.T) {
 // `opencode debug agent build` (testdata/opencode-1.18.30-tools.txt) and
 // fails when gates.js's TOOL_CLASSIFICATION table is missing any tool id the
 // capture lists. It is a floor, not a ceiling: the table also carries ids
-// (edit, write, list, websearch) the capture omits but other, independently
-// captured evidence confirms real — see the testdata file's and gates.js's
-// own comments for that reconciliation.
+// (edit, write, websearch, and the experimental execute, lsp and plan_exit)
+// the capture omits but other, independently captured evidence confirms
+// real — see the testdata file's and gates.js's own comments for that
+// reconciliation.
 func TestToolClassificationCoversCapturedTools(t *testing.T) {
 	node := requireNode(t)
 
@@ -573,6 +587,70 @@ func TestToolClassificationCoversCapturedTools(t *testing.T) {
 		if !table[id] {
 			t.Errorf("captured tool id %q is missing from gates.js's TOOL_CLASSIFICATION table", id)
 		}
+	}
+}
+
+// TestExperimentalToolIDsClassified pins the three tool ids opencode 1.18.30
+// registers only behind an experimental flag (#1818): execute
+// (OPENCODE_EXPERIMENTAL_CODE_MODE), lsp (OPENCODE_EXPERIMENTAL_LSP_TOOL) and
+// plan_exit (OPENCODE_EXPERIMENTAL_PLAN_MODE, cli client). Each must reach
+// its own classification, not the unknown-tool refusal. It also pins that
+// "list", which is a permission key and not a tool id on 1.18.30, is off the
+// table and refused as unknown.
+func TestExperimentalToolIDsClassified(t *testing.T) {
+	node := requireNode(t)
+	bin := buildNightgaugeBin(t)
+	home := isolatedHomeEnv(t)
+
+	table := make(map[string]bool)
+	for _, id := range readToolClassificationKeys(t, node) {
+		table[id] = true
+	}
+	for _, id := range []string{"execute", "lsp", "plan_exit"} {
+		if !table[id] {
+			t.Errorf("experimental tool id %q is missing from gates.js's TOOL_CLASSIFICATION table", id)
+		}
+	}
+	if table["list"] {
+		t.Error(`"list" is not a tool id on opencode 1.18.30; it must not be on TOOL_CLASSIFICATION`)
+	}
+
+	cases := []struct {
+		name   string
+		tool   string
+		args   map[string]any
+		marker string // "" means allowed
+	}{
+		{"execute is blocked as unmappable", "execute", map[string]any{"code": "await mcp.call()"}, "[nightgauge-gate:workflow]"},
+		{"plan_exit is blocked as unmappable", "plan_exit", map[string]any{}, "[nightgauge-gate:workflow]"},
+		{"lsp on a worktree file is allowed", "lsp", map[string]any{"operation": "hover", "filePath": "README.md", "line": 1, "character": 1}, ""},
+		{"lsp on a case variant of a secret is refused", "lsp", map[string]any{"operation": "documentSymbol", "filePath": ".ENV"}, "[nightgauge-gate:case-folded-deny]"},
+		{"list is refused as an unknown tool", "list", map[string]any{"path": "."}, "[nightgauge-gate:unknown-tool]"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			args := map[string]any{}
+			for k, v := range tc.args {
+				args[k] = v
+			}
+			if fp, ok := args["filePath"].(string); ok {
+				args["filePath"] = filepath.Join(root, fp)
+			}
+			res := runToolHarness(t, node, root, tc.tool, marshalJSON(t, args), bin, home)
+			if tc.marker == "" {
+				if res.Threw {
+					t.Fatalf("want no throw, got %q", res.Message)
+				}
+				return
+			}
+			if !res.Threw {
+				t.Fatal("want a throw, got none")
+			}
+			if !strings.HasPrefix(res.Message, tc.marker) {
+				t.Errorf("message = %q, want the %s marker", res.Message, tc.marker)
+			}
+		})
 	}
 }
 
@@ -713,15 +791,49 @@ type gatesParityRow struct {
 	Stage string `json:"stage,omitempty"`
 
 	// sanitize
-	CommandName string   `json:"command_name,omitempty"`
-	Arguments   string   `json:"arguments,omitempty"`
-	Parts       []string `json:"parts,omitempty"`
+	CommandName  string             `json:"command_name,omitempty"`
+	Arguments    string             `json:"arguments,omitempty"`
+	Parts        []string           `json:"parts,omitempty"`
+	SubtaskParts []gatesSubtaskPart `json:"subtask_parts,omitempty"`
 
 	Expect string `json:"expect"` // "allow" or "block"
 }
 
+// gatesSubtaskPart is the screened half of the `type:"subtask"` part
+// opencode 1.18.30 sends to command.execute.before for a command whose agent
+// is a subagent, or that sets `subtask: true` (#1818). Its prompt is the
+// expanded template.
+type gatesSubtaskPart struct {
+	Description string `json:"description,omitempty"`
+	Prompt      string `json:"prompt"`
+}
+
+// commandParts is the row's parts as command.execute.before receives them:
+// the text parts, then the subtask parts.
+func (r gatesParityRow) commandParts() []map[string]string {
+	parts := textParts(r.Parts)
+	for _, sp := range r.SubtaskParts {
+		parts = append(parts, map[string]string{
+			"type":        "subtask",
+			"agent":       "general",
+			"command":     r.CommandName,
+			"description": sp.Description,
+			"prompt":      sp.Prompt,
+		})
+	}
+	return parts
+}
+
 func (r gatesParityRow) sanitizePrompt() string {
-	partsText := strings.Join(r.Parts, "\n")
+	texts := append([]string(nil), r.Parts...)
+	for _, sp := range r.SubtaskParts {
+		for _, s := range []string{sp.Description, sp.Prompt} {
+			if s != "" {
+				texts = append(texts, s)
+			}
+		}
+	}
+	partsText := strings.Join(texts, "\n")
 	var pieces []string
 	for _, s := range []string{r.CommandName, r.Arguments, partsText} {
 		if s != "" {
@@ -814,7 +926,7 @@ func TestGatesParityCorpus(t *testing.T) {
 				}
 				res = runToolHarness(t, node, root, toolID, argsJSON, bin, env)
 			case "sanitize":
-				res = runCommandHarness(t, node, root, row.CommandName, row.Arguments, row.Parts, bin, home)
+				res = runCommandPartsHarness(t, node, root, row.CommandName, row.Arguments, row.commandParts(), bin, home)
 			}
 
 			gotPlugin := "allow"

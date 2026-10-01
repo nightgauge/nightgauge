@@ -163,6 +163,30 @@ func TestBashThenStopScript(t *testing.T) {
 	}
 }
 
+// TestToolsForeverScriptNeverStops: the tools-forever script (#1811) answers
+// every turn with a read tool call, however many assistant messages the
+// conversation already holds, including the step-cap nudge OpenCode appends
+// as an assistant message of its own. It is the model that never stops
+// calling tools, which a stage bound has to end.
+func TestToolsForeverScriptNeverStops(t *testing.T) {
+	baseURL := startServer(t, Config{Script: "tools-forever"})
+
+	for _, assistants := range []int{0, 1, 7, 200} {
+		messages := []map[string]any{{"role": "user", "content": "read calc.py"}}
+		for i := 0; i < assistants; i++ {
+			messages = append(messages, map[string]any{"role": "assistant", "content": "CRITICAL - MAXIMUM STEPS REACHED"})
+		}
+		resp, body := postChatCompletion(t, baseURL, map[string]any{"model": "stub/stub-model", "messages": messages, "stream": false})
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%d assistant messages: status = %d, body = %s", assistants, resp.StatusCode, body)
+		}
+		choice := decodeChatCompletion(t, body).Choices[0]
+		if choice.FinishReason != "tool_calls" || len(choice.Message.ToolCalls) != 1 || choice.Message.ToolCalls[0].Function.Name != "read" {
+			t.Fatalf("%d assistant messages: finish_reason %q, tool_calls %+v; want one read call", assistants, choice.FinishReason, choice.Message.ToolCalls)
+		}
+	}
+}
+
 func TestOverflowScript(t *testing.T) {
 	baseURL := startServer(t, Config{Script: "overflow"})
 

@@ -106,11 +106,12 @@ const openCodeConfigContentEnvVar = "OPENCODE_CONFIG_CONTENT"
 
 // openCodeDefaultSteps is the steps cap of the build agent and every
 // subagent when a stage sets no turn cap (RunOptions.MaxTurns is 0). A step
-// is one model request with its tool calls; when a session reaches the cap,
-// OpenCode forces a text-only reply and the run ends. 200 steps is room for a
-// long implementation stage on a local model and still ends a session that
-// keeps looping, such as one that resumes on the synthetic continue turn
-// after every compaction.
+// is one model request with its tool calls. The cap is not a hard stop on
+// 1.18.30: from the step that reaches it, OpenCode appends a nudge asking for
+// a text-only reply and still offers every tool, so a model that keeps
+// calling tools keeps going (#1811). What ends such a stage is the manager's
+// turn budget, which counts step_finish events on the stream (#1652); the cap
+// stays because a model that heeds the nudge ends there on its own.
 const openCodeDefaultSteps = 200
 
 // openCodeSubagentDepth is set explicitly: a subagent the task tool starts

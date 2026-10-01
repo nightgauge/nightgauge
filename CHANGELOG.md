@@ -29,6 +29,39 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The docs link check re-probes an HTTP 408 instead of failing on it**
+  (#2317). A shields.io badge in `README.md` answered 408 Request Timeout and
+  failed the required `link-check` job on a pull request that did not touch
+  the file. A 408 now takes the same curl re-probe as a 5xx (#1404); every
+  other 4xx, and so every missing relative link, stays fatal on the first
+  answer.
+- **The OpenCode tamper gate compares against the worktree's creation commit**
+  (#1825). The project-config tamper gate used to diff `opencode.json` and
+  `.opencode/` against the merge-base with the live `origin/<default>` ref.
+  That refused every OpenCode dispatch from a primary checkout on a branch
+  with an unmerged config change, and a stage could move that shared ref to
+  hide a committed tamper. The pipeline now records each worktree's creation
+  commit in the worktree's own git admin directory, and the gate diffs against
+  it. A damaged record, a failed `merge-base` or a failed `diff` refuses the
+  dispatch instead of silently skipping the check. Worktrees created before
+  this change fall back to the merge-base and say so on stderr.
+- **The OpenCode plugin screens subtask commands and knows the experimental
+  tool ids** (#1818). `command.execute.before` now screens the description and
+  expanded prompt of a `type:"subtask"` part, which opencode sends for a
+  subagent or `subtask: true` command; before, only text parts reached
+  `hook sanitize-prompt`. The tool table covers `execute` and `plan_exit`
+  (blocked) and `lsp` (through the read gates on its `filePath`), and drops
+  `list`, which is a permission key and not a tool id.
+- **OpenCode's per-run `steps` cap is measured, not assumed** (#1811). On
+  1.18.30, from the step that reaches the cap, OpenCode appends a "maximum
+  steps reached" nudge but still offers every tool, so a model that keeps
+  calling tools never stops on its own.
+  `TestOpenCodeIntegrationStepsCapIsNotAHardStop` shows this against the
+  pinned binary with the stub provider's new `tools-forever` script, and shows
+  that the stage turn budget (#1652) is what stops such a stage, classified
+  `budget_exceeded` with its process group reaped. ADR-022 § 7 records the
+  real semantics and the enforcement.
+
 - **The SDK's eval and CLI spawn helpers survive a child that never reads
   stdin** (#2314). Writing the prompt to a child that had already exited
   raised an uncaught `EPIPE` instead of returning the child's exit code. The
