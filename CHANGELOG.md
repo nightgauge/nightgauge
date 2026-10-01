@@ -41,6 +41,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`capture.sh` redacts its capture roots as literal strings** (#2328). The
+  `redact` step put the mktemp roots into a `sed` regular expression, so the
+  `.` in the template matched any character and a `#` in `TMPDIR` broke the
+  expression. It now replaces them literally, and the stub-port substitution
+  no longer rewrites a longer port that begins with the same digits. ADR-025
+  also lists NGD043–NGD047, which the doctor emitted without a table row.
+
 - **A stage-context test no longer fails when its two records straddle a
   second** (#2326). It stripped clock-derived keys only at the top level, but
   each `phases[]` entry carries its own second-resolution timestamps; it now
