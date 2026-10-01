@@ -310,6 +310,8 @@ REQUIRED_FILES=(
   scripts/test-post-merge-check.sh
   scripts/test-publish-vsix-set.sh
   scripts/test-sign-macos-binaries.sh
+  scripts/test-check-shipped-code.sh
+  packages/nightgauge-vscode/scripts/check-shipped-code.sh
   scripts/test-scrub-evidence.sh
   docker/clean-install/scrub-evidence.sh
   scripts/test-capture-cli-help.sh
@@ -1279,6 +1281,15 @@ run_group "sign-macos-binaries.sh regression suite" \
 #       runs only on developer machines, where that would trip real antivirus.
 run_group "malware-scan.sh regression suite" \
   bash scripts/test-malware-scan.sh
+
+# 1b2d. check-shipped-code.sh regression suite (#2320, #2321) — the scan of
+#       what the VSIX ships for the shapes a static malware scanner matches on
+#       (a fetch piped into a shell, a base64 decode). The scan itself runs
+#       where a VSIX is built (release.yml, staging.yml, marketplace-publish.yml
+#       and check-runtime-assets.sh); this suite proves it can fail, on seeded
+#       fixtures, in the dist and the VSIX form.
+run_group "check-shipped-code.sh regression suite" \
+  bash scripts/test-check-shipped-code.sh
 
 # 1b3. scrub-evidence.sh regression suite (#1335) — the second of the two
 #      layers that must each stop a credential reaching a public artifact. The

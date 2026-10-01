@@ -77,6 +77,31 @@ changelog, and the release workflow refuses a tag that does not.
   no longer rewrites a longer port that begins with the same digits. ADR-025
   also lists NGD043–NGD047, which the doctor emitted without a table row.
 
+- **No shipped bundle carries a pipe-to-shell command, and the check now reads
+  what ships** (#2320). Two Grok install hints in the SDK, which esbuild
+  bundles into `dist/extension.cjs` and `dist/sdk-cli.cjs`, still read
+  `curl … | bash` after #1858 removed the extension's own copy; both now point
+  at the Grok documentation. The source test only walked the extension's
+  `src/`, so a string from another workspace package was invisible to it.
+  `packages/nightgauge-vscode/scripts/check-shipped-code.sh` now scans every
+  text file the extension ships (the two bundles, `dist/opencode-plugin/**`,
+  every shipped `.sh`, and anything a later build adds under `dist/`) for a
+  fetch piped into a shell or a base64 decode. It runs on every VSIX
+  `release.yml`, `staging.yml` and `marketplace-publish.yml` verify, and from
+  `check-runtime-assets.sh`; `scripts/test-check-shipped-code.sh` proves it
+  fails on seeded fixtures. The source test also reads the SDK's source now.
+
+- **The interactive Codex launch uses no shell string** (#2321). It typed
+  `P="$(openssl base64 -d -A -in <tmp>)"; rm -f <tmp>; codex … "$P"; exit`
+  into a terminal: safe, but the decode-delete-execute shape static scanners
+  match on. VS Code now starts `codex` as the terminal's own process with the
+  prompt as one argument, so there is no shell, no base64 and, for a normal
+  prompt, no temporary file. A prompt over the platform's argument limit
+  (Linux allows 128 KiB per argument and the rendered pr-merge prompt is about
+  155 KB) is written to a private file Codex is told to read, and removed when
+  the terminal closes. The command and model are still checked against the
+  safe-token pattern before anything else happens.
+
 - **A stage-context test no longer fails when its two records straddle a
   second** (#2326). It stripped clock-derived keys only at the top level, but
   each `phases[]` entry carries its own second-resolution timestamps; it now
@@ -247,6 +272,15 @@ changelog, and the release workflow refuses a tag that does not.
   reported as resolved, not BLOCKED.
 
 ### Changed
+
+- **Release step 9a scans the JS bundles and records more than the engine
+  count** (#2322). VirusTotal does not report every file it unpacks from a
+  VSIX, so `dist/extension.cjs` and `dist/sdk-cli.cjs` are now submitted as
+  files of their own, after asserting every target VSIX carries the same
+  bytes. Each report records its detection count, its Code insights verdict
+  and any community YARA rule names. A "Suspicious" verdict or a YARA match
+  stops the release for an owner decision before publishing. The step also
+  says how to submit a file the web uploader refuses for its size.
 
 - **"Green" means every check on the PR, required or not** (workspace rule).
   The ruleset blocks a merge only on required checks, so a red optional check,

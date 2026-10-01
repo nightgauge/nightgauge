@@ -181,6 +181,9 @@ jobs:
             unzip -l "$VSIX" | grep -q 'extension/dist/sdk-cli.cjs' \
               || { echo "ERROR: $VSIX missing bundled SDK CLI"; exit 1; }
             if unzip -l "$VSIX" | grep -qE '\.(map|d\.ts)$'; then echo "ERROR: $VSIX ships source maps or type declarations"; exit 1; fi
+            # No shipped file may carry a fetch piped to a shell or a base64
+            # decode, from whichever package it was bundled (#2320, #2321).
+            bash scripts/check-shipped-code.sh "$VSIX"
 
             # Assert the PACKAGED binary is Developer ID signed, not the one the
             # signing step happened to touch. The VSIX freezes a copy, so this

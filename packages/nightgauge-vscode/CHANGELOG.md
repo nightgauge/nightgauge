@@ -9,6 +9,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- **Interactive Codex starts without a shell command.** The terminal now runs
+  `codex` directly with the stage prompt as its argument, instead of decoding
+  the prompt from a temporary file in a shell (#2321).
+- **No install hint pipes a download into a shell.** The Grok install hints
+  link to the Grok documentation instead (#2320).
+
 ## [0.5.1] - 2026-09-30
 
 **0.5.1 is the first 0.5 build on the normal release channel.** 0.5.0 reached

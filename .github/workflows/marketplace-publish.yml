@@ -211,6 +211,9 @@ jobs:
             fi
             [[ "$PACKAGED" == "$CHANNEL_NAME" ]] \
               || { echo "::error::$VSIX was packaged as $PACKAGED but $VERSION resolves to $CHANNEL_NAME"; exit 1; }
+            # The registries get nothing that carries a fetch piped to a shell
+            # or a base64 decode (#2320, #2321).
+            bash scripts/check-shipped-code.sh "$VSIX"
             echo "OK: $VSIX sha256=$ACTUAL channel=$PACKAGED"
           done
           rm checksums.txt

