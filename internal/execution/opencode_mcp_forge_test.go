@@ -38,6 +38,8 @@ var integrationNightgaugeBinaryCleanup func()
 // nothing for the same reason: no test may ask whatever model server this
 // machine runs.
 func TestMain(m *testing.M) {
+	// A child this binary spawns as a fake CLI runs that and exits (#2323).
+	runSigtermTrapHelperIfAsked()
 	// Stages commit through the adapter's own `git commit`, a plain child that
 	// inherits os.Environ(): without this, a developer's global
 	// commit.gpgsign=true fails those commits (#2283).

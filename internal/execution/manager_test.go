@@ -8,10 +8,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -688,8 +690,8 @@ func TestRunStage_DoesNotCreateASnapshotForARunThatHasNone(t *testing.T) {
 }
 
 // sigtermTrapAdapter is a minimal agentic adapters.SkillRunner whose
-// BuildCommand spawns a shell that traps SIGTERM, echoes proof to stderr, and
-// exits 0 — the graceful-stop shape #564 exists for. No real CLI adapter
+// BuildCommand spawns a process that catches SIGTERM, prints proof to stderr,
+// and exits 0 — the graceful-stop shape #564 exists for. No real CLI adapter
 // exercises this cheaply: they all shell out to a vendor binary that isn't
 // present in CI, so the fake is the only way to pin the trap-and-exit-0 race
 // against CancelWithGrace deterministically.
@@ -697,12 +699,44 @@ type sigtermTrapAdapter struct{ ready string }
 
 func (sigtermTrapAdapter) Name() string { return "sigterm-trap-fake" }
 
-// The ready file is written only once the trap is installed AND the background
-// sleep is in the process group, so the test can wait for it instead of guessing
-// how long sh takes. Writing it before `sleep 30 &` let a group SIGTERM land
-// before the fork: the late sleep missed it and held the pipes past the grace.
+// The fake CLI is this test binary in its sigterm-trap helper mode
+// (runSigtermTrapHelperIfAsked), not a shell (#2323). It was
+// `sh -c 'trap … TERM; sleep 30 & : > "$0"; wait'`, and macOS's bash 3.2
+// segfaulted handling the trapped signal in `wait` (4 in 1000 spawns, exit
+// -11, so ExitCode -1), while the background sleep missed the group's SIGTERM
+// in the window between its fork and its exec (8 in 1000), holding the pipes
+// for 30s. The helper registers its handler before it writes the ready file
+// and starts no child, so a signal that lands after the file exists is caught.
 func (a sigtermTrapAdapter) BuildCommand(adapters.RunOptions) (string, []string, map[string]string) {
-	return "sh", []string{"-c", `trap "echo received SIGTERM >&2; exit 0" TERM; sleep 30 & : > "$0"; wait`, a.ready}, nil
+	return os.Args[0], nil, map[string]string{sigtermTrapHelperEnv: a.ready}
+}
+
+// sigtermTrapHelperEnv carries the ready-file path to the helper mode; its
+// presence is what selects that mode.
+const sigtermTrapHelperEnv = "NIGHTGAUGE_TEST_SIGTERM_TRAP_READY"
+
+// runSigtermTrapHelperIfAsked turns this process into sigtermTrapAdapter's
+// fake CLI when sigtermTrapHelperEnv is set. TestMain calls it first, so the
+// helper never runs a test. It never returns in that mode: SIGTERM prints the
+// proof line and exits 0, and with no SIGTERM it exits 1 after 60s.
+func runSigtermTrapHelperIfAsked() {
+	ready := os.Getenv(sigtermTrapHelperEnv)
+	if ready == "" {
+		return
+	}
+	term := make(chan os.Signal, 1)
+	signal.Notify(term, syscall.SIGTERM)
+	if err := os.WriteFile(ready, nil, 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "sigterm-trap helper: %v\n", err)
+		os.Exit(2)
+	}
+	select {
+	case <-term:
+		fmt.Fprintln(os.Stderr, "received SIGTERM")
+		os.Exit(0)
+	case <-time.After(60 * time.Second):
+		os.Exit(1)
+	}
 }
 
 func (sigtermTrapAdapter) UsesStdin() bool { return false }
@@ -752,11 +786,11 @@ func TestRunStage_GracefulStopExitZeroIsReportedCancelled(t *testing.T) {
 		return ok
 	})
 	// Registration happens right after cmd.Start(), which only forks+execs —
-	// the shell itself needs a moment to reach the `trap` builtin, and a
+	// the fake CLI needs a moment to install its SIGTERM handler, and a
 	// SIGTERM that lands before then kills it by signal (ExitCode -1). A fixed
 	// 50ms sleep lost that race under -race load (#2171); wait for the file
-	// the shell writes after installing the trap instead.
-	pollUntil(t, "the fake CLI to install its SIGTERM trap", 30*time.Second, func() bool {
+	// the helper writes after installing the handler instead.
+	pollUntil(t, "the fake CLI to install its SIGTERM handler", 30*time.Second, func() bool {
 		_, err := os.Stat(ready)
 		return err == nil
 	})

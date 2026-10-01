@@ -54,6 +54,15 @@ changelog, and the release workflow refuses a tag that does not.
   fixture capture scripts replace `HOME` as a literal string and find an IPv4
   address in a capture that holds a NUL byte or invalid UTF-8. ADR-022 states
   the catalog precondition and what of an endpoint's address is redacted.
+- **The graceful-stop test no longer fails or stalls under load** (#2323).
+  `TestRunStage_GracefulStopExitZeroIsReportedCancelled`'s fake CLI was a
+  shell that trapped SIGTERM while waiting on a background `sleep`. macOS's
+  `/bin/sh` (bash 3.2) segfaulted handling that signal in 4 of 1000 spawns,
+  which the stage reported as exit code -1. In 8 of 1000 the background `sleep`
+  missed the group's SIGTERM between its fork and its exec and held the pipes
+  for 30 s. The fake CLI is now the test binary itself, which installs its
+  handler before it signals ready and starts no child. Under load with tight
+  polling: 1 failure and 43 runs of ~30 s in 200 before, none in 200 after.
 - **`stop()` and the stage timeout reach the units of a fan-out stage**
   (#1765). On the `sdk-fanout` path, `PipelineOrchestrator.stop()` and the
   per-stage timeout used to leave each unit's `opencode` query running. The
