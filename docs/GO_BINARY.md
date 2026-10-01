@@ -2318,6 +2318,182 @@ because a stage was killed. And the dispatch path itself
 recovery command, **before** the worktree teardown that makes the ref the only
 remaining path to the work.
 
+### Handoff and Work-Order Operations
+
+Two read-only verbs for a workspace that spans several repositories. Both are
+deterministic Go: no LLM call, and the same inputs give the same output.
+
+#### `nightgauge handoff` — roll up session handoff headers (Issue #1481)
+
+A session handoff is a markdown file a session rewrites at its end. Its header
+is a YAML mapping inside an HTML comment:
+
+```markdown
+<!-- nightgauge:handoff
+repo: acme-api
+session: 12
+updated: 2026-09-30
+tip: 3542de0d
+open_issues: 41
+open_prs: 2
+next: [acme-api#88, acme-api#91]
+needs:
+  - { from: acme-web, issue: acme-web#17, what: the login redirect }
+provides: []
+-->
+```
+
+```bash
+# A directory contributes its *.md files; ones without a header are skipped
+nightgauge handoff <dir-or-file>... [--workspace-root <dir>] \
+  [--checkout repo=path ...] [--ref origin/main] [--max-age-days 7] [--json]
+```
+
+The header's `tip` is measured in a local checkout of its `repo`, found by
+`--checkout repo=path` or as `<workspace-root>/<repo>` (default: the parent of
+the current checkout). Nothing is fetched, so fetch first for the forge's
+answer. A repo with no checkout is reported as `handoff-tip-unmeasured` (info),
+never as fresh. A scalar is read exactly as written, so a tip such as
+`0123abcd` or `12791854` is never reinterpreted as a YAML number.
+
+| Code                             | Severity | Meaning                                                     |
+| -------------------------------- | -------- | ----------------------------------------------------------- |
+| `handoff-stale`                  | finding  | `tip` is behind `--ref`, or `updated` is past the age limit |
+| `handoff-tip-unresolvable`       | finding  | `tip` is not a commit in the repo's checkout                |
+| `handoff-header-missing`         | finding  | A file argument has no header block                         |
+| `handoff-header-unparseable`     | finding  | The block is not a YAML mapping, or `updated` is not a date |
+| `cross-repo-need-unmaterialized` | finding  | A `needs` or `provides` row has no `issue`                  |
+| `cross-repo-row-malformed`       | finding  | A `needs` or `provides` row is not a mapping                |
+| `handoff-tip-unmeasured`         | info     | No checkout, or `--ref` does not resolve; staleness unknown |
+
+Exit codes: `0` no findings, `1` findings, `2` could not run. An info-only
+report exits `0`.
+
+`--json` shape:
+
+```json
+{
+  "ref": "origin/main",
+  "max_age_days": 7,
+  "as_of": "2026-10-01",
+  "handoffs": [
+    {
+      "path": "handoffs/acme-api.md",
+      "header": {
+        "repo": "acme-api",
+        "session": "12",
+        "updated": "2026-09-30",
+        "tip": "3542de0d",
+        "open_issues": 41,
+        "open_prs": 2,
+        "next": ["acme-api#88"],
+        "needs": [{ "from": "acme-web", "issue": "acme-web#17", "what": "…" }],
+        "provides": [],
+        "raw": { "…": "every key in the block, as YAML decoded it" }
+      },
+      "checkout": "/src/acme-api",
+      "ref": "origin/main",
+      "tip_behind": 0,
+      "days_since_updated": 1,
+      "findings": []
+    }
+  ],
+  "skipped": ["handoffs/README.md"],
+  "findings": [
+    {
+      "code": "handoff-stale",
+      "severity": "finding",
+      "path": "…",
+      "repo": "acme-api",
+      "message": "…"
+    }
+  ]
+}
+```
+
+`header` is `null` when the file has no parseable block. `tip_behind` and
+`days_since_updated` are `null` when not measured. Arrays are always present,
+never `null`.
+
+#### `nightgauge next` — rank Ready, unblocked work by a programs file (Issue #1481)
+
+```bash
+nightgauge next --programs <file> [--owner <org>] [--project N] [--repos a,b] [--json]
+```
+
+The programs file is ordered work. Each program selects its issues by a label:
+
+```yaml
+label_prefix: "program:" # optional; a program's selector is <prefix><id>
+ready_status: Ready # optional; the board Status that means ready
+exclude_labels: [blocked] # optional; an issue carrying one is blocked
+programs:
+  - id: billing
+    rank: 1 # optional; unranked programs follow, in file order
+    title: Customers can pay
+    repos: [acme-api, acme-web] # optional; default every repo read
+  - id: onboarding
+    rank: 2
+    label: area:onboarding # optional; overrides <prefix><id>
+```
+
+Unknown keys are ignored, so a richer registry can serve as the programs file
+unchanged. The repos read are `--repos`, else every repo the file names, else
+the sibling checkouts with `.nightgauge/config.yaml`. Each repo's board is
+resolved as the scheduler resolves it.
+
+Readiness comes from the board Status. "Unblocked" comes from the cross-repo
+dependency graph `nightgauge graph build` prints: an issue is unblocked when it
+is in the graph's first topological wave, so no open issue on a board that was
+read blocks it, by GitHub's `blockedBy` relation or a dependency declared in its
+body. An issue is also blocked when it is in a dependency cycle, carries an
+exclude label, or has a truncated label set, because then an exclusion cannot
+be ruled out. A dependency on a repo outside the read set has an unknown state.
+It is listed under `unresolved_dependencies` and does not block.
+
+Items are ordered by board Priority (P0 first, unset last), then repo, then
+issue number. Ready, blocked issues no program selects are omitted.
+
+`--json` shape:
+
+```json
+{
+  "ready_status": "Ready",
+  "exclude_labels": ["blocked"],
+  "programs": [
+    {
+      "id": "billing",
+      "rank": 1,
+      "title": "Customers can pay",
+      "selector": "program:billing",
+      "repos": ["acme-api", "acme-web"],
+      "ready": [
+        {
+          "ref": "acme/acme-api#11",
+          "repo": "acme/acme-api",
+          "number": 11,
+          "title": "…",
+          "status": "Ready",
+          "priority": "P0",
+          "size": "M",
+          "labels": ["program:billing"],
+          "unresolved_dependencies": ["acme/other#5"]
+        }
+      ],
+      "blocked": [
+        {
+          "ref": "acme/acme-api#12",
+          "…": "…",
+          "blocked_by": ["acme/acme-api#20", "label `blocked`"]
+        }
+      ]
+    }
+  ],
+  "unprogrammed_ready": [],
+  "totals": { "ready": 1, "blocked": 1, "unprogrammed_ready": 0 }
+}
+```
+
 ### PR Operations
 
 ```bash

@@ -804,6 +804,8 @@ func rootCmd() *cobra.Command {
 		worktreeCmd(),
 		stashCmd(),
 		wipCmd(),
+		handoffCmd(),
+		nextCmd(),
 		configCmd(),
 		scanCmd(),
 		preflightCmd(),

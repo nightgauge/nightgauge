@@ -16,6 +16,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **`nightgauge handoff` and `nightgauge next`: handoff roll-up and ranked
+  work order in the binary** (#1481). `nightgauge handoff <file-or-dir>...`
+  parses each `<!-- nightgauge:handoff -->` header and reports a tip behind
+  `origin/main` in the repo's local checkout, an `updated` date older than
+  `--max-age-days`, and `needs`/`provides` rows with no issue. It exits 0
+  clean, 1 on findings and 2 when it could not run. `nightgauge next
+--programs <file>` reads an ordered programs file, each program selecting
+  issues by a label, and lists per program the board-Ready issues that the
+  cross-repo dependency graph shows unblocked, then the Ready ones that are
+  blocked and why, then Ready work no program selects. Neither verb calls an
+  LLM. Both take `--json`; the shapes are in
+  [GO_BINARY.md § Handoff and Work-Order Operations](docs/GO_BINARY.md#handoff-and-work-order-operations).
 - **`nightgauge doctor resolve machine-id --keep state|legacy` settles a
   machine-id conflict** (#2308). When `~/.nightgauge/machine-id` and the one in
   the machine-state directory differ, the NGD045 finding now shows both ids,
