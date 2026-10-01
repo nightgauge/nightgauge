@@ -14,8 +14,10 @@
 # with `"tool":"edit"` in internal/execution/testdata/opencode_stream_
 # research_sample.jsonl and opencode_stream_cloud_capture.jsonl, both captured
 # before #1640, and named in docs/decisions/022-opencode-multi-provider-
-# adapter.md § 6's own "observed default tools" list) and `list`/`websearch`
-# (named in that same ADR's § 9 "explore" subagent permission dump). See
+# adapter.md § 6's own "observed default tools" list), `websearch` (named in
+# that same ADR's § 9 "explore" subagent permission dump; `list` there is a
+# permission key, not a tool id, #1818) and the experimental `execute`, `lsp`
+# and `plan_exit`, which `ToolRegistry` adds only behind a flag (#1818). See
 # gates.js's TOOL_CLASSIFICATION comment for the reconciliation: the
 # classification table is the UNION of this capture and those other captures,
 # never a subset of only this file. TestToolClassificationCoversCapturedTools

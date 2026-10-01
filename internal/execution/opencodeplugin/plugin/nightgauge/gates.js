@@ -21,6 +21,7 @@
 //                      map matches a tool call's filePath lexically, so a
 //                      symlink planted inside an allow-listed directory
 //                      after the config is written is invisible to it.
+//   - "lsp"         -> the same as "read", on its filePath (#1818).
 //   - "read", "edit", "write" also refuse a path that matches the
 //                      permission map's secret (and, for edit/write,
 //                      project-config) deny patterns once letter case is
@@ -163,6 +164,11 @@ const TASK_MARKER = "[nightgauge-gate:task-denied]";
 //     § 6's own "observed default tools" list (bash, edit, write, read, grep,
 //     glob, task, todowrite, skill, webfetch) plus its § 9 "explore" subagent
 //     permission dump (list, websearch, grep, glob, bash, webfetch, read).
+//     `list` there is a permission key only: no 1.18.x tool registers that
+//     id (#1818), so it is not on this table and is refused as unknown.
+//   - Three ids `ToolRegistry` adds only behind an experimental flag the
+//     adapter never sets (#1818): `execute`, `lsp` and `plan_exit`. Each is
+//     classified below rather than left to the unknown-tool refusal.
 //
 // The two captures do NOT disagree on the file-mutation tool surface — a
 // review finding this round (see the ADR-022 amendment dated 2026-09-15,
@@ -207,13 +213,23 @@ export const TOOL_CLASSIFICATION = Object.freeze(
     read: "read",
     glob: "passthrough",
     grep: "passthrough",
-    list: "passthrough",
     webfetch: "passthrough", // governed by #1638's permission map, not here
     websearch: "passthrough",
     todowrite: "passthrough",
     skill: "passthrough", // Claude's own PostToolUse:Skill hook only logs usage
     question: "passthrough",
     invalid: "passthrough",
+    // Experimental tools (#1818). `ToolRegistry` adds each only when its flag
+    // is set, and the adapter sets none of them.
+    // OPENCODE_EXPERIMENTAL_CODE_MODE: runs an orchestration script that
+    // calls connected MCP tools, which no gate here can see into.
+    execute: "blocked",
+    // OPENCODE_EXPERIMENTAL_LSP_TOOL: read-only language-server queries on
+    // `{operation, filePath, line, character}`, gated like a read of filePath.
+    lsp: "read",
+    // OPENCODE_EXPERIMENTAL_PLAN_MODE, cli client only: switches the session
+    // from the plan agent to the build agent, a mode change no stage makes.
+    plan_exit: "blocked",
     // opencode's own read-only MCP resource tools (never a repository's own
     // MCP server tool, which arrives as "<server>_<tool>" and is not in this
     // table at all — see the ADR-022 amendment this round for that gap and
@@ -463,7 +479,6 @@ function explorationTarget(tool, args) {
       return [args.filePath];
     case "grep":
     case "glob":
-    case "list":
       return [typeof args.path === "string" && args.path !== "" ? args.path : "."];
     case "bash":
       return bashExplorationPaths(args.command);
@@ -561,7 +576,8 @@ export async function toolExecuteBefore(ctx, input, output) {
     };
     runGateVerb(["hook", "external-directory-gate"], payload, cwd, EXTERNAL_DIRECTORY_MARKER);
     enforceCaseFoldedDeny(input.tool, filePath, cwd, SECRET_DENY_PATTERNS);
-    capReadLimit(output);
+    // `limit` is read's own argument; lsp has none to cap.
+    if (input.tool === "read") capReadLimit(output);
     return;
   }
 
@@ -582,7 +598,10 @@ export async function toolExecuteBefore(ctx, input, output) {
 //
 // The screened text is every `type:"text"` part of `output.parts` (the
 // expansion this hook fires to let a plugin inspect/override, mirroring
-// tool.execute.before's already-relied-upon output.args — #1635) joined with
+// tool.execute.before's already-relied-upon output.args — #1635), plus the
+// description and expanded prompt of every `type:"subtask"` part, the shape
+// 1.18.30 sends for a command whose agent is a subagent or that sets
+// `subtask: true` (#1818). That is all joined with
 // the command's own name and raw argument string, so a hostile expansion
 // cannot hide behind a benign command name and an injection cannot hide
 // behind hostile-looking argv the model never actually resolved into parts.
@@ -591,8 +610,13 @@ export async function commandExecuteBefore(ctx, input, output) {
   const cwd = gateCwd(ctx);
   const parts = output && Array.isArray(output.parts) ? output.parts : [];
   const partsText = parts
-    .filter((p) => p && p.type === "text" && typeof p.text === "string")
-    .map((p) => p.text)
+    .flatMap((p) => {
+      if (!p) return [];
+      if (p.type === "text") return [p.text];
+      if (p.type === "subtask") return [p.description, p.prompt];
+      return [];
+    })
+    .filter((s) => typeof s === "string" && s !== "")
     .join("\n");
   const prompt = [input.command, input.arguments, partsText]
     .filter((s) => typeof s === "string" && s !== "")

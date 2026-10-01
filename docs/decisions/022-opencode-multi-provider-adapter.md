@@ -3291,6 +3291,34 @@ runs now passes `-c core.fsmonitor=false -c core.hooksPath=/dev/null` with
 `GIT_CONFIG_NOSYSTEM=1`, and its `git diff` passes `--no-ext-diff
 --no-textconv`.
 
+## Subtask commands and the experimental tool ids (amendment 2026-09-30, #1818)
+
+A command whose agent is a subagent, or that sets `subtask: true`, reaches
+`command.execute.before` as a single `type:"subtask"` part carrying the
+expanded template in `prompt`. `gates.js` screened only `type:"text"` parts,
+so the expansion never reached `hook sanitize-prompt`. It now screens each
+subtask part's `description` and `prompt` with the text parts. The `task`
+denial still refuses the subagent session that follows, so this mattered
+only once that denial is lifted (#1805).
+
+`ToolRegistry` adds three tool ids only behind an experimental flag the
+adapter never sets. `TOOL_CLASSIFICATION` now names them instead of leaving
+them to the unknown-tool refusal:
+
+| Tool id     | Flag                                          | Kind      |
+| ----------- | --------------------------------------------- | --------- |
+| `execute`   | `OPENCODE_EXPERIMENTAL_CODE_MODE`             | `blocked` |
+| `lsp`       | `OPENCODE_EXPERIMENTAL_LSP_TOOL`              | `read`    |
+| `plan_exit` | `OPENCODE_EXPERIMENTAL_PLAN_MODE`, cli client | `blocked` |
+
+`execute` runs a script that calls MCP tools no gate can see into.
+`plan_exit` switches the session to the build agent, which no stage needs.
+`lsp` takes `{operation, filePath, line, character}` and only queries a
+language server, so it gets the read gates on `filePath`, without read's
+line cap. `list` left the table: on 1.18.x it is a permission key and no
+tool registers that id. The registry was read from the installed 1.18.32
+binary's bundled source; the pinned 1.18.30 capture lists none of the four.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special
