@@ -159,14 +159,21 @@ longer costs you the check gate to do so.
 finishes the work, watches CI go green and then stops to ask permission to merge
 has not finished the work — completing work includes landing it. The approval it
 waits for adds nothing: the ruleset already makes a merge impossible while a
-check is red or pending, so the gate is enforced by the forge, not by the
-operator being awake to answer. Merge, then run the post-merge verification
+required check is red or pending, so the gate is enforced by the forge, not by
+the operator being awake to answer. Merge, then run the post-merge verification
 below. A real failure is still surfaced rather than merged around — this removes
 a redundant confirmation, not the judgement.
 
+**"Green" means every check on the PR, required or not.** The ruleset blocks
+only on required checks, so a red optional one merges silently. Read the whole
+rollup (`gh pr view N --json statusCheckRollup`), not `gh pr checks --required`,
+and treat any failure there as a failing change. A platform PR once merged with
+its `npm audit` step red: the advisories were real and already on `main`, and
+nothing reported them because that workflow never runs on `main`.
+
 **Dependabot PRs follow the same rule.** A green dependency bump is merged with
 `gh pr merge --squash` like any other pull request, without waiting for a human
-review: the required checks are the review. A red one is a failing change: fix
+review: the checks are the review. A red one is a failing change: fix
 the code or the pin in that pull request (or a follow-up that supersedes it),
 never leave it open for someone to look at.
 
