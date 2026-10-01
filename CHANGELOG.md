@@ -41,6 +41,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A stage-context test no longer fails when its two records straddle a
+  second** (#2326). It stripped clock-derived keys only at the top level, but
+  each `phases[]` entry carries its own second-resolution timestamps; it now
+  strips them at every depth.
 - **Six follow-ups from the OpenCode adapter review** (#1708). Every stage
   of an `opencode` run now starts with no cached model catalog: OpenCode
   prefers a cached catalog to the one bundled in the binary, the stages of a
@@ -208,6 +212,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **"Green" means every check on the PR, required or not** (workspace rule).
+  The ruleset blocks a merge only on required checks, so a red optional check,
+  such as an `npm audit` step, used to merge silently. The workspace-rules block
+  in `AGENTS.md` and `docs/GIT_WORKFLOW.md` now say to read the whole check
+  rollup before merging, and the latter no longer claims the ruleset blocks on
+  every check.
 - **`@anthropic-ai/sdk` 0.112.5 → 0.128.0 in the SDK, with the lockfile.**
   The root `overrides` floor (`^0.112.3`, set to clear advisories in #70) is
   raised to `^0.128.0`. Dependabot's #2301 changed only the SDK's

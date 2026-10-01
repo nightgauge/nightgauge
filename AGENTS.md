@@ -41,13 +41,13 @@ the SHA-256 of the lines between the markers.
   when `github_auth.app` is configured, on the installation's own quota.
 - Use a feature branch and a pull request; never push to `main`. Run this
   repository's complete local gate, defined in this file, once before pushing.
-- **Merge** with `nightgauge pr merge N` once required checks are green: it
-  squash-merges directly, or on a merge-queue branch enqueues and waits for
-  the queue's result. `gh pr merge` cannot enqueue here (auto-merge is off).
-  Never `--auto`. `--admin` bypasses the entire ruleset and is an emergency hatch.
-  Green checks are the go signal: merge instead of stopping to ask.
-  Dependabot PRs are no exception: merge a green one without waiting for a
-  human review, and fix a red one like any other failing change.
+- **Merge** with `nightgauge pr merge N` once every check is green, required
+  or not: a red optional check (say `npm audit`) still means not done, so read
+  `gh pr view N --json statusCheckRollup`, not `--required`. It squash-merges,
+  or enqueues on a merge-queue branch and waits; `gh pr merge` cannot enqueue
+  (auto-merge is off). Never `--auto`; `--admin` bypasses the whole ruleset.
+  Green checks are the go signal: merge instead of stopping to ask. Merge a
+  green Dependabot PR without review; fix a red one like any other failure.
 - **Batch merges; never serialize them.** CI is slow, and before the merge
   queue each merge made every other open PR update and re-run it. Fold related
   or small changes (fixes from one finding pass, a follow-up to an open PR)
@@ -93,7 +93,7 @@ the SHA-256 of the lines between the markers.
 - Instruction files are regular files. Never symlink them and never import
   across repositories.
 
-<!-- nightgauge-workspace-rules:end sha256=297793a6dd0ea919b1280db8798c0a5ff751f0c9ff5739880a989a6e40d8ef1f -->
+<!-- nightgauge-workspace-rules:end sha256=0d8fd44a39bc68315361bb732bdef90530eb8da91e696c4d94db9d169ef21be0 -->
 
 ## Repository operating contract
 
