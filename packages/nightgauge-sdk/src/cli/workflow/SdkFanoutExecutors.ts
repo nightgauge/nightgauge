@@ -45,6 +45,7 @@ import {
   type AgentExecutionResult,
   type JudgeExecutionResult,
   type WorkflowExecutorBindings,
+  type WorkflowUnitContext,
 } from "./SdkFanoutRunner.js";
 import type { ICliAdapter, QueryFunctionOptions } from "../adapters/ICliAdapter.js";
 import { isLocalProvider, providerFor } from "../../eval/modelRegistry.js";
@@ -89,6 +90,12 @@ export type EphemeralExec = (input: {
   /** Owning pipeline stage, propagated to the adapter's query options. */
   stage?: string;
   cwd?: string;
+  /**
+   * The stage's stop (`PipelineOrchestrator.stop()` or the stage timeout).
+   * The exec hands it to the query, so a query that honours it, the opencode
+   * adapter's, ends its process with the stage. @see Issue #1765
+   */
+  abortSignal?: AbortSignal;
 }) => Promise<EphemeralExecResult>;
 
 /**
@@ -164,9 +171,17 @@ function usageFromExec(
   };
 }
 
-/** Map a thrown exec error to a precise terminal kind. */
-function terminalKindFromError(err: unknown): WorkflowTerminalKind {
-  return err instanceof EphemeralTimeoutError ? "timeout" : "error";
+/**
+ * Map a thrown exec error to a precise terminal kind. A unit the stage timeout
+ * aborted throws the query's own abort error; the signal's reason says it
+ * timed out.
+ */
+function terminalKindFromError(err: unknown, abortSignal?: AbortSignal): WorkflowTerminalKind {
+  if (err instanceof EphemeralTimeoutError) return "timeout";
+  if (abortSignal?.aborted && abortSignal.reason instanceof EphemeralTimeoutError) {
+    return "timeout";
+  }
+  return "error";
 }
 
 /**
@@ -186,7 +201,11 @@ export const adapterEphemeralExec: EphemeralExec = async ({
   model,
   stage,
   cwd,
+  abortSignal,
 }): Promise<EphemeralExecResult> => {
+  // A unit queued behind the concurrency ceiling may start after the stage
+  // stopped; it never spawns.
+  abortSignal?.throwIfAborted();
   const queryOptions: QueryFunctionOptions = { cwd, stage };
   const query = await adapter.createQueryFunction(queryOptions);
 
@@ -194,7 +213,10 @@ export const adapterEphemeralExec: EphemeralExec = async ({
   let tokens: EphemeralExecResult["tokens"];
   let resolvedModel = model;
 
-  for await (const message of query({ prompt, options: { model, cwd } })) {
+  for await (const message of query({ prompt, options: { model, cwd, abortSignal } })) {
+    // An adapter whose query ignores the signal stops being drained; leaving
+    // the loop returns its generator, which ends its process.
+    abortSignal?.throwIfAborted();
     const record = message as Record<string, unknown>;
     if (message.type === "result") {
       const usage = (record.usage ?? {}) as Record<string, number | undefined>;
@@ -319,7 +341,11 @@ export function makeSdkFanoutBindings(
   const { stage, cwd } = options;
 
   return {
-    async runAgent(agent: WorkflowAgentSpec): Promise<AgentExecutionResult> {
+    async runAgent(
+      agent: WorkflowAgentSpec,
+      unit?: WorkflowUnitContext
+    ): Promise<AgentExecutionResult> {
+      const abortSignal = unit?.abortSignal;
       try {
         const result = await exec({
           adapter,
@@ -327,6 +353,7 @@ export function makeSdkFanoutBindings(
           model: agent.model,
           stage,
           cwd,
+          abortSignal,
         });
         return {
           usage: usageFromExec(result, adapter, agent.model),
@@ -339,19 +366,24 @@ export function makeSdkFanoutBindings(
         // failure so the terminal node never emits a generic "error" with no
         // signal about whether the unit timed out (#3914, fan-out side).
         throw new AgentExecutionError(
-          terminalKindFromError(err),
+          terminalKindFromError(err, abortSignal),
           zeroUsage(true),
           err instanceof Error ? err.message : String(err)
         );
       }
     },
 
-    async runJudge(judge: WorkflowJudgeSpec): Promise<JudgeExecutionResult> {
+    async runJudge(
+      judge: WorkflowJudgeSpec,
+      _targetNodeId: string,
+      unit?: WorkflowUnitContext
+    ): Promise<JudgeExecutionResult> {
       const result = await exec({
         adapter,
         prompt: judge.prompt,
         stage,
         cwd,
+        abortSignal: unit?.abortSignal,
       });
       const outcome = parseJudgeOutcome(result.text);
       return {

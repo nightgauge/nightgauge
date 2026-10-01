@@ -30,6 +30,7 @@ import {
 import { parseOrchestrationFrontmatter } from "../cli/workflow/parseOrchestrationFrontmatter.js";
 import type { WorkflowSpec } from "../cli/workflow/WorkflowSpec.js";
 import type { WorkflowExecutorBindings } from "../cli/workflow/SdkFanoutRunner.js";
+import { EphemeralTimeoutError } from "../cli/workflow/SdkFanoutExecutors.js";
 import { WorkflowExecutor, createNodeJournalFs, type JournalFs } from "./WorkflowExecutor.js";
 import type { ICliAdapter } from "../cli/adapters/ICliAdapter.js";
 import { TraceRecorder } from "../events/traceRecorder.js";
@@ -407,25 +408,50 @@ export class PipelineOrchestrator {
    * Run a stage via the multi-agent `WorkflowExecutor`, bracketed by the
    * pipeline's own phase/agent nodes so the stage still appears as one phase in
    * the canonical tree while its fan-out sub-nodes stream through the same sink.
+   *
+   * `abortSignal` is the stage's stop. It and the stage timeout fire the
+   * signal every fan-out unit's query receives, as the single-agent
+   * StageExecutor path does. @see Issue #1765
    */
   private async runStageWorkflow(
     stage: PipelineStage,
-    selection: Extract<ExecutorSelection, { kind: "workflow" }>
+    selection: Extract<ExecutorSelection, { kind: "workflow" }>,
+    abortSignal: AbortSignal
   ): Promise<void> {
+    const abort = new AbortController();
+    const onStop = () => abort.abort(abortSignal.reason);
+    if (abortSignal.aborted) onStop();
+    else abortSignal.addEventListener("abort", onStop, { once: true });
+    const timeoutMs = this.config.stageTimeoutMs ?? 0;
+    const timeoutId =
+      timeoutMs > 0
+        ? setTimeout(
+            () =>
+              abort.abort(
+                new EphemeralTimeoutError(`stage '${stage}' timed out after ${timeoutMs}ms`)
+              ),
+            timeoutMs
+          )
+        : null;
+
     this.emitter.stageStarted(stage);
     try {
       // The EventBus is itself the canonical WorkflowEventSink, so the fan-out's
       // sub-agent/judge nodes fold into the same live tree as the stage node.
-      const result = await selection.executor.execute(selection.spec, this.events);
-      const failed = result.summary.status === "failed";
-      if (failed) {
-        this.emitter.stageFailed(stage, "error");
+      const result = await selection.executor.execute(selection.spec, this.events, {
+        abortSignal: abort.signal,
+      });
+      // The catch below emits the one failed terminal for this throw too.
+      if (result.summary.status === "failed") {
         throw new Error(`workflow stage '${stage}' failed (status=${result.summary.status})`);
       }
       this.emitter.stageCompleted(stage);
     } catch (error) {
       this.emitter.stageFailed(stage, "error");
       throw error instanceof Error ? error : new Error(String(error));
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      abortSignal.removeEventListener("abort", onStop);
     }
   }
 
@@ -711,7 +737,7 @@ export class PipelineOrchestrator {
       // unchanged single-agent StageExecutor path.
       const selection = await this.selectExecutor(stage, issueNumber);
       if (selection.kind === "workflow") {
-        await this.runStageWorkflow(stage, selection);
+        await this.runStageWorkflow(stage, selection, abortSignal);
         return {
           stage,
           issueNumber,
@@ -806,17 +832,17 @@ export class PipelineOrchestrator {
     // single-agent SDKMessage stream to yield — its fan-out drives the canonical
     // node tree through the EventBus sink, so we run it to completion and yield
     // nothing here. Consumers observe the fan-out via `orchestrator.events`.
-    const selection = await this.selectExecutor(stage, issueNumber);
-    if (selection.kind === "workflow") {
-      await this.runStageWorkflow(stage, selection);
-      return;
-    }
-
-    const prompt = await buildStagePrompt(stage, issueNumber, this.config.skillsPath);
-    const skillDir = await this.stageSkillDir(stage);
-
     const { signal: abortSignal, release } = this.stageAbort();
     try {
+      const selection = await this.selectExecutor(stage, issueNumber);
+      if (selection.kind === "workflow") {
+        await this.runStageWorkflow(stage, selection, abortSignal);
+        return;
+      }
+
+      const prompt = await buildStagePrompt(stage, issueNumber, this.config.skillsPath);
+      const skillDir = await this.stageSkillDir(stage);
+
       yield* this.executor.execute({
         stage,
         issueNumber,

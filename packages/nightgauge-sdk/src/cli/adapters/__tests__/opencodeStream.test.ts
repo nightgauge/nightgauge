@@ -67,6 +67,8 @@ interface ExpectedFixture {
   };
   stderr: string | null;
   failures: Array<{ allowed_tools: string[]; marker: string }>;
+  /** What every failure run reports as drift; absent, none. */
+  failure_drift_markers?: string[];
   fold: null | {
     sessions: Array<{
       id: string;
@@ -194,7 +196,7 @@ describe("opencode stream parser: shared Go/TS expectations (#1637)", () => {
         expect(summary.failure?.split("\n")[0].startsWith(`${f.marker}:`), summary.failure).toBe(
           true
         );
-        expect(summary.driftMarkers).toEqual([]);
+        expect(summary.driftMarkers).toEqual(fx.failure_drift_markers ?? []);
       }
     });
 

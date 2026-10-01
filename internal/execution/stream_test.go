@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1718,7 +1719,11 @@ type openCodeExpectedFixture struct {
 		AllowedTools []string `json:"allowed_tools"`
 		Marker       string   `json:"marker"`
 	} `json:"failures"`
-	Fold *struct {
+	// FailureDriftMarkers is what every failure run reports as drift; absent,
+	// none. A "deny" capture has no stderr notice, so its rejection is read
+	// from the stream and says so.
+	FailureDriftMarkers []string `json:"failure_drift_markers"`
+	Fold                *struct {
 		Sessions []struct {
 			ID       string                 `json:"id"`
 			Parent   string                 `json:"parent"`
@@ -1808,6 +1813,9 @@ func TestOpenCodeSharedExpectations(t *testing.T) {
 				staged, _ := openCodeStageRun(t, stdout, readTestdata(t, *fx.Stderr), 0, f.AllowedTools, nil)
 				if staged.ExitCode != 1 || !strings.HasSuffix(staged.Stderr, f.Marker+"\n") {
 					t.Errorf("allowed %q: exit %d, stderr %q; want exit 1 ending in %q", f.AllowedTools, staged.ExitCode, staged.Stderr, f.Marker)
+				}
+				if !slices.Equal(staged.DriftMarkers, fx.FailureDriftMarkers) {
+					t.Errorf("allowed %q: drift markers %q, want %q", f.AllowedTools, staged.DriftMarkers, fx.FailureDriftMarkers)
 				}
 			}
 

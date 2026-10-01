@@ -701,6 +701,10 @@ Each entry is keyed by a capture's file name, and both tests fail when an
   stage with for each set of allowed tools. `[adapter-permission-rejected]`
   is for a tool the stage was allowed, and `[permission-denied]` for one it
   was not. A capture without stderr has no failure: its run is clean.
+- `failure_drift_markers`: the drift markers every failure run reports;
+  absent, none. A `deny` capture prints no auto-reject notice, so its stderr
+  file is empty and the rejection is classified from the stream's own
+  rejected `tool_use` event, which reports one drift marker saying so.
 - `fold`: for a capture whose session exports were recorded at capture time,
   the sessions and their export totals. It also holds the stage's usage with
   every subagent session folded in, the served model as ADR-022 § 2 records

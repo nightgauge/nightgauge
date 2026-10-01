@@ -118,9 +118,23 @@ export interface JudgeExecutionResult {
  */
 export interface WorkflowExecutorBindings {
   /** Run one fanned-out agent and return its usage + terminal kind. */
-  runAgent(agent: WorkflowAgentSpec): Promise<AgentExecutionResult>;
+  runAgent(agent: WorkflowAgentSpec, unit?: WorkflowUnitContext): Promise<AgentExecutionResult>;
   /** Run one adversarial judge against a target node's "done" claim. */
-  runJudge(judge: WorkflowJudgeSpec, targetNodeId: string): Promise<JudgeExecutionResult>;
+  runJudge(
+    judge: WorkflowJudgeSpec,
+    targetNodeId: string,
+    unit?: WorkflowUnitContext
+  ): Promise<JudgeExecutionResult>;
+}
+
+/**
+ * What the runner hands each unit it dispatches. `abortSignal` is the run's
+ * stop: the pipeline fires it on `stop()` and on the stage timeout, and a
+ * binding passes it to its query so the unit's process ends with the stage.
+ * @see Issue #1765
+ */
+export interface WorkflowUnitContext {
+  abortSignal?: AbortSignal;
 }
 
 /** Per-phase counts in the run summary. */
@@ -169,6 +183,11 @@ export interface RunSdkFanoutOptions {
    * quota. Defaults to {@link DEFAULT_LARGE_FANOUT_THRESHOLD}.
    */
   largeFanoutThreshold?: number;
+  /**
+   * The run's stop, passed to every unit's binding so an aborted stage ends
+   * the units' queries too. @see Issue #1765
+   */
+  abortSignal?: AbortSignal;
 }
 
 /**
@@ -248,6 +267,7 @@ export async function runSdkFanout(
 
   const nextSeq = createSeqCounter();
   const now = (): string => new Date().toISOString();
+  const unit: WorkflowUnitContext = { abortSignal: options.abortSignal };
 
   // Carries the non-deferred quota-gate decision onto the final summary when a
   // provider was supplied; stays undefined when no provider gated the run.
@@ -410,7 +430,7 @@ export async function runSdkFanout(
           let terminalKind: WorkflowTerminalKind;
           let usage: WorkflowAgentUsage;
           try {
-            result = await executor.runAgent(agent);
+            result = await executor.runAgent(agent, unit);
             terminalKind = result.terminalKind;
             usage = result.usage;
             status = terminalKind === "success" ? "succeeded" : "failed";
@@ -476,7 +496,7 @@ export async function runSdkFanout(
           let result: JudgeExecutionResult;
           let status: WorkflowNodeStatus;
           try {
-            result = await executor.runJudge(judge, target);
+            result = await executor.runJudge(judge, target, unit);
             status = "succeeded";
           } catch (err) {
             result = { verdict: "uncertain", usage: zeroUsage(true) };

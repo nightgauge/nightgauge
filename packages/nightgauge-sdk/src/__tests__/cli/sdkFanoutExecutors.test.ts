@@ -451,4 +451,75 @@ describe("SdkFanoutExecutors (#3911)", () => {
       expect(agentResult.usage.costUsd).toBe(0);
     });
   });
+
+  describe("the stage's stop reaches the fan-out query (#1765)", () => {
+    it("adapterEphemeralExec hands the abort signal to the adapter's query", async () => {
+      let seen: AbortSignal | undefined;
+      const queryFn: SDKQueryFunction = (q) => {
+        seen = q.options?.abortSignal;
+        return (async function* (): AsyncGenerator<SDKMessage> {
+          yield { type: "result", usage: {}, total_cost_usd: 0 };
+        })();
+      };
+      const controller = new AbortController();
+      await adapterEphemeralExec({
+        adapter: fakeAdapter("opencode", queryFn),
+        prompt: "p",
+        abortSignal: controller.signal,
+      });
+      expect(seen).toBe(controller.signal);
+    });
+
+    it("a fanned-out opencode unit ends when the run's signal fires", async () => {
+      // A query that honours the signal, as the opencode adapter's does: it
+      // runs until aborted, then throws.
+      let started!: () => void;
+      const running = new Promise<void>((resolve) => (started = resolve));
+      const queryFn: SDKQueryFunction = (q) =>
+        (async function* (): AsyncGenerator<SDKMessage> {
+          const signal = q.options?.abortSignal;
+          started();
+          await new Promise<void>((_, reject) => {
+            if (!signal) return; // never ends: the bug
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+          yield { type: "result", usage: {}, total_cost_usd: 0 };
+        })();
+      const adapter = fakeAdapter("opencode", queryFn);
+      const controller = new AbortController();
+      const spec = codexSpec(1);
+
+      const sink = new ArrayWorkflowEventSink();
+      const run = runSdkFanout(spec, sink, makeSdkFanoutBindings(adapter), {
+        abortSignal: controller.signal,
+      });
+      await running;
+      controller.abort(new EphemeralTimeoutError("stage timed out"));
+      const summary = await run;
+
+      expect(summary.agentsFailed).toBe(1);
+      const terminal = sink
+        .getEvents()
+        .filter(isSubAgentNode)
+        .find((n) => n.status === "failed");
+      // The stage timeout's reason classifies the unit as timed out.
+      expect(terminal?.terminalKind).toBe("timeout");
+    });
+
+    it("a unit that starts after the stop never spawns", async () => {
+      const create = vi.fn();
+      const adapter = fakeAdapter("opencode");
+      adapter.createQueryFunction = create;
+      const controller = new AbortController();
+      controller.abort();
+      const bindings = makeSdkFanoutBindings(adapter);
+      await expect(
+        bindings.runAgent(
+          { agentId: "a0", prompt: "p", provider: "opencode" },
+          { abortSignal: controller.signal }
+        )
+      ).rejects.toThrow();
+      expect(create).not.toHaveBeenCalled();
+    });
+  });
 });

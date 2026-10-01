@@ -29,6 +29,33 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`stop()` and the stage timeout reach the units of a fan-out stage**
+  (#1765). On the `sdk-fanout` path, `PipelineOrchestrator.stop()` and the
+  per-stage timeout used to leave each unit's `opencode` query running. The
+  stage's abort signal, joined with its timeout, now reaches every unit's query
+  as the single-agent path does. A unit that would start after the stop never
+  spawns, and a unit ended by the timeout is reported as `timeout`.
+- **A failed fan-out stage emits one `failed` terminal, not two** (#2318).
+  `runStageWorkflow` emitted the stage's failed agent and phase events before
+  throwing, and its own `catch` emitted them again.
+- **An OpenCode isolation test no longer fails its cleanup under load**
+  (#1783). `TestOpenCodeIsolationKeepsTheOperatorsGitAndGh` runs the real `gh`.
+  For a sampled call, `gh` starts a background `send-telemetry` process that
+  outlives it and writes a device-id file into the test's temporary home,
+  sometimes after the cleanup has removed that directory. The test now sets
+  `GH_TELEMETRY=0`, so no such process starts and no fixture data is sent.
+- **The shared OpenCode fixture loops assert how the deny capture classifies**
+  (#1830). `opencode_deny_rejected_stream.jsonl` had no expected failures, so
+  neither the Go nor the TS shared loop checked its classification. It now
+  lists the marker for each allowed-tools set and, through a new
+  `failure_drift_markers` field, the drift marker both languages report, so a
+  parity break fails both loops.
+- **The failure taxonomy names the permission map's `deny` as the usual
+  source of `adapter_permission_rejected`** (#1829). The rule table, the Go
+  comment and `docs/FAILURE_TAXONOMY.md` still said Nightgauge generates no
+  OpenCode permission map. An explicit `deny` in that map is now the main
+  source; an `ask` rule from other OpenCode config, auto-rejected headless, is
+  the narrower case.
 - **The docs link check re-probes an HTTP 408 instead of failing on it**
   (#2317). A shields.io badge in `README.md` answered 408 Request Timeout and
   failed the required `link-check` job on a pull request that did not touch
