@@ -128,6 +128,15 @@ func (m *Manager) ensureWorktree(repo string, issueNumber int) (string, error) {
 		return "", fmt.Errorf("git worktree add: %s: %w", string(output), err)
 	}
 
+	// Record the creation commit for the OpenCode tamper gate (#1825), which
+	// diffs the worktree's OpenCode config against it rather than against the
+	// live default-branch ref. A failed write is not a failed provisioning:
+	// the gate then falls back to the default branch's merge-base and says so
+	// on stderr.
+	if err := gitworktree.RecordBaseCommit(worktreeDir, headSHA); err != nil {
+		log.Printf("[WARN] worktree %s: %v; the OpenCode tamper gate will compare against the default branch instead", worktreeDir, err)
+	}
+
 	// Copy .nightgauge config files from the parent repo into the worktree
 	// so adapter detection reads the same config as the main checkout.
 	copyWorktreeConfig(repoRoot, worktreeDir)

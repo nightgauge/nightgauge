@@ -2625,6 +2625,24 @@ cycle); and `git ls-files -v`, because `git update-index
 status and the diff legs entirely (`TestOpenCodeTamperGateCommittedChange`,
 `TestOpenCodeTamperGateSkipWorktree`).
 
+**Amendment (#1825): leg 2 compares against the worktree's creation
+commit.** The merge-base with the live default-branch ref was wrong both
+ways. `ensureWorktree` creates a worktree detached at the primary checkout's
+`HEAD`, so a primary checkout on a branch carrying an unmerged `opencode.json`
+change got every OpenCode dispatch refused. And `refs/remotes/origin/<default>`
+is shared with the primary checkout, so a stage with `Bash` could move it onto
+its own tamper commit and hide that commit from the next dispatch. Now
+`ensureWorktree` records the creation commit in the worktree's own git admin
+directory (`gitworktree.BaseCommitFile`), and leg 2 diffs against that commit.
+The admin directory is outside the worktree's tree, no ref update moves it, and
+git deletes it with the worktree. Leg 2 also fails closed now. A record that is
+unreadable, malformed or names no commit refuses, and so does a failed
+`merge-base` or `diff`; before, each of those silently skipped the leg. A
+worktree with no record (created before #1825, or not by the pipeline) falls
+back to the merge-base and prints a notice on stderr saying so. With no default
+branch either, the leg is skipped, with its own notice
+(`opencode_guard_1825_test.go`).
+
 **AC4's `/tmp` allow-list: found dead, left dead, recorded (AC8).** A
 probe read Tool.assertExternalDirectory's own bundled source: every
 `external_directory` request — the file tool's own out-of-worktree check,

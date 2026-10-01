@@ -59,6 +59,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -68,6 +69,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/nightgauge/nightgauge/internal/gitworktree"
 	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
 
@@ -976,16 +978,20 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 //     files inside its target, so a symlinked .opencode is reported as itself
 //     — the issue's "symlinks are compared as links, not followed" — without
 //     this function resolving anything by hand.
-//  2. `git diff --name-only <merge-base> -- <paths>` against the worktree's
-//     resolved base ref (openCodeTamperGateBaseRef) — status alone only ever
-//     sees a difference from HEAD, which is wrong once a stage commits its
-//     tamper: Manager.RunStage reuses one worktree across every stage of a
-//     run, and a later stage's HEAD is whatever an earlier stage committed,
-//     not the base branch's tip. Comparing to the merge-base instead of HEAD
-//     catches a committed change status alone misses. A worktree with no
-//     resolvable base ref (no origin remote and no local main/master — never
-//     a real dispatch, whose worktree Manager.RunStage clones from the target
-//     repository) skips only this leg, not the whole check.
+//  2. `git diff --name-only <base> -- <paths>` against the worktree's base
+//     (openCodeTamperGateBase) — status alone only ever sees a difference
+//     from HEAD, which is wrong once a stage commits its tamper:
+//     Manager.RunStage reuses one worktree across every stage of a run, and a
+//     later stage's HEAD is whatever an earlier stage committed. The base is
+//     the commit the worktree was created at, which ensureWorktree records in
+//     the worktree's own git admin directory (gitworktree.BaseCommitFile,
+//     #1825): not the live default-branch ref, which both refused a worktree
+//     created from a primary checkout already carrying an unmerged config
+//     change and could be moved by a stage to hide a committed tamper. A
+//     worktree with no record (created before #1825, or not by the pipeline)
+//     falls back to the merge-base with the default branch, and one with no
+//     resolvable default branch at all skips this leg; both say so on warn.
+//     Every other failure resolving the base or running the diff refuses.
 //  3. `git ls-files -v -- <paths>` — a path a stage marked skip-worktree or
 //     assume-unchanged (`git update-index --skip-worktree`/`--assume-unchanged`)
 //     is invisible to both (1) and (2): git's own diff and status machinery
@@ -1012,6 +1018,12 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 // status failure for any OTHER reason (git missing from PATH, a corrupt
 // object database) already returned a refusal below and is unchanged.
 func openCodeProjectConfigTamperCheck(ctx context.Context, worktreeDir string) error {
+	return openCodeProjectConfigTamperCheckTo(ctx, worktreeDir, os.Stderr)
+}
+
+// openCodeProjectConfigTamperCheckTo is openCodeProjectConfigTamperCheck with
+// the writer leg 2's fallback and skip notices go to.
+func openCodeProjectConfigTamperCheckTo(ctx context.Context, worktreeDir string, warn io.Writer) error {
 	if worktreeDir == "" {
 		return nil
 	}
@@ -1058,19 +1070,29 @@ func openCodeProjectConfigTamperCheck(ctx context.Context, worktreeDir string) e
 		add(line[3:])
 	}
 
-	// Leg 2: committed on top of the base branch, which status alone misses
-	// in a worktree a later stage reuses (best-effort: a worktree with no
-	// resolvable base ref skips only this leg).
-	if baseRef, ok := openCodeTamperGateBaseRef(ctx, worktreeDir); ok {
-		if mergeBase, err := openCodeGitOutput(ctx, worktreeDir, "merge-base", "HEAD", baseRef); err == nil {
-			if mergeBase = strings.TrimSpace(mergeBase); mergeBase != "" {
-				diffArgs := append([]string{"diff", "--no-ext-diff", "--no-textconv", "--name-only", mergeBase, "--"}, protectedPaths...)
-				if diffOut, err := openCodeGitOutput(ctx, worktreeDir, diffArgs...); err == nil {
-					for _, line := range strings.Split(strings.TrimSpace(diffOut), "\n") {
-						add(line)
-					}
-				}
-			}
+	// Leg 2: committed on top of the worktree's base, which status alone
+	// misses in a worktree a later stage reuses.
+	base, notice, err := openCodeTamperGateBase(ctx, worktreeDir)
+	if err != nil {
+		return fmt.Errorf(
+			"opencode: refused: cannot resolve the base %s's %s is compared against: %v. "+
+				"See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
+			worktreeDir, gitProtectedPathsDoc, err)
+	}
+	if notice != "" {
+		fmt.Fprintf(warn, "opencode: tamper gate: %s: %s\n", worktreeDir, notice)
+	}
+	if base != "" {
+		diffArgs := append([]string{"diff", "--no-ext-diff", "--no-textconv", "--name-only", base, "--"}, protectedPaths...)
+		diffOut, err := openCodeGitOutput(ctx, worktreeDir, diffArgs...)
+		if err != nil {
+			return fmt.Errorf(
+				"opencode: refused: cannot diff %s's %s against its base %s: %s. "+
+					"See docs/decisions/022-opencode-multi-provider-adapter.md § 8",
+				worktreeDir, gitProtectedPathsDoc, base, openCodeGitErrText(err))
+		}
+		for _, line := range strings.Split(strings.TrimSpace(diffOut), "\n") {
+			add(line)
 		}
 	}
 
@@ -1096,8 +1118,71 @@ func openCodeProjectConfigTamperCheck(ctx context.Context, worktreeDir string) e
 		worktreeDir, gitProtectedPathsDoc, strings.Join(paths, ", "))
 }
 
-// openCodeTamperGateBaseRef resolves the ref openCodeProjectConfigTamperCheck's
-// second leg compares worktreeDir against: the remote's default branch when
+// openCodeTamperGateBase resolves the commit openCodeProjectConfigTamperCheck's
+// second leg diffs worktreeDir against (#1825).
+//
+// The worktree's recorded creation commit (gitworktree.BaseCommitFile in its
+// own git admin directory) wins. A record that exists but is unreadable,
+// malformed or names no commit is an error: something wrote it, and the gate
+// cannot tell a damaged record from a stage hiding a tamper behind one.
+//
+// With no record, the base is the merge-base of HEAD with the default branch
+// (openCodeTamperGateBaseRef), and notice says so: that ref is live and shared
+// with the primary checkout, so the comparison is weaker. A failed merge-base
+// (shallow history, unrelated histories) is an error. With no default branch
+// to resolve either, base is "" and notice says the leg was skipped.
+func openCodeTamperGateBase(ctx context.Context, worktreeDir string) (base, notice string, err error) {
+	gitDir, err := openCodeGitOutput(ctx, worktreeDir, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return "", "", fmt.Errorf("git rev-parse --absolute-git-dir: %s", openCodeGitErrText(err))
+	}
+	recordPath := filepath.Join(strings.TrimSpace(gitDir), gitworktree.BaseCommitFile)
+	data, readErr := os.ReadFile(recordPath)
+	switch {
+	case readErr == nil:
+		sha := strings.TrimSpace(string(data))
+		if !openCodeCommitSHA.MatchString(sha) {
+			return "", "", fmt.Errorf("recorded base commit in %s is malformed: %q", recordPath, sha)
+		}
+		if !openCodeGitRefExists(ctx, worktreeDir, sha+"^{commit}") {
+			return "", "", fmt.Errorf("recorded base commit %s (%s) names no commit in this repository", sha, recordPath)
+		}
+		return sha, "", nil
+	case !errors.Is(readErr, fs.ErrNotExist):
+		return "", "", fmt.Errorf("reading recorded base commit: %w", readErr)
+	}
+
+	baseRef, ok := openCodeTamperGateBaseRef(ctx, worktreeDir)
+	if !ok {
+		return "", "no recorded creation commit and no default branch to compare against; committed changes to the OpenCode config are not checked", nil
+	}
+	mergeBase, err := openCodeGitOutput(ctx, worktreeDir, "merge-base", "HEAD", baseRef)
+	if err != nil {
+		return "", "", fmt.Errorf("git merge-base HEAD %s: %s", baseRef, openCodeGitErrText(err))
+	}
+	mergeBase = strings.TrimSpace(mergeBase)
+	if mergeBase == "" {
+		return "", "", fmt.Errorf("git merge-base HEAD %s printed nothing", baseRef)
+	}
+	return mergeBase, fmt.Sprintf("no recorded creation commit; comparing against the merge-base with %s, a live ref a stage can move", baseRef), nil
+}
+
+// openCodeCommitSHA is a full SHA-1 or SHA-256 object name.
+var openCodeCommitSHA = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// openCodeGitErrText is a failed git invocation's stderr when it has one.
+func openCodeGitErrText(err error) string {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		if stderr := strings.TrimSpace(string(exitErr.Stderr)); stderr != "" {
+			return stderr
+		}
+	}
+	return err.Error()
+}
+
+// openCodeTamperGateBaseRef resolves the ref openCodeTamperGateBase falls back
+// to when a worktree carries no recorded creation commit: the remote's default branch when
 // one is configured (a real pipeline worktree always has an "origin" remote —
 // Manager.RunStage clones it from the target repository), else the local
 // branch of the same name, mirroring internal/execution's own
@@ -1105,8 +1190,8 @@ func openCodeProjectConfigTamperCheck(ctx context.Context, worktreeDir string) e
 // rather than imported: internal/execution imports this package (adapters),
 // so the reverse import would cycle. ok is false when neither a remote nor a
 // local ref for the resolved default branch name exists — a repository with
-// no commit reachable from anywhere but HEAD, which openCodeProjectConfigTamperCheck
-// treats as "this leg finds nothing", not as a refusal.
+// no commit reachable from anywhere but HEAD, which openCodeTamperGateBase
+// reports as a skipped leg, not as a refusal.
 func openCodeTamperGateBaseRef(ctx context.Context, worktreeDir string) (ref string, ok bool) {
 	defaultBranch := "main"
 	if out, err := openCodeGitOutput(ctx, worktreeDir, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"); err == nil {
