@@ -29,7 +29,9 @@ import (
 // testdata/opencode-config-schema/README.md). OpenCode 1.18.30 itself drops an
 // unknown key without a word (ADR-022 § 20), so a misspelled, renamed or
 // retired key in the per-run config would silently do nothing at run time;
-// this suite is what turns that into a red test.
+// this suite is what turns that into a red test. Validation catches such a
+// key only where the schema closes the object; TestNoUndeclaredNestedKeys
+// covers the open ones (#1766).
 //
 // The configs under test are the ones PrepareOpenCodeRun, the preparation the
 // adapter and `nightgauge opencode config` share, builds for a matrix of
@@ -371,6 +373,59 @@ func TestNoDeprecatedKeys(t *testing.T) {
 	}
 }
 
+// TestNoUndeclaredNestedKeys: no generated config sets a nested key the
+// pinned schema does not declare. Validation alone does not catch one under
+// agent.<name> (and mode.<name>) or provider.<id>.options: AgentConfig and
+// the provider options object list their properties but leave
+// additionalProperties open, so a misspelled `stpes` or `baseUrl` validates
+// and OpenCode ignores it at run time (#1766). The walker reports every key
+// of an object whose schema lists properties, matches none of them or a
+// patternProperties pattern, and gives no schema for additional ones (a map
+// such as agent, whose additionalProperties is AgentConfig, is not open).
+func TestNoUndeclaredNestedKeys(t *testing.T) {
+	schema := decodeSchemaDoc(t, schemaContractSchema(t))
+
+	// The walker is not vacuous: it finds a misspelled key in each open
+	// object the issue names, under a built-in agent, a custom agent, a mode
+	// entry and a provider's options, and not the declared keys beside it.
+	probe := map[string]any{
+		"agent": map[string]any{
+			"build":  map[string]any{"model": "m", "stpes": 20},
+			"custom": map[string]any{"steps": 20, "tempreature": 0.2},
+		},
+		"mode":     map[string]any{"plan": map[string]any{"disable": false, "maxStep": 1}},
+		"provider": map[string]any{"lmstudio": map[string]any{"options": map[string]any{"baseURL": "x", "baseUrl": "x"}}},
+	}
+	want := []string{"/agent/build/stpes", "/agent/custom/tempreature", "/mode/plan/maxStep", "/provider/lmstudio/options/baseUrl"}
+	if got := schema.undeclaredIn(probe); !slices.Equal(got, want) {
+		t.Fatalf("the walker found undeclared keys %q in the probe, want %q", got, want)
+	}
+
+	reached := map[string]bool{}
+	for _, c := range schemaContractConfigs(t) {
+		doc := decodeOpenCodeConfig(t, c.content)
+		for _, ptr := range schema.undeclaredIn(doc) {
+			t.Errorf("%s: the config sets %s, a key the pinned OpenCode schema does not declare there, so OpenCode would ignore it", c.name, ptr)
+		}
+		agents, _ := doc["agent"].(map[string]any)
+		for name, a := range agents {
+			if m, _ := a.(map[string]any); len(m) > 0 {
+				reached["agent."+name] = true
+			}
+		}
+		if opts, _ := jsonPath(doc, "provider", c.provider, "options").(map[string]any); len(opts) > 0 {
+			reached["provider.options"] = true
+		}
+	}
+	// The matrix reaches the objects the walker guards; were the builder to
+	// stop setting them, this suite would pass over nothing.
+	for _, key := range []string{"agent.build", "provider.options"} {
+		if !reached[key] {
+			t.Errorf("no generated config sets a non-empty %s, so the walker checks nothing there", key)
+		}
+	}
+}
+
 // schemaContractSecurityKeys are the top-level keys that carry a safety
 // setting. A renamed one would be ignored at run time, so each must be a
 // property the pinned schema defines. permission is here before the builder
@@ -572,6 +627,63 @@ func (d schemaDoc) walk(v any, schemas []map[string]any, ptr string, found *[]st
 				}
 			}
 			d.walk(child, items, fmt.Sprintf("%s/%d", ptr, i), found)
+		}
+	}
+}
+
+// undeclaredIn is the sorted JSON pointers of every key in doc that sits in
+// an open object (see TestNoUndeclaredNestedKeys) and is not one of its
+// declared properties, walking doc against the root schema.
+func (d schemaDoc) undeclaredIn(doc any) []string {
+	var found []string
+	d.walkUndeclared(doc, []map[string]any{d.root}, "", &found)
+	slices.Sort(found)
+	return slices.Compact(found)
+}
+
+func (d schemaDoc) walkUndeclared(v any, schemas []map[string]any, ptr string, found *[]string) {
+	schemas = d.expandAll(schemas)
+	switch v := v.(type) {
+	case map[string]any:
+		declared, patterns, listsProperties, additional := map[string]bool{}, []*regexp.Regexp{}, false, false
+		for _, s := range schemas {
+			if props, ok := s["properties"].(map[string]any); ok && len(props) > 0 {
+				listsProperties = true
+				for k := range props {
+					declared[k] = true
+				}
+			}
+			if pp, ok := s["patternProperties"].(map[string]any); ok {
+				for p := range pp {
+					if re, err := regexp.Compile(p); err == nil {
+						patterns = append(patterns, re)
+					}
+				}
+			}
+			if _, ok := s["additionalProperties"].(map[string]any); ok {
+				additional = true
+			}
+		}
+		for key, child := range v {
+			p := ptr + "/" + jsonPointerEscape(key)
+			if listsProperties && !additional && !declared[key] && !slices.ContainsFunc(patterns, func(re *regexp.Regexp) bool { return re.MatchString(key) }) {
+				*found = append(*found, p)
+			}
+			d.walkUndeclared(child, propertySchemas(schemas, key), p, found)
+		}
+	case []any:
+		for i, child := range v {
+			var items []map[string]any
+			for _, s := range schemas {
+				if prefix, _ := s["prefixItems"].([]any); i < len(prefix) {
+					if p, ok := prefix[i].(map[string]any); ok {
+						items = append(items, p)
+					}
+				} else if p, ok := s["items"].(map[string]any); ok {
+					items = append(items, p)
+				}
+			}
+			d.walkUndeclared(child, items, fmt.Sprintf("%s/%d", ptr, i), found)
 		}
 	}
 }

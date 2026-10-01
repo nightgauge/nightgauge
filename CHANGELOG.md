@@ -38,6 +38,15 @@ changelog, and the release workflow refuses a tag that does not.
 - **A failed fan-out stage emits one `failed` terminal, not two** (#2318).
   `runStageWorkflow` emitted the stage's failed agent and phase events before
   throwing, and its own `catch` emitted them again.
+- **The OpenCode config-schema contract checks nested keys under `agent.*`,
+  `mode.*` and `provider.*.options`** (#1766). The pinned schema lists the
+  properties of an agent entry and of a provider's options but leaves extra
+  keys open, so a misspelled `stpes` or `baseUrl` there validated, and OpenCode
+  would have ignored it. A new test fails on any key the schema does not
+  declare in such an object. **Correction to the 0.4.2 entry for #1634:** it
+  said the contract test fails on any key the schema does not define. That
+  held only for objects the schema closes, such as the top level, not for
+  these nested ones.
 - **An OpenCode isolation test no longer fails its cleanup under load**
   (#1783). `TestOpenCodeIsolationKeepsTheOperatorsGitAndGh` runs the real `gh`.
   For a sampled call, `gh` starts a background `send-telemetry` process that
