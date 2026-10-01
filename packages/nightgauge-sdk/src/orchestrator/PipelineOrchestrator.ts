@@ -441,9 +441,8 @@ export class PipelineOrchestrator {
       const result = await selection.executor.execute(selection.spec, this.events, {
         abortSignal: abort.signal,
       });
-      const failed = result.summary.status === "failed";
-      if (failed) {
-        this.emitter.stageFailed(stage, "error");
+      // The catch below emits the one failed terminal for this throw too.
+      if (result.summary.status === "failed") {
         throw new Error(`workflow stage '${stage}' failed (status=${result.summary.status})`);
       }
       this.emitter.stageCompleted(stage);

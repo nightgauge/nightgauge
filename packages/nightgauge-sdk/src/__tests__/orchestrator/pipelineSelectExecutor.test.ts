@@ -329,6 +329,37 @@ describe("PipelineOrchestrator.selectExecutor", () => {
       expect(result.success).toBe(true);
       expect(agentRuns).toBe(0);
     });
+    it("a failed fan-out stage emits one failed terminal per node, not two", async () => {
+      ws = await makeWorkspace(["feature-dev"]);
+      const bindings: WorkflowExecutorBindings = {
+        async runAgent() {
+          return { usage: usage(), terminalKind: "error" as const };
+        },
+        async runJudge() {
+          return { verdict: "pass" as const, usage: usage() };
+        },
+      };
+      const orch = makeOrchestrator(ws.dir, {
+        workflowAdapter: fakeAdapter(),
+        workflowBindings: bindings,
+        workflowJournalFs: new FakeFs(),
+        orchestration: { disabled: false },
+      });
+      const failedPhases: string[] = [];
+      const failedAgents: string[] = [];
+      orch.events.on("phase", (e) => {
+        if (e.status === "failed" && e.name === "feature-dev") failedPhases.push(e.name);
+      });
+      orch.events.on("agent", (e) => {
+        if (e.status === "failed" && e.agentId === "feature-dev") failedAgents.push(e.agentId);
+      });
+
+      const result = await orch.runStage("feature-dev", 42);
+
+      expect(result.success).toBe(false);
+      expect(failedPhases).toEqual(["feature-dev"]);
+      expect(failedAgents).toEqual(["feature-dev"]);
+    });
   });
 
   describe("the stage's stop reaches the fan-out units (#1765)", () => {
