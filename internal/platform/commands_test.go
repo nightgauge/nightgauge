@@ -135,6 +135,43 @@ func TestCommandService_AcknowledgeAgentCommand_NoAPIKey(t *testing.T) {
 	}
 }
 
+// AlreadyResolvedAgentCommand posts {outcome: "already_resolved", detail}
+// (#2341), and ApplyAgentCommand {outcome: "applied"} with no detail when none
+// is given; neither reads a runId from the response.
+func TestCommandService_OutcomeAcksThatStartNoRun(t *testing.T) {
+	var bodies []map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("body: %v", err)
+		}
+		bodies = append(bodies, body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	defer srv.Close()
+	c, err := NewClient(Config{BaseURL: srv.URL, APIKey: "k"})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	svc := NewCommandService(c)
+	if err := svc.AlreadyResolvedAgentCommand(context.Background(), "agent-1", "cmd-1", "already-paused: the run is already paused"); err != nil {
+		t.Fatalf("AlreadyResolvedAgentCommand: %v", err)
+	}
+	if err := svc.ApplyAgentCommand(context.Background(), "agent-1", "cmd-2", ""); err != nil {
+		t.Fatalf("ApplyAgentCommand: %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("%d acks posted, want 2", len(bodies))
+	}
+	if bodies[0]["outcome"] != AgentCommandAlreadyResolvedOutcome || bodies[0]["detail"] != "already-paused: the run is already paused" {
+		t.Errorf("already_resolved body = %v", bodies[0])
+	}
+	if _, hasDetail := bodies[1]["detail"]; bodies[1]["outcome"] != AgentCommandAppliedOutcome || hasDetail {
+		t.Errorf("applied body = %v, want outcome applied and no detail", bodies[1])
+	}
+}
+
 // RejectAgentCommand posts {outcome: "rejected", detail} (#1656) with detail
 // cut to the hosted service's 2000-byte bound on a UTF-8 boundary, and reads
 // no runId from the response.

@@ -13,10 +13,11 @@
  *
  * Every command type the platform's router delivers to an agent is consumed
  * and acknowledged by exactly one handler (#2334): `trigger` by
- * TriggerCommandHandler, and the run verbs by RunVerbCommandHandler. A type
- * neither handles is acknowledged `rejected` as unsupported, once however
- * often it is delivered, so it ends with an answer instead of expiring
- * unacknowledged.
+ * TriggerCommandHandler, and the run verbs by RunVerbCommandHandler. The
+ * workspace `throttle`, which the platform publishes to the workspace's agent
+ * directly, goes to ThrottleCommandHandler (#2337). A type none of them
+ * handles is acknowledged `rejected` as unsupported, once however often it is
+ * delivered, so it ends with an answer instead of expiring unacknowledged.
  */
 
 import {
@@ -27,13 +28,15 @@ import {
 import { CommandRedeliveryGuard } from "./CommandRedeliveryGuard";
 import type { IpcClient } from "./IpcClient";
 import { isRunVerb, RUN_VERB_COMMAND_TYPES } from "./RunVerbCommandHandler";
+import { THROTTLE_COMMAND_TYPE } from "./ThrottleCommandHandler";
 import type { Logger } from "../utils/logger";
 
 /**
  * Every command type the platform's command router delivers to an agent: a
  * `trigger`, and the run verbs a client issues against an existing run.
  * (`attention_resolve` and `throttle` are published to a named agent
- * directly, never through the router; the queue_* types are never created.)
+ * directly, never through the router; the daemon applies the first and this
+ * dispatcher the second. The queue_* types are never created.)
  */
 export const ROUTER_DELIVERED_COMMAND_TYPES = ["trigger", ...RUN_VERB_COMMAND_TYPES] as const;
 
@@ -64,6 +67,7 @@ export class AgentCommandDispatcher implements CommandHandler {
   constructor(
     private readonly trigger: AgentScopedHandler,
     private readonly verbs: AgentScopedHandler,
+    private readonly throttle: AgentScopedHandler,
     private readonly ipcClient: Pick<IpcClient, "agentAcknowledgeCommand">,
     private readonly logger: Logger
   ) {}
@@ -77,6 +81,7 @@ export class AgentCommandDispatcher implements CommandHandler {
     this.agentId = agentId;
     this.trigger.setAgentId(agentId);
     this.verbs.setAgentId(agentId);
+    this.throttle.setAgentId(agentId);
   }
 
   handle(cmd: ReceivedCommand): void {
@@ -86,6 +91,10 @@ export class AgentCommandDispatcher implements CommandHandler {
     }
     if (isRunVerb(cmd.type)) {
       this.verbs.handle(cmd);
+      return;
+    }
+    if (cmd.type === THROTTLE_COMMAND_TYPE) {
+      this.throttle.handle(cmd);
       return;
     }
     void this.refuseUnsupported(cmd);

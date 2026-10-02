@@ -315,14 +315,102 @@ platform addressed. A daemon with no extension attached has nobody to relay
 to, and such a command expires on the platform.
 
 The extension acknowledges every command it consumes exactly once (#2334): a
-trigger with the run it starts; a run verb (`cancel`, `approve`, `reject`,
-`pause`, `resume`) as `applied`, or as `rejected` with the reason it was a
-no-op; any other type as `rejected` with `unsupported-command`. Delivery is
+trigger with the run it starts; a run verb (`cancel`, `pause`, `resume`) as
+`applied`, as `already_resolved` when the run was already in the state the
+verb asks for (a pause of a paused run, a resume of a run that is not paused,
+#2341), or as `rejected` with the reason it could not act; an `approve` or
+`reject` as `rejected` with `no-approval-gate` (see below); any other type as
+`rejected` with `unsupported-command`. The
+platform keeps the status a pause or resume set unless the ack is
+`rejected`, which makes it restore the run's earlier status. Delivery is
 at least once, so a copy of a verb or an unsupported command that arrives
 again is not carried out again; it re-sends the first copy's ack only when
 that ack did not reach the platform. A second copy of a trigger is refused by
-the platform at its ack and starts nothing. A trigger or verb for a
-repository that is not open in the window is left for the window that has it.
+the platform at its ack and starts nothing. A trigger, or a verb with no
+`runId`, for a repository that is not open in the window is left for the
+window that has it.
+
+Only the window that holds a run answers a verb for it (#2340). The platform
+sends a command to every connection that shares the agent id, so every window
+on the machine receives the verb, and the first acknowledgement ends it. A
+window holds a run while one of its slots carries the run id, and from the
+moment it accepts the run's trigger until that slot opens, while the issue is
+still queued there or its worktree is being created; a verb that arrives in
+that interval is refused as `not-started`. An issue removed from the queue
+since (Clear Queue, Remove from Queue, a halt's drain) will never start, and
+the window no longer holds its run. The holder answers whichever repositories
+it has open now, so a manifest reload that drops the run's repository does not
+silence it. A window that does not hold the run drops the verb without
+acknowledging it, so `rejected` only ever comes from the holder, when it
+cannot apply the verb. A refused pause or resume makes the platform put the
+run back to its earlier status, so a refusal from a window that does not hold
+the run would undo the holder's hold. When no window holds the run, nobody
+acknowledges, and the platform expires the command. A verb with no `runId`
+names no run, and every window that has the repository open refuses it as
+`invalid-payload`.
+
+No local run waits for a platform `approve` or `reject` (#2336). The verbs
+name a run's `stage` and `gateType`, one of the platform's quality-gate types
+(`lint`, `type-check`, `tests`, `build`, `security`), but nothing in a local
+run holds for such a decision:
+
+- the pipeline evaluates its quality gates itself, and a failing gate fails
+  the stage, which the pipeline's own retry and recovery then handle;
+- the architecture-approval check ends the run before `feature-dev` and is
+  approved on the issue (the `approved:architecture` label or an approval
+  file), not on a run, and a new run picks the approval up;
+- a decision request in the attention queue is resolved by its own command,
+  `attention_resolve`, which the daemon applies.
+
+The window that holds the run therefore refuses both verbs, `rejected` with
+`no-approval-gate`, and the extension keeps no approval state for them to
+release. A gate that holds a run for a human decision would be the place to
+wire them.
+
+The workspace `throttle` (#2337) caps how many runs the workspace executes at
+once, optionally until `resumeAt`. The platform keeps it on the workspace and
+publishes a `throttle` command straight to the agent the workspace is linked
+to (the last agent that registered it), never through the router:
+`{action: "set", maxConcurrent, resumeAt}` or `{action: "cleared"}`. When that
+is the daemon's agent, the daemon relays it like any other command.
+
+The command names no workspace, and every window of a machine shares one
+agent while each serves its own workspace. The registration response's
+`throttle` is no better: it is the strictest cap across every workspace linked
+to the agent. So the extension never applies a payload. Each window reads the
+throttle of its own workspace, found by its manifest's `workspace.name` slug,
+from the platform's workspace list (`GET /v1/workspaces`), and a window whose
+manifest names no workspace has none. It reads again whenever the throttle may
+have changed: on a `throttle` command, when its command stream (re)connects,
+on every authenticated session event (sign-in, restore, and each token
+refresh), and when the manifest is reloaded. Reads run one at a time, and a
+read asked for during another runs again after it, so an older read never
+undoes a newer change; a read that fails changes nothing.
+
+- Dispatch opens no slot above the lower of `pipeline.max_concurrent` and
+  `maxConcurrent` while the throttle is in force. The cap is applied where the
+  extension decides concurrency (`ConcurrentPipelineManager`'s available slot
+  count), and checked again before each start of a batch, so a throttle that
+  lands mid-fill puts the rest of the batch back in the queue. A slot already
+  running is never stopped, and a cap below the running count opens nothing
+  until enough of them finish. The autonomous scheduler can still hand issues
+  to the queue; they wait there for a slot.
+- Clearing or raising the throttle, or reaching `resumeAt`, fills slots from
+  the queue at once, as a finished slot does.
+- The throttle is followed only while the platform session is authenticated.
+  The applied throttle is kept in the window's workspace state with its
+  workspace slug, and restored when the session is, so a reload holds
+  dispatch before the first read. Signing out, or losing the session, lifts
+  the cap and forgets it; with the platform disabled nothing is applied.
+- The Queued Issues header shows the cap while one is in force, and Resume
+  Queue names it when it holds every slot.
+- The window acknowledges the command `applied` once its read is applied, or
+  `rejected` with `apply-failed` when the read failed; an invalid payload is
+  refused `invalid-payload`. A window with no platform session leaves the
+  command to the windows that have one.
+
+The daemon does not apply the throttle, and neither does the Go scheduler when
+it dispatches without the extension (#2352).
 
 ## CLI Command Reference
 

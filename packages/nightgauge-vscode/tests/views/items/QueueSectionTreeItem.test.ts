@@ -86,4 +86,22 @@ describe("QueueSectionTreeItem count (#264)", () => {
     expect(section.description).toBe("(0)");
     expect(section.getChildren()).toHaveLength(0);
   });
+
+  // #2337: a workspace throttle that holds dispatch says so where the waiting
+  // work is counted, and survives the queue emptying.
+  it("shows the workspace throttle beside the counts and in the tooltip", () => {
+    const section = new QueueSectionTreeItem();
+    section.setItems([createMockQueueItem({ issueNumber: 1, status: "pending" })]);
+    section.setWorkspaceThrottle({ maxConcurrent: 0, resumeAt: null });
+
+    expect(section.description).toBe("(1) · capped at 0");
+    const tooltip = String((section.tooltip as { value?: string })?.value ?? section.tooltip);
+    expect(tooltip).toContain("0 runs at once until it is cleared");
+
+    section.clear();
+    expect(section.description).toBe("(0) · capped at 0");
+
+    section.setWorkspaceThrottle(null);
+    expect(section.description).toBe("(0)");
+  });
 });

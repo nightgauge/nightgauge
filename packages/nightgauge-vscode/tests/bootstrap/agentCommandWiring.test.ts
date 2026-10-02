@@ -2,7 +2,7 @@
  * agentCommandWiring.test.ts
  *
  * Pins the bootstrap wiring the platform agent commands depend on (#2334,
- * #2335), the way adapterUsageServiceWired.test.ts pins its wiring: by
+ * #2335, #2337), the way adapterUsageServiceWired.test.ts pins its wiring: by
  * reading bootstrap/services.ts, which is impractical to instantiate in a
  * unit test. The behaviour behind each line is tested where it lives:
  * AgentCommandDispatcher.test.ts (the relay subscription, against the
@@ -18,6 +18,7 @@ const servicesSource = readFileSync(
   path.resolve(__dirname, "../../src/bootstrap/services.ts"),
   "utf-8"
 );
+const extensionSource = readFileSync(path.resolve(__dirname, "../../src/extension.ts"), "utf-8");
 
 describe("platform agent command wiring in bootstrap/services.ts", () => {
   it("subscribes the dispatcher to the commands the daemon relays, and disposes it", () => {
@@ -28,7 +29,38 @@ describe("platform agent command wiring in bootstrap/services.ts", () => {
 
   it("feeds the window's own command stream to the same dispatcher", () => {
     expect(servicesSource).toMatch(
-      /new AgentCommandStreamService\([^)]*agentCommandDispatcher\s*\)/
+      /new AgentCommandStreamService\([^)]*agentCommandDispatcher,\s*\(\) => void throttleSync\.refresh\(\)\s*\)/
+    );
+  });
+
+  // #2337: the window reads its own workspace's throttle (by the manifest's
+  // slug) into per-workspace state, and only while the platform session is
+  // authenticated. The behaviour is tested in WorkspaceThrottleSync.test.ts.
+  it("follows the workspace throttle through the session, the stream and throttle commands", () => {
+    expect(servicesSource).toMatch(
+      /new WorkspaceThrottleState\(concurrentPipelineManager, context\.workspaceState, logger\)/
+    );
+    expect(servicesSource).toMatch(
+      /new AgentCommandDispatcher\([\s\S]*?new ThrottleCommandHandler\(throttleSync, ipcClient, logger\)/
+    );
+    // Subscribed before the session is restored, so the restored session's
+    // event reaches it; nothing restores the throttle unconditionally.
+    expect(servicesSource).toMatch(
+      /workspaceThrottleSync\.followSession\(sessionManager\)\);\s*\}\s*void sessionManager\.restore\(\);/
+    );
+    expect(servicesSource).not.toMatch(/[Tt]hrottle\w*\.restore\(/);
+  });
+
+  // Registration no longer carries the throttle: a reload reuses the stored
+  // registration exactly as before #2337, so a failed re-registration can
+  // never leave the window without its heartbeat and command stream.
+  it("leaves the registration path free of the workspace throttle", () => {
+    expect(extensionSource).not.toMatch(/applyRegistrationThrottle|workspaceThrottleState/);
+    expect(extensionSource).toContain(
+      "if (storedAgentId && registeredReposSig === currentReposSig) {"
+    );
+    expect(extensionSource).toMatch(
+      /onWorkspaceConfigReloaded\.event\(\(\) => \{\s*void services!\.workspaceThrottleSync\?\.refresh\(\);/
     );
   });
 

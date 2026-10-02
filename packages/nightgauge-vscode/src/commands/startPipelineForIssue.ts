@@ -14,6 +14,7 @@ import type { Logger } from "../utils/logger";
 import type { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
 import type { IssueQueueService } from "../services/IssueQueueService";
 import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
+import { describeWorkspaceThrottle } from "../services/WorkspaceThrottle";
 import { registerRemoveQueueItemCommand } from "./removeQueueItem";
 import { registerRetryQueueItemCommand } from "./retryQueueItem";
 
@@ -276,6 +277,25 @@ export function registerQueueCommands(
               `Failed to resume queue: ${error instanceof Error ? error.message : "Unknown error"}`
             );
           });
+          return;
+        }
+
+        // No free slot with nothing running: the workspace throttle holds
+        // dispatch (#2337), or the slots are still being prepared. Say which,
+        // instead of reporting a missing manager.
+        if (concurrentPipelineManager) {
+          const throttle = concurrentPipelineManager.getWorkspaceThrottle();
+          if (throttle) {
+            logger.info("resumeQueue: the workspace throttle holds dispatch", { ...throttle });
+            vscode.window.showInformationMessage(
+              `The workspace's concurrency cap allows ${describeWorkspaceThrottle(throttle)}. ` +
+                "Queued issues start when it is raised, cleared or ends."
+            );
+          } else {
+            vscode.window.showInformationMessage(
+              "Queue is active. Next issue will start when a slot is free."
+            );
+          }
           return;
         }
 

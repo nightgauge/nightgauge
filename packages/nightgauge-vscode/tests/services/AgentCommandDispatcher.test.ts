@@ -23,6 +23,7 @@ import {
 } from "../../src/services/AgentCommandDispatcher";
 import { TriggerCommandHandler } from "../../src/services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../../src/services/RunVerbCommandHandler";
+import { ThrottleCommandHandler } from "../../src/services/ThrottleCommandHandler";
 import type { ReceivedCommand } from "../../src/services/AgentCommandStreamService";
 import type { RemoteVerbResult } from "../../src/services/ConcurrentPipelineManager";
 
@@ -38,24 +39,26 @@ function makeIpc() {
   };
 }
 
-/** A run manager whose every verb answers `verbResult`. */
-function makeRuns(verbResult: RemoteVerbResult) {
+/**
+ * A run manager whose every verb answers `verbResult`. This window holds the
+ * run each verb names unless `holds` says otherwise (#2340).
+ */
+function makeRuns(verbResult: RemoteVerbResult, holds = true) {
   return {
+    holdsRemoteRun: vi.fn().mockResolvedValue(holds),
     isRunning: vi.fn().mockReturnValue(false),
     setPendingRemoteRunId: vi.fn(),
     clearPendingRemoteRunId: vi.fn(),
     fillSlots: vi.fn().mockResolvedValue(undefined),
     cancelByRemoteRunId: vi.fn().mockResolvedValue(verbResult),
-    approveByRemoteRunId: vi.fn().mockReturnValue(verbResult),
-    rejectByRemoteRunId: vi.fn().mockReturnValue(verbResult),
     pauseByRemoteRunId: vi.fn().mockResolvedValue(verbResult),
     resumeByRemoteRunId: vi.fn().mockResolvedValue(verbResult),
   };
 }
 
-function build(verbResult: RemoteVerbResult) {
+function build(verbResult: RemoteVerbResult, holds = true) {
   const ipc = makeIpc();
-  const runs = makeRuns(verbResult);
+  const runs = makeRuns(verbResult, holds);
   const queue = { enqueue: vi.fn().mockResolvedValue({ issueNumber: 7 }) };
   const logger = makeLogger();
   const trigger = new TriggerCommandHandler(
@@ -65,9 +68,21 @@ function build(verbResult: RemoteVerbResult) {
     logger as never
   );
   const verbs = new RunVerbCommandHandler(runs as never, ipc as never, logger as never);
-  const dispatcher = new AgentCommandDispatcher(trigger, verbs, ipc as never, logger as never);
+  // The throttle handler reads the window's own workspace throttle (#2337).
+  const throttleSync = {
+    isActive: vi.fn(() => true),
+    refresh: vi.fn().mockResolvedValue("applied"),
+  };
+  const throttle = new ThrottleCommandHandler(throttleSync, ipc as never, logger as never);
+  const dispatcher = new AgentCommandDispatcher(
+    trigger,
+    verbs,
+    throttle,
+    ipc as never,
+    logger as never
+  );
   dispatcher.setAgentId("agent-ext");
-  return { dispatcher, ipc, runs, queue };
+  return { dispatcher, ipc, runs, queue, throttleSync };
 }
 
 /** A command of `type` as the platform's router publishes it. */
@@ -116,20 +131,36 @@ describe("AgentCommandDispatcher", () => {
       for (const call of ipc.agentAcknowledgeCommand.mock.calls) {
         expect(call[0]).toBe("agent-ext");
       }
-      const verbOutcomes = ipc.agentAcknowledgeCommand.mock.calls
-        .filter((c) => !String(c[1]).startsWith("cmd-trigger"))
-        .map((c) => c[2]);
-      expect(new Set(verbOutcomes)).toEqual(
-        new Set([verbResult === "applied" ? "applied" : "rejected"])
-      );
+      // Approve and reject have no local gate to release (#2336): refused.
+      const outcomeOf = (type: string) =>
+        ipc.agentAcknowledgeCommand.mock.calls.find((c) =>
+          String(c[1]).startsWith(`cmd-${type}-`)
+        )?.[2];
+      for (const type of ["cancel", "pause", "resume"]) {
+        expect(outcomeOf(type)).toBe(verbResult === "applied" ? "applied" : "rejected");
+      }
+      expect(outcomeOf("approve")).toBe("rejected");
+      expect(outcomeOf("reject")).toBe("rejected");
     }
   );
+
+  // #2340: a window that does not hold the run leaves every verb for the
+  // window that does; it still takes a trigger for a repo it has open.
+  it("leaves every verb unacknowledged in a window that does not hold the run", async () => {
+    const { dispatcher, ipc } = build("no-active-run", false);
+    const sent = ROUTER_DELIVERED_COMMAND_TYPES.map((type, n) => routedCommand(type, n));
+
+    for (const cmd of sent) dispatcher.handle(cmd);
+    await settle();
+
+    expect(ipc.agentAcknowledgeCommand.mock.calls.map((c) => c[1])).toEqual(["cmd-trigger-0"]);
+  });
 
   // The platform delivers at least once: a command published while the
   // stream replays its backlog arrives twice, and an unacknowledged one again
   // on every reconnect. Each is still carried out once and acknowledged once.
   it("acknowledges every router-delivered command once when each arrives twice", async () => {
-    const { dispatcher, ipc, runs, queue } = build("applied");
+    const { dispatcher, ipc, runs, queue, throttleSync } = build("applied");
     // The platform keeps the first ack of a command and refuses any later one.
     const accepted: string[] = [];
     ipc.agentAcknowledgeCommand.mockImplementation(async (_agentId: string, id: string) => {
@@ -150,8 +181,6 @@ describe("AgentCommandDispatcher", () => {
     // No verb was applied twice, and no refusal was sent twice.
     for (const verb of [
       runs.cancelByRemoteRunId,
-      runs.approveByRemoteRunId,
-      runs.rejectByRemoteRunId,
       runs.pauseByRemoteRunId,
       runs.resumeByRemoteRunId,
     ]) {
@@ -161,19 +190,47 @@ describe("AgentCommandDispatcher", () => {
       (c) => c[1] === "cmd-throttle-9"
     );
     expect(throttleAcks).toHaveLength(1);
+    expect(throttleSync.refresh).toHaveBeenCalledTimes(1);
     // The trigger's second copy is refused by the platform, so it starts nothing.
     expect(queue.enqueue).toHaveBeenCalledTimes(1);
   });
 
   it("acknowledges an unsupported command type once, as rejected", async () => {
     const { dispatcher, ipc } = build("applied");
-    dispatcher.handle({ ...routedCommand("throttle", 0), payload: { action: "cleared" } });
+    dispatcher.handle({ ...routedCommand("queue_add", 0), payload: { issueNumber: 7 } });
     await settle();
 
     expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
     const [agentId, id, outcome, detail] = ipc.agentAcknowledgeCommand.mock.calls[0];
-    expect([agentId, id, outcome]).toEqual(["agent-ext", "cmd-throttle-0", "rejected"]);
+    expect([agentId, id, outcome]).toEqual(["agent-ext", "cmd-queue_add-0", "rejected"]);
     expect(detail).toMatch(/^unsupported-command: /);
+  });
+
+  // #2337: the platform publishes the workspace throttle to the workspace's
+  // agent directly; whichever agent it reaches, this window reads its own
+  // workspace's throttle and acknowledges the command.
+  it("reads the workspace throttle on a throttle command, from its own stream or the daemon's relay, and acknowledges it", async () => {
+    const { dispatcher, ipc, throttleSync } = build("applied");
+    dispatcher.handle({
+      ...routedCommand("throttle", 0),
+      payload: { action: "set", maxConcurrent: 1, resumeAt: null },
+    });
+    dispatcher.handleRelayed({
+      agentId: "agent-daemon",
+      frame: {
+        commandId: "cmd-throttle-relayed",
+        type: "throttle",
+        payload: { action: "cleared", maxConcurrent: null, resumeAt: null },
+        createdAt: "2026-10-01T00:00:01.000Z",
+      },
+    });
+    await settle();
+
+    expect(throttleSync.refresh).toHaveBeenCalledTimes(2);
+    expect(ipc.agentAcknowledgeCommand.mock.calls.map((c) => c.slice(0, 3))).toEqual([
+      ["agent-ext", "cmd-throttle-0", "applied"],
+      ["agent-daemon", "cmd-throttle-relayed", "applied"],
+    ]);
   });
 
   it("handles a command the daemon relayed, acknowledging under the daemon's agent", async () => {

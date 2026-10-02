@@ -82,7 +82,14 @@ export class AgentCommandStreamService implements vscode.Disposable {
     private readonly tokenStorage: ITokenStorage,
     private readonly context: vscode.ExtensionContext,
     private readonly logger: Logger,
-    private readonly onCommand: CommandHandler
+    private readonly onCommand: CommandHandler,
+    /**
+     * Optional: called each time the stream (re)connects. A command published
+     * while the stream was down is replayed only until someone acknowledges
+     * it, so state a command announces (the workspace throttle, #2337) is
+     * read again here.
+     */
+    private readonly onConnected?: () => void
   ) {}
 
   /** Call once agentId is available from registration. No-op if already started or agentId is empty. */
@@ -160,6 +167,13 @@ export class AgentCommandStreamService implements vscode.Disposable {
 
     this.reconnectAttempt = 0;
     this.logger.info("AgentCommandStreamService stream connected", { agentId });
+    try {
+      this.onConnected?.();
+    } catch (err) {
+      this.logger.warn("AgentCommandStreamService: onConnected threw", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();

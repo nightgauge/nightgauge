@@ -224,6 +224,35 @@ func TestAgentAcknowledgeCommand_AppliedCarriesOutcome(t *testing.T) {
 	}
 }
 
+// A verb whose run was already in the state it asks for is acked
+// {outcome: "already_resolved", detail} (#2341), so the platform keeps the
+// status the verb set instead of restoring the run's earlier one.
+func TestAgentAcknowledgeCommand_AlreadyResolvedCarriesOutcomeAndDetail(t *testing.T) {
+	var bodies []map[string]any
+	srv := ackBodyRecorder(t, &bodies)
+	defer srv.Close()
+	s := NewServer(nil, WithPlatformClient(newTestPlatformClientFor(t, srv.URL, "k")))
+	s.writer = &bytes.Buffer{}
+
+	params, _ := json.Marshal(AgentAcknowledgeCommandParams{
+		AgentID: "agent-1", CommandID: "cmd-1",
+		Outcome: "already_resolved", Detail: "already-paused: the run is already paused",
+	})
+	res, err := s.handleAgentAcknowledgeCommand(context.Background(), params)
+	if err != nil {
+		t.Fatalf("already_resolved ack: %v", err)
+	}
+	if got := res.(AgentAcknowledgeCommandResult).RunID; got != "" {
+		t.Errorf("an already_resolved ack returned runId %q; it starts no run", got)
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("%d acks posted, want 1", len(bodies))
+	}
+	if bodies[0]["outcome"] != "already_resolved" || bodies[0]["detail"] != "already-paused: the run is already paused" {
+		t.Errorf("already_resolved ack body = %v", bodies[0])
+	}
+}
+
 func TestAgentAcknowledgeCommand_OutcomeIsClosed(t *testing.T) {
 	var bodies []map[string]any
 	srv := ackBodyRecorder(t, &bodies)
@@ -231,7 +260,7 @@ func TestAgentAcknowledgeCommand_OutcomeIsClosed(t *testing.T) {
 	s := NewServer(nil, WithPlatformClient(newTestPlatformClientFor(t, srv.URL, "k")))
 	s.writer = &bytes.Buffer{}
 	for _, p := range []AgentAcknowledgeCommandParams{
-		{AgentID: "a", CommandID: "c", Outcome: "already_resolved"},
+		{AgentID: "a", CommandID: "c", Outcome: "already-resolved"},
 		{AgentID: "a", CommandID: "c", Outcome: "done"},
 		{AgentID: "a", CommandID: "c", Outcome: "rejected"},
 	} {

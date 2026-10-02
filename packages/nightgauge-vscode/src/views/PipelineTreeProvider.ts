@@ -36,6 +36,7 @@ import { FailedIssueTreeItem } from "./items/FailedIssueTreeItem";
 import { ConcurrentSlotTreeItem } from "./items/ConcurrentSlotTreeItem";
 import type { IssueQueueService } from "../services/IssueQueueService";
 import type { QueueState } from "../types/queue";
+import type { WorkspaceThrottle } from "../services/WorkspaceThrottle";
 
 import type { PipelineStateService, PipelineState } from "../services/PipelineStateService";
 import type { StagePhase } from "../schemas/pipelineState";
@@ -372,6 +373,15 @@ export class PipelineTreeProvider
       this.queueSection.setItems(state.items);
       this.queueSection.setStatus(state.status, state.pauseReason);
     }
+    this.refreshAll();
+  }
+
+  /**
+   * Show the platform's workspace throttle on the queue section while it
+   * holds dispatch; null when none is in force (#2337).
+   */
+  setWorkspaceThrottle(throttle: WorkspaceThrottle | null): void {
+    this.queueSection.setWorkspaceThrottle(throttle);
     this.refreshAll();
   }
 

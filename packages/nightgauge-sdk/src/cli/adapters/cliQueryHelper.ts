@@ -23,7 +23,13 @@ import type {
 } from "../../orchestrator/StageExecutor.js";
 import type { AdapterActivity, AdapterActivityTokens, NightgaugeAdapter } from "./ICliAdapter.js";
 import type { OpenCodeRunConfig, OpenCodeRunConfigRequest } from "./OpenCodeAdapter.js";
-import { applyCodexSandboxProfile } from "./codexSandbox.js";
+import {
+  applyCodexSandboxProfile,
+  codexApprovalFlags,
+  codexCloneWritableRoot,
+  codexResumeSandboxFlags,
+  resolveCodexSandboxMode,
+} from "./codexSandbox.js";
 import {
   OPENCODE_CONFIG_CONTENT_ENV,
   OPENCODE_ISOLATION_XDG,
@@ -193,8 +199,9 @@ export function createCliQueryFn(options: {
     // Build final args and stdin based on prompt delivery mode and resume state.
     // For Codex with NIGHTGAUGE_CODEX_RESUME_ENABLED=true, switch from
     // `exec` to `exec resume` when session ID is available (or `--last` as fallback).
-    // `--sandbox` is not available on `exec resume`; use
-    // `--dangerously-bypass-approvals-and-sandbox` for externally sandboxed envs.
+    // `exec resume` refuses `--sandbox` but honours `-c sandbox_mode=...`, and a
+    // resumed turn never inherits the session's sandbox, so the resume carries
+    // the stage's own mode (#2342; codexResumeSandboxFlags).
     // @see Issue #1659
     let finalArgs: string[];
     let stdinPrompt: string;
@@ -219,30 +226,26 @@ export function createCliQueryFn(options: {
       ]);
       const extraArgs = baseArgs.filter((a) => !RESUME_STRIP.has(a));
 
-      if (resumeSessionId) {
-        // Resume with explicit thread ID: exec resume <threadId> - <base flags>
-        // `-` tells Codex to read the prompt from stdin.
-        finalArgs = [
-          "exec",
-          "resume",
-          resumeSessionId,
-          "-",
-          "--dangerously-bypass-approvals-and-sandbox",
-          "--json",
-          ...extraArgs,
-        ];
-      } else {
-        // Fallback: resume most-recent session when no explicit ID is available.
-        finalArgs = [
-          "exec",
-          "resume",
-          "--last",
-          "-",
-          "--dangerously-bypass-approvals-and-sandbox",
-          "--json",
-          ...extraArgs,
-        ];
-      }
+      // The sandbox a stage's allowed-tools justify, exactly as on a fresh
+      // start. Only full access resumes with the bypass flag; a read-only or
+      // edit-only stage resumes with its mode as config, the approval policy
+      // before `exec` (#1715), and the clone's writable root for
+      // workspace-write (#2342).
+      const mode = resolveCodexSandboxMode(queryOptions.options?.allowedTools);
+      // Resume with the explicit thread ID, or fall back to the most recent
+      // session when no ID is available. `-` tells Codex to read the prompt
+      // from stdin.
+      finalArgs = [
+        ...codexApprovalFlags(mode),
+        "exec",
+        "resume",
+        ...(resumeSessionId ? [resumeSessionId] : ["--last"]),
+        "-",
+        ...codexResumeSandboxFlags(mode),
+        ...codexCloneWritableRoot(mode, cwd),
+        "--json",
+        ...extraArgs,
+      ];
       stdinPrompt = queryOptions.prompt;
     } else {
       // Standard execution path (resume disabled or non-Codex adapter).
@@ -251,8 +254,8 @@ export function createCliQueryFn(options: {
       // `--sandbox <mode>`, with `--ask-for-approval never` before `exec`
       // (a top-level codex option, #1715), when the tools prove it safe.
       // No-op (full-access, unchanged) when tools imply shell/network or are
-      // absent. The resume branch above can't sandbox (`--sandbox` is unsupported
-      // on `exec resume`), so it stays full-access.
+      // absent. The resume branch above scopes the same mode its own way, since
+      // `exec resume` takes the sandbox as config rather than `--sandbox`.
       const effectiveBaseArgs =
         options.adapter === "codex"
           ? applyCodexSandboxProfile(baseArgs, queryOptions.options?.allowedTools, cwd)

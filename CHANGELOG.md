@@ -16,6 +16,39 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The platform's workspace throttle caps local dispatch** (#2337). A
+  `throttle` command (`set` with `maxConcurrent` and an optional `resumeAt`,
+  or `cleared`) was refused as unsupported, so a workspace throttle never
+  capped work started on the machine. Each window signed in to the platform
+  now applies the throttle of the workspace its manifest names, where it
+  decides concurrency: no new slot opens above the lower of
+  `pipeline.max_concurrent` and the cap, also when the cap lands while a
+  batch is starting, a running slot is never stopped, and queued issues start
+  as soon as the throttle is raised, cleared or reaches `resumeAt`. The
+  command names no workspace, so a window reads its own workspace's throttle
+  from the platform's workspace list on every `throttle` command, stream
+  reconnect, session event and manifest reload, and acknowledges the command
+  `applied`. A throttle on one workspace never caps a window serving another,
+  and a change made while a window was offline is picked up when it
+  reconnects. The applied throttle survives a reload and is dropped on
+  sign-out. The Queued Issues header shows it, and Resume Queue says when it
+  holds every slot. The daemon does not apply it yet (#2352).
+- **Spike #1568 decided which execution adapters can host a conversation, and
+  how** (#1568). `docs/spikes/1568-conversational-agent-sessions-across-adapters.md`
+  assesses every registered adapter against its installed CLI. `claude-headless`
+  clears the viability bar: a new process with `--no-session-persistence`, given
+  the earlier exchange replayed in its message, answers from it, text streams as
+  it is written, the turn leaves its text in no file, and `--restricted` refuses
+  every permission bypass before a model is called. `claude-sdk` waits for one
+  run on its API-key credential; `codex`, `opencode`, `grok`, `gemini`,
+  `gemini-sdk` and `copilot` are deferred on named observations, and the retired
+  `ollama` and `lm-studio` are skipped. For each adapter the record states how to
+  run a turn statelessly with persistence off, whether its own stored session
+  could stand in for the conversation's context, and what it keeps on disk. It
+  maps every performance-mode field onto each adapter's controls, with one rule
+  for an effort a model cannot take. No workspace advertises `conversation` yet;
+  the capability waits for #1569's turn runner.
+
 - **`nightgauge handoff` and `nightgauge next`: handoff roll-up and ranked
   work order in the binary** (#1481). `nightgauge handoff <file-or-dir>...`
   parses each `<!-- nightgauge:handoff -->` header and reports a tip behind
@@ -70,6 +103,49 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A slow reap of the complexity-model lock broker no longer hides why the
+  transaction failed** (#2356). The extension waited for a broker it had sent
+  SIGKILL as briefly as for one asked to exit, and an error from that wait
+  replaced the transaction's own, so a timed-out release could be reported as
+  a broker that would not die. The wait after SIGKILL now has its own bound,
+  and a reap failure never replaces the transaction's error.
+- **A platform approve or reject says why it cannot apply** (#2336). The
+  extension's approve and reject released an approval promise that nothing
+  ever created, so no verb could take effect. No local run holds for a
+  quality-gate decision: the pipeline evaluates its gates and fails the
+  stage, the architecture-approval check is approved on the issue, and an
+  attention request has `attention_resolve`. The unused approval state is
+  removed, and the window holding the run acknowledges both verbs `rejected`
+  with `no-approval-gate`. The decision is recorded in
+  [GO_BINARY.md § The daemon's platform agent](docs/GO_BINARY.md#the-daemons-platform-agent).
+- **A remote pause of a paused run, or resume of a running one, no longer flips
+  the run's status on the platform** (#2341). The extension acknowledged both
+  as `rejected` (`already-paused`, `not-paused`), and the platform answers a
+  rejected pause or resume by restoring the run's earlier status, so a run
+  paused locally read `running`. Both are now acknowledged `already_resolved`
+  with the same reason, which leaves the status the verb set, and
+  `agent.acknowledgeCommand` accepts that outcome.
+- **Only the window that holds a run answers a remote command for it**
+  (#2340). The platform sends a pause, resume, cancel, approve or reject to
+  every connection that shares the agent id and keeps the first
+  acknowledgement. A second window open on the same repository answered for a
+  run it did not hold, `rejected` with `no-active-run`, and could answer
+  first; the platform then undid a pause that the window running the run had
+  applied. A window now answers a verb only for a run one of its slots
+  carries, or one whose trigger it accepted and whose issue is still queued
+  there (refused as `not-started`), whichever repositories it has open. It
+  leaves any other verb unacknowledged, and the platform expires a verb that
+  no window holds.
+- **A resumed Codex query keeps the sandbox its allowed tools justify** (#2342).
+  With `NIGHTGAUGE_CODEX_RESUME_ENABLED=true`, the SDK's `createCliQueryFn`
+  resumed every Codex query with `--dangerously-bypass-approvals-and-sandbox`,
+  even when its caller passed read-only or edit-only allowed tools.
+  `codex exec resume` refuses `--sandbox` but honours `-c sandbox_mode=...`, and on
+  codex-cli 0.154.0 a resumed turn takes its sandbox from the resume invocation
+  rather than the session, so a scoped resume now carries its mode that way, with
+  `--ask-for-approval never` before `exec`. No shipped stage changes yet: the SDK
+  stage command passes no allowed tools (#2358), and every pipeline stage skill
+  grants `Bash`, which keeps full access on a fresh start and on a resume alike.
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
   the phone app or the dashboard used to sit `routing` until it expired,
@@ -79,10 +155,10 @@ changelog, and the release workflow refuses a tag that does not.
   reason when it found nothing to act on (no local run carries the runId, no
   gate is waiting, the run is already paused or not paused) or the payload had
   no runId. A command type the extension does not handle is acknowledged
-  `rejected` as unsupported instead of expiring (the workspace throttle is
-  one; applying it is #2337). The platform delivers a command at least once,
-  so a copy that arrives again is not carried out a second time: it re-sends
-  the first copy's ack only if that ack never arrived. Pause and resume use
+  `rejected` as unsupported instead of expiring. The platform delivers a
+  command at least once, so a copy that arrives again is not carried out a
+  second time: it re-sends the first copy's ack only if that ack never
+  arrived. Pause and resume use
   the same per-run pause as `Nightgauge: Pause Pipeline`: the stage in flight
   finishes, the run holds before the next stage starts, and resume continues
   from there. The window shows them as it shows the local commands, in the
@@ -91,8 +167,8 @@ changelog, and the release workflow refuses a tag that does not.
   lands just after a stage finished no longer lets the next stage run first.
   A verb for a repository that is not open in the window is left for the
   window that has it, as a trigger already was. `agent.acknowledgeCommand`
-  accepts the `applied` outcome. Approve and reject now report no waiting
-  gate, because no local gate waits on them yet (#2336).
+  accepts the `applied` outcome. Approve and reject are refused, because no
+  local run waits at an approval gate (#2336).
 - **The daemon's platform agent declares the workspace it serves** (#2335).
   `nightgauge serve` registered with no repositories, so workspace presence
   never counted it and a workspace served only by the daemon read offline. Its

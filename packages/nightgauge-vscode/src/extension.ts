@@ -823,6 +823,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       dispose: () => clearTimeout(reloadTimer),
     });
 
+    // The manifest names the platform workspace whose throttle this window
+    // follows (#2337), so a reloaded manifest reads it again. A no-op while
+    // the window has no platform session.
+    context.subscriptions.push(
+      onWorkspaceConfigReloaded.event(() => {
+        void services!.workspaceThrottleSync?.refresh();
+      })
+    );
+
     // Agent re-registration stays gated on the hosted service — it is the
     // concern that genuinely needs an account — but no longer owns the watcher.
     if (services.sessionManager && services.agentRegistrationService) {

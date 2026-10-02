@@ -7,6 +7,7 @@ import {
   resolveCodexSandboxMode,
   codexSandboxFlags,
   codexApprovalFlags,
+  codexResumeSandboxFlags,
   applyCodexSandboxProfile,
   CODEX_BYPASS_FLAG,
   codexCloneWritableRoot,
@@ -62,6 +63,22 @@ describe("codexApprovalFlags (#1715)", () => {
     expect(codexApprovalFlags("read-only")).toEqual(["--ask-for-approval", "never"]);
     expect(codexApprovalFlags("workspace-write")).toEqual(["--ask-for-approval", "never"]);
     expect(codexApprovalFlags("danger-full-access")).toEqual([]);
+  });
+});
+
+describe("codexResumeSandboxFlags (#2342)", () => {
+  it("carries a scoped mode as config, since exec resume refuses --sandbox", () => {
+    expect(codexResumeSandboxFlags("read-only")).toEqual(["-c", 'sandbox_mode="read-only"']);
+    expect(codexResumeSandboxFlags("workspace-write")).toEqual([
+      "-c",
+      'sandbox_mode="workspace-write"',
+    ]);
+  });
+
+  it("keeps the bypass flag for full access only, as a fresh start does", () => {
+    expect(codexResumeSandboxFlags("danger-full-access")).toEqual([CODEX_BYPASS_FLAG]);
+    expect(codexResumeSandboxFlags("read-only")).not.toContain(CODEX_BYPASS_FLAG);
+    expect(codexResumeSandboxFlags("workspace-write")).not.toContain(CODEX_BYPASS_FLAG);
   });
 });
 

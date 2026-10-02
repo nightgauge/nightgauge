@@ -31,6 +31,9 @@ const execFileAsync = promisify(execFile);
  */
 const ABORT_ALL_TIMEOUT_MS = 30_000;
 
+/** The longest delay setTimeout honours (2^31 - 1 ms, about 24.8 days). */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 /**
  * Terminal kinds that must NOT halt the queue (#3444/#3835/#3508/#4002/#4222).
  *
@@ -143,6 +146,7 @@ import { updateProjectItemStatus } from "../utils/projectFieldWriter";
 import { postFailureComment } from "../utils/failureComment";
 import { getConcurrentPipelineConfig } from "../utils/nightgaugeConfig";
 import type { WorkspaceManager } from "./WorkspaceManager";
+import { throttleInForce, type WorkspaceThrottle } from "./WorkspaceThrottle";
 import { IpcClient } from "./IpcClient";
 import type { AbandonedDispatchSituation } from "./IpcClientBase";
 
@@ -207,15 +211,12 @@ interface SlotReservation {
 /**
  * What a platform verb did to a local run (#2334): "applied", or why it found
  * nothing to act on. The verb's ack reports it, so a requester can tell an
- * applied command from a no-op.
+ * applied command from a no-op. "not-started": this window accepted the
+ * run's trigger, but the run is still queued here and has no slot yet
+ * (#2340).
  */
 export type RemoteVerbResult =
-  | "applied"
-  | "no-active-run"
-  | "no-waiting-gate"
-  | "already-paused"
-  | "not-paused"
-  | "no-run-state";
+  "applied" | "no-active-run" | "not-started" | "already-paused" | "not-paused" | "no-run-state";
 
 interface PipelineSlot {
   /** Slot index (0-based) */
@@ -434,6 +435,11 @@ export interface ConcurrentPipelineCallbacks {
    * @see Issue #2992 — broken failure recovery
    */
   onReEnqueueFailed?: (issueNumber: number, error: Error) => void;
+  /**
+   * Called when the workspace throttle in force changes: applied, changed,
+   * cleared, or lifted at its resumeAt (#2337). Null when none is in force.
+   */
+  onWorkspaceThrottleChanged?: (throttle: WorkspaceThrottle | null) => void;
   /** Called when all slots are idle and queue is empty */
   onAllComplete?: () => void;
   /** Called when stdout output arrives for a slot */
@@ -561,6 +567,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   private readonly lifecyclePromises = new Map<number, Promise<PipelineRunResult>>();
   private worktreeManager: WorktreeManager;
   private maxConcurrent: number;
+  /**
+   * The platform's workspace throttle (#2337), or null: while it is in force
+   * dispatch opens no slot above min(maxConcurrent, its maxConcurrent). See
+   * {@link setWorkspaceThrottle}.
+   */
+  private workspaceThrottle: WorkspaceThrottle | null = null;
+  /** Fills slots when the throttle lifts at its resumeAt. */
+  private throttleLiftTimer: ReturnType<typeof setTimeout> | null = null;
   private callbacks: ConcurrentPipelineCallbacks = {};
   private isShuttingDown = false;
   private isAbortAllInProgress = false;
@@ -641,6 +655,103 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
+   * Apply the platform's workspace throttle (#2337), or clear it with null.
+   *
+   * The cap applies where dispatch decides concurrency: while the throttle is
+   * in force, {@link availableSlotCount} counts against min(configured
+   * max_concurrent, throttle.maxConcurrent), so no new slot opens above it.
+   * A slot already running is never stopped; a cap below the running count
+   * simply opens nothing until enough of them finish. The throttle is in
+   * force until its `resumeAt` (indefinitely when that is null) or until it
+   * is cleared. Clearing it, raising it, or reaching `resumeAt` fills slots
+   * from the queue at once, as a finished slot does.
+   */
+  setWorkspaceThrottle(throttle: WorkspaceThrottle | null): void {
+    const inForce = throttle !== null && throttleInForce(throttle, Date.now());
+    // The throttle is read again on every change signal and token refresh; the
+    // same throttle changes nothing and keeps its lift timer.
+    const current = this.workspaceThrottle;
+    if (
+      inForce
+        ? current?.maxConcurrent === throttle.maxConcurrent &&
+          current.resumeAt === throttle.resumeAt
+        : current === null
+    ) {
+      return;
+    }
+    const before = this.availableSlotCount;
+    if (this.throttleLiftTimer) {
+      clearTimeout(this.throttleLiftTimer);
+      this.throttleLiftTimer = null;
+    }
+    this.workspaceThrottle = inForce ? { ...throttle } : null;
+    this.notifyThrottleChanged();
+    this.logger.info(
+      inForce ? "Workspace throttle applied" : "Workspace throttle cleared",
+      inForce
+        ? {
+            maxConcurrent: throttle.maxConcurrent,
+            resumeAt: throttle.resumeAt,
+            configuredMaxConcurrent: this.maxConcurrent,
+          }
+        : { configuredMaxConcurrent: this.maxConcurrent }
+    );
+    if (inForce && throttle.resumeAt !== null) {
+      this.scheduleThrottleLift(Date.parse(throttle.resumeAt));
+    }
+    if (this.availableSlotCount > before) this.fillAfterThrottleChange();
+  }
+
+  /** The throttle in force now, or null (#2337). */
+  getWorkspaceThrottle(): WorkspaceThrottle | null {
+    const throttle = this.workspaceThrottle;
+    return throttle && throttleInForce(throttle, Date.now()) ? { ...throttle } : null;
+  }
+
+  /**
+   * Lift the throttle at `resumeAtMs`. A timer cannot wait longer than about
+   * 24.8 days, so a later time re-arms on the way; the platform keeps
+   * `resumeAt` within 7 days.
+   */
+  private scheduleThrottleLift(resumeAtMs: number): void {
+    const delay = Math.min(Math.max(resumeAtMs - Date.now(), 0), MAX_TIMER_DELAY_MS);
+    this.throttleLiftTimer = setTimeout(() => {
+      this.throttleLiftTimer = null;
+      if (Date.now() < resumeAtMs) {
+        this.scheduleThrottleLift(resumeAtMs);
+        return;
+      }
+      this.logger.info("Workspace throttle lifted at its resumeAt", {
+        configuredMaxConcurrent: this.maxConcurrent,
+      });
+      this.workspaceThrottle = null;
+      this.notifyThrottleChanged();
+      this.fillAfterThrottleChange();
+    }, delay);
+    this.throttleLiftTimer.unref?.();
+  }
+
+  private notifyThrottleChanged(): void {
+    try {
+      this.callbacks.onWorkspaceThrottleChanged?.(this.getWorkspaceThrottle());
+    } catch (err) {
+      this.logger.warn("onWorkspaceThrottleChanged callback threw", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /** Start what the queue holds now that the throttle allows more slots. */
+  private fillAfterThrottleChange(): void {
+    if (this.isShuttingDown) return;
+    this.fillSlots().catch((err) => {
+      this.logger.error("fillSlots after a workspace throttle change failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  /**
    * Number of currently active slots
    */
   get activeSlotCount(): number {
@@ -657,7 +768,21 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * that is already being claimed. #3874.
    */
   get availableSlotCount(): number {
-    return this.maxConcurrent - this.slots.size - this.reservedSlots.size;
+    return this.dispatchCeiling - this.slots.size - this.reservedSlots.size;
+  }
+
+  /**
+   * The most slots dispatch may have open: the configured ceiling, or the
+   * workspace throttle's when that is lower and in force (#2337). Read at
+   * every dispatch, so a throttle past its resumeAt stops counting even
+   * before the lift timer fires.
+   */
+  private get dispatchCeiling(): number {
+    const throttle = this.workspaceThrottle;
+    if (throttle && throttleInForce(throttle, Date.now())) {
+      return Math.min(this.maxConcurrent, throttle.maxConcurrent);
+    }
+    return this.maxConcurrent;
   }
 
   /**
@@ -769,7 +894,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         this.fillAgain = false;
 
         const available = this.availableSlotCount;
-        if (available <= 0) break;
+        if (available <= 0) {
+          if (this.getWorkspaceThrottle()) {
+            this.logger.debug("fillSlots: the workspace throttle holds dispatch", {
+              throttle: this.getWorkspaceThrottle(),
+              activeSlots: this.slots.size,
+              reservedSlots: this.reservedSlots.size,
+            });
+          }
+          break;
+        }
 
         if (this.isShuttingDown) break;
 
@@ -842,6 +976,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             // The live slot's own completion clears ITS mark; this duplicate
             // dequeue put a second one on and no run will ever clear it (#254).
             await this.completeQueueItem(item, "duplicate dispatch skipped");
+            continue;
+          }
+          // The ceiling can drop while this batch starts: a workspace throttle
+          // applied during an earlier item's worktree creation (#2337), or a
+          // lower max_concurrent. `available` was read before that, and
+          // reservations keep availableSlotCount exact, so check it again
+          // before each start, and hand an item the old ceiling admitted back
+          // to the queue instead of opening a slot above the new one.
+          if (this.availableSlotCount <= 0) {
+            await this.returnToQueue(item, "dispatch ceiling lowered during the fill");
             continue;
           }
           const outcome = await this.startSlot(item);
@@ -937,6 +1081,53 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         reason,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  }
+
+  /**
+   * Put an item this fill dequeued back in the queue without starting it
+   * (#2337): its "processing" mark is cleared and it is queued again, behind
+   * what is already waiting, under the repository, platform run id and
+   * requested adapter and model it was dequeued with. Its pending platform run
+   * id stays in {@link pendingRemoteRunIds}, so the slot that opens for it
+   * later still adopts it. A failure to queue it again is reported like the
+   * one after a failed slot start.
+   */
+  private async returnToQueue(item: QueueItem, reason: string): Promise<void> {
+    await this.completeQueueItem(item, reason);
+    const [owner, repo] = item.repoName?.split("/") ?? [];
+    try {
+      const queued = await this.queueService.enqueue(
+        item.issueNumber,
+        item.title,
+        item.labels,
+        undefined,
+        {
+          ...(owner && repo ? { repoOverride: { owner, repo } } : {}),
+          remoteRunId: this.pendingRemoteRunIds.get(item.issueNumber),
+          ...(item.requestedAdapter
+            ? { requestedAdapter: item.requestedAdapter, requestedModel: item.requestedModel }
+            : {}),
+        }
+      );
+      this.logger.info("Returned a dequeued item to the queue", {
+        issueNumber: item.issueNumber,
+        repo: item.repoName ?? "",
+        reason,
+        queued: queued !== null,
+      });
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      this.logger.error("Failed to return a dequeued item to the queue", {
+        issueNumber: item.issueNumber,
+        reason,
+        error: error.message,
+      });
+      try {
+        this.callbacks.onReEnqueueFailed?.(item.issueNumber, error);
+      } catch {
+        // Never let a callback error break the fill loop.
+      }
     }
   }
 
@@ -3002,6 +3193,11 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     } catch {
       // Best effort — queue clear is non-critical
     }
+    // A triggered run still queued here will never start now, so this window
+    // no longer holds it, and must not answer the platform's verbs for it
+    // (#2340). A dispatch already creating its worktree is refused by the
+    // shutdown check before its slot would adopt the id.
+    this.pendingRemoteRunIds.clear();
 
     // Stop all running orchestrators. Mark each slot as user-cancelled BEFORE
     // issuing the stop so the slot's runSlot completion handler treats the
@@ -3645,6 +3841,60 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
+   * Whether this window holds the run the platform's run id names (#2340): a
+   * slot carries the id, or this window accepted the run's trigger and the
+   * run is still queued here (its pending id is applied when the slot opens).
+   *
+   * The platform sends a verb to every connection that shares the agent id,
+   * so several windows on one machine all receive it, and the first ack ends
+   * the command. Only the window that holds the run may answer it: a no-op
+   * ack from another window would race the holder's, and a `rejected` pause
+   * or resume makes the platform undo a hold the holder applied.
+   *
+   * An accepted trigger is held only while its issue is still on its way to
+   * a slot: in the queue (waiting, or dequeued by a fill), or reserved while
+   * its worktree is created. An issue removed from the queue since (Clear
+   * Queue, Remove from Queue, a halt's drain) will never start here, so the
+   * window does not claim the run. When the queue cannot be read, the
+   * accepted trigger keeps its claim.
+   */
+  async holdsRemoteRun(remoteRunId: string): Promise<boolean> {
+    if (this.findSlotByRemoteRunId(remoteRunId) !== null) return true;
+    const issueNumber = this.pendingIssueFor(remoteRunId);
+    if (issueNumber === null) return false;
+    if (this.reservedSlots.has(issueNumber)) return true;
+    try {
+      const queue = await this.queueService.getQueue();
+      return queue?.items.some((item) => item.issueNumber === issueNumber) ?? false;
+    } catch (err) {
+      this.logger.warn("holdsRemoteRun: could not read the queue — keeping the trigger's claim", {
+        remoteRunId,
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return true;
+    }
+  }
+
+  /** The issue whose accepted trigger carries this platform run id, with no slot yet. */
+  private pendingIssueFor(remoteRunId: string): number | null {
+    for (const [issueNumber, pending] of this.pendingRemoteRunIds) {
+      if (pending === remoteRunId) return issueNumber;
+    }
+    return null;
+  }
+
+  /** Whether a trigger this window accepted is queued for the run, with no slot yet. */
+  private isQueuedRemoteRun(remoteRunId: string): boolean {
+    return this.pendingIssueFor(remoteRunId) !== null;
+  }
+
+  /** Why a verb found no slot for the run: still queued here, or not here at all. */
+  private noSlotFor(remoteRunId: string): RemoteVerbResult {
+    return this.isQueuedRemoteRun(remoteRunId) ? "not-started" : "no-active-run";
+  }
+
+  /**
    * Cancel the pipeline slot identified by the platform's run id.
    * Sets userCancelled=true so the slot completion handler suppresses failure
    * bookkeeping, then calls gracefulStop(SIGTERM → 10s → SIGKILL).
@@ -3652,32 +3902,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   async cancelByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return "no-active-run";
+    if (!slot) return this.noSlotFor(remoteRunId);
     slot.userCancelled = true;
     await slot.orchestrator.gracefulStop(10_000);
     return "applied";
-  }
-
-  /**
-   * Forward an approval decision to the slot identified by the platform's run
-   * id. "no-waiting-gate" when the run is not waiting at an approval gate.
-   * @see Issue #3553 — approve command handler
-   */
-  approveByRemoteRunId(remoteRunId: string): RemoteVerbResult {
-    const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return "no-active-run";
-    return slot.orchestrator.approve() ? "applied" : "no-waiting-gate";
-  }
-
-  /**
-   * Reject the approval gate for the slot identified by the platform's run id.
-   * "no-waiting-gate" when the run is not waiting at an approval gate.
-   * @see Issue #3553 — reject command handler
-   */
-  rejectByRemoteRunId(remoteRunId: string): RemoteVerbResult {
-    const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return "no-active-run";
-    return slot.orchestrator.reject() ? "applied" : "no-waiting-gate";
   }
 
   /**
@@ -3689,7 +3917,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   async pauseByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return "no-active-run";
+    if (!slot) return this.noSlotFor(remoteRunId);
     // The flag lives on the run's loaded state; a slot with none yet cannot
     // hold, and must not report that it does. Decided before the flag moves,
     // not by re-reading it afterwards: a resume handled in the same tick may
@@ -3708,7 +3936,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   async resumeByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return "no-active-run";
+    if (!slot) return this.noSlotFor(remoteRunId);
     if (!slot.stateService.isPaused()) return "not-paused";
     await slot.stateService.resumePipeline();
     return "applied";
@@ -3836,6 +4064,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
   dispose(): void {
     this.isShuttingDown = true;
+    if (this.throttleLiftTimer) {
+      clearTimeout(this.throttleLiftTimer);
+      this.throttleLiftTimer = null;
+    }
     // Kill all active orchestrators
     for (const slot of this.slots.values()) {
       try {

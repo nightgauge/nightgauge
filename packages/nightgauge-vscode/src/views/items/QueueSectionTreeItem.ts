@@ -11,6 +11,10 @@ import * as vscode from "vscode";
 import { BaseTreeItem } from "./BaseTreeItem";
 import { QueuedIssueTreeItem } from "./QueuedIssueTreeItem";
 import type { QueueItem, QueueStatus } from "../../types/queue";
+import {
+  describeWorkspaceThrottle,
+  type WorkspaceThrottle,
+} from "../../services/WorkspaceThrottle";
 
 /**
  * Get icon for queue status
@@ -52,6 +56,8 @@ export class QueueSectionTreeItem extends BaseTreeItem {
   private queuedCount = 0;
   /** Items dispatched and executing — marked in place, not removed (#232/#246). */
   private runningCount = 0;
+  /** The platform's workspace throttle holding dispatch, or null (#2337). */
+  private workspaceThrottle: WorkspaceThrottle | null = null;
 
   constructor() {
     super("Queued Issues", vscode.TreeItemCollapsibleState.Collapsed);
@@ -77,13 +83,17 @@ export class QueueSectionTreeItem extends BaseTreeItem {
    * record of the work and the queue reported `idle` while a pipeline ran.
    */
   private describeCounts(): string {
+    // A throttle that holds dispatch says so where the waiting work is counted.
+    const cap = this.workspaceThrottle
+      ? ` · capped at ${this.workspaceThrottle.maxConcurrent}`
+      : "";
     if (this.runningCount === 0) {
-      return `(${this.queuedCount})`;
+      return `(${this.queuedCount})${cap}`;
     }
     if (this.queuedCount === 0) {
-      return `(0 queued, ${this.runningCount} running)`;
+      return `(0 queued, ${this.runningCount} running)${cap}`;
     }
-    return `(${this.queuedCount} queued, ${this.runningCount} running)`;
+    return `(${this.queuedCount} queued, ${this.runningCount} running)${cap}`;
   }
 
   /**
@@ -106,6 +116,12 @@ export class QueueSectionTreeItem extends BaseTreeItem {
         tooltipText += `\n\n⚠️ ${this.pauseReason}`;
       }
     }
+    if (this.workspaceThrottle) {
+      tooltipText +=
+        `\n\nThe workspace's concurrency cap allows ` +
+        `${describeWorkspaceThrottle(this.workspaceThrottle)}. Queued issues start ` +
+        `when it is raised, cleared or ends.`;
+    }
 
     this.tooltip = new vscode.MarkdownString(tooltipText);
   }
@@ -126,6 +142,13 @@ export class QueueSectionTreeItem extends BaseTreeItem {
     if (this.items.length > 0) {
       this.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
     }
+  }
+
+  /** Show the workspace throttle that holds dispatch, or none (#2337). */
+  setWorkspaceThrottle(throttle: WorkspaceThrottle | null): void {
+    this.workspaceThrottle = throttle;
+    this.description = this.describeCounts();
+    this.updateTooltip();
   }
 
   /**
@@ -169,7 +192,7 @@ export class QueueSectionTreeItem extends BaseTreeItem {
     this.runningCount = 0;
     this.queueStatus = "idle";
     this.pauseReason = undefined;
-    this.description = "(0)";
+    this.description = this.describeCounts();
     this.iconPath = getQueueStatusIcon("idle", 0);
     this.collapsibleState = vscode.TreeItemCollapsibleState.Collapsed;
     this.updateTooltip();

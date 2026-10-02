@@ -9,8 +9,31 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **A concurrency cap set on the workspace from the dashboard applies to this
+  window.** While you are signed in, the window applies the cap of the
+  workspace its `.vscode/nightgauge-workspace.yaml` names: no new pipeline
+  starts above it, running ones are never stopped, and queued issues start as
+  soon as the cap is raised, cleared or ends. A cap on another workspace
+  never applies here. The Queued Issues header shows the cap, Resume Queue
+  says when it holds every slot, it survives a window reload, and signing out
+  drops it (#2337).
+
 ### Fixed
 
+- **Approve and reject from the phone app or the dashboard say why they
+  cannot apply:** no run in the extension waits at an approval gate, so the
+  window running the pipeline answers both with that reason (#2336).
+- **A pause of a paused run, or a resume of a running one, from the phone app
+  or the dashboard no longer shows the opposite state there.** The window now
+  answers that the run was already in that state instead of refusing the
+  command, which made the platform restore the run's earlier status (#2341).
+- **Another window no longer undoes a pause or resume from the phone app or
+  the dashboard.** With two windows open on the same repository, the one not
+  running the pipeline could answer first that it had no such run, and the
+  platform then restored the run as if the pause had not happened. Only the
+  window running the pipeline answers now (#2340).
 - **Pause, resume, cancel, approve and reject from the phone app or the
   dashboard are acknowledged.** Each one used to show as unacknowledged and
   then expired, even when it had been carried out. Pause and resume now work:

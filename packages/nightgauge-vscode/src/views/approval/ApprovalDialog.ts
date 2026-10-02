@@ -136,9 +136,8 @@ function shouldAutoAcceptStage(stage: PipelineStage): boolean {
  * const dialog = new ApprovalDialog(context.extensionUri);
  * const result = await dialog.show('feature-planning', 42, planContent);
  *
- * if (result.action === 'approve') {
- *   orchestrator.approve();
- * }
+ * // As a pipeline's onApprovalRequired callback answer:
+ * return result.action === 'approve';
  * ```
  */
 export class ApprovalDialog implements vscode.Disposable {

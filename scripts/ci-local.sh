@@ -1372,6 +1372,17 @@ run_step "SKILL.md metadata" bash scripts/validate-skill-metadata.sh
 #    so on its success line; one that exits non-zero names them inline.
 run_step "publication boundary" python3 scripts/publication-boundary-check.py
 
+# 5-i. The allowlist changes alone (#1970), on this branch. The workflow runs
+#      scripts/check-boundary-allowlist-isolation.sh on every pull request;
+#      until #2371 this gate ran only that script's self-test (5b-ii), so a
+#      branch that changed the allowlist together with other files passed
+#      here and failed CI. The base is the changed set's, origin/main...HEAD,
+#      and the check reads commits, as CI does: an uncommitted edit is not
+#      part of what a push sends. Without origin/main the script cannot list
+#      the changed files and fails closed, saying so.
+run_step "publication boundary allowlist changes alone" \
+  bash scripts/check-boundary-allowlist-isolation.sh origin/main HEAD
+
 # 5a. Credential scan — scripts/credential-scan.sh, gitleaks over full history
 #     with .gitleaksignore (mirrors .github/workflows/credential-scan.yml).
 #     The header listed it as never skipped; until #2075 no step ran it, and
@@ -1426,8 +1437,9 @@ run_step "Publication boundary attribution" \
 run_step "Publication boundary suite hermeticity" \
   bash scripts/test-publication-boundary-hermeticity.sh
 
-# 5b-ii. Allowlist-isolation check (#1970): the allowlist changes alone.
-run_step "Publication boundary allowlist isolation" \
+# 5b-ii. Allowlist-isolation self-test (#1970): proves the check that step 5-i
+#        runs on this branch still fails closed.
+run_step "Publication boundary allowlist isolation regression suite" \
   bash scripts/test-check-boundary-allowlist-isolation.sh
 
 # 5c. Band-vocabulary reintroduction gate (#582) — fails on hand-inlined band

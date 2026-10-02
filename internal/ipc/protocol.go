@@ -201,7 +201,8 @@ type AgentExecutionProfileResult struct {
 	Profile platform.ExecutionProfile `json:"profile"`
 	// Conversation reports whether the workspace may advertise the
 	// `conversation` capability: its adapter passed the conversation spike's
-	// viability bar (#1568). False for every adapter until that spike runs.
+	// viability bar (#1568) and the daemon can serve a turn on it. False for
+	// every adapter until the turn runner (#1569) lands.
 	Conversation bool `json:"conversation"`
 }
 
@@ -1316,8 +1317,10 @@ type AgentAcknowledgeCommandParams struct {
 	AgentID   string `json:"agentId"`
 	CommandID string `json:"commandId"`
 	// Outcome is empty for an ordinary ack, "rejected" to refuse the command
-	// with Detail as the reason the requester sees (#1656), or "applied" for a
-	// command the agent carried out (#2334). Any other value is an error.
+	// with Detail as the reason the requester sees (#1656), "applied" for a
+	// command the agent carried out (#2334), or "already_resolved" for a verb
+	// whose run was already in the state it asks for (#2341). Any other value
+	// is an error.
 	Outcome string `json:"outcome,omitempty"`
 	Detail  string `json:"detail,omitempty"`
 }

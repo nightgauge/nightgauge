@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { PassThrough } from "node:stream";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { ComplexityModelService } from "@nightgauge/sdk";
 import {
@@ -29,6 +31,42 @@ function depsForScript(script: string): {
       exitTimeoutMs: 1_000,
     },
     spawnLock,
+  };
+}
+
+/**
+ * A broker that reports readiness, then ignores EOF and SIGTERM. Its exit
+ * after SIGKILL is observed `exitDelayMs` later, or never when null: the delay
+ * Node takes to see a killed process exit grows under load (#2356).
+ */
+function brokerSlowToReap(exitDelayMs: number | null) {
+  const child = Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(),
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+    pid: 4242,
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    kill: vi.fn((signal: NodeJS.Signals) => {
+      if (signal === "SIGKILL" && exitDelayMs !== null) {
+        setTimeout(() => {
+          child.signalCode = "SIGKILL";
+          child.emit("exit", null, "SIGKILL");
+        }, exitDelayMs);
+      }
+      return true;
+    }),
+  });
+  setImmediate(() => child.stdout.write("READY\n"));
+  return child;
+}
+
+function depsForChild(child: ReturnType<typeof brokerSlowToReap>): ComplexityModelLockDeps {
+  return {
+    resolveBinary: async () => "/fake/nightgauge",
+    spawnLock: vi.fn(() => child) as unknown as typeof spawn,
+    readyTimeoutMs: 1_000,
+    exitTimeoutMs: 25,
   };
 }
 
@@ -135,5 +173,27 @@ describe("withComplexityModelService", () => {
       )
     ).rejects.toThrow(/failed to commit transaction.*code=3/);
     expect(mutationReported).toBe(false);
+  });
+
+  // #2356: the wait after SIGKILL does not shrink with exitTimeoutMs, and a
+  // reap failure never replaces the transaction's own error.
+  it("keeps the transaction's error when the killed broker's exit is observed late", async () => {
+    const child = brokerSlowToReap(80);
+
+    await expect(
+      withComplexityModelService(ROOT, async () => 42, depsForChild(child))
+    ).rejects.toThrow(/timed out waiting for complexity-model broker to release transaction/);
+    expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(["SIGTERM", "SIGKILL"]);
+    expect(child.signalCode).toBe("SIGKILL");
+  });
+
+  it("never replaces the transaction's error with a broker that outlives SIGKILL", async () => {
+    const child = brokerSlowToReap(null);
+    const deps = { ...depsForChild(child), killExitTimeoutMs: 30 };
+
+    await expect(withComplexityModelService(ROOT, async () => 42, deps)).rejects.toThrow(
+      /timed out waiting for complexity-model broker to release transaction/
+    );
+    expect(child.kill).toHaveBeenCalledWith("SIGKILL");
   });
 });

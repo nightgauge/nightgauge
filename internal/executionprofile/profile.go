@@ -72,11 +72,15 @@ func Resolve(workspaceRoot string) (platform.ExecutionProfile, error) {
 	return p, nil
 }
 
-// conversationViableAdapters is the set of adapters that passed the
-// conversation spike's viability bar (nightgauge#1568). It is EMPTY on
-// purpose: the spike has not run, so no workspace can host a turn yet and
-// none advertises the capability. The spike's result fills this in; a
-// workspace must never claim a capability nothing has demonstrated.
+// conversationViableAdapters is the set of adapters a workspace may host a
+// conversational turn on, and so advertise the `conversation` capability for.
+// Spike #1568 set the viability bar and adopted claude-headless
+// (docs/spikes/1568-conversational-agent-sessions-across-adapters.md,
+// § 13). The set is still EMPTY on purpose: no code path serves a turn until
+// the daemon's turn runner (#1569) lands, and an adapter enters the set
+// together with its conversational turn builder, so the advertised set and
+// the servable set are one set by construction. A workspace must never claim
+// a capability no code path serves.
 var conversationViableAdapters = map[string]bool{}
 
 // ConversationViable reports whether a workspace on this adapter can host a

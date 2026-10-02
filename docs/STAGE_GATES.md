@@ -383,8 +383,9 @@ disable it. After every stage, whatever its exit, `gates.CheckProtectedPaths`
 fails the stage if the workspace changed a path in
 `gates.PipelineProtectedPaths` — today `.github/publication-boundary.yaml`, the
 allowlist of the gate that checks the pipeline's own output (#1970). A human
-changes that file in a pull request that changes nothing else; CI enforces the
-isolation with `scripts/check-boundary-allowlist-isolation.sh`.
+changes that file in a pull request that changes nothing else; CI and the
+local gate (`scripts/ci-local.sh`) enforce the isolation with
+`scripts/check-boundary-allowlist-isolation.sh`.
 
 ## Adding a new stage gate
 
