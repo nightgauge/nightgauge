@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 
 	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
@@ -47,12 +48,21 @@ type AgentRegistration struct {
 // agentRegisterBody is the POST /v1/agents/register request body. The platform's
 // RegisterAgentSchema (zod) requires `machine_id`; `agent_version` is optional
 // (omitted when the build version is unknown) and `capabilities` is always sent.
+// `repos` and `workspace` declare the workspace this daemon serves (#2335);
+// the service reads an absent `repos` as none.
 type agentRegisterBody struct {
 	MachineID        string            `json:"machine_id"`
 	AgentVersion     string            `json:"agent_version,omitempty"`
 	Capabilities     []string          `json:"capabilities"`
+	Repos            []AgentRepo       `json:"repos,omitempty"`
+	Workspace        *AgentWorkspace   `json:"workspace,omitempty"`
 	ExecutionProfile *ExecutionProfile `json:"execution_profile,omitempty"`
 }
+
+// errNoTeamMembershipCode is the service's answer to a `workspace` block from
+// an account that belongs to no team: 403 with this code. The agent row is
+// already written by then, but the registration reports failure.
+const errNoTeamMembershipCode = "NO_TEAM_MEMBERSHIP"
 
 // agentHeartbeatBody is the PUT /v1/agents/:agentId/heartbeat body. It is only
 // sent when a profile resolved; otherwise the beat stays the bodiless PUT the
@@ -74,6 +84,7 @@ type AgentRegistrationService struct {
 	client       *Client
 	agentVersion string
 	profile      ProfileFunc
+	workspace    WorkspaceFunc
 }
 
 // NewAgentRegistrationService builds a registration service bound to the platform
@@ -90,6 +101,39 @@ func (s *AgentRegistrationService) WithExecutionProfile(fn ProfileFunc) *AgentRe
 	return s
 }
 
+// WithWorkspace sets the source of the workspace this daemon declares it
+// serves (#2335). Without one, the registration declares no repos and no
+// workspace, and covers no workspace on the hosted service.
+func (s *AgentRegistrationService) WithWorkspace(fn WorkspaceFunc) *AgentRegistrationService {
+	s.workspace = fn
+	return s
+}
+
+// resolveWorkspace runs the workspace source and keeps only what the hosted
+// service will accept. A part outside the service's bounds would cost the
+// whole registration a 422, and with it the agent id the attention mirror
+// needs, so it is dropped and logged instead.
+func (s *AgentRegistrationService) resolveWorkspace() ([]AgentRepo, *AgentWorkspace) {
+	if s.workspace == nil {
+		return nil, nil
+	}
+	decl, err := s.workspace()
+	if err != nil {
+		log.Printf("agent registration: workspace not declared: %v", err)
+		return nil, nil
+	}
+	repos, block := decl.Repos, decl.Workspace
+	if err := validateRepos(repos); err != nil {
+		log.Printf("agent registration: repos not declared: %v", err)
+		repos = nil
+	}
+	if err := validateWorkspace(block); err != nil {
+		log.Printf("agent registration: workspace block not sent: %v", err)
+		block = nil
+	}
+	return repos, block
+}
+
 // resolveProfile runs the profile source and re-validates what it returned:
 // the bound on what leaves the machine is enforced here, at the wire, not
 // trusted to the source.
@@ -104,10 +148,16 @@ func (s *AgentRegistrationService) resolveProfile() (*ExecutionProfile, bool) {
 	return &p, conversation
 }
 
-// RegisterAgent POSTs the daemon's machine id + capabilities to
-// POST /v1/agents/register and returns the platform-assigned agent id + TTL.
-// Idempotent server-side (upsert by machine_id per account). A non-201 response
-// or a missing agentId is an error the caller retries with backoff.
+// RegisterAgent POSTs the daemon's machine id, capabilities and the workspace
+// it serves to POST /v1/agents/register and returns the platform-assigned
+// agent id + TTL. Idempotent server-side (upsert by machine_id per account). A
+// non-201 response or a missing agentId is an error the caller retries with
+// backoff.
+//
+// A `workspace` block needs the account to belong to a team. When the service
+// answers NO_TEAM_MEMBERSHIP, the registration is sent once more without the
+// block, still declaring the repos: an account with no team then registers as
+// it did before #2335, instead of failing every retry for good.
 func (s *AgentRegistrationService) RegisterAgent(ctx context.Context) (AgentRegistration, error) {
 	if s == nil || s.client == nil {
 		return AgentRegistration{}, fmt.Errorf("agent registration: no platform client")
@@ -127,9 +177,24 @@ func (s *AgentRegistrationService) RegisterAgent(ctx context.Context) (AgentRegi
 			body.Capabilities = append(body.Capabilities, AgentCapabilityConversation)
 		}
 	}
+	body.Repos, body.Workspace = s.resolveWorkspace()
+
+	info, status, code, err := s.postRegister(ctx, body)
+	if err != nil && status == http.StatusForbidden && code == errNoTeamMembershipCode && body.Workspace != nil {
+		log.Printf("agent registration: the account belongs to no team, so workspace %q cannot be named; registering without it", body.Workspace.Slug)
+		body.Workspace = nil
+		info, _, _, err = s.postRegister(ctx, body)
+	}
+	return info, err
+}
+
+// postRegister sends one registration. On a non-201 it returns the status and
+// the response's error code, so the caller can tell a refusal it can recover
+// from from one it cannot.
+func (s *AgentRegistrationService) postRegister(ctx context.Context, body agentRegisterBody) (AgentRegistration, int, string, error) {
 	data, err := json.Marshal(body)
 	if err != nil {
-		return AgentRegistration{}, fmt.Errorf("agent registration: marshal: %w", err)
+		return AgentRegistration{}, 0, "", fmt.Errorf("agent registration: marshal: %w", err)
 	}
 
 	req, err := s.client.newRequest(ctx, requestSpec{
@@ -141,27 +206,31 @@ func (s *AgentRegistrationService) RegisterAgent(ctx context.Context) (AgentRegi
 		},
 	})
 	if err != nil {
-		return AgentRegistration{}, fmt.Errorf("agent registration: request: %w", err)
+		return AgentRegistration{}, 0, "", fmt.Errorf("agent registration: request: %w", err)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return AgentRegistration{}, fmt.Errorf("agent registration: POST: %w", err)
+		return AgentRegistration{}, 0, "", fmt.Errorf("agent registration: POST: %w", err)
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusCreated {
-		return AgentRegistration{}, fmt.Errorf("agent registration: server returned %d", resp.StatusCode)
+		var refusal struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(respBody, &refusal)
+		return AgentRegistration{}, resp.StatusCode, refusal.Code, fmt.Errorf("agent registration: server returned %d", resp.StatusCode)
 	}
 
 	var parsed AgentRegistration
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		return AgentRegistration{}, fmt.Errorf("agent registration: parse response: %w", err)
+		return AgentRegistration{}, resp.StatusCode, "", fmt.Errorf("agent registration: parse response: %w", err)
 	}
 	if parsed.AgentID == "" {
-		return AgentRegistration{}, fmt.Errorf("agent registration: response missing agentId")
+		return AgentRegistration{}, resp.StatusCode, "", fmt.Errorf("agent registration: response missing agentId")
 	}
-	return parsed, nil
+	return parsed, resp.StatusCode, "", nil
 }
 
 // Heartbeat PUTs /v1/agents/:agentId/heartbeat to keep the agent alive (the

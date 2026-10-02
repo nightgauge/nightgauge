@@ -22,6 +22,43 @@ export interface ReceivedCommand {
   type: string;
   payload: unknown;
   createdAt: string;
+  /**
+   * The agent the platform addressed, which an ack must name. Absent on this
+   * stream's own commands (they are addressed to the stream's agent); set on a
+   * command the daemon received on ITS agent and relayed here (#2335).
+   */
+  agentId?: string;
+  /**
+   * Routing columns the platform's router stamps on the frame of every
+   * repo-scoped command (a trigger, or a verb, from the run it targets).
+   */
+  owner?: string;
+  repo?: string;
+}
+
+/**
+ * Parse one command frame as the platform publishes it. The platform puts the
+ * command id under `commandId` (see the platform's
+ * pipeline-command-router-service), but ReceivedCommand and its handlers read
+ * `id`. Normalizing it here keeps the ack, which threads `id` through to
+ * agent.acknowledgeCommand, from sending an empty commandId and failing with
+ * "commandId is required" (#3551). Returns null for a frame that is not a
+ * command object.
+ */
+export function parseCommandFrame(frame: unknown): ReceivedCommand | null {
+  const raw = typeof frame === "string" ? (JSON.parse(frame) as unknown) : frame;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  // `agentId` is never taken from frame data: it names the agent a relay
+  // received the command on, which only the relay knows.
+  const { agentId: _frameAgentId, ...cmd } = raw as ReceivedCommand & {
+    commandId?: string;
+    commandType?: string;
+  };
+  return {
+    ...cmd,
+    id: cmd.id ?? cmd.commandId ?? "",
+    type: cmd.type ?? cmd.commandType ?? "",
+  };
 }
 
 export interface CommandHandler {
@@ -169,16 +206,13 @@ export class AgentCommandStreamService implements vscode.Disposable {
   private handleCommandEvent(data: string): void {
     if (data.startsWith(":")) return; // keepalive comment
 
-    let cmd: ReceivedCommand;
+    let cmd: ReceivedCommand | null;
     try {
-      // The platform publishes the command id under `commandId` (see the
-      // platform's pipeline-command-router-service), but ReceivedCommand and
-      // its handlers read `id`. Normalize so the ack — which threads `id`
-      // through to agent.acknowledgeCommand — doesn't send an empty commandId
-      // and fail with "commandId is required", leaving the run unstarted (#3551).
-      const raw = JSON.parse(data) as ReceivedCommand & { commandId?: string };
-      cmd = { ...raw, id: raw.id ?? raw.commandId ?? "" };
+      cmd = parseCommandFrame(data);
     } catch {
+      cmd = null;
+    }
+    if (!cmd) {
       this.logger.warn("AgentCommandStreamService: malformed command JSON, skipping");
       return;
     }

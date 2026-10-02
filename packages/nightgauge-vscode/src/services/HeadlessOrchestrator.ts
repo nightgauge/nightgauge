@@ -16088,25 +16088,26 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
-   * Approve the current approval gate
-   * Used when waiting at an approval gate
+   * Approve the current approval gate.
+   * Returns whether a gate was waiting: false means there was nothing to
+   * approve, which a platform verb reports as a no-op (#2334).
    */
-  approve(): void {
-    if (this.approvalResolve) {
-      this.approvalResolve(true);
-      this.approvalResolve = null;
-    }
+  approve(): boolean {
+    if (!this.approvalResolve) return false;
+    this.approvalResolve(true);
+    this.approvalResolve = null;
+    return true;
   }
 
   /**
-   * Reject the current approval gate
-   * Stops the pipeline at the current stage
+   * Reject the current approval gate, stopping the pipeline at the current
+   * stage. Returns whether a gate was waiting (see approve()).
    */
-  reject(): void {
-    if (this.approvalResolve) {
-      this.approvalResolve(false);
-      this.approvalResolve = null;
-    }
+  reject(): boolean {
+    if (!this.approvalResolve) return false;
+    this.approvalResolve(false);
+    this.approvalResolve = null;
+    return true;
   }
 
   /**

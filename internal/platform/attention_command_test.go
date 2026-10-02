@@ -422,3 +422,82 @@ type resolveRejectedError struct{}
 func (*resolveRejectedError) Error() string {
 	return "attention: option \"bogus\" is not declared on request"
 }
+
+// A trigger or pipeline verb that reaches the daemon's agent is relayed whole,
+// under the agent id the platform addressed, and never acknowledged here: the
+// extension that runs the pipeline acknowledges it (#2335). attention_resolve
+// is still the daemon's own and is not relayed.
+func TestAttentionCommandStream_RelaysWhatItDoesNotExecute(t *testing.T) {
+	const verbFrame = `{"commandId":"cmd-verb-1","type":"cancel","commandType":"cancel","payload":{"runId":"run-9"},"owner":"acme","repo":"api","issueNumber":7,"stage":null,"createdAt":"2026-10-01T00:00:00.000Z","expiresAt":"2026-10-01T00:05:00.000Z"}`
+	var mu sync.Mutex
+	var acked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/agents/agent-1/commands":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "event: command\ndata: %s\n\n", verbFrame)
+			writeSSEFrame(t, w, "cmd-sse-1", "dr_sse_1", "resume")
+			<-r.Context().Done()
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/ack"):
+			parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+			mu.Lock()
+			acked = append(acked, parts[4])
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"runId":"r-1"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := onlineClient(t, srv.URL)
+	res := &fakeResolver{outcome: AttentionResolveOutcome{Applied: true}}
+	var relayed []PendingCommand
+	var relayedTo []string
+	consumer := NewAttentionCommandConsumer(res, NewCommandService(c).AcknowledgeAgentCommand, "agent-1").
+		WithRelay(func(agentID string, cmd PendingCommand) {
+			mu.Lock()
+			defer mu.Unlock()
+			relayed = append(relayed, cmd)
+			relayedTo = append(relayedTo, agentID)
+		})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go runAttentionCommandStream(ctx, c, consumer, "agent-1", nil, 5*time.Millisecond, 20*time.Millisecond)
+
+	waitFor(t, "the attention_resolve ack", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(acked) == 1
+	})
+	mu.Lock()
+	defer mu.Unlock()
+	if acked[0] != "cmd-sse-1" {
+		t.Errorf("acked %v, want only the attention_resolve; the relayed verb is the extension's to ack", acked)
+	}
+	if len(relayed) != 1 {
+		t.Fatalf("%d commands relayed, want the cancel only", len(relayed))
+	}
+	if relayedTo[0] != "agent-1" || relayed[0].ID != "cmd-verb-1" || relayed[0].Type != "cancel" {
+		t.Errorf("relayed %s/%s to %s", relayed[0].ID, relayed[0].Type, relayedTo[0])
+	}
+	if string(relayed[0].Frame) != verbFrame {
+		t.Errorf("relayed frame = %s, want the platform's frame unchanged", relayed[0].Frame)
+	}
+}
+
+// Without a relay a foreign command is left alone, as before #2335.
+func TestExecute_WithoutRelayLeavesOtherTypesAlone(t *testing.T) {
+	srv, acks := ackRecorder(t)
+	defer srv.Close()
+	res := &fakeResolver{}
+	consumer := NewAttentionCommandConsumer(res, NewCommandService(onlineClient(t, srv.URL)).AcknowledgeAgentCommand, "agent-1")
+	if err := consumer.Execute(context.Background(), PendingCommand{ID: "c", Type: "trigger", Frame: []byte(`{}`)}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(*acks) != 0 || res.calls != 0 {
+		t.Errorf("a trigger was acked (%v) or resolved (%d calls)", *acks, res.calls)
+	}
+}

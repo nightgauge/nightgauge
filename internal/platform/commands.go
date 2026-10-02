@@ -20,6 +20,9 @@ type PendingCommand struct {
 	Type      string          `json:"type"`
 	Payload   json.RawMessage `json:"payload"`
 	CreatedAt time.Time       `json:"createdAt"`
+	// Frame is the SSE `data:` JSON exactly as the platform sent it, kept so
+	// a command this daemon does not execute can be relayed whole (#2335).
+	Frame json.RawMessage `json:"-"`
 }
 
 // CommandService acknowledges agent commands the hosted service delivers on
@@ -42,6 +45,11 @@ func (s *CommandService) AcknowledgeAgentCommand(ctx context.Context, agentId, c
 // AgentCommandRejectedOutcome is the ack outcome that refuses a command.
 const AgentCommandRejectedOutcome = "rejected"
 
+// AgentCommandAppliedOutcome is the ack outcome for a command the agent
+// carried out (#2334). It and AgentCommandRejectedOutcome are how an ack tells
+// an applied verb from one that found nothing to act on.
+const AgentCommandAppliedOutcome = "applied"
+
 // AgentCommandAckDetailMax bounds a rejected ack's detail, the hosted
 // service's limit on the field.
 const AgentCommandAckDetailMax = 2000
@@ -55,6 +63,18 @@ func (s *CommandService) RejectAgentCommand(ctx context.Context, agentId, comman
 		Outcome string `json:"outcome"`
 		Detail  string `json:"detail"`
 	}{AgentCommandRejectedOutcome, truncateAckDetail(detail)}
+	_, err := s.ackAgentCommand(ctx, agentId, commandId, body, false)
+	return err
+}
+
+// ApplyAgentCommand acks a command the agent carried out: {outcome:
+// "applied"}, with detail when one is given (#2334). It starts no run, so no
+// runId is read back.
+func (s *CommandService) ApplyAgentCommand(ctx context.Context, agentId, commandId, detail string) error {
+	body := struct {
+		Outcome string `json:"outcome"`
+		Detail  string `json:"detail,omitempty"`
+	}{AgentCommandAppliedOutcome, truncateAckDetail(detail)}
 	_, err := s.ackAgentCommand(ctx, agentId, commandId, body, false)
 	return err
 }

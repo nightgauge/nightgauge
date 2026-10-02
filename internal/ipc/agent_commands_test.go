@@ -195,6 +195,35 @@ func TestAgentAcknowledgeCommand_RejectedCarriesOutcomeAndDetail(t *testing.T) {
 	}
 }
 
+// An applied verb is acked {outcome: "applied"} (#2334): the ack tells the
+// requester the agent carried it out, where a rejected ack says it found
+// nothing to act on.
+func TestAgentAcknowledgeCommand_AppliedCarriesOutcome(t *testing.T) {
+	var bodies []map[string]any
+	srv := ackBodyRecorder(t, &bodies)
+	defer srv.Close()
+	s := NewServer(nil, WithPlatformClient(newTestPlatformClientFor(t, srv.URL, "k")))
+	s.writer = &bytes.Buffer{}
+
+	params, _ := json.Marshal(AgentAcknowledgeCommandParams{AgentID: "agent-1", CommandID: "cmd-1", Outcome: "applied"})
+	res, err := s.handleAgentAcknowledgeCommand(context.Background(), params)
+	if err != nil {
+		t.Fatalf("applied ack: %v", err)
+	}
+	if got := res.(AgentAcknowledgeCommandResult).RunID; got != "" {
+		t.Errorf("an applied ack returned runId %q; it starts no run", got)
+	}
+	if len(bodies) != 1 {
+		t.Fatalf("%d acks posted, want 1", len(bodies))
+	}
+	if bodies[0]["outcome"] != "applied" {
+		t.Errorf("applied ack body = %v, want outcome applied", bodies[0])
+	}
+	if _, ok := bodies[0]["detail"]; ok {
+		t.Errorf("applied ack body = %v, want no detail when none is given", bodies[0])
+	}
+}
+
 func TestAgentAcknowledgeCommand_OutcomeIsClosed(t *testing.T) {
 	var bodies []map[string]any
 	srv := ackBodyRecorder(t, &bodies)
@@ -202,7 +231,8 @@ func TestAgentAcknowledgeCommand_OutcomeIsClosed(t *testing.T) {
 	s := NewServer(nil, WithPlatformClient(newTestPlatformClientFor(t, srv.URL, "k")))
 	s.writer = &bytes.Buffer{}
 	for _, p := range []AgentAcknowledgeCommandParams{
-		{AgentID: "a", CommandID: "c", Outcome: "applied"},
+		{AgentID: "a", CommandID: "c", Outcome: "already_resolved"},
+		{AgentID: "a", CommandID: "c", Outcome: "done"},
 		{AgentID: "a", CommandID: "c", Outcome: "rejected"},
 	} {
 		params, _ := json.Marshal(p)

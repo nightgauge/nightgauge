@@ -80,7 +80,10 @@ export class TriggerCommandHandler implements CommandHandler {
   }
 
   private async handleTrigger(cmd: ReceivedCommand): Promise<void> {
-    const agentId = this.agentId;
+    // A trigger the daemon relayed from its own agent names that agent, and
+    // the ack must name it too (#2335); this window's own stream delivers
+    // triggers addressed to this window's agent.
+    const agentId = cmd.agentId ?? this.agentId;
     if (!agentId) {
       this.logger.warn("TriggerCommandHandler: agentId not set, dropping trigger", {
         commandId: cmd.id,
@@ -161,7 +164,7 @@ export class TriggerCommandHandler implements CommandHandler {
     if (requested === "refused") return;
 
     // Ack must complete before pipeline starts (AC#1). The ack returns the
-    // platform runId the dashboard polls for status and that CancelCommandHandler
+    // platform runId the dashboard polls for status and that RunVerbCommandHandler
     // uses to route a cancel to the right slot.
     let runId: string;
     try {
