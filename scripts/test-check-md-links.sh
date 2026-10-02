@@ -324,6 +324,35 @@ check "the SAME URL without a matching ignore entry still fails the gate" \
 check "and is classed dead -- the ignore is host-scoped, not a blanket exemption" \
   "$(grep -qE 'Link classes: [1-9]' "$TMP/out" && echo 0 || echo 1)"
 
+# --- Case 10: a file the checker could not check is not a pass (#2379) -----
+#
+# markdown-link-check exits non-zero WITHOUT a single `[✖]` line when it
+# crashes, or cannot read its config or the file. The gate recorded nothing for
+# such a file and printed "passed", so a malformed config turned the whole step
+# off. It must fail with a HARNESS ERROR line, which ci-local.sh classes as
+# infrastructure (scripts/lib/ci_local_failures.sh) — and only when nothing
+# else failed: beside a dead link, the marker would make ci-local.sh class a
+# real failure as infrastructure.
+# shellcheck source=scripts/lib/ci_local_failures.sh
+. scripts/lib/ci_local_failures.sh
+printf '{ this is not json' > "$TMP/malformed.json"
+run_gate_with_config "$TMP/malformed.json" dead-relative.md
+RC=$?
+check "a checker that cannot load its config fails the gate" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "and never reports the unchecked file as passed" \
+  "$(grep -qF 'Markdown link check passed' "$TMP/out" && echo 1 || echo 0)"
+check "and says the check could not run, which ci-local.sh classes as infrastructure" \
+  "$([ "$(classify_failure "$TMP/out" "$RC")" = infra ] && echo 0 || echo 1)"
+
+MD_LINK_CHECK_FILES="$(printf '%s\n' "$FIX/dead-relative.md" "$FIX/never-written.md")" \
+  bash "$GATE" > "$TMP/out" 2>&1
+RC=$?
+check "a dead link beside an unchecked file still fails the gate" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "as an assertion failure, not an infrastructure one" \
+  "$([ "$(classify_failure "$TMP/out" "$RC")" = assert ] && echo 0 || echo 1)"
+check "and the unchecked file is still named" \
+  "$(grep -qF 'never-written.md: markdown-link-check exited' "$TMP/out" && echo 0 || echo 1)"
+
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
 [ "$FAIL" -eq 0 ]

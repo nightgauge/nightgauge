@@ -507,6 +507,14 @@ changelog, and the release workflow refuses a tag that does not.
   OpenCode permission map. An explicit `deny` in that map is now the main
   source; an `ask` rule from other OpenCode config, auto-rejected headless, is
   the narrower case.
+- **The docs link check no longer passes a file it could not check** (#2379).
+  When `markdown-link-check` exited non-zero without reporting a link (it
+  crashed, or could not read its config or the file), the step recorded
+  nothing and printed "passed", so a malformed `.markdown-link-check.json`
+  turned the check off for every file. Such a file now fails the step with a
+  `HARNESS ERROR` line, which `scripts/ci-local.sh` reports as an
+  infrastructure error. Beside a dead link, the step still fails as an
+  ordinary check failure and names the unchecked file.
 - **The docs link check re-probes an HTTP 408 instead of failing on it**
   (#2317). A shields.io badge in `README.md` answered 408 Request Timeout and
   failed the required `link-check` job on a pull request that did not touch

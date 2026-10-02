@@ -163,6 +163,13 @@ N_ALIVE=0
 DEAD_LINES=""
 UNREACHABLE_LINES=""
 ALIVE_LINES=""
+# Files the checker exited non-zero on WITHOUT reporting a single link: it
+# crashed, or could not read its config or the file (#2379). Nothing in them
+# was checked, so they are neither a pass nor a dead link — the step could not
+# run, and says so with a HARNESS ERROR line (ci-local.sh's infrastructure
+# marker) instead of the "passed" a malformed config used to earn every file.
+N_UNCHECKED=0
+UNCHECKED_LINES=""
 
 while IFS= read -r f; do
   [ -z "$f" ] && continue
@@ -180,6 +187,12 @@ while IFS= read -r f; do
   ANSWERED="$(printf '%s\n' "$OUT" | sed -n 's/.*\[✖\] \(.*\) → Status: \([0-9]*\)$/\1 \2/p' | grep -v ' 0$')"
 
   FILE_FATAL=0
+
+  if [ -z "$ANSWERED" ] && [ -z "$ERRORED" ]; then
+    N_UNCHECKED=$((N_UNCHECKED + 1))
+    UNCHECKED_LINES="${UNCHECKED_LINES}"$'\n'"    ${f}: markdown-link-check exited ${RC} without reporting a link"
+    continue
+  fi
 
   # A link the checker got a real status for is USUALLY this gate's own verdict —
   # internal/relative links land here (a missing file reads Status: 400) and are
@@ -262,9 +275,19 @@ fi
 if [ -n "$ALIVE_LINES" ]; then
   echo "  alive-after-reprobe (NOT fatal — the host answered on re-probe):${ALIVE_LINES}"
 fi
+if [ "$N_UNCHECKED" -gt 0 ] && [ "$FAIL" -eq 0 ]; then
+  echo "HARNESS ERROR: markdown-link-check could not check ${N_UNCHECKED} file(s) — its own output is above:${UNCHECKED_LINES}"
+elif [ "$N_UNCHECKED" -gt 0 ]; then
+  # A dead link already fails this step as an assertion. A HARNESS ERROR line
+  # here would make ci-local.sh class that real failure as infrastructure.
+  echo "  not checked (markdown-link-check reported no link):${UNCHECKED_LINES}"
+fi
 echo ""
-if [ "$FAIL" -eq 0 ]; then
+if [ "$FAIL" -eq 0 ] && [ "$N_UNCHECKED" -eq 0 ]; then
   echo "✓ Markdown link check passed — ${COUNT} files, no dead links."
+elif [ "$FAIL" -eq 0 ]; then
+  echo "! Markdown link check could not run on every file, so it did not pass (#2379)."
+  FAIL=1
 else
   echo "✗ Markdown link check found dead links in:${FAILED_FILES}"
   echo ""
