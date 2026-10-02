@@ -123,6 +123,7 @@ import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../services/RunVerbCommandHandler";
 import { REMOTE_RUN_LEDGER_DIR, RemoteRunLedger } from "../services/RemoteRunLedger";
 import { resolveStateHome } from "../utils/machineStateDir";
+import { reloadInterruptedRemoteRun } from "../utils/reloadInterruptedRun";
 import { ThrottleCommandHandler } from "../services/ThrottleCommandHandler";
 import { WorkspaceThrottleState } from "../services/WorkspaceThrottle";
 import {
@@ -1299,6 +1300,26 @@ export async function initializeServices(
     headlessOrchestrator.setContextLoader(repositoryContextLoader);
   }
 
+  // Paused runs a window reload ended, by the platform run id their snapshot
+  // names (#2339). The scan below can find them before the pipeline manager
+  // exists, so they wait here and are handed to it once it does; from then on
+  // they go to it directly. The manager holds each one for the platform's
+  // verbs and refuses a resume with the reason, until the Resume prompt
+  // consumes the snapshot.
+  const reloadInterruptedRuns = new Map<string, number>();
+  let reloadInterruptedRunsTarget: ConcurrentPipelineManager | null = null;
+  const holdReloadInterruptedRun = (remoteRunId: string, issueNumber: number): void => {
+    if (reloadInterruptedRunsTarget) {
+      reloadInterruptedRunsTarget.holdReloadInterruptedRun(remoteRunId, issueNumber);
+    } else {
+      reloadInterruptedRuns.set(remoteRunId, issueNumber);
+    }
+  };
+  const dropReloadInterruptedRun = (remoteRunId: string): void => {
+    reloadInterruptedRuns.delete(remoteRunId);
+    reloadInterruptedRunsTarget?.dropReloadInterruptedRun(remoteRunId);
+  };
+
   // Restore paused pipeline state from runtime-*.json files (Issue #2008)
   // The existing getState() call above returns null on startup since Go hasn't
   // emitted pipeline.stateChanged yet. Scanning runtime files directly gives us
@@ -1340,6 +1361,8 @@ export async function initializeServices(
               issueNumber?: number;
               repo?: string | null;
               stage?: string | null;
+              remoteRunId?: unknown;
+              ownerPid?: unknown;
             };
             // The sweep fails SAFE on the new scheme: a run-identity-keyed
             // snapshot is never classified and never deleted here.
@@ -1363,6 +1386,14 @@ export async function initializeServices(
                 issueNumber: runtime.issueNumber,
                 file,
               });
+              // A paused run that a platform trigger started, whose owning
+              // daemon is gone: a reload ended it, and this window holds it
+              // for the platform's verbs until its Resume runs (#2339). A
+              // live owner is another window's daemon, which answers itself.
+              const interrupted = reloadInterruptedRemoteRun(runtime);
+              if (interrupted) {
+                holdReloadInterruptedRun(interrupted.remoteRunId, interrupted.issueNumber);
+              }
               vscode.commands.executeCommand("setContext", "nightgauge.pipelinePaused", true);
               vscode.commands.executeCommand("setContext", "nightgauge.pipelineRunning", false);
               const action = await vscode.window.showInformationMessage(
@@ -1371,6 +1402,8 @@ export async function initializeServices(
                 "Cancel"
               );
               if (action === "Resume") {
+                // The new run does not serve the platform run (#2339).
+                if (interrupted) dropReloadInterruptedRun(interrupted.remoteRunId);
                 // CONSUME THE SNAPSHOT THIS PROMPT WAS BUILT FROM.
                 //
                 // Resume does not continue the paused run — it starts a NEW one
@@ -1490,6 +1523,13 @@ export async function initializeServices(
       workspaceManager ?? undefined
     );
     context.subscriptions.push(concurrentPipelineManager);
+
+    // Hand over the paused runs a reload ended that the scan found first (#2339).
+    reloadInterruptedRunsTarget = concurrentPipelineManager;
+    for (const [remoteRunId, issueNumber] of reloadInterruptedRuns) {
+      concurrentPipelineManager.holdReloadInterruptedRun(remoteRunId, issueNumber);
+    }
+    reloadInterruptedRuns.clear();
 
     // Wire the stop-control guard: reject enqueue attempts while a Stop /
     // Abort is in progress. Blocks delayed autonomous.dispatch events from

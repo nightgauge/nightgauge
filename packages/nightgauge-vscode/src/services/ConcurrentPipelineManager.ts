@@ -223,10 +223,18 @@ interface SlotReservation {
  * nothing to act on. The verb's ack reports it, so a requester can tell an
  * applied command from a no-op. "not-started": the run is still queued here
  * and has no slot yet (#2340), which a pause or resume cannot act on; a cancel
- * of such a run applies (#2344).
+ * of such a run applies (#2344). "resume-in-window": the run was paused here
+ * and a window reload ended it; only the window's own Resume can continue it
+ * until the paused snapshot can be claimed (#2339).
  */
 export type RemoteVerbResult =
-  "applied" | "no-active-run" | "not-started" | "already-paused" | "not-paused" | "no-run-state";
+  | "applied"
+  | "no-active-run"
+  | "not-started"
+  | "already-paused"
+  | "not-paused"
+  | "no-run-state"
+  | "resume-in-window";
 
 interface PipelineSlot {
   /** Slot index (0-based) */
@@ -554,6 +562,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * the rate an operator cancels runs.
    */
   private readonly cancelledRemoteRunIds = new Set<string>();
+  /**
+   * Paused runs a window reload ended, keyed by the platform run id their
+   * snapshot names, with their issue number (#2339). The held runPipeline()
+   * call died with the extension host, so no slot carries the run; the
+   * snapshot is all that is left, and the window's Resume prompt is the only
+   * way to continue it, as a new run. This window still holds the run for the
+   * platform's verbs, and refuses a resume with that reason instead of
+   * leaving the requester waiting for an expiry.
+   */
+  private readonly reloadInterruptedRuns = new Map<string, number>();
 
   /**
    * TOMBSTONES: run identities the abort deadline force-cleared (#307).
@@ -4019,12 +4037,30 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     return this.holdsRemoteRunNow(remoteRunId);
   }
 
-  /** A slot carries the run, or a dispatch creating its worktree serves it. */
+  /**
+   * A slot carries the run, a dispatch creating its worktree serves it, or
+   * it is a paused run a reload ended here (#2339).
+   */
   private holdsRemoteRunNow(remoteRunId: string): boolean {
     return (
       this.findSlotByRemoteRunId(remoteRunId) !== null ||
-      this.reservationFor(remoteRunId) !== undefined
+      this.reservationFor(remoteRunId) !== undefined ||
+      this.reloadInterruptedRuns.has(remoteRunId)
     );
+  }
+
+  /**
+   * Hold a paused run a window reload ended (#2339): its paused snapshot
+   * names the platform run id, and no live process owns it any more.
+   */
+  holdReloadInterruptedRun(remoteRunId: string, issueNumber: number): void {
+    this.reloadInterruptedRuns.set(remoteRunId, issueNumber);
+    this.noteHeldRemoteRuns();
+  }
+
+  /** The window's Resume prompt consumed the snapshot: the run is no longer held. */
+  dropReloadInterruptedRun(remoteRunId: string): void {
+    if (this.reloadInterruptedRuns.delete(remoteRunId)) this.noteHeldRemoteRuns();
   }
 
   /** The reservation of the dispatch that serves this platform run, if one is in flight. */
@@ -4079,6 +4115,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       await slot.orchestrator.gracefulStop(10_000);
       return "applied";
     }
+    // Nothing runs to stop; the paused run waits for its window (#2339).
+    if (this.reloadInterruptedRuns.has(remoteRunId)) return "resume-in-window";
     // No await between the lookup above and the tombstone below.
     this.cancelledRemoteRunIds.add(remoteRunId);
     const preparing = this.reservationFor(remoteRunId) !== undefined;
@@ -4122,6 +4160,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   async pauseByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
+    if (!slot && this.reloadInterruptedRuns.has(remoteRunId)) return "already-paused";
     if (!slot) return this.noSlotFor(remoteRunId);
     // The flag lives on the run's loaded state; a slot with none yet cannot
     // hold, and must not report that it does. Decided before the flag moves,
@@ -4141,6 +4180,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   async resumeByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
+    // A reload ended the held call that a resume would let continue (#2339).
+    if (!slot && this.reloadInterruptedRuns.has(remoteRunId)) return "resume-in-window";
     if (!slot) return this.noSlotFor(remoteRunId);
     if (!slot.stateService.isPaused()) return "not-paused";
     await slot.stateService.resumePipeline();
@@ -4275,7 +4316,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * read it to tell a verb this window will answer from one nobody holds.
    */
   heldRemoteRunIds(): string[] {
-    const held = new Set<string>(this.acceptedRemoteRuns.keys());
+    const held = new Set<string>([
+      ...this.acceptedRemoteRuns.keys(),
+      ...this.reloadInterruptedRuns.keys(),
+    ]);
     for (const slot of this.slots.values()) if (slot.remoteRunId) held.add(slot.remoteRunId);
     for (const reservation of this.reservedSlots.values()) {
       if (reservation.remoteRunId) held.add(reservation.remoteRunId);

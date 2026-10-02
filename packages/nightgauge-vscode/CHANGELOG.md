@@ -35,6 +35,11 @@ and this project adheres to
   A `# comment` after the list is no longer read as tools, and a field that
   lists no tool now fails the stage (#2358).
 
+- **Resuming a run from the phone app or the dashboard after its window was
+  reloaded says to resume it in the window,** instead of waiting five minutes
+  to expire. The reload ended the paused run; the window's own Resume prompt
+  continues it (#2339).
+
 - **A command from the phone app or the dashboard for a run no window has is
   answered again within about two seconds,** instead of waiting five minutes
   to expire. With several windows open, only the one running the pipeline

@@ -3083,6 +3083,10 @@ func (s *Server) registerMethods() {
 			// remoteRunId matches the item's). SetRequestedPin is set-once, so
 			// a later hop never rewrites it.
 			s.seedRequestedPin(rt, repo, p.IssueNumber, p.RemoteRunID)
+			// The platform run id rides on the run's snapshot (#2339), so a
+			// window that finds the run paused after a reload knows which
+			// platform run it holds. Set-once, like the pin.
+			rt.SetRemoteRunID(p.RemoteRunID)
 			// The entry's index key follows the runtime's repo, so the derived
 			// issue index (Decision 6) can rank without ever taking rs.mu.
 			if res.entry != nil && repo != "" {

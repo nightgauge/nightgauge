@@ -495,4 +495,27 @@ describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334
     });
     await manager.settleForTest(424);
   });
+
+  // #2339: a window reload ends the held runPipeline() call of a paused run;
+  // the paused snapshot names its platform run id. The window that finds it
+  // holds the run and says why a platform resume cannot continue it.
+  it("holds a paused run a reload ended, and refuses a resume of it with the reason", async () => {
+    const { manager } = buildManager([]);
+    const published: string[][] = [];
+    manager.onHeldRemoteRunsChanged((runIds) => published.push(runIds));
+
+    manager.holdReloadInterruptedRun("platform-run-2339", 2339);
+    expect(await manager.holdsRemoteRun("platform-run-2339")).toBe(true);
+    expect(manager.heldRemoteRunIds()).toEqual(["platform-run-2339"]);
+    expect(await manager.resumeByRemoteRunId("platform-run-2339")).toBe("resume-in-window");
+    expect(await manager.cancelByRemoteRunId("platform-run-2339")).toBe("resume-in-window");
+    expect(await manager.pauseByRemoteRunId("platform-run-2339")).toBe("already-paused");
+
+    // The window's Resume prompt starts a new run from the snapshot: the
+    // platform run is no longer held here.
+    manager.dropReloadInterruptedRun("platform-run-2339");
+    expect(await manager.holdsRemoteRun("platform-run-2339")).toBe(false);
+    expect(await manager.resumeByRemoteRunId("platform-run-2339")).toBe("no-active-run");
+    expect(published).toEqual([["platform-run-2339"], []]);
+  });
 });

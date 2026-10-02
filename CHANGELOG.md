@@ -196,6 +196,17 @@ changelog, and the release workflow refuses a tag that does not.
   not know read as no list and got the default tools, `Bash`, `Write` and
   `Edit` among them, and a comment that named a tool granted it.
 
+- **A platform resume of a run a window reload paused says why it cannot
+  continue the run** (#2339). A platform `pause` holds the run in its window;
+  a reload ends that held call, and a later platform `resume` found no slot,
+  went unanswered and expired. The run's snapshot now records the platform run
+  id (`remoteRunId`), and the window that finds the paused snapshot after a
+  reload, with its owning process gone, holds the run: a `resume` or `cancel`
+  is refused `resume-in-window` (only the window's Resume prompt can continue
+  the run, as a new run), and a `pause` is `already_resolved`. Continuing the
+  run from a platform resume waits for ADR-017's consume-on-claim step; #2339
+  stays open for it.
+
 - **A run verb no window holds is refused again, and never ahead of the
   holder's answer** (#2357). Every editor window of a machine shares one
   agent, so each receives a platform `cancel`, `pause`, `resume`, `approve`

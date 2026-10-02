@@ -378,6 +378,23 @@ written refuses nothing, and the verb then expires as before. A verb with no
 `runId` names no run, and every window that has the repository open refuses
 it as `invalid-payload`.
 
+A platform `pause` holds a run in the window that executes it (#2334): the
+slot's pipeline call stays in flight at the stage boundary, and a `resume`
+lets that same call continue. A window reload ends the call, and the daemon
+that owned the run's runtime with it; the paused snapshot
+(`runtime-<issue>-<run>.json`) is all that is left. It records the platform
+run id (`remoteRunId`, #2339) and its owner process (`ownerPid`). The window
+that finds such a snapshot when it activates, with the owner gone, holds the
+run for the platform's verbs, and lists it in the remote-run ledger. A
+`resume` is refused `resume-in-window`, and so is a `cancel`, since nothing
+runs to stop: only the window's Resume prompt can continue the run, as a new
+run. A `pause` is `already_resolved`. Once the prompt's Resume starts that new
+run, the window no longer holds the platform run. A snapshot whose owner is
+alive is another window's live run, which answers for itself. Continuing the
+run from a platform `resume` waits for ADR-017's consume-on-claim step (step
+8), so that a platform resume and the local prompt cannot both start a run
+from one snapshot.
+
 No local run waits for a platform `approve` or `reject` (#2336). The verbs
 name a run's `stage` and `gateType`, one of the platform's quality-gate types
 (`lint`, `type-check`, `tests`, `build`, `security`), but nothing in a local

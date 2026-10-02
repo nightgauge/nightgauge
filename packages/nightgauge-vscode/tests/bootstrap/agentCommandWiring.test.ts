@@ -81,4 +81,19 @@ describe("platform agent command wiring in bootstrap/services.ts", () => {
     );
     expect(servicesSource).toMatch(/context\.subscriptions\.push\(\s*remoteRunLedger,/);
   });
+
+  // #2339: the paused-snapshot scan holds a platform run a reload ended, and
+  // the manager gets every one the scan found before it existed.
+  it("hands the paused runs a reload ended to the pipeline manager", () => {
+    expect(servicesSource).toContain("const interrupted = reloadInterruptedRemoteRun(runtime);");
+    expect(servicesSource).toContain(
+      "holdReloadInterruptedRun(interrupted.remoteRunId, interrupted.issueNumber);"
+    );
+    expect(servicesSource).toContain(
+      "if (interrupted) dropReloadInterruptedRun(interrupted.remoteRunId);"
+    );
+    expect(servicesSource).toMatch(
+      /reloadInterruptedRunsTarget = concurrentPipelineManager;\s*for \(const \[remoteRunId, issueNumber\] of reloadInterruptedRuns\) \{\s*concurrentPipelineManager\.holdReloadInterruptedRun\(remoteRunId, issueNumber\);/
+    );
+  });
 });

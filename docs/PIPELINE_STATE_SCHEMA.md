@@ -187,7 +187,7 @@ the discovery regex and the atomic-write contract. This section documents the
 
 | Group          | Fields                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Identity       | `repo`, `issueNumber`, `itemId`, `title`, `body`, `branch`, `runId`, `requestedAdapter`, `requestedModel`                                                                                                                                                                                                                                                                                                                       |
+| Identity       | `repo`, `issueNumber`, `itemId`, `title`, `body`, `branch`, `runId`, `requestedAdapter`, `requestedModel`, `remoteRunId`                                                                                                                                                                                                                                                                                                        |
 | Lifecycle      | `terminal`, `terminalAt`, `terminalOutcome`, `abandoned`, `abandonedAt`, `abandonedReason`, `paused`                                                                                                                                                                                                                                                                                                                            |
 | Position       | `stage`, `startedAt`, `stageStart`                                                                                                                                                                                                                                                                                                                                                                                              |
 | Process        | `pid`, `ownerPid`, `worktreeDir`                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -201,6 +201,12 @@ ADR-022 § 2): the adapter and model a dashboard or mobile trigger asked the run
 to execute on. Set once when the run starts, absent on every other run, and
 never rewritten: a cap-hop shows as `stageAdapters` / `stageModels` differing
 from them.
+
+`remoteRunId` is the platform run id of the trigger the run serves (#2339),
+set once from the first stage transition that carries it and absent on every
+run no trigger started. It is correlation, not the run's identity (ADR-017
+Decision 2). A window that finds a paused snapshot after a reload reads it to
+know which platform run it holds.
 
 `mainCheckVerdict` / `mainCheckFailing` are the post-merge observation of the
 base branch (#1249): once the pipeline had merged, whether the merged PR head's

@@ -105,6 +105,8 @@ const NO_OP_DETAIL: Record<Exclude<RemoteVerbResult, "applied" | AlreadyResolved
   "no-active-run": "no-active-run: no pipeline on this agent carries this runId",
   "not-started": "not-started: the run is queued on this agent and has not started yet",
   "no-run-state": "no-run-state: the run has no local state to pause yet",
+  "resume-in-window":
+    "resume-in-window: a window reload ended the paused run; only its window can resume it",
 };
 
 const INVALID_PAYLOAD_DETAIL = "invalid-payload: runId is required";

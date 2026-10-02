@@ -32,6 +32,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type * as vscode from "vscode";
+import { isProcessAlive } from "../utils/processAlive";
 
 /** The ledger's directory under the machine-state root. */
 export const REMOTE_RUN_LEDGER_DIR = "agent-commands";
@@ -44,16 +45,6 @@ function answerFileName(commandId: string): string {
   return /^[A-Za-z0-9._-]{1,128}$/.test(commandId) && !/^\.+$/.test(commandId)
     ? commandId
     : `cmd-${Buffer.from(commandId).toString("base64url").slice(0, 120)}`;
-}
-
-/** Whether the process `pid` is alive. EPERM means it exists under another user. */
-function processAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM";
-  }
 }
 
 export interface RemoteRunLedgerOptions {
@@ -77,7 +68,7 @@ export class RemoteRunLedger implements vscode.Disposable {
 
   constructor(dir: string, options: RemoteRunLedgerOptions = {}) {
     this.windowId = options.windowId ?? process.pid;
-    this.isAlive = options.isAlive ?? processAlive;
+    this.isAlive = options.isAlive ?? isProcessAlive;
     this.now = options.now ?? Date.now;
     this.holdersDir = path.join(dir, "holders");
     this.answersDir = path.join(dir, "answers");

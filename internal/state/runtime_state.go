@@ -283,6 +283,14 @@ type RuntimeState struct {
 	RequestedAdapter string `json:"requestedAdapter,omitempty"`
 	RequestedModel   string `json:"requestedModel,omitempty"`
 
+	// RemoteRunID is the platform run id of the trigger this run serves
+	// (#2339): correlation, never the run's identity (ADR-017 Decision 2).
+	// Set once from the first transition that carries it and never
+	// rewritten, so a paused snapshot names the platform run it holds and a
+	// window that finds the snapshot after a reload can answer the platform's
+	// verbs for that run. Empty on every run no trigger started.
+	RemoteRunID string `json:"remoteRunId,omitempty"`
+
 	// StageModels captures the model that ACTUALLY executed each stage
 	// (Issue #42) — after escalation overrides and model-unavailable tier
 	// downgrades, which can differ from the run-level predicted model.
@@ -2058,6 +2066,20 @@ func (rs *RuntimeState) SetRequestedPin(adapter, model string) {
 	rs.RequestedModel = model
 }
 
+// SetRemoteRunID records the platform run id of the trigger this run serves
+// (#2339). Set-once: an empty id, or any id after the first, changes nothing.
+func (rs *RuntimeState) SetRemoteRunID(remoteRunID string) {
+	if remoteRunID == "" {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if rs.RemoteRunID != "" {
+		return
+	}
+	rs.RemoteRunID = remoteRunID
+}
+
 // RequestedPin returns the remote run request's adapter and model, or two
 // empty strings when the run was not requested with a pin.
 func (rs *RuntimeState) RequestedPin() (adapter, model string) {
@@ -3063,6 +3085,7 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		RunID:                    rs.RunID,
 		RequestedAdapter:         rs.RequestedAdapter,
 		RequestedModel:           rs.RequestedModel,
+		RemoteRunID:              rs.RemoteRunID,
 		Stage:                    rs.Stage,
 		StartedAt:                rs.StartedAt,
 		StageStart:               rs.StageStart,
