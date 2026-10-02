@@ -881,6 +881,15 @@ func TestContract_Queue(t *testing.T) {
 	// queue.complete is the terminal counterpart to queue.dequeueIndependent.
 	// The extension owns the run loop, so without this method reaching the
 	// scheduler every dispatched item stays "processing" forever (#254).
+	// queue.removeRemoteRun (#2344) needs a run id; an empty one is refused
+	// with -32603, which still proves the method is registered.
+	t.Run("queue.removeRemoteRun/registered", func(t *testing.T) {
+		id := h.sendRequest("queue.removeRemoteRun", map[string]interface{}{
+			"remoteRunId": "",
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "queue.removeRemoteRun")
+	})
+
 	t.Run("queue.complete/registered", func(t *testing.T) {
 		id := h.sendRequest("queue.complete", map[string]interface{}{
 			"repo": "test-org/test-repo", "issueNumber": 42,

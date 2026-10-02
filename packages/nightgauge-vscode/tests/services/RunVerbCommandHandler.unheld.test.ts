@@ -142,8 +142,18 @@ describe("RunVerbCommandHandler — a verb no window of the machine holds (#2357
     holderRuns.cancelByRemoteRunId.mockReturnValue(applied.promise);
     const holder = makeWindow(101, holderRuns, platform);
     const other = makeWindow(102, makeRuns(false), platform);
+    // The other window looks only once the holder's claim is on disk, however
+    // long the filesystem takes: the claim, not a timing, keeps it quiet.
+    const claimed = deferred<void>();
+    const claimAnswer = holder.ledger.claimAnswer.bind(holder.ledger);
+    vi.spyOn(holder.ledger, "claimAnswer").mockImplementation(async (id) => {
+      const won = await claimAnswer(id);
+      claimed.resolve();
+      return won;
+    });
 
     const holderDone = holder.handler.consume(verb("cancel"), "cancel");
+    await claimed.promise;
     await other.handler.consume(verb("cancel"), "cancel");
     expect(platform.agentAcknowledgeCommand).not.toHaveBeenCalled();
 

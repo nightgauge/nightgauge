@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { RemoteRunLedger } from "../../src/services/RemoteRunLedger";
+import { CLOSED_LISTING_GRACE_MS, RemoteRunLedger } from "../../src/services/RemoteRunLedger";
 
 let dir: string;
 
@@ -38,9 +38,10 @@ describe("RemoteRunLedger (#2357)", () => {
     expect(await a.heldElsewhere("run-1")).toBe(false);
   });
 
-  it("follows the latest set, and an empty set or a closed window holds nothing", async () => {
-    const a = windowOf(101);
-    const b = windowOf(102);
+  it("follows the latest set, and an empty set holds nothing", async () => {
+    let now = Date.now();
+    const a = new RemoteRunLedger(dir, { windowId: 101, isAlive: () => true, now: () => now });
+    const b = new RemoteRunLedger(dir, { windowId: 102, isAlive: () => true, now: () => now });
 
     // Writes queued back to back: only the newest set ends up on disk.
     void a.publish(["run-1"]);
@@ -54,10 +55,81 @@ describe("RemoteRunLedger (#2357)", () => {
 
     await a.publish(["run-4"]);
     a.dispose();
-    expect(await b.heldElsewhere("run-4")).toBe(false);
     // A closed window publishes nothing more.
     await a.publish(["run-5"]);
     expect(await b.heldElsewhere("run-5")).toBe(false);
+    // Its last listing counts for the grace a reload needs, and no longer.
+    expect(await b.heldElsewhere("run-4")).toBe(true);
+    now += CLOSED_LISTING_GRACE_MS;
+    expect(await b.heldElsewhere("run-4")).toBe(false);
+    expect(fs.existsSync(path.join(dir, "holders", "101.json"))).toBe(false);
+  });
+
+  // #2357: a window reload ends the window's process; until the window is
+  // back and lists its queued runs again, the others must not refuse them.
+  it("keeps a reloading window's runs held for the grace after its process is gone", async () => {
+    let now = Date.now();
+    let reloading = true;
+    const a = new RemoteRunLedger(dir, { windowId: 101, now: () => now });
+    const b = new RemoteRunLedger(dir, {
+      windowId: 102,
+      isAlive: (pid) => pid !== 101 || !reloading,
+      now: () => now,
+    });
+    await a.publish(["run-1"]);
+    a.dispose();
+    expect(await b.heldElsewhere("run-1")).toBe(true);
+    now += CLOSED_LISTING_GRACE_MS - 1;
+    expect(await b.heldElsewhere("run-1")).toBe(true);
+    now += 1;
+    expect(await b.heldElsewhere("run-1")).toBe(false);
+    reloading = false;
+
+    // A window that held nothing leaves nothing behind.
+    const c = new RemoteRunLedger(dir, { windowId: 103 });
+    await c.publish([]);
+    c.dispose();
+    expect(fs.existsSync(path.join(dir, "holders", "103.json"))).toBe(false);
+  });
+
+  // #2339: every window of a clone finds the same paused snapshot; one holds it.
+  it("gives one live window the claim on a run, and lets a gone window's claim be taken over", async () => {
+    let aliveA = true;
+    const a = windowOf(101);
+    const b = windowOf(102, (pid) => pid !== 101 || aliveA);
+
+    const claims = await Promise.all([a.claimRun("run-1"), b.claimRun("run-1")]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    const [holder, other] = claims[0] ? [a, b] : [b, a];
+    expect(await holder.claimRun("run-1")).toBe(true);
+    expect(await other.claimRun("run-1")).toBe(false);
+
+    // Released by its holder, the claim is free; another window's is kept.
+    await other.releaseRun("run-1");
+    expect(await other.claimRun("run-1")).toBe(false);
+    await holder.releaseRun("run-1");
+    expect(await other.claimRun("run-1")).toBe(true);
+
+    // A claim whose window is gone is taken over.
+    expect(await a.claimRun("run-2")).toBe(true);
+    expect(await b.claimRun("run-2")).toBe(false);
+    aliveA = false;
+    expect(await b.claimRun("run-2")).toBe(true);
+    const claim = JSON.parse(fs.readFileSync(path.join(dir, "claims", "run-2.json"), "utf8"));
+    expect(claim).toEqual({ pid: 102 });
+  });
+
+  it("claims nothing when the claim cannot be recorded", async () => {
+    fs.writeFileSync(path.join(dir, "claims"), "");
+    expect(await windowOf(101).claimRun("run-1")).toBe(false);
+  });
+
+  it("takes over a claim lock a window died holding", async () => {
+    let now = Date.now();
+    const a = new RemoteRunLedger(dir, { windowId: 101, now: () => now });
+    fs.mkdirSync(path.join(dir, "claims", "run-1.json.lock"), { recursive: true });
+    now += 60_000;
+    expect(await a.claimRun("run-1")).toBe(true);
   });
 
   it("ignores and removes the listing of a window whose process is gone", async () => {
@@ -70,8 +142,13 @@ describe("RemoteRunLedger (#2357)", () => {
 
   it("counts the run as held when a listing cannot be read", async () => {
     fs.mkdirSync(path.join(dir, "holders"), { recursive: true });
-    fs.writeFileSync(path.join(dir, "holders", "101.json"), "{not json");
-    expect(await windowOf(102).heldElsewhere("run-1")).toBe(true);
+    for (const content of ["{not json", "null", "7"]) {
+      fs.writeFileSync(path.join(dir, "holders", "101.json"), content);
+      expect(await windowOf(102).heldElsewhere("run-1")).toBe(true);
+    }
+    // Unless its window is gone: then it is removed.
+    expect(await windowOf(102, (pid) => pid !== 101).heldElsewhere("run-1")).toBe(false);
+    expect(fs.existsSync(path.join(dir, "holders", "101.json"))).toBe(false);
   });
 
   it("holds nothing anywhere before any window published", async () => {

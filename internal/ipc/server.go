@@ -4244,7 +4244,8 @@ func (s *Server) registerMethods() {
 			// Adopt the platform-assigned run_id (dashboard-trigger ack) when
 			// present so the scheduler's runtime.RunID matches the command's
 			// ack runId — keeping the dashboard's run deep-link resolvable (#4120).
-			RemoteRunID: p.RemoteRunID,
+			RemoteRunID:       p.RemoteRunID,
+			RemoteRunAttached: p.RemoteRunAttached && p.RemoteRunID != "",
 		})
 		return map[string]string{"status": "ok"}, nil
 	}
@@ -4299,11 +4300,12 @@ func (s *Server) registerMethods() {
 		return map[string]string{"status": "ok"}, nil
 	}
 
-	// queue.removeRemoteRun removes the queued item of a remote run request
-	// the platform cancelled before a slot opened for it (#2344). Unlike
-	// queue.remove, which drops every item with an issue number, it removes
-	// only the item carrying the run id, and only while no dispatch has
-	// taken it.
+	// queue.removeRemoteRun takes a remote run the platform cancelled before
+	// a slot opened for it off the queue (#2344). Unlike queue.remove, which
+	// drops every item with an issue number, it acts only on the item
+	// carrying the run id: the run's own item is removed while no dispatch
+	// has taken it, and the operator's item the run was attached to only
+	// loses the run id (Scheduler.QueueRemoveRemoteRun).
 	//ipc:method queueRemoveRemoteRun params:QueueRemoveRemoteRunParams result:QueueRemoveRemoteRunResult
 	s.methods["queue.removeRemoteRun"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
 		var p QueueRemoveRemoteRunParams

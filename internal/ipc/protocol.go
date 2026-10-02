@@ -487,6 +487,11 @@ type QueueAddParams struct {
 	// queue item's RemoteRunID (#3557); this just lets the enqueue populate it.
 	// See #4120.
 	RemoteRunID string `json:"remoteRunId,omitempty"`
+	// RemoteRunAttached queues the item as the operator's own work that also
+	// serves RemoteRunID (#2344): a dispatched item the run was attached to,
+	// queued again. Cancelling the run then detaches it instead of removing
+	// the item. Ignored without RemoteRunID.
+	RemoteRunAttached bool `json:"remoteRunAttached,omitempty"`
 	// Adapter and Model are a remote run request's pin (#1656, ADR-022 § 2):
 	// the `trigger` payload's `adapter` and `model`, which the caller has
 	// already put through queue.validatePin. queue.add validates them again in
@@ -541,8 +546,10 @@ type QueueRemoveRemoteRunParams struct {
 	RemoteRunID string `json:"remoteRunId"`
 }
 
-// QueueRemoveRemoteRunResult reports whether queue.removeRemoteRun removed an
-// item: false when no item carries the run id, or a dispatch already took it.
+// QueueRemoveRemoteRunResult reports whether queue.removeRemoteRun took the
+// run off the queue: its own item removed, or the operator's item it was
+// attached to detached from it. False when no item carries the run id, or a
+// dispatch already took the run's own item.
 type QueueRemoveRemoteRunResult struct {
 	Removed bool `json:"removed"`
 }

@@ -132,6 +132,13 @@ export interface QueueItem {
    */
   remoteRunId?: string;
   /**
+   * The run id was attached to an item queued for the issue before its
+   * trigger arrived (#2344): the item is the operator's work, and serves the
+   * remote run too. A cancel of the run before its slot opens detaches the
+   * run id and leaves the item to run as it was queued.
+   */
+  remoteRunAttached?: boolean;
+  /**
    * A remote run request's pin (#1656, ADR-022 § 2): the adapter and model a
    * dashboard or mobile trigger asked for, already accepted by Go's
    * queue.validatePin. Every stage of the run dispatches on them. Absent on

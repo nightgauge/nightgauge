@@ -415,9 +415,12 @@ describe("ConcurrentPipelineManager — per-repo concurrency cap (#3874)", () =>
     // Start the fill but do NOT await — create() is now blocked, so #10 is
     // reserved-but-in-flight.
     const fillPromise = manager.fillSlots();
-    // Let microtasks run up to the awaited create().
-    await Promise.resolve();
-    await Promise.resolve();
+    // Wait for the fill to reach the awaited create(), however many ticks its
+    // dequeue takes (it waits its turn against a trigger's placement, #2344).
+    await vi.waitFor(() => expect(cap.dequeueIndependent).toHaveBeenCalled(), {
+      timeout: 10_000,
+    });
+    await vi.waitFor(() => expect(manager.availableSlotCount).toBe(2), { timeout: 10_000 });
 
     // Reservation is live: the workspace ceiling already shows one fewer slot,
     // even though the slot map is still empty.

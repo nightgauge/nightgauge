@@ -71,7 +71,9 @@ describe("platform agent command wiring in bootstrap/services.ts", () => {
   });
 
   // #2357: a verb no window holds is refused through the machine's ledger,
-  // which follows this window's held runs and is removed when it closes.
+  // which follows this window's held runs from the start (its current set,
+  // and the queue read once and on every reconnect) and is marked closed
+  // when the window goes.
   it("gives the run-verb handler the machine's remote-run ledger, kept current", () => {
     expect(servicesSource).toMatch(
       /new RunVerbCommandHandler\([\s\S]*?remoteRunLedger \? \{ ledger: remoteRunLedger \} : undefined\s*\)/
@@ -79,21 +81,31 @@ describe("platform agent command wiring in bootstrap/services.ts", () => {
     expect(servicesSource).toContain(
       "pipelineManager.onHeldRemoteRunsChanged((runIds) => void remoteRunLedger.publish(runIds))"
     );
-    expect(servicesSource).toMatch(/context\.subscriptions\.push\(\s*remoteRunLedger,/);
-  });
-
-  // #2339: the paused-snapshot scan holds a platform run a reload ended, and
-  // the manager gets every one the scan found before it existed.
-  it("hands the paused runs a reload ended to the pipeline manager", () => {
-    expect(servicesSource).toContain("const interrupted = reloadInterruptedRemoteRun(runtime);");
     expect(servicesSource).toContain(
-      "holdReloadInterruptedRun(interrupted.remoteRunId, interrupted.issueNumber);"
-    );
-    expect(servicesSource).toContain(
-      "if (interrupted) dropReloadInterruptedRun(interrupted.remoteRunId);"
+      "void remoteRunLedger.publish(pipelineManager.heldRemoteRunIds());"
     );
     expect(servicesSource).toMatch(
-      /reloadInterruptedRunsTarget = concurrentPipelineManager;\s*for \(const \[remoteRunId, issueNumber\] of reloadInterruptedRuns\) \{\s*concurrentPipelineManager\.holdReloadInterruptedRun\(remoteRunId, issueNumber\);/
+      /ipcClient\.onDidChangeStatus\(\(connected\) => \{\s*if \(connected\) void pipelineManager\.syncQueuedRemoteRuns\(\);/
     );
+    expect(servicesSource).toContain(
+      "if (remoteRunLedger) context.subscriptions.push(remoteRunLedger);"
+    );
+  });
+
+  // #2339: the paused-snapshot scan offers a platform run a reload ended to
+  // the window's holds, which claim it in the ledger, so one window of the
+  // clone holds it; the behaviour is tested in reloadInterruptedHolds.test.ts.
+  it("hands the paused runs a reload ended to the window's exclusive holds", () => {
+    expect(servicesSource).toContain("const interrupted = reloadInterruptedRemoteRun(runtime);");
+    expect(servicesSource).toContain(
+      "const reloadInterruptedHolds = new ReloadInterruptedRunHolds(remoteRunLedger);"
+    );
+    expect(servicesSource).toMatch(
+      /await reloadInterruptedHolds\.found\(interrupted, async \(\) => \{\s*await fs\.unlink\(filePath\)/
+    );
+    expect(servicesSource).toContain(
+      "if (interrupted) await reloadInterruptedHolds.resumed(interrupted.remoteRunId);"
+    );
+    expect(servicesSource).toContain("reloadInterruptedHolds.attach(concurrentPipelineManager);");
   });
 });

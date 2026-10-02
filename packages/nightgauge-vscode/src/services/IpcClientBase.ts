@@ -750,6 +750,11 @@ export interface IpcQueueItem {
    * absent on every other item.
    */
   remoteRunId?: string;
+  /**
+   * The run id was attached to the operator's own item for the issue
+   * (#2344); a cancel of the run detaches it instead of removing the item.
+   */
+  remoteRunAttached?: boolean;
   /** A remote run request's adapter pin (#1656); absent on every other item. */
   requestedAdapter?: string;
   /** A remote run request's model, the `-m` value (#1656). */

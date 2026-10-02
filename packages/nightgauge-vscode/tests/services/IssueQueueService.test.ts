@@ -94,15 +94,17 @@ describe("IssueQueueService (IPC delegation)", () => {
     it("delegates to IPC queueAdd with correct params", async () => {
       const result = await service.enqueue(42, "Test issue", ["type:feature"]);
 
-      // Trailing args are priority (unused here), remoteRunId (#4120) and the
-      // remote run request's adapter and model (#1656) — all undefined for a
-      // plain enqueue with no repoOverride/runId/pin.
+      // Trailing args are priority (unused here), remoteRunId (#4120), the
+      // attached flag (#2344) and the remote run request's adapter and model
+      // (#1656) — all undefined for a plain enqueue with no
+      // repoOverride/runId/pin.
       expect(mockQueueAdd).toHaveBeenCalledWith(
         "test-owner",
         "test-repo",
         42,
         "Test issue",
         ["type:feature"],
+        undefined,
         undefined,
         undefined,
         undefined,
@@ -128,8 +130,30 @@ describe("IssueQueueService (IPC delegation)", () => {
         undefined,
         "49b2019e-6ab7-4866-935e-235a32765bc7",
         undefined,
+        undefined,
         undefined
       );
+    });
+
+    it("queues an attached remote run again as attached, and never the flag alone (#2344)", async () => {
+      await service.enqueue(42, "Test issue", ["type:feature"], undefined, {
+        remoteRunId: "run-attached",
+        remoteRunAttached: true,
+      });
+      expect(mockQueueAdd.mock.calls[0].slice(6)).toEqual([
+        "run-attached",
+        true,
+        undefined,
+        undefined,
+      ]);
+
+      await service.enqueue(43, "Other issue", [], undefined, { remoteRunAttached: true });
+      expect(mockQueueAdd.mock.calls[1].slice(6)).toEqual([
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+      ]);
     });
 
     it("forwards a remote run request's adapter and model to IPC queueAdd (#1656)", async () => {
@@ -147,6 +171,7 @@ describe("IssueQueueService (IPC delegation)", () => {
         ["type:feature"],
         undefined,
         "49b2019e-6ab7-4866-935e-235a32765bc7",
+        undefined,
         "opencode",
         "lmstudio/qwen/qwen3.8-27b"
       );
@@ -305,6 +330,29 @@ describe("IssueQueueService (IPC delegation)", () => {
 
       expect(triggered.remoteRunId).toBe("49b2019e-6ab7-4866-935e-235a32765bc7");
       expect(triggered.repoName).toBe("acme/api");
+      expect(triggered.remoteRunAttached).toBeUndefined();
+    });
+
+    // #2344: a run attached to the operator's item is only detached by a cancel.
+    it("carries whether the run was attached to the operator's own item", async () => {
+      mockQueueDequeueIndependent.mockResolvedValueOnce([
+        {
+          repo: "acme/api",
+          issueNumber: 8,
+          title: "Queued here, then triggered",
+          priority: 0,
+          status: "processing",
+          addedAt: "2026-01-01T00:00:00Z",
+          position: 1,
+          remoteRunId: "run-attached",
+          remoteRunAttached: true,
+        },
+      ]);
+
+      const [attached] = await service.dequeueIndependent(1, []);
+
+      expect(attached.remoteRunId).toBe("run-attached");
+      expect(attached.remoteRunAttached).toBe(true);
     });
 
     // The slot manager bases a sub-issue on epic/<N>-* only when the epic

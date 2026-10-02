@@ -51,8 +51,12 @@ function makeConcurrentManager(isRunning = false) {
   return {
     isRunning: vi.fn().mockReturnValue(isRunning),
     fillSlots: vi.fn().mockResolvedValue(1),
-    acceptRemoteRun: vi.fn(),
-    forgetRemoteRun: vi.fn(),
+    remoteTriggerConflict: vi.fn().mockResolvedValue(null),
+    // As the manager places a run when nothing of the issue is under way
+    // here (#2344): it queues it through the handler's enqueue.
+    placeRemoteRun: vi.fn(async (_run: unknown, enqueue: () => Promise<boolean>) =>
+      (await enqueue()) ? "queued" : "not-queued"
+    ),
   };
 }
 
@@ -137,16 +141,22 @@ describe("TriggerCommandHandler", () => {
 
     await vi.waitFor(() => expect(concurrentManager.fillSlots).toHaveBeenCalledTimes(1));
 
-    // The window holds the run from the ack on, BEFORE the enqueue can start
-    // a fill (#2340); the queued item carries the run id the slot adopts.
-    expect(concurrentManager.acceptRemoteRun).toHaveBeenCalledWith(
-      "run-abc",
+    // The window holds the run from the ack on (#2340): the manager places
+    // it, and the enqueue runs inside that placement (#2344); the queued item
+    // carries the run id the slot adopts.
+    expect(concurrentManager.placeRemoteRun).toHaveBeenCalledWith(
+      { remoteRunId: "run-abc", issueNumber: 10, repo: "nightgauge/nightgauge" },
+      expect.any(Function)
+    );
+    const ackOrder = ipcClient.agentAcknowledgeCommand.mock.invocationCallOrder[0];
+    const placeOrder = concurrentManager.placeRemoteRun.mock.invocationCallOrder[0];
+    const enqOrder = queueService.enqueue.mock.invocationCallOrder[0];
+    expect(ackOrder).toBeLessThan(placeOrder);
+    expect(placeOrder).toBeLessThan(enqOrder);
+    expect(concurrentManager.remoteTriggerConflict).toHaveBeenCalledWith(
       10,
       "nightgauge/nightgauge"
     );
-    const setOrder = concurrentManager.acceptRemoteRun.mock.invocationCallOrder[0];
-    const enqOrder = queueService.enqueue.mock.invocationCallOrder[0];
-    expect(setOrder).toBeLessThan(enqOrder);
 
     expect(logger.info).toHaveBeenCalledWith(
       expect.stringContaining("ack succeeded"),
@@ -202,7 +212,7 @@ describe("TriggerCommandHandler", () => {
     expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
   });
 
-  it("forgets the accepted run and does not fill slots when enqueue is refused", async () => {
+  it("does not fill slots when enqueue is refused", async () => {
     queueService.enqueue.mockResolvedValue(null); // e.g. stop-in-progress guard
     const cmd = makeTriggerCmd(42);
     handler.handle(cmd);
@@ -212,11 +222,11 @@ describe("TriggerCommandHandler", () => {
         expect.any(Object)
       )
     );
-    expect(concurrentManager.forgetRemoteRun).toHaveBeenCalledWith("run-abc");
+    expect(await concurrentManager.placeRemoteRun.mock.results[0].value).toBe("not-queued");
     expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
   });
 
-  it("forgets the accepted run when enqueue throws", async () => {
+  it("does not fill slots when enqueue throws", async () => {
     queueService.enqueue.mockRejectedValue(new Error("ipc down"));
     const cmd = makeTriggerCmd(42);
     handler.handle(cmd);
@@ -226,9 +236,84 @@ describe("TriggerCommandHandler", () => {
         expect.any(Object)
       )
     );
-    expect(concurrentManager.forgetRemoteRun).toHaveBeenCalledWith("run-abc");
     expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
   });
+
+  // #2344: an issue queued or on its way to a slot here for another platform
+  // run cannot serve this one; the requester learns why before any ack.
+  it("refuses a trigger for an issue queued here for another run, before the ack", async () => {
+    concurrentManager.remoteTriggerConflict.mockResolvedValue("busy");
+    handler.handle(makeTriggerCmd(42));
+
+    await vi.waitFor(() => expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledTimes(1));
+    expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledWith(
+      "agent-1",
+      "cmd-1",
+      "rejected",
+      "already-queued: the issue is already queued on this agent for another run"
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    expect(concurrentManager.placeRemoteRun).not.toHaveBeenCalled();
+    expect(queueService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("leaves a trigger alone when the issue's slot opened while it was fetched", async () => {
+    concurrentManager.remoteTriggerConflict.mockResolvedValue("running");
+    handler.handle(makeTriggerCmd(42));
+
+    await vi.waitFor(() =>
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("concurrent trigger rejected"),
+        expect.any(Object)
+      )
+    );
+    expect(ipcClient.agentAcknowledgeCommand).not.toHaveBeenCalled();
+    expect(concurrentManager.placeRemoteRun).not.toHaveBeenCalled();
+  });
+
+  it("starts nothing more when the issue's dispatch already under way serves the run", async () => {
+    concurrentManager.placeRemoteRun.mockResolvedValue("attached");
+    handler.handle(makeTriggerCmd(42));
+
+    await vi.waitFor(() =>
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringContaining("dispatch already under way here serves the run"),
+        expect.any(Object)
+      )
+    );
+    expect(queueService.enqueue).not.toHaveBeenCalled();
+    expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
+  });
+
+  // An epic runs as its sub-issues, each a run of its own: the epic's
+  // platform run has no queued item to ride, so it is not placed (#2344).
+  it("queues an epic's sub-issues and fills slots without placing its run", async () => {
+    ipcClient.issueView.mockResolvedValue({ number: 42, title: "An epic", labels: ["type:epic"] });
+    handler.handle(makeTriggerCmd(42));
+
+    await vi.waitFor(() => expect(concurrentManager.fillSlots).toHaveBeenCalledTimes(1));
+    expect(queueService.enqueue).toHaveBeenCalledWith(42, "An epic", ["type:epic"], undefined, {
+      repoOverride: { owner: "nightgauge", repo: "nightgauge" },
+      remoteRunId: "run-abc",
+    });
+    expect(concurrentManager.placeRemoteRun).not.toHaveBeenCalled();
+  });
+
+  it.each(["running", "busy"] as const)(
+    "reports a run acked but not served when the placement finds the issue %s",
+    async (placement) => {
+      concurrentManager.placeRemoteRun.mockResolvedValue(placement);
+      handler.handle(makeTriggerCmd(42));
+
+      await vi.waitFor(() =>
+        expect(logger.error).toHaveBeenCalledWith(
+          expect.stringContaining("acked but is not served"),
+          expect.objectContaining({ placement, runId: "run-abc" })
+        )
+      );
+      expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
+    }
+  );
 
   it("logs error when pipeline start throws", async () => {
     concurrentManager.fillSlots.mockRejectedValue(new Error("slot error"));
@@ -468,7 +553,7 @@ describe("TriggerCommandHandler — remote run request (#1656)", () => {
     );
     await new Promise((r) => setTimeout(r, 10));
     expect(queueService.enqueue).not.toHaveBeenCalled();
-    expect(concurrentManager.acceptRemoteRun).not.toHaveBeenCalled();
+    expect(concurrentManager.placeRemoteRun).not.toHaveBeenCalled();
     expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
   });
 

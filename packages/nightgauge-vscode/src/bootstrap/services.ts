@@ -123,7 +123,10 @@ import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../services/RunVerbCommandHandler";
 import { REMOTE_RUN_LEDGER_DIR, RemoteRunLedger } from "../services/RemoteRunLedger";
 import { resolveStateHome } from "../utils/machineStateDir";
-import { reloadInterruptedRemoteRun } from "../utils/reloadInterruptedRun";
+import {
+  ReloadInterruptedRunHolds,
+  reloadInterruptedRemoteRun,
+} from "../utils/reloadInterruptedRun";
 import { ThrottleCommandHandler } from "../services/ThrottleCommandHandler";
 import { WorkspaceThrottleState } from "../services/WorkspaceThrottle";
 import {
@@ -1300,25 +1303,23 @@ export async function initializeServices(
     headlessOrchestrator.setContextLoader(repositoryContextLoader);
   }
 
+  // The machine's windows share one platform agent, so they agree through
+  // the remote-run ledger on who answers a run verb (#2357) and on which
+  // window holds a paused run a reload ended (#2339). Without a
+  // machine-state directory there is none: a verb no window holds is left to
+  // expire, and every window that finds such a run holds it.
+  const stateHome = resolveStateHome();
+  const remoteRunLedger = stateHome
+    ? new RemoteRunLedger(path.join(stateHome, REMOTE_RUN_LEDGER_DIR))
+    : undefined;
+  if (remoteRunLedger) context.subscriptions.push(remoteRunLedger);
+
   // Paused runs a window reload ended, by the platform run id their snapshot
   // names (#2339). The scan below can find them before the pipeline manager
-  // exists, so they wait here and are handed to it once it does; from then on
-  // they go to it directly. The manager holds each one for the platform's
-  // verbs and refuses a resume with the reason, until the Resume prompt
-  // consumes the snapshot.
-  const reloadInterruptedRuns = new Map<string, number>();
-  let reloadInterruptedRunsTarget: ConcurrentPipelineManager | null = null;
-  const holdReloadInterruptedRun = (remoteRunId: string, issueNumber: number): void => {
-    if (reloadInterruptedRunsTarget) {
-      reloadInterruptedRunsTarget.holdReloadInterruptedRun(remoteRunId, issueNumber);
-    } else {
-      reloadInterruptedRuns.set(remoteRunId, issueNumber);
-    }
-  };
-  const dropReloadInterruptedRun = (remoteRunId: string): void => {
-    reloadInterruptedRuns.delete(remoteRunId);
-    reloadInterruptedRunsTarget?.dropReloadInterruptedRun(remoteRunId);
-  };
+  // exists; the holds wait until it does. The manager holds each one for the
+  // platform's verbs and refuses a resume with the reason, a platform cancel
+  // consumes the snapshot, and the Resume prompt gives the hold up.
+  const reloadInterruptedHolds = new ReloadInterruptedRunHolds(remoteRunLedger);
 
   // Restore paused pipeline state from runtime-*.json files (Issue #2008)
   // The existing getState() call above returns null on startup since Go hasn't
@@ -1392,7 +1393,11 @@ export async function initializeServices(
               // live owner is another window's daemon, which answers itself.
               const interrupted = reloadInterruptedRemoteRun(runtime);
               if (interrupted) {
-                holdReloadInterruptedRun(interrupted.remoteRunId, interrupted.issueNumber);
+                await reloadInterruptedHolds.found(interrupted, async () => {
+                  await fs.unlink(filePath).catch((err: NodeJS.ErrnoException) => {
+                    if (err.code !== "ENOENT") throw err;
+                  });
+                });
               }
               vscode.commands.executeCommand("setContext", "nightgauge.pipelinePaused", true);
               vscode.commands.executeCommand("setContext", "nightgauge.pipelineRunning", false);
@@ -1403,7 +1408,7 @@ export async function initializeServices(
               );
               if (action === "Resume") {
                 // The new run does not serve the platform run (#2339).
-                if (interrupted) dropReloadInterruptedRun(interrupted.remoteRunId);
+                if (interrupted) await reloadInterruptedHolds.resumed(interrupted.remoteRunId);
                 // CONSUME THE SNAPSHOT THIS PROMPT WAS BUILT FROM.
                 //
                 // Resume does not continue the paused run — it starts a NEW one
@@ -1525,11 +1530,7 @@ export async function initializeServices(
     context.subscriptions.push(concurrentPipelineManager);
 
     // Hand over the paused runs a reload ended that the scan found first (#2339).
-    reloadInterruptedRunsTarget = concurrentPipelineManager;
-    for (const [remoteRunId, issueNumber] of reloadInterruptedRuns) {
-      concurrentPipelineManager.holdReloadInterruptedRun(remoteRunId, issueNumber);
-    }
-    reloadInterruptedRuns.clear();
+    reloadInterruptedHolds.attach(concurrentPipelineManager);
 
     // Wire the stop-control guard: reject enqueue attempts while a Stop /
     // Abort is in progress. Blocks delayed autonomous.dispatch events from
@@ -4323,18 +4324,21 @@ export async function initializeServices(
     // A pause or resume from the platform shows in this window as the local
     // Pause/Resume Pipeline commands show it (#2334).
     const pipelineManager = concurrentPipelineManager;
-    // The machine's windows share one agent, so they agree through the
-    // remote-run ledger on who answers a verb: the holder, or, when no window
-    // holds the run, one refusal (#2357). With no machine-state directory a
-    // verb no window holds is left to expire, as before.
-    const stateHome = resolveStateHome();
-    const remoteRunLedger = stateHome
-      ? new RemoteRunLedger(path.join(stateHome, REMOTE_RUN_LEDGER_DIR))
-      : undefined;
+    // The window lists the runs it holds in the remote-run ledger, so the
+    // machine's other windows answer a verb only when no window holds the
+    // run, with one refusal (#2357). The listing starts with what the window
+    // holds now, the paused runs a reload ended included, and the queue is
+    // read once: after a reload it can carry runs no queue change announces.
     if (remoteRunLedger) {
       context.subscriptions.push(
-        remoteRunLedger,
         pipelineManager.onHeldRemoteRunsChanged((runIds) => void remoteRunLedger.publish(runIds))
+      );
+      void remoteRunLedger.publish(pipelineManager.heldRemoteRunIds());
+      void pipelineManager.syncQueuedRemoteRuns();
+      context.subscriptions.push(
+        ipcClient.onDidChangeStatus((connected) => {
+          if (connected) void pipelineManager.syncQueuedRemoteRuns();
+        })
       );
     }
     const runVerbCommandHandler = new RunVerbCommandHandler(

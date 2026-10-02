@@ -2910,5 +2910,57 @@ func TestQueueAddItem_AttachesATriggersRunIdToAWaitingItem(t *testing.T) {
 		if item.Title == "trigger" {
 			t.Errorf("#%d took the duplicate's title", item.IssueNumber)
 		}
+		// Only the operator's item that took a trigger's run is marked
+		// attached; an item queued for its own run is not.
+		if attached := item.IssueNumber == 1; item.RemoteRunAttached != attached {
+			t.Errorf("#%d RemoteRunAttached = %v, want %v", item.IssueNumber, item.RemoteRunAttached, attached)
+		}
+	}
+}
+
+// Cancelling a remote run attached to the operator's own item (#2344) leaves
+// the item queued, waiting or dequeued, and only takes the run id off it; an
+// item queued again as attached keeps that. A run's own item is removed only
+// while no dispatch has taken it.
+func TestQueueRemoveRemoteRun_DetachesARunFromTheOperatorsItem(t *testing.T) {
+	s := &Scheduler{
+		repoRunning: make(map[string]int),
+		mergeLocks:  make(map[string]*sync.Mutex),
+	}
+	s.QueueAddItem(
+		QueueItem{Repo: "o/a", IssueNumber: 1, Title: "operator's, waiting"},
+		QueueItem{Repo: "o/a", IssueNumber: 2, Title: "operator's, dequeued"},
+		QueueItem{Repo: "o/a", IssueNumber: 3, Title: "re-queued", RemoteRunID: "run-3", RemoteRunAttached: true},
+		QueueItem{Repo: "o/a", IssueNumber: 4, Title: "the run's own", RemoteRunID: "run-4"},
+		QueueItem{Repo: "o/a", IssueNumber: 5, Title: "flag alone", RemoteRunAttached: true},
+	)
+	s.QueueAddItem(
+		QueueItem{Repo: "o/a", IssueNumber: 1, RemoteRunID: "run-1"},
+		QueueItem{Repo: "o/a", IssueNumber: 2, RemoteRunID: "run-2"},
+	)
+	s.mu.Lock()
+	s.queue[1].Status = "processing"
+	s.mu.Unlock()
+
+	for _, id := range []string{"run-1", "run-2", "run-3"} {
+		if !s.QueueRemoveRemoteRun(id) {
+			t.Errorf("did not take attached %s off the queue", id)
+		}
+	}
+	if !s.QueueRemoveRemoteRun("run-4") {
+		t.Error("did not remove run-4's own waiting item")
+	}
+
+	state := s.GetState()
+	if len(state.Items) != 4 {
+		t.Fatalf("queue = %+v, want the operator's four items", state.Items)
+	}
+	for _, item := range state.Items {
+		if item.RemoteRunID != "" || item.RemoteRunAttached {
+			t.Errorf("#%d still serves a run: %+v", item.IssueNumber, item)
+		}
+	}
+	if state.Items[1].IssueNumber != 2 || state.Items[1].Status != "processing" {
+		t.Errorf("Items[1] = %+v, want the dequeued #2 still with its dispatch", state.Items[1])
 	}
 }

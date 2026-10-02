@@ -59,11 +59,14 @@
  * within seconds (#2357), through the machine's RemoteRunLedger: the holder
  * claims the command's one answer before it applies the verb, and a window
  * that does not hold the run waits UNHELD_VERB_GRACE_MS, then refuses only
- * when it still does not hold it, no live window of the machine lists the
- * run as held, and it claims the answer first. So the platform receives one
- * acknowledgement per command, and never a refusal ahead of the holder's.
- * Without a ledger (no machine-state directory) such a verb is left alone and
- * expires.
+ * when it still does not hold it, no window of the machine lists the run as
+ * held (a window that closed or is reloading still counts for a minute), and
+ * it claims the answer first. So the platform receives one acknowledgement
+ * per command, and never a refusal ahead of the holder's. A holder that finds
+ * the answer claimed already answers all the same: the platform takes its
+ * later `applied` over a refusal from a window that could not see the run
+ * held. Without a ledger (no machine-state directory) such a verb is left
+ * alone and expires.
  *
  * Replaces the separate Cancel/Approve/RejectCommandHandler classes, which
  * acted on the run and acknowledged nothing.
@@ -220,9 +223,28 @@ export class RunVerbCommandHandler implements CommandHandler {
       }
       // The holder claims the command's one answer before it applies the
       // verb, so no window that waited out the grace refuses it (#2357).
-      await this.unheld?.ledger.claimAnswer(cmd.id);
+      await this.claimAsHolder(cmd, verb, runId);
     }
     return this.consumeAsHolder(cmd, verb, runId);
+  }
+
+  /**
+   * Claim the command's one answer as the window that holds the run. The
+   * holder applies and answers the verb even when another window answered
+   * first: that window refused a run it could not see held, and the
+   * platform lets the holder's later `applied` replace that refusal.
+   */
+  private async claimAsHolder(
+    cmd: ReceivedCommand,
+    verb: RunVerbCommandType,
+    runId: string
+  ): Promise<void> {
+    if (!this.unheld) return;
+    if (await this.unheld.ledger.claimAnswer(cmd.id)) return;
+    this.logger.warn(
+      "RunVerbCommandHandler: another window answered a verb for a run this window holds — answering as the holder",
+      { verb, runId, commandId: cmd.id }
+    );
   }
 
   private consumeAsHolder(
@@ -240,8 +262,8 @@ export class RunVerbCommandHandler implements CommandHandler {
   /**
    * Refuse a verb for a run no window of the machine holds (#2357), once the
    * grace has passed: unless this window holds the run by then (a trigger it
-   * was accepting queued it), another live window lists it, or another
-   * window answered the command first.
+   * was accepting queued it), another window lists it, or another window
+   * answered the command first.
    */
   private async refuseIfNobodyHolds(
     cmd: ReceivedCommand,
@@ -255,7 +277,7 @@ export class RunVerbCommandHandler implements CommandHandler {
       await delay(unheld.graceMs ?? UNHELD_VERB_GRACE_MS);
       if (this.redelivery.remembers(cmd.id)) return;
       if (await this.runs.holdsRemoteRun(runId)) {
-        await unheld.ledger.claimAnswer(cmd.id);
+        await this.claimAsHolder(cmd, verb, runId);
         return this.consumeAsHolder(cmd, verb, runId);
       }
       if (await unheld.ledger.heldElsewhere(runId)) {

@@ -1113,6 +1113,11 @@ type QueueItem struct {
 	// remote-triggered runs. Preferred over the locally-generated runstate
 	// UUID when set (#3557).
 	RemoteRunID string `json:"remoteRunId,omitempty"`
+	// RemoteRunAttached is true when RemoteRunID was attached to an item
+	// queued for the issue before its trigger arrived (#2344): the item is
+	// the operator's own work and also serves the remote run, so cancelling
+	// the run detaches the run id instead of removing the item.
+	RemoteRunAttached bool `json:"remoteRunAttached,omitempty"`
 	// RequestedAdapter and RequestedModel are a remote run request's pin
 	// (#1656, ADR-022 § 2), already accepted by ValidateRemotePin. Every
 	// stage of the run dispatches on them, and the run record keeps them next
@@ -2552,11 +2557,13 @@ func (s *Scheduler) QueueAdd(entries ...QueueEntry) {
 // QueueAddItem adds rich queue items to the execution queue.
 // Duplicate repository+issue identities are skipped, with one exception: a
 // remote run's trigger for an issue already waiting here, on an item that
-// serves no remote run, attaches its run id to that item (#2344). The
-// extension's slot adopts the run id from the item it dequeues, so without
-// it the triggered run would start under no run id and the platform's verbs
-// could never reach it. An item a dispatch has taken, or one already serving
-// another remote run, is left as it is.
+// serves no remote run, attaches its run id to that item and marks it
+// attached (#2344). The extension's slot adopts the run id from the item it
+// dequeues, so without it the triggered run would start under no run id and
+// the platform's verbs could never reach it. An item a dispatch has taken,
+// or one already serving another remote run, is left as it is: the
+// extension places a trigger for an issue it is dispatching on that
+// dispatch itself.
 func (s *Scheduler) QueueAddItem(items ...QueueItem) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2564,8 +2571,12 @@ func (s *Scheduler) QueueAddItem(items ...QueueItem) {
 		if existing := s.queueItemUnlocked(items[i].Repo, items[i].IssueNumber); existing != nil {
 			if items[i].RemoteRunID != "" && existing.RemoteRunID == "" && existing.Status != "processing" {
 				existing.RemoteRunID = items[i].RemoteRunID
+				existing.RemoteRunAttached = true
 			}
 			continue
+		}
+		if items[i].RemoteRunID == "" {
+			items[i].RemoteRunAttached = false
 		}
 		if items[i].Status == "" {
 			items[i].Status = "pending"
@@ -2724,24 +2735,34 @@ func (s *Scheduler) GetState() QueueState {
 	}
 }
 
-// QueueRemoveRemoteRun removes the item a remote run request's trigger
-// queued (#2344): the one item carrying remoteRunID that no dispatch has
-// taken yet. An item a dispatch has dequeued (processing) is left to that
-// dispatch, which drops a cancelled remote run itself, and no other item,
-// whatever its repository or issue number, is touched. Reports whether an
-// item was removed.
+// QueueRemoveRemoteRun takes a cancelled remote run off the queue (#2344):
+// the one item carrying remoteRunID. The trigger's own item is removed while
+// no dispatch has taken it; an item a dispatch has dequeued (processing) is
+// left to that dispatch, which drops a cancelled remote run itself. An item
+// the run was attached to (RemoteRunAttached) is the operator's own work, so
+// it keeps its place, waiting or dequeued, and only loses the run id. No
+// other item, whatever its repository or issue number, is touched. Reports
+// whether the queue no longer carries the run.
 func (s *Scheduler) QueueRemoveRemoteRun(remoteRunID string) bool {
 	if remoteRunID == "" {
 		return false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, item := range s.queue {
-		if item.RemoteRunID != remoteRunID || item.Status == "processing" {
+	for i := range s.queue {
+		item := &s.queue[i]
+		if item.RemoteRunID != remoteRunID {
 			continue
 		}
-		s.queue = append(s.queue[:i], s.queue[i+1:]...)
-		s.recalculatePositions()
+		if item.RemoteRunAttached {
+			item.RemoteRunID = ""
+			item.RemoteRunAttached = false
+		} else if item.Status == "processing" {
+			continue
+		} else {
+			s.queue = append(s.queue[:i], s.queue[i+1:]...)
+			s.recalculatePositions()
+		}
 		s.persistQueue()
 		s.emitQueueChangedUnlocked()
 		return true

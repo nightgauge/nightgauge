@@ -121,6 +121,12 @@ export class IssueQueueService implements vscode.Disposable {
        */
       remoteRunId?: string;
       /**
+       * The item is the operator's own work, queued again after a dispatch
+       * the remote run was attached to (#2344): a cancel of the run detaches
+       * it instead of removing the item.
+       */
+      remoteRunAttached?: boolean;
+      /**
        * A remote run request's adapter and model (#1656), already accepted
        * by `queueValidatePin`. Go re-checks their shape and stores them on the
        * queue item.
@@ -179,6 +185,7 @@ export class IssueQueueService implements vscode.Disposable {
       resolvedLabels,
       undefined,
       _options?.remoteRunId,
+      _options?.remoteRunId && _options.remoteRunAttached ? true : undefined,
       _options?.requestedAdapter,
       _options?.requestedModel
     );
@@ -366,10 +373,12 @@ export class IssueQueueService implements vscode.Disposable {
   }
 
   /**
-   * Remove the queued item of a remote run the platform cancelled before its
-   * slot opened (#2344): only the item carrying `remoteRunId`, and only while
-   * no dispatch has taken it. Resolves whether an item was removed; a
-   * dispatch that already took it drops the cancelled run itself.
+   * Take a remote run the platform cancelled before its slot opened off the
+   * queue (#2344): only the item carrying `remoteRunId`. The run's own item
+   * is removed while no dispatch has taken it; the operator's item the run
+   * was attached to keeps its place and loses the run id. Resolves whether
+   * the queue no longer carries the run; a dispatch that already took the
+   * run's own item drops the cancelled run itself.
    */
   async removeRemoteRun(remoteRunId: string): Promise<boolean> {
     const ipc = IpcClient.getInstance();
@@ -528,6 +537,7 @@ export class IssueQueueService implements vscode.Disposable {
       epicRepo: item.epicRepo || undefined,
       repoName: item.repo || undefined,
       remoteRunId: item.remoteRunId || undefined,
+      ...(item.remoteRunId && item.remoteRunAttached ? { remoteRunAttached: true } : {}),
       requestedAdapter: item.requestedAdapter || undefined,
       requestedModel: item.requestedModel || undefined,
     };
