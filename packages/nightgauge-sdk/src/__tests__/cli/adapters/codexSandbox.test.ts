@@ -6,6 +6,7 @@ import { describe, it, expect } from "vitest";
 import {
   resolveCodexSandboxMode,
   codexSandboxFlags,
+  codexApprovalFlags,
   applyCodexSandboxProfile,
   CODEX_BYPASS_FLAG,
   codexCloneWritableRoot,
@@ -50,19 +51,17 @@ describe("codexSandboxFlags (#4026)", () => {
     expect(codexSandboxFlags("danger-full-access")).toEqual([CODEX_BYPASS_FLAG]);
   });
 
-  it("uses explicit --sandbox + --ask-for-approval never for scoped modes", () => {
-    expect(codexSandboxFlags("read-only")).toEqual([
-      "--sandbox",
-      "read-only",
-      "--ask-for-approval",
-      "never",
-    ]);
-    expect(codexSandboxFlags("workspace-write")).toEqual([
-      "--sandbox",
-      "workspace-write",
-      "--ask-for-approval",
-      "never",
-    ]);
+  it("uses explicit --sandbox for scoped modes", () => {
+    expect(codexSandboxFlags("read-only")).toEqual(["--sandbox", "read-only"]);
+    expect(codexSandboxFlags("workspace-write")).toEqual(["--sandbox", "workspace-write"]);
+  });
+});
+
+describe("codexApprovalFlags (#1715)", () => {
+  it("pins --ask-for-approval never for scoped modes and nothing for full access", () => {
+    expect(codexApprovalFlags("read-only")).toEqual(["--ask-for-approval", "never"]);
+    expect(codexApprovalFlags("workspace-write")).toEqual(["--ask-for-approval", "never"]);
+    expect(codexApprovalFlags("danger-full-access")).toEqual([]);
   });
 });
 
@@ -75,24 +74,36 @@ describe("applyCodexSandboxProfile (#4026)", () => {
     expect(applyCodexSandboxProfile(baseArgs, [])).toEqual(baseArgs);
   });
 
-  it("swaps the bypass flag in place for a read-only profile", () => {
+  // `--ask-for-approval` is a top-level codex option: after `exec`, codex
+  // 0.145.0 refuses the argv with "unexpected argument" (#1715).
+  it("swaps the bypass flag in place and puts the approval policy before exec (read-only)", () => {
     expect(applyCodexSandboxProfile(baseArgs, ["Read", "Grep"])).toEqual([
+      "--ask-for-approval",
+      "never",
       "exec",
       "--sandbox",
       "read-only",
-      "--ask-for-approval",
-      "never",
       "--json",
     ]);
   });
 
-  it("swaps the bypass flag in place for a workspace-write profile", () => {
+  it("swaps the bypass flag in place and puts the approval policy before exec (workspace-write)", () => {
     expect(applyCodexSandboxProfile(baseArgs, ["Read", "Write"])).toEqual([
+      "--ask-for-approval",
+      "never",
       "exec",
       "--sandbox",
       "workspace-write",
+      "--json",
+    ]);
+  });
+
+  it("puts the approval policy first when no exec precedes the bypass flag", () => {
+    expect(applyCodexSandboxProfile([CODEX_BYPASS_FLAG, "--json"], ["Read"])).toEqual([
       "--ask-for-approval",
       "never",
+      "--sandbox",
+      "read-only",
       "--json",
     ]);
   });
@@ -123,11 +134,11 @@ describe("codexCloneWritableRoot (ADR-024 § 7)", () => {
       expect(
         applyCodexSandboxProfile(["exec", CODEX_BYPASS_FLAG, "--json"], ["Read", "Edit"], dir)
       ).toEqual([
+        "--ask-for-approval",
+        "never",
         "exec",
         "--sandbox",
         "workspace-write",
-        "--ask-for-approval",
-        "never",
         ...want,
         "--json",
       ]);

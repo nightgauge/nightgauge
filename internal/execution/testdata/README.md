@@ -233,29 +233,17 @@ codex --ask-for-approval never --sandbox workspace-write exec --json - \
 reproduce. That exact invocation is unavailable from this capture
 environment (a policy blocks spawning an unsandboxed sub-agent from an
 already-sandboxed session), so the capture instead exercises
-`BuildCommand`'s other real branch: `codexSandboxFlags` for a
-`workspace-write`-eligible stage, which is `--sandbox workspace-write
---ask-for-approval never` appended **after** `exec`
-([codex_sandbox.go](../adapters/codex_sandbox.go)).
+`BuildCommand`'s other real branch: a `workspace-write`-eligible stage.
 
-Running that literal argv against the installed `codex-cli 0.153.4` fails:
-
-```
-error: unexpected argument '--ask-for-approval' found
-```
-
-`codex exec --help` on this version lists no `--ask-for-approval` flag at
-all; `-a`/`--ask-for-approval` only appears on the base `codex --help` (before
-the `exec` subcommand). This capture therefore places the two flags before
-`exec` instead, which is the same sandbox policy `BuildCommand` intends
-(workspace-write, never ask) reached through an argv order the real 0.153.4
-binary accepts. **This is a `BuildCommand`/CLI-version mismatch, not a stream
-parser mismatch** — `ParseCodexStreamLine`'s field-name and per-event
-assumptions all held against the real output below — so it is out of this
-issue's scope (`internal/execution/adapters/codex_sandbox.go` is not among
-this issue's owned files). It is recorded here as the reason this fixture's
-command differs from `BuildCommand`'s output, and is reported back rather
-than fixed in this PR.
+When this was captured, `BuildCommand` put `--ask-for-approval never` after
+`exec`, and codex-cli 0.153.4 refused that argv with
+`error: unexpected argument '--ask-for-approval' found`: `-a` /
+`--ask-for-approval` is on the base `codex --help` only. The capture placed it
+before `exec`, and #1715 then moved `BuildCommand` to the same order:
+`--ask-for-approval never exec --sandbox workspace-write --json -`. The one
+remaining difference is where `--sandbox` sits, which `codex` and `codex exec`
+both accept. `ParseCodexStreamLine`'s field-name and per-event assumptions all
+held against the real output below.
 
 ### CLI version note
 

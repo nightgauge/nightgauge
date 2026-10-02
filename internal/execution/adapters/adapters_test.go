@@ -1,6 +1,7 @@
 package adapters
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -284,10 +285,10 @@ func TestCodexAdapterSandboxFromAllowedTools(t *testing.T) {
 		Stage:        "feature-validate",
 		AllowedTools: []string{"Read", "Grep", "Glob"},
 	})
-	for _, want := range []string{"--sandbox", "read-only", "--ask-for-approval", "never"} {
-		if !containsArg(args, want) {
-			t.Errorf("read-only: missing %q in %v", want, args)
-		}
+	// The approval policy is a top-level codex option, so it precedes `exec`;
+	// after it, codex refuses the argv (#1715).
+	if want := []string{"--ask-for-approval", "never", "exec", "--sandbox", "read-only", "--json", "-"}; !slices.Equal(args, want) {
+		t.Errorf("read-only: args = %q, want %q", args, want)
 	}
 	if containsArg(args, "--dangerously-bypass-approvals-and-sandbox") {
 		t.Errorf("read-only: bypass flag should be absent in %v", args)
@@ -303,6 +304,9 @@ func TestCodexAdapterSandboxFromAllowedTools(t *testing.T) {
 	}
 	if containsArg(fullArgs, "--sandbox") {
 		t.Errorf("bash: --sandbox should be absent in %v", fullArgs)
+	}
+	if containsArg(fullArgs, "--ask-for-approval") || fullArgs[0] != "exec" {
+		t.Errorf("bash: want `exec` first and no --ask-for-approval in %v", fullArgs)
 	}
 }
 

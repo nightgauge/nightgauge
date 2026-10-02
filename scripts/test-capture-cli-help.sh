@@ -314,14 +314,17 @@ for f in "$LOG"/cli-*.argv; do
   name="${name#cli-}"
   name="${name%%.*}"
   case "$name" in
-    codex) want="exec --help" ;;
+    codex) want="exec --help|--help" ;;
     opencode) want="run --help" ;;
     *) want="--help" ;;
   esac
-  [ "$(cat "$f")" = "$want" ] || argv_ok=1
+  case "|$want|" in *"|$(cat "$f")|"*) ;; *) argv_ok=1 ;; esac
 done
 check "every CLI ran with --help only, after its subcommand" [ "$argv_ok" -eq 0 ]
-check "four CLIs ran" [ "$(ls "$LOG"/cli-*.argv 2>/dev/null | wc -l | tr -d ' ')" -eq 4 ]
+# codex runs twice: `exec --help`, and `--help` for the flags its argv puts
+# before `exec` (#1715).
+check "four CLIs ran, codex twice" [ "$(ls "$LOG"/cli-*.argv 2>/dev/null | wc -l | tr -d ' ')" -eq 5 ]
+check "codex ran its top-level --help" grep -qx -- '--help' "$LOG"/cli-codex.*.argv
 
 home_ok=0
 for f in "$LOG"/cli-*.env "$LOG"/npm.*.env "$LOG"/curl.*.env "$LOG"/installer.*.env; do
@@ -346,10 +349,12 @@ done <"$LOG/prefixes"
 check "the npm prefixes are gone after exit" [ "$prefixes_gone" -eq 0 ]
 check "nothing is left in TMPDIR after exit" scratch_is_empty
 
-want_files="claude-headless-$CLAUDE_V.txt codex-exec-$CODEX_V.txt grok-$GROK_V.txt opencode-run-$OPENCODE_V.txt"
-check "exactly the four captures were written" [ "$(cd "$OUT" && ls | tr '\n' ' ' | sed 's/ $//')" = "$want_files" ]
+want_files="claude-headless-$CLAUDE_V.txt codex-$CODEX_V.txt codex-exec-$CODEX_V.txt grok-$GROK_V.txt opencode-run-$OPENCODE_V.txt"
+check "exactly the five captures were written" [ "$(cd "$OUT" && ls | tr '\n' ' ' | sed 's/ $//')" = "$want_files" ]
 check "each capture starts with its header" \
   [ "$(head -n 1 "$OUT/codex-exec-$CODEX_V.txt")" = "# adapter=codex version=$CODEX_V command=codex exec --help" ]
+check "the codex top-level capture starts with its header" \
+  [ "$(head -n 1 "$OUT/codex-$CODEX_V.txt")" = "# adapter=codex version=$CODEX_V command=codex --help" ]
 check "gemini and copilot were skipped" grep -q "skip gemini" "$TMP/run.out"
 
 capture="$OUT/opencode-run-$OPENCODE_V.txt"

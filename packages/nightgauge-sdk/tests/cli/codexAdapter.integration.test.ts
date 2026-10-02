@@ -221,8 +221,8 @@ describe("CodexAdapter — end-to-end composition (mocked subprocess)", () => {
     const args = spawnMock.mock.calls[0][1] as string[];
     expect(args).toContain("--sandbox");
     expect(args).toContain("read-only");
-    expect(args).toContain("--ask-for-approval");
-    expect(args).toContain("never");
+    // A top-level codex option: after `exec`, codex refuses the argv (#1715).
+    expect(args.slice(0, 3)).toEqual(["--ask-for-approval", "never", "exec"]);
     expect(args).not.toContain("--dangerously-bypass-approvals-and-sandbox");
   });
 

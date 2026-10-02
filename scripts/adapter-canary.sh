@@ -9,7 +9,10 @@
 #                                         `version=<resolved>` then
 #                                         `bin=<path>` on stdout.
 #   capture-help <adapter> <bin> <dir>   Capture `<bin> [<sub>] --help` into
-#                                         dir/<adapter>[-<sub>]-<version>.txt,
+#                                         dir/<adapter>[-<sub>]-<version>.txt
+#                                         (and `<bin> --help` into
+#                                         dir/<adapter>-<version>.txt for an
+#                                         adapter with leading flags, #1715),
 #                                         the shape flag_contract_test.go's
 #                                         NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR
 #                                         override reads. Also carries the
@@ -85,6 +88,16 @@ help_subcommand() {
   case "$1" in
     codex) echo exec ;;
     opencode) echo run ;;
+    *) echo "" ;;
+  esac
+}
+
+# help_top_level mirrors helpLeadingFlags in flag_contract_test.go and
+# help_top_level() in capture-cli-help.sh: "yes" when the adapter's argv puts
+# flags before its subcommand, so the binary's own --help is captured too.
+help_top_level() {
+  case "$1" in
+    codex) echo yes ;;
     *) echo "" ;;
   esac
 }
@@ -259,6 +272,17 @@ cmd_capture_help() {
     printf '# adapter=%s version=%s command=%s\n' "$adapter" "$version" "$command_text"
     cat "$raw"
   } >"$outdir/$stem-$version.txt"
+
+  # The flags an adapter puts before its subcommand are checked against the
+  # binary's own --help (#1715), so capture that too.
+  if [ -n "$sub" ] && [ -n "$(help_top_level "$adapter")" ]; then
+    bounded "$HELP_TIMEOUT" "$bin" --help >"$raw" 2>&1
+    [ -s "$raw" ] || die "$adapter: \`$binary --help\` printed nothing"
+    {
+      printf '# adapter=%s version=%s command=%s\n' "$adapter" "$version" "$binary --help"
+      cat "$raw"
+    } >"$outdir/$adapter-$version.txt"
+  fi
   rm -f "$raw"
 
   # Carry over the committed hidden-flag sidecar (#1617), whatever version it

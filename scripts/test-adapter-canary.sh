@@ -337,10 +337,19 @@ FAKE
   chmod +x "$fake"
   ADAPTER_CANARY_VERSION="$ver" bash "$SCRIPT" capture-help "$adapter" "$fake" "$FRESH" >/dev/null
 done
-# codex has no compat-adapter fake bin above; carry its own committed capture
-# over unchanged so the flag-contract run below covers every captured
-# adapter, not just the three this sidecar fix concerns.
-cp "$CLI_HELP/codex-exec-0.145.0.txt" "$FRESH/"
+# codex puts --ask-for-approval before `exec` (#1715), so capture-help also
+# captures its top-level --help: one fake answers both.
+cat >"$FAKEBINS/codex" <<FAKE
+#!/usr/bin/env bash
+if [ "\$1" = "exec" ] && [ "\$2" = "--help" ]; then tail -n +2 "$CLI_HELP/codex-exec-0.145.0.txt"; fi
+if [ "\$1" = "--help" ]; then tail -n +2 "$CLI_HELP/codex-0.145.0.txt"; fi
+FAKE
+chmod +x "$FAKEBINS/codex"
+ADAPTER_CANARY_VERSION="0.145.0" bash "$SCRIPT" capture-help codex "$FAKEBINS/codex" "$FRESH" >/dev/null
+check "capture-help writes codex's exec capture" \
+  [ "$(head -n 1 "$FRESH/codex-exec-0.145.0.txt")" = "# adapter=codex version=0.145.0 command=codex exec --help" ]
+check "capture-help writes codex's top-level capture" \
+  [ "$(head -n 1 "$FRESH/codex-0.145.0.txt")" = "# adapter=codex version=0.145.0 command=codex --help" ]
 check "capture-help writes claude-headless's committed .hidden sidecar at its own version" \
   [ -f "$FRESH/claude-headless-2.1.258.txt.hidden" ]
 check "capture-help writes grok's committed .hidden sidecar at its own version" \
@@ -376,7 +385,7 @@ FAKE
   chmod +x "$fake"
   ADAPTER_CANARY_VERSION="$ver" bash "$SCRIPT" capture-help "$adapter" "$fake" "$NEWER" >/dev/null
 done
-cp "$CLI_HELP/codex-exec-0.145.0.txt" "$NEWER/"
+cp "$CLI_HELP/codex-exec-0.145.0.txt" "$CLI_HELP/codex-0.145.0.txt" "$NEWER/"
 cp "$CLI_HELP/opencode-run-1.18.30.txt" "$NEWER/"
 check "capture-help carries claude-headless's sidecar to a version newer than committed" \
   [ -f "$NEWER/claude-headless-2.1.999.txt.hidden" ]

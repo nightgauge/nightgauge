@@ -13,7 +13,8 @@
  * `allowed-tools` (or any tool that implies shell / network / arbitrary access),
  * it returns `danger-full-access` — the prior behavior — so an autonomous run is
  * never locked out of access it needs. Autonomous runs keep
- * `--ask-for-approval never`; only the sandbox is scoped.
+ * `--ask-for-approval never`; only the sandbox is scoped. That policy is a
+ * top-level codex option, so it goes before `exec` (#1715).
  *
  * @see Issue #4026 - Map skill allowed-tools → Codex sandbox mode + approval policy
  * @see https://developers.openai.com/codex (sandbox modes / approval policy)
@@ -73,18 +74,32 @@ export function resolveCodexSandboxMode(allowedTools?: readonly string[]): Codex
 }
 
 /**
- * The Codex CLI flags for a sandbox mode on the `exec` (non-resume) path.
+ * The `codex exec` flags for a sandbox mode on the non-resume path.
  *
  * `danger-full-access` uses the single `--dangerously-bypass-approvals-and-sandbox`
  * flag (the documented "ephemeral, fully sandboxed CI environment" mode — no
- * sandbox, no approvals). Tighter modes use explicit `--sandbox <mode>` with
- * `--ask-for-approval never` so autonomous runs still never block on a prompt.
+ * sandbox, no approvals). Tighter modes use explicit `--sandbox <mode>`, with
+ * the approval policy from {@link codexApprovalFlags} before `exec`.
  */
 export function codexSandboxFlags(mode: CodexSandboxMode): string[] {
   if (mode === "danger-full-access") {
     return ["--dangerously-bypass-approvals-and-sandbox"];
   }
-  return ["--sandbox", mode, "--ask-for-approval", "never"];
+  return ["--sandbox", mode];
+}
+
+/**
+ * The flags that go BEFORE `exec` for a sandbox mode. Tighter modes pin
+ * `--ask-for-approval never` so autonomous runs still never block on a prompt.
+ * It is a top-level codex option, not an `exec` one: codex-cli 0.145.0 refuses
+ * `codex exec --ask-for-approval never` ("unexpected argument", exit 2) and
+ * accepts `codex --ask-for-approval never exec` (#1715). `danger-full-access`
+ * needs none; its bypass flag covers approvals. Mirrors the Go
+ * `codexApprovalFlags`.
+ */
+export function codexApprovalFlags(mode: CodexSandboxMode): string[] {
+  if (mode === "danger-full-access") return [];
+  return ["--ask-for-approval", "never"];
 }
 
 /** The full-access sentinel flag swapped out when a tighter profile applies. */
@@ -93,9 +108,11 @@ export const CODEX_BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox";
 /**
  * Apply the resolved sandbox profile to a Codex `exec` arg list. When the tools
  * justify a tighter mode, the `--dangerously-bypass-approvals-and-sandbox`
- * sentinel is replaced in place with the scoped flags. When the mode is
- * full-access, or the sentinel is absent (an operator override removed it), the
- * args are returned unchanged — the mapping never loosens or force-injects.
+ * sentinel is replaced in place with the scoped flags, and the approval policy
+ * is put before the `exec` subcommand (before everything when there is no
+ * `exec` ahead of the sentinel). When the mode is full-access, or the sentinel
+ * is absent (an operator override removed it), the args are returned
+ * unchanged — the mapping never loosens or force-injects.
  */
 export function applyCodexSandboxProfile(
   args: readonly string[],
@@ -113,12 +130,15 @@ export function applyCodexSandboxProfile(
     return [...args];
   }
 
-  return [
+  const scoped = [
     ...args.slice(0, idx),
     ...codexSandboxFlags(mode),
     ...codexCloneWritableRoot(mode, cwd),
     ...args.slice(idx + 1),
   ];
+  const exec = args.slice(0, idx).indexOf("exec");
+  const at = exec === -1 ? 0 : exec;
+  return [...scoped.slice(0, at), ...codexApprovalFlags(mode), ...scoped.slice(at)];
 }
 
 /**

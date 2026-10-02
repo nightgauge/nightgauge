@@ -248,7 +248,8 @@ export function createCliQueryFn(options: {
       // Standard execution path (resume disabled or non-Codex adapter).
       // For Codex, scope the filesystem sandbox to what the stage's allowed-tools
       // justify (#4026) — swaps the full-access bypass flag for a tighter
-      // `--sandbox <mode> --ask-for-approval never` when the tools prove it safe.
+      // `--sandbox <mode>`, with `--ask-for-approval never` before `exec`
+      // (a top-level codex option, #1715), when the tools prove it safe.
       // No-op (full-access, unchanged) when tools imply shell/network or are
       // absent. The resume branch above can't sandbox (`--sandbox` is unsupported
       // on `exec resume`), so it stays full-access.

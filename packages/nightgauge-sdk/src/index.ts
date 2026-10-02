@@ -1219,6 +1219,7 @@ export type {
 export {
   resolveCodexSandboxMode,
   codexSandboxFlags,
+  codexApprovalFlags,
   applyCodexSandboxProfile,
   CODEX_BYPASS_FLAG,
 } from "./cli/adapters/codexSandbox.js";
