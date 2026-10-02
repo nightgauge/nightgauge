@@ -105,6 +105,11 @@ violation() { # violation <message>
   FAIL=1
 }
 
+# Never pipe a producer into `grep -q` in this script (#2362). Under pipefail,
+# grep -q exiting at its first match SIGPIPEs the producer and turns the match
+# into a miss: intermittently, and only under load. Grep the file itself, or
+# give grep a here-string, as scripts/branch-merged-check.sh does.
+#
 # Section headings, one per line: `## [Unreleased]` or `## [X.Y.Z] - YYYY-MM-DD`.
 headings() { grep -E '^## \[' "$1"; }
 # The versions a file names, one per line, without brackets or dates.
@@ -141,7 +146,7 @@ if [ -n "$EXTRACT_TAG" ]; then
       echo "check-changelog: $ROOT has no [Unreleased] section" >&2
       exit 1
     fi
-  elif ! headings "$ROOT" | grep -qE "^## \[$v\] "; then
+  elif ! grep -qE "^## \[$v\] " "$ROOT"; then
     echo "check-changelog: $ROOT has no section for $EXTRACT_TAG" >&2
     exit 1
   fi
@@ -164,7 +169,7 @@ for f in "${FILES[@]}"; do
     case "$line" in
       "## [Unreleased]") ;;
       *)
-        if ! printf '%s\n' "$line" | grep -qE '^## \[[0-9]+\.[0-9]+\.[0-9]+\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+        if ! grep -qE '^## \[[0-9]+\.[0-9]+\.[0-9]+\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$' <<<"$line"; then
           violation "$f: heading '$line' is not '## [X.Y.Z] - YYYY-MM-DD'"
         fi
         ;;
@@ -176,7 +181,7 @@ done
 ROOT_VERSIONS="$(versions "$ROOT")"
 EXT_VERSIONS=""
 [ "$EXT" = "none" ] || EXT_VERSIONS="$(versions "$EXT")"
-has_version() { printf '%s\n' "$1" | grep -qxF "$2"; }
+has_version() { grep -qxF "$2" <<<"$1"; }
 
 while IFS= read -r tag; do
   [ -n "$tag" ] || continue
@@ -214,7 +219,7 @@ if [ -n "$GATE_TAG" ]; then
   esac
   v="${GATE_TAG#v}"
   for f in "${FILES[@]}"; do
-    if ! headings "$f" | grep -qE "^## \[$v\] "; then
+    if ! grep -qE "^## \[$v\] " "$f"; then
       violation "release gate: $f has no '## [$v]' section for $GATE_TAG — land the rollover PR before pushing the tag"
       continue
     fi

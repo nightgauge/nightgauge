@@ -224,6 +224,17 @@ ok=1
 [ "$rc" -eq 0 ] && [ "$OUT" = "$expected" ] && ok=0
 check "arm 12: --extract ignores a missing extension changelog" "$ok"
 
+# --- Arm 13: nothing in the gate is piped into grep -q (#2362) --------------
+# Under pipefail, grep -q exiting at its first match SIGPIPEs the producer and
+# turns a match into a miss. That is intermittent (a gate run under load named
+# a present version missing), so this arm forbids the shape itself rather than
+# trying to reproduce it. Comment lines are exempt: they name the pattern.
+hits="$(grep -nE '\|[[:space:]]*grep[[:space:]]+(-[A-Za-z]*q|--quiet)' "$GATE" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+ok=1
+[ -z "$hits" ] && ok=0
+[ -n "$hits" ] && printf '      %s\n' "$hits"
+check "arm 13: the gate never pipes a producer into grep -q" "$ok"
+
 echo
 echo "check-changelog regression suite: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

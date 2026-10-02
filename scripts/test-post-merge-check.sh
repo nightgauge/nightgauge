@@ -595,6 +595,20 @@ for url in git@github.com:acme/widget.git ssh://git@github.com/acme/widget.git \
 done
 rm -rf "$REMOTE_REPO"
 
+# #2362: nothing in the script is piped into grep -q. Under pipefail, grep -q
+# exiting at its first match SIGPIPEs the producer and turns a match into a
+# miss, intermittently, so the shape itself is forbidden. Comment lines are
+# exempt: they name the pattern.
+hits="$(grep -nE '\|[[:space:]]*grep[[:space:]]+(-[A-Za-z]*q|--quiet)' "$SCRIPT" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+if [ -z "$hits" ]; then
+  echo "ok    the script never pipes a producer into grep -q"
+  PASS=$((PASS + 1))
+else
+  echo "FAIL  the script pipes a producer into grep -q (#2362):"
+  printf '      %s\n' "$hits"
+  FAIL=$((FAIL + 1))
+fi
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "$FAIL post-merge-check test(s) failed, $PASS passed"

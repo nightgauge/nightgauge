@@ -340,7 +340,11 @@ push_may_run() {
     --jq '.[] | select(.type == "file" and (.name | test("\\.ya?ml$"; "i"))) | .path' 2>/dev/null) || return 0
   for f in $files; do
     body=$(gh api -H 'Accept: application/vnd.github.raw' "repos/$REPO/contents/$f?ref=$FULL_SHA" 2>/dev/null) || return 0
-    printf '%s\n' "$body" | sed 's/#.*//' | grep -Eq '(^|[^A-Za-z0-9_./-])push($|[^A-Za-z0-9_./-])' && return 0
+    # Strip comments into the variable, then a here-string: piping into grep -q
+    # under pipefail SIGPIPEs the writer on an early match and turns the hit
+    # into a miss (#2362).
+    body=$(sed 's/#.*//' <<<"$body")
+    grep -Eq '(^|[^A-Za-z0-9_./-])push($|[^A-Za-z0-9_./-])' <<<"$body" && return 0
   done
   return 1
 }
