@@ -9,7 +9,9 @@
  * - createCliQueryFn builds exec resume args when resumeSessionId + env var set
  * - createCliQueryFn builds --last fallback args when no ID but env var set
  * - createCliQueryFn uses standard exec args when env var is not set
- * - Resume command uses --dangerously-bypass-approvals-and-sandbox (not --sandbox)
+ * - Resume never passes --sandbox: a full-access stage resumes with
+ *   --dangerously-bypass-approvals-and-sandbox, a read-only or edit-only stage
+ *   with -c sandbox_mode="<mode>" (#2342)
  * - Fixture file has thread.started event and it is parsed correctly
  * - session_id is propagated in result messages from Codex runs
  */
@@ -339,5 +341,104 @@ describe("createCliQueryFn — resume arg construction (Issue #1659)", () => {
     expect(args).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(args).not.toContain("--sandbox");
     expect(args).not.toContain("danger-full-access");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createCliQueryFn — a resumed stage keeps the sandbox its tools justify (#2342)
+// ---------------------------------------------------------------------------
+
+describe("createCliQueryFn — a resumed stage keeps its sandbox (#2342)", () => {
+  const STANDARD_ARGS = ["exec", "--dangerously-bypass-approvals-and-sandbox", "--json"];
+  const BYPASS = "--dangerously-bypass-approvals-and-sandbox";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  /** The argv a resumed codex stage spawns with, for the given tools and thread. */
+  async function resumeArgs(
+    allowedTools: string[] | undefined,
+    resumeSessionId: string | undefined
+  ): Promise<string[]> {
+    vi.stubEnv("NIGHTGAUGE_CODEX_RESUME_ENABLED", "true");
+    mockSpawnReturning([agentMessageLine("Stage complete."), turnCompletedLine()].join("\n"));
+    const queryFn = createCliQueryFn({ command: "codex", args: STANDARD_ARGS, adapter: "codex" });
+    const options = {
+      ...(resumeSessionId ? { resumeSessionId } : {}),
+      ...(allowedTools ? { allowedTools } : {}),
+    };
+    for await (const _ of queryFn({ prompt: "test", options })) {
+      /* consume */
+    }
+    return lastSpawnArgs();
+  }
+
+  /** The value following `-c` that sets sandbox_mode, or undefined. */
+  function sandboxModeConfig(args: string[]): string | undefined {
+    const i = args.findIndex((a) => a.startsWith("sandbox_mode="));
+    if (i === -1) return undefined;
+    expect(args[i - 1]).toBe("-c");
+    return args[i];
+  }
+
+  it("resumes a read-only stage read-only, not with the bypass flag", async () => {
+    const args = await resumeArgs(["Read", "Grep", "Glob"], "prior-thread-id");
+
+    // The approval policy is a top-level option, so it precedes `exec` (#1715).
+    expect(args.slice(0, 6)).toEqual([
+      "--ask-for-approval",
+      "never",
+      "exec",
+      "resume",
+      "prior-thread-id",
+      "-",
+    ]);
+    expect(sandboxModeConfig(args)).toBe('sandbox_mode="read-only"');
+    expect(args).not.toContain(BYPASS);
+    // `exec resume` refuses --sandbox outright (exit 2).
+    expect(args).not.toContain("--sandbox");
+    expect(args).toContain("--json");
+  });
+
+  it("scopes the --last fallback the same way", async () => {
+    const args = await resumeArgs(["Read"], undefined);
+
+    expect(args.slice(0, 6)).toEqual([
+      "--ask-for-approval",
+      "never",
+      "exec",
+      "resume",
+      "--last",
+      "-",
+    ]);
+    expect(sandboxModeConfig(args)).toBe('sandbox_mode="read-only"');
+    expect(args).not.toContain(BYPASS);
+  });
+
+  it("resumes an edit-only stage at workspace-write", async () => {
+    const args = await resumeArgs(["Read", "Edit"], "prior-thread-id");
+
+    expect(sandboxModeConfig(args)).toBe('sandbox_mode="workspace-write"');
+    expect(args).not.toContain(BYPASS);
+    expect(args).not.toContain("--sandbox");
+    expect(args.indexOf("--ask-for-approval")).toBeLessThan(args.indexOf("exec"));
+  });
+
+  it.each([
+    ["a shell tool", ["Read", "Bash"]],
+    ["a scoped shell tool", ["Bash(git status)"]],
+    ["no tools at all", undefined],
+  ])("resumes a stage with %s at full access, as a fresh start does", async (_label, tools) => {
+    const args = await resumeArgs(tools, "prior-thread-id");
+
+    expect(args.slice(0, 4)).toEqual(["exec", "resume", "prior-thread-id", "-"]);
+    expect(args).toContain(BYPASS);
+    expect(sandboxModeConfig(args)).toBeUndefined();
+    expect(args).not.toContain("--ask-for-approval");
   });
 });

@@ -106,6 +106,25 @@ export function codexApprovalFlags(mode: CodexSandboxMode): string[] {
 export const CODEX_BYPASS_FLAG = "--dangerously-bypass-approvals-and-sandbox";
 
 /**
+ * The flags that carry a sandbox mode onto `codex exec resume` (#2342).
+ *
+ * `exec resume` refuses `--sandbox` ("unexpected argument", exit 2 on
+ * codex-cli 0.154.0) but honours the `sandbox_mode` config key, and a resumed
+ * turn takes its sandbox from the resume invocation, never from the session it
+ * resumes (spike #1568 § 4.2). So a tighter mode travels as
+ * `-c sandbox_mode="<mode>"`, and only `danger-full-access` resumes with the
+ * bypass flag — the same split {@link codexSandboxFlags} makes on a fresh
+ * start. The approval policy still goes before `exec`
+ * ({@link codexApprovalFlags}).
+ */
+export function codexResumeSandboxFlags(mode: CodexSandboxMode): string[] {
+  if (mode === "danger-full-access") {
+    return [CODEX_BYPASS_FLAG];
+  }
+  return ["-c", `sandbox_mode=${JSON.stringify(mode)}`];
+}
+
+/**
  * Apply the resolved sandbox profile to a Codex `exec` arg list. When the tools
  * justify a tighter mode, the `--dangerously-bypass-approvals-and-sandbox`
  * sentinel is replaced in place with the scoped flags, and the approval policy

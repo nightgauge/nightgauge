@@ -55,6 +55,9 @@ and this project adheres to
   (#2330), and never hands it a model name it cannot run (#1725).
 - **No install hint pipes a download into a shell.** The Grok install hints
   link to the Grok documentation instead (#2320).
+- **A resumed Codex stage keeps its sandbox.** With Codex session resume on,
+  a read-only or edit-only stage used to resume with no sandbox at all; it now
+  resumes in the same sandbox it started in (#2342).
 
 ## [0.5.1] - 2026-09-30
 

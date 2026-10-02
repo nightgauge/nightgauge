@@ -134,6 +134,15 @@ changelog, and the release workflow refuses a tag that does not.
   there (refused as `not-started`), whichever repositories it has open. It
   leaves any other verb unacknowledged, and the platform expires a verb that
   no window holds.
+- **A resumed Codex stage keeps its sandbox** (#2342). With
+  `NIGHTGAUGE_CODEX_RESUME_ENABLED=true`, every resume ran with
+  `--dangerously-bypass-approvals-and-sandbox`, so a stage whose allowed tools
+  are read-only or edit-only lost its sandbox the moment it resumed.
+  `codex exec resume` refuses `--sandbox` but honours `-c sandbox_mode=...`,
+  and a resumed turn never inherits the session's sandbox, so a resume now
+  carries the stage's own mode that way, with `--ask-for-approval never`
+  before `exec`. Only a stage that needs full access resumes with the bypass
+  flag, as it starts with it.
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
   the phone app or the dashboard used to sit `routing` until it expired,

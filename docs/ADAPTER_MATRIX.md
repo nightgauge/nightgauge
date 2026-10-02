@@ -304,20 +304,25 @@ Error message: `codex CLI is not authenticated. Run 'codex login' to authenticat
   get `--ephemeral` flag by default. Configurable via `NIGHTGAUGE_CODEX_EPHEMERAL_STAGES`.
 - **Session resume:** Opt-in via `NIGHTGAUGE_CODEX_RESUME_ENABLED=true`. Resume uses
   `exec resume <threadId> -` syntax; falls back to `exec resume --last` when no ID available.
+  A resumed stage keeps the sandbox its allowed-tools justify (#2342): `exec resume` refuses
+  `--sandbox` but honours `-c sandbox_mode="<mode>"`, and a resumed turn takes its sandbox
+  from the resume invocation, never from the session (observed on codex-cli 0.154.0, spike
+  #1568). Only a full-access stage resumes with `--dangerously-bypass-approvals-and-sandbox`.
 - **Sandbox scoping from allowed-tools (#4026):** Codex has no per-tool allowlist
   flag, so the skill's `allowed-tools` are mapped onto Codex's sandbox mode +
   approval policy (`resolveCodexSandboxMode` in `codexSandbox.ts` / `codex_sandbox.go`,
   single source of truth shared by both spawn paths). The mapping only ever
   TIGHTENS with positive evidence — default is full access so autonomous runs are
   never locked out:
-  | allowed-tools                                                                | Codex flags                                                |
-  | ---------------------------------------------------------------------------- | ---------------------------------------------------------- |
-  | absent/empty, or any of `Bash`/`Task`/`WebFetch`/`WebSearch`/`mcp__*`        | `--dangerously-bypass-approvals-and-sandbox` (full access) |
-  | `Write`/`Edit`/`MultiEdit`/`NotebookEdit` (no shell/network)                 | `--ask-for-approval never exec --sandbox workspace-write`  |
-  | read-only set (`Read`/`Grep`/`Glob`/…)                                       | `--ask-for-approval never exec --sandbox read-only`        |
-  | `--ask-for-approval never` is always kept (autonomous). It is a top-level    |
-  | codex option, so it goes before `exec` (#1715). `exec resume` cannot         |
-  | sandbox (the flag is unsupported there), so resumed stages stay full access. |
+  | allowed-tools                                                             | Codex flags                                                |
+  | ------------------------------------------------------------------------- | ---------------------------------------------------------- |
+  | absent/empty, or any of `Bash`/`Task`/`WebFetch`/`WebSearch`/`mcp__*`     | `--dangerously-bypass-approvals-and-sandbox` (full access) |
+  | `Write`/`Edit`/`MultiEdit`/`NotebookEdit` (no shell/network)              | `--ask-for-approval never exec --sandbox workspace-write`  |
+  | read-only set (`Read`/`Grep`/`Glob`/…)                                    | `--ask-for-approval never exec --sandbox read-only`        |
+  | `--ask-for-approval never` is always kept (autonomous). It is a top-level |
+  | codex option, so it goes before `exec` (#1715). `exec resume` refuses     |
+  | `--sandbox`, so a resumed stage carries the same mode as                  |
+  | `-c sandbox_mode="<mode>"` (#2342).                                       |
 - **Model routing:** `NIGHTGAUGE_CODEX_MODEL` env var → `--model <value>`
 
 **Go adapter (`nightgauge run --adapter codex`, #4019):**
