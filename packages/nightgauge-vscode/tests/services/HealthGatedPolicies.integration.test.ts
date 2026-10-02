@@ -28,6 +28,19 @@ vi.mock("../../src/utils/healthScoreHistory", () => ({
   },
 }));
 
+// Mock the IpcClient singleton (#2355): an unmocked client spawns whatever
+// `nightgauge` is on PATH for every threshold read, about two seconds each,
+// and the eight reads in one test outran its timeout. The thresholds are the
+// defaults.
+const mockConfigGetHealthThresholds = vi.fn();
+vi.mock("../../src/services/IpcClient", () => ({
+  IpcClient: {
+    getInstance: () => ({
+      configGetHealthThresholds: mockConfigGetHealthThresholds,
+    }),
+  },
+}));
+
 import { HealthActionService } from "../../src/services/HealthActionService";
 import type { PipelinePolicyOverrides } from "../../src/services/PipelinePolicyOverrides";
 
@@ -65,6 +78,14 @@ describe("Health-Gated Policies Integration", () => {
     vi.mocked(fs.readFile).mockRejectedValue(
       Object.assign(new Error("ENOENT"), { code: "ENOENT" })
     );
+    mockConfigGetHealthThresholds.mockResolvedValue({
+      warningThreshold: 70,
+      criticalThreshold: 50,
+      emergencyThreshold: 30,
+      actionsEnabled: true,
+      policiesEnabled: true,
+      feedbackLoopEnabled: true,
+    });
   });
 
   // ===========================================================================
