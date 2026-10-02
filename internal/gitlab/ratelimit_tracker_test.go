@@ -234,9 +234,14 @@ func TestDefaultSharedTrackerPath_withPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DefaultSharedTrackerPath: %v", err)
 	}
-	// Port should be stripped.
-	if strings.Contains(path, "8080") {
-		t.Fatalf("path should not contain port: %s", path)
+	// Port should be stripped. Assert on the file name the function builds, not
+	// on the whole path: the isolated state root is an os.MkdirTemp directory
+	// whose random decimal suffix can itself contain "8080" (#2364).
+	if got, want := filepath.Base(path), "ratelimit-gitlab-gitlab-example-com.json"; got != want {
+		t.Fatalf("tracker file name = %q, want %q (port stripped): %s", got, want, path)
+	}
+	if !strings.HasPrefix(path, os.Getenv("NIGHTGAUGE_STATE_HOME")) {
+		t.Fatalf("path %s is not under the isolated state root", path)
 	}
 }
 
