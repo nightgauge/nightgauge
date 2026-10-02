@@ -8087,8 +8087,12 @@ func (s *Scheduler) isBlocked(ctx context.Context, item types.BoardItem) (bool, 
 
 		// Detect circular dependency: issue blocked by its own parent epic.
 		// This can never resolve (epic waits for sub-issue, sub-issue waits for epic).
-		// Auto-remove the relationship and skip this blocker.
-		if item.ParentNumber > 0 && blocker.Number == item.ParentNumber {
+		// Auto-remove the relationship and skip this blocker. The parent is
+		// matched by repository as well as number (#2369): when the epic lives
+		// in another repository, a blocker that merely shares its number is a
+		// real dependency, and removing it deleted a legitimate relationship
+		// and dispatched over an open blocker.
+		if blockerIsOwnParent(item, blocker) {
 			// This branch never actually removed anything before #956. It was
 			// guarded on item.NodeID, and BoardItem.NodeID is not populated on
 			// the GitHub path -- nodeToItem sets only item.ID, and the board
@@ -8123,6 +8127,24 @@ func (s *Scheduler) isBlocked(ctx context.Context, item types.BoardItem) (bool, 
 		return true, nil
 	}
 	return false, nil
+}
+
+// blockerIsOwnParent reports whether blocker is item's own parent epic: the
+// parent's number in the parent's repository. An empty ParentRepo, or an empty
+// blocker Repo, means the item's own repository.
+func blockerIsOwnParent(item types.BoardItem, blocker types.BlockingRef) bool {
+	if item.ParentNumber <= 0 || blocker.Number != item.ParentNumber {
+		return false
+	}
+	parentRepo := item.ParentRepo
+	if parentRepo == "" {
+		parentRepo = item.Repo
+	}
+	blockerRepo := blocker.Repo
+	if blockerRepo == "" {
+		blockerRepo = item.Repo
+	}
+	return strings.EqualFold(parentRepo, blockerRepo)
 }
 
 // refreshBlockerStates fetches fresh blocker state from GitHub for all queued

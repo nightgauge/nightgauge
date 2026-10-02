@@ -516,11 +516,17 @@ func (p *ProjectService) SetFields(ctx context.Context, owner, repo string, issu
 // cannot close until the sub-issue does and the sub-issue cannot start until
 // the epic does.
 //
+// The parent is matched by repository AND number (#2369). Issue numbers are
+// per repository and the parent can live in another one, where a blocker that
+// only shares its number is a different issue and a legitimate edge.
+//
 // blockedParentNumber is 0 when the blocked issue has no parent, or when its
-// parent could not be determined; both must decline to guard rather than
-// guess, because a false positive REJECTS a legitimate edge.
-func blocksOwnParent(blockedParentNumber, blockerNumber int) bool {
-	return blockedParentNumber != 0 && blockerNumber == blockedParentNumber
+// parent could not be determined, and blockedParentRepo is "" when the
+// parent's repository could not be read. Each must decline to guard rather
+// than guess, because a false positive REJECTS a legitimate edge.
+func blocksOwnParent(blockedParentRepo string, blockedParentNumber int, blockerRepo string, blockerNumber int) bool {
+	return blockedParentNumber != 0 && blockerNumber == blockedParentNumber &&
+		blockedParentRepo != "" && strings.EqualFold(blockedParentRepo, blockerRepo)
 }
 
 // AddBlockedByNumber adds a blocking relationship between two issues identified by number.
@@ -546,7 +552,7 @@ func (p *ProjectService) AddBlockedByNumber(ctx context.Context, owner, repo str
 
 	// Guard: reject if the blocker is the parent epic of the blocked issue.
 	// A sub-issue blocked by its own epic creates an unresolvable circular dependency.
-	if blocksOwnParent(blocked.ParentNumber, blockerNumber) {
+	if blocksOwnParent(blocked.ParentRepo, blocked.ParentNumber, owner+"/"+repo, blockerNumber) {
 		return fmt.Errorf(
 			"circular dependency: cannot block #%d by its parent epic #%d",
 			blockedNumber, blockerNumber,

@@ -28,6 +28,11 @@ type issueRef struct {
 	// ParentNumber is the parent epic's issue number, or 0 when the issue has
 	// no parent. Derived from REST's `parent_issue_url`.
 	ParentNumber int
+	// ParentRepo is the parent epic's repository, "owner/name", from the same
+	// URL, or "" when there is no parent or the URL names no repository. The
+	// parent can live in another repository, where ParentNumber names a
+	// different issue (#2369).
+	ParentRepo string
 }
 
 // issueRefResponse is the slice of GitHub's REST issue object this read uses.
@@ -108,6 +113,7 @@ func resolveIssueRef(ctx context.Context, c *Client, owner, repo string, number 
 		NodeID:       resp.NodeID,
 		DatabaseID:   resp.ID,
 		ParentNumber: parentIssueNumber(resp.ParentIssueURL),
+		ParentRepo:   parentIssueRepo(resp.ParentIssueURL),
 	}, nil
 }
 
@@ -130,4 +136,24 @@ func parentIssueNumber(raw string) int {
 		return 0
 	}
 	return n
+}
+
+// parentIssueRepo extracts "owner/name" from REST's parent_issue_url
+// (https://api.github.com/repos/<owner>/<name>/issues/<n>). Returns "" for an
+// empty URL or any other shape: like parentIssueNumber, an unreadable URL must
+// read as "parent unknown", because the caller uses it to REJECT a link.
+func parentIssueRepo(raw string) string {
+	_, rest, ok := strings.Cut(strings.TrimSpace(raw), "/repos/")
+	if !ok {
+		return ""
+	}
+	owner, rest, ok := strings.Cut(rest, "/")
+	if !ok || owner == "" {
+		return ""
+	}
+	name, rest, ok := strings.Cut(rest, "/")
+	if !ok || name == "" || !strings.HasPrefix(rest, "issues/") {
+		return ""
+	}
+	return owner + "/" + name
 }

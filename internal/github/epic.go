@@ -44,6 +44,23 @@ type EpicValidationResult struct {
 	Gaps           []EpicValidationGap `json:"gaps"`
 }
 
+// blockerIsEpic reports whether blocker, on a sub-issue living in subRepo, is
+// the epic epicRepo#epicNumber itself. The repository counts as well as the
+// number (#2369): a sub-issue in another repository can be blocked by an
+// unrelated issue that only shares the epic's number, and reporting that as a
+// circular blocker sends the issue-audit repair (remove-blocked-by) after a
+// legitimate relationship. An empty blocker Repo means the sub-issue's own.
+func blockerIsEpic(blocker types.BlockingRef, subRepo, epicRepo string, epicNumber int) bool {
+	if blocker.Number != epicNumber {
+		return false
+	}
+	blockerRepo := blocker.Repo
+	if blockerRepo == "" {
+		blockerRepo = subRepo
+	}
+	return strings.EqualFold(blockerRepo, epicRepo)
+}
+
 // Validate checks an epic's sub-issue structure for circular blockers (sub-issue
 // blocked by its own parent epic) and stale blockers (blocked by a closed issue).
 // Sub-issues are fetched in one batched GraphQL request per repository.
@@ -110,8 +127,12 @@ func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumb
 			fmt.Fprintf(os.Stderr, "warning: sub-issue #%d missing from batch response\n", si.Number)
 			continue
 		}
+		subRepo := si.Repo
+		if subRepo == "" {
+			subRepo = owner + "/" + repo
+		}
 		for _, blocker := range subIssue.BlockedBy {
-			if blocker.Number == epicNumber {
+			if blockerIsEpic(blocker, subRepo, owner+"/"+repo, epicNumber) {
 				result.Valid = false
 				result.Gaps = append(result.Gaps, EpicValidationGap{
 					SubIssueNumber: si.Number,

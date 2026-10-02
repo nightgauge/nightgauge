@@ -242,6 +242,14 @@ changelog, and the release workflow refuses a tag that does not.
   of 20 s. When the concurrent-pipelines test timed out, its main thread could
   wait forever; now it fails.
 
+- **A blocker that shares its number with a parent epic in another repository
+  is no longer deleted, refused or flagged as circular** (#2369). Three checks
+  for "an issue blocked by its own parent epic" compared only the number. The
+  scheduler's dispatch gate deleted such a blocker from GitHub and dispatched
+  the sub-issue over it, `issue add-blocked-by` refused the edge, and
+  `epic validate` reported a circular blocker that issue-audit's repair then
+  removes. All three now match the parent by repository and number.
+
 - **The `issue-create` skill, `issue create-sub --blocked-by` and
   GO_BINARY.md no longer call body-declared dependencies cosmetic** (#2351).
   Native `blockedBy` is still the relationship to create, but the pickup gate

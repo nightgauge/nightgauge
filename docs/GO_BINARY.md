@@ -1402,7 +1402,10 @@ nightgauge epic plan-waves --sub-issues <N,M,...> [--owner ORG] [--repo REPO] [-
 
 `add-blocked-by` also enforces a parent-epic guard: it rejects the relationship
 when the blocker is the parent epic of the blocked issue, preventing circular
-dependencies at the source.
+dependencies at the source. The parent is matched in its own repository: when
+the epic lives in another repository, an issue that only shares its number is
+a legitimate blocker (#2369). `epic validate`'s `circular_blocker` check and
+the scheduler's circular-parent auto-fix match the same way.
 
 ### Git Operations
 
