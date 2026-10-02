@@ -1,0 +1,6 @@
+# Refuse a push that would publish, to the public repository, a history
+# unrelated to main or content the publication boundary rejects (#2365).
+# Pushes to any other remote pass straight through. The guard reads git's
+# ref lines on stdin, so exec it rather than run it in a pipeline.
+# See docs/PUBLIC_CORE_BOUNDARY.md § Checked before it is pushed.
+exec bash "$(git rev-parse --show-toplevel)/scripts/publication-push-guard.sh" "$@"

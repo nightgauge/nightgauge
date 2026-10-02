@@ -100,6 +100,17 @@ changelog, and the release workflow refuses a tag that does not.
   would use and its source, and warns (NGD047) when that URL is not absolute
   or is plain HTTP to a host other than localhost. See
   [CONFIGURATION.md § Pointing at another platform deployment](docs/CONFIGURATION.md#pointing-at-another-platform-deployment).
+- **A pre-push hook checks the publication boundary before a push to this
+  repository leaves the machine** (#2365). Until now CI checked the boundary
+  only on pull requests, after GitHub had already stored and published the
+  push, and never checked a branch or tag that did not become a pull request.
+  `.husky/pre-push`, installed by `npm install`, now refuses a push to this
+  repository's URL in two cases. The first is a history unrelated to `main`.
+  The second is a new commit the boundary checker rejects, including one that
+  a later commit in the same push cleans up. A deletion or a release tag on
+  `main` passes at once, and pushes to other remotes are untouched. It is a
+  client-side hook, so `--no-verify` skips it. See
+  [PUBLIC_CORE_BOUNDARY.md § Checked before it is pushed](docs/PUBLIC_CORE_BOUNDARY.md#checked-before-it-is-pushed).
 
 ### Fixed
 

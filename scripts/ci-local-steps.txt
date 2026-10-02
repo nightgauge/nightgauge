@@ -33,6 +33,7 @@ Publication boundary ceiling lag and erosion
 Publication boundary attribution
 Publication boundary suite hermeticity
 Publication boundary allowlist isolation regression suite
+Publication push guard regression suite
 band-vocabulary reintroduction gate
 Band-vocabulary gate regression suite
 visibility-prose reintroduction gate

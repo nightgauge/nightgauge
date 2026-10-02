@@ -95,6 +95,14 @@ jobs:
       - name: Prove the allowlist-isolation check still fails closed
         run: bash scripts/test-check-boundary-allowlist-isolation.sh
 
+      - name: Prove the pre-push guard stops what this job only sees after publication
+        # #2365: this job runs after GitHub has stored and published a push, so
+        # .husky/pre-push checks the boundary before the push leaves the
+        # machine. The suite pushes for real into throwaway repositories: an
+        # unrelated history and a boundary violation are refused and never reach
+        # the remote; a feature branch, a deletion and a tag on main pass.
+        run: bash scripts/test-publication-push-guard.sh
+
       - name: Prove the hermeticity assertions still catch what they scope out
         # The hermeticity step below attributes dirt to the paths the SUITE
         # writes, instead of demanding that global `git status` and

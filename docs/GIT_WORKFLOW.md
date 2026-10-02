@@ -918,6 +918,10 @@ All repositories use the same tag conventions:
 ### Tag Rules
 
 - Tags are **only** created from the `main` branch
+- Pushing a tag runs the publication pre-push hook (§ Mandatory Local CI
+  Validation). A tag on `main` publishes no new commit, so the hook passes it
+  without a scan. It needs `origin/main` fetched, which step 1 of the release
+  steps below does.
 - Tags are **annotated** (`git tag -a`) with a changelog summary
 - Tags are **never deleted or moved** — immutable release history
 - RC tags can be created freely; production tags should follow a validated RC
@@ -1288,6 +1292,21 @@ Every push that fails CI wastes time and pollutes the PR with fix-up commits.
 > automatically via `npm install` (husky). If it is not running, execute
 > `npm run setup-hooks`.
 
+> **Pre-push hook**: a push to this repository's URL first runs
+> `scripts/publication-push-guard.sh`. CI checks the publication boundary only
+> after GitHub has stored a push, and it never checks a branch or tag that does
+> not become a pull request. The hook refuses two kinds of push: a history
+> unrelated to `main`, and a new commit that the boundary checker rejects, even
+> when a later commit in the same push cleans it up. It also refuses a push it
+> cannot verify, for example when `origin/main` is missing
+> (`git fetch origin main` fixes that). Each new commit it scans costs a full
+> checker run, which takes several seconds. A deletion or a release tag on `main` costs almost
+> nothing, and pushes to other remotes pass straight through. `--no-verify` and
+> `HUSKY=0` skip the hook, so do not use them to get a refused push through:
+> fix the commit that adds the content. What the hook checks and what it cannot
+> cover:
+> [PUBLIC_CORE_BOUNDARY.md § Checked before it is pushed](PUBLIC_CORE_BOUNDARY.md#checked-before-it-is-pushed).
+
 Run these commands **before every `git push`**:
 
 ```bash
@@ -1537,6 +1556,10 @@ nightgauge pre-push install
 This creates `.git/hooks/pre-push` which calls the validation gate before each
 push. The hook only activates for pipeline branches (branches with issue
 numbers). Non-pipeline branches pass through.
+
+In this repository, husky sets `core.hooksPath` to `.husky/_`, so git never
+runs `.git/hooks/pre-push`. The pre-push hook that runs here is the
+publication guard in `.husky/pre-push` (§ Mandatory Local CI Validation).
 
 ### Reading the Context File
 

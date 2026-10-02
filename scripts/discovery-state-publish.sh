@@ -24,6 +24,15 @@
 # no working tree, so it is re-runnable and cannot disturb the caller's
 # checkout — which matters because a developer may run this by hand.
 #
+# A SEPARATE ROOT, SO CI PUBLISHES IT
+#
+# The state branch is a history of its own. The publication guard that
+# .husky/pre-push runs refuses any push to the public repository with a root
+# main does not have, and it has no exception list (#2365). So a run that
+# pushes to the public repository from a checkout where that hook is installed
+# is refused. The scheduled workflows run this in a fresh actions/checkout,
+# where nothing installs the hook.
+#
 # Usage:
 #   scripts/discovery-state-publish.sh --message "release-watch: 2.1.80"
 #
@@ -52,7 +61,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     -h | --help)
-      sed -n '2,32p' "$0"
+      sed -n '2,41p' "$0"
       exit 0
       ;;
     *)
