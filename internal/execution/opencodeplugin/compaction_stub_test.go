@@ -331,10 +331,29 @@ func runCompactionStub(t *testing.T, real string, growth, summary stubInstance) 
 // isolated HOME/XDG environment the run itself used, so it reads that run's
 // own session store rather than any other. It is a read-only follow-up call,
 // never the run under test.
+//
+// Its stdout is an unlinked temporary file, never a pipe (#2346), for the
+// reason the production fold's helper gives (opencode_usage.go, #2165):
+// OpenCode prints the export with a single write and then calls
+// process.exit(), and into a pipe its runtime writes only what the pipe
+// accepts at once (64 KiB) and drops the rest. This session's export is
+// larger than that, with the second synthetic continue turn a few KB under
+// the cut, so a piped capture counted 1 whenever run-to-run variation moved
+// that turn past it. Stderr is kept apart, so what is returned is the export
+// alone, and it must parse: a cut-short export fails here, by name, instead
+// of being counted.
 func exportSanitized(t *testing.T, result compactionStubResult) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	stdout, err := os.CreateTemp(t.TempDir(), "opencode-export-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdout.Close()
+	if err := os.Remove(stdout.Name()); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.CommandContext(ctx, result.real, "export", "--sanitize", result.sessionID)
 	cmd.Dir = t.TempDir()
 	cmd.Env = []string{
@@ -348,11 +367,26 @@ func exportSanitized(t *testing.T, result compactionStubResult) string {
 		"OPENCODE_DISABLE_MODELS_FETCH=1",
 		pluginIntegrationNoRegistry,
 	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("opencode export --sanitize %s: %v\n%s", result.sessionID, err, out)
+	var stderr bytes.Buffer
+	cmd.Stdout = stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("opencode export --sanitize %s: %v\nstderr:\n%s", result.sessionID, err, stderr.String())
 	}
-	return string(out)
+	info, err := stdout.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The process shared the file's offset, so read from the start, not from
+	// where the process left it.
+	exported := make([]byte, info.Size())
+	if _, err := stdout.ReadAt(exported, 0); err != nil {
+		t.Fatalf("reading the export of %s: %v", result.sessionID, err)
+	}
+	if !json.Valid(exported) {
+		t.Fatalf("opencode export --sanitize %s printed %d bytes that do not parse as JSON, so nothing in it can be counted\nstderr:\n%s", result.sessionID, len(exported), stderr.String())
+	}
+	return string(exported)
 }
 
 // TestCompactionAutocontinueSuppressionAgainstRealOpenCode is #1641's own
