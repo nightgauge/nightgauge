@@ -88,6 +88,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A slow reap of the complexity-model lock broker no longer hides why the
+  transaction failed** (#2356). The extension waited for a broker it had sent
+  SIGKILL as briefly as for one asked to exit, and an error from that wait
+  replaced the transaction's own, so a timed-out release could be reported as
+  a broker that would not die. The wait after SIGKILL now has its own bound,
+  and a reap failure never replaces the transaction's error.
 - **A platform approve or reject says why it cannot apply** (#2336). The
   extension's approve and reject released an approval promise that nothing
   ever created, so no verb could take effect. No local run holds for a

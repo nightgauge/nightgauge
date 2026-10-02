@@ -5,6 +5,12 @@ import { checkoutPath } from "../utils/cloneLayout";
 
 const READY_TIMEOUT_MS = 30_000;
 const EXIT_TIMEOUT_MS = 5_000;
+/**
+ * How long to wait for a SIGKILLed broker's exit to be observed (#2356). A
+ * process cannot survive SIGKILL; this only covers the delay before Node sees
+ * the exit, which grows under load, so it does not shrink with exitTimeoutMs.
+ */
+const KILL_EXIT_TIMEOUT_MS = 5_000;
 const STDERR_LIMIT = 4_096;
 
 type CommitComplexityModel = (content: string) => Promise<void>;
@@ -20,6 +26,8 @@ export interface ComplexityModelLockDeps {
   spawnLock: typeof spawn;
   readyTimeoutMs: number;
   exitTimeoutMs: number;
+  /** The wait for the exit after SIGKILL; KILL_EXIT_TIMEOUT_MS when absent. */
+  killExitTimeoutMs?: number;
 }
 
 const defaultDeps: ComplexityModelLockDeps = {
@@ -70,13 +78,14 @@ function waitForReady(
 
 async function releaseAndReap(
   child: ChildProcessWithoutNullStreams,
-  timeoutMs: number
+  timeoutMs: number,
+  killTimeoutMs: number
 ): Promise<void> {
   if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
 
-  const waitForExit = () =>
+  const waitForExit = (waitMs = timeoutMs) =>
     new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => resolve(false), timeoutMs);
+      const timer = setTimeout(() => resolve(false), waitMs);
       const onExit = () => {
         clearTimeout(timer);
         resolve(true);
@@ -95,7 +104,7 @@ async function releaseAndReap(
   if (await waitForExit()) return;
 
   child.kill("SIGKILL");
-  if (!(await waitForExit())) {
+  if (!(await waitForExit(killTimeoutMs))) {
     throw new Error(`complexity-model lock broker did not exit after SIGKILL (pid=${child.pid})`);
   }
 }
@@ -163,7 +172,16 @@ async function withComplexityModelLock<T>(
   const stderr = () => (stderrText ? `: ${stderrText.trim()}` : "");
   const brokerExit = observeExit(child);
   let committed = false;
+  const reap = () => {
+    if (!child.stdin.writableEnded) child.stdin.end();
+    return releaseAndReap(
+      child,
+      deps.exitTimeoutMs,
+      deps.killExitTimeoutMs ?? KILL_EXIT_TIMEOUT_MS
+    );
+  };
 
+  let value: T;
   try {
     await waitForReady(child, deps.readyTimeoutMs, stderr);
     const commit: CommitComplexityModel = async (content) => {
@@ -176,17 +194,20 @@ async function withComplexityModelLock<T>(
       committed = true;
     };
 
-    const value = await action(commit);
+    value = await action(commit);
     if (!committed) {
       child.stdin.end();
       const exit = await waitForBrokerExit(brokerExit, deps.exitTimeoutMs, "release transaction");
       assertSuccessfulExit(exit, "release transaction", stderr);
     }
-    return value;
-  } finally {
-    if (!child.stdin.writableEnded) child.stdin.end();
-    await releaseAndReap(child, deps.exitTimeoutMs);
+  } catch (error) {
+    // The transaction's own error is the one the caller can act on (#2356);
+    // a broker that also outlived SIGKILL must not replace it.
+    await reap().catch(() => {});
+    throw error;
   }
+  await reap();
+  return value;
 }
 
 /** Run one correctly rooted SDK model transaction through the Go broker. */
