@@ -1782,7 +1782,7 @@ Pipeline execution settings.
 | `failure_mode`            | enum    | `halt`       | Behavior on terminal pipeline failure (Issue #3001)                                                                                                                           |
 | `adaptive_stall_recovery` | boolean | `false`      | Rewind to feature-planning once on first stall-kill (Issue #3005)                                                                                                             |
 | `adaptive_budget`         | boolean | `true`       | Derive per-stage token budgets from this repo's own exit records once ≥5 successful samples exist for the (repo, stage, size) group; falls back to the static table otherwise |
-| `performance_mode`        | object  | -            | Default performance mode + per-mode overrides (Issue #3009)                                                                                                                   |
+| `performance_mode`        | object  | -            | Maximum-profile overrides (Issue #3009); the active mode is not set here                                                                                                      |
 
 **Skip object:**
 
@@ -1822,13 +1822,14 @@ rebasing long-lived epic branches.
 
 #### `pipeline.performance_mode` (Issue #3009)
 
-Selects the named cost/quality envelope applied to every pipeline stage. See
-[PERFORMANCE_MODES.md](PERFORMANCE_MODES.md) for the full per-stage matrix.
+Tunes the `maximum` profile. The four modes, their envelopes and pins, and the
+order in which the active mode is resolved are in
+[PERFORMANCE_MODES.md](PERFORMANCE_MODES.md); no key in this file selects the
+mode.
 
 ```yaml
 pipeline:
   performance_mode:
-    default: elevated # efficiency | elevated | maximum | frontier
     overrides:
       maximum:
         model: opus # heavy-tier model (default: opus)
@@ -1908,10 +1909,12 @@ Sonnet (the ceiling caps the raise), while `stage_models.feature-dev: opus` +
 `minimum_model.feature-dev: fable` dispatches Opus (the raise is discarded, the
 operator's own model stands).
 
-The active mode is normally driven by the status-bar QuickPick (writes the
-checkout's `performance-mode.yaml`, `nightgauge layout path checkout performance-mode.yaml`); `pipeline.performance_mode.default`
-applies only when no state file is present. Override per-shell with
-`NIGHTGAUGE_PERFORMANCE_MODE=<mode>`.
+The active mode is set with the status-bar QuickPick, which writes the
+checkout's `performance-mode.yaml`
+(`nightgauge layout path checkout performance-mode.yaml`), or per shell with
+`NIGHTGAUGE_PERFORMANCE_MODE=<mode>`. With neither, it is `elevated`. A
+`pipeline.performance_mode.default` key was documented here but never read
+(#2343); the schema now rejects it.
 
 The legacy `pipeline.supercharge` block is still parsed for one release as a
 synonym for `pipeline.performance_mode.overrides.maximum`. See

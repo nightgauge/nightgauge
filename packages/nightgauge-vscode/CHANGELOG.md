@@ -39,6 +39,12 @@ and this project adheres to
   repository's publication hook does, which can take longer than that on a busy
   machine. The orchestrator now gives every push ten minutes, the one that
   saves a run's work when its budget stops it included (#2365).
+
+- **`pipeline.performance_mode.default` is reported as invalid.** The key was
+  documented as the mode used when no state file is present, but the extension
+  never read it. Choose the mode with the status-bar picker, or set
+  `NIGHTGAUGE_PERFORMANCE_MODE`, and remove the key (#2343).
+
 - **Pause, resume, cancel, approve and reject from the phone app or the
   dashboard are acknowledged.** Each one used to show as unacknowledged and
   then expired, even when it had been carried out. Pause and resume now work:

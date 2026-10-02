@@ -1394,25 +1394,23 @@ export const PipelineConfigSchema = z.object({
     })
     .optional(),
   /**
-   * Performance mode — explicit cost/quality selector with three named modes
-   * (Issue #3009, replaces the legacy `supercharge` toggle from #2433).
+   * Performance mode — the cost/quality envelope every stage routes within
+   * (Issue #3009, replaces the legacy `supercharge` toggle from #2433). The
+   * four modes (`efficiency`, `elevated`, `maximum`, `frontier`) and their
+   * envelopes are MODE_PROFILES in utils/modeProfiles.ts.
    *
-   * - `efficiency`: Haiku-where-possible, Sonnet for heavier stages, low/medium effort.
-   * - `elevated`:   Default routing — no overrides; adaptive routing operates normally.
-   * - `maximum`:    Opus + effort=high across every stage, raised stall multiplier,
-   *                 disabled budget ceiling. Replicates today's Supercharge envelope.
-   *
-   * Selection is persisted in the checkout's `performance-mode.yaml`
-   * (`.git/nightgauge-worktree/`, ADR-024 § 7) and can
-   * be overridden per-shell via `NIGHTGAUGE_PERFORMANCE_MODE=<mode>`.
+   * The active mode is NOT configured here. It is `NIGHTGAUGE_PERFORMANCE_MODE`,
+   * else the checkout's `performance-mode.yaml` (`.git/nightgauge-worktree/`,
+   * ADR-024 § 7, written by the status-bar picker), else `elevated`. A
+   * `default` key was documented here but neither resolver ever read it
+   * (#2343); the object is strict, so a config that still sets it is rejected
+   * rather than silently ignored.
    *
    * @see docs/PERFORMANCE_MODES.md
    * @see Issue #3009 - Replace Supercharge toggle with explicit performance mode selector
    */
   performance_mode: z
     .object({
-      /** Default mode applied when no state file is present */
-      default: z.enum(["efficiency", "elevated", "maximum", "frontier"]).optional(),
       /** Per-mode overrides for tuning the published profiles */
       overrides: z
         .object({
@@ -1439,6 +1437,7 @@ export const PipelineConfigSchema = z.object({
         })
         .optional(),
     })
+    .strict()
     .optional(),
   /**
    * @deprecated Issue #3009 — replaced by `performance_mode`. Retained for one

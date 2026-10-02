@@ -242,6 +242,18 @@ changelog, and the release workflow refuses a tag that does not.
   of 20 s. When the concurrent-pipelines test timed out, its main thread could
   wait forever; now it fails.
 
+- **PERFORMANCE_MODES.md describes the modes the pipeline has** (#2343). It
+  listed `economy`, `balanced`, `quality` and `custom`, which neither resolver
+  knows. It now gives the four real modes (`efficiency`, `elevated`, `maximum`,
+  `frontier`) with each one's model and effort bounds and pins, as the routing
+  tables define them, and the order in which the active mode is resolved. The
+  `pipeline.performance_mode.default` config key is removed: both
+  CONFIGURATION.md and the extension's schema described it as the mode used
+  when no state file is present, but neither resolver ever read it. The mode
+  comes from `NIGHTGAUGE_PERFORMANCE_MODE`, then the checkout's
+  `performance-mode.yaml` (the status-bar picker), then `elevated`. A config
+  that still sets the key is reported as invalid instead of being ignored.
+
 - **An epic's branch, epic PR, accumulated context and checkpoint are found in
   the epic's own repository** (#2377). Four call sites still resolved a
   sub-issue's parent epic by number in the sub-issue's repository. When the
