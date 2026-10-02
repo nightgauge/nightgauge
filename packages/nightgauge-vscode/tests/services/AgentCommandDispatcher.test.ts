@@ -45,7 +45,7 @@ function makeIpc() {
  */
 function makeRuns(verbResult: RemoteVerbResult, holds = true) {
   return {
-    holdsRemoteRun: vi.fn().mockReturnValue(holds),
+    holdsRemoteRun: vi.fn().mockResolvedValue(holds),
     isRunning: vi.fn().mockReturnValue(false),
     setPendingRemoteRunId: vi.fn(),
     clearPendingRemoteRunId: vi.fn(),

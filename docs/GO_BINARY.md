@@ -326,22 +326,28 @@ platform keeps the status a pause or resume set unless the ack is
 at least once, so a copy of a verb or an unsupported command that arrives
 again is not carried out again; it re-sends the first copy's ack only when
 that ack did not reach the platform. A second copy of a trigger is refused by
-the platform at its ack and starts nothing. A trigger or verb for a
-repository that is not open in the window is left for the window that has it.
+the platform at its ack and starts nothing. A trigger, or a verb with no
+`runId`, for a repository that is not open in the window is left for the
+window that has it.
 
 Only the window that holds a run answers a verb for it (#2340). The platform
 sends a command to every connection that shares the agent id, so every window
 on the machine receives the verb, and the first acknowledgement ends it. A
 window holds a run while one of its slots carries the run id, and from the
-moment it accepts the run's trigger until that slot opens; a verb that
-arrives in that interval is refused as `not-started`. A window that does not
-hold the run drops the verb without acknowledging it, so `rejected` only ever
-comes from the holder, when it cannot apply the verb. A refused pause or
-resume makes the platform put the run back to its earlier status, so a
-refusal from a window that does not hold the run would undo the holder's
-hold. When no window holds the run, nobody acknowledges, and the platform
-expires the command. A verb with no `runId` names no run, and every window
-that has the repository open refuses it as `invalid-payload`.
+moment it accepts the run's trigger until that slot opens, while the issue is
+still queued there or its worktree is being created; a verb that arrives in
+that interval is refused as `not-started`. An issue removed from the queue
+since (Clear Queue, Remove from Queue, a halt's drain) will never start, and
+the window no longer holds its run. The holder answers whichever repositories
+it has open now, so a manifest reload that drops the run's repository does not
+silence it. A window that does not hold the run drops the verb without
+acknowledging it, so `rejected` only ever comes from the holder, when it
+cannot apply the verb. A refused pause or resume makes the platform put the
+run back to its earlier status, so a refusal from a window that does not hold
+the run would undo the holder's hold. When no window holds the run, nobody
+acknowledges, and the platform expires the command. A verb with no `runId`
+names no run, and every window that has the repository open refuses it as
+`invalid-payload`.
 
 No local run waits for a platform `approve` or `reject` (#2336). The verbs
 name a run's `stage` and `gateType`, one of the platform's quality-gate types

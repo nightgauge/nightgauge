@@ -48,9 +48,10 @@
  * sends a command to every connection that shares the agent id, and the agent
  * identity is per machine, so every window on this machine receives the verb;
  * the first ack ends the command. A window that does not hold the run (no
- * slot carries the runId and no trigger it accepted is queued for it) leaves
- * the verb without acknowledging it, as TriggerCommandHandler leaves a
- * trigger for a repo the window does not have open. A no-op ack from such a
+ * slot carries the runId, and no trigger it accepted for it is still queued
+ * there) leaves the verb without acknowledging it, as TriggerCommandHandler
+ * leaves a trigger for a repo the window does not have open. The holder
+ * answers whatever repositories it has open now. A no-op ack from such a
  * window would race the holder's ack, and a `rejected` pause or resume makes
  * the platform undo the hold the holder applied. `rejected` therefore comes
  * only from the holder, when it cannot apply the verb. When no window holds
@@ -134,8 +135,9 @@ export class RunVerbCommandHandler implements CommandHandler {
     private readonly ipcClient: Pick<IpcClient, "agentAcknowledgeCommand">,
     private readonly logger: Logger,
     /**
-     * Optional, as for TriggerCommandHandler: when present, a verb whose repo
-     * is not open in this workspace is left for the window that has it.
+     * Optional, as for TriggerCommandHandler: when present, a verb with no
+     * runId whose repo is not open in this workspace is left for the window
+     * that has it. A verb that names a run goes by who holds the run.
      */
     private readonly workspaceManager?: Pick<WorkspaceManager, "findRepositoryByGitHub">,
     /** Optional: shows an applied pause or resume in this window. */
@@ -158,19 +160,22 @@ export class RunVerbCommandHandler implements CommandHandler {
    * consumption.
    */
   async consume(cmd: ReceivedCommand, verb: RunVerbCommandType): Promise<void> {
-    if (this.notThisWindow(cmd)) {
-      this.logger.info(
-        "RunVerbCommandHandler: repo not open in this workspace — leaving the command for the window that has it",
-        { verb, owner: cmd.owner, repo: cmd.repo, commandId: cmd.id }
-      );
-      return;
-    }
-    // Only the holder answers (#2340). A copy of a command this window already
-    // consumed belongs to that decision, even when the run has ended since:
-    // its ack may still have to be re-sent. A verb with no runId names no run
-    // to hold; every window that has the repo refuses it the same way.
+    // Only the holder answers (#2340), whichever repositories the window has
+    // open now: a run it holds stays its own when a manifest reload drops the
+    // run's repository. A copy of a command this window already consumed
+    // belongs to that decision, even when the run has ended since: its ack
+    // may still have to be re-sent. A verb with no runId names no run to
+    // hold; every window that has the repo refuses it the same way.
     const runId = runIdOf(cmd);
-    if (runId !== null && !this.redelivery.remembers(cmd.id) && !this.runs.holdsRemoteRun(runId)) {
+    if (runId === null) {
+      if (this.notThisWindow(cmd)) {
+        this.logger.info(
+          "RunVerbCommandHandler: repo not open in this workspace — leaving the command for the window that has it",
+          { verb, owner: cmd.owner, repo: cmd.repo, commandId: cmd.id }
+        );
+        return;
+      }
+    } else if (!this.redelivery.remembers(cmd.id) && !(await this.runs.holdsRemoteRun(runId))) {
       this.logger.info(
         "RunVerbCommandHandler: this window does not hold the run — leaving the command for the window that does",
         { verb, runId, commandId: cmd.id }

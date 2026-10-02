@@ -33,7 +33,7 @@ function makeRuns(
   [K in keyof RunVerbTarget]: ReturnType<typeof vi.fn>;
 } {
   return {
-    holdsRemoteRun: vi.fn().mockReturnValue(holds),
+    holdsRemoteRun: vi.fn().mockResolvedValue(holds),
     cancelByRemoteRunId: vi.fn().mockResolvedValue(result),
     pauseByRemoteRunId: vi.fn().mockResolvedValue(result),
     resumeByRemoteRunId: vi.fn().mockResolvedValue(result),
@@ -309,7 +309,7 @@ describe("RunVerbCommandHandler", () => {
     );
   });
 
-  it("leaves a verb for a repo not open in this window to the window that has it", async () => {
+  it("leaves a verb with no runId for a repo not open in this window to the window that has it", async () => {
     const runs = makeRuns("no-active-run");
     const workspace = { findRepositoryByGitHub: vi.fn().mockReturnValue(undefined) };
     const handler = new RunVerbCommandHandler(
@@ -320,11 +320,86 @@ describe("RunVerbCommandHandler", () => {
     );
     handler.setAgentId("agent-ext");
 
-    await handler.consume(verbCmd("cancel"), "cancel");
+    await handler.consume(verbCmd("cancel", { payload: {} }), "cancel");
 
     expect(workspace.findRepositoryByGitHub).toHaveBeenCalledWith("acme/api");
     expect(runs.cancelByRemoteRunId).not.toHaveBeenCalled();
     expect(ipc.agentAcknowledgeCommand).not.toHaveBeenCalled();
+  });
+
+  it("leaves a verb for a run it does not hold, whether or not the repo is open here", async () => {
+    for (const repoOpen of [true, false]) {
+      const ack = makeIpc();
+      const runs = makeRuns("applied", false);
+      const workspace = {
+        findRepositoryByGitHub: vi.fn().mockReturnValue(repoOpen ? { name: "api" } : undefined),
+      };
+      const handler = new RunVerbCommandHandler(
+        runs as never,
+        ack,
+        logger as never,
+        workspace as never
+      );
+      handler.setAgentId("agent-ext");
+
+      await handler.consume(verbCmd("cancel"), "cancel");
+
+      expect(runs.cancelByRemoteRunId).not.toHaveBeenCalled();
+      expect(ack.agentAcknowledgeCommand).not.toHaveBeenCalled();
+    }
+  });
+
+  // #2340 review: a manifest reload can drop the repository of a run a slot
+  // is executing. The window still holds that run, and answers for it.
+  it("answers a verb for a run it holds after the run's repo left the workspace", async () => {
+    const runs = makeRuns("applied");
+    const workspace = { findRepositoryByGitHub: vi.fn().mockReturnValue(undefined) };
+    const handler = new RunVerbCommandHandler(
+      runs as never,
+      ipc,
+      logger as never,
+      workspace as never
+    );
+    handler.setAgentId("agent-ext");
+
+    await handler.consume(verbCmd("pause"), "pause");
+
+    expect(runs.pauseByRemoteRunId).toHaveBeenCalledWith("run-1");
+    expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledWith(
+      "agent-ext",
+      "cmd-pause",
+      "applied",
+      undefined
+    );
+  });
+
+  it("re-sends a failed ack after the run ended and its repo left the workspace", async () => {
+    const runs = makeRuns("applied");
+    const workspace = { findRepositoryByGitHub: vi.fn().mockReturnValue({ name: "api" }) };
+    ipc.agentAcknowledgeCommand
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValue({ runId: "" });
+    const handler = new RunVerbCommandHandler(
+      runs as never,
+      ipc,
+      logger as never,
+      workspace as never
+    );
+    handler.setAgentId("agent-ext");
+
+    await handler.consume(verbCmd("cancel"), "cancel");
+    workspace.findRepositoryByGitHub.mockReturnValue(undefined);
+    runs.holdsRemoteRun.mockResolvedValue(false);
+    await handler.consume(verbCmd("cancel"), "cancel");
+
+    expect(runs.cancelByRemoteRunId).toHaveBeenCalledTimes(1);
+    expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(2);
+    expect(ipc.agentAcknowledgeCommand).toHaveBeenLastCalledWith(
+      "agent-ext",
+      "cmd-cancel",
+      "applied",
+      undefined
+    );
   });
 
   it("consumes a verb for a repo open in this window", async () => {
@@ -369,6 +444,8 @@ describe("RunVerbCommandHandler", () => {
 
     const first = handler.consume(verbCmd("pause"), "pause");
     const second = handler.consume(verbCmd("pause"), "pause");
+    // The holder check resolves before the first copy reaches the run.
+    await vi.waitFor(() => expect(runs.pauseByRemoteRunId).toHaveBeenCalled());
     release();
     await Promise.all([first, second]);
 
@@ -387,6 +464,30 @@ describe("RunVerbCommandHandler", () => {
     expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
   });
 
+  // The holder check is asynchronous now (#2340 review); a pause and a resume
+  // replayed in one stream chunk must still reach the run in arrival order.
+  it("applies a pause and a resume handled in one tick in the order they arrived", async () => {
+    const order: string[] = [];
+    const runs = makeRuns("applied");
+    runs.pauseByRemoteRunId.mockImplementation(async () => {
+      order.push("pause");
+      return "applied";
+    });
+    runs.resumeByRemoteRunId.mockImplementation(async () => {
+      order.push("resume");
+      return "applied";
+    });
+    const handler = new RunVerbCommandHandler(runs as never, ipc, logger as never);
+    handler.setAgentId("agent-ext");
+
+    await Promise.all([
+      handler.consume(verbCmd("pause"), "pause"),
+      handler.consume(verbCmd("resume"), "resume"),
+    ]);
+
+    expect(order).toEqual(["pause", "resume"]);
+  });
+
   it("re-sends the same ack, without re-applying, when a redelivery follows a failed ack", async () => {
     const runs = makeRuns("applied");
     ipc.agentAcknowledgeCommand
@@ -399,7 +500,7 @@ describe("RunVerbCommandHandler", () => {
     // The platform delivers it again on the next reconnect; by then the run
     // is gone, so this window no longer holds it, and a fresh decision would
     // wrongly say no-active-run. The copy belongs to the first decision.
-    runs.holdsRemoteRun.mockReturnValue(false);
+    runs.holdsRemoteRun.mockResolvedValue(false);
     runs.cancelByRemoteRunId.mockResolvedValue("no-active-run");
     await handler.consume(verbCmd("cancel"), "cancel");
     await handler.consume(verbCmd("cancel"), "cancel");

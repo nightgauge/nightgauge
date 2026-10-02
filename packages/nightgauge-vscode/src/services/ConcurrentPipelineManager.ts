@@ -3765,17 +3765,43 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * the command. Only the window that holds the run may answer it: a no-op
    * ack from another window would race the holder's, and a `rejected` pause
    * or resume makes the platform undo a hold the holder applied.
+   *
+   * An accepted trigger is held only while its issue is still on its way to
+   * a slot: in the queue (waiting, or dequeued by a fill), or reserved while
+   * its worktree is created. An issue removed from the queue since (Clear
+   * Queue, Remove from Queue, a halt's drain) will never start here, so the
+   * window does not claim the run. When the queue cannot be read, the
+   * accepted trigger keeps its claim.
    */
-  holdsRemoteRun(remoteRunId: string): boolean {
-    return this.findSlotByRemoteRunId(remoteRunId) !== null || this.isQueuedRemoteRun(remoteRunId);
+  async holdsRemoteRun(remoteRunId: string): Promise<boolean> {
+    if (this.findSlotByRemoteRunId(remoteRunId) !== null) return true;
+    const issueNumber = this.pendingIssueFor(remoteRunId);
+    if (issueNumber === null) return false;
+    if (this.reservedSlots.has(issueNumber)) return true;
+    try {
+      const queue = await this.queueService.getQueue();
+      return queue?.items.some((item) => item.issueNumber === issueNumber) ?? false;
+    } catch (err) {
+      this.logger.warn("holdsRemoteRun: could not read the queue — keeping the trigger's claim", {
+        remoteRunId,
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      return true;
+    }
+  }
+
+  /** The issue whose accepted trigger carries this platform run id, with no slot yet. */
+  private pendingIssueFor(remoteRunId: string): number | null {
+    for (const [issueNumber, pending] of this.pendingRemoteRunIds) {
+      if (pending === remoteRunId) return issueNumber;
+    }
+    return null;
   }
 
   /** Whether a trigger this window accepted is queued for the run, with no slot yet. */
   private isQueuedRemoteRun(remoteRunId: string): boolean {
-    for (const pending of this.pendingRemoteRunIds.values()) {
-      if (pending === remoteRunId) return true;
-    }
-    return false;
+    return this.pendingIssueFor(remoteRunId) !== null;
   }
 
   /** Why a verb found no slot for the run: still queued here, or not here at all. */
