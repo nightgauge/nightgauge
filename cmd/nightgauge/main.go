@@ -147,7 +147,8 @@ const (
 // registration succeeds the attention sync stays mirror-only (agent_id omitted).
 // Both the heartbeat 404 (TTL eviction) and the command stream 404 (agent gone)
 // funnel into a single re-register path that swaps the id and restarts the
-// stream against the new id. Returns when ctx is cancelled.
+// stream against the new id. onRegistered sees every successful registration's
+// reply, the first and each re-registration. Returns when ctx is cancelled.
 func runAttentionAgentRegistration(
 	ctx context.Context,
 	reg *platform.AgentRegistrationService,
@@ -155,8 +156,9 @@ func runAttentionAgentRegistration(
 	platformClient *platform.Client,
 	resolver platform.AttentionResolver,
 	relay platform.AgentCommandRelay,
+	onRegistered func(platform.AgentRegistration),
 ) {
-	agentID := registerAttentionAgentWithRetry(ctx, reg)
+	agentID := registerAttentionAgentWithRetry(ctx, reg, onRegistered)
 	if agentID == "" {
 		return // ctx cancelled before registration succeeded
 	}
@@ -192,7 +194,7 @@ func runAttentionAgentRegistration(
 	reRegister := func(reason string) bool {
 		log.Printf("[nightgauge] attention agent %s: %s — re-registering", agentID, reason)
 		pollCancel()
-		newID := registerAttentionAgentWithRetry(ctx, reg)
+		newID := registerAttentionAgentWithRetry(ctx, reg, onRegistered)
 		if newID == "" {
 			return false // ctx cancelled during re-registration
 		}
@@ -237,11 +239,15 @@ func runAttentionAgentRegistration(
 
 // registerAttentionAgentWithRetry attempts registration immediately, then every
 // attentionRegisterRetryInterval until it succeeds or ctx is cancelled. Returns
-// the platform-assigned agent id, or "" if ctx was cancelled first.
-func registerAttentionAgentWithRetry(ctx context.Context, reg *platform.AgentRegistrationService) string {
+// the platform-assigned agent id, or "" if ctx was cancelled first. The reply
+// of the registration that succeeded goes to onRegistered, once.
+func registerAttentionAgentWithRetry(ctx context.Context, reg *platform.AgentRegistrationService, onRegistered func(platform.AgentRegistration)) string {
 	for {
 		info, err := reg.RegisterAgent(ctx)
 		if err == nil && info.AgentID != "" {
+			if onRegistered != nil {
+				onRegistered(info)
+			}
 			return info.AgentID
 		}
 		if err != nil {
@@ -291,12 +297,28 @@ type eventEmitter interface {
 }
 
 // daemonAgentIPC is what the daemon's platform agent needs from the IPC
-// server: the single writer that applies an attention_resolve, and the event
-// channel that relays every other command to the extension. *ipc.Server is
-// both.
+// server: the single writer that applies an attention_resolve, the event
+// channel that relays every other command to the extension, and the status
+// that reports what the latest registration was refused (#2372).
+// *ipc.Server is all three.
 type daemonAgentIPC interface {
 	platform.AttentionResolver
 	eventEmitter
+	SetRefusedWorkspaceWrites([]platform.RefusedWorkspaceWrite)
+}
+
+// reportRefusedWorkspaceWrites surfaces the workspace writes a registration
+// was refused (#2372), once per registration: one log line each, naming the
+// workspace and the permission the write needs, and the daemon's status
+// (platform.status), which each registration replaces. The agent registers
+// all the same, so without this a developer's repositories silently stay
+// unlinked from the team's workspace and every remote trigger for them is
+// refused.
+func reportRefusedWorkspaceWrites(status daemonAgentIPC, info platform.AgentRegistration) {
+	for _, refused := range info.RefusedWorkspaceWrites {
+		log.Printf("[nightgauge] agent registration: %s", refused.Describe())
+	}
+	status.SetRefusedWorkspaceWrites(info.RefusedWorkspaceWrites)
 }
 
 // runDaemonPlatformAgent is serve's platform agent (#330, #2335): it
@@ -326,7 +348,8 @@ func runDaemonPlatformAgent(
 		WithWorkspace(func() (platform.WorkspaceDeclaration, error) {
 			return agentworkspace.ResolveServed(window, workspaceRoot)
 		})
-	runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, ext, relayAgentCommandToExtension(ext))
+	runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, ext, relayAgentCommandToExtension(ext),
+		func(info platform.AgentRegistration) { reportRefusedWorkspaceWrites(ext, info) })
 }
 
 func main() {

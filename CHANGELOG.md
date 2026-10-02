@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The daemon says which workspace writes its registration was refused**
+  (#2372). The platform's `POST /v1/agents/register` reply lists
+  `refused_workspace_writes`: the workspace writes skipped because the
+  operator's role on the workspace's team is developer or viewer (creating
+  the named workspace, updating its agent or display name, linking the
+  declared repositories). The agent still registers, and the daemon dropped
+  the list, so a developer's repositories stayed unlinked from the team's
+  workspace and every remote trigger for them was refused with no hint why.
+  Each registration now logs one line per refusal, naming the workspace and
+  the permission it needs, and `platform.status` reports the latest
+  registration's refusals.
 - **The platform's workspace throttle caps local dispatch** (#2337). A
   `throttle` command (`set` with `maxConcurrent` and an optional `resumeAt`,
   or `cleared`) was refused as unsupported, so a workspace throttle never

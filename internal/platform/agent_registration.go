@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
+	"unicode"
 
 	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 )
@@ -43,6 +45,64 @@ type AgentRegistration struct {
 	AgentID     string `json:"agentId"`
 	CommandsURL string `json:"commandsUrl"`
 	TTLSeconds  int    `json:"ttl_seconds"`
+	// RefusedWorkspaceWrites are the workspace writes this registration was
+	// refused (#2372): creating the named workspace, updating its agent or
+	// display name, or linking the declared repositories to it, which need
+	// the owner or admin role on the workspace's team. The agent registers
+	// all the same, so nothing else tells the operator; the daemon reports
+	// each one (see RefusedWorkspaceWrite.Describe). Empty when none was.
+	RefusedWorkspaceWrites []RefusedWorkspaceWrite `json:"refused_workspace_writes,omitempty"`
+}
+
+// RefusedWorkspaceWrite is one workspace write the platform refused a
+// registration, as its reply carries it.
+type RefusedWorkspaceWrite struct {
+	// Workspace is the named workspace's slug, or "default" for the team's
+	// Default workspace the declared repositories are linked to.
+	Workspace string `json:"workspace"`
+	TeamID    string `json:"team_id"`
+	// Code is the refusal's code, PERMISSION_DENIED.
+	Code string `json:"code"`
+	// Permission is the permission the write needs: workspace:create or
+	// workspace:update.
+	Permission string `json:"permission"`
+	// Message is the platform's own sentence for the refusal.
+	Message string `json:"message"`
+}
+
+// Describe is the operator's line for the refusal: the workspace that was not
+// written and the permission the write needs. It is built from the fields,
+// each cut to a bounded printable form, so a reply cannot put arbitrary text
+// into the daemon's log.
+func (r RefusedWorkspaceWrite) Describe() string {
+	workspace := fmt.Sprintf("workspace %q", printableField(r.Workspace))
+	if r.Workspace == "default" {
+		workspace = "the team's Default workspace"
+	}
+	return fmt.Sprintf("the platform did not write %s: %s needs the owner or admin role on its team (team %s, %s); repositories this agent declares stay unlinked from it, so a remote trigger for one is refused",
+		workspace, printableField(r.Permission), printableField(r.TeamID), printableField(r.Code))
+}
+
+// printableField bounds one field of a platform reply for a log line: at most
+// 100 runes, with every control character dropped.
+func printableField(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			continue
+		}
+		if n == 100 {
+			b.WriteString("…")
+			break
+		}
+		b.WriteRune(r)
+		n++
+	}
+	if b.Len() == 0 {
+		return "unknown"
+	}
+	return b.String()
 }
 
 // agentRegisterBody is the POST /v1/agents/register request body. The platform's

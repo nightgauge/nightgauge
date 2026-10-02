@@ -399,6 +399,20 @@ export interface PlatformStatus {
   mode: string;
   tier?: string;
   message?: string;
+  /**
+   * The workspace writes the platform refused the daemon's latest agent
+   * registration (#2372), because the operator's role on the workspace's
+   * team is developer or viewer. Absent when none was refused.
+   */
+  refusedWorkspaceWrites?: Array<{
+    /** The named workspace's slug, or "default" for the team's Default workspace. */
+    workspace: string;
+    team_id: string;
+    code: string;
+    /** "workspace:create" or "workspace:update". */
+    permission: string;
+    message: string;
+  }>;
 }
 
 /**

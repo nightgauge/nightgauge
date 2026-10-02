@@ -366,3 +366,74 @@ func TestRegisterAgent_NoTeamRegistersWithoutTheBlock(t *testing.T) {
 		t.Errorf("a plain 403 gave err=%v after %d posts, want an error after 1", err, len(bodies))
 	}
 }
+
+// The registration reply names the workspace writes the operator's role kept
+// it from making (#2372); a reply without the field, or with an empty list,
+// decodes to none.
+func TestRegisterAgent_DecodesRefusedWorkspaceWrites(t *testing.T) {
+	cases := map[string]struct {
+		reply string
+		want  []RefusedWorkspaceWrite
+	}{
+		"refusals": {
+			reply: `{"agentId":"a","ttl_seconds":90,"throttle":null,"refused_workspace_writes":[` +
+				`{"workspace":"acme-platform","team_id":"team-1","code":"PERMISSION_DENIED","permission":"workspace:update","message":"Registration did not write workspace 'acme-platform': workspace:update needs the owner or admin role on its team"},` +
+				`{"workspace":"default","team_id":"team-1","code":"PERMISSION_DENIED","permission":"workspace:update","message":"m"}]}`,
+			want: []RefusedWorkspaceWrite{
+				{Workspace: "acme-platform", TeamID: "team-1", Code: "PERMISSION_DENIED", Permission: "workspace:update",
+					Message: "Registration did not write workspace 'acme-platform': workspace:update needs the owner or admin role on its team"},
+				{Workspace: "default", TeamID: "team-1", Code: "PERMISSION_DENIED", Permission: "workspace:update", Message: "m"},
+			},
+		},
+		"empty list":    {reply: `{"agentId":"a","ttl_seconds":90,"refused_workspace_writes":[]}`},
+		"field missing": {reply: `{"agentId":"a","ttl_seconds":90}`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(machineIDEnv, "test-machine-uuid")
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(tc.reply))
+			}))
+			defer srv.Close()
+			info, err := NewAgentRegistrationService(onlineClient(t, srv.URL), "1.0.0").RegisterAgent(context.Background())
+			if err != nil {
+				t.Fatalf("RegisterAgent: %v", err)
+			}
+			if len(info.RefusedWorkspaceWrites) != len(tc.want) {
+				t.Fatalf("refusals = %+v, want %+v", info.RefusedWorkspaceWrites, tc.want)
+			}
+			for i := range tc.want {
+				if info.RefusedWorkspaceWrites[i] != tc.want[i] {
+					t.Errorf("refusal %d = %+v, want %+v", i, info.RefusedWorkspaceWrites[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// The operator's line names the workspace and the permission the write needs,
+// and a reply cannot put control characters or unbounded text into it.
+func TestRefusedWorkspaceWrite_Describe(t *testing.T) {
+	named := RefusedWorkspaceWrite{Workspace: "acme-platform", TeamID: "team-1", Code: "PERMISSION_DENIED", Permission: "workspace:create"}
+	line := named.Describe()
+	for _, want := range []string{`workspace "acme-platform"`, "workspace:create", "owner or admin role", "team-1"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("Describe() = %q, want it to contain %q", line, want)
+		}
+	}
+
+	def := RefusedWorkspaceWrite{Workspace: "default", Permission: "workspace:update"}
+	if line := def.Describe(); !strings.Contains(line, "the team's Default workspace") || !strings.Contains(line, "workspace:update") {
+		t.Errorf("Describe() for the Default workspace = %q", line)
+	}
+
+	hostile := RefusedWorkspaceWrite{Workspace: "a\nb\x1b[31m" + strings.Repeat("x", 300), Permission: "workspace:update"}
+	line = hostile.Describe()
+	if strings.ContainsAny(line, "\n\x1b") {
+		t.Errorf("Describe() kept a control character: %q", line)
+	}
+	if strings.Contains(line, strings.Repeat("x", 101)) {
+		t.Errorf("Describe() did not bound the workspace field: %q", line)
+	}
+}

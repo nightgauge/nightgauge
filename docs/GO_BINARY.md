@@ -306,6 +306,17 @@ A part outside the service's bounds is dropped and logged rather than
 costing the registration, and an account that belongs to no team is
 registered again without the `workspace` block.
 
+Creating the named workspace, updating its agent or display name, and
+linking the declared repositories need the owner or admin role on the
+workspace's team. For a developer or viewer the service skips those writes,
+registers the agent all the same, and lists each skipped write in the reply's
+`refused_workspace_writes` (#2372). The daemon logs one line per refusal on
+every registration, naming the workspace and the permission the write needs
+(`workspace:create` or `workspace:update`), and `platform.status` reports the
+latest registration's refusals as `refusedWorkspaceWrites`. Until someone
+with that role registers the workspace, the declared repositories stay
+unlinked from it and a remote trigger for one is refused.
+
 The service places a trigger or a run verb on any agent that declares the
 run's repository, so the daemon's stream can receive one. The daemon executes
 only `attention_resolve` itself. It relays every other command to the

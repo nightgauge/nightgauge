@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +26,21 @@ import (
 type extensionSide struct {
 	mu     sync.Mutex
 	events []ipc.Event
+	// refusals records every SetRefusedWorkspaceWrites call, one per
+	// registration (#2372).
+	refusals [][]platform.RefusedWorkspaceWrite
+}
+
+func (e *extensionSide) SetRefusedWorkspaceWrites(refused []platform.RefusedWorkspaceWrite) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.refusals = append(e.refusals, refused)
+}
+
+func (e *extensionSide) recordedRefusals() [][]platform.RefusedWorkspaceWrite {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([][]platform.RefusedWorkspaceWrite(nil), e.refusals...)
 }
 
 func (e *extensionSide) ApplyRelayedResolve(context.Context, string, string, string, string) (platform.AttentionResolveOutcome, error) {
@@ -151,5 +168,64 @@ func TestRunDaemonPlatformAgent_DeclaresTheWindowsWorkspaceAndRelays(t *testing.
 	}
 	if relayed.AgentID != "agent-daemon" || string(relayed.Frame) != frame {
 		t.Errorf("relayed %s %s, want the platform's frame under agent-daemon", relayed.AgentID, relayed.Frame)
+	}
+}
+
+// A registration the platform refused workspace writes (#2372) is reported
+// once: one log line per refusal naming the workspace and the permission it
+// needs, and the daemon's status, which the registration replaces.
+func TestRunDaemonPlatformAgent_ReportsRefusedWorkspaceWrites(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_AGENT_ID", "test-machine-uuid")
+	t.Setenv(agentworkspace.WindowFoldersEnv, "")
+	logs := &syncBuffer{}
+	prev := log.Writer()
+	log.SetOutput(logs)
+	defer log.SetOutput(prev)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/register":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"agentId":"agent-daemon","ttl_seconds":90,"throttle":null,"refused_workspace_writes":[` +
+				`{"workspace":"acme-platform","team_id":"team-1","code":"PERMISSION_DENIED","permission":"workspace:update","message":"m"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/agents/agent-daemon/commands":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client, err := platform.NewClient(platform.Config{BaseURL: srv.URL, APIKey: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext := &extensionSide{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test", t.TempDir(), nil)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitUntil(t, "the registration's refusals", func() bool { return len(ext.recordedRefusals()) == 1 })
+	got := ext.recordedRefusals()[0]
+	if len(got) != 1 || got[0].Workspace != "acme-platform" || got[0].Permission != "workspace:update" {
+		t.Fatalf("recorded refusals = %+v, want the one acme-platform refusal", got)
+	}
+	waitUntil(t, "the refusal's log line", func() bool {
+		return strings.Contains(logs.String(), `agent registration: the platform did not write workspace "acme-platform": workspace:update needs the owner or admin role`)
+	})
+	if n := strings.Count(logs.String(), "the platform did not write"); n != 1 {
+		t.Errorf("logged the refusal %d times, want once per registration", n)
 	}
 }

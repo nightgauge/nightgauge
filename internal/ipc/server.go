@@ -131,6 +131,13 @@ type Server struct {
 	teamSvc           *platform.TeamService
 	billingSvc        *platform.BillingService
 
+	// refusedWorkspaceWrites are the workspace writes the platform refused
+	// this daemon's latest agent registration (#2372), reported by
+	// platform.status. Written by the registration goroutine, read by
+	// handler goroutines, so both go through refusedWorkspaceWritesMu.
+	refusedWorkspaceWritesMu sync.RWMutex
+	refusedWorkspaceWrites   []platform.RefusedWorkspaceWrite
+
 	// workspaceRoot is the CURRENT root, and it is MUTABLE: workspace.setRoot
 	// re-points it on a multi-repo workspace switch, from a handler goroutine,
 	// while the deferred reconcile sweep reads it from a timer goroutine (ADR-017
@@ -478,6 +485,28 @@ func (s *Server) getPlatformClient() *platform.Client {
 	s.platformClientMu.RLock()
 	defer s.platformClientMu.RUnlock()
 	return s.platformClient
+}
+
+// SetRefusedWorkspaceWrites records the workspace writes the platform refused
+// the daemon's latest agent registration (#2372); each registration replaces
+// the previous one's, and an empty list clears them. platform.status reports
+// them, so a client asking for the daemon's platform status learns that the
+// operator's role kept the workspace from being written.
+func (s *Server) SetRefusedWorkspaceWrites(refused []platform.RefusedWorkspaceWrite) {
+	s.refusedWorkspaceWritesMu.Lock()
+	defer s.refusedWorkspaceWritesMu.Unlock()
+	s.refusedWorkspaceWrites = append([]platform.RefusedWorkspaceWrite(nil), refused...)
+}
+
+// RefusedWorkspaceWrites returns a copy of the refusals the latest agent
+// registration recorded, nil when there were none.
+func (s *Server) RefusedWorkspaceWrites() []platform.RefusedWorkspaceWrite {
+	s.refusedWorkspaceWritesMu.RLock()
+	defer s.refusedWorkspaceWritesMu.RUnlock()
+	if len(s.refusedWorkspaceWrites) == 0 {
+		return nil
+	}
+	return append([]platform.RefusedWorkspaceWrite(nil), s.refusedWorkspaceWrites...)
 }
 
 func (s *Server) getLicenseSvc() *platform.LicenseService {
@@ -1912,6 +1941,9 @@ func (s *Server) registerMethods() {
 		}
 		if s.getLicenseSvc() != nil {
 			result["tier"] = s.getLicenseSvc().CurrentTier()
+		}
+		if refused := s.RefusedWorkspaceWrites(); len(refused) > 0 {
+			result["refusedWorkspaceWrites"] = refused
 		}
 		return result, nil
 	}
