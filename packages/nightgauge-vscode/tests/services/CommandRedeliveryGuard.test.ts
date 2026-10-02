@@ -68,6 +68,31 @@ describe("CommandRedeliveryGuard", () => {
     expect(decide).toHaveBeenCalledTimes(2);
   });
 
+  it("remembers a consumed id from its first copy on, and never an empty one", async () => {
+    const guard = new CommandRedeliveryGuard<string>(2);
+    expect(guard.remembers("a")).toBe(false);
+    const first = guard.consume(
+      "a",
+      async () => "x",
+      async () => true
+    );
+    expect(guard.remembers("a")).toBe(true); // before its decision settles
+    await first;
+    await guard.consume(
+      "",
+      async () => "x",
+      async () => true
+    );
+    expect(guard.remembers("")).toBe(false);
+    for (const id of ["b", "c"])
+      await guard.consume(
+        id,
+        async () => "x",
+        async () => true
+      );
+    expect(guard.remembers("a")).toBe(false); // forgotten beyond capacity
+  });
+
   it("forgets the oldest ids beyond its capacity", async () => {
     const guard = new CommandRedeliveryGuard<string>(2);
     const decide = vi.fn().mockResolvedValue("x");

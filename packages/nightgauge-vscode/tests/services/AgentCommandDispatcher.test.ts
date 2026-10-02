@@ -38,9 +38,13 @@ function makeIpc() {
   };
 }
 
-/** A run manager whose every verb answers `verbResult`. */
-function makeRuns(verbResult: RemoteVerbResult) {
+/**
+ * A run manager whose every verb answers `verbResult`. This window holds the
+ * run each verb names unless `holds` says otherwise (#2340).
+ */
+function makeRuns(verbResult: RemoteVerbResult, holds = true) {
   return {
+    holdsRemoteRun: vi.fn().mockReturnValue(holds),
     isRunning: vi.fn().mockReturnValue(false),
     setPendingRemoteRunId: vi.fn(),
     clearPendingRemoteRunId: vi.fn(),
@@ -53,9 +57,9 @@ function makeRuns(verbResult: RemoteVerbResult) {
   };
 }
 
-function build(verbResult: RemoteVerbResult) {
+function build(verbResult: RemoteVerbResult, holds = true) {
   const ipc = makeIpc();
-  const runs = makeRuns(verbResult);
+  const runs = makeRuns(verbResult, holds);
   const queue = { enqueue: vi.fn().mockResolvedValue({ issueNumber: 7 }) };
   const logger = makeLogger();
   const trigger = new TriggerCommandHandler(
@@ -124,6 +128,18 @@ describe("AgentCommandDispatcher", () => {
       );
     }
   );
+
+  // #2340: a window that does not hold the run leaves every verb for the
+  // window that does; it still takes a trigger for a repo it has open.
+  it("leaves every verb unacknowledged in a window that does not hold the run", async () => {
+    const { dispatcher, ipc } = build("no-active-run", false);
+    const sent = ROUTER_DELIVERED_COMMAND_TYPES.map((type, n) => routedCommand(type, n));
+
+    for (const cmd of sent) dispatcher.handle(cmd);
+    await settle();
+
+    expect(ipc.agentAcknowledgeCommand.mock.calls.map((c) => c[1])).toEqual(["cmd-trigger-0"]);
+  });
 
   // The platform delivers at least once: a command published while the
   // stream replays its backlog arrives twice, and an unacknowledged one again

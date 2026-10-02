@@ -315,9 +315,11 @@ Displays comprehensive metrics:
 - **From the phone app or the dashboard:** Pause and Resume act the same way
   on a run this window is executing, including the status bar and the
   Pause/Resume button in the pipeline view. Every command from there (pause,
-  resume, cancel, approve, reject) is acknowledged back, as applied or with
-  the reason it did nothing, for example that no run here carries that run id.
-  A command delivered twice is carried out once.
+  resume, cancel, approve, reject) is acknowledged back by the window that
+  holds the run, as applied or with the reason it did nothing, for example
+  that the run has not started yet. Another window open on the same
+  repository leaves the command alone. A command delivered twice is carried
+  out once.
 
 #### Stopping Execution
 

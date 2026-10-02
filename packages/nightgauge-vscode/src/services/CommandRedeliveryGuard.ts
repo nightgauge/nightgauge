@@ -35,6 +35,14 @@ export class CommandRedeliveryGuard<D> {
   constructor(private readonly capacity = REMEMBERED_COMMAND_IDS) {}
 
   /**
+   * Whether a copy of command `id` was consumed here already, so a later copy
+   * belongs to that decision whatever has changed since (#2340).
+   */
+  remembers(id: string): boolean {
+    return id !== "" && this.consumptions.has(id);
+  }
+
+  /**
    * Consume one delivered copy of command `id`.
    *
    * `decide` carries the command out and returns the ack to send, or null when

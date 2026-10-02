@@ -386,6 +386,54 @@ describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334
     await manager.settleForTest(426);
   });
 
+  // #2340: only the window that holds a run answers a verb for it. It holds
+  // the run while a slot carries the platform run id, and from the moment it
+  // accepts the run's trigger until that slot opens (the run is queued here).
+  it("holds a run its slot carries or its accepted trigger queued, and no other", async () => {
+    const { manager, controllable } = buildManager([427]);
+    manager.setPendingRemoteRunId(427, "platform-run-427");
+    // Accepted, and still queued behind 427: no slot for it yet.
+    manager.setPendingRemoteRunId(428, "platform-run-428");
+
+    expect(manager.holdsRemoteRun("platform-run-427")).toBe(true);
+    await manager.fillSlots();
+    expect(manager.findSlotByRemoteRunId("platform-run-427")).toBe(427);
+    expect(manager.holdsRemoteRun("platform-run-427")).toBe(true);
+    expect(manager.holdsRemoteRun("platform-run-428")).toBe(true);
+    expect(manager.holdsRemoteRun("elsewhere")).toBe(false);
+
+    // A verb on the queued run says it has not started, not that no run here
+    // carries it.
+    expect(await manager.cancelByRemoteRunId("platform-run-428")).toBe("not-started");
+    expect(await manager.pauseByRemoteRunId("platform-run-428")).toBe("not-started");
+    expect(await manager.resumeByRemoteRunId("platform-run-428")).toBe("not-started");
+
+    // A dispatch abandoned before its slot opened stops holding the run.
+    manager.clearPendingRemoteRunId(428);
+    expect(manager.holdsRemoteRun("platform-run-428")).toBe(false);
+
+    controllable.finishWith(427, {
+      success: true,
+      completedStages: [],
+      skippedStages: [],
+      deferredStages: [],
+      totalDurationMs: 1,
+    });
+    await manager.settleForTest(427);
+    // The run ended: no window holds it any more.
+    expect(manager.holdsRemoteRun("platform-run-427")).toBe(false);
+  });
+
+  it("stops holding a queued run once Stop All clears the queue", async () => {
+    const { manager } = buildManager([]);
+    manager.setPendingRemoteRunId(429, "platform-run-429");
+    expect(manager.holdsRemoteRun("platform-run-429")).toBe(true);
+
+    await manager.abortAll();
+
+    expect(manager.holdsRemoteRun("platform-run-429")).toBe(false);
+  });
+
   it("reports a run id no local slot carries, and a gate that is not waiting, as no-ops", async () => {
     const { manager, controllable } = buildManager([424]);
     manager.setPendingRemoteRunId(424, "platform-run-424");

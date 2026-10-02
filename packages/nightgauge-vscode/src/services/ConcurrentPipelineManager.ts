@@ -207,11 +207,14 @@ interface SlotReservation {
 /**
  * What a platform verb did to a local run (#2334): "applied", or why it found
  * nothing to act on. The verb's ack reports it, so a requester can tell an
- * applied command from a no-op.
+ * applied command from a no-op. "not-started": this window accepted the
+ * run's trigger, but the run is still queued here and has no slot yet
+ * (#2340).
  */
 export type RemoteVerbResult =
   | "applied"
   | "no-active-run"
+  | "not-started"
   | "no-waiting-gate"
   | "already-paused"
   | "not-paused"
@@ -3002,6 +3005,11 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     } catch {
       // Best effort — queue clear is non-critical
     }
+    // A triggered run still queued here will never start now, so this window
+    // no longer holds it, and must not answer the platform's verbs for it
+    // (#2340). A dispatch already creating its worktree is refused by the
+    // shutdown check before its slot would adopt the id.
+    this.pendingRemoteRunIds.clear();
 
     // Stop all running orchestrators. Mark each slot as user-cancelled BEFORE
     // issuing the stop so the slot's runSlot completion handler treats the
@@ -3645,6 +3653,34 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
+   * Whether this window holds the run the platform's run id names (#2340): a
+   * slot carries the id, or this window accepted the run's trigger and the
+   * run is still queued here (its pending id is applied when the slot opens).
+   *
+   * The platform sends a verb to every connection that shares the agent id,
+   * so several windows on one machine all receive it, and the first ack ends
+   * the command. Only the window that holds the run may answer it: a no-op
+   * ack from another window would race the holder's, and a `rejected` pause
+   * or resume makes the platform undo a hold the holder applied.
+   */
+  holdsRemoteRun(remoteRunId: string): boolean {
+    return this.findSlotByRemoteRunId(remoteRunId) !== null || this.isQueuedRemoteRun(remoteRunId);
+  }
+
+  /** Whether a trigger this window accepted is queued for the run, with no slot yet. */
+  private isQueuedRemoteRun(remoteRunId: string): boolean {
+    for (const pending of this.pendingRemoteRunIds.values()) {
+      if (pending === remoteRunId) return true;
+    }
+    return false;
+  }
+
+  /** Why a verb found no slot for the run: still queued here, or not here at all. */
+  private noSlotFor(remoteRunId: string): RemoteVerbResult {
+    return this.isQueuedRemoteRun(remoteRunId) ? "not-started" : "no-active-run";
+  }
+
+  /**
    * Cancel the pipeline slot identified by the platform's run id.
    * Sets userCancelled=true so the slot completion handler suppresses failure
    * bookkeeping, then calls gracefulStop(SIGTERM → 10s → SIGKILL).
@@ -3652,7 +3688,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   async cancelByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return "no-active-run";
+    if (!slot) return this.noSlotFor(remoteRunId);
     slot.userCancelled = true;
     await slot.orchestrator.gracefulStop(10_000);
     return "applied";
@@ -3665,7 +3701,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   approveByRemoteRunId(remoteRunId: string): RemoteVerbResult {
     const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return "no-active-run";
+    if (!slot) return this.noSlotFor(remoteRunId);
     return slot.orchestrator.approve() ? "applied" : "no-waiting-gate";
   }
 
@@ -3676,7 +3712,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   rejectByRemoteRunId(remoteRunId: string): RemoteVerbResult {
     const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return "no-active-run";
+    if (!slot) return this.noSlotFor(remoteRunId);
     return slot.orchestrator.reject() ? "applied" : "no-waiting-gate";
   }
 
@@ -3689,7 +3725,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   async pauseByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return "no-active-run";
+    if (!slot) return this.noSlotFor(remoteRunId);
     // The flag lives on the run's loaded state; a slot with none yet cannot
     // hold, and must not report that it does. Decided before the flag moves,
     // not by re-reading it afterwards: a resume handled in the same tick may
@@ -3708,7 +3744,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   async resumeByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return "no-active-run";
+    if (!slot) return this.noSlotFor(remoteRunId);
     if (!slot.stateService.isPaused()) return "not-paused";
     await slot.stateService.resumePipeline();
     return "applied";

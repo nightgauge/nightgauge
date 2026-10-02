@@ -70,6 +70,16 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Only the window that holds a run answers a remote command for it**
+  (#2340). The platform sends a pause, resume, cancel, approve or reject to
+  every connection that shares the agent id and keeps the first
+  acknowledgement. A second window open on the same repository answered for a
+  run it did not hold, `rejected` with `no-active-run`, and could answer
+  first; the platform then undid a pause that the window running the run had
+  applied. A window now answers a verb only for a run one of its slots
+  carries, or one whose trigger it accepted and that is still queued there
+  (refused as `not-started`). It leaves any other verb unacknowledged, and the
+  platform expires a verb that no window holds.
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
   the phone app or the dashboard used to sit `routing` until it expired,

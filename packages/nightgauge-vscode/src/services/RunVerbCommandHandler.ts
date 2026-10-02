@@ -14,9 +14,10 @@
  * Every consumed verb is acknowledged once, and the ack's outcome tells an
  * applied verb from a no-op:
  *   - `applied`: the verb took effect on a local run;
- *   - `rejected` with a fixed reason: it found nothing to act on (no local run
- *     carries the runId, no gate is waiting, the run is already paused or not
- *     paused) or its payload had no runId.
+ *   - `rejected` with a fixed reason: it found nothing to act on (the run is
+ *     still queued here, no gate is waiting, the run is already paused or not
+ *     paused, or the run ended after this window was found to hold it) or its
+ *     payload had no runId.
  *
  * `pause` and `resume` reuse the local Pause/Resume Pipeline mechanism (#423):
  * the run's state service is marked paused, the stage in flight finishes, the
@@ -31,10 +32,17 @@
  * A pause or resume that took effect also shows in this window the way the
  * local Pause/Resume Pipeline commands show it (RemotePauseUi).
  *
- * A verb for a repo that is not open in this window is not consumed here: the
- * agent identity is per machine, so another window on this machine may hold
- * the run, and a no-op ack from this one would race its applied ack. It is
- * left for that window, exactly as TriggerCommandHandler leaves a trigger.
+ * Only the window that holds the run consumes a verb (#2340). The platform
+ * sends a command to every connection that shares the agent id, and the agent
+ * identity is per machine, so every window on this machine receives the verb;
+ * the first ack ends the command. A window that does not hold the run (no
+ * slot carries the runId and no trigger it accepted is queued for it) leaves
+ * the verb without acknowledging it, as TriggerCommandHandler leaves a
+ * trigger for a repo the window does not have open. A no-op ack from such a
+ * window would race the holder's ack, and a `rejected` pause or resume makes
+ * the platform undo the hold the holder applied. `rejected` therefore comes
+ * only from the holder, when it cannot apply the verb. When no window holds
+ * the run, nobody acknowledges, and the platform expires the command.
  *
  * Replaces the separate Cancel/Approve/RejectCommandHandler classes, which
  * acted on the run and acknowledged nothing.
@@ -64,6 +72,7 @@ export function isRunVerb(type: string): type is RunVerbCommandType {
  */
 const NO_OP_DETAIL: Record<Exclude<RemoteVerbResult, "applied">, string> = {
   "no-active-run": "no-active-run: no pipeline on this agent carries this runId",
+  "not-started": "not-started: the run is queued on this agent and has not started yet",
   "no-waiting-gate": "no-waiting-gate: the run is not waiting at an approval gate",
   "already-paused": "already-paused: the run is already paused",
   "not-paused": "not-paused: the run is not paused",
@@ -74,6 +83,7 @@ const APPLY_FAILED_DETAIL = "apply-failed: the agent could not carry out the com
 
 export type RunVerbTarget = Pick<
   ConcurrentPipelineManager,
+  | "holdsRemoteRun"
   | "cancelByRemoteRunId"
   | "approveByRemoteRunId"
   | "rejectByRemoteRunId"
@@ -87,6 +97,12 @@ interface VerbAck {
   agentId: string | null;
   outcome: "applied" | "rejected";
   detail?: string;
+}
+
+/** The run a verb names: its payload's non-empty `runId`, or null. */
+function runIdOf(cmd: ReceivedCommand): string | null {
+  const runId = (cmd.payload as { runId?: unknown } | null | undefined)?.runId;
+  return typeof runId === "string" && runId !== "" ? runId : null;
 }
 
 export class RunVerbCommandHandler implements CommandHandler {
@@ -129,20 +145,35 @@ export class RunVerbCommandHandler implements CommandHandler {
       );
       return;
     }
+    // Only the holder answers (#2340). A copy of a command this window already
+    // consumed belongs to that decision, even when the run has ended since:
+    // its ack may still have to be re-sent. A verb with no runId names no run
+    // to hold; every window that has the repo refuses it the same way.
+    const runId = runIdOf(cmd);
+    if (runId !== null && !this.redelivery.remembers(cmd.id) && !this.runs.holdsRemoteRun(runId)) {
+      this.logger.info(
+        "RunVerbCommandHandler: this window does not hold the run — leaving the command for the window that does",
+        { verb, runId, commandId: cmd.id }
+      );
+      return;
+    }
     return this.redelivery.consume(
       cmd.id,
-      () => this.decide(cmd, verb),
+      () => this.decide(cmd, verb, runId),
       (ack) => this.acknowledge(cmd, verb, ack)
     );
   }
 
   /** Carry the verb out and decide its ack. Never throws. */
-  private async decide(cmd: ReceivedCommand, verb: RunVerbCommandType): Promise<VerbAck> {
+  private async decide(
+    cmd: ReceivedCommand,
+    verb: RunVerbCommandType,
+    runId: string | null
+  ): Promise<VerbAck> {
     // A relayed command names the agent it was addressed to; this window's
     // own stream delivers commands addressed to its own agent.
     const agentId = cmd.agentId ?? this.agentId;
-    const runId = (cmd.payload as { runId?: unknown } | null | undefined)?.runId;
-    if (typeof runId !== "string" || runId === "") {
+    if (runId === null) {
       this.logger.warn("RunVerbCommandHandler: missing runId in payload", {
         verb,
         commandId: cmd.id,

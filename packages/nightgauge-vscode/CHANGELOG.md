@@ -11,6 +11,11 @@ and this project adheres to
 
 ### Fixed
 
+- **Another window no longer undoes a pause or resume from the phone app or
+  the dashboard.** With two windows open on the same repository, the one not
+  running the pipeline could answer first that it had no such run, and the
+  platform then restored the run as if the pause had not happened. Only the
+  window running the pipeline answers now (#2340).
 - **Pause, resume, cancel, approve and reject from the phone app or the
   dashboard are acknowledged.** Each one used to show as unacknowledged and
   then expired, even when it had been carried out. Pause and resume now work:
