@@ -151,7 +151,9 @@ var issue2349ReviewWorkspace = append(append([]string{}, issue2349Workspace...),
 //   - Repo-qualified entries under "## Dependencies", "## Blocked by" and
 //     "## Depends on". Only "## Cross-Repo Dependencies" read an entry's
 //     repository, and #2349 masked the short name out of the same-repo pass,
-//     so "- widget-api #12" there declared nothing at all.
+//     so "- widget-api #12" there declared nothing at all. Nor did a
+//     qualified reference later on a section line, which the qualified pass
+//     skipped while the same-repo pass reads every section line.
 var issue2349ReviewRows = []struct {
 	body string
 	want string
@@ -168,6 +170,8 @@ var issue2349ReviewRows = []struct {
 	{"## Depends on\n\n- example-org/widget-api#12 — the API\n", "example-org/widget-api#12"},
 	{"## Dependencies\n\nwidget-api #12 must land first\n", "example-org/widget-api#12"},
 	{"## Dependencies\n\n* [ ] widget-api #12\n", "example-org/widget-api#12"},
+	{"## Dependencies\n\n- the API from example-org/widget-api#12 lands first\n", "example-org/widget-api#12"},
+	{"## Blocked by\n\n- ❌ the client, until widget-api #12 ships\n", "example-org/widget-api#12"},
 }
 
 func TestParseDependencyRefs_Issue2349ReviewRows(t *testing.T) {
