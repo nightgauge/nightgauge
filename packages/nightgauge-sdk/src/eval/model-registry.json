@@ -30,7 +30,7 @@
       "behavior": {
         "thinking_default": "on",
         "thinking_disable_max_effort": "never",
-        "effort_default": "medium",
+        "effort_default": "low",
         "max_output_tokens": 128000,
         "propensity": {
           "verification": "high",
