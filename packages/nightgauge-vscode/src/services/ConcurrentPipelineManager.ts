@@ -92,6 +92,25 @@ const HALT_SKIP_ENVIRONMENTAL: ReadonlySet<string> = new Set([
 const HALT_SKIP_TRANSIENT_STALL: ReadonlySet<string> = new Set(["stall_kill"]);
 
 /**
+ * The parked kinds (#1631, #1753): the next attempt on the same model and
+ * adapter meets the same condition unchanged, so Go's `TerminalKindParks`
+ * schedules no retry, charges no lifetime failure, feeds no cascade breaker,
+ * does NOT pause, and holds the one issue for an operator
+ * (docs/FAILURE_TAXONOMY.md, "The parked kinds."). Halting the repository
+ * queue here made the extension-driven path disagree with the Go-dispatched
+ * one about what a single parked issue does to the rest of the queue. Not in
+ * HALT_SKIP_ENVIRONMENTAL because that path returns silently and nothing
+ * about a park clears by waiting: the operator has to act on this issue.
+ * Pinned against Go's predicate by
+ * tests/services/concurrentPipelineManager.goHaltParity.test.ts.
+ */
+const HALT_SKIP_PARKED: ReadonlySet<string> = new Set([
+  "context_window_exceeded",
+  "adapter_permission_rejected",
+  "adapter_incompatible",
+]);
+
+/**
  * Transient network-blip detector (#4002): true when the failure text resolves
  * to one of the two network terminal kinds — an Anthropic transport drop
  * (`api_connection_lost`) or the pipeline-start GitHub outage
@@ -2467,6 +2486,23 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         this.logger.info(
           "Skipping haltQueueOnSlotFailure — the issue is not pipeline work; it is labelled owner-action and parked, and the rest of the queue is unaffected",
           { failedIssue: slot.issueNumber }
+        );
+        return;
+      }
+
+      // #1753: a parked kind holds this ONE issue for an operator, the same
+      // shape as not_pipeline_actionable above — the rest of the repository's
+      // queue keeps moving, as it does on the Go-dispatched path. A visible
+      // toast rather than a silent return: unlike the environmental kinds,
+      // nothing here clears by waiting.
+      if (haltKind !== undefined && HALT_SKIP_PARKED.has(haltKind)) {
+        this.logger.info(
+          "Skipping haltQueueOnSlotFailure — parked kind holds this issue for an operator; the rest of the queue is unaffected",
+          { failedIssue: slot.issueNumber, kind: haltKind }
+        );
+        void vscode.window.showWarningMessage(
+          `Nightgauge: Issue #${slot.issueNumber} is parked (${haltKind}) and will not be retried. ` +
+            "The rest of the queue continues. Fix the cause, then release it with `nightgauge autonomous clear-failures`."
         );
         return;
       }
