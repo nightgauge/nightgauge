@@ -201,7 +201,8 @@ type AgentExecutionProfileResult struct {
 	Profile platform.ExecutionProfile `json:"profile"`
 	// Conversation reports whether the workspace may advertise the
 	// `conversation` capability: its adapter passed the conversation spike's
-	// viability bar (#1568). False for every adapter until that spike runs.
+	// viability bar (#1568) and the daemon can serve a turn on it. False for
+	// every adapter until the turn runner (#1569) lands.
 	Conversation bool `json:"conversation"`
 }
 

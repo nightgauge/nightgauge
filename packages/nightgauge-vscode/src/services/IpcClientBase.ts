@@ -888,7 +888,8 @@ export interface AgentAcknowledgeCommandResult {
 /**
  * Result from agent.executionProfile (#1567): the profile the agent
  * advertises, and whether its adapter can host a conversational turn (false
- * for every adapter until the conversation spike #1568 records one).
+ * for every adapter until the daemon's turn runner, #1569, serves one that
+ * the conversation spike #1568 adopted).
  */
 export interface AgentExecutionProfileResult {
   profile: import("./executionProfile").ExecutionProfile;

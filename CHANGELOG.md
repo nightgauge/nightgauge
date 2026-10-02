@@ -33,6 +33,19 @@ changelog, and the release workflow refuses a tag that does not.
   reconnects. The applied throttle survives a reload and is dropped on
   sign-out. The Queued Issues header shows it, and Resume Queue says when it
   holds every slot. The daemon does not apply it yet (#2352).
+- **Spike #1568 decided which execution adapters can host a conversation, and
+  how** (#1568). `docs/spikes/1568-conversational-agent-sessions-across-adapters.md`
+  assesses every registered adapter against its installed CLI. `claude-headless`
+  and `claude-sdk` clear the viability bar: a later turn resumes the session by
+  id, text streams as it is written, and `--restricted` refuses every permission
+  bypass before a model is called. `codex`, `opencode`, `grok`, `gemini`,
+  `gemini-sdk` and `copilot` are deferred on named observations, and the retired
+  `ollama` and `lm-studio` are skipped. For #1569 it recommends stateless turns,
+  one process group per turn resumed by the CLI's own session, after measuring a
+  held Claude session at 218–226 MiB per open conversation, and it maps every
+  performance-mode field onto each adapter's controls, reporting an effort an
+  adapter cannot apply instead of dropping it. No workspace advertises
+  `conversation` yet; the capability waits for #1569's turn runner.
 
 - **`nightgauge handoff` and `nightgauge next`: handoff roll-up and ranked
   work order in the binary** (#1481). `nightgauge handoff <file-or-dir>...`

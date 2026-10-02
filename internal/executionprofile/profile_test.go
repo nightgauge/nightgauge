@@ -239,13 +239,14 @@ func TestResolve_SerializedProfileIsScopeBounded(t *testing.T) {
 	}
 }
 
-// No adapter has passed the conversation spike's bar (#1568), so none may
-// advertise the capability. When the spike records one, this test is where
-// that decision becomes visible.
-func TestConversation_NotAdvertisedUntilTheSpikeRecordsAViableAdapter(t *testing.T) {
+// Spike #1568 adopted the two Claude adapters, but no code path serves a
+// conversational turn until the daemon's turn runner (#1569) lands, so none
+// may advertise the capability yet. When the runner registers an adapter's
+// turn builder, this test is where that decision becomes visible.
+func TestConversation_NotAdvertisedUntilARunnerServesTurns(t *testing.T) {
 	for _, name := range adapters.NewRegistry().Names() {
 		if ConversationViable(name) {
-			t.Errorf("%s is marked conversation-viable with no spike result behind it", name)
+			t.Errorf("%s is marked conversation-viable with no turn runner behind it", name)
 		}
 		caps := Capabilities([]string{"headless"}, platform.ExecutionProfile{Adapter: name})
 		if !reflect.DeepEqual(caps, []string{"headless"}) {
