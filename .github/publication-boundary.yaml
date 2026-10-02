@@ -479,9 +479,9 @@ forbidden_content:
       github.com/incredibuilders/incredibuilders, a repository that does not exist.
 
       SCOPE: this rule governs the TREE, not history. The former name still
-      survives in the *file paths* of old commits (packages/incredibuilders-*);
-      those are removed once, at go-public, by the clean-slate history reset (a
-      one-time owner procedure kept privately) — not by this content rule, which
+      survives in the *file paths* of old commits (packages/incredibuilders-*),
+      which the clean-slate history reset at go-public (a one-time owner
+      procedure kept privately) took out of `main`'s lineage. This content rule
       only scans the working tree. The name is a former product brand, not a secret.
     allow_paths:
       - ".github/publication-boundary.yaml"
