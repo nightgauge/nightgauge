@@ -36,16 +36,18 @@ changelog, and the release workflow refuses a tag that does not.
 - **Spike #1568 decided which execution adapters can host a conversation, and
   how** (#1568). `docs/spikes/1568-conversational-agent-sessions-across-adapters.md`
   assesses every registered adapter against its installed CLI. `claude-headless`
-  and `claude-sdk` clear the viability bar: a later turn resumes the session by
-  id, text streams as it is written, and `--restricted` refuses every permission
-  bypass before a model is called. `codex`, `opencode`, `grok`, `gemini`,
+  clears the viability bar: a new process with `--no-session-persistence`, given
+  the earlier exchange replayed in its message, answers from it, text streams as
+  it is written, the turn leaves its text in no file, and `--restricted` refuses
+  every permission bypass before a model is called. `claude-sdk` waits for one
+  run on its API-key credential; `codex`, `opencode`, `grok`, `gemini`,
   `gemini-sdk` and `copilot` are deferred on named observations, and the retired
-  `ollama` and `lm-studio` are skipped. For #1569 it recommends stateless turns,
-  one process group per turn resumed by the CLI's own session, after measuring a
-  held Claude session at 218–226 MiB per open conversation, and it maps every
-  performance-mode field onto each adapter's controls, reporting an effort an
-  adapter cannot apply instead of dropping it. No workspace advertises
-  `conversation` yet; the capability waits for #1569's turn runner.
+  `ollama` and `lm-studio` are skipped. For each adapter the record states how to
+  run a turn statelessly with persistence off, whether its own stored session
+  could stand in for the conversation's context, and what it keeps on disk. It
+  maps every performance-mode field onto each adapter's controls, with one rule
+  for an effort a model cannot take. No workspace advertises `conversation` yet;
+  the capability waits for #1569's turn runner.
 
 - **`nightgauge handoff` and `nightgauge next`: handoff roll-up and ranked
   work order in the binary** (#1481). `nightgauge handoff <file-or-dir>...`
@@ -134,15 +136,16 @@ changelog, and the release workflow refuses a tag that does not.
   there (refused as `not-started`), whichever repositories it has open. It
   leaves any other verb unacknowledged, and the platform expires a verb that
   no window holds.
-- **A resumed Codex stage keeps its sandbox** (#2342). With
-  `NIGHTGAUGE_CODEX_RESUME_ENABLED=true`, every resume ran with
-  `--dangerously-bypass-approvals-and-sandbox`, so a stage whose allowed tools
-  are read-only or edit-only lost its sandbox the moment it resumed.
-  `codex exec resume` refuses `--sandbox` but honours `-c sandbox_mode=...`,
-  and a resumed turn never inherits the session's sandbox, so a resume now
-  carries the stage's own mode that way, with `--ask-for-approval never`
-  before `exec`. Only a stage that needs full access resumes with the bypass
-  flag, as it starts with it.
+- **A resumed Codex query keeps the sandbox its allowed tools justify** (#2342).
+  With `NIGHTGAUGE_CODEX_RESUME_ENABLED=true`, the SDK's `createCliQueryFn`
+  resumed every Codex query with `--dangerously-bypass-approvals-and-sandbox`,
+  even when its caller passed read-only or edit-only allowed tools.
+  `codex exec resume` refuses `--sandbox` but honours `-c sandbox_mode=...`, and on
+  codex-cli 0.154.0 a resumed turn takes its sandbox from the resume invocation
+  rather than the session, so a scoped resume now carries its mode that way, with
+  `--ask-for-approval never` before `exec`. No shipped stage changes yet: the SDK
+  stage command passes no allowed tools (#2358), and every pipeline stage skill
+  grants `Bash`, which keeps full access on a fresh start and on a resume alike.
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
   the phone app or the dashboard used to sit `routing` until it expired,

@@ -239,7 +239,7 @@ func TestResolve_SerializedProfileIsScopeBounded(t *testing.T) {
 	}
 }
 
-// Spike #1568 adopted the two Claude adapters, but no code path serves a
+// Spike #1568 adopted claude-headless, but no code path serves a
 // conversational turn until the daemon's turn runner (#1569) lands, so none
 // may advertise the capability yet. When the runner registers an adapter's
 // turn builder, this test is where that decision becomes visible.

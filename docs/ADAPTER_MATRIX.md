@@ -307,7 +307,9 @@ Error message: `codex CLI is not authenticated. Run 'codex login' to authenticat
   A resumed stage keeps the sandbox its allowed-tools justify (#2342): `exec resume` refuses
   `--sandbox` but honours `-c sandbox_mode="<mode>"`, and a resumed turn takes its sandbox
   from the resume invocation, never from the session (observed on codex-cli 0.154.0, spike
-  #1568). Only a full-access stage resumes with `--dangerously-bypass-approvals-and-sandbox`.
+  #1568; unverified on older releases). Only a full-access stage resumes with
+  `--dangerously-bypass-approvals-and-sandbox`, which today is every stage: each pipeline
+  stage skill grants `Bash`.
 - **Sandbox scoping from allowed-tools (#4026):** Codex has no per-tool allowlist
   flag, so the skill's `allowed-tools` are mapped onto Codex's sandbox mode +
   approval policy (`resolveCodexSandboxMode` in `codexSandbox.ts` / `codex_sandbox.go`,

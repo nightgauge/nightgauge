@@ -74,8 +74,8 @@ func Resolve(workspaceRoot string) (platform.ExecutionProfile, error) {
 
 // conversationViableAdapters is the set of adapters a workspace may host a
 // conversational turn on, and so advertise the `conversation` capability for.
-// Spike #1568 set the viability bar and adopted claude-headless and
-// claude-sdk (docs/spikes/1568-conversational-agent-sessions-across-adapters.md,
+// Spike #1568 set the viability bar and adopted claude-headless
+// (docs/spikes/1568-conversational-agent-sessions-across-adapters.md,
 // § 13). The set is still EMPTY on purpose: no code path serves a turn until
 // the daemon's turn runner (#1569) lands, and an adapter enters the set
 // together with its conversational turn builder, so the advertised set and
