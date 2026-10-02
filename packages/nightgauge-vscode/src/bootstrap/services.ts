@@ -123,6 +123,11 @@ import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../services/RunVerbCommandHandler";
 import { ThrottleCommandHandler } from "../services/ThrottleCommandHandler";
 import { WorkspaceThrottleState } from "../services/WorkspaceThrottle";
+import {
+  PlatformWorkspaceThrottleReader,
+  WorkspaceThrottleSync,
+} from "../services/WorkspaceThrottleSync";
+import { WorkspaceRegistrationPayloadBuilder } from "../services/WorkspaceRegistrationPayloadBuilder";
 import { AgentCommandDispatcher, subscribeToDaemonRelay } from "../services/AgentCommandDispatcher";
 import { createRemotePauseUi } from "../utils/pauseUi";
 import { AgentRegistrationService } from "../services/AgentRegistrationService";
@@ -269,8 +274,8 @@ export interface ExtensionServices {
   agentHeartbeatService: AgentHeartbeatService | null;
   agentCommandStreamService: AgentCommandStreamService | null;
   agentRegistrationService: AgentRegistrationService | null;
-  /** The platform's workspace throttle as this window applies it (#2337). */
-  workspaceThrottleState: WorkspaceThrottleState | null;
+  /** Keeps this window's dispatch on its workspace's platform throttle (#2337). */
+  workspaceThrottleSync: WorkspaceThrottleSync | null;
   tierGate: TierGate | null;
   licensePreflight: LicensePreflight | null;
   nightgaugeRoot: string | null;
@@ -1559,6 +1564,8 @@ export async function initializeServices(
     };
 
     concurrentPipelineManager.setCallbacks({
+      // The queue section says when the workspace throttle holds dispatch (#2337).
+      onWorkspaceThrottleChanged: (throttle) => treeProvider?.setWorkspaceThrottle(throttle),
       onSlotPreparing: (issueNumber, title, epicNumber) => {
         // Show immediate feedback in the tree view while worktree is created
         treeProvider.addPreparingSlot(issueNumber, title, epicNumber);
@@ -4229,24 +4236,36 @@ export async function initializeServices(
   // start(agentId) is called by the registration service once agentId is available (#3544).
   const agentCommandStreamTokenStorage = TokenStorage.getInstance();
   let agentCommandStreamService: AgentCommandStreamService | null = null;
-  // The platform's workspace throttle caps this window's dispatch (#2337). A
-  // throttle applied before a reload is restored at once; the registration
-  // response and `throttle` commands keep it current.
-  let workspaceThrottleState: WorkspaceThrottleState | null = null;
-  if (concurrentPipelineManager) {
-    workspaceThrottleState = new WorkspaceThrottleState(
-      concurrentPipelineManager,
-      context.globalState,
-      logger
+  // The platform's workspace throttle caps this window's dispatch (#2337). The
+  // window reads its own workspace's throttle, by the manifest's slug, while
+  // the platform session is authenticated (followSession, below): a `throttle`
+  // command, a (re)connected stream and every session event read it again.
+  // The applied throttle is kept per workspace and restored only once the
+  // session is authenticated; signing out lifts it.
+  let workspaceThrottleSync: WorkspaceThrottleSync | null = null;
+  if (concurrentPipelineManager && agentCommandStreamTokenStorage) {
+    workspaceThrottleSync = new WorkspaceThrottleSync(
+      new PlatformWorkspaceThrottleReader(
+        getPlatformUrl,
+        agentCommandStreamTokenStorage,
+        onDemandTokenRefresher
+      ),
+      new WorkspaceThrottleState(concurrentPipelineManager, context.workspaceState, logger),
+      () =>
+        WorkspaceRegistrationPayloadBuilder.build(workspaceManager?.getWorkspaceConfig() ?? null)
+          ?.slug ?? null,
+      logger,
+      // The manifest names the workspace; read nothing before it is loaded.
+      workspaceInitPromise ?? Promise.resolve()
     );
-    workspaceThrottleState.restore();
   }
   if (
     agentCommandStreamTokenStorage &&
     concurrentPipelineManager &&
     issueQueueService &&
-    workspaceThrottleState
+    workspaceThrottleSync
   ) {
+    const throttleSync = workspaceThrottleSync;
     const triggerCommandHandler = new TriggerCommandHandler(
       ipcClient,
       concurrentPipelineManager,
@@ -4272,7 +4291,7 @@ export async function initializeServices(
     const agentCommandDispatcher = new AgentCommandDispatcher(
       triggerCommandHandler,
       runVerbCommandHandler,
-      new ThrottleCommandHandler(workspaceThrottleState, ipcClient, logger),
+      new ThrottleCommandHandler(throttleSync, ipcClient, logger),
       ipcClient,
       logger
     );
@@ -4280,12 +4299,16 @@ export async function initializeServices(
     // platform may place a trigger or verb on the daemon's agent; the daemon
     // relays it here, where pipelines run (#2335).
     context.subscriptions.push(subscribeToDaemonRelay(ipcClient, agentCommandDispatcher));
+    // A (re)connected stream reads the workspace throttle again: a change
+    // another window acknowledged while this one was disconnected is not
+    // replayed to it (#2337).
     agentCommandStreamService = new AgentCommandStreamService(
       getPlatformUrl,
       agentCommandStreamTokenStorage,
       context,
       logger,
-      agentCommandDispatcher
+      agentCommandDispatcher,
+      () => void throttleSync.refresh()
     );
     context.subscriptions.push(agentCommandStreamService);
     // start(agentId) is invoked from extension.ts alongside the heartbeat once
@@ -4332,6 +4355,12 @@ export async function initializeServices(
       logger,
       configBridge
     );
+    // The workspace throttle is followed only while the session is
+    // authenticated (#2337). Subscribed before restore() so the restored
+    // session's event reaches it.
+    if (workspaceThrottleSync) {
+      context.subscriptions.push(workspaceThrottleSync.followSession(sessionManager));
+    }
     void sessionManager.restore(); // fire-and-forget session restoration
     context.subscriptions.push(sessionManager);
   }
@@ -4635,7 +4664,7 @@ export async function initializeServices(
     agentHeartbeatService,
     agentCommandStreamService,
     agentRegistrationService,
-    workspaceThrottleState,
+    workspaceThrottleSync,
     offlineManager,
     tokenStorage: TokenStorage.getInstance(),
     oauthDeviceFlowService,

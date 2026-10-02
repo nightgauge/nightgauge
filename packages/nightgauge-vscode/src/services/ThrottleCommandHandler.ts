@@ -1,37 +1,41 @@
 /**
- * ThrottleCommandHandler — applies the platform's `throttle` command to this
- * window's dispatch and acknowledges it (#2337).
+ * ThrottleCommandHandler — answers the platform's `throttle` command by
+ * bringing this window's dispatch onto its workspace's throttle (#2337).
  *
  * The platform publishes a `throttle` straight to the agent a workspace is
  * linked to, never through its router, whenever an owner or admin sets or
  * clears the workspace's concurrency cap. Every connection that shares the
- * agent id receives it, and unlike a run verb it concerns all of them: each
- * window applies it to its own dispatch (WorkspaceThrottleState →
- * ConcurrentPipelineManager.setWorkspaceThrottle) and acknowledges it
- * `applied`. The platform keeps the first acknowledgement; another window's
- * later one is refused and logged, with nothing left undone.
+ * agent id receives it. The payload (`{action: "set", maxConcurrent,
+ * resumeAt}` or `{action: "cleared"}`) does not name the workspace, and the
+ * windows of one machine share the agent while each serves its own
+ * workspace, so the payload is never applied as it stands: the command makes
+ * the window read its own workspace's throttle (WorkspaceThrottleSync) and
+ * apply that. Commands handled out of order therefore cannot undo a newer
+ * cap, since every read reflects the platform's state when it was made.
  *
- * A payload that is not a valid set or clear is acknowledged `rejected` with
- * `invalid-payload`. The platform retires an older undelivered throttle
- * command when it queues a new one, so a replayed backlog holds at most the
- * newest; a copy older than the throttle already applied is still refused,
- * as `superseded`, rather than undoing the newer cap. Delivery is at least
- * once, and each command id is applied and acknowledged once
- * (CommandRedeliveryGuard).
+ * The window acknowledges the command `applied` once its read is applied,
+ * and `rejected` with `apply-failed` when the read failed. The platform keeps
+ * the first acknowledgement; another window's later one is refused and
+ * logged, with nothing left undone, because each window reads for itself. A
+ * payload that is not a valid set or clear is refused `invalid-payload`. A
+ * window with no platform session follows no throttle, and leaves the command
+ * to the windows that do. Delivery is at least once, and each command id is
+ * answered once (CommandRedeliveryGuard).
  *
- * @see WorkspaceThrottle — the cap, its persistence, and the registration path
+ * @see WorkspaceThrottleSync — reads the workspace's throttle
+ * @see WorkspaceThrottle — the cap and its persistence
  */
 
 import type { CommandHandler, ReceivedCommand } from "./AgentCommandStreamService";
 import { CommandRedeliveryGuard } from "./CommandRedeliveryGuard";
 import type { IpcClient } from "./IpcClient";
-import { parseThrottleCommand, type WorkspaceThrottleState } from "./WorkspaceThrottle";
+import { parseThrottleCommand } from "./WorkspaceThrottle";
+import type { ThrottleRefreshResult, WorkspaceThrottleSync } from "./WorkspaceThrottleSync";
 import type { Logger } from "../utils/logger";
 
 export const THROTTLE_COMMAND_TYPE = "throttle";
 
-const SUPERSEDED_DETAIL = "superseded: a newer throttle command is already applied";
-const APPLY_FAILED_DETAIL = "apply-failed: the agent could not apply the throttle";
+const APPLY_FAILED_DETAIL = "apply-failed: the agent could not read the workspace throttle";
 
 interface ThrottleAck {
   agentId: string;
@@ -42,11 +46,9 @@ interface ThrottleAck {
 export class ThrottleCommandHandler implements CommandHandler {
   private agentId: string | null = null;
   private readonly redelivery = new CommandRedeliveryGuard<ThrottleAck>();
-  /** When the newest throttle command applied here was queued (ms), for ordering. */
-  private appliedQueuedAt = Number.NEGATIVE_INFINITY;
 
   constructor(
-    private readonly throttle: Pick<WorkspaceThrottleState, "apply">,
+    private readonly sync: Pick<WorkspaceThrottleSync, "isActive" | "refresh">,
     private readonly ipcClient: Pick<IpcClient, "agentAcknowledgeCommand">,
     private readonly logger: Logger
   ) {}
@@ -61,8 +63,15 @@ export class ThrottleCommandHandler implements CommandHandler {
     void this.consume(cmd);
   }
 
-  /** Apply one throttle command and acknowledge it, once per command id. */
+  /** Bring dispatch onto the workspace's throttle and acknowledge, once per command id. */
   consume(cmd: ReceivedCommand): Promise<void> {
+    if (!this.sync.isActive() && !this.redelivery.remembers(cmd.id)) {
+      this.logger.info(
+        "ThrottleCommandHandler: no platform session in this window — leaving the throttle to the windows that have one",
+        { commandId: cmd.id }
+      );
+      return Promise.resolve();
+    }
     return this.redelivery.consume(
       cmd.id,
       () => this.decide(cmd),
@@ -70,7 +79,7 @@ export class ThrottleCommandHandler implements CommandHandler {
     );
   }
 
-  /** Apply the command and decide its ack. Never throws. */
+  /** Read and apply the workspace's throttle, and decide the ack. Never throws. */
   private async decide(cmd: ReceivedCommand): Promise<ThrottleAck | null> {
     // A relayed command names the agent it was addressed to (#2335).
     const agentId = cmd.agentId ?? this.agentId;
@@ -89,27 +98,30 @@ export class ThrottleCommandHandler implements CommandHandler {
         ? { agentId, outcome: "rejected", detail: `invalid-payload: ${parsed.invalid}` }
         : null;
     }
-    const queuedAt = Date.parse(cmd.createdAt);
-    if (Number.isFinite(queuedAt) && queuedAt < this.appliedQueuedAt) {
-      this.logger.info("ThrottleCommandHandler: a newer throttle is already applied", {
-        commandId: cmd.id,
-        createdAt: cmd.createdAt,
-      });
-      return agentId ? { agentId, outcome: "rejected", detail: SUPERSEDED_DETAIL } : null;
-    }
+    let result: ThrottleRefreshResult;
     try {
-      await this.throttle.apply(parsed.throttle);
+      result = await this.sync.refresh();
     } catch (err) {
-      this.logger.error("ThrottleCommandHandler: applying the throttle failed", {
+      this.logger.error("ThrottleCommandHandler: reading the workspace throttle threw", {
         commandId: cmd.id,
         err: err instanceof Error ? err.message : String(err),
       });
+      result = "failed";
+    }
+    if (result === "inactive") {
+      // Signed out while the read was in flight: this window follows no
+      // throttle now, and leaves the command to one that does.
+      this.logger.info("ThrottleCommandHandler: the session ended — not acknowledging", {
+        commandId: cmd.id,
+      });
+      return null;
+    }
+    if (result === "failed") {
       return agentId ? { agentId, outcome: "rejected", detail: APPLY_FAILED_DETAIL } : null;
     }
-    if (Number.isFinite(queuedAt)) this.appliedQueuedAt = queuedAt;
-    this.logger.info("ThrottleCommandHandler: applied", {
+    this.logger.info("ThrottleCommandHandler: applied the workspace throttle", {
       commandId: cmd.id,
-      throttle: parsed.throttle,
+      announced: parsed.throttle,
     });
     return agentId ? { agentId, outcome: "applied" } : null;
   }
@@ -121,7 +133,7 @@ export class ThrottleCommandHandler implements CommandHandler {
       await this.ipcClient.agentAcknowledgeCommand(ack.agentId, cmd.id, ack.outcome, ack.detail);
       return true;
     } catch (err) {
-      // Every window of the machine applies the throttle and acknowledges it;
+      // Every window of the machine reads the throttle and acknowledges it;
       // the platform keeps the first ack and refuses the others.
       this.logger.warn(
         "ThrottleCommandHandler: ack not accepted (another window may have sent it)",

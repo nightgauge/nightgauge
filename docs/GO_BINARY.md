@@ -368,30 +368,49 @@ release. A gate that holds a run for a human decision would be the place to
 wire them.
 
 The workspace `throttle` (#2337) caps how many runs the workspace executes at
-once, optionally until `resumeAt`. The platform publishes it straight to the
-agent the workspace is linked to (the last agent that registered it), never
-through the router: `{action: "set", maxConcurrent, resumeAt}` or
-`{action: "cleared", maxConcurrent: null, resumeAt: null}`. When that is the
-daemon's agent, the daemon relays it like any other command. Unlike a run
-verb it concerns every window, so each window that receives it applies it and
-acknowledges it `applied` (the platform keeps the first ack):
+once, optionally until `resumeAt`. The platform keeps it on the workspace and
+publishes a `throttle` command straight to the agent the workspace is linked
+to (the last agent that registered it), never through the router:
+`{action: "set", maxConcurrent, resumeAt}` or `{action: "cleared"}`. When that
+is the daemon's agent, the daemon relays it like any other command.
+
+The command names no workspace, and every window of a machine shares one
+agent while each serves its own workspace. The registration response's
+`throttle` is no better: it is the strictest cap across every workspace linked
+to the agent. So the extension never applies a payload. Each window reads the
+throttle of its own workspace, found by its manifest's `workspace.name` slug,
+from the platform's workspace list (`GET /v1/workspaces`), and a window whose
+manifest names no workspace has none. It reads again whenever the throttle may
+have changed: on a `throttle` command, when its command stream (re)connects,
+on every authenticated session event (sign-in, restore, and each token
+refresh), and when the manifest is reloaded. Reads run one at a time, and a
+read asked for during another runs again after it, so an older read never
+undoes a newer change; a read that fails changes nothing.
 
 - Dispatch opens no slot above the lower of `pipeline.max_concurrent` and
   `maxConcurrent` while the throttle is in force. The cap is applied where the
   extension decides concurrency (`ConcurrentPipelineManager`'s available slot
-  count), so a slot already running is never stopped, and a cap below the
-  running count opens nothing until enough of them finish. The autonomous
-  scheduler can still hand issues to the queue; they wait there for a slot.
+  count), and checked again before each start of a batch, so a throttle that
+  lands mid-fill puts the rest of the batch back in the queue. A slot already
+  running is never stopped, and a cap below the running count opens nothing
+  until enough of them finish. The autonomous scheduler can still hand issues
+  to the queue; they wait there for a slot.
 - Clearing or raising the throttle, or reaching `resumeAt`, fills slots from
   the queue at once, as a finished slot does.
-- The applied throttle is kept in the extension's global state, because a
-  reload reuses the stored registration instead of registering again. While
-  one is kept, activation registers again: the registration response carries
-  the throttle in force for the agent (`throttle`, or null), which replaces
-  the kept one, so a clear that expired while no window was connected is not
-  missed.
-- An invalid payload is refused `invalid-payload`; a throttle command queued
-  before the one already applied is refused `superseded`.
+- The throttle is followed only while the platform session is authenticated.
+  The applied throttle is kept in the window's workspace state with its
+  workspace slug, and restored when the session is, so a reload holds
+  dispatch before the first read. Signing out, or losing the session, lifts
+  the cap and forgets it; with the platform disabled nothing is applied.
+- The Queued Issues header shows the cap while one is in force, and Resume
+  Queue names it when it holds every slot.
+- The window acknowledges the command `applied` once its read is applied, or
+  `rejected` with `apply-failed` when the read failed; an invalid payload is
+  refused `invalid-payload`. A window with no platform session leaves the
+  command to the windows that have one.
+
+The daemon does not apply the throttle, and neither does the Go scheduler when
+it dispatches without the extension (#2352).
 
 ## CLI Command Reference
 

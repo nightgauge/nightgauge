@@ -12,9 +12,13 @@ and this project adheres to
 ### Added
 
 - **A concurrency cap set on the workspace from the dashboard applies to this
-  window.** No new pipeline starts above the cap, running ones are never
-  stopped, and queued issues start as soon as the cap is raised, cleared or
-  ends. The cap survives a window reload (#2337).
+  window.** While you are signed in, the window applies the cap of the
+  workspace its `.vscode/nightgauge-workspace.yaml` names: no new pipeline
+  starts above it, running ones are never stopped, and queued issues start as
+  soon as the cap is raised, cleared or ends. A cap on another workspace
+  never applies here. The Queued Issues header shows the cap, Resume Queue
+  says when it holds every slot, it survives a window reload, and signing out
+  drops it (#2337).
 
 ### Fixed
 

@@ -68,8 +68,12 @@ function build(verbResult: RemoteVerbResult, holds = true) {
     logger as never
   );
   const verbs = new RunVerbCommandHandler(runs as never, ipc as never, logger as never);
-  const throttleState = { apply: vi.fn().mockResolvedValue(undefined) };
-  const throttle = new ThrottleCommandHandler(throttleState, ipc as never, logger as never);
+  // The throttle handler reads the window's own workspace throttle (#2337).
+  const throttleSync = {
+    isActive: vi.fn(() => true),
+    refresh: vi.fn().mockResolvedValue("applied"),
+  };
+  const throttle = new ThrottleCommandHandler(throttleSync, ipc as never, logger as never);
   const dispatcher = new AgentCommandDispatcher(
     trigger,
     verbs,
@@ -78,7 +82,7 @@ function build(verbResult: RemoteVerbResult, holds = true) {
     logger as never
   );
   dispatcher.setAgentId("agent-ext");
-  return { dispatcher, ipc, runs, queue, throttleState };
+  return { dispatcher, ipc, runs, queue, throttleSync };
 }
 
 /** A command of `type` as the platform's router publishes it. */
@@ -156,7 +160,7 @@ describe("AgentCommandDispatcher", () => {
   // stream replays its backlog arrives twice, and an unacknowledged one again
   // on every reconnect. Each is still carried out once and acknowledged once.
   it("acknowledges every router-delivered command once when each arrives twice", async () => {
-    const { dispatcher, ipc, runs, queue, throttleState } = build("applied");
+    const { dispatcher, ipc, runs, queue, throttleSync } = build("applied");
     // The platform keeps the first ack of a command and refuses any later one.
     const accepted: string[] = [];
     ipc.agentAcknowledgeCommand.mockImplementation(async (_agentId: string, id: string) => {
@@ -186,7 +190,7 @@ describe("AgentCommandDispatcher", () => {
       (c) => c[1] === "cmd-throttle-9"
     );
     expect(throttleAcks).toHaveLength(1);
-    expect(throttleState.apply).toHaveBeenCalledTimes(1);
+    expect(throttleSync.refresh).toHaveBeenCalledTimes(1);
     // The trigger's second copy is refused by the platform, so it starts nothing.
     expect(queue.enqueue).toHaveBeenCalledTimes(1);
   });
@@ -203,9 +207,10 @@ describe("AgentCommandDispatcher", () => {
   });
 
   // #2337: the platform publishes the workspace throttle to the workspace's
-  // agent directly; whichever agent it reaches, this window applies it.
-  it("applies a workspace throttle, from its own stream or the daemon's relay, and acknowledges it", async () => {
-    const { dispatcher, ipc, throttleState } = build("applied");
+  // agent directly; whichever agent it reaches, this window reads its own
+  // workspace's throttle and acknowledges the command.
+  it("reads the workspace throttle on a throttle command, from its own stream or the daemon's relay, and acknowledges it", async () => {
+    const { dispatcher, ipc, throttleSync } = build("applied");
     dispatcher.handle({
       ...routedCommand("throttle", 0),
       payload: { action: "set", maxConcurrent: 1, resumeAt: null },
@@ -221,10 +226,7 @@ describe("AgentCommandDispatcher", () => {
     });
     await settle();
 
-    expect(throttleState.apply.mock.calls).toEqual([
-      [{ maxConcurrent: 1, resumeAt: null }],
-      [null],
-    ]);
+    expect(throttleSync.refresh).toHaveBeenCalledTimes(2);
     expect(ipc.agentAcknowledgeCommand.mock.calls.map((c) => c.slice(0, 3))).toEqual([
       ["agent-ext", "cmd-throttle-0", "applied"],
       ["agent-daemon", "cmd-throttle-relayed", "applied"],

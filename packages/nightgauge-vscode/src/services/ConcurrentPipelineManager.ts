@@ -435,6 +435,11 @@ export interface ConcurrentPipelineCallbacks {
    * @see Issue #2992 — broken failure recovery
    */
   onReEnqueueFailed?: (issueNumber: number, error: Error) => void;
+  /**
+   * Called when the workspace throttle in force changes: applied, changed,
+   * cleared, or lifted at its resumeAt (#2337). Null when none is in force.
+   */
+  onWorkspaceThrottleChanged?: (throttle: WorkspaceThrottle | null) => void;
   /** Called when all slots are idle and queue is empty */
   onAllComplete?: () => void;
   /** Called when stdout output arrives for a slot */
@@ -662,13 +667,25 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * from the queue at once, as a finished slot does.
    */
   setWorkspaceThrottle(throttle: WorkspaceThrottle | null): void {
+    const inForce = throttle !== null && throttleInForce(throttle, Date.now());
+    // The throttle is read again on every change signal and token refresh; the
+    // same throttle changes nothing and keeps its lift timer.
+    const current = this.workspaceThrottle;
+    if (
+      inForce
+        ? current?.maxConcurrent === throttle.maxConcurrent &&
+          current.resumeAt === throttle.resumeAt
+        : current === null
+    ) {
+      return;
+    }
     const before = this.availableSlotCount;
     if (this.throttleLiftTimer) {
       clearTimeout(this.throttleLiftTimer);
       this.throttleLiftTimer = null;
     }
-    const inForce = throttle !== null && throttleInForce(throttle, Date.now());
     this.workspaceThrottle = inForce ? { ...throttle } : null;
+    this.notifyThrottleChanged();
     this.logger.info(
       inForce ? "Workspace throttle applied" : "Workspace throttle cleared",
       inForce
@@ -708,9 +725,20 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         configuredMaxConcurrent: this.maxConcurrent,
       });
       this.workspaceThrottle = null;
+      this.notifyThrottleChanged();
       this.fillAfterThrottleChange();
     }, delay);
     this.throttleLiftTimer.unref?.();
+  }
+
+  private notifyThrottleChanged(): void {
+    try {
+      this.callbacks.onWorkspaceThrottleChanged?.(this.getWorkspaceThrottle());
+    } catch (err) {
+      this.logger.warn("onWorkspaceThrottleChanged callback threw", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /** Start what the queue holds now that the throttle allows more slots. */
@@ -950,6 +978,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             await this.completeQueueItem(item, "duplicate dispatch skipped");
             continue;
           }
+          // The ceiling can drop while this batch starts: a workspace throttle
+          // applied during an earlier item's worktree creation (#2337), or a
+          // lower max_concurrent. `available` was read before that, and
+          // reservations keep availableSlotCount exact, so check it again
+          // before each start, and hand an item the old ceiling admitted back
+          // to the queue instead of opening a slot above the new one.
+          if (this.availableSlotCount <= 0) {
+            await this.returnToQueue(item, "dispatch ceiling lowered during the fill");
+            continue;
+          }
           const outcome = await this.startSlot(item);
           if (outcome === "started") {
             totalStarted++;
@@ -1043,6 +1081,53 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         reason,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  }
+
+  /**
+   * Put an item this fill dequeued back in the queue without starting it
+   * (#2337): its "processing" mark is cleared and it is queued again, behind
+   * what is already waiting, under the repository, platform run id and
+   * requested adapter and model it was dequeued with. Its pending platform run
+   * id stays in {@link pendingRemoteRunIds}, so the slot that opens for it
+   * later still adopts it. A failure to queue it again is reported like the
+   * one after a failed slot start.
+   */
+  private async returnToQueue(item: QueueItem, reason: string): Promise<void> {
+    await this.completeQueueItem(item, reason);
+    const [owner, repo] = item.repoName?.split("/") ?? [];
+    try {
+      const queued = await this.queueService.enqueue(
+        item.issueNumber,
+        item.title,
+        item.labels,
+        undefined,
+        {
+          ...(owner && repo ? { repoOverride: { owner, repo } } : {}),
+          remoteRunId: this.pendingRemoteRunIds.get(item.issueNumber),
+          ...(item.requestedAdapter
+            ? { requestedAdapter: item.requestedAdapter, requestedModel: item.requestedModel }
+            : {}),
+        }
+      );
+      this.logger.info("Returned a dequeued item to the queue", {
+        issueNumber: item.issueNumber,
+        repo: item.repoName ?? "",
+        reason,
+        queued: queued !== null,
+      });
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      this.logger.error("Failed to return a dequeued item to the queue", {
+        issueNumber: item.issueNumber,
+        reason,
+        error: error.message,
+      });
+      try {
+        this.callbacks.onReEnqueueFailed?.(item.issueNumber, error);
+      } catch {
+        // Never let a callback error break the fill loop.
+      }
     }
   }
 

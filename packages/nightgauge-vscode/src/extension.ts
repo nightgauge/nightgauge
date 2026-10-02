@@ -25,7 +25,6 @@ import { initializeServices, type ExtensionServices } from "./bootstrap/services
 import { registerAllCommands } from "./commands/register-all";
 import { IpcClient } from "./services/IpcClient";
 import { agentCapabilities, resolveExecutionProfile } from "./services/executionProfile";
-import { applyRegistrationThrottle } from "./services/WorkspaceThrottle";
 import { DemoModeController } from "./services/DemoModeController";
 import { ProjectEventSubscriber } from "./services/ProjectEventSubscriber";
 import { setProjectEventSubscriber } from "./commands/autonomousCommands";
@@ -690,14 +689,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         // opened before this reload), fall through to re-register so the
         // agent serves the current repos — otherwise dashboard triggers for
         // the newly-opened repo stay queued forever (#3544 follow-up).
-        // A workspace throttle kept from an earlier session also registers
-        // again (#2337): the response carries the throttle in force now, and
-        // a clear sent while no window was connected may have expired.
-        if (
-          storedAgentId &&
-          registeredReposSig === currentReposSig &&
-          !services!.workspaceThrottleState?.hasPersisted()
-        ) {
+        if (storedAgentId && registeredReposSig === currentReposSig) {
           services!.agentHeartbeatService?.start(storedAgentId);
           // Open the SSE command stream so remotely-triggered pipelines are
           // received and acked, not just left queued (#3544).
@@ -729,10 +721,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           // Remember which repos this registration covers so a later reload
           // can detect a repo change and re-register (#3544 follow-up).
           await context.globalState.update("nightgauge.agentRepos", currentReposSig);
-          await applyRegistrationThrottle(
-            services!.agentRegistrationService,
-            services!.workspaceThrottleState
-          );
           services!.agentHeartbeatService?.start(agentId);
           // Open the SSE command stream so remotely-triggered pipelines are
           // received and acked, not just left queued (#3544).
@@ -835,6 +823,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       dispose: () => clearTimeout(reloadTimer),
     });
 
+    // The manifest names the platform workspace whose throttle this window
+    // follows (#2337), so a reloaded manifest reads it again. A no-op while
+    // the window has no platform session.
+    context.subscriptions.push(
+      onWorkspaceConfigReloaded.event(() => {
+        void services!.workspaceThrottleSync?.refresh();
+      })
+    );
+
     // Agent re-registration stays gated on the hosted service — it is the
     // concern that genuinely needs an account — but no longer owns the watcher.
     if (services.sessionManager && services.agentRegistrationService) {
@@ -877,10 +874,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               await context.globalState.update(
                 "nightgauge.agentRepos",
                 reposSignature(workspaceRepos)
-              );
-              await applyRegistrationThrottle(
-                services!.agentRegistrationService,
-                services!.workspaceThrottleState
               );
               services!.agentHeartbeatService?.start(agentId);
               // Open the SSE command stream so remotely-triggered pipelines are

@@ -1,9 +1,9 @@
 /**
  * WorkspaceThrottle.test.ts
  *
- * The platform's workspace throttle as this agent reads and keeps it (#2337):
- * the `throttle` command's payload, the registration response's value, and
- * the state that survives a reload.
+ * The platform's workspace throttle as this window reads and keeps it
+ * (#2337): the `throttle` command's payload, a reported throttle value, and
+ * the per-workspace state that survives a reload.
  */
 
 import { describe, it, expect, vi } from "vitest";
@@ -11,7 +11,7 @@ import { describe, it, expect, vi } from "vitest";
 vi.mock("vscode", () => ({}));
 
 import {
-  applyRegistrationThrottle,
+  describeWorkspaceThrottle,
   parseThrottleCommand,
   parseThrottleValue,
   throttleInForce,
@@ -105,88 +105,92 @@ describe("throttleInForce", () => {
   });
 });
 
+describe("describeWorkspaceThrottle", () => {
+  it("names the cap and when it ends", () => {
+    expect(describeWorkspaceThrottle({ maxConcurrent: 1, resumeAt: null })).toBe(
+      "1 run at once until it is cleared"
+    );
+    expect(describeWorkspaceThrottle({ maxConcurrent: 0, resumeAt: LATER })).toBe(
+      `0 runs at once until ${new Date(LATER).toLocaleString()}`
+    );
+  });
+});
+
 describe("WorkspaceThrottleState", () => {
-  it("applies a throttle and keeps it; a clear drops both", async () => {
+  it("applies a throttle and keeps it with its workspace; a clear drops both", async () => {
     const { state, target, memento } = makeState();
 
-    await state.apply({ maxConcurrent: 1, resumeAt: LATER });
+    await state.apply("alpha", { maxConcurrent: 1, resumeAt: LATER });
     expect(target.setWorkspaceThrottle).toHaveBeenLastCalledWith({
       maxConcurrent: 1,
       resumeAt: LATER,
     });
     expect(memento.values.get(WORKSPACE_THROTTLE_STATE_KEY)).toEqual({
+      slug: "alpha",
       maxConcurrent: 1,
       resumeAt: LATER,
     });
-    expect(state.hasPersisted()).toBe(true);
 
-    await state.apply(null);
+    await state.apply("alpha", null);
     expect(target.setWorkspaceThrottle).toHaveBeenLastCalledWith(null);
     expect(memento.values.has(WORKSPACE_THROTTLE_STATE_KEY)).toBe(false);
-    expect(state.hasPersisted()).toBe(false);
   });
 
-  it("does not keep a throttle that has already lifted", async () => {
+  it("does not keep a throttle that has already lifted, or one for no workspace", async () => {
     const { state, target, memento } = makeState();
-    await state.apply({ maxConcurrent: 1, resumeAt: EARLIER });
+    await state.apply("alpha", { maxConcurrent: 1, resumeAt: EARLIER });
     expect(target.setWorkspaceThrottle).toHaveBeenCalledWith({
       maxConcurrent: 1,
       resumeAt: EARLIER,
     });
     expect(memento.values.has(WORKSPACE_THROTTLE_STATE_KEY)).toBe(false);
+
+    await state.apply(null, { maxConcurrent: 1, resumeAt: null });
+    expect(memento.values.has(WORKSPACE_THROTTLE_STATE_KEY)).toBe(false);
   });
 
-  it("restores a kept throttle that is still in force", () => {
+  it("restores a kept throttle that is still in force, for its own workspace", () => {
     const { state, target } = makeState({
-      [WORKSPACE_THROTTLE_STATE_KEY]: { maxConcurrent: 2, resumeAt: null },
+      [WORKSPACE_THROTTLE_STATE_KEY]: { slug: "alpha", maxConcurrent: 2, resumeAt: null },
     });
-    state.restore();
+    state.restore("alpha");
     expect(target.setWorkspaceThrottle).toHaveBeenCalledWith({ maxConcurrent: 2, resumeAt: null });
   });
 
   it.each([
-    ["lifted", { maxConcurrent: 2, resumeAt: EARLIER }],
-    ["malformed", { maxConcurrent: "two" }],
-  ])("drops a %s kept throttle instead of restoring it", async (_kind, kept) => {
+    ["lifted", { slug: "alpha", maxConcurrent: 2, resumeAt: EARLIER }, "alpha"],
+    ["malformed", { slug: "alpha", maxConcurrent: "two" }, "alpha"],
+    ["another workspace's", { slug: "beta", maxConcurrent: 2, resumeAt: null }, "alpha"],
+    ["unattributed", { maxConcurrent: 2, resumeAt: null }, "alpha"],
+    ["no-workspace", { slug: "alpha", maxConcurrent: 2, resumeAt: null }, null],
+  ])("drops a %s kept throttle instead of restoring it", async (_kind, kept, slug) => {
     const { state, target, memento } = makeState({ [WORKSPACE_THROTTLE_STATE_KEY]: kept });
-    state.restore();
+    state.restore(slug);
     await vi.waitFor(() => expect(memento.values.has(WORKSPACE_THROTTLE_STATE_KEY)).toBe(false));
     expect(target.setWorkspaceThrottle).not.toHaveBeenCalled();
   });
 
   it("restores nothing when nothing was kept", () => {
     const { state, target } = makeState();
-    state.restore();
+    state.restore("alpha");
     expect(target.setWorkspaceThrottle).not.toHaveBeenCalled();
-    expect(state.hasPersisted()).toBe(false);
+  });
+
+  it("lifts the cap and forgets the kept throttle on clear", async () => {
+    const { state, target, memento } = makeState({
+      [WORKSPACE_THROTTLE_STATE_KEY]: { slug: "alpha", maxConcurrent: 0, resumeAt: null },
+    });
+    await state.clear();
+    expect(target.setWorkspaceThrottle).toHaveBeenCalledWith(null);
+    expect(memento.values.has(WORKSPACE_THROTTLE_STATE_KEY)).toBe(false);
   });
 
   it("applies the throttle even when keeping it fails", async () => {
     const { state, target, memento } = makeState();
     memento.update.mockRejectedValueOnce(new Error("storage unavailable"));
-    await expect(state.apply({ maxConcurrent: 1, resumeAt: LATER })).resolves.toBeUndefined();
+    await expect(
+      state.apply("alpha", { maxConcurrent: 1, resumeAt: LATER })
+    ).resolves.toBeUndefined();
     expect(target.setWorkspaceThrottle).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("applyRegistrationThrottle", () => {
-  it("applies what the registration reported, including no throttle", async () => {
-    const state = { apply: vi.fn().mockResolvedValue(undefined) };
-
-    await applyRegistrationThrottle(
-      { getLastThrottle: () => ({ maxConcurrent: 1, resumeAt: null }) },
-      state
-    );
-    expect(state.apply).toHaveBeenLastCalledWith({ maxConcurrent: 1, resumeAt: null });
-
-    await applyRegistrationThrottle({ getLastThrottle: () => null }, state);
-    expect(state.apply).toHaveBeenLastCalledWith(null);
-  });
-
-  it("changes nothing when the registration reported no valid throttle", async () => {
-    const state = { apply: vi.fn().mockResolvedValue(undefined) };
-    await applyRegistrationThrottle({ getLastThrottle: () => undefined }, state);
-    await applyRegistrationThrottle(null, state);
-    expect(state.apply).not.toHaveBeenCalled();
   });
 });

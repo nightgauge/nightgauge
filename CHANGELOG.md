@@ -19,13 +19,20 @@ changelog, and the release workflow refuses a tag that does not.
 - **The platform's workspace throttle caps local dispatch** (#2337). A
   `throttle` command (`set` with `maxConcurrent` and an optional `resumeAt`,
   or `cleared`) was refused as unsupported, so a workspace throttle never
-  capped work started on the machine. Each window now applies it where it
+  capped work started on the machine. Each window signed in to the platform
+  now applies the throttle of the workspace its manifest names, where it
   decides concurrency: no new slot opens above the lower of
-  `pipeline.max_concurrent` and the cap, a running slot is never stopped, and
-  queued issues start as soon as the throttle is raised, cleared or reaches
-  `resumeAt`. The command is acknowledged `applied`. The applied throttle
-  survives a reload, and the `throttle` in the registration response
-  refreshes it.
+  `pipeline.max_concurrent` and the cap, also when the cap lands while a
+  batch is starting, a running slot is never stopped, and queued issues start
+  as soon as the throttle is raised, cleared or reaches `resumeAt`. The
+  command names no workspace, so a window reads its own workspace's throttle
+  from the platform's workspace list on every `throttle` command, stream
+  reconnect, session event and manifest reload, and acknowledges the command
+  `applied`. A throttle on one workspace never caps a window serving another,
+  and a change made while a window was offline is picked up when it
+  reconnects. The applied throttle survives a reload and is dropped on
+  sign-out. The Queued Issues header shows it, and Resume Queue says when it
+  holds every slot. The daemon does not apply it yet (#2352).
 
 - **`nightgauge handoff` and `nightgauge next`: handoff roll-up and ranked
   work order in the binary** (#1481). `nightgauge handoff <file-or-dir>...`

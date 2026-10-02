@@ -3,7 +3,6 @@ import type { ITokenStorage } from "../platform/TokenStorage";
 import type { Logger } from "../utils/logger";
 import type { IOnDemandTokenRefresher } from "../platform/TokenRefreshManager";
 import type { ExecutionProfile } from "./executionProfile";
-import { parseThrottleValue, type WorkspaceThrottle } from "./WorkspaceThrottle";
 
 export interface WorkspaceRegisterMetadata {
   slug: string;
@@ -34,14 +33,6 @@ export class AgentRegistrationService implements vscode.Disposable {
    */
   private _lastFailureDetail: string | undefined;
 
-  /**
-   * The workspace throttle the last successful registration reported (#2337):
-   * the strictest cap in force for this agent, or null for none. Undefined
-   * before a success, after a failure, or when the response carried no valid
-   * throttle, so a caller never reads a missing value as "no throttle".
-   */
-  private _lastThrottle: WorkspaceThrottle | null | undefined;
-
   constructor(
     private readonly getPlatformUrl: () => string,
     private readonly tokenStorage: ITokenStorage,
@@ -61,11 +52,6 @@ export class AgentRegistrationService implements vscode.Disposable {
     return this._lastFailureDetail;
   }
 
-  /** The throttle the last successful registration reported; see `_lastThrottle`. */
-  getLastThrottle(): WorkspaceThrottle | null | undefined {
-    return this._lastThrottle;
-  }
-
   /**
    * POST /v1/agents/register. Returns agentId on success, null on failure.
    * Non-2xx responses are logged but never thrown. On any failure,
@@ -73,7 +59,6 @@ export class AgentRegistrationService implements vscode.Disposable {
    * 401/403 returns null; caller must clear stored agentId and skip heartbeat.
    */
   async register(payload: AgentRegistrationPayload): Promise<string | null> {
-    this._lastThrottle = undefined;
     let token = await this.tokenStorage.retrieve("accessToken");
     if (!token) {
       this.failWith("no access token — sign in to sync the workspace");
@@ -114,12 +99,6 @@ export class AgentRegistrationService implements vscode.Disposable {
         return null;
       }
       this._lastFailureDetail = undefined;
-      this._lastThrottle = parseThrottleValue(body["throttle"]);
-      if (this._lastThrottle === undefined && body["throttle"] !== undefined) {
-        this.logger.warn("AgentRegistrationService: ignoring an invalid workspace throttle", {
-          throttle: body["throttle"],
-        });
-      }
       this.logger.info("AgentRegistrationService: registered", { agentId });
       return agentId;
     } catch (err) {

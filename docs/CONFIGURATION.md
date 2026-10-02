@@ -2803,11 +2803,15 @@ export NIGHTGAUGE_PIPELINE_MAX_CONCURRENT=2
 - `DiscordService` — Concurrent slot notifications
 
 **Workspace throttle.** An owner or admin of a hosted workspace can cap the
-runs the workspace executes at once, optionally until a set time. The
-extension applies the cap to its own dispatch: no new slot opens above the
-lower of `max_concurrent` and the cap, a run already going is never stopped,
-and queued issues start as soon as the cap is raised, cleared or reaches its
-end. The cap applies to each window of the machine and survives a reload. See
+runs the workspace executes at once, optionally until a set time. A window
+signed in to the platform applies the cap of the workspace its
+`.vscode/nightgauge-workspace.yaml` names (`workspace.name`) to its own
+dispatch: no new slot opens above the lower of `max_concurrent` and the cap, a
+run already going is never stopped, and queued issues start as soon as the cap
+is raised, cleared or reaches its end. Each window applies its own
+workspace's cap, holds it across a reload, and drops it on sign-out; the
+Queued Issues header shows it while it is in force. The daemon does not apply
+it yet (#2352). See
 [GO_BINARY.md § The daemon's platform agent](GO_BINARY.md#the-daemons-platform-agent).
 
 **See also:**

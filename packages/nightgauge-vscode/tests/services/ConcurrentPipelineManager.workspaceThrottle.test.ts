@@ -9,6 +9,13 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+/** Holds one issue's worktree creation until released, to act mid-fill. */
+const worktreeGate = vi.hoisted(() => ({
+  issue: null as number | null,
+  reached: false,
+  release: () => {},
+}));
+
 vi.mock("vscode", () => ({
   EventEmitter: class {
     private listeners: Array<(...args: any[]) => void> = [];
@@ -33,14 +40,18 @@ vi.mock("vscode", () => ({
 vi.mock("../../src/utils/WorktreeManager", () => ({
   WorktreeManager: vi.fn(function () {
     return {
-      create: vi.fn().mockImplementation((issueNumber: number, branchName: string) =>
-        Promise.resolve({
+      create: vi.fn().mockImplementation(async (issueNumber: number, branchName: string) => {
+        if (worktreeGate.issue === issueNumber) {
+          worktreeGate.reached = true;
+          await new Promise<void>((resolve) => (worktreeGate.release = resolve));
+        }
+        return {
           path: `/test-repo/.worktrees/issue-${issueNumber}`,
           branch: branchName,
           issueNumber,
           exists: true,
-        })
-      ),
+        };
+      }),
       cleanup: vi.fn().mockResolvedValue(undefined),
       cleanupOrphans: vi.fn().mockResolvedValue(0),
       cleanupAll: vi.fn().mockResolvedValue(undefined),
@@ -80,19 +91,20 @@ const SUCCESS = {
   totalDurationMs: 1,
 };
 
-function queueItem(issueNumber: number) {
+function queueItem(issueNumber: number, extra: Record<string, unknown> = {}) {
   return {
     issueNumber,
     title: `Issue #${issueNumber}`,
     position: 1,
     status: "pending",
     addedAt: new Date().toISOString(),
+    ...extra,
   };
 }
 
 /** A manager over a queue holding `queued`, each slot's run held until finished. */
-function buildManager(queued: number[], maxConcurrent = 3) {
-  const waiting = queued.map(queueItem);
+function buildManager(queued: Array<number | ReturnType<typeof queueItem>>, maxConcurrent = 3) {
+  const waiting = queued.map((q) => (typeof q === "number" ? queueItem(q) : q));
   const queueService = {
     dequeueIndependent: vi.fn(async (n: number) => waiting.splice(0, Math.max(0, n))),
     updateActiveSlots: vi.fn().mockResolvedValue(undefined),
@@ -152,13 +164,15 @@ function buildManager(queued: number[], maxConcurrent = 3) {
     finishers.get(issueNumber)?.(SUCCESS);
     await manager.settleForTest(issueNumber);
   };
-  return { manager, running, finish, waiting };
+  return { manager, running, finish, waiting, queueService };
 }
 
 describe("ConcurrentPipelineManager — workspace throttle (#2337)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     fakeCloneLayout("/test-repo");
+    worktreeGate.issue = null;
+    worktreeGate.reached = false;
   });
 
   afterEach(() => {
@@ -265,5 +279,85 @@ describe("ConcurrentPipelineManager — workspace throttle (#2337)", () => {
     expect(vi.getTimerCount()).toBe(1);
     manager.dispose();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // #2337 review: a throttle that lands while a fill is starting the batch it
+  // dequeued under the old ceiling must stop the rest of that batch.
+  it("opens no slot above a cap lowered while a fill is starting its batch", async () => {
+    const { manager, running, finish, queueService } = buildManager([
+      1,
+      queueItem(2, { repoName: "acme/api", requestedAdapter: "codex", requestedModel: "gpt-5" }),
+      3,
+    ]);
+    manager.setPendingRemoteRunId(2, "platform-run-2");
+    worktreeGate.issue = 1;
+    const fill = manager.fillSlots();
+    await vi.waitFor(() => expect(worktreeGate.reached).toBe(true));
+
+    manager.setWorkspaceThrottle({ maxConcurrent: 1, resumeAt: null });
+    worktreeGate.release();
+    await fill;
+
+    expect(running()).toEqual([1]);
+    expect(manager.availableSlotCount).toBe(0);
+    // The items the old ceiling admitted go back to the queue, with what they
+    // were dequeued with, and their processing marks are cleared.
+    expect(queueService.complete).toHaveBeenCalledWith("acme/api", 2);
+    expect(queueService.complete).toHaveBeenCalledWith("", 3);
+    expect(queueService.enqueue).toHaveBeenCalledWith(2, "Issue #2", undefined, undefined, {
+      repoOverride: { owner: "acme", repo: "api" },
+      remoteRunId: "platform-run-2",
+      requestedAdapter: "codex",
+      requestedModel: "gpt-5",
+    });
+    expect(queueService.enqueue).toHaveBeenCalledWith(3, "Issue #3", undefined, undefined, {
+      remoteRunId: undefined,
+    });
+    // Issue 2 is queued again with its pending run id, so this window still
+    // holds that run, and the slot that opens for it later adopts the id.
+    queueService.getQueue.mockResolvedValue({
+      items: [queueItem(2, { repoName: "acme/api" })],
+      status: "waiting",
+    });
+    expect(manager.findSlotByRemoteRunId("platform-run-2")).toBeNull();
+    expect(await manager.holdsRemoteRun("platform-run-2")).toBe(true);
+
+    await finish(1);
+    manager.dispose();
+  });
+
+  it("changes nothing, and keeps the lift timer, when the same throttle is applied again", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2026-10-02T12:00:00.000Z"));
+    const { manager } = buildManager([]);
+    const onWorkspaceThrottleChanged = vi.fn();
+    manager.setCallbacks({ onWorkspaceThrottleChanged });
+    const throttle = { maxConcurrent: 1, resumeAt: "2026-10-02T13:00:00.000Z" };
+
+    manager.setWorkspaceThrottle(throttle);
+    manager.setWorkspaceThrottle({ ...throttle });
+    expect(onWorkspaceThrottleChanged).toHaveBeenCalledTimes(1);
+    expect(onWorkspaceThrottleChanged).toHaveBeenLastCalledWith(throttle);
+    expect(vi.getTimerCount()).toBe(1);
+
+    manager.setWorkspaceThrottle(null);
+    manager.setWorkspaceThrottle(null);
+    expect(onWorkspaceThrottleChanged).toHaveBeenCalledTimes(2);
+    expect(onWorkspaceThrottleChanged).toHaveBeenLastCalledWith(null);
+    expect(vi.getTimerCount()).toBe(0);
+    manager.dispose();
+  });
+
+  it("reports the lift at resumeAt to the throttle callback", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    vi.setSystemTime(new Date("2026-10-02T12:00:00.000Z"));
+    const { manager } = buildManager([]);
+    const onWorkspaceThrottleChanged = vi.fn();
+    manager.setCallbacks({ onWorkspaceThrottleChanged });
+    manager.setWorkspaceThrottle({ maxConcurrent: 0, resumeAt: "2026-10-02T12:10:00.000Z" });
+
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(onWorkspaceThrottleChanged).toHaveBeenLastCalledWith(null);
+    manager.dispose();
   });
 });

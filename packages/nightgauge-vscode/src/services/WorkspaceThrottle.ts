@@ -1,30 +1,34 @@
 /**
  * WorkspaceThrottle — the platform's workspace concurrency throttle, as this
- * agent applies it (#2337).
+ * window applies it (#2337).
  *
  * An owner or admin caps how many runs a workspace executes at once,
  * optionally until `resumeAt`. The platform enforces the cap on the triggers
- * it dispatches, and tells the workspace's agent two ways:
- *   - a `throttle` command on the agent's command stream whenever the cap is
- *     set (`{action: "set", maxConcurrent, resumeAt}`) or cleared
- *     (`{action: "cleared", maxConcurrent: null, resumeAt: null}`);
- *   - the `throttle` field of every registration response, the strictest
- *     cap in force for the agent, or null, so that an agent that restarts
- *     re-learns a cap it had already acknowledged.
+ * it dispatches, keeps it on the workspace, and publishes a `throttle`
+ * command to the agent the workspace is linked to whenever it is set or
+ * cleared.
  *
- * Every window applies the cap to its own dispatch
+ * The command does not name the workspace, and every window of the machine
+ * shares one agent while each serves its own workspace. So a window never
+ * applies a command's payload: the command, a (re)connected command stream
+ * and every authenticated session event make it read the throttle of its own
+ * workspace, by the manifest's slug, from the platform's workspace list
+ * (WorkspaceThrottleSync). A window whose manifest names no workspace has no
+ * throttle.
+ *
+ * The window applies the cap to its own dispatch
  * (ConcurrentPipelineManager.setWorkspaceThrottle): no new slot opens above
  * min(configured max_concurrent, maxConcurrent) until the throttle lifts, and
  * a slot already running is never stopped. WorkspaceThrottleState keeps the
- * applied cap in the extension's global state, so a reload, which reuses the
- * stored registration, does not forget it; a persisted cap makes the next
- * activation register again to refresh it.
+ * applied cap in the window's workspace state, so a reload holds dispatch at
+ * once, before the first read; the cap is kept and applied only while a
+ * platform session exists, and signing out lifts and forgets it.
  *
- * @see ThrottleCommandHandler — applies and acknowledges the command
+ * @see WorkspaceThrottleSync — reads the throttle and follows the session
+ * @see ThrottleCommandHandler — answers the `throttle` command
  */
 
 import type * as vscode from "vscode";
-import type { AgentRegistrationService } from "./AgentRegistrationService";
 import type { ConcurrentPipelineManager } from "./ConcurrentPipelineManager";
 import type { Logger } from "../utils/logger";
 
@@ -35,7 +39,7 @@ export interface WorkspaceThrottle {
   resumeAt: string | null;
 }
 
-/** A throttle command's payload: the throttle to apply (null clears), or why it is invalid. */
+/** A throttle command's payload: the throttle it announces (null clears), or why it is invalid. */
 export type ParsedThrottleCommand = { throttle: WorkspaceThrottle | null } | { invalid: string };
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -71,10 +75,10 @@ export function parseThrottleCommand(payload: unknown): ParsedThrottleCommand {
 }
 
 /**
- * Parse a stored or reported throttle object (`{maxConcurrent, resumeAt}`,
- * as the registration response and the persisted state carry it). Returns
- * null for an explicit null, and undefined when the value is absent or is not
- * a valid throttle, so a caller never mistakes a malformed value for "no
+ * Parse a reported or stored throttle object (`{maxConcurrent, resumeAt}`, as
+ * the platform's workspace list and the kept state carry it). Returns null
+ * for an explicit null, and undefined when the value is absent or is not a
+ * valid throttle, so a caller never mistakes a malformed value for "no
  * throttle".
  */
 export function parseThrottleValue(value: unknown): WorkspaceThrottle | null | undefined {
@@ -93,13 +97,31 @@ export function throttleInForce(throttle: WorkspaceThrottle, now: number): boole
   return throttle.resumeAt === null || now < Date.parse(throttle.resumeAt);
 }
 
-/** The global-state key the applied throttle is kept under. */
+/**
+ * The throttle in words, for the queue view and the Resume Queue message:
+ * "1 run at once until <local time>", or "... until it is cleared".
+ */
+export function describeWorkspaceThrottle(throttle: WorkspaceThrottle): string {
+  const runs = `${throttle.maxConcurrent} ${throttle.maxConcurrent === 1 ? "run" : "runs"} at once`;
+  return throttle.resumeAt === null
+    ? `${runs} until it is cleared`
+    : `${runs} until ${new Date(throttle.resumeAt).toLocaleString()}`;
+}
+
+/** The workspace-state key the applied throttle is kept under. */
 export const WORKSPACE_THROTTLE_STATE_KEY = "nightgauge.workspaceThrottle";
 
+/** The kept value: the throttle, and the workspace (manifest slug) it belongs to. */
+interface KeptThrottle extends WorkspaceThrottle {
+  slug: string;
+}
+
 /**
- * The throttle this window applies, kept across reloads (#2337). The agent
- * id is per machine, and every window of the machine receives the same
- * throttle, so the extension's global state is the right scope.
+ * The throttle this window applies, kept across reloads (#2337). It is kept
+ * in the window's workspace state, with the slug of the platform workspace
+ * it belongs to, and restored only for that slug: a window serving another
+ * workspace, or the same folder after its manifest names another workspace,
+ * never starts from it.
  */
 export class WorkspaceThrottleState {
   constructor(
@@ -110,45 +132,52 @@ export class WorkspaceThrottleState {
   ) {}
 
   /**
-   * Apply the throttle an earlier session kept, unless it has lifted since;
-   * a lifted or unreadable one is dropped.
+   * Apply the throttle an earlier session kept for workspace `slug`, unless
+   * it has lifted since. A lifted, unreadable or other workspace's one is
+   * dropped.
    */
-  restore(): void {
+  restore(slug: string | null): void {
     const stored = this.memento.get<unknown>(WORKSPACE_THROTTLE_STATE_KEY);
     if (stored === undefined) return;
     const throttle = parseThrottleValue(stored);
-    if (!throttle || !throttleInForce(throttle, this.now())) {
-      void this.forget();
+    const keptFor = isObject(stored) && typeof stored.slug === "string" ? stored.slug : null;
+    if (
+      !throttle ||
+      keptFor === null ||
+      keptFor !== slug ||
+      !throttleInForce(throttle, this.now())
+    ) {
+      void this.keep(undefined);
       return;
     }
-    this.logger.info("WorkspaceThrottleState: restoring the workspace throttle", { ...throttle });
+    this.logger.info("WorkspaceThrottleState: restoring the workspace throttle", {
+      slug,
+      ...throttle,
+    });
     this.target.setWorkspaceThrottle(throttle);
-  }
-
-  /** Whether a throttle is kept: a reload should register again to refresh it. */
-  hasPersisted(): boolean {
-    return this.memento.get<unknown>(WORKSPACE_THROTTLE_STATE_KEY) !== undefined;
   }
 
   /**
-   * Apply a throttle to dispatch and keep it; null clears both. Dispatch has
-   * the throttle once this returns; keeping it is best effort, and a failure
-   * to keep it is logged.
+   * Apply workspace `slug`'s throttle to dispatch and keep it; null clears
+   * both. Dispatch has the throttle once this returns; keeping it is best
+   * effort, and a failure to keep it is logged.
    */
-  async apply(throttle: WorkspaceThrottle | null): Promise<void> {
+  async apply(slug: string | null, throttle: WorkspaceThrottle | null): Promise<void> {
     this.target.setWorkspaceThrottle(throttle);
-    if (throttle === null || !throttleInForce(throttle, this.now())) {
-      await this.forget();
+    if (slug === null || throttle === null || !throttleInForce(throttle, this.now())) {
+      await this.keep(undefined);
       return;
     }
-    await this.keep({ maxConcurrent: throttle.maxConcurrent, resumeAt: throttle.resumeAt });
+    await this.keep({ slug, maxConcurrent: throttle.maxConcurrent, resumeAt: throttle.resumeAt });
   }
 
-  private forget(): Promise<void> {
-    return this.keep(undefined);
+  /** Lift the cap and forget the kept throttle: the window has no platform session. */
+  async clear(): Promise<void> {
+    this.target.setWorkspaceThrottle(null);
+    await this.keep(undefined);
   }
 
-  private async keep(value: WorkspaceThrottle | undefined): Promise<void> {
+  private async keep(value: KeptThrottle | undefined): Promise<void> {
     try {
       await this.memento.update(WORKSPACE_THROTTLE_STATE_KEY, value);
     } catch (err) {
@@ -157,19 +186,4 @@ export class WorkspaceThrottleState {
       });
     }
   }
-}
-
-/**
- * Apply the throttle a successful registration reported (#2337). The
- * registering agent becomes the one its workspace is linked to, so the
- * response is the cap in force for that workspace now, and null clears one
- * kept from before. A response with no valid throttle changes nothing.
- */
-export async function applyRegistrationThrottle(
-  registration: Pick<AgentRegistrationService, "getLastThrottle"> | null | undefined,
-  state: Pick<WorkspaceThrottleState, "apply"> | null | undefined
-): Promise<void> {
-  const throttle = registration?.getLastThrottle();
-  if (throttle === undefined || !state) return;
-  await state.apply(throttle);
 }

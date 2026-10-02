@@ -493,6 +493,39 @@ describe("AgentCommandStreamService", () => {
     svc.dispose();
   });
 
+  // #2337: a command published while the stream was down is replayed only
+  // until someone acknowledges it, so the window reads the state it announces
+  // again on every connect.
+  it("calls onConnected each time the stream connects, and not when a connect fails", async () => {
+    vi.useFakeTimers();
+    const randSpy = vi.spyOn(Math, "random").mockReturnValue(0.5);
+    mockFetch
+      .mockResolvedValueOnce({ ok: true, status: 200, statusText: "OK", body: makeSSEStream([]) })
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValueOnce({ ok: true, status: 200, statusText: "OK", body: makeSSEStream([]) })
+      .mockReturnValue(new Promise(() => {}));
+    const onConnected = vi.fn();
+    const svc = new AgentCommandStreamService(
+      () => "https://api.example.com",
+      makeMockTokenStorage(),
+      makeContext(),
+      makeLogger(),
+      makeHandler(),
+      onConnected
+    );
+
+    svc.start("agent-9");
+    await vi.waitFor(() => expect(onConnected).toHaveBeenCalledTimes(1));
+    // The server closes the stream; the reconnect fails once, then succeeds.
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(onConnected).toHaveBeenCalledTimes(2));
+
+    svc.dispose();
+    randSpy.mockRestore();
+  });
+
   // ── Reconnect backoff (#3554) ───────────────────────────────────────────────
 
   describe("reconnect backoff", () => {
