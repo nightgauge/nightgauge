@@ -59,11 +59,17 @@ import (
 	"time"
 )
 
-// compactionStubBudget bounds the whole opencode run: the probe this test's
-// config was derived from completed in ~1-2s once compaction routed to its
-// own stub, so 45s leaves wide headroom without masking a real hang as a
-// slow pass.
-const compactionStubBudget = 45 * time.Second
+// compactionStubBudget bounds `opencode run` and nothing else: the nightgauge
+// build its hooks need happens before the clock starts (#2347). The probe this
+// test's config was derived from completed in ~1-2s once compaction routed to
+// its own stub, but the fixture's run is a fixed 35-37 loop steps, and each
+// step spawns hook processes. Measured on a loaded 12-core machine, OpenCode's
+// part took 11-25 s; under heavier CPU contention it ran at about 1 s a step
+// with no stall, and the old 45 s budget killed it just short of the end
+// (step 30 at +38 s). Two minutes is over twice that contended worst. A
+// runaway continuation (the negative control logged 311+ loop steps) is still
+// killed, and the kill fails the test.
+const compactionStubBudget = 2 * time.Minute
 
 // buildStubProviderBin builds cmd/stub-provider once per test process, the
 // same pattern buildNightgaugeBin (plugin_test.go) uses for cmd/nightgauge.
@@ -271,9 +277,10 @@ func runCompactionStub(t *testing.T, real string, growth, summary stubInstance) 
 
 	configContent := compactionStubConfig(sh.pluginEntry, growth.baseURL, summary.baseURL)
 
+	// Build first: the budget times the run, not a go build (#2347).
+	hookBin, waitForHooks := trackedHookBin(t, buildNightgaugeBin(t))
 	ctx, cancel := context.WithTimeout(context.Background(), compactionStubBudget)
 	defer cancel()
-	hookBin, waitForHooks := trackedHookBin(t, buildNightgaugeBin(t))
 	cmd := exec.CommandContext(ctx, real, "run", "please do the task, using bash as needed",
 		"-m", "lmstudio/stub-model", "--agent", "build", "--print-logs", "--log-level", "DEBUG")
 	cmd.Dir = projectDir
@@ -331,10 +338,29 @@ func runCompactionStub(t *testing.T, real string, growth, summary stubInstance) 
 // isolated HOME/XDG environment the run itself used, so it reads that run's
 // own session store rather than any other. It is a read-only follow-up call,
 // never the run under test.
+//
+// Its stdout is an unlinked temporary file, never a pipe (#2346), for the
+// reason the production fold's helper gives (opencode_usage.go, #2165):
+// OpenCode prints the export with a single write and then calls
+// process.exit(), and into a pipe its runtime writes only what the pipe
+// accepts at once (64 KiB) and drops the rest. This session's export is
+// larger than that, with the second synthetic continue turn a few KB under
+// the cut, so a piped capture counted 1 whenever run-to-run variation moved
+// that turn past it. Stderr is kept apart, so what is returned is the export
+// alone, and it must parse: a cut-short export fails here, by name, instead
+// of being counted.
 func exportSanitized(t *testing.T, result compactionStubResult) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	stdout, err := os.CreateTemp(t.TempDir(), "opencode-export-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdout.Close()
+	if err := os.Remove(stdout.Name()); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.CommandContext(ctx, result.real, "export", "--sanitize", result.sessionID)
 	cmd.Dir = t.TempDir()
 	cmd.Env = []string{
@@ -348,11 +374,26 @@ func exportSanitized(t *testing.T, result compactionStubResult) string {
 		"OPENCODE_DISABLE_MODELS_FETCH=1",
 		pluginIntegrationNoRegistry,
 	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("opencode export --sanitize %s: %v\n%s", result.sessionID, err, out)
+	var stderr bytes.Buffer
+	cmd.Stdout = stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("opencode export --sanitize %s: %v\nstderr:\n%s", result.sessionID, err, stderr.String())
 	}
-	return string(out)
+	info, err := stdout.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The process shared the file's offset, so read from the start, not from
+	// where the process left it.
+	exported := make([]byte, info.Size())
+	if _, err := stdout.ReadAt(exported, 0); err != nil {
+		t.Fatalf("reading the export of %s: %v", result.sessionID, err)
+	}
+	if !json.Valid(exported) {
+		t.Fatalf("opencode export --sanitize %s printed %d bytes that do not parse as JSON, so nothing in it can be counted\nstderr:\n%s", result.sessionID, len(exported), stderr.String())
+	}
+	return string(exported)
 }
 
 // TestCompactionAutocontinueSuppressionAgainstRealOpenCode is #1641's own
@@ -417,9 +458,10 @@ func TestPermissionAskEventAgainstRealOpenCode(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Build first: the budget times the run, not a go build (#2347).
+	hookBin, waitForHooks := trackedHookBin(t, buildNightgaugeBin(t))
 	ctx, cancel := context.WithTimeout(context.Background(), compactionStubBudget)
 	defer cancel()
-	hookBin, waitForHooks := trackedHookBin(t, buildNightgaugeBin(t))
 	cmd := exec.CommandContext(ctx, real, "run", "please do the task, using bash as needed",
 		"-m", "lmstudio/stub-model", "--agent", "build", "--print-logs", "--log-level", "DEBUG")
 	cmd.Dir = projectDir

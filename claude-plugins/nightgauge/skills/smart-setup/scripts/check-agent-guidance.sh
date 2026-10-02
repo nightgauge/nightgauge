@@ -509,7 +509,9 @@ else
       }
       END { if (!intable || rows == 0) print "NOTABLE" }
     ' "$ROUTING_PATH")
-    if printf '%s\n' "$table_paths" | grep -qx 'NOTABLE'; then
+    # A here-string, not `printf | grep -q`: under pipefail, grep -q exiting at
+    # the first match SIGPIPEs printf and turns the match into a miss (#2362).
+    if grep -qx 'NOTABLE' <<<"$table_paths"; then
       fail "routing table not found under the routing heading in $ROUTING"
     fi
     while IFS= read -r entry; do

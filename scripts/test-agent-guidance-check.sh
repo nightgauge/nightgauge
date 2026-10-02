@@ -551,6 +551,19 @@ else
   FAIL=$((FAIL + 1))
 fi
 
+# #2362: nothing in the check is piped into grep -q. Under pipefail, grep -q
+# exiting at its first match SIGPIPEs the producer and turns a match into a
+# miss, intermittently, so the shape itself is forbidden. Comment lines are
+# exempt: they name the pattern.
+hits="$(grep -nE '\|[[:space:]]*grep[[:space:]]+(-[A-Za-z]*q|--quiet)' "$CHECK" | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
+if [ -z "$hits" ]; then
+  ok "the check never pipes a producer into grep -q"
+else
+  echo "FAIL  the check pipes a producer into grep -q (#2362):"
+  printf '      %s\n' "$hits"
+  FAIL=$((FAIL + 1))
+fi
+
 echo
 if [ "$FAIL" -gt 0 ]; then
   echo "$FAIL agent-guidance check test(s) failed, $PASS passed"
