@@ -676,9 +676,9 @@ func splitFrontmatter(content string) (body string, fm frontmatter) {
 	body = content[4+endIdx+4:]
 	return body, frontmatter{
 		Name:              extractYAMLField(head, "name"),
-		AllowedTools:      splitTools(extractYAMLField(head, "allowed-tools")),
-		ProgrammaticTools: splitTools(extractYAMLField(head, "programmatic-tools")),
-		MCPTools:          splitTools(extractYAMLField(head, "mcp-tools")),
+		AllowedTools:      extractToolList(head, "allowed-tools"),
+		ProgrammaticTools: extractToolList(head, "programmatic-tools"),
+		MCPTools:          extractToolList(head, "mcp-tools"),
 	}
 }
 
@@ -692,6 +692,46 @@ func extractYAMLField(frontmatter string, key string) string {
 		}
 	}
 	return ""
+}
+
+// extractToolList reads a frontmatter tool field into its entries: the value
+// on the key's line, as extractYAMLField reads it and splitTools splits it,
+// or, when that line has no value at all, the YAML block list on the lines
+// after it, one `- entry` per line. Blank and `#` comment lines inside the list
+// are skipped, and the first other line ends it. Each item is unquoted and
+// split as an inline value is.
+//
+// It used to read the key's line alone, so a block list declared no tools, and
+// the extension, which gives a skill that declares none its default set, then
+// granted Bash, Write and Edit to a skill that asked for Read and Grep (#2358).
+// The SDK reads the same grammar (skillAllowedTools.ts).
+func extractToolList(frontmatter string, key string) []string {
+	prefix := key + ":"
+	lines := strings.Split(frontmatter, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, prefix) {
+			continue
+		}
+		if value := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix)); value != "" {
+			return splitTools(strings.Trim(value, "\"'"))
+		}
+		var entries []string
+		for _, next := range lines[i+1:] {
+			item := strings.TrimSpace(next)
+			if item == "" || strings.HasPrefix(item, "#") {
+				continue
+			}
+			// A list item is a dash alone or a dash and a space: `-Read` is not one.
+			rest, ok := strings.CutPrefix(item, "-")
+			if !ok || (rest != "" && strings.TrimLeftFunc(rest, unicode.IsSpace) == rest) {
+				break
+			}
+			entries = append(entries, splitTools(strings.Trim(strings.TrimSpace(rest), "\"'"))...)
+		}
+		return entries
+	}
+	return nil
 }
 
 // splitTools splits a frontmatter tool list into its entries.

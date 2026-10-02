@@ -3677,6 +3677,37 @@ mcp-tools: mcp__github__*, mcp__slack__*
     expect(tools).not.toContain("");
   });
 
+  it("grants an injected YAML block list exactly, not the default set (#2358)", () => {
+    // Read as no list, a block list used to get the default set, Bash,
+    // Write and Edit among it, which this skill does not ask for.
+    const injectedContent = `---
+name: platform-skill
+allowed-tools:
+  - Read
+  - Grep
+---
+# Read-only platform skill
+`;
+    vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      injectedContent
+    );
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    expect(args[args.indexOf("--allowedTools") + 1]).toBe("Read,Grep");
+  });
+
   it("should fall back to disk on injected content parse failure", () => {
     // Empty string content — parseSkillContent should return null
     const injectedContent = "";

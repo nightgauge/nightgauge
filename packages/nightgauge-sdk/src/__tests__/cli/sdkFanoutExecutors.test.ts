@@ -506,6 +506,37 @@ describe("SdkFanoutExecutors (#3911)", () => {
       expect(terminal?.terminalKind).toBe("timeout");
     });
 
+    it("adapterEphemeralExec hands the unit's tools to the adapter's query (#2358)", async () => {
+      const seen: Array<string[] | undefined> = [];
+      const queryFn: SDKQueryFunction = (q) => {
+        seen.push(q.options?.allowedTools);
+        return (async function* (): AsyncGenerator<SDKMessage> {
+          yield { type: "result", usage: {}, total_cost_usd: 0 };
+        })();
+      };
+      const adapter = fakeAdapter("codex", queryFn);
+      await adapterEphemeralExec({ adapter, prompt: "p", allowedTools: ["Read", "Grep"] });
+      await adapterEphemeralExec({ adapter, prompt: "p" });
+
+      expect(seen).toEqual([["Read", "Grep"], undefined]);
+    });
+
+    it("runAgent and runJudge pass the unit's tools to the exec (#2358)", async () => {
+      const exec = vi.fn(async () => ({ text: '{"verdict":"pass"}' }));
+      const bindings = makeSdkFanoutBindings(fakeAdapter("codex"), { exec });
+      const unit = { allowedTools: ["Read", "Grep"] };
+      await bindings.runAgent({ agentId: "a0", prompt: "p", provider: "codex" }, unit);
+      await bindings.runJudge({ judgeId: "j0", prompt: "p" }, "a0", unit);
+      await bindings.runAgent({ agentId: "a1", prompt: "p", provider: "codex" });
+
+      const calls = exec.mock.calls as unknown as Array<[{ allowedTools?: readonly string[] }]>;
+      expect(calls.map(([input]) => input.allowedTools)).toEqual([
+        ["Read", "Grep"],
+        ["Read", "Grep"],
+        undefined,
+      ]);
+    });
+
     it("a unit that starts after the stop never spawns", async () => {
       const create = vi.fn();
       const adapter = fakeAdapter("opencode");

@@ -96,6 +96,13 @@ export type EphemeralExec = (input: {
    * adapter's, ends its process with the stage. @see Issue #1765
    */
   abortSignal?: AbortSignal;
+  /**
+   * The tools the unit is granted, the owning stage skill's (WorkflowSpec
+   * `allowedTools`). The exec hands them to the query as the stage's
+   * single-agent query gets them: Codex scopes its sandbox to them and
+   * claude-headless passes them as `--allowedTools`. @see Issue #2358
+   */
+  allowedTools?: readonly string[];
 }) => Promise<EphemeralExecResult>;
 
 /**
@@ -202,6 +209,7 @@ export const adapterEphemeralExec: EphemeralExec = async ({
   stage,
   cwd,
   abortSignal,
+  allowedTools,
 }): Promise<EphemeralExecResult> => {
   // A unit queued behind the concurrency ceiling may start after the stage
   // stopped; it never spawns.
@@ -213,7 +221,13 @@ export const adapterEphemeralExec: EphemeralExec = async ({
   let tokens: EphemeralExecResult["tokens"];
   let resolvedModel = model;
 
-  for await (const message of query({ prompt, options: { model, cwd, abortSignal } })) {
+  const options = {
+    model,
+    cwd,
+    abortSignal,
+    ...(allowedTools !== undefined && { allowedTools: [...allowedTools] }),
+  };
+  for await (const message of query({ prompt, options })) {
     // An adapter whose query ignores the signal stops being drained; leaving
     // the loop returns its generator, which ends its process.
     abortSignal?.throwIfAborted();
@@ -354,6 +368,7 @@ export function makeSdkFanoutBindings(
           stage,
           cwd,
           abortSignal,
+          ...(unit?.allowedTools !== undefined && { allowedTools: unit.allowedTools }),
         });
         return {
           usage: usageFromExec(result, adapter, agent.model),
@@ -384,6 +399,7 @@ export function makeSdkFanoutBindings(
         stage,
         cwd,
         abortSignal: unit?.abortSignal,
+        ...(unit?.allowedTools !== undefined && { allowedTools: unit.allowedTools }),
       });
       const outcome = parseJudgeOutcome(result.text);
       return {

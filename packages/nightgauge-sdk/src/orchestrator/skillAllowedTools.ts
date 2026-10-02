@@ -1,7 +1,7 @@
 /**
  * skillAllowedTools — a stage SKILL.md's `allowed-tools`, read exactly as the
  * Go side reads them (internal/skillrender/render.go: splitFrontmatter and
- * extractYAMLField find the field, splitTools splits it, FilterHeadlessTools
+ * extractToolList find the field, splitTools splits it, FilterHeadlessTools
  * drops what a non-interactive run cannot use).
  *
  * The SDK stage path used to hand its query no tools at all, so a stage run
@@ -34,20 +34,38 @@ function trimWhere(value: string, drop: (ch: string) => boolean): string {
   return value.slice(start, end);
 }
 
+function isQuote(ch: string): boolean {
+  return ch === '"' || ch === "'";
+}
+
 /**
- * The value of the first frontmatter line whose trimmed text starts with
- * `key:`, trimmed and stripped of surrounding quotes (Go's extractYAMLField).
+ * The entries of the first frontmatter field whose line, trimmed, starts with
+ * `key:` (Go's extractToolList): the value on that line, trimmed, unquoted and
+ * split, or, when the line has no value at all, the YAML block list on the
+ * lines after it, one `- entry` per line. Blank and `#` comment lines inside
+ * the list are skipped, and the first other line ends it. Each item is
+ * unquoted and split as an inline value is, so a block list reads as the
+ * same list written inline.
  */
-function frontmatterField(head: string, key: string): string {
+function frontmatterTools(head: string, key: string): string[] {
   const prefix = `${key}:`;
-  for (const line of head.split("\n")) {
-    const trimmed = trimWhere(line, isSpace);
-    if (trimmed.startsWith(prefix)) {
-      const value = trimWhere(trimmed.slice(prefix.length), isSpace);
-      return trimWhere(value, (ch) => ch === '"' || ch === "'");
+  const lines = head.split("\n");
+  for (let i = 0; i < lines.length; i += 1) {
+    const trimmed = trimWhere(lines[i], isSpace);
+    if (!trimmed.startsWith(prefix)) continue;
+    const value = trimWhere(trimmed.slice(prefix.length), isSpace);
+    if (value !== "") return splitAllowedTools(trimWhere(value, isQuote));
+    const entries: string[] = [];
+    for (const next of lines.slice(i + 1)) {
+      const item = trimWhere(next, isSpace);
+      if (item === "" || item.startsWith("#")) continue;
+      // A list item is a dash alone or a dash and a space: `-Read` is not one.
+      if (!item.startsWith("-") || (item.length > 1 && !isSpace(item[1]))) break;
+      entries.push(...splitAllowedTools(trimWhere(trimWhere(item.slice(1), isSpace), isQuote)));
     }
+    return entries;
   }
-  return "";
+  return [];
 }
 
 /**
@@ -89,7 +107,7 @@ export function skillFrontmatterTools(skillContent: string, field: SkillToolFiel
   if (!skillContent.startsWith("---\n")) return [];
   const end = skillContent.indexOf("\n---", 4);
   if (end < 0) return [];
-  return splitAllowedTools(frontmatterField(skillContent.slice(4, end), field));
+  return frontmatterTools(skillContent.slice(4, end), field);
 }
 
 /**

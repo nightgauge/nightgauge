@@ -1,5 +1,5 @@
 {
-  "about": "A SKILL.md per case and the tool lists a reader must take from it: `declared` is its allowed-tools read verbatim, `headless` what a non-interactive run is granted, and `mcp` / `programmatic`, where a case has them, its mcp-tools and programmatic-tools. internal/skillrender (splitFrontmatter, splitTools, FilterHeadlessTools) and the SDK (skillAllowedTools.ts) both read this file (#2358).",
+  "about": "A SKILL.md per case and the tool lists a reader must take from it: `declared` is its allowed-tools read verbatim, inline or as a YAML block list, `headless` what a non-interactive run is granted, and `mcp` / `programmatic`, where a case has them, its mcp-tools and programmatic-tools. internal/skillrender (splitFrontmatter, splitTools, FilterHeadlessTools) and the SDK (skillAllowedTools.ts) both read this file (#2358).",
   "cases": [
     {
       "name": "a pipeline stage's space-separated set",
@@ -106,6 +106,56 @@
       "headless": ["Read"],
       "mcp": ["all"],
       "programmatic": []
+    },
+    {
+      "name": "a YAML block list",
+      "skill": "---\nname: s\nallowed-tools:\n  - Read\n  - Grep\n---\nBody\n",
+      "declared": ["Read", "Grep"],
+      "headless": ["Read", "Grep"]
+    },
+    {
+      "name": "a block list at the key's indent, quoted, with a pattern",
+      "skill": "---\nname: s\nallowed-tools:\n- 'Read'\n- \"Bash(gh *)\"\n- AskUserQuestion\n---\nBody\n",
+      "declared": ["Read", "Bash(gh *)", "AskUserQuestion"],
+      "headless": ["Read", "Bash(gh *)"]
+    },
+    {
+      "name": "a block list skips blank and comment lines and ends at the next key",
+      "skill": "---\nname: s\nallowed-tools:\n  - Read\n\n  # search too\n  - Grep\ndescription: d\n  - Bash\n---\nBody\n",
+      "declared": ["Read", "Grep"],
+      "headless": ["Read", "Grep"]
+    },
+    {
+      "name": "every tool field reads a block list",
+      "skill": "---\nname: s\nallowed-tools:\n  - Read\nmcp-tools:\n  - mcp__github__*\n  - mcp__slack__*\nprogrammatic-tools:\n  - run_tests\n---\nBody\n",
+      "declared": ["Read"],
+      "headless": ["Read"],
+      "mcp": ["mcp__github__*", "mcp__slack__*"],
+      "programmatic": ["run_tests"]
+    },
+    {
+      "name": "a dash without a space is not a list item",
+      "skill": "---\nname: s\nallowed-tools:\n  - Read\n  -Grep\n  - Glob\n---\nBody\n",
+      "declared": ["Read"],
+      "headless": ["Read"]
+    },
+    {
+      "name": "an empty list item adds nothing",
+      "skill": "---\nname: s\nallowed-tools:\n  -\n  - Read\n---\nBody\n",
+      "declared": ["Read"],
+      "headless": ["Read"]
+    },
+    {
+      "name": "a value on the key's line is not followed by a block list",
+      "skill": "---\nname: s\nallowed-tools: Read\n  - Bash\n---\nBody\n",
+      "declared": ["Read"],
+      "headless": ["Read"]
+    },
+    {
+      "name": "a quoted empty value is a value",
+      "skill": "---\nname: s\nallowed-tools: \"\"\n  - Bash\n---\nBody\n",
+      "declared": [],
+      "headless": []
     },
     {
       "name": "an empty value",

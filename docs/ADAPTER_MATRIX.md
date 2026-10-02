@@ -277,9 +277,9 @@ surfaces at the preflight check rather than mid-query. It also runs the
 native-workflow version preflight, which never hard-fails auth — a stale SDK
 simply downgrades orchestration to the `sdk-fanout` floor.
 
-**Allowed tools:** a stage's query receives the stage skill's allowed-tools as the
-Agent SDK's `allowedTools`, the tools it runs without asking (#2358). Before #2358
-it received none. Any other tool that asks for permission is refused in a headless
+**Allowed tools:** a stage's query, and each unit's query when the stage fans out,
+receives the stage skill's allowed-tools as the Agent SDK's `allowedTools`, the tools
+it runs without asking (#2358). Before #2358 it received none. Any other tool that asks for permission is refused in a headless
 run, as under the Go adapters' `--allowedTools`. The query does not set `tools`, so
 the model's built-in tool list is unchanged.
 
@@ -324,11 +324,15 @@ Error message: `codex CLI is not authenticated. Run 'codex login' to authenticat
   flag, so the skill's `allowed-tools` are mapped onto Codex's sandbox mode +
   approval policy (`resolveCodexSandboxMode` in `codexSandbox.ts` / `codex_sandbox.go`,
   single source of truth shared by both spawn paths). On the SDK path the tools
-  are the stage SKILL.md's, which `PipelineOrchestrator` reads as the Go side does
-  (#2358); before #2358 they never reached the query, so every SDK-path stage ran
-  with full access whatever its skill declared. The mapping only ever
+  are the stage's base SKILL.md's, which `PipelineOrchestrator` reads as the Go side
+  does and hands to the stage's query and to each fanned-out unit's (#2358). Before
+  #2358 they never reached a query, so every SDK-path stage ran with full access
+  whatever its skill declared. The SDK path applies no skill overlay, so a whole-file
+  override (`_overlays/<key>.SKILL.md`) that narrows a stage's tools narrows them on
+  the Go path only (#2381). The mapping only ever
   TIGHTENS with positive evidence — default is full access so autonomous runs are
   never locked out:
+
   | allowed-tools                                                             | Codex flags                                                |
   | ------------------------------------------------------------------------- | ---------------------------------------------------------- |
   | absent/empty, or any of `Bash`/`Task`/`WebFetch`/`WebSearch`/`mcp__*`     | `--dangerously-bypass-approvals-and-sandbox` (full access) |
@@ -338,6 +342,11 @@ Error message: `codex CLI is not authenticated. Run 'codex login' to authenticat
   | codex option, so it goes before `exec` (#1715). `exec resume` refuses     |
   | `--sandbox`, so a resumed stage carries the same mode as                  |
   | `-c sandbox_mode="<mode>"` (#2342).                                       |
+
+  Both paths map the tools a headless run is granted, so `AskUserQuestion` is dropped
+  first: a skill whose only declared tool is `AskUserQuestion` grants none and runs with
+  full access, while one that declares `Read AskUserQuestion` runs read-only.
+
 - **Model routing:** `NIGHTGAUGE_CODEX_MODEL` env var → `--model <value>`
 
 **Go adapter (`nightgauge run --adapter codex`, #4019):**

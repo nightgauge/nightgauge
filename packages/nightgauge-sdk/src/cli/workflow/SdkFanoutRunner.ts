@@ -135,6 +135,12 @@ export interface WorkflowExecutorBindings {
  */
 export interface WorkflowUnitContext {
   abortSignal?: AbortSignal;
+  /**
+   * The tools the unit's query is granted, the spec's
+   * {@link WorkflowSpec.allowedTools}. A binding passes them to its query as
+   * the single-agent stage path does. @see Issue #2358
+   */
+  allowedTools?: readonly string[];
 }
 
 /** Per-phase counts in the run summary. */
@@ -267,7 +273,11 @@ export async function runSdkFanout(
 
   const nextSeq = createSeqCounter();
   const now = (): string => new Date().toISOString();
-  const unit: WorkflowUnitContext = { abortSignal: options.abortSignal };
+  const unit: WorkflowUnitContext = {
+    abortSignal: options.abortSignal,
+    ...(spec.allowedTools !== undefined &&
+      spec.allowedTools.length > 0 && { allowedTools: spec.allowedTools }),
+  };
 
   // Carries the non-deferred quota-gate decision onto the final summary when a
   // provider was supplied; stays undefined when no provider gated the run.

@@ -147,6 +147,26 @@ changelog, and the release workflow refuses a tag that does not.
   entry such as `Bash(gh *)`, which the binary used to cut in two, stays
   whole. Shipped stages keep full Codex access, since each grants `Bash`.
 
+- **A stage `nightgauge-sdk stage` or `run` runs is granted the tools its
+  skill declares** (#2358). Those commands, which the VS Code extension uses
+  for every non-Claude adapter, built each stage's query, and each fanned-out
+  unit's, with no tools. Both now get the stage SKILL.md's `allowed-tools`
+  without `AskUserQuestion`, as the Go pipeline grants them from the same
+  file: the Claude Agent SDK receives them as `allowedTools` where it received
+  none, `claude-headless` as `--allowedTools` (without it, `--print` refused
+  any tool that needs permission unless the user's settings allowed it),
+  Codex scopes its sandbox to them on a fresh start and on a resume, and
+  OpenCode tells a refused granted tool from one never granted. That file is
+  the stage's base SKILL.md: the SDK path applies no skill overlay, so a
+  whole-file override changes neither its prompt nor its tools (#2381).
+  The binary, the SDK and the extension read the field the same way: entries
+  are separated by spaces or commas or written one per line as a YAML block
+  list, and a `Tool(pattern)` entry such as `Bash(gh *)`, which the binary
+  used to cut in two, stays whole. A block list used to read as no list, so
+  the extension granted its default tools, `Bash`, `Write` and `Edit` among
+  them, in its place. Shipped stages keep full Codex access, since each
+  grants `Bash`.
+
 - **A slow reap of the complexity-model lock broker no longer hides why the
   transaction failed** (#2356). The extension waited for a broker it had sent
   SIGKILL as briefly as for one asked to exit, and an error from that wait

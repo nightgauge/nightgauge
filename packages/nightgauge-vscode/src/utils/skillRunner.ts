@@ -3139,9 +3139,10 @@ function parseSkillContent(raw: string): {
   try {
     const frontmatterMatch = raw.match(/^---\n([\s\S]*?)\n---/);
     // Each tool list is read as the binary reads a SKILL.md on disk (#2358):
-    // entries separated by spaces or commas, a `Tool(pattern)` entry whole.
-    // An absent or empty list reads as the render envelope's omitted one:
-    // the historical default for allowed-tools, none for the others.
+    // entries separated by spaces or commas, a `Tool(pattern)` entry whole,
+    // inline or as a YAML block list. An absent or empty list reads as the
+    // render envelope's omitted one: the historical default for allowed-tools,
+    // none for the others.
     const declaredTools = skillAllowedTools(raw);
     const allowedTools = declaredTools.length > 0 ? declaredTools : [...DEFAULT_ALLOWED_TOOLS];
     const mcpTools = skillFrontmatterTools(raw, "mcp-tools");

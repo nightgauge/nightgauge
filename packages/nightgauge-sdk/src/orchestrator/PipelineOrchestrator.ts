@@ -362,8 +362,8 @@ export class PipelineOrchestrator {
 
     // Read the SAME skill content `buildStagePrompt` loads, and compile its
     // `orchestration:` block. No block (or no usable units) → single-agent.
-    const { skillContent } = await loadStageSkill(stage, this.config.skillsPath);
-    const spec = parseOrchestrationFrontmatter(skillContent, {
+    const skill = await loadStageSkill(stage, this.config.skillsPath);
+    const spec = parseOrchestrationFrontmatter(skill.skillContent, {
       runId: `wf-${issueNumber}-${stage}`,
       issueNumber,
       stage,
@@ -379,7 +379,14 @@ export class PipelineOrchestrator {
       return { kind: "single-agent" };
     }
 
-    return { kind: "workflow", spec, executor };
+    // Every fanned-out unit is granted the tools the stage's single-agent query
+    // would be, out of the same SKILL.md (#2358).
+    const allowedTools = filterHeadlessTools(skill.allowedTools);
+    return {
+      kind: "workflow",
+      spec: allowedTools.length > 0 ? { ...spec, allowedTools } : spec,
+      executor,
+    };
   }
 
   /**
@@ -796,6 +803,11 @@ export class PipelineOrchestrator {
    * scheduler grants them (FilterHeadlessTools). A skill that declares no
    * tools leaves `allowedTools` unset, as the Go path leaves
    * RunOptions.AllowedTools empty. @see Issue #2358
+   *
+   * That SKILL.md is the stage's base one. This path resolves no ADR-016
+   * overlay, so a whole-file override (`_overlays/<key>.SKILL.md`) replaces
+   * neither the prompt nor the tools here, where the Go render takes the
+   * override's tools (#2381).
    */
   private async stageSkill(
     stage: PipelineStage,
