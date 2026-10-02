@@ -14,6 +14,10 @@ and this project adheres to
 - **Interactive Codex starts without a shell command.** The terminal now runs
   `codex` directly with the stage prompt as its argument, instead of decoding
   the prompt from a temporary file in a shell (#2321).
+- **A parked OpenCode failure no longer halts the whole repository queue.**
+  The issue is held for you and the rest of the queue continues (#1753).
+- **Auto-routing keeps OpenCode as a candidate when `opencode.model` is set**
+  (#2330), and never hands it a model name it cannot run (#1725).
 - **No install hint pipes a download into a shell.** The Grok install hints
   link to the Grok documentation instead (#2320).
 

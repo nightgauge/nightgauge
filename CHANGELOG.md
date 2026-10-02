@@ -70,6 +70,23 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Sandbox-scoped codex stages no longer fail at spawn** (#1715).
+  `--ask-for-approval never` now goes before `exec`, where codex defines it,
+  so read-only and edit-only stages build an argv codex accepts. Go and the
+  SDK build the same argv, and the flag contract checks a leading flag against
+  the captured top-level `codex --help`.
+- **An auto-router pick of `opencode` never carries a bare tier** (#1725). A
+  tier such as `sonnet` resolves against the configured `opencode.model`
+  provider; with no usable model, opencode is dropped from the candidates and
+  the pick's rationale says why.
+- **The VS Code auto-router sees the configured `opencode.model`** (#2330), so
+  OpenCode stays a routing candidate when a model is configured.
+- **A parked OpenCode kind no longer halts the extension's repository queue**
+  (#1753). `context_window_exceeded`, `adapter_permission_rejected` and
+  `adapter_incompatible` hold the issue for the operator and the queue
+  continues, matching the Go scheduler.
+- **`docs/ADAPTER_GUIDE.md` shows the Grok install as download, inspect, run**
+  (#2331), instead of piping the installer into a shell.
 - **`capture.sh` redacts its capture roots as literal strings** (#2328). The
   `redact` step put the mktemp roots into a `sed` regular expression, so the
   `.` in the template matched any character and a `#` in `TMPDIR` broke the
@@ -273,6 +290,10 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **`claude-opus-5-5` defaults to `low` effort** (#2120), in both model
+  registries. The default is provisional until the control-eval sweep confirms
+  or reverts it. Explicit per-stage efforts and `model_routing.default_effort`
+  still take precedence.
 - **Release step 9a scans the JS bundles and records more than the engine
   count** (#2322). VirusTotal does not report every file it unpacks from a
   VSIX, so `dist/extension.cjs` and `dist/sdk-cli.cjs` are now submitted as
