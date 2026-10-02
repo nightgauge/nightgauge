@@ -66,14 +66,14 @@ else
   fail "check-test-collection.sh exits 0 with a planted orphaned test file present (expected non-zero)"
 fi
 
-if echo "$STDOUT_2" | grep -q "RECOVERABLE: orphaned_test_file"; then
+if grep -q "RECOVERABLE: orphaned_test_file" <<<"$STDOUT_2"; then
   pass "RECOVERABLE: orphaned_test_file emitted"
 else
   fail "RECOVERABLE: orphaned_test_file NOT found in output"
   echo "    output was: $STDOUT_2"
 fi
 
-if echo "$STDOUT_2" | grep -q "plantedGuardFixture.test.ts"; then
+if grep -q "plantedGuardFixture.test.ts" <<<"$STDOUT_2"; then
   pass "planted file path named in the failure output"
 else
   fail "planted file path NOT named in the failure output"

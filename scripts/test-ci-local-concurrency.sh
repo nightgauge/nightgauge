@@ -113,6 +113,28 @@ printf '  \033[31m\xe2\x9c\x97\033[0m manifest.bak: No such file or directory\n'
 [ "$(classify_failure "$TMP/real.log" 2)" = "assert" ]
 check "a real failure at exit 2 still classifies as assert" $?
 
+# ── (4b, 4c) a long log changes neither answer (#2360) ───────────────────────
+# Both functions run under their caller's pipefail, this suite's included.
+# classify_failure piped the stripped log into grep -q: a HARNESS ERROR near the
+# top of a long log made grep exit while sed was still writing, sed died of
+# SIGPIPE, and an infrastructure failure read as an assertion. failure_markers'
+# `head` did the same to grep when a log held more markers than its limit, and
+# the function failed. With half a megabyte behind the match, both happened on
+# every run, on any machine; the fixed forms have no reader that stops early.
+{
+  printf '  \033[31m\xe2\x9c\x97 HARNESS ERROR\033[0m git could not take index.lock\n'
+  awk 'BEGIN { for (i = 0; i < 20000; i++) printf "  \033[32m\342\234\223\033[0m arm %05d passed\n", i }'
+} > "$TMP/long-harness.log"
+[ "$(classify_failure "$TMP/long-harness.log" 2)" = "infra" ]
+check "a HARNESS ERROR above half a megabyte of log still classifies as infra" $?
+
+awk 'BEGIN { for (i = 0; i < 20000; i++) printf "  \033[31m\342\234\227\033[0m arm %05d failed\n", i }' \
+  > "$TMP/many-markers.log"
+out="$(failure_markers "$TMP/many-markers.log" 15)"
+markers_rc=$?
+[ "$markers_rc" -eq 0 ] && [ "$(grep -c . <<<"$out")" -eq 15 ]
+check "failure_markers lifts 15 of 20,000 markers and succeeds (status $markers_rc)" $?
+
 # ── (5,6) the heavy-step budget binds, through the REAL run_group ─────────────
 # Five steps, budget two. Each child records how many slots were held when it
 # began, so the maximum is observed from inside the budget. Reverting the
@@ -261,8 +283,11 @@ check "--list-steps succeeds with the budget fully held" $?
 # A structural guard on the one-line revert that reintroduces the defect while
 # every behavioural arm above still passes for a single gate.
 # Comments are stripped first: the comment at the throttle NAMES the form it
-# replaced, and a guard that matched prose would be red forever.
-! grep -vE '^[[:space:]]*#' scripts/ci-local.sh | grep -q 'jobs -rp'
+# replaced, and a guard that matched prose would be red forever. The stripped
+# text is captured, then searched: piped into `grep -q` under pipefail, a
+# match early in the file could SIGPIPE the writer and pass this check with
+# the form present (#2360).
+! grep -q 'jobs -rp' <<<"$(grep -vE '^[[:space:]]*#' scripts/ci-local.sh)"
 check "run_group no longer throttles on this shell's own job table" $?
 grep -q '^  slot="\$(slot_acquire)"$' scripts/ci-local.sh
 check "run_group throttles on the machine-wide slot budget" $?
@@ -345,7 +370,7 @@ plan_total="$(
   sed -n 's/^ARM_PLAN=(\(.*\))$/\1/p' scripts/test-mirror-drift-gate.sh |
     tr ' ' '\n' | awk -F: 'NF==2 {t += $2} END {print t}'
 )"
-declared_total="$(sed -n 's/^EXPECTED_ASSERTIONS=\([0-9]*\)$/\1/p' scripts/test-mirror-drift-gate.sh | head -1)"
+declared_total="$(sed -n 's/^EXPECTED_ASSERTIONS=\([0-9]*\)$/\1/p' scripts/test-mirror-drift-gate.sh | sed -n 1p)"
 [ -n "$plan_total" ] && [ -n "$declared_total" ] && [ "$plan_total" = "$declared_total" ]
 check "ARM_PLAN sums to EXPECTED_ASSERTIONS ($plan_total vs $declared_total)" $?
 

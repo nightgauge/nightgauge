@@ -22,6 +22,10 @@
 #      legacy root's: an added file there passes (macOS layout only).
 #  11. Overrides are ignored: NIGHTGAUGE_STATE_HOME pointed elsewhere does not
 #      move the watched STATE.
+#  12. A changed file is still named "changed", not "removed", when the added
+#      list runs to most of a megabyte, and this suite's own matcher still
+#      finds that line in the output that size (#2360). Deterministic: no
+#      load needed.
 #
 # Run: bash scripts/test-state-backstop.sh
 # Also run by scripts/ci-local.sh.
@@ -63,13 +67,19 @@ run_arm() {
   HOME="$home" bash "$BACKSTOP" compare "$home.before" "$home.after"
 }
 
+# names <output> <text>: the output contains the text. A here-string, never
+# `printf | grep -q`: under pipefail, grep -q exiting at its match SIGPIPEs a
+# writer that is still writing, and a line that is there reads as missing.
+# That failed this suite once under load (#2360); arm 12 makes it certain.
+names() { grep -qF -- "$2" <<<"$1"; }
+
 expect() { # expect <label> <want-rc> <grep-or-empty> <home> <mutation>
   local label="$1" want="$2" pattern="$3" out rc
   out="$(run_arm "$4" "$5" 2>&1)"
   rc=$?
   if [ "$rc" -ne "$want" ]; then
     bad "$label (exit $rc, want $want)" "$out"
-  elif [ -n "$pattern" ] && ! printf '%s\n' "$out" | grep -qF -- "$pattern"; then
+  elif [ -n "$pattern" ] && ! names "$out" "$pattern"; then
     bad "$label (output does not name: $pattern)" "$out"
   else
     ok "$label"
@@ -114,6 +124,38 @@ h="$(fixture override)"
 ARM_STATE_OVERRIDE="$TMP/elsewhere"
 expect "an override does not move the watched STATE" 1 "removed: $h/$STATE_REL/machine-id" "$h" "rm $STATE_REL/machine-id"
 unset ARM_STATE_OVERRIDE
+
+# 12 (#2360). compare() asked "is this removed path also added?" by piping the
+# added list into grep -q under pipefail. With a list this size, grep matches
+# the first line and exits while the writer still has over half a megabyte
+# to go, the writer dies of SIGPIPE, and the changed file was reported
+# removed: every time, on any machine. The snapshot lists are written
+# directly, 6,000 added entries standing in for a mass leak, so the arm costs
+# nothing to set up. The output is as large, so `names` (expect's matcher) is
+# held to the same standard: its needle is on the second line.
+big="$TMP/large"
+legacy="$big/home/.nightgauge"
+mkdir -p "$big/before" "$big/after"
+printf '%s\n' "$legacy" >"$big/before/legacy.root"
+printf '%s\n' "$big/home/$STATE_REL" >"$big/before/state.root"
+echo ABSENT >"$big/before/state.list"
+echo ABSENT >"$big/after/state.list"
+printf 'a-changed\tfile:1111\n' >"$big/before/legacy.list"
+LC_ALL=C awk 'BEGIN {
+  print "a-changed\tfile:2222"
+  for (i = 1; i <= 6000; i++) printf "usage/leaked-%05d-%s\tfile:3333\n", i, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+}' >"$big/after/legacy.list"
+out="$(bash "$BACKSTOP" compare "$big/before" "$big/after" 2>&1)"
+rc=$?
+if [ "$rc" -ne 1 ]; then
+  bad "a large added list: a changed file still fails (exit $rc, want 1)" "${out:0:400}"
+elif ! names "$out" "changed: $legacy/a-changed"; then
+  bad "a large added list: the changed file is named changed (output does not name it)" "${out:0:400}"
+elif names "$out" "removed: $legacy/a-changed"; then
+  bad "a large added list: the changed file is named changed, not removed" "${out:0:400}"
+else
+  ok "a large added list: a changed file is named changed, not removed (#2360)"
+fi
 
 echo ""
 echo "$PASS passed, $FAIL failed"

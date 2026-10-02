@@ -87,11 +87,17 @@ build_pr_index() {
           | "\(.state)\t\(.headRefName)\t\(.headRefOid)\t\(.number)\t\(.baseRefName)"' 2>/dev/null) || PR_INDEX=""
 }
 
+# The lookups below read PR_INDEX from a here-string, never `printf | awk`:
+# awk's `exit` at the first match stops reading, and under pipefail a printf
+# still writing the index then dies of SIGPIPE and the lookup reads as "no
+# such PR". For open_pr_for that skipped the open-PR KEEP, and a branch the
+# ancestor rule called merged read SAFE-DELETE (#2360).
+#
 # open_pr_for <branch> -> prints the PR number if an OPEN PR uses this branch
 open_pr_for() {
   [ -n "$PR_INDEX" ] || return 1
-  printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" \
-    '$1=="OPEN" && $2==b {print $4; found=1; exit} END{exit !found}'
+  awk -F'\t' -v b="$1" \
+    '$1=="OPEN" && $2==b {print $4; found=1; exit} END{exit !found}' <<<"$PR_INDEX"
 }
 
 # open_pr_based_on <branch> -> prints the PR number if an OPEN PR targets this
@@ -99,8 +105,8 @@ open_pr_for() {
 # it, and a pipeline epic branch is exactly that base.
 open_pr_based_on() {
   [ -n "$PR_INDEX" ] || return 1
-  printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" \
-    '$1=="OPEN" && $5==b {print $4; found=1; exit} END{exit !found}'
+  awk -F'\t' -v b="$1" \
+    '$1=="OPEN" && $5==b {print $4; found=1; exit} END{exit !found}' <<<"$PR_INDEX"
 }
 
 # epic_issue_state <N> -> prints the issue's state (OPEN/CLOSED); non-zero and
@@ -117,8 +123,8 @@ epic_issue_state() {
 # merged_pr_for <branch> -> prints "<sha>\t<number>" if a merged PR used it
 merged_pr_for() {
   [ -n "$PR_INDEX" ] || return 1
-  printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" \
-    '$1=="MERGED" && $2==b {print $3 "\t" $4; found=1; exit} END{exit !found}'
+  awk -F'\t' -v b="$1" \
+    '$1=="MERGED" && $2==b {print $3 "\t" $4; found=1; exit} END{exit !found}' <<<"$PR_INDEX"
 }
 
 # merged_pr_head_parents <sha> -> prints one parent SHA per line for a merged
@@ -239,7 +245,7 @@ classify() {
     tracking_sha=$(git rev-parse "$ref" 2>/dev/null)
     live_line=$(git ls-remote origin "refs/heads/$branch" 2>/dev/null)
     # ls-remote matches patterns by ref-name tail, so pick the exact ref only.
-    live_sha=$(printf '%s\n' "$live_line" | awk -v want="refs/heads/$branch" '$2 == want {print $1; exit}')
+    live_sha=$(awk -v want="refs/heads/$branch" '$2 == want {print $1; exit}' <<<"$live_line")
     if [ -z "$live_sha" ]; then
       echo "UNKNOWN      remote-only ref $branch — \`git ls-remote origin refs/heads/$branch\` failed or found nothing; cannot confirm the cached tracking ref ${tracking_sha:0:7} is current"
       return 2
@@ -268,11 +274,11 @@ classify() {
   # branch refs (refs/heads/<branch>), and remote_only means that ref does
   # not exist — there is no local checkout for this branch name to hold.
   if [ "$remote_only" = 0 ]; then
-    local wt
-    wt=$(git worktree list --porcelain 2>/dev/null \
-      | awk -v b="refs/heads/$branch" '
+    local wt worktrees
+    worktrees=$(git worktree list --porcelain 2>/dev/null)
+    wt=$(awk -v b="refs/heads/$branch" '
           /^worktree /  { w = substr($0, 10) }
-          /^branch /    { if (substr($0, 8) == b) { print w; exit } }')
+          /^branch /    { if (substr($0, 8) == b) { print w; exit } }' <<<"$worktrees")
     if [ -n "$wt" ]; then
       echo "KEEP         checked out in a worktree: $wt"
       return 1

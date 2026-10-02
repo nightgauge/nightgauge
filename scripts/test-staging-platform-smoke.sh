@@ -477,9 +477,9 @@ PYEOF
 )"
 
 check "the smoke workflow still has a workflow_dispatch trigger" \
-  "$(printf '%s' "$TRIGGERS" | grep -qw workflow_dispatch && echo 0 || echo 1)"
+  "$(grep -qw workflow_dispatch <<<"$TRIGGERS" && echo 0 || echo 1)"
 check "the smoke workflow has NO schedule trigger (#1087)" \
-  "$(printf '%s' "$TRIGGERS" | grep -qw schedule && echo 1 || echo 0)"
+  "$(grep -qw schedule <<<"$TRIGGERS" && echo 1 || echo 0)"
 check "the removed schedule says what re-enables it" \
   "$(contains "$WF" "RE-ENABLE by restoring the block below" && echo 0 || echo 1)"
 

@@ -130,7 +130,7 @@ else
 fi
 
 json="$("$bin" ci classify --base "$base" --head "$head" --workdir "$root" --json 2>&1)" ||
-  fail_open "nightgauge ci classify failed: $(printf '%s' "$json" | head -1) — running the full suite"
+  fail_open "nightgauge ci classify failed: $(head -n1 <<<"$json") — running the full suite"
 
 # printJSON uses json.MarshalIndent, so each key sits on its own line; a
 # line-anchored sed needs no jq/python on the runner.
@@ -140,9 +140,9 @@ json="$("$bin" ci classify --base "$base" --head "$head" --workdir "$root" --jso
 # matches nothing there and the gate fails open on every local run — green,
 # useless, and invisible. The value is validated against true|false below
 # instead, which is where that check belongs anyway.
-class="$(printf '%s\n' "$json" | sed -n 's/^[[:space:]]*"change_class"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
-heavy="$(printf '%s\n' "$json" | sed -n 's/^[[:space:]]*"run_heavy"[[:space:]]*:[[:space:]]*\([a-z]*\).*/\1/p' | head -1)"
-reason="$(printf '%s\n' "$json" | sed -n 's/^[[:space:]]*"reason"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' | head -1)"
+class="$(sed -n 's/^[[:space:]]*"change_class"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' <<<"$json" | sed -n 1p)"
+heavy="$(sed -n 's/^[[:space:]]*"run_heavy"[[:space:]]*:[[:space:]]*\([a-z]*\).*/\1/p' <<<"$json" | sed -n 1p)"
+reason="$(sed -n 's/^[[:space:]]*"reason"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' <<<"$json" | sed -n 1p)"
 
 [ -n "$class" ] || fail_open "could not parse change_class out of the classifier output — running the full suite"
 case "$heavy" in

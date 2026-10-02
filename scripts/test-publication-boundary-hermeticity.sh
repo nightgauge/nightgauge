@@ -163,7 +163,7 @@ if [ -z "${NG_HERMETICITY_TALLY:-}" ]; then
     bad "the hermeticity step deleted a live suite run's sandbox (#1697)"
   fi
   if [ -e "$LIVE_SANDBOX/tree/.git" ] &&
-    git worktree list --porcelain | grep -qxF "worktree $LIVE_SANDBOX/tree"; then
+    grep -qxF -- "worktree $LIVE_SANDBOX/tree" <<<"$(git worktree list --porcelain)"; then
     ok "a concurrent suite run's checkout and its registration survive too (#1697)"
   else
     bad "the hermeticity step removed a live suite run's worktree (#1697)"
@@ -352,7 +352,7 @@ mkdir -p "$LINK_ROOT/owned" "${PREFIX_VICTIM%/*}" || exit 2
 PREFIX_VICTIM="$(cd "${PREFIX_VICTIM%/*}" && pwd -P)/owned/tree"
 if git worktree add --detach --no-checkout --quiet "$PREFIX_VICTIM" HEAD >/dev/null 2>&1; then
   remove_run_root "$LINK_ROOT/owned"
-  if git worktree list --porcelain | grep -qxF "worktree $PREFIX_VICTIM"; then
+  if grep -qxF -- "worktree $PREFIX_VICTIM" <<<"$(git worktree list --porcelain)"; then
     ok "removing a run root leaves a worktree whose path only contains it (#1697)"
   else
     bad "removing a run root removed a worktree outside it (#1697)"
@@ -390,10 +390,10 @@ SUITE_PID=$!
 # Wait for the sandbox to be registered — killing before that proves nothing.
 KILLED_SANDBOX=""
 for _ in $(seq 1 120); do
-  KILLED_SANDBOX="$(sandbox_dirs | head -1)"
+  KILLED_SANDBOX="$(sandbox_dirs | sed -n 1p)"
   # In a linked worktree `.git` is a FILE (a gitdir pointer), never a directory.
   if [ -n "$KILLED_SANDBOX" ] && [ -e "$KILLED_SANDBOX/tree/.git" ] &&
-    git worktree list --porcelain | grep -qF "$KILLED_SANDBOX/tree"; then
+    grep -qF -- "$KILLED_SANDBOX/tree" <<<"$(git worktree list --porcelain)"; then
     break
   fi
   KILLED_SANDBOX=""
@@ -439,7 +439,7 @@ fi
 # outer layer asserts once this run is over.
 # Minimal mode (#850): only the startup sweep is observed.
 TMPDIR="$SHARED_TMPDIR" NG_BOUNDARY_SUITE_MINIMAL=1 bash "$SUITE" >/dev/null 2>&1
-if [ -d "$KILLED_SANDBOX" ] && git worktree list --porcelain | grep -qF "$KILLED_SANDBOX/tree"; then
+if [ -d "$KILLED_SANDBOX" ] && grep -qF -- "$KILLED_SANDBOX/tree" <<<"$(git worktree list --porcelain)"; then
   ok "a concurrent gate's suite sweep leaves this run's killed sandbox alone (#1697)"
 else
   bad "a concurrent gate's suite sweep reclaimed this run's killed sandbox (#1697)"
@@ -447,7 +447,7 @@ fi
 
 # ── 3. #722 — the leak is real, unprunable, and the next run reclaims it ─────
 git worktree prune >/dev/null 2>&1
-if git worktree list --porcelain | grep -qF "$KILLED_SANDBOX/tree"; then
+if grep -qF -- "$KILLED_SANDBOX/tree" <<<"$(git worktree list --porcelain)"; then
   ok "the killed run's registration survives 'git worktree prune' (the #722 leak)"
 else
   # Not a pass: without a surviving leak, step 4 asserts nothing. Say so rather
@@ -470,7 +470,7 @@ else
   bad "the reclaiming suite run exited $SUITE_EXIT"
 fi
 
-if ! git worktree list --porcelain | grep -qF "$KILLED_SANDBOX/tree"; then
+if ! grep -qF -- "$KILLED_SANDBOX/tree" <<<"$(git worktree list --porcelain)"; then
   ok "the next suite run removes the leaked worktree registration (#722)"
 else
   bad "the leaked worktree registration survived the next suite run (#722)"
@@ -481,7 +481,7 @@ if [ ! -d "$KILLED_SANDBOX" ]; then
 else
   bad "the leaked sandbox directory survived the next suite run (#722)"
   printf '    leaked: %s\n' "$KILLED_SANDBOX"
-  find "$KILLED_SANDBOX" -maxdepth 2 2>/dev/null | sed 's/^/      /' | head -20
+  find "$KILLED_SANDBOX" -maxdepth 2 2>/dev/null | sed -n '1,20s/^/      /p'
   printf '    sandbox root now:\n'
   sandbox_dirs | sed 's/^/      /'
 fi
@@ -519,7 +519,7 @@ env -u NG_BOUNDARY_SUITE_MINIMAL bash "$SUITE" >/dev/null 2>&1 &
 SUITE_PID=$!
 TERM_SANDBOX=""
 for _ in $(seq 1 120); do
-  TERM_SANDBOX="$(sandbox_dirs | head -1)"
+  TERM_SANDBOX="$(sandbox_dirs | sed -n 1p)"
   if [ -n "$TERM_SANDBOX" ] && [ -e "$TERM_SANDBOX/tree/.git" ]; then
     break
   fi
@@ -598,7 +598,7 @@ LOCKED_SANDBOX="$(cd "$LOCKED_SANDBOX" && pwd -P)"
 if git worktree add --detach --quiet "$LOCKED_SANDBOX/tree" HEAD >/dev/null 2>&1 &&
   git worktree lock "$LOCKED_SANDBOX/tree" >/dev/null 2>&1; then
   git worktree prune >/dev/null 2>&1
-  if git worktree list --porcelain | grep -qF "$LOCKED_SANDBOX/tree"; then
+  if grep -qF -- "$LOCKED_SANDBOX/tree" <<<"$(git worktree list --porcelain)"; then
     ok "a locked leaked registration survives 'git worktree prune' (the CI failure)"
   else
     bad "expected a locked registration to survive prune; nothing to reclaim"
@@ -615,7 +615,7 @@ if git worktree add --detach --quiet "$LOCKED_SANDBOX/tree" HEAD >/dev/null 2>&1
   # exit code is deliberately not captured at all.
   NG_BOUNDARY_SUITE_MINIMAL=1 bash "$SUITE" >/dev/null 2>&1
 
-  if ! git worktree list --porcelain | grep -qF "$LOCKED_SANDBOX/tree"; then
+  if ! grep -qF -- "$LOCKED_SANDBOX/tree" <<<"$(git worktree list --porcelain)"; then
     ok "the next suite run reclaims a LOCKED leaked registration too"
   else
     bad "a locked leaked registration survived the next suite run"

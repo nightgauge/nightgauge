@@ -91,8 +91,8 @@ compare() {
     PASS_COUNT=$((PASS_COUNT + 1))
   else
     echo -e "  ${RED}FAIL${NC} [$category] $name"
-    echo "    Shell: $(echo "$shell_out" | head -1)"
-    echo "    Go:    $(echo "$go_out" | head -1)"
+    echo "    Shell: $(head -n1 <<<"$shell_out")"
+    echo "    Go:    $(head -n1 <<<"$go_out")"
     FAIL_COUNT=$((FAIL_COUNT + 1))
   fi
 }

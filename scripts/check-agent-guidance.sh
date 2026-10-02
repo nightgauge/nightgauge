@@ -319,7 +319,7 @@ else
     /^[[:space:]]*(```|~~~)/ { fence = !fence; next }
     !fence && /^#+[[:space:]]/ { print; exit }
   ' "$AGENTS")
-  if printf '%s\n' "$heading" | LC_ALL=C grep -Eiq -- "($TOOL_NAMES)"; then
+  if LC_ALL=C grep -Eiq -- "($TOOL_NAMES)" <<<"$heading"; then
     fail "AGENTS.md: first heading names a tool ($heading); the contract is tool-neutral"
   fi
 

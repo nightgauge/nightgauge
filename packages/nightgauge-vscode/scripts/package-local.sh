@@ -18,6 +18,6 @@ npm run build
 "$SCRIPT_DIR/check-runtime-assets.sh" "$PKG_DIR/dist"
 vsce package --no-dependencies
 
-VSIX="$(ls -t ./*.vsix 2>/dev/null | head -1)"
+VSIX="$(ls -t ./*.vsix 2>/dev/null | sed -n 1p)"
 test -n "$VSIX" || { echo "ERROR: vsce did not produce a VSIX" >&2; exit 1; }
 "$SCRIPT_DIR/check-runtime-assets.sh" "$VSIX"

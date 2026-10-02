@@ -51,7 +51,7 @@ else
   bad "write-surface collapsed to $COUNT paths — the dirt assertions would be vacuous"
 fi
 
-if printf '%s\n' "$SURFACE" | grep -qxF ".github/publication-boundary.yaml"; then
+if grep -qxF ".github/publication-boundary.yaml" <<<"$SURFACE"; then
   ok "the manifest is in the surface (the #713 incident's own path)"
 else
   bad "the manifest is NOT in the surface — #713 would go unnoticed"
@@ -59,7 +59,7 @@ fi
 
 # The surface is derived, not hand-listed, so a NEW fixture arm must appear in
 # it automatically. This is the drift guard: it reads the suite, not a list.
-if printf '%s\n' "$SURFACE" | grep -qxF "internal/ipc/protocol.go"; then
+if grep -qxF "internal/ipc/protocol.go" <<<"$SURFACE"; then
   ok "a \$CARRY path the suite edits in place is discovered automatically"
 else
   bad "the \$CARRY path is missing — a hand-list has replaced the derivation"

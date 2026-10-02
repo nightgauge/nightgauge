@@ -276,11 +276,11 @@ print("real=%s lookalike=%s comment=%s" % (matches_real, matches_lookalike, has_
 PYEOF
 )"
 check "the config ignores the real Marketplace listing URL" \
-  "$(printf '%s' "$PATTERN_CHECK" | grep -q 'real=True' && echo 0 || echo 1)"
+  "$(grep -q 'real=True' <<<"$PATTERN_CHECK" && echo 0 || echo 1)"
 check "the ignore is host-scoped: a lookalike host does NOT match" \
-  "$(printf '%s' "$PATTERN_CHECK" | grep -q 'lookalike=False' && echo 0 || echo 1)"
+  "$(grep -q 'lookalike=False' <<<"$PATTERN_CHECK" && echo 0 || echo 1)"
 check "the matching ignore entry documents why, with a comment" \
-  "$(printf '%s' "$PATTERN_CHECK" | grep -q 'comment=True' && echo 0 || echo 1)"
+  "$(grep -q 'comment=True' <<<"$PATTERN_CHECK" && echo 0 || echo 1)"
 
 # --- Case 9: the ignore mechanism itself is never-requested, end-to-end -----
 #

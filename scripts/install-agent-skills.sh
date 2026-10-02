@@ -333,7 +333,7 @@ install_grok() {
     local out
     echo "    Installing Nightgauge plugin via grok (best-effort) ..."
     if out="$(grok plugin marketplace add "$REPO_ROOT" 2>&1)" ||
-      printf '%s' "$out" | grep -q 'already configured'; then
+      grep -q 'already configured' <<<"$out"; then
       grok plugin marketplace update nightgauge >/dev/null 2>&1 || true
     else
       echo "    WARNING: grok plugin marketplace add failed — ~/.grok/skills copy still applies." >&2
@@ -341,7 +341,7 @@ install_grok() {
     fi
     if out="$(grok plugin install "$plugin_src" --trust 2>&1)"; then
       echo "    Grok plugin installed from $plugin_src."
-    elif printf '%s' "$out" | grep -q 'already installed'; then
+    elif grep -q 'already installed' <<<"$out"; then
       if grok plugin update nightgauge >/dev/null 2>&1; then
         echo "    Grok plugin refreshed from $plugin_src."
       else

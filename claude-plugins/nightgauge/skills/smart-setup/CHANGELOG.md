@@ -12,7 +12,9 @@ and this project adheres to
 
 - The bundled agent-guidance check no longer pipes into `grep -q` under
   `pipefail`. Under load, that shape can turn a match into a miss
-  (issue 2362).
+  (issue 2362). The tool-name check on the first `AGENTS.md` heading, which
+  hid the same pipe behind `LC_ALL=C`, now reads a here-string as well
+  (issue 2360).
 - Phase 4.5's CI scaffold runs the repository's own gate scripts
   (`npm run typecheck|lint|test|build`, whichever exist), pins actions to
   commit SHAs, and takes `--runs-on`; the summary prints the emitted steps

@@ -118,7 +118,9 @@ squash_merge_to_main() {
 # branch, default main), `issue view` with FAKE_ISSUE_STATE (fails if unset), (nothing at all if
 # FAKE_PR_STATE is unset — an unauthenticated/no-PR forge) and
 # `api repos/{owner}/{repo}/commits/<sha>` with FAKE_PR_PARENTS, one SHA per
-# line, when <sha> matches FAKE_PR_SHA.
+# line, when <sha> matches FAKE_PR_SHA. FAKE_PR_FILLER=<n> appends n merged
+# PRs for unrelated branches after that line, to make the index larger than
+# any pipe buffer (#2360).
 install_fake_gh() {
   [ -n "$FAKE_BIN" ] && return 0
   FAKE_BIN="$(mktemp -d)"
@@ -128,6 +130,9 @@ if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
   if [ -n "${FAKE_PR_STATE:-}" ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$FAKE_PR_STATE" "$FAKE_PR_BRANCH" "$FAKE_PR_SHA" "$FAKE_PR_NUM" "${FAKE_PR_BASE:-main}"
   fi
+  awk -v n="${FAKE_PR_FILLER:-0}" 'BEGIN {
+    for (i = 1; i <= n; i++) printf "MERGED\tfiller/%05d-branch\t%040d\t%d\tmain\n", i, i, 50000 + i
+  }'
   exit 0
 fi
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
@@ -174,7 +179,7 @@ expect() {
   code=$?
   [ "$code" -eq "$want" ] || ok=0
   if [ "$ok" = "1" ] && [ -n "$must_contain" ]; then
-    printf '%s\n' "$out" | grep -qF -- "$must_contain" || ok=0
+    grep -qF -- "$must_contain" <<<"$out" || ok=0
   fi
   if [ "$ok" = "1" ]; then
     printf '  \033[32m✓\033[0m %s\n' "$desc"
@@ -487,6 +492,34 @@ expect 1 "a PR that merged into another base stays KEEP" "" \
 expect 1 "a tip the forge knows no PR for stays KEEP" "" \
   -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_FOLD_STATUS=ahead \
   "$SCRIPT" fix/801-sub origin/main
+
+# ── (q) an open PR on the first row of a large PR index is KEEP (#2360) ────
+# The open-PR lookups piped the index into `awk '… {…; exit}'` under pipefail.
+# awk stops reading at its match; with the matching row first and over half
+# a megabyte behind it, printf was still writing, died of SIGPIPE, and the
+# lookup read as "no open PR". This branch is an ancestor of main, so the rule
+# after those lookups answered SAFE-DELETE: exit 0, permission to delete the
+# head (or the base) of an open PR, every time, on any machine. The real index
+# holds up to 500 PRs, whose rows can outgrow a pipe buffer the same way.
+new_fixture
+root="$TMP/clone"
+git_in "$root" branch -q fix/4100-open-head main
+install_fake_gh
+expect 1 "an open PR on the first row of a large PR index is KEEP" \
+  "deleting this branch would close it" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_FILLER=8000 \
+  FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=fix/4100-open-head FAKE_PR_SHA=deadbeef FAKE_PR_NUM=4101 \
+  "$SCRIPT" fix/4100-open-head origin/main
+expect 1 "an open PR based on the branch, first in a large PR index, is KEEP" \
+  "targets this branch as its base" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_FILLER=8000 \
+  FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=feat/4102-stacked FAKE_PR_SHA=deadbeef FAKE_PR_NUM=4103 \
+  FAKE_PR_BASE=fix/4100-open-head "$SCRIPT" fix/4100-open-head origin/main
+# The control: the same large index with no open PR for the branch leaves the
+# ancestor rule its SAFE-DELETE, so the KEEPs above come from the open row.
+expect 0 "the same branch in a large PR index with no open PR is SAFE-DELETE" "ancestor" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_FILLER=8000 \
+  "$SCRIPT" fix/4100-open-head origin/main
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then

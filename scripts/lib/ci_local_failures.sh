@@ -25,10 +25,15 @@ strip_ansi() { # strip_ansi <file>
 # The lines from a failed step's log worth lifting into the summary. A vitest
 # failure can sit thousands of lines above the exit line, so "scroll up" is not
 # a usable instruction — and is exactly how a failure escapes identification.
+#
+# `sed -n 1,Np`, not `head`, and a here-string, not `strip_ansi | grep -q`
+# below: a reader that stops early SIGPIPEs the command writing into it, and
+# under a caller's pipefail a log with many markers then fails this function,
+# and a HARNESS ERROR near the top of a long log reads as an assertion (#2360).
 failure_markers() { # failure_markers <file> [limit]
   strip_ansi "$1" |
     grep -aE '^[[:space:]]*(×|✗|!|FAIL |--- FAIL|AssertionError|Error:|HARNESS ERROR|panic:|ran [0-9]+ assertions)' |
-    head -"${2:-15}"
+    sed -n "1,${2:-15}p"
 }
 
 # "an arm asserted false" versus "the harness could not run the arm" — a git
@@ -43,7 +48,7 @@ failure_markers() { # failure_markers <file> [limit]
 # misclassify real failures as infrastructure — the one direction that must
 # never happen.
 classify_failure() { # classify_failure <file> <exit-code>
-  if strip_ansi "$1" | grep -qaE 'HARNESS ERROR|INFRASTRUCTURE (failure|error)'; then
+  if grep -qaE 'HARNESS ERROR|INFRASTRUCTURE (failure|error)' <<<"$(strip_ansi "$1")"; then
     printf 'infra\n'
   else
     printf 'assert\n'

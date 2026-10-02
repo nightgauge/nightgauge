@@ -372,7 +372,7 @@ if ! grep -q "synthesized terminal-failure RunRecord for #397" "$WORK/queue.err"
 fi
 
 HIST_DIR="$PIPELINE_DIR/history"
-JSONL="$(find "$HIST_DIR" -name '*.jsonl' -type f | head -1)"
+JSONL="$(find "$HIST_DIR" -name '*.jsonl' -type f | sed -n 1p)"
 if [ -z "$JSONL" ]; then
   echo "capture-undetermined-branch-fixture: no daily JSONL was written" >&2
   exit 1

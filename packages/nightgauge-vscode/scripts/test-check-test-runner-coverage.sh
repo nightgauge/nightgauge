@@ -75,13 +75,13 @@ if [ $EXIT_2 -ne 0 ]; then
 else
   fail "check-test-runner-coverage.sh exits 0 with the planted file present (expected non-zero)"
 fi
-if echo "$STDOUT_2" | grep -q "RECOVERABLE: orphaned_test_file"; then
+if grep -q "RECOVERABLE: orphaned_test_file" <<<"$STDOUT_2"; then
   pass "RECOVERABLE: orphaned_test_file emitted (Test 2)"
 else
   fail "RECOVERABLE: orphaned_test_file NOT found in output (Test 2)"
   echo "    output was: $STDOUT_2"
 fi
-if echo "$STDOUT_2" | grep -q "plantedGuardFixture.test.ts"; then
+if grep -q "plantedGuardFixture.test.ts" <<<"$STDOUT_2"; then
   pass "planted file path named in the failure output (Test 2)"
 else
   fail "planted file path NOT named in the failure output (Test 2)"
@@ -110,13 +110,13 @@ if [ $EXIT_3 -ne 0 ]; then
 else
   fail "check-test-runner-coverage.sh exits 0 with the planted file present (expected non-zero)"
 fi
-if echo "$STDOUT_3" | grep -q "RECOVERABLE: orphaned_test_file"; then
+if grep -q "RECOVERABLE: orphaned_test_file" <<<"$STDOUT_3"; then
   pass "RECOVERABLE: orphaned_test_file emitted (Test 3)"
 else
   fail "RECOVERABLE: orphaned_test_file NOT found in output (Test 3)"
   echo "    output was: $STDOUT_3"
 fi
-if echo "$STDOUT_3" | grep -q "plantedGuardFixture.playwright.ts"; then
+if grep -q "plantedGuardFixture.playwright.ts" <<<"$STDOUT_3"; then
   pass "planted file path named in the failure output (Test 3)"
 else
   fail "planted file path NOT named in the failure output (Test 3)"
@@ -144,7 +144,7 @@ if [ $EXIT_4 -ne 0 ]; then
 else
   fail "check-test-runner-coverage.sh exits 0 with the planted *.host.ts present (expected non-zero)"
 fi
-if echo "$STDOUT_4" | grep -q "plantedGuardFixture.host.ts"; then
+if grep -q "plantedGuardFixture.host.ts" <<<"$STDOUT_4"; then
   pass "planted file path named in the failure output (Test 4)"
 else
   fail "planted file path NOT named in the failure output (Test 4)"
@@ -172,7 +172,7 @@ if [ $EXIT_5 -ne 0 ]; then
 else
   fail "check-test-runner-coverage.sh exits 0 with the unimported suite present (expected non-zero)"
 fi
-if echo "$STDOUT_5" | grep -q "plantedGuardFixture.suite.ts"; then
+if grep -q "plantedGuardFixture.suite.ts" <<<"$STDOUT_5"; then
   pass "planted suite path named in the failure output (Test 5)"
 else
   fail "planted suite path NOT named in the failure output (Test 5)"
@@ -203,7 +203,7 @@ if [ $EXIT_6 -ne 0 ]; then
 else
   fail "check-test-runner-coverage.sh exits 0 with the planted host .test.ts present (expected non-zero)"
 fi
-if echo "$STDOUT_6" | grep -q "RECOVERABLE: orphaned_test_file"; then
+if grep -q "RECOVERABLE: orphaned_test_file" <<<"$STDOUT_6"; then
   pass "RECOVERABLE: orphaned_test_file emitted (Test 6)"
 else
   fail "RECOVERABLE: orphaned_test_file NOT found in output (Test 6)"

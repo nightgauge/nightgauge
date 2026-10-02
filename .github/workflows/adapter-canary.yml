@@ -88,8 +88,11 @@ jobs:
           # commit, exactly as a pull_request diffs its base against HEAD.
           if [ "$EVENT_NAME" = "pull_request" ] || [ "$EVENT_NAME" = "merge_group" ]; then
             git fetch --no-tags --depth=1 origin "$BASE_SHA"
-            if git diff --name-only "$BASE_SHA" HEAD \
-                -- internal/adaptercompat/manifests/ | grep -q .; then
+            # Captured, not piped into `grep -q .`: under pipefail a reader
+            # that exits at its first line can SIGPIPE git and read a changed
+            # manifest as unchanged (#2360).
+            CHANGED="$(git diff --name-only "$BASE_SHA" HEAD -- internal/adaptercompat/manifests/)"
+            if [ -n "$CHANGED" ]; then
               echo "run=true" >> "$GITHUB_OUTPUT"
               echo "internal/adaptercompat/manifests/ changed: running"
             else

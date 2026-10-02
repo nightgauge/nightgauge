@@ -146,6 +146,25 @@ changelog, and the release workflow refuses a tag that does not.
   `--ask-for-approval never` before `exec`. No shipped stage changes yet: the SDK
   stage command passes no allowed tools (#2358), and every pipeline stage skill
   grants `Bash`, which keeps full access on a fresh start and on a resume alike.
+
+- **No script pipes into a reader that stops early, so a check can no longer
+  read a match as a miss** (#2360). `grep -q`, `head`, `sed q` and an awk
+  `exit` stop reading before the end of their input. The command still
+  writing into them then dies of SIGPIPE, and under `pipefail` that is the
+  pipeline's status. Gate runs went red that way under load with matching
+  content; on a large input it fails every time. Every shell script and
+  workflow `run:` block now reads a here-string, a file or a captured
+  variable instead. The worst case was `scripts/branch-merged-check.sh`: once
+  the PR index outgrew a pipe buffer, the head or base branch of an open PR
+  that is an ancestor of `main` read SAFE-DELETE, exit 0. `state-backstop.sh`
+  reported a changed file as removed beside a large leak, and now lists a
+  mass leak without a process per path. The release and staging VSIX checks
+  could fail a good package, or pass one that ships source maps. A new gate,
+  `scripts/check-pipefail-early-exit.py`, keeps the shape out, in `ci-local.sh`
+  and `lint.yml`. Its suite reproduces the failure on a 3 MB input instead of
+  waiting for load. `cmd | grep PAT >/dev/null` is no substitute: GNU grep
+  treats an output of `/dev/null` as `-q`, and the gate flags that too.
+
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
   the phone app or the dashboard used to sit `routing` until it expired,
