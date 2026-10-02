@@ -263,6 +263,9 @@ changelog, and the release workflow refuses a tag that does not.
   `## Dependencies` entries, so a stale one holds an issue until it is removed
   or marked `⏸️`.
 
+  or marked `⏸️`. `hook check-deps --help` and the hook contract now say it
+  reads both, and the contract documents its JSON and exit codes.
+
 - **The epic cascade finds a parent epic in another repository in that
   repository** (#2350). A sub-issue's parent was looked up by number in the
   sub-issue's own repository, because the board read recorded the parent's
