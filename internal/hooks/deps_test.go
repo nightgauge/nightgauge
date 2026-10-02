@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/depgraph"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -59,7 +60,7 @@ func TestEvaluateIssueDeps_NoBlockers(t *testing.T) {
 		},
 	}}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 42)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 42, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestEvaluateIssueDeps_WithOpenBlockers(t *testing.T) {
 		},
 	}}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1459)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1459, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -116,7 +117,7 @@ func TestEvaluateIssueDeps_ClosedBlockersIgnored(t *testing.T) {
 		},
 	}}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 100)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 100, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -140,7 +141,7 @@ func TestEvaluateIssueDeps_MixedBlockers(t *testing.T) {
 		},
 	}}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 200)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 200, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -155,7 +156,7 @@ func TestEvaluateIssueDeps_MixedBlockers(t *testing.T) {
 func TestEvaluateIssueDeps_NotFound(t *testing.T) {
 	mock := &mockFetcher{issues: map[string]*types.Issue{}}
 
-	_, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 999)
+	_, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 999, nil)
 	if err == nil {
 		t.Error("expected error for non-existent issue")
 	}
@@ -301,7 +302,7 @@ func TestEvaluateIssueDeps_BodyDeclaredSameRepo(t *testing.T) {
 		},
 	}}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -326,7 +327,7 @@ func TestEvaluateIssueDeps_BodyDeclaredClosedDoesNotBlock(t *testing.T) {
 		"nightgauge/nightgauge#1187": {Number: 1187, State: "CLOSED"},
 	}}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -349,7 +350,7 @@ func TestEvaluateIssueDeps_BodyDeclaredNotDoubleCountedWithNative(t *testing.T) 
 		"nightgauge/nightgauge#1187": {Number: 1187, State: "OPEN"},
 	}}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -376,7 +377,7 @@ func TestEvaluateIssueDeps_DependencyListsCannotFailTheGate(t *testing.T) {
 		truncated: map[string]gh.IssueRelations{"nightgauge/nightgauge#20": gh.AllRelations},
 	}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 10)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 10, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v — the dependency's own lists are not the gate's to read", err)
 	}
@@ -405,7 +406,7 @@ func TestEvaluateIssueDeps_ReadsOnlyTheIssuesBlockedBy(t *testing.T) {
 		},
 	}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 10)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 10, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v — only the blockedBy list is the gate's to read", err)
 	}
@@ -423,7 +424,7 @@ func TestEvaluateIssueDeps_TruncatedBlockedByIsAnError(t *testing.T) {
 		truncated: map[string]gh.IssueRelations{"nightgauge/nightgauge#10": gh.RelationBlockedBy},
 	}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 10)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 10, nil)
 	if !errors.Is(err, gh.ErrConnectionTruncated) {
 		t.Fatalf("err = %v (result %+v), want ErrConnectionTruncated", err, result)
 	}
@@ -437,7 +438,7 @@ func TestEvaluateIssueDeps_UnresolvableBodyRefIsSkipped(t *testing.T) {
 		"nightgauge/nightgauge#1188": {Number: 1188, Body: "Blocked by acme/nonexistent#9999"},
 	}}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -454,11 +455,53 @@ func TestEvaluateIssueDeps_ProseMentionIsNotADependency(t *testing.T) {
 		"nightgauge/nightgauge#1187": {Number: 1187, State: "OPEN"},
 	}}
 
-	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188)
+	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 1188, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.ShouldBlock {
 		t.Fatalf("a prose mention became a blocker: %+v", result)
+	}
+}
+
+// TestEvaluateIssueDeps_SiblingShortNamesResolveThroughTheWorkspace is the
+// pickup half of #2349, row for row from the issue's table: in an issue of
+// example-org/app, each body line holds the issue on the sibling's #12. Every
+// candidate the old example alias map could reach is open and fetchable here —
+// the declaring repo's own #12 and acme/platform#12 — so a regression shows as
+// the wrong blocker rather than as a skipped, unfetchable one.
+func TestEvaluateIssueDeps_SiblingShortNamesResolveThroughTheWorkspace(t *testing.T) {
+	aliases := depgraph.WorkspaceRepoAliases([]string{
+		"example-org/app", "example-org/widget-api", "example-org/platform",
+	})
+	rows := []struct {
+		body, wantRepo string
+	}{
+		{"Blocked by widget-api#12", "example-org/widget-api"},
+		{"Blocked by widget-api #12", "example-org/widget-api"},
+		{"Blocked by platform #12", "example-org/platform"},
+		{"Blocked by example-org/widget-api#12", "example-org/widget-api"},
+	}
+	for _, row := range rows {
+		mock := &mockFetcher{issues: map[string]*types.Issue{
+			"example-org/app#1":         {Number: 1, Body: row.body},
+			"example-org/app#12":        {Number: 12, Title: "unrelated", State: "OPEN"},
+			"example-org/widget-api#12": {Number: 12, Title: "widget", State: "OPEN"},
+			"example-org/platform#12":   {Number: 12, Title: "platform", State: "OPEN"},
+			"acme/platform#12":          {Number: 12, Title: "example repository", State: "OPEN"},
+		}}
+
+		result, err := EvaluateIssueDeps(context.Background(), mock, "example-org", "app", 1, aliases)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", row.body, err)
+		}
+		if len(result.OpenDependencies) != 1 {
+			t.Errorf("%q: open dependencies = %+v, want exactly %s#12", row.body, result.OpenDependencies, row.wantRepo)
+			continue
+		}
+		dep := result.OpenDependencies[0]
+		if dep.Repo != row.wantRepo || dep.Number != 12 || dep.Source != "body" || !result.ShouldBlock {
+			t.Errorf("%q: dependency = %+v (block=%v), want %s#12 from the body", row.body, dep, result.ShouldBlock, row.wantRepo)
+		}
 	}
 }

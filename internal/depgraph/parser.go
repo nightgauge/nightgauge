@@ -19,21 +19,46 @@ type CrossRepoRef struct {
 	SourceLine string
 }
 
-// DefaultRepoAliases maps short names used in issue bodies to full GitHub
-// repo names. Callers may extend or override these.
-var DefaultRepoAliases = map[string]string{
-	"platform":              "acme/platform",
-	"acme-platform":         "acme/platform",
-	"flutter":               "acme/mobile",
-	"acme-mobile":           "acme/mobile",
-	"angular":               "acme/dashboard",
-	"acme-dashboard":        "acme/dashboard",
-	"core":                  "nightgauge/nightgauge",
-	"nightgauge":            "nightgauge/nightgauge",
-	"nightgauge/nightgauge": "nightgauge/nightgauge",
-	"acme/platform":         "acme/platform",
-	"acme/mobile":           "acme/mobile",
-	"acme/dashboard":        "acme/dashboard",
+// WorkspaceRepoAliases builds the alias map that a body-declared dependency's
+// repo token resolves through, from the workspace's own repositories. Each
+// "owner/name" slug contributes its full spelling and its bare name, so
+// "Blocked by widget-api #12", "Blocked by widget-api#12" and
+// "Blocked by example-org/widget-api#12" all reach example-org/widget-api#12.
+//
+// Before #2349 every caller passed nil, and nil meant a built-in map of the
+// documentation's example repositories (acme/platform, acme/mobile, …). In a
+// workspace whose repositories carry any other names, a sibling's short name
+// resolved to nothing: glued to the `#` it dropped the dependency, and with a
+// space it gated on the declaring repository's own same-numbered issue. Only the
+// full owner/repo spelling worked, and `platform` resolved to an acme
+// repository no board holds.
+//
+// A bare name that two of the slugs share (org-a/app and org-b/app) names
+// neither, so it is left out rather than guessed; the full spelling still
+// resolves. Slugs that are not exactly "owner/name" are skipped. resolveAlias
+// matches keys case-insensitively, so no case variants are added.
+func WorkspaceRepoAliases(slugs []string) map[string]string {
+	aliases := make(map[string]string, 2*len(slugs))
+	ambiguous := make(map[string]bool)
+	for _, slug := range slugs {
+		slug = strings.TrimSpace(slug)
+		owner, name, ok := strings.Cut(slug, "/")
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			continue
+		}
+		aliases[slug] = slug
+		short := strings.ToLower(name)
+		if ambiguous[short] {
+			continue
+		}
+		if prev, seen := aliases[short]; seen && !strings.EqualFold(prev, slug) {
+			delete(aliases, short)
+			ambiguous[short] = true
+			continue
+		}
+		aliases[short] = slug
+	}
+	return aliases
 }
 
 // The dependency keyword, defined ONCE and composed into every pattern that
@@ -394,16 +419,14 @@ func extractDepContext(body string) string {
 // it is documentation, not a dependency. See isNonGatingLine and
 // docs/AUTONOMOUS_ORCHESTRATOR.md for the marker contract.
 //
-// repoAliases maps short names to full "owner/repo" names. If nil,
-// DefaultRepoAliases is used.
+// repoAliases maps short names to full "owner/repo" names; build it with
+// WorkspaceRepoAliases. A nil map resolves only the full "owner/repo"
+// spelling (#2349).
 func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoRef {
 	if body == "" {
 		return nil
 	}
 	body = maskFencedCode(body)
-	if repoAliases == nil {
-		repoAliases = DefaultRepoAliases
-	}
 
 	seen := make(map[string]bool) // "repo#number" dedup
 	var refs []CrossRepoRef
@@ -761,16 +784,14 @@ func maskQualifiedRefs(s string, aliases map[string]string) string {
 // and feature-planning discovered the prerequisite by reading prose the
 // scheduler had ignored.
 //
-// selfRepo == "" degrades to exactly ParseCrossRepoRefs.
+// selfRepo == "" degrades to exactly ParseCrossRepoRefs. repoAliases is the
+// workspace's alias map (WorkspaceRepoAliases), as for ParseCrossRepoRefs.
 func ParseDependencyRefs(body, selfRepo string, repoAliases map[string]string) []CrossRepoRef {
 	refs := ParseCrossRepoRefs(body, repoAliases)
 	if body == "" || selfRepo == "" {
 		return refs
 	}
 	body = maskFencedCode(body)
-	if repoAliases == nil {
-		repoAliases = DefaultRepoAliases
-	}
 
 	seen := make(map[string]bool, len(refs))
 	for _, r := range refs {

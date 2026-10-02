@@ -6,9 +6,28 @@ import (
 	"testing"
 )
 
+// testRepoAliases is the documentation's example workspace, for tests only.
+// Until #2349 it was DefaultRepoAliases and every production caller resolved
+// short repository names through it; production now builds its map from the
+// workspace's own repositories (WorkspaceRepoAliases).
+var testRepoAliases = map[string]string{
+	"platform":              "acme/platform",
+	"acme-platform":         "acme/platform",
+	"flutter":               "acme/mobile",
+	"acme-mobile":           "acme/mobile",
+	"angular":               "acme/dashboard",
+	"acme-dashboard":        "acme/dashboard",
+	"core":                  "nightgauge/nightgauge",
+	"nightgauge":            "nightgauge/nightgauge",
+	"nightgauge/nightgauge": "nightgauge/nightgauge",
+	"acme/platform":         "acme/platform",
+	"acme/mobile":           "acme/mobile",
+	"acme/dashboard":        "acme/dashboard",
+}
+
 func TestParseBlockedBy(t *testing.T) {
 	body := "This issue is Blocked by platform #535 and needs attention."
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d", len(refs))
 	}
@@ -25,7 +44,7 @@ func TestParseBlockedBy(t *testing.T) {
 
 func TestParseBlockedByFullRepoName(t *testing.T) {
 	body := "blocked by acme/mobile#127"
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d", len(refs))
 	}
@@ -39,7 +58,7 @@ func TestParseBlockedByFullRepoName(t *testing.T) {
 
 func TestParseBlockedByCaseInsensitive(t *testing.T) {
 	body := "BLOCKED BY flutter #99"
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d", len(refs))
 	}
@@ -50,7 +69,7 @@ func TestParseBlockedByCaseInsensitive(t *testing.T) {
 
 func TestParseDependsOn(t *testing.T) {
 	body := "Depends on: flutter #127"
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d", len(refs))
 	}
@@ -68,7 +87,7 @@ func TestParseDependsOn(t *testing.T) {
 func TestParseDependsOnMultiple(t *testing.T) {
 	body := `Depends on flutter #127
 Depends on angular #152`
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 2 {
 		t.Fatalf("expected 2 refs, got %d", len(refs))
 	}
@@ -82,7 +101,7 @@ Depends on angular #152`
 
 func TestParseDependsOnWithoutColon(t *testing.T) {
 	body := "Depends on platform #42"
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d", len(refs))
 	}
@@ -106,7 +125,7 @@ Some content here.
 
 More content.
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 3 {
 		t.Fatalf("expected 3 refs, got %d: %v", len(refs), refs)
 	}
@@ -144,7 +163,7 @@ More content.
 }
 
 func TestParseEmptyBody(t *testing.T) {
-	refs := ParseCrossRepoRefs("", nil)
+	refs := ParseCrossRepoRefs("", testRepoAliases)
 	if refs != nil {
 		t.Errorf("expected nil for empty body, got %v", refs)
 	}
@@ -154,7 +173,7 @@ func TestParseDeduplicate(t *testing.T) {
 	// Same ref via blocked-by AND depends-on should only appear once
 	body := `Blocked by platform #100
 Depends on platform #100`
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Errorf("expected 1 ref (deduped), got %d", len(refs))
 	}
@@ -217,7 +236,7 @@ func TestParseMultipleBlockedBy(t *testing.T) {
 	body := `Blocked by platform #100
 Blocked by flutter #200
 Blocked by angular #300`
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 3 {
 		t.Errorf("expected 3 refs, got %d", len(refs))
 	}
@@ -227,7 +246,7 @@ func TestParseStructuredSectionNoHeader(t *testing.T) {
 	// Without the cross-repo section header, structured entries should NOT match
 	body := `- ✅ platform #535 — stuff
 - ❌ flutter #127`
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	// These should only be picked up if there's a header; without it they
 	// shouldn't match via the structured section parser. They may or may not
 	// match other patterns (they don't match blocked-by or depends-on).
@@ -240,7 +259,7 @@ func TestParseStructuredSectionNoHeader(t *testing.T) {
 
 func TestParseNoRefs(t *testing.T) {
 	body := "This is a normal issue body with no cross-repo references."
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 0 {
 		t.Errorf("expected 0 refs, got %d", len(refs))
 	}
@@ -249,7 +268,7 @@ func TestParseNoRefs(t *testing.T) {
 func TestParseSameRepoRef(t *testing.T) {
 	// "Blocked by nightgauge #42" should resolve to the core repo
 	body := "Blocked by nightgauge #42"
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d", len(refs))
 	}
@@ -260,7 +279,7 @@ func TestParseSameRepoRef(t *testing.T) {
 
 func TestParseDependSingular(t *testing.T) {
 	body := "Depend on platform #77"
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d", len(refs))
 	}
@@ -292,7 +311,7 @@ the deterministic-first stages will ship.
 
 1. Do the thing.
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 0 {
 		t.Errorf("URL in Goal prose must not produce refs, got %d: %v", len(refs), refs)
 	}
@@ -308,7 +327,7 @@ Some goal text.
 - [#3264](https://github.com/nightgauge/nightgauge/issues/3264) (pr-merge)
 - [#3265](https://github.com/nightgauge/nightgauge/issues/3265) (pr-create)
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 2 {
 		t.Fatalf("expected 2 refs from Blocked by section, got %d: %v", len(refs), refs)
 	}
@@ -332,7 +351,7 @@ func TestParseURLInDependsOnSectionExtracted(t *testing.T) {
 
 - [Platform API #99](https://github.com/acme/platform/issues/99)
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref from Depends on section, got %d", len(refs))
 	}
@@ -346,7 +365,7 @@ func TestParseURLInDependenciesSectionExtracted(t *testing.T) {
 
 - https://github.com/nightgauge/nightgauge/issues/42
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref from Dependencies section, got %d", len(refs))
 	}
@@ -362,7 +381,7 @@ func TestParseURLOnBlockedByMarkerLine(t *testing.T) {
 Blocked by https://github.com/nightgauge/nightgauge/issues/100 — see comments.
 
 More prose.`
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref from blocked-by marker line, got %d: %v", len(refs), refs)
 	}
@@ -379,7 +398,7 @@ func TestParseURLInPlanSectionIgnored(t *testing.T) {
    re-baseline the budget caps.
 2. Update [docs/CONFIGURATION.md](docs/CONFIGURATION.md).
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 0 {
 		t.Errorf("URLs in Plan prose must not produce refs, got %d: %v", len(refs), refs)
 	}
@@ -390,7 +409,7 @@ func TestParseURLInAcceptanceCriteriaIgnored(t *testing.T) {
 
 - [ ] Tracked by [#999](https://github.com/nightgauge/nightgauge/issues/999).
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 0 {
 		t.Errorf("URLs in Acceptance criteria must not produce refs, got %d: %v", len(refs), refs)
 	}
@@ -423,7 +442,7 @@ Out of scope from [#3261](https://github.com/nightgauge/nightgauge/issues/3261)'
 - [#3265](https://github.com/nightgauge/nightgauge/issues/3265) (pr-create)
 - [#3267](https://github.com/nightgauge/nightgauge/issues/3267) (gates everywhere)
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	gotNums := map[int]bool{}
 	for _, r := range refs {
 		gotNums[r.Number] = true
@@ -445,7 +464,7 @@ func TestParseURLNoDepContextProducesNoRefs(t *testing.T) {
 	// URLs are pure references, not deps.
 	body := `See https://github.com/nightgauge/nightgauge/issues/100 for context.
 Related: https://github.com/acme/platform/issues/55`
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 0 {
 		t.Errorf("URLs outside dep context must not produce refs, got %d: %v", len(refs), refs)
 	}
@@ -456,7 +475,7 @@ func TestParseURLGitLabInDepSection(t *testing.T) {
 
 - https://gitlab.com/myorg/myproject/-/issues/42
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 GitLab URL ref from Blocked by, got %d", len(refs))
 	}
@@ -469,7 +488,7 @@ func TestParseURLGitLabInProseIgnored(t *testing.T) {
 	body := `## Goal
 
 See https://gitlab.com/myorg/myproject/-/issues/42 for context.`
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 0 {
 		t.Errorf("GitLab URL in prose must not produce refs, got %d: %v", len(refs), refs)
 	}
@@ -484,7 +503,7 @@ func TestParseURLAndSlugDedup(t *testing.T) {
 
 - https://github.com/acme/platform/issues/99
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Errorf("URL + slug form of same ref must dedup to 1, got %d: %v", len(refs), refs)
 	}
@@ -498,7 +517,7 @@ func TestParseDepSectionSubheader(t *testing.T) {
 
 - [#42](https://github.com/nightgauge/nightgauge/issues/42)
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref from ### Blocked by, got %d", len(refs))
 	}
@@ -521,7 +540,7 @@ func TestParseMultipleDepSections(t *testing.T) {
 
 - [#3](https://github.com/nightgauge/nightgauge/issues/3)
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	gotNums := map[int]bool{}
 	for _, r := range refs {
 		gotNums[r.Number] = true
@@ -636,7 +655,7 @@ func TestStructuredSectionMarkerGating(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			body := "## Goal\n\nSomething.\n\n## Cross-Repo Dependencies\n\n" + tc.entry + "\n\n## Testing Plan\n\nMore.\n"
-			refs := ParseCrossRepoRefs(body, nil)
+			refs := ParseCrossRepoRefs(body, testRepoAliases)
 
 			if !tc.wantEdge {
 				if len(refs) != 0 {
@@ -744,7 +763,7 @@ func TestNonGatingPrecedence(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			body := "## Cross-Repo Dependencies\n\n" + tc.entry + "\n"
-			refs := ParseCrossRepoRefs(body, nil)
+			refs := ParseCrossRepoRefs(body, testRepoAliases)
 
 			if !tc.wantEdge {
 				if len(refs) != 0 {
@@ -777,7 +796,7 @@ func TestStructuredSectionMixedMarkers(t *testing.T) {
 - ⏸️ acme/mobile#77 — deferred, out of scope for this epic
 - ✅ acme/dashboard#12 — shipped
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	got := map[int]bool{}
 	for _, r := range refs {
 		got[r.Number] = true
@@ -801,7 +820,7 @@ func TestParseRefsCarrySourceLine(t *testing.T) {
 
 - ⚠️ acme/platform#209 — store distribution
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d: %+v", len(refs), refs)
 	}
@@ -818,7 +837,7 @@ func TestParseRefsCarrySourceLine(t *testing.T) {
 // the opposite of the behavior #126 pinned.
 func TestUnmarkedEntryGates(t *testing.T) {
 	body := "## Cross-Repo Dependencies\n\n- acme/platform#535 — really blocks us\n"
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	if len(refs) != 1 {
 		t.Fatalf("expected 1 ref, got %d: %+v", len(refs), refs)
 	}
@@ -846,7 +865,7 @@ func TestUnmarkedEntryWithNonGatingTokenDoesNotGate(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			body := "## Cross-Repo Dependencies\n\n" + tc.entry + "\n"
-			refs := ParseCrossRepoRefs(body, nil)
+			refs := ParseCrossRepoRefs(body, testRepoAliases)
 			if len(refs) != 0 {
 				t.Fatalf("entry %q must produce NO dependency edge, got %d: %+v",
 					tc.entry, len(refs), refs)
@@ -867,7 +886,7 @@ func TestUnmarkedEntryMixedWithMarkedEntries(t *testing.T) {
 - ⏸️ acme/dashboard#12 — deferred, out of scope
 - ✅ acme/platform#209 — duplicate, already listed above
 `
-	refs := ParseCrossRepoRefs(body, nil)
+	refs := ParseCrossRepoRefs(body, testRepoAliases)
 	got := map[int]bool{}
 	for _, r := range refs {
 		got[r.Number] = true
@@ -914,7 +933,7 @@ func TestMarkedEntriesUnaffectedByOptionalMarkerGroup(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.marker, func(t *testing.T) {
 			body := "## Cross-Repo Dependencies\n\n- " + tc.marker + " acme/platform#535 — description\n"
-			refs := ParseCrossRepoRefs(body, nil)
+			refs := ParseCrossRepoRefs(body, testRepoAliases)
 			if len(refs) != 1 {
 				t.Fatalf("expected 1 ref, got %d: %+v", len(refs), refs)
 			}
@@ -941,7 +960,7 @@ const selfRepo = "nightgauge/nightgauge"
 func sameRepoNumbers(t *testing.T, body string) []int {
 	t.Helper()
 	var got []int
-	for _, r := range ParseDependencyRefs(body, selfRepo, nil) {
+	for _, r := range ParseDependencyRefs(body, selfRepo, testRepoAliases) {
 		if r.Repo == selfRepo {
 			got = append(got, r.Number)
 		}
@@ -1029,7 +1048,7 @@ func TestParseDependencyRefs_DeclarationBeatsIncidentalDeferred(t *testing.T) {
 // which would block on an unrelated issue in the wrong repository.
 func TestParseDependencyRefs_QualifiedRefsNotDoubleCounted(t *testing.T) {
 	body := "Blocked by platform #535\nDepends on: acme/platform#600\n"
-	refs := ParseDependencyRefs(body, selfRepo, nil)
+	refs := ParseDependencyRefs(body, selfRepo, testRepoAliases)
 	for _, r := range refs {
 		if r.Repo == selfRepo {
 			t.Errorf("repo-qualified ref also produced a same-repo edge to #%d (line %q)",
@@ -1042,7 +1061,7 @@ func TestParseDependencyRefs_QualifiedRefsNotDoubleCounted(t *testing.T) {
 }
 
 func TestParseDependencyRefs_MixedQualifiedAndBareOnOneLine(t *testing.T) {
-	refs := ParseDependencyRefs("Depends on: platform #535 and #1187", selfRepo, nil)
+	refs := ParseDependencyRefs("Depends on: platform #535 and #1187", selfRepo, testRepoAliases)
 	var sawPlatform, sawSelf bool
 	for _, r := range refs {
 		switch {
@@ -1060,10 +1079,10 @@ func TestParseDependencyRefs_MixedQualifiedAndBareOnOneLine(t *testing.T) {
 }
 
 func TestParseDependencyRefs_SelfReferenceAndEmptyRepo(t *testing.T) {
-	if refs := ParseDependencyRefs("Depends on: #1187", "", nil); len(refs) != 0 {
+	if refs := ParseDependencyRefs("Depends on: #1187", "", testRepoAliases); len(refs) != 0 {
 		t.Errorf("empty selfRepo must degrade to ParseCrossRepoRefs, got %v", refs)
 	}
-	refs := ParseDependencyRefs("Depends on: #1187", selfRepo, nil)
+	refs := ParseDependencyRefs("Depends on: #1187", selfRepo, testRepoAliases)
 	if len(refs) != 1 || refs[0].SourceLine != "Depends on: #1187" {
 		t.Fatalf("SourceLine must name the responsible prose, got %v", refs)
 	}
@@ -1099,7 +1118,7 @@ Part of #308
 	if len(got) != 1 || got[0] != 300 {
 		t.Fatalf("got %v, want [300] — only the blocker is a dependency", got)
 	}
-	for _, r := range ParseDependencyRefs(body, selfRepo, nil) {
+	for _, r := range ParseDependencyRefs(body, selfRepo, testRepoAliases) {
 		if r.Number == 308 {
 			t.Fatalf("parent epic #308 became a dependency edge (source=%q line=%q) — "+
 				"an epic never closes before its children, so this deadlocks the issue",
@@ -1245,7 +1264,7 @@ func TestParseDependencyRefs_SentenceScopedKeywords(t *testing.T) {
 func TestParseDependencyRefs_PerKeywordSourceOnOneLine(t *testing.T) {
 	want := map[int]string{5: "body_text", 6: "depends_on"}
 	got := map[int]string{}
-	for _, r := range ParseDependencyRefs("Blocked by #5. Depends on #6\n", selfRepo, nil) {
+	for _, r := range ParseDependencyRefs("Blocked by #5. Depends on #6\n", selfRepo, testRepoAliases) {
 		if r.Repo == selfRepo {
 			got[r.Number] = r.Source
 		}
@@ -1316,7 +1335,7 @@ func TestParseDependencyRefs_Issue1505Specimen(t *testing.T) {
 		"not retry until both close.\n"
 
 	got := map[string]bool{}
-	for _, r := range ParseDependencyRefs(body, selfRepo, nil) {
+	for _, r := range ParseDependencyRefs(body, selfRepo, testRepoAliases) {
 		got[r.Repo+"#"+strconv.Itoa(r.Number)] = true
 		if r.Source != "body_text" {
 			t.Errorf("%s#%d source = %q, want body_text", r.Repo, r.Number, r.Source)
@@ -1357,7 +1376,7 @@ func TestParseDependencyRefs_Issue477ShapeDeclaresNothing(t *testing.T) {
 		"Depends on #12",
 		"~~~",
 	}, "\n")
-	if refs := ParseDependencyRefs(body, "o/r", nil); len(refs) != 0 {
+	if refs := ParseDependencyRefs(body, "o/r", testRepoAliases); len(refs) != 0 {
 		t.Errorf("refs = %+v, want none", refs)
 	}
 }
@@ -1373,7 +1392,7 @@ func TestParseDependencyRefs_RealDeclarationsSurviveTheIssue477Fixes(t *testing.
 		"Blocked by #9",
 	}, "\n")
 	got := map[int]bool{}
-	for _, r := range ParseDependencyRefs(body, "o/r", nil) {
+	for _, r := range ParseDependencyRefs(body, "o/r", testRepoAliases) {
 		got[r.Number] = true
 	}
 	for _, want := range []int{5, 7, 9} {

@@ -242,6 +242,21 @@ changelog, and the release workflow refuses a tag that does not.
   of 20 s. When the concurrent-pipelines test timed out, its main thread could
   wait forever; now it fails.
 
+- **Short repository names in body-declared dependencies resolve against the
+  workspace's own repositories** (#2349). The pickup gate, the dispatcher's
+  dependency graph, `graph build`, `next`, `hook check-deps`, the `pr merge`
+  blocker guard and the `deps-gate promote` sweep resolved a short name, such
+  as `widget-api` in `Blocked by widget-api #12`, through a built-in map of the
+  documentation's example repositories. In any other workspace a sibling's
+  name glued to its `#` dropped the dependency, so the issue dispatched over an
+  open blocker; written with a space, it gated on the declaring repository's
+  own `#12`; and `platform` gated on `acme/platform`, which no board holds.
+  Every caller now builds the map from the workspace's repositories (the
+  manifest's members, the sibling checkouts and the scheduler's repo set),
+  found from the main checkout even when the command runs in a pipeline
+  worktree. A bare name that two repositories share resolves to neither, and
+  the full `owner/repo#N` spelling always works.
+
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
   the phone app or the dashboard used to sit `routing` until it expired,

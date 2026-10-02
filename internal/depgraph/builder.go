@@ -98,6 +98,11 @@ func CachedBoardProvider(client *gh.Client, cache *boardcache.Cache) BoardProvid
 //
 // Boards are read straight from the client; a process that holds a board
 // snapshot cache should call BuildGraphWithBoards instead.
+//
+// repoAliases resolves the short repo names issue bodies use ("Blocked by
+// widget-api #12"); pass WorkspaceRepoAliases over the workspace's
+// repositories. With nil, only full "owner/repo" spellings cross a
+// repository boundary (#2349).
 func BuildGraph(ctx context.Context, client *gh.Client, repos []RepoConfig, repoAliases map[string]string) (*Graph, error) {
 	return BuildGraphWithBoards(ctx, client, DefaultBoardProvider(client), repos, repoAliases)
 }

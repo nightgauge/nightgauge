@@ -852,8 +852,18 @@ not only the one immediately after it, which is how the second blocker in
 
 is honoured — the same claim the bare `#N` forms have always had.
 
-Short names (`platform`, `flutter`, `angular`, `core`) are resolved via a
-built-in alias map. A reference with **no** repo token resolves to the
+A short repository name resolves against the **workspace's own
+repositories**: each one known to the workspace (the manifest's members, the
+sibling checkouts, and the scheduler's repo set) answers to its bare name, so
+in a workspace holding `example-org/widget-api`, `Blocked by widget-api #12`,
+`Blocked by widget-api#12` and `Blocked by example-org/widget-api#12` all name
+`example-org/widget-api#12`. A bare name two of the workspace's repositories
+share names neither; spell it `owner/repo`. The pickup gate, the dispatcher's
+graph, `graph build` and `next` resolve through the same map (#2349). Before
+#2349 they resolved short names through the example repositories of this page
+(`acme/platform`, …): a sibling's name glued to its `#` produced no edge, and
+one written with a space gated on the declaring repository's own
+same-numbered issue. A reference with **no** repo token resolves to the
 declaring issue's own repository.
 
 The same-repo forms were added in Issue #1492. Until then every pattern
@@ -1707,8 +1717,10 @@ an actual promotable count.
 
 ### Cross-repo dependencies not detected
 
-- Verify the repo alias is in the alias map (e.g., `platform` maps to
-  `acme/platform`)
+- Verify the short name is a repository the workspace knows: a member of
+  `.vscode/nightgauge-workspace.yaml` or a sibling checkout whose
+  `.nightgauge/config.yaml` names its owner and repo. A name two repositories
+  share resolves to neither; write `owner/repo#<number>`
 - Check body text format: `Blocked by <repo> #<number>`,
   `Depends on <repo> #<number>`, or the same-repo `Depends on: #<number>` /
   `Blocked by #<number>`

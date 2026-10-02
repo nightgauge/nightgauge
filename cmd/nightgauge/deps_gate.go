@@ -71,7 +71,8 @@ func depsGateCheckCmd() *cobra.Command {
 			ownerPart, repoPart := splitRepo(owner, repo)
 			issueSvc := gh.NewIssueService(client)
 
-			res, err := evaluateDepsGate(cmd.Context(), issueSvc, ownerPart, repoPart, issueNum)
+			res, err := evaluateDepsGate(cmd.Context(), issueSvc, ownerPart, repoPart, issueNum,
+				launchRepoAliases(ownerPart+"/"+repoPart))
 			if err != nil {
 				return fmt.Errorf("evaluate deps gate for #%d: %w", issueNum, enrichError(err))
 			}
@@ -141,7 +142,7 @@ func depsGatePromoteCmd() *cobra.Command {
 			}
 			issueSvc := gh.NewIssueService(client)
 
-			summary := depsGatePromoteSweep(cmd.Context(), sched, issueSvc, ownerPart)
+			summary := depsGatePromoteSweep(cmd.Context(), sched, issueSvc, ownerPart, launchRepoAliases())
 
 			if outputJSON {
 				return printJSON(summary)
@@ -173,9 +174,11 @@ type depsGateCheckResult struct {
 
 // evaluateDepsGate runs the deterministic blockedBy check and maps it to an
 // allow/defer decision. Extracted from the RunE closure so it is unit-testable
-// with a fake IssueFetcher (no network).
-func evaluateDepsGate(ctx context.Context, fetcher hooks.IssueFetcher, owner, repo string, issueNum int) (depsGateCheckResult, error) {
-	res, err := hooks.EvaluateIssueDeps(ctx, fetcher, owner, repo, issueNum)
+// with a fake IssueFetcher (no network). repoAliases is the workspace's alias
+// map (workspaceRepoAliases), which the body-declared half of the check
+// resolves short repository names through (#2349).
+func evaluateDepsGate(ctx context.Context, fetcher hooks.IssueFetcher, owner, repo string, issueNum int, repoAliases map[string]string) (depsGateCheckResult, error) {
+	res, err := hooks.EvaluateIssueDeps(ctx, fetcher, owner, repo, issueNum, repoAliases)
 	if err != nil {
 		return depsGateCheckResult{}, err
 	}
@@ -248,8 +251,9 @@ type depsPromoteEntry struct {
 
 // depsGatePromoteSweep re-evaluates every blocked_dependency-paused item and
 // resumes those whose blockers have all closed. Extracted from the RunE closure
-// so it is unit-testable with a fake IssueFetcher (no network).
-func depsGatePromoteSweep(ctx context.Context, sched *orchestrator.Scheduler, fetcher hooks.IssueFetcher, defaultOwner string) depsGatePromoteSummary {
+// so it is unit-testable with a fake IssueFetcher (no network). repoAliases is
+// the workspace's alias map, as for evaluateDepsGate.
+func depsGatePromoteSweep(ctx context.Context, sched *orchestrator.Scheduler, fetcher hooks.IssueFetcher, defaultOwner string, repoAliases map[string]string) depsGatePromoteSummary {
 	items := sched.ListPausedByKind("blocked_dependency")
 	summary := depsGatePromoteSummary{
 		Owner:       defaultOwner,
@@ -262,7 +266,7 @@ func depsGatePromoteSweep(ctx context.Context, sched *orchestrator.Scheduler, fe
 
 	for _, item := range items {
 		o, r := ownerRepoForItem(item.Repo, defaultOwner)
-		res, err := hooks.EvaluateIssueDeps(ctx, fetcher, o, r, item.IssueNumber)
+		res, err := hooks.EvaluateIssueDeps(ctx, fetcher, o, r, item.IssueNumber, repoAliases)
 		entry := depsPromoteEntry{IssueNumber: item.IssueNumber, OpenCount: res.OpenCount}
 		if err != nil {
 			entry.Error = err.Error()

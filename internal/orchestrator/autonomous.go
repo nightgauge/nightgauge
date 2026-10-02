@@ -1252,6 +1252,11 @@ const MaxConflictRestarts = 3
 
 // NewAutonomousScheduler creates a new autonomous scheduler that wraps the
 // existing Scheduler and uses the depgraph for cross-repo coordination.
+//
+// repoAliases is the workspace's alias map (depgraph.WorkspaceRepoAliases),
+// through which every graph build resolves the short repository names in
+// body-declared dependencies. Build it from the whole workspace, not only
+// repos: FilterRepos narrows what is scanned, never what a body may name.
 func NewAutonomousScheduler(
 	scheduler *Scheduler,
 	ghClient *gh.Client,

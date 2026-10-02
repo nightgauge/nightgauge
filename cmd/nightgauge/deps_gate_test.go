@@ -57,7 +57,7 @@ func TestEvaluateDepsGate_DefersOnOpenBlocker(t *testing.T) {
 		},
 	}}
 
-	res, err := evaluateDepsGate(context.Background(), mock, "nightgauge", "nightgauge", 1459)
+	res, err := evaluateDepsGate(context.Background(), mock, "nightgauge", "nightgauge", 1459, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestEvaluateDepsGate_AllowsWhenNoOpenBlockers(t *testing.T) {
 		},
 	}}
 
-	res, err := evaluateDepsGate(context.Background(), mock, "nightgauge", "nightgauge", 100)
+	res, err := evaluateDepsGate(context.Background(), mock, "nightgauge", "nightgauge", 100, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestDepsGatePromoteSweep_ResumesWhenBlockerClosed(t *testing.T) {
 		},
 	}}
 
-	summary := depsGatePromoteSweep(context.Background(), s, mock, "nightgauge")
+	summary := depsGatePromoteSweep(context.Background(), s, mock, "nightgauge", nil)
 	if len(summary.Promoted) != 1 || summary.Promoted[0].IssueNumber != 1459 {
 		t.Fatalf("expected #1459 promoted, got %+v", summary.Promoted)
 	}
@@ -171,7 +171,7 @@ func TestDepsGatePromoteSweep_KeepsPausedWhenBlockerOpen(t *testing.T) {
 		},
 	}}
 
-	summary := depsGatePromoteSweep(context.Background(), s, mock, "nightgauge")
+	summary := depsGatePromoteSweep(context.Background(), s, mock, "nightgauge", nil)
 	if len(summary.Promoted) != 0 {
 		t.Errorf("expected nothing promoted while blocker open, got %+v", summary.Promoted)
 	}

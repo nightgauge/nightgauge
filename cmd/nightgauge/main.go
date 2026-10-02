@@ -5457,8 +5457,12 @@ func serveCmd() *cobra.Command {
 							schedulerLeaseHolderLine(workspaceRoot))
 					}
 					if len(repoConfigs) > 0 && weHoldSchedulerLease {
+						// Short repo names in issue bodies resolve against this
+						// workspace's repositories, not the docs' examples (#2349).
 						autoSched = orchestrator.NewAutonomousScheduler(
-							sched, client, repoConfigs, nil, autoCfg, workspaceRoot,
+							sched, client, repoConfigs,
+							workspaceRepoAliases(workspaceRoot, repoConfigs),
+							autoCfg, workspaceRoot,
 						)
 						// Refinement runs through the same stage bridge every
 						// pipeline stage crosses in extension (IPC) mode —
@@ -6392,7 +6396,8 @@ func hookCheckDepsCmd() *cobra.Command {
 			}
 			issueSvc := gh.NewIssueService(client)
 
-			result, err := hooks.EvaluateIssueDeps(cmd.Context(), issueSvc, owner, repo, issueNumber)
+			result, err := hooks.EvaluateIssueDeps(cmd.Context(), issueSvc, owner, repo, issueNumber,
+				launchRepoAliases(owner+"/"+repo))
 			if err != nil {
 				return err
 			}
@@ -7156,12 +7161,13 @@ func checkPRMergeBlockers(
 	repo string,
 	issueNumber int,
 	force bool,
+	repoAliases map[string]string,
 ) error {
 	if issueNumber <= 0 || force {
 		return nil
 	}
 
-	result, err := hooks.EvaluateIssueDeps(ctx, fetcher, owner, repo, issueNumber)
+	result, err := hooks.EvaluateIssueDeps(ctx, fetcher, owner, repo, issueNumber, repoAliases)
 	if err != nil {
 		return fmt.Errorf("check blockedBy for issue #%d: %w", issueNumber, err)
 	}
@@ -7232,7 +7238,8 @@ func prMergeCmd() *cobra.Command {
 			if force && issueNumber > 0 && !outputJSON {
 				fmt.Fprintf(os.Stderr, "WARNING: bypassing blockedBy merge guard for issue #%d via --force\n", issueNumber)
 			}
-			if err := checkPRMergeBlockers(cmd.Context(), issueSvc, ownerPart, repoPart, issueNumber, force); err != nil {
+			if err := checkPRMergeBlockers(cmd.Context(), issueSvc, ownerPart, repoPart, issueNumber, force,
+				launchRepoAliases(ownerPart+"/"+repoPart)); err != nil {
 				return err
 			}
 
@@ -10243,7 +10250,8 @@ func depgraphBuildCmd() *cobra.Command {
 			}
 
 			ctx := context.Background()
-			graph, err := depgraph.BuildGraph(ctx, client, repoConfigs, nil)
+			graph, err := depgraph.BuildGraph(ctx, client, repoConfigs,
+				workspaceRepoAliases(workdir, repoConfigs))
 			if err != nil {
 				return fmt.Errorf("build graph: %w", err)
 			}
@@ -11039,7 +11047,9 @@ func autonomousRunCmd() *cobra.Command {
 			})
 
 			autoSched := orchestrator.NewAutonomousScheduler(
-				sched, client, repoConfigs, nil, autoCfg, workdir,
+				sched, client, repoConfigs,
+				workspaceRepoAliases(workdir, repoConfigs),
+				autoCfg, workdir,
 			)
 			// (#4151) Resolve the post-merge survival observation window from
 			// pipeline.survival.window_days (safe on a nil Pipeline; cfg guarded).
