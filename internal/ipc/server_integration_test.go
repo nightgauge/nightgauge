@@ -21,12 +21,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -229,8 +231,16 @@ func newIpcTestHarness(t *testing.T) *ipcTestHarness {
 	return h
 }
 
-// nextLine reads the next line from the binary's stdout. Fails the test if
-// the channel is closed or the timeout (10s) is exceeded.
+// ipcHarnessLineWait bounds one wait for the daemon's next line. It bounds a
+// failure only, a daemon that never answers: a line is returned the moment
+// it is written, so a pass never waits on it. It was 10 s, and a contended
+// machine took longer than that over real work (#2367); it is sized for a
+// contended machine, not a quiet one.
+const ipcHarnessLineWait = 60 * time.Second
+
+// nextLine reads the next line from the binary's stdout. It fails the bound
+// test (see bind) if the channel is closed or no line comes within
+// ipcHarnessLineWait.
 func (h *ipcTestHarness) nextLine() string {
 	h.t.Helper()
 	select {
@@ -239,10 +249,63 @@ func (h *ipcTestHarness) nextLine() string {
 			h.t.Fatal("binary stdout closed unexpectedly")
 		}
 		return line
-	case <-time.After(10 * time.Second):
-		h.t.Fatal("timeout waiting for binary output")
+	case <-time.After(ipcHarnessLineWait):
+		h.t.Fatalf("no output from the binary within %s", ipcHarnessLineWait)
 		return ""
 	}
+}
+
+// sealNetwork keeps the daemons t starts off the network, and returns how
+// many requests they tried to send there. It listens on loopback and sets
+// itself as the HTTP and HTTPS proxy for the rest of t; a harness passes its
+// environment to the daemon, so call it before newIpcTestHarness. Every
+// request to a host that is not loopback then reaches the seal, which closes
+// the connection at once: nothing goes out, and nothing waits on a network
+// round trip. Loopback is never proxied, so a test's own fixture servers
+// still answer (#2367).
+func sealNetwork(t *testing.T) (requests func() int64) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("network seal: %v", err)
+	}
+	var n atomic.Int64
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			n.Add(1)
+			conn.Close()
+		}
+	}()
+	t.Cleanup(func() {
+		ln.Close()
+		<-done
+	})
+	proxy := "http://" + ln.Addr().String()
+	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
+		t.Setenv(k, proxy)
+	}
+	for _, k := range []string{"NO_PROXY", "no_proxy"} {
+		t.Setenv(k, "")
+	}
+	return n.Load
+}
+
+// bind makes t, a subtest of the test that owns the harness, the one a
+// harness failure fails, until t ends. Without it a failure inside a subtest
+// is FailNow on the parent test, which Go reports as "subtest may have called
+// FailNow on a parent test" (#2367). Subtests of one harness run one at a
+// time, so the swap needs no lock.
+func (h *ipcTestHarness) bind(t *testing.T) {
+	t.Helper()
+	parent := h.t
+	h.t = t
+	t.Cleanup(func() { h.t = parent })
 }
 
 // awaitReady reads lines until the ipc.ready event is consumed and returns it.

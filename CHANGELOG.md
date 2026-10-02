@@ -190,6 +190,13 @@ changelog, and the release workflow refuses a tag that does not.
   so on a loaded machine a fast helper timed out first and the hung one never
   started. Now the hung helper's deadline passes once it is running, and the
   test checks that it, and no other helper, timed out.
+  `TestContract_Attention`'s sweep subtest (#2367) went to GitHub for real
+  under a 10 s read. A loopback proxy that refuses every connection now
+  keeps the IPC test daemon off the network, and the subtest checks the
+  sweep's degraded result and counts the requests the seal refused. The
+  harness's read bound only catches a daemon that never answers, so it now
+  allows 60 s. A subtest can bind the harness to itself, so a harness
+  failure fails that subtest instead of its parent.
 
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
