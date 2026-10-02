@@ -1352,9 +1352,9 @@ func NewAutonomousScheduler(
 	// dedicated setter rather than by chaining OnEpicComplete — that slot is
 	// re-assigned per pipeline.run request and a chain built on it is silently
 	// wiped (#991). SetEpicCheckpointFn is nil-receiver safe.
-	scheduler.SetEpicCheckpointFn(func(epicNumber int) {
+	scheduler.SetEpicCheckpointFn(func(epicRepo string, epicNumber int) {
 		if as.safetyRails != nil {
-			as.safetyRails.RecordEpicComplete(epicNumber)
+			as.safetyRails.RecordEpicComplete(epicRepo, epicNumber)
 		}
 	})
 
@@ -3845,7 +3845,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 				// the next graceful shutdown writes "cancelled" over
 				// safety_tripped and the trip is gone on restart.
 				as.latchMachineHaltLocked("safety_tripped", "safety:rail-check")
-				lastEpic := safetySnap.LastEpicNumber
+				lastEpic := safetySnap.LastEpicRef()
 				pausedForCheckpoint := safetySnap.PausedForCheckpoint
 				as.fireStatusChangeLocked()
 				as.mu.Unlock()
@@ -3856,7 +3856,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 				// even tells the operator to "resolve the card". Until now there
 				// was no card to resolve, and the whole signal was a status-bar
 				// icon. Outside the lock: raiseAttention writes to the store.
-				epicForCard := 0
+				epicForCard := ""
 				if pausedForCheckpoint {
 					epicForCard = lastEpic
 				}

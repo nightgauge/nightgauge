@@ -1010,6 +1010,15 @@ LLM-as-judge (#4097) must treat it as background, not instructions. Bounds:
 ≤25 files, ≤12 notes, ≤2.5 KB. Non-epic work and wave-0 sub-issues (no
 accumulated context yet) get a byte-identical prompt (the renderer returns "").
 
+**The file lives in the epic's own repository (#2377).** `{E}` is an issue
+number, which names an issue only within one repository. The wave orchestrator
+writes the file into the pipeline state of the epic's repository checkout, and
+a sub-issue's prompt reads it from there, whichever repository the sub-issue is
+in. Before #2377 both used the launch checkout's pipeline state, so a sub-issue
+of an epic in another repository could be handed the findings of an unrelated
+epic that shared the number. When the workspace has no checkout of the epic's
+repository, nothing is written or injected.
+
 > **Note**: Epic context files are NOT cleaned up by `/pr-merge` — they persist
 > for the lifetime of the epic. See Issue #2404.
 

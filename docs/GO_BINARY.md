@@ -1426,6 +1426,14 @@ the scheduler's circular-parent auto-fix match the same way.
 nightgauge git branch-create [<branch-name> | --issue N] [--json]
 ```
 
+**An epic branch belongs to its epic's repository (#2377).** A sub-issue whose
+parent epic lives in the same repository is based on `epic/<N>-<slug>`, which is
+created from the default branch when absent, and `--json` reports `parent_issue`
+and `epic_branch`. A parent in another repository leaves both `null` and the
+branch is based on the default branch: `epic/<N>-*` here would be the branch of
+this repository's own `#N`. See
+[MULTI_REPO_WORKSPACE.md](MULTI_REPO_WORKSPACE.md#epic-branches-in-a-cross-repo-epic-2377).
+
 **The git service is common-dir aware, and must stay that way (#535).** Every
 pipeline stage runs inside a linked worktree, where `.git` is a file pointing at
 `<common>/worktrees/<name>` — a directory holding only HEAD, index, logs and a

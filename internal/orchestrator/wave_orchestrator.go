@@ -880,13 +880,27 @@ type sharedResearch struct {
 // epicContextPath returns the path to the epic context file. Delegates to the
 // shared helper so the accumulator and the prompt-injection read side
 // (epic_context_prompt.go) compute the same path.
+//
+// The file lives in the pipeline state of the epic's own repository
+// (wo.repo), where its number names this epic. In the launch checkout's, an
+// epic of another repository shared the file of every epic with its number,
+// and a sub-issue could be handed another epic's findings (#2377).
 func (wo *WaveOrchestrator) epicContextPath() (string, error) {
-	return epicContextFilePath(wo.scheduler.execMgr.WorkspaceRoot(), wo.epicNumber)
+	root, err := wo.scheduler.resolveRunRoot(wo.repo)
+	if err != nil {
+		return "", err
+	}
+	return epicContextFilePath(root, wo.epicNumber)
 }
 
-// readEpicContext reads the epic context file, returning nil if it doesn't exist.
+// readEpicContext reads the epic context file, returning nil if it doesn't
+// exist or the epic's repository has no checkout here.
 func (wo *WaveOrchestrator) readEpicContext() *epicContext {
-	return readEpicContextFile(wo.scheduler.execMgr.WorkspaceRoot(), wo.epicNumber)
+	root, err := wo.scheduler.resolveRunRoot(wo.repo)
+	if err != nil {
+		return nil
+	}
+	return readEpicContextFile(root, wo.epicNumber)
 }
 
 // writeEpicContext writes the epic context file atomically.

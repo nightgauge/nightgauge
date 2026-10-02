@@ -69,9 +69,9 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		// DETACHED, bounded context: this runs on the pr-merge finalization path,
 		// so a hung webhook must not block the pipeline (the pipeline ctx may also
 		// be cancelled once the run returns) (#4076 review).
-		// The alert names the epic that closed in its own repository, which
-		// the hook resolved it against (result.EpicRepo); for an epic in
-		// another repository item.Repo would name a different issue (#2350).
+		// The alert, the checkpoint and the epic-PR callback all name the closed
+		// epic in its own repository, the one the hook resolved it in (EpicRepo);
+		// item.Repo can hold a different issue with that number (#2350, #2377).
 		repo, epic := result.EpicRepo, result.EpicNumber
 		if repo == "" {
 			repo = item.Repo
@@ -87,10 +87,10 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		// onEpicComplete does real network work (epic PR create + merge), so a
 		// panic or a long block there must not lose the pause (#991).
 		if s.epicCheckpoint != nil {
-			s.epicCheckpoint(result.EpicNumber)
+			s.epicCheckpoint(repo, epic)
 		}
 		if s.onEpicComplete != nil {
-			s.onEpicComplete(item.Repo, result.EpicNumber)
+			s.onEpicComplete(repo, epic)
 		}
 	}
 

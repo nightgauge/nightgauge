@@ -203,37 +203,6 @@ func TestEnsureEpicBranchForItem_EpicTitleReadSkipsRelationships(t *testing.T) {
 	}
 }
 
-// TestEnsureEpicBranchForItem_ReadsACrossRepoEpicInItsOwnRepository: the
-// epic's title is read where the epic lives. By number in the sub-issue's
-// repository it named the branch after an unrelated same-numbered issue
-// (#2350 review).
-func TestEnsureEpicBranchForItem_ReadsACrossRepoEpicInItsOwnRepository(t *testing.T) {
-	t.Setenv("NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH", "true")
-	root := gitWorkspace(t)
-	remote := filepath.Join(t.TempDir(), "origin.git")
-	gitIn(t, root, "init", "--bare", remote)
-	gitIn(t, root, "remote", "add", "origin", remote)
-	gitIn(t, root, "push", "origin", "main")
-
-	mock := newMockIssueSvc()
-	mock.addIssue("Org", "platform", 2000, &types.Issue{Number: 2000, Title: "Platform Epic", State: "OPEN"})
-	mock.addIssue("Org", "repo", 2000, &types.Issue{Number: 2000, Title: "Unrelated Issue", State: "OPEN"})
-	s := &Scheduler{issueSvc: mock}
-
-	failure := s.ensureEpicBranchForItem(context.Background(), root,
-		types.BoardItem{Number: 2001, ParentNumber: 2000, ParentRepo: "Org/platform", Repo: "Org/repo"})
-	if failure != "" {
-		t.Fatalf("epic branch failure = %q", failure)
-	}
-	out, err := gittest.Command(root, "ls-remote", "--heads", "origin").CombinedOutput()
-	if err != nil {
-		t.Fatalf("git ls-remote: %v\n%s", err, out)
-	}
-	if !strings.Contains(string(out), "refs/heads/epic/2000-platform-epic") {
-		t.Fatalf("remote heads:\n%s\nwant epic/2000-platform-epic, named from the epic in Org/platform", out)
-	}
-}
-
 // TestBlockerStateReadsSkipRelationships: refreshBlockerStates and
 // resolveIssueStatesByKey read only each issue's State. Reading it through the
 // relationship read meant a blocker's own long relationship list could fail

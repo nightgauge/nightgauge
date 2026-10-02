@@ -8460,7 +8460,9 @@ func gitBranchCreateCmd() *cobra.Command {
 						return err
 					}
 				}
-				parentIssue = issue.ParentIssueNumber
+				// 0 for a parent in another repository, so the title read
+				// below is always this repository's #N (#2377).
+				parentIssue = epicBranchParentFor(issue, owner, repo)
 				epicTitle = func() (string, error) {
 					if issueSvc == nil {
 						client, clientErr := clientFromConfig()

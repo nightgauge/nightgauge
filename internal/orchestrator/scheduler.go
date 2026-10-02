@@ -968,7 +968,7 @@ type Scheduler struct {
 	// Callbacks
 	onStageStart    func(repo string, issue int, stage string, title string)
 	onStageComplete func(repo string, issue int, stage string, err error, cost StageCost, model string)
-	onEpicComplete  func(repo string, epicNumber int)
+	onEpicComplete  func(epicRepo string, epicNumber int) // the epic's own repository (#2377)
 	// evaluatePostMergeFn performs the post-merge evaluation. A field, not a
 	// direct call, for the same reason buildGraphFn is one: checkEpicCompletion
 	// otherwise constructs its own GitHub services from a live client, so the
@@ -996,7 +996,8 @@ type Scheduler struct {
 	// onto it would be silently wiped by the next pipeline.run, or born nil,
 	// depending on ordering; both failures are invisible (#991). Mirrors the
 	// SetAttention shape: one writer, nil-safe on both ends. nil in CLI mode.
-	epicCheckpoint     func(epicNumber int)
+	// It receives the epic's own repository with its number (#2377).
+	epicCheckpoint     func(epicRepo string, epicNumber int)
 	onPipelineComplete func(repo string, issue int, runtime *state.RuntimeState, success bool)
 	onQueueChanged     func(QueueState)
 	onStateChanged     func(repo string, issue int, runtime *state.RuntimeState)
@@ -1625,6 +1626,14 @@ func originRepoSlug(root string) string {
 		return ""
 	}
 	return owner + "/" + name
+}
+
+// RepoRoot resolves the checkout of repo ("owner/name") by the rules a run in
+// that repository is rooted by (resolveRunRoot), and errors when this
+// workspace has none. The IPC server uses it to find an epic's branch in the
+// epic's own repository (#2377).
+func (s *Scheduler) RepoRoot(repo string) (string, error) {
+	return s.resolveRunRoot(repo)
 }
 
 // runRoot resolves the filesystem root a run's on-disk state belongs in — the
@@ -3611,11 +3620,16 @@ func (s *Scheduler) OnStageComplete(fn func(repo string, issue int, stage string
 
 // OnEpicComplete sets a callback for when an epic auto-closes.
 //
+// fn receives the epic's own repository ("owner/name") and number. For an
+// epic with sub-issues in other repositories that is not the merged
+// sub-issue's repository, which holds a different issue with that number
+// (#2377).
+//
 // SINGLE SLOT: a second call replaces the first. internal/ipc/server.go
 // registers one per `pipeline.run` request, so anything that needs to observe
 // epic completion durably must NOT register here — see SetEpicCheckpointFn for
 // the shape that survives (#991).
-func (s *Scheduler) OnEpicComplete(fn func(repo string, epicNumber int)) {
+func (s *Scheduler) OnEpicComplete(fn func(epicRepo string, epicNumber int)) {
 	s.onEpicComplete = fn
 }
 
@@ -3623,9 +3637,12 @@ func (s *Scheduler) OnEpicComplete(fn func(repo string, epicNumber int)) {
 // recorder, so the fleet-scoped SafetyRails pause fires from the one place an
 // epic actually closes.
 //
+// fn receives the epic's own repository ("owner/name") and number, as
+// OnEpicComplete's callback does (#2377).
+//
 // Nil-receiver guard is required: NewAutonomousScheduler is called with a nil
 // *Scheduler throughout the test suite.
-func (s *Scheduler) SetEpicCheckpointFn(fn func(epicNumber int)) {
+func (s *Scheduler) SetEpicCheckpointFn(fn func(epicRepo string, epicNumber int)) {
 	if s == nil {
 		return
 	}
@@ -5870,9 +5887,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// nothing has accumulated yet, keeping those prompts byte-identical.
 		if item.ParentNumber > 0 &&
 			(stage == state.StageFeaturePlanning || stage == state.StageFeatureDev) {
-			if section := renderEpicContextForPrompt(s.workspaceRoot, item.ParentNumber); section != "" {
-				prompt += section
-			}
+			prompt += s.epicContextSection(item)
 		}
 
 		// Planning hand-off (#2181): feature-dev starts from the plan's text
@@ -8129,6 +8144,32 @@ func (s *Scheduler) isBlocked(ctx context.Context, item types.BoardItem) (bool, 
 	return false, nil
 }
 
+// epicRepoOf returns the repository of item's parent epic: ParentRepo, or the
+// item's own repository when the board read recorded none.
+func epicRepoOf(item types.BoardItem) string {
+	if item.ParentRepo != "" {
+		return item.ParentRepo
+	}
+	return item.Repo
+}
+
+// epicContextSection is the accumulated context of item's parent epic for its
+// prompt (#4096). It is read from the pipeline state of the epic's own
+// repository, as the wave orchestrator writes it: epic-context-{N}.json names
+// #N of the repository whose checkout holds it, and the same-numbered file in
+// another checkout is another epic's (#2377). "" when item has no parent,
+// nothing has accumulated, or the epic's repository has no checkout here.
+func (s *Scheduler) epicContextSection(item types.BoardItem) string {
+	if item.ParentNumber <= 0 {
+		return ""
+	}
+	root := s.runRoot(epicRepoOf(item))
+	if root == "" {
+		return ""
+	}
+	return renderEpicContextForPrompt(root, item.ParentNumber)
+}
+
 // blockerIsOwnParent reports whether blocker is item's own parent epic: the
 // parent's number in the parent's repository. An empty ParentRepo, or an empty
 // blocker Repo, means the item's own repository.
@@ -8136,10 +8177,7 @@ func blockerIsOwnParent(item types.BoardItem, blocker types.BlockingRef) bool {
 	if item.ParentNumber <= 0 || blocker.Number != item.ParentNumber {
 		return false
 	}
-	parentRepo := item.ParentRepo
-	if parentRepo == "" {
-		parentRepo = item.Repo
-	}
+	parentRepo := epicRepoOf(item)
 	blockerRepo := blocker.Repo
 	if blockerRepo == "" {
 		blockerRepo = item.Repo
@@ -9957,6 +9995,16 @@ func (s *Scheduler) cleanupMergedRemoteBranch(issueNumber int, workdir, headRefN
 // hit the identical credential. The caller appends what comes back to the
 // stage's captured evidence, which is where every downstream consumer looks.
 func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot string, item types.BoardItem) string {
+	// The epic branch belongs to the epic's own repository, and workspaceRoot
+	// is this sub-issue's checkout. For a parent in another repository,
+	// epic/<N>-* here is the branch of this repository's own #N, and one
+	// created here would never be merged by the epic's completion PR. The
+	// sub-issue is based on its own default branch instead (#2377).
+	if item.ParentNumber > 0 && git.EpicBranchParent(item.Repo, item.ParentNumber, item.ParentRepo) == 0 {
+		log.Printf("#%d: parent epic %s#%d lives in another repository — no epic branch in %s",
+			item.Number, item.ParentRepo, item.ParentNumber, item.Repo)
+		return ""
+	}
 	if !getAutoCreateEpicBranch(workspaceRoot) {
 		log.Printf("#%d: auto_create_epic_branch disabled — skipping epic branch creation", item.Number)
 		return ""
@@ -9968,16 +10016,11 @@ func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot s
 	}
 
 	// Prefer ParentTitle from board data; fall back to GitHub API. Only the
-	// title is used, so the epic's sub-issue list is not read. The epic is read
-	// in its own repository: by number in the sub-issue's, an epic elsewhere
-	// is a different issue (#2350).
+	// title is used, so the epic's sub-issue list is not read. The guard above
+	// leaves only a parent in this item's repository, so it is read there.
 	epicTitle := item.ParentTitle
 	if epicTitle == "" {
-		epicRepo := item.ParentRepo
-		if epicRepo == "" {
-			epicRepo = item.Repo
-		}
-		owner, repo := splitOwnerRepo(epicRepo)
+		owner, repo := splitOwnerRepo(item.Repo)
 		epicIssue, apiErr := s.issueSvc.GetIssueWithRelations(ctx, owner, repo, item.ParentNumber, gh.NoRelations)
 		if apiErr != nil {
 			return logEpicBranchFailure(item.Number,

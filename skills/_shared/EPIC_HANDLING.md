@@ -27,6 +27,12 @@ Every sub-issue of an epic uses an epic branch as its merge target:
    completion check, creates epic→main PR (Step 2.5)
 5. **Epic PR merges**: Epic branch deleted by GitHub PR cleanup
 
+The epic branch belongs to the epic's own repository: `epic/{PARENT}-*` names
+issue `#{PARENT}` of the repository it is pushed to. A sub-issue whose epic
+lives in **another** repository has no epic branch. It branches from, and its
+PR targets, its own repository's default branch, and `git branch-create`
+reports `parent_issue` and `epic_branch` as `null` for it.
+
 This workflow is **STATELESS** — relies on git remote state (`git ls-remote`)
 and GitHub API (GraphQL parent detection, issue state). Works regardless of
 queuing method (batch, individual, mixed).

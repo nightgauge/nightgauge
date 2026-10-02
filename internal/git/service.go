@@ -642,6 +642,11 @@ func (s *Service) classifyLocalDeleteFailure(name string, delErr error) error {
 }
 
 // FindEpicBranch searches remote branches for one matching the epic/<number>-* pattern.
+//
+// epicNumber is an issue number in this checkout's repository: epic/<N>-*
+// here is the branch of this repository's #N. Run it only in the epic's own
+// repository's checkout; a sub-issue of an epic elsewhere has no epic branch
+// (EpicBranchParent, #2377).
 func (s *Service) FindEpicBranch(epicNumber int) (string, error) {
 	branches, err := s.ListRemoteBranches()
 	if err != nil {
@@ -1353,6 +1358,10 @@ func (s *Service) SetRemote(url string) error {
 // if any remote branch matching epic/<epicNumber>-* already exists, it returns
 // that branch name with created=false. After creating and pushing, the original
 // branch is restored so the caller's working tree is unaffected.
+//
+// As with FindEpicBranch, epicNumber is #N of this checkout's repository and
+// epicTitle is that issue's title; an epic in another repository gets no
+// branch here (#2377).
 func (s *Service) EnsureEpicBranch(epicNumber int, epicTitle string) (string, bool, error) {
 	// Check for existing remote epic branch (no-op if already there)
 	existing, err := s.FindEpicBranch(epicNumber)

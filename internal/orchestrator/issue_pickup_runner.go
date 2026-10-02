@@ -109,7 +109,11 @@ func (r *deterministicIssuePickup) Run(_ context.Context, in IssuePickupInput) (
 	if err != nil {
 		return res, fmt.Errorf("derive branch name: %w", err)
 	}
-	br, err := r.ensure(in.Dir, name, in.Issue.ParentIssueNumber, in.EpicTitle)
+	// The epic branch is the epic's own repository's: a parent in another
+	// repository bases this branch on the default branch, never on
+	// epic/<N>-* of this repository's own #N (#2377).
+	parent := git.EpicBranchParent(in.Issue.Repo, in.Issue.ParentIssueNumber, in.Issue.ParentIssueRepo)
+	br, err := r.ensure(in.Dir, name, parent, in.EpicTitle)
 	if err != nil {
 		return res, fmt.Errorf("create branch %s: %w", name, err)
 	}
@@ -421,12 +425,17 @@ func (s *Scheduler) tryDeterministicIssuePickup(
 	if iss.Number == 0 {
 		iss.Number = item.Number
 	}
+	if iss.Repo == "" {
+		iss.Repo = owner + "/" + repo
+	}
 
 	decision := deriveRoutingDecision(workspaceRoot, item)
 	devModel := routing.NewRouter(nil, workspaceRoot).
 		Route(ctx, string(state.StageFeatureDev), complexity.Score{Value: decision.ComplexityScore}).Model
 
-	parent := iss.ParentIssueNumber
+	// Run creates an epic branch only for a parent in this repository, so the
+	// title is read here, by this repository's number (#2377).
+	parent := git.EpicBranchParent(iss.Repo, iss.ParentIssueNumber, iss.ParentIssueRepo)
 	in := IssuePickupInput{
 		Issue:    iss,
 		Dir:      dir,

@@ -1554,7 +1554,10 @@ surface reads it.
   repo, survives a restart, and raises a `blocking_fleet` Action Center card.
   Start refuses to resume it; resolve the card or Resume explicitly (#991)
 - **Trigger**: All sub-issues of an epic complete
-- **Effect**: Scheduler pauses (`pausedForCheckpoint`) until human resumes
+- **Effect**: Scheduler pauses (`pausedForCheckpoint`) until human resumes. The
+  halt reason and the card name the epic in its own repository
+  (`lastEpicRepo`, `lastEpicNumber`), for example
+  `epic example-org/platform#20 complete` (#2377)
 - **Resume**: Call `ResumeCheckpoint()` or restart the scheduler
 - **Disable**: Set to `false`
 

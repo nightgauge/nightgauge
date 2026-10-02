@@ -2631,8 +2631,9 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 
-		// Find epic branch
-		gitSvc, err := s.gitService("")
+		// Find the epic branch in the named repository's own checkout, where
+		// epic/<N>-* is the branch of its #N (#2377).
+		gitSvc, err := s.epicGitService(p.Owner + "/" + p.Repo)
 		if err != nil {
 			return nil, err
 		}
@@ -2677,8 +2678,10 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 
-		// Cleanup local branch + remote tracking refs
-		gitSvc, err := s.gitService("")
+		// Cleanup local branch + remote tracking refs, in the repository the
+		// PR merged in: a same-named branch in the launch checkout can belong
+		// to another repository's epic (#2377).
+		gitSvc, err := s.epicGitService(p.Owner + "/" + p.Repo)
 		if err == nil {
 			_ = gitSvc.BranchCleanup(p.EpicBranch)
 		}
@@ -2711,101 +2714,9 @@ func (s *Server) registerMethods() {
 
 		// OnEpicComplete: deterministic epic PR creation, merge, and branch cleanup.
 		// Runs only on successful pipeline completion (all sub-issues closed).
-		prSvc := gh.NewPRService(s.client)
-		s.scheduler.OnEpicComplete(func(cbRepo string, epicNumber int) {
-			ctx := context.Background()
-			owner, repo := splitOwnerRepo(cbRepo)
-			if owner == "" || repo == "" {
-				log.Printf("epic #%d: invalid repo format %q", epicNumber, cbRepo)
-				return
-			}
-
-			// 1. Find the epic branch on remote
-			gitSvc, err := s.gitService("")
-			if err != nil {
-				log.Printf("epic #%d: git service: %v", epicNumber, err)
-				return
-			}
-			epicBranch, err := gitSvc.FindEpicBranch(epicNumber)
-			if err != nil {
-				log.Printf("epic #%d: no epic branch found, skipping PR creation: %v", epicNumber, err)
-				return
-			}
-
-			// 2. Get epic title for PR; its sub-issue list is not read.
-			issueSvc := gh.NewIssueService(s.client)
-			epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, gh.NoRelations)
-			if err != nil {
-				log.Printf("epic #%d: failed to fetch issue: %v", epicNumber, err)
-				return
-			}
-
-			// 3. Create epic PR (epic branch → main)
-			baseBranch := "main"
-			result, err := prSvc.CreateEpicPR(ctx, owner, repo, epicNumber, epicIssue.Title, epicBranch, baseBranch)
-			if err != nil {
-				log.Printf("epic #%d: failed to create epic PR: %v", epicNumber, err)
-				s.Emit("epic.prFailed", map[string]interface{}{
-					"repo":       cbRepo,
-					"epicNumber": epicNumber,
-					"error":      err.Error(),
-				})
-				return
-			}
-
-			log.Printf("epic #%d: PR %s (%s)", epicNumber, result.PRURL, result.Action)
-
-			if result.Action == "already_merged" {
-				// PR was already merged — just cleanup branches
-				log.Printf("epic #%d: already merged, cleaning up branches", epicNumber)
-				_ = gitSvc.BranchCleanup(epicBranch)
-				s.Emit("epic.completed", map[string]interface{}{
-					"repo":       cbRepo,
-					"epicNumber": epicNumber,
-					"action":     "already_merged",
-					"prUrl":      result.PRURL,
-				})
-				return
-			}
-
-			// 4. Merge the epic PR (MERGE strategy to preserve commit history)
-			prNodeID := result.PRNodeID
-			if prNodeID == "" {
-				log.Printf("epic #%d: no PR node ID, cannot auto-merge", epicNumber)
-				s.Emit("epic.prCreated", map[string]interface{}{
-					"repo":       cbRepo,
-					"epicNumber": epicNumber,
-					"prUrl":      result.PRURL,
-					"prNumber":   result.PRNumber,
-					"action":     "created_manual_merge_required",
-				})
-				return
-			}
-
-			if err := prSvc.MergeEpicPR(ctx, owner, repo, prNodeID, epicBranch); err != nil {
-				log.Printf("epic #%d: failed to merge epic PR: %v", epicNumber, err)
-				s.Emit("epic.mergeFailed", map[string]interface{}{
-					"repo":       cbRepo,
-					"epicNumber": epicNumber,
-					"prUrl":      result.PRURL,
-					"error":      err.Error(),
-				})
-				return
-			}
-
-			// 5. Cleanup: delete epic branch locally + remote tracking refs
-			if err := gitSvc.BranchCleanup(epicBranch); err != nil {
-				log.Printf("epic #%d: branch cleanup warning: %v", epicNumber, err)
-			}
-
-			log.Printf("epic #%d: completed — PR merged, branches cleaned", epicNumber)
-			s.Emit("epic.completed", map[string]interface{}{
-				"repo":       cbRepo,
-				"epicNumber": epicNumber,
-				"action":     "merged",
-				"prUrl":      result.PRURL,
-				"prNumber":   result.PRNumber,
-			})
+		// The callback names the epic in its own repository (#2377).
+		s.scheduler.OnEpicComplete(func(epicRepo string, epicNumber int) {
+			s.completeEpicPR(context.Background(), epicRepo, epicNumber)
 		})
 
 		// Update autonomous stall escalation mode on the shared runner (#3348).
@@ -5839,6 +5750,137 @@ func (s *Server) gitService(workDir string) (*gitops.Service, error) {
 		return nil, fmt.Errorf("no workspace root configured for git operations")
 	}
 	return gitops.NewService(dir)
+}
+
+// completeEpicPR opens and merges the epic branch → main PR of an epic that
+// auto-closed. epicRepo is the epic's own repository ("owner/name"), and every
+// read and write happens there: the epic branch in that repository's checkout,
+// the title, and the PR. In the merged sub-issue's repository the same number
+// is a different issue, and the launch checkout can be another repository
+// altogether (#2377).
+func (s *Server) completeEpicPR(ctx context.Context, epicRepo string, epicNumber int) {
+	owner, repo := splitOwnerRepo(epicRepo)
+	if owner == "" || repo == "" {
+		log.Printf("epic #%d: invalid repo format %q", epicNumber, epicRepo)
+		return
+	}
+
+	// 1. Find the epic branch on remote, in the epic repository's checkout. A
+	// workspace with no checkout of it ran none of its sub-issues, so it holds
+	// no epic branch to merge, as when none was found.
+	gitSvc, err := s.epicGitService(epicRepo)
+	if err != nil {
+		log.Printf("epic %s#%d: no checkout of the epic's repository, skipping PR creation: %v", epicRepo, epicNumber, err)
+		return
+	}
+	epicBranch, err := gitSvc.FindEpicBranch(epicNumber)
+	if err != nil {
+		log.Printf("epic %s#%d: no epic branch found, skipping PR creation: %v", epicRepo, epicNumber, err)
+		return
+	}
+
+	// 2. Get epic title for PR; its sub-issue list is not read.
+	issueSvc := gh.NewIssueService(s.client)
+	epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, gh.NoRelations)
+	if err != nil {
+		log.Printf("epic %s#%d: failed to fetch issue: %v", epicRepo, epicNumber, err)
+		return
+	}
+
+	// 3. Create epic PR (epic branch → main)
+	prSvc := gh.NewPRService(s.client)
+	baseBranch := "main"
+	result, err := prSvc.CreateEpicPR(ctx, owner, repo, epicNumber, epicIssue.Title, epicBranch, baseBranch)
+	if err != nil {
+		log.Printf("epic %s#%d: failed to create epic PR: %v", epicRepo, epicNumber, err)
+		s.Emit("epic.prFailed", map[string]interface{}{
+			"repo":       epicRepo,
+			"epicNumber": epicNumber,
+			"error":      err.Error(),
+		})
+		return
+	}
+
+	log.Printf("epic %s#%d: PR %s (%s)", epicRepo, epicNumber, result.PRURL, result.Action)
+
+	if result.Action == "already_merged" {
+		// PR was already merged — just cleanup branches
+		log.Printf("epic %s#%d: already merged, cleaning up branches", epicRepo, epicNumber)
+		_ = gitSvc.BranchCleanup(epicBranch)
+		s.Emit("epic.completed", map[string]interface{}{
+			"repo":       epicRepo,
+			"epicNumber": epicNumber,
+			"action":     "already_merged",
+			"prUrl":      result.PRURL,
+		})
+		return
+	}
+
+	// 4. Merge the epic PR (MERGE strategy to preserve commit history)
+	prNodeID := result.PRNodeID
+	if prNodeID == "" {
+		log.Printf("epic %s#%d: no PR node ID, cannot auto-merge", epicRepo, epicNumber)
+		s.Emit("epic.prCreated", map[string]interface{}{
+			"repo":       epicRepo,
+			"epicNumber": epicNumber,
+			"prUrl":      result.PRURL,
+			"prNumber":   result.PRNumber,
+			"action":     "created_manual_merge_required",
+		})
+		return
+	}
+
+	if err := prSvc.MergeEpicPR(ctx, owner, repo, prNodeID, epicBranch); err != nil {
+		log.Printf("epic %s#%d: failed to merge epic PR: %v", epicRepo, epicNumber, err)
+		s.Emit("epic.mergeFailed", map[string]interface{}{
+			"repo":       epicRepo,
+			"epicNumber": epicNumber,
+			"prUrl":      result.PRURL,
+			"error":      err.Error(),
+		})
+		return
+	}
+
+	// 5. Cleanup: delete epic branch locally + remote tracking refs
+	if err := gitSvc.BranchCleanup(epicBranch); err != nil {
+		log.Printf("epic %s#%d: branch cleanup warning: %v", epicRepo, epicNumber, err)
+	}
+
+	log.Printf("epic %s#%d: completed — PR merged, branches cleaned", epicRepo, epicNumber)
+	s.Emit("epic.completed", map[string]interface{}{
+		"repo":       epicRepo,
+		"epicNumber": epicNumber,
+		"action":     "merged",
+		"prUrl":      result.PRURL,
+		"prNumber":   result.PRNumber,
+	})
+}
+
+// epicGitService opens the checkout of epicRepo ("owner/name"), the one
+// repository where the epic branch epic/<N>-* names its #N (#2377). With a
+// scheduler wired it is the checkout a run in that repository is rooted at,
+// which is where the epic's own sub-issues created the branch. Without one,
+// only a launch checkout whose origin is epicRepo will do.
+func (s *Server) epicGitService(epicRepo string) (*gitops.Service, error) {
+	if s.scheduler != nil {
+		root, err := s.scheduler.RepoRoot(epicRepo)
+		if err != nil {
+			return nil, err
+		}
+		return s.gitService(root)
+	}
+	svc, err := s.gitService("")
+	if err != nil {
+		return nil, err
+	}
+	slug, err := svc.RemoteRepoSlug()
+	if err != nil {
+		return nil, fmt.Errorf("no checkout of %s: the launch checkout's repository is unknown: %w", epicRepo, err)
+	}
+	if !strings.EqualFold(slug, epicRepo) {
+		return nil, fmt.Errorf("no checkout of %s: the launch checkout is %s", epicRepo, slug)
+	}
+	return svc, nil
 }
 
 // destructiveGitService resolves the git service for a verb that destroys

@@ -242,6 +242,24 @@ changelog, and the release workflow refuses a tag that does not.
   of 20 s. When the concurrent-pipelines test timed out, its main thread could
   wait forever; now it fails.
 
+- **An epic's branch, epic PR, accumulated context and checkpoint are found in
+  the epic's own repository** (#2377). Four call sites still resolved a
+  sub-issue's parent epic by number in the sub-issue's repository. When the
+  epic lived elsewhere, the epic-PR step that runs on auto-close read that
+  repository's same-numbered issue for the title, and opened and merged the PR
+  there, from whichever `epic/<N>-*` branch the launch checkout held. Issue
+  pickup (the scheduler, its deterministic runner and `git branch-create`)
+  based the sub-issue on `epic/<N>-*` of its own repository, which is that
+  repository's own `#N`'s branch, or created a second one that no epic PR would
+  merge. A sub-issue's prompt could also be handed another epic's accumulated
+  findings. The epic PR is now opened in the epic's repository, from the epic
+  branch in that repository's checkout. A sub-issue whose epic lives in another
+  repository has no epic branch: it branches from and merges into its own
+  repository's default branch, and `git branch-create` reports no
+  `parent_issue` for it. Epic context is kept in the pipeline state of the
+  epic's repository. The between-epic checkpoint's halt reason and card name
+  the epic as `owner/repo#N`.
+
 - **A blocker that shares its number with a parent epic in another repository
   is no longer deleted, refused or flagged as circular** (#2369). Three checks
   for "an issue blocked by its own parent epic" compared only the number. The
@@ -286,6 +304,8 @@ changelog, and the release workflow refuses a tag that does not.
   cache's stored shape changed, so its entries are read fresh once. The
   ready-to-ship alert names the closed epic in its own repository, and the epic
   branch is named from the epic's own title.
+
+  ready-to-ship alert names the closed epic in its own repository.
 
 - **Short repository names in body-declared dependencies resolve against the
   workspace's own repositories** (#2349). The pickup gate, the dispatcher's

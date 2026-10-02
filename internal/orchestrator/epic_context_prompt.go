@@ -36,6 +36,10 @@ const (
 // epicContextFilePath returns the epic-context file path for a given workspace
 // and epic number. Single source of truth shared with the WaveOrchestrator
 // accumulator.
+//
+// workspaceRoot is the checkout of the epic's own repository: the number names
+// an issue only there, so writer and reader both resolve that checkout from
+// the epic's repository (#2377).
 func epicContextFilePath(workspaceRoot string, epicNumber int) (string, error) {
 	dir, err := layout.PipelineStateDir(workspaceRoot)
 	if err != nil {
