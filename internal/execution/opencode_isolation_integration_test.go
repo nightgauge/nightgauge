@@ -295,6 +295,12 @@ func useRealNightgaugeBinary(t *testing.T) {
 // only by the plugin's 5 s kill. That 5 s, not any production cost, is the
 // "slow hook verb" #1641 was blamed for. This case runs the exact argv the
 // plugin runs and requires it to behave like the verb it names.
+//
+// It identifies the binary by what it is, never by how fast it answers: it is
+// not this test binary, and its `version` names nightgauge. A 2 s bound on
+// `hook stop-verify` stood in for that and measured the machine's load as
+// much as the binary (#1810, #2348); it also let any program that exits 0
+// in silence, /usr/bin/true for one, pass.
 func TestOpenCodeIntegrationHostBinaryIsARealNightgauge(t *testing.T) {
 	real := realOpenCode(t)
 	_ = openCodeShim(t, real) // the same installer every dispatching case uses
@@ -303,16 +309,37 @@ func TestOpenCodeIntegrationHostBinaryIsARealNightgauge(t *testing.T) {
 	if self == "" {
 		t.Fatal("the manager resolved no host binary to export as NIGHTGAUGE_BIN")
 	}
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	selfInfo, err := os.Stat(self)
+	if err != nil {
+		t.Fatalf("NIGHTGAUGE_BIN %s: %v", self, err)
+	}
+	if testInfo, err := os.Stat(testBinary); err == nil && os.SameFile(selfInfo, testInfo) {
+		t.Fatalf("NIGHTGAUGE_BIN is this Go test binary (%s): the plugin's `hook stop-verify` would re-run the whole suite", self)
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Bounds a hang, never a pass: a verb that answers at all passes.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	env := []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
+
+	// A nightgauge names itself on the first line of `version`. A Go test
+	// binary runs its tests instead, and /usr/bin/true prints nothing.
+	version := exec.CommandContext(ctx, self, "version")
+	version.Dir = t.TempDir()
+	version.Env = env
+	vout, err := version.Output()
+	if err != nil || !strings.HasPrefix(string(vout), "nightgauge ") {
+		t.Fatalf("`$NIGHTGAUGE_BIN version` exited %v and printed %q; a nightgauge binary names itself on the first line", err, vout)
+	}
+
 	cmd := exec.CommandContext(ctx, self, "hook", "stop-verify", "--workdir", t.TempDir())
 	cmd.Dir = t.TempDir()
-	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
-	started := time.Now()
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
-	elapsed := time.Since(started)
-
 	if err != nil {
 		t.Fatalf("`$NIGHTGAUGE_BIN hook stop-verify` exited %v — NIGHTGAUGE_BIN is not a nightgauge binary\noutput:\n%s", err, out)
 	}
@@ -320,12 +347,6 @@ func TestOpenCodeIntegrationHostBinaryIsARealNightgauge(t *testing.T) {
 	// silent stdout. A Go test binary prints its own test log here instead.
 	if len(out) != 0 {
 		t.Errorf("`$NIGHTGAUGE_BIN hook stop-verify` printed %d bytes for a workdir with no plan file, want silence:\n%s", len(out), out)
-	}
-	// The plugin's own bound is 5s. A real verb answers in well under a
-	// second; anything near the bound is a binary that is doing something
-	// else entirely.
-	if elapsed > 2*time.Second {
-		t.Errorf("`$NIGHTGAUGE_BIN hook stop-verify` took %s; the verb the plugin spawns on every session.idle must answer in milliseconds", elapsed)
 	}
 }
 
@@ -479,11 +500,38 @@ func writeOperatorOpenCodeConfig(t *testing.T, home string, plugin bool) {
 // OpenCode's own install is already satisfied, exactly as it would be for
 // an operator who has used OpenCode before. Seeding only the version marker
 // (round 6/7's fixture) does NOT satisfy opencode's own check.
+//
+// It also asserts OperatorInstallSatisfied's own verdict on the seeded
+// directory (#1800, #1810): the opt-in tests tell OpenCode's fast path from an
+// install wait by the watchdog never arming, and that is only the predicate's
+// verdict if the predicate reads this fixture as satisfied. A predicate that
+// regressed fails here, by name, before any dispatch.
 func seedOperatorInstallSatisfied(t *testing.T, dir string) {
 	t.Helper()
 	if err := opencodeplugin.WriteDependencies(dir); err != nil {
 		t.Fatal(err)
 	}
+	if !opencodeplugin.OperatorInstallSatisfied(dir) {
+		t.Fatalf("OperatorInstallSatisfied reads %s as unsatisfied after seeding the full four-file set; the watchdog would arm on a directory OpenCode itself treats as installed", dir)
+	}
+}
+
+// installRiskMarker names the install-risk or adapter_incompatible marker a
+// dispatch emitted, or "", and returns the stderr it searched. The manager
+// writes these markers into the run's own stderr (result.Stderr, and the
+// streamer), never into this process's os.Stderr, so a check of the captured
+// os.Stderr alone could never see one (#1800). Both are read.
+func installRiskMarker(stderr string, result *adapters.RunResult) (marker, combined string) {
+	combined = stderr
+	if result != nil {
+		combined += "\n" + result.Stderr
+	}
+	for _, m := range []string{"adapter_incompatible", "may be waiting on an unreachable registry"} {
+		if strings.Contains(combined, m) {
+			return m, combined
+		}
+	}
+	return "", combined
 }
 
 // debugPaths parses `opencode debug paths` into name → path.
@@ -680,8 +728,8 @@ func TestOpenCodeIntegrationInheritUserConfigOptIn(t *testing.T) {
 	if result != nil && result.ExitCode == -1 {
 		t.Error("ExitCode = -1: the dispatch was killed rather than completing on OpenCode's own fast path")
 	}
-	if strings.Contains(stderr, "adapter_incompatible") || strings.Contains(stderr, "may be waiting on an unreachable registry") {
-		t.Errorf("stderr carries an install-risk/adapter_incompatible marker for a directory seeded satisfied:\n%s", stderr)
+	if marker, all := installRiskMarker(stderr, result); marker != "" {
+		t.Errorf("the dispatch's stderr carries %q for a directory seeded satisfied:\n%s", marker, all)
 	}
 	config := string(readShimFile(t, out, "config.json"))
 	for _, want := range []string{"operator-fixture-agent", "operator-fixture-mcp"} {
@@ -755,8 +803,8 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 	if result != nil && result.ExitCode == -1 {
 		t.Error("ExitCode = -1: the dispatch was killed rather than completing")
 	}
-	if strings.Contains(stderr, "adapter_incompatible") || strings.Contains(stderr, "may be waiting on an unreachable registry") {
-		t.Errorf("stderr carries an install-risk/adapter_incompatible marker; a non-inheriting run's own per-run HOME must never touch ~/.opencode at all:\n%s", stderr)
+	if marker, all := installRiskMarker(stderr, result); marker != "" {
+		t.Errorf("the dispatch's stderr carries %q; a non-inheriting run's own per-run HOME must never touch ~/.opencode at all:\n%s", marker, all)
 	}
 	if got := watchdog(); got.armed {
 		t.Errorf("the operator-install-risk watchdog armed (bound %s, ended by %s): #1787's whole point is that a non-inheriting run never waits on ~/.opencode", got.bound, got.end)
@@ -793,8 +841,8 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 	if result != nil && result.ExitCode == -1 {
 		t.Error("ExitCode = -1: the dispatch was killed rather than completing on OpenCode's own fast path")
 	}
-	if strings.Contains(stderr, "adapter_incompatible") || strings.Contains(stderr, "may be waiting on an unreachable registry") {
-		t.Errorf("stderr carries an install-risk/adapter_incompatible marker for directories seeded satisfied:\n%s", stderr)
+	if marker, all := installRiskMarker(stderr, result); marker != "" {
+		t.Errorf("the dispatch's stderr carries %q for directories seeded satisfied:\n%s", marker, all)
 	}
 	// OpenCode's own fast path, by count rather than by a 35 s clock that CI
 	// load had already pushed to 23.7 s (#2348): with both operator

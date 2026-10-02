@@ -169,7 +169,8 @@ changelog, and the release workflow refuses a tag that does not.
   waiting for load. `cmd | grep PAT >/dev/null` is no substitute: GNU grep
   treats an output of `/dev/null` as `-q`, and the gate flags that too.
 
-- **The OpenCode integration tests no longer fail on a busy machine** (#2348).
+- **The OpenCode integration tests no longer fail on a busy machine** (#2348,
+  #1810).
   `TestOpenCodeIntegrationInheritUserConfigOptIn` told OpenCode's "already
   installed" fast path from an install wait by a 20 s wall-clock bound, and
   under load the fast path itself ran past it. It now checks the two facts
@@ -179,6 +180,10 @@ changelog, and the release workflow refuses a tag that does not.
   The 35 s caps on `HomeDotOpenCode`, `HomeDirBinOnlyNeverArmsTheWatchdog` and
   `AbsentInheritedConfigDirOffline` gave way the same way: the last now reads
   "bounded by the watchdog" from the watchdog's own timeout.
+  `HostBinaryIsARealNightgauge` identifies the binary the plugin spawns by
+  its `version` line instead of a 2 s bound, which `/usr/bin/true` passed. The
+  opt-in tests' install-risk marker checks read the run's own stderr, where
+  the manager writes those markers; before, they could never fail.
 
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
