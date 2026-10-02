@@ -59,6 +59,69 @@ for the local capability or public contract. Track private implementation and
 commercial work separately; never link private issue numbers from the public
 repository.
 
+## A history rewrite does not redact
+
+Anything pushed to a public GitHub repository is disclosed from that moment,
+and a history rewrite does not redact it. A force push, a rebase or squash over
+the commit, deleting its branch or tag, or starting a fresh root makes the
+commit unreachable. It does not remove it from GitHub:
+
+- GitHub keeps unreachable objects and serves them by SHA, without
+  authentication: the commit, its tree and its file contents, through the API
+  and the web view. The SHA is already out, in the clones, forks, CI logs,
+  links and public event feed of the time when the commit was reachable.
+- A commit in a pull request's final head stays referenced by that pull
+  request after its branch is deleted, and no push removes that reference.
+- Only GitHub Support garbage-collects such objects, on request, and only for
+  sensitive data it judges rotation cannot mitigate. Nothing reaches the forks,
+  clones and mirrors made while the content was public.
+
+Removal from `main` is therefore cosmetic: the repository looks clean and the
+content is still served. The checks here cannot tell the difference. The
+publication guard reads the working tree and the credential scan reads the
+history a clone can reach, so both stay green while old objects remain
+fetchable. Never describe content as removed because a rewrite ran.
+
+When sensitive material is found in public history, act in this order:
+
+1. **Record the exposure.** Write down every affected commit SHA and what it
+   carried before anything changes. A rewrite done first destroys that
+   evidence, and with it the list of what to rotate.
+2. **Rotate.** A credential that was ever pushed public is revoked and
+   replaced. Any other private material is treated as already published, and
+   its owner decides what follows on that basis.
+3. **Decide in writing whether to purge or accept.** Accepting is defensible
+   when the content was meant to be public anyway; it is not when the content
+   is what the cleanup set out to remove. A purge is a Support request naming
+   every recorded SHA, made after a rewrite has removed each branch and tag
+   that points at them; Support removes the pull-request references itself.
+
+A rewrite on its own changes what the repository shows, not what has been
+disclosed. GitHub documents its side of this in
+[Removing sensitive data from a repository](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
+
+### Verify the effect, not the execution
+
+A control must verify its effect, not its execution. "The rewrite ran", "the
+new root was pushed" and "the guard is green on `main`" each record that a step
+was performed, and none of them shows the exposure is gone. A control that
+passes because its step happened can pass while the risk it exists for is
+untouched.
+
+The effect check for history is an unauthenticated request for each commit the
+cleanup was meant to remove, made as a stranger would make it:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  "https://api.github.com/repos/<owner>/<repo>/commits/<sha>"
+```
+
+`200` means GitHub still serves the commit; `422` (`No commit found for SHA`)
+means it does not. Anything else, such as a `403` from the unauthenticated rate
+limit, answers neither way: retry later. Record the result for every SHA, and
+run the same probe again after any purge: a purge is done when the probe says
+so, not when the ticket closes.
+
 ## How to write an issue reference
 
 This tree was imported from a predecessor repository whose issue numbers came
