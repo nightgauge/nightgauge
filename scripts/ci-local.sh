@@ -334,6 +334,7 @@ REQUIRED_FILES=(
   scripts/check-boundary-allowlist-isolation.sh
   scripts/test-check-boundary-allowlist-isolation.sh
   scripts/publication-push-guard.sh
+  scripts/install-publication-push-hook.sh
   scripts/test-publication-push-guard.sh
   .husky/pre-push
   scripts/check-band-vocabulary.py
@@ -1451,8 +1452,8 @@ run_step "Publication boundary allowlist isolation regression suite" \
 
 # 5b-iii. The pre-push guard (#2365) — the boundary checked before a push to
 #     the public repository, which CI only sees after GitHub has stored it.
-#     Real pushes through the hook into throwaway repositories; no tree scan of
-#     this checkout.
+#     Real pushes through the hooks npm install installs, into throwaway
+#     repositories; no tree scan of this checkout.
 run_step "Publication push guard regression suite" \
   bash scripts/test-publication-push-guard.sh
 

@@ -153,11 +153,27 @@ done when the probes say so, not when the ticket closes.
 CI runs the publication guard on pull requests and in the merge queue. That is
 after GitHub has stored the pushed objects, and a branch or tag that never
 becomes a pull request is not checked at all. As the section above explains,
-nothing done afterwards takes the content back. So the repository's `pre-push`
-hook, `.husky/pre-push`, runs `scripts/publication-push-guard.sh` before a push
-leaves the machine. The hook examines a push only when its URL names this
-repository. It matches on the URL's path, so any transport or SSH host alias
-counts. For every branch or tag the push updates:
+nothing done afterwards takes the content back. So a `pre-push` hook runs
+`scripts/publication-push-guard.sh` before a push leaves the machine.
+
+`npm install` installs it. After husky, `package.json`'s `prepare` script runs
+`scripts/install-publication-push-hook.sh`, which points `core.hooksPath` at a
+hook directory in the clone's shared git directory (`npm run setup-hooks` does
+the same). Every worktree of the clone then runs the guard on every push,
+including a worktree where `npm install` never ran, such as one the pipeline
+creates. It runs whatever the worktree has checked out: an orphan branch,
+another repository's history or an old commit has no hook of its own, so the
+guard comes from the copy installed beside the hook. husky's own hooks did
+neither, because their path is relative to each worktree and husky skips a
+hook the checked-out tree lacks. `.husky/pre-push` still runs the guard in a
+clone where only husky is installed.
+
+The hook examines a push only when its URL names this repository. It matches on
+the URL's path, so any transport or SSH host alias counts. It asks the remote
+which commits it already has, with `git ls-remote` on that URL, and fetches the
+remote's `main` when the clone lacks it. Remote-tracking refs are not trusted:
+they go stale when a branch is deleted upstream, and a push to a separate
+`pushurl` writes them. For every branch or tag the push updates:
 
 - A deletion publishes nothing and passes.
 - **A history unrelated to `main` is refused.** Such a history has a root
@@ -166,42 +182,72 @@ counts. For every branch or tag the push updates:
   `--allow-unrelated-histories`. There is no exception list. The scheduled
   discovery jobs' `discovery-state` branch is a separate root by design, so
   they push it from CI, where nothing installs the hook.
+- **An allowlist change must stand alone**, as CI requires of a pull request
+  (#1970). A new commit whose `.github/publication-boundary.yaml` differs from
+  both its merge base with `main` and `main`'s own must change nothing else, by
+  CI's own `scripts/check-boundary-allowlist-isolation.sh`. Loosening the
+  allowlist and adding what it lets in is refused, in one commit or in two.
 - **The new commits are scanned** with `scripts/publication-boundary-check.py`,
-  the check CI runs. A commit is new when the remote does not have it yet:
-  `origin/main`, the ref's old value and the remote's other remote-tracking
-  refs cannot reach it. Each commit is scanned with its own checker and
-  manifest, with `NG_BOUNDARY_DIFF_BASE` at its merge base with `origin/main`.
-  The tip is always scanned. An earlier commit is scanned as well when it
-  holds a file version that no scanned tree holds, because a push publishes
-  every commit it reaches. So content that one commit adds and the next
-  deletes is refused.
+  the check CI runs. A commit is new when nothing the remote has can reach it.
+  One scan covers a ref: the ref merged into the remote's `main`, which is what
+  CI's pull-request run checks, so `main`'s checker and manifest apply unless
+  the ref changes them. A push publishes every commit it reaches, so every file
+  version an earlier commit holds that the tip does not is merged into the same
+  path for that scan, less the lines that commit's merge base already had there.
+  Content that one commit adds and a later one rewrites or deletes is refused.
+  A ref that does not merge cleanly is scanned as its own tip, by its own checker
+  and manifest. A commit with its own version of the checker, the manifest, the
+  isolation script or a `.gitattributes` is also scanned on its own.
+- When that scan fails, the commits are scanned one at a time to name the one
+  at fault. The combined scan can fail where no commit does, for example on a
+  count that the commits add up to. If every commit then passes by `main`'s
+  rules, the push proceeds. If any commit was judged by rules of its own, the
+  push is refused as unverified.
 - A push with nothing new, such as a release tag on `main`, scans nothing.
 - **Anything the hook cannot verify is refused:**
-  - a missing `origin/main` (`git fetch origin main` fixes it);
+  - a remote it cannot list, or one without a `main`;
   - a shallow history (`git fetch --unshallow`);
   - no `python3` with PyYAML;
   - a ref that is neither a branch nor a tag;
-  - a checker that cannot run.
+  - a checker that cannot run;
+  - two paths that differ only in case or Unicode normalization, on a
+    filesystem that folds them into one file.
 
-Each scan checks the commit out in a scratch repository that borrows this
-repository's objects, so the checkout doing the push is never touched. A scan
-of this repository costs about 13 CPU-seconds. On a 12-core machine at a load
-average of 55 to 90, that came to 9 to 15 seconds of wall clock for each
-scanned commit. A push with nothing new took about 0.25 seconds, and a push to
-another remote about 0.05 seconds. `npm install` installs the hook along with
-the other husky hooks. `scripts/test-publication-push-guard.sh` proves each case
-by pushing for real into throwaway repositories and then reading the remote.
+A refusal names the commit at fault. A later commit that removes the content
+does not help, because the commit that adds it is published as well, so the
+refusal gives a way to rewrite the unpushed commits that needs no force-push:
+`git reset --soft` to the last commit the remote has, then commit again.
+
+Each scan checks a synthetic commit out in a scratch repository that borrows
+this repository's objects, so the checkout doing the push is never touched. A
+scan of this repository costs about 13 CPU-seconds. Replaying real pull-request
+branches of 6 to 8 commits on a 12-core machine at a load average of 15 to 35
+took one scan and 5 to 7 seconds each. A 17-commit branch that carried two
+versions of the manifest took three scans and 15 seconds. A push with nothing
+new costs one `git ls-remote`, and a push to another remote costs nothing.
+`scripts/test-publication-push-guard.sh` proves each case by installing the
+hooks as `npm install` does, pushing for real into throwaway repositories, and
+then reading the remote.
 
 ### What the hook cannot cover
 
 A client-side hook narrows the window, but it does not close it:
 
-- `git push --no-verify` skips the hook, and so does `HUSKY=0`. A checkout
-  where `npm install` never ran has no hook at all.
-- The hook runs only in a checkout of this repository. A checkout of a
-  different repository that pushes to this repository's URL runs that
-  repository's hooks, or none. That is the most likely way for an unrelated
-  history to be pushed.
+- `git push --no-verify` skips the hook. `HUSKY=0` skips it only in a clone
+  where the publication hook is not installed.
+- A clone where `npm install` never ran has no hook at all. An `npm install` in
+  a checkout older than the installer puts husky's relative hooks path back,
+  which leaves only husky's coverage, until the next `npm install` in a current
+  checkout or `npm run setup-hooks` restores it. The hook directory is named by
+  absolute path, so a clone moved elsewhere runs no hooks until one of those
+  runs again.
+- The hook runs only in a clone of this repository. A checkout of a different
+  repository that pushes to this repository's URL runs that repository's hooks,
+  or none. That is the most likely way for an unrelated history to be pushed.
+- A push to a fork is not examined, because its URL names another owner, yet
+  GitHub serves a fork's commits through this repository's network. Nor is a
+  URL that reaches this repository only through a redirect, such as a renamed
+  owner or repository.
 - The hook checks files. It does not read commit messages or tag messages.
 
 Only a control that runs before GitHub accepts a push covers all of these, and
@@ -216,8 +262,9 @@ A machine-wide `pre-push` hook covers a checkout of another repository on that
 machine. Set it with `git config --global core.hooksPath`, and have it refuse a
 push to this repository's URL unless the pushed history shares `main`'s root.
 It is a client-side hook too, so it covers only the machine it is installed on.
-A repository that sets its own `core.hooksPath`, as husky does, overrides the
-global one, so such a repository needs the hook in its own hook directory.
+A repository that sets its own `core.hooksPath`, as husky and this repository's
+installer do, overrides the global one, so such a repository needs the hook in
+its own hook directory.
 
 ## How to write an issue reference
 

@@ -1,13 +1,15 @@
 #!/bin/bash
 # Setup git hooks for the nightgauge repository.
 #
-# This script is run automatically via the npm "prepare" lifecycle event
-# (npm install triggers it). You can also run it manually:
+# npm install already does this through the "prepare" script in package.json,
+# which runs husky and then scripts/install-publication-push-hook.sh. Run this
+# by hand to repeat it without reinstalling packages:
 #
 #   npm run setup-hooks
 #
 # The repository uses husky for hook management. This script ensures husky
-# is initialized so the .husky/pre-commit hook is active.
+# is initialized so the .husky/pre-commit hook is active, and that the
+# publication push guard runs for every worktree of this clone.
 
 set -e
 
@@ -22,6 +24,12 @@ echo "Installing git hooks..."
 if command -v npx > /dev/null 2>&1; then
   npx husky 2>/dev/null || true
 fi
+
+# husky's hooks path is relative to each worktree, and its runner skips a hook
+# the checked-out tree lacks. The publication push guard (#2365) must run for
+# every push to the public repository regardless, so it is installed for every
+# worktree of this clone; see scripts/install-publication-push-hook.sh.
+bash "$REPO_ROOT/scripts/install-publication-push-hook.sh"
 
 # Verify the pre-commit hook is in place
 HOOK_FILE="$REPO_ROOT/.husky/pre-commit"

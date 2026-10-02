@@ -231,6 +231,15 @@ const PR_MERGE_DIAGNOSIS_TIMEOUT_MS = 120 * 1000;
  * and epic-rollup calls around it. Killing the hook mid-poll records nothing.
  */
 const POST_MERGE_HOOK_TIMEOUT_MS = 25 * 60 * 1000;
+/**
+ * Upper bound on a `git push` (#2365). A push runs the repository's pre-push
+ * hook first, and a hook may scan what it is about to send: nightgauge's
+ * publication guard runs the boundary checker over the pushed commits, which
+ * takes several seconds a scan and much longer on a loaded machine. The old 60 s
+ * bound killed such pushes mid-scan. A killed push sends nothing, so the bound
+ * only has to catch a push that is really stuck.
+ */
+const GIT_PUSH_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * Reject `promise` if it hasn't settled within `timeoutMs`. The underlying
@@ -3149,7 +3158,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       );
     }
     try {
-      await execFileAsync("git", ["push", "-u", "origin", "HEAD"], { cwd, timeout: 60_000 });
+      await execFileAsync("git", ["push", "-u", "origin", "HEAD"], {
+        cwd,
+        timeout: GIT_PUSH_TIMEOUT_MS,
+      });
       this.logger.info("Pushed deterministic validate commit", { issueNumber });
     } catch (err) {
       // Non-fatal — pr-create's Phase 3 pushes the branch again.
@@ -3988,7 +4000,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       await execFileAsync("git", ["push", "-u", "origin", branch], {
         encoding: "utf-8",
         cwd,
-        timeout: 60_000,
+        timeout: GIT_PUSH_TIMEOUT_MS,
       });
     } catch (pushErr) {
       if (isGithubRateLimitError(pushErr)) {
@@ -4649,7 +4661,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       await execFileAsync("git", ["push", "--force-with-lease"], {
         encoding: "utf-8",
         cwd,
-        timeout: 60_000,
+        timeout: GIT_PUSH_TIMEOUT_MS,
       });
     } catch (pushErr) {
       const msg = pushErr instanceof Error ? pushErr.message : String(pushErr);

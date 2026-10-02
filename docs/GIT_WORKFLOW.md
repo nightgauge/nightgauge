@@ -920,8 +920,7 @@ All repositories use the same tag conventions:
 - Tags are **only** created from the `main` branch
 - Pushing a tag runs the publication pre-push hook (§ Mandatory Local CI
   Validation). A tag on `main` publishes no new commit, so the hook passes it
-  without a scan. It needs `origin/main` fetched, which step 1 of the release
-  steps below does.
+  without a scan, after one `git ls-remote` to ask the remote what it has.
 - Tags are **annotated** (`git tag -a`) with a changelog summary
 - Tags are **never deleted or moved** — immutable release history
 - RC tags can be created freely; production tags should follow a validated RC
@@ -1293,18 +1292,22 @@ Every push that fails CI wastes time and pollutes the PR with fix-up commits.
 > `npm run setup-hooks`.
 
 > **Pre-push hook**: a push to this repository's URL first runs
-> `scripts/publication-push-guard.sh`. CI checks the publication boundary only
-> after GitHub has stored a push, and it never checks a branch or tag that does
-> not become a pull request. The hook refuses two kinds of push: a history
-> unrelated to `main`, and a new commit that the boundary checker rejects, even
-> when a later commit in the same push cleans it up. It also refuses a push it
-> cannot verify, for example when `origin/main` is missing
-> (`git fetch origin main` fixes that). Each new commit it scans costs a full
-> checker run, which takes several seconds. A deletion or a release tag on `main` costs almost
-> nothing, and pushes to other remotes pass straight through. `--no-verify` and
-> `HUSKY=0` skip the hook, so do not use them to get a refused push through:
-> fix the commit that adds the content. What the hook checks and what it cannot
-> cover:
+> `scripts/publication-push-guard.sh`, in every worktree of the clone, whatever
+> it has checked out. `npm install` installs it, and `npm run setup-hooks`
+> installs it again. CI checks the publication boundary only after GitHub has
+> stored a push, and it never checks a branch or tag that does not become a pull
+> request. The hook refuses a history unrelated to `main`, an allowlist change
+> made together with anything else, and a new commit that the boundary checker
+> rejects, even when a later commit in the same push cleans it up. It also
+> refuses a push it cannot verify. A pushed branch usually costs one checker
+> run, which takes several seconds. A deletion or a release tag on `main` costs
+> almost nothing, and pushes to other remotes pass straight through. When an
+> agent pushes, give the command a few minutes, not the default two.
+> `--no-verify` skips the hook, so do not use it to get a refused push through.
+> A new commit that removes the content does not help either, because the
+> commit that adds it is published too: rewrite the unpushed commits with
+> `git reset --soft`, as the refusal says. What the hook checks and what it
+> cannot cover:
 > [PUBLIC_CORE_BOUNDARY.md § Checked before it is pushed](PUBLIC_CORE_BOUNDARY.md#checked-before-it-is-pushed).
 
 Run these commands **before every `git push`**:
@@ -1557,9 +1560,10 @@ This creates `.git/hooks/pre-push` which calls the validation gate before each
 push. The hook only activates for pipeline branches (branches with issue
 numbers). Non-pipeline branches pass through.
 
-In this repository, husky sets `core.hooksPath` to `.husky/_`, so git never
-runs `.git/hooks/pre-push`. The pre-push hook that runs here is the
-publication guard in `.husky/pre-push` (§ Mandatory Local CI Validation).
+In this repository, `npm install` points `core.hooksPath` at a hook directory
+of its own (`scripts/install-publication-push-hook.sh`), so git never runs
+`.git/hooks/pre-push`. The pre-push hook that runs here is the publication
+guard (§ Mandatory Local CI Validation).
 
 ### Reading the Context File
 

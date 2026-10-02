@@ -97,10 +97,14 @@ jobs:
 
       - name: Prove the pre-push guard stops what this job only sees after publication
         # #2365: this job runs after GitHub has stored and published a push, so
-        # .husky/pre-push checks the boundary before the push leaves the
-        # machine. The suite pushes for real into throwaway repositories: an
-        # unrelated history and a boundary violation are refused and never reach
-        # the remote; a feature branch, a deletion and a tag on main pass.
+        # a pre-push hook checks the boundary before the push leaves the
+        # machine, in every worktree of a clone whatever it has checked out. The
+        # suite installs the hooks as npm install does and pushes for real into
+        # throwaway repositories: an unrelated history, a boundary violation and
+        # an allowlist change made together with what it lets in are refused and
+        # never reach the remote; a feature branch, a deletion and a tag on main
+        # pass. This job runs no npm ci, so the suite stands in for husky's
+        # runner here; scripts/ci-local.sh runs it with husky's own.
         run: bash scripts/test-publication-push-guard.sh
 
       - name: Prove the hermeticity assertions still catch what they scope out

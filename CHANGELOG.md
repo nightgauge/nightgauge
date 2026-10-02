@@ -104,12 +104,18 @@ changelog, and the release workflow refuses a tag that does not.
   repository leaves the machine** (#2365). Until now CI checked the boundary
   only on pull requests, after GitHub had already stored and published the
   push, and never checked a branch or tag that did not become a pull request.
-  `.husky/pre-push`, installed by `npm install`, now refuses a push to this
-  repository's URL in two cases. The first is a history unrelated to `main`.
-  The second is a new commit the boundary checker rejects, including one that
-  a later commit in the same push cleans up. A deletion or a release tag on
-  `main` passes at once, and pushes to other remotes are untouched. It is a
-  client-side hook, so `--no-verify` skips it. See
+  `npm install` now installs a pre-push hook for every worktree of the clone,
+  the pipeline's included, and the hook runs whatever is checked out. It
+  refuses a push to this repository's URL that carries a history unrelated to
+  `main`, an allowlist change made together with anything else, or a commit the
+  boundary checker rejects, even one that a later commit in the same push
+  cleans up. It asks the remote what it already has rather than trusting
+  remote-tracking refs. A pushed branch usually costs one checker run, however
+  many commits it has, and a refusal says how to rewrite the commits without a
+  force-push. A deletion or a release tag on `main` passes at once, and pushes
+  to other remotes are untouched. It is a client-side hook, so `--no-verify`
+  skips it. The VS Code orchestrator now gives a `git push` ten minutes rather
+  than 60 seconds, so the hook's scan is not cut short. See
   [PUBLIC_CORE_BOUNDARY.md § Checked before it is pushed](docs/PUBLIC_CORE_BOUNDARY.md#checked-before-it-is-pushed).
 
 ### Fixed
