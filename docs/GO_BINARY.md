@@ -361,6 +361,32 @@ The window that holds the run therefore refuses both verbs, `rejected` with
 release. A gate that holds a run for a human decision would be the place to
 wire them.
 
+The workspace `throttle` (#2337) caps how many runs the workspace executes at
+once, optionally until `resumeAt`. The platform publishes it straight to the
+agent the workspace is linked to (the last agent that registered it), never
+through the router: `{action: "set", maxConcurrent, resumeAt}` or
+`{action: "cleared", maxConcurrent: null, resumeAt: null}`. When that is the
+daemon's agent, the daemon relays it like any other command. Unlike a run
+verb it concerns every window, so each window that receives it applies it and
+acknowledges it `applied` (the platform keeps the first ack):
+
+- Dispatch opens no slot above the lower of `pipeline.max_concurrent` and
+  `maxConcurrent` while the throttle is in force. The cap is applied where the
+  extension decides concurrency (`ConcurrentPipelineManager`'s available slot
+  count), so a slot already running is never stopped, and a cap below the
+  running count opens nothing until enough of them finish. The autonomous
+  scheduler can still hand issues to the queue; they wait there for a slot.
+- Clearing or raising the throttle, or reaching `resumeAt`, fills slots from
+  the queue at once, as a finished slot does.
+- The applied throttle is kept in the extension's global state, because a
+  reload reuses the stored registration instead of registering again. While
+  one is kept, activation registers again: the registration response carries
+  the throttle in force for the agent (`throttle`, or null), which replaces
+  the kept one, so a clear that expired while no window was connected is not
+  missed.
+- An invalid payload is refused `invalid-payload`; a throttle command queued
+  before the one already applied is refused `superseded`.
+
 ## CLI Command Reference
 
 This section is the canonical reference for all `nightgauge` subcommands.

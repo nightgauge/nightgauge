@@ -121,6 +121,8 @@ import { resolveExecutionProfile } from "../services/executionProfile";
 import { AgentCommandStreamService } from "../services/AgentCommandStreamService";
 import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../services/RunVerbCommandHandler";
+import { ThrottleCommandHandler } from "../services/ThrottleCommandHandler";
+import { WorkspaceThrottleState } from "../services/WorkspaceThrottle";
 import { AgentCommandDispatcher, subscribeToDaemonRelay } from "../services/AgentCommandDispatcher";
 import { createRemotePauseUi } from "../utils/pauseUi";
 import { AgentRegistrationService } from "../services/AgentRegistrationService";
@@ -267,6 +269,8 @@ export interface ExtensionServices {
   agentHeartbeatService: AgentHeartbeatService | null;
   agentCommandStreamService: AgentCommandStreamService | null;
   agentRegistrationService: AgentRegistrationService | null;
+  /** The platform's workspace throttle as this window applies it (#2337). */
+  workspaceThrottleState: WorkspaceThrottleState | null;
   tierGate: TierGate | null;
   licensePreflight: LicensePreflight | null;
   nightgaugeRoot: string | null;
@@ -4225,7 +4229,24 @@ export async function initializeServices(
   // start(agentId) is called by the registration service once agentId is available (#3544).
   const agentCommandStreamTokenStorage = TokenStorage.getInstance();
   let agentCommandStreamService: AgentCommandStreamService | null = null;
-  if (agentCommandStreamTokenStorage && concurrentPipelineManager && issueQueueService) {
+  // The platform's workspace throttle caps this window's dispatch (#2337). A
+  // throttle applied before a reload is restored at once; the registration
+  // response and `throttle` commands keep it current.
+  let workspaceThrottleState: WorkspaceThrottleState | null = null;
+  if (concurrentPipelineManager) {
+    workspaceThrottleState = new WorkspaceThrottleState(
+      concurrentPipelineManager,
+      context.globalState,
+      logger
+    );
+    workspaceThrottleState.restore();
+  }
+  if (
+    agentCommandStreamTokenStorage &&
+    concurrentPipelineManager &&
+    issueQueueService &&
+    workspaceThrottleState
+  ) {
     const triggerCommandHandler = new TriggerCommandHandler(
       ipcClient,
       concurrentPipelineManager,
@@ -4235,8 +4256,8 @@ export async function initializeServices(
     );
     // One dispatcher consumes every command the platform delivers, and every
     // handler acknowledges what it consumes exactly once (#2334): the trigger
-    // handler and the run-verb handler (cancel, approve, reject, pause,
-    // resume). AgentCommandStreamService.start() passes it the agentId before
+    // handler, the run-verb handler (cancel, approve, reject, pause, resume)
+    // and the workspace throttle handler (#2337). AgentCommandStreamService.start() passes it the agentId before
     // the first command arrives.
     // A pause or resume from the platform shows in this window as the local
     // Pause/Resume Pipeline commands show it (#2334).
@@ -4251,6 +4272,7 @@ export async function initializeServices(
     const agentCommandDispatcher = new AgentCommandDispatcher(
       triggerCommandHandler,
       runVerbCommandHandler,
+      new ThrottleCommandHandler(workspaceThrottleState, ipcClient, logger),
       ipcClient,
       logger
     );
@@ -4613,6 +4635,7 @@ export async function initializeServices(
     agentHeartbeatService,
     agentCommandStreamService,
     agentRegistrationService,
+    workspaceThrottleState,
     offlineManager,
     tokenStorage: TokenStorage.getInstance(),
     oauthDeviceFlowService,

@@ -23,6 +23,7 @@ import {
 } from "../../src/services/AgentCommandDispatcher";
 import { TriggerCommandHandler } from "../../src/services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../../src/services/RunVerbCommandHandler";
+import { ThrottleCommandHandler } from "../../src/services/ThrottleCommandHandler";
 import type { ReceivedCommand } from "../../src/services/AgentCommandStreamService";
 import type { RemoteVerbResult } from "../../src/services/ConcurrentPipelineManager";
 
@@ -67,9 +68,17 @@ function build(verbResult: RemoteVerbResult, holds = true) {
     logger as never
   );
   const verbs = new RunVerbCommandHandler(runs as never, ipc as never, logger as never);
-  const dispatcher = new AgentCommandDispatcher(trigger, verbs, ipc as never, logger as never);
+  const throttleState = { apply: vi.fn().mockResolvedValue(undefined) };
+  const throttle = new ThrottleCommandHandler(throttleState, ipc as never, logger as never);
+  const dispatcher = new AgentCommandDispatcher(
+    trigger,
+    verbs,
+    throttle,
+    ipc as never,
+    logger as never
+  );
   dispatcher.setAgentId("agent-ext");
-  return { dispatcher, ipc, runs, queue };
+  return { dispatcher, ipc, runs, queue, throttleState };
 }
 
 /** A command of `type` as the platform's router publishes it. */
@@ -147,7 +156,7 @@ describe("AgentCommandDispatcher", () => {
   // stream replays its backlog arrives twice, and an unacknowledged one again
   // on every reconnect. Each is still carried out once and acknowledged once.
   it("acknowledges every router-delivered command once when each arrives twice", async () => {
-    const { dispatcher, ipc, runs, queue } = build("applied");
+    const { dispatcher, ipc, runs, queue, throttleState } = build("applied");
     // The platform keeps the first ack of a command and refuses any later one.
     const accepted: string[] = [];
     ipc.agentAcknowledgeCommand.mockImplementation(async (_agentId: string, id: string) => {
@@ -177,19 +186,49 @@ describe("AgentCommandDispatcher", () => {
       (c) => c[1] === "cmd-throttle-9"
     );
     expect(throttleAcks).toHaveLength(1);
+    expect(throttleState.apply).toHaveBeenCalledTimes(1);
     // The trigger's second copy is refused by the platform, so it starts nothing.
     expect(queue.enqueue).toHaveBeenCalledTimes(1);
   });
 
   it("acknowledges an unsupported command type once, as rejected", async () => {
     const { dispatcher, ipc } = build("applied");
-    dispatcher.handle({ ...routedCommand("throttle", 0), payload: { action: "cleared" } });
+    dispatcher.handle({ ...routedCommand("queue_add", 0), payload: { issueNumber: 7 } });
     await settle();
 
     expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
     const [agentId, id, outcome, detail] = ipc.agentAcknowledgeCommand.mock.calls[0];
-    expect([agentId, id, outcome]).toEqual(["agent-ext", "cmd-throttle-0", "rejected"]);
+    expect([agentId, id, outcome]).toEqual(["agent-ext", "cmd-queue_add-0", "rejected"]);
     expect(detail).toMatch(/^unsupported-command: /);
+  });
+
+  // #2337: the platform publishes the workspace throttle to the workspace's
+  // agent directly; whichever agent it reaches, this window applies it.
+  it("applies a workspace throttle, from its own stream or the daemon's relay, and acknowledges it", async () => {
+    const { dispatcher, ipc, throttleState } = build("applied");
+    dispatcher.handle({
+      ...routedCommand("throttle", 0),
+      payload: { action: "set", maxConcurrent: 1, resumeAt: null },
+    });
+    dispatcher.handleRelayed({
+      agentId: "agent-daemon",
+      frame: {
+        commandId: "cmd-throttle-relayed",
+        type: "throttle",
+        payload: { action: "cleared", maxConcurrent: null, resumeAt: null },
+        createdAt: "2026-10-01T00:00:01.000Z",
+      },
+    });
+    await settle();
+
+    expect(throttleState.apply.mock.calls).toEqual([
+      [{ maxConcurrent: 1, resumeAt: null }],
+      [null],
+    ]);
+    expect(ipc.agentAcknowledgeCommand.mock.calls.map((c) => c.slice(0, 3))).toEqual([
+      ["agent-ext", "cmd-throttle-0", "applied"],
+      ["agent-daemon", "cmd-throttle-relayed", "applied"],
+    ]);
   });
 
   it("handles a command the daemon relayed, acknowledging under the daemon's agent", async () => {

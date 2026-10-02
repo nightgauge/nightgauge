@@ -9,6 +9,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **A concurrency cap set on the workspace from the dashboard applies to this
+  window.** No new pipeline starts above the cap, running ones are never
+  stopped, and queued issues start as soon as the cap is raised, cleared or
+  ends. The cap survives a window reload (#2337).
+
 ### Fixed
 
 - **Approve and reject from the phone app or the dashboard say why they

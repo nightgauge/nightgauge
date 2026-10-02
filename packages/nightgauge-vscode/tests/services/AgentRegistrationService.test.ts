@@ -57,6 +57,61 @@ describe("AgentRegistrationService", () => {
     );
   });
 
+  // #2337: the response names the workspace throttle in force for this agent,
+  // so a restarted agent re-learns it.
+  describe("the registration's workspace throttle", () => {
+    it("reports the throttle the response carries", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        makeResponse(201, {
+          agentId: "agent-xyz",
+          throttle: {
+            maxConcurrent: 1,
+            resumeAt: "2026-10-03T00:00:00.000Z",
+            setBy: "user-1",
+            setAt: "2026-10-02T00:00:00.000Z",
+          },
+        })
+      );
+      await service.register(PAYLOAD);
+      expect(service.getLastThrottle()).toEqual({
+        maxConcurrent: 1,
+        resumeAt: "2026-10-03T00:00:00.000Z",
+      });
+    });
+
+    it("reports no throttle as null, and a missing or invalid one as undefined", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        makeResponse(201, { agentId: "agent-xyz", throttle: null })
+      );
+      await service.register(PAYLOAD);
+      expect(service.getLastThrottle()).toBeNull();
+
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(201, { agentId: "agent-xyz" }));
+      await service.register(PAYLOAD);
+      expect(service.getLastThrottle()).toBeUndefined();
+
+      vi.mocked(fetch).mockResolvedValueOnce(
+        makeResponse(201, { agentId: "agent-xyz", throttle: { maxConcurrent: -1 } })
+      );
+      await service.register(PAYLOAD);
+      expect(service.getLastThrottle()).toBeUndefined();
+      expect(logger.warn).toHaveBeenCalledWith(
+        "AgentRegistrationService: ignoring an invalid workspace throttle",
+        expect.anything()
+      );
+    });
+
+    it("reports nothing after a failed registration", async () => {
+      vi.mocked(fetch).mockResolvedValueOnce(
+        makeResponse(201, { agentId: "agent-xyz", throttle: null })
+      );
+      await service.register(PAYLOAD);
+      vi.mocked(fetch).mockResolvedValueOnce(makeResponse(500, {}));
+      await service.register(PAYLOAD);
+      expect(service.getLastThrottle()).toBeUndefined();
+    });
+  });
+
   it("returns null and logs warning on 401", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(makeResponse(401, {}));
 

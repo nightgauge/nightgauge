@@ -16,6 +16,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The platform's workspace throttle caps local dispatch** (#2337). A
+  `throttle` command (`set` with `maxConcurrent` and an optional `resumeAt`,
+  or `cleared`) was refused as unsupported, so a workspace throttle never
+  capped work started on the machine. Each window now applies it where it
+  decides concurrency: no new slot opens above the lower of
+  `pipeline.max_concurrent` and the cap, a running slot is never stopped, and
+  queued issues start as soon as the throttle is raised, cleared or reaches
+  `resumeAt`. The command is acknowledged `applied`. The applied throttle
+  survives a reload, and the `throttle` in the registration response
+  refreshes it.
+
 - **`nightgauge handoff` and `nightgauge next`: handoff roll-up and ranked
   work order in the binary** (#1481). `nightgauge handoff <file-or-dir>...`
   parses each `<!-- nightgauge:handoff -->` header and reports a tip behind
@@ -105,10 +116,10 @@ changelog, and the release workflow refuses a tag that does not.
   reason when it found nothing to act on (no local run carries the runId, no
   gate is waiting, the run is already paused or not paused) or the payload had
   no runId. A command type the extension does not handle is acknowledged
-  `rejected` as unsupported instead of expiring (the workspace throttle is
-  one; applying it is #2337). The platform delivers a command at least once,
-  so a copy that arrives again is not carried out a second time: it re-sends
-  the first copy's ack only if that ack never arrived. Pause and resume use
+  `rejected` as unsupported instead of expiring. The platform delivers a
+  command at least once, so a copy that arrives again is not carried out a
+  second time: it re-sends the first copy's ack only if that ack never
+  arrived. Pause and resume use
   the same per-run pause as `Nightgauge: Pause Pipeline`: the stage in flight
   finishes, the run holds before the next stage starts, and resume continues
   from there. The window shows them as it shows the local commands, in the

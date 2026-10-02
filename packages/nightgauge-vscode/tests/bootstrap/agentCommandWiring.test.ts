@@ -18,6 +18,7 @@ const servicesSource = readFileSync(
   path.resolve(__dirname, "../../src/bootstrap/services.ts"),
   "utf-8"
 );
+const extensionSource = readFileSync(path.resolve(__dirname, "../../src/extension.ts"), "utf-8");
 
 describe("platform agent command wiring in bootstrap/services.ts", () => {
   it("subscribes the dispatcher to the commands the daemon relays, and disposes it", () => {
@@ -29,6 +30,24 @@ describe("platform agent command wiring in bootstrap/services.ts", () => {
   it("feeds the window's own command stream to the same dispatcher", () => {
     expect(servicesSource).toMatch(
       /new AgentCommandStreamService\([^)]*agentCommandDispatcher\s*\)/
+    );
+  });
+
+  // #2337: the throttle state is restored at activation, and the dispatcher
+  // hands `throttle` commands to a handler that applies it.
+  it("restores the workspace throttle and gives the dispatcher a throttle handler", () => {
+    expect(servicesSource).toMatch(
+      /new WorkspaceThrottleState\(\s*concurrentPipelineManager,\s*context\.globalState,\s*logger\s*\);\s*workspaceThrottleState\.restore\(\);/
+    );
+    expect(servicesSource).toMatch(
+      /new AgentCommandDispatcher\([\s\S]*?new ThrottleCommandHandler\(workspaceThrottleState, ipcClient, logger\)/
+    );
+  });
+
+  it("applies the registration's throttle after both registrations, and re-registers to refresh a kept one", () => {
+    expect(extensionSource.match(/await applyRegistrationThrottle\(/g)?.length).toBe(2);
+    expect(extensionSource).toMatch(
+      /storedAgentId &&\s*registeredReposSig === currentReposSig &&\s*!services!\.workspaceThrottleState\?\.hasPersisted\(\)/
     );
   });
 

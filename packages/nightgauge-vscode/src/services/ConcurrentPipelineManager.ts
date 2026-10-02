@@ -31,6 +31,9 @@ const execFileAsync = promisify(execFile);
  */
 const ABORT_ALL_TIMEOUT_MS = 30_000;
 
+/** The longest delay setTimeout honours (2^31 - 1 ms, about 24.8 days). */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
 /**
  * Terminal kinds that must NOT halt the queue (#3444/#3835/#3508/#4002/#4222).
  *
@@ -143,6 +146,7 @@ import { updateProjectItemStatus } from "../utils/projectFieldWriter";
 import { postFailureComment } from "../utils/failureComment";
 import { getConcurrentPipelineConfig } from "../utils/nightgaugeConfig";
 import type { WorkspaceManager } from "./WorkspaceManager";
+import { throttleInForce, type WorkspaceThrottle } from "./WorkspaceThrottle";
 import { IpcClient } from "./IpcClient";
 import type { AbandonedDispatchSituation } from "./IpcClientBase";
 
@@ -558,6 +562,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   private readonly lifecyclePromises = new Map<number, Promise<PipelineRunResult>>();
   private worktreeManager: WorktreeManager;
   private maxConcurrent: number;
+  /**
+   * The platform's workspace throttle (#2337), or null: while it is in force
+   * dispatch opens no slot above min(maxConcurrent, its maxConcurrent). See
+   * {@link setWorkspaceThrottle}.
+   */
+  private workspaceThrottle: WorkspaceThrottle | null = null;
+  /** Fills slots when the throttle lifts at its resumeAt. */
+  private throttleLiftTimer: ReturnType<typeof setTimeout> | null = null;
   private callbacks: ConcurrentPipelineCallbacks = {};
   private isShuttingDown = false;
   private isAbortAllInProgress = false;
@@ -638,6 +650,80 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
+   * Apply the platform's workspace throttle (#2337), or clear it with null.
+   *
+   * The cap applies where dispatch decides concurrency: while the throttle is
+   * in force, {@link availableSlotCount} counts against min(configured
+   * max_concurrent, throttle.maxConcurrent), so no new slot opens above it.
+   * A slot already running is never stopped; a cap below the running count
+   * simply opens nothing until enough of them finish. The throttle is in
+   * force until its `resumeAt` (indefinitely when that is null) or until it
+   * is cleared. Clearing it, raising it, or reaching `resumeAt` fills slots
+   * from the queue at once, as a finished slot does.
+   */
+  setWorkspaceThrottle(throttle: WorkspaceThrottle | null): void {
+    const before = this.availableSlotCount;
+    if (this.throttleLiftTimer) {
+      clearTimeout(this.throttleLiftTimer);
+      this.throttleLiftTimer = null;
+    }
+    const inForce = throttle !== null && throttleInForce(throttle, Date.now());
+    this.workspaceThrottle = inForce ? { ...throttle } : null;
+    this.logger.info(
+      inForce ? "Workspace throttle applied" : "Workspace throttle cleared",
+      inForce
+        ? {
+            maxConcurrent: throttle.maxConcurrent,
+            resumeAt: throttle.resumeAt,
+            configuredMaxConcurrent: this.maxConcurrent,
+          }
+        : { configuredMaxConcurrent: this.maxConcurrent }
+    );
+    if (inForce && throttle.resumeAt !== null) {
+      this.scheduleThrottleLift(Date.parse(throttle.resumeAt));
+    }
+    if (this.availableSlotCount > before) this.fillAfterThrottleChange();
+  }
+
+  /** The throttle in force now, or null (#2337). */
+  getWorkspaceThrottle(): WorkspaceThrottle | null {
+    const throttle = this.workspaceThrottle;
+    return throttle && throttleInForce(throttle, Date.now()) ? { ...throttle } : null;
+  }
+
+  /**
+   * Lift the throttle at `resumeAtMs`. A timer cannot wait longer than about
+   * 24.8 days, so a later time re-arms on the way; the platform keeps
+   * `resumeAt` within 7 days.
+   */
+  private scheduleThrottleLift(resumeAtMs: number): void {
+    const delay = Math.min(Math.max(resumeAtMs - Date.now(), 0), MAX_TIMER_DELAY_MS);
+    this.throttleLiftTimer = setTimeout(() => {
+      this.throttleLiftTimer = null;
+      if (Date.now() < resumeAtMs) {
+        this.scheduleThrottleLift(resumeAtMs);
+        return;
+      }
+      this.logger.info("Workspace throttle lifted at its resumeAt", {
+        configuredMaxConcurrent: this.maxConcurrent,
+      });
+      this.workspaceThrottle = null;
+      this.fillAfterThrottleChange();
+    }, delay);
+    this.throttleLiftTimer.unref?.();
+  }
+
+  /** Start what the queue holds now that the throttle allows more slots. */
+  private fillAfterThrottleChange(): void {
+    if (this.isShuttingDown) return;
+    this.fillSlots().catch((err) => {
+      this.logger.error("fillSlots after a workspace throttle change failed", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  /**
    * Number of currently active slots
    */
   get activeSlotCount(): number {
@@ -654,7 +740,21 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * that is already being claimed. #3874.
    */
   get availableSlotCount(): number {
-    return this.maxConcurrent - this.slots.size - this.reservedSlots.size;
+    return this.dispatchCeiling - this.slots.size - this.reservedSlots.size;
+  }
+
+  /**
+   * The most slots dispatch may have open: the configured ceiling, or the
+   * workspace throttle's when that is lower and in force (#2337). Read at
+   * every dispatch, so a throttle past its resumeAt stops counting even
+   * before the lift timer fires.
+   */
+  private get dispatchCeiling(): number {
+    const throttle = this.workspaceThrottle;
+    if (throttle && throttleInForce(throttle, Date.now())) {
+      return Math.min(this.maxConcurrent, throttle.maxConcurrent);
+    }
+    return this.maxConcurrent;
   }
 
   /**
@@ -766,7 +866,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         this.fillAgain = false;
 
         const available = this.availableSlotCount;
-        if (available <= 0) break;
+        if (available <= 0) {
+          if (this.getWorkspaceThrottle()) {
+            this.logger.debug("fillSlots: the workspace throttle holds dispatch", {
+              throttle: this.getWorkspaceThrottle(),
+              activeSlots: this.slots.size,
+              reservedSlots: this.reservedSlots.size,
+            });
+          }
+          break;
+        }
 
         if (this.isShuttingDown) break;
 
@@ -3844,6 +3953,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
   dispose(): void {
     this.isShuttingDown = true;
+    if (this.throttleLiftTimer) {
+      clearTimeout(this.throttleLiftTimer);
+      this.throttleLiftTimer = null;
+    }
     // Kill all active orchestrators
     for (const slot of this.slots.values()) {
       try {
