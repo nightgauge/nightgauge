@@ -35,10 +35,14 @@ today is one line away from it. The replacement forms cost nothing.
 
 Fenced shell in Markdown (skill bodies and their includes) is out of scope. A
 fence is an instruction an agent runs in its own tool's shell, often with
-placeholders filled in by hand, so it is not code this repository runs under
-known options, and many fences are deliberately partial. A fence a test lifts
-out and runs, as issue-create's scope gates are run under pipefail, is
-written in the replacement forms by hand.
+placeholders filled in by hand, and many fences are deliberately partial.
+This repository does not set that shell's options, and no fence turns
+pipefail on itself, so a marker check in one reads grep's own status unless
+the operator's shell enables pipefail. Where a fence decides a hard gate, a
+test lifts it out and runs it under pipefail, the worst case, and it is
+written in the replacement forms by hand, as issue-create's scope gates are.
+Converting the other fences is a mechanical sweep of its own (#2360 records
+why).
 
 Early-exit readers, as the first command of the stage after a pipe, looking
 inside a `{ }` or `( )` group or an `if` condition, and past wrappers such as

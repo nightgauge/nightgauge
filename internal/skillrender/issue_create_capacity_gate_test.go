@@ -61,8 +61,10 @@ func runScopeGate(t *testing.T, c scopeGateCase) scopeGateRun {
 		}
 	}
 	file := filepath.Join(work, "scope-gate.sh")
-	// pipefail, as the stage's shell may run it: a marker check that pipes
-	// into `grep -q` can lose a found marker to SIGPIPE under it.
+	// pipefail, the worst case: the fence runs in the agent tool's shell,
+	// whose options this repository does not set, and under pipefail a
+	// marker check that pipes into `grep -q` can lose a found marker to
+	// SIGPIPE. This fence decides a hard gate, so it must hold under it.
 	if err := os.WriteFile(file, []byte("set -o pipefail\n"+script), 0o644); err != nil {
 		t.Fatal(err)
 	}
