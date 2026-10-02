@@ -47,27 +47,35 @@ env, nice, nohup, stdbuf, sudo and timeout: grep (egrep, fgrep, ggrep) with
 which GNU grep treats as -q (so trading -q for that redirect is no fix); head
 (ghead) unless it prints all but the last lines (`-n -N`); sed (gsed) with a q
 or Q command; awk with an exit or nextfile outside END, or with only BEGIN
-rules, which read no input; perl -n or -p with exit or last; read; and a
-while or until loop whose body can break, exit or return. An awk, sed or perl
-program holding an expansion is read with the expansion as an opaque word.
-A pipeline that ends an input process substitution `<(...)` is exempt: no
-one reads its status.
+rules, which read no input (a getline that reads a file or a command reads
+none of it either); perl -n or -p with exit or last; read; an until loop
+conditioned on a read, which ends at the first line; and a while or until
+loop whose body can break, exit or return. An awk, sed or perl program
+holding an expansion is read with the expansion as an opaque word. A
+pipeline that ends an input process substitution `<(...)` is exempt: no one
+reads its status.
 
-Not seen: a command named by an expansion (`$GREP -q`), jq, a loop condition
-that can turn false before the end of input, and code in a quoted string
-handed to another shell.
+Not seen: a command named by an expansion (`$GREP -q`), jq, a program read
+from a file (`awk -f`, `sed -f`), any other loop condition that can end the
+loop before the end of input, and code in a quoted string handed to another
+shell. Flagged although it drains its input: a group that reads a line and
+then reads the rest, such as `{ read -r first; cat; }`; capture the input
+first instead.
 
 WHY THIS IS NOT A GREP
 
 The shape has to be found in shell code, not in text that mentions it: a
 quoted help string, a comment, a heredoc body, a `case` pattern list such as
 `yes | no)`, a regex alternation inside `[[ ]]` and arithmetic all hold a `|`
-that is no pipe, and in arithmetic `<<` is a shift, not a heredoc. Code in
-`$(...)` or backticks is code even within double quotes, and a pipeline
-continues across a line ending in `|` or a backslash. So this file carries a
-small shell lexer. Code in a quoted string handed to another shell
-(`sh -c '...'`) is out of its reach; it does not run under this file's
-options anyway.
+that is no pipe, and in arithmetic, an assignment's `[subscript]` included,
+`<<` is a shift, not a heredoc. Code in `$(...)` or backticks is code even
+within double quotes, and a pipeline continues across a line ending in `|` or
+a backslash. Bash's own readings are followed where they surprise: a `((` or
+`$((` that does not end in `))` is a subshell or a command substitution,
+whose `|` is a pipe, and `!(...)` at a command's start is a negated subshell
+unless the file turns extglob on. So this file carries a small shell lexer.
+Code in a quoted string handed to another shell (`sh -c '...'`) is out of its
+reach; it does not run under this file's options anyway.
 
 Exit 0 clean, 1 on a violation, 2 if the gate cannot run: a file it cannot
 lex, or a path that does not exist, is a failure, never a silent pass. A
@@ -191,6 +199,12 @@ def starts_command(prev: Tok | None) -> bool:
     return prev.value in COMMAND_KEYWORDS
 
 
+# `shopt -s extglob` (or -qs, or with other names) anywhere in a file.
+EXTGLOB_ON = re.compile(r"\bshopt\s[^\n;|&]*-\w*s\w*\s[^\n;|&]*\bextglob\b")
+# A name that a `[subscript]` can follow in an assignment word.
+NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
 @dataclass
 class Lexer:
     src: str
@@ -198,6 +212,13 @@ class Lexer:
     i: int = 0
     toks: list[Tok] = field(default_factory=list)
     heredocs: list[tuple[str, bool]] = field(default_factory=list)
+    # Whether the file turns extglob on. Without it, bash reads `!(cmd)` at a
+    # command's start as `!` and a subshell, not as a pattern.
+    extglob_on: bool | None = None
+
+    def __post_init__(self) -> None:
+        if self.extglob_on is None:
+            self.extglob_on = bool(EXTGLOB_ON.search(self.src))
 
     def peek(self, k: int = 0) -> str:
         j = self.i + k
@@ -227,6 +248,7 @@ class Lexer:
         depth = 0
         case: list[str] = []  # per open `case`: "word", "pattern" or "body"
         prev: Tok | None = None
+        in_prefix = False  # every word of this command so far is an assignment
         while self.i < len(self.src):
             c = self.peek()
             if self.startswith("\\\n"):
@@ -251,15 +273,21 @@ class Lexer:
             if c in "<>" and self.peek(1) == "(":
                 prev = self.word() or prev  # process substitution <(...) / >(...)
                 continue
-            if self.startswith("((") and not in_pattern and (
-                starts_command(prev) or (prev is not None and prev.value == "for")
+            if (
+                self.startswith("((")
+                and not in_pattern
+                and (starts_command(prev) or (prev is not None and prev.value == "for"))
+                and self.closes_arithmetic(self.i + 2)
             ):
                 prev = self.arithmetic()  # (( ... )): `<<` and `|` in it are operators on numbers
                 continue
+            # A `((` that does not end in `))` is two subshells, as bash reads
+            # it: `((cmd | head -1); echo)`. Each `(` is lexed as an operator.
             op = next((o for o in self.OPERATORS if self.startswith(o)), None)
             if op is not None:
                 self.advance(len(op))
                 prev = self.emit_op(op)
+                in_prefix = False
                 if op == "(" and not in_pattern:
                     depth += 1
                 elif op == ")":
@@ -273,9 +301,14 @@ class Lexer:
                 elif op in ("<<", "<<-"):
                     self.heredoc_delimiter(strip_tabs=op == "<<-")
                 continue
-            tok = self.word()
+            at_start = starts_command(prev) and not in_pattern
+            # Bash reads an assignment only at a command's start or after the
+            # assignments that open it: `x=1 a[1<<2]=5`, not `echo a[1<<2]`.
+            assign_ok = at_start or (in_prefix and not in_pattern)
+            tok = self.word(at_start=at_start, assign_ok=assign_ok)
             if tok is None:
                 raise LexError(f"line {self.line}: cannot read {self.src[self.i:self.i + 20]!r}")
+            in_prefix = assign_ok and bool(ASSIGNMENT.match(tok.text))
             if tok.value == "case" and starts_command(prev):
                 case.append("word")
             elif tok.value == "in" and case and case[-1] == "word":
@@ -300,6 +333,37 @@ class Lexer:
         tok = Tok("word", self.src[start : self.i], None, line, shape=OPAQUE)
         self.toks.append(tok)
         return tok
+
+    def closes_arithmetic(self, pos: int) -> bool:
+        """True when the `((` or `$((` whose body starts at pos is arithmetic.
+
+        Bash reads the body up to the `)` that balances the second `(`, and
+        takes it as arithmetic only when another `)` follows at once.
+        Otherwise `((` is two nested subshells and `$((` a command
+        substitution whose code starts with one: `x=$((cmd) | head -1)` runs
+        a pipeline. A body that never closes stays arithmetic, so that
+        arithmetic() reports it.
+        """
+        depth, j, n = 1, pos, len(self.src)
+        while j < n:
+            c = self.src[j]
+            if c == "\\":
+                j += 2
+                continue
+            if c in "'\"":
+                end = self.src.find(c, j + 1)
+                if end < 0:
+                    return True
+                j = end + 1
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    return self.src.startswith(")", j + 1)
+            j += 1
+        return True
 
     def heredoc_delimiter(self, strip_tabs: bool) -> None:
         while self.peek() in (" ", "\t"):
@@ -331,7 +395,10 @@ class Lexer:
                     break
 
     # ---- words ------------------------------------------------------------
-    def word(self) -> Tok | None:
+    def word(self, at_start: bool = False, assign_ok: bool = False) -> Tok | None:
+        """One word. at_start: it may start a command; assign_ok: it may be an
+        assignment, where bash reads a `[subscript]` after the name as
+        arithmetic, so `a[1<<2]=5` holds no heredoc."""
         line = self.line
         start = self.i
         literal: list[str] = []
@@ -340,7 +407,13 @@ class Lexer:
         while self.i < len(self.src):
             c = self.peek()
             if c == "(" and last_plain in ("@", "!", "+", "*", "?"):
+                if last_plain == "!" and self.i == start + 1 and at_start and not self.extglob_on:
+                    break  # `!(cmd)`: the word `!`, then a subshell
                 self.extglob(literal)  # @(a|b): a pattern, not a subshell
+                last_plain = ""
+                continue
+            if c == "[" and assign_ok and is_literal and NAME.fullmatch("".join(literal)):
+                is_literal = self.subscript(literal)
                 last_plain = ""
                 continue
             if c in " \t\r\n;&|()":
@@ -398,6 +471,42 @@ class Lexer:
         self.toks.append(tok)
         return tok
 
+    def subscript(self, literal: list[str]) -> bool:
+        """An assignment's `[...]`, as part of its word: `<`, `|` and blanks
+        inside it are arithmetic, and a substitution inside it is code.
+        False when it holds an expansion."""
+        line = self.line
+        depth = 0
+        is_literal = True
+        while self.i < len(self.src):
+            c = self.peek()
+            if c == "\\":
+                literal.append(self.advance(2))
+                continue
+            if c == "'":
+                end = self.src.find("'", self.i + 1)
+                if end < 0:
+                    raise LexError(f"line {line}: unterminated single quote in a subscript")
+                literal.append(self.advance(end - self.i + 1))
+                continue
+            if c == '"':
+                self.advance()
+                is_literal = self.double_quoted(literal) and is_literal
+                continue
+            if c in ("$", "`"):
+                self.dollar_or_backtick()
+                literal.append(OPAQUE)
+                is_literal = False
+                continue
+            literal.append(self.advance())
+            if c == "[":
+                depth += 1
+            elif c == "]":
+                depth -= 1
+                if depth == 0:
+                    return is_literal
+        raise LexError(f"line {line}: unterminated subscript")
+
     def extglob(self, literal: list[str]) -> None:
         line = self.line
         depth = 0
@@ -452,7 +561,7 @@ class Lexer:
         raise LexError(f"line {line}: unterminated double quote")
 
     def dollar_or_backtick(self) -> None:
-        if self.startswith("$(("):
+        if self.startswith("$((") and self.closes_arithmetic(self.i + 3):
             self.advance(3)
             self.skip_balanced("(", ")", depth=2)
         elif self.startswith("$("):
@@ -479,7 +588,7 @@ class Lexer:
             if self.i >= len(self.src):
                 raise LexError(f"line {line}: unterminated backtick")
             self.advance()
-            inner = Lexer("".join(body), line)
+            inner = Lexer("".join(body), line, extglob_on=self.extglob_on)
             inner.lex()
             self.emit_op("$(")
             self.toks.extend(inner.toks)
@@ -511,7 +620,8 @@ class Lexer:
                 self.advance()
                 self.double_quoted([])
                 continue
-            if self.startswith("$(") and not self.startswith("$(("):
+            arithmetic = self.startswith("$((") and self.closes_arithmetic(self.i + 3)
+            if self.startswith("$(") and not arithmetic:
                 self.advance(2)
                 self.substitution()
                 continue
@@ -585,12 +695,18 @@ def command_words(toks: list[Tok], j: int) -> tuple[list[Tok], set[str | None], 
     return words, stdout, j
 
 
+def is_assignment(tok: Tok) -> bool:
+    """`NAME=value`, read by its shape, so a value holding an expansion
+    (`LC_ALL=$loc`) is an assignment too."""
+    return bool(ASSIGNMENT.match(tok.value if tok.value is not None else tok.shape))
+
+
 def skip_wrappers(words: list[Tok]) -> int:
     """Index of the command a stage runs, past assignments and wrappers."""
     k = 0
     while k < len(words):
         v = words[k].value
-        if v is not None and (ASSIGNMENT.match(v) or v in PREFIX_WORDS):
+        if is_assignment(words[k]) or v in PREFIX_WORDS:
             k += 1
             continue
         name = v.rsplit("/", 1)[-1] if v is not None else None
@@ -602,7 +718,7 @@ def skip_wrappers(words: list[Tok]) -> int:
             if w == "--":
                 k += 1
                 break
-            if w is not None and name == "env" and (w == "-" or ASSIGNMENT.match(w)):
+            if name == "env" and (w == "-" or is_assignment(words[k])):
                 k += 1
             elif w is not None and w.startswith("-") and w != "-":
                 k += 2 if w in WRAPPERS[name] else 1
@@ -864,11 +980,27 @@ def awk_stops(args: list[str | None]) -> tuple[str, str] | None:
     # lines a getline takes. A getline in a loop may read it all.
     rules = without(main, awk_blocks(main, AWK_BEGIN) + awk_blocks(main, AWK_FUNCTION))
     if not ends and not re.sub(r"[\s;]", "", rules):
-        if not re.search(r"\bgetline\b", code):
+        if not awk_getline_reads_input(code):
             return ("BEGIN", "has only BEGIN rules, which read no input")
         if not re.search(r"\b(?:while|for|do)\b", code):
             return ("BEGIN", "has only BEGIN rules, which read only the lines its getline takes")
     return None
+
+
+# `getline [var] < file` reads the file, not the input.
+AWK_GETLINE_FROM_FILE = re.compile(r"\s*(?:[A-Za-z_$][\w$]*(?:\[[^]]*\])?)?\s*<")
+
+
+def awk_getline_reads_input(code: str) -> bool:
+    """True when a getline in code reads the program's input: not `cmd |
+    getline`, which reads a command, and not `getline [var] < file`."""
+    for m in re.finditer(r"\bgetline\b", code):
+        if code[: m.start()].rstrip().endswith("|"):
+            continue
+        if AWK_GETLINE_FROM_FILE.match(code, m.end()):
+            continue
+        return True
+    return False
 
 
 def perl_stops(args: list[str | None]) -> bool:
@@ -939,7 +1071,7 @@ def loop_exit(toks: list[Tok], j: int) -> Tok | None:
         # A `)` here ends a case pattern; a subshell's `)` is never followed
         # by a command word.
         elif starts_command(prev) or after_assignment or (prev is not None and prev.text == ")"):
-            after_assignment = t.value is not None and bool(ASSIGNMENT.match(t.value))
+            after_assignment = t.kind == "word" and is_assignment(t)
             if not after_assignment:
                 name = t.value
             if t.value == "do":
@@ -964,6 +1096,16 @@ def loop_exit(toks: list[Tok], j: int) -> Tok | None:
     return None
 
 
+def until_reads(toks: list[Tok], j: int) -> bool:
+    """True when the until loop at toks[j] is conditioned on a plain read:
+    the read succeeds on the first line, and the loop ends there."""
+    words, _, _ = command_words(toks, j + 1)
+    if not words or words[0].value == "!":
+        return False  # `until ! read` loops while read succeeds: to the end
+    k = skip_wrappers(words)
+    return k < len(words) and words[k].value == "read"
+
+
 def stage_hazard(toks: list[Tok], j: int) -> tuple[Tok, str, str, int] | None:
     """(token, reader, why, end) when the pipeline stage at toks[j] stops
     reading before the end of its input; `end` indexes the operator after it."""
@@ -976,6 +1118,8 @@ def stage_hazard(toks: list[Tok], j: int) -> tuple[Tok, str, str, int] | None:
     if (t.kind == "word" and t.value in ("{", "if")) or (t.kind == "op" and t.text == "("):
         hit = stage_hazard(toks, j + 1)
         return (hit[0], hit[1], hit[2], len(toks)) if hit else None
+    if t.kind == "word" and t.value == "until" and until_reads(toks, j):
+        return (t, "until read", "stops at the first line its read takes", len(toks))
     if t.kind == "word" and t.value in LOOP_WORDS:
         stop = loop_exit(toks, j)
         if stop is None:

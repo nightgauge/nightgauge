@@ -14,8 +14,11 @@
 #   B. Every replacement the gate recommends succeeds on the same input.
 #   C. The gate goes red on each forbidden shape, naming the file and line of
 #      the reader, including one inside a group or an `if`, behind a wrapper
-#      such as timeout, in a program holding an expansion, and a loop that can
-#      break. It keeps reading past an arithmetic `<<`, which is no heredoc. It
+#      such as timeout, in a program holding an expansion, a loop that can
+#      break, an `until read`, a negated `!(...)` subshell, and a `((` or `$((`
+#      that bash reads as a subshell because it does not end in `))`. It keeps
+#      reading past an arithmetic `<<`, an assignment's subscript included,
+#      which is no heredoc. It
 #      stays green on the look-alikes it must not flag: quoted text, comments,
 #      heredoc bodies, case patterns, regex alternations inside [[ ]] on any of
 #      its lines, `||`, `exit` in awk text or END, `head -n -N`, the end of an
@@ -111,6 +114,9 @@ echo $[x<<1]
 if (( x << 1 > 2 )); then :; fi
 for (( i = 1 << 1; i < 3; i++ )); do :; done
 (( y = (x << 3) | head ))
+a[1<<2]=5
+x=1 a[1 << 2]=5
+echo $(( (1 << 2) | 1 ))
 printf '%s\n' "$v" | grep -q needle # BAD
 echo "$v" | grep -qxF needle # BAD
 cmd | grep -Fxq -- needle # BAD
@@ -170,6 +176,15 @@ diff <(cmd | head -5; echo more) "$f" # BAD
 tee >(cmd | head -1) <"$f" # BAD
 x=`cmd | head -1` # BAD
 cmd | grep --quie needle # BAD
+if !(cmd | grep -q needle); then :; fi # BAD
+((cmd | head -1); echo) # BAD
+x=$((cmd) | head -1) # BAD
+cmd | until read -r l; do :; done # BAD
+cmd | awk 'BEGIN { while ((getline line < "f") > 0) n++; print n }' # BAD
+cmd | awk 'BEGIN { while (("sort" | getline line) > 0) n++ }' # BAD
+cmd | LC_ALL=$loc grep -q needle # BAD
+cmd | env X="$(id)" head -1 # BAD
+a[$i]=1 cmd | sed 1q # BAD
 SH
 
 cat >"$FIX/good.sh" <<'SH'
@@ -234,6 +249,19 @@ cmd | perl -pe 's/a/b/'
 cmd | timeout 5 grep needle
 cmd | env - grep -c needle
 y=`cmd | sed -n 1p`
+cmd | until ! read -r l; do :; done
+if ! (cmd | grep needle); then :; fi
+(( (x) | 1 ))
+echo $(( (1 + 2) | 4 ))
+SH
+
+# With extglob on, `!(a|head)` at a command's start is a pattern, so its `|`
+# is no pipe. The same line in a file without it is a negated subshell.
+cat >"$FIX/extglob.sh" <<'SH'
+#!/usr/bin/env bash
+shopt -s extglob
+!(a|head) || true
+for f in !(a|head); do :; done
 SH
 
 mkdir -p "$FIX/wf"
@@ -295,7 +323,7 @@ flags_exactly() {
 flags_exactly "$FIX/bad.sh"
 flags_exactly "$FIX/wf/bad.yml"
 
-for fixture in "$FIX/good.sh" "$FIX/wf/good.yml"; do
+for fixture in "$FIX/good.sh" "$FIX/wf/good.yml" "$FIX/extglob.sh"; do
   gate "$fixture"
   if [ "$GATE_RC" -eq 0 ]; then
     ok "$(basename "$fixture"): green on every look-alike"
