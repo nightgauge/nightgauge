@@ -314,16 +314,21 @@ type daemonAgentIPC interface {
 
 // reportRefusedWorkspaceWrites surfaces the workspace writes a registration
 // was refused (#2372), once per registration: one log line each, naming the
-// workspace and the permission the write needs, and the daemon's status
-// (platform.status), which each registration replaces. The agent registers
-// all the same, so without this a developer's repositories silently stay
-// unlinked from the team's workspace and every remote trigger for them is
-// refused.
+// workspace and the permission the write needs; the daemon's status
+// (platform.status), which each registration replaces; and an event the
+// extension shows the operator. The agent registers all the same, so
+// without this a developer's repositories silently stay unlinked from the
+// team's workspace and every remote trigger for them is refused.
 func reportRefusedWorkspaceWrites(status daemonAgentIPC, info platform.AgentRegistration) {
+	reports := make([]platform.RefusedWorkspaceWriteReport, 0, len(info.RefusedWorkspaceWrites))
 	for _, refused := range info.RefusedWorkspaceWrites {
 		log.Printf("[nightgauge] agent registration: %s", refused.Describe())
+		reports = append(reports, refused.Report())
 	}
 	status.SetRefusedWorkspaceWrites(info.RefusedWorkspaceWrites)
+	if len(reports) > 0 {
+		status.Emit(ipc.EventWorkspaceWritesRefused, ipc.WorkspaceWritesRefusedEvent{Refusals: reports})
+	}
 }
 
 // runDaemonPlatformAgent is serve's platform agent (#330, #2335): it

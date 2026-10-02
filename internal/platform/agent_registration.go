@@ -83,13 +83,40 @@ func (r RefusedWorkspaceWrite) Describe() string {
 		workspace, printableField(r.Permission), printableField(r.TeamID), printableField(r.Code))
 }
 
+// RefusedWorkspaceWriteReport is a refusal as the daemon reports it to a
+// client (#2372): every field cut to its bounded printable form, and the
+// operator's line, never the platform's own message, which is unbounded.
+type RefusedWorkspaceWriteReport struct {
+	Workspace  string `json:"workspace"`
+	TeamID     string `json:"teamId"`
+	Code       string `json:"code"`
+	Permission string `json:"permission"`
+	// Description is Describe(): the workspace that was not written and the
+	// permission the write needs.
+	Description string `json:"description"`
+}
+
+// Report is the refusal's bounded form, for the daemon's status and the
+// extension.
+func (r RefusedWorkspaceWrite) Report() RefusedWorkspaceWriteReport {
+	return RefusedWorkspaceWriteReport{
+		Workspace:   printableField(r.Workspace),
+		TeamID:      printableField(r.TeamID),
+		Code:        printableField(r.Code),
+		Permission:  printableField(r.Permission),
+		Description: r.Describe(),
+	}
+}
+
 // printableField bounds one field of a platform reply for a log line: at most
-// 100 runes, with every control character dropped.
+// 100 runes, keeping only graphic ones (letters, marks, numbers, punctuation,
+// symbols and spaces), so no control, format or separator character, such
+// as a line break, U+2028 or a bidirectional override, reaches the line.
 func printableField(s string) string {
 	var b strings.Builder
 	n := 0
 	for _, r := range s {
-		if unicode.IsControl(r) {
+		if !unicode.IsGraphic(r) {
 			continue
 		}
 		if n == 100 {

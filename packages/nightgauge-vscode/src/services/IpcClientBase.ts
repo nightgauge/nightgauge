@@ -402,16 +402,18 @@ export interface PlatformStatus {
   /**
    * The workspace writes the platform refused the daemon's latest agent
    * registration (#2372), because the operator's role on the workspace's
-   * team is developer or viewer. Absent when none was refused.
+   * team is developer or viewer. Absent when none was refused. Every field
+   * is bounded and printable; the platform's own message is not reported.
    */
   refusedWorkspaceWrites?: Array<{
     /** The named workspace's slug, or "default" for the team's Default workspace. */
     workspace: string;
-    team_id: string;
+    teamId: string;
     code: string;
     /** "workspace:create" or "workspace:update". */
     permission: string;
-    message: string;
+    /** The operator's line: the workspace not written and the permission it needs. */
+    description: string;
   }>;
 }
 

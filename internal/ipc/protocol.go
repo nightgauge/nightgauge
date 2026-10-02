@@ -1362,6 +1362,20 @@ type AgentAcknowledgeCommandResult struct {
 // EventAgentCommand is the event carrying an AgentCommandEvent.
 const EventAgentCommand = "agent.command"
 
+// EventWorkspaceWritesRefused is the event carrying a
+// WorkspaceWritesRefusedEvent.
+const EventWorkspaceWritesRefused = "platform.workspaceWritesRefused"
+
+// WorkspaceWritesRefusedEvent tells the extension that the daemon's agent
+// registration was refused workspace writes (#2372), so it can show the
+// operator, who otherwise learns of it only from the daemon's log: the
+// declared repositories stay unlinked from the workspace, and every remote
+// trigger for them is refused. Sent once per registration that was refused
+// any; every field is bounded and printable.
+type WorkspaceWritesRefusedEvent struct {
+	Refusals []platform.RefusedWorkspaceWriteReport `json:"refusals"`
+}
+
 // AgentCommandEvent hands the extension a platform command that reached the
 // daemon's own agent but that the daemon does not execute (#2335): a trigger
 // or a pipeline verb, which the extension runs. AgentID is the agent the

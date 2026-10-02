@@ -524,7 +524,9 @@ func (s *Server) SetRefusedWorkspaceWrites(refused []platform.RefusedWorkspaceWr
 }
 
 // RefusedWorkspaceWrites returns a copy of the refusals the latest agent
-// registration recorded, nil when there were none.
+// registration recorded, nil when there were none. platform.status reports
+// their bounded form (RefusedWorkspaceWrite.Report), never the platform's
+// raw message.
 func (s *Server) RefusedWorkspaceWrites() []platform.RefusedWorkspaceWrite {
 	s.refusedWorkspaceWritesMu.RLock()
 	defer s.refusedWorkspaceWritesMu.RUnlock()
@@ -1968,7 +1970,11 @@ func (s *Server) registerMethods() {
 			result["tier"] = s.getLicenseSvc().CurrentTier()
 		}
 		if refused := s.RefusedWorkspaceWrites(); len(refused) > 0 {
-			result["refusedWorkspaceWrites"] = refused
+			reports := make([]platform.RefusedWorkspaceWriteReport, 0, len(refused))
+			for _, r := range refused {
+				reports = append(reports, r.Report())
+			}
+			result["refusedWorkspaceWrites"] = reports
 		}
 		return result, nil
 	}

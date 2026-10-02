@@ -436,4 +436,42 @@ func TestRefusedWorkspaceWrite_Describe(t *testing.T) {
 	if strings.Contains(line, strings.Repeat("x", 101)) {
 		t.Errorf("Describe() did not bound the workspace field: %q", line)
 	}
+
+	// The fields printed as they are, not quoted, are the ones a reply could
+	// forge a log line through: a line break, a line separator (U+2028), a
+	// bidirectional override (U+202E), a zero-width joiner, a tab.
+	forging := "workspace:update\n[nightgauge] forged line\u2028\u202eevil\u200d\t"
+	forged := RefusedWorkspaceWrite{Workspace: "acme", TeamID: forging, Code: forging, Permission: forging}
+	line = forged.Describe()
+	for _, r := range []rune{'\n', '\u2028', '\u202e', '\u200d', '\t'} {
+		if strings.ContainsRune(line, r) {
+			t.Errorf("Describe() kept %U: %q", r, line)
+		}
+	}
+	if !strings.Contains(line, "workspace:update[nightgauge] forged lineevil") {
+		t.Errorf("Describe() dropped more than the unprintable runes: %q", line)
+	}
+}
+
+// The status and the extension get the refusal's bounded fields and the
+// operator's line, never the platform's raw message (#2372).
+func TestRefusedWorkspaceWrite_Report(t *testing.T) {
+	refused := RefusedWorkspaceWrite{
+		Workspace: "acme-platform", TeamID: "team-1\u202e", Code: "PERMISSION_DENIED",
+		Permission: "workspace:update", Message: strings.Repeat("raw message ", 1000),
+	}
+	got := refused.Report()
+	want := RefusedWorkspaceWriteReport{
+		Workspace: "acme-platform", TeamID: "team-1", Code: "PERMISSION_DENIED",
+		Permission: "workspace:update", Description: refused.Describe(),
+	}
+	if got != want {
+		t.Errorf("Report() = %+v, want %+v", got, want)
+	}
+	if strings.Contains(got.Description, "raw message") {
+		t.Errorf("the report carries the platform's message: %q", got.Description)
+	}
+	if empty := (RefusedWorkspaceWrite{}).Report(); empty.Workspace != "unknown" || empty.Permission != "unknown" {
+		t.Errorf("an empty refusal reports %+v, want unknown fields", empty)
+	}
 }

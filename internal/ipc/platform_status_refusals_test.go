@@ -38,12 +38,13 @@ func TestPlatformStatus_ReportsTheLatestRegistrationsRefusals(t *testing.T) {
 
 	refused := []platform.RefusedWorkspaceWrite{{
 		Workspace: "acme-platform", TeamID: "team-1", Code: "PERMISSION_DENIED",
-		Permission: "workspace:update", Message: "m",
+		Permission: "workspace:update", Message: "the platform's own, unbounded message",
 	}}
 	s.SetRefusedWorkspaceWrites(refused)
+	// The bounded fields and the operator's line; the raw message stays out.
 	want := []interface{}{map[string]interface{}{
-		"workspace": "acme-platform", "team_id": "team-1", "code": "PERMISSION_DENIED",
-		"permission": "workspace:update", "message": "m",
+		"workspace": "acme-platform", "teamId": "team-1", "code": "PERMISSION_DENIED",
+		"permission": "workspace:update", "description": refused[0].Describe(),
 	}}
 	if got := status()["refusedWorkspaceWrites"]; !reflect.DeepEqual(got, want) {
 		t.Errorf("refusedWorkspaceWrites = %v, want %v", got, want)

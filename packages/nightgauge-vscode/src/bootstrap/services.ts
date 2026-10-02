@@ -122,6 +122,7 @@ import { AgentCommandStreamService } from "../services/AgentCommandStreamService
 import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../services/RunVerbCommandHandler";
 import { REMOTE_RUN_LEDGER_DIR, RemoteRunLedger } from "../services/RemoteRunLedger";
+import { followRefusedWorkspaceWrites } from "../platform/refusedWorkspaceWrites";
 import { resolveStateHome } from "../utils/machineStateDir";
 import {
   ReloadInterruptedRunHolds,
@@ -4510,6 +4511,15 @@ export async function initializeServices(
   // connectivity, which credential kind is in use, Go binary path/version,
   // and the last transport error per platform surface.
   context.subscriptions.push(registerShowDiagnosticsCommand({ logger, platformStatusBarItem }));
+  // The workspace writes the platform refused the daemon's agent registration
+  // (#2372): the declared repositories stay unlinked from the workspace, and
+  // every remote trigger for them is refused, so the operator is told.
+  context.subscriptions.push(
+    followRefusedWorkspaceWrites(ipcClient, (message) => {
+      logger.warn(message);
+      void vscode.window.showWarningMessage(message);
+    })
+  );
 
   // Pipeline-aware connectivity badge (Issue #3203). Shown only when a
   // pipeline stage is running and ConnectivityStateBus reports degraded or

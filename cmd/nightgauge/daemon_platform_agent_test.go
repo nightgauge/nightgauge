@@ -250,6 +250,26 @@ func TestRunDaemonPlatformAgent_ReportsRefusedWorkspaceWrites(t *testing.T) {
 	if n := strings.Count(logs.String(), "the platform did not write"); n != 1 {
 		t.Errorf("logged the refusal %d times, want once per registration", n)
 	}
+	// The extension is told too, with the bounded report, so it can show the
+	// operator: one event for the registration.
+	var refusedEvents []ipc.Event
+	waitUntil(t, "the refusal event", func() bool {
+		refusedEvents = nil
+		for _, e := range ext.relayed() {
+			if e.Event == ipc.EventWorkspaceWritesRefused {
+				refusedEvents = append(refusedEvents, e)
+			}
+		}
+		return len(refusedEvents) == 1
+	})
+	event, ok := refusedEvents[0].Data.(ipc.WorkspaceWritesRefusedEvent)
+	if !ok || len(event.Refusals) != 1 {
+		t.Fatalf("refusal event = %+v, want one refusal", refusedEvents[0].Data)
+	}
+	if r := event.Refusals[0]; r.Workspace != "acme-platform" || r.Permission != "workspace:update" ||
+		!strings.Contains(r.Description, "workspace:update needs the owner or admin role") {
+		t.Errorf("refusal event's report = %+v", r)
+	}
 }
 
 // The daemon follows the platform throttle of the workspace it serves (#2352),
