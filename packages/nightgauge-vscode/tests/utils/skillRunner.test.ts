@@ -3642,6 +3642,41 @@ allowed-tools: Read Write Glob Grep
     );
   });
 
+  it("reads injected tool lists as the binary does: commas, and a pattern whole (#2358)", () => {
+    const injectedContent = `---
+name: platform-skill
+allowed-tools: Read, Bash(gh *), AskUserQuestion
+mcp-tools: mcp__github__*, mcp__slack__*
+---
+# Platform Skill
+`;
+    vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      injectedContent
+    );
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const tools = args[args.indexOf("--allowedTools") + 1].split(",");
+    // The headless dispatch drops AskUserQuestion; the MCP tools follow.
+    expect(tools.slice(0, 2)).toEqual(["Read", "Bash(gh *)"]);
+    expect(tools).not.toContain("AskUserQuestion");
+    expect(tools).toContain("mcp__github__*");
+    expect(tools).toContain("mcp__slack__*");
+    // A comma left on an entry would join into an empty one.
+    expect(tools).not.toContain("");
+  });
+
   it("should fall back to disk on injected content parse failure", () => {
     // Empty string content — parseSkillContent should return null
     const injectedContent = "";

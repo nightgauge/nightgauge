@@ -236,7 +236,11 @@ will either.
 **Go adapter differences:**
 
 - Go `ClaudeAdapter` uses `-p --output-format stream-json --verbose` instead of `--print --output-format text`
-- Go adapter supports `--allowedTools`, `--max-tokens`, `--max-turns`, `--max-budget-usd`
+- Both pass the stage skill's allowed-tools as `--allowedTools`, comma-joined. The TypeScript
+  adapter adds it unless `NIGHTGAUGE_CLAUDE_CLI_ARGS` already names allowed tools (#2358).
+  Without it a `--print` run refuses any tool that needs permission unless the user's
+  settings allow it.
+- Go adapter supports `--max-tokens`, `--max-turns`, `--max-budget-usd`
 - TypeScript adapter supports none of these
 - Go adapter has stream-json output (token tracking capable); TypeScript does not
 
@@ -272,6 +276,12 @@ throws `AUTH_MISSING` when `ANTHROPIC_API_KEY` is absent, so a missing key
 surfaces at the preflight check rather than mid-query. It also runs the
 native-workflow version preflight, which never hard-fails auth — a stale SDK
 simply downgrades orchestration to the `sdk-fanout` floor.
+
+**Allowed tools:** a stage's query receives the stage skill's allowed-tools as the
+Agent SDK's `allowedTools`, the tools it runs without asking (#2358). Before #2358
+it received none. Any other tool that asks for permission is refused in a headless
+run, as under the Go adapters' `--allowedTools`. The query does not set `tools`, so
+the model's built-in tool list is unchanged.
 
 **Environment variables:**
 
@@ -313,7 +323,10 @@ Error message: `codex CLI is not authenticated. Run 'codex login' to authenticat
 - **Sandbox scoping from allowed-tools (#4026):** Codex has no per-tool allowlist
   flag, so the skill's `allowed-tools` are mapped onto Codex's sandbox mode +
   approval policy (`resolveCodexSandboxMode` in `codexSandbox.ts` / `codex_sandbox.go`,
-  single source of truth shared by both spawn paths). The mapping only ever
+  single source of truth shared by both spawn paths). On the SDK path the tools
+  are the stage SKILL.md's, which `PipelineOrchestrator` reads as the Go side does
+  (#2358); before #2358 they never reached the query, so every SDK-path stage ran
+  with full access whatever its skill declared. The mapping only ever
   TIGHTENS with positive evidence — default is full access so autonomous runs are
   never locked out:
   | allowed-tools                                                             | Codex flags                                                |
@@ -646,20 +659,22 @@ disposition; see the ADR for the reasoning behind each:
 
 ### Gap #1: claude-headless TypeScript vs Go Parity
 
-| Attribute        | Value                                                                                |
-| ---------------- | ------------------------------------------------------------------------------------ |
-| Adapter          | `claude-headless`                                                                    |
-| Capability       | Tool calling, budget limits                                                          |
-| TypeScript claim | Does not support `--allowedTools`, `--max-tokens`, `--max-turns`, `--max-budget-usd` |
-| Go adapter       | Supports all of the above                                                            |
-| Severity         | MEDIUM                                                                               |
-| Decision         | **DEFER**                                                                            |
+| Attribute        | Value                                                               |
+| ---------------- | ------------------------------------------------------------------- |
+| Adapter          | `claude-headless`                                                   |
+| Capability       | Budget limits (tool calling resolved by #2358)                      |
+| TypeScript claim | Does not support `--max-tokens`, `--max-turns`, `--max-budget-usd`  |
+| Go adapter       | Supports all of the above                                           |
+| Severity         | MEDIUM                                                              |
+| Decision         | **DEFER** (the budget flags); `--allowedTools` **RESOLVED** (#2358) |
 
 **Evidence:**
 
 - Go `ClaudeAdapter.BuildCommand()` appends `--allowedTools`, `--model`, `--max-tokens`, `--max-turns`, `--max-budget-usd` when set in `RunOptions`
 - TypeScript `ClaudeHeadlessAdapter.createQueryFunction()` reads only `NIGHTGAUGE_CLAUDE_CLI_COMMAND` and `NIGHTGAUGE_CLAUDE_CLI_ARGS` env vars — no structured options
-- Adding these to TypeScript requires extending `QueryFunctionOptions` interface
+- The stage's allowed-tools reach the query's own options from the stage SKILL.md (#2358), and
+  `createCliQueryFn` passes them as `--allowedTools`. The budget flags still need
+  `QueryFunctionOptions` extended
 
 **Rationale for DEFER:** TypeScript headless adapter is typically used via the VSCode extension IPC path where the orchestrator manages budget; Go adapter is the scheduler-driven path where budget enforcement is more critical. The gap is real but not blocking current usage.
 

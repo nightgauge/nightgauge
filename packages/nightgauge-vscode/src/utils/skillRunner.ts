@@ -65,6 +65,8 @@ import {
   TIER_BANDS_STRONGEST_FIRST as SDK_TIER_BANDS_STRONGEST_FIRST,
   readRoutingAdvice,
   pickAdvice,
+  skillAllowedTools,
+  skillFrontmatterTools,
   type JobClass,
   type ModelSelectionResult,
   type IssueMetadata,
@@ -3136,28 +3138,15 @@ function parseSkillContent(raw: string): {
 } | null {
   try {
     const frontmatterMatch = raw.match(/^---\n([\s\S]*?)\n---/);
-    let allowedTools: string[] = [...DEFAULT_ALLOWED_TOOLS];
-    let mcpTools: string[] = [];
-    let programmaticTools: string[] | undefined;
-
-    if (frontmatterMatch) {
-      const frontmatter = frontmatterMatch[1];
-      const toolsMatch = frontmatter.match(/allowed-tools:\s*(.+)/);
-      if (toolsMatch) {
-        allowedTools = toolsMatch[1].trim().split(/\s+/);
-      }
-
-      const mcpMatch = frontmatter.match(/mcp-tools:\s*(.+)/);
-      if (mcpMatch) {
-        const rawMcp = mcpMatch[1].trim();
-        mcpTools = rawMcp === "all" ? ["all"] : rawMcp.split(/\s+/);
-      }
-
-      const ptcMatch = frontmatter.match(/programmatic-tools:\s*(.+)/);
-      if (ptcMatch) {
-        programmaticTools = ptcMatch[1].trim().split(/\s+/);
-      }
-    }
+    // Each tool list is read as the binary reads a SKILL.md on disk (#2358):
+    // entries separated by spaces or commas, a `Tool(pattern)` entry whole.
+    // An absent or empty list reads as the render envelope's omitted one:
+    // the historical default for allowed-tools, none for the others.
+    const declaredTools = skillAllowedTools(raw);
+    const allowedTools = declaredTools.length > 0 ? declaredTools : [...DEFAULT_ALLOWED_TOOLS];
+    const mcpTools = skillFrontmatterTools(raw, "mcp-tools");
+    const declaredProgrammatic = skillFrontmatterTools(raw, "programmatic-tools");
+    const programmaticTools = declaredProgrammatic.length > 0 ? declaredProgrammatic : undefined;
 
     // Strip frontmatter from the content passed to the executing agent.
     // Frontmatter keys like `agent:` and `context: fork` are metadata for the

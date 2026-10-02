@@ -1,0 +1,135 @@
+{
+  "about": "A SKILL.md per case and the tool lists a reader must take from it: `declared` is its allowed-tools read verbatim, `headless` what a non-interactive run is granted, and `mcp` / `programmatic`, where a case has them, its mcp-tools and programmatic-tools. internal/skillrender (splitFrontmatter, splitTools, FilterHeadlessTools) and the SDK (skillAllowedTools.ts) both read this file (#2358).",
+  "cases": [
+    {
+      "name": "a pipeline stage's space-separated set",
+      "skill": "---\nname: nightgauge-feature-dev\nallowed-tools: Read Write Edit Glob Grep Bash Task\n---\n\n# Feature Dev\n",
+      "declared": ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Task"],
+      "headless": ["Read", "Write", "Edit", "Glob", "Grep", "Bash", "Task"]
+    },
+    {
+      "name": "a read-only set",
+      "skill": "---\nname: s\nallowed-tools: Read Grep Glob\n---\nBody\n",
+      "declared": ["Read", "Grep", "Glob"],
+      "headless": ["Read", "Grep", "Glob"]
+    },
+    {
+      "name": "comma and space separated",
+      "skill": "---\nname: s\nallowed-tools: Read, Grep, Glob\n---\nBody\n",
+      "declared": ["Read", "Grep", "Glob"],
+      "headless": ["Read", "Grep", "Glob"]
+    },
+    {
+      "name": "comma separated",
+      "skill": "---\nname: s\nallowed-tools: Read,Edit,Bash\n---\nBody\n",
+      "declared": ["Read", "Edit", "Bash"],
+      "headless": ["Read", "Edit", "Bash"]
+    },
+    {
+      "name": "a pattern with a space stays one entry",
+      "skill": "---\nname: s\nallowed-tools: Read Grep Glob Bash(gh *) mcp__github__*\n---\nBody\n",
+      "declared": ["Read", "Grep", "Glob", "Bash(gh *)", "mcp__github__*"],
+      "headless": ["Read", "Grep", "Glob", "Bash(gh *)", "mcp__github__*"]
+    },
+    {
+      "name": "comma separated patterns",
+      "skill": "---\nname: s\nallowed-tools: Bash(git add:*), Bash(git status:*), Read\n---\nBody\n",
+      "declared": ["Bash(git add:*)", "Bash(git status:*)", "Read"],
+      "headless": ["Bash(git add:*)", "Bash(git status:*)", "Read"]
+    },
+    {
+      "name": "a comma inside a pattern does not split it",
+      "skill": "---\nname: s\nallowed-tools: Bash(printf a,b) Read\n---\nBody\n",
+      "declared": ["Bash(printf a,b)", "Read"],
+      "headless": ["Bash(printf a,b)", "Read"]
+    },
+    {
+      "name": "nested parentheses",
+      "skill": "---\nname: s\nallowed-tools: Bash(echo (x) y) Read\n---\nBody\n",
+      "declared": ["Bash(echo (x) y)", "Read"],
+      "headless": ["Bash(echo (x) y)", "Read"]
+    },
+    {
+      "name": "an unclosed parenthesis keeps the rest in its entry",
+      "skill": "---\nname: s\nallowed-tools: Read Bash(git * Grep\n---\nBody\n",
+      "declared": ["Read", "Bash(git * Grep"],
+      "headless": ["Read", "Bash(git * Grep"]
+    },
+    {
+      "name": "a stray closing parenthesis is part of its entry",
+      "skill": "---\nname: s\nallowed-tools: Read) Grep\n---\nBody\n",
+      "declared": ["Read)", "Grep"],
+      "headless": ["Read)", "Grep"]
+    },
+    {
+      "name": "runs of separators, tabs and a no-break space",
+      "skill": "---\nname: s\nallowed-tools: Read\t\tGrep ,, Glob\u00a0Bash\n---\nBody\n",
+      "declared": ["Read", "Grep", "Glob", "Bash"],
+      "headless": ["Read", "Grep", "Glob", "Bash"]
+    },
+    {
+      "name": "U+0085 separates and U+FEFF does not, as in unicode.IsSpace",
+      "skill": "---\nname: s\nallowed-tools: Read\u0085Grep Glob\ufeffBash\n---\nBody\n",
+      "declared": ["Read", "Grep", "Glob\ufeffBash"],
+      "headless": ["Read", "Grep", "Glob\ufeffBash"]
+    },
+    {
+      "name": "a double-quoted value",
+      "skill": "---\nname: s\nallowed-tools: \"Read Grep\"\n---\nBody\n",
+      "declared": ["Read", "Grep"],
+      "headless": ["Read", "Grep"]
+    },
+    {
+      "name": "a single-quoted value",
+      "skill": "---\nname: s\nallowed-tools: 'Read, Bash'\n---\nBody\n",
+      "declared": ["Read", "Bash"],
+      "headless": ["Read", "Bash"]
+    },
+    {
+      "name": "AskUserQuestion is declared but not granted headless",
+      "skill": "---\nname: s\nallowed-tools: Read AskUserQuestion Bash\n---\nBody\n",
+      "declared": ["Read", "AskUserQuestion", "Bash"],
+      "headless": ["Read", "Bash"]
+    },
+    {
+      "name": "every tool field reads the same way",
+      "skill": "---\nname: s\nallowed-tools: Read, Grep\nmcp-tools: mcp__github__*, mcp__slack__*\nprogrammatic-tools: query_database run_tests\n---\nBody\n",
+      "declared": ["Read", "Grep"],
+      "headless": ["Read", "Grep"],
+      "mcp": ["mcp__github__*", "mcp__slack__*"],
+      "programmatic": ["query_database", "run_tests"]
+    },
+    {
+      "name": "mcp-tools all",
+      "skill": "---\nname: s\nallowed-tools: Read\nmcp-tools: all\n---\nBody\n",
+      "declared": ["Read"],
+      "headless": ["Read"],
+      "mcp": ["all"],
+      "programmatic": []
+    },
+    {
+      "name": "an empty value",
+      "skill": "---\nname: s\nallowed-tools:\n---\nBody\n",
+      "declared": [],
+      "headless": []
+    },
+    {
+      "name": "no allowed-tools field",
+      "skill": "---\nname: s\ndescription: d\n---\nBody\n",
+      "declared": [],
+      "headless": []
+    },
+    {
+      "name": "no frontmatter",
+      "skill": "# Body\nallowed-tools: Read\n",
+      "declared": [],
+      "headless": []
+    },
+    {
+      "name": "a field after the frontmatter is not read",
+      "skill": "---\nname: s\n---\nallowed-tools: Read\n",
+      "declared": [],
+      "headless": []
+    }
+  ]
+}

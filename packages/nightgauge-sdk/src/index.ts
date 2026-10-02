@@ -39,6 +39,7 @@ export {
 export {
   StageExecutor,
   buildStagePrompt,
+  composeStagePrompt,
   loadStageSkill,
   StageTimeoutError,
   type StageExecutorOptions,
@@ -47,6 +48,15 @@ export {
   type SDKQueryFunction,
   type SDKQueryOptions,
 } from "./orchestrator/StageExecutor.js";
+
+// A stage SKILL.md's allowed-tools, read as the Go side reads them (#2358).
+export {
+  skillAllowedTools,
+  skillFrontmatterTools,
+  splitAllowedTools,
+  filterHeadlessTools,
+  type SkillToolField,
+} from "./orchestrator/skillAllowedTools.js";
 
 // Context Management
 export {

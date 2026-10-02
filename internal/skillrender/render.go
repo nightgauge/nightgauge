@@ -27,6 +27,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/nightgauge/nightgauge/internal/models"
 )
@@ -693,7 +694,17 @@ func extractYAMLField(frontmatter string, key string) string {
 	return ""
 }
 
-// splitTools splits a space-separated frontmatter tool list.
+// splitTools splits a frontmatter tool list into its entries.
+//
+// Entries are separated by whitespace or commas, so the Agent Skills form
+// (`Read Grep Glob`) and Claude Code's (`Read, Grep, Glob`) read the same. A
+// separator inside parentheses does not split: a `Tool(pattern)` entry stays
+// whole, so `Bash(gh *)` is one entry. It used to split on whitespace alone,
+// which cut that entry into `Bash(gh` and `*)` and kept a comma on the tool
+// name before it (#2358). An unclosed parenthesis keeps the rest of the list
+// in its entry. The SDK reads the same grammar (skillAllowedTools.ts); both
+// test suites read testdata/allowed_tools_expected.json, so the two cannot
+// drift apart.
 //
 // It reports what the skill DECLARES, verbatim. It used to drop
 // AskUserQuestion here, which was a headless-execution policy applied at parse
@@ -704,10 +715,29 @@ func extractYAMLField(frontmatter string, key string) string {
 // frontmatter — #79 caught this by way of an interactive test that asserted
 // the declared tool survives.
 func splitTools(tools string) []string {
-	if tools == "" {
-		return nil
+	var entries []string
+	start, depth := -1, 0
+	for i, r := range tools {
+		switch {
+		case depth == 0 && (r == ',' || unicode.IsSpace(r)):
+			if start >= 0 {
+				entries = append(entries, tools[start:i])
+				start = -1
+			}
+			continue
+		case r == '(':
+			depth++
+		case r == ')' && depth > 0:
+			depth--
+		}
+		if start < 0 {
+			start = i
+		}
 	}
-	return strings.Fields(tools)
+	if start >= 0 {
+		entries = append(entries, tools[start:])
+	}
+	return entries
 }
 
 // FilterHeadlessTools removes tools that cannot work in a non-interactive run.

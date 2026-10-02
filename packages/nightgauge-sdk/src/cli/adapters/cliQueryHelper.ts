@@ -153,6 +153,30 @@ export function selectCodexOutput(
   return jsonlSummary.displayText;
 }
 
+/** The `claude` CLI flag spellings that name a run's allowed tools. */
+const CLAUDE_ALLOWED_TOOLS_FLAGS = ["--allowedTools", "--allowed-tools"];
+
+/**
+ * A claude-headless argv with the stage's allowed tools as `--allowedTools`,
+ * comma-joined with each entry whole, as the Go ClaudeAdapter passes them.
+ * Without the flag a `claude --print` run refuses every tool that asks for
+ * permission, `Bash`, `Write` and `Edit` among them, unless the user's own
+ * settings allow it (#2358). No tools add nothing, and args that already name
+ * allowed tools (an operator's NIGHTGAUGE_CLAUDE_CLI_ARGS) are kept as given.
+ */
+export function withClaudeAllowedTools(
+  args: readonly string[],
+  allowedTools?: readonly string[]
+): string[] {
+  const named = args.some((arg) =>
+    CLAUDE_ALLOWED_TOOLS_FLAGS.some((flag) => arg === flag || arg.startsWith(`${flag}=`))
+  );
+  if (!allowedTools || allowedTools.length === 0 || named) {
+    return [...args];
+  }
+  return [...args, "--allowedTools", allowedTools.join(",")];
+}
+
 /**
  * Create an SDKQueryFunction that spawns a CLI process.
  */
@@ -256,10 +280,14 @@ export function createCliQueryFn(options: {
       // No-op (full-access, unchanged) when tools imply shell/network or are
       // absent. The resume branch above scopes the same mode its own way, since
       // `exec resume` takes the sandbox as config rather than `--sandbox`.
+      // claude-headless takes the stage's tools as `--allowedTools`, as the Go
+      // ClaudeAdapter passes them (#2358).
       const effectiveBaseArgs =
         options.adapter === "codex"
           ? applyCodexSandboxProfile(baseArgs, queryOptions.options?.allowedTools, cwd)
-          : baseArgs;
+          : options.adapter === "claude-headless"
+            ? withClaudeAllowedTools(baseArgs, queryOptions.options?.allowedTools)
+            : baseArgs;
       if (delivery === "positional") {
         finalArgs = [queryOptions.prompt, ...effectiveBaseArgs];
         stdinPrompt = "";

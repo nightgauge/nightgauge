@@ -22,6 +22,12 @@ and this project adheres to
 
 ### Fixed
 
+- **Codex and OpenCode stages get the tools their skill grants.** They ran
+  with no tool list, so a skill that grants only read tools still ran Codex
+  with full access, and OpenCode reported a refusal of a granted tool as one
+  the stage was never granted. A `Tool(pattern)` entry such as `Bash(gh *)` is
+  now read whole, and a comma-separated `allowed-tools` list reads as a
+  space-separated one (#2358).
 - **Approve and reject from the phone app or the dashboard say why they
   cannot apply:** no run in the extension waits at an approval gate, so the
   window running the pipeline answers both with that reason (#2336).
