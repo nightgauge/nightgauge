@@ -69,7 +69,13 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		// DETACHED, bounded context: this runs on the pr-merge finalization path,
 		// so a hung webhook must not block the pipeline (the pipeline ctx may also
 		// be cancelled once the run returns) (#4076 review).
-		repo, epic := item.Repo, result.EpicNumber
+		// The alert names the epic that closed in its own repository, which
+		// the hook resolved it against (result.EpicRepo); for an epic in
+		// another repository item.Repo would name a different issue (#2350).
+		repo, epic := result.EpicRepo, result.EpicNumber
+		if repo == "" {
+			repo = item.Repo
+		}
 		// lifecycle: process-lifetime, 35s-bounded — deliberately detached, not
 		// routed through goTracked (#491 pin allowlist cites this line).
 		go func() {

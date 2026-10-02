@@ -271,6 +271,13 @@ changelog, and the release workflow refuses a tag that does not.
   `(via epic owner/repo#20)`. The REST board cache's stored shape changed, so
   its entries are read fresh once.
 
+  hold through a cross-repository epic names it, and each of its blockers
+  outside the sub-issue's repository, in full:
+  `(via epic owner/repo#20) blocked by owner/repo#10 (open)`. The REST board
+  cache's stored shape changed, so its entries are read fresh once. The
+  ready-to-ship alert names the closed epic in its own repository, and the epic
+  branch is named from the epic's own title.
+
 - **Short repository names in body-declared dependencies resolve against the
   workspace's own repositories** (#2349). The pickup gate, the dispatcher's
   dependency graph, `graph build`, `next`, `hook check-deps`, the `pr merge`

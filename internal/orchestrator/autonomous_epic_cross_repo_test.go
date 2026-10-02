@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,7 +96,8 @@ func crossRepoStuckOpts() stuckEpicScanOpts {
 }
 
 // The watchdog files a cross-repository sub-issue under its real epic and
-// explains the hold by naming that epic in its own repository.
+// explains the hold by naming that epic, and its blocker, in their own
+// repository: in a reason about o/app#21 a bare "#10" would read as o/app#10.
 func TestStuckEpics_CrossRepoParentWithAnOpenBlockerIsStuck(t *testing.T) {
 	g := buildTestGraph([]*depgraph.Node{
 		makeEpicTestNode(crossRepoPlatform, 10, "OPEN", "In progress", nil, 0),
@@ -111,7 +113,7 @@ func TestStuckEpics_CrossRepoParentWithAnOpenBlockerIsStuck(t *testing.T) {
 	if len(got[0].Blockers) != 1 || got[0].Blockers[0].Number != 21 {
 		t.Fatalf("o/platform#20 blockers = %+v, want its sub-issue o/app#21", got[0].Blockers)
 	}
-	const want = "(via epic o/platform#20) blocked by #10 (open)"
+	const want = "(via epic o/platform#20) blocked by o/platform#10 (open)"
 	if reason := got[0].Blockers[0].Reason; reason != want {
 		t.Errorf("reason = %q, want %q", reason, want)
 	}
@@ -154,5 +156,22 @@ func TestEpicCascadeDeps_RecognisesACrossRepoSubIssue(t *testing.T) {
 	}
 	if len(gating) != 1 || gating[0] != "o/app#20" {
 		t.Errorf("gating = %v, want [o/app#20], an issue that is not the epic's sub-issue", gating)
+	}
+}
+
+// openBlockerRefs names a blocker in the reason's own repository as "#N" and
+// any other as "owner/repo#N", the local ones first.
+func TestOpenBlockerRefs_QualifiesBlockersInOtherRepositories(t *testing.T) {
+	g := buildTestGraph([]*depgraph.Node{
+		makeEpicTestNode(crossRepoApp, 7, "OPEN", "In progress", nil, 0),
+		makeEpicTestNode(crossRepoApp, 3, "OPEN", "Ready", nil, 0),
+		makeEpicTestNode(crossRepoPlatform, 10, "OPEN", "In progress", nil, 0),
+		makeEpicTestNode("o/api", 2, "OPEN", "Ready", nil, 0),
+		makeEpicTestNode(crossRepoPlatform, 11, "CLOSED", "Done", nil, 0),
+	}, nil)
+	keys := []string{"o/platform#10", "o/app#7", "o/api#2", "o/app#3", "o/platform#11"}
+	got := strings.Join(openBlockerRefs(keys, g, crossRepoApp), ", ")
+	if want := "#3, #7, o/api#2, o/platform#10"; got != want {
+		t.Errorf("refs = %q, want %q", got, want)
 	}
 }

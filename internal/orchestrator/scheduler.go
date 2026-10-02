@@ -9968,10 +9968,16 @@ func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot s
 	}
 
 	// Prefer ParentTitle from board data; fall back to GitHub API. Only the
-	// title is used, so the epic's sub-issue list is not read.
+	// title is used, so the epic's sub-issue list is not read. The epic is read
+	// in its own repository: by number in the sub-issue's, an epic elsewhere
+	// is a different issue (#2350).
 	epicTitle := item.ParentTitle
 	if epicTitle == "" {
-		owner, repo := splitOwnerRepo(item.Repo)
+		epicRepo := item.ParentRepo
+		if epicRepo == "" {
+			epicRepo = item.Repo
+		}
+		owner, repo := splitOwnerRepo(epicRepo)
 		epicIssue, apiErr := s.issueSvc.GetIssueWithRelations(ctx, owner, repo, item.ParentNumber, gh.NoRelations)
 		if apiErr != nil {
 			return logEpicBranchFailure(item.Number,

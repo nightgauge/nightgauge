@@ -281,25 +281,43 @@ func hasOpenBlocker(depKeys []string, graph *depgraph.Graph) bool {
 	return false
 }
 
-// openBlockerRefs returns the sorted "#N" refs of the OPEN, non-work-complete
-// dependencies in depKeys (the same set hasOpenBlocker counts), for use in a
-// human reason string.
-func openBlockerRefs(depKeys []string, graph *depgraph.Graph) []string {
-	var nums []int
+// openBlockerRefs returns the refs of the OPEN, non-work-complete dependencies
+// in depKeys (the same set hasOpenBlocker counts), for use in a human reason
+// string about an issue in home. A dependency in home reads "#N"; one in any
+// other repository reads "owner/repo#N", because in a reason about home's issue
+// a bare "#N" names home's own #N, and an epic's blocker in another
+// repository is not that issue (#2350 review). home's own refs come first, by
+// number, then the others by repository and number.
+func openBlockerRefs(depKeys []string, graph *depgraph.Graph, home string) []string {
+	var deps []depgraph.NodeID
 	for _, depKey := range depKeys {
 		dep, ok := graph.Nodes[depKey]
 		if !ok || !strings.EqualFold(dep.State, "OPEN") || isWorkCompleteStatus(dep.BoardStatus) {
 			continue
 		}
-		nums = append(nums, dep.Number)
+		deps = append(deps, dep.ID())
 	}
-	if len(nums) == 0 {
+	if len(deps) == 0 {
 		return nil
 	}
-	sort.Ints(nums)
-	refs := make([]string, len(nums))
-	for i, b := range nums {
-		refs[i] = fmt.Sprintf("#%d", b)
+	local := func(id depgraph.NodeID) bool { return strings.EqualFold(id.Repo, home) }
+	sort.Slice(deps, func(i, j int) bool {
+		a, b := deps[i], deps[j]
+		if local(a) != local(b) {
+			return local(a)
+		}
+		if !local(a) && !strings.EqualFold(a.Repo, b.Repo) {
+			return strings.ToLower(a.Repo) < strings.ToLower(b.Repo)
+		}
+		return a.Number < b.Number
+	})
+	refs := make([]string, len(deps))
+	for i, id := range deps {
+		if local(id) {
+			refs[i] = fmt.Sprintf("#%d", id.Number)
+		} else {
+			refs[i] = id.String()
+		}
 	}
 	return refs
 }
@@ -315,7 +333,7 @@ func blockerReasonFor(n *depgraph.Node, adj map[string][]string, graph *depgraph
 	// Direct blocker takes precedence (matches the dispatcher's ordering: own-dep
 	// before epic cascade). Only OPEN, non-work-complete deps are real blockers —
 	// an "In review" dep (PR up) does not block downstream work (#4073 review).
-	if refs := openBlockerRefs(adj[n.ID().String()], graph); len(refs) > 0 {
+	if refs := openBlockerRefs(adj[n.ID().String()], graph, n.Repo); len(refs) > 0 {
 		return "blocked by " + strings.Join(refs, ", ") + " (open)"
 	}
 
@@ -326,7 +344,7 @@ func blockerReasonFor(n *depgraph.Node, adj map[string][]string, graph *depgraph
 		epicKey := graph.NodeKey(epicID)
 		if epic, ok := graph.Nodes[epicKey]; ok && strings.EqualFold(epic.State, "OPEN") {
 			gating, _ := epicCascadeDeps(graph, adj, epicKey)
-			if refs := openBlockerRefs(gating, graph); len(refs) > 0 {
+			if refs := openBlockerRefs(gating, graph, n.Repo); len(refs) > 0 {
 				return fmt.Sprintf("(via epic %s) blocked by %s (open)", epicRefFor(n, epicID), strings.Join(refs, ", "))
 			}
 		}

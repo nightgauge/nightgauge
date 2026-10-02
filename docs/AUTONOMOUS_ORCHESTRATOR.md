@@ -107,8 +107,9 @@ repository with its number, and the dispatcher, the stuck-epic watchdog and
 `example-org/platform#20` living in `example-org/app` was cascaded through
 `example-org/app#20`: the real epic's open blockers never held it, and an
 unrelated `#20`'s did whenever that issue was open on a board. A hold through
-a cross-repository epic names it in full, for example
-`(via epic example-org/platform#20) blocked by #10 (open)`.
+a cross-repository epic names it in full, and so does each of its blockers
+outside the sub-issue's repository, for example
+`(via epic example-org/platform#20) blocked by example-org/platform#10 (open)`.
 
 **Config** (opt-out): Set `autonomous.disable_epic_blockedby_cascade: true` in
 `.nightgauge/config.yaml` to revert to individual-issue-only blocking.

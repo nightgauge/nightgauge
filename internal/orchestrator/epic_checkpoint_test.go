@@ -2,7 +2,12 @@ package orchestrator
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -232,6 +237,43 @@ func TestCheckEpicCompletion_LatchesTheCheckpoint(t *testing.T) {
 	}
 	if allowed, _ := as.safetyRails.CheckBeforeEnqueue(0); allowed {
 		t.Error("dispatch still allowed after the between-epic checkpoint latched")
+	}
+}
+
+// TestCheckEpicCompletion_ReadyToShipNamesTheEpicInItsOwnRepository: the
+// ready-to-ship alert names the epic the hook closed, in the repository the
+// hook resolved it against. It used to name the merged sub-issue's
+// repository, which for an epic elsewhere is a different issue (#2350
+// review).
+func TestCheckEpicCompletion_ReadyToShipNamesTheEpicInItsOwnRepository(t *testing.T) {
+	posted := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		select {
+		case posted <- body:
+		default:
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	t.Setenv(config.DefaultShipNotifyWebhookEnv, srv.URL)
+
+	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
+	sched.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
+		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer,
+		_ hooks.PostMergeInput) hooks.PostMergeResult {
+		return hooks.PostMergeResult{IssueClosed: true, AutoClosed: true, EpicNumber: 20, EpicRepo: "o/platform"}
+	}
+
+	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/app", Number: 21}, 0)
+
+	select {
+	case body := <-posted:
+		if !strings.Contains(string(body), "epic o/platform#20 closed") {
+			t.Errorf("ready-to-ship alert = %s, want it to name o/platform#20", body)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("no ready-to-ship alert was posted")
 	}
 }
 
