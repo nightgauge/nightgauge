@@ -318,6 +318,13 @@ primitives.
 | `CIRCULAR_BLOCKER`                       | `nightgauge issue remove-blocked-by <sub> <epic>` (auto)                    |
 | `MISSING_PARENT_BACKREF`                 | `nightgauge issue edit <epic> --append-body "<cross-repo link line>"`       |
 
+The `epic validate` gaps behind `STALE_BLOCKED_BY` and `CIRCULAR_BLOCKER` name
+the sub-issue's repository (`subIssueRepo`) and the blocker's (`blockerRepo`).
+`remove-blocked-by` works within its one `--repo`, so these are repaired
+automatically only when both repositories are the same, passed as `--repo`. A
+cross-repository pair is reported for manual repair: acting on the numbers in
+one repository would remove a different issue's relationship.
+
 ### Hard Rules (Auto-fix Constraints)
 
 These rules are encoded in the skill body and the negative test fixture pins

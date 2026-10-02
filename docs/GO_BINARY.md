@@ -1326,9 +1326,11 @@ nightgauge epic check-completion <epic-number> [--json]
 nightgauge epic validate <epic-number> [--owner ORG] [--repo REPO] [--json]
 # JSON output schema: { "epicNumber": N, "title": "...", "repo": "...",
 #   "totalSubIssues": N, "valid": true|false,
-#   "gaps": [{ "subIssueNumber": N, "subIssueTitle": "...",
+#   "gaps": [{ "subIssueNumber": N, "subIssueRepo": "owner/name", "subIssueTitle": "...",
 #              "gapType": "circular_blocker"|"stale_blocker",
-#              "blockerNumber": N, "detail": "..." }] }
+#              "blockerNumber": N, "blockerRepo": "owner/name", "detail": "..." }] }
+# subIssueRepo / blockerRepo: where each number lives; a cross-repo epic's
+# sub-issues and their blockers can be in several repositories.
 # Exit codes: 0 = success (gaps reported in JSON/stdout); non-zero = error fetching epic
 
 # Assess epic sub-issues for batch vs sequential strategy

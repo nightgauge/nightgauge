@@ -250,6 +250,12 @@ changelog, and the release workflow refuses a tag that does not.
   `epic validate` reported a circular blocker that issue-audit's repair then
   removes. All three now match the parent by repository and number.
 
+  `epic validate` also tells two sub-issues that share a number in different
+  repositories apart, and each gap names its sub-issue's and blocker's
+  repositories (`subIssueRepo`, `blockerRepo`). issue-audit repairs a gap only
+  when both are the same repository, and leaves a cross-repository pair for a
+  human, since `remove-blocked-by` works within one repository.
+
 - **The `issue-create` skill, `issue create-sub --blocked-by` and
   GO_BINARY.md no longer call body-declared dependencies cosmetic** (#2351).
   Native `blockedBy` is still the relationship to create, but the pickup gate

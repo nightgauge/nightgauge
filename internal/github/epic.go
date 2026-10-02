@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -26,11 +27,19 @@ func NewEpicService(client *Client) *EpicService {
 }
 
 // EpicValidationGap categorizes a single validation finding.
+//
+// SubIssueRepo and BlockerRepo name the repository each number lives in,
+// "owner/name". Issue numbers are per repository and an epic's sub-issues and
+// their blockers can live in several, so a repair that acts on the numbers
+// alone, in the epic's repository, can remove a relationship of an unrelated
+// issue (#2369 review).
 type EpicValidationGap struct {
 	SubIssueNumber int    `json:"subIssueNumber"`
+	SubIssueRepo   string `json:"subIssueRepo"`
 	SubIssueTitle  string `json:"subIssueTitle"`
 	GapType        string `json:"gapType"` // "circular_blocker" | "stale_blocker"
 	BlockerNumber  int    `json:"blockerNumber,omitempty"`
+	BlockerRepo    string `json:"blockerRepo,omitempty"`
 	Detail         string `json:"detail"`
 }
 
@@ -102,8 +111,14 @@ func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumb
 		repoOwnerName[repoKey] = [2]string{siOwner, siRepo}
 	}
 
-	// Fetch all sub-issues in batched requests (one per repo).
-	fetched := make(map[int]*types.Issue, len(epic.SubIssues))
+	// Fetch all sub-issues in batched requests (one per repo), keyed by
+	// repository and number: two sub-issues in different repositories can
+	// share a number, and keyed by number alone one would be judged by the
+	// other's blockers (#2369 review).
+	fetched := make(map[string]*types.Issue, len(epic.SubIssues))
+	subKey := func(repo string, number int) string {
+		return strings.ToLower(repo) + "#" + strconv.Itoa(number)
+	}
 	for repoKey, numbers := range byRepo {
 		on := repoOwnerName[repoKey]
 		issues, err := issueSvc.getIssuesByNumbers(ctx, on[0], on[1], numbers, RelationBlockedBy)
@@ -117,38 +132,57 @@ func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumb
 			continue
 		}
 		for n, iss := range issues {
-			fetched[n] = iss
+			fetched[subKey(repoKey, n)] = iss
 		}
 	}
 
-	for _, si := range epic.SubIssues {
-		subIssue, ok := fetched[si.Number]
-		if !ok {
-			fmt.Fprintf(os.Stderr, "warning: sub-issue #%d missing from batch response\n", si.Number)
-			continue
+	epicRepo := owner + "/" + repo
+	// ref names an issue in a gap's detail: "#N" in the epic's repository,
+	// "owner/repo#N" in any other.
+	ref := func(repo string, number int) string {
+		if strings.EqualFold(repo, epicRepo) {
+			return "#" + strconv.Itoa(number)
 		}
+		return repo + "#" + strconv.Itoa(number)
+	}
+	for _, si := range epic.SubIssues {
 		subRepo := si.Repo
 		if subRepo == "" {
-			subRepo = owner + "/" + repo
+			subRepo = epicRepo
+		}
+		subIssue, ok := fetched[subKey(subRepo, si.Number)]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "warning: sub-issue %s missing from batch response\n", ref(subRepo, si.Number))
+			continue
 		}
 		for _, blocker := range subIssue.BlockedBy {
-			if blockerIsEpic(blocker, subRepo, owner+"/"+repo, epicNumber) {
+			blockerRepo := blocker.Repo
+			if blockerRepo == "" {
+				blockerRepo = subRepo
+			}
+			if blockerIsEpic(blocker, subRepo, epicRepo, epicNumber) {
 				result.Valid = false
 				result.Gaps = append(result.Gaps, EpicValidationGap{
 					SubIssueNumber: si.Number,
+					SubIssueRepo:   subRepo,
 					SubIssueTitle:  si.Title,
 					GapType:        "circular_blocker",
 					BlockerNumber:  blocker.Number,
-					Detail:         fmt.Sprintf("sub-issue #%d is blocked by its own epic #%d", si.Number, epicNumber),
+					BlockerRepo:    blockerRepo,
+					Detail: fmt.Sprintf("sub-issue %s is blocked by its own epic %s",
+						ref(subRepo, si.Number), ref(epicRepo, epicNumber)),
 				})
 			} else if strings.EqualFold(blocker.State, "CLOSED") {
 				result.Valid = false
 				result.Gaps = append(result.Gaps, EpicValidationGap{
 					SubIssueNumber: si.Number,
+					SubIssueRepo:   subRepo,
 					SubIssueTitle:  si.Title,
 					GapType:        "stale_blocker",
 					BlockerNumber:  blocker.Number,
-					Detail:         fmt.Sprintf("sub-issue #%d blocked by closed issue #%d", si.Number, blocker.Number),
+					BlockerRepo:    blockerRepo,
+					Detail: fmt.Sprintf("sub-issue %s blocked by closed issue %s",
+						ref(subRepo, si.Number), ref(blockerRepo, blocker.Number)),
 				})
 			}
 		}

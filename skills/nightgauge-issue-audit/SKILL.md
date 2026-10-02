@@ -432,6 +432,9 @@ if [ "$MODE" = "epic" ] && [ -n "$EPIC_NUMBER" ]; then
   printf '%s\n' "$GAPS" | jq -c '.[]' | while read -r gap; do
     GAP_TYPE=$(printf '%s\n' "$gap" | jq -r '.gapType')
     SUB=$(printf '%s\n' "$gap" | jq -r '.subIssueNumber')
+    SUB_REPO=$(printf '%s\n' "$gap" | jq -r '.subIssueRepo')
+    BLOCKER=$(printf '%s\n' "$gap" | jq -r '.blockerNumber')
+    BLOCKER_REPO=$(printf '%s\n' "$gap" | jq -r '.blockerRepo')
     DETAIL=$(printf '%s\n' "$gap" | jq -r '.detail')
     case "$GAP_TYPE" in
       circular_blocker) /* emit CIRCULAR_BLOCKER (CRITICAL) */ ;;
@@ -440,6 +443,11 @@ if [ "$MODE" = "epic" ] && [ -n "$EPIC_NUMBER" ]; then
   done
 fi
 ```
+
+Issue numbers are per repository and an epic's sub-issues can live in several.
+Each gap names the sub-issue's repository (`subIssueRepo`) and the blocker's
+(`blockerRepo`); record the finding against `$SUB_REPO#$SUB` and carry both
+repositories into the repair (Phase 11).
 
 For body-declared dependencies (`Depends on:` lines and the
 `<!-- nightgauge:dependency-metadata -->` YAML block), parse and verify
@@ -553,6 +561,15 @@ echo '{"ts":"'$(date -u +%Y-%m-%dT%H:%M:%SZ)'","issue":"'$ISSUE'","finding":"'$T
 | `STALE_BLOCKED_BY_NOT_PLANNED`  | `nightgauge issue remove-blocked-by` (only in `--fix-interactive` after `yes`)  |
 | `CIRCULAR_BLOCKER`              | `nightgauge issue remove-blocked-by <sub> <epic>` (auto in `--fix`)             |
 | `MISSING_PARENT_BACKREF`        | `nightgauge issue edit <epic> --append-body "<cross-repo link line>"`           |
+
+`remove-blocked-by` resolves both numbers in its one `--repo`. Repair a
+`CIRCULAR_BLOCKER` or `STALE_BLOCKED_BY` gap from `epic validate` only when its
+`subIssueRepo` and `blockerRepo` are the same repository, and pass that
+repository as `--repo`. When they differ (a sub-issue in another repository
+than its epic, or a blocker elsewhere), do not auto-fix: report the finding
+with `(no auto-fix available: cross-repository relationship)` for a human to
+remove. By number in one repository, the repair would act on a different
+issue's relationship.
 
 `MISSING_TYPE_LABEL`, `MULTIPLE_TYPE_LABELS`, `MISSING_REQUIRED_HEADING`,
 `EMPTY_REQUIRED_HEADING`, `MISSING_SPIKE_RECS_BLOCK`, `OVERSIZED_SCOPE`,
