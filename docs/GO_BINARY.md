@@ -455,8 +455,35 @@ undoes a newer change; a read that fails changes nothing.
   refused `invalid-payload`. A window with no platform session leaves the
   command to the windows that have one.
 
-The daemon does not apply the throttle, and neither does the Go scheduler when
-it dispatches without the extension (#2352).
+The Go side follows the same throttle for the work it starts itself (#2352):
+
+- The daemon follows the throttle of the workspace it serves, read by the
+  workspace's slug from the same workspace list, while it has a signed-in
+  session (the extension hands it the session). It reads it after every
+  agent registration, on every `throttle` command its agent receives (which
+  it still relays to the extension, whose window acknowledges it), each time
+  its command stream opens, and whenever the session is installed or
+  cleared. Reads run one at a time, a read asked for during another runs
+  again after it, and a read that fails changes nothing. Neither the
+  command's payload nor the registration response's agent-wide `throttle` is
+  applied, so a throttle on another workspace never applies. Without a
+  session nothing is followed and the cap is lifted, as in the extension.
+- The autonomous scheduler holds the runs it dispatches without the extension
+  (the Go queue, or the cloud dispatcher) below the lower of its configured
+  concurrency (`pipeline.max_concurrent`) and the throttle's cap, and the auto-scheduler
+  loop (`nightgauge pipeline run --auto`) starts nothing while as many
+  pipelines run as the cap allows. Work the scheduler hands to the extension
+  is capped where the extension opens slots, never a second time. A running
+  pipeline is never stopped, and a cap below the running count starts nothing
+  until enough of them finish. A change, or the throttle reaching `resumeAt`,
+  wakes the scheduler at once.
+- A headless scheduler (`nightgauge autonomous run`, `nightgauge pipeline run
+--auto`) holds only a license key, which the workspace list refuses, so it
+  asks the daemon serving the same workspace (`platform.workspaceThrottle`
+  on the workspace socket) every 30 seconds. A daemon that cannot be reached
+  changes nothing, so a throttle already learned holds until its `resumeAt`;
+  a daemon with no signed-in session lifts it. With no daemon serving the
+  workspace, the throttle is not followed.
 
 ## CLI Command Reference
 

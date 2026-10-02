@@ -153,6 +153,7 @@ var contractTestedMethods = map[string]bool{
 	"platform.auditListReports":    true,
 	"platform.auditDownloadReport": true,
 	"platform.auditGetReport":      true,
+	"platform.workspaceThrottle":   true,
 	"audit.getRetentionConfig":     true,
 	"audit.updateRetentionConfig":  true,
 	"audit.verifyIntegrity":        true,

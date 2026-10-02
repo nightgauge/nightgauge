@@ -138,6 +138,14 @@ type Server struct {
 	refusedWorkspaceWritesMu sync.RWMutex
 	refusedWorkspaceWrites   []platform.RefusedWorkspaceWrite
 
+	// dispatchThrottle is the platform workspace throttle the daemon follows
+	// (#2352), reported by platform.workspaceThrottle; sessionTokenListeners
+	// learn that platform.setSessionToken installed or cleared a session.
+	// Both are guarded by throttleMu.
+	throttleMu            sync.RWMutex
+	dispatchThrottle      *orchestrator.DispatchThrottle
+	sessionTokenListeners []func()
+
 	// workspaceRoot is the CURRENT root, and it is MUTABLE: workspace.setRoot
 	// re-points it on a multi-repo workspace switch, from a handler goroutine,
 	// while the deferred reconcile sweep reads it from a timer goroutine (ADR-017
@@ -485,6 +493,23 @@ func (s *Server) getPlatformClient() *platform.Client {
 	s.platformClientMu.RLock()
 	defer s.platformClientMu.RUnlock()
 	return s.platformClient
+}
+
+// SetDispatchThrottle sets the workspace throttle the daemon follows (#2352),
+// which platform.workspaceThrottle reports.
+func (s *Server) SetDispatchThrottle(d *orchestrator.DispatchThrottle) {
+	s.throttleMu.Lock()
+	defer s.throttleMu.Unlock()
+	s.dispatchThrottle = d
+}
+
+// OnSessionToken registers a listener called, on its own goroutine, after
+// platform.setSessionToken installs or clears the signed-in session: the
+// daemon then reads its workspace throttle again (#2352).
+func (s *Server) OnSessionToken(fn func()) {
+	s.throttleMu.Lock()
+	defer s.throttleMu.Unlock()
+	s.sessionTokenListeners = append(s.sessionTokenListeners, fn)
 }
 
 // SetRefusedWorkspaceWrites records the workspace writes the platform refused
@@ -2410,7 +2435,29 @@ func (s *Server) registerMethods() {
 			}
 		}
 		pc.SetSessionToken(p.Token)
+		s.throttleMu.RLock()
+		listeners := append([]func(){}, s.sessionTokenListeners...)
+		s.throttleMu.RUnlock()
+		for _, fn := range listeners {
+			go fn()
+		}
 		return map[string]bool{"ok": true}, nil
+	}
+
+	// platform.workspaceThrottle reports the workspace throttle this daemon
+	// follows (#2352). A headless scheduler with only a license key cannot
+	// read the platform's workspace list, so it asks the workspace's daemon
+	// over the socket.
+	//ipc:method platformWorkspaceThrottle params:none result:PlatformWorkspaceThrottleResult skip
+	s.methods["platform.workspaceThrottle"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
+		s.throttleMu.RLock()
+		d := s.dispatchThrottle
+		s.throttleMu.RUnlock()
+		if d == nil {
+			return PlatformWorkspaceThrottleResult{}, nil
+		}
+		throttle, known := d.Snapshot()
+		return PlatformWorkspaceThrottleResult{Known: known, Throttle: throttle}, nil
 	}
 
 	// --- Auth methods ---

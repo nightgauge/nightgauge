@@ -520,6 +520,16 @@ type QueueValidatePinResult struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// PlatformWorkspaceThrottleResult is the platform workspace throttle this
+// daemon follows (#2352), for a process that cannot read it itself: a headless
+// scheduler holding only a license key asks the workspace's daemon over the
+// socket. Known is false while the daemon follows no throttle (it has no
+// signed-in session); Throttle is the throttle in force, or null for none.
+type PlatformWorkspaceThrottleResult struct {
+	Known    bool                        `json:"known"`
+	Throttle *platform.WorkspaceThrottle `json:"throttle"`
+}
+
 // QueueRemoveParams are parameters for queue.remove.
 type QueueRemoveParams struct {
 	IssueNumber int `json:"issueNumber"`

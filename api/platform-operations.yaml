@@ -206,3 +206,12 @@ operations:
     path: /v1/telemetry/pipeline-run
     security: pipeline
     upstream: declared
+
+  # The workspace list carries each workspace's concurrency throttle. The
+  # daemon reads its own workspace's by slug (#2352), as the extension does.
+  - id: workspaces.list
+    go_name: OpWorkspacesList
+    method: GET
+    path: /v1/workspaces
+    security: user_jwt
+    upstream: declared

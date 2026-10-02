@@ -16,6 +16,22 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The daemon and the headless schedulers follow the platform's workspace
+  throttle** (#2352). Only the extension applied it (#2337), so work the Go
+  side started itself ran at its configured concurrency while the platform
+  held the workspace throttled. The daemon now reads its own workspace's
+  throttle by slug from the platform's workspace list while it has a
+  signed-in session: after every agent registration, on every `throttle`
+  command (still relayed to the extension), each time its command stream
+  opens, and when the session changes; never the command's payload or the
+  registration's agent-wide value. The autonomous scheduler holds the runs it
+  dispatches without the extension, and `nightgauge pipeline run --auto` its
+  loop, to the lower of the configured concurrency and the cap, until the
+  throttle is cleared or reaches `resumeAt`; a running pipeline is never
+  stopped, and work handed to the extension is not capped twice. A headless
+  `nightgauge autonomous run` or `pipeline run --auto`, which holds only a
+  license key, follows the throttle through the workspace's daemon
+  (`platform.workspaceThrottle` on the socket).
 - **The daemon says which workspace writes its registration was refused**
   (#2372). The platform's `POST /v1/agents/register` reply lists
   `refused_workspace_writes`: the workspace writes skipped because the

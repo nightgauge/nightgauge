@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,6 +19,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/agentworkspace"
 	"github.com/nightgauge/nightgauge/internal/ipc"
+	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
 )
 
@@ -29,6 +31,8 @@ type extensionSide struct {
 	// refusals records every SetRefusedWorkspaceWrites call, one per
 	// registration (#2372).
 	refusals [][]platform.RefusedWorkspaceWrite
+	// sessionListeners are the daemon's session listeners (#2352).
+	sessionListeners []func()
 }
 
 func (e *extensionSide) SetRefusedWorkspaceWrites(refused []platform.RefusedWorkspaceWrite) {
@@ -41,6 +45,23 @@ func (e *extensionSide) recordedRefusals() [][]platform.RefusedWorkspaceWrite {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return append([][]platform.RefusedWorkspaceWrite(nil), e.refusals...)
+}
+
+// OnSessionToken records the daemon's session listener (#2352); a test calls
+// sessionChanged to play the extension pushing a session.
+func (e *extensionSide) OnSessionToken(fn func()) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.sessionListeners = append(e.sessionListeners, fn)
+}
+
+func (e *extensionSide) sessionChanged() {
+	e.mu.Lock()
+	listeners := append([]func(){}, e.sessionListeners...)
+	e.mu.Unlock()
+	for _, fn := range listeners {
+		fn()
+	}
 }
 
 func (e *extensionSide) ApplyRelayedResolve(context.Context, string, string, string, string) (platform.AttentionResolveOutcome, error) {
@@ -135,7 +156,7 @@ func TestRunDaemonPlatformAgent_DeclaresTheWindowsWorkspaceAndRelays(t *testing.
 		defer close(done)
 		// Exactly as serve calls it.
 		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test",
-			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv))
+			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), nil)
 	}()
 	defer func() {
 		cancel()
@@ -210,7 +231,7 @@ func TestRunDaemonPlatformAgent_ReportsRefusedWorkspaceWrites(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test", t.TempDir(), nil)
+		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test", t.TempDir(), nil, nil)
 	}()
 	defer func() {
 		cancel()
@@ -227,5 +248,183 @@ func TestRunDaemonPlatformAgent_ReportsRefusedWorkspaceWrites(t *testing.T) {
 	})
 	if n := strings.Count(logs.String(), "the platform did not write"); n != 1 {
 		t.Errorf("logged the refusal %d times, want once per registration", n)
+	}
+}
+
+// The daemon follows the platform throttle of the workspace it serves (#2352),
+// by its slug and only with a signed-in session: it reads it after it
+// registers and again on a `throttle` command, which it still relays. A
+// throttle on another workspace never applies.
+func TestRunDaemonPlatformAgent_FollowsItsWorkspaceThrottle(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_AGENT_ID", "test-machine-uuid")
+	ws := t.TempDir()
+	writeTestFile(t, filepath.Join(ws, ".vscode", "nightgauge-workspace.yaml"),
+		"workspace:\n  name: Acme Platform\nrepositories:\n  - name: api\n    path: api\n")
+	writeTestFile(t, filepath.Join(ws, "api", ".nightgauge", "config.yaml"), "github:\n  owner: acme\n  repo: api\n")
+	windowJSON, _ := json.Marshal([]string{ws, filepath.Join(ws, "api")})
+	t.Setenv(agentworkspace.WindowFoldersEnv, string(windowJSON))
+
+	const throttleFrame = `{"commandId":"cmd-throttle-1","type":"throttle","commandType":"throttle","payload":{"action":"set","maxConcurrent":0,"resumeAt":null},"createdAt":"2026-10-02T00:00:00.000Z"}`
+	var mu sync.Mutex
+	workspaceCap := 2
+	sendThrottle := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/register":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"agentId":"agent-daemon","ttl_seconds":90,"throttle":{"maxConcurrent":0,"resumeAt":null}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/workspaces":
+			if got := r.Header.Get("Authorization"); got != "Bearer header.payload.signature" {
+				t.Errorf("workspace list read with %q, want the session", got)
+			}
+			mu.Lock()
+			body := fmt.Sprintf(`{"workspaces":[{"slug":"other","throttle":{"maxConcurrent":0,"resumeAt":null}},{"slug":"acme-platform","throttle":{"maxConcurrent":%d,"resumeAt":null}}]}`, workspaceCap)
+			mu.Unlock()
+			_, _ = w.Write([]byte(body))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/agents/agent-daemon/commands":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			select {
+			case <-sendThrottle:
+				_, _ = fmt.Fprintf(w, "event: command\ndata: %s\n\n", throttleFrame)
+				if f, ok := w.(http.Flusher); ok {
+					f.Flush()
+				}
+			case <-r.Context().Done():
+				return
+			}
+			<-r.Context().Done()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client, err := platform.NewClient(platform.Config{BaseURL: srv.URL, APIKey: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.SetSessionToken("header.payload.signature")
+	throttle := orchestrator.NewDispatchThrottle()
+	ext := &extensionSide{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test",
+			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), throttle)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	// Registered: its own workspace's cap, 2, not the agent-wide 0 the
+	// registration reply carries, nor the other workspace's 0.
+	waitUntil(t, "the throttle read after registration", func() bool { return throttle.Ceiling(5) == 2 })
+
+	// A throttle command makes the daemon read again; it is still relayed.
+	mu.Lock()
+	workspaceCap = 1
+	mu.Unlock()
+	close(sendThrottle)
+	waitUntil(t, "the throttle read on a throttle command", func() bool { return throttle.Ceiling(5) == 1 })
+	waitUntil(t, "the throttle command relayed", func() bool {
+		for _, e := range ext.relayed() {
+			if relayed, ok := e.Data.(ipc.AgentCommandEvent); ok && strings.Contains(string(relayed.Frame), "cmd-throttle-1") {
+				return true
+			}
+		}
+		return false
+	})
+
+	// Without a session the throttle cannot be followed, and is lifted.
+	client.SetSessionToken("")
+	ext.sessionChanged()
+	waitUntil(t, "the throttle lifted without a session", func() bool {
+		_, known := throttle.Snapshot()
+		return !known && throttle.Ceiling(5) == 5
+	})
+}
+
+// A headless scheduler follows the throttle the workspace's daemon follows:
+// a daemon that cannot be reached changes nothing, one that follows none
+// lifts it (#2352).
+func TestFollowDaemonWorkspaceThrottle(t *testing.T) {
+	type answer struct {
+		result ipc.PlatformWorkspaceThrottleResult
+		err    error
+	}
+	answers := make(chan answer)
+	throttle := orchestrator.NewDispatchThrottle()
+	changes := make(chan struct{}, 8)
+	throttle.OnChange(func() { changes <- struct{}{} })
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		followDaemonWorkspaceThrottle(ctx, throttle, time.Millisecond,
+			func(context.Context) (ipc.PlatformWorkspaceThrottleResult, error) {
+				a := <-answers
+				return a.result, a.err
+			})
+	}()
+	defer func() {
+		cancel()
+		close(answers)
+		<-done
+	}()
+	ask := func(a answer) {
+		t.Helper()
+		select {
+		case answers <- a:
+		case <-time.After(5 * time.Second):
+			t.Fatal("the follower stopped asking the daemon")
+		}
+	}
+
+	ask(answer{result: ipc.PlatformWorkspaceThrottleResult{Known: true, Throttle: &platform.WorkspaceThrottle{MaxConcurrent: 1}}})
+	<-changes
+	if got := throttle.Ceiling(3); got != 1 {
+		t.Fatalf("the daemon's throttle: ceiling = %d, want 1", got)
+	}
+	ask(answer{err: errors.New("dial unix: no such file")})
+	ask(answer{err: errors.New("dial unix: no such file")}) // the previous answer has been handled
+	if got := throttle.Ceiling(3); got != 1 {
+		t.Fatalf("daemon unreachable: ceiling = %d, want the last throttle, 1", got)
+	}
+	ask(answer{result: ipc.PlatformWorkspaceThrottleResult{Known: false}})
+	<-changes
+	if got := throttle.Ceiling(3); got != 3 {
+		t.Fatalf("daemon without a session: ceiling = %d, want 3", got)
+	}
+}
+
+// A throttle command makes the daemon read its throttle again, and is
+// relayed to the extension unchanged; other commands are only relayed.
+func TestRefreshThrottleOnCommand(t *testing.T) {
+	var relayed []string
+	refreshed := make(chan struct{}, 2)
+	relay := refreshThrottleOnCommand(func(_ string, cmd platform.PendingCommand) {
+		relayed = append(relayed, cmd.Type)
+	}, func() { refreshed <- struct{}{} })
+
+	relay("agent-1", platform.PendingCommand{ID: "c1", Type: "pause"})
+	relay("agent-1", platform.PendingCommand{ID: "c2", Type: "throttle"})
+	if !reflect.DeepEqual(relayed, []string{"pause", "throttle"}) {
+		t.Fatalf("relayed = %v, want both commands", relayed)
+	}
+	select {
+	case <-refreshed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a throttle command did not refresh the throttle")
+	}
+	select {
+	case <-refreshed:
+		t.Fatal("a pause refreshed the throttle")
+	case <-time.After(20 * time.Millisecond):
 	}
 }

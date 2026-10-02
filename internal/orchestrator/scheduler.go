@@ -886,6 +886,10 @@ type Scheduler struct {
 	mu                       sync.Mutex
 	scalingConfig            *ScalingConfig // Dynamic agent scaling (nil = use defaults)
 
+	// dispatchThrottle is the platform's workspace throttle RunAuto holds
+	// new dispatch to (#2352); nil caps nothing. Guarded by mu.
+	dispatchThrottle *DispatchThrottle
+
 	// Budget-aware retry tracking (Issue #2338 — max 1 budget retry per stage per run)
 	budgetRetries map[string]int
 
@@ -2284,9 +2288,35 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 	return &candidates[0], nil
 }
 
+// SetDispatchThrottle holds the auto-scheduler loop (RunAuto) to the
+// platform's workspace throttle (#2352): while it is in force, no new
+// pipeline starts while as many run as its cap allows. Running pipelines are
+// never stopped. Nil caps nothing.
+func (s *Scheduler) SetDispatchThrottle(d *DispatchThrottle) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dispatchThrottle = d
+}
+
+// throttleHoldsDispatch reports whether the workspace throttle allows no
+// further pipeline now: as many run as its cap.
+func (s *Scheduler) throttleHoldsDispatch() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dispatchThrottle == nil {
+		return false
+	}
+	running := 0
+	for _, n := range s.repoRunning {
+		running += n
+	}
+	return running >= s.dispatchThrottle.Ceiling(running+1)
+}
+
 // RunAuto continuously polls the board and dispatches pipelines.
 // A backstop sweep ticker fires every sweepMultiplier * pollInterval to close
 // any epics whose sub-issues are all done but which the on-merge trigger missed.
+// While the workspace throttle holds dispatch (#2352), a poll starts nothing.
 func (s *Scheduler) RunAuto(ctx context.Context, pollInterval time.Duration) error {
 	log.Printf("Starting auto-scheduler (poll every %s)", pollInterval)
 
@@ -2303,8 +2333,9 @@ func (s *Scheduler) RunAuto(ctx context.Context, pollInterval time.Duration) err
 		default:
 		}
 
-		item, err := s.PickNext(ctx)
-		if err != nil {
+		if s.throttleHoldsDispatch() {
+			log.Printf("auto-scheduler: the workspace throttle holds dispatch; waiting")
+		} else if item, err := s.PickNext(ctx); err != nil {
 			log.Printf("scheduler error: %v", err)
 		} else if item != nil {
 			log.Printf("dispatching #%d: %s (%s)", item.Number, item.Title, item.Repo)

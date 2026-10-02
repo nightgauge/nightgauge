@@ -95,10 +95,11 @@ type AgentCommandAcker func(ctx context.Context, agentID, commandID string) (str
 // a card this daemon's store does not hold — so a consumed command is never
 // redelivered forever; the distinction is logged and returned in the outcome.
 type AttentionCommandConsumer struct {
-	resolver AttentionResolver
-	ack      AgentCommandAcker
-	agentID  string
-	relay    AgentCommandRelay
+	resolver    AttentionResolver
+	ack         AgentCommandAcker
+	agentID     string
+	relay       AgentCommandRelay
+	onConnected func()
 }
 
 // AgentCommandRelay hands on a command addressed to this daemon's agent that
@@ -122,6 +123,15 @@ func NewAttentionCommandConsumer(resolver AttentionResolver, ack AgentCommandAck
 // was before #2335.
 func (c *AttentionCommandConsumer) WithRelay(relay AgentCommandRelay) *AttentionCommandConsumer {
 	c.relay = relay
+	return c
+}
+
+// WithOnConnected sets a function called each time the command stream opens,
+// the first time and on every reconnect. A command published while the stream
+// was down is replayed only until someone acknowledges it, so state a command
+// announces (the workspace throttle, #2352) is read again here.
+func (c *AttentionCommandConsumer) WithOnConnected(fn func()) *AttentionCommandConsumer {
+	c.onConnected = fn
 	return c
 }
 
@@ -330,6 +340,9 @@ func streamAgentCommands(ctx context.Context, client *Client, consumer *Attentio
 	}
 	if resp.StatusCode >= 400 {
 		return false, false, fmt.Errorf("attention command stream: server returned %d", resp.StatusCode)
+	}
+	if consumer != nil && consumer.onConnected != nil {
+		go consumer.onConnected()
 	}
 
 	reader := bufio.NewReader(resp.Body)

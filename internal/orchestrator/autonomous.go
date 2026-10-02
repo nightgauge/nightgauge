@@ -1039,6 +1039,12 @@ type AutonomousScheduler struct {
 	// (e.g. IPC emit to TypeScript extension) instead of using the Go queue.
 	onDispatch func(owner, repo string, issueNumber int, title string)
 
+	// dispatchThrottle is the platform's workspace throttle (#2352). It caps
+	// the global ceiling only when the scheduler dispatches without the
+	// extension: work fed to the extension is capped where the extension
+	// opens slots (#2337), never a second time here. Nil caps nothing.
+	dispatchThrottle *DispatchThrottle
+
 	// onStatusChange is fired whenever state.Status transitions. Used by the
 	// IPC server to push an `autonomous.statusChanged` event to the VSCode
 	// extension so the status bar badge stays in sync without polling.
@@ -1820,6 +1826,44 @@ func (as *AutonomousScheduler) SetDispatcher(d Dispatcher) {
 // with as.mu released, so it may call back into the scheduler.
 func (as *AutonomousScheduler) SetBuildGraph(fn func(ctx context.Context) (*depgraph.Graph, error)) {
 	as.buildGraphFn = fn
+}
+
+// SetDispatchThrottle holds the scheduler's own dispatch to the platform's
+// workspace throttle (#2352): while the throttle is in force, and the
+// scheduler dispatches without the extension, no new run starts above the
+// lower of MaxConcurrent and the throttle's cap. A change, or the throttle
+// lifting at its resumeAt, wakes the dispatch loop without refetching the
+// board. Call before Run().
+func (as *AutonomousScheduler) SetDispatchThrottle(d *DispatchThrottle) {
+	as.dispatchThrottle = d
+	if d == nil {
+		return
+	}
+	d.OnChange(func() {
+		select {
+		case as.rescanCh <- struct{}{}:
+		default:
+			// A rescan is already pending.
+		}
+	})
+}
+
+// dispatchesWithoutExtension reports whether this scheduler starts the runs
+// it dispatches itself (the Go queue, or the cloud dispatcher) rather than
+// handing them to the extension, which applies the throttle on its own.
+func (as *AutonomousScheduler) dispatchesWithoutExtension() bool {
+	return as.dispatcher != nil || as.onDispatch == nil
+}
+
+// dispatchCeiling is the global concurrency ceiling dispatch may reach now:
+// MaxConcurrent, held to the workspace throttle when it applies (#2352).
+// Called with as.mu held.
+func (as *AutonomousScheduler) dispatchCeilingLocked() int {
+	ceiling := as.config.MaxConcurrent
+	if as.dispatchThrottle != nil && as.dispatchesWithoutExtension() {
+		ceiling = as.dispatchThrottle.Ceiling(ceiling)
+	}
+	return ceiling
 }
 
 // OnDispatch sets a callback for dispatching issues to the pipeline.
@@ -3559,8 +3603,8 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	availableSlots := as.effectiveAvailableSlots()
 	if availableSlots <= 0 {
 		as.mu.Lock()
-		log.Printf("autonomous: no effective slots available (MaxConcurrent=%d, running=%d), skipping graph build",
-			as.config.MaxConcurrent, len(as.state.Running))
+		log.Printf("autonomous: no effective slots available (MaxConcurrent=%d, ceiling=%d, running=%d), skipping graph build",
+			as.config.MaxConcurrent, as.dispatchCeilingLocked(), len(as.state.Running))
 		as.mu.Unlock()
 		as.persistState()
 		if as.onCycleComplete != nil {
@@ -6898,8 +6942,9 @@ func (as *AutonomousScheduler) hasDispatchHeadroom() (bool, string) {
 }
 
 // effectiveAvailableSlots returns how many additional pipelines can be
-// dispatched right now, considering both the global MaxConcurrent ceiling and
-// any per-repo caps. Returns 0 when all effective capacity is consumed.
+// dispatched right now, considering both the global MaxConcurrent ceiling
+// (held to the workspace throttle when it applies, #2352) and any per-repo
+// caps. Returns 0 when all effective capacity is consumed.
 //
 // When every active repo has an explicit cap, the per-repo sum is the binding
 // limit (e.g. MaxConcurrent=3 but only one repo with cap=1 means at most 1
@@ -6909,7 +6954,7 @@ func (as *AutonomousScheduler) hasDispatchHeadroom() (bool, string) {
 // Must be called without as.mu held.
 func (as *AutonomousScheduler) effectiveAvailableSlots() int {
 	as.mu.Lock()
-	globalAvail := as.config.MaxConcurrent - len(as.state.Running)
+	globalAvail := as.dispatchCeilingLocked() - len(as.state.Running)
 	repos := as.repos
 	as.mu.Unlock()
 
