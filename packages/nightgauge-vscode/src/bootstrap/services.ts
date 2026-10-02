@@ -4257,8 +4257,8 @@ export async function initializeServices(
     // One dispatcher consumes every command the platform delivers, and every
     // handler acknowledges what it consumes exactly once (#2334): the trigger
     // handler, the run-verb handler (cancel, approve, reject, pause, resume)
-    // and the workspace throttle handler (#2337). AgentCommandStreamService.start() passes it the agentId before
-    // the first command arrives.
+    // and the workspace throttle handler (#2337). AgentCommandStreamService
+    // .start() passes it the agentId before the first command arrives.
     // A pause or resume from the platform shows in this window as the local
     // Pause/Resume Pipeline commands show it (#2334).
     const pipelineManager = concurrentPipelineManager;

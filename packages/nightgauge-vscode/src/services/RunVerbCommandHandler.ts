@@ -97,13 +97,14 @@ const NO_OP_DETAIL: Record<Exclude<RemoteVerbResult, "applied" | AlreadyResolved
   "no-run-state": "no-run-state: the run has no local state to pause yet",
 };
 
-function isAlreadyResolved(result: RemoteVerbResult): result is AlreadyResolvedResult {
-  return result in ALREADY_RESOLVED_DETAIL;
-}
 const INVALID_PAYLOAD_DETAIL = "invalid-payload: runId is required";
 const NO_APPROVAL_GATE_DETAIL =
   "no-approval-gate: runs on this agent never wait at an approval gate";
 const APPLY_FAILED_DETAIL = "apply-failed: the agent could not carry out the command";
+
+function isAlreadyResolved(result: RemoteVerbResult): result is AlreadyResolvedResult {
+  return result in ALREADY_RESOLVED_DETAIL;
+}
 
 export type RunVerbTarget = Pick<
   ConcurrentPipelineManager,
