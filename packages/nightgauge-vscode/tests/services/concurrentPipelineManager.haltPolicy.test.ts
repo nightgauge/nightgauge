@@ -111,6 +111,28 @@ const SKIP_CASES: { text: string; kind: string; branch: string }[] = [
     kind: "stall_kill",
     branch: "transient stall (widened: bare `hard cap`, main required `exceeded stage_hard_cap`)",
   },
+  // #1753 — the three parked kinds (#1631). Go holds the issue for an
+  // operator and does not pause the fleet; the extension must not halt the
+  // rest of the repository's queue over one parked issue.
+  {
+    text:
+      "AI_APICallError: This model's maximum context length is 32768 tokens. " +
+      "However, your messages resulted in 40000 tokens.",
+    kind: "context_window_exceeded",
+    branch: "parked",
+  },
+  {
+    text: "exit 1: [adapter-permission-rejected] tool=read",
+    kind: "adapter_permission_rejected",
+    branch: "parked",
+  },
+  {
+    text:
+      'dispatch refused for adapter "opencode": adapter_incompatible: opencode 1.2.0 is ' +
+      "below the floor 1.18.0. Install opencode at or above 1.18.0.",
+    kind: "adapter_incompatible",
+    branch: "parked",
+  },
 ];
 
 /** Failures that MUST reach the halt — the bugs the halt exists to surface. */
@@ -169,6 +191,21 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
     expect(source).toContain("const haltKind = classifyTerminalKind(haltErrMsg);");
   });
 
+  it("exempts the three parked kinds from the halt, as not_pipeline_actionable is (#1753)", () => {
+    // A park holds ONE issue for an operator; Go schedules no retry and does
+    // not pause the fleet (docs/FAILURE_TAXONOMY.md, "The parked kinds."). The
+    // extension used to halt the whole repository queue on it.
+    const parked = setLiteral(source, "HALT_SKIP_PARKED");
+    expect(parked).toEqual(
+      ["adapter_incompatible", "adapter_permission_rejected", "context_window_exceeded"].sort()
+    );
+    for (const c of SKIP_CASES.filter((c) => c.branch === "parked")) {
+      expect(parked, c.text).toContain(classifyTerminalKind(c.text));
+    }
+    const body = methodBody(source, "private async haltQueueOnSlotFailure(");
+    expect(body).toMatch(/HALT_SKIP_PARKED\.has\(haltKind\)/);
+  });
+
   it("keeps exactly one deliberate raw-text condition, in any form, and says why", () => {
     // A bare Anthropic "session/usage limit" with no model named is a shape the
     // RECORD does not classify — Go returns "" for it — so the halt branch
@@ -214,6 +251,17 @@ describe("queue-halt policy (ConcurrentPipelineManager)", () => {
     );
   });
 });
+
+/** The sorted string members of a `const NAME ... = new Set([...])` literal, comments stripped. */
+function setLiteral(src: string, name: string): string[] {
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+  const at = code.indexOf(`const ${name}`);
+  expect(at, `${name} is gone from ConcurrentPipelineManager`).toBeGreaterThan(0);
+  const open = code.indexOf("new Set([", at);
+  const close = code.indexOf("]", open);
+  expect(close, `${name} literal did not parse`).toBeGreaterThan(open);
+  return [...code.slice(open, close).matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]).sort();
+}
 
 /** The brace-balanced body of a method, comments stripped. */
 function methodBody(src: string, decl: string): string {

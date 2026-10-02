@@ -313,19 +313,20 @@ Error message: `codex CLI is not authenticated. Run 'codex login' to authenticat
   | allowed-tools                                                                | Codex flags                                                |
   | ---------------------------------------------------------------------------- | ---------------------------------------------------------- |
   | absent/empty, or any of `Bash`/`Task`/`WebFetch`/`WebSearch`/`mcp__*`        | `--dangerously-bypass-approvals-and-sandbox` (full access) |
-  | `Write`/`Edit`/`MultiEdit`/`NotebookEdit` (no shell/network)                 | `--sandbox workspace-write --ask-for-approval never`       |
-  | read-only set (`Read`/`Grep`/`Glob`/…)                                       | `--sandbox read-only --ask-for-approval never`             |
-  | `--ask-for-approval never` is always kept (autonomous). `exec resume` cannot |
+  | `Write`/`Edit`/`MultiEdit`/`NotebookEdit` (no shell/network)                 | `--ask-for-approval never exec --sandbox workspace-write`  |
+  | read-only set (`Read`/`Grep`/`Glob`/…)                                       | `--ask-for-approval never exec --sandbox read-only`        |
+  | `--ask-for-approval never` is always kept (autonomous). It is a top-level    |
+  | codex option, so it goes before `exec` (#1715). `exec resume` cannot         |
   | sandbox (the flag is unsupported there), so resumed stages stay full access. |
 - **Model routing:** `NIGHTGAUGE_CODEX_MODEL` env var → `--model <value>`
 
 **Go adapter (`nightgauge run --adapter codex`, #4019):**
 
-- Go adapter: `codex exec <sandbox flags> --json [--model <id>]`, prompt piped via
+- Go adapter: `codex [--ask-for-approval never] exec <sandbox flags> --json [--model <id>]`, prompt piped via
   stdin (`-`) — matches the TypeScript adapter's modern `exec` contract. The
   `<sandbox flags>` are scoped from `RunOptions.AllowedTools` via the same mapping
   as the SDK (#4026): `--dangerously-bypass-approvals-and-sandbox` by default,
-  tightening to `--sandbox <mode> --ask-for-approval never` for read-only / edit-only stages.
+  tightening to `--ask-for-approval never exec --sandbox <mode>` for read-only / edit-only stages.
 - `--json` output is parsed by `ParseCodexStreamLine` for token/event tracking
 - Session resume and ephemeral stages remain TypeScript-only (the Go path is the local CLI runner)
 

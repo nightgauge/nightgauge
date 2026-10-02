@@ -102,6 +102,17 @@ help_subcommand() {
   esac
 }
 
+# help_top_level <adapter>: "yes" when the adapter's argv also puts flags
+# BEFORE its subcommand, so the binary's own top-level --help is captured as
+# well, as <adapter>-<version>.txt. codex's --ask-for-approval is a top-level
+# option (#1715). Keep in step with helpLeadingFlags in flag_contract_test.go.
+help_top_level() {
+  case "$1" in
+    codex) echo yes ;;
+    *) echo "" ;;
+  esac
+}
+
 # expected_installer_sha256 <adapter>: the sha256 that adapter's vendor
 # installer script must match before this script runs it, so a compromised
 # or silently changed installer refuses rather than being executed blind and
@@ -390,6 +401,40 @@ refuse_foreign_ipv4() {
   [ -z "$others" ] || die "$2 names an IPv4 address other than 127.0.0.1; nothing was written"
 }
 
+# capture_help <adapter> <binary> <bin> <version> <sub> <source_note>: run
+# `<bin> [<sub>] --help` and stage it as <adapter>[-<sub>]-<version>.txt.
+capture_help() {
+  local adapter="$1" binary="$2" bin="$3" version="$4" sub="$5" source_note="$6"
+  local command_text raw rc stem name body
+  # stdout and stderr together: opencode 1.18.30 prints `run --help` on
+  # stderr, and a CLI's warning on either stream belongs in the reviewed diff.
+  command_text="$binary${sub:+ $sub} --help"
+  stem="$adapter${sub:+-$sub}"
+  raw="$PREFIX/$stem.out"
+  rc=0
+  if [ -n "$sub" ]; then
+    in_clean_env "$HELP_TIMEOUT" "$bin" "$sub" --help >"$raw" 2>&1 || rc=$?
+  else
+    in_clean_env "$HELP_TIMEOUT" "$bin" --help >"$raw" 2>&1 || rc=$?
+  fi
+  if [ "$rc" -ne 0 ]; then
+    redact <"$raw" 2>/dev/null | tail -n 20 | sed 's/^/    /' >&2
+    die "$adapter: \`$command_text\` exited $rc; nothing was written"
+  fi
+  [ -s "$raw" ] || die "$adapter: \`$command_text\` printed nothing; nothing was written"
+
+  name="$stem-$version.txt"
+  body="$PREFIX/$stem.body"
+  redact <"$raw" >"$body"
+  refuse_foreign_ipv4 "$body" "the $adapter capture"
+  {
+    printf '# adapter=%s version=%s command=%s\n' "$adapter" "$version" "$command_text"
+    cat "$body"
+  } >"$STAGE/$name"
+  CAPTURED+=("$stem|$name")
+  SUMMARY+=("$adapter | $name | exit $rc | sha256 $(sha256 "$STAGE/$name") | $source_note")
+}
+
 SUMMARY=()
 CAPTURED=()
 for adapter in "${ADAPTERS[@]}"; do
@@ -454,33 +499,10 @@ for adapter in "${ADAPTERS[@]}"; do
   fi
   [ -x "$bin" ] || die "$adapter: the install produced no executable $binary"
 
-  # stdout and stderr together: opencode 1.18.30 prints `run --help` on
-  # stderr, and a CLI's warning on either stream belongs in the reviewed diff.
-  command_text="$binary${sub:+ $sub} --help"
-  raw="$PREFIX/$adapter.out"
-  rc=0
-  if [ -n "$sub" ]; then
-    in_clean_env "$HELP_TIMEOUT" "$bin" "$sub" --help >"$raw" 2>&1 || rc=$?
-  else
-    in_clean_env "$HELP_TIMEOUT" "$bin" --help >"$raw" 2>&1 || rc=$?
+  capture_help "$adapter" "$binary" "$bin" "$version" "$sub" "$source_note"
+  if [ -n "$sub" ] && [ -n "$(help_top_level "$adapter")" ]; then
+    capture_help "$adapter" "$binary" "$bin" "$version" "" "$source_note"
   fi
-  if [ "$rc" -ne 0 ]; then
-    redact <"$raw" 2>/dev/null | tail -n 20 | sed 's/^/    /' >&2
-    die "$adapter: \`$command_text\` exited $rc; nothing was written"
-  fi
-  [ -s "$raw" ] || die "$adapter: \`$command_text\` printed nothing; nothing was written"
-
-  stem="$adapter${sub:+-$sub}"
-  name="$stem-$version.txt"
-  body="$PREFIX/$adapter.body"
-  redact <"$raw" >"$body"
-  refuse_foreign_ipv4 "$body" "the $adapter capture"
-  {
-    printf '# adapter=%s version=%s command=%s\n' "$adapter" "$version" "$command_text"
-    cat "$body"
-  } >"$STAGE/$name"
-  CAPTURED+=("$stem|$name")
-  SUMMARY+=("$adapter | $name | exit $rc | sha256 $(sha256 "$STAGE/$name") | $source_note")
 done
 
 # Every requested adapter passed: replace each captured adapter's previous

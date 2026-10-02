@@ -24,6 +24,14 @@ vi.mock("vscode", () => ({
   },
 }));
 
+// #2330 — the configured `opencode.model` is machine-tier config, so the real
+// reader would see this machine's ~/.nightgauge. Pin it per test instead.
+const configuredOpenCodeModel = vi.hoisted(() => ({ value: undefined as string | undefined }));
+vi.mock("../../../src/utils/resolvers/modelResolver", async (importActual) => ({
+  ...(await importActual<typeof import("../../../src/utils/resolvers/modelResolver")>()),
+  getOpenCodeModel: () => configuredOpenCodeModel.value,
+}));
+
 import { AutoProviderRouter, type AutoRouterDecision } from "@nightgauge/sdk";
 
 import {
@@ -238,5 +246,55 @@ describe("resolveStageAdapter Step 2.5 (auto-router) — Issue #3230", () => {
     const decision = resolveStageAdapter("feature-dev", tmpRoot, process.env, options);
     expect(decision.adapter).toBe("opencode");
     expect(decision.source).toBe("auto-router");
+  });
+
+  describe("passes the configured opencode.model to the router (#2330)", () => {
+    afterEach(() => {
+      configuredOpenCodeModel.value = undefined;
+    });
+
+    function route(available: AutoRouterOptions["enumerateAvailableAdapters"]) {
+      const options: AutoRouterOptions = {
+        enumerateAvailableAdapters: available,
+        complexity: "M",
+        mode: "automatic",
+        router: new AutoProviderRouter(),
+      };
+      return resolveStageAdapter("feature-dev", tmpRoot, process.env, options);
+    }
+
+    it("hands the configured model to the router as ctx.opencode_model", () => {
+      configuredOpenCodeModel.value = "lmstudio/qwen3-coder-30b";
+      const stub = makeStubRouter(null);
+      resolveStageAdapter("feature-dev", tmpRoot, process.env, {
+        enumerateAvailableAdapters: () => ["claude-headless", "opencode"],
+        complexity: "M",
+        router: stub,
+      });
+      const ctx = (stub.selectForStage as ReturnType<typeof vi.fn>).mock.calls[0][1];
+      expect(ctx.opencode_model).toBe("lmstudio/qwen3-coder-30b");
+    });
+
+    it("keeps opencode a candidate with the configured local model as its dispatch model", () => {
+      configuredOpenCodeModel.value = "lmstudio/qwen3-coder-30b";
+      const decision = route(() => ["opencode"]);
+      expect(decision.source).toBe("auto-router");
+      expect(decision.adapter).toBe("opencode");
+      expect(decision.routerModel).toBe("lmstudio/qwen3-coder-30b");
+    });
+
+    it("resolves the routed tier against a configured hosted provider", () => {
+      configuredOpenCodeModel.value = "anthropic/claude-sonnet-5";
+      const decision = route(() => ["opencode"]);
+      expect(decision.adapter).toBe("opencode");
+      expect(decision.routerModel).toMatch(/^anthropic\/claude-/);
+    });
+
+    it("drops opencode with the reason when no model is configured", () => {
+      const decision = route(() => ["claude-headless", "opencode"]);
+      expect(decision.source).toBe("auto-router");
+      expect(decision.adapter).toBe("claude");
+      expect(decision.rationale).toContain("opencode dropped:");
+    });
   });
 });

@@ -21,6 +21,9 @@
  * 7. Delegate model pick to `AutoModelSelector`; remap to nearest adapter-
  *    supported tier when the chosen adapter does not natively support the
  *    model (e.g. Codex receiving `"opus"` is remapped to its heavy tier).
+ *    The model is resolved per candidate BEFORE scoring: a candidate with no
+ *    dispatchable model (`opencode` with no configured provider) is dropped
+ *    and named in the pick's rationale (#1725).
  *
  * ## Determinism guarantees
  *
@@ -52,7 +55,12 @@ import {
 } from "./auto-router-types.js";
 import { defaultRegistry } from "../cli/adapters/AdapterRegistry.js";
 import type { OrchestrationCapability } from "../cli/adapters/ICliAdapter.js";
-import { parseOpenCodeModel, resolveModelForAdapter } from "../eval/modelRegistry.js";
+import {
+  dispatchModelFor,
+  parseOpenCodeModel,
+  resolveModelForAdapter,
+  type DispatchModelResult,
+} from "../eval/modelRegistry.js";
 
 /**
  * Per-adapter context window in tokens, used by the context-window sub-score.
@@ -194,17 +202,28 @@ function categorizeStage(stage: string): RouterStageCategory {
 
 /**
  * Map a tier alias (`haiku`/`sonnet`/`opus`/`fable`) returned by
- * `AutoModelSelector` to a model identifier the chosen adapter actually
- * understands, via the provider-aware model registry (#56). Claude passes the
- * tier through unchanged (the `claude` CLI accepts tier aliases natively);
- * providers without a fable-equivalent resolve `fable` to their strongest
- * band model. Local adapters (openai-compatible) have no tier hierarchy — the
- * tier alias is returned unchanged and the dispatcher falls back to the
- * configured local model, exactly like the performance-mode mismatch path.
+ * `AutoModelSelector` to the model the chosen adapter dispatches, or say why
+ * it has none.
+ *
+ * Claude passes the tier through unchanged (the `claude` CLI accepts tier
+ * aliases natively). `opencode` serves many providers, so its answer comes from
+ * {@link dispatchModelFor} against the configured `ctx.opencode_model`: a
+ * hosted provider's registry model as `<provider>/<id>`, a local provider's
+ * configured model as-is, and an error when there is no provider to resolve
+ * against or no model in the band (#1725) — never a bare tier, which neither
+ * dispatch path accepts. Every other adapter resolves through the
+ * provider-aware model registry (#56); providers without a fable-equivalent
+ * resolve `fable` to their strongest band model, and adapters with no tier
+ * hierarchy get the tier back and fall back to their configured local model.
  */
-function remapTierForAdapter(adapter: RouterExecutionAdapter, tier: ModelTier): string {
-  if (adapter === "claude-sdk" || adapter === "claude-headless") return tier;
-  return resolveModelForAdapter(adapter, tier)?.id ?? tier;
+function modelForAdapter(
+  adapter: RouterExecutionAdapter,
+  tier: ModelTier,
+  ctx: AutoRouterContext
+): DispatchModelResult {
+  if (adapter === "claude-sdk" || adapter === "claude-headless") return { ok: true, model: tier };
+  if (adapter === "opencode") return dispatchModelFor(adapter, tier, ctx.opencode_model ?? "");
+  return { ok: true, model: resolveModelForAdapter(adapter, tier)?.id ?? tier };
 }
 
 /**
@@ -249,16 +268,31 @@ export class AutoProviderRouter {
     const weights = this.resolveWeights(ctx.weights, requiresWorkflow);
     const threshold = ctx.confidence_threshold ?? DEFAULT_AUTO_ROUTER_CONFIDENCE_THRESHOLD;
 
-    // Iterate in lexicographic order for deterministic tie-breaking.
-    const candidates = dedupeAndSort(ctx.available_adapters);
+    // Iterate in lexicographic order for deterministic tie-breaking. A
+    // candidate with no dispatchable model for this stage's tier is dropped
+    // before scoring, and the pick's rationale says why (#1725).
+    const tier = this.pickTier(stage, ctx);
+    const models = new Map<RouterExecutionAdapter, string>();
+    const dropped: string[] = [];
+    for (const adapter of dedupeAndSort(ctx.available_adapters)) {
+      const resolved = modelForAdapter(adapter, tier, ctx);
+      if (resolved.ok) models.set(adapter, resolved.model);
+      else dropped.push(`${adapter} dropped: ${resolved.error}`);
+    }
+    const candidates = Array.from(models.keys());
+    if (candidates.length === 0) {
+      return null;
+    }
+    const droppedNote = dropped.length > 0 ? `; ${dropped.join("; ")}` : "";
 
     if (candidates.length === 1) {
       const adapter = candidates[0];
-      const model = this.pickModelForAdapter(stage, adapter, ctx);
+      const model = models.get(adapter)!;
+      const why = dropped.length > 0 ? "only routable adapter" : "only authenticated adapter";
       return {
         adapter,
         model,
-        rationale: `adapter=${adapter} selected for stage=${stage} (only authenticated adapter); model=${model} from AutoModelSelector`,
+        rationale: `adapter=${adapter} selected for stage=${stage} (${why}); model=${model} from AutoModelSelector${droppedNote}`,
         confidence: 1.0,
         scores: { [adapter]: 1.0 } as Partial<Record<RouterExecutionAdapter, number>>,
       };
@@ -316,13 +350,13 @@ export class AutoProviderRouter {
       return null;
     }
 
-    const model = this.pickModelForAdapter(stage, top.adapter, ctx);
+    const model = models.get(top.adapter)!;
     const workflowFragment = requiresWorkflow ? `workflow=${top.workflow.toFixed(2)} ` : "";
     const rationale =
       `adapter=${top.adapter} selected for stage=${stage} ` +
       `(cost=${top.cost.toFixed(2)} capability=${top.capability.toFixed(2)} ` +
       `context=${top.context.toFixed(2)} ${workflowFragment}total=${top.total.toFixed(3)} ` +
-      `margin=${margin.toFixed(3)}); model=${model} from AutoModelSelector`;
+      `margin=${margin.toFixed(3)}); model=${model} from AutoModelSelector${droppedNote}`;
 
     const scores: Partial<Record<RouterExecutionAdapter, number>> = {};
     for (const entry of scoreEntries) {
@@ -377,11 +411,7 @@ export class AutoProviderRouter {
     };
   }
 
-  private pickModelForAdapter(
-    stage: string,
-    adapter: RouterExecutionAdapter,
-    ctx: AutoRouterContext
-  ): string {
+  private pickTier(stage: string, ctx: AutoRouterContext): ModelTier {
     const labels: string[] = [`size:${ctx.complexity}`];
     if (ctx.issue_type) labels.push(`type:${ctx.issue_type}`);
     const metadata: IssueMetadata = {
@@ -389,8 +419,7 @@ export class AutoProviderRouter {
       title: `auto-router-stage-${stage}`,
       size: ctx.complexity,
     };
-    const result = this.modelSelector.selectModel(stage, metadata);
-    return remapTierForAdapter(adapter, result.model);
+    return this.modelSelector.selectModel(stage, metadata).model;
   }
 }
 

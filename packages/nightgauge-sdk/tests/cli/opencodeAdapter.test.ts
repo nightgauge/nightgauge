@@ -460,6 +460,7 @@ describe("OpenCodeAdapter run config (#1637, #1648)", () => {
           NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK: "/home/operator/.opencode",
         },
       }),
+      runRootCleaner: noClean,
     });
     const messages = await runOnce(adapter, { cwd: tmp("oc-wt-") });
     expect(messages.some((m) => m.type === "result")).toBe(true);
@@ -667,6 +668,7 @@ describe("OpenCodeAdapter spawn (#1637)", () => {
           NIGHTGAUGE_OPENCODE_OPERATOR_INSTALL_RISK: "/home/operator/.opencode",
         },
       }),
+      runRootCleaner: noClean,
     });
     const query = await adapter.createQueryFunction({ cwd: worktree, stage: "feature-dev" });
     await drain(query({ prompt: "p" }));

@@ -312,7 +312,10 @@ reconcile does not re-admit it either. The failed entry's reason carries the
 remediation from `TerminalKindRemediation`, which ends with the release:
 `nightgauge autonomous clear-failures <owner/repo#N>`. A park does not pause
 the fleet, and `autonomous resume` acts only on a pause, so a resume leaves a
-park held while the fleet runs.
+park held while the fleet runs. The extension-driven queue agrees: its
+`HALT_SKIP_PARKED` set keeps a park from halting the rest of the repository's
+queue, and a test reads `TerminalKindParks` from the Go source so the two
+cannot drift (#1753).
 
 - `context_window_exceeded`: reload the model with a larger context, route the
   stage to a model with a larger window, or split the issue. It is not an

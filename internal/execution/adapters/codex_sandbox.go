@@ -78,13 +78,26 @@ func resolveCodexSandboxMode(allowedTools []string) string {
 	return codexSandboxReadOnly
 }
 
-// codexSandboxFlags returns the `exec`-path flags for a sandbox mode. Tighter
-// modes pin `--ask-for-approval never` so autonomous runs still never block.
+// codexSandboxFlags returns the `exec` flags for a sandbox mode: the bypass
+// flag for danger-full-access, `--sandbox <mode>` otherwise.
 func codexSandboxFlags(mode string) []string {
 	if mode == codexSandboxDangerFull {
 		return []string{codexBypassFlag}
 	}
-	return []string{"--sandbox", mode, "--ask-for-approval", "never"}
+	return []string{"--sandbox", mode}
+}
+
+// codexApprovalFlags returns the flags that go BEFORE `exec` for a sandbox
+// mode. Tighter modes pin `--ask-for-approval never` so autonomous runs still
+// never block. It is a top-level codex option, not an `exec` one: codex-cli
+// 0.145.0 refuses `codex exec --ask-for-approval never` ("unexpected
+// argument", exit 2) and accepts `codex --ask-for-approval never exec`
+// (#1715). danger-full-access needs none; its bypass flag covers approvals.
+func codexApprovalFlags(mode string) []string {
+	if mode == codexSandboxDangerFull {
+		return nil
+	}
+	return []string{"--ask-for-approval", "never"}
 }
 
 // codexCloneWritableRoot makes the clone's per-clone directory (ADR-024 § 7,

@@ -162,10 +162,12 @@ func (a *CodexAdapter) BuildCommand(opts RunOptions) (string, []string, map[stri
 	// Scope the filesystem sandbox to what the stage's allowed-tools justify
 	// (#4026). Defaults to `--dangerously-bypass-approvals-and-sandbox` (the prior
 	// behavior) when tools imply shell/network or are absent, so autonomous runs
-	// are never locked out; tightens to `--sandbox <mode> --ask-for-approval never`
-	// for read-only / file-edit-only stages.
-	args := []string{"exec"}
+	// are never locked out; tightens to
+	// `--ask-for-approval never exec --sandbox <mode>` for read-only /
+	// file-edit-only stages. The approval policy precedes `exec` because it is
+	// a top-level codex option (#1715).
 	mode := resolveCodexSandboxMode(opts.AllowedTools)
+	args := append(codexApprovalFlags(mode), "exec")
 	args = append(args, codexSandboxFlags(mode)...)
 	args = append(args, codexCloneWritableRoot(mode, opts.WorktreeDir)...)
 	args = append(args, "--json")

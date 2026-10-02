@@ -46,6 +46,25 @@ function goKindConstants(): Map<string, string> {
   return out;
 }
 
+/**
+ * The kinds Go's `TerminalKindParks` returns true for (#1631): the scheduler
+ * holds the issue for an operator, schedules no retry and does not pause. They
+ * are routed by that predicate, not by an `if terminalFailureKind ==` branch,
+ * which is why `goTerminalKindBranches` never saw them (#1753).
+ */
+function goParkedKinds(): string[] {
+  const src = readFileSync(FAILURE_HANDLER_GO, "utf-8");
+  const consts = goKindConstants();
+  const at = src.indexOf("func TerminalKindParks(");
+  expect(at, `TerminalKindParks is gone from ${FAILURE_HANDLER_GO}`).toBeGreaterThan(0);
+  const caseAt = src.indexOf("case ", at);
+  const caseLine = src.slice(caseAt, src.indexOf(":", caseAt));
+  return [...caseLine.matchAll(/\bTerminalKind\w+/g)]
+    .map((m) => consts.get(m[0]))
+    .filter((k): k is string => k !== undefined)
+    .sort();
+}
+
 interface GoBranch {
   /** Kind strings the branch condition tests for. */
   kinds: string[];
@@ -98,7 +117,11 @@ function extensionSkipKinds(): Set<string> {
     .replace(/\/\/[^\n]*/g, "");
 
   const kinds = new Set<string>();
-  for (const setName of ["HALT_SKIP_ENVIRONMENTAL", "HALT_SKIP_TRANSIENT_STALL"]) {
+  for (const setName of [
+    "HALT_SKIP_ENVIRONMENTAL",
+    "HALT_SKIP_TRANSIENT_STALL",
+    "HALT_SKIP_PARKED",
+  ]) {
     const at = src.indexOf(setName);
     expect(at, `${setName} is gone from ConcurrentPipelineManager`).toBeGreaterThan(0);
     const open = src.indexOf("new Set([", at);
@@ -161,6 +184,24 @@ describe("Go/extension halt-decision parity (#1169)", () => {
       "adapter_auth_failed is back to halting the queue while Go says no pause — this is #1169, " +
         "and before it #3835 (api_overloaded). Add it to HALT_SKIP_ENVIRONMENTAL."
     ).toBe(true);
+  });
+
+  it("does not halt the queue for a kind Go parks for an operator (#1753)", () => {
+    // A park holds one issue and pauses nothing on the Go side. Halting the
+    // extension's repository queue on it made the two paths disagree about
+    // what one parked issue does to the rest of the queue.
+    const parked = goParkedKinds();
+    expect(parked, "TerminalKindParks parsed to nothing — this guard checks nothing").toEqual([
+      "adapter_incompatible",
+      "adapter_permission_rejected",
+      "context_window_exceeded",
+    ]);
+    const skipped = extensionSkipKinds();
+    expect(
+      parked.filter((k) => !skipped.has(k)),
+      "Go parks these kinds without a pause, and the extension still halts the repository " +
+        "queue on them. Add each to HALT_SKIP_PARKED."
+    ).toEqual([]);
   });
 
   it("forces a decision on every kind Go declares no-pause, instead of letting one slip", () => {

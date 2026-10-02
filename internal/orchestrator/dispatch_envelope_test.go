@@ -218,6 +218,55 @@ func TestResolveWireEffort(t *testing.T) {
 	})
 }
 
+// TestOpus55EffortDefault pins #2120: Opus 5.5 declares a provisional
+// effort_default of "low", and that default rules only the UNOVERRIDDEN case.
+// When no explicit effort resolves, the wire omits the flag and the opus
+// band's rung (the registry's declared default) is what the model runs at;
+// an explicit stage or default effort still outranks it.
+func TestOpus55EffortDefault(t *testing.T) {
+	stage := state.StageFeatureDev
+	// effective mirrors the dispatch contract: a non-empty wire effort is
+	// sent; an empty one leaves the model's declared default in force.
+	effective := func(wire string) string {
+		if wire != "" {
+			return wire
+		}
+		rung, ok := routing.ResolveBandEnvelope("anthropic", routing.TierOpus, "")
+		if !ok {
+			t.Fatalf("no anthropic rung for the opus band")
+		}
+		if rung.ModelID != "claude-opus-5-5" {
+			t.Fatalf("opus band resolves to %q, want claude-opus-5-5", rung.ModelID)
+		}
+		return rung.Effort
+	}
+
+	t.Run("no override: the declared default, low", func(t *testing.T) {
+		dir := isolatedWorkspace(t)
+		isolateEffortEnv(t)
+		if got := effective(resolveWireEffort(dir, stage)); got != "low" {
+			t.Errorf("effective effort = %q, want \"low\"", got)
+		}
+	})
+
+	t.Run("explicit stage override: high", func(t *testing.T) {
+		dir := isolatedWorkspace(t)
+		isolateEffortEnv(t)
+		t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV", "high")
+		if got := effective(resolveWireEffort(dir, stage)); got != "high" {
+			t.Errorf("effective effort = %q, want \"high\"", got)
+		}
+	})
+
+	t.Run("model_routing.default_effort: high", func(t *testing.T) {
+		dir := routedWorkspace(t, "model_routing:\n  default_effort: high\n")
+		isolateEffortEnv(t)
+		if got := effective(resolveWireEffort(dir, stage)); got != "high" {
+			t.Errorf("effective effort = %q, want \"high\"", got)
+		}
+	})
+}
+
 // TestResolveWireThinking pins the wire thinking to the selection query's
 // declared rung under the band contract the wire Model already speaks (#581),
 // with the CLAUDE_CODE_DISABLE_THINKING interlock as the one override. Every

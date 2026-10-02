@@ -10,10 +10,15 @@ hand.
 ## Format and lookup
 
 - The file name is `<adapter>[-<subcommand>]-<version>.txt`. The subcommand is
-  the one the adapter's argv starts with: `codex exec` and `opencode run`.
+  the one the adapter's argv runs: `codex exec` and `opencode run`.
+- An adapter whose argv puts flags before its subcommand (`helpLeadingFlags`)
+  also has its top-level help captured, as `<adapter>-<version>.txt`. Those
+  flags are options of the binary, not of the subcommand, and are checked
+  against that capture: codex's `--ask-for-approval` goes before `exec`
+  (#1715), so `codex-0.145.0.txt` holds `codex --help`.
 - The first line is `# adapter=<id> version=<x.y.z> command=<command>`. The rest
   is the help text, redacted by the script.
-- Exactly one file matches each adapter. `NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR`
+- Exactly one file matches each adapter and help it captures. `NIGHTGAUGE_FLAG_CONTRACT_HELP_DIR`
   points `TestFlagContract` at another directory in the same layout, such as
   captures from the newest CLIs. Only this directory is held to `max_tested`.
   The contract's self-tests always read this directory, so a wider `-run`
@@ -65,6 +70,7 @@ hand.
 | File                          | Command               | Install source                                                                                                                                    | Exit code |
 | ----------------------------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
 | `claude-headless-2.1.258.txt` | `claude --help`       | npm `@anthropic-ai/claude-code@2.1.258`                                                                                                           | 0         |
+| `codex-0.145.0.txt`           | `codex --help`        | npm `@openai/codex@0.145.0`                                                                                                                       | 0         |
 | `codex-exec-0.145.0.txt`      | `codex exec --help`   | npm `@openai/codex@0.145.0`                                                                                                                       | 0         |
 | `grok-1.0.4.txt`              | `grok --help`         | `https://x.ai/cli/install.sh` with version argument `1.0.4` (installer sha256 `7fd6fdc75d9418b2e58356726fcbf1ae849416f773925da07d0ccc7a60d3e791`) | 0         |
 | `opencode-run-1.18.30.txt`    | `opencode run --help` | npm `opencode-ai@1.18.30`                                                                                                                         | 0         |
@@ -121,10 +127,23 @@ grok's `--effort` is not hidden: 1.0.4 lists it as `[aliases: --effort]` of
 
 ### Emitted but refused (`knownBroken`)
 
-| Adapter and version     | Flag                 | Probe                                                                                                                                                                                                                                                                      | Bug   |
-| ----------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| claude-headless 2.1.258 | `--max-tokens`       | `claude -p --max-tokens 5` exits 1 with `error: unknown option '--max-tokens'`                                                                                                                                                                                             | #1716 |
-| codex 0.145.0           | `--ask-for-approval` | `codex exec --sandbox read-only --ask-for-approval never --json -` and `codex exec --ask-for-approval never --help` exit 2 with `error: unexpected argument '--ask-for-approval' found`; `codex --ask-for-approval never exec --help` exits 0, so it is a top-level option | #1715 |
+| Adapter and version     | Flag           | Probe                                                                          | Bug   |
+| ----------------------- | -------------- | ------------------------------------------------------------------------------ | ----- |
+| claude-headless 2.1.258 | `--max-tokens` | `claude -p --max-tokens 5` exits 1 with `error: unknown option '--max-tokens'` | #1716 |
+
+### codex 0.145.0 `--ask-for-approval` (#1715)
+
+`--ask-for-approval` is a top-level codex option, so codex's argv puts it
+before `exec`. `codex exec --sandbox read-only --ask-for-approval never --json -`
+and `codex exec --ask-for-approval never --help` exit 2 with
+`error: unexpected argument '--ask-for-approval' found`, and
+`codex --ask-for-approval never exec --help` exits 0. `codex-0.145.0.txt`, the
+top-level help, was captured on 2026-10-01 by
+`bash scripts/capture-cli-help.sh codex`, which re-captured
+`codex-exec-0.145.0.txt` byte for byte. A real run in that order is on record:
+`../../../testdata/codex_stream_real_capture.jsonl` was produced by
+`codex --ask-for-approval never --sandbox workspace-write exec --json -` on
+codex-cli 0.153.4.
 
 ### opencode 1.18.30 `run`
 

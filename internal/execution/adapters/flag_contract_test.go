@@ -57,6 +57,14 @@ var flagContractAdapters = []string{"claude-headless", "codex", "copilot", "gemi
 // scripts/capture-cli-help.sh.
 var helpSubcommand = map[string]string{"codex": "exec", "opencode": "run"}
 
+// helpLeadingFlags are the flags an adapter's argv puts BEFORE its
+// subcommand: options of the binary itself, not of the subcommand, so they
+// are checked against the top-level `<binary> --help`, captured beside the
+// subcommand's as <adapter>-<version>.txt. codex's approval policy is one:
+// `codex --ask-for-approval never exec ...` (#1715). Keep in step with
+// help_top_level in scripts/capture-cli-help.sh.
+var helpLeadingFlags = map[string][]string{"codex": {"--ask-for-approval"}}
+
 // helpNotCaptured are the adapters that have no captured help, and why. Their
 // flags are not checked against help; their required_flags still are. An
 // entry holds only while the manifest pins no max_tested, because capturing a
@@ -75,9 +83,6 @@ var helpNotCaptured = map[string]string{
 var knownBroken = map[string]map[string]int{
 	// claude 2.1.258: `error: unknown option '--max-tokens'`.
 	"claude-headless": {"--max-tokens": 1716},
-	// codex-cli 0.145.0: `error: unexpected argument '--ask-for-approval'
-	// found`. It is a top-level codex option, not an `exec` one.
-	"codex": {"--ask-for-approval": 1715},
 }
 
 // hiddenSidecarSuffix names a capture's hidden-flag sidecar,
@@ -235,16 +240,15 @@ func TestFlagContractOptionsCoversEveryRunOptionsField(t *testing.T) {
 }
 
 // helpArgvShape describes where a subcommand sits in the argv BuildCommand
-// builds, so argvFlags can check a flag that must precede it — the shape
-// #1715's fix needs for codex: `--ask-for-approval`/`-a` is a top-level codex
-// option (`codex -a never exec ...`), not a `codex exec` one, so it belongs
-// before the subcommand, not after. Every adapter's shape is subcommand-first
-// today (LeadingFlags nil): the subcommand must be in argv, and every flag
+// builds, so argvFlags can check a flag that must precede it — codex's
+// shape: `--ask-for-approval` is a top-level codex option
+// (`codex --ask-for-approval never exec ...`), not a `codex exec` one, so it
+// belongs before the subcommand, not after (#1715). With LeadingFlags nil the
+// shape is subcommand-first: the subcommand must be argv[0], and every flag
 // before it is refused. LeadingFlags names the flags allowed to precede it
-// instead; checking them against a captured top-level --help (rather than
-// the subcommand's) is #1715's own work, not built here — this only makes
-// the shape expressible and stops an undeclared leading flag silently
-// passing as if it were a trailing one.
+// instead (helpLeadingFlags); flagContractProblems checks those against the
+// captured top-level --help rather than the subcommand's, and an undeclared
+// leading flag is refused rather than passing as if it were a trailing one.
 type helpArgvShape struct {
 	Sub          string
 	LeadingFlags []string
@@ -294,13 +298,8 @@ func flagsOf(args []string) []string {
 
 // TestArgvFlagsExpressesALeadingFlagBeforeTheSubcommand pins the argv model
 // extension #1721 asks for: a flag can be declared to precede the
-// subcommand, the shape codex's #1715 fix needs for `-a`/`--ask-for-approval`
-// (a top-level codex option: `codex -a never exec ...`, not a `codex exec`
-// one). This is the model only — codex's BuildCommand does not emit `-a` yet
-// (#1715 is its own, unfixed issue), and checking a leading flag against a
-// captured top-level `codex --help` (rather than `codex exec --help`) is
-// #1715's own work, so nothing here changes what TestFlagContract checks
-// today.
+// subcommand, the shape codex's `-a`/`--ask-for-approval` has (a top-level
+// codex option: `codex -a never exec ...`, not a `codex exec` one, #1715).
 func TestArgvFlagsExpressesALeadingFlagBeforeTheSubcommand(t *testing.T) {
 	shape := helpArgvShape{Sub: "exec", LeadingFlags: []string{"-a", "--ask-for-approval"}}
 	leading, trailing, err := argvFlags(shape, []string{"-a", "never", "exec", "--json", "-"})
@@ -320,11 +319,9 @@ func TestArgvFlagsExpressesALeadingFlagBeforeTheSubcommand(t *testing.T) {
 		t.Fatal("argvFlags accepted an undeclared leading flag")
 	}
 
-	// Every real adapter's shape today declares no LeadingFlags, so it stays
-	// exactly as strict as before this type existed: the subcommand must be
-	// argv[0], full stop — including for codex's actual argv today (#1715
-	// unfixed), where "-a" lands after "exec" and is read as an ordinary
-	// trailing flag, not refused as a misplaced leading one.
+	// A shape that declares no LeadingFlags stays exactly as strict as before
+	// this type existed: the subcommand must be argv[0], full stop, and a
+	// flag after it is an ordinary trailing flag.
 	if _, _, err := argvFlags(helpArgvShape{Sub: "exec"}, []string{"-a", "never", "exec", "--json"}); err == nil {
 		t.Fatal("the strict subcommand-first shape accepted a flag before the subcommand")
 	}
@@ -340,7 +337,8 @@ func TestArgvFlagsExpressesALeadingFlagBeforeTheSubcommand(t *testing.T) {
 // first options that emitted it. The product runs twice: with a writable
 // TMPDIR, and with one that does not exist, the only way grok falls back from
 // --prompt-file to -p. It fails the test when an argv does not start with the
-// adapter's subcommand.
+// adapter's subcommand, or when a flag precedes it that helpLeadingFlags
+// does not name.
 func emittedFlagsByAdapter(t *testing.T) map[string]map[string]string {
 	t.Helper()
 	// The operator overrides grok reads would change its argv.
@@ -363,12 +361,20 @@ func emittedFlagsByAdapter(t *testing.T) map[string]map[string]string {
 			t.Setenv("TMPDIR", tmp)
 			for _, o := range flagContractOptions([]string{"", flagContractModel(adapter)}, []string{"", "implement the issue"}) {
 				_, args, _ := runner.BuildCommand(o)
-				_, got, err := argvFlags(helpArgvShape{Sub: helpSubcommand[adapter]}, args)
+				leading, trailing, err := argvFlags(helpArgvShape{Sub: helpSubcommand[adapter], LeadingFlags: helpLeadingFlags[adapter]}, args)
 				if err != nil {
 					t.Errorf("%s with %s: %v", adapter, describeOptions(o), err)
 					continue
 				}
-				for _, f := range got {
+				// A leading flag is checked against the top-level help, so
+				// one that also lands after the subcommand would be checked
+				// against the wrong capture.
+				for _, f := range trailing {
+					if slices.Contains(helpLeadingFlags[adapter], f) {
+						t.Errorf("%s with %s: %s is a leading flag, but it follows the %q subcommand: %q", adapter, describeOptions(o), f, helpSubcommand[adapter], args)
+					}
+				}
+				for _, f := range append(leading, trailing...) {
 					if _, seen := flags[f]; !seen {
 						flags[f] = describeOptions(o)
 					}
@@ -434,8 +440,14 @@ type helpCapture struct {
 // findHelpCapture returns the one capture in dir named for adapter, or why
 // there is none; found is false when no file matches.
 func findHelpCapture(dir, adapter string) (path string, found bool, problem string) {
+	return findHelpCaptureOf(dir, adapter, helpSubcommand[adapter])
+}
+
+// findHelpCaptureOf is findHelpCapture for the help of sub, or of the binary
+// itself when sub is "".
+func findHelpCaptureOf(dir, adapter, sub string) (path string, found bool, problem string) {
 	stem := adapter
-	if sub := helpSubcommand[adapter]; sub != "" {
+	if sub != "" {
 		stem += "-" + sub
 	}
 	entries, err := os.ReadDir(dir)
@@ -542,31 +554,32 @@ func flagContractProblems(dir string, pinned bool, emitted map[string]map[string
 			continue
 		}
 		captured[filepath.Base(path)] = true
-		capture, err := readHelpCapture(path)
-		if err != nil {
-			problems = append(problems, err.Error())
+		capture, problem := validHelpCapture(path, adapter, helpSubcommand[adapter], m, pinned)
+		if problem != "" {
+			problems = append(problems, problem)
 			continue
 		}
-		wantCommand := m.Binary + " --help"
-		if sub := helpSubcommand[adapter]; sub != "" {
-			wantCommand = m.Binary + " " + sub + " --help"
-		}
-		switch {
-		case capture.adapter != adapter:
-			problems = append(problems, fmt.Sprintf("%s: its header names adapter %q, not %q", path, capture.adapter, adapter))
-			continue
-		case capture.command != wantCommand:
-			problems = append(problems, fmt.Sprintf("%s: its header names command %q, not %q", path, capture.command, wantCommand))
-			continue
-		case !strings.HasSuffix(path, "-"+capture.version+".txt"):
-			problems = append(problems, fmt.Sprintf("%s: its header names version %s, which is not the version in its name", path, capture.version))
-			continue
-		case pinned && capture.version != m.MaxTested:
-			problems = append(problems, fmt.Sprintf("%s: captured version %s is not the manifest's max_tested %q; re-run scripts/capture-cli-help.sh", path, capture.version, m.MaxTested))
-			continue
-		case len(capture.options) < 10:
-			problems = append(problems, fmt.Sprintf("%s: parsed only %d options; the help parser no longer matches its format", path, len(capture.options)))
-			continue
+
+		// Leading flags are options of the binary itself: they are checked
+		// against its top-level help, which must then be captured too.
+		var top helpCapture
+		if len(helpLeadingFlags[adapter]) > 0 {
+			topPath, found, problem := findHelpCaptureOf(dir, adapter, "")
+			if problem == "" && !found {
+				problem = fmt.Sprintf("%s: puts %q before its subcommand, but %s has no top-level help capture %s-<version>.txt; scripts/capture-cli-help.sh writes it", adapter, helpLeadingFlags[adapter], dir, adapter)
+			}
+			if problem == "" {
+				captured[filepath.Base(topPath)] = true
+				if top, problem = validHelpCapture(topPath, adapter, "", m, pinned); problem != "" {
+					// Its path is not under the adapter's subcommand stem, so
+					// name the adapter for the canary's attribution.
+					problem = adapter + ": " + problem
+				}
+			}
+			if problem != "" {
+				problems = append(problems, problem)
+				continue
+			}
 		}
 
 		sidecar := path + hiddenSidecarSuffix
@@ -588,6 +601,13 @@ func flagContractProblems(dir string, pinned bool, emitted map[string]map[string
 		for _, flag := range sortedKeys(flags) {
 			issue, broken := knownBroken[adapter][flag]
 			defined := capture.options[flag]
+			if slices.Contains(helpLeadingFlags[adapter], flag) {
+				defined = top.options[flag]
+				if !defined && !broken && !hidden[flag] {
+					problems = append(problems, fmt.Sprintf("%s: BuildCommand emits %s before its subcommand (with %s), which %s (`%s`, version %s) does not define", adapter, flag, flags[flag], top.path, top.command, top.version))
+					continue
+				}
+			}
 			switch {
 			case defined && broken:
 				problems = append(problems, fmt.Sprintf("%s: %s defines %s now, so knownBroken's entry for #%d is not needed: remove it", adapter, path, flag, issue))
@@ -604,6 +624,34 @@ func flagContractProblems(dir string, pinned bool, emitted map[string]map[string
 		}
 	}
 	return append(problems, orphanSidecars(dir, captured)...), notes
+}
+
+// validHelpCapture reads the capture at path and checks it is adapter's help
+// of sub (of the binary itself when sub is ""), named for the version its
+// header gives, at max_tested when pinned, and parseable. It returns the
+// capture, or the one problem that makes it unusable.
+func validHelpCapture(path, adapter, sub string, m adaptercompat.Manifest, pinned bool) (helpCapture, string) {
+	capture, err := readHelpCapture(path)
+	if err != nil {
+		return helpCapture{}, err.Error()
+	}
+	wantCommand := m.Binary + " --help"
+	if sub != "" {
+		wantCommand = m.Binary + " " + sub + " --help"
+	}
+	switch {
+	case capture.adapter != adapter:
+		return capture, fmt.Sprintf("%s: its header names adapter %q, not %q", path, capture.adapter, adapter)
+	case capture.command != wantCommand:
+		return capture, fmt.Sprintf("%s: its header names command %q, not %q", path, capture.command, wantCommand)
+	case !strings.HasSuffix(path, "-"+capture.version+".txt"):
+		return capture, fmt.Sprintf("%s: its header names version %s, which is not the version in its name", path, capture.version)
+	case pinned && capture.version != m.MaxTested:
+		return capture, fmt.Sprintf("%s: captured version %s is not the manifest's max_tested %q; re-run scripts/capture-cli-help.sh", path, capture.version, m.MaxTested)
+	case len(capture.options) < 10:
+		return capture, fmt.Sprintf("%s: parsed only %d options; the help parser no longer matches its format", path, len(capture.options))
+	}
+	return capture, ""
 }
 
 // orphanSidecars reports each sidecar in dir with no capture of its name
@@ -922,7 +970,7 @@ func TestFlagContractTablesFailWhenNotNeeded(t *testing.T) {
 		emitted map[string]map[string]string
 		want    []string
 	}{
-		{"known broken flag now in help", withDefinition(t, "codex", "      --ask-for-approval <APPROVAL_POLICY>"), emitted, []string{"codex:", "--ask-for-approval", "#1715", "remove it"}},
+		{"known broken flag now in help", withDefinition(t, "claude-headless", "  --max-tokens <tokens>                 Maximum output tokens"), emitted, []string{"claude-headless:", "--max-tokens", "#1716", "remove it"}},
 		{"known broken flag no longer emitted", committed, without("claude-headless", "--max-tokens"), []string{"claude-headless:", "--max-tokens", "#1716", "remove the entry"}},
 		{"hidden flag now in help", withDefinition(t, "claude-headless", "  --max-turns <turns>                   Maximum agentic turns"), emitted, []string{"claude-headless:", "--max-turns", sidecarName("claude-headless"), "remove the line"}},
 		{"hidden flag no longer emitted", committed, without("grok", "--no-auto-update"), []string{"grok:", "--no-auto-update", sidecarName("grok"), "remove the line"}},
@@ -933,6 +981,66 @@ func TestFlagContractTablesFailWhenNotNeeded(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			problems, _ := flagContractProblems(c.dir, true, c.emitted)
+			if len(problems) != 1 {
+				t.Fatalf("want exactly one violation, got %d:\n%s", len(problems), strings.Join(problems, "\n"))
+			}
+			for _, want := range c.want {
+				if !strings.Contains(problems[0], want) {
+					t.Errorf("the violation does not say %q: %s", want, problems[0])
+				}
+			}
+		})
+	}
+}
+
+// TestFlagContractChecksLeadingFlagsAgainstTheTopLevelHelp pins #1715's
+// half of the contract: codex puts --ask-for-approval before `exec`, so it is
+// checked against the captured top-level `codex --help`, not the `exec` help
+// that does not define it. Without the top-level capture, or with the flag
+// gone from it, the contract fails.
+func TestFlagContractChecksLeadingFlagsAgainstTheTopLevelHelp(t *testing.T) {
+	ignoreHelpDirOverride(t)
+	emitted := emittedFlagsByAdapter(t)
+	if _, ok := emitted["codex"]["--ask-for-approval"]; !ok {
+		t.Fatalf("codex no longer emits --ask-for-approval; this test pins where it is checked: %v", sortedKeys(emitted["codex"]))
+	}
+	top, found, problem := findHelpCaptureOf(committedHelpDir, "codex", "")
+	if !found || problem != "" {
+		t.Fatalf("no top-level codex capture in %s: %s", committedHelpDir, problem)
+	}
+	if problems, _ := flagContractProblems(committedHelpDir, true, emitted); len(problems) != 0 {
+		t.Fatalf("the committed captures fail the contract:\n%s", strings.Join(problems, "\n"))
+	}
+
+	missing := copyHelpDir(t)
+	if err := os.Remove(filepath.Join(missing, filepath.Base(top))); err != nil {
+		t.Fatal(err)
+	}
+	undefined := copyHelpDir(t)
+	raw, err := os.ReadFile(top)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, line := range strings.Split(string(raw), "\n") {
+		if !strings.Contains(line, "--ask-for-approval <") {
+			kept = append(kept, line)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(undefined, filepath.Base(top)), []byte(strings.Join(kept, "\n")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, c := range []struct {
+		name string
+		dir  string
+		want []string
+	}{
+		{"no top-level capture", missing, []string{"codex:", "--ask-for-approval", "no top-level help capture"}},
+		{"top-level capture does not define it", undefined, []string{"codex:", "--ask-for-approval", "before its subcommand", "codex --help"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			problems, _ := flagContractProblems(c.dir, true, emitted)
 			if len(problems) != 1 {
 				t.Fatalf("want exactly one violation, got %d:\n%s", len(problems), strings.Join(problems, "\n"))
 			}

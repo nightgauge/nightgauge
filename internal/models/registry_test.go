@@ -463,6 +463,7 @@ func TestActiveAnthropicModelsDeclareBehavior(t *testing.T) {
 		effortDefault   string
 		maxOutputTokens int
 	}{
+		{"claude-opus-5-5", true, ThinkingDisableNever, "low", 128000},
 		{"claude-opus-5", true, "high", "high", 128000},
 		{"claude-sonnet-5", true, "", "high", 128000},
 		{"claude-fable-5-1", true, ThinkingDisableNever, "high", 128000},

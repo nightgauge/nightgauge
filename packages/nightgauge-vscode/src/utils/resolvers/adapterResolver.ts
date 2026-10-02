@@ -41,6 +41,7 @@ import {
   VALID_ADAPTERS,
   RetiredAdapterConfigError,
   assertAdapterNotRetired,
+  getOpenCodeModel,
   readAdapterFromFile,
 } from "./modelResolver";
 import { ADAPTER_ID_ALTERNATION } from "../../config/schema";
@@ -955,6 +956,10 @@ export function tryAutoRouter(
     recent_history: options.recentHistory ?? [],
     remaining_budget_usd: options.remainingBudgetUsd,
     stage_estimated_cost_usd: options.stageEstimatedCostUsd,
+    // #2330: the router resolves opencode's dispatch model against the
+    // configured `opencode.model` and drops the candidate without one (#1725),
+    // so opencode is only routable when this is passed.
+    opencode_model: available.includes("opencode") ? getOpenCodeModel(workspaceRoot) : undefined,
   };
 
   return router.selectForStage(stage, ctx);
