@@ -488,6 +488,14 @@ changelog, and the release workflow refuses a tag that does not.
   clone moves. The summary no longer says "nothing moved" after files moved,
   and findings an earlier remedy in the same `--fix` run already resolved are
   reported as resolved, not BLOCKED.
+- **Syncing discovery state no longer makes a full clone shallow** (#2373).
+  `scripts/discovery-state-sync.sh` and `scripts/discovery-state-publish.sh`
+  fetched the `discovery-state` branch with `--depth 1`. Once the branch had a
+  second commit, that recorded a shallow boundary, and git then reported the
+  whole clone as shallow. The publication-boundary checker refuses to run in a
+  shallow clone, so the local gate would have failed in every clone that
+  synced. Both scripts now fetch the whole branch, which holds one small commit
+  per run.
 
 ### Changed
 

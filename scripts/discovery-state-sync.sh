@@ -102,9 +102,12 @@ fi
 # adding a third state directory means editing one line, not two scripts.
 STATE_PATHS=(".nightgauge/release-watch" ".nightgauge/improvement-runs")
 
-# `--depth 1` because the history of the state branch is not interesting to a
-# consumer; only its tip is. A shallow fetch of one ref is a few kilobytes.
-if ! git fetch --quiet --depth 1 "$REMOTE" "$BRANCH":"refs/discovery-state/$BRANCH" 2>/dev/null; then
+# The whole branch, although only its tip is read. A `--depth 1` fetch records
+# a shallow boundary once the branch has a second commit, and git then reports
+# the clone as a whole as shallow, main's complete history notwithstanding. The
+# publication-boundary checker refuses to run in a shallow clone (#2373). The
+# branch carries one small commit per run.
+if ! git fetch --quiet "$REMOTE" "$BRANCH":"refs/discovery-state/$BRANCH" 2>/dev/null; then
   echo "discovery-state-sync: no '$BRANCH' branch on '$REMOTE' yet — the scheduled"
   echo "discovery loop has not published a run. See docs/SCHEDULED_DISCOVERY.md."
   exit 0

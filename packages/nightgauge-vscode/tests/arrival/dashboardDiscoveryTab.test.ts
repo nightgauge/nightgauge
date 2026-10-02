@@ -370,4 +370,65 @@ describe("arrival: discovery state transport (discovery-state branch)", () => {
     expect(text).toContain(CREATED_TITLE);
     expect(text).not.toContain("No discovery activity yet");
   });
+
+  it("publishing and syncing many runs leaves both clones whole (#2373)", () => {
+    // Both scripts used to fetch the state branch with `--depth 1`. Once the
+    // branch had a second commit, that recorded a shallow boundary, and
+    // `git rev-parse --is-shallow-repository` then answered true for the whole
+    // clone, main's complete history notwithstanding. The publication-boundary
+    // checker refuses to run in a shallow clone, so every clone that synced
+    // discovery state, or published it by hand, failed the local gate.
+    const remote = makeWorkspace("ng-arrival-discovery-remote-", { git: false });
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.mkdirSync(remote, { recursive: true });
+    git(remote, "init", "--quiet", "--bare");
+
+    const runner = makeWorkspace("ng-arrival-discovery-runner-", { git: false });
+    git(runner, "init", "--quiet", "--initial-branch", "trunk");
+    fs.writeFileSync(path.join(runner, "README.md"), "runner\n", "utf-8");
+    git(runner, "add", "-A");
+    git(runner, "commit", "--quiet", "-m", "seed");
+    git(runner, "remote", "add", "origin", remote);
+    git(runner, "push", "--quiet", "-u", "origin", "trunk");
+
+    // Three runs, each with state of its own, so each publish adds a commit.
+    // The third publish fetches a branch two commits long.
+    for (let run = 1; run <= 3; run++) {
+      const record = checkoutPath(runner, "releaseWatch", `run-${run}.json`);
+      fs.mkdirSync(path.dirname(record), { recursive: true });
+      fs.writeFileSync(record, JSON.stringify({ run }) + "\n", "utf-8");
+      execFileSync("bash", [statePublish, "--message", `arrival: run ${run}`], {
+        cwd: runner,
+        stdio: "pipe",
+      });
+    }
+    expect(git(remote, "rev-list", "--count", "discovery-state").trim()).toBe("3");
+    expect(git(runner, "rev-parse", "--is-shallow-repository").trim()).toBe("false");
+
+    const local = makeWorkspace("ng-arrival-discovery-local-", { git: false });
+    fs.rmSync(local, { recursive: true, force: true });
+    git(path.dirname(local), "clone", "--quiet", remote, local);
+    execFileSync("bash", [stateSync], { cwd: local, stdio: "pipe" });
+    execFileSync("bash", [stateSync], { cwd: local, stdio: "pipe" });
+
+    expect(git(local, "rev-parse", "--is-shallow-repository").trim()).toBe("false");
+    expect(fs.existsSync(checkoutPath(local, "releaseWatch", "run-3.json"))).toBe(true);
+    // The checker's own test, the one that refused to run.
+    const shallow = execFileSync(
+      "python3",
+      [
+        "-c",
+        [
+          "import importlib.util, sys",
+          "spec = importlib.util.spec_from_file_location('boundary', sys.argv[1])",
+          "module = importlib.util.module_from_spec(spec)",
+          "spec.loader.exec_module(module)",
+          "print(module.repository_is_shallow())",
+        ].join("\n"),
+        path.join(repoRoot, "scripts/publication-boundary-check.py"),
+      ],
+      { cwd: local, encoding: "utf-8" }
+    );
+    expect(shallow.trim()).toBe("False");
+  });
 });

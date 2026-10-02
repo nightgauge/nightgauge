@@ -100,7 +100,10 @@ export GIT_INDEX_FILE="$SCRATCH/index"
 
 PARENT=""
 if git ls-remote --exit-code --heads "$REMOTE" "$BRANCH" >/dev/null 2>&1; then
-  git fetch --quiet --depth 1 "$REMOTE" "$BRANCH"
+  # The whole branch, not `--depth 1`: a depth-limited fetch of a branch two
+  # commits long makes the clone shallow, and a clone this runs in by hand is
+  # then refused by the publication-boundary checker (#2373).
+  git fetch --quiet "$REMOTE" "$BRANCH"
   PARENT="$(git rev-parse FETCH_HEAD)"
   # Seed the index from the previous run so files this run did not touch are
   # carried forward rather than silently deleted from the branch.
