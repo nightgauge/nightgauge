@@ -628,11 +628,15 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 		}
 	}
 
-	// pipeline.complete is emitted from the scheduler's terminal defer just
-	// before SealAndRemove runs. Wait for that defer to finish, then assert the
-	// durable terminal contract rather than racing the transient snapshot.
+	// pipeline.complete is emitted from the scheduler's terminal defer before
+	// SealAndRemove runs, with worktree and branch cleanup (git processes)
+	// between them, and no event follows the seal. Poll for that defer to
+	// finish, then assert the durable terminal contract rather than racing the
+	// transient snapshot. The poll ends the moment the snapshot is gone; its
+	// limit bounds a failure only (a snapshot never removed), at the stall
+	// bound's 2 minutes, so no load can fail a run that removes it (#2368).
 	stateDir := layouttest.PipelineDir(t, workDir)
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute)
 	for {
 		snapshots, err := state.FindPersistedStatesForIssue(stateDir, issueNumber)
 		if err != nil {
