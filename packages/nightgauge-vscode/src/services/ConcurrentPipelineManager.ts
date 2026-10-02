@@ -136,7 +136,7 @@ function isTransientNetworkFailureText(errMsg: string): boolean {
 import type { IssueQueueService } from "./IssueQueueService";
 import type { HeadlessOrchestrator } from "./HeadlessOrchestrator";
 import type { PipelineRunResult, RequestedPin } from "./HeadlessOrchestrator";
-import type { PipelineStateService } from "./PipelineStateService";
+import type { PipelineState, PipelineStateService } from "./PipelineStateService";
 import type { Logger } from "../utils/logger";
 import type { ActiveSlot, QueueItem } from "../types/queue";
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
@@ -204,6 +204,19 @@ interface SlotReservation {
 /**
  * Slot state for a single concurrent pipeline execution
  */
+/**
+ * What a platform verb did to a local run (#2334): "applied", or why it found
+ * nothing to act on. The verb's ack reports it, so a requester can tell an
+ * applied command from a no-op.
+ */
+export type RemoteVerbResult =
+  | "applied"
+  | "no-active-run"
+  | "no-waiting-gate"
+  | "already-paused"
+  | "not-paused"
+  | "no-run-state";
+
 interface PipelineSlot {
   /** Slot index (0-based) */
   index: number;
@@ -3635,45 +3648,85 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * Cancel the pipeline slot identified by the platform's run id.
    * Sets userCancelled=true so the slot completion handler suppresses failure
    * bookkeeping, then calls gracefulStop(SIGTERM → 10s → SIGKILL).
-   * Returns true if a slot was found and stop initiated, false if no match.
    * @see Issue #3552 — cancel command handler
    */
-  async cancelByRemoteRunId(remoteRunId: string): Promise<boolean> {
-    const issueNumber = this.findSlotByRemoteRunId(remoteRunId);
-    if (issueNumber === null) return false;
-    const slot = this.slots.get(issueNumber);
-    if (!slot) return false;
+  async cancelByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
+    const slot = this.slotByRemoteRunId(remoteRunId);
+    if (!slot) return "no-active-run";
     slot.userCancelled = true;
     await slot.orchestrator.gracefulStop(10_000);
-    return true;
+    return "applied";
   }
 
   /**
-   * Forward an approval decision to the slot identified by the platform's run id.
-   * Returns true if a slot was found and approve() called, false if no match.
+   * Forward an approval decision to the slot identified by the platform's run
+   * id. "no-waiting-gate" when the run is not waiting at an approval gate.
    * @see Issue #3553 — approve command handler
    */
-  approveByRemoteRunId(remoteRunId: string): boolean {
-    const issueNumber = this.findSlotByRemoteRunId(remoteRunId);
-    if (issueNumber === null) return false;
-    const slot = this.slots.get(issueNumber);
-    if (!slot) return false;
-    slot.orchestrator.approve();
-    return true;
+  approveByRemoteRunId(remoteRunId: string): RemoteVerbResult {
+    const slot = this.slotByRemoteRunId(remoteRunId);
+    if (!slot) return "no-active-run";
+    return slot.orchestrator.approve() ? "applied" : "no-waiting-gate";
   }
 
   /**
    * Reject the approval gate for the slot identified by the platform's run id.
-   * Returns true if a slot was found and reject() called, false if no match.
+   * "no-waiting-gate" when the run is not waiting at an approval gate.
    * @see Issue #3553 — reject command handler
    */
-  rejectByRemoteRunId(remoteRunId: string): boolean {
+  rejectByRemoteRunId(remoteRunId: string): RemoteVerbResult {
+    const slot = this.slotByRemoteRunId(remoteRunId);
+    if (!slot) return "no-active-run";
+    return slot.orchestrator.reject() ? "applied" : "no-waiting-gate";
+  }
+
+  /**
+   * Pause the slot identified by the platform's run id (#2334), the same way
+   * `Nightgauge: Pause Pipeline` pauses a slot run: the slot's own state
+   * service is marked paused, the stage in flight finishes, and the stage
+   * loop holds at the next stage boundary (#423). The platform has already
+   * marked the run paused.
+   */
+  async pauseByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
+    const slot = this.slotByRemoteRunId(remoteRunId);
+    if (!slot) return "no-active-run";
+    // The flag lives on the run's loaded state; a slot with none yet cannot
+    // hold, and must not report that it does. Decided before the flag moves,
+    // not by re-reading it afterwards: a resume handled in the same tick may
+    // clear it again while this pause is still being persisted, and the pause
+    // took effect all the same.
+    if (!slot.stateService.hasRunState()) return "no-run-state";
+    if (slot.stateService.isPaused()) return "already-paused";
+    await slot.stateService.pausePipeline();
+    return "applied";
+  }
+
+  /**
+   * Resume a paused slot (#2334), as `Nightgauge: Resume Pipeline` does for a
+   * slot run: clearing the flag lets the held runPipeline() call continue
+   * with the next stage, from where the run held.
+   */
+  async resumeByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
+    const slot = this.slotByRemoteRunId(remoteRunId);
+    if (!slot) return "no-active-run";
+    if (!slot.stateService.isPaused()) return "not-paused";
+    await slot.stateService.resumePipeline();
+    return "applied";
+  }
+
+  /**
+   * The local state of the run the platform's run id names, or null when no
+   * slot carries it. A platform pause or resume reads it to show the run the
+   * way the local Pause/Resume Pipeline commands do (#2334).
+   */
+  async remoteRunState(remoteRunId: string): Promise<PipelineState | null> {
+    const slot = this.slotByRemoteRunId(remoteRunId);
+    return slot ? slot.stateService.getState() : null;
+  }
+
+  private slotByRemoteRunId(remoteRunId: string): PipelineSlot | undefined {
     const issueNumber = this.findSlotByRemoteRunId(remoteRunId);
-    if (issueNumber === null) return false;
-    const slot = this.slots.get(issueNumber);
-    if (!slot) return false;
-    slot.orchestrator.reject();
-    return true;
+    return issueNumber === null ? undefined : this.slots.get(issueNumber);
   }
 
   /**

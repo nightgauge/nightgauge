@@ -12,6 +12,8 @@ import (
 // It POSTs to /v1/agents/{agentId}/commands/{commandId}/ack and returns the
 // runId assigned by the platform. With outcome "rejected" it refuses the
 // command instead, with detail as the reason (#1656), and returns no runId.
+// With outcome "applied" it reports a command the agent carried out (#2334),
+// and also returns no runId.
 func (s *Server) handleAgentAcknowledgeCommand(ctx context.Context, raw json.RawMessage) (interface{}, error) {
 	var p AgentAcknowledgeCommandParams
 	if err := json.Unmarshal(raw, &p); err != nil {
@@ -37,6 +39,11 @@ func (s *Server) handleAgentAcknowledgeCommand(ctx context.Context, raw json.Raw
 			return nil, fmt.Errorf("agent.acknowledgeCommand: a rejected ack needs a detail")
 		}
 		if err := svc.RejectAgentCommand(ctx, p.AgentID, p.CommandID, p.Detail); err != nil {
+			return nil, fmt.Errorf("agent.acknowledgeCommand: %w", err)
+		}
+		return AgentAcknowledgeCommandResult{}, nil
+	case platform.AgentCommandAppliedOutcome:
+		if err := svc.ApplyAgentCommand(ctx, p.AgentID, p.CommandID, p.Detail); err != nil {
 			return nil, fmt.Errorf("agent.acknowledgeCommand: %w", err)
 		}
 		return AgentAcknowledgeCommandResult{}, nil

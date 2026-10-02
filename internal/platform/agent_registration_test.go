@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -223,5 +224,145 @@ func TestAgentRegistration_ReRegisterOn404(t *testing.T) {
 	// The new id heartbeats OK.
 	if err := reg.Heartbeat(ctx, second.AgentID); err != nil {
 		t.Fatalf("heartbeat new agent: %v", err)
+	}
+}
+
+// registerBodies runs one RegisterAgent against a server that answers each
+// POST with the next of responses, and returns every body it received.
+func registerBodies(t *testing.T, reg func(*Client) *AgentRegistrationService, responses ...func(http.ResponseWriter)) ([]map[string]any, error) {
+	t.Helper()
+	t.Setenv(machineIDEnv, "test-machine-uuid")
+	var bodies []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		if err := json.Unmarshal(raw, &body); err != nil {
+			t.Errorf("register body is not JSON: %v", err)
+		}
+		bodies = append(bodies, body)
+		if i := len(bodies) - 1; i < len(responses) {
+			responses[i](w)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	_, err := reg(onlineClient(t, srv.URL)).RegisterAgent(context.Background())
+	return bodies, err
+}
+
+func created(w http.ResponseWriter) {
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write([]byte(`{"agentId":"9c1f0f2e-1111-4222-8333-444455556666","ttl_seconds":90}`))
+}
+
+func twoRepoWorkspace() (WorkspaceDeclaration, error) {
+	return WorkspaceDeclaration{
+		Repos:     []AgentRepo{{Owner: "acme", Repo: "api"}, {Owner: "acme", Repo: "web"}},
+		Workspace: &AgentWorkspace{Slug: "acme-platform", DisplayName: "Acme Platform"},
+	}, nil
+}
+
+// The declaration rides on the registration exactly as the hosted service's
+// RegisterAgentSchema reads it (#2335).
+func TestRegisterAgent_DeclaresTheWorkspace(t *testing.T) {
+	bodies, err := registerBodies(t, func(c *Client) *AgentRegistrationService {
+		return NewAgentRegistrationService(c, "1.2.3").WithWorkspace(twoRepoWorkspace)
+	}, created)
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	repos, _ := json.Marshal(bodies[0]["repos"])
+	if string(repos) != `[{"owner":"acme","repo":"api"},{"owner":"acme","repo":"web"}]` {
+		t.Errorf("repos = %s", repos)
+	}
+	ws, _ := bodies[0]["workspace"].(map[string]any)
+	if len(ws) != 2 || ws["slug"] != "acme-platform" || ws["display_name"] != "Acme Platform" {
+		t.Errorf("workspace = %v, want exactly slug and display_name", bodies[0]["workspace"])
+	}
+}
+
+// Without a workspace source the body is what it was before #2335.
+func TestRegisterAgent_NoWorkspaceSourceDeclaresNothing(t *testing.T) {
+	bodies, err := registerBodies(t, func(c *Client) *AgentRegistrationService {
+		return NewAgentRegistrationService(c, "1.2.3")
+	}, created)
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	for _, key := range []string{"repos", "workspace"} {
+		if _, ok := bodies[0][key]; ok {
+			t.Errorf("body carries %q with no workspace source: %v", key, bodies[0])
+		}
+	}
+}
+
+// A part the service would refuse is dropped, and the rest still registers: a
+// 422 would cost the daemon its agent id, and the attention mirror with it.
+func TestRegisterAgent_DropsAnOutOfBoundsPart(t *testing.T) {
+	bodies, err := registerBodies(t, func(c *Client) *AgentRegistrationService {
+		return NewAgentRegistrationService(c, "").WithWorkspace(func() (WorkspaceDeclaration, error) {
+			d, _ := twoRepoWorkspace()
+			d.Workspace.DisplayName = strings.Repeat("n", 201)
+			return d, nil
+		})
+	}, created)
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	if _, ok := bodies[0]["workspace"]; ok {
+		t.Errorf("an out-of-bounds workspace block was sent: %v", bodies[0]["workspace"])
+	}
+	if repos, _ := bodies[0]["repos"].([]any); len(repos) != 2 {
+		t.Errorf("repos = %v, want both still declared", bodies[0]["repos"])
+	}
+}
+
+// A source that fails declares nothing and does not stop the registration.
+func TestRegisterAgent_WorkspaceSourceErrorDeclaresNothing(t *testing.T) {
+	bodies, err := registerBodies(t, func(c *Client) *AgentRegistrationService {
+		return NewAgentRegistrationService(c, "").WithWorkspace(func() (WorkspaceDeclaration, error) {
+			return WorkspaceDeclaration{}, errors.New("manifest unreadable")
+		})
+	}, created)
+	if err != nil || len(bodies) != 1 {
+		t.Fatalf("RegisterAgent: %v after %d posts", err, len(bodies))
+	}
+	if _, ok := bodies[0]["repos"]; ok {
+		t.Errorf("repos declared from a failed source: %v", bodies[0])
+	}
+}
+
+// An account in no team cannot name a workspace (403 NO_TEAM_MEMBERSHIP). The
+// daemon registers again without the block, still declaring its repos, rather
+// than failing every retry.
+func TestRegisterAgent_NoTeamRegistersWithoutTheBlock(t *testing.T) {
+	noTeam := func(w http.ResponseWriter) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"code":"NO_TEAM_MEMBERSHIP","message":"Account is not a member of any team"}`))
+	}
+	bodies, err := registerBodies(t, func(c *Client) *AgentRegistrationService {
+		return NewAgentRegistrationService(c, "").WithWorkspace(twoRepoWorkspace)
+	}, noTeam, created)
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("%d posts, want the refused one and one retry", len(bodies))
+	}
+	if _, ok := bodies[1]["workspace"]; ok {
+		t.Errorf("the retry still named the workspace: %v", bodies[1])
+	}
+	if repos, _ := bodies[1]["repos"].([]any); len(repos) != 2 {
+		t.Errorf("the retry dropped the repos: %v", bodies[1]["repos"])
+	}
+
+	// Any other refusal is the caller's to retry, not a reason to drop the block.
+	forbidden := func(w http.ResponseWriter) { w.WriteHeader(http.StatusForbidden) }
+	bodies, err = registerBodies(t, func(c *Client) *AgentRegistrationService {
+		return NewAgentRegistrationService(c, "").WithWorkspace(twoRepoWorkspace)
+	}, forbidden, created)
+	if err == nil || len(bodies) != 1 {
+		t.Errorf("a plain 403 gave err=%v after %d posts, want an error after 1", err, len(bodies))
 	}
 }

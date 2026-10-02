@@ -1315,9 +1315,9 @@ type TreeUpdateEvent struct {
 type AgentAcknowledgeCommandParams struct {
 	AgentID   string `json:"agentId"`
 	CommandID string `json:"commandId"`
-	// Outcome is empty for an ordinary ack, or "rejected" to refuse the
-	// command with Detail as the reason the requester sees (#1656). Any other
-	// value is an error.
+	// Outcome is empty for an ordinary ack, "rejected" to refuse the command
+	// with Detail as the reason the requester sees (#1656), or "applied" for a
+	// command the agent carried out (#2334). Any other value is an error.
 	Outcome string `json:"outcome,omitempty"`
 	Detail  string `json:"detail,omitempty"`
 }
@@ -1325,6 +1325,19 @@ type AgentAcknowledgeCommandParams struct {
 // AgentAcknowledgeCommandResult is the result for agent.acknowledgeCommand.
 type AgentAcknowledgeCommandResult struct {
 	RunID string `json:"runId"`
+}
+
+// EventAgentCommand is the event carrying an AgentCommandEvent.
+const EventAgentCommand = "agent.command"
+
+// AgentCommandEvent hands the extension a platform command that reached the
+// daemon's own agent but that the daemon does not execute (#2335): a trigger
+// or a pipeline verb, which the extension runs. AgentID is the agent the
+// platform addressed, so it is the one the extension's ack must name. Frame
+// is the command exactly as the platform sent it on the command stream.
+type AgentCommandEvent struct {
+	AgentID string          `json:"agentId"`
+	Frame   json.RawMessage `json:"frame"`
 }
 
 // PipelineSetMaxConcurrentParams are parameters for pipeline.setMaxConcurrent.

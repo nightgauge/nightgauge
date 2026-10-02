@@ -21,6 +21,7 @@ import type { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
 import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
 import type { Logger } from "../utils/logger";
 import type { StatusBarManager } from "../utils/statusBar";
+import { runningStageOf, showPipelinePaused } from "../utils/pauseUi";
 import { resolveTargetRunService } from "./runSelector";
 
 /**
@@ -73,13 +74,7 @@ export function registerPausePipelineCommand(
     }
 
     // Find the currently running stage (if any)
-    let runningStage: string | null = null;
-    for (const [stageName, stageState] of Object.entries(state.stages)) {
-      if (stageState.status === "running") {
-        runningStage = stageName;
-        break;
-      }
-    }
+    const runningStage = runningStageOf(state);
 
     logger.info("Pausing pipeline", {
       issueNumber,
@@ -93,11 +88,9 @@ export function registerPausePipelineCommand(
       // case the pause is in-memory only and does not survive a reload.
       const persisted = await service.pausePipeline();
 
-      // Update status bar to show paused state
-      statusBar.showPaused(runningStage || undefined);
-
-      // Update context for UI
-      vscode.commands.executeCommand("setContext", "nightgauge.pipelinePaused", true);
+      // Show the paused state: status bar and the context key that swaps
+      // Pause for Resume. A platform pause shows the same (#2334).
+      showPipelinePaused(statusBar, runningStage);
 
       // Show notification with Resume action. Say plainly when the pause was
       // not written to Go — telling the operator "Pipeline paused." while

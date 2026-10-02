@@ -23,6 +23,7 @@ import (
 
 	forgecmd "github.com/nightgauge/nightgauge/cmd/nightgauge/forge"
 	workspacecmd "github.com/nightgauge/nightgauge/cmd/nightgauge/workspace"
+	"github.com/nightgauge/nightgauge/internal/agentworkspace"
 	apipkg "github.com/nightgauge/nightgauge/internal/audit"
 	cipkg "github.com/nightgauge/nightgauge/internal/ci"
 	"github.com/nightgauge/nightgauge/internal/cmd/aggregatefindings"
@@ -153,6 +154,7 @@ func runAttentionAgentRegistration(
 	attnSync *platform.AttentionSyncService,
 	platformClient *platform.Client,
 	resolver platform.AttentionResolver,
+	relay platform.AgentCommandRelay,
 ) {
 	agentID := registerAttentionAgentWithRetry(ctx, reg)
 	if agentID == "" {
@@ -174,7 +176,7 @@ func runAttentionAgentRegistration(
 	startStream := func(id string) {
 		var streamCtx context.Context
 		streamCtx, pollCancel = context.WithCancel(ctx)
-		startAttentionCommandStream(streamCtx, platformClient, resolver, id, signalGone)
+		startAttentionCommandStream(streamCtx, platformClient, resolver, relay, id, signalGone)
 	}
 
 	// Late-bind the real agent id: subsequent sync pushes carry it, and the
@@ -257,13 +259,74 @@ func registerAttentionAgentWithRetry(ctx context.Context, reg *platform.AgentReg
 // (used for the ack path) and opens the agent-command SSE stream against it. A
 // new consumer is built on every (re-)registration so the ack carries the
 // current id. onAgentGone is invoked if the stream sees a 404 (agent evicted).
-func startAttentionCommandStream(ctx context.Context, platformClient *platform.Client, resolver platform.AttentionResolver, agentID string, onAgentGone func()) {
+// Every command type but attention_resolve goes to relay (#2335).
+func startAttentionCommandStream(ctx context.Context, platformClient *platform.Client, resolver platform.AttentionResolver, relay platform.AgentCommandRelay, agentID string, onAgentGone func()) {
 	consumer := platform.NewAttentionCommandConsumer(
 		resolver, // *ipc.Server implements platform.AttentionResolver
 		platform.NewCommandService(platformClient).AcknowledgeAgentCommand,
 		agentID,
-	)
+	).WithRelay(relay)
 	platform.StartAttentionCommandStream(ctx, platformClient, consumer, agentID, onAgentGone)
+}
+
+// relayAgentCommandToExtension hands a command the daemon's agent received,
+// and the daemon does not execute, to the extension attached over IPC (#2335).
+// The extension runs this workspace's pipelines, so it carries out the
+// trigger or verb and acknowledges it under the agent id the platform
+// addressed. A daemon with no extension attached has nobody to hand it to, and
+// the command expires on the platform as it did before.
+func relayAgentCommandToExtension(ext eventEmitter) platform.AgentCommandRelay {
+	return func(agentID string, cmd platform.PendingCommand) {
+		if len(cmd.Frame) == 0 {
+			return
+		}
+		log.Printf("[nightgauge] agent command %s (%s) for agent %s relayed to the extension", cmd.ID, cmd.Type, agentID)
+		ext.Emit(ipc.EventAgentCommand, ipc.AgentCommandEvent{AgentID: agentID, Frame: cmd.Frame})
+	}
+}
+
+// eventEmitter sends an unsolicited event to the extension: *ipc.Server.
+type eventEmitter interface {
+	Emit(event string, data interface{})
+}
+
+// daemonAgentIPC is what the daemon's platform agent needs from the IPC
+// server: the single writer that applies an attention_resolve, and the event
+// channel that relays every other command to the extension. *ipc.Server is
+// both.
+type daemonAgentIPC interface {
+	platform.AttentionResolver
+	eventEmitter
+}
+
+// runDaemonPlatformAgent is serve's platform agent (#330, #2335): it
+// registers the daemon, declaring the workspace it serves and its execution
+// profile, then runs the command stream and heartbeat until ctx ends
+// (runAttentionAgentRegistration). window is the folders of the VS Code
+// window that started the daemon, from agentworkspace.WindowFoldersEnv, or
+// nil; the declaration is the extension's for that window when it is set,
+// and the one for workspaceRoot otherwise. Every command the daemon does not
+// execute is relayed to the extension over ext.
+func runDaemonPlatformAgent(
+	ctx context.Context,
+	platformClient *platform.Client,
+	attnSync *platform.AttentionSyncService,
+	ext daemonAgentIPC,
+	version, workspaceRoot string,
+	window []string,
+) {
+	reg := platform.NewAgentRegistrationService(platformClient, version).
+		WithExecutionProfile(func() (platform.ExecutionProfile, bool, error) {
+			p, err := executionprofile.Resolve(workspaceRoot)
+			return p, err == nil && executionprofile.ConversationViable(p.Adapter), err
+		}).
+		// Declare the workspace this daemon serves, the same repos and
+		// workspace block the extension declares for it, so workspace
+		// presence counts the daemon (#2335).
+		WithWorkspace(func() (platform.WorkspaceDeclaration, error) {
+			return agentworkspace.ResolveServed(window, workspaceRoot)
+		})
+	runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, ext, relayAgentCommandToExtension(ext))
 }
 
 func main() {
@@ -5562,12 +5625,8 @@ func serveCmd() *cobra.Command {
 					// the platform-assigned agent id onto the sync + command poller +
 					// heartbeat. Runs in a goroutine so an offline start self-heals
 					// without blocking IPC startup.
-					reg := platform.NewAgentRegistrationService(platformClient, version).
-						WithExecutionProfile(func() (platform.ExecutionProfile, bool, error) {
-							p, err := executionprofile.Resolve(workspaceRoot)
-							return p, err == nil && executionprofile.ConversationViable(p.Adapter), err
-						})
-					go runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, server)
+					go runDaemonPlatformAgent(ctx, platformClient, attnSync, server, version, workspaceRoot,
+						agentworkspace.WindowFolders(os.Getenv))
 				}
 			}
 

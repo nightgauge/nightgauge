@@ -143,7 +143,20 @@ function createControllableFactory() {
     const promise = new Promise((resolve) => resolvers.set(issueNumber, resolve));
     const stop = vi.fn();
     stops.set(issueNumber, stop);
+    // The pause flag the real PipelineStateService keeps on its loaded state.
+    let paused = false;
     const stateService = {
+      // initEmpty() seeds the real service's state before the slot is live.
+      hasRunState: vi.fn(() => true),
+      isPaused: vi.fn(() => paused),
+      pausePipeline: vi.fn(async () => {
+        paused = true;
+        return true;
+      }),
+      resumePipeline: vi.fn(async () => {
+        paused = false;
+        return true;
+      }),
       onStateChanged: vi.fn().mockReturnValue({ dispose: vi.fn() }),
       onPhaseStart: vi.fn().mockReturnValue({ dispose: vi.fn() }),
       onPhaseComplete: vi.fn().mockReturnValue({ dispose: vi.fn() }),
@@ -166,6 +179,10 @@ function createControllableFactory() {
         resolveRunRepoSlug: vi.fn().mockResolvedValue("nightgauge/nightgauge"),
         runPipeline: vi.fn().mockReturnValue(promise),
         stop,
+        // No approval gate waits in this fixture: approve/reject find nothing.
+        approve: vi.fn().mockReturnValue(false),
+        reject: vi.fn().mockReturnValue(false),
+        gracefulStop: vi.fn().mockResolvedValue(undefined),
         dispose: vi.fn(),
       },
       stateService,
@@ -268,5 +285,131 @@ describe("ConcurrentPipelineManager — pause holds the slot instead of ending i
     expect(onSlotFailed).not.toHaveBeenCalled();
     // The slot is cleaned up on its REAL completion, not on the pause.
     expect(manager.getActiveSlots()).toHaveLength(0);
+  });
+});
+
+// A platform pause and resume (#2334) act on the slot the platform's run id
+// names, through the same per-slot pause flag `Nightgauge: Pause Pipeline`
+// sets, so the stage loop holds at the next boundary and a resume continues
+// the same run. Each verb reports what it did, for its ack.
+describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAutonomousStatus.mockResolvedValue({ status: "running" });
+  });
+
+  it("pauses and resumes the slot through its own state service, and reports each outcome", async () => {
+    const { manager, controllable, onSlotFailed } = buildManager([423]);
+    manager.setPendingRemoteRunId(423, "platform-run-423");
+    await manager.fillSlots();
+    const state = controllable.stateServiceFor(423);
+
+    expect(await manager.resumeByRemoteRunId("platform-run-423")).toBe("not-paused");
+    expect(await manager.pauseByRemoteRunId("platform-run-423")).toBe("applied");
+    expect(state.pausePipeline).toHaveBeenCalledTimes(1);
+    expect(state.isPaused()).toBe(true);
+    expect(await manager.pauseByRemoteRunId("platform-run-423")).toBe("already-paused");
+    expect(state.pausePipeline).toHaveBeenCalledTimes(1);
+
+    // Held, not ended: the slot is still live and reachable by the verb.
+    expect(manager.getActiveSlots().map((s) => s.issueNumber)).toEqual([423]);
+    expect(onSlotFailed).not.toHaveBeenCalled();
+
+    expect(await manager.resumeByRemoteRunId("platform-run-423")).toBe("applied");
+    expect(state.resumePipeline).toHaveBeenCalledTimes(1);
+    expect(state.isPaused()).toBe(false);
+
+    controllable.finishWith(423, {
+      success: true,
+      completedStages: [],
+      skippedStages: [],
+      deferredStages: [],
+      totalDurationMs: 1,
+    });
+    await manager.settleForTest(423);
+  });
+
+  // A pause and a resume replayed in one stream chunk are handled in the same
+  // tick: the resume clears the flag while the pause is still persisting it.
+  // Both took effect, in order, and the pause must say so rather than report
+  // that the run had no state to pause (#2334 review).
+  it("reports a pause and a resume handled in the same tick as both applied", async () => {
+    const { manager, controllable } = buildManager([425]);
+    manager.setPendingRemoteRunId(425, "platform-run-425");
+    await manager.fillSlots();
+    const state = controllable.stateServiceFor(425);
+    const setFlag = state.pausePipeline.getMockImplementation();
+    state.pausePipeline.mockImplementation(async () => {
+      const persisted = setFlag(); // the flag moves at once, as in the real service
+      await new Promise((resolve) => setTimeout(resolve, 5)); // the IPC persist
+      return persisted;
+    });
+
+    const pause = manager.pauseByRemoteRunId("platform-run-425");
+    const resume = manager.resumeByRemoteRunId("platform-run-425");
+
+    expect(await pause).toBe("applied");
+    expect(await resume).toBe("applied");
+    expect(state.isPaused()).toBe(false);
+
+    controllable.finishWith(425, {
+      success: true,
+      completedStages: [],
+      skippedStages: [],
+      deferredStages: [],
+      totalDurationMs: 1,
+    });
+    await manager.settleForTest(425);
+  });
+
+  it("reports a pause of a slot with no loaded state as no-run-state, and exposes the run's state", async () => {
+    const { manager, controllable } = buildManager([426]);
+    manager.setPendingRemoteRunId(426, "platform-run-426");
+    await manager.fillSlots();
+    const state = controllable.stateServiceFor(426);
+    state.getState.mockResolvedValue({ issue_number: 426 });
+
+    expect(await manager.remoteRunState("platform-run-426")).toEqual({ issue_number: 426 });
+    expect(await manager.remoteRunState("elsewhere")).toBeNull();
+
+    state.hasRunState.mockReturnValue(false);
+    expect(await manager.pauseByRemoteRunId("platform-run-426")).toBe("no-run-state");
+    expect(state.pausePipeline).not.toHaveBeenCalled();
+
+    controllable.finishWith(426, {
+      success: true,
+      completedStages: [],
+      skippedStages: [],
+      deferredStages: [],
+      totalDurationMs: 1,
+    });
+    await manager.settleForTest(426);
+  });
+
+  it("reports a run id no local slot carries, and a gate that is not waiting, as no-ops", async () => {
+    const { manager, controllable } = buildManager([424]);
+    manager.setPendingRemoteRunId(424, "platform-run-424");
+    await manager.fillSlots();
+
+    for (const verb of [
+      () => manager.cancelByRemoteRunId("elsewhere"),
+      () => manager.approveByRemoteRunId("elsewhere"),
+      () => manager.rejectByRemoteRunId("elsewhere"),
+      () => manager.pauseByRemoteRunId("elsewhere"),
+      () => manager.resumeByRemoteRunId("elsewhere"),
+    ]) {
+      expect(await verb()).toBe("no-active-run");
+    }
+    expect(manager.approveByRemoteRunId("platform-run-424")).toBe("no-waiting-gate");
+    expect(manager.rejectByRemoteRunId("platform-run-424")).toBe("no-waiting-gate");
+
+    controllable.finishWith(424, {
+      success: true,
+      completedStages: [],
+      skippedStages: [],
+      deferredStages: [],
+      totalDurationMs: 1,
+    });
+    await manager.settleForTest(424);
   });
 });

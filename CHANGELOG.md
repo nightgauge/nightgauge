@@ -70,6 +70,48 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The VS Code agent acknowledges every command it consumes, and carries out
+  pause and resume** (#2334). A cancel, approve, reject, pause or resume from
+  the phone app or the dashboard used to sit `routing` until it expired,
+  whether or not it had been carried out, because only a trigger was ever
+  acknowledged. One handler now consumes the five run verbs and acknowledges
+  each exactly once: `applied` when it took effect, `rejected` with a fixed
+  reason when it found nothing to act on (no local run carries the runId, no
+  gate is waiting, the run is already paused or not paused) or the payload had
+  no runId. A command type the extension does not handle is acknowledged
+  `rejected` as unsupported instead of expiring (the workspace throttle is
+  one; applying it is #2337). The platform delivers a command at least once,
+  so a copy that arrives again is not carried out a second time: it re-sends
+  the first copy's ack only if that ack never arrived. Pause and resume use
+  the same per-run pause as `Nightgauge: Pause Pipeline`: the stage in flight
+  finishes, the run holds before the next stage starts, and resume continues
+  from there. The window shows them as it shows the local commands, in the
+  status bar and with Resume in place of Pause in the pipeline view. The stage
+  loop now also checks the pause before each stage starts, so a pause that
+  lands just after a stage finished no longer lets the next stage run first.
+  A verb for a repository that is not open in the window is left for the
+  window that has it, as a trigger already was. `agent.acknowledgeCommand`
+  accepts the `applied` outcome. Approve and reject now report no waiting
+  gate, because no local gate waits on them yet (#2336).
+- **The daemon's platform agent declares the workspace it serves** (#2335).
+  `nightgauge serve` registered with no repositories, so workspace presence
+  never counted it and a workspace served only by the daemon read offline. Its
+  registration now declares the same `owner/repo` set the extension declares
+  for the workspace (each member repository's own config, or the effective
+  `autonomous.enabled_repos` when none names one) and, when the workspace
+  manifest names the workspace, the same `workspace` block, slug derived
+  exactly as the extension derives it. The extension hands the daemon its
+  window's folders (`NIGHTGAUGE_WINDOW_FOLDERS`), and the daemon resolves the
+  workspace from them as the extension does: from the first folder's git
+  root and its manifest, or from every folder of a multi-root window with no
+  manifest. The two therefore agree even when `--workspace` names another
+  folder; a daemon started from a terminal declares its `--workspace` root.
+  A part the service would refuse is
+  dropped rather than costing the registration, and an account in no team
+  registers again without the block. Because the service may now route a
+  trigger or verb to the daemon's agent, the daemon relays any command it does
+  not execute to the extension over a new `agent.command` IPC event, and the
+  extension carries it out and acknowledges it under the daemon's agent id.
 - **Sandbox-scoped codex stages no longer fail at spawn** (#1715).
   `--ask-for-approval never` now goes before `exec`, where codex defines it,
   so read-only and edit-only stages build an argv codex accepts. Go and the

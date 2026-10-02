@@ -312,6 +312,12 @@ Displays comprehensive metrics:
   - Pipeline pauses after current stage completes
   - Resume from same point
 - **Resume:** Click status bar while paused → `Nightgauge: Resume Pipeline`
+- **From the phone app or the dashboard:** Pause and Resume act the same way
+  on a run this window is executing, including the status bar and the
+  Pause/Resume button in the pipeline view. Every command from there (pause,
+  resume, cancel, approve, reject) is acknowledged back, as applied or with
+  the reason it did nothing, for example that no run here carries that run id.
+  A command delivered twice is carried out once.
 
 #### Stopping Execution
 

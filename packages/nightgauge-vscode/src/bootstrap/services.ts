@@ -119,11 +119,10 @@ import { AgentHeartbeatService } from "../services/AgentHeartbeatService";
 import { buildUsageReport, getUsageReportingLevel } from "../services/usage/usageReporting";
 import { resolveExecutionProfile } from "../services/executionProfile";
 import { AgentCommandStreamService } from "../services/AgentCommandStreamService";
-import type { CommandHandler } from "../services/AgentCommandStreamService";
 import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
-import { CancelCommandHandler } from "../services/CancelCommandHandler";
-import { ApproveCommandHandler } from "../services/ApproveCommandHandler";
-import { RejectCommandHandler } from "../services/RejectCommandHandler";
+import { RunVerbCommandHandler } from "../services/RunVerbCommandHandler";
+import { AgentCommandDispatcher, subscribeToDaemonRelay } from "../services/AgentCommandDispatcher";
+import { createRemotePauseUi } from "../utils/pauseUi";
 import { AgentRegistrationService } from "../services/AgentRegistrationService";
 import { IpcClient } from "../services/IpcClient";
 import { IpcClientBase } from "../services/IpcClientBase";
@@ -4234,39 +4233,42 @@ export async function initializeServices(
       logger,
       workspaceManager ?? undefined
     );
-    const cancelCommandHandler = new CancelCommandHandler(concurrentPipelineManager, logger);
-    const approveCommandHandler = new ApproveCommandHandler(concurrentPipelineManager, logger);
-    const rejectCommandHandler = new RejectCommandHandler(concurrentPipelineManager, logger);
-    // CompositeCommandHandler fans out each received command to all registered
-    // handlers. AgentCommandStreamService accepts a single CommandHandler, so
-    // this thin composite lets all command types coexist without changing the
-    // service's interface. (#3552, #3553)
-    const compositeCommandHandler: CommandHandler = {
-      handle(cmd) {
-        triggerCommandHandler.handle(cmd);
-        cancelCommandHandler.handle(cmd);
-        approveCommandHandler.handle(cmd);
-        rejectCommandHandler.handle(cmd);
-      },
-      // Fan the agentId out to handlers that ack commands. Only the trigger
-      // handler acks today (POST /v1/agents/{agentId}/commands/{id}/ack, #3551);
-      // others act on local slots. AgentCommandStreamService.start() invokes
-      // this so the agentId is in place before the first command arrives.
-      setAgentId(agentId) {
-        triggerCommandHandler.setAgentId(agentId);
-      },
-    };
+    // One dispatcher consumes every command the platform delivers, and every
+    // handler acknowledges what it consumes exactly once (#2334): the trigger
+    // handler and the run-verb handler (cancel, approve, reject, pause,
+    // resume). AgentCommandStreamService.start() passes it the agentId before
+    // the first command arrives.
+    // A pause or resume from the platform shows in this window as the local
+    // Pause/Resume Pipeline commands show it (#2334).
+    const pipelineManager = concurrentPipelineManager;
+    const runVerbCommandHandler = new RunVerbCommandHandler(
+      concurrentPipelineManager,
+      ipcClient,
+      logger,
+      workspaceManager ?? undefined,
+      createRemotePauseUi(statusBar, (runId) => pipelineManager.remoteRunState(runId))
+    );
+    const agentCommandDispatcher = new AgentCommandDispatcher(
+      triggerCommandHandler,
+      runVerbCommandHandler,
+      ipcClient,
+      logger
+    );
+    // The daemon declares this workspace's repos for its own agent too, so the
+    // platform may place a trigger or verb on the daemon's agent; the daemon
+    // relays it here, where pipelines run (#2335).
+    context.subscriptions.push(subscribeToDaemonRelay(ipcClient, agentCommandDispatcher));
     agentCommandStreamService = new AgentCommandStreamService(
       getPlatformUrl,
       agentCommandStreamTokenStorage,
       context,
       logger,
-      compositeCommandHandler
+      agentCommandDispatcher
     );
     context.subscriptions.push(agentCommandStreamService);
     // start(agentId) is invoked from extension.ts alongside the heartbeat once
     // registration yields an agentId; start() also calls
-    // compositeCommandHandler.setAgentId(agentId) so trigger acks work (#3544).
+    // agentCommandDispatcher.setAgentId(agentId) so every ack names it (#3544).
   }
 
   if (platformEnabled) {

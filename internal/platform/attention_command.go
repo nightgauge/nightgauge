@@ -98,12 +98,31 @@ type AttentionCommandConsumer struct {
 	resolver AttentionResolver
 	ack      AgentCommandAcker
 	agentID  string
+	relay    AgentCommandRelay
 }
+
+// AgentCommandRelay hands on a command addressed to this daemon's agent that
+// the daemon does not execute itself: every type but attention_resolve
+// (#2335). The pipeline verbs and triggers the platform's router places by
+// repo are carried out by the VS Code extension attached to this daemon, which
+// runs the workspace's pipelines and acknowledges them under agentID, the
+// agent the platform addressed. Once the daemon declares the workspace's
+// repos, the router may place any of them on the daemon's agent instead of the
+// extension's; without the relay they would sit unacknowledged until expiry.
+type AgentCommandRelay func(agentID string, cmd PendingCommand)
 
 // NewAttentionCommandConsumer builds a consumer bound to the resolver (the single
 // writer), the agent-command ack, and this binary's agent id.
 func NewAttentionCommandConsumer(resolver AttentionResolver, ack AgentCommandAcker, agentID string) *AttentionCommandConsumer {
 	return &AttentionCommandConsumer{resolver: resolver, ack: ack, agentID: agentID}
+}
+
+// WithRelay sets where a command this consumer does not apply is handed on
+// (see AgentCommandRelay). Without one such a command is left alone, as it
+// was before #2335.
+func (c *AttentionCommandConsumer) WithRelay(relay AgentCommandRelay) *AttentionCommandConsumer {
+	c.relay = relay
+	return c
 }
 
 // Consume applies one command and acknowledges it. It returns a non-nil error
@@ -160,8 +179,15 @@ func (c *AttentionCommandConsumer) Consume(ctx context.Context, cmd PendingComma
 }
 
 // Execute drives Consume from the agent-command stream loop. Consume already
-// acknowledges and logs, so Execute always returns nil.
+// acknowledges and logs, so Execute always returns nil. Any other command type
+// goes to the relay, whose receiver acknowledges it.
 func (c *AttentionCommandConsumer) Execute(ctx context.Context, cmd PendingCommand) error {
+	if cmd.Type != AttentionResolveCommandType {
+		if c.relay != nil {
+			c.relay(c.agentID, cmd)
+		}
+		return nil
+	}
 	_, _ = c.Consume(ctx, cmd)
 	return nil
 }
@@ -328,6 +354,7 @@ func streamAgentCommands(ctx context.Context, client *Client, consumer *Attentio
 		if cmd.ID == "" || cmd.Type == "" {
 			return
 		}
+		cmd.Frame = json.RawMessage(payload)
 		gotFrame = true
 		_ = consumer.Execute(ctx, cmd)
 	}

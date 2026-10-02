@@ -11,6 +11,18 @@ and this project adheres to
 
 ### Fixed
 
+- **Pause, resume, cancel, approve and reject from the phone app or the
+  dashboard are acknowledged.** Each one used to show as unacknowledged and
+  then expired, even when it had been carried out. Pause and resume now work:
+  the run holds before its next stage, as with `Nightgauge: Pause Pipeline`,
+  and resume continues from there. The status bar and the pipeline view's
+  Pause/Resume button follow them, and a command delivered twice is carried
+  out once (#2334).
+- **A pause holds the run before the next stage starts** even when it lands
+  just after a stage finished; the next stage used to run in full first
+  (#2334).
+- **Remote commands reach this window when the platform routes them to the
+  background service's agent** (#2335).
 - **Interactive Codex starts without a shell command.** The terminal now runs
   `codex` directly with the stage prompt as its argument, instead of decoding
   the prompt from a temporary file in a shell (#2321).
