@@ -1618,7 +1618,7 @@ func issueCreateSubCmd() *cobra.Command {
 	cmd.Flags().StringVar(&body, "body", "", "Sub-issue body")
 	cmd.Flags().StringSliceVar(&labels, "labels", nil, "Label names to apply, comma-separated (e.g. type:bug,component:sdk). Unknown names fail before anything is created.")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number (skips board sync when 0)")
-	cmd.Flags().StringVar(&blockedBy, "blocked-by", "", "Comma-separated blocker issue numbers (e.g. 280,290). Body text 'Blocked by #N' is not parsed.")
+	cmd.Flags().StringVar(&blockedBy, "blocked-by", "", "Comma-separated blocker issue numbers (e.g. 280,290); creates native blockedBy relationships. A 'Blocked by #N' line in the body also gates pickup and dispatch.")
 	cmd.Flags().StringVar(&dependsOn, "depends-on", "", "Comma-separated blocker issue numbers (semantic alias for --blocked-by; creates addBlockedBy relationships)")
 	cmd.Flags().IntVar(&wave, "wave", 0, "Wave number for this sub-issue — embeds '(Wave N)' annotation in issue body")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")

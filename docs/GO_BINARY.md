@@ -1127,7 +1127,11 @@ nightgauge issue edit <number> --append-body "\n\nappended text" [--owner ORG] [
 # Create sub-issue under a parent epic
 nightgauge issue create-sub <parent-number> "<title>" "<body>"
 #   --blocked-by    Comma-separated blocker issue numbers (e.g. --blocked-by 280,290).
-#                   Body text "Blocked by #N" is cosmetic and NOT parsed. Default: none.
+#                   Native blockedBy is the relationship to create. Body lines
+#                   ("Depends on: #N", "Blocked by #N", "## Dependencies") are
+#                   honoured too, by the pickup gate and the dispatcher, so a
+#                   stale one holds the issue until removed or marked ⏸️.
+#                   Default: none.
 #   --depends-on    Semantic alias for --blocked-by. Creates addBlockedBy relationships.
 #                   Both flags can be used simultaneously; their blocker lists are merged.
 #   --wave          Wave number (integer). Embeds "(Wave N)" annotation in the issue body.

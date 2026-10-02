@@ -146,10 +146,16 @@ Both `--blocked-by` and `--depends-on` create `addBlockedBy` relationships.
 mechanical flag. Both can be used simultaneously — their blocker lists are
 merged.
 
-> **IMPORTANT**: Writing "Blocked by #N" in the issue body is purely cosmetic
-> text. The pipeline reads GitHub's native `blockedBy` GraphQL relationships —
-> NOT body text. Always use `--blocked-by` (or `nightgauge issue
-add-blocked-by` post-hoc) to create pipeline-visible blocking relationships.
+> **IMPORTANT**: Native `blockedBy` is the relationship to create: use
+> `--blocked-by` here, or `nightgauge issue add-blocked-by` afterwards. Body
+> text is not inert, though. The pickup gate and the dispatcher also honour a
+> dependency declared in the body (`Depends on: #N`, `Blocked by #N`, or an
+> entry under a `## Dependencies` section), so a stale line holds the issue
+> until it is removed or marked non-gating with `⏸️`. The words `deferred` /
+> `not-gating` also mark an entry non-gating, except on a line that says
+> `Blocked by` or `Depends on` outright. Keep the body and the native
+> relationships in agreement. Full rules: `docs/AUTONOMOUS_ORCHESTRATOR.md`
+> § "Body Text (same-repo and cross-repo)".
 
 If any blocker fails to link, the command reports a partial-success error naming
 each failed blocker. The sub-issue and parent link are preserved; re-run
@@ -225,9 +231,15 @@ After all sub-issues are created, set GitHub's **native blocking relationships**
 so the pipeline respects execution ordering. This prevents merge conflicts by
 ensuring dependent sub-issues don't run in parallel.
 
-**CRITICAL**: Use the `addBlockedBy` GraphQL mutation — NOT `trackedInIssues`,
-NOT body text like "Blocked by #N", NOT labels. The pipeline reads `blockedBy`/
-`blocking` fields from the GitHub API. Other approaches are invisible to it.
+**CRITICAL**: Native `blockedBy` is the relationship to create (`--blocked-by`
+at creation, `nightgauge issue add-blocked-by` afterwards) — NOT
+`trackedInIssues`, NOT labels, which the pipeline never reads as dependencies.
+A body line is no substitute: wave planning (`epic plan-waves`) reads only the
+native relationships. The pickup gate and the dispatcher do also honour body
+declarations (`Depends on: #N`, `Blocked by #N`, `## Dependencies`), so the
+Phase 3 body annotations gate dispatch too, and a stale one holds a sub-issue
+until it is removed or marked non-gating with `⏸️`. Keep the annotations and
+the native relationships in agreement.
 
 #### Step 1: Cross-Epic Dependency Detection (MANDATORY for all epics)
 

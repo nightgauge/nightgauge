@@ -242,6 +242,13 @@ changelog, and the release workflow refuses a tag that does not.
   of 20 s. When the concurrent-pipelines test timed out, its main thread could
   wait forever; now it fails.
 
+- **The `issue-create` skill, `issue create-sub --blocked-by` and
+  GO_BINARY.md no longer call body-declared dependencies cosmetic** (#2351).
+  Native `blockedBy` is still the relationship to create, but the pickup gate
+  and the dispatcher also honour `Depends on:` / `Blocked by` lines and
+  `## Dependencies` entries, so a stale one holds an issue until it is removed
+  or marked `⏸️`.
+
 - **The epic cascade finds a parent epic in another repository in that
   repository** (#2350). A sub-issue's parent was looked up by number in the
   sub-issue's own repository, because the board read recorded the parent's

@@ -75,8 +75,9 @@ The orchestrator scans all configured repository project boards and builds a
 unified Directed Acyclic Graph (DAG) of issues:
 
 - Fetches all open issues from each repo's GitHub project board
-- Reads `blockedBy` relationships from the GraphQL board data (intra-repo)
-- Parses issue bodies for cross-repo references (inter-repo)
+- Reads native `blockedBy` relationships from the board data
+- Parses issue bodies for declared dependencies, same-repo and cross-repo
+  (see [Body Text](#body-text-same-repo-and-cross-repo))
 - Computes topological execution waves via Kahn's algorithm
 - Finds the critical path (longest weighted path through the DAG)
 

@@ -58,8 +58,8 @@ row. Then, and only then, check blockers on the survivors:
 ```bash
 # Step 2: blocker check, on the selected tier's candidates only.
 # (blockedBy is not a --json field on any CLI; check-deps reads the native
-# GraphQL relationship. It is one call per issue, so it runs on the tier
-# that matched, never on all seven.)
+# relationship and the dependencies the issue body declares. It is one call
+# per issue, so it runs on the tier that matched, never on all seven.)
 ISSUE=$(printf '%s\n' "$TIER_CANDIDATES" | jq -r '.[].number' | while read -r n; do
   RESULT=$("$BINARY" hook check-deps "$n" --check-only 2>/dev/null || echo '{"has_open_dependencies":false}')
   if [ "$(printf '%s\n' "$RESULT" | jq -r '.has_open_dependencies')" = "false" ]; then
