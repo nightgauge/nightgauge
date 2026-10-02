@@ -1411,7 +1411,11 @@ export const PipelineConfigSchema = z.object({
    */
   performance_mode: z
     .object({
-      /** Per-mode overrides for tuning the published profiles */
+      /**
+       * Maximum-profile overrides. Accepted, but nothing reads them: the
+       * profile keeps its own values (#2378 decides between wiring them up
+       * and removing them).
+       */
       overrides: z
         .object({
           maximum: z

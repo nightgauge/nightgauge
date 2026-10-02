@@ -1782,7 +1782,7 @@ Pipeline execution settings.
 | `failure_mode`            | enum    | `halt`       | Behavior on terminal pipeline failure (Issue #3001)                                                                                                                           |
 | `adaptive_stall_recovery` | boolean | `false`      | Rewind to feature-planning once on first stall-kill (Issue #3005)                                                                                                             |
 | `adaptive_budget`         | boolean | `true`       | Derive per-stage token budgets from this repo's own exit records once ≥5 successful samples exist for the (repo, stage, size) group; falls back to the static table otherwise |
-| `performance_mode`        | object  | -            | Maximum-profile overrides (Issue #3009); the active mode is not set here                                                                                                      |
+| `performance_mode`        | object  | -            | Accepted, but no key under it is read yet (#2378); the active mode is not set here                                                                                            |
 
 **Skip object:**
 
@@ -1825,21 +1825,14 @@ rebasing long-lived epic branches.
 
 #### `pipeline.performance_mode` (Issue #3009)
 
-Tunes the `maximum` profile. The four modes, their envelopes and pins, and the
-order in which the active mode is resolved are in
-[PERFORMANCE_MODES.md](PERFORMANCE_MODES.md); no key in this file selects the
-mode.
+No key in this file selects the mode. The four modes, their envelopes and
+pins, and the order in which the active mode is resolved are in
+[PERFORMANCE_MODES.md](PERFORMANCE_MODES.md).
 
-```yaml
-pipeline:
-  performance_mode:
-    overrides:
-      maximum:
-        model: opus # heavy-tier model (default: opus)
-        codex_model: gpt-5.5 # optional Codex override
-        stall_kill_multiplier: 10
-        disable_budget_ceiling: true
-```
+The schema accepts `pipeline.performance_mode.overrides.maximum` (`model`,
+`codex_model`, `stall_kill_multiplier`, `disable_budget_ceiling`), but nothing
+reads it: the `maximum` profile keeps its own values whatever the block holds.
+Whether these overrides are wired up or removed is tracked in #2378.
 
 ### Capping automatic routing with `max_model`
 
@@ -1919,8 +1912,10 @@ checkout's `performance-mode.yaml`
 `pipeline.performance_mode.default` key was documented here but never read
 (#2343); the schema now rejects it.
 
-The legacy `pipeline.supercharge` block is still parsed for one release as a
-synonym for `pipeline.performance_mode.overrides.maximum`. See
+The legacy `pipeline.supercharge` block is still parsed for one release, by
+the extension only, and only two of its keys: `model` and `codex_model` set the
+Claude and Codex models of the `maximum` profile. Its `stall_kill_multiplier`
+and `disable_budget_ceiling` are not read. See
 [DEPRECATIONS.md](DEPRECATIONS.md#supercharge-toggle--performance_mode-selector).
 
 #### `pipeline.recovery.conflict_recovery` (#4072)

@@ -138,3 +138,53 @@ pipeline:
     expect(getStallKillMultiplier("/test/workspace", "feature-validate")).toBe(10);
   });
 });
+
+// #2378: the global multiplier is pipeline.stall_kill_multiplier itself. The
+// same key nested under performance_mode.overrides.maximum or the legacy
+// supercharge block, as CONFIGURATION.md's example once suggested, used to be
+// read as the global value for every stage in every mode.
+describe("getStallKillMultiplier — only pipeline's own key is global (#2378)", () => {
+  function config(yaml: string): void {
+    vi.mocked(resolveConfigPathSync).mockReturnValue({
+      path: "/test/workspace/.nightgauge/config.yaml",
+      exists: true,
+      isLegacy: false,
+    });
+    vi.mocked(fs.readFileSync).mockReturnValue(yaml);
+  }
+
+  it.each([
+    [
+      "performance_mode.overrides.maximum",
+      `
+pipeline:
+  performance_mode:
+    overrides:
+      maximum:
+        stall_kill_multiplier: 10
+`,
+    ],
+    [
+      "supercharge",
+      `
+pipeline:
+  supercharge:
+    stall_kill_multiplier: 10
+`,
+    ],
+  ])("ignores a stall_kill_multiplier nested under %s", (_where, yaml) => {
+    config(yaml);
+    expect(getStallKillMultiplier("/test/workspace", "feature-dev")).toBe(8);
+    expect(getStallKillMultiplier("/test/workspace", "feature-validate")).toBe(4);
+  });
+
+  it("still reads pipeline.stall_kill_multiplier beside a nested one, at any indentation", () => {
+    config(`
+pipeline:
+    supercharge:
+        stall_kill_multiplier: 10
+    stall_kill_multiplier: 6
+`);
+    expect(getStallKillMultiplier("/test/workspace", "feature-dev")).toBe(6);
+  });
+});

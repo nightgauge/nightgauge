@@ -8,12 +8,12 @@ the extension. The two tables mirror each other.
 
 ## Modes
 
-| Mode                 | Model floor | Model ceiling | Effort floor | Effort ceiling | Per-stage pins                  |
-| -------------------- | ----------- | ------------- | ------------ | -------------- | ------------------------------- |
-| `efficiency`         | `haiku`     | `sonnet`      | none         | `medium`       | none                            |
-| `elevated` (default) | `haiku`     | `opus`        | none         | none           | none                            |
-| `maximum`            | `opus`      | `opus`        | `high`       | none           | `opus` at `high` on every stage |
-| `frontier`           | `haiku`     | `fable`       | none         | none           | none                            |
+| Mode                 | Model floor | Model ceiling | Effort floor | Effort ceiling | Per-stage pins                                  |
+| -------------------- | ----------- | ------------- | ------------ | -------------- | ----------------------------------------------- |
+| `efficiency`         | `haiku`     | `sonnet`      | none         | `medium`       | none                                            |
+| `elevated` (default) | `haiku`     | `opus`        | none         | none           | none                                            |
+| `maximum`            | `opus`      | `opus`        | `high`       | none           | `opus` at `high` on the six stages listed below |
+| `frontier`           | `haiku`     | `fable`       | none         | none           | none                                            |
 
 - **Envelope.** The router picks each stage's model inside the mode's
   `[floor, ceiling]` band. The ceiling also caps post-failure escalation, the
@@ -22,7 +22,9 @@ the extension. The two tables mirror each other.
   effort bounds; when nothing resolves an effort, the effort floor applies.
 - **Pins.** A pin replaces routing for its stage. Only `maximum` pins: `opus`
   at effort `high` on `issue-pickup`, `feature-planning`, `feature-dev`,
-  `feature-validate`, `pr-create` and `pr-merge`.
+  `feature-validate`, `pr-create` and `pr-merge`. It pins neither
+  `issue-refine` nor `spike-materialize`; its envelope holds those to `opus`,
+  with effort at least `high`.
 - **Frontier.** `fable` is the ceiling on `feature-planning` and `feature-dev`
   only; every other stage is capped at `opus`. The router reaches `fable` on
   those two stages only for an issue in the top complexity band (`L`/`XL`).

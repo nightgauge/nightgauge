@@ -45,6 +45,10 @@ and this project adheres to
   never read it. Choose the mode with the status-bar picker, or set
   `NIGHTGAUGE_PERFORMANCE_MODE`, and remove the key (#2343).
 
+- **A `stall_kill_multiplier` under `performance_mode` or `supercharge` no
+  longer changes every stage's stall window.** Only
+  `pipeline.stall_kill_multiplier` itself sets the global multiplier (#2378).
+
 - **A sub-issue whose epic lives in another repository is based on its own
   default branch.** The base-branch check after issue pickup and the concurrent
   slots used to look for the epic's branch by number in the sub-issue's

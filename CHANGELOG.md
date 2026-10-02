@@ -254,6 +254,17 @@ changelog, and the release workflow refuses a tag that does not.
   `performance-mode.yaml` (the status-bar picker), then `elevated`. A config
   that still sets the key is reported as invalid instead of being ignored.
 
+  CONFIGURATION.md no longer says `pipeline.performance_mode.overrides.maximum`
+  tunes the `maximum` profile, or that `pipeline.supercharge` is its synonym:
+  nothing reads the overrides (#2378), and only the legacy block's `model` and
+  `codex_model` are read.
+- **A `stall_kill_multiplier` nested inside another `pipeline` key no longer
+  sets the global one** (#2378). The extension read the key at any depth under
+  `pipeline:`, so one under `performance_mode.overrides.maximum`, as
+  CONFIGURATION.md's example showed, or under `supercharge` changed the stall
+  window of every stage in every mode. Only `pipeline.stall_kill_multiplier`
+  itself is the global multiplier now.
+
 - **An epic's branch, epic PR, accumulated context and checkpoint are found in
   the epic's own repository** (#2377). Four call sites still resolved a
   sub-issue's parent epic by number in the sub-issue's repository. When the
