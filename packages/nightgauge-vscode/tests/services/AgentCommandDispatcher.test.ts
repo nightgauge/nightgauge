@@ -50,8 +50,6 @@ function makeRuns(verbResult: RemoteVerbResult, holds = true) {
     clearPendingRemoteRunId: vi.fn(),
     fillSlots: vi.fn().mockResolvedValue(undefined),
     cancelByRemoteRunId: vi.fn().mockResolvedValue(verbResult),
-    approveByRemoteRunId: vi.fn().mockReturnValue(verbResult),
-    rejectByRemoteRunId: vi.fn().mockReturnValue(verbResult),
     pauseByRemoteRunId: vi.fn().mockResolvedValue(verbResult),
     resumeByRemoteRunId: vi.fn().mockResolvedValue(verbResult),
   };
@@ -120,12 +118,16 @@ describe("AgentCommandDispatcher", () => {
       for (const call of ipc.agentAcknowledgeCommand.mock.calls) {
         expect(call[0]).toBe("agent-ext");
       }
-      const verbOutcomes = ipc.agentAcknowledgeCommand.mock.calls
-        .filter((c) => !String(c[1]).startsWith("cmd-trigger"))
-        .map((c) => c[2]);
-      expect(new Set(verbOutcomes)).toEqual(
-        new Set([verbResult === "applied" ? "applied" : "rejected"])
-      );
+      // Approve and reject have no local gate to release (#2336): refused.
+      const outcomeOf = (type: string) =>
+        ipc.agentAcknowledgeCommand.mock.calls.find((c) =>
+          String(c[1]).startsWith(`cmd-${type}-`)
+        )?.[2];
+      for (const type of ["cancel", "pause", "resume"]) {
+        expect(outcomeOf(type)).toBe(verbResult === "applied" ? "applied" : "rejected");
+      }
+      expect(outcomeOf("approve")).toBe("rejected");
+      expect(outcomeOf("reject")).toBe("rejected");
     }
   );
 
@@ -166,8 +168,6 @@ describe("AgentCommandDispatcher", () => {
     // No verb was applied twice, and no refusal was sent twice.
     for (const verb of [
       runs.cancelByRemoteRunId,
-      runs.approveByRemoteRunId,
-      runs.rejectByRemoteRunId,
       runs.pauseByRemoteRunId,
       runs.resumeByRemoteRunId,
     ]) {

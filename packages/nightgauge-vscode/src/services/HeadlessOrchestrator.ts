@@ -1156,7 +1156,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   private abortController: AbortController | null = null;
   private disposables: vscode.Disposable[] = [];
 
-  private approvalResolve: ((approved: boolean) => void) | null = null;
   private config: Required<PipelineExecutionConfig>;
 
   /**
@@ -16108,29 +16107,6 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       return false;
     }
     this.logger.info("Pipeline resumed — continuing stage loop", { stage, issueNumber });
-    return true;
-  }
-
-  /**
-   * Approve the current approval gate.
-   * Returns whether a gate was waiting: false means there was nothing to
-   * approve, which a platform verb reports as a no-op (#2334).
-   */
-  approve(): boolean {
-    if (!this.approvalResolve) return false;
-    this.approvalResolve(true);
-    this.approvalResolve = null;
-    return true;
-  }
-
-  /**
-   * Reject the current approval gate, stopping the pipeline at the current
-   * stage. Returns whether a gate was waiting (see approve()).
-   */
-  reject(): boolean {
-    if (!this.approvalResolve) return false;
-    this.approvalResolve(false);
-    this.approvalResolve = null;
     return true;
   }
 

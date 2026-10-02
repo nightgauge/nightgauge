@@ -179,9 +179,6 @@ function createControllableFactory() {
         resolveRunRepoSlug: vi.fn().mockResolvedValue("nightgauge/nightgauge"),
         runPipeline: vi.fn().mockReturnValue(promise),
         stop,
-        // No approval gate waits in this fixture: approve/reject find nothing.
-        approve: vi.fn().mockReturnValue(false),
-        reject: vi.fn().mockReturnValue(false),
         gracefulStop: vi.fn().mockResolvedValue(undefined),
         dispose: vi.fn(),
       },
@@ -434,22 +431,18 @@ describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334
     expect(manager.holdsRemoteRun("platform-run-429")).toBe(false);
   });
 
-  it("reports a run id no local slot carries, and a gate that is not waiting, as no-ops", async () => {
+  it("reports a run id no local slot carries as a no-op", async () => {
     const { manager, controllable } = buildManager([424]);
     manager.setPendingRemoteRunId(424, "platform-run-424");
     await manager.fillSlots();
 
     for (const verb of [
       () => manager.cancelByRemoteRunId("elsewhere"),
-      () => manager.approveByRemoteRunId("elsewhere"),
-      () => manager.rejectByRemoteRunId("elsewhere"),
       () => manager.pauseByRemoteRunId("elsewhere"),
       () => manager.resumeByRemoteRunId("elsewhere"),
     ]) {
       expect(await verb()).toBe("no-active-run");
     }
-    expect(manager.approveByRemoteRunId("platform-run-424")).toBe("no-waiting-gate");
-    expect(manager.rejectByRemoteRunId("platform-run-424")).toBe("no-waiting-gate");
 
     controllable.finishWith(424, {
       success: true,

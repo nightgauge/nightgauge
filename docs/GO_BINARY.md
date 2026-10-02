@@ -315,11 +315,12 @@ platform addressed. A daemon with no extension attached has nobody to relay
 to, and such a command expires on the platform.
 
 The extension acknowledges every command it consumes exactly once (#2334): a
-trigger with the run it starts; a run verb (`cancel`, `approve`, `reject`,
-`pause`, `resume`) as `applied`, as `already_resolved` when the run was
-already in the state the verb asks for (a pause of a paused run, a resume of
-a run that is not paused, #2341), or as `rejected` with the reason it could
-not act; any other type as `rejected` with `unsupported-command`. The
+trigger with the run it starts; a run verb (`cancel`, `pause`, `resume`) as
+`applied`, as `already_resolved` when the run was already in the state the
+verb asks for (a pause of a paused run, a resume of a run that is not paused,
+#2341), or as `rejected` with the reason it could not act; an `approve` or
+`reject` as `rejected` with `no-approval-gate` (see below); any other type as
+`rejected` with `unsupported-command`. The
 platform keeps the status a pause or resume set unless the ack is
 `rejected`, which makes it restore the run's earlier status. Delivery is
 at least once, so a copy of a verb or an unsupported command that arrives
@@ -341,6 +342,24 @@ refusal from a window that does not hold the run would undo the holder's
 hold. When no window holds the run, nobody acknowledges, and the platform
 expires the command. A verb with no `runId` names no run, and every window
 that has the repository open refuses it as `invalid-payload`.
+
+No local run waits for a platform `approve` or `reject` (#2336). The verbs
+name a run's `stage` and `gateType`, one of the platform's quality-gate types
+(`lint`, `type-check`, `tests`, `build`, `security`), but nothing in a local
+run holds for such a decision:
+
+- the pipeline evaluates its quality gates itself, and a failing gate fails
+  the stage, which the pipeline's own retry and recovery then handle;
+- the architecture-approval check ends the run before `feature-dev` and is
+  approved on the issue (the `approved:architecture` label or an approval
+  file), not on a run, and a new run picks the approval up;
+- a decision request in the attention queue is resolved by its own command,
+  `attention_resolve`, which the daemon applies.
+
+The window that holds the run therefore refuses both verbs, `rejected` with
+`no-approval-gate`, and the extension keeps no approval state for them to
+release. A gate that holds a run for a human decision would be the place to
+wire them.
 
 ## CLI Command Reference
 

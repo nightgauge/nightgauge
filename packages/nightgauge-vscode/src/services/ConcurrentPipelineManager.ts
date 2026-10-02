@@ -212,13 +212,7 @@ interface SlotReservation {
  * (#2340).
  */
 export type RemoteVerbResult =
-  | "applied"
-  | "no-active-run"
-  | "not-started"
-  | "no-waiting-gate"
-  | "already-paused"
-  | "not-paused"
-  | "no-run-state";
+  "applied" | "no-active-run" | "not-started" | "already-paused" | "not-paused" | "no-run-state";
 
 interface PipelineSlot {
   /** Slot index (0-based) */
@@ -3692,28 +3686,6 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     slot.userCancelled = true;
     await slot.orchestrator.gracefulStop(10_000);
     return "applied";
-  }
-
-  /**
-   * Forward an approval decision to the slot identified by the platform's run
-   * id. "no-waiting-gate" when the run is not waiting at an approval gate.
-   * @see Issue #3553 — approve command handler
-   */
-  approveByRemoteRunId(remoteRunId: string): RemoteVerbResult {
-    const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return this.noSlotFor(remoteRunId);
-    return slot.orchestrator.approve() ? "applied" : "no-waiting-gate";
-  }
-
-  /**
-   * Reject the approval gate for the slot identified by the platform's run id.
-   * "no-waiting-gate" when the run is not waiting at an approval gate.
-   * @see Issue #3553 — reject command handler
-   */
-  rejectByRemoteRunId(remoteRunId: string): RemoteVerbResult {
-    const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return this.noSlotFor(remoteRunId);
-    return slot.orchestrator.reject() ? "applied" : "no-waiting-gate";
   }
 
   /**

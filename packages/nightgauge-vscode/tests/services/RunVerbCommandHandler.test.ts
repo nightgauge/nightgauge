@@ -35,8 +35,6 @@ function makeRuns(
   return {
     holdsRemoteRun: vi.fn().mockReturnValue(holds),
     cancelByRemoteRunId: vi.fn().mockResolvedValue(result),
-    approveByRemoteRunId: vi.fn().mockReturnValue(result),
-    rejectByRemoteRunId: vi.fn().mockReturnValue(result),
     pauseByRemoteRunId: vi.fn().mockResolvedValue(result),
     resumeByRemoteRunId: vi.fn().mockResolvedValue(result),
   };
@@ -58,13 +56,20 @@ function verbCmd(type: string, extra: Partial<ReceivedCommand> = {}): ReceivedCo
   };
 }
 
-const METHOD: Record<string, keyof RunVerbTarget> = {
+/** The verbs that act on a local run, and the run-manager method each calls. */
+const APPLIED_VERBS = ["cancel", "pause", "resume"] as const;
+const METHOD: Record<(typeof APPLIED_VERBS)[number], keyof RunVerbTarget> = {
   cancel: "cancelByRemoteRunId",
-  approve: "approveByRemoteRunId",
-  reject: "rejectByRemoteRunId",
   pause: "pauseByRemoteRunId",
   resume: "resumeByRemoteRunId",
 };
+/** No local run waits at a gate these could release (#2336). */
+const GATE_VERBS = ["approve", "reject"] as const;
+
+/** Whether any verb method of the run manager was called. */
+function appliedAnything(runs: ReturnType<typeof makeRuns>): boolean {
+  return Object.values(METHOD).some((m) => runs[m].mock.calls.length > 0);
+}
 
 describe("RunVerbCommandHandler", () => {
   let ipc: ReturnType<typeof makeIpc>;
@@ -75,25 +80,22 @@ describe("RunVerbCommandHandler", () => {
     logger = makeLogger();
   });
 
-  it.each(RUN_VERB_COMMAND_TYPES)(
-    "an applied %s is acknowledged once, as applied",
-    async (verb) => {
-      const runs = makeRuns("applied");
-      const handler = new RunVerbCommandHandler(runs as never, ipc, logger as never);
-      handler.setAgentId("agent-ext");
+  it.each(APPLIED_VERBS)("an applied %s is acknowledged once, as applied", async (verb) => {
+    const runs = makeRuns("applied");
+    const handler = new RunVerbCommandHandler(runs as never, ipc, logger as never);
+    handler.setAgentId("agent-ext");
 
-      await handler.consume(verbCmd(verb), verb);
+    await handler.consume(verbCmd(verb), verb);
 
-      expect(runs[METHOD[verb]]).toHaveBeenCalledWith("run-1");
-      expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
-      expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledWith(
-        "agent-ext",
-        `cmd-${verb}`,
-        "applied",
-        undefined
-      );
-    }
-  );
+    expect(runs[METHOD[verb]]).toHaveBeenCalledWith("run-1");
+    expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
+    expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledWith(
+      "agent-ext",
+      `cmd-${verb}`,
+      "applied",
+      undefined
+    );
+  });
 
   // #2340: every window on the machine receives the verb, and the first ack
   // ends it. A window that does not hold the run must not answer for it.
@@ -107,14 +109,14 @@ describe("RunVerbCommandHandler", () => {
       await handler.consume(verbCmd(verb), verb);
 
       expect(runs.holdsRemoteRun).toHaveBeenCalledWith("run-1");
-      expect(runs[METHOD[verb]]).not.toHaveBeenCalled();
+      expect(appliedAnything(runs)).toBe(false);
       expect(ipc.agentAcknowledgeCommand).not.toHaveBeenCalled();
     }
   );
 
   // The holder can still find nothing to act on: the run ended between the
   // check and the apply. It held the run, so it answers, as rejected.
-  it.each(RUN_VERB_COMMAND_TYPES)(
+  it.each(APPLIED_VERBS)(
     "a %s whose run ended under the holder is acknowledged once, as a rejected no-op",
     async (verb) => {
       const handler = new RunVerbCommandHandler(
@@ -162,15 +164,41 @@ describe("RunVerbCommandHandler", () => {
       await other.consume(verbCmd(verb), verb);
       await holder.consume(verbCmd(verb), verb);
 
-      expect(otherRuns[METHOD[verb]]).not.toHaveBeenCalled();
-      expect(holderRuns[METHOD[verb]]).toHaveBeenCalledWith("run-1");
+      expect(appliedAnything(otherRuns)).toBe(false);
       expect(shared.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
-      expect(shared.agentAcknowledgeCommand).toHaveBeenCalledWith(
-        "agent-machine",
-        `cmd-${verb}`,
-        "applied",
-        undefined
+      const [agentId, id, outcome] = shared.agentAcknowledgeCommand.mock.calls[0];
+      expect([agentId, id]).toEqual(["agent-machine", `cmd-${verb}`]);
+      if (verb === "approve" || verb === "reject") {
+        expect(outcome).toBe("rejected");
+      } else {
+        expect(holderRuns[METHOD[verb]]).toHaveBeenCalledWith("run-1");
+        expect(outcome).toBe("applied");
+      }
+    }
+  );
+
+  // #2336: an approve or reject names a stage and gate type, but no local run
+  // ever waits at a gate it could release. The holder says so; it touches
+  // nothing.
+  it.each(GATE_VERBS)(
+    "a %s is refused by the holder as no-approval-gate, and no run is touched",
+    async (verb) => {
+      const runs = makeRuns("applied");
+      const handler = new RunVerbCommandHandler(runs as never, ipc, logger as never);
+      handler.setAgentId("agent-ext");
+
+      await handler.consume(
+        verbCmd(verb, {
+          payload: { runId: "run-1", stage: "feature-validate", gateType: "tests", reason: "no" },
+        }),
+        verb
       );
+
+      expect(appliedAnything(runs)).toBe(false);
+      expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
+      const [agentId, id, outcome, detail] = ipc.agentAcknowledgeCommand.mock.calls[0];
+      expect([agentId, id, outcome]).toEqual(["agent-ext", `cmd-${verb}`, "rejected"]);
+      expect(detail).toMatch(/^no-approval-gate: /);
     }
   );
 
@@ -202,7 +230,6 @@ describe("RunVerbCommandHandler", () => {
 
   it("names each kind of no-op in the ack's reason", async () => {
     const cases: Array<[RemoteVerbResult, string, RegExp]> = [
-      ["no-waiting-gate", "approve", /^no-waiting-gate: /],
       ["no-run-state", "pause", /^no-run-state: /],
       ["not-started", "cancel", /^not-started: /],
     ];

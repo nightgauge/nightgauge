@@ -18,10 +18,18 @@
  *     the verb asks for, a pause of a paused run or a resume of a run that is
  *     not paused (#2341). The platform keeps the status the verb set;
  *   - `rejected` with a fixed reason: it could not act (the run is still
- *     queued here, no gate is waiting, the run has no state to pause yet, or
- *     the run ended after this window was found to hold it) or its payload
- *     had no runId. On a pause or resume the platform then restores the
- *     run's earlier status.
+ *     queued here, the run has no state to pause yet, or the run ended after
+ *     this window was found to hold it), it was an `approve` or `reject`, or
+ *     its payload had no runId. On a pause or resume the platform then
+ *     restores the run's earlier status.
+ *
+ * `approve` and `reject` name a run's `stage` and `gateType`, but no local
+ * run ever waits at a gate a platform decision could release (#2336): the
+ * pipeline evaluates its quality gates itself and fails the stage when one
+ * fails, the architecture-approval check ends the run before feature-dev and
+ * is approved on the issue, and an attention decision request has its own
+ * command, `attention_resolve`. The holder refuses both verbs with
+ * `no-approval-gate` (docs/GO_BINARY.md § The daemon's platform agent).
  *
  * `pause` and `resume` reuse the local Pause/Resume Pipeline mechanism (#423):
  * the run's state service is marked paused, the stage in flight finishes, the
@@ -86,7 +94,6 @@ const ALREADY_RESOLVED_DETAIL: Record<AlreadyResolvedResult, string> = {
 const NO_OP_DETAIL: Record<Exclude<RemoteVerbResult, "applied" | AlreadyResolvedResult>, string> = {
   "no-active-run": "no-active-run: no pipeline on this agent carries this runId",
   "not-started": "not-started: the run is queued on this agent and has not started yet",
-  "no-waiting-gate": "no-waiting-gate: the run is not waiting at an approval gate",
   "no-run-state": "no-run-state: the run has no local state to pause yet",
 };
 
@@ -94,16 +101,13 @@ function isAlreadyResolved(result: RemoteVerbResult): result is AlreadyResolvedR
   return result in ALREADY_RESOLVED_DETAIL;
 }
 const INVALID_PAYLOAD_DETAIL = "invalid-payload: runId is required";
+const NO_APPROVAL_GATE_DETAIL =
+  "no-approval-gate: runs on this agent never wait at an approval gate";
 const APPLY_FAILED_DETAIL = "apply-failed: the agent could not carry out the command";
 
 export type RunVerbTarget = Pick<
   ConcurrentPipelineManager,
-  | "holdsRemoteRun"
-  | "cancelByRemoteRunId"
-  | "approveByRemoteRunId"
-  | "rejectByRemoteRunId"
-  | "pauseByRemoteRunId"
-  | "resumeByRemoteRunId"
+  "holdsRemoteRun" | "cancelByRemoteRunId" | "pauseByRemoteRunId" | "resumeByRemoteRunId"
 >;
 
 /** The ack a consumed verb gets, decided once per command id. */
@@ -195,6 +199,14 @@ export class RunVerbCommandHandler implements CommandHandler {
       });
       return { agentId, outcome: "rejected", detail: INVALID_PAYLOAD_DETAIL };
     }
+    if (verb === "approve" || verb === "reject") {
+      this.logger.info("RunVerbCommandHandler: no local run waits at an approval gate", {
+        verb,
+        runId,
+        commandId: cmd.id,
+      });
+      return { agentId, outcome: "rejected", detail: NO_APPROVAL_GATE_DETAIL };
+    }
 
     let result: RemoteVerbResult;
     try {
@@ -247,16 +259,12 @@ export class RunVerbCommandHandler implements CommandHandler {
   }
 
   private apply(
-    verb: RunVerbCommandType,
+    verb: Exclude<RunVerbCommandType, "approve" | "reject">,
     runId: string
-  ): Promise<RemoteVerbResult> | RemoteVerbResult {
+  ): Promise<RemoteVerbResult> {
     switch (verb) {
       case "cancel":
         return this.runs.cancelByRemoteRunId(runId);
-      case "approve":
-        return this.runs.approveByRemoteRunId(runId);
-      case "reject":
-        return this.runs.rejectByRemoteRunId(runId);
       case "pause":
         return this.runs.pauseByRemoteRunId(runId);
       case "resume":

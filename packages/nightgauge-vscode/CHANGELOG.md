@@ -11,6 +11,9 @@ and this project adheres to
 
 ### Fixed
 
+- **Approve and reject from the phone app or the dashboard say why they
+  cannot apply:** no run in the extension waits at an approval gate, so the
+  window running the pipeline answers both with that reason (#2336).
 - **A pause of a paused run, or a resume of a running one, from the phone app
   or the dashboard no longer shows the opposite state there.** The window now
   answers that the run was already in that state instead of refusing the

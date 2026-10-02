@@ -70,6 +70,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A platform approve or reject says why it cannot apply** (#2336). The
+  extension's approve and reject released an approval promise that nothing
+  ever created, so no verb could take effect. No local run holds for a
+  quality-gate decision: the pipeline evaluates its gates and fails the
+  stage, the architecture-approval check is approved on the issue, and an
+  attention request has `attention_resolve`. The unused approval state is
+  removed, and the window holding the run acknowledges both verbs `rejected`
+  with `no-approval-gate`. The decision is recorded in
+  [GO_BINARY.md § The daemon's platform agent](docs/GO_BINARY.md#the-daemons-platform-agent).
 - **A remote pause of a paused run, or resume of a running one, no longer flips
   the run's status on the platform** (#2341). The extension acknowledged both
   as `rejected` (`already-paused`, `not-paused`), and the platform answers a
@@ -108,8 +117,8 @@ changelog, and the release workflow refuses a tag that does not.
   lands just after a stage finished no longer lets the next stage run first.
   A verb for a repository that is not open in the window is left for the
   window that has it, as a trigger already was. `agent.acknowledgeCommand`
-  accepts the `applied` outcome. Approve and reject now report no waiting
-  gate, because no local gate waits on them yet (#2336).
+  accepts the `applied` outcome. Approve and reject are refused, because no
+  local run waits at an approval gate (#2336).
 - **The daemon's platform agent declares the workspace it serves** (#2335).
   `nightgauge serve` registered with no repositories, so workspace presence
   never counted it and a workspace served only by the daemon read offline. Its
