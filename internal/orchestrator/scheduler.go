@@ -8298,6 +8298,14 @@ func splitOwnerRepo(fullRepo string) (string, string) {
 	return "", fullRepo
 }
 
+// isOwnerRepo reports whether repo is spelled "owner/name". A dependency key
+// whose repository is not is the name an issue body gave a repository the
+// workspace cannot identify (depgraph.CrossRepoRef.Unresolved, #2349).
+func isOwnerRepo(repo string) bool {
+	owner, name, ok := strings.Cut(repo, "/")
+	return ok && owner != "" && name != ""
+}
+
 // splitNodeKey parses a graph node key ("owner/repo#number") into its repo
 // ("owner/repo") and issue number. ok is false for malformed keys (no '#', or
 // a non-numeric suffix).
@@ -8328,6 +8336,10 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 // inaccessible) — are left OUT of the returned map. Callers must treat
 // absence as "still unresolved" and apply their own fail-open/fail-closed
 // policy; this helper never guesses a state.
+//
+// A key whose repository is not "owner/repo" — the name an issue body gave a
+// repository the workspace cannot identify (depgraph's Unresolved reference)
+// — names no issue GitHub could return, so it is left out without a request.
 func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []string) map[string]string {
 	if issueSvc == nil || len(keys) == 0 {
 		return nil
@@ -8339,6 +8351,9 @@ func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 		if !ok {
 			log.Printf("WARN: resolveIssueStatesByKey: malformed node key %q, skipping", key)
 			continue
+		}
+		if !isOwnerRepo(repo) {
+			continue // an unresolvable repository name — see the doc comment
 		}
 		byRepo[repo] = append(byRepo[repo], num)
 	}

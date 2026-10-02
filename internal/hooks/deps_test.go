@@ -505,3 +505,67 @@ func TestEvaluateIssueDeps_SiblingShortNamesResolveThroughTheWorkspace(t *testin
 		}
 	}
 }
+
+// TestEvaluateIssueDeps_Issue2349ReviewRows is the pickup half of the #2349
+// review's rows: a dotted repository in every spelling, and repo-qualified
+// entries under every dependency-section header, each hold the issue on the
+// right repository's #12. The declaring repository's own #12 is open and
+// fetchable, so a regression shows as the wrong blocker.
+func TestEvaluateIssueDeps_Issue2349ReviewRows(t *testing.T) {
+	aliases := depgraph.WorkspaceRepoAliases([]string{
+		"example-org/app", "example-org/widget-api", "example-org/site.dev",
+	})
+	rows := []struct {
+		body, wantRepo string
+	}{
+		{"Blocked by site.dev #12", "example-org/site.dev"},
+		{"Blocked by site.dev#12", "example-org/site.dev"},
+		{"Blocked by example-org/site.dev#12.", "example-org/site.dev"},
+		{"## Dependencies\n\n- widget-api #12\n", "example-org/widget-api"},
+		{"## Blocked by\n\n- example-org/widget-api#12\n", "example-org/widget-api"},
+		{"## Depends on\n\n- ❌ widget-api #12 — not started\n", "example-org/widget-api"},
+	}
+	for _, row := range rows {
+		mock := &mockFetcher{issues: map[string]*types.Issue{
+			"example-org/app#1":         {Number: 1, Body: row.body},
+			"example-org/app#12":        {Number: 12, Title: "unrelated", State: "OPEN"},
+			"example-org/widget-api#12": {Number: 12, Title: "widget", State: "OPEN"},
+			"example-org/site.dev#12":   {Number: 12, Title: "site", State: "OPEN"},
+		}}
+		result, err := EvaluateIssueDeps(context.Background(), mock, "example-org", "app", 1, aliases)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", row.body, err)
+		}
+		if len(result.OpenDependencies) != 1 || !result.ShouldBlock {
+			t.Errorf("%q: open dependencies = %+v, want exactly %s#12", row.body, result.OpenDependencies, row.wantRepo)
+			continue
+		}
+		if dep := result.OpenDependencies[0]; dep.Repo != row.wantRepo || dep.Number != 12 || dep.Source != "body" {
+			t.Errorf("%q: dependency = %+v, want %s#12 from the body", row.body, dep, row.wantRepo)
+		}
+	}
+}
+
+// An Unresolved reference — a repository the workspace cannot name — is
+// skipped like any unfetchable one, and in particular is never read as the
+// declaring repository's own open #12, which is what "Blocked by core #12"
+// gated on before the #2349 review.
+func TestEvaluateIssueDeps_UnresolvedRepositoryIsNotThisRepository(t *testing.T) {
+	aliases := depgraph.WorkspaceRepoAliases([]string{"example-org/app", "other-org/app", "example-org/widget-api"})
+	for _, body := range []string{"Blocked by core #12", "Blocked by core#12", "Blocked by app #12"} {
+		mock := &mockFetcher{issues: map[string]*types.Issue{
+			"example-org/widget-api#1":  {Number: 1, Body: body},
+			"example-org/widget-api#12": {Number: 12, Title: "unrelated", State: "OPEN"},
+		}}
+		result, err := EvaluateIssueDeps(context.Background(), mock, "example-org", "widget-api", 1, aliases)
+		if err != nil {
+			t.Fatalf("%q: unexpected error: %v", body, err)
+		}
+		if len(result.OpenDependencies) != 0 {
+			t.Errorf("%q: open dependencies = %+v, want none", body, result.OpenDependencies)
+		}
+		if reads := mock.reads["example-org/widget-api#12"]; len(reads) != 0 {
+			t.Errorf("%q: the declaring repository's own #12 was read %d time(s)", body, len(reads))
+		}
+	}
+}

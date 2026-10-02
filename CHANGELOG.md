@@ -286,6 +286,24 @@ changelog, and the release workflow refuses a tag that does not.
   worktree. A bare name that two repositories share resolves to neither, and
   the full `owner/repo#N` spelling always works.
 
+  Every caller now builds the map from the workspace's repositories: the
+  checkout itself, the manifest's members and the sibling checkouts, each
+  counted when its own `.nightgauge/config.yaml` names its owner and repo, plus
+  the scheduler's repo set, found from the main checkout even when the command
+  runs in a pipeline worktree. A repository
+  name may contain a dot (`site.dev`), which no spelling but the issue URL
+  could name before. A name that resolves to no repository, or a bare name two
+  repositories share, now holds the issue (the dispatcher fails closed and
+  names the line) wherever it is plainly a repository: right after the
+  keyword, as a dependency-section entry, or glued to the `#`. It no longer
+  gates on the declaring repository's own same-numbered issue or drops the
+  dependency. `owner/repo#N` always resolves. Repo-qualified entries now gate
+  under `## Dependencies`, `## Blocked by` and `## Depends on` as they do under
+  `## Cross-Repo Dependencies`, and a repo-qualified `Part of owner/repo#N`
+  there stays a parent link. A keyword no longer reaches a reference on the
+  next line, so prose hard-wrapped after "does not … depend on" no longer
+  declares the dependency it denies.
+
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
   the phone app or the dashboard used to sit `routing` until it expired,

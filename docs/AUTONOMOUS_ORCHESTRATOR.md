@@ -823,13 +823,14 @@ blockedBy(first: 10) {
 
 ### Body Text (same-repo and cross-repo)
 
-Regex patterns in issue bodies:
+Regex patterns in issue bodies, here in a workspace holding `acme/platform`,
+`acme/mobile`, `acme/dashboard`, `acme/store` and `acme/acme-api`:
 
 ```
 Blocked by platform #535
 Blocked by acme/acme-api#100
-Depends on: flutter #127, angular #152
-Depends on acme-mobile #127
+Depends on: mobile #127, dashboard #152
+Depends on acme/mobile#127
 Depends on: #1187
 Depends on #1187, #1190 and #1195
 Blocked by #1187
@@ -864,18 +865,38 @@ not only the one immediately after it, which is how the second blocker in
 is honoured — the same claim the bare `#N` forms have always had.
 
 A short repository name resolves against the **workspace's own
-repositories**: each one known to the workspace (the manifest's members, the
-sibling checkouts, and the scheduler's repo set) answers to its bare name, so
-in a workspace holding `example-org/widget-api`, `Blocked by widget-api #12`,
+repositories**. Each repository the workspace knows answers to its bare name:
+the checkout itself, every member of `.vscode/nightgauge-workspace.yaml` and
+every sibling checkout, each counted only when its own
+`.nightgauge/config.yaml` names its owner and repo, plus every repository in
+the scheduler's repo set. So in a workspace holding
+`example-org/widget-api`, `Blocked by widget-api #12`,
 `Blocked by widget-api#12` and `Blocked by example-org/widget-api#12` all name
-`example-org/widget-api#12`. A bare name two of the workspace's repositories
-share names neither; spell it `owner/repo`. The pickup gate, the dispatcher's
-graph, `graph build` and `next` resolve through the same map (#2349). Before
-#2349 they resolved short names through the example repositories of this page
-(`acme/platform`, …): a sibling's name glued to its `#` produced no edge, and
-one written with a space gated on the declaring repository's own
-same-numbered issue. A reference with **no** repo token resolves to the
-declaring issue's own repository.
+`example-org/widget-api#12`, and a name with a dot in it (`site.dev`,
+`example-org/site.dev#12`) resolves the same way. The pickup gate, the
+dispatcher's graph, `graph build` and `next` resolve through the same map
+(#2349). Before #2349 they resolved short names through the example
+repositories of this page (`acme/platform`, …): a sibling's name glued to its
+`#` produced no edge, and one written with a space gated on the declaring
+repository's own same-numbered issue. A reference with **no** repo token
+resolves to the declaring issue's own repository.
+
+**A name that resolves to no repository holds the issue.** A name is a
+repository directly after the keyword (`Blocked by core #12`), as the first
+word of a dependency-section entry (`- ❌ core #12`), and anywhere in a
+declaration when it is glued to the `#` (`core#12`). When that name is not one
+of the workspace's repositories, or is a bare name two of them share, the
+dependency is unresolved: the dispatcher fails closed and names the line in
+its hold reason, until the line names a repository. `owner/repo#N` always
+does, inside the workspace or outside it. The pickup gate (`hook check-deps`)
+skips an unresolved reference, as it skips any it cannot fetch. Words that
+describe a reference rather than name its repository (`issue`, `PR`, `epic`,
+`task`, …) and counts are not repository names, so `Blocked by issue #12` and
+`Blocked by PR#12` are the declaring repository's `#12`. Elsewhere in the
+sentence, a word followed by a space and a `#N` is read as prose, and the `#N`
+as the declaring repository's own issue: in `Depends on: mobile #127, web #152`
+in a workspace with no `web` repository, the second reference is the declaring
+repository's `#152`. Spell such a list item `owner/repo#N`.
 
 The same-repo forms were added in Issue #1492. Until then every pattern
 required a repo token before the `#`, which made the scheduler _stricter about
@@ -895,6 +916,9 @@ Two rules keep the bare form from over-matching:
   reference, not a blocker: promoting incidental mentions to hard edges
   silently stalls dispatch, which is why URL extraction was already scoped to
   these same contexts.
+- A declaration **lives on one line**. A keyword ending one line does not
+  reach a reference opening the next: prose hard-wrapped after "does not …
+  depend on" used to declare the reference it denied.
 - A keyword claims **its own sentence, not the rest of the line**. Each
   declaration runs from the keyword to the earliest of the next keyword on that
   line or a sentence terminator (`.`, `;`, `!`, `?` followed by whitespace or
@@ -917,7 +941,9 @@ Two rules keep the bare form from over-matching:
   bookkeeping relation is not a dependency**: `Part of #N`, `Parent`, `Epic`,
   `Sub-issue of`, `Child of`, `Tracks`, `Tracked by`, `Related` / `Related to`,
   `See also`, `Closes`, `Fixes`, `Resolves`, and the `(Wave N)` planning
-  parenthetical. The section rule reads a line's _position_ as the declaration,
+  parenthetical, with or without a repository in front of the `#N`
+  (`Part of acme/platform#308`). The section rule reads a line's _position_ as
+  the declaration,
   and authors put the epic membership line inside the section — so without this
   `Part of #308` became an edge to the parent epic, which never closes before
   its children, deadlocking the issue and every sibling reached through the
@@ -945,10 +971,17 @@ A dedicated section in the issue body with status indicators:
 ## Cross-Repo Dependencies
 
 - ✅ platform #535 — API endpoint verified
-- ❌ flutter #127 — not yet implemented
-- ⚠️ angular #152 — partial implementation
+- ❌ mobile #127 — not yet implemented
+- ⚠️ dashboard #152 — partial implementation
 - ⏸️ acme/store #209 — deferred, out of scope for this epic
 ```
+
+Entries read the same way under `## Dependencies`, `## Blocked by` and
+`## Depends on`: the word in front of an entry's `#N` is its repository, and
+a repo-qualified reference anywhere on a section line is a dependency in that
+repository. Before the #2349 review only `## Cross-Repo Dependencies` read an
+entry's repository, so `- widget-api #12` under `## Dependencies` declared
+nothing at all.
 
 #### Which markers gate dispatch
 
@@ -1728,10 +1761,12 @@ an actual promotable count.
 
 ### Cross-repo dependencies not detected
 
-- Verify the short name is a repository the workspace knows: a member of
-  `.vscode/nightgauge-workspace.yaml` or a sibling checkout whose
-  `.nightgauge/config.yaml` names its owner and repo. A name two repositories
-  share resolves to neither; write `owner/repo#<number>`
+- Verify the short name is a repository the workspace knows: a checkout,
+  whether a member of `.vscode/nightgauge-workspace.yaml` or a sibling, whose
+  own `.nightgauge/config.yaml` names its owner and repo, or a repository in
+  the scheduler's repo set. A name the workspace does not hold, or one two of
+  its repositories share, does not resolve and holds the issue (the hold
+  reason reads `unresolvable`); write `owner/repo#<number>`
 - Check body text format: `Blocked by <repo> #<number>`,
   `Depends on <repo> #<number>`, or the same-repo `Depends on: #<number>` /
   `Blocked by #<number>`

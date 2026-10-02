@@ -71,7 +71,11 @@ type OpenDependency struct {
 // A body-declared reference whose issue cannot be fetched is skipped rather
 // than treated as blocking: unlike a native relation, prose can name a
 // repository that does not exist, and a permanent un-clearable hold on a typo
-// is worse than the deferral it would buy.
+// is worse than the deferral it would buy. So is an Unresolved one, which
+// names a repository the workspace cannot identify and so has no issue to
+// fetch; it is never read as this repository's same-numbered issue. The
+// dispatcher's graph holds such an issue instead (fails closed), naming the
+// line to fix.
 //
 // The gate uses one relationship list, the issue's own blockedBy, and reads it
 // whole: a blockedBy list that cannot be read to its end fails the evaluation
@@ -118,8 +122,8 @@ func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo st
 		seen[key] = true
 
 		refOwner, refName, ok := strings.Cut(ref.Repo, "/")
-		if !ok || refOwner == "" || refName == "" {
-			continue
+		if ref.Unresolved || !ok || refOwner == "" || refName == "" {
+			continue // no issue to fetch — see the doc comment
 		}
 		dep, derr := fetcher.GetIssueWithRelations(ctx, refOwner, refName, ref.Number, gh.NoRelations)
 		if derr != nil || dep == nil {

@@ -193,11 +193,18 @@ func TestParseCustomAliases(t *testing.T) {
 	}
 }
 
+// A name in the repo position that no alias resolves is a repository the
+// workspace cannot name. Until the #2349 review it produced no reference here
+// and the declaring repository's own #42 in ParseDependencyRefs; now it is an
+// Unresolved reference, which holds the issue (fails closed) instead.
 func TestParseUnknownAlias(t *testing.T) {
 	body := "Blocked by unknown-repo #42"
 	refs := ParseCrossRepoRefs(body, map[string]string{})
-	if len(refs) != 0 {
-		t.Errorf("unknown alias should produce no refs, got %d", len(refs))
+	if len(refs) != 1 {
+		t.Fatalf("unknown repo name should produce one unresolved ref, got %+v", refs)
+	}
+	if r := refs[0]; !r.Unresolved || r.Repo != "unknown-repo" || r.Number != 42 || r.SourceLine != body {
+		t.Errorf("ref = %+v, want Unresolved unknown-repo#42 naming its line", r)
 	}
 }
 

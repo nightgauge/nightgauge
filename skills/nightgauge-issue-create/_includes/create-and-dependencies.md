@@ -153,9 +153,11 @@ merged.
 > entry under a `## Dependencies` section), so a stale line holds the issue
 > until it is removed or marked non-gating with `⏸️`. The words `deferred` /
 > `not-gating` also mark an entry non-gating, except on a line that says
-> `Blocked by` or `Depends on` outright. Keep the body and the native
-> relationships in agreement. Full rules: `docs/AUTONOMOUS_ORCHESTRATOR.md`
-> § "Body Text (same-repo and cross-repo)".
+> `Blocked by` or `Depends on` outright. Name another repository's issue as
+> `owner/repo#N`: a short name resolves only to a repository the workspace
+> knows, and one it does not know holds the issue until the line is fixed.
+> Keep the body and the native relationships in agreement. Full rules:
+> `docs/AUTONOMOUS_ORCHESTRATOR.md` § "Body Text (same-repo and cross-repo)".
 
 If any blocker fails to link, the command reports a partial-success error naming
 each failed blocker. The sub-issue and parent link are preserved; re-run

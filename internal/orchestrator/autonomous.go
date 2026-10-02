@@ -4237,6 +4237,15 @@ type depBlockResult struct {
 	// graph (resolved — or left unresolved — via the issue service instead)
 }
 
+// depKeyNamesNoRepository reports whether depKey's repository is not spelled
+// "owner/repo": the dependency is an issue-body reference to a repository the
+// workspace cannot identify (depgraph.CrossRepoRef.Unresolved), so no lookup
+// can resolve it and the hold reason says which kind of line to fix (#2349).
+func depKeyNamesNoRepository(depKey string) bool {
+	repo, _, ok := splitNodeKey(depKey)
+	return ok && !isOwnerRepo(repo)
+}
+
 // evaluateDeps scans depKeys — a node's outgoing dependency edges from
 // rawAdjacency — and reports whether any of them still blocks dispatch.
 //
@@ -4266,6 +4275,11 @@ func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]strin
 		if !exists {
 			state, ok := resolved[depKey]
 			switch {
+			case !ok && depKeyNamesNoRepository(depKey):
+				return depBlockResult{
+					blocked: true, blocker: depKey, offBoard: true,
+					status: "unresolvable (the issue body names a repository that is not one of the workspace's — failing closed; name it as owner/repo#N)",
+				}
 			case !ok:
 				return depBlockResult{
 					blocked: true, blocker: depKey, offBoard: true,
