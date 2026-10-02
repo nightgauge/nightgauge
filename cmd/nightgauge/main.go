@@ -6375,9 +6375,12 @@ func hookCheckDepsCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:          "check-deps [issue-number]",
-		Short:        "Check issue blockedBy dependencies on GitHub",
-		Long:         "Queries GitHub's blockedBy relationships for the given issue. Without an issue number, falls back to checking local tool dependencies.",
+		Use:   "check-deps [issue-number]",
+		Short: "Check an issue's open dependencies: native blockedBy and body declarations",
+		Long: "Reports the open dependencies of the given issue: GitHub's native blockedBy relationships " +
+			"and the dependencies its body declares (\"Depends on: #N\", \"Blocked by <repo> #N\", entries " +
+			"under a ## Dependencies section), resolved against the workspace's repositories. " +
+			"Without an issue number, falls back to checking local tool dependencies.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// No issue number provided — fall back to legacy tool-availability check

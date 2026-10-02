@@ -72,9 +72,10 @@ rm -f "$BOARD"
 ```
 
 **NOTE**: No CLI `issue list --json` surface supports `blockedBy` as a
-field. Blocking relationships must be queried via GraphQL (which
-`nightgauge hook check-deps` handles). Do NOT use `trackedInIssues` — that is a
-different GitHub feature (task list checkboxes) and does not represent blocking.
+field. Ask `nightgauge hook check-deps`, which reads the native relationships
+through GraphQL and also the dependencies the issue body declares. Do NOT use
+`trackedInIssues` — that is a different GitHub feature (task list checkboxes)
+and does not represent blocking.
 
 Tier-specific `[TIER_FLAGS]`:
 
