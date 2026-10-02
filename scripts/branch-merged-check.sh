@@ -10,7 +10,7 @@
 #   0  SAFE-DELETE  content is in base, or the branch is exactly what a merged PR merged,
 #                   or its tip is inside a merged PR's head (folded in by merge commit)
 #   1  KEEP         carries content base does not have, or has commits past the merge
-#   2  UNKNOWN      undecidable — do NOT delete
+#   2  UNKNOWN      undecidable, or a lookup that guards deletion could not run — do NOT delete
 #
 # Why this is a script and not a one-liner
 # ----------------------------------------
@@ -93,20 +93,28 @@ build_pr_index() {
 # such PR". For open_pr_for that skipped the open-PR KEEP, and a branch the
 # ancestor rule called merged read SAFE-DELETE (#2360).
 #
+# A lookup answers 0 (found) or NOT_FOUND, and nothing else means "no such
+# PR". Any other status is a lookup that did not run: bash could not create
+# the here-string's temporary file (an index larger than a pipe buffer, a
+# full or read-only temp directory, a file-size limit), or awk failed.
+# classify() answers UNKNOWN for that, never "no open PR": the open-PR checks
+# guard every SAFE-DELETE, so a failed one must fail closed.
+NOT_FOUND=3
+
 # open_pr_for <branch> -> prints the PR number if an OPEN PR uses this branch
 open_pr_for() {
-  [ -n "$PR_INDEX" ] || return 1
-  awk -F'\t' -v b="$1" \
-    '$1=="OPEN" && $2==b {print $4; found=1; exit} END{exit !found}' <<<"$PR_INDEX"
+  [ -n "$PR_INDEX" ] || return "$NOT_FOUND"
+  awk -F'\t' -v b="$1" -v nf="$NOT_FOUND" \
+    '$1=="OPEN" && $2==b {print $4; found=1; exit} END{if (!found) exit nf}' <<<"$PR_INDEX"
 }
 
 # open_pr_based_on <branch> -> prints the PR number if an OPEN PR targets this
 # branch as its BASE (#2175). Deleting a base branch breaks every PR stacked on
 # it, and a pipeline epic branch is exactly that base.
 open_pr_based_on() {
-  [ -n "$PR_INDEX" ] || return 1
-  awk -F'\t' -v b="$1" \
-    '$1=="OPEN" && $5==b {print $4; found=1; exit} END{exit !found}' <<<"$PR_INDEX"
+  [ -n "$PR_INDEX" ] || return "$NOT_FOUND"
+  awk -F'\t' -v b="$1" -v nf="$NOT_FOUND" \
+    '$1=="OPEN" && $5==b {print $4; found=1; exit} END{if (!found) exit nf}' <<<"$PR_INDEX"
 }
 
 # epic_issue_state <N> -> prints the issue's state (OPEN/CLOSED); non-zero and
@@ -120,11 +128,13 @@ epic_issue_state() {
   printf '%s' "$st"
 }
 
-# merged_pr_for <branch> -> prints "<sha>\t<number>" if a merged PR used it
+# merged_pr_for <branch> -> prints "<sha>\t<number>" if a merged PR used it.
+# Its caller treats every non-zero status alike: a merged PR only ever adds a
+# SAFE-DELETE, so a lookup that did not run costs a deletion, never work.
 merged_pr_for() {
-  [ -n "$PR_INDEX" ] || return 1
-  awk -F'\t' -v b="$1" \
-    '$1=="MERGED" && $2==b {print $3 "\t" $4; found=1; exit} END{exit !found}' <<<"$PR_INDEX"
+  [ -n "$PR_INDEX" ] || return "$NOT_FOUND"
+  awk -F'\t' -v b="$1" -v nf="$NOT_FOUND" \
+    '$1=="MERGED" && $2==b {print $3 "\t" $4; found=1; exit} END{if (!found) exit nf}' <<<"$PR_INDEX"
 }
 
 # merged_pr_head_parents <sha> -> prints one parent SHA per line for a merged
@@ -273,35 +283,70 @@ classify() {
   # Skipped for a remote-only branch: `git worktree list` matches local
   # branch refs (refs/heads/<branch>), and remote_only means that ref does
   # not exist — there is no local checkout for this branch name to hold.
+  #
+  # Like the open-PR checks below, it fails closed: a worktree list git could
+  # not produce, or a lookup that did not run, is UNKNOWN, never "not checked
+  # out" (#2360).
+  local rc
   if [ "$remote_only" = 0 ]; then
     local wt worktrees
-    worktrees=$(git worktree list --porcelain 2>/dev/null)
-    wt=$(awk -v b="refs/heads/$branch" '
+    if ! worktrees=$(git worktree list --porcelain 2>/dev/null); then
+      echo "UNKNOWN      \`git worktree list\` failed — cannot rule out a checkout of this branch"
+      return 2
+    fi
+    wt=$(awk -v b="refs/heads/$branch" -v nf="$NOT_FOUND" '
           /^worktree /  { w = substr($0, 10) }
-          /^branch /    { if (substr($0, 8) == b) { print w; exit } }' <<<"$worktrees")
-    if [ -n "$wt" ]; then
+          /^branch /    { if (substr($0, 8) == b) { print w; found = 1; exit } }
+          END           { if (!found) exit nf }' <<<"$worktrees")
+    rc=$?
+    case "$rc" in
+    0)
       echo "KEEP         checked out in a worktree: $wt"
       return 1
-    fi
+      ;;
+    "$NOT_FOUND") ;;
+    *)
+      echo "UNKNOWN      the worktree lookup did not run (status $rc) — cannot rule out a checkout of this branch"
+      return 2
+      ;;
+    esac
   fi
 
   # An OPEN PR means the branch is in use no matter what its content says.
   # Deleting the head branch of an open PR closes that PR. Content cannot see
   # this: a PR whose changes were already applied to base by another route
   # compares identical and would otherwise read SAFE-DELETE.
-  if pr_num=$(open_pr_for "$branch"); then
+  pr_num=$(open_pr_for "$branch")
+  rc=$?
+  case "$rc" in
+  0)
     echo "KEEP         open PR #$pr_num — deleting this branch would close it"
     return 1
-  fi
+    ;;
+  "$NOT_FOUND") ;;
+  *)
+    echo "UNKNOWN      ${remote_note}the open-PR lookup did not run (status $rc) — cannot rule out an open PR on this branch"
+    return 2
+    ;;
+  esac
 
   # An OPEN PR whose BASE is this branch (#2175): deleting it breaks that PR.
   # Like the worktree guard, this must precede every SAFE-DELETE — and unlike
   # it, it applies to a remote-only ref too, because a stacked PR's base
   # usually exists only on the remote.
-  if pr_num=$(open_pr_based_on "$branch"); then
+  pr_num=$(open_pr_based_on "$branch")
+  rc=$?
+  case "$rc" in
+  0)
     echo "KEEP         ${remote_note}open PR #$pr_num targets this branch as its base — deleting it would break that PR"
     return 1
-  fi
+    ;;
+  "$NOT_FOUND") ;;
+  *)
+    echo "UNKNOWN      ${remote_note}the open-PR lookup did not run (status $rc) — cannot rule out an open PR based on this branch"
+    return 2
+    ;;
+  esac
 
   # A pipeline epic branch (`epic/<N>-…`) is the base every sub-issue branch
   # of epic N is cut from and merges into (#2175). Freshly created it has no

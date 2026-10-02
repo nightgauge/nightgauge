@@ -169,6 +169,29 @@ FAKE_GH
   chmod +x "$FAKE_BIN/gh"
 }
 
+# failing_tool <tool> <needle> -> prints a directory holding a wrapper named
+# <tool> that exits 2, as a tool that could not run, when any argument
+# contains <needle>, and otherwise runs the real <tool>. Put first on PATH to
+# make one lookup fail without touching the others (#2360).
+failing_tool() {
+  local tool="$1" needle="$2" real dir
+  real="$(command -v "$tool")" || {
+    echo "HARNESS ERROR: no $tool on PATH to wrap" >&2
+    exit 1
+  }
+  dir="$(mktemp -d "$TMP/fail-$tool.XXXXXX")"
+  # shellcheck disable=SC2016 # the wrapper's own "$@" and "$a", written as text
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'for a in "$@"; do\n'
+    printf '  case "$a" in *%q*) echo "%s: simulated failure" >&2; exit 2 ;; esac\n' "$needle" "$tool"
+    printf 'done\n'
+    printf 'exec %q "$@"\n' "$real"
+  } >"$dir/$tool"
+  chmod +x "$dir/$tool"
+  printf '%s' "$dir"
+}
+
 # expect <want_exit_code> <desc> [must_contain] -- <run...>
 expect() {
   local want="$1" desc="$2" must_contain="$3"
@@ -520,6 +543,41 @@ expect 1 "an open PR based on the branch, first in a large PR index, is KEEP" \
 expect 0 "the same branch in a large PR index with no open PR is SAFE-DELETE" "ancestor" \
   -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_FILLER=8000 \
   "$SCRIPT" fix/4100-open-head origin/main
+
+# ── (r) a guard lookup that cannot run is UNKNOWN, never SAFE-DELETE (#2360) ─
+# The open-PR and worktree lookups guard every SAFE-DELETE. A failed one used
+# to read as "none found", and this branch, an ancestor of main, then read
+# SAFE-DELETE although the forge had just listed an open PR for it. Each arm
+# below breaks one lookup and wants UNKNOWN (exit 2). The (q) arms above are
+# the controls: the same fixture and index, with every lookup able to run.
+# shellcheck disable=SC2016 # the awk program text to match, not an expansion
+awk_dir="$(failing_tool awk '$1=="OPEN"')"
+expect 2 "an open-PR lookup whose awk fails is UNKNOWN" \
+  "the open-PR lookup did not run (status 2)" \
+  -- run_in "$root" env PATH="$awk_dir:$FAKE_BIN:$PATH" \
+  FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=fix/4100-open-head FAKE_PR_SHA=deadbeef FAKE_PR_NUM=4101 \
+  "$SCRIPT" fix/4100-open-head origin/main
+git_dir="$(failing_tool git worktree)"
+expect 2 "a worktree list git cannot produce is UNKNOWN" "\`git worktree list\` failed" \
+  -- run_in "$root" env PATH="$git_dir:$FAKE_BIN:$PATH" "$SCRIPT" fix/4100-open-head origin/main
+
+# The cause seen in review: bash writes a here-string larger than a pipe
+# buffer to a temporary file, and when it cannot (a full or read-only temp
+# directory, here a file-size limit of zero) the lookup never runs. Probed
+# first, because a bash that needs no file for it cannot fail this way.
+# shellcheck disable=SC2016 # expands in the probe's own shell
+if bash -c 'trap "" XFSZ; ulimit -f 0
+  v="$(awk "BEGIN { for (i = 0; i < 8000; i++) printf \"%070d\\n\", i }")"
+  cat <<<"$v" >/dev/null' 2>/dev/null; then
+  echo "  - skipped: this bash writes a 560 KB here-string without a temporary file"
+else
+  # shellcheck disable=SC2016 # expands in the wrapper's own shell
+  expect 2 "an open PR the lookup cannot read (no room for its temp file) is UNKNOWN" \
+    "lookup did not run" \
+    -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_FILLER=8000 \
+    FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=fix/4100-open-head FAKE_PR_SHA=deadbeef FAKE_PR_NUM=4101 \
+    bash -c 'trap "" XFSZ; ulimit -f 0; exec "$@"' _ "$SCRIPT" fix/4100-open-head origin/main
+fi
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then

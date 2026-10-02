@@ -128,6 +128,14 @@ check "a real failure at exit 2 still classifies as assert" $?
 [ "$(classify_failure "$TMP/long-harness.log" 2)" = "infra" ]
 check "a HARNESS ERROR above half a megabyte of log still classifies as infra" $?
 
+# A log can hold NUL bytes (a child's binary output). classify_failure reads it
+# as a stream, so bash has no command substitution to warn about them in, and
+# the gate's summary carries no "ignored null byte" line.
+printf 'binary\0output\0\n  HARNESS ERROR: no temp space\n' > "$TMP/nul.log"
+nul_err="$(classify_failure "$TMP/nul.log" 2 2>&1 >/dev/null)"
+[ "$(classify_failure "$TMP/nul.log" 2 2>/dev/null)" = "infra" ] && [ -z "$nul_err" ]
+check "a log with NUL bytes classifies as infra, with nothing on stderr (got: '$nul_err')" $?
+
 awk 'BEGIN { for (i = 0; i < 20000; i++) printf "  \033[31m\342\234\227\033[0m arm %05d failed\n", i }' \
   > "$TMP/many-markers.log"
 out="$(failure_markers "$TMP/many-markers.log" 15)"

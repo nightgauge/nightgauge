@@ -193,7 +193,7 @@ if [ "${DISTINCT_TARGETS:-0}" -ge 6 ]; then
   OVERSIZED=true
   TRIGGERS="${TRIGGERS} ${DISTINCT_TARGETS} distinct target files (>=6);"
 fi
-if printf '%s\n' "${PREDICTED_SIZE}" | grep -qiE '^XL$'; then
+if grep -qiE '^XL$' <<< "${PREDICTED_SIZE}"; then
   OVERSIZED=true
   TRIGGERS="${TRIGGERS} predicted size == XL;"
 fi
@@ -219,7 +219,7 @@ ERROR: capacity-gate — requires human decomposition
 GATE_ERROR
   exit 1
 
-elif [ "$OVER_CAPACITY" = "true" ] && ! { printf '%s\n' "${TYPE_LABEL}" | grep -qi "epic" && [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ]; }; then
+elif [ "$OVER_CAPACITY" = "true" ] && ! { grep -qi "epic" <<< "${TYPE_LABEL}" && [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ]; }; then
   # Above the cap and not being decomposed now. The oversized-scope marker
   # does not override this: the model cannot hold the work, however atomic.
   cat >&2 << GATE_ERROR
@@ -239,7 +239,7 @@ elif [ "$OVERSIZED" = "true" ]; then
 
   # An epic that is BEING decomposed now (sub-issues planned in Phase 2) is the
   # CORRECT shape for oversized scope — that is exactly what the gate wants.
-  if printf '%s\n' "${TYPE_LABEL}" | grep -qi "epic" && [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ]; then
+  if grep -qi "epic" <<< "${TYPE_LABEL}" && [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ]; then
     echo "Phase 2.85: PASS — oversized scope is decomposed into ${SUB_ISSUE_COUNT} sub-issues under an epic"
 
   elif [ "$SCOPE_OVERRIDE" = "true" ]; then
@@ -304,7 +304,7 @@ explicit shapes before any GitHub mutation.
 
 ```bash
 IS_EPIC=false
-if printf '%s\n' "${TYPE_LABEL}" | grep -qi "epic"; then
+if grep -qi "epic" <<< "${TYPE_LABEL}"; then
   IS_EPIC=true
 fi
 
@@ -324,13 +324,15 @@ else
     HAS_SUB_ISSUES=true
   fi
 
-  # Shape B: explicit placeholder marker in issue body
-  if printf '%s\n' "${ISSUE_BODY}" | grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder"; then
+  # Shape B: explicit placeholder marker in issue body. Here-strings, never
+  # `printf | grep -q`: under pipefail, grep -q exiting at its first match can
+  # SIGPIPE printf on a long body and turn a found marker into a miss.
+  if grep -qi "nightgauge:decompose-later\|placeholder.*decompose later\|decompose later.*placeholder" <<< "${ISSUE_BODY}"; then
     HAS_PLACEHOLDER_MARKER=true
   fi
 
   # Shape C: standalone epic declaration
-  if printf '%s\n' "${ISSUE_BODY}" | grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues"; then
+  if grep -qi "nightgauge:standalone-epic\|standalone epic\|intentionally.*no sub-issues" <<< "${ISSUE_BODY}"; then
     HAS_STANDALONE_MARKER=true
   fi
 

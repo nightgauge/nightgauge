@@ -13,11 +13,16 @@
 #      gate forbids the shape because a test cannot be trusted to lose the race.
 #   B. Every replacement the gate recommends succeeds on the same input.
 #   C. The gate goes red on each forbidden shape, naming the file and line of
-#      the reader, and stays green on the look-alikes it must not flag: quoted
-#      text, comments, heredoc bodies, case patterns, regex alternations inside
-#      [[ ]], `||`, and readers that read to the end. It reads workflow `run:`
-#      blocks, skips a step whose shell is not sh or bash, and exits 2 rather
-#      than passing when it cannot read a file.
+#      the reader, including one inside a group or an `if`, behind a wrapper
+#      such as timeout, in a program holding an expansion, and a loop that can
+#      break. It keeps reading past an arithmetic `<<`, which is no heredoc. It
+#      stays green on the look-alikes it must not flag: quoted text, comments,
+#      heredoc bodies, case patterns, regex alternations inside [[ ]] on any of
+#      its lines, `||`, `exit` in awk text or END, `head -n -N`, the end of an
+#      input process substitution, and readers that read to the end. It reads
+#      workflow `run:` blocks and husky hooks, skips a step whose shell is not
+#      sh or bash, and exits 2 rather than passing when it cannot read a file,
+#      such as one whose heredoc never ends.
 #
 # Run: bash scripts/test-pipefail-early-exit.sh
 # Also run by scripts/ci-local.sh and .github/workflows/lint.yml.
@@ -95,9 +100,17 @@ mkdir -p "$FIX"
 
 # Every line the gate must flag carries `# BAD` on the reader's line; the
 # comment itself is invisible to the gate.
+# The arithmetic lines up top hold a `<<` that is no heredoc: misread as one,
+# the rest of the file would go unread and every # BAD line after them missed.
 cat >"$FIX/bad.sh" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
+(( n = 1 << 4 ))
+(( x <<= 1 ))
+echo $[x<<1]
+if (( x << 1 > 2 )); then :; fi
+for (( i = 1 << 1; i < 3; i++ )); do :; done
+(( y = (x << 3) | head ))
 printf '%s\n' "$v" | grep -q needle # BAD
 echo "$v" | grep -qxF needle # BAD
 cmd | grep -Fxq -- needle # BAD
@@ -126,6 +139,37 @@ cmd |& grep -q needle # BAD
 cmd | command grep -q needle # BAD
 cmd | env LC_ALL=C grep -q needle # BAD
 f() { cmd | grep -q needle; } # BAD
+cmd | { grep -q needle; } # BAD
+cmd | ( grep -q needle ) # BAD
+cmd | if grep -q needle; then :; fi # BAD
+cmd | timeout 5 grep -q needle # BAD
+cmd | timeout -k 1 -s TERM 5 head -1 # BAD
+cmd | stdbuf -oL grep -m1 needle # BAD
+cmd | sudo -u nobody grep -q needle # BAD
+cmd | nice -n 5 head -1 # BAD
+cmd | ghead -1 # BAD
+cmd | gsed 5q # BAD
+cmd | awk "/$pat/ { print; exit }" # BAD
+cmd | sed -n "/$pat/{p;q;}" # BAD
+cmd | sed "${n}q" # BAD
+cmd | awk 'BEGIN { getline line; print line }' # BAD
+cmd | awk 'BEGIN { print "reads no input" }' # BAD
+cmd | awk 'END { if (n) { if (n > 1) { print n } } } { n++; if (n > 9) exit }' # BAD
+cmd | awk '{ if (/x/) nextfile }' # BAD
+cmd | perl -ne 'print; exit' # BAD
+cmd | perl -lne 'last if /x/' # BAD
+cmd | while read -r l; do [ "$l" = x ] && break; done # BAD
+cmd | while IFS= read -r l; do # BAD
+  case "$l" in
+    stop) break ;;
+  esac
+done
+cmd | while read -r l; do for x in a b; do break 2; done; done # BAD
+cmd | until false; do read -r l; exit 0; done # BAD
+diff <(cmd | head -5; echo more) "$f" # BAD
+tee >(cmd | head -1) <"$f" # BAD
+x=`cmd | head -1` # BAD
+cmd | grep --quie needle # BAD
 SH
 
 cat >"$FIX/good.sh" <<'SH'
@@ -165,6 +209,31 @@ cmd | while read -r line; do :; done
 x=$((a | b))
 y="${v//|/,}"
 z="$(case "$v" in a | head) echo x ;; esac)"
+if [[ $a == x &&
+  $b =~ ^(a|head)$ ]]; then :; fi
+let "x <<= 2"
+(( x |= 1 ))
+cmd | while :; do IFS= read -r line || break; echo "$line"; done
+cmd | while read -r line; do for x in a b; do break; done; done
+cmd | awk '/exit code/ { print }'
+cmd | awk '{ print "exit" }'
+cmd | awk '$1 == "exit" { n++ } END { print n }'
+cmd | awk 'END { if (n) { if (n > 1) { exit 1 } } }'
+cmd | awk -v x=1 'BEGIN { FS = ":" } { print $1 }'
+cmd | awk 'BEGIN { while ((getline line) > 0) n++; print n }'
+cmd | awk 'function f(a) { return a } { print f($1) }'
+cmd | awk "{ print \$1 }"
+cmd | head -n -1
+cmd | head --lines=-2
+cmd | ghead -c -5
+diff <(cmd | head -5) "$f"
+diff <(cmd | head -5 | sort) "$f"
+while read -r line; do :; done < <(cmd | head -5)
+cmd | perl -ne 'print if /x/'
+cmd | perl -pe 's/a/b/'
+cmd | timeout 5 grep needle
+cmd | env - grep -c needle
+y=`cmd | sed -n 1p`
 SH
 
 mkdir -p "$FIX/wf"
@@ -250,17 +319,32 @@ else
   bad "a file it cannot lex is exit 2 (got $GATE_RC)" "$GATE_OUT"
 fi
 
+# A heredoc whose delimiter never comes swallows the rest of the file, in bash
+# and in the gate. `let x<<=1` is one: bash reads a heredoc there too. So is a
+# `[[` never closed. Each would hide the pipe after it, so each is exit 2.
+printf '#!/bin/bash\ncat <<EOF\nbody\ncmd | grep -q needle\n' >"$FIX/open-heredoc.sh"
+printf '#!/bin/bash\nx=1\nlet x<<=1\ncmd | grep -q needle\n' >"$FIX/let-shift.sh"
+printf '#!/bin/bash\nif [[ -n $x &&\n  -z $y; then :; fi\ncmd | grep -q needle\n' >"$FIX/open-test.sh"
+for fixture in "$FIX/open-heredoc.sh" "$FIX/let-shift.sh" "$FIX/open-test.sh"; do
+  gate "$fixture"
+  if [ "$GATE_RC" -eq 2 ]; then
+    ok "$(basename "$fixture"): exit 2, not a pass"
+  else
+    bad "$(basename "$fixture"): exit 2 (got $GATE_RC)" "$GATE_OUT"
+  fi
+done
+
 # Tree mode reads what it claims to: the scripts this issue fixed, a library,
-# a plugin hook, and the release workflow.
+# a plugin hook, a husky Git hook (no shebang), and the release workflow.
 listed="$(python3 "$GATE" --list-files 2>&1)"
 missing=""
 for want in scripts/state-backstop.sh scripts/test-state-backstop.sh scripts/check-changelog.sh \
   scripts/lib/ci_local_failures.sh claude-plugins/nightgauge/hooks/test-quality.sh \
-  .github/workflows/release.yml .github/workflows/staging.yml; do
+  .github/workflows/release.yml .github/workflows/staging.yml .husky/pre-commit; do
   grep -qxF -- "$want" <<<"$listed" || missing="$missing $want"
 done
 if [ -z "$missing" ]; then
-  ok "the tree scan includes shell scripts, a library, a hook and the workflows"
+  ok "the tree scan includes shell scripts, a library, the hooks and the workflows"
 else
   bad "the tree scan misses:$missing"
 fi
