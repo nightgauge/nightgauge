@@ -102,6 +102,7 @@ func TestBoardItemContractValues(t *testing.T) {
 		IsEpic:          false,
 		ParentNumber:    10,
 		ParentTitle:     "Epic: Photo Management",
+		ParentRepo:      "nightgauge/nightgauge",
 		SubIssues: []types.SubIssueRef{
 			{NodeID: "I_sub789", Number: 43, Title: "Implement upload API", State: "OPEN", Repo: "nightgauge/nightgauge", Labels: []string{"size:M"}},
 		},

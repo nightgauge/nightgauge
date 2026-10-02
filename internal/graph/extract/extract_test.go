@@ -472,3 +472,34 @@ func mustDocNode(t *testing.T, p string) graph.Node {
 }
 
 var _ = exec.Command // keep os/exec referenced if a future test drops its use
+
+// A sub-issue is part of its epic in the EPIC's repository (#2350): keyed by
+// number in the sub-issue's own repository, a cross-repository parent became
+// a part-of edge to an unrelated issue.
+func TestIssuesPartOfNamesTheEpicInItsOwnRepository(t *testing.T) {
+	dg := depgraph.NewGraph()
+	dg.AddNode(&depgraph.Node{Repo: "acme/app", Number: 21, Title: "cross-repo sub", State: "OPEN", EpicNumber: 20, EpicRepo: "acme/platform"})
+	dg.AddNode(&depgraph.Node{Repo: "acme/app", Number: 22, Title: "same-repo sub", State: "OPEN", EpicNumber: 9})
+
+	res := IssuesFromGraph(dg)
+	if res.Skipped != "" {
+		t.Fatalf("unexpected skip: %s", res.Skipped)
+	}
+	got := map[graph.NodeID]bool{}
+	for _, e := range res.Graph.Edges() {
+		if e.Kind == graph.EdgePartOf {
+			got[e.To] = true
+		}
+	}
+	for _, want := range []graph.NodeID{
+		graph.MakeNodeID(graph.NodeEpic, "acme/platform#20"),
+		graph.MakeNodeID(graph.NodeEpic, "acme/app#9"),
+	} {
+		if !got[want] {
+			t.Errorf("no part-of edge to %v; part-of targets %v", want, got)
+		}
+	}
+	if bad := graph.MakeNodeID(graph.NodeEpic, "acme/app#20"); got[bad] {
+		t.Errorf("part-of edge to %v, the sub-issue's own same-numbered issue", bad)
+	}
+}

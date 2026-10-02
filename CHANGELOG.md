@@ -242,6 +242,20 @@ changelog, and the release workflow refuses a tag that does not.
   of 20 s. When the concurrent-pipelines test timed out, its main thread could
   wait forever; now it fails.
 
+- **The epic cascade finds a parent epic in another repository in that
+  repository** (#2350). A sub-issue's parent was looked up by number in the
+  sub-issue's own repository, because the board read recorded the parent's
+  number but not its repository. For a sub-issue whose epic lives elsewhere,
+  the dispatcher and the stuck-epic watchdog therefore cascaded through an
+  unrelated, same-numbered issue. The real epic's open blockers never held
+  the sub-issue, while the unrelated issue's blockers did whenever it was open
+  on a board. Both board reads (GraphQL and REST) now record the parent's
+  repository, and the dispatcher, the watchdog, its own-sub-issue check and
+  the knowledge graph's part-of edge key the epic by repository and number. A
+  hold through a cross-repository epic names it in full:
+  `(via epic owner/repo#20)`. The REST board cache's stored shape changed, so
+  its entries are read fresh once.
+
 - **Short repository names in body-declared dependencies resolve against the
   workspace's own repositories** (#2349). The pickup gate, the dispatcher's
   dependency graph, `graph build`, `next`, `hook check-deps`, the `pr merge`

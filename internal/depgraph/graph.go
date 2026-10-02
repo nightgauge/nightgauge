@@ -35,7 +35,10 @@ type Node struct {
 	// prefix of the real set and no label-derived exclusion can be trusted.
 	LabelsTruncated bool `json:"labelsTruncated,omitempty"`
 	EpicNumber      int  `json:"epicNumber,omitempty"` // parent epic if sub-issue
-	Weight          int  `json:"weight"`               // size weight for critical path
+	// EpicRepo is the parent epic's repository when it is not this node's
+	// own; read the parent through EpicID, never as {Repo, EpicNumber}.
+	EpicRepo string `json:"epicRepo,omitempty"`
+	Weight   int    `json:"weight"` // size weight for critical path
 	// AuthorAssociation is the issue author's relationship to the repo
 	// (OWNER, MEMBER, COLLABORATOR, ...). Used by the autonomous pipeline's
 	// author-trust gate (#270) — empty/unknown values are untrusted.
@@ -45,6 +48,36 @@ type Node struct {
 // ID returns the NodeID for this node.
 func (n *Node) ID() NodeID {
 	return NodeID{Repo: n.Repo, Number: n.Number}
+}
+
+// EpicID returns the NodeID of this node's parent epic, in the epic's own
+// repository, and false when the node has no parent.
+//
+// Issue numbers are per repository, so the parent is EpicNumber in EpicRepo;
+// only an empty EpicRepo means this node's own repository. Keying the parent
+// as {Repo, EpicNumber} is the lookup #2350 removed from the epic cascade: for
+// a sub-issue whose epic lives elsewhere it read the same-numbered issue in the
+// sub-issue's repository, so the real epic's open blockers never held the
+// sub-issue, and an unrelated issue's did whenever it was open on a board.
+func (n *Node) EpicID() (NodeID, bool) {
+	if n == nil || n.EpicNumber == 0 {
+		return NodeID{}, false
+	}
+	repo := n.EpicRepo
+	if repo == "" {
+		repo = n.Repo
+	}
+	return NodeID{Repo: repo, Number: n.EpicNumber}, true
+}
+
+// IsSubIssueOf reports whether epic is this node's parent, by the epic's
+// repository and number together.
+func (n *Node) IsSubIssueOf(epic *Node) bool {
+	if epic == nil {
+		return false
+	}
+	parent, ok := n.EpicID()
+	return ok && strings.EqualFold(parent.Repo, epic.Repo) && parent.Number == epic.Number
 }
 
 // Edge represents a dependency between two issues.

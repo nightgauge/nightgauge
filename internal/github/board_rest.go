@@ -202,6 +202,7 @@ type restItem struct {
 	PipelineStage     string   `json:"pipelineStage,omitempty"`
 	ParentNumber      int      `json:"parentNumber,omitempty"`
 	ParentTitle       string   `json:"parentTitle,omitempty"`
+	ParentRepo        string   `json:"parentRepo,omitempty"`
 	// Relations is nil when the item did not carry BOTH summaries: an absent
 	// summary is "unknown", never "zero blockers" — the reader then fetches
 	// the lists (restCompleteRelations).
@@ -357,14 +358,20 @@ func reduceItemsPage(body []byte) (any, error) {
 			case "Pipeline Stage":
 				it.PipelineStage = fieldText(f.Value)
 			case "Parent issue":
+				// The value is the parent's REST issue object, which names
+				// its repository (repository_url, html_url) as well as its
+				// number. The number alone is no coordinate for an epic in
+				// another repository (#2350).
 				if len(f.Value) > 0 && string(f.Value) != "null" {
 					var p struct {
+						restIssueRepo
 						Number int    `json:"number"`
 						Title  string `json:"title"`
 					}
 					if json.Unmarshal(f.Value, &p) == nil {
 						it.ParentNumber = p.Number
 						it.ParentTitle = p.Title
+						it.ParentRepo = p.repoName()
 					}
 				}
 			}
@@ -415,6 +422,7 @@ func (it restItem) toBoardItem() (types.BoardItem, bool) {
 		}
 		item.ParentNumber = it.ParentNumber
 		item.ParentTitle = it.ParentTitle
+		item.ParentRepo = it.ParentRepo
 	}
 	if item.Priority == "" {
 		item.Priority = priorityFromLabels(item.Labels)
@@ -438,7 +446,9 @@ func (b *BoardService) restListItems(ctx context.Context, q string, withLists bo
 	if err != nil {
 		return nil, 0, err
 	}
-	pages, _, err := b.client.condGetAll(ctx, b.restItemsURL(q, fieldIDs), "board-items/v2", reduceItemsPage)
+	// v3: restItem gained ParentRepo (#2350); a v2 page would decode with it
+	// empty and send the epic cascade back to the sub-issue's own repository.
+	pages, _, err := b.client.condGetAll(ctx, b.restItemsURL(q, fieldIDs), "board-items/v3", reduceItemsPage)
 	if err != nil {
 		return nil, 0, b.restFallback(err)
 	}

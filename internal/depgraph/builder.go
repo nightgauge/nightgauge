@@ -500,6 +500,11 @@ func boardItemToNode(item *types.BoardItem, repoName string) *Node {
 	}
 	if item.ParentNumber != 0 {
 		node.EpicNumber = item.ParentNumber
+		// Kept only when it differs: an empty EpicRepo already means the
+		// node's own repository (Node.EpicID).
+		if !strings.EqualFold(item.ParentRepo, effectiveRepo) {
+			node.EpicRepo = item.ParentRepo
+		}
 	}
 	node.Weight = SizeWeight(node.Size)
 	return node

@@ -585,6 +585,7 @@ func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, 
 		Labels:       epicItem.Labels,
 		ID:           fmt.Sprintf("epic-%d-sub-%d", wo.epicNumber, si.Number),
 		ParentNumber: wo.epicNumber,
+		ParentRepo:   epicItem.Repo,
 	}
 
 	// Create a per-subagent child context for cancellation isolation

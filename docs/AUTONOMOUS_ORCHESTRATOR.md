@@ -99,6 +99,16 @@ stuck-epic watchdog both drop such edges from the cascade (the dispatcher logs
 them once per scan as a data defect). A self-edge is dropped when the graph is
 built.
 
+**A parent epic in another repository is found in that repository** (#2350).
+Issue numbers are per repository, so the board read records the parent's
+repository with its number, and the dispatcher, the stuck-epic watchdog and
+`graph build` key the epic by both. Before #2350 a sub-issue of
+`example-org/platform#20` living in `example-org/app` was cascaded through
+`example-org/app#20`: the real epic's open blockers never held it, and an
+unrelated `#20`'s did whenever that issue was open on a board. A hold through
+a cross-repository epic names it in full, for example
+`(via epic example-org/platform#20) blocked by #10 (open)`.
+
 **Config** (opt-out): Set `autonomous.disable_epic_blockedby_cascade: true` in
 `.nightgauge/config.yaml` to revert to individual-issue-only blocking.
 

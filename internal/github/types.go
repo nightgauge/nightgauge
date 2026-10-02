@@ -194,9 +194,17 @@ type projectItemContent struct {
 		SubIssues subIssuePage `graphql:"subIssues(first: 12)"`
 		BlockedBy blockingPage `graphql:"blockedBy(first: 5)"`
 		Blocking  blockingPage `graphql:"blocking(first: 5)"`
-		Parent    struct {
-			Number graphql.Int
-			Title  graphql.String
+		// Parent selects the epic's own repository with its number, as
+		// issueQuery's Parent does (#1181): a number alone is no coordinate
+		// for an epic that lives in another repository, and the epic cascade
+		// keyed on it read the sub-issue's own same-numbered issue (#2350).
+		// An object field, not a connection, so it adds no query cost.
+		Parent struct {
+			Number     graphql.Int
+			Title      graphql.String
+			Repository struct {
+				NameWithOwner graphql.String
+			}
 		}
 	} `graphql:"... on Issue"`
 	PRFields struct {

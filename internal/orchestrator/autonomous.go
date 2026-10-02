@@ -4631,9 +4631,11 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		// treat the sub-issue as blocked too. This prevents out-of-order
 		// execution when epics are wired with blockedBy dependencies but their
 		// sub-issues have no individual blockers. Opt-out via
-		// DisableEpicBlockedByCascade in AutonomousConfig.
-		if !as.config.DisableEpicBlockedByCascade && node.EpicNumber != 0 {
-			epicKey := g.NodeKey(depgraph.NodeID{Repo: node.Repo, Number: node.EpicNumber})
+		// DisableEpicBlockedByCascade in AutonomousConfig. The epic is keyed
+		// in its own repository (Node.EpicID), never by number in the
+		// sub-issue's (#2350).
+		if epicID, isSub := node.EpicID(); !as.config.DisableEpicBlockedByCascade && isSub {
+			epicKey := g.NodeKey(epicID)
 			if epicNode, ok := g.Nodes[epicKey]; ok && strings.EqualFold(epicNode.State, "OPEN") {
 				gating, ownSubs := epicCascadeDeps(g, adj, epicKey)
 				if len(ownSubs) > 0 && !ownSubEdgeLogged[epicKey] {
@@ -4646,9 +4648,9 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 					blocker = res.blocker
 					offBoard = res.offBoard
 					blockerEdge = describeEdgeSource(g, epicKey, res.blocker)
-					prefix := "(via epic #" + strconv.Itoa(node.EpicNumber) + ") "
+					prefix := "(via epic " + epicRefFor(node, epicID) + ") "
 					if res.offBoard {
-						prefix = "(via epic #" + strconv.Itoa(node.EpicNumber) + ", off-board) "
+						prefix = "(via epic " + epicRefFor(node, epicID) + ", off-board) "
 					}
 					blockerStatus = prefix + res.status
 				}
@@ -4718,7 +4720,8 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			if !hasOpenBlocker {
 				continue
 			}
-			// Find candidates that are sub-issues of this epic (same repo).
+			// Find candidates that are sub-issues of this epic, in whichever
+			// repository each lives (#2350).
 			var danglingKeys []string
 			for _, c := range candidates {
 				subKey := fmt.Sprintf("%s#%d", c.Repo, c.Number)
@@ -4726,7 +4729,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 					continue
 				}
 				subNode, ok := g.Nodes[subKey]
-				if ok && subNode.EpicNumber == node.Number && subNode.Repo == node.Repo {
+				if ok && subNode.IsSubIssueOf(node) {
 					danglingKeys = append(danglingKeys, subKey)
 				}
 			}
