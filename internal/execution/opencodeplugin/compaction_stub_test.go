@@ -59,11 +59,17 @@ import (
 	"time"
 )
 
-// compactionStubBudget bounds the whole opencode run: the probe this test's
-// config was derived from completed in ~1-2s once compaction routed to its
-// own stub, so 45s leaves wide headroom without masking a real hang as a
-// slow pass.
-const compactionStubBudget = 45 * time.Second
+// compactionStubBudget bounds `opencode run` and nothing else: the nightgauge
+// build its hooks need happens before the clock starts (#2347). The probe this
+// test's config was derived from completed in ~1-2s once compaction routed to
+// its own stub, but the fixture's run is a fixed 35-37 loop steps, and each
+// step spawns hook processes. Measured on a loaded 12-core machine, OpenCode's
+// part took 11-25 s; under heavier CPU contention it ran at about 1 s a step
+// with no stall, and the old 45 s budget killed it just short of the end
+// (step 30 at +38 s). Two minutes is over twice that contended worst. A
+// runaway continuation (the negative control logged 311+ loop steps) is still
+// killed, and the kill fails the test.
+const compactionStubBudget = 2 * time.Minute
 
 // buildStubProviderBin builds cmd/stub-provider once per test process, the
 // same pattern buildNightgaugeBin (plugin_test.go) uses for cmd/nightgauge.
@@ -271,9 +277,10 @@ func runCompactionStub(t *testing.T, real string, growth, summary stubInstance) 
 
 	configContent := compactionStubConfig(sh.pluginEntry, growth.baseURL, summary.baseURL)
 
+	// Build first: the budget times the run, not a go build (#2347).
+	hookBin, waitForHooks := trackedHookBin(t, buildNightgaugeBin(t))
 	ctx, cancel := context.WithTimeout(context.Background(), compactionStubBudget)
 	defer cancel()
-	hookBin, waitForHooks := trackedHookBin(t, buildNightgaugeBin(t))
 	cmd := exec.CommandContext(ctx, real, "run", "please do the task, using bash as needed",
 		"-m", "lmstudio/stub-model", "--agent", "build", "--print-logs", "--log-level", "DEBUG")
 	cmd.Dir = projectDir
@@ -451,9 +458,10 @@ func TestPermissionAskEventAgainstRealOpenCode(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Build first: the budget times the run, not a go build (#2347).
+	hookBin, waitForHooks := trackedHookBin(t, buildNightgaugeBin(t))
 	ctx, cancel := context.WithTimeout(context.Background(), compactionStubBudget)
 	defer cancel()
-	hookBin, waitForHooks := trackedHookBin(t, buildNightgaugeBin(t))
 	cmd := exec.CommandContext(ctx, real, "run", "please do the task, using bash as needed",
 		"-m", "lmstudio/stub-model", "--agent", "build", "--print-logs", "--log-level", "DEBUG")
 	cmd.Dir = projectDir
