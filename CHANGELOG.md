@@ -272,6 +272,18 @@ changelog, and the release workflow refuses a tag that does not.
   epic's repository. The between-epic checkpoint's halt reason and card name
   the epic as `owner/repo#N`.
 
+  the epic as `owner/repo#N`. The extension decides the same way: its
+  post-pickup epic base-branch check and its concurrent slots look for an epic
+  branch only when the epic lives in the sub-issue's repository, using the
+  epic repository the queue now records for each sub-issue, and the Go pickup
+  runner's issue context carries no `parent_issue` for a parent elsewhere. A
+  wave run executes each sub-issue in its own repository, not as the epic
+  repository's issue with the same number, and the dispatcher's cross-epic hold
+  no longer holds an unrelated issue that shares a number with a blocked
+  epic's sub-issue. The unused `epic.readContext`, `epic.appendContext` and
+  `wave.status` IPC methods, which read the launch checkout by epic number
+  alone, are removed.
+
 - **A blocker that shares its number with a parent epic in another repository
   is no longer deleted, refused or flagged as circular** (#2369). Three checks
   for "an issue blocked by its own parent epic" compared only the number. The

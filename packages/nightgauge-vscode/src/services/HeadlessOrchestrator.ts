@@ -62,6 +62,7 @@ import {
 import { OrchestratorEventDispatcher } from "../orchestrator/events/OrchestratorEventDispatcher";
 import { WorktreeManager } from "../utils/WorktreeManager";
 import { isValidBranchName } from "../utils/branchUtils";
+import { epicBranchParent } from "../utils/epicBranchParent";
 
 const execAsync = promisify(exec);
 import {
@@ -5905,6 +5906,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * never created, this method fell open to main, and sub-issues landed on main
    * individually (acmeapp-platform#6/#7 even pushed directly to main).
    *
+   * Only a parent in this issue's own repository counts. A sub-issue of an epic
+   * in another repository has no epic branch here, so it keeps its own base
+   * branch and nothing is looked up or created (#2377).
+   *
    * @see Issue #1452 — #1463 merged to main instead of epic branch
    */
   private async enforceEpicBaseBranch(
@@ -5926,7 +5931,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // Already targeting an epic branch — nothing to do
       if (currentBase.startsWith("epic/")) return { ok: true };
 
-      // Detect parent epic from the context or via GitHub sub-issues API
+      // Detect parent epic from the context or via GitHub sub-issues API.
+      // native_parent is a number in this repository: the context assembler
+      // leaves it null for a parent in another repository (#1058).
       let parentNumber: number | null = ctx.native_parent ?? null;
 
       // Resolve owner/repo from repoOverride or CWD's git remote (also used by
@@ -5952,7 +5959,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
 
       if (parentNumber === null) {
-        // Query GitHub for this issue's parent (native sub-issues API)
+        // Query GitHub for this issue's parent (native sub-issues API), with
+        // the parent's repository. An epic branch, epic/<N>-*, names #N of the
+        // repository it is pushed to, so a parent in another repository has
+        // none here: epic/<N>-* in this one is the branch of its own #N, and
+        // creating one strands the sub-issue on a branch no epic PR merges
+        // (#2377). Such a sub-issue keeps its own default branch, as
+        // `git branch-create` decides on the skill path.
+        let parent: { number?: number; repository?: { nameWithOwner?: string } } | null = null;
         try {
           const { stdout: parentRaw } = await execFileAsync(
             "gh",
@@ -5960,19 +5974,38 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               "api",
               "graphql",
               "-f",
-              `query=query { repository(owner: "${gqlOwner}", name: "${gqlRepo}") { issue(number: ${issueNumber}) { parent { number } } } }`,
+              `query=query { repository(owner: "${gqlOwner}", name: "${gqlRepo}") { issue(number: ${issueNumber}) { parent { number repository { nameWithOwner } } } } }`,
               "--jq",
-              ".data.repository.issue.parent.number",
+              ".data.repository.issue.parent",
             ],
             execOptions
           );
           const parentJson = parentRaw.trim();
           if (parentJson && parentJson !== "null") {
-            parentNumber = parseInt(parentJson, 10);
+            parent = JSON.parse(parentJson);
           }
         } catch {
           // Non-critical: parent detection failed (transient). We can't confirm
           // this is an epic sub-issue, so don't block — fall through to ok.
+        }
+        if (parent?.number) {
+          const local = epicBranchParent(
+            `${gqlOwner}/${gqlRepo}`,
+            parent.number,
+            parent.repository?.nameWithOwner
+          );
+          if (local === undefined) {
+            this.logger.info(
+              "Epic sub-issue's parent lives in another repository — keeping its own base branch",
+              {
+                issueNumber,
+                parent: `${parent.repository?.nameWithOwner}#${parent.number}`,
+                currentBase,
+              }
+            );
+            return { ok: true };
+          }
+          parentNumber = local;
         }
       }
 

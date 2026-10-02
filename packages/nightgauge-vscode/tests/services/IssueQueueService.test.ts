@@ -283,6 +283,31 @@ describe("IssueQueueService (IPC delegation)", () => {
       expect(items[0].title).toBe("Dequeued item");
     });
 
+    // The slot manager bases a sub-issue on epic/<N>-* only when the epic
+    // lives in the sub-issue's own repository (#2377), so the epic's
+    // repository must survive the IPC conversion.
+    it("carries a sub-issue's epic and the epic's repository", async () => {
+      mockQueueDequeueIndependent.mockResolvedValueOnce([
+        {
+          repo: "acme/app",
+          issueNumber: 21,
+          title: "Sub-issue",
+          priority: 0,
+          status: "pending",
+          addedAt: "2026-01-01T00:00:00Z",
+          position: 1,
+          epicNumber: 20,
+          epicRepo: "acme/platform",
+        },
+      ]);
+
+      const [item] = await service.dequeueIndependent(1, []);
+
+      expect(item.repoName).toBe("acme/app");
+      expect(item.epicNumber).toBe(20);
+      expect(item.epicRepo).toBe("acme/platform");
+    });
+
     it("fires onItemRemoved callback for each dequeued item", async () => {
       const onItemRemoved = vi.fn();
       service.setCallbacks({ onItemRemoved });

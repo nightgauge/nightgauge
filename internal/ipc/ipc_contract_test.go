@@ -52,12 +52,10 @@ var contractTestedMethods = map[string]bool{
 	// Branch
 	"branch.cleanup": true,
 	// Epic
-	"epic.appendContext":    true,
 	"epic.checkCompletion":  true,
 	"epic.createPR":         true,
 	"epic.mergePR":          true,
 	"epic.progress":         true,
-	"epic.readContext":      true,
 	"epic.transitionStatus": true,
 	// Execution
 	"execution.list": true,
@@ -175,8 +173,6 @@ var contractTestedMethods = map[string]bool{
 	"workspace.repoAdd":                true,
 	"workspace.repoRemove":             true,
 	"workspace.configureForgeInstance": true,
-	// Wave orchestration
-	"wave.status": true,
 	// Queue
 	"queue.add":                true,
 	"queue.clear":              true,
@@ -688,28 +684,6 @@ func TestContract_Epic(t *testing.T) {
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "epic.mergePR")
 	})
-
-	t.Run("epic.readContext/registered", func(t *testing.T) {
-		id := h.sendRequest("epic.readContext", map[string]interface{}{
-			"epicNumber": 1,
-		})
-		assertMethodRegistered(t, h.readResponseFor(id, nil), "epic.readContext")
-	})
-
-	t.Run("epic.appendContext/registered", func(t *testing.T) {
-		id := h.sendRequest("epic.appendContext", map[string]interface{}{
-			"epicNumber":  1,
-			"issueNumber": 42,
-			"findings": map[string]interface{}{
-				"files_touched": []string{"src/foo.ts"},
-				"decisions":     []string{},
-				"discoveries":   []string{},
-				"patterns":      []string{},
-				"recorded_at":   "2026-03-24T00:00:00Z",
-			},
-		})
-		assertMethodRegistered(t, h.readResponseFor(id, nil), "epic.appendContext")
-	})
 }
 
 // ─── Pipeline ──────────────────────────────────────────────────────────────
@@ -918,14 +892,6 @@ func TestContract_Queue(t *testing.T) {
 			"owner": "test-org", "repo": "test-repo", "epicNumber": 1,
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "queue.enqueueEpic")
-	})
-
-	// wave.status reads persisted wave plan/status → -32603 with no data on disk.
-	t.Run("wave.status/registered", func(t *testing.T) {
-		id := h.sendRequest("wave.status", map[string]interface{}{
-			"epicNumber": 999,
-		})
-		assertMethodRegistered(t, h.readResponseFor(id, nil), "wave.status")
 	})
 }
 

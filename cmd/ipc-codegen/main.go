@@ -379,7 +379,6 @@ func collectImportTypes(methods []MethodDef) []string {
 		"AutonomousClearIssueFailuresResult": true,
 		"AutonomousClearQuotaCooldownResult": true,
 		"StuckEpicsResult":                   true, // Issue #4073
-		"EpicContextResult":                  true,
 		"FocusShowResult":                    true,
 		"FocusListResult":                    true,
 		"PipelineMaxConcurrentResult":        true,

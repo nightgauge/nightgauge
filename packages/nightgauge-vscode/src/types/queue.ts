@@ -116,6 +116,11 @@ export interface QueueItem {
   epicOrder?: number;
   /** Parent epic issue number (set for sub-issues of an epic) */
   epicNumber?: number;
+  /**
+   * The repository (`owner/name`) of the epic `epicNumber` names. A sub-issue
+   * of an epic in another repository has no epic branch in its own (#2377).
+   */
+  epicRepo?: string;
   /** Repository name (for cross-repo queue display, Issue #2188) */
   repoName?: string;
   /**

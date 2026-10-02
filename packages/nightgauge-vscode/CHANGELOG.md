@@ -45,6 +45,12 @@ and this project adheres to
   never read it. Choose the mode with the status-bar picker, or set
   `NIGHTGAUGE_PERFORMANCE_MODE`, and remove the key (#2343).
 
+- **A sub-issue whose epic lives in another repository is based on its own
+  default branch.** The base-branch check after issue pickup and the concurrent
+  slots used to look for the epic's branch by number in the sub-issue's
+  repository, where it belongs to a different issue, and the check created one
+  there when none existed (#2377).
+
 - **Pause, resume, cancel, approve and reject from the phone app or the
   dashboard are acknowledged.** Each one used to show as unacknowledged and
   then expired, even when it had been carried out. Pause and resume now work:

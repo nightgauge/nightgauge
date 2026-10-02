@@ -51,7 +51,6 @@ import type {
   DoctorHistoryResult,
   DoctorRecheckResult,
   DoctorRunResult,
-  EpicContextResult,
   EpicProgress,
   ExecutionInfo,
   FailureClassification,
@@ -221,14 +220,6 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async epicTransitionStatus(owner: string, repo: string, epicNumber: number, projectNumber: number, newStatus: string, githubUser?: string): Promise<{epicNumber:number;newStatus:string;epicSynced:boolean;subIssueTotal:number;subIssueMoved:number}> {
     return this.call<{epicNumber:number;newStatus:string;epicSynced:boolean;subIssueTotal:number;subIssueMoved:number}>('epic.transitionStatus', { owner, repo, epicNumber, projectNumber, newStatus, githubUser });
-  }
-
-  async epicReadContext(): Promise<EpicContextResult> {
-    return this.call<EpicContextResult>('epic.readContext');
-  }
-
-  async epicAppendContext(): Promise<void> {
-    await this.call<void>('epic.appendContext');
   }
 
 

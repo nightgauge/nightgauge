@@ -727,6 +727,8 @@ export interface IpcQueueItem {
   epicOrder?: number;
   isBatch?: boolean;
   epicNumber?: number;
+  /** The repository (`owner/name`) of the epic `epicNumber` names (#2377). */
+  epicRepo?: string;
   addedAt: string;
   position: number;
   /** A remote run request's adapter pin (#1656); absent on every other item. */
@@ -904,11 +906,6 @@ export interface AgentExecutionProfileResult {
 export interface QueueValidatePinResult {
   ok: boolean;
   reason?: string;
-}
-
-/** Result from epic.readContext — raw epic context JSON. */
-export interface EpicContextResult {
-  [key: string]: unknown;
 }
 
 /**

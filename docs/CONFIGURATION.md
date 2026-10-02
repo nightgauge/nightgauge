@@ -1810,8 +1810,11 @@ pipeline:
 
 When `true` (the default), the Go scheduler creates `epic/{N}-{slug}` from the
 repository's default branch immediately after `issue-pickup` completes for any
-sub-issue. This ensures `enforceEpicBaseBranch()` in TypeScript finds the branch
-before `feature-planning` runs.
+sub-issue whose epic lives in the same repository. This ensures
+`enforceEpicBaseBranch()` in TypeScript finds the branch before
+`feature-planning` runs. A sub-issue of an epic in another repository gets no
+epic branch; see
+[MULTI_REPO_WORKSPACE.md](MULTI_REPO_WORKSPACE.md#epic-branches-in-a-cross-repo-epic-2377).
 
 Set to `false` to disable auto-creation. Sub-issue PRs will target `main` unless
 the epic branch was created manually.

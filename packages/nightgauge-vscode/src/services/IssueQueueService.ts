@@ -513,6 +513,7 @@ export class IssueQueueService implements vscode.Disposable {
       })),
       epicOrder: item.epicOrder,
       epicNumber: item.epicNumber,
+      epicRepo: item.epicRepo || undefined,
       repoName: item.repo || undefined,
       requestedAdapter: item.requestedAdapter || undefined,
       requestedModel: item.requestedModel || undefined,

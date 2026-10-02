@@ -144,6 +144,7 @@ import type { Logger } from "../utils/logger";
 import type { ActiveSlot, QueueItem } from "../types/queue";
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
 import { postFailureComment } from "../utils/failureComment";
+import { epicBranchParent } from "../utils/epicBranchParent";
 import { getConcurrentPipelineConfig } from "../utils/nightgaugeConfig";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import { throttleInForce, type WorkspaceThrottle } from "./WorkspaceThrottle";
@@ -1396,12 +1397,15 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     }
 
     // Detect epic branch for sub-issues so the worktree branches from the
-    // epic branch (with main merged in) instead of bare main.
+    // epic branch (with main merged in) instead of bare main. Only an epic in
+    // the item's own repository has one there: epic/<N>-* in another
+    // repository is the branch of that repository's own #N (#2377).
     let baseBranch: string | undefined;
-    if (item.epicNumber) {
+    const localEpicNumber = epicBranchParent(item.repoName, item.epicNumber, item.epicRepo);
+    if (localEpicNumber) {
       try {
         const { stdout } = await execAsync(
-          `git ls-remote --heads origin "epic/${item.epicNumber}-*" | head -1 | awk '{print $2}' | sed 's|refs/heads/||'`,
+          `git ls-remote --heads origin "epic/${localEpicNumber}-*" | head -1 | awk '{print $2}' | sed 's|refs/heads/||'`,
           { cwd: slotWorktreeManager.getRepoRoot(), timeout: 15_000 }
         );
         const epicBranch = stdout.trim();
@@ -1409,13 +1413,22 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           baseBranch = epicBranch;
           this.logger.info("Epic branch detected for sub-issue worktree", {
             issueNumber: item.issueNumber,
-            epicNumber: item.epicNumber,
+            epicNumber: localEpicNumber,
             epicBranch,
           });
         }
       } catch {
         // Non-critical — fall back to main
       }
+    } else if (item.epicNumber) {
+      this.logger.info(
+        "Sub-issue's epic lives in another repository — worktree uses the default branch",
+        {
+          issueNumber: item.issueNumber,
+          repo: item.repoName,
+          epic: `${item.epicRepo}#${item.epicNumber}`,
+        }
+      );
     }
 
     this.logger.info("Starting concurrent pipeline slot", {

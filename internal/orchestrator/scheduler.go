@@ -1093,8 +1093,14 @@ type QueueItem struct {
 	EpicOrder       *int               `json:"epicOrder,omitempty"`
 	IsBatch         bool               `json:"isBatch,omitempty"`
 	EpicNumber      *int               `json:"epicNumber,omitempty"`
-	AddedAt         time.Time          `json:"addedAt"`
-	Position        int                `json:"position"` // 1-indexed
+	// EpicRepo is the repository ("owner/name") of the epic EpicNumber names.
+	// A sub-issue of a cross-repository epic sits in another repository, where
+	// EpicNumber names a different issue and epic/<N>-* is that issue's
+	// branch, so a consumer bases the sub-issue on the epic branch only when
+	// EpicRepo is its own repository (#2377).
+	EpicRepo string    `json:"epicRepo,omitempty"`
+	AddedAt  time.Time `json:"addedAt"`
+	Position int       `json:"position"` // 1-indexed
 	// PausedReason is set when Status == "paused" (Issue #3001). Discriminated
 	// by Kind so future paused reasons (manual hold, license check) can be
 	// added without re-shaping callers.
@@ -2135,11 +2141,19 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 	// If an epic is blocked by another epic (cross-epic dependency),
 	// all of its sub-issues are transitively blocked even if they
 	// don't have direct blockedBy entries.
-	subIssueToEpicIdx := make(map[int]int) // sub-issue number → index in items
+	//
+	// Keyed by the sub-issue's repository and number: a sub-issue can live in
+	// another repository than its epic, and keyed by number alone an unrelated
+	// issue sharing that number was held as "parent epic is blocked" (#2377).
+	subIssueToEpicIdx := make(map[string]int) // "owner/repo#N" (lower-cased) → index in items
 	for i, item := range items {
 		if item.IsEpic {
 			for _, si := range item.SubIssues {
-				subIssueToEpicIdx[si.Number] = i
+				repo := si.Repo
+				if repo == "" {
+					repo = item.Repo
+				}
+				subIssueToEpicIdx[repoIssueKey(repo, si.Number)] = i
 			}
 		}
 	}
@@ -2212,7 +2226,7 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 		// Check parent epic blocking (cross-epic transitive blocking).
 		// If this issue is a sub-issue of an epic that has open blockedBy
 		// entries, the sub-issue is transitively blocked.
-		if epicIdx, ok := subIssueToEpicIdx[item.Number]; ok {
+		if epicIdx, ok := subIssueToEpicIdx[repoIssueKey(item.Repo, item.Number)]; ok {
 			epicItem := items[epicIdx]
 			epicBlocked := false
 			for _, b := range epicItem.BlockedBy {
@@ -2222,7 +2236,7 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 				}
 			}
 			if epicBlocked {
-				log.Printf("#%d: skipping — parent epic #%d is blocked", item.Number, epicItem.Number)
+				log.Printf("%s#%d: skipping — parent epic %s#%d is blocked", item.Repo, item.Number, epicItem.Repo, epicItem.Number)
 				continue
 			}
 		}
@@ -3070,6 +3084,7 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 			Labels:      labels,
 			EpicOrder:   &order,
 			EpicNumber:  &epicNumber,
+			EpicRepo:    fullRepo,
 			IsBatch:     true,
 			AddedAt:     time.Now().UTC(),
 		}
@@ -3631,6 +3646,13 @@ func (s *Scheduler) OnStageComplete(fn func(repo string, issue int, stage string
 // the shape that survives (#991).
 func (s *Scheduler) OnEpicComplete(fn func(epicRepo string, epicNumber int)) {
 	s.onEpicComplete = fn
+}
+
+// EpicCompleteCallback returns the callback OnEpicComplete last registered, or
+// nil. The IPC server's tests fire the one `pipeline.run` registers, to check
+// that it opens the epic PR in the repository it is handed (#2377).
+func (s *Scheduler) EpicCompleteCallback() func(epicRepo string, epicNumber int) {
+	return s.onEpicComplete
 }
 
 // SetEpicCheckpointFn injects the autonomous scheduler's epic-checkpoint
@@ -8342,6 +8364,14 @@ func splitOwnerRepo(fullRepo string) (string, string) {
 func isOwnerRepo(repo string) bool {
 	owner, name, ok := strings.Cut(repo, "/")
 	return ok && owner != "" && name != ""
+}
+
+// repoIssueKey keys an issue by repository and number ("owner/repo#N"), with
+// the repository lower-cased: GitHub compares repository names
+// case-insensitively, and an issue number names an issue only within one
+// repository.
+func repoIssueKey(repo string, number int) string {
+	return strings.ToLower(repo) + "#" + strconv.Itoa(number)
 }
 
 // splitNodeKey parses a graph node key ("owner/repo#number") into its repo

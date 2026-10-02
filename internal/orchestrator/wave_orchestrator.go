@@ -415,6 +415,7 @@ func (wo *WaveOrchestrator) fetchSubIssueDetails(ctx context.Context, owner, rep
 		subIssues = append(subIssues, teams.SubIssue{
 			Number:     si.Number,
 			Title:      si.Title,
+			Repo:       siOwner + "/" + siRepo,
 			Files:      files,
 			Complexity: complexity,
 		})
@@ -562,6 +563,29 @@ func (wo *WaveOrchestrator) runWaveScaled(ctx context.Context, wave teams.WaveAs
 	return results
 }
 
+// subIssueItem is the synthetic board item a wave runs a sub-issue as.
+//
+// The sub-issue runs in its own repository (si.Repo). A sub-issue of this epic
+// in another repository used to run as the epic repository's issue with the
+// same number (#2377). ParentNumber and ParentRepo link it to the epic, so the
+// scheduler can inject accumulated sibling context into the planning/dev
+// prompt (#4096); left 0, they kept the epic-context loop open.
+func (wo *WaveOrchestrator) subIssueItem(si teams.SubIssue, epicItem types.BoardItem) types.BoardItem {
+	repo := si.Repo
+	if repo == "" {
+		repo = epicItem.Repo
+	}
+	return types.BoardItem{
+		Number:       si.Number,
+		Title:        si.Title,
+		Repo:         repo,
+		Labels:       epicItem.Labels,
+		ID:           fmt.Sprintf("epic-%d-sub-%d", wo.epicNumber, si.Number),
+		ParentNumber: wo.epicNumber,
+		ParentRepo:   epicItem.Repo,
+	}
+}
+
 // runSubagent executes the full pipeline for a single sub-issue.
 // Each subagent gets its own worktree for isolation.
 func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, epicItem types.BoardItem, waveIdx int, tokenBudget int) *AgentResult {
@@ -574,19 +598,7 @@ func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, 
 	log.Printf("epic #%d: wave %d — starting subagent for #%d %q",
 		wo.epicNumber, waveIdx, si.Number, si.Title)
 
-	// Build a synthetic BoardItem for the sub-issue. ParentNumber links it to
-	// the epic so the scheduler can inject accumulated sibling context into the
-	// planning/dev prompt (#4096) — previously left 0, which kept the
-	// epic-context loop open.
-	subItem := types.BoardItem{
-		Number:       si.Number,
-		Title:        si.Title,
-		Repo:         epicItem.Repo,
-		Labels:       epicItem.Labels,
-		ID:           fmt.Sprintf("epic-%d-sub-%d", wo.epicNumber, si.Number),
-		ParentNumber: wo.epicNumber,
-		ParentRepo:   epicItem.Repo,
-	}
+	subItem := wo.subIssueItem(si, epicItem)
 
 	// Create a per-subagent child context for cancellation isolation
 	subCtx, cancel := context.WithCancel(ctx)
