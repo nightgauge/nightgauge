@@ -281,6 +281,7 @@ deny:
       - "docs/spikes/662-adapter-usage-quota-signals.md"
       - "docs/spikes/1272-ai-native-sdlc-playbook-gap-analysis.md"
       - "docs/spikes/1650-opencode-server-mode-warm-serve-run-attach-http-permission.md"
+      - "docs/spikes/1568-conversational-agent-sessions-across-adapters.md"
     rationale: >-
       Company research artifacts require an explicit publication decision.
       The public README documents the product contract without publishing the
@@ -326,6 +327,19 @@ deny:
       observed during the experiments (this machine's LAN address) is redacted
       to a placeholder. The spike-materialize stage requires the artifact at
       this path to file its follow-up issues.
+      Spike #1568 (conversational sessions across the execution adapters) is
+      reviewed and excepted on the same basis: every observation is of a
+      third-party CLI's own published surface -- its --help output at a stated
+      version, its vendor documentation, cited by URL, and its behaviour in
+      two-turn probes run in a scratch directory outside any repository on the
+      smallest model offered -- and the only Nightgauge material it cites is
+      code already public under internal/** and packages/** and public issue
+      numbers in this repository. Probe figures are token counts, latencies
+      and resident memory of throwaway sessions; it states no price, and
+      contains no COGS, customer data, account identifiers, session ids,
+      private repository issue numbers, or unreleased roadmap material. The
+      spike-materialize stage requires the artifact at this path to file its
+      follow-up issues.
   - path: "docs/epics/**"
     class: PRIVATE
     except:
@@ -727,8 +741,14 @@ issue_references:
   # the run's own `retired:` lines, which is the point of #1080: a fall is now
   # itemised instead of argued about.
   #
+  # 2026-10-02 (#2336): 5,754 — two references, named. Removing the dead
+  # platform approve/reject methods from ConcurrentPipelineManager.ts took
+  # their two `@see` citations of the archived repository's issues with them.
+  # Measured over main at 5,756 (#2345), the checker counted both as genuinely
+  # removed at one ceiling and named 5,754.
+  #
   # NEVER raise this number. Lower it ONLY to the value the checker names.
-  tree_baseline: 5756
+  tree_baseline: 5754
   allow_paths:
     # Files that DEFINE or TEST the rule must contain example violations.
     - ".github/publication-boundary.yaml"
