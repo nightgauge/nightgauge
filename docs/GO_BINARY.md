@@ -291,6 +291,14 @@ the same workspace, and the two declare the same workspace (#2335):
   root alone when there is no valid manifest. When no member is named, the
   effective `autonomous.enabled_repos` is used. `internal/agentworkspace`
   resolves the set.
+- The workspace root is the one the extension uses. The extension starts the
+  daemon with its window's folders in `NIGHTGAUGE_WINDOW_FOLDERS` (a JSON
+  array, window order), because `--workspace` is the first folder that has a
+  project config and can be another folder. The root is then the first
+  folder's git root, as `git.root` answers it, or the folder itself; a
+  multi-root window with no manifest whose every folder has a project config
+  declares every folder. Without the variable (`nightgauge serve` from a
+  terminal) the root is `--workspace`.
 - `workspace`: `{slug, display_name}` when the manifest sets
   `workspace.name`. The slug is derived exactly as the extension derives it.
 
@@ -309,9 +317,12 @@ to, and such a command expires on the platform.
 The extension acknowledges every command it consumes exactly once (#2334): a
 trigger with the run it starts; a run verb (`cancel`, `approve`, `reject`,
 `pause`, `resume`) as `applied`, or as `rejected` with the reason it was a
-no-op; any other type as `rejected` with `unsupported-command`. A trigger or
-verb for a repository that is not open in the window is left for the window
-that has it.
+no-op; any other type as `rejected` with `unsupported-command`. Delivery is
+at least once, so a copy of a verb or an unsupported command that arrives
+again is not carried out again; it re-sends the first copy's ack only when
+that ack did not reach the platform. A second copy of a trigger is refused by
+the platform at its ack and starts nothing. A trigger or verb for a
+repository that is not open in the window is left for the window that has it.
 
 ## CLI Command Reference
 

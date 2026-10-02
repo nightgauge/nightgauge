@@ -136,7 +136,7 @@ function isTransientNetworkFailureText(errMsg: string): boolean {
 import type { IssueQueueService } from "./IssueQueueService";
 import type { HeadlessOrchestrator } from "./HeadlessOrchestrator";
 import type { PipelineRunResult, RequestedPin } from "./HeadlessOrchestrator";
-import type { PipelineStateService } from "./PipelineStateService";
+import type { PipelineState, PipelineStateService } from "./PipelineStateService";
 import type { Logger } from "../utils/logger";
 import type { ActiveSlot, QueueItem } from "../types/queue";
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
@@ -3690,11 +3690,15 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   async pauseByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
     if (!slot) return "no-active-run";
+    // The flag lives on the run's loaded state; a slot with none yet cannot
+    // hold, and must not report that it does. Decided before the flag moves,
+    // not by re-reading it afterwards: a resume handled in the same tick may
+    // clear it again while this pause is still being persisted, and the pause
+    // took effect all the same.
+    if (!slot.stateService.hasRunState()) return "no-run-state";
     if (slot.stateService.isPaused()) return "already-paused";
     await slot.stateService.pausePipeline();
-    // The flag lives on the run's loaded state; a slot with none yet cannot
-    // hold, and must not report that it does.
-    return slot.stateService.isPaused() ? "applied" : "no-run-state";
+    return "applied";
   }
 
   /**
@@ -3708,6 +3712,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     if (!slot.stateService.isPaused()) return "not-paused";
     await slot.stateService.resumePipeline();
     return "applied";
+  }
+
+  /**
+   * The local state of the run the platform's run id names, or null when no
+   * slot carries it. A platform pause or resume reads it to show the run the
+   * way the local Pause/Resume Pipeline commands do (#2334).
+   */
+  async remoteRunState(remoteRunId: string): Promise<PipelineState | null> {
+    const slot = this.slotByRemoteRunId(remoteRunId);
+    return slot ? slot.stateService.getState() : null;
   }
 
   private slotByRemoteRunId(remoteRunId: string): PipelineSlot | undefined {

@@ -1980,6 +1980,14 @@ export class PipelineStateService implements vscode.Disposable {
     return this._lastState?.paused ?? false;
   }
 
+  /**
+   * Whether the run has loaded state, which is where pausePipeline() sets
+   * the paused flag: without it a pause has nothing to hold the run with.
+   */
+  hasRunState(): boolean {
+    return this._lastState !== null;
+  }
+
   getExecutionMode(): StageExecutionMode {
     return "headless";
   }

@@ -23,6 +23,14 @@
  * stage loop holds at the next boundary, and a resume lets the same run
  * continue with the next stage.
  *
+ * The platform delivers at least once, so the same command can arrive twice.
+ * Each command id is carried out and acknowledged once
+ * (CommandRedeliveryGuard): a later copy re-sends the first copy's ack only
+ * when that ack did not reach the platform.
+ *
+ * A pause or resume that took effect also shows in this window the way the
+ * local Pause/Resume Pipeline commands show it (RemotePauseUi).
+ *
  * A verb for a repo that is not open in this window is not consumed here: the
  * agent identity is per machine, so another window on this machine may hold
  * the run, and a no-op ack from this one would race its applied ack. It is
@@ -35,10 +43,12 @@
  */
 
 import type { CommandHandler, ReceivedCommand } from "./AgentCommandStreamService";
+import { CommandRedeliveryGuard } from "./CommandRedeliveryGuard";
 import type { ConcurrentPipelineManager, RemoteVerbResult } from "./ConcurrentPipelineManager";
 import type { IpcClient } from "./IpcClient";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import type { Logger } from "../utils/logger";
+import type { RemotePauseUi } from "../utils/pauseUi";
 
 /** The verbs that act on an existing run, as the platform names them. */
 export const RUN_VERB_COMMAND_TYPES = ["cancel", "approve", "reject", "pause", "resume"] as const;
@@ -71,8 +81,17 @@ export type RunVerbTarget = Pick<
   | "resumeByRemoteRunId"
 >;
 
+/** The ack a consumed verb gets, decided once per command id. */
+interface VerbAck {
+  /** The agent the ack names; null when none is known yet. */
+  agentId: string | null;
+  outcome: "applied" | "rejected";
+  detail?: string;
+}
+
 export class RunVerbCommandHandler implements CommandHandler {
   private agentId: string | null = null;
+  private readonly redelivery = new CommandRedeliveryGuard<VerbAck>();
 
   constructor(
     private readonly runs: RunVerbTarget,
@@ -82,7 +101,9 @@ export class RunVerbCommandHandler implements CommandHandler {
      * Optional, as for TriggerCommandHandler: when present, a verb whose repo
      * is not open in this workspace is left for the window that has it.
      */
-    private readonly workspaceManager?: Pick<WorkspaceManager, "findRepositoryByGitHub">
+    private readonly workspaceManager?: Pick<WorkspaceManager, "findRepositoryByGitHub">,
+    /** Optional: shows an applied pause or resume in this window. */
+    private readonly pauseUi?: RemotePauseUi
   ) {}
 
   /** The agent this window's own command stream belongs to. */
@@ -96,8 +117,9 @@ export class RunVerbCommandHandler implements CommandHandler {
   }
 
   /**
-   * Apply one verb and acknowledge it. Resolves once the ack has been sent or
-   * has failed, so a caller can await the whole consumption.
+   * Apply one verb and acknowledge it, once per command id. Resolves once the
+   * ack has been sent or has failed, so a caller can await the whole
+   * consumption.
    */
   async consume(cmd: ReceivedCommand, verb: RunVerbCommandType): Promise<void> {
     if (this.notThisWindow(cmd)) {
@@ -107,15 +129,25 @@ export class RunVerbCommandHandler implements CommandHandler {
       );
       return;
     }
+    return this.redelivery.consume(
+      cmd.id,
+      () => this.decide(cmd, verb),
+      (ack) => this.acknowledge(cmd, verb, ack)
+    );
+  }
 
+  /** Carry the verb out and decide its ack. Never throws. */
+  private async decide(cmd: ReceivedCommand, verb: RunVerbCommandType): Promise<VerbAck> {
+    // A relayed command names the agent it was addressed to; this window's
+    // own stream delivers commands addressed to its own agent.
+    const agentId = cmd.agentId ?? this.agentId;
     const runId = (cmd.payload as { runId?: unknown } | null | undefined)?.runId;
     if (typeof runId !== "string" || runId === "") {
       this.logger.warn("RunVerbCommandHandler: missing runId in payload", {
         verb,
         commandId: cmd.id,
       });
-      await this.acknowledge(cmd, verb, "rejected", INVALID_PAYLOAD_DETAIL);
-      return;
+      return { agentId, outcome: "rejected", detail: INVALID_PAYLOAD_DETAIL };
     }
 
     let result: RemoteVerbResult;
@@ -128,14 +160,13 @@ export class RunVerbCommandHandler implements CommandHandler {
         commandId: cmd.id,
         err: err instanceof Error ? err.message : String(err),
       });
-      await this.acknowledge(cmd, verb, "rejected", APPLY_FAILED_DETAIL);
-      return;
+      return { agentId, outcome: "rejected", detail: APPLY_FAILED_DETAIL };
     }
 
     if (result === "applied") {
       this.logger.info("RunVerbCommandHandler: applied", { verb, runId, commandId: cmd.id });
-      await this.acknowledge(cmd, verb, "applied");
-      return;
+      await this.showInWindow(verb, runId);
+      return { agentId, outcome: "applied" };
     }
     this.logger.warn("RunVerbCommandHandler: nothing to act on — no-op", {
       verb,
@@ -143,7 +174,21 @@ export class RunVerbCommandHandler implements CommandHandler {
       result,
       commandId: cmd.id,
     });
-    await this.acknowledge(cmd, verb, "rejected", NO_OP_DETAIL[result]);
+    return { agentId, outcome: "rejected", detail: NO_OP_DETAIL[result] };
+  }
+
+  /** Show an applied pause or resume the way the local commands do. */
+  private async showInWindow(verb: RunVerbCommandType, runId: string): Promise<void> {
+    if (!this.pauseUi || (verb !== "pause" && verb !== "resume")) return;
+    try {
+      await (verb === "pause" ? this.pauseUi.paused(runId) : this.pauseUi.resumed(runId));
+    } catch (err) {
+      this.logger.warn("RunVerbCommandHandler: could not show the run's new state", {
+        verb,
+        runId,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private apply(
@@ -169,31 +214,30 @@ export class RunVerbCommandHandler implements CommandHandler {
     return !this.workspaceManager.findRepositoryByGitHub(`${cmd.owner}/${cmd.repo}`);
   }
 
+  /** Send the decided ack. Resolves whether the platform accepted it. */
   private async acknowledge(
     cmd: ReceivedCommand,
     verb: RunVerbCommandType,
-    outcome: "applied" | "rejected",
-    detail?: string
-  ): Promise<void> {
-    // A relayed command names the agent it was addressed to; this window's
-    // own stream delivers commands addressed to its own agent.
-    const agentId = cmd.agentId ?? this.agentId;
-    if (!agentId || !cmd.id) {
+    ack: VerbAck
+  ): Promise<boolean> {
+    if (!ack.agentId || !cmd.id) {
       this.logger.warn("RunVerbCommandHandler: cannot acknowledge — no agent id or command id", {
         verb,
         commandId: cmd.id,
       });
-      return;
+      return false;
     }
     try {
-      await this.ipcClient.agentAcknowledgeCommand(agentId, cmd.id, outcome, detail);
+      await this.ipcClient.agentAcknowledgeCommand(ack.agentId, cmd.id, ack.outcome, ack.detail);
+      return true;
     } catch (err) {
       this.logger.error("RunVerbCommandHandler: ack failed", {
         verb,
         commandId: cmd.id,
-        outcome,
+        outcome: ack.outcome,
         err: err instanceof Error ? err.message : String(err),
       });
+      return false;
     }
   }
 }

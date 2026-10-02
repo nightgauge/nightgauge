@@ -10659,6 +10659,16 @@ export class HeadlessOrchestrator implements vscode.Disposable {
           break;
         }
 
+        // Hold BEFORE a stage starts, too (#2334). The check after a stage
+        // (below) runs once, as the stage completes. A pause that lands after
+        // it (during the between-stage budget check, or while a bookend,
+        // deferred or already-completed stage `continue`s past it) would
+        // otherwise let the next stage run in full, possibly a long
+        // feature-dev, before the run held.
+        if (!(await this.holdWhilePaused("before", stage, issueNumber))) {
+          break;
+        }
+
         // ===================================================================
         // DEFERRED STAGES: When deferMerge is enabled, pr-merge and
         // pipeline-finish require human action (PR review/approval).
@@ -12363,26 +12373,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         // SAME call continue exactly where it left off. Still responsive to
         // abort/stop: the wait loop re-checks the abort signal every poll
         // tick, same as the per-stage check at the top of this loop.
-        if (this.stateService) {
-          let isPaused = await this.stateService.isPaused();
-          if (isPaused) {
-            this.logger.info("Pipeline paused after stage complete — holding", {
-              stage,
-              issueNumber,
-            });
-            while (isPaused && !this.abortController?.signal.aborted) {
-              await this.delay(this.config.pausePollIntervalMs ?? PAUSE_POLL_INTERVAL_MS);
-              isPaused = await this.stateService.isPaused();
-            }
-            if (this.abortController?.signal.aborted) {
-              this.logger.info("Pipeline aborted while paused", { stage, issueNumber });
-              break;
-            }
-            this.logger.info("Pipeline resumed — continuing stage loop", {
-              stage,
-              issueNumber,
-            });
-          }
+        if (!(await this.holdWhilePaused("after", stage, issueNumber))) {
+          break;
         }
 
         // =================================================================
@@ -16085,6 +16077,38 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    */
   getCurrentStage(): PipelineStage | null {
     return this.currentStage;
+  }
+
+  /**
+   * Hold the stage loop while the run is paused (#239, #423): poll the
+   * paused flag until a resume clears it, staying responsive to abort.
+   * `when` says which side of `stage` the loop is holding at. Returns false
+   * when the run was aborted while held, and the loop must stop.
+   */
+  private async holdWhilePaused(
+    when: "before" | "after",
+    stage: PipelineStage,
+    issueNumber: number
+  ): Promise<boolean> {
+    if (!this.stateService) return true;
+    let isPaused = await this.stateService.isPaused();
+    if (!isPaused) return true;
+    this.logger.info(
+      when === "after"
+        ? "Pipeline paused after stage complete — holding"
+        : "Pipeline paused before stage start — holding",
+      { stage, issueNumber }
+    );
+    while (isPaused && !this.abortController?.signal.aborted) {
+      await this.delay(this.config.pausePollIntervalMs ?? PAUSE_POLL_INTERVAL_MS);
+      isPaused = await this.stateService.isPaused();
+    }
+    if (this.abortController?.signal.aborted) {
+      this.logger.info("Pipeline aborted while paused", { stage, issueNumber });
+      return false;
+    }
+    this.logger.info("Pipeline resumed — continuing stage loop", { stage, issueNumber });
+    return true;
   }
 
   /**

@@ -271,4 +271,75 @@ describe("HeadlessOrchestrator pause hold (#423)", () => {
     expect(result.success === false && result.failedStage === undefined).toBe(false);
     expect(orchestrator.getIsRunning()).toBe(false);
   });
+
+  // #2334 review: the check after a stage runs once, as the stage completes.
+  // A pause that lands just after it (a platform pause arriving during the
+  // between-stage budget check) must still hold the run BEFORE the next stage
+  // starts, not one whole stage later.
+  it("holds before the next stage starts when the pause lands just after the end-of-stage check", async () => {
+    const twoStagesPending = {
+      ...ALL_STAGES_STATE,
+      stages: {
+        ...ALL_STAGES_STATE.stages,
+        "feature-dev": undefined,
+        "feature-validate": undefined,
+      },
+    };
+    const mockState = createMockStateService();
+    vi.mocked(mockState.getState).mockResolvedValue(twoStagesPending as any);
+
+    // `armed` makes the next isPaused() call (the check that runs as the
+    // stage completes) answer "not paused" while the pause lands right after.
+    let armed = false;
+    let paused = false;
+    vi.mocked(mockState.isPaused).mockImplementation(() => {
+      if (armed) {
+        armed = false;
+        paused = true;
+        return Promise.resolve(false) as any;
+      }
+      return Promise.resolve(paused) as any;
+    });
+
+    const orchestrator = new HeadlessOrchestrator(mockState, mockLogger, {
+      contextFileWaitMs: 0,
+      pausePollIntervalMs: 5,
+    });
+
+    const startedStages: string[] = [];
+    vi.mocked(runStageSkillHeadless).mockImplementation((stage, _issueNumber, callbacks) => {
+      startedStages.push(stage as string);
+      if (startedStages.length === 1) armed = true;
+      Promise.resolve().then(() => {
+        void callbacks?.onComplete?.({ success: true, exitCode: 0 } as SkillRunResult);
+      });
+      return { kill: vi.fn(), process: null } as any;
+    });
+
+    const runPromise = orchestrator.runPipeline(42);
+
+    const holding = () =>
+      vi
+        .mocked(mockLogger.info)
+        .mock.calls.find(([msg]) => msg === "Pipeline paused before stage start — holding");
+    const deadline = Date.now() + 5000;
+    while (!holding()) {
+      if (Date.now() > deadline) {
+        throw new Error(
+          `Timed out waiting for the before-stage hold; stages started: ${startedStages.join(", ")}`
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    // Held before feature-validate: only feature-dev has started.
+    expect(startedStages).toEqual(["feature-dev"]);
+    expect(holding()?.[1]).toEqual(expect.objectContaining({ stage: "feature-validate" }));
+    expect(orchestrator.getIsRunning()).toBe(true);
+
+    paused = false;
+    const result = await runPromise;
+    expect(startedStages.slice(0, 2)).toEqual(["feature-dev", "feature-validate"]);
+    expect(result.success === false && result.failedStage === undefined).toBe(false);
+  });
 });

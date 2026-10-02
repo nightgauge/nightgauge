@@ -1,0 +1,16 @@
+{
+  "event": "agent.command",
+  "data": {
+    "agentId": "agent-daemon",
+    "frame": {
+      "commandId": "cmd-relay-1",
+      "type": "pause",
+      "commandType": "pause",
+      "payload": { "runId": "run-7" },
+      "owner": "acme",
+      "repo": "api",
+      "createdAt": "2026-10-01T00:00:00.000Z",
+      "expiresAt": "2026-10-01T00:05:00.000Z"
+    }
+  }
+}

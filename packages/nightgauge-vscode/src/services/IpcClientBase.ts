@@ -67,6 +67,13 @@ interface PendingRequest {
 /** Event handler callback. */
 export type EventHandler = (data: unknown) => void;
 
+/**
+ * The environment variable that hands the daemon this window's folders, a
+ * JSON array of absolute paths in window order (#2335). The Go side reads it
+ * as agentworkspace.WindowFoldersEnv; an older daemon ignores it.
+ */
+export const WINDOW_FOLDERS_ENV_VAR = "NIGHTGAUGE_WINDOW_FOLDERS";
+
 // ---------------------------------------------------------------------------
 // Workspace types (matches Go internal/ipc/protocol.go Workspace* structs)
 // ---------------------------------------------------------------------------
@@ -1991,6 +1998,18 @@ export abstract class IpcClientBase implements vscode.Disposable {
     // argv). Without these, platformClient stays nil and all
     // platform.* IPC methods return "platform client not configured".
     this.forwardPlatformEnv(env);
+
+    // The window's folders, in order, so the daemon's platform agent declares
+    // the workspace this extension's agent declares (#2335). The extension
+    // resolves it from the first folder (its git root) and, for a multi-root
+    // window with no manifest, from every folder; `--workspace` above is
+    // instead the first folder that has a project config, which can differ.
+    const windowFolders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+    if (windowFolders.length > 0) {
+      env[WINDOW_FOLDERS_ENV_VAR] = JSON.stringify(windowFolders);
+    } else {
+      delete env[WINDOW_FOLDERS_ENV_VAR];
+    }
 
     // Start the daemon IN the workspace it was told to serve (#1913).
     // `--workspace` is a string the Go side threads through config and the

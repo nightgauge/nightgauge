@@ -211,6 +211,121 @@ describe("RunVerbCommandHandler", () => {
     expect(logger.error).toHaveBeenCalled();
   });
 
+  // At-least-once delivery (#2334 review): a pause delivered twice while the
+  // first copy is still persisting its pause must not be acked
+  // `already-paused` by the second copy, ahead of the first copy's `applied`.
+  it("applies and acknowledges a verb delivered twice only once", async () => {
+    let paused = false;
+    let release: () => void = () => {};
+    const runs = makeRuns("applied");
+    runs.pauseByRemoteRunId.mockImplementation(async () => {
+      if (paused) return "already-paused";
+      paused = true; // the flag moves at once; persisting it takes a while
+      await new Promise<void>((resolve) => (release = resolve));
+      return "applied";
+    });
+    const handler = new RunVerbCommandHandler(runs as never, ipc, logger as never);
+    handler.setAgentId("agent-ext");
+
+    const first = handler.consume(verbCmd("pause"), "pause");
+    const second = handler.consume(verbCmd("pause"), "pause");
+    release();
+    await Promise.all([first, second]);
+
+    expect(runs.pauseByRemoteRunId).toHaveBeenCalledTimes(1);
+    expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
+    expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledWith(
+      "agent-ext",
+      "cmd-pause",
+      "applied",
+      undefined
+    );
+
+    // A copy after the ack reached the platform is dropped.
+    await handler.consume(verbCmd("pause"), "pause");
+    expect(runs.pauseByRemoteRunId).toHaveBeenCalledTimes(1);
+    expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-sends the same ack, without re-applying, when a redelivery follows a failed ack", async () => {
+    const runs = makeRuns("applied");
+    ipc.agentAcknowledgeCommand
+      .mockRejectedValueOnce(new Error("network down"))
+      .mockResolvedValue({ runId: "" });
+    const handler = new RunVerbCommandHandler(runs as never, ipc, logger as never);
+    handler.setAgentId("agent-ext");
+
+    await handler.consume(verbCmd("cancel"), "cancel");
+    // The platform delivers it again on the next reconnect; by then the run
+    // is gone, and a fresh decision would wrongly say no-active-run.
+    runs.cancelByRemoteRunId.mockResolvedValue("no-active-run");
+    await handler.consume(verbCmd("cancel"), "cancel");
+    await handler.consume(verbCmd("cancel"), "cancel");
+
+    expect(runs.cancelByRemoteRunId).toHaveBeenCalledTimes(1);
+    expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(2);
+    for (const call of ipc.agentAcknowledgeCommand.mock.calls) {
+      expect(call).toEqual(["agent-ext", "cmd-cancel", "applied", undefined]);
+    }
+  });
+
+  // A platform pause or resume shows in the window as the local commands
+  // show it (#2334 review): only when it took effect.
+  it("shows an applied pause and resume in the window, and nothing for a no-op", async () => {
+    const pauseUi = {
+      paused: vi.fn().mockResolvedValue(undefined),
+      resumed: vi.fn().mockResolvedValue(undefined),
+    };
+    const applied = new RunVerbCommandHandler(
+      makeRuns("applied") as never,
+      ipc,
+      logger as never,
+      undefined,
+      pauseUi
+    );
+    applied.setAgentId("agent-ext");
+    await applied.consume(verbCmd("pause"), "pause");
+    expect(pauseUi.paused).toHaveBeenCalledWith("run-1");
+    await applied.consume(verbCmd("resume"), "resume");
+    expect(pauseUi.resumed).toHaveBeenCalledWith("run-1");
+    await applied.consume(verbCmd("cancel"), "cancel");
+    expect(pauseUi.paused).toHaveBeenCalledTimes(1);
+    expect(pauseUi.resumed).toHaveBeenCalledTimes(1);
+
+    const noop = new RunVerbCommandHandler(
+      makeRuns("already-paused") as never,
+      ipc,
+      logger as never,
+      undefined,
+      pauseUi
+    );
+    noop.setAgentId("agent-ext");
+    await noop.consume(verbCmd("pause", { id: "cmd-pause-2" }), "pause");
+    expect(pauseUi.paused).toHaveBeenCalledTimes(1);
+  });
+
+  it("still acknowledges a pause whose window update fails", async () => {
+    const pauseUi = {
+      paused: vi.fn().mockRejectedValue(new Error("no status bar")),
+      resumed: vi.fn(),
+    };
+    const handler = new RunVerbCommandHandler(
+      makeRuns("applied") as never,
+      ipc,
+      logger as never,
+      undefined,
+      pauseUi
+    );
+    handler.setAgentId("agent-ext");
+    await handler.consume(verbCmd("pause"), "pause");
+    expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledWith(
+      "agent-ext",
+      "cmd-pause",
+      "applied",
+      undefined
+    );
+  });
+
   it("ignores every type that is not a run verb", () => {
     const runs = makeRuns("applied");
     const handler = new RunVerbCommandHandler(runs as never, ipc, logger as never);

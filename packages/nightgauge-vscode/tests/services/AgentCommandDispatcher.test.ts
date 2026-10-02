@@ -10,12 +10,16 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 vi.mock("vscode", () => ({}));
 
 import {
   AgentCommandDispatcher,
+  AGENT_COMMAND_RELAY_EVENT,
   ROUTER_DELIVERED_COMMAND_TYPES,
+  subscribeToDaemonRelay,
 } from "../../src/services/AgentCommandDispatcher";
 import { TriggerCommandHandler } from "../../src/services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../../src/services/RunVerbCommandHandler";
@@ -89,9 +93,9 @@ async function settle(): Promise<void> {
 describe("AgentCommandDispatcher", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  // The platform's router delivers exactly these: the trigger dispatcher's
-  // `trigger`, and the five verbs its PipelineCommandsService queues against
-  // an existing run. A new routed type must be added here AND handled.
+  // The platform's router delivers exactly these: a `trigger`, and the five
+  // verbs a client issues against an existing run. A new routed type must be
+  // added here AND handled.
   it("knows every command type the platform's router delivers", () => {
     expect([...ROUTER_DELIVERED_COMMAND_TYPES].sort()).toEqual(
       ["approve", "cancel", "pause", "reject", "resume", "trigger"].sort()
@@ -120,6 +124,46 @@ describe("AgentCommandDispatcher", () => {
       );
     }
   );
+
+  // The platform delivers at least once: a command published while the
+  // stream replays its backlog arrives twice, and an unacknowledged one again
+  // on every reconnect. Each is still carried out once and acknowledged once.
+  it("acknowledges every router-delivered command once when each arrives twice", async () => {
+    const { dispatcher, ipc, runs, queue } = build("applied");
+    // The platform keeps the first ack of a command and refuses any later one.
+    const accepted: string[] = [];
+    ipc.agentAcknowledgeCommand.mockImplementation(async (_agentId: string, id: string) => {
+      if (accepted.includes(id)) throw new Error("HTTP 409: already acknowledged");
+      accepted.push(id);
+      return { runId: "platform-run-1" };
+    });
+    const sent = [
+      ...ROUTER_DELIVERED_COMMAND_TYPES.map((type, n) => routedCommand(type, n)),
+      { ...routedCommand("throttle", 9), payload: { action: "cleared" } },
+    ];
+
+    for (const cmd of sent) dispatcher.handle(cmd);
+    for (const cmd of sent) dispatcher.handle({ ...cmd });
+    await settle();
+
+    expect(accepted.sort()).toEqual(sent.map((c) => c.id).sort());
+    // No verb was applied twice, and no refusal was sent twice.
+    for (const verb of [
+      runs.cancelByRemoteRunId,
+      runs.approveByRemoteRunId,
+      runs.rejectByRemoteRunId,
+      runs.pauseByRemoteRunId,
+      runs.resumeByRemoteRunId,
+    ]) {
+      expect(verb).toHaveBeenCalledTimes(1);
+    }
+    const throttleAcks = ipc.agentAcknowledgeCommand.mock.calls.filter(
+      (c) => c[1] === "cmd-throttle-9"
+    );
+    expect(throttleAcks).toHaveLength(1);
+    // The trigger's second copy is refused by the platform, so it starts nothing.
+    expect(queue.enqueue).toHaveBeenCalledTimes(1);
+  });
 
   it("acknowledges an unsupported command type once, as rejected", async () => {
     const { dispatcher, ipc } = build("applied");
@@ -171,6 +215,42 @@ describe("AgentCommandDispatcher", () => {
     expect(ipc.agentAcknowledgeCommand.mock.calls[1]).toEqual([
       "agent-daemon",
       "cmd-relayed-2",
+      "applied",
+      undefined,
+    ]);
+  });
+
+  // The daemon's side of the relay writes exactly the line in this fixture
+  // (internal/ipc TestAgentCommandEvent_MatchesTheSharedFixture); IPC codegen
+  // covers methods, not events, so the shared file is what pins the shape.
+  it("handles the agent.command event the daemon emits, through the relay subscription", async () => {
+    const fixture = JSON.parse(
+      readFileSync(
+        resolve(__dirname, "../../../../internal/ipc/testdata/agent-command-event.json"),
+        "utf-8"
+      )
+    ) as { event: string; data: unknown };
+    expect(fixture.event).toBe(AGENT_COMMAND_RELAY_EVENT);
+
+    const { dispatcher, ipc, runs } = build("applied");
+    const handlers = new Map<string, (data: unknown) => void>();
+    const ipcEvents = {
+      on: vi.fn((event: string, handler: (data: unknown) => void) => {
+        handlers.set(event, handler);
+        return { dispose: vi.fn() };
+      }),
+    };
+    const subscription = subscribeToDaemonRelay(ipcEvents, dispatcher);
+    expect(typeof subscription.dispose).toBe("function");
+
+    handlers.get(fixture.event)?.(fixture.data);
+    await settle();
+
+    expect(runs.pauseByRemoteRunId).toHaveBeenCalledWith("run-7");
+    expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
+    expect(ipc.agentAcknowledgeCommand.mock.calls[0]).toEqual([
+      "agent-daemon",
+      "cmd-relay-1",
       "applied",
       undefined,
     ]);

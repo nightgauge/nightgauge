@@ -9,28 +9,14 @@
  */
 
 import * as vscode from "vscode";
-import type { PipelineStage } from "@nightgauge/sdk";
 import type { PipelineStateService } from "../services/PipelineStateService";
 import type { HeadlessOrchestrator, PipelineCallbacks } from "../services/HeadlessOrchestrator";
 import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
 import type { Logger } from "../utils/logger";
 import type { StatusBarManager } from "../utils/statusBar";
 import { getStageLabel } from "../utils/skillRunner";
+import { clearPipelinePausedContext, resumePointOf } from "../utils/pauseUi";
 import { resolveTargetRunService } from "./runSelector";
-
-/**
- * Pipeline stages in order for finding next stage
- */
-const PIPELINE_STAGES: PipelineStage[] = [
-  "pipeline-start",
-  "issue-pickup",
-  "feature-planning",
-  "feature-dev",
-  "feature-validate",
-  "pr-create",
-  "pr-merge",
-  "pipeline-finish",
-];
 
 /**
  * Register the Resume Pipeline command
@@ -90,23 +76,9 @@ export function registerResumePipelineCommand(
       return;
     }
 
-    // Find the next pending stage for logging
-    let nextStage: PipelineStage | null = null;
-    let lastCompletedStage: PipelineStage | null = null;
-
-    for (const stage of PIPELINE_STAGES) {
-      const stageState = state.stages[stage];
-      if (stageState.status === "complete" || stageState.status === "skipped") {
-        lastCompletedStage = stage;
-      } else if (stageState.status === "pending" && !nextStage) {
-        nextStage = stage;
-        break;
-      } else if (stageState.status === "running") {
-        // If a stage is still running, it will complete and check paused flag
-        nextStage = null;
-        break;
-      }
-    }
+    // Find the next pending stage for logging. If a stage is still running,
+    // there is none yet: it completes and then checks the paused flag.
+    const { nextStage, lastCompletedStage } = resumePointOf(state);
 
     logger.info("Resuming pipeline", {
       issueNumber,
@@ -123,11 +95,8 @@ export function registerResumePipelineCommand(
         ? ""
         : " This session only — the persisted pause was not cleared (no run identity; ADR-017 step 8).";
 
-      // Update context for UI
-      vscode.commands.executeCommand("setContext", "nightgauge.pipelinePaused", false);
-
-      // Set pipeline running context
-      vscode.commands.executeCommand("setContext", "nightgauge.pipelineRunning", true);
+      // Update context for UI: Pause returns in place of Resume
+      clearPipelinePausedContext();
 
       // Check if a live runPipeline() call is already HOLDING this run at its
       // pause boundary (#423) instead of having returned. Since the stage
@@ -155,9 +124,10 @@ export function registerResumePipelineCommand(
         // HeadlessOrchestrator.runPipeline() (which would create a
         // duplicate execution path and, for the singleton, throw against the
         // duplicate-dispatch guard).
-        // Show running state — use the next pending stage or fallback to pipeline-start
-        const goResumeStage = nextStage ?? "pipeline-start";
-        statusBar.showRunning(goResumeStage);
+        // Show running state — use the next pending stage or fallback to
+        // pipeline-start. A platform resume of a held run shows the same
+        // (showHeldPipelineResumed, #2334).
+        statusBar.showRunning(nextStage ?? "pipeline-start");
         vscode.window.showInformationMessage(`Pipeline resumed.${notPersisted}`);
         logger.info("Pipeline resumed (held run continues)", {
           issueNumber,

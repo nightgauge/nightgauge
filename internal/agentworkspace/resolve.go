@@ -23,13 +23,26 @@
 // identified by the root's own config. The root is therefore the one member
 // here.
 //
-// The folders of a multi-root VS Code window that has no manifest are not
-// visible to a daemon and are not mirrored. The extension's last fallback
-// reads `platform.owner` and `platform.defaultRepo`, keys neither config
-// schema defines, so it is not mirrored either.
+// Which root the declaration is resolved from matters as much as how. The
+// extension resolves its workspace from its window: the git root of the
+// window's first folder, or that folder when it is not in a repository, and,
+// for a multi-root window with no manifest whose every folder has a project
+// config, from each folder. The daemon's `--workspace` is instead the first
+// folder that has a project config, which can be another folder, so the
+// extension hands the daemon its window's folders (WindowFoldersEnv) and
+// ResolveWindow resolves from them as the extension does. A daemon started
+// without them (`nightgauge serve` from a terminal) declares its
+// `--workspace` root (Resolve).
+//
+// The extension's last fallback reads `platform.owner` and
+// `platform.defaultRepo`, keys neither config schema defines, so it is not
+// mirrored. Nor is a window whose folders share a name: the extension keys
+// the folders by name and keeps the last, and a folder's name can be set in
+// the .code-workspace file, which the daemon does not read.
 package agentworkspace
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"math"
@@ -40,9 +53,100 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	gitops "github.com/nightgauge/nightgauge/internal/git"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/workspacemanifest"
 )
+
+// WindowFoldersEnv names the environment variable through which the VS Code
+// extension tells the daemon it starts which folders its window has open: a
+// JSON array of absolute paths, in window order (IpcClientBase
+// WINDOW_FOLDERS_ENV_VAR).
+const WindowFoldersEnv = "NIGHTGAUGE_WINDOW_FOLDERS"
+
+// WindowFolders returns the folders WindowFoldersEnv names, or nil when it is
+// unset or is not a JSON array of non-empty strings.
+func WindowFolders(getenv func(string) string) []string {
+	raw := strings.TrimSpace(getenv(WindowFoldersEnv))
+	if raw == "" {
+		return nil
+	}
+	var folders []string
+	if err := json.Unmarshal([]byte(raw), &folders); err != nil {
+		return nil
+	}
+	for _, f := range folders {
+		if f == "" {
+			return nil
+		}
+	}
+	return folders
+}
+
+// ResolveServed returns what the daemon declares: the extension's
+// declaration for the window that started it when it named the window's
+// folders, otherwise the declaration for the daemon's own workspace root.
+func ResolveServed(window []string, workspaceRoot string) (platform.WorkspaceDeclaration, error) {
+	if len(window) > 0 {
+		return ResolveWindow(window)
+	}
+	return Resolve(workspaceRoot)
+}
+
+// ResolveWindow returns the declaration the extension makes for a window
+// with these folders open, the first first (getWorkspaceRoot,
+// getNightgaugeRoot, WorkspaceManager and detectWorkspaceType):
+//
+//   - the workspace root is the git root of the first folder, as this
+//     daemon's own `git.root` answers the extension, or the folder itself
+//     when that fails;
+//   - a valid manifest at the root decides the members, as in Resolve;
+//   - otherwise, when the window has two or more folders and every one has a
+//     project config, each folder is a member;
+//   - otherwise the root alone is.
+func ResolveWindow(folders []string) (platform.WorkspaceDeclaration, error) {
+	if len(folders) == 0 {
+		return platform.WorkspaceDeclaration{}, nil
+	}
+	var autoDetected []string
+	if len(folders) >= 2 && everyHasProjectConfig(folders) {
+		autoDetected = folders
+	}
+	return resolve(windowRoot(folders[0]), autoDetected), nil
+}
+
+// windowRoot is the extension's workspace root for a window whose first
+// folder is first: getNightgaugeRoot asks the daemon's git.root, which is
+// gitops.Service.Root, and falls back to the folder when that fails or is
+// empty. The same call here keeps the two in step.
+func windowRoot(first string) string {
+	svc, err := gitops.NewService(first)
+	if err != nil {
+		return first
+	}
+	root, err := svc.Root()
+	if err != nil || root == "" {
+		return first
+	}
+	return root
+}
+
+// everyHasProjectConfig reports whether every folder has a project config,
+// the current or the legacy file (autoDetectMultiWorkspace).
+func everyHasProjectConfig(folders []string) bool {
+	for _, folder := range folders {
+		if !exists(filepath.Join(folder, ".nightgauge", "config.yaml")) &&
+			!exists(filepath.Join(folder, ".nightgauge", "nightgauge.yaml")) {
+			return false
+		}
+	}
+	return true
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
 
 // manifest is the part of .vscode/nightgauge-workspace.yaml read here.
 type manifest struct {
@@ -65,16 +169,24 @@ type repoIdentity struct {
 }
 
 // Resolve returns the declaration for the workspace rooted at root. Like the
-// extension's workspace detection, it treats a manifest that cannot be read
-// or that fails the manifest rules (workspacemanifest.ValidateBytes, the Go
-// mirror of the extension's validateWorkspaceConfig) as absent: the workspace
-// is then the root alone, with no workspace block. A repository whose config
-// cannot be read or parsed is skipped, as the extension skips it.
+// extension's workspace detection, it does not use a manifest that cannot be
+// read or that fails the manifest rules (workspacemanifest.ValidateBytes, the
+// Go mirror of the extension's validateWorkspaceConfig): the workspace is
+// then the root alone, with no workspace block, and ResolveWindow does not
+// try the window's folders either. A repository whose config cannot be read
+// or parsed is skipped, as the extension skips it.
 func Resolve(root string) (platform.WorkspaceDeclaration, error) {
+	return resolve(root, nil), nil
+}
+
+// resolve declares the workspace rooted at root. autoDetected, when set, is
+// the members of a multi-root window with no manifest (ResolveWindow).
+func resolve(root string, autoDetected []string) platform.WorkspaceDeclaration {
 	var decl platform.WorkspaceDeclaration
 
 	repoRoots := []string{root}
-	if m, ok := readManifest(root); ok {
+	switch m, found := readManifest(root); found {
+	case manifestValid:
 		// A valid manifest names the workspace. With an empty list it is the
 		// N:1 topology, whose members are all identified by the root's config.
 		if len(m.Repositories) > 0 {
@@ -84,6 +196,13 @@ func Resolve(root string) (platform.WorkspaceDeclaration, error) {
 			}
 		}
 		decl.Workspace = platform.WorkspaceBlock(m.Workspace.Name)
+	case manifestAbsent:
+		if len(autoDetected) > 0 {
+			repoRoots = autoDetected
+		}
+	case manifestInvalid:
+		// The extension's detection throws on a manifest it cannot use and
+		// falls back to the root alone, without trying the window's folders.
 	}
 
 	for _, repoRoot := range repoRoots {
@@ -94,21 +213,37 @@ func Resolve(root string) (platform.WorkspaceDeclaration, error) {
 	if len(decl.Repos) == 0 {
 		decl.Repos = enabledRepos(root)
 	}
-	return decl, nil
+	return decl
 }
 
-// readManifest reads and validates the workspace manifest, reporting false
-// when there is none the extension would use.
-func readManifest(root string) (manifest, bool) {
+// manifestState is what readManifest found at the workspace root.
+type manifestState int
+
+const (
+	// manifestAbsent: no manifest file.
+	manifestAbsent manifestState = iota
+	// manifestInvalid: a file the extension cannot use (unreadable, not
+	// YAML, or failing the manifest rules).
+	manifestInvalid
+	// manifestValid: a manifest the extension uses.
+	manifestValid
+)
+
+// readManifest reads and validates the workspace manifest.
+func readManifest(root string) (manifest, manifestState) {
 	var m manifest
-	data, err := os.ReadFile(workspacemanifest.ManifestPath(root))
+	path := workspacemanifest.ManifestPath(root)
+	if !exists(path) {
+		return m, manifestAbsent
+	}
+	data, err := os.ReadFile(path)
 	if err != nil || workspacemanifest.ValidateBytes(data) != nil {
-		return m, false
+		return m, manifestInvalid
 	}
 	if err := yaml.Unmarshal(data, &m); err != nil {
-		return m, false
+		return m, manifestInvalid
 	}
-	return m, true
+	return m, manifestValid
 }
 
 // resolvePath resolves a manifest path against the workspace root the way

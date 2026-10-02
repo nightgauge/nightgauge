@@ -119,13 +119,10 @@ import { AgentHeartbeatService } from "../services/AgentHeartbeatService";
 import { buildUsageReport, getUsageReportingLevel } from "../services/usage/usageReporting";
 import { resolveExecutionProfile } from "../services/executionProfile";
 import { AgentCommandStreamService } from "../services/AgentCommandStreamService";
-import type { CommandHandler } from "../services/AgentCommandStreamService";
 import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../services/RunVerbCommandHandler";
-import {
-  AgentCommandDispatcher,
-  AGENT_COMMAND_RELAY_EVENT,
-} from "../services/AgentCommandDispatcher";
+import { AgentCommandDispatcher, subscribeToDaemonRelay } from "../services/AgentCommandDispatcher";
+import { createRemotePauseUi } from "../utils/pauseUi";
 import { AgentRegistrationService } from "../services/AgentRegistrationService";
 import { IpcClient } from "../services/IpcClient";
 import { IpcClientBase } from "../services/IpcClientBase";
@@ -4241,11 +4238,15 @@ export async function initializeServices(
     // handler and the run-verb handler (cancel, approve, reject, pause,
     // resume). AgentCommandStreamService.start() passes it the agentId before
     // the first command arrives.
+    // A pause or resume from the platform shows in this window as the local
+    // Pause/Resume Pipeline commands show it (#2334).
+    const pipelineManager = concurrentPipelineManager;
     const runVerbCommandHandler = new RunVerbCommandHandler(
       concurrentPipelineManager,
       ipcClient,
       logger,
-      workspaceManager ?? undefined
+      workspaceManager ?? undefined,
+      createRemotePauseUi(statusBar, (runId) => pipelineManager.remoteRunState(runId))
     );
     const agentCommandDispatcher = new AgentCommandDispatcher(
       triggerCommandHandler,
@@ -4256,11 +4257,7 @@ export async function initializeServices(
     // The daemon declares this workspace's repos for its own agent too, so the
     // platform may place a trigger or verb on the daemon's agent; the daemon
     // relays it here, where pipelines run (#2335).
-    context.subscriptions.push(
-      ipcClient.on(AGENT_COMMAND_RELAY_EVENT, (event) =>
-        agentCommandDispatcher.handleRelayed(event)
-      )
-    );
+    context.subscriptions.push(subscribeToDaemonRelay(ipcClient, agentCommandDispatcher));
     agentCommandStreamService = new AgentCommandStreamService(
       getPlatformUrl,
       agentCommandStreamTokenStorage,
