@@ -40,6 +40,14 @@ and this project adheres to
   to expire. The reload ended the paused run; the window's own Resume prompt
   continues it (#2339).
 
+  continues it. Cancelling such a run from there ends it, and its Resume
+  prompt no longer comes back. With several windows on one repository, only
+  one of them answers for it (#2339).
+- **The window warns you when the platform refused to write your workspace.**
+  When your role on the team cannot create or update the workspace, its
+  repositories stay unlinked and triggers for them are refused; the warning
+  names the workspace and the permission needed (#2372).
+
 - **A command from the phone app or the dashboard for a run no window has is
   answered again within about two seconds,** instead of waiting five minutes
   to expire. With several windows open, only the one running the pipeline
@@ -50,6 +58,11 @@ and this project adheres to
   works.** A run still waiting for a free slot, or whose worktree was being
   created, refused the cancel as not started. It is now removed and never
   starts, and triggering the same issue again runs normally (#2344).
+
+  starts, and triggering the same issue again runs normally. Triggering an
+  issue you already queued, even one already starting, follows your queued
+  run, and cancelling it from there leaves your run as you queued it
+  (#2344).
 
 - **Approve and reject from the phone app or the dashboard say why they
   cannot apply:** no run in the extension waits at an approval gate, so the

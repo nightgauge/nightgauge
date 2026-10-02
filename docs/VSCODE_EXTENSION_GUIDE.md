@@ -318,11 +318,21 @@ Displays comprehensive metrics:
   resume, cancel, approve, reject) is acknowledged back by the window that
   holds the run, as applied or with the reason it did nothing, for example
   that a run asked to pause has not started yet. A cancel of a run that has
-  not started yet removes it, and it never starts. Another window open on the
-  same repository leaves the command alone, and when no window has the run,
-  one of them says so within about two seconds. Approve and reject are always answered
-  that no run here waits at an approval gate: no local stage holds for one. A
-  command delivered twice is carried out once.
+  not started yet removes it, and it never starts; when you had queued that
+  issue yourself before it was triggered, the trigger only joined your queued
+  work, so the cancel leaves your work queued. A cancel of a paused run a
+  window reload ended removes its paused state, so the Resume prompt does not
+  come back. Another window open on the same repository leaves the command
+  alone, and when no window has the run, one of them says so within about two
+  seconds. Approve and reject are always answered that no run here waits at an
+  approval gate: no local stage holds for one. A command delivered twice is
+  carried out once.
+- **Workspace writes the platform refused:** when your role on the team that
+  owns the workspace cannot create or update it, the platform still registers
+  this machine but leaves the workspace and its repository links alone, so
+  triggers for those repositories are refused. The window shows a warning
+  naming the workspace and the permission the write needs, once for each new
+  set of refusals.
 
 #### Stopping Execution
 

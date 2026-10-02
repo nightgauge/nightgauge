@@ -28,10 +28,18 @@ changelog, and the release workflow refuses a tag that does not.
   dispatches without the extension, and `nightgauge pipeline run --auto` its
   loop, to the lower of the configured concurrency and the cap, until the
   throttle is cleared or reaches `resumeAt`; a running pipeline is never
-  stopped, and work handed to the extension is not capped twice. A headless
-  `nightgauge autonomous run` or `pipeline run --auto`, which holds only a
-  license key, follows the throttle through the workspace's daemon
-  (`platform.workspaceThrottle` on the socket).
+  stopped, and work handed to the extension is not capped twice. Each read is
+  bounded, so one that never answers holds back no later read. `pipeline run
+--auto` checks the throttle again after reading the board, and an epic's
+  waves start no more sub-issues at once than the cap leaves room for. A
+  headless `nightgauge autonomous run` or `pipeline run --auto`, which holds
+  only a license key, follows the throttle through the workspace's daemon
+  (`platform.workspaceThrottle` on the socket), asking it once before its
+  first dispatch; when the daemon stops answering, the last throttle it
+  reported is kept, and the log says so and until when. A daemon without a
+  signed-in session, which is any daemon the extension is not attached to,
+  still follows no throttle: the license key cannot read the workspace's own
+  throttle yet (#2352 stays open for it).
 - **The daemon says which workspace writes its registration was refused**
   (#2372). The platform's `POST /v1/agents/register` reply lists
   `refused_workspace_writes`: the workspace writes skipped because the
@@ -41,8 +49,11 @@ changelog, and the release workflow refuses a tag that does not.
   the list, so a developer's repositories stayed unlinked from the team's
   workspace and every remote trigger for them was refused with no hint why.
   Each registration now logs one line per refusal, naming the workspace and
-  the permission it needs, and `platform.status` reports the latest
-  registration's refusals.
+  the permission it needs; `platform.status` reports the latest
+  registration's refusals; and the extension shows each new set of refusals
+  as a warning. Only bounded, printable fields of the reply are logged or
+  reported (no line break, line separator or bidirectional override, and
+  never the platform's own message).
 - **The platform's workspace throttle caps local dispatch** (#2337). A
   `throttle` command (`set` with `maxConcurrent` and an optional `resumeAt`,
   or `cleared`) was refused as unsupported, so a workspace throttle never
@@ -223,6 +234,15 @@ changelog, and the release workflow refuses a tag that does not.
   run from a platform resume waits for ADR-017's consume-on-claim step; #2339
   stays open for it.
 
+  reload, with its owning process gone, holds the run: a `resume` is refused
+  `resume-in-window` (only the window's Resume prompt can continue the run,
+  as a new run), a `pause` is `already_resolved`, and a `cancel` ends the run
+  by consuming its paused snapshot and is `applied`. Every window on a
+  worktree of the clone finds the same snapshot, so only the first to claim
+  the run in the machine's ledger holds it. Continuing the run from a
+  platform resume waits for ADR-017's consume-on-claim step; #2339 stays open
+  for it.
+
 - **A run verb no window holds is refused again, and never ahead of the
   holder's answer** (#2357). Every editor window of a machine shares one
   agent, so each receives a platform `cancel`, `pause`, `resume`, `approve`
@@ -238,6 +258,17 @@ changelog, and the release workflow refuses a tag that does not.
   lists it, and it claims the answer first. The platform gets one
   acknowledgement per command, the holder's whenever a window holds the run.
 
+  (`STATE/agent-commands/`): each lists every platform run it answers for
+  (slots, dispatches on their way to a slot, triggers being queued, the runs
+  its queue carries, and paused runs a reload ended there) from the moment it
+  is wired, and the first to answer a command claims it. A window that closes
+  or reloads keeps its listing for a minute, so its runs are not refused while
+  it comes back. The holder claims the answer before it applies the verb; a
+  window without the run waits two seconds and refuses `no-active-run` only
+  when it still does not hold the run, no window lists it, and it claims the
+  answer first. The platform gets one acknowledgement per command, the
+  holder's whenever a window holds the run.
+
 - **A platform cancel of a triggered run that has not started yet applies**
   (#2344). A cancel of a run this window accepted the trigger for, still
   queued behind other slots or with its worktree being created, was refused
@@ -252,6 +283,16 @@ changelog, and the release workflow refuses a tag that does not.
   run id, and a trigger for an issue already waiting in the queue attaches its
   run id to that item. `queue.removeRemoteRun` removes one remote run's item
   that no dispatch has taken.
+
+  a local re-queue or another repository, and a re-queued remote run keeps its
+  run id. A trigger for an issue the operator already queued here serves that
+  work: it attaches its run id to the waiting item, or to the issue's dispatch
+  already on its way to a slot, decided in one turn with the fill's dequeue,
+  and cancelling such a run only detaches it, leaving the operator's work
+  queued. A trigger for an issue queued or dispatched here for another
+  platform run is refused `already-queued` before its ack.
+  `queue.removeRemoteRun` removes one remote run's item that no dispatch has
+  taken, or detaches the run from the operator's item.
 
 - **A slow reap of the complexity-model lock broker no longer hides why the
   transaction failed** (#2356). The extension waited for a broker it had sent
