@@ -24,6 +24,7 @@ npm audit allow-list
 SKILL.md metadata gate regression suite
 SKILL.md metadata
 publication boundary
+publication boundary allowlist changes alone
 credential scan (tree + full history)
 Publication boundary regression suite
 Publication boundary rename carry-over
@@ -31,7 +32,7 @@ Publication boundary derived ceiling
 Publication boundary ceiling lag and erosion
 Publication boundary attribution
 Publication boundary suite hermeticity
-Publication boundary allowlist isolation
+Publication boundary allowlist isolation regression suite
 band-vocabulary reintroduction gate
 Band-vocabulary gate regression suite
 visibility-prose reintroduction gate
