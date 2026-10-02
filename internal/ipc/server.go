@@ -4248,6 +4248,26 @@ func (s *Server) registerMethods() {
 		return map[string]string{"status": "ok"}, nil
 	}
 
+	// queue.removeRemoteRun removes the queued item of a remote run request
+	// the platform cancelled before a slot opened for it (#2344). Unlike
+	// queue.remove, which drops every item with an issue number, it removes
+	// only the item carrying the run id, and only while no dispatch has
+	// taken it.
+	//ipc:method queueRemoveRemoteRun params:QueueRemoveRemoteRunParams result:QueueRemoveRemoteRunResult
+	s.methods["queue.removeRemoteRun"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p QueueRemoveRemoteRunParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if p.RemoteRunID == "" {
+			return nil, errors.New("remoteRunId is required")
+		}
+		if s.scheduler == nil {
+			return nil, errors.New(errSchedulerNotConfigured)
+		}
+		return QueueRemoveRemoteRunResult{Removed: s.scheduler.QueueRemoveRemoteRun(p.RemoteRunID)}, nil
+	}
+
 	//ipc:method queueClear params:none result:void
 	s.methods["queue.clear"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
 		if s.scheduler == nil {

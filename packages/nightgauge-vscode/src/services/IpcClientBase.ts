@@ -745,6 +745,11 @@ export interface IpcQueueItem {
   epicRepo?: string;
   addedAt: string;
   position: number;
+  /**
+   * The platform run id of the trigger the item was queued for (#2344);
+   * absent on every other item.
+   */
+  remoteRunId?: string;
   /** A remote run request's adapter pin (#1656); absent on every other item. */
   requestedAdapter?: string;
   /** A remote run request's model, the `-m` value (#1656). */
@@ -917,6 +922,15 @@ export interface AgentExecutionProfileResult {
  * remote run request's adapter and model, and, when it cannot, the reason the
  * rejected ack carries as its `detail`.
  */
+/**
+ * Result of queue.removeRemoteRun (#2344): whether the queued item of the
+ * remote run was removed. False when no item carries the run id, or when a
+ * dispatch already took it (the dispatch then drops the cancelled run).
+ */
+export interface QueueRemoveRemoteRunResult {
+  removed: boolean;
+}
+
 export interface QueueValidatePinResult {
   ok: boolean;
   reason?: string;

@@ -21,6 +21,7 @@ const mockQueueList = vi.fn().mockResolvedValue({
   updated_at: new Date().toISOString(),
 });
 const mockQueueRemove = vi.fn().mockResolvedValue(undefined);
+const mockQueueRemoveRemoteRun = vi.fn().mockResolvedValue({ removed: true });
 const mockQueueClear = vi.fn().mockResolvedValue(undefined);
 const mockQueueDequeueIndependent = vi.fn().mockResolvedValue([]);
 const mockQueueEnqueueEpic = vi.fn().mockResolvedValue(undefined);
@@ -40,6 +41,7 @@ vi.mock("../../src/services/IpcClient", () => ({
       queueAdd: mockQueueAdd,
       queueList: mockQueueList,
       queueRemove: mockQueueRemove,
+      queueRemoveRemoteRun: mockQueueRemoveRemoteRun,
       queueClear: mockQueueClear,
       queueDequeueIndependent: mockQueueDequeueIndependent,
       queueEnqueueEpic: mockQueueEnqueueEpic,
@@ -281,6 +283,28 @@ describe("IssueQueueService (IPC delegation)", () => {
       expect(items).toHaveLength(1);
       expect(items[0].issueNumber).toBe(42);
       expect(items[0].title).toBe("Dequeued item");
+      expect(items[0].remoteRunId).toBeUndefined();
+    });
+
+    // #2344: the slot adopts the platform run id from the item it dequeues.
+    it("carries the platform run id an item was queued for", async () => {
+      mockQueueDequeueIndependent.mockResolvedValueOnce([
+        {
+          repo: "acme/api",
+          issueNumber: 7,
+          title: "Triggered",
+          priority: 0,
+          status: "processing",
+          addedAt: "2026-01-01T00:00:00Z",
+          position: 1,
+          remoteRunId: "49b2019e-6ab7-4866-935e-235a32765bc7",
+        },
+      ]);
+
+      const [triggered] = await service.dequeueIndependent(1, []);
+
+      expect(triggered.remoteRunId).toBe("49b2019e-6ab7-4866-935e-235a32765bc7");
+      expect(triggered.repoName).toBe("acme/api");
     });
 
     // The slot manager bases a sub-issue on epic/<N>-* only when the epic
@@ -368,6 +392,18 @@ describe("IssueQueueService (IPC delegation)", () => {
       const item = await service.dequeue();
 
       expect(item).toBeNull();
+    });
+  });
+
+  describe("removeRemoteRun()", () => {
+    // #2344: a cancel before the slot opens removes only that run's item.
+    it("removes the queued item of one remote run and says whether it did", async () => {
+      expect(await service.removeRemoteRun("run-1")).toBe(true);
+      expect(mockQueueRemoveRemoteRun).toHaveBeenCalledWith("run-1");
+      expect(mockQueueRemove).not.toHaveBeenCalled();
+
+      mockQueueRemoveRemoteRun.mockResolvedValueOnce({ removed: false });
+      expect(await service.removeRemoteRun("run-2")).toBe(false);
     });
   });
 

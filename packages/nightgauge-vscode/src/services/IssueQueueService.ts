@@ -365,6 +365,18 @@ export class IssueQueueService implements vscode.Disposable {
     return true;
   }
 
+  /**
+   * Remove the queued item of a remote run the platform cancelled before its
+   * slot opened (#2344): only the item carrying `remoteRunId`, and only while
+   * no dispatch has taken it. Resolves whether an item was removed; a
+   * dispatch that already took it drops the cancelled run itself.
+   */
+  async removeRemoteRun(remoteRunId: string): Promise<boolean> {
+    const ipc = IpcClient.getInstance();
+    const result = await ipc.queueRemoveRemoteRun(remoteRunId);
+    return result.removed;
+  }
+
   async clear(): Promise<void> {
     const ipc = IpcClient.getInstance();
     await ipc.queueClear();
@@ -515,6 +527,7 @@ export class IssueQueueService implements vscode.Disposable {
       epicNumber: item.epicNumber,
       epicRepo: item.epicRepo || undefined,
       repoName: item.repo || undefined,
+      remoteRunId: item.remoteRunId || undefined,
       requestedAdapter: item.requestedAdapter || undefined,
       requestedModel: item.requestedModel || undefined,
     };

@@ -525,6 +525,18 @@ type QueueRemoveParams struct {
 	IssueNumber int `json:"issueNumber"`
 }
 
+// QueueRemoveRemoteRunParams are parameters for queue.removeRemoteRun
+// (#2344): the platform run id of the trigger whose queued item is removed.
+type QueueRemoveRemoteRunParams struct {
+	RemoteRunID string `json:"remoteRunId"`
+}
+
+// QueueRemoveRemoteRunResult reports whether queue.removeRemoteRun removed an
+// item: false when no item carries the run id, or a dispatch already took it.
+type QueueRemoveRemoteRunResult struct {
+	Removed bool `json:"removed"`
+}
+
 // QueueCompleteParams are parameters for queue.complete — the terminal
 // counterpart to queue.dequeueIndependent.
 //

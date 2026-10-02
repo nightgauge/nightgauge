@@ -17,11 +17,12 @@
  *   - `already_resolved` with a fixed reason: the run was already in the state
  *     the verb asks for, a pause of a paused run or a resume of a run that is
  *     not paused (#2341). The platform keeps the status the verb set;
- *   - `rejected` with a fixed reason: it could not act (the run is still
- *     queued here, the run has no state to pause yet, or the run ended after
- *     this window was found to hold it), it was an `approve` or `reject`, or
- *     its payload had no runId. On a pause or resume the platform then
- *     restores the run's earlier status.
+ *   - `rejected` with a fixed reason: it could not act (a pause or resume of
+ *     a run still queued here, the run has no state to pause yet, or the run
+ *     ended after this window was found to hold it), it was an `approve` or
+ *     `reject`, or its payload had no runId. On a pause or resume the
+ *     platform then restores the run's earlier status. A cancel of a run
+ *     still queued here applies (#2344).
  *
  * `approve` and `reject` name a run's `stage` and `gateType`, but no local
  * run ever waits at a gate a platform decision could release (#2336): the

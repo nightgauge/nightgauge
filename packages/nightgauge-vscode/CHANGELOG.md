@@ -34,6 +34,12 @@ and this project adheres to
   `Bash`, `Write` and `Edit` among them, instead of the ones its skill grants.
   A `# comment` after the list is no longer read as tools, and a field that
   lists no tool now fails the stage (#2358).
+
+- **Cancelling a run from the phone app or the dashboard before it starts
+  works.** A run still waiting for a free slot, or whose worktree was being
+  created, refused the cancel as not started. It is now removed and never
+  starts, and triggering the same issue again runs normally (#2344).
+
 - **Approve and reject from the phone app or the dashboard say why they
   cannot apply:** no run in the extension waits at an approval gate, so the
   window running the pipeline answers both with that reason (#2336).

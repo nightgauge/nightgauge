@@ -181,6 +181,7 @@ var contractTestedMethods = map[string]bool{
 	"queue.enqueueEpic":        true,
 	"queue.list":               true,
 	"queue.remove":             true,
+	"queue.removeRemoteRun":    true,
 	"queue.validatePin":        true,
 	// Autonomous
 	"autonomous.start":              true,

@@ -51,8 +51,8 @@ function makeConcurrentManager(isRunning = false) {
   return {
     isRunning: vi.fn().mockReturnValue(isRunning),
     fillSlots: vi.fn().mockResolvedValue(1),
-    setPendingRemoteRunId: vi.fn(),
-    clearPendingRemoteRunId: vi.fn(),
+    acceptRemoteRun: vi.fn(),
+    forgetRemoteRun: vi.fn(),
   };
 }
 
@@ -137,9 +137,14 @@ describe("TriggerCommandHandler", () => {
 
     await vi.waitFor(() => expect(concurrentManager.fillSlots).toHaveBeenCalledTimes(1));
 
-    // Pending runId must be set BEFORE enqueue so the slot adopts it on open.
-    expect(concurrentManager.setPendingRemoteRunId).toHaveBeenCalledWith(10, "run-abc");
-    const setOrder = concurrentManager.setPendingRemoteRunId.mock.invocationCallOrder[0];
+    // The window holds the run from the ack on, BEFORE the enqueue can start
+    // a fill (#2340); the queued item carries the run id the slot adopts.
+    expect(concurrentManager.acceptRemoteRun).toHaveBeenCalledWith(
+      "run-abc",
+      10,
+      "nightgauge/nightgauge"
+    );
+    const setOrder = concurrentManager.acceptRemoteRun.mock.invocationCallOrder[0];
     const enqOrder = queueService.enqueue.mock.invocationCallOrder[0];
     expect(setOrder).toBeLessThan(enqOrder);
 
@@ -197,7 +202,7 @@ describe("TriggerCommandHandler", () => {
     expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
   });
 
-  it("clears the pending runId and does not fill slots when enqueue is refused", async () => {
+  it("forgets the accepted run and does not fill slots when enqueue is refused", async () => {
     queueService.enqueue.mockResolvedValue(null); // e.g. stop-in-progress guard
     const cmd = makeTriggerCmd(42);
     handler.handle(cmd);
@@ -207,11 +212,11 @@ describe("TriggerCommandHandler", () => {
         expect.any(Object)
       )
     );
-    expect(concurrentManager.clearPendingRemoteRunId).toHaveBeenCalledWith(42);
+    expect(concurrentManager.forgetRemoteRun).toHaveBeenCalledWith("run-abc");
     expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
   });
 
-  it("clears the pending runId when enqueue throws", async () => {
+  it("forgets the accepted run when enqueue throws", async () => {
     queueService.enqueue.mockRejectedValue(new Error("ipc down"));
     const cmd = makeTriggerCmd(42);
     handler.handle(cmd);
@@ -221,7 +226,7 @@ describe("TriggerCommandHandler", () => {
         expect.any(Object)
       )
     );
-    expect(concurrentManager.clearPendingRemoteRunId).toHaveBeenCalledWith(42);
+    expect(concurrentManager.forgetRemoteRun).toHaveBeenCalledWith("run-abc");
     expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
   });
 
@@ -463,7 +468,7 @@ describe("TriggerCommandHandler — remote run request (#1656)", () => {
     );
     await new Promise((r) => setTimeout(r, 10));
     expect(queueService.enqueue).not.toHaveBeenCalled();
-    expect(concurrentManager.setPendingRemoteRunId).not.toHaveBeenCalled();
+    expect(concurrentManager.acceptRemoteRun).not.toHaveBeenCalled();
     expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
   });
 

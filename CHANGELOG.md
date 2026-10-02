@@ -196,6 +196,21 @@ changelog, and the release workflow refuses a tag that does not.
   not know read as no list and got the default tools, `Bash`, `Write` and
   `Edit` among them, and a comment that named a tool granted it.
 
+- **A platform cancel of a triggered run that has not started yet applies**
+  (#2344). A cancel of a run this window accepted the trigger for, still
+  queued behind other slots or with its worktree being created, was refused
+  `not-started`, and the requester had to wait for the run to start and cancel
+  it again. The cancel now tombstones the platform run id and is acknowledged
+  `applied`; the queued item is removed, or, when a fill already took it, the
+  dispatch drops it wherever it is, so no slot ever opens for it. A later
+  trigger of the same issue runs under its own run id. The queued item now
+  carries the platform run id and the slot adopts it from there, so a run id
+  can no longer be adopted by a later dispatch of the same issue number from
+  a local re-queue or another repository, a re-queued remote run keeps its
+  run id, and a trigger for an issue already waiting in the queue attaches its
+  run id to that item. `queue.removeRemoteRun` removes one remote run's item
+  that no dispatch has taken.
+
 - **A slow reap of the complexity-model lock broker no longer hides why the
   transaction failed** (#2356). The extension waited for a broker it had sent
   SIGKILL as briefly as for one asked to exit, and an error from that wait

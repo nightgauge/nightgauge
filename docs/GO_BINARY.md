@@ -346,10 +346,19 @@ sends a command to every connection that shares the agent id, so every window
 on the machine receives the verb, and the first acknowledgement ends it. A
 window holds a run while one of its slots carries the run id, and from the
 moment it accepts the run's trigger until that slot opens, while the issue is
-still queued there or its worktree is being created; a verb that arrives in
-that interval is refused as `not-started`. An issue removed from the queue
-since (Clear Queue, Remove from Queue, a halt's drain) will never start, and
-the window no longer holds its run. The holder answers whichever repositories
+still queued there or its worktree is being created. The queued item carries
+the run id (`remoteRunId` on the queue item; a trigger for an issue already
+waiting in the queue attaches its run id to that item), and the slot adopts it
+from the item it dequeues, so a window still holds a queued run after a reload.
+A pause or resume that arrives before the slot opens is refused as
+`not-started`. A cancel applies (#2344): it tombstones the run id, removes the
+item if no fill has taken it yet (`queue.removeRemoteRun`, which touches no
+other item), and the dispatch drops a tombstoned item wherever it is, waiting
+for an earlier start or with its worktree being created, last in the tick its
+slot would open, so no slot ever opens for it. The tombstone is keyed by the
+platform run id, so a later trigger of the same issue runs. An issue removed
+from the queue since (Clear Queue, Remove from Queue, a halt's drain) will
+never start, and the window no longer holds its run. The holder answers whichever repositories
 it has open now, so a manifest reload that drops the run's repository does not
 silence it. A window that does not hold the run drops the verb without
 acknowledging it, so `rejected` only ever comes from the holder, when it

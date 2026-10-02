@@ -124,6 +124,14 @@ export interface QueueItem {
   /** Repository name (for cross-repo queue display, Issue #2188) */
   repoName?: string;
   /**
+   * The platform run id of the trigger this item was queued for (#2344): the
+   * run id a dashboard or mobile trigger's ack returned. The slot that opens
+   * for the item adopts it, so the platform's verbs for the run reach that
+   * slot, and a cancel before the slot opens drops the item. Absent on every
+   * other item.
+   */
+  remoteRunId?: string;
+  /**
    * A remote run request's pin (#1656, ADR-022 § 2): the adapter and model a
    * dashboard or mobile trigger asked for, already accepted by Go's
    * queue.validatePin. Every stage of the run dispatches on them. Absent on

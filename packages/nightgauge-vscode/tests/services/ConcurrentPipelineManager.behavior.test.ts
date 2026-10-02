@@ -810,8 +810,12 @@ describe("ConcurrentPipelineManager — remote run request pin (#1656)", () => {
       createMockLogger() as any,
       { maxConcurrent: 2 }
     );
-    manager.setPendingRemoteRunId(1658, "platform-run-1658");
-    mockQueue.dequeueIndependent.mockResolvedValueOnce([makeQueueItem(1658), makeQueueItem(1659)]);
+    // The queued item carries the trigger's run id, and the slot adopts it
+    // from there (#2344).
+    mockQueue.dequeueIndependent.mockResolvedValueOnce([
+      { ...makeQueueItem(1658), remoteRunId: "platform-run-1658" },
+      makeQueueItem(1659),
+    ]);
 
     await manager.fillSlots();
     await vi.waitFor(() => {

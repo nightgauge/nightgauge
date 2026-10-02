@@ -317,8 +317,9 @@ Displays comprehensive metrics:
   Pause/Resume button in the pipeline view. Every command from there (pause,
   resume, cancel, approve, reject) is acknowledged back by the window that
   holds the run, as applied or with the reason it did nothing, for example
-  that the run has not started yet. Another window open on the same
-  repository leaves the command alone. Approve and reject are always answered
+  that a run asked to pause has not started yet. A cancel of a run that has
+  not started yet removes it, and it never starts. Another window open on the
+  same repository leaves the command alone. Approve and reject are always answered
   that no run here waits at an approval gate: no local stage holds for one. A
   command delivered twice is carried out once.
 

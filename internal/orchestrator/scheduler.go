@@ -2519,12 +2519,21 @@ func (s *Scheduler) QueueAdd(entries ...QueueEntry) {
 }
 
 // QueueAddItem adds rich queue items to the execution queue.
-// Duplicate repository+issue identities are silently skipped.
+// Duplicate repository+issue identities are skipped, with one exception: a
+// remote run's trigger for an issue already waiting here, on an item that
+// serves no remote run, attaches its run id to that item (#2344). The
+// extension's slot adopts the run id from the item it dequeues, so without
+// it the triggered run would start under no run id and the platform's verbs
+// could never reach it. An item a dispatch has taken, or one already serving
+// another remote run, is left as it is.
 func (s *Scheduler) QueueAddItem(items ...QueueItem) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range items {
-		if s.queueContainsUnlocked(items[i].Repo, items[i].IssueNumber) {
+		if existing := s.queueItemUnlocked(items[i].Repo, items[i].IssueNumber); existing != nil {
+			if items[i].RemoteRunID != "" && existing.RemoteRunID == "" && existing.Status != "processing" {
+				existing.RemoteRunID = items[i].RemoteRunID
+			}
 			continue
 		}
 		if items[i].Status == "" {
@@ -2538,6 +2547,17 @@ func (s *Scheduler) QueueAddItem(items ...QueueItem) {
 	}
 	s.persistQueue()
 	s.emitQueueChangedUnlocked()
+}
+
+// queueItemUnlocked returns the queued item with the exact repository+issue
+// identity, or nil. The pointer is into s.queue and valid only under s.mu.
+func (s *Scheduler) queueItemUnlocked(repo string, issueNumber int) *QueueItem {
+	for i := range s.queue {
+		if s.queue[i].Repo == repo && s.queue[i].IssueNumber == issueNumber {
+			return &s.queue[i]
+		}
+	}
+	return nil
 }
 
 // queueContainsUnlocked returns true if the queue already contains the exact
@@ -2671,6 +2691,31 @@ func (s *Scheduler) GetState() QueueState {
 		Items:         items,
 		UpdatedAt:     time.Now().UTC(),
 	}
+}
+
+// QueueRemoveRemoteRun removes the item a remote run request's trigger
+// queued (#2344): the one item carrying remoteRunID that no dispatch has
+// taken yet. An item a dispatch has dequeued (processing) is left to that
+// dispatch, which drops a cancelled remote run itself, and no other item,
+// whatever its repository or issue number, is touched. Reports whether an
+// item was removed.
+func (s *Scheduler) QueueRemoveRemoteRun(remoteRunID string) bool {
+	if remoteRunID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, item := range s.queue {
+		if item.RemoteRunID != remoteRunID || item.Status == "processing" {
+			continue
+		}
+		s.queue = append(s.queue[:i], s.queue[i+1:]...)
+		s.recalculatePositions()
+		s.persistQueue()
+		s.emitQueueChangedUnlocked()
+		return true
+	}
+	return false
 }
 
 // QueueRemove removes an issue from the queue by number.

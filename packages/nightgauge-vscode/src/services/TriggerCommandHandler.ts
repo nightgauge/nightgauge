@@ -185,10 +185,11 @@ export class TriggerCommandHandler implements CommandHandler {
       runId,
     });
 
-    // Store runId BEFORE the issue can be dequeued so the slot adopts it when it
-    // opens (#3552). enqueue() can trigger a debounced fillSlots via onItemAdded,
-    // so the pending runId must be in place first.
-    this.concurrentManager.setPendingRemoteRunId(issueNumber, runId);
+    // This window holds the run from the ack on (#2340): record it BEFORE the
+    // issue can be dequeued. enqueue() can trigger a debounced fillSlots via
+    // onItemAdded. The queued item carries the run id itself, and the slot
+    // that opens for it adopts the id from there (#2344).
+    this.concurrentManager.acceptRemoteRun(runId, issueNumber, `${owner}/${repo}`);
 
     // Enqueue the issue so fillSlots() has something to dequeue. Without this the
     // command acked but the run never started — fillSlots found an empty queue
@@ -200,8 +201,8 @@ export class TriggerCommandHandler implements CommandHandler {
         repoOverride: { owner, repo },
         // Adopt the ack runId as the pipeline-run id (via the Go queue item's
         // RemoteRunID) so command.runId === pipeline_runs.runId and the
-        // dashboard's run deep-link resolves instead of 404ing (#4120). This is
-        // the same value passed to setPendingRemoteRunId above for cancel-routing.
+        // dashboard's run deep-link resolves instead of 404ing (#4120). The slot
+        // adopts it from the item, so the platform's verbs reach the run (#2344).
         remoteRunId: runId,
         // Only a remote run request adds keys; without one the options are
         // exactly what they were before #1656.
@@ -214,7 +215,7 @@ export class TriggerCommandHandler implements CommandHandler {
           "TriggerCommandHandler: enqueue refused (stop in progress?) — pipeline not started",
           { issueNumber, commandId: cmd.id, runId }
         );
-        this.concurrentManager.clearPendingRemoteRunId(issueNumber);
+        this.concurrentManager.forgetRemoteRun(runId);
         return;
       }
     } catch (err) {
@@ -224,7 +225,7 @@ export class TriggerCommandHandler implements CommandHandler {
         runId,
         err: err instanceof Error ? err.message : String(err),
       });
-      this.concurrentManager.clearPendingRemoteRunId(issueNumber);
+      this.concurrentManager.forgetRemoteRun(runId);
       return;
     }
 
