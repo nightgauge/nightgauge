@@ -68,13 +68,20 @@ commit unreachable. It does not remove it from GitHub:
 
 - GitHub keeps unreachable objects and serves them by SHA, without
   authentication: the commit, its tree and its file contents, through the API
-  and the web view. The SHA is already out, in the clones, forks, CI logs,
+  and the web view. An abbreviated SHA, such as the seven characters a log
+  prints, is enough. The SHA is already out, in the clones, forks, CI logs,
   links and public event feed of the time when the commit was reachable.
+- One pushed branch or tag publishes every commit it reaches, not only its tip.
+- The repositories in a fork network share their Git data, so a commit pushed
+  to any fork is served through this repository too, even after that fork is
+  deleted. A private repository that is made public publishes what it holds the
+  same way, including commits pushed while it was private that no ref reaches.
 - A commit in a pull request's final head stays referenced by that pull
   request after its branch is deleted, and no push removes that reference.
-- Only GitHub Support garbage-collects such objects, on request, and only for
-  sensitive data it judges rotation cannot mitigate. Nothing reaches the forks,
-  clones and mirrors made while the content was public.
+- Only GitHub Support garbage-collects such objects and removes their cached
+  views, on request, and only for sensitive data it judges rotation cannot
+  mitigate. Nothing reaches the forks, clones and mirrors made while the
+  content was public.
 
 Removal from `main` is therefore cosmetic: the repository looks clean and the
 content is still served. The checks here cannot tell the difference. The
@@ -84,21 +91,31 @@ fetchable. Never describe content as removed because a rewrite ran.
 
 When sensitive material is found in public history, act in this order:
 
-1. **Record the exposure.** Write down every affected commit SHA and what it
-   carried before anything changes. A rewrite done first destroys that
-   evidence, and with it the list of what to rotate.
+1. **Record the exposure, privately.** Write down every affected commit SHA and
+   what it carried before anything changes, in a maintainer's private record or
+   a report made as [SECURITY.md](../SECURITY.md) describes. Never record it in
+   a public issue, pull request, commit or discussion: a public record names
+   the SHAs to fetch. Take the list from a clone that still holds the history
+   (`git rev-list <tip>` for each branch or tag that was pushed), not from the
+   refs you remember. A rewrite done first destroys that evidence, and with it
+   the list of what to rotate.
 2. **Rotate.** A credential that was ever pushed public is revoked and
    replaced. Any other private material is treated as already published, and
    its owner decides what follows on that basis.
-3. **Decide in writing whether to purge or accept.** Accepting is defensible
-   when the content was meant to be public anyway; it is not when the content
-   is what the cleanup set out to remove. A purge is a Support request naming
-   every recorded SHA, made after a rewrite has removed each branch and tag
-   that points at them; Support removes the pull-request references itself.
+3. **The owner decides in writing whether to purge or accept.** That decision,
+   and any rewrite it needs, belongs to the repository owner and is made and
+   verified outside this tree. Accepting is defensible when nothing in the
+   recorded commits is sensitive once credentials are rotated; it is not when
+   they carry private material that rotation cannot take back. A purge is a
+   Support request naming every recorded SHA, made once no branch, tag or fork
+   references them; Support removes the pull-request references itself.
+   Support declines data it does not judge sensitive, so no purge is assured.
 
 A rewrite on its own changes what the repository shows, not what has been
 disclosed. GitHub documents its side of this in
-[Removing sensitive data from a repository](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
+[Removing sensitive data from a repository](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository)
+and
+[About permissions and visibility of forks](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/about-permissions-and-visibility-of-forks).
 
 ### Verify the effect, not the execution
 
@@ -108,19 +125,26 @@ was performed, and none of them shows the exposure is gone. A control that
 passes because its step happened can pass while the risk it exists for is
 untouched.
 
-The effect check for history is an unauthenticated request for each commit the
-cleanup was meant to remove, made as a stranger would make it:
+The effect check for history is two unauthenticated requests for each commit
+the cleanup was meant to remove, made as a stranger would make them:
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \
   "https://api.github.com/repos/<owner>/<repo>/commits/<sha>"
+curl -s -o /dev/null -w '%{http_code}\n' \
+  "https://github.com/<owner>/<repo>/commit/<sha>"
 ```
 
-`200` means GitHub still serves the commit; `422` (`No commit found for SHA`)
-means it does not. Anything else, such as a `403` from the unauthenticated rate
-limit, answers neither way: retry later. Record the result for every SHA, and
-run the same probe again after any purge: a purge is done when the probe says
-so, not when the ticket closes.
+From the API, `200` means GitHub still serves the commit and `422` (`No commit
+found for SHA`) means it does not. From the web view, `200` means served and
+`404` means not. A commit is gone only when both say so, because GitHub
+removes cached views in a step of its own. A `403`, `429` or `5xx` answers
+neither way: retry later, and pace a long list, because the unauthenticated API
+allows 60 requests an hour. A `404` from the API, or a `301` from either, means
+the URL does not name a public repository (a typo, a private repository, a
+rename): fix the URL, because retrying will not change the answer. Record the
+result for every SHA, and run both probes again after any purge: a purge is
+done when the probes say so, not when the ticket closes.
 
 ## How to write an issue reference
 

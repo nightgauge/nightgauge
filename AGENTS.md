@@ -147,8 +147,9 @@ or epic bodies, so keep that material out of those too. If classification is
 uncertain, keep the work private until the boundary is resolved.
 
 A history rewrite does not redact this repository: anything sensitive ever
-pushed here is disclosed. Rotate credentials, treat other material as
-published, and verify a cleanup by its effect, not its execution. See
+pushed here, or to any fork of it, is disclosed. Record an exposure privately,
+rotate credentials, treat other material as published, and verify a cleanup by
+its effect, not its execution. See
 [docs/PUBLIC_CORE_BOUNDARY.md](docs/PUBLIC_CORE_BOUNDARY.md#a-history-rewrite-does-not-redact).
 
 Do not manually lower `issue_references.tree_baseline` when the publication
