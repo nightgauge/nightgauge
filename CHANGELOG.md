@@ -157,9 +157,11 @@ changelog, and the release workflow refuses a tag that does not.
   variable instead. The worst case was `scripts/branch-merged-check.sh`: once
   the PR index outgrew a pipe buffer, the head or base branch of an open PR
   that is an ancestor of `main` read SAFE-DELETE, exit 0. Its open-PR and
-  worktree lookups now fail closed: one that cannot run (a full temp
-  directory, a failed `git worktree list`) answers UNKNOWN, exit 2, never
-  "no open PR". Issue creation's epic gate found its markers the same broken
+  worktree lookups and its content diff now fail closed: one that cannot run
+  (a full temp directory, a failed `git worktree list` or `git diff`, a `gh`
+  that is missing or cannot fetch the PR index) answers UNKNOWN, exit 2,
+  never "no open PR" or "identical content". Only `NO_PR=1` still judges on
+  content alone. Issue creation's epic gate found its markers the same broken
   way in a long issue body, and reads a here-string now. `state-backstop.sh`
   reported a changed file as removed beside a large leak, and now lists a
   mass leak without a process per path. The release and staging VSIX checks

@@ -57,7 +57,8 @@
 # commit (the batching rule) has no PR of its own; the forge's commit -> PRs
 # lookup finds the PR that carried it, and an ancestry compare against that
 # PR's head proves the tip landed (#2313). Set NO_PR=1 to skip the forge
-# lookup entirely; the result is then conservative by design.
+# lookup entirely and judge on content alone: no merged PR can prove a merge,
+# and no open PR is looked for.
 
 set -uo pipefail
 
@@ -74,17 +75,33 @@ BASE_DEFAULT="origin/main"
 # ---------------------------------------------------------------------------
 # PR index: "<state>\t<headRefName>\t<headRefOid>\t<number>\t<baseRefName>",
 # fetched once for open AND merged PRs. Open ones mark a branch in use (as head
-# OR as base, #2175); merged ones prove a branch already landed. Empty when NO_PR=1, gh is missing, unauthenticated, or
-# the remote is not a forge we can query — classification stays content-only.
+# OR as base, #2175); merged ones prove a branch already landed.
+#
+# NO_PR=1 skips the fetch, and classification is content-only: no open-PR
+# guard, no merged-PR proof. Nothing else does. When gh is not installed, or
+# its fetch fails (unauthenticated, offline, a remote it cannot query),
+# PR_INDEX_ERR says why, and every verdict the open-PR guards stand before is
+# UNKNOWN: an empty index would read as "no open PR" for a branch no guard
+# looked at (#2360).
 # ---------------------------------------------------------------------------
 PR_INDEX=""
+PR_INDEX_ERR=""
 build_pr_index() {
   [ "${NO_PR:-0}" = "1" ] && return 0
-  command -v gh >/dev/null 2>&1 || return 0
+  if ! command -v gh >/dev/null 2>&1; then
+    PR_INDEX_ERR="gh is not installed; NO_PR=1 judges on content alone"
+    return 0
+  fi
+  local rc
   PR_INDEX=$(gh pr list --state all --limit 500 \
     --json state,headRefName,headRefOid,number,baseRefName \
     --jq '.[] | select(.state=="OPEN" or .state=="MERGED")
-          | "\(.state)\t\(.headRefName)\t\(.headRefOid)\t\(.number)\t\(.baseRefName)"' 2>/dev/null) || PR_INDEX=""
+          | "\(.state)\t\(.headRefName)\t\(.headRefOid)\t\(.number)\t\(.baseRefName)"' 2>/dev/null)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    PR_INDEX=""
+    PR_INDEX_ERR="gh pr list failed (status $rc)"
+  fi
 }
 
 # The lookups below read PR_INDEX from a here-string, never `printf | awk`:
@@ -312,6 +329,13 @@ classify() {
     esac
   fi
 
+  # Both open-PR guards below read the PR index. One that could not be
+  # fetched is no evidence of "no open PR" (see build_pr_index).
+  if [ -n "$PR_INDEX_ERR" ]; then
+    echo "UNKNOWN      ${remote_note}the open-PR lookups did not run ($PR_INDEX_ERR) — cannot rule out an open PR on this branch"
+    return 2
+  fi
+
   # An OPEN PR means the branch is in use no matter what its content says.
   # Deleting the head branch of an open PR closes that PR. Content cannot see
   # this: a PR whose changes were already applied to base by another route
@@ -379,7 +403,14 @@ classify() {
     return 0
   fi
 
-  files=$(git diff --name-only "$base...$ref" 2>/dev/null)
+  # Each diff below fails closed like the lookups above: an empty result from
+  # a git (or xargs) that did not run would read as "no files" or "identical
+  # content", the second a SAFE-DELETE (#2360). pipefail is set, so a failure
+  # anywhere in the residual pipeline is its status.
+  if ! files=$(git diff --name-only "$base...$ref" 2>/dev/null); then
+    echo "UNKNOWN      ${remote_note}the file list did not run (\`git diff --name-only\` failed) — cannot compare content with $base"
+    return 2
+  fi
   if [ -z "$files" ]; then
     # NOT "merged" — undecidable, and NOT the ancestor case (ruled out above).
     # A branch that introduces nothing yet is not contained in base means the
@@ -390,8 +421,11 @@ classify() {
 
   # Base TIP vs branch TIP, restricted to those paths. NUL-split so the list
   # never routes through shell word-splitting and spaces are safe.
-  residual=$(git diff --name-only -z "$base...$ref" \
-    | xargs -0 git diff --stat "$base" "$ref" -- 2>/dev/null)
+  if ! residual=$(git diff --name-only -z "$base...$ref" \
+    | xargs -0 git diff --stat "$base" "$ref" -- 2>/dev/null); then
+    echo "UNKNOWN      ${remote_note}the content diff did not run (\`git diff --stat\` or xargs failed) — cannot compare content with $base"
+    return 2
+  fi
 
   if [ -z "$residual" ]; then
     echo "SAFE-DELETE  ${remote_note}content identical in $base ($(printf '%s\n' "$files" | grep -c .) files)"

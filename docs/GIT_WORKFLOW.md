@@ -780,10 +780,12 @@ not by hand:
 ```bash
 scripts/branch-merged-check.sh feat/my-feature   # 0 SAFE-DELETE, 1 KEEP, 2 UNKNOWN
 scripts/branch-merged-check.sh --all             # sweep every local branch
-NO_PR=1 scripts/branch-merged-check.sh --all     # offline; conservative by design
+NO_PR=1 scripts/branch-merged-check.sh --all     # offline: content only, no open-PR check
 ```
 
-Only exit `0` authorizes a delete. `2` means undecidable, not safe. Every
+Only exit `0` authorizes a delete. `2` means undecidable, not safe, and is
+also the answer when a check that guards deletion could not run: with no `gh`,
+or a `gh pr list` that fails, no open PR can be ruled out. Every
 `SAFE-DELETE` cites its evidence — either identical content or the merged PR
 number — so the verdict is auditable rather than trusted.
 

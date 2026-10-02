@@ -120,13 +120,18 @@ squash_merge_to_main() {
 # `api repos/{owner}/{repo}/commits/<sha>` with FAKE_PR_PARENTS, one SHA per
 # line, when <sha> matches FAKE_PR_SHA. FAKE_PR_FILLER=<n> appends n merged
 # PRs for unrelated branches after that line, to make the index larger than
-# any pipe buffer (#2360).
+# any pipe buffer (#2360). FAKE_PR_LIST_STATUS=<n> makes `pr list` fail with
+# status n, as an unauthenticated or offline gh does.
 install_fake_gh() {
   [ -n "$FAKE_BIN" ] && return 0
   FAKE_BIN="$(mktemp -d)"
   cat >"$FAKE_BIN/gh" <<'FAKE_GH'
 #!/usr/bin/env bash
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  if [ -n "${FAKE_PR_LIST_STATUS:-}" ]; then
+    echo "gh: simulated failure" >&2
+    exit "$FAKE_PR_LIST_STATUS"
+  fi
   if [ -n "${FAKE_PR_STATE:-}" ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$FAKE_PR_STATE" "$FAKE_PR_BRANCH" "$FAKE_PR_SHA" "$FAKE_PR_NUM" "${FAKE_PR_BASE:-main}"
   fi
@@ -578,6 +583,60 @@ else
     FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=fix/4100-open-head FAKE_PR_SHA=deadbeef FAKE_PR_NUM=4101 \
     bash -c 'trap "" XFSZ; ulimit -f 0; exec "$@"' _ "$SCRIPT" fix/4100-open-head origin/main
 fi
+
+# ── (s) a content diff that cannot run is UNKNOWN, never SAFE-DELETE ───────
+# The residual diff decides "content identical", the SAFE-DELETE for a
+# squash-merged branch. Its pipeline's status was ignored, so a `git diff
+# --stat` that failed, or an xargs that could not start git, left an empty
+# residual, which read as identical content: exit 0 for a branch carrying a
+# commit main does not have. The first arm is the control: the same branch,
+# every tool able to run, is KEEP.
+new_fixture
+root="$TMP/clone"
+wt="$(add_worktree "$root" 4200 fix/4200-unmerged)"
+commit_in "$wt" fix.txt "not merged anywhere
+"
+git_in "$root" worktree remove "$wt" --force
+expect 1 "a branch with a commit main lacks is KEEP (control)" "1 file changed" \
+  -- run_in "$root" env NO_PR=1 "$SCRIPT" fix/4200-unmerged origin/main
+stat_dir="$(failing_tool git --stat)"
+expect 2 "a content diff git cannot produce is UNKNOWN" "the content diff did not run" \
+  -- run_in "$root" env PATH="$stat_dir:$PATH" NO_PR=1 "$SCRIPT" fix/4200-unmerged origin/main
+xargs_dir="$(failing_tool xargs -0)"
+expect 2 "a content diff xargs cannot start is UNKNOWN" "the content diff did not run" \
+  -- run_in "$root" env PATH="$xargs_dir:$PATH" NO_PR=1 "$SCRIPT" fix/4200-unmerged origin/main
+names_dir="$(failing_tool git --name-only)"
+expect 2 "a file list git cannot produce is UNKNOWN, not \"touches no files\"" \
+  "the file list did not run" \
+  -- run_in "$root" env PATH="$names_dir:$PATH" NO_PR=1 "$SCRIPT" fix/4200-unmerged origin/main
+
+# ── (t) a PR index gh cannot fetch is UNKNOWN, never "no open PR" ─────────
+# Both open-PR guards read the index. When gh could not fetch it (not
+# installed, unauthenticated, offline), the index was empty, each guard read
+# "no open PR", and an ancestor branch read SAFE-DELETE although no guard had
+# looked. Only NO_PR=1, asked for by name, judges on content alone.
+new_fixture
+root="$TMP/clone"
+git_in "$root" branch -q fix/4300-ancestor main
+install_fake_gh
+expect 0 "an ancestor branch with a fetched, empty PR index is SAFE-DELETE (control)" "ancestor" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" "$SCRIPT" fix/4300-ancestor origin/main
+expect 2 "a PR index gh pr list could not fetch is UNKNOWN" "gh pr list failed (status 1)" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_LIST_STATUS=1 \
+  "$SCRIPT" fix/4300-ancestor origin/main
+# A PATH with every tool the checker runs, and no gh.
+nogh_bin="$(mktemp -d "$TMP/nogh.XXXXXX")"
+for tool in bash git awk sed grep xargs cut tail; do
+  real="$(command -v "$tool")" || {
+    echo "HARNESS ERROR: no $tool on PATH to link" >&2
+    exit 1
+  }
+  ln -s "$real" "$nogh_bin/$tool"
+done
+expect 2 "with no gh installed, the open-PR guards cannot look: UNKNOWN" "gh is not installed" \
+  -- run_in "$root" env PATH="$nogh_bin" "$SCRIPT" fix/4300-ancestor origin/main
+expect 0 "with no gh and NO_PR=1, an ancestor branch is SAFE-DELETE on content alone" "ancestor" \
+  -- run_in "$root" env PATH="$nogh_bin" NO_PR=1 "$SCRIPT" fix/4300-ancestor origin/main
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then
