@@ -325,6 +325,8 @@ describe("AutoProviderRouter — opencode priors (#1615)", () => {
       makeCtx({
         stage,
         available_adapters: ["claude-headless", "opencode"],
+        // A configured local model, so opencode is a routable candidate (#1725).
+        opencode_model: "lmstudio/qwen3-coder-30b",
         confidence_threshold: 0,
         weights,
       })
@@ -356,9 +358,12 @@ describe("AutoProviderRouter — opencode priors (#1615)", () => {
 describe("AutoProviderRouter — opencode resolved-window scoring (#1645)", () => {
   const router = new AutoProviderRouter();
 
+  // The default opencode_model is a local model the registry cannot resolve:
+  // routable (#1725), and scored against the static 32_000 placeholder.
   function scoreOpencode(overrides: Partial<AutoRouterContext> = {}) {
     const ctx = makeCtx({
       available_adapters: ["claude-headless", "opencode"],
+      opencode_model: "lmstudio/some-unknown-local-model",
       confidence_threshold: 0,
       weights: { cost: 0, capability: 0, context_window: 1, workflow: 0 },
       ...overrides,
@@ -398,7 +403,7 @@ describe("AutoProviderRouter — opencode resolved-window scoring (#1645)", () =
       stage: "feature-dev",
       opencode_model: "anthropic/claude-sonnet-5", // registry context_window: 1_000_000
     });
-    const placeholderOnly = scoreOpencode({ stage: "feature-dev" }); // no override: static 32_000
+    const placeholderOnly = scoreOpencode({ stage: "feature-dev" }); // unresolvable: static 32_000
     expect(resolved).toBe(1.0);
     expect(placeholderOnly).toBeLessThan(1.0);
   });
@@ -416,9 +421,9 @@ describe("AutoProviderRouter — opencode resolved-window scoring (#1645)", () =
   it("falls back to the static placeholder for an unresolvable opencode_model", () => {
     const got = scoreOpencode({
       stage: "feature-dev",
-      opencode_model: "lmstudio/some-unknown-local-model",
+      opencode_model: "lmstudio/another-unknown-local-model",
     });
-    const staticOnly = scoreOpencode({ stage: "feature-dev" });
+    const staticOnly = scoreOpencode({ stage: "feature-dev", opencode_context_window: 32_000 });
     expect(got).toBe(staticOnly);
   });
 
@@ -428,6 +433,7 @@ describe("AutoProviderRouter — opencode resolved-window scoring (#1645)", () =
       available_adapters: ["grok", "opencode"],
       confidence_threshold: 0,
       weights: { cost: 0, capability: 0, context_window: 1, workflow: 0 },
+      opencode_model: "lmstudio/qwen3-coder-30b",
       opencode_context_window: 131_072,
     });
     const result = router.selectForStage(ctx.stage, ctx);
@@ -599,5 +605,79 @@ describe("AutoProviderRouter — non-workflow routing unchanged (#3912)", () => 
   it("reserves a fractional WORKFLOW_SUBSCORE_WEIGHT in (0, 1)", () => {
     expect(WORKFLOW_SUBSCORE_WEIGHT).toBeGreaterThan(0);
     expect(WORKFLOW_SUBSCORE_WEIGHT).toBeLessThan(1);
+  });
+});
+
+// ── #1725 — an opencode pick never carries a bare tier ───────────────────────
+
+describe("AutoProviderRouter — opencode dispatch model (#1725)", () => {
+  const router = new AutoProviderRouter();
+  const BARE_TIERS = ["haiku", "sonnet", "opus", "fable"];
+
+  it("resolves a tier against the configured hosted provider to <provider>/<id>", () => {
+    const result = router.selectForStage(
+      "feature-dev",
+      makeCtx({ available_adapters: ["opencode"], opencode_model: "anthropic/claude-sonnet-5" })
+    );
+    expect(result).not.toBeNull();
+    expect(result!.adapter).toBe("opencode");
+    expect(BARE_TIERS).not.toContain(result!.model);
+    expect(result!.model).toMatch(/^anthropic\/claude-/);
+  });
+
+  it("returns the configured local model, which serves every band", () => {
+    const result = router.selectForStage(
+      "feature-dev",
+      makeCtx({ available_adapters: ["opencode"], opencode_model: "lmstudio/qwen3-coder-30b" })
+    );
+    expect(result).not.toBeNull();
+    expect(result!.model).toBe("lmstudio/qwen3-coder-30b");
+  });
+
+  it("drops opencode when no provider is configured, so the only candidate abstains", () => {
+    const result = router.selectForStage(
+      "feature-dev",
+      makeCtx({ available_adapters: ["opencode"] })
+    );
+    expect(result).toBeNull();
+  });
+
+  it("drops an unresolvable opencode and states why in the remaining pick's rationale", () => {
+    const result = router.selectForStage(
+      "feature-dev",
+      makeCtx({ available_adapters: ["claude-headless", "opencode"] })
+    );
+    expect(result).not.toBeNull();
+    expect(result!.adapter).toBe("claude-headless");
+    expect(result!.scores!.opencode).toBeUndefined();
+    expect(result!.rationale).toContain("opencode dropped:");
+  });
+
+  it("never returns a bare tier for opencode across stages and sizes", () => {
+    const stages = [
+      "issue-pickup",
+      "feature-planning",
+      "feature-dev",
+      "feature-validate",
+      "pr-create",
+      "pr-merge",
+    ];
+    const sizes: ComplexityLabel[] = ["XS", "S", "M", "L", "XL"];
+    for (const stage of stages) {
+      for (const complexity of sizes) {
+        const result = router.selectForStage(
+          stage,
+          makeCtx({
+            stage,
+            complexity,
+            available_adapters: ["opencode"],
+            opencode_model: "anthropic/claude-sonnet-5",
+          })
+        );
+        if (result === null) continue;
+        expect(BARE_TIERS).not.toContain(result.model);
+        expect(result.model).toContain("/");
+      }
+    }
   });
 });

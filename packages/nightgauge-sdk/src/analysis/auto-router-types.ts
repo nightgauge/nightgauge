@@ -158,7 +158,10 @@ export interface AutoRouterContext {
    * `<provider>/<id>` dispatch string. Used to score `opencode`'s
    * context-window sub-score against the model it will actually run instead
    * of the static `ADAPTER_CONTEXT_WINDOW_TOKENS.opencode` placeholder
-   * (#1645, ADR 023 Q10). Ignored for every other adapter.
+   * (#1645, ADR 023 Q10), and the configured provider a routed tier
+   * resolves against (`dispatchModelFor`, #1725): with no `<provider>/<id>`
+   * here, `opencode` has no dispatchable model, so the router drops it and
+   * the pick's rationale says why. Ignored for every other adapter.
    */
   opencode_model?: string;
   /**
