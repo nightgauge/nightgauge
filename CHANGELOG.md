@@ -196,6 +196,21 @@ changelog, and the release workflow refuses a tag that does not.
   not know read as no list and got the default tools, `Bash`, `Write` and
   `Edit` among them, and a comment that named a tool granted it.
 
+- **A run verb no window holds is refused again, and never ahead of the
+  holder's answer** (#2357). Every editor window of a machine shares one
+  agent, so each receives a platform `cancel`, `pause`, `resume`, `approve`
+  or `reject`, and the platform keeps the first acknowledgement. #2340 made
+  only the window holding the run answer, so a refusal from another window
+  no longer reached the platform first; but a verb for a run no window held
+  then went unanswered for five minutes, until it expired. The windows now
+  agree through a ledger in the machine-state directory
+  (`STATE/agent-commands/`): each lists the platform runs it holds, and the
+  first to answer a command claims it. The holder claims the answer before it
+  applies the verb; a window without the run waits two seconds and refuses
+  `no-active-run` only when it still does not hold the run, no live window
+  lists it, and it claims the answer first. The platform gets one
+  acknowledgement per command, the holder's whenever a window holds the run.
+
 - **A platform cancel of a triggered run that has not started yet applies**
   (#2344). A cancel of a run this window accepted the trigger for, still
   queued behind other slots or with its worktree being created, was refused

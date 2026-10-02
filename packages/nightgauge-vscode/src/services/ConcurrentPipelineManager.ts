@@ -620,6 +620,15 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   private _onSlotsChanged = new vscode.EventEmitter<ActiveSlot[]>();
   readonly onSlotsChanged = this._onSlotsChanged.event;
 
+  /**
+   * Fires with {@link heldRemoteRunIds} whenever that set changes (#2357):
+   * the other windows of the machine read it from the remote-run ledger.
+   */
+  private _onHeldRemoteRunsChanged = new vscode.EventEmitter<string[]>();
+  readonly onHeldRemoteRunsChanged = this._onHeldRemoteRunsChanged.event;
+  /** The last set fired, sorted and joined, so an unchanged set fires nothing. */
+  private lastHeldRemoteRuns = "";
+
   /** Optional WorkspaceManager for resolving cross-repo local paths */
   private workspaceManager: WorkspaceManager | undefined;
 
@@ -649,7 +658,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     this.worktreeManager = new WorktreeManager(repoRoot);
     this.workspaceManager = workspaceManager;
 
-    this.disposables.push(this._onSlotsChanged);
+    this.disposables.push(this._onSlotsChanged, this._onHeldRemoteRunsChanged);
   }
 
   /**
@@ -1215,6 +1224,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   private async dropCancelledRemoteRun(item: QueueItem, reason: string): Promise<void> {
     if (item.remoteRunId !== undefined) this.acceptedRemoteRuns.delete(item.remoteRunId);
+    this.noteHeldRemoteRuns();
     this.logger.info("Dropped a remote run the platform cancelled before its slot opened", {
       issueNumber: item.issueNumber,
       repo: item.repoName ?? "",
@@ -1295,6 +1305,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       ...(item.remoteRunId ? { remoteRunId: item.remoteRunId } : {}),
     };
     this.reservedSlots.set(item.issueNumber, reservation);
+    this.noteHeldRemoteRuns();
     let reservationReleased = false;
     const releaseReservation = () => {
       if (reservationReleased) return;
@@ -1306,6 +1317,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // duplicate-dispatch guard and the per-repo concurrency cap correct.
       if (this.reservedSlots.get(item.issueNumber)?.runId === runId) {
         this.reservedSlots.delete(item.issueNumber);
+        this.noteHeldRemoteRuns();
       }
     };
     try {
@@ -3330,6 +3342,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // (#2340). A dispatch already creating its worktree is refused by the
     // shutdown check before its slot would adopt the id.
     this.acceptedRemoteRuns.clear();
+    this.noteHeldRemoteRuns();
 
     // Stop all running orchestrators. Mark each slot as user-cancelled BEFORE
     // issuing the stop so the slot's runSlot completion handler treats the
@@ -3943,6 +3956,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   acceptRemoteRun(remoteRunId: string, issueNumber: number, repo: string): void {
     this.acceptedRemoteRuns.set(remoteRunId, { issueNumber, repo });
+    this.noteHeldRemoteRuns();
   }
 
   /**
@@ -3952,6 +3966,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   forgetRemoteRun(remoteRunId: string): void {
     this.acceptedRemoteRuns.delete(remoteRunId);
+    this.noteHeldRemoteRuns();
   }
 
   /**
@@ -4068,6 +4083,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     this.cancelledRemoteRunIds.add(remoteRunId);
     const preparing = this.reservationFor(remoteRunId) !== undefined;
     const accepted = this.acceptedRemoteRuns.delete(remoteRunId);
+    this.noteHeldRemoteRuns();
     let removed = false;
     try {
       removed = await this.queueService.removeRemoteRun(remoteRunId);
@@ -4249,6 +4265,37 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
   private emitSlotsChanged(): void {
     this._onSlotsChanged.fire(this.getActiveSlots());
+    this.noteHeldRemoteRuns();
+  }
+
+  /**
+   * The platform run ids this window holds (#2357): those its slots carry,
+   * those the dispatches preparing a slot serve, and the triggers it
+   * accepted whose slot has not opened yet. The machine's other windows
+   * read it to tell a verb this window will answer from one nobody holds.
+   */
+  heldRemoteRunIds(): string[] {
+    const held = new Set<string>(this.acceptedRemoteRuns.keys());
+    for (const slot of this.slots.values()) if (slot.remoteRunId) held.add(slot.remoteRunId);
+    for (const reservation of this.reservedSlots.values()) {
+      if (reservation.remoteRunId) held.add(reservation.remoteRunId);
+    }
+    return [...held].sort();
+  }
+
+  /** Fire {@link onHeldRemoteRunsChanged} when the held set changed. */
+  private noteHeldRemoteRuns(): void {
+    const held = this.heldRemoteRunIds();
+    const key = held.join("\n");
+    if (key === this.lastHeldRemoteRuns) return;
+    this.lastHeldRemoteRuns = key;
+    try {
+      this._onHeldRemoteRunsChanged.fire(held);
+    } catch (err) {
+      this.logger.warn("onHeldRemoteRunsChanged listener threw", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   dispose(): void {

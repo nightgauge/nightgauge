@@ -360,14 +360,23 @@ platform run id, so a later trigger of the same issue runs. An issue removed
 from the queue since (Clear Queue, Remove from Queue, a halt's drain) will
 never start, and the window no longer holds its run. The holder answers whichever repositories
 it has open now, so a manifest reload that drops the run's repository does not
-silence it. A window that does not hold the run drops the verb without
-acknowledging it, so `rejected` only ever comes from the holder, when it
-cannot apply the verb. A refused pause or resume makes the platform put the
-run back to its earlier status, so a refusal from a window that does not hold
-the run would undo the holder's hold. When no window holds the run, nobody
-acknowledges, and the platform expires the command. A verb with no `runId`
-names no run, and every window that has the repository open refuses it as
-`invalid-payload`.
+silence it. A window that does not hold the run never applies the verb, and
+never refuses it ahead of the holder's answer: a refused pause or resume
+makes the platform put the run back to its earlier status, so such a refusal
+would undo the holder's hold. When no window holds the run, the verb is still refused, `no-active-run`,
+within about two seconds (#2357). The windows of a machine agree on it
+through a ledger in the machine-state directory, `STATE/agent-commands/`:
+each window lists the platform run ids it holds (`holders/<pid>.json`,
+removed when it closes, ignored once its process is gone), and the first
+window to answer a command claims it (`answers/<command id>`, created
+exclusively). The holder claims the answer before it applies the verb. A
+window that does not hold the run waits two seconds, and refuses only when
+it still does not hold it, no live window lists the run, and it claims the
+answer first. So the platform receives one acknowledgement per command, the
+holder's whenever a window holds the run. A ledger that cannot be read or
+written refuses nothing, and the verb then expires as before. A verb with no
+`runId` names no run, and every window that has the repository open refuses
+it as `invalid-payload`.
 
 No local run waits for a platform `approve` or `reject` (#2336). The verbs
 name a run's `stage` and `gateType`, one of the platform's quality-gate types

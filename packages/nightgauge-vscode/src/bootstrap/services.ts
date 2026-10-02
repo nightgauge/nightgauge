@@ -121,6 +121,8 @@ import { resolveExecutionProfile } from "../services/executionProfile";
 import { AgentCommandStreamService } from "../services/AgentCommandStreamService";
 import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../services/RunVerbCommandHandler";
+import { REMOTE_RUN_LEDGER_DIR, RemoteRunLedger } from "../services/RemoteRunLedger";
+import { resolveStateHome } from "../utils/machineStateDir";
 import { ThrottleCommandHandler } from "../services/ThrottleCommandHandler";
 import { WorkspaceThrottleState } from "../services/WorkspaceThrottle";
 import {
@@ -4281,12 +4283,27 @@ export async function initializeServices(
     // A pause or resume from the platform shows in this window as the local
     // Pause/Resume Pipeline commands show it (#2334).
     const pipelineManager = concurrentPipelineManager;
+    // The machine's windows share one agent, so they agree through the
+    // remote-run ledger on who answers a verb: the holder, or, when no window
+    // holds the run, one refusal (#2357). With no machine-state directory a
+    // verb no window holds is left to expire, as before.
+    const stateHome = resolveStateHome();
+    const remoteRunLedger = stateHome
+      ? new RemoteRunLedger(path.join(stateHome, REMOTE_RUN_LEDGER_DIR))
+      : undefined;
+    if (remoteRunLedger) {
+      context.subscriptions.push(
+        remoteRunLedger,
+        pipelineManager.onHeldRemoteRunsChanged((runIds) => void remoteRunLedger.publish(runIds))
+      );
+    }
     const runVerbCommandHandler = new RunVerbCommandHandler(
       concurrentPipelineManager,
       ipcClient,
       logger,
       workspaceManager ?? undefined,
-      createRemotePauseUi(statusBar, (runId) => pipelineManager.remoteRunState(runId))
+      createRemotePauseUi(statusBar, (runId) => pipelineManager.remoteRunState(runId)),
+      remoteRunLedger ? { ledger: remoteRunLedger } : undefined
     );
     const agentCommandDispatcher = new AgentCommandDispatcher(
       triggerCommandHandler,

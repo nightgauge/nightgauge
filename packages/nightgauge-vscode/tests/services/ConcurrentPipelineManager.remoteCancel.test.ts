@@ -344,4 +344,28 @@ describe("ConcurrentPipelineManager — a platform cancel before the slot opens 
       remoteRunId: "run-506",
     });
   });
+
+  // #2357: the machine's other windows read which runs this one holds.
+  it("publishes the platform runs it holds as they come and go", async () => {
+    const { manager, waiting, finish } = buildManager([]);
+    const published: string[][] = [];
+    manager.onHeldRemoteRunsChanged((runIds) => published.push(runIds));
+
+    manager.acceptRemoteRun("run-600", 600, "acme/api");
+    expect(manager.heldRemoteRunIds()).toEqual(["run-600"]);
+    waiting.push(item(600, "run-600"));
+    gate.worktreeIssue = 600;
+    const fill = manager.fillSlots();
+    await vi.waitFor(() => expect(gate.reached).toBe(true));
+    gate.release();
+    await fill;
+    // The slot carries the run now: the same set, so nothing more is published.
+    expect(manager.findSlotByRemoteRunId("run-600")).toBe(600);
+    expect(published).toEqual([["run-600"]]);
+
+    manager.acceptRemoteRun("run-601", 601, "acme/api");
+    manager.forgetRemoteRun("run-601");
+    await finish(600);
+    expect(published).toEqual([["run-600"], ["run-600", "run-601"], ["run-600"], []]);
+  });
 });

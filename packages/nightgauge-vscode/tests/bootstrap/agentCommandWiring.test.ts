@@ -66,7 +66,19 @@ describe("platform agent command wiring in bootstrap/services.ts", () => {
 
   it("gives the run-verb handler the window's pause UI", () => {
     expect(servicesSource).toMatch(
-      /new RunVerbCommandHandler\([\s\S]*?createRemotePauseUi\(statusBar, \(runId\) => pipelineManager\.remoteRunState\(runId\)\)\s*\)/
+      /new RunVerbCommandHandler\([\s\S]*?createRemotePauseUi\(statusBar, \(runId\) => pipelineManager\.remoteRunState\(runId\)\),/
     );
+  });
+
+  // #2357: a verb no window holds is refused through the machine's ledger,
+  // which follows this window's held runs and is removed when it closes.
+  it("gives the run-verb handler the machine's remote-run ledger, kept current", () => {
+    expect(servicesSource).toMatch(
+      /new RunVerbCommandHandler\([\s\S]*?remoteRunLedger \? \{ ledger: remoteRunLedger \} : undefined\s*\)/
+    );
+    expect(servicesSource).toContain(
+      "pipelineManager.onHeldRemoteRunsChanged((runIds) => void remoteRunLedger.publish(runIds))"
+    );
+    expect(servicesSource).toMatch(/context\.subscriptions\.push\(\s*remoteRunLedger,/);
   });
 });
