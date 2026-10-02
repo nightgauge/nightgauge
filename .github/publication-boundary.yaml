@@ -727,6 +727,11 @@ issue_references:
   # the run's own `retired:` lines, which is the point of #1080: a fall is now
   # itemised instead of argued about.
   #
+  # 2026-10-02 (#2336): 5,760 — two references, named. Removing the dead
+  # platform approve/reject methods from ConcurrentPipelineManager.ts took
+  # their two `@see` citations of the archived repository's issues with them;
+  # the checker itemised them as retired and named 5,760.
+  #
   # NEVER raise this number. Lower it ONLY to the value the checker names.
   tree_baseline: 5756
   allow_paths:
