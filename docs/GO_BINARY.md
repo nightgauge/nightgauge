@@ -316,8 +316,12 @@ to, and such a command expires on the platform.
 
 The extension acknowledges every command it consumes exactly once (#2334): a
 trigger with the run it starts; a run verb (`cancel`, `approve`, `reject`,
-`pause`, `resume`) as `applied`, or as `rejected` with the reason it was a
-no-op; any other type as `rejected` with `unsupported-command`. Delivery is
+`pause`, `resume`) as `applied`, as `already_resolved` when the run was
+already in the state the verb asks for (a pause of a paused run, a resume of
+a run that is not paused, #2341), or as `rejected` with the reason it could
+not act; any other type as `rejected` with `unsupported-command`. The
+platform keeps the status a pause or resume set unless the ack is
+`rejected`, which makes it restore the run's earlier status. Delivery is
 at least once, so a copy of a verb or an unsupported command that arrives
 again is not carried out again; it re-sends the first copy's ack only when
 that ack did not reach the platform. A second copy of a trigger is refused by

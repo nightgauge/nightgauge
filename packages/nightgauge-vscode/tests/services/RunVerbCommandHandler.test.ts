@@ -203,8 +203,6 @@ describe("RunVerbCommandHandler", () => {
   it("names each kind of no-op in the ack's reason", async () => {
     const cases: Array<[RemoteVerbResult, string, RegExp]> = [
       ["no-waiting-gate", "approve", /^no-waiting-gate: /],
-      ["already-paused", "pause", /^already-paused: /],
-      ["not-paused", "resume", /^not-paused: /],
       ["no-run-state", "pause", /^no-run-state: /],
       ["not-started", "cancel", /^not-started: /],
     ];
@@ -216,6 +214,26 @@ describe("RunVerbCommandHandler", () => {
       expect(ack.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
       expect(ack.agentAcknowledgeCommand.mock.calls[0][2]).toBe("rejected");
       expect(ack.agentAcknowledgeCommand.mock.calls[0][3]).toMatch(reason);
+    }
+  });
+
+  // #2341: a pause of a paused run, or a resume of a run that is not paused,
+  // found the run in the state it asks for. A `rejected` would make the
+  // platform restore the run's earlier status, the opposite of the holder's.
+  it("acknowledges a verb whose run is already in the requested state as already_resolved", async () => {
+    const cases: Array<[RemoteVerbResult, "pause" | "resume", RegExp]> = [
+      ["already-paused", "pause", /^already-paused: /],
+      ["not-paused", "resume", /^not-paused: /],
+    ];
+    for (const [result, verb, reason] of cases) {
+      const ack = makeIpc();
+      const handler = new RunVerbCommandHandler(makeRuns(result) as never, ack, logger as never);
+      handler.setAgentId("agent-ext");
+      await handler.consume(verbCmd(verb), verb);
+      expect(ack.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
+      const [agentId, id, outcome, detail] = ack.agentAcknowledgeCommand.mock.calls[0];
+      expect([agentId, id, outcome]).toEqual(["agent-ext", `cmd-${verb}`, "already_resolved"]);
+      expect(detail).toMatch(reason);
     }
   });
 

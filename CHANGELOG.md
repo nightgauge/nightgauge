@@ -70,6 +70,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A remote pause of a paused run, or resume of a running one, no longer flips
+  the run's status on the platform** (#2341). The extension acknowledged both
+  as `rejected` (`already-paused`, `not-paused`), and the platform answers a
+  rejected pause or resume by restoring the run's earlier status, so a run
+  paused locally read `running`. Both are now acknowledged `already_resolved`
+  with the same reason, which leaves the status the verb set, and
+  `agent.acknowledgeCommand` accepts that outcome.
 - **Only the window that holds a run answers a remote command for it**
   (#2340). The platform sends a pause, resume, cancel, approve or reject to
   every connection that shares the agent id and keeps the first

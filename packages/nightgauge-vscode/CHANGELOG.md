@@ -11,6 +11,10 @@ and this project adheres to
 
 ### Fixed
 
+- **A pause of a paused run, or a resume of a running one, from the phone app
+  or the dashboard no longer shows the opposite state there.** The window now
+  answers that the run was already in that state instead of refusing the
+  command, which made the platform restore the run's earlier status (#2341).
 - **Another window no longer undoes a pause or resume from the phone app or
   the dashboard.** With two windows open on the same repository, the one not
   running the pipeline could answer first that it had no such run, and the

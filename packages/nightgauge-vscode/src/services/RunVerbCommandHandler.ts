@@ -14,10 +14,14 @@
  * Every consumed verb is acknowledged once, and the ack's outcome tells an
  * applied verb from a no-op:
  *   - `applied`: the verb took effect on a local run;
- *   - `rejected` with a fixed reason: it found nothing to act on (the run is
- *     still queued here, no gate is waiting, the run is already paused or not
- *     paused, or the run ended after this window was found to hold it) or its
- *     payload had no runId.
+ *   - `already_resolved` with a fixed reason: the run was already in the state
+ *     the verb asks for, a pause of a paused run or a resume of a run that is
+ *     not paused (#2341). The platform keeps the status the verb set;
+ *   - `rejected` with a fixed reason: it could not act (the run is still
+ *     queued here, no gate is waiting, the run has no state to pause yet, or
+ *     the run ended after this window was found to hold it) or its payload
+ *     had no runId. On a pause or resume the platform then restores the
+ *     run's earlier status.
  *
  * `pause` and `resume` reuse the local Pause/Resume Pipeline mechanism (#423):
  * the run's state service is marked paused, the stage in flight finishes, the
@@ -66,18 +70,29 @@ export function isRunVerb(type: string): type is RunVerbCommandType {
   return (RUN_VERB_COMMAND_TYPES as readonly string[]).includes(type);
 }
 
+/** The results that find the run already in the state the verb asks for. */
+type AlreadyResolvedResult = "already-paused" | "not-paused";
+
 /**
  * The public reason a no-op ack carries: a fixed category and a short gloss,
- * never anything local (paths, error text).
+ * never anything local (paths, error text). The run is already in the
+ * requested state (acked `already_resolved`, #2341)...
  */
-const NO_OP_DETAIL: Record<Exclude<RemoteVerbResult, "applied">, string> = {
+const ALREADY_RESOLVED_DETAIL: Record<AlreadyResolvedResult, string> = {
+  "already-paused": "already-paused: the run is already paused",
+  "not-paused": "not-paused: the run is not paused",
+};
+/** ...or the holder could not act on it (acked `rejected`). */
+const NO_OP_DETAIL: Record<Exclude<RemoteVerbResult, "applied" | AlreadyResolvedResult>, string> = {
   "no-active-run": "no-active-run: no pipeline on this agent carries this runId",
   "not-started": "not-started: the run is queued on this agent and has not started yet",
   "no-waiting-gate": "no-waiting-gate: the run is not waiting at an approval gate",
-  "already-paused": "already-paused: the run is already paused",
-  "not-paused": "not-paused: the run is not paused",
   "no-run-state": "no-run-state: the run has no local state to pause yet",
 };
+
+function isAlreadyResolved(result: RemoteVerbResult): result is AlreadyResolvedResult {
+  return result in ALREADY_RESOLVED_DETAIL;
+}
 const INVALID_PAYLOAD_DETAIL = "invalid-payload: runId is required";
 const APPLY_FAILED_DETAIL = "apply-failed: the agent could not carry out the command";
 
@@ -95,7 +110,7 @@ export type RunVerbTarget = Pick<
 interface VerbAck {
   /** The agent the ack names; null when none is known yet. */
   agentId: string | null;
-  outcome: "applied" | "rejected";
+  outcome: "applied" | "already_resolved" | "rejected";
   detail?: string;
 }
 
@@ -198,6 +213,15 @@ export class RunVerbCommandHandler implements CommandHandler {
       this.logger.info("RunVerbCommandHandler: applied", { verb, runId, commandId: cmd.id });
       await this.showInWindow(verb, runId);
       return { agentId, outcome: "applied" };
+    }
+    if (isAlreadyResolved(result)) {
+      this.logger.info("RunVerbCommandHandler: the run is already in the requested state", {
+        verb,
+        runId,
+        result,
+        commandId: cmd.id,
+      });
+      return { agentId, outcome: "already_resolved", detail: ALREADY_RESOLVED_DETAIL[result] };
     }
     this.logger.warn("RunVerbCommandHandler: nothing to act on — no-op", {
       verb,
