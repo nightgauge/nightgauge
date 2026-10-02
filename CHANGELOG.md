@@ -191,7 +191,9 @@ changelog, and the release workflow refuses a tag that does not.
   (#2366). `TestOpenCodeFoldBoundedProcesses` gave every fold helper 300 ms,
   so on a loaded machine a fast helper timed out first and the hung one never
   started. Now the hung helper's deadline passes once it is running, and the
-  test checks that it, and no other helper, timed out.
+  test checks that it, and no other helper, timed out. A second case, where
+  every helper hangs and nothing else can end one, pins each helper's own
+  timeout.
   `TestContract_Attention`'s sweep subtest (#2367) went to GitHub for real
   under a 10 s read. A loopback proxy that refuses every connection now
   keeps the IPC test daemon off the network, and the subtest checks the
