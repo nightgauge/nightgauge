@@ -197,6 +197,13 @@ changelog, and the release workflow refuses a tag that does not.
   harness's read bound only catches a daemon that never answers, so it now
   allows 60 s. A subtest can bind the harness to itself, so a harness
   failure fails that subtest instead of its parent.
+  The pipeline E2E tests (#2368) gave a whole run a fixed budget (30 s, 15 s,
+  150 s), and each run spent 10 s of it on a license check nobody answered.
+  They now answer the check as the extension does. They stop only when the
+  pipeline makes no progress for two minutes or dispatches too many stages,
+  and they make no network calls. The lifecycle test takes about 11 s instead
+  of 20 s. When the concurrent-pipelines test timed out, its main thread could
+  wait forever; now it fails.
 
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
