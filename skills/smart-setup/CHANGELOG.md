@@ -10,6 +10,9 @@ and this project adheres to
 
 ### Fixed
 
+- The bundled agent-guidance check no longer pipes into `grep -q` under
+  `pipefail`. Under load, that shape can turn a match into a miss
+  (issue 2362).
 - Phase 4.5's CI scaffold runs the repository's own gate scripts
   (`npm run typecheck|lint|test|build`, whichever exist), pins actions to
   commit SHAs, and takes `--runs-on`; the summary prints the emitted steps
