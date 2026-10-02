@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -426,5 +427,71 @@ func TestRefreshThrottleOnCommand(t *testing.T) {
 	case <-refreshed:
 		t.Fatal("a pause refreshed the throttle")
 	case <-time.After(20 * time.Millisecond):
+	}
+}
+
+// A headless scheduler holds its very first dispatch to the throttle: the
+// daemon is asked before the scheduler starts, then again in the background
+// (#2352).
+func TestStartFollowingDaemonWorkspaceThrottle_ReadsBeforeReturning(t *testing.T) {
+	throttle := orchestrator.NewDispatchThrottle()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var reads int32
+	startFollowingDaemonWorkspaceThrottle(ctx, throttle, time.Hour,
+		func(context.Context) (ipc.PlatformWorkspaceThrottleResult, error) {
+			atomic.AddInt32(&reads, 1)
+			return ipc.PlatformWorkspaceThrottleResult{Known: true, Throttle: &platform.WorkspaceThrottle{MaxConcurrent: 0}}, nil
+		})
+	if got := throttle.Ceiling(3); got != 0 {
+		t.Fatalf("on return: ceiling = %d, want the daemon's 0", got)
+	}
+	if n := atomic.LoadInt32(&reads); n != 1 {
+		t.Fatalf("reads before returning = %d, want 1", n)
+	}
+}
+
+// A daemon that stops answering leaves the last throttle it reported in
+// force, and the log says so and until when, rather than that the throttle
+// is not followed (#2352).
+func TestDaemonThrottleFollower_SaysTheLastThrottleIsKept(t *testing.T) {
+	logs := &syncBuffer{}
+	prev := log.Writer()
+	log.SetOutput(logs)
+	defer log.SetOutput(prev)
+
+	throttle := orchestrator.NewDispatchThrottle()
+	resumeAt := time.Date(2099, 1, 2, 3, 4, 5, 0, time.UTC)
+	answer := ipc.PlatformWorkspaceThrottleResult{Known: true, Throttle: &platform.WorkspaceThrottle{MaxConcurrent: 1}}
+	var readErr error
+	f := &daemonThrottleFollower{throttle: throttle, read: func(context.Context) (ipc.PlatformWorkspaceThrottleResult, error) {
+		return answer, readErr
+	}}
+
+	readErr = errors.New("dial unix: no such file")
+	f.step(context.Background())
+	if !strings.Contains(logs.String(), "the platform's throttle is not followed") {
+		t.Fatalf("nothing learned, daemon unreachable: log = %q", logs.String())
+	}
+
+	readErr = nil
+	f.step(context.Background())
+	readErr = errors.New("dial unix: no such file")
+	f.step(context.Background())
+	if got := throttle.Ceiling(3); got != 1 {
+		t.Fatalf("daemon unreachable: ceiling = %d, want the kept 1", got)
+	}
+	if !strings.Contains(logs.String(), "the last throttle it reported is kept: 1 run(s) at once until the platform clears it") {
+		t.Fatalf("kept throttle: log = %q", logs.String())
+	}
+
+	answer.Throttle = &platform.WorkspaceThrottle{MaxConcurrent: 2, ResumeAt: &resumeAt}
+	readErr = nil
+	f.step(context.Background())
+	readErr = errors.New("dial unix: no such file")
+	f.step(context.Background())
+	f.step(context.Background())
+	if n := strings.Count(logs.String(), "is kept: 2 run(s) at once until 2099-01-02T03:04:05Z"); n != 1 {
+		t.Fatalf("the kept throttle with its resumeAt was logged %d times, want once: %q", n, logs.String())
 	}
 }

@@ -113,6 +113,11 @@ func parseWorkspaceThrottle(raw json.RawMessage) (*WorkspaceThrottle, error) {
 	return t, nil
 }
 
+// workspaceThrottleReadTimeout bounds one read of the workspace list. Reads
+// run one at a time, so a read that never answered would hold back every
+// later one: throttle commands, stream reconnects and session changes.
+const workspaceThrottleReadTimeout = 30 * time.Second
+
 // WorkspaceThrottleFollower keeps a dispatch throttle on the platform throttle
 // of the workspace a process serves (#2352). Refresh reads it whenever it may
 // have changed: after a registration, on a `throttle` command, when the
@@ -120,14 +125,16 @@ func parseWorkspaceThrottle(raw json.RawMessage) (*WorkspaceThrottle, error) {
 //
 // Reads run one at a time, and a Refresh asked for while one is in flight
 // runs again after it, so the value applied last always comes from a read
-// that started after the last change was signalled. A read that fails changes
-// nothing. The throttle is followed only while a signed-in session exists, as
+// that started after the last change was signalled. Each read is bounded by
+// workspaceThrottleReadTimeout, and a read that fails changes nothing. The throttle is followed only while a signed-in session exists, as
 // the extension follows it: without one the cap is lifted and unknown.
 type WorkspaceThrottleFollower struct {
 	read    func(ctx context.Context, slug string) (*WorkspaceThrottle, error)
 	slug    func() (string, bool, error)
 	session func() bool
 	apply   func(throttle *WorkspaceThrottle, known bool)
+	// readTimeout bounds each read; workspaceThrottleReadTimeout but in tests.
+	readTimeout time.Duration
 
 	mu      sync.Mutex
 	running bool
@@ -145,7 +152,10 @@ func NewWorkspaceThrottleFollower(
 	session func() bool,
 	apply func(throttle *WorkspaceThrottle, known bool),
 ) *WorkspaceThrottleFollower {
-	return &WorkspaceThrottleFollower{read: read, slug: slug, session: session, apply: apply}
+	return &WorkspaceThrottleFollower{
+		read: read, slug: slug, session: session, apply: apply,
+		readTimeout: workspaceThrottleReadTimeout,
+	}
 }
 
 // Refresh reads the throttle and applies it. It returns once a read that
@@ -188,7 +198,9 @@ func (f *WorkspaceThrottleFollower) readAndApply(ctx context.Context) {
 		f.apply(nil, true)
 		return
 	}
-	throttle, err := f.read(ctx, slug)
+	readCtx, cancel := context.WithTimeout(ctx, f.readTimeout)
+	defer cancel()
+	throttle, err := f.read(readCtx, slug)
 	if err != nil {
 		log.Printf("[nightgauge] workspace throttle: could not read the throttle of workspace %q (keeping the last one): %v", slug, err)
 		return

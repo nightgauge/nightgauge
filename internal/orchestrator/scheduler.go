@@ -886,9 +886,13 @@ type Scheduler struct {
 	mu                       sync.Mutex
 	scalingConfig            *ScalingConfig // Dynamic agent scaling (nil = use defaults)
 
-	// dispatchThrottle is the platform's workspace throttle RunAuto holds
-	// new dispatch to (#2352); nil caps nothing. Guarded by mu.
+	// dispatchThrottle is the platform's workspace throttle RunAuto and an
+	// epic's waves hold new dispatch to (#2352); nil caps nothing. Guarded
+	// by mu.
 	dispatchThrottle *DispatchThrottle
+	// onThrottleWait, when set, is called as waitForThrottleRoom starts to
+	// wait; tests use it to know the wait began.
+	onThrottleWait func()
 
 	// Budget-aware retry tracking (Issue #2338 — max 1 budget retry per stage per run)
 	budgetRetries map[string]int
@@ -2303,19 +2307,75 @@ func (s *Scheduler) SetDispatchThrottle(d *DispatchThrottle) {
 	s.dispatchThrottle = d
 }
 
+// followsDispatchThrottle reports whether a workspace throttle is followed
+// at all (#2352).
+func (s *Scheduler) followsDispatchThrottle() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dispatchThrottle != nil
+}
+
 // throttleHoldsDispatch reports whether the workspace throttle allows no
 // further pipeline now: as many run as its cap.
 func (s *Scheduler) throttleHoldsDispatch() bool {
+	return s.throttleRoom(1) == 0
+}
+
+// throttleRoom is how many of want more pipelines the workspace throttle
+// lets start now (#2352): want when no throttle is followed or in force,
+// otherwise what its cap leaves above the pipelines running, never below 0.
+func (s *Scheduler) throttleRoom(want int) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.dispatchThrottle == nil {
-		return false
+	if s.dispatchThrottle == nil || want <= 0 {
+		return want
 	}
 	running := 0
 	for _, n := range s.repoRunning {
 		running += n
 	}
-	return running >= s.dispatchThrottle.Ceiling(running+1)
+	room := s.dispatchThrottle.Ceiling(running+want) - running
+	if room < 0 {
+		return 0
+	}
+	return room
+}
+
+// throttleRoomWait is how often waitForThrottleRoom looks again while the
+// workspace throttle holds dispatch, for the room a running pipeline makes
+// when it ends; a throttle change wakes it at once.
+const throttleRoomWait = 2 * time.Second
+
+// waitForThrottleRoom waits until the workspace throttle lets at least one
+// more pipeline start, and returns how many of want may (#2352). It returns
+// 0 only when ctx ends first.
+func (s *Scheduler) waitForThrottleRoom(ctx context.Context, want int) int {
+	waiting := false
+	for {
+		s.mu.Lock()
+		throttle := s.dispatchThrottle
+		s.mu.Unlock()
+		var changed <-chan struct{}
+		if throttle != nil {
+			changed = throttle.Changed()
+		}
+		if room := s.throttleRoom(want); room > 0 {
+			return room
+		}
+		if !waiting {
+			waiting = true
+			log.Printf("the workspace throttle holds dispatch; %d pipeline(s) wait for room", want)
+			if s.onThrottleWait != nil {
+				s.onThrottleWait()
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return 0
+		case <-changed:
+		case <-time.After(throttleRoomWait):
+		}
+	}
 }
 
 // RunAuto continuously polls the board and dispatches pipelines.
@@ -2342,6 +2402,9 @@ func (s *Scheduler) RunAuto(ctx context.Context, pollInterval time.Duration) err
 			log.Printf("auto-scheduler: the workspace throttle holds dispatch; waiting")
 		} else if item, err := s.PickNext(ctx); err != nil {
 			log.Printf("scheduler error: %v", err)
+		} else if item != nil && s.throttleHoldsDispatch() {
+			// The throttle changed while the board was read.
+			log.Printf("auto-scheduler: the workspace throttle holds dispatch; #%d waits", item.Number)
 		} else if item != nil {
 			log.Printf("dispatching #%d: %s (%s)", item.Number, item.Title, item.Repo)
 			go s.dispatchItem(ctx, *item)

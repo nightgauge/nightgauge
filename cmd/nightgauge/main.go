@@ -4624,10 +4624,11 @@ func runCmd() *cobra.Command {
 			if auto {
 				interval := time.Duration(pollSeconds) * time.Second
 				// Hold new dispatch to the platform's workspace throttle,
-				// followed through the workspace's daemon (#2352).
+				// followed through the workspace's daemon (#2352), read once
+				// before the first poll.
 				throttle := orchestrator.NewDispatchThrottle()
 				sched.SetDispatchThrottle(throttle)
-				go followDaemonWorkspaceThrottle(cmd.Context(), throttle, daemonThrottleInterval,
+				startFollowingDaemonWorkspaceThrottle(cmd.Context(), throttle, daemonThrottleInterval,
 					func(ctx context.Context) (ipc.PlatformWorkspaceThrottleResult, error) {
 						return readDaemonWorkspaceThrottle(ctx, cwd)
 					})
@@ -11190,7 +11191,7 @@ func autonomousRunCmd() *cobra.Command {
 			autoSched.SetDispatchThrottle(throttle)
 			ctx, stopThrottle := context.WithCancel(context.Background())
 			defer stopThrottle()
-			go followDaemonWorkspaceThrottle(ctx, throttle, daemonThrottleInterval,
+			startFollowingDaemonWorkspaceThrottle(ctx, throttle, daemonThrottleInterval,
 				func(ctx context.Context) (ipc.PlatformWorkspaceThrottleResult, error) {
 					return readDaemonWorkspaceThrottle(ctx, workdir)
 				})

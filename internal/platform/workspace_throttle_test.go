@@ -223,3 +223,33 @@ func TestWorkspaceThrottleFollower_ReadsAgainAfterAReadInFlight(t *testing.T) {
 		t.Fatalf("applied = %+v, want the newer read last", got)
 	}
 }
+
+// A read that never answers is cut off at its bound (#2352), so it cannot
+// hold back the refreshes after it: the next one reads and applies.
+func TestWorkspaceThrottleFollower_BoundsEachRead(t *testing.T) {
+	var reads int32
+	f, applied := followerFor(
+		func(ctx context.Context, _ string) (*WorkspaceThrottle, error) {
+			if atomic.AddInt32(&reads, 1) == 1 {
+				<-ctx.Done() // the platform never answers
+				return nil, ctx.Err()
+			}
+			return &WorkspaceThrottle{MaxConcurrent: 1}, nil
+		},
+		func() (string, bool, error) { return "w", true, nil },
+		func() bool { return true },
+	)
+	f.readTimeout = time.Millisecond
+
+	f.Refresh(context.Background())
+	if got := applied(); len(got) != 0 {
+		t.Fatalf("a read cut off at its bound applied %+v", got)
+	}
+	f.Refresh(context.Background())
+	if got := applied(); len(got) != 1 || got[0].throttle.MaxConcurrent != 1 {
+		t.Fatalf("applied = %+v, want the next read's throttle", got)
+	}
+	if NewWorkspaceThrottleFollower(nil, nil, nil, nil).readTimeout != workspaceThrottleReadTimeout {
+		t.Fatal("a follower is built without the read bound")
+	}
+}

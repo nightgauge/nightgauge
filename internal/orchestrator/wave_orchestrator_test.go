@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/intelligence/batch"
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
+	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/pkg/types"
 
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
@@ -913,5 +915,104 @@ func TestWaveOrchestrator_ScalingDecisionCallback(t *testing.T) {
 	}
 	if captured.Reason != "config_ceiling" {
 		t.Errorf("captured reason = %q, want 'config_ceiling'", captured.Reason)
+	}
+}
+
+// runningObservingIssueSvc records, at each sub-issue pipeline's first issue
+// read (inside runPipeline, after it counted itself running), the most
+// pipelines the scheduler counted running, and which issues started.
+type runningObservingIssueSvc struct {
+	*mockEpicIssueSvc
+	s          *Scheduler
+	mu         sync.Mutex
+	maxRunning int
+	started    []int
+}
+
+func (o *runningObservingIssueSvc) GetIssueWithRelations(ctx context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error) {
+	o.s.mu.Lock()
+	running := 0
+	for _, n := range o.s.repoRunning {
+		running += n
+	}
+	o.s.mu.Unlock()
+	o.mu.Lock()
+	if running > o.maxRunning {
+		o.maxRunning = running
+	}
+	o.started = append(o.started, number)
+	o.mu.Unlock()
+	return o.mockEpicIssueSvc.GetIssueWithRelations(ctx, owner, repo, number, rels)
+}
+
+// An epic's wave starts no sub-issue while the workspace throttle holds
+// dispatch, and then no more at once than its cap (#2352), even when the
+// wave's own concurrency would run them all together.
+func TestRunWaveScaled_HeldToTheWorkspaceThrottle(t *testing.T) {
+	tmpDir := layouttest.Repo(t)
+	runner := &trackingStageRunner{behavior: "succeed"}
+	s := buildWaveTestScheduler(t, tmpDir, newMockEpicIssueSvc(), runner)
+	observing := &runningObservingIssueSvc{mockEpicIssueSvc: newMockEpicIssueSvc(), s: s}
+	s.issueSvc = observing
+	throttle := NewDispatchThrottle()
+	s.SetDispatchThrottle(throttle)
+	throttle.Set(&platform.WorkspaceThrottle{MaxConcurrent: 0}, true)
+	waiting := make(chan struct{}, 1)
+	s.onThrottleWait = func() {
+		select {
+		case waiting <- struct{}{}:
+		default:
+		}
+	}
+	wo := newWaveOrchestrator(s, 100, "Org/repo", 8, 2_000_000)
+	wave := teams.WaveAssignment{
+		WaveIndex: 0,
+		Issues: []teams.SubIssue{
+			{Number: 401, Title: "A"},
+			{Number: 402, Title: "B"},
+			{Number: 403, Title: "C"},
+		},
+	}
+	budgetResult := teams.SplitBudget(wave.Issues, 600_000, teams.StrategyEqual)
+	epicItem := types.BoardItem{Number: 100, Repo: "Org/repo"}
+
+	done := make(chan []*AgentResult, 1)
+	go func() {
+		done <- wo.runWaveScaled(context.Background(), wave, epicItem, 0, budgetResult, 3)
+	}()
+	select {
+	case <-waiting:
+	case <-time.After(30 * time.Second):
+		t.Fatal("the wave did not wait while the throttle held dispatch")
+	}
+	observing.mu.Lock()
+	started := append([]int(nil), observing.started...)
+	observing.mu.Unlock()
+	if len(started) != 0 {
+		t.Fatalf("started %v under a cap of 0", started)
+	}
+
+	throttle.Set(&platform.WorkspaceThrottle{MaxConcurrent: 1}, true)
+	var results []*AgentResult
+	select {
+	case results = <-done:
+	case <-time.After(120 * time.Second):
+		t.Fatal("the wave never finished once the throttle allowed one run")
+	}
+	if len(results) != 3 {
+		t.Fatalf("results = %d, want 3", len(results))
+	}
+	for i, r := range results {
+		if r == nil || r.IssueNumber != wave.Issues[i].Number {
+			t.Errorf("result[%d] = %+v, want #%d", i, r, wave.Issues[i].Number)
+		}
+	}
+	observing.mu.Lock()
+	defer observing.mu.Unlock()
+	if len(observing.started) != 3 {
+		t.Fatalf("started %v, want all three sub-issues", observing.started)
+	}
+	if observing.maxRunning != 1 {
+		t.Fatalf("at most %d sub-issues ran at once, want 1 under a cap of 1", observing.maxRunning)
 	}
 }

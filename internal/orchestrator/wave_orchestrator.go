@@ -528,14 +528,20 @@ func (wo *WaveOrchestrator) runWaveParallel(ctx context.Context, wave teams.Wave
 func (wo *WaveOrchestrator) runWaveScaled(ctx context.Context, wave teams.WaveAssignment, epicItem types.BoardItem, waveIdx int, budgetResult teams.BudgetResult, concurrency int) []*AgentResult {
 	issues := wave.Issues
 
-	// Fast path: concurrency >= wave size, run all in parallel
-	if concurrency >= len(issues) {
+	// Fast path: concurrency >= wave size, run all in parallel, unless the
+	// workspace throttle is followed (#2352): each batch then starts only as
+	// many sub-issues as it leaves room for.
+	if concurrency >= len(issues) && !wo.scheduler.followsDispatchThrottle() {
 		return wo.runWaveParallel(ctx, wave, epicItem, waveIdx, budgetResult)
 	}
 
 	// Slow path: split into sequential batches
 	results := make([]*AgentResult, len(issues))
-	for batchStart := 0; batchStart < len(issues); batchStart += concurrency {
+	for batchStart := 0; batchStart < len(issues); {
+		batchSize := concurrency
+		if wo.scheduler.followsDispatchThrottle() {
+			batchSize = wo.scheduler.waitForThrottleRoom(ctx, concurrency)
+		}
 		select {
 		case <-ctx.Done():
 			// Fill remaining slots with cancellation results
@@ -550,17 +556,18 @@ func (wo *WaveOrchestrator) runWaveScaled(ctx context.Context, wave teams.WaveAs
 			return results
 		default:
 		}
+		if batchSize < 1 {
+			batchSize = 1
+		}
 
-		batchEnd := batchStart + concurrency
+		batchEnd := batchStart + batchSize
 		if batchEnd > len(issues) {
 			batchEnd = len(issues)
 		}
 		batchIssues := issues[batchStart:batchEnd]
 
-		log.Printf("epic #%d: wave %d batch %d/%d — issues %d-%d of %d (concurrency=%d)",
-			wo.epicNumber, waveIdx, batchStart/concurrency+1,
-			(len(issues)+concurrency-1)/concurrency,
-			batchStart+1, batchEnd, len(issues), concurrency)
+		log.Printf("epic #%d: wave %d batch — issues %d-%d of %d (concurrency=%d)",
+			wo.epicNumber, waveIdx, batchStart+1, batchEnd, len(issues), batchSize)
 
 		var wg sync.WaitGroup
 		for i, si := range batchIssues {
@@ -572,6 +579,7 @@ func (wo *WaveOrchestrator) runWaveScaled(ctx context.Context, wave teams.WaveAs
 			}(batchStart+i, si)
 		}
 		wg.Wait()
+		batchStart = batchEnd
 	}
 
 	return results

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -56,46 +57,98 @@ func readDaemonWorkspaceThrottle(ctx context.Context, workspaceRoot string) (ipc
 	return result, err
 }
 
+// daemonThrottleFollower keeps a headless scheduler's dispatch throttle on
+// the workspace throttle the workspace's daemon follows (#2352).
+type daemonThrottleFollower struct {
+	throttle *orchestrator.DispatchThrottle
+	read     func(ctx context.Context) (ipc.PlatformWorkspaceThrottleResult, error)
+	last     string
+}
+
+// step asks the daemon once and applies its answer. A daemon that cannot be
+// reached changes nothing: a throttle it reported before is kept, until its
+// resumeAt or until a daemon reports the workspace's throttle again, and the
+// log says so; with none learned, nothing is capped. Each change of state is
+// logged once.
+func (f *daemonThrottleFollower) step(ctx context.Context) {
+	result, err := f.read(ctx)
+	switch {
+	case err != nil:
+		if kept, _ := f.throttle.Snapshot(); kept != nil {
+			f.report("kept "+describeWorkspaceThrottle(kept),
+				"the workspace's daemon cannot be reached, so the last throttle it reported is kept: %s (%v)",
+				describeWorkspaceThrottle(kept), err)
+		} else {
+			f.report("unreachable", "no daemon serves this workspace with a signed-in session, so the platform's throttle is not followed (%v)", err)
+		}
+	case !result.Known:
+		f.throttle.Set(nil, false)
+		f.report("unknown", "the workspace's daemon has no signed-in session, so the platform's throttle is not followed")
+	case result.Throttle == nil:
+		f.throttle.Set(nil, true)
+		f.report("none", "the workspace has no throttle")
+	default:
+		f.throttle.Set(result.Throttle, true)
+		f.report("throttled "+describeWorkspaceThrottle(result.Throttle), "the workspace is throttled to %s", describeWorkspaceThrottle(result.Throttle))
+	}
+}
+
+func (f *daemonThrottleFollower) report(state string, format string, args ...interface{}) {
+	if state == f.last {
+		return
+	}
+	f.last = state
+	log.Printf("[nightgauge] workspace throttle: "+format, args...)
+}
+
+// loop asks the daemon every interval until ctx ends.
+func (f *daemonThrottleFollower) loop(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		f.step(ctx)
+	}
+}
+
+// describeWorkspaceThrottle names a throttle for the log: its cap and until when.
+func describeWorkspaceThrottle(t *platform.WorkspaceThrottle) string {
+	until := "until the platform clears it"
+	if t.ResumeAt != nil {
+		until = "until " + t.ResumeAt.UTC().Format(time.RFC3339)
+	}
+	return fmt.Sprintf("%d run(s) at once %s", t.MaxConcurrent, until)
+}
+
 // followDaemonWorkspaceThrottle keeps throttle on the workspace throttle the
 // workspace's daemon follows (#2352): now, then every interval, until ctx
-// ends. A daemon that cannot be reached changes nothing, so a throttle
-// already learned holds until its resumeAt; one that follows no throttle
-// lifts it. Each change of state is logged once.
+// ends (see daemonThrottleFollower.step).
 func followDaemonWorkspaceThrottle(
 	ctx context.Context,
 	throttle *orchestrator.DispatchThrottle,
 	interval time.Duration,
 	read func(ctx context.Context) (ipc.PlatformWorkspaceThrottleResult, error),
 ) {
-	last := ""
-	report := func(state string, format string, args ...interface{}) {
-		if state == last {
-			return
-		}
-		last = state
-		log.Printf("[nightgauge] workspace throttle: "+format, args...)
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		result, err := read(ctx)
-		switch {
-		case err != nil:
-			report("unreachable", "no daemon serves this workspace with a signed-in session, so the platform's throttle is not followed (%v)", err)
-		case !result.Known:
-			throttle.Set(nil, false)
-			report("unknown", "the workspace's daemon has no signed-in session, so the platform's throttle is not followed")
-		case result.Throttle == nil:
-			throttle.Set(nil, true)
-			report("none", "the workspace has no throttle")
-		default:
-			throttle.Set(result.Throttle, true)
-			report("throttled", "the workspace is throttled to %d run(s) at once", result.Throttle.MaxConcurrent)
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
+	f := &daemonThrottleFollower{throttle: throttle, read: read}
+	f.step(ctx)
+	f.loop(ctx, interval)
+}
+
+// startFollowingDaemonWorkspaceThrottle asks the workspace's daemon for the
+// throttle before it returns, so a scheduler started next already holds its
+// first dispatch to it, then keeps following it every interval in the
+// background until ctx ends (#2352).
+func startFollowingDaemonWorkspaceThrottle(
+	ctx context.Context,
+	throttle *orchestrator.DispatchThrottle,
+	interval time.Duration,
+	read func(ctx context.Context) (ipc.PlatformWorkspaceThrottleResult, error),
+) {
+	f := &daemonThrottleFollower{throttle: throttle, read: read}
+	f.step(ctx)
+	go f.loop(ctx, interval)
 }

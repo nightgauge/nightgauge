@@ -1090,6 +1090,13 @@ func TestContract_Platform(t *testing.T) {
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.status")
 	})
 
+	// platform.workspaceThrottle (#2352) reports what the daemon follows;
+	// with nothing followed it answers unknown.
+	t.Run("platform.workspaceThrottle/registered", func(t *testing.T) {
+		id := h.sendRequest("platform.workspaceThrottle", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.workspaceThrottle")
+	})
+
 	t.Run("platform.license/registered", func(t *testing.T) {
 		id := h.sendRequest("platform.license", nil)
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.license")

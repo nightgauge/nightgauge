@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -95,20 +96,56 @@ func TestDispatchThrottle_AnnouncesChangesAndTheLift(t *testing.T) {
 		t.Fatalf("raise, clear and unknown announced %d changes, want 3", n)
 	}
 
-	resumeAt := time.Now().Add(20 * time.Millisecond)
+	// The lift at resumeAt is armed on the throttle's clock and announced
+	// when it fires, with no further Set. The clock and the timer are the
+	// test's, so no scheduling delay can make the resumeAt pass before Set.
+	now := time.Date(2026, 10, 2, 12, 0, 0, 0, time.UTC)
+	d.now = func() time.Time { return now }
+	var armed []time.Duration
+	var fire func()
+	d.afterFunc = func(wait time.Duration, f func()) liftTimer {
+		armed = append(armed, wait)
+		fire = f
+		return fakeLiftTimer{}
+	}
+	resumeAt := now.Add(20 * time.Millisecond)
 	d.Set(throttleAt(1, &resumeAt), true)
 	if n := count(); n != 1 {
 		t.Fatalf("setting a timed throttle announced %d changes, want 1", n)
 	}
-	select {
-	case <-changes:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the throttle lifting at its resumeAt was never announced")
+	if len(armed) != 1 || armed[0] != 20*time.Millisecond {
+		t.Fatalf("armed lifts = %v, want one at resumeAt", armed)
+	}
+	if got := d.Ceiling(3); got != 1 {
+		t.Fatalf("before the lift: ceiling = %d, want 1", got)
+	}
+	now = resumeAt
+	fire()
+	if n := count(); n != 1 {
+		t.Fatalf("the lift at resumeAt announced %d changes, want 1", n)
 	}
 	if got := d.Ceiling(3); got != 3 {
 		t.Fatalf("after the announced lift: ceiling = %d, want 3", got)
 	}
+
+	// A throttle whose resumeAt has passed already is announced as the
+	// change it is, and arms no lift.
+	past := now.Add(-time.Second)
+	d.Set(throttleAt(2, &past), true)
+	if n := count(); n != 1 {
+		t.Fatalf("a throttle already lifted announced %d changes, want 1", n)
+	}
+	if len(armed) != 1 {
+		t.Fatalf("armed a lift for a resumeAt in the past: %v", armed)
+	}
+	if got := d.Ceiling(3); got != 3 {
+		t.Fatalf("a throttle already lifted: ceiling = %d, want 3", got)
+	}
 }
+
+type fakeLiftTimer struct{}
+
+func (fakeLiftTimer) Stop() bool { return true }
 
 // The autonomous scheduler holds its own dispatch to the throttle, and never
 // work it hands to the extension, which caps that work itself (#2352). A
@@ -185,5 +222,57 @@ func TestScheduler_ThrottleHoldsDispatch(t *testing.T) {
 	d.Set(nil, true)
 	if s.throttleHoldsDispatch() {
 		t.Fatal("cleared: dispatch held")
+	}
+}
+
+// How many pipelines the throttle lets start (#2352): everything asked for
+// without one, what its cap leaves above the running ones with one, and
+// nothing at or above the cap.
+func TestScheduler_ThrottleRoom(t *testing.T) {
+	s := &Scheduler{repoRunning: map[string]int{"o/a": 1}}
+	if got := s.throttleRoom(3); got != 3 {
+		t.Fatalf("no throttle: room = %d, want 3", got)
+	}
+	if s.followsDispatchThrottle() {
+		t.Fatal("follows a throttle before one was set")
+	}
+	d := NewDispatchThrottle()
+	s.SetDispatchThrottle(d)
+	if !s.followsDispatchThrottle() {
+		t.Fatal("does not follow the throttle it was given")
+	}
+	if got := s.throttleRoom(3); got != 3 {
+		t.Fatalf("no throttle in force: room = %d, want 3", got)
+	}
+	d.Set(throttleAt(2, nil), true)
+	if got := s.throttleRoom(3); got != 1 {
+		t.Fatalf("cap 2 with 1 running: room = %d, want 1", got)
+	}
+	s.repoRunning["o/b"] = 2
+	if got := s.throttleRoom(3); got != 0 {
+		t.Fatalf("cap 2 with 3 running: room = %d, want 0", got)
+	}
+	d.Set(throttleAt(10, nil), true)
+	if got := s.throttleRoom(3); got != 3 {
+		t.Fatalf("cap above the running and wanted: room = %d, want 3", got)
+	}
+}
+
+// A wave's sub-issues wait while the throttle holds dispatch, and the wait
+// ends with the context (#2352).
+func TestScheduler_WaitForThrottleRoom(t *testing.T) {
+	s := &Scheduler{repoRunning: map[string]int{"o/a": 1}}
+	d := NewDispatchThrottle()
+	s.SetDispatchThrottle(d)
+	d.Set(throttleAt(1, nil), true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := s.waitForThrottleRoom(ctx, 2); got != 0 {
+		t.Fatalf("held, context ended: room = %d, want 0", got)
+	}
+	d.Set(throttleAt(2, nil), true)
+	if got := s.waitForThrottleRoom(context.Background(), 2); got != 1 {
+		t.Fatalf("cap 2 with 1 running: room = %d, want 1", got)
 	}
 }

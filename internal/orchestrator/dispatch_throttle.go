@@ -22,17 +22,27 @@ import (
 //
 // Safe for concurrent use.
 type DispatchThrottle struct {
-	mu        sync.Mutex
-	throttle  *platform.WorkspaceThrottle
-	known     bool
-	now       func() time.Time
-	liftTimer *time.Timer
+	mu       sync.Mutex
+	throttle *platform.WorkspaceThrottle
+	known    bool
+	now      func() time.Time
+	// afterFunc arms the lift at resumeAt: time.AfterFunc, but in tests.
+	afterFunc func(time.Duration, func()) liftTimer
+	liftTimer liftTimer
 	listeners []func()
+	// changed is closed at the next announced change; see Changed.
+	changed chan struct{}
 }
+
+// liftTimer is the timer that announces the throttle lifting at its resumeAt.
+type liftTimer interface{ Stop() bool }
 
 // NewDispatchThrottle returns a throttle that caps nothing until Set.
 func NewDispatchThrottle() *DispatchThrottle {
-	return &DispatchThrottle{now: time.Now}
+	return &DispatchThrottle{
+		now:       time.Now,
+		afterFunc: func(d time.Duration, f func()) liftTimer { return time.AfterFunc(d, f) },
+	}
 }
 
 // Set applies a throttle, or clears it with nil. known is false when the
@@ -53,9 +63,11 @@ func (d *DispatchThrottle) Set(throttle *platform.WorkspaceThrottle, known bool)
 		d.liftTimer.Stop()
 		d.liftTimer = nil
 	}
+	// A resumeAt already past arms nothing: the throttle is not in force, and
+	// this Set announces that as its change.
 	if throttle != nil && throttle.ResumeAt != nil {
 		if wait := throttle.ResumeAt.Sub(d.now()); wait > 0 {
-			d.liftTimer = time.AfterFunc(wait, d.notify)
+			d.liftTimer = d.afterFunc(wait, d.notify)
 		}
 	}
 	d.mu.Unlock()
@@ -97,9 +109,24 @@ func (d *DispatchThrottle) OnChange(fn func()) {
 	d.listeners = append(d.listeners, fn)
 }
 
+// Changed returns a channel closed at the next change, the lift at resumeAt
+// included, so a dispatcher waiting for room looks again at once.
+func (d *DispatchThrottle) Changed() <-chan struct{} {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.changed == nil {
+		d.changed = make(chan struct{})
+	}
+	return d.changed
+}
+
 func (d *DispatchThrottle) notify() {
 	d.mu.Lock()
 	listeners := append([]func(){}, d.listeners...)
+	if d.changed != nil {
+		close(d.changed)
+		d.changed = nil
+	}
 	d.mu.Unlock()
 	for _, fn := range listeners {
 		fn()
