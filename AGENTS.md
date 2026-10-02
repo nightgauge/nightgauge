@@ -146,6 +146,12 @@ belong in `nightgauge-internal`. The publication guard scans files, not issue
 or epic bodies, so keep that material out of those too. If classification is
 uncertain, keep the work private until the boundary is resolved.
 
+A history rewrite does not redact this repository: anything sensitive ever
+pushed here, or to any fork of it, is disclosed. Record an exposure privately,
+rotate credentials, treat other material as published, and verify a cleanup by
+its effect, not its execution. See
+[docs/PUBLIC_CORE_BOUNDARY.md](docs/PUBLIC_CORE_BOUNDARY.md#a-history-rewrite-does-not-redact).
+
 Do not manually lower `issue_references.tree_baseline` when the publication
 checker says a count fell because the issue ceiling moved. Keep `origin/main`
 fetched so the checker can derive the current ceiling.

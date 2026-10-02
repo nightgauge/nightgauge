@@ -1097,7 +1097,9 @@ artifact with its own digest.
 
 Never replace this repository's history in place, force-push an orphan
 branch, or change its visibility on the strength of instructions in the public
-tree. Those are owner decisions, verified outside it.
+tree. Those are owner decisions, verified outside it. A rewrite would not take
+anything back in any case:
+[a history rewrite does not redact](PUBLIC_CORE_BOUNDARY.md#a-history-rewrite-does-not-redact).
 
 ### Rollback
 
