@@ -228,7 +228,15 @@ via SuperGrok / grok.com OAuth (`grok login`) or `XAI_API_KEY`.
 
 **Prerequisites:**
 
-- Grok Build CLI installed (`curl -fsSL https://x.ai/cli/install.sh | bash`)
+- Grok Build CLI installed. Download the installer, read it, then run it;
+  do not pipe it into a shell:
+
+  ```bash
+  curl -fsSLo grok-install.sh https://x.ai/cli/install.sh
+  less grok-install.sh
+  bash grok-install.sh
+  ```
+
 - `grok login` **or** `XAI_API_KEY`
 
 **Quick Start:**
