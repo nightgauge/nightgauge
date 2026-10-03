@@ -36,6 +36,16 @@ const REPAIR_COMMIT_BODY =
 const GIT_TIMEOUT_MS = 30_000;
 const PUSH_TIMEOUT_MS = 120_000;
 
+/**
+ * The bound on one git call of {@link SteeringGitRunner}'s default. A push runs
+ * the remote repository's pre-push hook first, and a hook may scan what it is
+ * about to send (#2365), so a push gets the Go guard's two minutes, not the
+ * 30 seconds of every other call.
+ */
+export function gitTimeoutMs(args: readonly string[]): number {
+  return args[0] === "push" ? PUSH_TIMEOUT_MS : GIT_TIMEOUT_MS;
+}
+
 /** Either marker alone is a leak: a half-block is still generated content. */
 export function containsManagedSteering(content: string): boolean {
   return content.includes(CODEX_MANAGED_BEGIN) || content.includes(CODEX_MANAGED_END);
@@ -150,7 +160,7 @@ async function gitAsync(cwd: string, args: string[]): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
       encoding: "utf-8",
-      timeout: GIT_TIMEOUT_MS,
+      timeout: gitTimeoutMs(args),
     });
     return String(stdout);
   } catch {

@@ -2013,7 +2013,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
       // Push to remote so partial work survives for retry (Issue #2338)
       try {
-        await execAsync("git push", { cwd: workDir, timeout: 30_000 });
+        await execAsync("git push", { cwd: workDir, timeout: GIT_PUSH_TIMEOUT_MS });
         this.logger.info("Pushed WIP commit to remote", {
           issueNumber,
           stage,

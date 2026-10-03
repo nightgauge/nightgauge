@@ -114,8 +114,10 @@ changelog, and the release workflow refuses a tag that does not.
   many commits it has, and a refusal says how to rewrite the commits without a
   force-push. A deletion or a release tag on `main` passes at once, and pushes
   to other remotes are untouched. It is a client-side hook, so `--no-verify`
-  skips it. The VS Code orchestrator now gives a `git push` ten minutes rather
-  than 60 seconds, so the hook's scan is not cut short. See
+  skips it. The VS Code orchestrator now gives every `git push` ten minutes
+  rather than 30 or 60 seconds, and the SDK gives its push of a steering
+  repair the two minutes it was meant to have rather than 30 seconds, so the
+  hook's scan is not cut short. See
   [PUBLIC_CORE_BOUNDARY.md § Checked before it is pushed](docs/PUBLIC_CORE_BOUNDARY.md#checked-before-it-is-pushed).
 
 ### Fixed

@@ -34,10 +34,11 @@ and this project adheres to
   running the pipeline could answer first that it had no such run, and the
   platform then restored the run as if the pause had not happened. Only the
   window running the pipeline answers now (#2340).
-- **A pipeline push is no longer killed after 60 seconds.** A repository's
-  pre-push hook may scan what it is about to send, and this repository's
-  publication hook does, which can take longer than that on a busy machine. The
-  orchestrator now gives a push ten minutes (#2365).
+- **A pipeline push is no longer killed after 30 or 60 seconds.** A
+  repository's pre-push hook may scan what it is about to send, and this
+  repository's publication hook does, which can take longer than that on a busy
+  machine. The orchestrator now gives every push ten minutes, the one that
+  saves a run's work when its budget stops it included (#2365).
 - **Pause, resume, cancel, approve and reject from the phone app or the
   dashboard are acknowledged.** Each one used to show as unacknowledged and
   then expired, even when it had been carried out. Pause and resume now work:
