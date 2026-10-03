@@ -317,10 +317,16 @@ latest registration's refusals as `refusedWorkspaceWrites`; and the daemon
 sends the extension a `platform.workspaceWritesRefused` event, which the
 window shows as a warning, once for each set of refusals it has not shown
 yet (it also reads `platform.status` whenever it connects, for a
-registration it missed). Every field the daemon logs or reports is cut to a
-bounded form with only graphic characters, so no line break, line separator
-or bidirectional override in the reply reaches a log line, and the
-platform's own message is never reported. Until someone with that role
+registration it missed). The window's own registration reply carries the
+same list, and the window shows it through the same once-per-set warning;
+its workspace sync status then reads failed, with the refusals as the
+reason, rather than synced, and the window registers again on its next
+activation instead of reusing that registration. Every field the daemon or
+the window logs or shows is cut to a bounded form with only graphic
+characters, so no line break, line separator or bidirectional override in
+the reply reaches a log line, and square brackets show as parentheses, since
+the warning renders markdown link syntax as a link; the platform's own
+message is never reported. Until someone with that role
 registers the workspace, the declared repositories stay unlinked from it and
 a remote trigger for one is refused.
 
@@ -352,8 +358,10 @@ Only the window that holds a run answers a verb for it (#2340). The platform
 sends a command to every connection that shares the agent id, so every window
 on the machine receives the verb, and the first acknowledgement ends it. A
 window holds a run while one of its slots carries the run id, and from the
-moment it accepts the run's trigger until that slot opens, while the issue is
-still queued there or its worktree is being created. The queued item carries
+moment the ack of the run's trigger comes back until that slot opens: while
+the run waits to be queued (a fill can hold the queue for as long as Go takes
+to read the issues' blockers), while it is queued, and while its worktree is
+being created. The queued item carries
 the run id (`remoteRunId` on the queue item), and the slot adopts it from the
 item it dequeues, so a window still holds a queued run after a reload.
 
@@ -374,6 +382,11 @@ run off the queue if no fill has taken its item yet (`queue.removeRemoteRun`,
 which touches no other item), and the dispatch drops a tombstoned item
 wherever it is, waiting for an earlier start or with its worktree being
 created, last in the tick its slot would open, so no slot ever opens for it.
+A cancel that arrives while the trigger's run is still being queued applies
+as well: nothing is queued for it, and a run the enqueue had queued already is
+taken back out. A tombstoned run is never put back in the queue, which
+outlives the in-memory tombstone across a window reload: not when the
+dispatch ceiling drops during the fill, and not when its slot fails to start.
 A run attached to the operator's own item or dispatch is detached instead:
 the operator's work stays queued, or goes on to its slot, as it was before
 the trigger. The tombstone is keyed by the platform run id, so a later trigger
@@ -393,9 +406,13 @@ there), from the moment it is wired, after reading its queue, which after a
 reload can carry runs no queue change announces, and again on every daemon
 reconnect. A window that closes or reloads marks its listing closed, and the
 others still honour it for a minute, so its runs are not refused while it
-comes back; any other listing counts only while its process lives. The first
-window to answer a command claims it (`answers/<command id>`, created
-exclusively). The holder claims the answer before it applies the verb. A
+comes back; any other listing counts only while its process lives. A window
+that left a verb to such a listing looks at it again once the listing lapses,
+and refuses it then when no window lists the run again, rather than leaving
+it to expire. The first window to answer a command claims it
+(`answers/<command id>`, created exclusively, naming the window); a claim
+whose window is gone before it answered is taken over by one window, which
+answers instead. The holder claims the answer before it applies the verb. A
 window that does not hold the run waits two seconds, and refuses only when
 it still does not hold it, no window lists the run, and it claims the answer
 first. So the platform receives one acknowledgement per command, the holder's
@@ -419,12 +436,18 @@ window on a worktree of the clone reads the same snapshots, so the window
 that finds such a snapshot when it activates, with the owner gone, holds the
 run for the platform's verbs only when it claims it first in the remote-run
 ledger (`claims/<run id>.json`; a claim whose window is gone is taken over),
-and lists it there. A `resume` is refused `resume-in-window`: only the
-window's Resume prompt can continue the run, as a new run. A `pause` is
-`already_resolved`. A `cancel` ends the run: the window consumes the paused
-snapshot, so neither its Resume prompt nor a later activation brings the run
-back, gives the claim up, and acknowledges `applied`; a snapshot it cannot
-remove keeps the hold, and the cancel is refused `apply-failed`. Once the
+and lists it there. The window holds every such run before it shows the
+first Resume prompt, so a run waiting behind another prompt is answered too.
+A `resume` is refused `resume-in-window`: only the window's Resume prompt can
+continue the run, as a new run. A `pause` is `already_resolved`. A `cancel`
+ends the run: the window consumes the paused snapshot, so neither its Resume
+prompt nor a later activation brings the run back (Resume on a prompt still
+on screen starts nothing), gives the claim up, and acknowledges `applied`; a
+snapshot it cannot remove keeps the hold, and the cancel is refused
+`apply-failed`. Consuming a snapshot renames it away before removing it: a
+rename has one winner, where two concurrent unlinks of one file can both
+succeed, so a cancel and a Resume, or the Resumes of two windows, never both
+take one snapshot. Once the
 prompt's Resume starts the new run, the window no longer holds the platform
 run: the new run does not report under its run id, so the platform run stays
 paused, and its later verbs are refused `no-active-run`, until a platform
@@ -498,16 +521,23 @@ The Go side follows the same throttle for the work it starts itself (#2352):
 
 - The daemon follows the throttle of the workspace it serves, read by the
   workspace's slug from the same workspace list, while it has a signed-in
-  session (the extension hands it the session). It reads it after every
-  agent registration, on every `throttle` command its agent receives (which
+  session (the extension hands it the session). It reads it when its agent
+  starts, after every agent registration, on every `throttle` command its
+  agent receives (which
   it still relays to the extension, whose window acknowledges it), each time
   its command stream opens, and whenever the session is installed or
   cleared. Reads run one at a time, each bounded to 30 seconds so one that
   never answers holds back no later read, a read asked for during another
   runs again after it, and a read that fails changes nothing. Neither the
   command's payload nor the registration response's agent-wide `throttle` is
-  applied, so a throttle on another workspace never applies. Without a
-  session nothing is followed and the cap is lifted, as in the extension.
+  applied. The read is by slug in the list the platform returns for the
+  account, which is one team's (without a team named, the account's default
+  team), so for an account on several teams the daemon, like the extension,
+  can follow another team's workspace of the same slug, or find none when
+  its workspace belongs to another team; scoping the read to the team the
+  registration used stays open in #2352. Without a session nothing is
+  followed and the cap is lifted, as in the extension. With one, the throttle
+  is followed but unread until a read succeeds.
   Only the extension hands the daemon a session, so a daemon the extension is
   not attached to follows no throttle: the license key it holds cannot read
   the workspace's own throttle yet, and that stays open in #2352.
@@ -527,11 +557,13 @@ The Go side follows the same throttle for the work it starts itself (#2352):
   workspace list refuses, so it asks the daemon serving the same workspace
   (`platform.workspaceThrottle` on the workspace socket) before it starts,
   so its first dispatch already follows the answer, then every 30 seconds. A
-  daemon that cannot be reached changes nothing: a throttle it reported
-  before is kept, until its `resumeAt` or until a daemon reports the
-  workspace's throttle again, and the log says so; a daemon with no signed-in
-  session lifts it. With no daemon serving the workspace, the throttle is not
-  followed.
+  daemon that cannot be reached changes nothing, and neither does one that
+  follows the throttle but has not read it yet (it has just started, or its
+  reads fail; `platform.workspaceThrottle` answers `unread`): a throttle the
+  daemon reported before is kept, until its `resumeAt` or until a daemon
+  reports the workspace's throttle again, and the log says so. A daemon that
+  follows no throttle, with no signed-in session, lifts it. With no daemon
+  serving the workspace, the throttle is not followed.
 
 ## CLI Command Reference
 

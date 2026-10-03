@@ -322,7 +322,7 @@ Displays comprehensive metrics:
   issue yourself before it was triggered, the trigger only joined your queued
   work, so the cancel leaves your work queued. A cancel of a paused run a
   window reload ended removes its paused state, so the Resume prompt does not
-  come back. Another window open on the same repository leaves the command
+  come back, and Resume on a prompt already on screen starts nothing. Another window open on the same repository leaves the command
   alone, and when no window has the run, one of them says so within about two
   seconds. Approve and reject are always answered that no run here waits at an
   approval gate: no local stage holds for one. A command delivered twice is
@@ -332,7 +332,9 @@ Displays comprehensive metrics:
   this machine but leaves the workspace and its repository links alone, so
   triggers for those repositories are refused. The window shows a warning
   naming the workspace and the permission the write needs, once for each new
-  set of refusals.
+  set of refusals, whether this window's registration or the background
+  service's was refused, and the workspace sync status shows the sync as
+  failed with that reason until a registration is refused nothing.
 
 #### Stopping Execution
 

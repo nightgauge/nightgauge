@@ -48,6 +48,17 @@ and this project adheres to
   repositories stay unlinked and triggers for them are refused; the warning
   names the workspace and the permission needed (#2372).
 
+  continues it. Cancelling such a run from there ends it, its Resume prompt
+  no longer comes back, and choosing Resume on a prompt already on screen
+  starts nothing. With several paused runs, each is answered for while the
+  first prompt waits. With several windows on one repository, only one of
+  them answers for it, and only one of them can resume it (#2339).
+- **The window warns you when the platform refused to write your workspace.**
+  When your role on the team cannot create or update the workspace, its
+  repositories stay unlinked and triggers for them are refused; the warning
+  names the workspace and the permission needed, and the workspace sync
+  status shows the sync as failed rather than synced (#2372).
+
 - **A command from the phone app or the dashboard for a run no window has is
   answered again within about two seconds,** instead of waiting five minutes
   to expire. With several windows open, only the one running the pipeline
@@ -60,6 +71,16 @@ and this project adheres to
   starts, and triggering the same issue again runs normally (#2344).
 
   starts, and triggering the same issue again runs normally. Triggering an
+
+  the run is stopping or holding. After a window reload, a command for a run
+  that did not survive it is answered once the reloaded window has had a
+  minute to come back (#2357).
+- **Cancelling a run from the phone app or the dashboard before it starts
+  works.** A run still waiting for a free slot, or whose worktree was being
+  created, refused the cancel as not started. It is now removed and never
+  starts, even when the cancel arrives the moment the run is triggered, and
+  triggering the same issue again runs normally. Triggering an
+
   issue you already queued, even one already starting, follows your queued
   run, and cancelling it from there leaves your run as you queued it
   (#2344).

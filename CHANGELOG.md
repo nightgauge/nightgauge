@@ -21,10 +21,10 @@ changelog, and the release workflow refuses a tag that does not.
   side started itself ran at its configured concurrency while the platform
   held the workspace throttled. The daemon now reads its own workspace's
   throttle by slug from the platform's workspace list while it has a
-  signed-in session: after every agent registration, on every `throttle`
-  command (still relayed to the extension), each time its command stream
-  opens, and when the session changes; never the command's payload or the
-  registration's agent-wide value. The autonomous scheduler holds the runs it
+  signed-in session: when its agent starts, after every agent registration,
+  on every `throttle` command (still relayed to the extension), each time its
+  command stream opens, and when the session changes; never the command's
+  payload or the registration's agent-wide value. The autonomous scheduler holds the runs it
   dispatches without the extension, and `nightgauge pipeline run --auto` its
   loop, to the lower of the configured concurrency and the cap, until the
   throttle is cleared or reaches `resumeAt`; a running pipeline is never
@@ -35,11 +35,13 @@ changelog, and the release workflow refuses a tag that does not.
   headless `nightgauge autonomous run` or `pipeline run --auto`, which holds
   only a license key, follows the throttle through the workspace's daemon
   (`platform.workspaceThrottle` on the socket), asking it once before its
-  first dispatch; when the daemon stops answering, the last throttle it
-  reported is kept, and the log says so and until when. A daemon without a
-  signed-in session, which is any daemon the extension is not attached to,
-  still follows no throttle: the license key cannot read the workspace's own
-  throttle yet (#2352 stays open for it).
+  first dispatch; when the daemon stops answering, or follows the throttle
+  but has not read it yet (it has just started, or its reads fail), the last
+  throttle it reported is kept, and the log says so and until when. A daemon
+  without a signed-in session, which is any daemon the extension is not
+  attached to, still follows no throttle: the license key cannot read the
+  workspace's own throttle yet, and the read, like the extension's, is by
+  slug in one team's workspace list (#2352 stays open for both).
 - **The daemon says which workspace writes its registration was refused**
   (#2372). The platform's `POST /v1/agents/register` reply lists
   `refused_workspace_writes`: the workspace writes skipped because the
@@ -51,9 +53,13 @@ changelog, and the release workflow refuses a tag that does not.
   Each registration now logs one line per refusal, naming the workspace and
   the permission it needs; `platform.status` reports the latest
   registration's refusals; and the extension shows each new set of refusals
-  as a warning. Only bounded, printable fields of the reply are logged or
-  reported (no line break, line separator or bidirectional override, and
-  never the platform's own message).
+  as a warning. The window's own registration reply is read the same way:
+  its refusals are logged and shown through the same warning, and the
+  workspace sync status reads failed, not synced, while writes are refused.
+  Only bounded, printable fields of the reply are logged or shown (no line
+  break, line separator or bidirectional override, square brackets as
+  parentheses so no markdown link reaches the warning, and never the
+  platform's own message).
 - **The platform's workspace throttle caps local dispatch** (#2337). A
   `throttle` command (`set` with `maxConcurrent` and an optional `resumeAt`,
   or `cleared`) was refused as unsupported, so a workspace throttle never
@@ -239,7 +245,11 @@ changelog, and the release workflow refuses a tag that does not.
   as a new run), a `pause` is `already_resolved`, and a `cancel` ends the run
   by consuming its paused snapshot and is `applied`. Every window on a
   worktree of the clone finds the same snapshot, so only the first to claim
-  the run in the machine's ledger holds it. Continuing the run from a
+  the run in the machine's ledger holds it. The window holds every such run
+  before it shows the first Resume prompt, and a Resume chosen after a
+  platform cancel starts nothing: consuming a snapshot renames it away first,
+  since two concurrent unlinks of one file can both succeed, so a cancel and
+  a Resume, or the Resumes of two windows, never both take one snapshot. Continuing the run from a
   platform resume waits for ADR-017's consume-on-claim step; #2339 stays open
   for it.
 
@@ -263,7 +273,11 @@ changelog, and the release workflow refuses a tag that does not.
   its queue carries, and paused runs a reload ended there) from the moment it
   is wired, and the first to answer a command claims it. A window that closes
   or reloads keeps its listing for a minute, so its runs are not refused while
-  it comes back. The holder claims the answer before it applies the verb; a
+  it comes back; a verb only such a listing held is looked at again when the
+  minute is over, and a claim left by a window that closed before it
+  answered is taken over. A window holds a triggered run from the moment its
+  ack comes back, before the run is queued, so a verb for it is answered
+  even while a fill holds the queue. The holder claims the answer before it applies the verb; a
   window without the run waits two seconds and refuses `no-active-run` only
   when it still does not hold the run, no window lists it, and it claims the
   answer first. The platform gets one acknowledgement per command, the
@@ -275,8 +289,11 @@ changelog, and the release workflow refuses a tag that does not.
   `not-started`, and the requester had to wait for the run to start and cancel
   it again. The cancel now tombstones the platform run id and is acknowledged
   `applied`; the queued item is removed, or, when a fill already took it, the
-  dispatch drops it wherever it is, so no slot ever opens for it. A later
-  trigger of the same issue runs under its own run id. The queued item now
+  dispatch drops it wherever it is, so no slot ever opens for it. A cancel
+  that arrives while the trigger's run waits for the queue, or is being
+  queued, applies too, and a cancelled run is never put back in the queue (a
+  lowered dispatch ceiling, a failed start), which a reload would otherwise
+  start. A later trigger of the same issue runs under its own run id. The queued item now
   carries the platform run id and the slot adopts it from there, so a run id
   can no longer be adopted by a later dispatch of the same issue number from
   a local re-queue or another repository, a re-queued remote run keeps its
