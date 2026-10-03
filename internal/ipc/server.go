@@ -4337,15 +4337,33 @@ func (s *Server) registerMethods() {
 	}
 
 	// queue.dropProcessing is what a window reload or close does to the queue
-	// (#2396): the items its dispatches took go with their runs, and every
-	// waiting item stays for the next window (Scheduler.QueueDropProcessing).
-	// queue.clear, the operator's Stop, drops those too.
-	//ipc:method queueDropProcessing params:none result:QueueDropProcessingResult
-	s.methods["queue.dropProcessing"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
+	// (#2396): the items its started dispatches took go with their runs, every
+	// waiting item stays for the next window, and so does each dispatch the
+	// window had not begun to start (Scheduler.QueueDropProcessing). The daemon
+	// dispatches nothing more afterwards. queue.clear, the operator's Stop,
+	// drops everything.
+	//ipc:method queueDropProcessing params:QueueDropProcessingParams result:QueueDropProcessingResult
+	s.methods["queue.dropProcessing"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p QueueDropProcessingParams
+		if len(params) > 0 && string(params) != "null" {
+			if err := json.Unmarshal(params, &p); err != nil {
+				return nil, fmt.Errorf("invalid params: %w", err)
+			}
+		}
 		if s.scheduler == nil {
 			return nil, errors.New(errSchedulerNotConfigured)
 		}
-		return QueueDropProcessingResult{Dropped: s.scheduler.QueueDropProcessing()}, nil
+		handBack := make([]orchestrator.QueueHandBack, 0, len(p.HandBack))
+		for _, h := range p.HandBack {
+			handBack = append(handBack, orchestrator.QueueHandBack{
+				Repo:              h.Repo,
+				IssueNumber:       h.IssueNumber,
+				RemoteRunID:       h.RemoteRunID,
+				RemoteRunAttached: h.RemoteRunAttached,
+			})
+		}
+		dropped, kept := s.scheduler.QueueDropProcessing(handBack, p.Unanswered)
+		return QueueDropProcessingResult{Dropped: dropped, Kept: kept}, nil
 	}
 
 	//ipc:method queueDequeueIndependent params:QueueDequeueIndependentParams result:IpcQueueItem[]
@@ -4361,7 +4379,7 @@ func (s *Server) registerMethods() {
 		for _, r := range p.RunningItems {
 			running = append(running, orchestrator.RunningItem{Repo: r.Repo, Number: r.Number})
 		}
-		items := s.scheduler.DequeueIndependent(ctx, p.MaxSlots, running)
+		items := s.scheduler.DequeueIndependentFor(ctx, p.Dispatch, p.MaxSlots, running)
 		if items == nil {
 			items = []orchestrator.QueueItem{}
 		}

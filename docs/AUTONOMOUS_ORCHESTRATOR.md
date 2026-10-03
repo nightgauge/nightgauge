@@ -1417,7 +1417,8 @@ What discards running slots is the **window reload**: the extension's
 rebuild during a busy fleet kills every in-flight run, and each one restarts
 from scratch and re-spends its planning. The reload keeps the queue (#2396):
 it drops only the items of the runs it ends, and every waiting issue,
-platform-triggered runs included, is still queued when the window comes back.
+platform-triggered runs and issues it had dequeued but not begun to start
+included, is still queued when the window comes back.
 Stop All, not a reload, is what clears the queue.
 
 The gap this closes was never a missing verb — it was that nothing said **when

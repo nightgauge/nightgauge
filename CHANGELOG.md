@@ -193,10 +193,12 @@ changelog, and the release workflow refuses a tag that does not.
   (#2396). `deactivate` ended the window's runs through the same path as Stop
   All, which clears the queue, so every waiting issue, runs triggered from the
   dashboard included, was gone when the window came back. A reload or close
-  now drops only the queue items its ending runs had taken (the new
-  `queue.dropProcessing`) and keeps every waiting item for the next window. A
-  dequeue still reading blockers when the drop lands dequeues nothing, so no
-  item is left marked as taken by a window that is gone. Stop All still
+  now removes only the queue items of the runs it ends (the new
+  `queue.dropProcessing`) and keeps every waiting item for the next window,
+  with each issue it had dequeued but not begun to start, still serving its
+  platform run. The window's daemon then dispatches nothing more, so neither
+  a dequeue still under way nor one a stopping pipeline sends afterwards
+  leaves an item marked as taken by a window that is gone. Stop All still
   clears the queue.
 - **A pipeline worktree on a branch older than the publication hook no longer
   turns the hook off for the whole clone** (#2389). The pipeline's

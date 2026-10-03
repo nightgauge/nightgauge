@@ -9,7 +9,11 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
 import { IssueQueueService } from "../../src/services/IssueQueueService";
+
+/** Each dequeue names its dispatch, so a closing window can hand it back (#2396). */
+const DISPATCH = expect.stringMatching(/^dequeue-\d+$/);
 
 // --- Mock IPC client ---
 
@@ -115,7 +119,7 @@ describe("IssueQueueService.dequeueIndependent", () => {
     const result = await service.dequeueIndependent(2, []);
 
     expect(result).toEqual([]);
-    expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(2, []);
+    expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(2, [], DISPATCH);
   });
 
   it("dequeues up to maxSlots independent items", async () => {
@@ -129,7 +133,7 @@ describe("IssueQueueService.dequeueIndependent", () => {
     expect(result).toHaveLength(2);
     expect(result[0].issueNumber).toBe(1);
     expect(result[1].issueNumber).toBe(2);
-    expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(2, []);
+    expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(2, [], DISPATCH);
   });
 
   it("passes runningItems (repo + number) to IPC for blocking + per-repo cap check", async () => {
@@ -144,7 +148,7 @@ describe("IssueQueueService.dequeueIndependent", () => {
     const running = [{ repo: "o/A", number: 100 }];
     const result = await service.dequeueIndependent(2, running);
 
-    expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(2, running);
+    expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(2, running, DISPATCH);
     expect(result).toHaveLength(2);
   });
 
@@ -158,7 +162,7 @@ describe("IssueQueueService.dequeueIndependent", () => {
     ];
     await service.dequeueIndependent(5, running);
 
-    expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(5, running);
+    expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(5, running, DISPATCH);
   });
 
   it("returns fewer than maxSlots when Go returns fewer", async () => {

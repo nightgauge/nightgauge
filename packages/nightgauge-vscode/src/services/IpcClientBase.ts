@@ -940,10 +940,25 @@ export interface QueueRemoveRemoteRunResult {
 
 /**
  * Result of queue.dropProcessing (#2396): how many dispatched ("processing")
- * items a window reload or close removed. Every waiting item stays.
+ * items a window reload or close removed with the runs that end, and how many
+ * it put back to waiting. Every waiting item stays.
  */
 export interface QueueDropProcessingResult {
   dropped: number;
+  kept: number;
+}
+
+/**
+ * A dispatch queue.dropProcessing puts back to waiting (#2396): one the
+ * window dequeued and had not begun to start, by repository (the dequeued
+ * item's `repo`, "" when it named none) and issue number, with the platform
+ * run it serves. No `remoteRunId` serves none.
+ */
+export interface QueueHandBackRef {
+  repo: string;
+  issueNumber: number;
+  remoteRunId?: string;
+  remoteRunAttached?: boolean;
 }
 
 export interface QueueValidatePinResult {

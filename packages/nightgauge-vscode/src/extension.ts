@@ -992,11 +992,13 @@ export function deactivate(): void {
   // Stop unified pipeline manager (handles all worktree-based slots, #1831).
   // A reload or close ends this window's runs and nothing more (#2396): the
   // queue outlives the window, so every waiting item, platform runs included,
-  // stays for the next one, and only the items the ending dispatches took are
-  // dropped. Stop All, not a reload, is what clears the queue.
-  if (concurrentPipelineManager?.hasDispatchInFlight) {
-    concurrentPipelineManager.abortAll({ keepQueued: true }).catch(() => {});
-  }
+  // stays for the next one, with each dispatch not yet begun, and only the
+  // items of the runs that end are dropped. Stop All, not a reload, is what
+  // clears the queue. Always, not only with a dispatch in flight: the queue
+  // request also releases the items the main orchestrator took, and ends
+  // dispatch in the daemon before that orchestrator's stop below can start
+  // its next queued issue.
+  concurrentPipelineManager?.abortAll({ keepQueued: true }).catch(() => {});
 
   // Also stop main orchestrator if running (batch processing, resume)
   if (headlessOrchestrator?.getIsRunning()) {

@@ -374,10 +374,11 @@ to read the issues' blockers), while it is queued, and while its worktree is
 being created. The queued item carries
 the run id (`remoteRunId` on the queue item), and the slot adopts it from the
 item it dequeues, so a window still holds a queued run after a reload. A
-reload or close with a pipeline running keeps the queue too (#2396): it drops
-only the items its dispatches took (`queue.dropProcessing`), and a dequeue
-still reading blockers when that lands dequeues nothing. Stop All clears the
-queue.
+reload or close keeps the queue too (#2396): `queue.dropProcessing` removes
+only the items of the runs that end, puts each dispatch the window had not
+begun to start back to waiting (named in `handBack`, or by the `dispatch`
+token of a `queue.dequeueIndependent` whose answer the window never read),
+and ends dispatch in that daemon. Stop All clears the queue.
 
 A trigger for an issue the operator already queued here serves that work
 instead of queueing the issue twice (#2344). The window places the run in one

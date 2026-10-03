@@ -23,7 +23,8 @@ const mockQueueList = vi.fn().mockResolvedValue({
 const mockQueueRemove = vi.fn().mockResolvedValue(undefined);
 const mockQueueRemoveRemoteRun = vi.fn().mockResolvedValue({ removed: true });
 const mockQueueClear = vi.fn().mockResolvedValue(undefined);
-const mockQueueDropProcessing = vi.fn().mockResolvedValue({ dropped: 2 });
+const mockQueueDropProcessing = vi.fn().mockResolvedValue({ dropped: 2, kept: 1 });
+let mockIpcConnected = true;
 const mockQueueDequeueIndependent = vi.fn().mockResolvedValue([]);
 const mockQueueEnqueueEpic = vi.fn().mockResolvedValue(undefined);
 
@@ -48,6 +49,9 @@ vi.mock("../../src/services/IpcClient", () => ({
       queueDequeueIndependent: mockQueueDequeueIndependent,
       queueEnqueueEpic: mockQueueEnqueueEpic,
       on: mockOn,
+      get isConnected() {
+        return mockIpcConnected;
+      },
     }),
   },
 }));
@@ -303,10 +307,14 @@ describe("IssueQueueService (IPC delegation)", () => {
         { repo: "acme/repo", number: 20 },
       ]);
 
-      expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(2, [
-        { repo: "acme/repo", number: 10 },
-        { repo: "acme/repo", number: 20 },
-      ]);
+      expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(
+        2,
+        [
+          { repo: "acme/repo", number: 10 },
+          { repo: "acme/repo", number: 20 },
+        ],
+        expect.stringMatching(/^dequeue-\d+$/)
+      );
       expect(items).toHaveLength(1);
       expect(items[0].issueNumber).toBe(42);
       expect(items[0].title).toBe("Dequeued item");
@@ -431,7 +439,11 @@ describe("IssueQueueService (IPC delegation)", () => {
 
       const item = await service.dequeue();
 
-      expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(1, []);
+      expect(mockQueueDequeueIndependent).toHaveBeenCalledWith(
+        1,
+        [],
+        expect.stringMatching(/^dequeue-\d+$/)
+      );
       expect(item).not.toBeNull();
       expect(item!.issueNumber).toBe(42);
     });
@@ -493,19 +505,47 @@ describe("IssueQueueService (IPC delegation)", () => {
   });
 
   describe("dropProcessing()", () => {
-    // #2396: a window reload drops only the dispatched items and keeps every
-    // waiting one, so it neither clears the queue nor tells anyone it did.
-    it("drops the dispatched items over IPC, never clears, and fires no callback", async () => {
+    // #2396: a window reload removes the items of the runs that end, hands
+    // the dispatches not begun back to waiting, and keeps every waiting item,
+    // so it neither clears the queue nor tells anyone it did.
+    afterEach(() => {
+      mockIpcConnected = true;
+    });
+
+    it("sends the hand-back over IPC, never clears, and fires no callback", async () => {
       const onQueueCleared = vi.fn();
       const onItemRemoved = vi.fn();
       service.setCallbacks({ onQueueCleared, onItemRemoved });
+      const handBack = [{ repo: "o/r", issueNumber: 7, remoteRunId: "run-7" }];
 
-      expect(await service.dropProcessing()).toBe(2);
+      expect(await service.dropProcessing(handBack)).toEqual({ dropped: 2, kept: 1 });
 
-      expect(mockQueueDropProcessing).toHaveBeenCalledTimes(1);
+      expect(mockQueueDropProcessing).toHaveBeenCalledWith(handBack, []);
       expect(mockQueueClear).not.toHaveBeenCalled();
       expect(onQueueCleared).not.toHaveBeenCalled();
       expect(onItemRemoved).not.toHaveBeenCalled();
+    });
+
+    it("names the dequeue whose answer has not arrived, and only that one", async () => {
+      let answer!: (items: unknown[]) => void;
+      mockQueueDequeueIndependent.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+      const dequeue = service.dequeueIndependent(2, []);
+      const dispatch = mockQueueDequeueIndependent.mock.calls.at(-1)?.[2];
+      expect(dispatch).toMatch(/^dequeue-\d+$/);
+
+      await service.dropProcessing();
+      expect(mockQueueDropProcessing).toHaveBeenLastCalledWith([], [dispatch]);
+
+      answer([]);
+      await dequeue;
+      await service.dropProcessing();
+      expect(mockQueueDropProcessing).toHaveBeenLastCalledWith([], []);
+    });
+
+    it("never starts a daemon on the way out", async () => {
+      mockIpcConnected = false;
+      expect(await service.dropProcessing()).toEqual({ dropped: 0, kept: 0 });
+      expect(mockQueueDropProcessing).not.toHaveBeenCalled();
     });
   });
 
