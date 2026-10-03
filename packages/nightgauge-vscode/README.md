@@ -295,12 +295,13 @@ telemetry, and more) is best browsed through
 
 ## Cloud features (optional)
 
-The pipeline runs entirely on your machine. Cloud features are off by
-default, and the local pipeline needs neither of the two switches below.
+Cloud features are optional and off by default. The local pipeline needs
+neither of the two switches below.
 
 - **`"nightgauge.cloud.enabled": true`** in VS Code settings shows sign-in and
-  the account and team commands, in the Command Palette and in the sidebar. It
-  changes what the extension shows, not what it sends.
+  the account and team commands in the Command Palette, and the account
+  sections in the sidebar. It changes what the extension shows, not what it
+  sends.
 - **`platform.enabled: true`** in `.nightgauge/config.yaml` decides whether the
   extension and its bundled binary talk to the hosted service on their own:
   restoring your session, registering this machine and sending the telemetry
