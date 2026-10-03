@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -34,14 +35,18 @@ func writeFakeOpenCode(t *testing.T, body string) string {
 	return path
 }
 
-// testFold is a fold of bin with a short helper timeout, run in dir.
+// testFold is a fold of bin, run in dir. Its helper timeout and budget bound
+// a hang only. A fake helper answers at once, so no pass waits on either, and
+// no load reaches them: 5 s and 30 s did, when the 64-session cap's 67
+// sequential helpers took over 0.45 s each on a loaded machine (#2366). A test
+// of the timeout path sets its own.
 func testFold(bin, dir string, env ...string) openCodeFold {
 	return openCodeFold{
 		bin:            bin,
 		env:            append([]string{"PATH=/usr/bin:/bin"}, env...),
 		dir:            dir,
-		timeout:        5 * time.Second,
-		budget:         30 * time.Second,
+		timeout:        time.Minute,
+		budget:         2 * time.Hour,
 		maxDescendants: openCodeMaxDescendants,
 	}
 }
@@ -286,53 +291,195 @@ esac
 	}
 }
 
+// eventDeadline is a context whose deadline passes when the test calls pass,
+// not when a clock says so. Its Err is context.DeadlineExceeded, as a timer's
+// would be, so a context derived from it, such as a helper's own timeout,
+// reads exactly as that helper timing out (#2366).
+type eventDeadline struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newEventDeadline() *eventDeadline {
+	return &eventDeadline{Context: context.Background(), done: make(chan struct{})}
+}
+
+func (d *eventDeadline) Done() <-chan struct{} { return d.done }
+
+func (d *eventDeadline) Err() error {
+	select {
+	case <-d.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (d *eventDeadline) pass() { d.once.Do(func() { close(d.done) }) }
+
 // TestOpenCodeFoldBoundedProcesses: every opencode process the fold starts
-// runs in its own process group under a timeout, so one that hangs is killed
-// with everything it started, and the stage still completes with its usage
-// marked partial; and a stage with more subagent sessions than the cap folds
-// exactly the cap.
+// runs in its own process group under a timeout of its own, so one that hangs
+// is killed with everything it started, and the stage still completes with
+// its usage marked partial; and a stage with more subagent sessions than the
+// cap folds exactly the cap.
 func TestOpenCodeFoldBoundedProcesses(t *testing.T) {
 	const parent = "ses_fixture0000000000000000001"
 
-	t.Run("a helper that sleeps 60s is killed at the timeout", func(t *testing.T) {
+	// No clock decides which helper times out (#2366). The timeout bounds each
+	// helper, so a 300 ms one also bounded the fast --version, export and db
+	// calls ahead of the slow one; on a loaded machine one of them outlived
+	// it, the fold stopped there with a "timed out" marker for the wrong
+	// helper, and the sleeper never started. Here every helper may take an
+	// hour, and the deadline passes when the slow export has started its
+	// sleeper, the moment a real timeout would find it hanging.
+	t.Run("a hung helper is killed with its group when its deadline passes", func(t *testing.T) {
 		dir := t.TempDir()
 		pidFile := filepath.Join(dir, "sleeper.pid")
-		bin := writeFakeOpenCode(t, fmt.Sprintf(`case "$1" in
+		calls := filepath.Join(dir, "calls.log")
+		bin := writeFakeOpenCode(t, fmt.Sprintf(`echo "$1 $2" >> %[3]q
+case "$1" in
 --version) echo 1.18.30 ;;
 db) echo '[{"id":"ses_slowChild","parent_id":"%[1]s"}]' ;;
 export)
   [ "$2" = %[1]s ] && { echo '{"messages":[]}'; exit 0; }
-  sleep 60 &
+  sleep 600 &
   echo $! > %[2]q
   wait ;;
 esac
-`, parent, pidFile))
+`, parent, pidFile, calls))
 		fold := testFold(bin, dir)
-		fold.timeout = 300 * time.Millisecond
+		fold.timeout = time.Hour
+		fold.budget = 2 * time.Hour
+		deadline := newEventDeadline()
 		stream := &OpenCodeStream{SessionID: parent}
-		start := time.Now()
-		res := fold.run(context.Background(), stream, "lmstudio/qwen/qwen3.8-27b")
-		if elapsed := time.Since(start); elapsed > 10*time.Second {
-			t.Errorf("the fold took %s; the helper was not killed at its timeout", elapsed)
+		folded := make(chan openCodeFoldResult, 1)
+		go func() { folded <- fold.run(deadline, stream, "lmstudio/qwen/qwen3.8-27b") }()
+
+		// Wait for the events, not for a time. Each limit below bounds only a
+		// failure (a sleeper that never starts, a helper never killed), so it
+		// is sized far above any machine's load, and below the sleeper's own
+		// 600 s, so a group left alive cannot pass by exiting on its own.
+		const failAfter = 2 * time.Minute
+		sleeper := 0
+		var res openCodeFoldResult
+		limit := time.NewTimer(failAfter)
+		defer limit.Stop()
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+	wait:
+		for {
+			select {
+			case res = <-folded:
+				break wait
+			case <-tick.C:
+				if sleeper != 0 {
+					continue
+				}
+				if raw, err := os.ReadFile(pidFile); err == nil {
+					if pid, err := strconv.Atoi(strings.TrimSpace(string(raw))); err == nil && pid > 0 {
+						sleeper = pid
+						deadline.pass()
+						limit.Reset(failAfter)
+					}
+				}
+			case <-limit.C:
+				deadline.pass()
+				if sleeper != 0 {
+					_ = killPID(sleeper)
+				}
+				t.Fatalf("the fold did not return within %s (sleeper pid %d; 0 = never started)", failAfter, sleeper)
+			}
+		}
+
+		if sleeper == 0 {
+			t.Fatal("the fold returned before the slow export started its sleeper")
+		}
+		if !waitGone(sleeper, failAfter) {
+			_ = killPID(sleeper)
+			t.Errorf("the sleeper %d the hung helper started is still running: the helper's group was not killed", sleeper)
 		}
 		if !res.partial {
 			t.Error("usage is not marked partial after a helper timed out")
 		}
-		markers := stream.DriftMarkers()
-		if len(markers) != 1 || !strings.Contains(markers[0], "usage partial") || !strings.Contains(markers[0], "timed out") {
-			t.Errorf("markers = %q, want one usage-partial marker naming the timeout", markers)
+		// The helper that timed out is the slow child's export, and no other:
+		// the stage's own export and the db listing each have a marker of
+		// their own, and the version read one more.
+		const want = "usage partial: exporting a subagent session failed: opencode export timed out and was killed"
+		if markers := stream.DriftMarkers(); len(markers) != 1 || !strings.Contains(markers[0], want) {
+			t.Errorf("markers = %q, want exactly one saying %q", markers, want)
 		}
-		raw, err := os.ReadFile(pidFile)
-		if err != nil {
-			t.Fatalf("the slow export never started its sleeper: %v", err)
-		}
-		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+		raw, err := os.ReadFile(calls)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !waitGone(pid, 5*time.Second) {
-			_ = killPID(pid)
-			t.Errorf("the sleeper %d the timed-out helper started is still running: the helper's group was not killed", pid)
+		lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
+		if len(lines) != 4 || lines[3] != "export ses_slowChild" {
+			t.Errorf("the fake ran %q; want --version, the stage's export and db, then the slow child's export last", lines)
+		}
+	})
+
+	// The case above passes its deadline through the fold's context, so it
+	// would still pass if a helper lost its own timer. Here nothing else can
+	// end one: every helper hangs, the parent context has no deadline and the
+	// budget is two hours, so each helper ends only when its own 100 ms
+	// timeout fires, at any load. The fold reads the version, exports the
+	// stage's session and lists its children, so three helpers time out.
+	t.Run("every helper is killed at its own timeout", func(t *testing.T) {
+		dir := t.TempDir()
+		pids := filepath.Join(dir, "sleepers.pid")
+		bin := writeFakeOpenCode(t, fmt.Sprintf(`sleep 600 &
+echo $! >> %q
+wait
+`, pids))
+		fold := testFold(bin, dir)
+		fold.timeout = 100 * time.Millisecond
+		fold.budget = 2 * time.Hour
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		stream := &OpenCodeStream{SessionID: parent}
+		folded := make(chan openCodeFoldResult, 1)
+		go func() { folded <- fold.run(ctx, stream, "lmstudio/qwen/qwen3.8-27b") }()
+
+		// Bounds a failure only: a helper whose timer never fires hangs for
+		// the sleeper's 600 s. The test then cancels the fold and kills what
+		// it started, and fails here instead of at go test's own timeout.
+		const failAfter = 2 * time.Minute
+		limit := time.NewTimer(failAfter)
+		defer limit.Stop()
+		var res openCodeFoldResult
+		select {
+		case res = <-folded:
+		case <-limit.C:
+			cancel()
+			killSleepers(t, pids)
+			t.Fatalf("the fold did not return within %s: a helper was not killed at its own timeout", failAfter)
+		}
+
+		if !res.partial {
+			t.Error("usage is not marked partial after the subagent listing timed out")
+		}
+		const killed = " timed out and was killed after 100ms"
+		want := []string{
+			"opencode --version: opencode --version" + killed,
+			"the served model is the dispatched model: exporting the session failed: opencode export" + killed,
+			"usage partial: listing the subagent sessions failed: opencode db" + killed,
+		}
+		markers := stream.DriftMarkers()
+		if len(markers) != len(want) {
+			t.Errorf("markers = %q, want one per helper: %q", markers, want)
+		} else {
+			for i, w := range want {
+				if !strings.HasSuffix(markers[i], " "+w) {
+					t.Errorf("marker %d = %q, want it to end %q", i, markers[i], w)
+				}
+			}
+		}
+		for _, pid := range sleeperPIDs(t, pids) {
+			if !waitGone(pid, failAfter) {
+				_ = killPID(pid)
+				t.Errorf("sleeper %d outlived its helper: the helper's group was not killed", pid)
+			}
 		}
 	})
 
@@ -385,6 +532,35 @@ func killPID(pid int) error {
 		return err
 	}
 	return p.Kill()
+}
+
+// sleeperPIDs reads the pids a fake helper appended to file, one per line. A
+// helper killed before it wrote its line added none, which is no failure: a
+// sleeper it started is in its group either way.
+func sleeperPIDs(t *testing.T, file string) []int {
+	t.Helper()
+	raw, err := os.ReadFile(file)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var pids []int
+	for _, field := range strings.Fields(string(raw)) {
+		if pid, err := strconv.Atoi(field); err == nil && pid > 0 {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// killSleepers is the test's own cleanup for every sleeper listed in file.
+func killSleepers(t *testing.T, file string) {
+	t.Helper()
+	for _, pid := range sleeperPIDs(t, file) {
+		_ = killPID(pid)
+	}
 }
 
 // TestOpenCodeVersionStampCached: `opencode --version` is read once per

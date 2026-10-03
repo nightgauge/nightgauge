@@ -131,6 +131,21 @@ type Server struct {
 	teamSvc           *platform.TeamService
 	billingSvc        *platform.BillingService
 
+	// refusedWorkspaceWrites are the workspace writes the platform refused
+	// this daemon's latest agent registration (#2372), reported by
+	// platform.status. Written by the registration goroutine, read by
+	// handler goroutines, so both go through refusedWorkspaceWritesMu.
+	refusedWorkspaceWritesMu sync.RWMutex
+	refusedWorkspaceWrites   []platform.RefusedWorkspaceWrite
+
+	// dispatchThrottle is the platform workspace throttle the daemon follows
+	// (#2352), reported by platform.workspaceThrottle; sessionTokenListeners
+	// learn that platform.setSessionToken installed or cleared a session.
+	// Both are guarded by throttleMu.
+	throttleMu            sync.RWMutex
+	dispatchThrottle      *orchestrator.DispatchThrottle
+	sessionTokenListeners []func()
+
 	// workspaceRoot is the CURRENT root, and it is MUTABLE: workspace.setRoot
 	// re-points it on a multi-repo workspace switch, from a handler goroutine,
 	// while the deferred reconcile sweep reads it from a timer goroutine (ADR-017
@@ -478,6 +493,47 @@ func (s *Server) getPlatformClient() *platform.Client {
 	s.platformClientMu.RLock()
 	defer s.platformClientMu.RUnlock()
 	return s.platformClient
+}
+
+// SetDispatchThrottle sets the workspace throttle the daemon follows (#2352),
+// which platform.workspaceThrottle reports.
+func (s *Server) SetDispatchThrottle(d *orchestrator.DispatchThrottle) {
+	s.throttleMu.Lock()
+	defer s.throttleMu.Unlock()
+	s.dispatchThrottle = d
+}
+
+// OnSessionToken registers a listener called, on its own goroutine, after
+// platform.setSessionToken installs or clears the signed-in session: the
+// daemon then reads its workspace throttle again (#2352).
+func (s *Server) OnSessionToken(fn func()) {
+	s.throttleMu.Lock()
+	defer s.throttleMu.Unlock()
+	s.sessionTokenListeners = append(s.sessionTokenListeners, fn)
+}
+
+// SetRefusedWorkspaceWrites records the workspace writes the platform refused
+// the daemon's latest agent registration (#2372); each registration replaces
+// the previous one's, and an empty list clears them. platform.status reports
+// them, so a client asking for the daemon's platform status learns that the
+// operator's role kept the workspace from being written.
+func (s *Server) SetRefusedWorkspaceWrites(refused []platform.RefusedWorkspaceWrite) {
+	s.refusedWorkspaceWritesMu.Lock()
+	defer s.refusedWorkspaceWritesMu.Unlock()
+	s.refusedWorkspaceWrites = append([]platform.RefusedWorkspaceWrite(nil), refused...)
+}
+
+// RefusedWorkspaceWrites returns a copy of the refusals the latest agent
+// registration recorded, nil when there were none. platform.status reports
+// their bounded form (RefusedWorkspaceWrite.Report), never the platform's
+// raw message.
+func (s *Server) RefusedWorkspaceWrites() []platform.RefusedWorkspaceWrite {
+	s.refusedWorkspaceWritesMu.RLock()
+	defer s.refusedWorkspaceWritesMu.RUnlock()
+	if len(s.refusedWorkspaceWrites) == 0 {
+		return nil
+	}
+	return append([]platform.RefusedWorkspaceWrite(nil), s.refusedWorkspaceWrites...)
 }
 
 func (s *Server) getLicenseSvc() *platform.LicenseService {
@@ -1031,22 +1087,6 @@ func (s *Server) pipelineStateDir(repo string) string {
 		return ""
 	}
 	return dir
-}
-
-// workspacePipelineStateDir is the workspace root's pipeline state directory
-// (state.PipelineStateDir), for the wave and epic-context methods that are
-// not scoped to a run's repo. It errors when no workspace root is configured
-// or the directory cannot be resolved, never answering a relative path.
-func (s *Server) workspacePipelineStateDir() (string, error) {
-	root := s.workspaceRootPath()
-	if root == "" {
-		return "", fmt.Errorf("no workspace root configured")
-	}
-	dir, err := state.PipelineStateDir(root)
-	if err != nil {
-		return "", fmt.Errorf("pipeline state directory for workspace root %q: %w", root, err)
-	}
-	return dir, nil
 }
 
 // invalidateOnAuth401 evicts the cached client for (owner, repo) when a
@@ -1929,6 +1969,13 @@ func (s *Server) registerMethods() {
 		if s.getLicenseSvc() != nil {
 			result["tier"] = s.getLicenseSvc().CurrentTier()
 		}
+		if refused := s.RefusedWorkspaceWrites(); len(refused) > 0 {
+			reports := make([]platform.RefusedWorkspaceWriteReport, 0, len(refused))
+			for _, r := range refused {
+				reports = append(reports, r.Report())
+			}
+			result["refusedWorkspaceWrites"] = reports
+		}
 		return result, nil
 	}
 
@@ -2394,7 +2441,29 @@ func (s *Server) registerMethods() {
 			}
 		}
 		pc.SetSessionToken(p.Token)
+		s.throttleMu.RLock()
+		listeners := append([]func(){}, s.sessionTokenListeners...)
+		s.throttleMu.RUnlock()
+		for _, fn := range listeners {
+			go fn()
+		}
 		return map[string]bool{"ok": true}, nil
+	}
+
+	// platform.workspaceThrottle reports the workspace throttle this daemon
+	// follows (#2352). A headless scheduler with only a license key cannot
+	// read the platform's workspace list, so it asks the workspace's daemon
+	// over the socket.
+	//ipc:method platformWorkspaceThrottle params:none result:PlatformWorkspaceThrottleResult skip
+	s.methods["platform.workspaceThrottle"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
+		s.throttleMu.RLock()
+		d := s.dispatchThrottle
+		s.throttleMu.RUnlock()
+		if d == nil {
+			return PlatformWorkspaceThrottleResult{}, nil
+		}
+		throttle, known, unread := d.Report()
+		return PlatformWorkspaceThrottleResult{Known: known, Unread: unread, Throttle: throttle}, nil
 	}
 
 	// --- Auth methods ---
@@ -2631,8 +2700,9 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 
-		// Find epic branch
-		gitSvc, err := s.gitService("")
+		// Find the epic branch in the named repository's own checkout, where
+		// epic/<N>-* is the branch of its #N (#2377).
+		gitSvc, err := s.epicGitService(p.Owner + "/" + p.Repo)
 		if err != nil {
 			return nil, err
 		}
@@ -2677,8 +2747,10 @@ func (s *Server) registerMethods() {
 			return nil, err
 		}
 
-		// Cleanup local branch + remote tracking refs
-		gitSvc, err := s.gitService("")
+		// Cleanup local branch + remote tracking refs, in the repository the
+		// PR merged in: a same-named branch in the launch checkout can belong
+		// to another repository's epic (#2377).
+		gitSvc, err := s.epicGitService(p.Owner + "/" + p.Repo)
 		if err == nil {
 			_ = gitSvc.BranchCleanup(p.EpicBranch)
 		}
@@ -2711,101 +2783,9 @@ func (s *Server) registerMethods() {
 
 		// OnEpicComplete: deterministic epic PR creation, merge, and branch cleanup.
 		// Runs only on successful pipeline completion (all sub-issues closed).
-		prSvc := gh.NewPRService(s.client)
-		s.scheduler.OnEpicComplete(func(cbRepo string, epicNumber int) {
-			ctx := context.Background()
-			owner, repo := splitOwnerRepo(cbRepo)
-			if owner == "" || repo == "" {
-				log.Printf("epic #%d: invalid repo format %q", epicNumber, cbRepo)
-				return
-			}
-
-			// 1. Find the epic branch on remote
-			gitSvc, err := s.gitService("")
-			if err != nil {
-				log.Printf("epic #%d: git service: %v", epicNumber, err)
-				return
-			}
-			epicBranch, err := gitSvc.FindEpicBranch(epicNumber)
-			if err != nil {
-				log.Printf("epic #%d: no epic branch found, skipping PR creation: %v", epicNumber, err)
-				return
-			}
-
-			// 2. Get epic title for PR; its sub-issue list is not read.
-			issueSvc := gh.NewIssueService(s.client)
-			epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, gh.NoRelations)
-			if err != nil {
-				log.Printf("epic #%d: failed to fetch issue: %v", epicNumber, err)
-				return
-			}
-
-			// 3. Create epic PR (epic branch → main)
-			baseBranch := "main"
-			result, err := prSvc.CreateEpicPR(ctx, owner, repo, epicNumber, epicIssue.Title, epicBranch, baseBranch)
-			if err != nil {
-				log.Printf("epic #%d: failed to create epic PR: %v", epicNumber, err)
-				s.Emit("epic.prFailed", map[string]interface{}{
-					"repo":       cbRepo,
-					"epicNumber": epicNumber,
-					"error":      err.Error(),
-				})
-				return
-			}
-
-			log.Printf("epic #%d: PR %s (%s)", epicNumber, result.PRURL, result.Action)
-
-			if result.Action == "already_merged" {
-				// PR was already merged — just cleanup branches
-				log.Printf("epic #%d: already merged, cleaning up branches", epicNumber)
-				_ = gitSvc.BranchCleanup(epicBranch)
-				s.Emit("epic.completed", map[string]interface{}{
-					"repo":       cbRepo,
-					"epicNumber": epicNumber,
-					"action":     "already_merged",
-					"prUrl":      result.PRURL,
-				})
-				return
-			}
-
-			// 4. Merge the epic PR (MERGE strategy to preserve commit history)
-			prNodeID := result.PRNodeID
-			if prNodeID == "" {
-				log.Printf("epic #%d: no PR node ID, cannot auto-merge", epicNumber)
-				s.Emit("epic.prCreated", map[string]interface{}{
-					"repo":       cbRepo,
-					"epicNumber": epicNumber,
-					"prUrl":      result.PRURL,
-					"prNumber":   result.PRNumber,
-					"action":     "created_manual_merge_required",
-				})
-				return
-			}
-
-			if err := prSvc.MergeEpicPR(ctx, owner, repo, prNodeID, epicBranch); err != nil {
-				log.Printf("epic #%d: failed to merge epic PR: %v", epicNumber, err)
-				s.Emit("epic.mergeFailed", map[string]interface{}{
-					"repo":       cbRepo,
-					"epicNumber": epicNumber,
-					"prUrl":      result.PRURL,
-					"error":      err.Error(),
-				})
-				return
-			}
-
-			// 5. Cleanup: delete epic branch locally + remote tracking refs
-			if err := gitSvc.BranchCleanup(epicBranch); err != nil {
-				log.Printf("epic #%d: branch cleanup warning: %v", epicNumber, err)
-			}
-
-			log.Printf("epic #%d: completed — PR merged, branches cleaned", epicNumber)
-			s.Emit("epic.completed", map[string]interface{}{
-				"repo":       cbRepo,
-				"epicNumber": epicNumber,
-				"action":     "merged",
-				"prUrl":      result.PRURL,
-				"prNumber":   result.PRNumber,
-			})
+		// The callback names the epic in its own repository (#2377).
+		s.scheduler.OnEpicComplete(func(epicRepo string, epicNumber int) {
+			s.completeEpicPR(context.Background(), epicRepo, epicNumber)
 		})
 
 		// Update autonomous stall escalation mode on the shared runner (#3348).
@@ -3156,6 +3136,10 @@ func (s *Server) registerMethods() {
 			// remoteRunId matches the item's). SetRequestedPin is set-once, so
 			// a later hop never rewrites it.
 			s.seedRequestedPin(rt, repo, p.IssueNumber, p.RemoteRunID)
+			// The platform run id rides on the run's snapshot (#2339), so a
+			// window that finds the run paused after a reload knows which
+			// platform run it holds. Set-once, like the pin.
+			rt.SetRemoteRunID(p.RemoteRunID)
 			// The entry's index key follows the runtime's repo, so the derived
 			// issue index (Decision 6) can rank without ever taking rs.mu.
 			if res.entry != nil && repo != "" {
@@ -4213,187 +4197,6 @@ func (s *Server) registerMethods() {
 		return map[string]string{"status": "ok"}, nil
 	}
 
-	// --- Wave orchestration methods ---
-
-	//ipc:method waveStatus params:WaveStatusParams result:WaveStatusResult skip
-	s.methods["wave.status"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
-		var p struct {
-			EpicNumber int `json:"epicNumber"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		stateDir, err := s.workspacePipelineStateDir()
-		if err != nil {
-			return nil, err
-		}
-		// Read persisted wave status from disk
-		statusPath := filepath.Join(stateDir, fmt.Sprintf("wave-status-%d.json", p.EpicNumber))
-		data, err := os.ReadFile(statusPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				// Try wave plan (orchestration may still be running)
-				planPath := filepath.Join(stateDir, fmt.Sprintf("wave-plan-%d.json", p.EpicNumber))
-				planData, planErr := os.ReadFile(planPath)
-				if planErr != nil {
-					return nil, fmt.Errorf("no wave data for epic #%d", p.EpicNumber)
-				}
-				var plan json.RawMessage
-				if err := json.Unmarshal(planData, &plan); err != nil {
-					return nil, fmt.Errorf("parse wave plan: %w", err)
-				}
-				return map[string]interface{}{
-					"status": "running",
-					"plan":   plan,
-				}, nil
-			}
-			return nil, fmt.Errorf("read wave status: %w", err)
-		}
-		var status json.RawMessage
-		if err := json.Unmarshal(data, &status); err != nil {
-			return nil, fmt.Errorf("parse wave status: %w", err)
-		}
-		return status, nil
-	}
-
-	// --- Epic Context methods (Issue #2404) ---
-
-	//ipc:method epicReadContext params:EpicContextParams result:EpicContextResult
-	s.methods["epic.readContext"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
-		var p struct {
-			EpicNumber int `json:"epicNumber"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		stateDir, err := s.workspacePipelineStateDir()
-		if err != nil {
-			return nil, err
-		}
-		ctxPath := filepath.Join(stateDir, fmt.Sprintf("epic-context-%d.json", p.EpicNumber))
-		data, err := os.ReadFile(ctxPath)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil, nil // No context yet — first sub-issue
-			}
-			return nil, fmt.Errorf("read epic context: %w", err)
-		}
-		var ctx json.RawMessage
-		if err := json.Unmarshal(data, &ctx); err != nil {
-			return nil, fmt.Errorf("parse epic context: %w", err)
-		}
-		return ctx, nil
-	}
-
-	//ipc:method epicAppendContext params:EpicAppendContextParams result:void
-	s.methods["epic.appendContext"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
-		var p struct {
-			EpicNumber  int `json:"epicNumber"`
-			IssueNumber int `json:"issueNumber"`
-			Findings    struct {
-				FilesTouched []string `json:"files_touched"`
-				Decisions    []string `json:"decisions"`
-				Discoveries  []string `json:"discoveries"`
-				Patterns     []string `json:"patterns"`
-				RecordedAt   string   `json:"recorded_at"`
-			} `json:"findings"`
-		}
-		if err := json.Unmarshal(params, &p); err != nil {
-			return nil, fmt.Errorf("invalid params: %w", err)
-		}
-		dir, err := s.workspacePipelineStateDir()
-		if err != nil {
-			return nil, err
-		}
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return nil, fmt.Errorf("create pipeline dir: %w", err)
-		}
-
-		ctxPath := filepath.Join(dir, fmt.Sprintf("epic-context-%d.json", p.EpicNumber))
-
-		// Read existing context or create new one
-		type subIssueFindings struct {
-			FilesTouched []string `json:"files_touched"`
-			Decisions    []string `json:"decisions"`
-			Discoveries  []string `json:"discoveries"`
-			Patterns     []string `json:"patterns"`
-			RecordedAt   string   `json:"recorded_at"`
-		}
-		type sharedResearch struct {
-			CodebaseNotes     []string `json:"codebase_notes"`
-			ArchitectureNotes []string `json:"architecture_notes"`
-			RelevantFiles     []string `json:"relevant_files"`
-		}
-		type epicCtx struct {
-			SchemaVersion    string                       `json:"schema_version"`
-			EpicNumber       int                          `json:"epic_number"`
-			LastUpdated      string                       `json:"last_updated"`
-			SubIssueFindings map[string]*subIssueFindings `json:"sub_issue_findings"`
-			SharedResearch   sharedResearch               `json:"shared_research"`
-		}
-
-		var ec epicCtx
-		data, err := os.ReadFile(ctxPath)
-		if err != nil {
-			// Initialize fresh
-			ec = epicCtx{
-				SchemaVersion:    "1.0",
-				EpicNumber:       p.EpicNumber,
-				SubIssueFindings: make(map[string]*subIssueFindings),
-				SharedResearch: sharedResearch{
-					CodebaseNotes:     []string{},
-					ArchitectureNotes: []string{},
-					RelevantFiles:     []string{},
-				},
-			}
-		} else {
-			if err := json.Unmarshal(data, &ec); err != nil {
-				return nil, fmt.Errorf("parse existing epic context: %w", err)
-			}
-		}
-
-		// Append findings
-		ec.LastUpdated = p.Findings.RecordedAt
-		if ec.LastUpdated == "" {
-			ec.LastUpdated = time.Now().UTC().Format(time.RFC3339)
-		}
-		ec.SubIssueFindings[fmt.Sprintf("%d", p.IssueNumber)] = &subIssueFindings{
-			FilesTouched: p.Findings.FilesTouched,
-			Decisions:    p.Findings.Decisions,
-			Discoveries:  p.Findings.Discoveries,
-			Patterns:     p.Findings.Patterns,
-			RecordedAt:   ec.LastUpdated,
-		}
-
-		// Merge relevant files (deduplicate)
-		if len(p.Findings.FilesTouched) > 0 {
-			seen := make(map[string]bool)
-			for _, f := range ec.SharedResearch.RelevantFiles {
-				seen[f] = true
-			}
-			for _, f := range p.Findings.FilesTouched {
-				if !seen[f] {
-					seen[f] = true
-					ec.SharedResearch.RelevantFiles = append(ec.SharedResearch.RelevantFiles, f)
-				}
-			}
-		}
-
-		out, err := json.MarshalIndent(ec, "", "  ")
-		if err != nil {
-			return nil, fmt.Errorf("marshal epic context: %w", err)
-		}
-		tmpPath := ctxPath + ".tmp"
-		if err := os.WriteFile(tmpPath, out, 0644); err != nil {
-			return nil, fmt.Errorf("write temp file: %w", err)
-		}
-		if err := os.Rename(tmpPath, ctxPath); err != nil {
-			os.Remove(tmpPath)
-			return nil, fmt.Errorf("rename temp file: %w", err)
-		}
-		return map[string]string{"status": "ok"}, nil
-	}
-
 	// --- Queue methods ---
 
 	//ipc:method queueAdd params:QueueAddParams result:void
@@ -4447,7 +4250,8 @@ func (s *Server) registerMethods() {
 			// Adopt the platform-assigned run_id (dashboard-trigger ack) when
 			// present so the scheduler's runtime.RunID matches the command's
 			// ack runId — keeping the dashboard's run deep-link resolvable (#4120).
-			RemoteRunID: p.RemoteRunID,
+			RemoteRunID:       p.RemoteRunID,
+			RemoteRunAttached: p.RemoteRunAttached && p.RemoteRunID != "",
 		})
 		return map[string]string{"status": "ok"}, nil
 	}
@@ -4500,6 +4304,27 @@ func (s *Server) registerMethods() {
 		}
 		s.scheduler.QueueRemove(p.IssueNumber)
 		return map[string]string{"status": "ok"}, nil
+	}
+
+	// queue.removeRemoteRun takes a remote run the platform cancelled before
+	// a slot opened for it off the queue (#2344). Unlike queue.remove, which
+	// drops every item with an issue number, it acts only on the item
+	// carrying the run id: the run's own item is removed while no dispatch
+	// has taken it, and the operator's item the run was attached to only
+	// loses the run id (Scheduler.QueueRemoveRemoteRun).
+	//ipc:method queueRemoveRemoteRun params:QueueRemoveRemoteRunParams result:QueueRemoveRemoteRunResult
+	s.methods["queue.removeRemoteRun"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p QueueRemoveRemoteRunParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if p.RemoteRunID == "" {
+			return nil, errors.New("remoteRunId is required")
+		}
+		if s.scheduler == nil {
+			return nil, errors.New(errSchedulerNotConfigured)
+		}
+		return QueueRemoveRemoteRunResult{Removed: s.scheduler.QueueRemoveRemoteRun(p.RemoteRunID)}, nil
 	}
 
 	//ipc:method queueClear params:none result:void
@@ -5839,6 +5664,137 @@ func (s *Server) gitService(workDir string) (*gitops.Service, error) {
 		return nil, fmt.Errorf("no workspace root configured for git operations")
 	}
 	return gitops.NewService(dir)
+}
+
+// completeEpicPR opens and merges the epic branch → main PR of an epic that
+// auto-closed. epicRepo is the epic's own repository ("owner/name"), and every
+// read and write happens there: the epic branch in that repository's checkout,
+// the title, and the PR. In the merged sub-issue's repository the same number
+// is a different issue, and the launch checkout can be another repository
+// altogether (#2377).
+func (s *Server) completeEpicPR(ctx context.Context, epicRepo string, epicNumber int) {
+	owner, repo := splitOwnerRepo(epicRepo)
+	if owner == "" || repo == "" {
+		log.Printf("epic #%d: invalid repo format %q", epicNumber, epicRepo)
+		return
+	}
+
+	// 1. Find the epic branch on remote, in the epic repository's checkout. A
+	// workspace with no checkout of it ran none of its sub-issues, so it holds
+	// no epic branch to merge, as when none was found.
+	gitSvc, err := s.epicGitService(epicRepo)
+	if err != nil {
+		log.Printf("epic %s#%d: no checkout of the epic's repository, skipping PR creation: %v", epicRepo, epicNumber, err)
+		return
+	}
+	epicBranch, err := gitSvc.FindEpicBranch(epicNumber)
+	if err != nil {
+		log.Printf("epic %s#%d: no epic branch found, skipping PR creation: %v", epicRepo, epicNumber, err)
+		return
+	}
+
+	// 2. Get epic title for PR; its sub-issue list is not read.
+	issueSvc := gh.NewIssueService(s.client)
+	epicIssue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, gh.NoRelations)
+	if err != nil {
+		log.Printf("epic %s#%d: failed to fetch issue: %v", epicRepo, epicNumber, err)
+		return
+	}
+
+	// 3. Create epic PR (epic branch → main)
+	prSvc := gh.NewPRService(s.client)
+	baseBranch := "main"
+	result, err := prSvc.CreateEpicPR(ctx, owner, repo, epicNumber, epicIssue.Title, epicBranch, baseBranch)
+	if err != nil {
+		log.Printf("epic %s#%d: failed to create epic PR: %v", epicRepo, epicNumber, err)
+		s.Emit("epic.prFailed", map[string]interface{}{
+			"repo":       epicRepo,
+			"epicNumber": epicNumber,
+			"error":      err.Error(),
+		})
+		return
+	}
+
+	log.Printf("epic %s#%d: PR %s (%s)", epicRepo, epicNumber, result.PRURL, result.Action)
+
+	if result.Action == "already_merged" {
+		// PR was already merged — just cleanup branches
+		log.Printf("epic %s#%d: already merged, cleaning up branches", epicRepo, epicNumber)
+		_ = gitSvc.BranchCleanup(epicBranch)
+		s.Emit("epic.completed", map[string]interface{}{
+			"repo":       epicRepo,
+			"epicNumber": epicNumber,
+			"action":     "already_merged",
+			"prUrl":      result.PRURL,
+		})
+		return
+	}
+
+	// 4. Merge the epic PR (MERGE strategy to preserve commit history)
+	prNodeID := result.PRNodeID
+	if prNodeID == "" {
+		log.Printf("epic %s#%d: no PR node ID, cannot auto-merge", epicRepo, epicNumber)
+		s.Emit("epic.prCreated", map[string]interface{}{
+			"repo":       epicRepo,
+			"epicNumber": epicNumber,
+			"prUrl":      result.PRURL,
+			"prNumber":   result.PRNumber,
+			"action":     "created_manual_merge_required",
+		})
+		return
+	}
+
+	if err := prSvc.MergeEpicPR(ctx, owner, repo, prNodeID, epicBranch); err != nil {
+		log.Printf("epic %s#%d: failed to merge epic PR: %v", epicRepo, epicNumber, err)
+		s.Emit("epic.mergeFailed", map[string]interface{}{
+			"repo":       epicRepo,
+			"epicNumber": epicNumber,
+			"prUrl":      result.PRURL,
+			"error":      err.Error(),
+		})
+		return
+	}
+
+	// 5. Cleanup: delete epic branch locally + remote tracking refs
+	if err := gitSvc.BranchCleanup(epicBranch); err != nil {
+		log.Printf("epic %s#%d: branch cleanup warning: %v", epicRepo, epicNumber, err)
+	}
+
+	log.Printf("epic %s#%d: completed — PR merged, branches cleaned", epicRepo, epicNumber)
+	s.Emit("epic.completed", map[string]interface{}{
+		"repo":       epicRepo,
+		"epicNumber": epicNumber,
+		"action":     "merged",
+		"prUrl":      result.PRURL,
+		"prNumber":   result.PRNumber,
+	})
+}
+
+// epicGitService opens the checkout of epicRepo ("owner/name"), the one
+// repository where the epic branch epic/<N>-* names its #N (#2377). With a
+// scheduler wired it is the checkout a run in that repository is rooted at,
+// which is where the epic's own sub-issues created the branch. Without one,
+// only a launch checkout whose origin is epicRepo will do.
+func (s *Server) epicGitService(epicRepo string) (*gitops.Service, error) {
+	if s.scheduler != nil {
+		root, err := s.scheduler.RepoRoot(epicRepo)
+		if err != nil {
+			return nil, err
+		}
+		return s.gitService(root)
+	}
+	svc, err := s.gitService("")
+	if err != nil {
+		return nil, err
+	}
+	slug, err := svc.RemoteRepoSlug()
+	if err != nil {
+		return nil, fmt.Errorf("no checkout of %s: the launch checkout's repository is unknown: %w", epicRepo, err)
+	}
+	if !strings.EqualFold(slug, epicRepo) {
+		return nil, fmt.Errorf("no checkout of %s: the launch checkout is %s", epicRepo, slug)
+	}
+	return svc, nil
 }
 
 // destructiveGitService resolves the git service for a verb that destroys

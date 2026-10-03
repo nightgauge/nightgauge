@@ -286,10 +286,14 @@ describe("ConcurrentPipelineManager — workspace throttle (#2337)", () => {
   it("opens no slot above a cap lowered while a fill is starting its batch", async () => {
     const { manager, running, finish, queueService } = buildManager([
       1,
-      queueItem(2, { repoName: "acme/api", requestedAdapter: "codex", requestedModel: "gpt-5" }),
+      queueItem(2, {
+        repoName: "acme/api",
+        remoteRunId: "platform-run-2",
+        requestedAdapter: "codex",
+        requestedModel: "gpt-5",
+      }),
       3,
     ]);
-    manager.setPendingRemoteRunId(2, "platform-run-2");
     worktreeGate.issue = 1;
     const fill = manager.fillSlots();
     await vi.waitFor(() => expect(worktreeGate.reached).toBe(true));
@@ -310,13 +314,11 @@ describe("ConcurrentPipelineManager — workspace throttle (#2337)", () => {
       requestedAdapter: "codex",
       requestedModel: "gpt-5",
     });
-    expect(queueService.enqueue).toHaveBeenCalledWith(3, "Issue #3", undefined, undefined, {
-      remoteRunId: undefined,
-    });
-    // Issue 2 is queued again with its pending run id, so this window still
-    // holds that run, and the slot that opens for it later adopts the id.
+    expect(queueService.enqueue).toHaveBeenCalledWith(3, "Issue #3", undefined, undefined, {});
+    // Issue 2 is queued again with its run id, so this window still holds
+    // that run, and the slot that opens for it later adopts the id.
     queueService.getQueue.mockResolvedValue({
-      items: [queueItem(2, { repoName: "acme/api" })],
+      items: [queueItem(2, { repoName: "acme/api", remoteRunId: "platform-run-2" })],
       status: "waiting",
     });
     expect(manager.findSlotByRemoteRunId("platform-run-2")).toBeNull();

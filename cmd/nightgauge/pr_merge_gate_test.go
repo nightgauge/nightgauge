@@ -27,7 +27,7 @@ func TestCheckPRMergeBlockers_OpenBlockerDetected(t *testing.T) {
 				Repo:   "nightgauge/nightgauge",
 			}},
 		},
-	}, "nightgauge", "nightgauge", 2935, false)
+	}, "nightgauge", "nightgauge", 2935, false, nil)
 	if err == nil {
 		t.Fatal("expected merge blocker error, got nil")
 	}
@@ -49,7 +49,7 @@ func TestCheckPRMergeBlockers_AllClosedProceedNormally(t *testing.T) {
 				Repo:   "nightgauge/nightgauge",
 			}},
 		},
-	}, "nightgauge", "nightgauge", 2935, false)
+	}, "nightgauge", "nightgauge", 2935, false, nil)
 	if err != nil {
 		t.Fatalf("expected no merge blocker error, got %v", err)
 	}
@@ -58,7 +58,7 @@ func TestCheckPRMergeBlockers_AllClosedProceedNormally(t *testing.T) {
 func TestCheckPRMergeBlockers_NoRelationshipsProceedNormally(t *testing.T) {
 	err := checkPRMergeBlockers(context.Background(), mergeGateIssueFetcher{
 		issue: &types.Issue{},
-	}, "nightgauge", "nightgauge", 2935, false)
+	}, "nightgauge", "nightgauge", 2935, false, nil)
 	if err != nil {
 		t.Fatalf("expected no merge blocker error, got %v", err)
 	}
@@ -73,7 +73,7 @@ func TestCheckPRMergeBlockers_ForceBypassesGuard(t *testing.T) {
 				Repo:   "nightgauge/nightgauge",
 			}},
 		},
-	}, "nightgauge", "nightgauge", 2935, true)
+	}, "nightgauge", "nightgauge", 2935, true, nil)
 	if err != nil {
 		t.Fatalf("expected --force to bypass merge blocker, got %v", err)
 	}

@@ -56,7 +56,7 @@ func TestBuildGraph_SharedBoardIsReadOnce(t *testing.T) {
 	}
 	bodies := func(context.Context, string, string, int) (string, error) { return "", nil }
 
-	g, err := buildGraphFromFetcher(context.Background(), fetcher, bodies, repos, nil)
+	g, err := buildGraphFromFetcher(context.Background(), fetcher, bodies, repos, testRepoAliases)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestCachedBoardProvider_WrapsSharedCache(t *testing.T) {
 	bodies := func(context.Context, string, string, int) (string, error) { return "", nil }
 	repos := []RepoConfig{{Owner: "O", Name: "a", Project: 7}, {Owner: "O", Name: "b", Project: 7}}
 	for i := 0; i < 2; i++ {
-		if _, err := buildGraphFromFetcher(context.Background(), fetcher, bodies, repos, nil); err != nil {
+		if _, err := buildGraphFromFetcher(context.Background(), fetcher, bodies, repos, testRepoAliases); err != nil {
 			t.Fatalf("build %d: %v", i, err)
 		}
 	}

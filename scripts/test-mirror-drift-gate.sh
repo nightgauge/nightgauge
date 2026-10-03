@@ -179,7 +179,7 @@ fixture_git() { # fixture_git <what-it-was-doing> <git args...>
       if [ -n "$out" ]; then printf '%s\n' "$out" >&2; fi
       return 0
     fi
-    if printf '%s' "$out" | grep -qiE 'index\.lock|cannot lock ref|another git process|File exists.*\.lock|Unable to create.*\.lock'; then
+    if grep -qiE 'index\.lock|cannot lock ref|another git process|File exists.*\.lock|Unable to create.*\.lock' <<<"$out"; then
       if [ "$attempt" -lt "$GIT_LOCK_RETRIES" ]; then
         printf '  ! git lock contention while %s (attempt %s/%s) — retrying in %ss\n' \
           "$what" "$attempt" "$GIT_LOCK_RETRIES" "$attempt" >&2
@@ -446,7 +446,7 @@ expect_gate() {
   fi
 
   if [ "$ok" = "1" ] && [ -n "$must_name" ]; then
-    printf '%s\n' "$out" | grep -qF -- "$must_name" || ok=0
+    grep -qF -- "$must_name" <<<"$out" || ok=0
   fi
 
   if [ "$ok" = "1" ]; then
@@ -710,7 +710,7 @@ expect_true "a FAILING run leaves the tree byte-identical too" \
 arm 'm' 'EXEC-BIT drift is drift'
 seed_repo
 EXEC_FILE="$(cd "$TMP/$MIRROR" && find . -type f -perm -u+x -print |
-  sed 's|^\./||' | LC_ALL=C sort | head -1)"
+  sed 's|^\./||' | LC_ALL=C sort | sed -n 1p)"
 expect_true "precondition: the mirror ships at least one executable file" \
   test -n "$EXEC_FILE"
 if [ -n "$EXEC_FILE" ]; then

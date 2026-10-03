@@ -118,16 +118,26 @@ squash_merge_to_main() {
 # branch, default main), `issue view` with FAKE_ISSUE_STATE (fails if unset), (nothing at all if
 # FAKE_PR_STATE is unset — an unauthenticated/no-PR forge) and
 # `api repos/{owner}/{repo}/commits/<sha>` with FAKE_PR_PARENTS, one SHA per
-# line, when <sha> matches FAKE_PR_SHA.
+# line, when <sha> matches FAKE_PR_SHA. FAKE_PR_FILLER=<n> appends n merged
+# PRs for unrelated branches after that line, to make the index larger than
+# any pipe buffer (#2360). FAKE_PR_LIST_STATUS=<n> makes `pr list` fail with
+# status n, as an unauthenticated or offline gh does.
 install_fake_gh() {
   [ -n "$FAKE_BIN" ] && return 0
   FAKE_BIN="$(mktemp -d)"
   cat >"$FAKE_BIN/gh" <<'FAKE_GH'
 #!/usr/bin/env bash
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  if [ -n "${FAKE_PR_LIST_STATUS:-}" ]; then
+    echo "gh: simulated failure" >&2
+    exit "$FAKE_PR_LIST_STATUS"
+  fi
   if [ -n "${FAKE_PR_STATE:-}" ]; then
     printf '%s\t%s\t%s\t%s\t%s\n' "$FAKE_PR_STATE" "$FAKE_PR_BRANCH" "$FAKE_PR_SHA" "$FAKE_PR_NUM" "${FAKE_PR_BASE:-main}"
   fi
+  awk -v n="${FAKE_PR_FILLER:-0}" 'BEGIN {
+    for (i = 1; i <= n; i++) printf "MERGED\tfiller/%05d-branch\t%040d\t%d\tmain\n", i, i, 50000 + i
+  }'
   exit 0
 fi
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
@@ -164,6 +174,29 @@ FAKE_GH
   chmod +x "$FAKE_BIN/gh"
 }
 
+# failing_tool <tool> <needle> -> prints a directory holding a wrapper named
+# <tool> that exits 2, as a tool that could not run, when any argument
+# contains <needle>, and otherwise runs the real <tool>. Put first on PATH to
+# make one lookup fail without touching the others (#2360).
+failing_tool() {
+  local tool="$1" needle="$2" real dir
+  real="$(command -v "$tool")" || {
+    echo "HARNESS ERROR: no $tool on PATH to wrap" >&2
+    exit 1
+  }
+  dir="$(mktemp -d "$TMP/fail-$tool.XXXXXX")"
+  # shellcheck disable=SC2016 # the wrapper's own "$@" and "$a", written as text
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'for a in "$@"; do\n'
+    printf '  case "$a" in *%q*) echo "%s: simulated failure" >&2; exit 2 ;; esac\n' "$needle" "$tool"
+    printf 'done\n'
+    printf 'exec %q "$@"\n' "$real"
+  } >"$dir/$tool"
+  chmod +x "$dir/$tool"
+  printf '%s' "$dir"
+}
+
 # expect <want_exit_code> <desc> [must_contain] -- <run...>
 expect() {
   local want="$1" desc="$2" must_contain="$3"
@@ -174,7 +207,7 @@ expect() {
   code=$?
   [ "$code" -eq "$want" ] || ok=0
   if [ "$ok" = "1" ] && [ -n "$must_contain" ]; then
-    printf '%s\n' "$out" | grep -qF -- "$must_contain" || ok=0
+    grep -qF -- "$must_contain" <<<"$out" || ok=0
   fi
   if [ "$ok" = "1" ]; then
     printf '  \033[32m✓\033[0m %s\n' "$desc"
@@ -487,6 +520,123 @@ expect 1 "a PR that merged into another base stays KEEP" "" \
 expect 1 "a tip the forge knows no PR for stays KEEP" "" \
   -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_FOLD_STATUS=ahead \
   "$SCRIPT" fix/801-sub origin/main
+
+# ── (q) an open PR on the first row of a large PR index is KEEP (#2360) ────
+# The open-PR lookups piped the index into `awk '… {…; exit}'` under pipefail.
+# awk stops reading at its match; with the matching row first and over half
+# a megabyte behind it, printf was still writing, died of SIGPIPE, and the
+# lookup read as "no open PR". This branch is an ancestor of main, so the rule
+# after those lookups answered SAFE-DELETE: exit 0, permission to delete the
+# head (or the base) of an open PR, every time, on any machine. The real index
+# holds up to 500 PRs, whose rows can outgrow a pipe buffer the same way.
+new_fixture
+root="$TMP/clone"
+git_in "$root" branch -q fix/4100-open-head main
+install_fake_gh
+expect 1 "an open PR on the first row of a large PR index is KEEP" \
+  "deleting this branch would close it" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_FILLER=8000 \
+  FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=fix/4100-open-head FAKE_PR_SHA=deadbeef FAKE_PR_NUM=4101 \
+  "$SCRIPT" fix/4100-open-head origin/main
+expect 1 "an open PR based on the branch, first in a large PR index, is KEEP" \
+  "targets this branch as its base" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_FILLER=8000 \
+  FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=feat/4102-stacked FAKE_PR_SHA=deadbeef FAKE_PR_NUM=4103 \
+  FAKE_PR_BASE=fix/4100-open-head "$SCRIPT" fix/4100-open-head origin/main
+# The control: the same large index with no open PR for the branch leaves the
+# ancestor rule its SAFE-DELETE, so the KEEPs above come from the open row.
+expect 0 "the same branch in a large PR index with no open PR is SAFE-DELETE" "ancestor" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_FILLER=8000 \
+  "$SCRIPT" fix/4100-open-head origin/main
+
+# ── (r) a guard lookup that cannot run is UNKNOWN, never SAFE-DELETE (#2360) ─
+# The open-PR and worktree lookups guard every SAFE-DELETE. A failed one used
+# to read as "none found", and this branch, an ancestor of main, then read
+# SAFE-DELETE although the forge had just listed an open PR for it. Each arm
+# below breaks one lookup and wants UNKNOWN (exit 2). The (q) arms above are
+# the controls: the same fixture and index, with every lookup able to run.
+# shellcheck disable=SC2016 # the awk program text to match, not an expansion
+awk_dir="$(failing_tool awk '$1=="OPEN"')"
+expect 2 "an open-PR lookup whose awk fails is UNKNOWN" \
+  "the open-PR lookup did not run (status 2)" \
+  -- run_in "$root" env PATH="$awk_dir:$FAKE_BIN:$PATH" \
+  FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=fix/4100-open-head FAKE_PR_SHA=deadbeef FAKE_PR_NUM=4101 \
+  "$SCRIPT" fix/4100-open-head origin/main
+git_dir="$(failing_tool git worktree)"
+expect 2 "a worktree list git cannot produce is UNKNOWN" "\`git worktree list\` failed" \
+  -- run_in "$root" env PATH="$git_dir:$FAKE_BIN:$PATH" "$SCRIPT" fix/4100-open-head origin/main
+
+# The cause seen in review: bash writes a here-string larger than a pipe
+# buffer to a temporary file, and when it cannot (a full or read-only temp
+# directory, here a file-size limit of zero) the lookup never runs. Probed
+# first, because a bash that needs no file for it cannot fail this way.
+# shellcheck disable=SC2016 # expands in the probe's own shell
+if bash -c 'trap "" XFSZ; ulimit -f 0
+  v="$(awk "BEGIN { for (i = 0; i < 8000; i++) printf \"%070d\\n\", i }")"
+  cat <<<"$v" >/dev/null' 2>/dev/null; then
+  echo "  - skipped: this bash writes a 560 KB here-string without a temporary file"
+else
+  # shellcheck disable=SC2016 # expands in the wrapper's own shell
+  expect 2 "an open PR the lookup cannot read (no room for its temp file) is UNKNOWN" \
+    "lookup did not run" \
+    -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_FILLER=8000 \
+    FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=fix/4100-open-head FAKE_PR_SHA=deadbeef FAKE_PR_NUM=4101 \
+    bash -c 'trap "" XFSZ; ulimit -f 0; exec "$@"' _ "$SCRIPT" fix/4100-open-head origin/main
+fi
+
+# ── (s) a content diff that cannot run is UNKNOWN, never SAFE-DELETE ───────
+# The residual diff decides "content identical", the SAFE-DELETE for a
+# squash-merged branch. Its pipeline's status was ignored, so a `git diff
+# --stat` that failed, or an xargs that could not start git, left an empty
+# residual, which read as identical content: exit 0 for a branch carrying a
+# commit main does not have. The first arm is the control: the same branch,
+# every tool able to run, is KEEP.
+new_fixture
+root="$TMP/clone"
+wt="$(add_worktree "$root" 4200 fix/4200-unmerged)"
+commit_in "$wt" fix.txt "not merged anywhere
+"
+git_in "$root" worktree remove "$wt" --force
+expect 1 "a branch with a commit main lacks is KEEP (control)" "1 file changed" \
+  -- run_in "$root" env NO_PR=1 "$SCRIPT" fix/4200-unmerged origin/main
+stat_dir="$(failing_tool git --stat)"
+expect 2 "a content diff git cannot produce is UNKNOWN" "the content diff did not run" \
+  -- run_in "$root" env PATH="$stat_dir:$PATH" NO_PR=1 "$SCRIPT" fix/4200-unmerged origin/main
+xargs_dir="$(failing_tool xargs -0)"
+expect 2 "a content diff xargs cannot start is UNKNOWN" "the content diff did not run" \
+  -- run_in "$root" env PATH="$xargs_dir:$PATH" NO_PR=1 "$SCRIPT" fix/4200-unmerged origin/main
+names_dir="$(failing_tool git --name-only)"
+expect 2 "a file list git cannot produce is UNKNOWN, not \"touches no files\"" \
+  "the file list did not run" \
+  -- run_in "$root" env PATH="$names_dir:$PATH" NO_PR=1 "$SCRIPT" fix/4200-unmerged origin/main
+
+# ── (t) a PR index gh cannot fetch is UNKNOWN, never "no open PR" ─────────
+# Both open-PR guards read the index. When gh could not fetch it (not
+# installed, unauthenticated, offline), the index was empty, each guard read
+# "no open PR", and an ancestor branch read SAFE-DELETE although no guard had
+# looked. Only NO_PR=1, asked for by name, judges on content alone.
+new_fixture
+root="$TMP/clone"
+git_in "$root" branch -q fix/4300-ancestor main
+install_fake_gh
+expect 0 "an ancestor branch with a fetched, empty PR index is SAFE-DELETE (control)" "ancestor" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" "$SCRIPT" fix/4300-ancestor origin/main
+expect 2 "a PR index gh pr list could not fetch is UNKNOWN" "gh pr list failed (status 1)" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_LIST_STATUS=1 \
+  "$SCRIPT" fix/4300-ancestor origin/main
+# A PATH with every tool the checker runs, and no gh.
+nogh_bin="$(mktemp -d "$TMP/nogh.XXXXXX")"
+for tool in bash git awk sed grep xargs cut tail; do
+  real="$(command -v "$tool")" || {
+    echo "HARNESS ERROR: no $tool on PATH to link" >&2
+    exit 1
+  }
+  ln -s "$real" "$nogh_bin/$tool"
+done
+expect 2 "with no gh installed, the open-PR guards cannot look: UNKNOWN" "gh is not installed" \
+  -- run_in "$root" env PATH="$nogh_bin" "$SCRIPT" fix/4300-ancestor origin/main
+expect 0 "with no gh and NO_PR=1, an ancestor branch is SAFE-DELETE on content alone" "ancestor" \
+  -- run_in "$root" env PATH="$nogh_bin" NO_PR=1 "$SCRIPT" fix/4300-ancestor origin/main
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then

@@ -64,10 +64,13 @@ cleanup() {
   local rc=$?
   set +e
   step "cleanup (exit $rc)"
-  if docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER"; then
+  # Listed, then a here-string: `docker ps | grep -q` under pipefail can
+  # SIGPIPE docker at an early match on a busy runner, and the container then
+  # reads as absent and is never removed (#2360).
+  if grep -qx "$CONTAINER" <<<"$(docker ps -a --format '{{.Names}}')"; then
     docker rm -f "$CONTAINER" >/dev/null 2>&1 && echo "removed container $CONTAINER"
   fi
-  ! docker ps -a --format '{{.Names}}' | grep -qx "$CONTAINER" || echo "WARN: container $CONTAINER still present"
+  ! grep -qx "$CONTAINER" <<<"$(docker ps -a --format '{{.Names}}')" || echo "WARN: container $CONTAINER still present"
   # The per-run image is ~2 GB and tagged with $TS, so nothing dangling-only
   # (the runner's scheduled `docker image prune`) ever reclaims it — twelve of
   # them held 24 GB on the ci-docker host on 2026-09-04. Remove it on every
@@ -173,7 +176,7 @@ JSON
 bash "$PKG/scripts/check-runtime-assets.sh" "$PKG/dist"
 rm -f "$PKG"/nightgauge-vscode-*"$VSCE_TARGET"*.vsix
 (cd "$PKG" && npx @vscode/vsce package --no-dependencies --target "$VSCE_TARGET" >/dev/null)
-VSIX="$(ls -t "$PKG"/nightgauge-vscode-*"$VSCE_TARGET"*.vsix | head -1)"
+VSIX="$(ls -t "$PKG"/nightgauge-vscode-*"$VSCE_TARGET"*.vsix | sed -n 1p)"
 fi
 bash "$PKG/scripts/check-runtime-assets.sh" "$VSIX"
 cp "$VSIX" "$RUN_DIR/vsix/"

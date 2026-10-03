@@ -954,3 +954,32 @@ func assertDirEmpty(t *testing.T, dir, what string) {
 	}
 	t.Errorf("%s wrote %v — it must write nothing", what, names)
 }
+
+// PickPersistedStateForRepoIssue picks among repo's snapshots only: the file
+// name carries the issue number alone, and one pipeline-state directory can
+// hold another repository's run of the same number (#2377).
+func TestPickPersistedStateForRepoIssue_OnlyThatRepositorysRuns(t *testing.T) {
+	dir := t.TempDir()
+	base := time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
+	platform := NewRuntimeState("example-org/platform", 21, "item-p", testRunID())
+	platform.StartedAt = base.Add(time.Hour) // newer, and live
+	app := NewRuntimeState("example-org/app", 21, "item-a", testRunID())
+	app.StartedAt = base
+	app.MarkTerminal("complete")
+	for _, rs := range []*RuntimeState{platform, app} {
+		if err := rs.Persist(dir); err != nil {
+			t.Fatalf("Persist: %v", err)
+		}
+	}
+
+	got, err := PickPersistedStateForRepoIssue(dir, "Example-Org/App", 21)
+	if err != nil || got.RunID != app.RunID {
+		t.Errorf("pick for example-org/app#21 = %v / %v, want its own run %s", got, err, app.RunID)
+	}
+	if got, err := PickPersistedStateForRepoIssue(dir, "", 21); err != nil || got.RunID != platform.RunID {
+		t.Errorf("unfiltered pick = %v / %v, want the standard pick %s", got, err, platform.RunID)
+	}
+	if _, err := PickPersistedStateForRepoIssue(dir, "example-org/elsewhere", 21); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("pick for a repository with no run = %v, want fs.ErrNotExist", err)
+	}
+}

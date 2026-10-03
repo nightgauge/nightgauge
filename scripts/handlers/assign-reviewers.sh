@@ -30,7 +30,7 @@ fi
 # Use headRefName to verify the branch matches exactly (avoid 12 matching 120, 1200, etc.)
 PR_NUMBER=""
 for prefix in feat fix docs; do
-  PR_JSON=$(gh pr list --search "head:${prefix}/${ISSUE_NUMBER}-" --json number,headRefName -q ".[] | select(.headRefName | test(\"^${prefix}/${ISSUE_NUMBER}-\")) | .number" 2>/dev/null | head -1 || echo "")
+  PR_JSON=$(gh pr list --search "head:${prefix}/${ISSUE_NUMBER}-" --json number,headRefName -q ".[] | select(.headRefName | test(\"^${prefix}/${ISSUE_NUMBER}-\")) | .number" 2>/dev/null | sed -n 1p || echo "")
   if [ -n "$PR_JSON" ]; then
     PR_NUMBER="$PR_JSON"
     break

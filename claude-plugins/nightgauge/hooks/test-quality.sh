@@ -15,8 +15,11 @@ fi
 #   {"tool_name":"Write","tool_input":{"file_path":"...","content":"..."}}
 INPUT="$(cat)"
 
-# Extract file_path from tool_input (lightweight jq-free parsing)
-FILE_PATH="$(echo "$INPUT" | grep -oE '"file_path"\s*:\s*"[^"]*"' | head -1 | sed 's/.*"file_path"\s*:\s*"//;s/"$//')"
+# Extract file_path from tool_input (lightweight jq-free parsing). The first
+# match is taken with `sed -n 1{...}`, which reads to the end, not `head -1`:
+# under pipefail a reader that stops early can SIGPIPE grep and end this hook
+# under `set -e` (#2360).
+FILE_PATH="$(echo "$INPUT" | grep -oE '"file_path"\s*:\s*"[^"]*"' | sed -n '1{s/.*"file_path"\s*:\s*"//;s/"$//;p;}')"
 
 if [ -z "$FILE_PATH" ]; then
   exit 0

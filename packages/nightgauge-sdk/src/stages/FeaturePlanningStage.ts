@@ -64,19 +64,9 @@ export class FeaturePlanningStage extends BaseStage<IssueContext, PlanningContex
    */
   protected override async buildPrompt(
     issueNumber: number,
-    inputContext?: IssueContext,
-    skillsBasePath: string = "skills"
+    inputContext: IssueContext | undefined,
+    skillContent: string
   ): Promise<string> {
-    const skillPath = `${skillsBasePath}/nightgauge-feature-planning/SKILL.md`;
-
-    let skillContent: string;
-    try {
-      const fs = await import("node:fs/promises");
-      skillContent = await fs.readFile(skillPath, "utf-8");
-    } catch {
-      throw new Error(`Failed to read skill file: ${skillPath}`);
-    }
-
     const sections: string[] = [
       "# Pipeline Stage: feature-planning",
       "",
@@ -163,6 +153,9 @@ export class FeaturePlanningStage extends BaseStage<IssueContext, PlanningContex
     const repairPrompt = this.buildRepairPrompt(options.issueNumber, validationError);
 
     try {
+      // The repair rewrites planning-{N}.json with the shell, so it gets the
+      // tools the stage's own query was granted (#2358).
+      const { allowedTools } = await this.readSkill(options.skillsBasePath);
       const repairMessages = [];
       for await (const message of executor.execute({
         stage: this.config.name,
@@ -171,6 +164,7 @@ export class FeaturePlanningStage extends BaseStage<IssueContext, PlanningContex
         model: options.model,
         maxTurns: 5,
         cwd: options.cwd,
+        ...(allowedTools && { allowedTools }),
       })) {
         repairMessages.push(message);
       }

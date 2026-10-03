@@ -47,19 +47,9 @@ export class FeatureDevStage extends BaseStage<PlanningContext, DevContext> {
    */
   protected override async buildPrompt(
     issueNumber: number,
-    inputContext?: PlanningContext,
-    skillsBasePath: string = "skills"
+    inputContext: PlanningContext | undefined,
+    skillContent: string
   ): Promise<string> {
-    const skillPath = `${skillsBasePath}/nightgauge-feature-dev/SKILL.md`;
-
-    let skillContent: string;
-    try {
-      const fs = await import("node:fs/promises");
-      skillContent = await fs.readFile(skillPath, "utf-8");
-    } catch {
-      throw new Error(`Failed to read skill file: ${skillPath}`);
-    }
-
     const sections: string[] = [
       "# Pipeline Stage: feature-dev",
       "",

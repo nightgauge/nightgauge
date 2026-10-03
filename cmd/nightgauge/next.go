@@ -110,7 +110,8 @@ issue number. No LLM participates.`,
 			if err != nil {
 				return fmt.Errorf("create github client: %w", err)
 			}
-			graph, err := depgraph.BuildGraph(context.Background(), client, repoConfigs, nil)
+			graph, err := depgraph.BuildGraph(context.Background(), client, repoConfigs,
+				workspaceRepoAliases(workdir, repoConfigs))
 			if err != nil {
 				return fmt.Errorf("build graph: %w", err)
 			}

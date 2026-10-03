@@ -41,13 +41,13 @@ See [docs/GO_BINARY.md](GO_BINARY.md) for full Go binary documentation.
 
 ## Required commands (missing binary = pipeline aborts)
 
-| Command                            | Purpose                                                      | Invoked by               | Arguments                                                 | Output format    |
-| ---------------------------------- | ------------------------------------------------------------ | ------------------------ | --------------------------------------------------------- | ---------------- |
-| `nightgauge ci wait`               | Poll GitHub CI checks for a PR until terminal state          | `CI_GATE.md`             | `<pr-number> [--timeout <seconds>] [--json]`              | JSON (see below) |
-| `nightgauge hook check-deps`       | Check that required host tools are available                 | `DEPENDENCY_CHECKING.md` | `<issue-number> [--check-only] [--json]`                  | JSON (see below) |
-| `nightgauge epic check-completion` | Detect whether all sub-issues of an epic are complete        | `EPIC_HANDLING.md`       | `<issue-number> [--sweep] [--check-only] [--json]`        | JSON (see below) |
-| `nightgauge pr create`             | Create the epic branch → main PR when all sub-issues land    | `EPIC_HANDLING.md`       | `--title <t> --head <b> --base <b> [--body <b>] [--json]` | JSON (see below) |
-| `nightgauge project move-status`   | Transition issue board status (in-progress, in-review, done) | all pipeline skills      | `<issue-number> <status> [--json]`                        | JSON (see below) |
+| Command                            | Purpose                                                        | Invoked by               | Arguments                                                 | Output format    |
+| ---------------------------------- | -------------------------------------------------------------- | ------------------------ | --------------------------------------------------------- | ---------------- |
+| `nightgauge ci wait`               | Poll GitHub CI checks for a PR until terminal state            | `CI_GATE.md`             | `<pr-number> [--timeout <seconds>] [--json]`              | JSON (see below) |
+| `nightgauge hook check-deps`       | Report an issue's open dependencies (native and body-declared) | `DEPENDENCY_CHECKING.md` | `<issue-number> [--check-only] [--json]`                  | JSON (see below) |
+| `nightgauge epic check-completion` | Detect whether all sub-issues of an epic are complete          | `EPIC_HANDLING.md`       | `<issue-number> [--sweep] [--check-only] [--json]`        | JSON (see below) |
+| `nightgauge pr create`             | Create the epic branch → main PR when all sub-issues land      | `EPIC_HANDLING.md`       | `--title <t> --head <b> --base <b> [--body <b>] [--json]` | JSON (see below) |
+| `nightgauge project move-status`   | Transition issue board status (in-progress, in-review, done)   | all pipeline skills      | `<issue-number> <status> [--json]`                        | JSON (see below) |
 
 ### `nightgauge ci wait`
 
@@ -80,24 +80,44 @@ CI_PROGRESS:{"state":"PENDING","elapsed":30,"pending":2,"completed":1}
 
 ### `nightgauge hook check-deps`
 
+With an issue number, reports the issue's **open dependencies**: its native
+`blockedBy` relationships and the dependencies its body declares
+(`Depends on: #N`, `Blocked by <repo> #N`, entries under a `## Dependencies`
+section), resolved against the workspace's repositories. Rules:
+[AUTONOMOUS_ORCHESTRATOR.md § Body Text](AUTONOMOUS_ORCHESTRATOR.md#body-text-same-repo-and-cross-repo).
+
 **Exit codes:**
 
-| Code | Meaning                                   |
-| ---- | ----------------------------------------- |
-| 0    | All required dependencies available       |
-| 1    | One or more required dependencies missing |
-| 3    | Error (binary not found or build failed)  |
+| Code | Meaning                                                                                 |
+| ---- | --------------------------------------------------------------------------------------- |
+| 0    | Evaluated (with `--check-only`: no open dependencies)                                   |
+| 1    | `--check-only` and the issue has open dependencies (JSON printed), or evaluation failed |
+| 3    | Error (binary not found or build failed)                                                |
 
 **Output JSON schema:**
 
 ```json
 {
-  "ok": true,
-  "required": [{ "name": "git", "available": true, "version": "2.39.1" }],
-  "optional": [{ "name": "node", "available": true, "version": "18.0.0" }],
-  "missing": []
+  "issue_number": 42,
+  "has_open_dependencies": true,
+  "should_block": true,
+  "open_dependencies": [
+    { "number": 41, "title": "...", "state": "OPEN", "repo": "owner/repo", "source": "blockedBy" },
+    {
+      "number": 12,
+      "title": "...",
+      "state": "OPEN",
+      "repo": "owner/widget-api",
+      "source": "body",
+      "source_line": "Blocked by widget-api #12"
+    }
+  ],
+  "open_count": 2
 }
 ```
+
+Without an issue number it reports whether the required host tools are
+available (`ok`, `required`, `optional`, `missing`).
 
 ### `nightgauge epic check-completion`
 

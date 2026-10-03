@@ -28,7 +28,7 @@ func TestEvaluateIssueDeps_LongListsItDoesNotUseCannotFailIt(t *testing.T) {
 		20: {Blocking: githubtest.Numbers(3000, 7)},
 	})
 
-	result, err := EvaluateIssueDeps(context.Background(), gh.NewIssueService(forge.Client()), githubtest.Owner, githubtest.Repo, 10)
+	result, err := EvaluateIssueDeps(context.Background(), gh.NewIssueService(forge.Client()), githubtest.Owner, githubtest.Repo, 10, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestEvaluateIssueDeps_LongBlockedByIsStillReadWhole(t *testing.T) {
 		10: {BlockedBy: githubtest.Numbers(1000, 11)},
 	})
 
-	result, err := EvaluateIssueDeps(context.Background(), gh.NewIssueService(forge.Client()), githubtest.Owner, githubtest.Repo, 10)
+	result, err := EvaluateIssueDeps(context.Background(), gh.NewIssueService(forge.Client()), githubtest.Owner, githubtest.Repo, 10, nil)
 	if !errors.Is(err, gh.ErrConnectionTruncated) {
 		t.Fatalf("err = %v (result %+v), want ErrConnectionTruncated", err, result)
 	}

@@ -366,3 +366,136 @@ func TestRegisterAgent_NoTeamRegistersWithoutTheBlock(t *testing.T) {
 		t.Errorf("a plain 403 gave err=%v after %d posts, want an error after 1", err, len(bodies))
 	}
 }
+
+// The registration reply names the workspace writes the operator's role kept
+// it from making (#2372); a reply without the field, or with an empty list,
+// decodes to none.
+func TestRegisterAgent_DecodesRefusedWorkspaceWrites(t *testing.T) {
+	cases := map[string]struct {
+		reply string
+		want  []RefusedWorkspaceWrite
+	}{
+		"refusals": {
+			reply: `{"agentId":"a","ttl_seconds":90,"throttle":null,"refused_workspace_writes":[` +
+				`{"workspace":"acme-platform","team_id":"team-1","code":"PERMISSION_DENIED","permission":"workspace:update","message":"Registration did not write workspace 'acme-platform': workspace:update needs the owner or admin role on its team"},` +
+				`{"workspace":"default","team_id":"team-1","code":"PERMISSION_DENIED","permission":"workspace:update","message":"m"}]}`,
+			want: []RefusedWorkspaceWrite{
+				{Workspace: "acme-platform", TeamID: "team-1", Code: "PERMISSION_DENIED", Permission: "workspace:update",
+					Message: "Registration did not write workspace 'acme-platform': workspace:update needs the owner or admin role on its team"},
+				{Workspace: "default", TeamID: "team-1", Code: "PERMISSION_DENIED", Permission: "workspace:update", Message: "m"},
+			},
+		},
+		"empty list":    {reply: `{"agentId":"a","ttl_seconds":90,"refused_workspace_writes":[]}`},
+		"field missing": {reply: `{"agentId":"a","ttl_seconds":90}`},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(machineIDEnv, "test-machine-uuid")
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(tc.reply))
+			}))
+			defer srv.Close()
+			info, err := NewAgentRegistrationService(onlineClient(t, srv.URL), "1.0.0").RegisterAgent(context.Background())
+			if err != nil {
+				t.Fatalf("RegisterAgent: %v", err)
+			}
+			if len(info.RefusedWorkspaceWrites) != len(tc.want) {
+				t.Fatalf("refusals = %+v, want %+v", info.RefusedWorkspaceWrites, tc.want)
+			}
+			for i := range tc.want {
+				if info.RefusedWorkspaceWrites[i] != tc.want[i] {
+					t.Errorf("refusal %d = %+v, want %+v", i, info.RefusedWorkspaceWrites[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// The operator's line names the workspace and the permission the write needs,
+// and a reply cannot put control characters or unbounded text into it.
+func TestRefusedWorkspaceWrite_Describe(t *testing.T) {
+	named := RefusedWorkspaceWrite{Workspace: "acme-platform", TeamID: "team-1", Code: "PERMISSION_DENIED", Permission: "workspace:create"}
+	line := named.Describe()
+	for _, want := range []string{`workspace "acme-platform"`, "workspace:create", "owner or admin role", "team-1"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("Describe() = %q, want it to contain %q", line, want)
+		}
+	}
+
+	def := RefusedWorkspaceWrite{Workspace: "default", Permission: "workspace:update"}
+	if line := def.Describe(); !strings.Contains(line, "the team's Default workspace") || !strings.Contains(line, "workspace:update") {
+		t.Errorf("Describe() for the Default workspace = %q", line)
+	}
+
+	hostile := RefusedWorkspaceWrite{Workspace: "a\nb\x1b[31m" + strings.Repeat("x", 300), Permission: "workspace:update"}
+	line = hostile.Describe()
+	if strings.ContainsAny(line, "\n\x1b") {
+		t.Errorf("Describe() kept a control character: %q", line)
+	}
+	if strings.Contains(line, strings.Repeat("x", 101)) {
+		t.Errorf("Describe() did not bound the workspace field: %q", line)
+	}
+
+	// The fields printed as they are, not quoted, are the ones a reply could
+	// forge a log line through: a line break, a line separator (U+2028), a
+	// bidirectional override (U+202E), a zero-width joiner, a tab.
+	forging := "workspace:update\n[nightgauge] forged line\u2028\u202eevil\u200d\t"
+	forged := RefusedWorkspaceWrite{Workspace: "acme", TeamID: forging, Code: forging, Permission: forging}
+	line = forged.Describe()
+	for _, r := range []rune{'\n', '\u2028', '\u202e', '\u200d', '\t'} {
+		if strings.ContainsRune(line, r) {
+			t.Errorf("Describe() kept %U: %q", r, line)
+		}
+	}
+	// Only the unprintable runes go; square brackets show as parentheses, so
+	// no markdown link reaches the extension's notification.
+	if !strings.Contains(line, "workspace:update(nightgauge) forged lineevil") {
+		t.Errorf("Describe() dropped more than the unprintable runes: %q", line)
+	}
+}
+
+// The status and the extension get the refusal's bounded fields and the
+// operator's line, never the platform's raw message (#2372).
+func TestRefusedWorkspaceWrite_Report(t *testing.T) {
+	refused := RefusedWorkspaceWrite{
+		Workspace: "acme-platform", TeamID: "team-1\u202e", Code: "PERMISSION_DENIED",
+		Permission: "workspace:update", Message: strings.Repeat("raw message ", 1000),
+	}
+	got := refused.Report()
+	want := RefusedWorkspaceWriteReport{
+		Workspace: "acme-platform", TeamID: "team-1", Code: "PERMISSION_DENIED",
+		Permission: "workspace:update", Description: refused.Describe(),
+	}
+	if got != want {
+		t.Errorf("Report() = %+v, want %+v", got, want)
+	}
+	if strings.Contains(got.Description, "raw message") {
+		t.Errorf("the report carries the platform's message: %q", got.Description)
+	}
+	if empty := (RefusedWorkspaceWrite{}).Report(); empty.Workspace != "unknown" || empty.Permission != "unknown" {
+		t.Errorf("an empty refusal reports %+v, want unknown fields", empty)
+	}
+}
+
+// The extension shows a refusal's line in a notification, which renders
+// markdown link syntax as a link, and a command: link runs a command when
+// clicked (#2372). A reply field cannot put one in front of the operator.
+func TestRefusedWorkspaceWrite_ShowsNoMarkdownLink(t *testing.T) {
+	link := "[Fix](command:workbench.action.terminal.sendSequence?%7B%22text%22%3A%22id%5Cn%22%7D)"
+	refused := RefusedWorkspaceWrite{
+		Workspace: link, TeamID: link, Code: "PERMISSION_DENIED", Permission: "[workspace:update]",
+	}
+	report := refused.Report()
+	for name, field := range map[string]string{
+		"description": report.Description, "workspace": report.Workspace,
+		"teamId": report.TeamID, "permission": report.Permission,
+	} {
+		if strings.ContainsAny(field, "[]") {
+			t.Errorf("%s keeps link syntax: %q", name, field)
+		}
+	}
+	if !strings.Contains(report.Workspace, "(Fix)(command:") {
+		t.Errorf("workspace = %q, want the brackets shown as parentheses", report.Workspace)
+	}
+}

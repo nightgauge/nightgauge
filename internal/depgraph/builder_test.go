@@ -228,7 +228,7 @@ func TestBuildGraphFromItems_UnresolvableRefs(t *testing.T) {
 	workspace := map[string]bool{"O/core": true}
 	// "nightgauge/external" is intentionally absent from workspace.
 
-	g := BuildGraphFromItems(items, bodies, workspace, nil)
+	g := BuildGraphFromItems(items, bodies, workspace, testRepoAliases)
 
 	if len(g.Edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(g.Edges))
@@ -326,7 +326,7 @@ func TestBuildGraphFromItems_LargeGraph(t *testing.T) {
 
 	workspace := map[string]bool{"O/repo": true}
 
-	g := BuildGraphFromItems(items, nil, workspace, nil)
+	g := BuildGraphFromItems(items, nil, workspace, testRepoAliases)
 
 	if len(g.Nodes) != n {
 		t.Errorf("expected %d nodes, got %d", n, len(g.Nodes))
@@ -403,7 +403,7 @@ func TestBuildGraphFromFetcherWithBatch_OneCallPerRepo(t *testing.T) {
 		{Owner: "O", Name: "a", Project: 1},
 		{Owner: "O", Name: "b", Project: 2},
 	}
-	g, err := buildGraphFromFetcherWithBatch(context.Background(), fetcher, perIssueFetcher, bodiesBatch, repos, nil)
+	g, err := buildGraphFromFetcherWithBatch(context.Background(), fetcher, perIssueFetcher, bodiesBatch, repos, testRepoAliases)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -470,7 +470,7 @@ func TestBuildGraphFromFetcherWithBatch_FallbackOnBatchError(t *testing.T) {
 		{Owner: "O", Name: "a", Project: 1},
 		{Owner: "O", Name: "b", Project: 2},
 	}
-	g, err := buildGraphFromFetcherWithBatch(context.Background(), fetcher, perIssueFetcher, bodiesBatch, repos, nil)
+	g, err := buildGraphFromFetcherWithBatch(context.Background(), fetcher, perIssueFetcher, bodiesBatch, repos, testRepoAliases)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -498,7 +498,7 @@ func TestBuildGraphFromFetcher_FetchError(t *testing.T) {
 	}
 	repos := []RepoConfig{{Owner: "O", Name: "repo", Project: 1}}
 
-	_, err := buildGraphFromFetcher(context.Background(), failFetcher, noopBodyFetcher, repos, nil)
+	_, err := buildGraphFromFetcher(context.Background(), failFetcher, noopBodyFetcher, repos, testRepoAliases)
 	if err == nil {
 		t.Error("expected error when fetcher fails, got nil")
 	}
@@ -560,7 +560,7 @@ func TestBuildGraphFromFetcher_HomeBoardStatusWins(t *testing.T) {
 				return "", nil
 			}
 
-			g, err := buildGraphFromFetcher(context.Background(), fetcher, noopBodyFetcher, tc.repos, nil)
+			g, err := buildGraphFromFetcher(context.Background(), fetcher, noopBodyFetcher, tc.repos, testRepoAliases)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
@@ -612,7 +612,7 @@ func TestBuildGraphFromFetcher_DroppedItemsCount(t *testing.T) {
 	log.SetOutput(&logBuf)
 	defer log.SetOutput(os.Stderr)
 
-	g, err := buildGraphFromFetcher(context.Background(), fetcher, noopBodyFetcher, repos, nil)
+	g, err := buildGraphFromFetcher(context.Background(), fetcher, noopBodyFetcher, repos, testRepoAliases)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -651,7 +651,7 @@ func TestBuildGraphFromItems_SameRepoBodyDependency(t *testing.T) {
 		"O/core#1": "## Goal\n\nShip the thing.\n\nDepends on: #2\n",
 	}
 
-	g := BuildGraphFromItems(items, bodies, map[string]bool{"O/core": true}, nil)
+	g := BuildGraphFromItems(items, bodies, map[string]bool{"O/core": true}, testRepoAliases)
 
 	if len(g.Edges) != 1 {
 		t.Fatalf("expected 1 edge from the body declaration, got %d: %v", len(g.Edges), g.Edges)
@@ -685,7 +685,7 @@ func TestBuildGraphFromItems_ProseReferenceIsNotADependency(t *testing.T) {
 		"O/core#1": "## Goal\n\nFollow-up to #2, which shipped the parser.\n",
 	}
 
-	g := BuildGraphFromItems(items, bodies, map[string]bool{"O/core": true}, nil)
+	g := BuildGraphFromItems(items, bodies, map[string]bool{"O/core": true}, testRepoAliases)
 
 	if len(g.Edges) != 0 {
 		t.Fatalf("prose mention became %d dependency edge(s): %v", len(g.Edges), g.Edges)

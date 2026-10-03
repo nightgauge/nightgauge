@@ -106,8 +106,11 @@ record_append() {
 # Labels must exist before `gh issue create --label` will accept them. The
 # allowlist lives in the validator, so anything reaching here is a known name.
 ensure_label() {
-  local label="$1"
-  if ! gh label list --limit 200 --json name --jq '.[].name' | grep -Fxq -- "$label"; then
+  local label="$1" names
+  # Listed, then a here-string: `gh label list | grep -q` under pipefail can
+  # SIGPIPE gh at an early match, and the label then reads as missing (#2360).
+  names="$(gh label list --limit 200 --json name --jq '.[].name')"
+  if ! grep -Fxq -- "$label" <<<"$names"; then
     gh label create "$label" --description "Auto-created by nightgauge $KIND" --color "0e8a16"
   fi
 }
@@ -131,7 +134,7 @@ while [ "$i" -lt "$COUNT" ]; do
   # already filed against must not come back as a second issue, and a closed
   # one is a decision the maintainer already made.
   EXISTING="$(gh issue list --state all --limit 200 --search "in:title \"$TITLE\"" --json title,url \
-    | jq -r --arg t "$TITLE" '.[] | select(.title == $t) | .url' | head -n1)"
+    | jq -r --arg t "$TITLE" 'first(.[] | select(.title == $t) | .url)')"
   if [ -n "$EXISTING" ]; then
     echo "DEDUP: '$TITLE' already exists at $EXISTING"
     if [ -n "$DEDUPED_KEY" ]; then

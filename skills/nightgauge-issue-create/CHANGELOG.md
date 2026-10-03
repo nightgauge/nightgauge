@@ -14,6 +14,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
   (`nightgauge layout path checkout complexity-model.yaml`), not
   `.nightgauge/complexity-model.yaml` (#2037, ADR-024 § 7).
 
+### Fixed
+
+- Phase 2.9 finds its decompose-later and standalone-epic markers in a long
+  issue body under `pipefail`. The marker checks read the body from a
+  here-string instead of `printf | grep -q`, whose writer could die of
+  SIGPIPE once `grep -q` matched and turn a found marker into a miss (#2360).
+  The type and size checks in Phases 2.85 and 2.9 read here-strings too.
+
 ## [1.25.1] - 2026-09-27
 
 ### Fixed

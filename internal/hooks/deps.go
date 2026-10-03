@@ -54,6 +54,13 @@ type OpenDependency struct {
 //     "Blocked by platform #535" — the same prose the scheduler's dependency
 //     graph parses (internal/depgraph).
 //
+// repoAliases resolves the short repository names that prose uses, and must be
+// built from the workspace's repositories (depgraph.WorkspaceRepoAliases), the
+// same map the scheduler's graph uses. Before #2349 this gate passed nil, which
+// resolved short names through example acme/* repositories: a sibling's short
+// name glued to its `#` was dropped, and one written with a space gated on this
+// repository's own same-numbered issue.
+//
 // Reading only (1) was the pickup half of #1492: the scheduler built no edge
 // for a body-declared same-repo dependency and this gate saw nothing either,
 // so `dependencies.blockedBy` in issue-<N>.json was written empty and
@@ -64,7 +71,11 @@ type OpenDependency struct {
 // A body-declared reference whose issue cannot be fetched is skipped rather
 // than treated as blocking: unlike a native relation, prose can name a
 // repository that does not exist, and a permanent un-clearable hold on a typo
-// is worse than the deferral it would buy.
+// is worse than the deferral it would buy. So is an Unresolved one, which
+// names a repository the workspace cannot identify and so has no issue to
+// fetch; it is never read as this repository's same-numbered issue. The
+// dispatcher's graph holds such an issue instead (fails closed), naming the
+// line to fix.
 //
 // The gate uses one relationship list, the issue's own blockedBy, and reads it
 // whole: a blockedBy list that cannot be read to its end fails the evaluation
@@ -72,7 +83,7 @@ type OpenDependency struct {
 // sub-issues and the issues it blocks are not its dependencies, and a
 // body-declared dependency is judged by its state alone, so however long any
 // of those lists is, it cannot fail the gate.
-func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo string, number int) (IssueDepsResult, error) {
+func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo string, number int, repoAliases map[string]string) (IssueDepsResult, error) {
 	result := IssueDepsResult{IssueNumber: number}
 
 	issue, err := fetcher.GetIssueWithRelations(ctx, owner, repo, number, gh.RelationBlockedBy)
@@ -100,7 +111,7 @@ func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo st
 		}
 	}
 
-	for _, ref := range depgraph.ParseDependencyRefs(issue.Body, selfRepo, nil) {
+	for _, ref := range depgraph.ParseDependencyRefs(issue.Body, selfRepo, repoAliases) {
 		if ref.Number == number && strings.EqualFold(ref.Repo, selfRepo) {
 			continue // self-reference
 		}
@@ -111,8 +122,8 @@ func EvaluateIssueDeps(ctx context.Context, fetcher IssueFetcher, owner, repo st
 		seen[key] = true
 
 		refOwner, refName, ok := strings.Cut(ref.Repo, "/")
-		if !ok || refOwner == "" || refName == "" {
-			continue
+		if ref.Unresolved || !ok || refOwner == "" || refName == "" {
+			continue // no issue to fetch — see the doc comment
 		}
 		dep, derr := fetcher.GetIssueWithRelations(ctx, refOwner, refName, ref.Number, gh.NoRelations)
 		if derr != nil || dep == nil {

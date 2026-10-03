@@ -295,6 +295,12 @@ func useRealNightgaugeBinary(t *testing.T) {
 // only by the plugin's 5 s kill. That 5 s, not any production cost, is the
 // "slow hook verb" #1641 was blamed for. This case runs the exact argv the
 // plugin runs and requires it to behave like the verb it names.
+//
+// It identifies the binary by what it is, never by how fast it answers: it is
+// not this test binary, and its `version` names nightgauge. A 2 s bound on
+// `hook stop-verify` stood in for that and measured the machine's load as
+// much as the binary (#1810, #2348); it also let any program that exits 0
+// in silence, /usr/bin/true for one, pass.
 func TestOpenCodeIntegrationHostBinaryIsARealNightgauge(t *testing.T) {
 	real := realOpenCode(t)
 	_ = openCodeShim(t, real) // the same installer every dispatching case uses
@@ -303,16 +309,37 @@ func TestOpenCodeIntegrationHostBinaryIsARealNightgauge(t *testing.T) {
 	if self == "" {
 		t.Fatal("the manager resolved no host binary to export as NIGHTGAUGE_BIN")
 	}
+	testBinary, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	selfInfo, err := os.Stat(self)
+	if err != nil {
+		t.Fatalf("NIGHTGAUGE_BIN %s: %v", self, err)
+	}
+	if testInfo, err := os.Stat(testBinary); err == nil && os.SameFile(selfInfo, testInfo) {
+		t.Fatalf("NIGHTGAUGE_BIN is this Go test binary (%s): the plugin's `hook stop-verify` would re-run the whole suite", self)
+	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	// Bounds a hang, never a pass: a verb that answers at all passes.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	env := []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
+
+	// A nightgauge names itself on the first line of `version`. A Go test
+	// binary runs its tests instead, and /usr/bin/true prints nothing.
+	version := exec.CommandContext(ctx, self, "version")
+	version.Dir = t.TempDir()
+	version.Env = env
+	vout, err := version.Output()
+	if err != nil || !strings.HasPrefix(string(vout), "nightgauge ") {
+		t.Fatalf("`$NIGHTGAUGE_BIN version` exited %v and printed %q; a nightgauge binary names itself on the first line", err, vout)
+	}
+
 	cmd := exec.CommandContext(ctx, self, "hook", "stop-verify", "--workdir", t.TempDir())
 	cmd.Dir = t.TempDir()
-	cmd.Env = []string{"HOME=" + t.TempDir(), "PATH=/usr/bin:/bin"}
-	started := time.Now()
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
-	elapsed := time.Since(started)
-
 	if err != nil {
 		t.Fatalf("`$NIGHTGAUGE_BIN hook stop-verify` exited %v — NIGHTGAUGE_BIN is not a nightgauge binary\noutput:\n%s", err, out)
 	}
@@ -320,12 +347,6 @@ func TestOpenCodeIntegrationHostBinaryIsARealNightgauge(t *testing.T) {
 	// silent stdout. A Go test binary prints its own test log here instead.
 	if len(out) != 0 {
 		t.Errorf("`$NIGHTGAUGE_BIN hook stop-verify` printed %d bytes for a workdir with no plan file, want silence:\n%s", len(out), out)
-	}
-	// The plugin's own bound is 5s. A real verb answers in well under a
-	// second; anything near the bound is a binary that is doing something
-	// else entirely.
-	if elapsed > 2*time.Second {
-		t.Errorf("`$NIGHTGAUGE_BIN hook stop-verify` took %s; the verb the plugin spawns on every session.idle must answer in milliseconds", elapsed)
 	}
 }
 
@@ -479,11 +500,38 @@ func writeOperatorOpenCodeConfig(t *testing.T, home string, plugin bool) {
 // OpenCode's own install is already satisfied, exactly as it would be for
 // an operator who has used OpenCode before. Seeding only the version marker
 // (round 6/7's fixture) does NOT satisfy opencode's own check.
+//
+// It also asserts OperatorInstallSatisfied's own verdict on the seeded
+// directory (#1800, #1810): the opt-in tests tell OpenCode's fast path from an
+// install wait by the watchdog never arming, and that is only the predicate's
+// verdict if the predicate reads this fixture as satisfied. A predicate that
+// regressed fails here, by name, before any dispatch.
 func seedOperatorInstallSatisfied(t *testing.T, dir string) {
 	t.Helper()
 	if err := opencodeplugin.WriteDependencies(dir); err != nil {
 		t.Fatal(err)
 	}
+	if !opencodeplugin.OperatorInstallSatisfied(dir) {
+		t.Fatalf("OperatorInstallSatisfied reads %s as unsatisfied after seeding the full four-file set; the watchdog would arm on a directory OpenCode itself treats as installed", dir)
+	}
+}
+
+// installRiskMarker names the install-risk or adapter_incompatible marker a
+// dispatch emitted, or "", and returns the stderr it searched. The manager
+// writes these markers into the run's own stderr (result.Stderr, and the
+// streamer), never into this process's os.Stderr, so a check of the captured
+// os.Stderr alone could never see one (#1800). Both are read.
+func installRiskMarker(stderr string, result *adapters.RunResult) (marker, combined string) {
+	combined = stderr
+	if result != nil {
+		combined += "\n" + result.Stderr
+	}
+	for _, m := range []string{"adapter_incompatible", "may be waiting on an unreachable registry"} {
+		if strings.Contains(combined, m) {
+			return m, combined
+		}
+	}
+	return "", combined
 }
 
 // debugPaths parses `opencode debug paths` into name → path.
@@ -627,6 +675,18 @@ func TestOpenCodeIntegrationPluginLoadsExactlyOnce(t *testing.T) {
 // layered back into the run, its agent and MCP server appear in `opencode
 // debug config`, one stderr line says so, and the run's data still lives in
 // its own root, so stored logins stay out.
+//
+// It also proves the dispatch took OpenCode's own "already installed" fast
+// path, by two counts rather than a clock (#2348): the operator-install-risk
+// watchdog never armed, and the npm registry stand-in saw no connection, so
+// OpenCode attempted no install. A 20 s wall-clock bound did this job before,
+// and on a loaded machine the fast path itself ran past it (26-35 s observed
+// at load 30-170) with every other assertion holding. Without
+// seedOperatorInstallSatisfied the watchdog arms, which is red within its
+// shortened bound at any load. The registry count covers the other way to
+// lose the fast path, a directory Nightgauge reads as satisfied that OpenCode
+// installs into anyway: an install wait does reach the stand-in (4
+// connections, observed with the seed removed and the production bound).
 func TestOpenCodeIntegrationInheritUserConfigOptIn(t *testing.T) {
 	real := realOpenCode(t)
 	home := isolateOpenCodeHome(t)
@@ -644,25 +704,32 @@ func TestOpenCodeIntegrationInheritUserConfigOptIn(t *testing.T) {
 	// marker (round 6/7's narrower fixture, which did not get the fast
 	// path).
 	seedOperatorInstallSatisfied(t, filepath.Join(home, ".config", "opencode"))
+	// Deliberately short: the watchdog must not arm at all, and if it does,
+	// this fails in seconds rather than at the production bound.
+	withShortOperatorInstallWaitBoundForRealBinary(t, 6*time.Second)
 
-	out := openCodeShim(t, real)
-	started := time.Now()
+	registryEnv, connections := localNPMRegistry(t)
+	out := openCodeShimWithRegistry(t, real, registryEnv)
+	watchdog := observeOperatorInstallWatchdog(t, nil)
 	result, stderr, err := runOpenCodeIntegrationStage(t)
-	elapsed := time.Since(started)
 	if err != nil {
 		t.Fatalf("RunStage: %v", err)
 	}
 	// A satisfied OPENCODE_CONFIG_DIR must never arm the operator-install-risk
-	// watchdog (#1635/A11 round 8): this dispatch completes on the fast path,
-	// not by the watchdog's own bound expiring and the CLI being killed.
+	// watchdog (#1635/A11 round 8): the manager has nothing to bound.
+	if got := watchdog(); got.armed {
+		t.Errorf("the operator-install-risk watchdog armed (bound %s, ended by %s) for an OPENCODE_CONFIG_DIR seeded satisfied", got.bound, got.end)
+	}
+	// And OpenCode's own fast path makes no install attempt: the ~70-80 s
+	// install wait this test tells it from starts with a registry request.
+	if n := connections(); n != 0 {
+		t.Errorf("the npm registry stand-in saw %d connection(s): OpenCode tried to install into an OPENCODE_CONFIG_DIR seeded satisfied instead of taking its fast path", n)
+	}
 	if result != nil && result.ExitCode == -1 {
 		t.Error("ExitCode = -1: the dispatch was killed rather than completing on OpenCode's own fast path")
 	}
-	if strings.Contains(stderr, "adapter_incompatible") || strings.Contains(stderr, "may be waiting on an unreachable registry") {
-		t.Errorf("stderr carries an install-risk/adapter_incompatible marker for a directory seeded satisfied:\n%s", stderr)
-	}
-	if elapsed > 20*time.Second {
-		t.Errorf("RunStage took %s; a satisfied OPENCODE_CONFIG_DIR should get OpenCode's own fast path (observed ~4.5s for a whole dispatch on the pinned binary), not the ~70-80s an install wait takes", elapsed)
+	if marker, all := installRiskMarker(stderr, result); marker != "" {
+		t.Errorf("the dispatch's stderr carries %q for a directory seeded satisfied:\n%s", marker, all)
 	}
 	config := string(readShimFile(t, out, "config.json"))
 	for _, want := range []string{"operator-fixture-agent", "operator-fixture-mcp"} {
@@ -725,20 +792,22 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 
 	registryEnv, connections := localNPMRegistry(t)
 	out := openCodeShimWithRegistry(t, real, registryEnv)
-	start := time.Now()
+	// Never waiting on ~/.opencode is asserted by count, not by clock (#2348):
+	// the watchdog never arms, and no registry connection is made.
+	withShortOperatorInstallWaitBoundForRealBinary(t, 6*time.Second)
+	watchdog := observeOperatorInstallWatchdog(t, nil)
 	result, stderr, err := runOpenCodeIntegrationStage(t)
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("RunStage with an agent in ~/.opencode = %v; #1787's per-run HOME must never wait or refuse on it", err)
 	}
 	if result != nil && result.ExitCode == -1 {
 		t.Error("ExitCode = -1: the dispatch was killed rather than completing")
 	}
-	if strings.Contains(stderr, "adapter_incompatible") || strings.Contains(stderr, "may be waiting on an unreachable registry") {
-		t.Errorf("stderr carries an install-risk/adapter_incompatible marker; a non-inheriting run's own per-run HOME must never touch ~/.opencode at all:\n%s", stderr)
+	if marker, all := installRiskMarker(stderr, result); marker != "" {
+		t.Errorf("the dispatch's stderr carries %q; a non-inheriting run's own per-run HOME must never touch ~/.opencode at all:\n%s", marker, all)
 	}
-	if elapsed > openCodeOfflineWallClockCap {
-		t.Errorf("RunStage took %s, want under %s: #1787's whole point is that a non-inheriting run never waits on ~/.opencode", elapsed, openCodeOfflineWallClockCap)
+	if got := watchdog(); got.armed {
+		t.Errorf("the operator-install-risk watchdog armed (bound %s, ended by %s): #1787's whole point is that a non-inheriting run never waits on ~/.opencode", got.bound, got.end)
 	}
 	if n := connections(); n != 0 {
 		t.Errorf("the npm registry stand-in saw %d connection(s); a non-inheriting run must never reach for a config directory it never sees", n)
@@ -764,28 +833,27 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 	// seeded here.
 	seedOperatorInstallSatisfied(t, filepath.Join(home, ".opencode"))
 	seedOperatorInstallSatisfied(t, filepath.Join(home, ".config", "opencode"))
-	started := time.Now()
+	watchdog = observeOperatorInstallWatchdog(t, nil)
 	result, stderr, err = runOpenCodeIntegrationStage(t)
-	elapsed = time.Since(started)
 	if err != nil {
 		t.Fatalf("RunStage with the opt-in: %v", err)
 	}
 	if result != nil && result.ExitCode == -1 {
 		t.Error("ExitCode = -1: the dispatch was killed rather than completing on OpenCode's own fast path")
 	}
-	if strings.Contains(stderr, "adapter_incompatible") || strings.Contains(stderr, "may be waiting on an unreachable registry") {
-		t.Errorf("stderr carries an install-risk/adapter_incompatible marker for directories seeded satisfied:\n%s", stderr)
+	if marker, all := installRiskMarker(stderr, result); marker != "" {
+		t.Errorf("the dispatch's stderr carries %q for directories seeded satisfied:\n%s", marker, all)
 	}
-	// This test seeds two operator-owned directories (~/.opencode and
-	// ~/.config/opencode) and runs a preceding refused dispatch before the
-	// timed section starts, so its fast-path wall clock runs measurably
-	// higher under CI's shared-runner load than the single-directory cases
-	// above (observed 23.7s in CI vs ~5-6s locally). 35s keeps a wide margin
-	// below the ~70-80s slow path this assertion exists to catch, while
-	// giving that CI variance headroom the tighter 20s bound in the
-	// single-directory tests does not need.
-	if elapsed > 35*time.Second {
-		t.Errorf("RunStage took %s; both operator directories were seeded satisfied and should get OpenCode's own fast path, not the ~70-80s an install wait takes", elapsed)
+	// OpenCode's own fast path, by count rather than by a 35 s clock that CI
+	// load had already pushed to 23.7 s (#2348): with both operator
+	// directories seeded satisfied the watchdog has nothing to bound, and
+	// OpenCode makes no install attempt, so the registry stand-in still has
+	// no connection at all.
+	if got := watchdog(); got.armed {
+		t.Errorf("the operator-install-risk watchdog armed (bound %s, ended by %s) with both operator directories seeded satisfied", got.bound, got.end)
+	}
+	if n := connections(); n != 0 {
+		t.Errorf("the npm registry stand-in saw %d connection(s): OpenCode tried an install with both operator directories seeded satisfied, instead of its fast path", n)
 	}
 	if config := string(readShimFile(t, out, "config.json")); !strings.Contains(config, "home-dotdir-agent") {
 		t.Errorf("with the opt-in the ~/.opencode agent is not in the run's config:\n%s", config)
@@ -798,17 +866,6 @@ func TestOpenCodeIntegrationHomeDotOpenCode(t *testing.T) {
 func depsMarkerPath(dir string) string {
 	return filepath.Join(dir, "node_modules", "@opencode-ai", "plugin", "package.json")
 }
-
-// openCodeOfflineWallClockCap bounds the two tests below at the shortened
-// openCodeOperatorInstallWaitBound this file sets for them, comfortably
-// below the multi-minute registry retry/backoff wait ADR-022's amendment
-// records (71s and 146.88s observed) a regression back to an UNBOUNDED wait
-// would reproduce. 35s (not 20s) because CI runs this package alongside two
-// others in the same `go test` invocation: TestOpenCodeIntegrationHomeDotOpenCode
-// observed 23-24s there against ~11s standalone locally — real contention,
-// not a regression — and 35s still leaves more than half its margin below
-// the 71s floor this guards against.
-const openCodeOfflineWallClockCap = 35 * time.Second
 
 // withShortOperatorInstallWaitBoundForRealBinary shortens
 // openCodeOperatorInstallWaitBound for a real-binary test in this file, so
@@ -829,11 +886,13 @@ func withShortOperatorInstallWaitBoundForRealBinary(t *testing.T, bound time.Dur
 // narrowed AC1 removes that): the real binary's own install waits on the
 // registry stand-in, and the dispatch fails, bounded by the shortened
 // watchdog rather than by npm's own multi-minute retry/backoff, classified
-// adapter_incompatible and naming the directory. Deleting the manager's
-// operator-install-risk watchdog turns this red: the dispatch then waits out
-// this test's own registry listener well past openCodeOfflineWallClockCap,
-// bounded only by RunStage's own 120s context timeout, with no
-// adapter_incompatible marker at all.
+// adapter_incompatible and naming the directory. "Bounded by the watchdog" is
+// read from the watchdog itself (#2348): it armed, and its own timeout ended
+// the dispatch. A wall-clock cap used to stand in for that and measured the
+// machine's load as much as the bound. Deleting the manager's
+// operator-install-risk watchdog turns this red: nothing arms or times out,
+// the dispatch waits out this test's own registry listener, bounded only by
+// RunStage's own 120s context timeout, with no adapter_incompatible marker.
 func TestOpenCodeIntegrationAbsentInheritedConfigDirOffline(t *testing.T) {
 	real := realOpenCode(t)
 	home := isolateOpenCodeHome(t)
@@ -847,11 +906,10 @@ func TestOpenCodeIntegrationAbsentInheritedConfigDirOffline(t *testing.T) {
 	registryEnv, _ := localNPMRegistry(t)
 	openCodeShimWithRegistry(t, real, registryEnv)
 
-	start := time.Now()
+	watchdog := observeOperatorInstallWatchdog(t, nil)
 	result, stderr, err := runOpenCodeIntegrationStage(t)
-	elapsed := time.Since(start)
-	if elapsed > openCodeOfflineWallClockCap {
-		t.Errorf("RunStage took %s, want under %s: an absent, unsatisfied OPENCODE_CONFIG_DIR must be bounded by the watchdog, not by npm's own retry/backoff", elapsed, openCodeOfflineWallClockCap)
+	if got := watchdog(); !got.armed || got.end != operatorInstallWatchdogEndTimedOut {
+		t.Errorf("the operator-install-risk watchdog armed=%v and ended by %s; an absent, unsatisfied OPENCODE_CONFIG_DIR must be bounded by the watchdog timing out, not by npm's own retry/backoff", got.armed, got.end)
 	}
 	combined := stderr
 	if result != nil {
@@ -896,14 +954,14 @@ func TestOpenCodeIntegrationHomeDirBinOnlyNeverArmsTheWatchdog(t *testing.T) {
 	registryEnv, connections := localNPMRegistry(t)
 	openCodeShimWithRegistry(t, real, registryEnv)
 
-	start := time.Now()
+	watchdog := observeOperatorInstallWatchdog(t, nil)
 	result, stderr, err := runOpenCodeIntegrationStage(t)
-	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("RunStage: %v", err)
 	}
-	if elapsed > openCodeOfflineWallClockCap {
-		t.Errorf("RunStage took %s, want under %s: a bin/-only ~/.opencode must never arm the watchdog for a non-inheriting run", elapsed, openCodeOfflineWallClockCap)
+	// Read from the watchdog, not inferred from a wall-clock cap (#2348).
+	if got := watchdog(); got.armed {
+		t.Errorf("the operator-install-risk watchdog armed (bound %s, ended by %s): a bin/-only ~/.opencode must never arm it for a non-inheriting run", got.bound, got.end)
 	}
 	combined := stderr
 	if result != nil {

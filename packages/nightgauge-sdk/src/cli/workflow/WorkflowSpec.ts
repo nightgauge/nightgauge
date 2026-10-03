@@ -90,6 +90,13 @@ export interface WorkflowSpec {
   preferNativeOffload?: boolean;
   /** Optional total USD budget for the run. */
   budgetUsd?: number;
+  /**
+   * The tools every unit's query is granted: the owning stage skill's
+   * `allowed-tools` without AskUserQuestion, as the stage's single-agent query
+   * gets them (`PipelineOrchestrator.selectExecutor`, #2358). Unset when the
+   * skill declares none.
+   */
+  allowedTools?: string[];
 }
 
 /**

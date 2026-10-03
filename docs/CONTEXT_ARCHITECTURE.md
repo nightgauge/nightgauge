@@ -1010,6 +1010,19 @@ LLM-as-judge (#4097) must treat it as background, not instructions. Bounds:
 ≤25 files, ≤12 notes, ≤2.5 KB. Non-epic work and wave-0 sub-issues (no
 accumulated context yet) get a byte-identical prompt (the renderer returns "").
 
+**The file lives in the epic's own repository (#2377).** `{E}` is an issue
+number, which names an issue only within one repository. The wave orchestrator
+writes the file into the pipeline state of the epic's repository checkout, and
+a sub-issue's prompt reads it from there, whichever repository the sub-issue is
+in. Before #2377 both used the launch checkout's pipeline state, so a sub-issue
+of an epic in another repository could be handed the findings of an unrelated
+epic that shared the number. When the workspace has no checkout of the epic's
+repository, nothing is written or injected. The wave plan and wave status
+(`wave-plan-{E}.json`, `wave-status-{E}.json`) are kept beside it. A sub-issue
+in the epic's repository is keyed in `sub_issue_findings` by its number; one in
+another repository is keyed `owner/repo#N`, so it never overwrites the findings
+of the epic repository's own issue with that number.
+
 > **Note**: Epic context files are NOT cleaned up by `/pr-merge` — they persist
 > for the lifetime of the epic. See Issue #2404.
 
@@ -1049,21 +1062,21 @@ accumulated context yet) get a byte-identical prompt (the renderer returns "").
 }
 ```
 
-| Field                                 | Type   | Required | Description                                 |
-| ------------------------------------- | ------ | -------- | ------------------------------------------- |
-| `schema_version`                      | string | Yes      | Schema version (`1.0`)                      |
-| `epic_number`                         | number | Yes      | Epic issue number                           |
-| `last_updated`                        | string | Yes      | ISO 8601 timestamp of last update           |
-| `sub_issue_findings`                  | object | Yes      | Keyed by issue number (string)              |
-| `sub_issue_findings[N].files_touched` | array  | Yes      | Files created or modified by sub-issue      |
-| `sub_issue_findings[N].decisions`     | array  | Yes      | Key decisions made during execution         |
-| `sub_issue_findings[N].discoveries`   | array  | Yes      | Codebase discoveries for sibling sub-issues |
-| `sub_issue_findings[N].patterns`      | array  | Yes      | Architecture patterns identified            |
-| `sub_issue_findings[N].recorded_at`   | string | Yes      | ISO 8601 timestamp                          |
-| `shared_research`                     | object | Yes      | Aggregated research across all sub-issues   |
-| `shared_research.codebase_notes`      | array  | Yes      | Codebase structure notes                    |
-| `shared_research.architecture_notes`  | array  | Yes      | Architecture observations                   |
-| `shared_research.relevant_files`      | array  | Yes      | Deduplicated file paths from all sub-issues |
+| Field                                 | Type   | Required | Description                                      |
+| ------------------------------------- | ------ | -------- | ------------------------------------------------ |
+| `schema_version`                      | string | Yes      | Schema version (`1.0`)                           |
+| `epic_number`                         | number | Yes      | Epic issue number                                |
+| `last_updated`                        | string | Yes      | ISO 8601 timestamp of last update                |
+| `sub_issue_findings`                  | object | Yes      | Keyed by issue number, or `owner/repo#N` (#2377) |
+| `sub_issue_findings[N].files_touched` | array  | Yes      | Files created or modified by sub-issue           |
+| `sub_issue_findings[N].decisions`     | array  | Yes      | Key decisions made during execution              |
+| `sub_issue_findings[N].discoveries`   | array  | Yes      | Codebase discoveries for sibling sub-issues      |
+| `sub_issue_findings[N].patterns`      | array  | Yes      | Architecture patterns identified                 |
+| `sub_issue_findings[N].recorded_at`   | string | Yes      | ISO 8601 timestamp                               |
+| `shared_research`                     | object | Yes      | Aggregated research across all sub-issues        |
+| `shared_research.codebase_notes`      | array  | Yes      | Codebase structure notes                         |
+| `shared_research.architecture_notes`  | array  | Yes      | Architecture observations                        |
+| `shared_research.relevant_files`      | array  | Yes      | Deduplicated file paths from all sub-issues      |
 
 ### Creation Manifest
 

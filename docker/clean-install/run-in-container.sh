@@ -54,8 +54,8 @@ whoami; echo "HOME=$HOME"
 [[ -z "${NIGHTGAUGE_GO_BINARY_PATH:-}" && -z "${NIGHTGAUGE_BIN:-}" ]] \
   || { echo "ERROR: NIGHTGAUGE_GO_BINARY_PATH / NIGHTGAUGE_BIN would short-circuit binary resolution"; exit 1; }
 [[ "${E2E_SMOKE:-0}" == "1" || -n "${GH_TOKEN:-}" ]] || { echo "ERROR: GH_TOKEN is not set"; exit 1; }
-echo "vscode: $(code --version --no-sandbox --user-data-dir=/tmp/probe | head -1)"; rm -rf /tmp/probe
-echo "claude: $(claude --version)"; echo "gh: $(gh --version | head -1)"; echo "node: $(node --version)"
+echo "vscode: $(code --version --no-sandbox --user-data-dir=/tmp/probe | sed -n 1p)"; rm -rf /tmp/probe
+echo "claude: $(claude --version)"; echo "gh: $(gh --version | sed -n 1p)"; echo "node: $(node --version)"
 
 step "agent auth (the one thing inherited from the host)"
 if [[ "${E2E_SMOKE:-0}" == "1" ]]; then
@@ -83,7 +83,7 @@ mkdir -p "$EXT_DIR" "$USER_DIR"
 CODE_ARGS=(--no-sandbox --disable-gpu --user-data-dir "$USER_DIR" --extensions-dir "$EXT_DIR")
 
 step "README step 1: install the packaged VSIX into a fresh profile"
-VSIX="$(ls /vsix/*.vsix | head -1)"
+VSIX="$(ls /vsix/*.vsix | sed -n 1p)"
 echo "vsix: $VSIX ($(stat -c %s "$VSIX") bytes)"
 code "${CODE_ARGS[@]}" --install-extension "$VSIX"
 code "${CODE_ARGS[@]}" --list-extensions --show-versions
@@ -133,7 +133,7 @@ type:epic 8957e5 Parent issue with sub-issues
 type:spike c2e0c6 Research/investigation task
 LABELS
   "$BIN" label list --owner "$E2E_OWNER" --repo "$E2E_REPO" --owner-type "$E2E_OWNER_TYPE" --json | jq -r '[.[].name] | join(" ")'
-  PROJECT_ID="$(grep -E '^\s+id:' .nightgauge/config.yaml | head -1 | sed -E 's/.*id: *"?([^"]*)"?/\1/')"
+  PROJECT_ID="$(grep -m1 -E '^\s+id:' .nightgauge/config.yaml | sed -E 's/.*id: *"?([^"]*)"?/\1/')"
   REPO_ID="$(gh api "repos/$E2E_REPO" --jq .node_id)"
   LINK_Q='mutation($projectId:ID!,$repoId:ID!){linkProjectV2ToRepository(input:{projectId:$projectId,repositoryId:$repoId}){repository{id}}}'
   if "$BIN" forge graphql --json -f query="$LINK_Q" -f "projectId=$PROJECT_ID" -f "repoId=$REPO_ID"; then

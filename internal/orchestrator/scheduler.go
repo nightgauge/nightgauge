@@ -886,6 +886,14 @@ type Scheduler struct {
 	mu                       sync.Mutex
 	scalingConfig            *ScalingConfig // Dynamic agent scaling (nil = use defaults)
 
+	// dispatchThrottle is the platform's workspace throttle RunAuto and an
+	// epic's waves hold new dispatch to (#2352); nil caps nothing. Guarded
+	// by mu.
+	dispatchThrottle *DispatchThrottle
+	// onThrottleWait, when set, is called as waitForThrottleRoom starts to
+	// wait; tests use it to know the wait began.
+	onThrottleWait func()
+
 	// Budget-aware retry tracking (Issue #2338 — max 1 budget retry per stage per run)
 	budgetRetries map[string]int
 
@@ -968,7 +976,7 @@ type Scheduler struct {
 	// Callbacks
 	onStageStart    func(repo string, issue int, stage string, title string)
 	onStageComplete func(repo string, issue int, stage string, err error, cost StageCost, model string)
-	onEpicComplete  func(repo string, epicNumber int)
+	onEpicComplete  func(epicRepo string, epicNumber int) // the epic's own repository (#2377)
 	// evaluatePostMergeFn performs the post-merge evaluation. A field, not a
 	// direct call, for the same reason buildGraphFn is one: checkEpicCompletion
 	// otherwise constructs its own GitHub services from a live client, so the
@@ -996,7 +1004,8 @@ type Scheduler struct {
 	// onto it would be silently wiped by the next pipeline.run, or born nil,
 	// depending on ordering; both failures are invisible (#991). Mirrors the
 	// SetAttention shape: one writer, nil-safe on both ends. nil in CLI mode.
-	epicCheckpoint     func(epicNumber int)
+	// It receives the epic's own repository with its number (#2377).
+	epicCheckpoint     func(epicRepo string, epicNumber int)
 	onPipelineComplete func(repo string, issue int, runtime *state.RuntimeState, success bool)
 	onQueueChanged     func(QueueState)
 	onStateChanged     func(repo string, issue int, runtime *state.RuntimeState)
@@ -1092,8 +1101,14 @@ type QueueItem struct {
 	EpicOrder       *int               `json:"epicOrder,omitempty"`
 	IsBatch         bool               `json:"isBatch,omitempty"`
 	EpicNumber      *int               `json:"epicNumber,omitempty"`
-	AddedAt         time.Time          `json:"addedAt"`
-	Position        int                `json:"position"` // 1-indexed
+	// EpicRepo is the repository ("owner/name") of the epic EpicNumber names.
+	// A sub-issue of a cross-repository epic sits in another repository, where
+	// EpicNumber names a different issue and epic/<N>-* is that issue's
+	// branch, so a consumer bases the sub-issue on the epic branch only when
+	// EpicRepo is its own repository (#2377).
+	EpicRepo string    `json:"epicRepo,omitempty"`
+	AddedAt  time.Time `json:"addedAt"`
+	Position int       `json:"position"` // 1-indexed
 	// PausedReason is set when Status == "paused" (Issue #3001). Discriminated
 	// by Kind so future paused reasons (manual hold, license check) can be
 	// added without re-shaping callers.
@@ -1102,6 +1117,11 @@ type QueueItem struct {
 	// remote-triggered runs. Preferred over the locally-generated runstate
 	// UUID when set (#3557).
 	RemoteRunID string `json:"remoteRunId,omitempty"`
+	// RemoteRunAttached is true when RemoteRunID was attached to an item
+	// queued for the issue before its trigger arrived (#2344): the item is
+	// the operator's own work and also serves the remote run, so cancelling
+	// the run detaches the run id instead of removing the item.
+	RemoteRunAttached bool `json:"remoteRunAttached,omitempty"`
 	// RequestedAdapter and RequestedModel are a remote run request's pin
 	// (#1656, ADR-022 § 2), already accepted by ValidateRemotePin. Every
 	// stage of the run dispatches on them, and the run record keeps them next
@@ -1165,6 +1185,21 @@ type QueueBlockingRef struct {
 	Number int    `json:"number"`
 	Title  string `json:"title"`
 	State  string `json:"state"`
+	// Repo is the blocker's repository ("owner/name"). Empty means the queue
+	// item's own repository. An epic's blockers, and a sub-issue's, can live
+	// in another repository than the sub-issue, where the same number names a
+	// different issue (#2377).
+	Repo string `json:"repo,omitempty"`
+}
+
+// queueBlockerKey keys the blocker b of a queue item in itemRepo by
+// repository and number (repoIssueKey).
+func queueBlockerKey(itemRepo string, b QueueBlockingRef) string {
+	repo := b.Repo
+	if repo == "" {
+		repo = itemRepo
+	}
+	return repoIssueKey(repo, b.Number)
 }
 
 // QueueState is the persistent queue state.
@@ -1625,6 +1660,14 @@ func originRepoSlug(root string) string {
 		return ""
 	}
 	return owner + "/" + name
+}
+
+// RepoRoot resolves the checkout of repo ("owner/name") by the rules a run in
+// that repository is rooted by (resolveRunRoot), and errors when this
+// workspace has none. The IPC server uses it to find an epic's branch in the
+// epic's own repository (#2377).
+func (s *Scheduler) RepoRoot(repo string) (string, error) {
+	return s.resolveRunRoot(repo)
 }
 
 // runRoot resolves the filesystem root a run's on-disk state belongs in — the
@@ -2126,11 +2169,19 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 	// If an epic is blocked by another epic (cross-epic dependency),
 	// all of its sub-issues are transitively blocked even if they
 	// don't have direct blockedBy entries.
-	subIssueToEpicIdx := make(map[int]int) // sub-issue number → index in items
+	//
+	// Keyed by the sub-issue's repository and number: a sub-issue can live in
+	// another repository than its epic, and keyed by number alone an unrelated
+	// issue sharing that number was held as "parent epic is blocked" (#2377).
+	subIssueToEpicIdx := make(map[string]int) // "owner/repo#N" (lower-cased) → index in items
 	for i, item := range items {
 		if item.IsEpic {
 			for _, si := range item.SubIssues {
-				subIssueToEpicIdx[si.Number] = i
+				repo := si.Repo
+				if repo == "" {
+					repo = item.Repo
+				}
+				subIssueToEpicIdx[repoIssueKey(repo, si.Number)] = i
 			}
 		}
 	}
@@ -2203,7 +2254,7 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 		// Check parent epic blocking (cross-epic transitive blocking).
 		// If this issue is a sub-issue of an epic that has open blockedBy
 		// entries, the sub-issue is transitively blocked.
-		if epicIdx, ok := subIssueToEpicIdx[item.Number]; ok {
+		if epicIdx, ok := subIssueToEpicIdx[repoIssueKey(item.Repo, item.Number)]; ok {
 			epicItem := items[epicIdx]
 			epicBlocked := false
 			for _, b := range epicItem.BlockedBy {
@@ -2213,7 +2264,7 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 				}
 			}
 			if epicBlocked {
-				log.Printf("#%d: skipping — parent epic #%d is blocked", item.Number, epicItem.Number)
+				log.Printf("%s#%d: skipping — parent epic %s#%d is blocked", item.Repo, item.Number, epicItem.Repo, epicItem.Number)
 				continue
 			}
 		}
@@ -2246,9 +2297,91 @@ func (s *Scheduler) PickNext(ctx context.Context) (*types.BoardItem, error) {
 	return &candidates[0], nil
 }
 
+// SetDispatchThrottle holds the auto-scheduler loop (RunAuto) to the
+// platform's workspace throttle (#2352): while it is in force, no new
+// pipeline starts while as many run as its cap allows. Running pipelines are
+// never stopped. Nil caps nothing.
+func (s *Scheduler) SetDispatchThrottle(d *DispatchThrottle) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dispatchThrottle = d
+}
+
+// followsDispatchThrottle reports whether a workspace throttle is followed
+// at all (#2352).
+func (s *Scheduler) followsDispatchThrottle() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dispatchThrottle != nil
+}
+
+// throttleHoldsDispatch reports whether the workspace throttle allows no
+// further pipeline now: as many run as its cap.
+func (s *Scheduler) throttleHoldsDispatch() bool {
+	return s.throttleRoom(1) == 0
+}
+
+// throttleRoom is how many of want more pipelines the workspace throttle
+// lets start now (#2352): want when no throttle is followed or in force,
+// otherwise what its cap leaves above the pipelines running, never below 0.
+func (s *Scheduler) throttleRoom(want int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.dispatchThrottle == nil || want <= 0 {
+		return want
+	}
+	running := 0
+	for _, n := range s.repoRunning {
+		running += n
+	}
+	room := s.dispatchThrottle.Ceiling(running+want) - running
+	if room < 0 {
+		return 0
+	}
+	return room
+}
+
+// throttleRoomWait is how often waitForThrottleRoom looks again while the
+// workspace throttle holds dispatch, for the room a running pipeline makes
+// when it ends; a throttle change wakes it at once.
+const throttleRoomWait = 2 * time.Second
+
+// waitForThrottleRoom waits until the workspace throttle lets at least one
+// more pipeline start, and returns how many of want may (#2352). It returns
+// 0 only when ctx ends first.
+func (s *Scheduler) waitForThrottleRoom(ctx context.Context, want int) int {
+	waiting := false
+	for {
+		s.mu.Lock()
+		throttle := s.dispatchThrottle
+		s.mu.Unlock()
+		var changed <-chan struct{}
+		if throttle != nil {
+			changed = throttle.Changed()
+		}
+		if room := s.throttleRoom(want); room > 0 {
+			return room
+		}
+		if !waiting {
+			waiting = true
+			log.Printf("the workspace throttle holds dispatch; %d pipeline(s) wait for room", want)
+			if s.onThrottleWait != nil {
+				s.onThrottleWait()
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return 0
+		case <-changed:
+		case <-time.After(throttleRoomWait):
+		}
+	}
+}
+
 // RunAuto continuously polls the board and dispatches pipelines.
 // A backstop sweep ticker fires every sweepMultiplier * pollInterval to close
 // any epics whose sub-issues are all done but which the on-merge trigger missed.
+// While the workspace throttle holds dispatch (#2352), a poll starts nothing.
 func (s *Scheduler) RunAuto(ctx context.Context, pollInterval time.Duration) error {
 	log.Printf("Starting auto-scheduler (poll every %s)", pollInterval)
 
@@ -2265,9 +2398,13 @@ func (s *Scheduler) RunAuto(ctx context.Context, pollInterval time.Duration) err
 		default:
 		}
 
-		item, err := s.PickNext(ctx)
-		if err != nil {
+		if s.throttleHoldsDispatch() {
+			log.Printf("auto-scheduler: the workspace throttle holds dispatch; waiting")
+		} else if item, err := s.PickNext(ctx); err != nil {
 			log.Printf("scheduler error: %v", err)
+		} else if item != nil && s.throttleHoldsDispatch() {
+			// The throttle changed while the board was read.
+			log.Printf("auto-scheduler: the workspace throttle holds dispatch; #%d waits", item.Number)
 		} else if item != nil {
 			log.Printf("dispatching #%d: %s (%s)", item.Number, item.Title, item.Repo)
 			go s.dispatchItem(ctx, *item)
@@ -2481,13 +2618,28 @@ func (s *Scheduler) QueueAdd(entries ...QueueEntry) {
 }
 
 // QueueAddItem adds rich queue items to the execution queue.
-// Duplicate repository+issue identities are silently skipped.
+// Duplicate repository+issue identities are skipped, with one exception: a
+// remote run's trigger for an issue already waiting here, on an item that
+// serves no remote run, attaches its run id to that item and marks it
+// attached (#2344). The extension's slot adopts the run id from the item it
+// dequeues, so without it the triggered run would start under no run id and
+// the platform's verbs could never reach it. An item a dispatch has taken,
+// or one already serving another remote run, is left as it is: the
+// extension places a trigger for an issue it is dispatching on that
+// dispatch itself.
 func (s *Scheduler) QueueAddItem(items ...QueueItem) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range items {
-		if s.queueContainsUnlocked(items[i].Repo, items[i].IssueNumber) {
+		if existing := s.queueItemUnlocked(items[i].Repo, items[i].IssueNumber); existing != nil {
+			if items[i].RemoteRunID != "" && existing.RemoteRunID == "" && existing.Status != "processing" {
+				existing.RemoteRunID = items[i].RemoteRunID
+				existing.RemoteRunAttached = true
+			}
 			continue
+		}
+		if items[i].RemoteRunID == "" {
+			items[i].RemoteRunAttached = false
 		}
 		if items[i].Status == "" {
 			items[i].Status = "pending"
@@ -2500,6 +2652,17 @@ func (s *Scheduler) QueueAddItem(items ...QueueItem) {
 	}
 	s.persistQueue()
 	s.emitQueueChangedUnlocked()
+}
+
+// queueItemUnlocked returns the queued item with the exact repository+issue
+// identity, or nil. The pointer is into s.queue and valid only under s.mu.
+func (s *Scheduler) queueItemUnlocked(repo string, issueNumber int) *QueueItem {
+	for i := range s.queue {
+		if s.queue[i].Repo == repo && s.queue[i].IssueNumber == issueNumber {
+			return &s.queue[i]
+		}
+	}
+	return nil
 }
 
 // queueContainsUnlocked returns true if the queue already contains the exact
@@ -2635,6 +2798,41 @@ func (s *Scheduler) GetState() QueueState {
 	}
 }
 
+// QueueRemoveRemoteRun takes a cancelled remote run off the queue (#2344):
+// the one item carrying remoteRunID. The trigger's own item is removed while
+// no dispatch has taken it; an item a dispatch has dequeued (processing) is
+// left to that dispatch, which drops a cancelled remote run itself. An item
+// the run was attached to (RemoteRunAttached) is the operator's own work, so
+// it keeps its place, waiting or dequeued, and only loses the run id. No
+// other item, whatever its repository or issue number, is touched. Reports
+// whether the queue no longer carries the run.
+func (s *Scheduler) QueueRemoveRemoteRun(remoteRunID string) bool {
+	if remoteRunID == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		item := &s.queue[i]
+		if item.RemoteRunID != remoteRunID {
+			continue
+		}
+		if item.RemoteRunAttached {
+			item.RemoteRunID = ""
+			item.RemoteRunAttached = false
+		} else if item.Status == "processing" {
+			continue
+		} else {
+			s.queue = append(s.queue[:i], s.queue[i+1:]...)
+			s.recalculatePositions()
+		}
+		s.persistQueue()
+		s.emitQueueChangedUnlocked()
+		return true
+	}
+	return false
+}
+
 // QueueRemove removes an issue from the queue by number.
 func (s *Scheduler) QueueRemove(issueNumber int) {
 	s.mu.Lock()
@@ -2768,19 +2966,29 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Numbers already in-flight (for the blockedBy guard) and per-repo
+	// Issues already in flight (for the blockedBy guard) and per-repo
 	// in-flight counts (for the per-repo cap). Seeded from the caller's
 	// running set; both grow as we dequeue this call.
-	dequeuedNums := make(map[int]bool)
+	//
+	// The guard keys issues by repository and number (repoIssueKey): an
+	// issue number names an issue only within one repository, and a queued
+	// sub-issue's blocker can sit in another repository (#2377). A running
+	// item that names no repository holds a blocker of its number in any.
+	inFlight := make(map[string]bool)
+	inFlightAnyRepo := make(map[int]bool)
 	repoInFlight := make(map[string]int)
 	for _, r := range running {
-		dequeuedNums[r.Number] = true
+		if r.Repo == "" {
+			inFlightAnyRepo[r.Number] = true
+		} else {
+			inFlight[repoIssueKey(r.Repo, r.Number)] = true
+		}
 		repoInFlight[r.Repo]++
 	}
 
-	allQueueNums := make(map[int]bool)
+	queued := make(map[string]bool, len(s.queue))
 	for _, item := range s.queue {
-		allQueueNums[item.IssueNumber] = true
+		queued[repoIssueKey(item.Repo, item.IssueNumber)] = true
 	}
 
 	var dequeued []QueueItem
@@ -2856,8 +3064,11 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 		if len(item.BlockedBy) > 0 {
 			blocked := false
 			for _, b := range item.BlockedBy {
-				if strings.EqualFold(b.State, "OPEN") &&
-					(dequeuedNums[b.Number] || allQueueNums[b.Number]) {
+				if !strings.EqualFold(b.State, "OPEN") {
+					continue
+				}
+				key := queueBlockerKey(item.Repo, b)
+				if inFlight[key] || queued[key] || inFlightAnyRepo[b.Number] {
 					blocked = true
 					break
 				}
@@ -2887,7 +3098,7 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 
 		item.Status = "processing"
 		dequeued = append(dequeued, item)
-		dequeuedNums[item.IssueNumber] = true
+		inFlight[repoIssueKey(item.Repo, item.IssueNumber)] = true
 		repoInFlight[item.Repo]++
 		toRemoveIdx = append(toRemoveIdx, i)
 	}
@@ -2977,7 +3188,10 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 	}
 	log.Printf("EnqueueEpic: epic #%d has %d sub-issues, title=%q", epicNumber, len(issue.SubIssues), issue.Title)
 
-	// Build the eligible-sub-issue set when a whitelist was supplied.
+	// Build the eligible-sub-issue set when a whitelist was supplied. The
+	// whitelist names sub-issues by number alone (queue.enqueueEpic's
+	// eligibleSubIssues, from the extension's drag filter), so a number admits
+	// every sub-issue of this epic that has it, in any repository.
 	var eligibleSet map[int]struct{}
 	if len(eligibleSubIssues) > 0 {
 		eligibleSet = make(map[int]struct{}, len(eligibleSubIssues))
@@ -2990,7 +3204,11 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 	// Fetch per-sub-issue blockedBy relationships before taking the lock.
 	// The epic query only returns lightweight SubIssueRef (no blocking data),
 	// so each sub-issue is read for its own blocker list, and only that list.
-	subIssueBlockedBy := make(map[int][]types.BlockingRef, len(issue.SubIssues))
+	//
+	// Keyed by the sub-issue's repository and number: an epic's sub-issues can
+	// share a number across repositories, and keyed by number the second one
+	// read replaced the first one's blockers (#2377).
+	subIssueBlockedBy := make(map[string][]types.BlockingRef, len(issue.SubIssues))
 	for _, si := range issue.SubIssues {
 		if strings.EqualFold(si.State, "CLOSED") {
 			continue
@@ -3011,13 +3229,13 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 			// The sub-issue's blocker list could not be read whole.
 			// Enqueuing it without the blockers past the part that was read
 			// would let DequeueIndependent dispatch it while one is still open.
-			return fmt.Errorf("enqueue epic #%d: blockers of sub-issue #%d: %w", epicNumber, si.Number, err)
+			return fmt.Errorf("enqueue epic #%d: blockers of sub-issue %s/%s#%d: %w", epicNumber, siOwner, siRepo, si.Number, err)
 		}
 		if err != nil {
-			log.Printf("WARN: failed to fetch blockedBy for sub-issue #%d: %v", si.Number, err)
+			log.Printf("WARN: failed to fetch blockedBy for sub-issue %s/%s#%d: %v", siOwner, siRepo, si.Number, err)
 			continue
 		}
-		subIssueBlockedBy[si.Number] = siIssue.BlockedBy
+		subIssueBlockedBy[repoIssueKey(siOwner+"/"+siRepo, si.Number)] = siIssue.BlockedBy
 	}
 
 	s.mu.Lock()
@@ -3061,24 +3279,20 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 			Labels:      labels,
 			EpicOrder:   &order,
 			EpicNumber:  &epicNumber,
+			EpicRepo:    fullRepo,
 			IsBatch:     true,
 			AddedAt:     time.Now().UTC(),
 		}
-		// Epic-level blockers apply to all sub-issues
+		// Epic-level blockers apply to all sub-issues. Each keeps its own
+		// repository: copied as a bare number onto a sub-issue in another
+		// repository, it was re-read and matched there as that repository's
+		// issue with the same number.
 		for _, b := range issue.BlockedBy {
-			item.BlockedBy = append(item.BlockedBy, QueueBlockingRef{
-				Number: b.Number,
-				Title:  b.Title,
-				State:  b.State,
-			})
+			item.BlockedBy = append(item.BlockedBy, queueBlockingRef(b, fullRepo))
 		}
 		// Sub-issue-level blockers (e.g., #1335 blockedBy #1336 within the epic)
-		for _, b := range subIssueBlockedBy[si.Number] {
-			item.BlockedBy = append(item.BlockedBy, QueueBlockingRef{
-				Number: b.Number,
-				Title:  b.Title,
-				State:  b.State,
-			})
+		for _, b := range subIssueBlockedBy[repoIssueKey(subIssueRepo, si.Number)] {
+			item.BlockedBy = append(item.BlockedBy, queueBlockingRef(b, subIssueRepo))
 		}
 		// Skip if already in queue (e.g., re-enqueued individually after a
 		// prior failure). Without this, the same issue can be dequeued into
@@ -3097,6 +3311,16 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 	s.persistQueue()
 	s.emitQueueChangedUnlocked()
 	return nil
+}
+
+// queueBlockingRef is the queue's record of blocker b of an issue in
+// ownerRepo, the repository b's number is read in when b names none.
+func queueBlockingRef(b types.BlockingRef, ownerRepo string) QueueBlockingRef {
+	repo := b.Repo
+	if repo == "" {
+		repo = ownerRepo
+	}
+	return QueueBlockingRef{Number: b.Number, Title: b.Title, State: b.State, Repo: repo}
 }
 
 // OnQueueChanged sets a callback for queue state changes.
@@ -3611,21 +3835,36 @@ func (s *Scheduler) OnStageComplete(fn func(repo string, issue int, stage string
 
 // OnEpicComplete sets a callback for when an epic auto-closes.
 //
+// fn receives the epic's own repository ("owner/name") and number. For an
+// epic with sub-issues in other repositories that is not the merged
+// sub-issue's repository, which holds a different issue with that number
+// (#2377).
+//
 // SINGLE SLOT: a second call replaces the first. internal/ipc/server.go
 // registers one per `pipeline.run` request, so anything that needs to observe
 // epic completion durably must NOT register here — see SetEpicCheckpointFn for
 // the shape that survives (#991).
-func (s *Scheduler) OnEpicComplete(fn func(repo string, epicNumber int)) {
+func (s *Scheduler) OnEpicComplete(fn func(epicRepo string, epicNumber int)) {
 	s.onEpicComplete = fn
+}
+
+// EpicCompleteCallback returns the callback OnEpicComplete last registered, or
+// nil. The IPC server's tests fire the one `pipeline.run` registers, to check
+// that it opens the epic PR in the repository it is handed (#2377).
+func (s *Scheduler) EpicCompleteCallback() func(epicRepo string, epicNumber int) {
+	return s.onEpicComplete
 }
 
 // SetEpicCheckpointFn injects the autonomous scheduler's epic-checkpoint
 // recorder, so the fleet-scoped SafetyRails pause fires from the one place an
 // epic actually closes.
 //
+// fn receives the epic's own repository ("owner/name") and number, as
+// OnEpicComplete's callback does (#2377).
+//
 // Nil-receiver guard is required: NewAutonomousScheduler is called with a nil
 // *Scheduler throughout the test suite.
-func (s *Scheduler) SetEpicCheckpointFn(fn func(epicNumber int)) {
+func (s *Scheduler) SetEpicCheckpointFn(fn func(epicRepo string, epicNumber int)) {
 	if s == nil {
 		return
 	}
@@ -5870,9 +6109,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// nothing has accumulated yet, keeping those prompts byte-identical.
 		if item.ParentNumber > 0 &&
 			(stage == state.StageFeaturePlanning || stage == state.StageFeatureDev) {
-			if section := renderEpicContextForPrompt(s.workspaceRoot, item.ParentNumber); section != "" {
-				prompt += section
-			}
+			prompt += s.epicContextSection(item)
 		}
 
 		// Planning hand-off (#2181): feature-dev starts from the plan's text
@@ -8087,8 +8324,12 @@ func (s *Scheduler) isBlocked(ctx context.Context, item types.BoardItem) (bool, 
 
 		// Detect circular dependency: issue blocked by its own parent epic.
 		// This can never resolve (epic waits for sub-issue, sub-issue waits for epic).
-		// Auto-remove the relationship and skip this blocker.
-		if item.ParentNumber > 0 && blocker.Number == item.ParentNumber {
+		// Auto-remove the relationship and skip this blocker. The parent is
+		// matched by repository as well as number (#2369): when the epic lives
+		// in another repository, a blocker that merely shares its number is a
+		// real dependency, and removing it deleted a legitimate relationship
+		// and dispatched over an open blocker.
+		if blockerIsOwnParent(item, blocker) {
 			// This branch never actually removed anything before #956. It was
 			// guarded on item.NodeID, and BoardItem.NodeID is not populated on
 			// the GitHub path -- nodeToItem sets only item.ID, and the board
@@ -8125,6 +8366,47 @@ func (s *Scheduler) isBlocked(ctx context.Context, item types.BoardItem) (bool, 
 	return false, nil
 }
 
+// epicRepoOf returns the repository of item's parent epic: ParentRepo, or the
+// item's own repository when the board read recorded none.
+func epicRepoOf(item types.BoardItem) string {
+	if item.ParentRepo != "" {
+		return item.ParentRepo
+	}
+	return item.Repo
+}
+
+// epicContextSection is the accumulated context of item's parent epic for its
+// prompt (#4096). It is read from the pipeline state of the epic's own
+// repository, as the wave orchestrator writes it: epic-context-{N}.json names
+// #N of the repository whose checkout holds it, and the same-numbered file in
+// another checkout is another epic's (#2377). "" when item has no parent,
+// nothing has accumulated, or the epic's repository has no checkout here.
+func (s *Scheduler) epicContextSection(item types.BoardItem) string {
+	if item.ParentNumber <= 0 {
+		return ""
+	}
+	root := s.runRoot(epicRepoOf(item))
+	if root == "" {
+		return ""
+	}
+	return renderEpicContextForPrompt(root, item.ParentNumber)
+}
+
+// blockerIsOwnParent reports whether blocker is item's own parent epic: the
+// parent's number in the parent's repository. An empty ParentRepo, or an empty
+// blocker Repo, means the item's own repository.
+func blockerIsOwnParent(item types.BoardItem, blocker types.BlockingRef) bool {
+	if item.ParentNumber <= 0 || blocker.Number != item.ParentNumber {
+		return false
+	}
+	parentRepo := epicRepoOf(item)
+	blockerRepo := blocker.Repo
+	if blockerRepo == "" {
+		blockerRepo = item.Repo
+	}
+	return strings.EqualFold(parentRepo, blockerRepo)
+}
+
 // refreshBlockerStates fetches fresh blocker state from GitHub for all queued
 // items that have blockedBy entries. This prevents items from staying stuck
 // when their blockers have been closed since the queue was last persisted.
@@ -8144,10 +8426,16 @@ func (s *Scheduler) refreshBlockerStates(ctx context.Context) {
 	for i, item := range s.queue {
 		for j, b := range item.BlockedBy {
 			if strings.EqualFold(b.State, "OPEN") {
+				// A blocker is read in its own repository; one that names
+				// none is in the item's (#2377).
+				repo := b.Repo
+				if repo == "" {
+					repo = item.Repo
+				}
 				targets = append(targets, refreshTarget{
 					queueIdx:   i,
 					blockerIdx: j,
-					repo:       item.Repo,
+					repo:       repo,
 					number:     b.Number,
 				})
 			}
@@ -8276,6 +8564,22 @@ func splitOwnerRepo(fullRepo string) (string, string) {
 	return "", fullRepo
 }
 
+// isOwnerRepo reports whether repo is spelled "owner/name". A dependency key
+// whose repository is not is the name an issue body gave a repository the
+// workspace cannot identify (depgraph.CrossRepoRef.Unresolved, #2349).
+func isOwnerRepo(repo string) bool {
+	owner, name, ok := strings.Cut(repo, "/")
+	return ok && owner != "" && name != ""
+}
+
+// repoIssueKey keys an issue by repository and number ("owner/repo#N"), with
+// the repository lower-cased: GitHub compares repository names
+// case-insensitively, and an issue number names an issue only within one
+// repository.
+func repoIssueKey(repo string, number int) string {
+	return strings.ToLower(repo) + "#" + strconv.Itoa(number)
+}
+
 // splitNodeKey parses a graph node key ("owner/repo#number") into its repo
 // ("owner/repo") and issue number. ok is false for malformed keys (no '#', or
 // a non-numeric suffix).
@@ -8306,6 +8610,10 @@ func splitNodeKey(key string) (repo string, number int, ok bool) {
 // inaccessible) — are left OUT of the returned map. Callers must treat
 // absence as "still unresolved" and apply their own fail-open/fail-closed
 // policy; this helper never guesses a state.
+//
+// A key whose repository is not "owner/repo" — the name an issue body gave a
+// repository the workspace cannot identify (depgraph's Unresolved reference)
+// — names no issue GitHub could return, so it is left out without a request.
 func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []string) map[string]string {
 	if issueSvc == nil || len(keys) == 0 {
 		return nil
@@ -8317,6 +8625,9 @@ func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 		if !ok {
 			log.Printf("WARN: resolveIssueStatesByKey: malformed node key %q, skipping", key)
 			continue
+		}
+		if !isOwnerRepo(repo) {
+			continue // an unresolvable repository name — see the doc comment
 		}
 		byRepo[repo] = append(byRepo[repo], num)
 	}
@@ -9920,6 +10231,16 @@ func (s *Scheduler) cleanupMergedRemoteBranch(issueNumber int, workdir, headRefN
 // hit the identical credential. The caller appends what comes back to the
 // stage's captured evidence, which is where every downstream consumer looks.
 func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot string, item types.BoardItem) string {
+	// The epic branch belongs to the epic's own repository, and workspaceRoot
+	// is this sub-issue's checkout. For a parent in another repository,
+	// epic/<N>-* here is the branch of this repository's own #N, and one
+	// created here would never be merged by the epic's completion PR. The
+	// sub-issue is based on its own default branch instead (#2377).
+	if item.ParentNumber > 0 && git.EpicBranchParent(item.Repo, item.ParentNumber, item.ParentRepo) == 0 {
+		log.Printf("#%d: parent epic %s#%d lives in another repository — no epic branch in %s",
+			item.Number, item.ParentRepo, item.ParentNumber, item.Repo)
+		return ""
+	}
 	if !getAutoCreateEpicBranch(workspaceRoot) {
 		log.Printf("#%d: auto_create_epic_branch disabled — skipping epic branch creation", item.Number)
 		return ""
@@ -9931,7 +10252,8 @@ func (s *Scheduler) ensureEpicBranchForItem(ctx context.Context, workspaceRoot s
 	}
 
 	// Prefer ParentTitle from board data; fall back to GitHub API. Only the
-	// title is used, so the epic's sub-issue list is not read.
+	// title is used, so the epic's sub-issue list is not read. The guard above
+	// leaves only a parent in this item's repository, so it is read there.
 	epicTitle := item.ParentTitle
 	if epicTitle == "" {
 		owner, repo := splitOwnerRepo(item.Repo)

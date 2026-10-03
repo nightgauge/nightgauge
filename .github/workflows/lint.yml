@@ -89,6 +89,15 @@ jobs:
         run: bash scripts/test-skill-echo-json.sh
       - name: Skill echo-into-jq gate
         run: python3 scripts/check-skill-echo-json.py
+      # Pipefail early-exit gate (#2360): a command piped into a reader that
+      # stops early (grep -q, head, sed q, awk exit) dies of SIGPIPE, and under
+      # pipefail a match then reads as a miss. Covers every shell script and
+      # workflow run block. Self-test first — a gate nothing exercises
+      # degrades into an unconditional pass (the #539/#549 lesson).
+      - name: Pipefail early-exit gate self-test
+        run: bash scripts/test-pipefail-early-exit.sh
+      - name: Pipefail early-exit gate
+        run: python3 scripts/check-pipefail-early-exit.py
       # Stale-visibility-prose reintroduction gate (#697): fails on a tracked
       # artifact unconditionally asserting this repository is private — the
       # exact shape all four #697 instances took. Legitimate conditional

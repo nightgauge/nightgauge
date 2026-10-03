@@ -24,6 +24,15 @@
 # no working tree, so it is re-runnable and cannot disturb the caller's
 # checkout — which matters because a developer may run this by hand.
 #
+# A SEPARATE ROOT, SO CI PUBLISHES IT
+#
+# The state branch is a history of its own. The publication guard, which
+# npm install installs as the clone's pre-push hook, refuses any push to the
+# public repository with a root main does not have, and it has no exception
+# list (#2365). So a run that pushes to the public repository from a clone where
+# npm install ran is refused. The scheduled workflows run this in a fresh
+# actions/checkout, where nothing installs the hook.
+#
 # Usage:
 #   scripts/discovery-state-publish.sh --message "release-watch: 2.1.80"
 #
@@ -52,7 +61,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     -h | --help)
-      sed -n '2,32p' "$0"
+      sed -n '2,41p' "$0"
       exit 0
       ;;
     *)
@@ -91,7 +100,10 @@ export GIT_INDEX_FILE="$SCRATCH/index"
 
 PARENT=""
 if git ls-remote --exit-code --heads "$REMOTE" "$BRANCH" >/dev/null 2>&1; then
-  git fetch --quiet --depth 1 "$REMOTE" "$BRANCH"
+  # The whole branch, not `--depth 1`: a depth-limited fetch of a branch two
+  # commits long makes the clone shallow, and a clone this runs in by hand is
+  # then refused by the publication-boundary checker (#2373).
+  git fetch --quiet "$REMOTE" "$BRANCH"
   PARENT="$(git rev-parse FETCH_HEAD)"
   # Seed the index from the previous run so files this run did not touch are
   # carried forward rather than silently deleted from the branch.

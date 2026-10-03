@@ -69,7 +69,13 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		// DETACHED, bounded context: this runs on the pr-merge finalization path,
 		// so a hung webhook must not block the pipeline (the pipeline ctx may also
 		// be cancelled once the run returns) (#4076 review).
-		repo, epic := item.Repo, result.EpicNumber
+		// The alert, the checkpoint and the epic-PR callback all name the closed
+		// epic in its own repository, the one the hook resolved it in (EpicRepo);
+		// item.Repo can hold a different issue with that number (#2350, #2377).
+		repo, epic := result.EpicRepo, result.EpicNumber
+		if repo == "" {
+			repo = item.Repo
+		}
 		// lifecycle: process-lifetime, 35s-bounded — deliberately detached, not
 		// routed through goTracked (#491 pin allowlist cites this line).
 		go func() {
@@ -81,10 +87,10 @@ func (s *Scheduler) checkEpicCompletion(ctx context.Context, item types.BoardIte
 		// onEpicComplete does real network work (epic PR create + merge), so a
 		// panic or a long block there must not lose the pause (#991).
 		if s.epicCheckpoint != nil {
-			s.epicCheckpoint(result.EpicNumber)
+			s.epicCheckpoint(repo, epic)
 		}
 		if s.onEpicComplete != nil {
-			s.onEpicComplete(item.Repo, result.EpicNumber)
+			s.onEpicComplete(repo, epic)
 		}
 	}
 

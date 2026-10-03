@@ -22,6 +22,7 @@ import { CodexContextGenerator } from "../context/CodexContextGenerator.js";
 import { CodexMcpProvisioner } from "../context/CodexMcpProvisioner.js";
 import { systemPromptPresetForAdapter } from "./providerSteering.js";
 import { withBehavioralPreamble } from "./behavioralPreamble.js";
+import { skillFileAllowedTools } from "./skillAllowedTools.js";
 
 /**
  * Configuration options for executing a pipeline stage
@@ -30,6 +31,14 @@ export interface StageExecutorOptions {
   stage: PipelineStage;
   issueNumber: number;
   prompt: string;
+  /**
+   * The tools the stage's skill grants a headless run: its `allowed-tools`
+   * without AskUserQuestion, read off the SKILL.md the prompt comes from
+   * (PipelineOrchestrator, #2358). Unset when the skill declares none. Each
+   * adapter's query applies it its own way: the Claude Agent SDK as
+   * `allowedTools`, claude-headless as `--allowedTools`, Codex as its sandbox
+   * mode, OpenCode to classify a call it rejected.
+   */
   allowedTools?: string[];
   /** Custom tool definitions for future PTC executor consumption (Issue #1066) */
   toolDefinitions?: CustomToolDefinition[];
@@ -90,6 +99,7 @@ export interface SDKMessage {
 export interface SDKQueryOptions {
   prompt: string;
   options?: {
+    /** The stage's granted tools ({@link StageExecutorOptions.allowedTools}). */
     allowedTools?: string[];
     /** Custom tool definitions for future PTC executor consumption (Issue #1066) */
     toolDefinitions?: CustomToolDefinition[];
@@ -366,6 +376,13 @@ export interface LoadedStageSkill {
   logicalSkillPath: string;
   /** Absolute or resolved directory containing the selected SKILL.md. */
   skillDirectory: string;
+  /**
+   * The tools the content's `allowed-tools` frontmatter declares, verbatim
+   * (skillAllowedTools). A headless caller drops what it cannot use with
+   * filterHeadlessTools. A field that lists no tool fails the load, naming the
+   * file. @see Issue #2358
+   */
+  allowedTools: string[];
 }
 
 /**
@@ -424,7 +441,12 @@ export async function loadStageSkill(
   }
 
   const skillContent = await readFile(skillPath, "utf-8");
-  return { skillContent, logicalSkillPath, skillDirectory: path.dirname(skillPath) };
+  return {
+    skillContent,
+    logicalSkillPath,
+    skillDirectory: path.dirname(skillPath),
+    allowedTools: skillFileAllowedTools(skillContent, skillPath),
+  };
 }
 
 /**
@@ -471,10 +493,20 @@ export async function buildStagePrompt(
   issueNumber: number,
   skillsBasePath: string = "skills"
 ): Promise<string> {
-  const { skillContent, logicalSkillPath, skillDirectory } = await loadStageSkill(
-    stage,
-    skillsBasePath
-  );
+  return composeStagePrompt(await loadStageSkill(stage, skillsBasePath), stage, issueNumber);
+}
+
+/**
+ * The prompt for a stage whose skill {@link loadStageSkill} already read, so a
+ * caller that needs more of the same skill (PipelineOrchestrator: its
+ * directory and its allowed-tools) reads the file once.
+ */
+export function composeStagePrompt(
+  skill: LoadedStageSkill,
+  stage: PipelineStage,
+  issueNumber: number
+): string {
+  const { skillContent, logicalSkillPath, skillDirectory } = skill;
   const resolvedSkillContent = rewriteStageSkillPaths(skillContent, stage, skillDirectory);
   const invocationLines: string[] = [
     "Execution mode: non-interactive headless stage execution.",

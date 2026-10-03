@@ -178,6 +178,10 @@ var contractCallSites = []callSite{
 	{api.OpTelemetryIngestPipelineRun, func(ctx context.Context, c *Client) error {
 		return NewAnalyticsService(c).pushPipelineRunSync(ctx, ExecutionHistoryRunRecord{})
 	}},
+	{api.OpWorkspacesList, func(ctx context.Context, c *Client) error {
+		_, err := c.ReadWorkspaceThrottle(ctx, "acme-platform")
+		return err
+	}},
 }
 
 // conformanceServer records the requests it receives and answers every one with

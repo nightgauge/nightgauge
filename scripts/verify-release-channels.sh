@@ -137,7 +137,7 @@ if ! CASK="$(gh api -H "Accept: application/vnd.github.raw" "repos/$TAP/contents
   echo "ERROR: cannot read Casks/nightgauge.rb on $TAP main" >&2
   exit 2
 fi
-SERVED="$(printf '%s\n' "$CASK" | sed -n 's/^[[:space:]]*version "\([^"]*\)".*/\1/p' | head -n 1)"
+SERVED="$(sed -n 's/^[[:space:]]*version "\([^"]*\)".*/\1/p' <<<"$CASK" | sed -n 1p)"
 if [[ ! "$SERVED" =~ $SEMVER_RE ]]; then
   echo "ERROR: no X.Y.Z 'version' line in Casks/nightgauge.rb on $TAP main (got '${SERVED:-<none>}')" >&2
   exit 2

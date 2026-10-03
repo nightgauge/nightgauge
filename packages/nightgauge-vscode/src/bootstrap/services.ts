@@ -121,6 +121,17 @@ import { resolveExecutionProfile } from "../services/executionProfile";
 import { AgentCommandStreamService } from "../services/AgentCommandStreamService";
 import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../services/RunVerbCommandHandler";
+import { REMOTE_RUN_LEDGER_DIR, RemoteRunLedger } from "../services/RemoteRunLedger";
+import {
+  RefusedWorkspaceWritesNotice,
+  followRefusedWorkspaceWrites,
+} from "../platform/refusedWorkspaceWrites";
+import { resolveStateHome } from "../utils/machineStateDir";
+import {
+  ReloadInterruptedRunHolds,
+  reloadInterruptedRemoteRun,
+} from "../utils/reloadInterruptedRun";
+import { type PausedSnapshot, restorePausedRuns } from "./pausedRunRestore";
 import { ThrottleCommandHandler } from "../services/ThrottleCommandHandler";
 import { WorkspaceThrottleState } from "../services/WorkspaceThrottle";
 import {
@@ -1297,6 +1308,24 @@ export async function initializeServices(
     headlessOrchestrator.setContextLoader(repositoryContextLoader);
   }
 
+  // The machine's windows share one platform agent, so they agree through
+  // the remote-run ledger on who answers a run verb (#2357) and on which
+  // window holds a paused run a reload ended (#2339). Without a
+  // machine-state directory there is none: a verb no window holds is left to
+  // expire, and every window that finds such a run holds it.
+  const stateHome = resolveStateHome();
+  const remoteRunLedger = stateHome
+    ? new RemoteRunLedger(path.join(stateHome, REMOTE_RUN_LEDGER_DIR))
+    : undefined;
+  if (remoteRunLedger) context.subscriptions.push(remoteRunLedger);
+
+  // Paused runs a window reload ended, by the platform run id their snapshot
+  // names (#2339). The scan below can find them before the pipeline manager
+  // exists; the holds wait until it does. The manager holds each one for the
+  // platform's verbs and refuses a resume with the reason, a platform cancel
+  // consumes the snapshot, and the Resume prompt gives the hold up.
+  const reloadInterruptedHolds = new ReloadInterruptedRunHolds(remoteRunLedger);
+
   // Restore paused pipeline state from runtime-*.json files (Issue #2008)
   // The existing getState() call above returns null on startup since Go hasn't
   // emitted pipeline.stateChanged yet. Scanning runtime files directly gives us
@@ -1329,6 +1358,7 @@ export async function initializeServices(
         // `fs.unlink`, and an inline regex here could be widened back to one
         // with the whole suite green.
         const runtimeFiles = files.filter((f) => ANY_RUNTIME_FILE.test(f));
+        const paused: PausedSnapshot[] = [];
         for (const file of runtimeFiles) {
           const filePath = path.join(pipelineDir, file);
           try {
@@ -1338,6 +1368,8 @@ export async function initializeServices(
               issueNumber?: number;
               repo?: string | null;
               stage?: string | null;
+              remoteRunId?: unknown;
+              ownerPid?: unknown;
             };
             // The sweep fails SAFE on the new scheme: a run-identity-keyed
             // snapshot is never classified and never deleted here.
@@ -1356,67 +1388,71 @@ export async function initializeServices(
               await fs.unlink(filePath).catch(() => {});
               continue;
             }
-            if (runtime.paused) {
+            if (runtime.paused && typeof runtime.issueNumber === "number") {
               logger.info("Paused pipeline detected on activation", {
                 issueNumber: runtime.issueNumber,
                 file,
               });
-              vscode.commands.executeCommand("setContext", "nightgauge.pipelinePaused", true);
-              vscode.commands.executeCommand("setContext", "nightgauge.pipelineRunning", false);
-              const action = await vscode.window.showInformationMessage(
-                `Pipeline for #${runtime.issueNumber} is paused. Resume from where you left off?`,
-                "Resume",
-                "Cancel"
-              );
-              if (action === "Resume") {
-                // CONSUME THE SNAPSHOT THIS PROMPT WAS BUILT FROM.
-                //
-                // Resume does not continue the paused run — it starts a NEW one
-                // (`runPipeline` below), under a new identity and, since
-                // ADR-017 step 1, under its own filename. The paused snapshot is
-                // therefore dead the moment the operator accepts, and nothing
-                // else removes it: before step 1 the new run's Persist
-                // overwrote the shared `runtime-{issue}.json` and the prompt
-                // stopped by accident. Without this unlink the prompt re-fires
-                // on EVERY activation, each acceptance launching another full
-                // pipeline run of the same issue and leaving another snapshot
-                // behind, which then feeds the issue-addressed readers more
-                // candidates. Best-effort by design — a failed unlink must not
-                // stop the resume the operator just asked for. (Step 8's
-                // consume-on-claim rename replaces this with a claim protocol.)
-                await fs.unlink(filePath).catch((err) => {
-                  logger.warn("Could not remove the paused snapshot after Resume", {
-                    file,
-                    issueNumber: runtime.issueNumber,
-                    err,
-                  });
-                });
-                if (pipelineStateService) {
-                  // Say it out loud when nothing was cleared on the Go side.
-                  // The resume runs BEFORE `runPipeline` installs an identity,
-                  // so `setPaused` refuses and only the in-memory flag moves.
-                  // ADR-017 step 8 fixes this by construction (pause-restore
-                  // parses the id from the claimed filename and installs it
-                  // via `beginRun` after winning the rename); until then the
-                  // log is the record, not a claim of success.
-                  const clearedOnGo = await pipelineStateService.resumePipeline();
-                  if (!clearedOnGo) {
-                    logger.warn(
-                      "Resume was not persisted — no run identity installed yet (ADR-017 step 8). " +
-                        "The in-memory pause flag is cleared; Go still holds the paused state.",
-                      { issueNumber: runtime.issueNumber }
-                    );
-                  }
-                }
-                headlessOrchestrator.runPipeline(runtime.issueNumber!).catch((err) => {
-                  logger.error("Failed to resume paused pipeline", { err });
-                });
-              }
+              paused.push({
+                filePath,
+                issueNumber: runtime.issueNumber,
+                // A paused run that a platform trigger started, whose owning
+                // daemon is gone: a reload ended it, and this window holds
+                // it for the platform's verbs until its Resume runs (#2339).
+                // A live owner is another window's daemon, which answers
+                // itself.
+                interrupted: reloadInterruptedRemoteRun(runtime),
+              });
             }
           } catch {
             // Ignore malformed runtime files
           }
         }
+        if (paused.length === 0) return;
+        vscode.commands.executeCommand("setContext", "nightgauge.pipelinePaused", true);
+        vscode.commands.executeCommand("setContext", "nightgauge.pipelineRunning", false);
+        // Every run a reload ended is held before the first prompt waits for
+        // the operator, and a Resume consumes its snapshot before it starts
+        // the new run, so it starts none for a run the platform cancelled
+        // meanwhile (pausedRunRestore).
+        await restorePausedRuns(paused, {
+          holds: reloadInterruptedHolds,
+          ask: (issueNumber) =>
+            vscode.window.showInformationMessage(
+              `Pipeline for #${issueNumber} is paused. Resume from where you left off?`,
+              "Resume",
+              "Cancel"
+            ),
+          resume: async (issueNumber) => {
+            if (pipelineStateService) {
+              // Say it out loud when nothing was cleared on the Go side.
+              // The resume runs BEFORE `runPipeline` installs an identity,
+              // so `setPaused` refuses and only the in-memory flag moves.
+              // ADR-017 step 8 fixes this by construction (pause-restore
+              // parses the id from the claimed filename and installs it
+              // via `beginRun` after winning the rename); until then the
+              // log is the record, not a claim of success.
+              const clearedOnGo = await pipelineStateService.resumePipeline();
+              if (!clearedOnGo) {
+                logger.warn(
+                  "Resume was not persisted — no run identity installed yet (ADR-017 step 8). " +
+                    "The in-memory pause flag is cleared; Go still holds the paused state.",
+                  { issueNumber }
+                );
+              }
+            }
+            headlessOrchestrator.runPipeline(issueNumber).catch((err) => {
+              logger.error("Failed to resume paused pipeline", { err });
+            });
+          },
+          gone: (issueNumber) => {
+            void vscode.window.showInformationMessage(
+              `Nightgauge: the paused pipeline for #${issueNumber} was cancelled from the platform ` +
+                "or resumed in another window, so it was not resumed here."
+            );
+          },
+          logger,
+        });
       } catch {
         // Non-critical — skip if pipeline dir doesn't exist
       }
@@ -1488,6 +1524,9 @@ export async function initializeServices(
       workspaceManager ?? undefined
     );
     context.subscriptions.push(concurrentPipelineManager);
+
+    // Hand over the paused runs a reload ended that the scan found first (#2339).
+    reloadInterruptedHolds.attach(concurrentPipelineManager);
 
     // Wire the stop-control guard: reject enqueue attempts while a Stop /
     // Abort is in progress. Blocks delayed autonomous.dispatch events from
@@ -4221,13 +4260,23 @@ export async function initializeServices(
     context.subscriptions.push(agentHeartbeatService);
   }
 
+  // The workspace writes the platform refused an agent registration (#2372),
+  // the window's own or the daemon's: the declared repositories stay
+  // unlinked from the workspace, and every remote trigger for them is
+  // refused, so the operator is told, once per distinct set.
+  const refusedWorkspaceWritesNotice = new RefusedWorkspaceWritesNotice((message) => {
+    logger.warn(message);
+    void vscode.window.showWarningMessage(message);
+  });
+
   let agentRegistrationService: AgentRegistrationService | null = null;
   if (agentHeartbeatTokenStorage) {
     agentRegistrationService = new AgentRegistrationService(
       getPlatformUrl,
       agentHeartbeatTokenStorage,
       logger,
-      onDemandTokenRefresher
+      onDemandTokenRefresher,
+      (refusals) => refusedWorkspaceWritesNotice.report(refusals)
     );
     context.subscriptions.push(agentRegistrationService);
   }
@@ -4281,12 +4330,30 @@ export async function initializeServices(
     // A pause or resume from the platform shows in this window as the local
     // Pause/Resume Pipeline commands show it (#2334).
     const pipelineManager = concurrentPipelineManager;
+    // The window lists the runs it holds in the remote-run ledger, so the
+    // machine's other windows answer a verb only when no window holds the
+    // run, with one refusal (#2357). The listing starts with what the window
+    // holds now, the paused runs a reload ended included, and the queue is
+    // read once: after a reload it can carry runs no queue change announces.
+    if (remoteRunLedger) {
+      context.subscriptions.push(
+        pipelineManager.onHeldRemoteRunsChanged((runIds) => void remoteRunLedger.publish(runIds))
+      );
+      void remoteRunLedger.publish(pipelineManager.heldRemoteRunIds());
+      void pipelineManager.syncQueuedRemoteRuns();
+      context.subscriptions.push(
+        ipcClient.onDidChangeStatus((connected) => {
+          if (connected) void pipelineManager.syncQueuedRemoteRuns();
+        })
+      );
+    }
     const runVerbCommandHandler = new RunVerbCommandHandler(
       concurrentPipelineManager,
       ipcClient,
       logger,
       workspaceManager ?? undefined,
-      createRemotePauseUi(statusBar, (runId) => pipelineManager.remoteRunState(runId))
+      createRemotePauseUi(statusBar, (runId) => pipelineManager.remoteRunState(runId)),
+      remoteRunLedger ? { ledger: remoteRunLedger } : undefined
     );
     const agentCommandDispatcher = new AgentCommandDispatcher(
       triggerCommandHandler,
@@ -4449,6 +4516,9 @@ export async function initializeServices(
   // connectivity, which credential kind is in use, Go binary path/version,
   // and the last transport error per platform surface.
   context.subscriptions.push(registerShowDiagnosticsCommand({ logger, platformStatusBarItem }));
+  // The workspace writes the platform refused the daemon's agent registration
+  // (#2372), shown through the same notice as the window's own.
+  context.subscriptions.push(followRefusedWorkspaceWrites(ipcClient, refusedWorkspaceWritesNotice));
 
   // Pipeline-aware connectivity badge (Issue #3203). Shown only when a
   // pipeline stage is running and ConnectivityStateBus reports degraded or

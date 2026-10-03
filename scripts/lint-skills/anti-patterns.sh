@@ -92,7 +92,7 @@ while IFS= read -r f; do
   [ -z "$f" ] && continue
   total=$(wc -l < "$f" | tr -d ' ')
   if [ "$total" -gt "$TOC_MIN_LINES" ]; then
-    if head -40 "$f" | grep -qiE '^#{1,2}[[:space:]]+(Contents|Table of Contents)\b'; then
+    if grep -qiE '^#{1,2}[[:space:]]+(Contents|Table of Contents)\b' <<<"$(head -n 40 "$f")"; then
       :
     else
       emit missing_toc "$f" "-" "$total lines, no '## Contents' heading in first 40 lines (threshold $TOC_MIN_LINES)"

@@ -247,6 +247,8 @@ function getStallKillMultiplierGlobal(workspaceRoot?: string, stage?: string): n
     const lines = configContent.split("\n");
     let inPipeline = false;
     let inStageMap = false;
+    // Indentation of pipeline:'s direct children, taken from the first one.
+    let childIndent: number | undefined;
     let globalFromYaml: number | undefined;
     let perStageFromYaml: number | undefined;
 
@@ -255,7 +257,18 @@ function getStallKillMultiplierGlobal(workspaceRoot?: string, stage?: string): n
 
       if (trimmed === "pipeline:") {
         inPipeline = true;
+        childIndent = undefined;
         continue;
+      }
+      const indent = line.length - line.trimStart().length;
+      if (
+        inPipeline &&
+        childIndent === undefined &&
+        trimmed &&
+        !trimmed.startsWith("#") &&
+        indent > 0
+      ) {
+        childIndent = indent;
       }
 
       // Detect stall_kill_multipliers: subsection (#3020)
@@ -286,8 +299,11 @@ function getStallKillMultiplierGlobal(workspaceRoot?: string, stage?: string): n
         }
       }
 
-      // Global YAML value
-      if (inPipeline && !inStageMap) {
+      // Global YAML value: pipeline.stall_kill_multiplier itself, a direct
+      // child of pipeline:. The same key nested deeper (under
+      // performance_mode.overrides.maximum or supercharge) is not the global
+      // one, and used to set it for every stage in every mode (#2378).
+      if (inPipeline && !inStageMap && indent === childIndent) {
         const match = trimmed.match(/^stall_kill_multiplier:\s*(\d+)/);
         if (match) {
           const parsed = Number.parseInt(match[1], 10);
@@ -3713,9 +3729,9 @@ export function writeSuperchargeStateFile(workspaceRoot: string, active: boolean
 /**
  * Get the Codex model override for the active performance mode.
  *
- * Resolution order matches the legacy supercharge path (preserved for one
- * release): env var > `pipeline.performance_mode.maximum.codex_model`
- * (or legacy `pipeline.supercharge.codex_model`) > Codex daemon catalog.
+ * Resolution order is getSuperchargeCodexModel's: env var > the legacy
+ * `pipeline.supercharge.codex_model` > Codex daemon catalog. Nothing reads
+ * `pipeline.performance_mode.overrides.maximum.codex_model` (#2378).
  *
  * Returns `undefined` for `efficiency` and `elevated` so the caller falls
  * back to per-stage Codex resolution.
@@ -3734,8 +3750,9 @@ export function getModeStageCodexModel(
 /**
  * Get the model used in `maximum` mode (legacy supercharge envelope).
  *
- * Reads `pipeline.performance_mode.maximum.model` (or legacy
- * `pipeline.supercharge.model`) from config, defaulting to 'opus'.
+ * Reads the legacy `pipeline.supercharge.model` from config, defaulting to
+ * 'opus'. Nothing reads `pipeline.performance_mode.overrides.maximum.model`
+ * (#2378).
  *
  * @param workspaceRoot - Workspace root path
  * @returns 'opus' (default) or 'sonnet' as configured

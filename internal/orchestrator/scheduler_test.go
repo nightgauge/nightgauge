@@ -2828,3 +2828,139 @@ func TestCircularBlockedByAutoFixActuallyFires(t *testing.T) {
 		t.Errorf("blocker ref = %s, want %s", call.blocker, wantBlocker)
 	}
 }
+
+// A platform cancel of a remote run that is still queued removes exactly its
+// item (#2344): not another repository's item with the same issue number, not
+// a local item of the same issue, and not the item once a dispatch took it.
+func TestQueueRemoveRemoteRun_RemovesOnlyTheRunsUntakenItem(t *testing.T) {
+	s := &Scheduler{
+		repoRunning: make(map[string]int),
+		mergeLocks:  make(map[string]*sync.Mutex),
+	}
+	s.QueueAddItem(
+		QueueItem{Repo: "o/a", IssueNumber: 7, Title: "triggered", RemoteRunID: "run-a"},
+		QueueItem{Repo: "o/b", IssueNumber: 7, Title: "same number, other repo"},
+		QueueItem{Repo: "o/c", IssueNumber: 9, Title: "taken", RemoteRunID: "run-c"},
+	)
+	s.mu.Lock()
+	s.queue[2].Status = "processing"
+	s.mu.Unlock()
+
+	if s.QueueRemoveRemoteRun("") {
+		t.Error("an empty run id removed an item")
+	}
+	if s.QueueRemoveRemoteRun("run-unknown") {
+		t.Error("a run id no item carries removed an item")
+	}
+	if s.QueueRemoveRemoteRun("run-c") {
+		t.Error("removed the item a dispatch already took")
+	}
+	if !s.QueueRemoveRemoteRun("run-a") {
+		t.Fatal("did not remove the queued item of run-a")
+	}
+	if s.QueueRemoveRemoteRun("run-a") {
+		t.Error("removed run-a's item twice")
+	}
+
+	state := s.GetState()
+	if len(state.Items) != 2 {
+		t.Fatalf("queue = %+v, want the other two items", state.Items)
+	}
+	if state.Items[0].Repo != "o/b" || state.Items[0].IssueNumber != 7 || state.Items[0].Position != 1 {
+		t.Errorf("Items[0] = %+v, want o/b#7 at position 1", state.Items[0])
+	}
+	if state.Items[1].Repo != "o/c" || state.Items[1].Status != "processing" || state.Items[1].RemoteRunID != "run-c" {
+		t.Errorf("Items[1] = %+v, want the taken o/c#9 still with its dispatch", state.Items[1])
+	}
+}
+
+// A remote run's trigger for an issue already waiting in the queue attaches
+// its run id to the waiting item (#2344), so the slot that opens for the item
+// serves the run. An item a dispatch took, or one serving another remote run,
+// keeps what it has, and nothing is queued twice.
+func TestQueueAddItem_AttachesATriggersRunIdToAWaitingItem(t *testing.T) {
+	s := &Scheduler{
+		repoRunning: make(map[string]int),
+		mergeLocks:  make(map[string]*sync.Mutex),
+	}
+	s.QueueAddItem(
+		QueueItem{Repo: "o/a", IssueNumber: 1, Title: "waiting"},
+		QueueItem{Repo: "o/a", IssueNumber: 2, Title: "taken"},
+		QueueItem{Repo: "o/a", IssueNumber: 3, Title: "other run", RemoteRunID: "run-old"},
+	)
+	s.mu.Lock()
+	s.queue[1].Status = "processing"
+	s.mu.Unlock()
+
+	s.QueueAddItem(
+		QueueItem{Repo: "o/a", IssueNumber: 1, Title: "trigger", RemoteRunID: "run-1"},
+		QueueItem{Repo: "o/a", IssueNumber: 2, Title: "trigger", RemoteRunID: "run-2"},
+		QueueItem{Repo: "o/a", IssueNumber: 3, Title: "trigger", RemoteRunID: "run-3"},
+	)
+
+	state := s.GetState()
+	if len(state.Items) != 3 {
+		t.Fatalf("len(Items) = %d, want 3: a trigger for a queued issue queues nothing new", len(state.Items))
+	}
+	want := map[int]string{1: "run-1", 2: "", 3: "run-old"}
+	for _, item := range state.Items {
+		if item.RemoteRunID != want[item.IssueNumber] {
+			t.Errorf("#%d RemoteRunID = %q, want %q", item.IssueNumber, item.RemoteRunID, want[item.IssueNumber])
+		}
+		if item.Title == "trigger" {
+			t.Errorf("#%d took the duplicate's title", item.IssueNumber)
+		}
+		// Only the operator's item that took a trigger's run is marked
+		// attached; an item queued for its own run is not.
+		if attached := item.IssueNumber == 1; item.RemoteRunAttached != attached {
+			t.Errorf("#%d RemoteRunAttached = %v, want %v", item.IssueNumber, item.RemoteRunAttached, attached)
+		}
+	}
+}
+
+// Cancelling a remote run attached to the operator's own item (#2344) leaves
+// the item queued, waiting or dequeued, and only takes the run id off it; an
+// item queued again as attached keeps that. A run's own item is removed only
+// while no dispatch has taken it.
+func TestQueueRemoveRemoteRun_DetachesARunFromTheOperatorsItem(t *testing.T) {
+	s := &Scheduler{
+		repoRunning: make(map[string]int),
+		mergeLocks:  make(map[string]*sync.Mutex),
+	}
+	s.QueueAddItem(
+		QueueItem{Repo: "o/a", IssueNumber: 1, Title: "operator's, waiting"},
+		QueueItem{Repo: "o/a", IssueNumber: 2, Title: "operator's, dequeued"},
+		QueueItem{Repo: "o/a", IssueNumber: 3, Title: "re-queued", RemoteRunID: "run-3", RemoteRunAttached: true},
+		QueueItem{Repo: "o/a", IssueNumber: 4, Title: "the run's own", RemoteRunID: "run-4"},
+		QueueItem{Repo: "o/a", IssueNumber: 5, Title: "flag alone", RemoteRunAttached: true},
+	)
+	s.QueueAddItem(
+		QueueItem{Repo: "o/a", IssueNumber: 1, RemoteRunID: "run-1"},
+		QueueItem{Repo: "o/a", IssueNumber: 2, RemoteRunID: "run-2"},
+	)
+	s.mu.Lock()
+	s.queue[1].Status = "processing"
+	s.mu.Unlock()
+
+	for _, id := range []string{"run-1", "run-2", "run-3"} {
+		if !s.QueueRemoveRemoteRun(id) {
+			t.Errorf("did not take attached %s off the queue", id)
+		}
+	}
+	if !s.QueueRemoveRemoteRun("run-4") {
+		t.Error("did not remove run-4's own waiting item")
+	}
+
+	state := s.GetState()
+	if len(state.Items) != 4 {
+		t.Fatalf("queue = %+v, want the operator's four items", state.Items)
+	}
+	for _, item := range state.Items {
+		if item.RemoteRunID != "" || item.RemoteRunAttached {
+			t.Errorf("#%d still serves a run: %+v", item.IssueNumber, item)
+		}
+	}
+	if state.Items[1].IssueNumber != 2 || state.Items[1].Status != "processing" {
+		t.Errorf("Items[1] = %+v, want the dequeued #2 still with its dispatch", state.Items[1])
+	}
+}

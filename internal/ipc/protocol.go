@@ -487,6 +487,11 @@ type QueueAddParams struct {
 	// queue item's RemoteRunID (#3557); this just lets the enqueue populate it.
 	// See #4120.
 	RemoteRunID string `json:"remoteRunId,omitempty"`
+	// RemoteRunAttached queues the item as the operator's own work that also
+	// serves RemoteRunID (#2344): a dispatched item the run was attached to,
+	// queued again. Cancelling the run then detaches it instead of removing
+	// the item. Ignored without RemoteRunID.
+	RemoteRunAttached bool `json:"remoteRunAttached,omitempty"`
 	// Adapter and Model are a remote run request's pin (#1656, ADR-022 § 2):
 	// the `trigger` payload's `adapter` and `model`, which the caller has
 	// already put through queue.validatePin. queue.add validates them again in
@@ -520,9 +525,38 @@ type QueueValidatePinResult struct {
 	Reason string `json:"reason,omitempty"`
 }
 
+// PlatformWorkspaceThrottleResult is the platform workspace throttle this
+// daemon follows (#2352), for a process that cannot read it itself: a headless
+// scheduler holding only a license key asks the workspace's daemon over the
+// socket. Known is true once the daemon has read the throttle; Throttle is
+// then the throttle in force, or null for none. With Known false, Unread
+// tells why: true while the daemon follows the throttle (it has a signed-in
+// session) but has not read it yet, its first read in flight or every read
+// so far failed, so a caller keeps the throttle it learned before; false
+// when the daemon follows no throttle (no signed-in session).
+type PlatformWorkspaceThrottleResult struct {
+	Known    bool                        `json:"known"`
+	Unread   bool                        `json:"unread,omitempty"`
+	Throttle *platform.WorkspaceThrottle `json:"throttle"`
+}
+
 // QueueRemoveParams are parameters for queue.remove.
 type QueueRemoveParams struct {
 	IssueNumber int `json:"issueNumber"`
+}
+
+// QueueRemoveRemoteRunParams are parameters for queue.removeRemoteRun
+// (#2344): the platform run id of the trigger whose queued item is removed.
+type QueueRemoveRemoteRunParams struct {
+	RemoteRunID string `json:"remoteRunId"`
+}
+
+// QueueRemoveRemoteRunResult reports whether queue.removeRemoteRun took the
+// run off the queue: its own item removed, or the operator's item it was
+// attached to detached from it. False when no item carries the run id, or a
+// dispatch already took the run's own item.
+type QueueRemoveRemoteRunResult struct {
+	Removed bool `json:"removed"`
 }
 
 // QueueCompleteParams are parameters for queue.complete — the terminal
@@ -1332,6 +1366,20 @@ type AgentAcknowledgeCommandResult struct {
 
 // EventAgentCommand is the event carrying an AgentCommandEvent.
 const EventAgentCommand = "agent.command"
+
+// EventWorkspaceWritesRefused is the event carrying a
+// WorkspaceWritesRefusedEvent.
+const EventWorkspaceWritesRefused = "platform.workspaceWritesRefused"
+
+// WorkspaceWritesRefusedEvent tells the extension that the daemon's agent
+// registration was refused workspace writes (#2372), so it can show the
+// operator, who otherwise learns of it only from the daemon's log: the
+// declared repositories stay unlinked from the workspace, and every remote
+// trigger for them is refused. Sent once per registration that was refused
+// any; every field is bounded and printable.
+type WorkspaceWritesRefusedEvent struct {
+	Refusals []platform.RefusedWorkspaceWriteReport `json:"refusals"`
+}
 
 // AgentCommandEvent hands the extension a platform command that reached the
 // daemon's own agent but that the daemon does not execute (#2335): a trigger

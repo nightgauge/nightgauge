@@ -36,7 +36,8 @@ type Client struct {
 	// goroutine (health poller, analytics push, IPC handlers) and the session
 	// token is swapped at runtime by platform.setSessionToken (#742), so the
 	// three sources live behind credMu instead of being collapsed into one
-	// value at construction. Read them through bearer(); never directly.
+	// value at construction. Read them through bearer() or sessionBearer();
+	// never directly.
 	credMu       sync.RWMutex
 	sessionToken string
 	staticAPIKey string
@@ -135,6 +136,14 @@ func (c *Client) bearer() string {
 		return c.staticAPIKey
 	}
 	return c.licenseKey
+}
+
+// sessionBearer is bearer() for a request that only a signed-in user may
+// make: the session token, or "" with no fallback when none is installed.
+func (c *Client) sessionBearer() string {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	return c.sessionToken
 }
 
 // SetSessionToken installs the signed-in user's JWT as the credential for every

@@ -231,7 +231,9 @@ describe("RunVerbCommandHandler", () => {
   it("names each kind of no-op in the ack's reason", async () => {
     const cases: Array<[RemoteVerbResult, string, RegExp]> = [
       ["no-run-state", "pause", /^no-run-state: /],
-      ["not-started", "cancel", /^not-started: /],
+      ["not-started", "pause", /^not-started: /],
+      // #2339: a reload ended the paused run; only its window can resume it.
+      ["resume-in-window", "resume", /^resume-in-window: .*only its window can resume it$/],
     ];
     for (const [result, verb, reason] of cases) {
       const ack = makeIpc();

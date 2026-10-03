@@ -40,7 +40,7 @@ type condResponse struct {
 // value worth keeping; its JSON is what the store holds and what a later 304
 // hands back, so a 2.5 MB page can be kept as the few fields it maps to.
 //
-// schema names the reducer's output shape ("board-items/v2"). It is part of the
+// schema names the reducer's output shape ("board-items/v3"). It is part of the
 // store key, so changing a reducer's shape and bumping its tag makes every old
 // payload a miss rather than something decoded into the wrong struct; each
 // reducer carries its own tag, so one change invalidates only its own entries.

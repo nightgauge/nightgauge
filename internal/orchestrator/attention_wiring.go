@@ -657,16 +657,16 @@ const keySafetyRailTrip = producerSafetyRailTrip + ":fleet"
 // defaults to ON and now actually fires, so a routine epic completion stops the
 // entire fleet across every repo. A halt this cheap to reach must be this
 // visible.
-func (as *AutonomousScheduler) raiseSafetyRailTrip(reason string, epicNumber int) {
+func (as *AutonomousScheduler) raiseSafetyRailTrip(reason string, epicRef string) {
 	body := fmt.Sprintf("Autonomous dispatch is stopped across every repository: %s\n\n"+
 		"This is a machine-raised halt — it survives a restart, and Start will refuse to "+
 		"resume it. Resolve this card, or resume explicitly, once you have decided the "+
 		"fleet should continue.", reason)
-	if epicNumber > 0 {
-		body = fmt.Sprintf("Epic #%d finished and the between-epic checkpoint paused the fleet for "+
+	if epicRef != "" {
+		body = fmt.Sprintf("Epic %s finished and the between-epic checkpoint paused the fleet for "+
 			"human review.\n\n%s\n\nThe checkpoint is `autonomous.safety_rails.epic_checkpoint` "+
 			"and defaults to true. Set it to false to run epic after epic unattended.",
-			epicNumber, body)
+			epicRef, body)
 	}
 
 	as.raiseAttention(attention.DecisionRequest{

@@ -7,6 +7,32 @@ import (
 	"strings"
 )
 
+// EpicBranchParent returns the number of a sub-issue's parent epic when that
+// epic lives in the sub-issue's own repository, and 0 when it lives in another.
+// Pass the result to EnsureIssueBranch as parentIssue.
+//
+// An epic branch, epic/<N>-<slug>, names #N of the repository it is pushed to:
+// FindEpicBranch and EnsureEpicBranch key it by number in the checkout they run
+// in. A sub-issue of an epic in another repository therefore has no epic branch
+// in its own. Looking for epic/<N>-* there finds the branch of that
+// repository's own #N, and creating one strands the sub-issue's work on a
+// branch that the epic's completion PR, opened in the epic's repository, never
+// merges (#2377). Such a sub-issue is based on, and merges into, its own
+// repository's default branch, like any issue without a parent.
+//
+// subRepo and parentRepo are "owner/name", compared case-insensitively. An
+// empty parentRepo means the sub-issue's own repository, the one place a bare
+// number names an issue.
+func EpicBranchParent(subRepo string, parentNumber int, parentRepo string) int {
+	if parentNumber <= 0 {
+		return 0
+	}
+	if parentRepo != "" && !strings.EqualFold(parentRepo, subRepo) {
+		return 0
+	}
+	return parentNumber
+}
+
 // IssueBranchResult reports what EnsureIssueBranch did.
 type IssueBranchResult struct {
 	Branch      string
@@ -23,7 +49,9 @@ type IssueBranchResult struct {
 //
 // parentIssue != 0 bases the branch on the parent's epic branch; when no epic
 // branch exists yet, epicTitle is asked for the parent's title and the epic
-// branch is created from the default branch and pushed.
+// branch is created from the default branch and pushed. parentIssue is a
+// number in this checkout's repository: callers pass EpicBranchParent's result,
+// which is 0 for a parent epic in another repository (#2377).
 //
 // The REMOTE is authoritative: when a prior run already pushed branchName, the
 // local ref is reset to origin/<branch> even when a stale local ref exists, so

@@ -86,8 +86,12 @@ func reachable(deps map[int][]int, from, to int) bool {
 
 // SubIssue represents a decomposed issue for wave planning.
 type SubIssue struct {
-	Number     int      `json:"number"`
-	Title      string   `json:"title"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	// Repo is the sub-issue's own repository ("owner/name"). An epic's
+	// sub-issue can live in another repository than the epic, where the epic
+	// repository's issue with the same number is a different issue (#2377).
+	Repo       string   `json:"repo,omitempty"`
 	Files      []string `json:"files,omitempty"`
 	Complexity string   `json:"complexity,omitempty"` // "simple", "medium", "complex"
 }

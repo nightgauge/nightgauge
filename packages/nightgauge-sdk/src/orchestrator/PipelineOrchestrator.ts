@@ -15,11 +15,12 @@ import { ContextManager } from "../context/ContextManager.js";
 import { cloneClassDir, resolveCloneLayout } from "../context/cloneLayout.js";
 import {
   StageExecutor,
-  buildStagePrompt,
+  composeStagePrompt,
   loadStageSkill,
   type SDKQueryFunction,
   type SDKMessage,
 } from "./StageExecutor.js";
+import { filterHeadlessTools } from "./skillAllowedTools.js";
 import {
   resolveOrchestrationConfig,
   prefersNativeOffload,
@@ -361,8 +362,8 @@ export class PipelineOrchestrator {
 
     // Read the SAME skill content `buildStagePrompt` loads, and compile its
     // `orchestration:` block. No block (or no usable units) → single-agent.
-    const { skillContent } = await loadStageSkill(stage, this.config.skillsPath);
-    const spec = parseOrchestrationFrontmatter(skillContent, {
+    const skill = await loadStageSkill(stage, this.config.skillsPath);
+    const spec = parseOrchestrationFrontmatter(skill.skillContent, {
       runId: `wf-${issueNumber}-${stage}`,
       issueNumber,
       stage,
@@ -378,7 +379,14 @@ export class PipelineOrchestrator {
       return { kind: "single-agent" };
     }
 
-    return { kind: "workflow", spec, executor };
+    // Every fanned-out unit is granted the tools the stage's single-agent query
+    // would be, out of the same SKILL.md (#2358).
+    const allowedTools = filterHeadlessTools(skill.allowedTools);
+    return {
+      kind: "workflow",
+      spec: allowedTools.length > 0 ? { ...spec, allowedTools } : spec,
+      executor,
+    };
   }
 
   /**
@@ -747,8 +755,7 @@ export class PipelineOrchestrator {
         };
       }
 
-      const prompt = await buildStagePrompt(stage, issueNumber, this.config.skillsPath);
-      const skillDir = await this.stageSkillDir(stage);
+      const { prompt, skillDir, allowedTools } = await this.stageSkill(stage, issueNumber);
 
       for await (const message of this.executor.execute({
         stage,
@@ -761,7 +768,8 @@ export class PipelineOrchestrator {
         timeoutMs: this.config.stageTimeoutMs,
         resumeSessionId: options?.resumeSessionId,
         ...(this.runId !== null && { runId: this.runId }),
-        ...(skillDir !== undefined && { skillDir }),
+        skillDir,
+        ...(allowedTools !== undefined && { allowedTools }),
         abortSignal,
       })) {
         messages.push(message);
@@ -789,16 +797,29 @@ export class PipelineOrchestrator {
   }
 
   /**
-   * The absolute directory of the stage's SKILL.md, resolved the way its
-   * prompt's was (loadStageSkill), or undefined when it has none.
+   * What a single-agent stage's query is built from, all out of the one
+   * SKILL.md loadStageSkill reads: the prompt, the skill's absolute directory
+   * and the tools its `allowed-tools` grant a headless run, as the Go
+   * scheduler grants them (FilterHeadlessTools). A skill that declares no
+   * tools leaves `allowedTools` unset, as the Go path leaves
+   * RunOptions.AllowedTools empty. @see Issue #2358
+   *
+   * That SKILL.md is the stage's base one. This path resolves no ADR-016
+   * overlay, so a whole-file override (`_overlays/<key>.SKILL.md`) replaces
+   * neither the prompt nor the tools here, where the Go render takes the
+   * override's tools (#2381).
    */
-  private async stageSkillDir(stage: PipelineStage): Promise<string | undefined> {
-    try {
-      const { skillDirectory } = await loadStageSkill(stage, this.config.skillsPath);
-      return path.resolve(skillDirectory);
-    } catch {
-      return undefined;
-    }
+  private async stageSkill(
+    stage: PipelineStage,
+    issueNumber: number
+  ): Promise<{ prompt: string; skillDir: string; allowedTools?: string[] }> {
+    const skill = await loadStageSkill(stage, this.config.skillsPath);
+    const allowedTools = filterHeadlessTools(skill.allowedTools);
+    return {
+      prompt: composeStagePrompt(skill, stage, issueNumber),
+      skillDir: path.resolve(skill.skillDirectory),
+      ...(allowedTools.length > 0 && { allowedTools }),
+    };
   }
 
   /**
@@ -840,8 +861,7 @@ export class PipelineOrchestrator {
         return;
       }
 
-      const prompt = await buildStagePrompt(stage, issueNumber, this.config.skillsPath);
-      const skillDir = await this.stageSkillDir(stage);
+      const { prompt, skillDir, allowedTools } = await this.stageSkill(stage, issueNumber);
 
       yield* this.executor.execute({
         stage,
@@ -853,7 +873,8 @@ export class PipelineOrchestrator {
         cwd: this.config.cwd,
         timeoutMs: this.config.stageTimeoutMs,
         ...(this.runId !== null && { runId: this.runId }),
-        ...(skillDir !== undefined && { skillDir }),
+        skillDir,
+        ...(allowedTools !== undefined && { allowedTools }),
         abortSignal,
       });
     } finally {

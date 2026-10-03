@@ -399,6 +399,22 @@ export interface PlatformStatus {
   mode: string;
   tier?: string;
   message?: string;
+  /**
+   * The workspace writes the platform refused the daemon's latest agent
+   * registration (#2372), because the operator's role on the workspace's
+   * team is developer or viewer. Absent when none was refused. Every field
+   * is bounded and printable; the platform's own message is not reported.
+   */
+  refusedWorkspaceWrites?: Array<{
+    /** The named workspace's slug, or "default" for the team's Default workspace. */
+    workspace: string;
+    teamId: string;
+    code: string;
+    /** "workspace:create" or "workspace:update". */
+    permission: string;
+    /** The operator's line: the workspace not written and the permission it needs. */
+    description: string;
+  }>;
 }
 
 /**
@@ -727,8 +743,20 @@ export interface IpcQueueItem {
   epicOrder?: number;
   isBatch?: boolean;
   epicNumber?: number;
+  /** The repository (`owner/name`) of the epic `epicNumber` names (#2377). */
+  epicRepo?: string;
   addedAt: string;
   position: number;
+  /**
+   * The platform run id of the trigger the item was queued for (#2344);
+   * absent on every other item.
+   */
+  remoteRunId?: string;
+  /**
+   * The run id was attached to the operator's own item for the issue
+   * (#2344); a cancel of the run detaches it instead of removing the item.
+   */
+  remoteRunAttached?: boolean;
   /** A remote run request's adapter pin (#1656); absent on every other item. */
   requestedAdapter?: string;
   /** A remote run request's model, the `-m` value (#1656). */
@@ -901,14 +929,18 @@ export interface AgentExecutionProfileResult {
  * remote run request's adapter and model, and, when it cannot, the reason the
  * rejected ack carries as its `detail`.
  */
+/**
+ * Result of queue.removeRemoteRun (#2344): whether the queued item of the
+ * remote run was removed. False when no item carries the run id, or when a
+ * dispatch already took it (the dispatch then drops the cancelled run).
+ */
+export interface QueueRemoveRemoteRunResult {
+  removed: boolean;
+}
+
 export interface QueueValidatePinResult {
   ok: boolean;
   reason?: string;
-}
-
-/** Result from epic.readContext — raw epic context JSON. */
-export interface EpicContextResult {
-  [key: string]: unknown;
 }
 
 /**

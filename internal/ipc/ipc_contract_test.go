@@ -52,12 +52,10 @@ var contractTestedMethods = map[string]bool{
 	// Branch
 	"branch.cleanup": true,
 	// Epic
-	"epic.appendContext":    true,
 	"epic.checkCompletion":  true,
 	"epic.createPR":         true,
 	"epic.mergePR":          true,
 	"epic.progress":         true,
-	"epic.readContext":      true,
 	"epic.transitionStatus": true,
 	// Execution
 	"execution.list": true,
@@ -155,6 +153,7 @@ var contractTestedMethods = map[string]bool{
 	"platform.auditListReports":    true,
 	"platform.auditDownloadReport": true,
 	"platform.auditGetReport":      true,
+	"platform.workspaceThrottle":   true,
 	"audit.getRetentionConfig":     true,
 	"audit.updateRetentionConfig":  true,
 	"audit.verifyIntegrity":        true,
@@ -175,8 +174,6 @@ var contractTestedMethods = map[string]bool{
 	"workspace.repoAdd":                true,
 	"workspace.repoRemove":             true,
 	"workspace.configureForgeInstance": true,
-	// Wave orchestration
-	"wave.status": true,
 	// Queue
 	"queue.add":                true,
 	"queue.clear":              true,
@@ -185,6 +182,7 @@ var contractTestedMethods = map[string]bool{
 	"queue.enqueueEpic":        true,
 	"queue.list":               true,
 	"queue.remove":             true,
+	"queue.removeRemoteRun":    true,
 	"queue.validatePin":        true,
 	// Autonomous
 	"autonomous.start":              true,
@@ -688,28 +686,6 @@ func TestContract_Epic(t *testing.T) {
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "epic.mergePR")
 	})
-
-	t.Run("epic.readContext/registered", func(t *testing.T) {
-		id := h.sendRequest("epic.readContext", map[string]interface{}{
-			"epicNumber": 1,
-		})
-		assertMethodRegistered(t, h.readResponseFor(id, nil), "epic.readContext")
-	})
-
-	t.Run("epic.appendContext/registered", func(t *testing.T) {
-		id := h.sendRequest("epic.appendContext", map[string]interface{}{
-			"epicNumber":  1,
-			"issueNumber": 42,
-			"findings": map[string]interface{}{
-				"files_touched": []string{"src/foo.ts"},
-				"decisions":     []string{},
-				"discoveries":   []string{},
-				"patterns":      []string{},
-				"recorded_at":   "2026-03-24T00:00:00Z",
-			},
-		})
-		assertMethodRegistered(t, h.readResponseFor(id, nil), "epic.appendContext")
-	})
 }
 
 // ─── Pipeline ──────────────────────────────────────────────────────────────
@@ -905,6 +881,15 @@ func TestContract_Queue(t *testing.T) {
 	// queue.complete is the terminal counterpart to queue.dequeueIndependent.
 	// The extension owns the run loop, so without this method reaching the
 	// scheduler every dispatched item stays "processing" forever (#254).
+	// queue.removeRemoteRun (#2344) needs a run id; an empty one is refused
+	// with -32603, which still proves the method is registered.
+	t.Run("queue.removeRemoteRun/registered", func(t *testing.T) {
+		id := h.sendRequest("queue.removeRemoteRun", map[string]interface{}{
+			"remoteRunId": "",
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "queue.removeRemoteRun")
+	})
+
 	t.Run("queue.complete/registered", func(t *testing.T) {
 		id := h.sendRequest("queue.complete", map[string]interface{}{
 			"repo": "test-org/test-repo", "issueNumber": 42,
@@ -918,14 +903,6 @@ func TestContract_Queue(t *testing.T) {
 			"owner": "test-org", "repo": "test-repo", "epicNumber": 1,
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "queue.enqueueEpic")
-	})
-
-	// wave.status reads persisted wave plan/status → -32603 with no data on disk.
-	t.Run("wave.status/registered", func(t *testing.T) {
-		id := h.sendRequest("wave.status", map[string]interface{}{
-			"epicNumber": 999,
-		})
-		assertMethodRegistered(t, h.readResponseFor(id, nil), "wave.status")
 	})
 }
 
@@ -1111,6 +1088,13 @@ func TestContract_Platform(t *testing.T) {
 	t.Run("platform.status/registered", func(t *testing.T) {
 		id := h.sendRequest("platform.status", nil)
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.status")
+	})
+
+	// platform.workspaceThrottle (#2352) reports what the daemon follows;
+	// with nothing followed it answers unknown.
+	t.Run("platform.workspaceThrottle/registered", func(t *testing.T) {
+		id := h.sendRequest("platform.workspaceThrottle", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.workspaceThrottle")
 	})
 
 	t.Run("platform.license/registered", func(t *testing.T) {
@@ -1374,20 +1358,30 @@ func TestContract_Execution(t *testing.T) {
 // empty result and resolve/acknowledge return a not-configured error — either
 // way the method is registered (not -32601).
 func TestContract_Attention(t *testing.T) {
+	// This harness's config resolves a board for o/r, so the daemon has a
+	// forge factory and attention.sweep reads the forge for real. It went to
+	// GitHub with the harness's fake token and came back 401, network round
+	// trips under the harness's read bound, and on a loaded machine it
+	// outlived it (#2367). TestMain's seal keeps every request on this
+	// machine; this test opens its own to count the sweep's.
+	forgeRequests := sealNetwork(t)
 	h := newIpcTestHarness(t)
 	h.awaitReady()
 
 	t.Run("attention.list/registered", func(t *testing.T) {
+		h.bind(t)
 		id := h.sendRequest("attention.list", map[string]interface{}{})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.list")
 	})
 
 	t.Run("attention.resolve/registered", func(t *testing.T) {
+		h.bind(t)
 		id := h.sendRequest("attention.resolve", map[string]interface{}{"id": "dr_x", "optionId": "go"})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.resolve")
 	})
 
 	t.Run("attention.acknowledge/registered", func(t *testing.T) {
+		h.bind(t)
 		id := h.sendRequest("attention.acknowledge", map[string]interface{}{"id": "dr_x"})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.acknowledge")
 	})
@@ -1397,6 +1391,7 @@ func TestContract_Attention(t *testing.T) {
 	// returns an internal error — which is the point of the assertion: the
 	// method must EXIST. Before #305 it returned -32601.
 	t.Run("attention.raise/registered", func(t *testing.T) {
+		h.bind(t)
 		id := h.sendRequest("attention.raise", map[string]interface{}{
 			"producer": "abandoned-dispatch", "repo": "o/r", "issue": 1, "stage": "feature-dev",
 		})
@@ -1404,21 +1399,50 @@ func TestContract_Attention(t *testing.T) {
 	})
 
 	t.Run("attention.mute/registered", func(t *testing.T) {
+		h.bind(t)
 		id := h.sendRequest("attention.mute", map[string]interface{}{"id": "dr_x"})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.mute")
 	})
 
 	t.Run("attention.unmute/registered", func(t *testing.T) {
+		h.bind(t)
 		id := h.sendRequest("attention.unmute", map[string]interface{}{"id": "dr_x"})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.unmute")
 	})
 
-	// attention.sweep degrades rather than erroring when the daemon has no
-	// attention store or forge factory (issue #93) — it fires on activation and
-	// must never be able to surface a failure there.
+	// attention.sweep degrades rather than erroring (issue #93): it fires on
+	// activation and must never be able to surface a failure there. Here it
+	// has a store and a forge factory, and the seal refuses every forge read
+	// at once, so o/r comes back reported in the result, not as an RPC error.
 	t.Run("attention.sweep/registered", func(t *testing.T) {
+		h.bind(t)
 		id := h.sendRequest("attention.sweep", map[string]interface{}{"repos": []string{"o/r"}})
-		assertMethodRegistered(t, h.readResponseFor(id, nil), "attention.sweep")
+		resp := h.readResponseFor(id, nil)
+		assertMethodRegistered(t, resp, "attention.sweep")
+		if resp.Error != nil {
+			t.Fatalf("attention.sweep answered an RPC error; with no forge reachable it must degrade into its result: %+v", resp.Error)
+		}
+		raw, err := json.Marshal(resp.Result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var res AttentionSweepResult
+		if err := json.Unmarshal(raw, &res); err != nil {
+			t.Fatalf("attention.sweep result %s: %v", raw, err)
+		}
+		if len(res.Repos) != 1 || res.Repos[0].Repo != "o/r" {
+			t.Fatalf("attention.sweep reported repos %+v; want o/r alone", res.Repos)
+		}
+		if r := res.Repos[0]; r.Created != 0 || (!r.Skipped && r.Error == "" && len(r.Failed) == 0) {
+			t.Errorf("o/r, swept with no forge reachable, reads %+v; want it skipped, failed or errored, with nothing created", r)
+		}
+		// Hermetic by count: the sweep's forge reads reached the seal. None
+		// would mean it no longer reads the forge here, or the daemon's client
+		// stopped honouring the proxy variables and this is on the network
+		// again.
+		if forgeRequests() == 0 {
+			t.Error("the sweep sent nothing to the network seal; it either read no forge or bypassed the proxy")
+		}
 	})
 }
 

@@ -62,6 +62,7 @@ import {
 import { OrchestratorEventDispatcher } from "../orchestrator/events/OrchestratorEventDispatcher";
 import { WorktreeManager } from "../utils/WorktreeManager";
 import { isValidBranchName } from "../utils/branchUtils";
+import { epicBranchParent } from "../utils/epicBranchParent";
 
 const execAsync = promisify(exec);
 import {
@@ -231,6 +232,15 @@ const PR_MERGE_DIAGNOSIS_TIMEOUT_MS = 120 * 1000;
  * and epic-rollup calls around it. Killing the hook mid-poll records nothing.
  */
 const POST_MERGE_HOOK_TIMEOUT_MS = 25 * 60 * 1000;
+/**
+ * Upper bound on a `git push` (#2365). A push runs the repository's pre-push
+ * hook first, and a hook may scan what it is about to send: nightgauge's
+ * publication guard runs the boundary checker over the pushed commits, which
+ * takes several seconds a scan and much longer on a loaded machine. The old 60 s
+ * bound killed such pushes mid-scan. A killed push sends nothing, so the bound
+ * only has to catch a push that is really stuck.
+ */
+const GIT_PUSH_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * Reject `promise` if it hasn't settled within `timeoutMs`. The underlying
@@ -2004,7 +2014,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
 
       // Push to remote so partial work survives for retry (Issue #2338)
       try {
-        await execAsync("git push", { cwd: workDir, timeout: 30_000 });
+        await execAsync("git push", { cwd: workDir, timeout: GIT_PUSH_TIMEOUT_MS });
         this.logger.info("Pushed WIP commit to remote", {
           issueNumber,
           stage,
@@ -3149,7 +3159,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       );
     }
     try {
-      await execFileAsync("git", ["push", "-u", "origin", "HEAD"], { cwd, timeout: 60_000 });
+      await execFileAsync("git", ["push", "-u", "origin", "HEAD"], {
+        cwd,
+        timeout: GIT_PUSH_TIMEOUT_MS,
+      });
       this.logger.info("Pushed deterministic validate commit", { issueNumber });
     } catch (err) {
       // Non-fatal — pr-create's Phase 3 pushes the branch again.
@@ -3988,7 +4001,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       await execFileAsync("git", ["push", "-u", "origin", branch], {
         encoding: "utf-8",
         cwd,
-        timeout: 60_000,
+        timeout: GIT_PUSH_TIMEOUT_MS,
       });
     } catch (pushErr) {
       if (isGithubRateLimitError(pushErr)) {
@@ -4649,7 +4662,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       await execFileAsync("git", ["push", "--force-with-lease"], {
         encoding: "utf-8",
         cwd,
-        timeout: 60_000,
+        timeout: GIT_PUSH_TIMEOUT_MS,
       });
     } catch (pushErr) {
       const msg = pushErr instanceof Error ? pushErr.message : String(pushErr);
@@ -5893,6 +5906,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * never created, this method fell open to main, and sub-issues landed on main
    * individually (acmeapp-platform#6/#7 even pushed directly to main).
    *
+   * Only a parent in this issue's own repository counts. A sub-issue of an epic
+   * in another repository has no epic branch here, so it keeps its own base
+   * branch and nothing is looked up or created (#2377).
+   *
    * @see Issue #1452 — #1463 merged to main instead of epic branch
    */
   private async enforceEpicBaseBranch(
@@ -5914,7 +5931,9 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // Already targeting an epic branch — nothing to do
       if (currentBase.startsWith("epic/")) return { ok: true };
 
-      // Detect parent epic from the context or via GitHub sub-issues API
+      // Detect parent epic from the context or via GitHub sub-issues API.
+      // native_parent is a number in this repository: the context assembler
+      // leaves it null for a parent in another repository (#1058).
       let parentNumber: number | null = ctx.native_parent ?? null;
 
       // Resolve owner/repo from repoOverride or CWD's git remote (also used by
@@ -5940,7 +5959,14 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
 
       if (parentNumber === null) {
-        // Query GitHub for this issue's parent (native sub-issues API)
+        // Query GitHub for this issue's parent (native sub-issues API), with
+        // the parent's repository. An epic branch, epic/<N>-*, names #N of the
+        // repository it is pushed to, so a parent in another repository has
+        // none here: epic/<N>-* in this one is the branch of its own #N, and
+        // creating one strands the sub-issue on a branch no epic PR merges
+        // (#2377). Such a sub-issue keeps its own default branch, as
+        // `git branch-create` decides on the skill path.
+        let parent: { number?: number; repository?: { nameWithOwner?: string } } | null = null;
         try {
           const { stdout: parentRaw } = await execFileAsync(
             "gh",
@@ -5948,19 +5974,38 @@ export class HeadlessOrchestrator implements vscode.Disposable {
               "api",
               "graphql",
               "-f",
-              `query=query { repository(owner: "${gqlOwner}", name: "${gqlRepo}") { issue(number: ${issueNumber}) { parent { number } } } }`,
+              `query=query { repository(owner: "${gqlOwner}", name: "${gqlRepo}") { issue(number: ${issueNumber}) { parent { number repository { nameWithOwner } } } } }`,
               "--jq",
-              ".data.repository.issue.parent.number",
+              ".data.repository.issue.parent",
             ],
             execOptions
           );
           const parentJson = parentRaw.trim();
           if (parentJson && parentJson !== "null") {
-            parentNumber = parseInt(parentJson, 10);
+            parent = JSON.parse(parentJson);
           }
         } catch {
           // Non-critical: parent detection failed (transient). We can't confirm
           // this is an epic sub-issue, so don't block — fall through to ok.
+        }
+        if (parent?.number) {
+          const local = epicBranchParent(
+            `${gqlOwner}/${gqlRepo}`,
+            parent.number,
+            parent.repository?.nameWithOwner
+          );
+          if (local === undefined) {
+            this.logger.info(
+              "Epic sub-issue's parent lives in another repository — keeping its own base branch",
+              {
+                issueNumber,
+                parent: `${parent.repository?.nameWithOwner}#${parent.number}`,
+                currentBase,
+              }
+            );
+            return { ok: true };
+          }
+          parentNumber = local;
         }
       }
 

@@ -119,15 +119,18 @@ interface QueueItem {
   position: number;
   status: string;
   addedAt: string;
+  remoteRunId?: string;
 }
 
-function makeQueueItem(issueNumber: number): QueueItem {
+/** A queued item; `remoteRunId` marks it queued for a platform trigger (#2344). */
+function makeQueueItem(issueNumber: number, remoteRunId?: string): QueueItem {
   return {
     issueNumber,
     title: `Issue #${issueNumber}`,
     position: 1,
     status: "pending",
     addedAt: new Date().toISOString(),
+    ...(remoteRunId ? { remoteRunId } : {}),
   };
 }
 
@@ -193,17 +196,17 @@ function createControllableFactory() {
   };
 }
 
-function buildManager(issueNumbers: number[]) {
+function buildManager(queued: Array<number | QueueItem>) {
+  const items = queued.map((q) => (typeof q === "number" ? makeQueueItem(q) : q));
   const queueService = {
-    dequeueIndependent: vi
-      .fn()
-      .mockResolvedValueOnce(issueNumbers.map(makeQueueItem))
-      .mockResolvedValue([]),
+    dequeueIndependent: vi.fn().mockResolvedValueOnce(items).mockResolvedValue([]),
     updateActiveSlots: vi.fn().mockResolvedValue(undefined),
     drainBlockedSuccessors: vi.fn().mockResolvedValue([]),
     enqueue: vi.fn().mockResolvedValue(null),
+    complete: vi.fn().mockResolvedValue(undefined),
     clear: vi.fn().mockResolvedValue(undefined),
     getQueue: vi.fn().mockResolvedValue({ items: [], status: "idle" }),
+    removeRemoteRun: vi.fn().mockResolvedValue(false),
   };
 
   const controllable = createControllableFactory();
@@ -221,7 +224,7 @@ function buildManager(issueNumbers: number[]) {
       debug: vi.fn(),
       getChannel: vi.fn(),
     } as any,
-    { maxConcurrent: issueNumbers.length }
+    { maxConcurrent: Math.max(1, items.length) }
   );
 
   manager.setCallbacks({ onSlotFailed, onSlotCompleted });
@@ -296,8 +299,9 @@ describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334
   });
 
   it("pauses and resumes the slot through its own state service, and reports each outcome", async () => {
-    const { manager, controllable, onSlotFailed } = buildManager([423]);
-    manager.setPendingRemoteRunId(423, "platform-run-423");
+    const { manager, controllable, onSlotFailed } = buildManager([
+      makeQueueItem(423, "platform-run-423"),
+    ]);
     await manager.fillSlots();
     const state = controllable.stateServiceFor(423);
 
@@ -331,8 +335,7 @@ describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334
   // Both took effect, in order, and the pause must say so rather than report
   // that the run had no state to pause (#2334 review).
   it("reports a pause and a resume handled in the same tick as both applied", async () => {
-    const { manager, controllable } = buildManager([425]);
-    manager.setPendingRemoteRunId(425, "platform-run-425");
+    const { manager, controllable } = buildManager([makeQueueItem(425, "platform-run-425")]);
     await manager.fillSlots();
     const state = controllable.stateServiceFor(425);
     const setFlag = state.pausePipeline.getMockImplementation();
@@ -360,8 +363,7 @@ describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334
   });
 
   it("reports a pause of a slot with no loaded state as no-run-state, and exposes the run's state", async () => {
-    const { manager, controllable } = buildManager([426]);
-    manager.setPendingRemoteRunId(426, "platform-run-426");
+    const { manager, controllable } = buildManager([makeQueueItem(426, "platform-run-426")]);
     await manager.fillSlots();
     const state = controllable.stateServiceFor(426);
     state.getState.mockResolvedValue({ issue_number: 426 });
@@ -384,15 +386,15 @@ describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334
   });
 
   // #2340: only the window that holds a run answers a verb for it. It holds
-  // the run while a slot carries the platform run id, and from the moment it
-  // accepts the run's trigger until that slot opens (the run is queued here).
-  it("holds a run its slot carries or its accepted trigger queued, and no other", async () => {
-    const { manager, controllable, queueService } = buildManager([427]);
-    manager.setPendingRemoteRunId(427, "platform-run-427");
-    // Accepted, and still queued behind 427: no slot for it yet.
-    manager.setPendingRemoteRunId(428, "platform-run-428");
+  // the run while a slot carries the platform run id, and while an item
+  // queued for the run is on its way to a slot (#2344).
+  it("holds a run its slot carries or its queue holds, and no other", async () => {
+    const { manager, controllable, queueService } = buildManager([
+      makeQueueItem(427, "platform-run-427"),
+    ]);
+    // Queued for its own run, behind 427: no slot for it yet.
     queueService.getQueue.mockResolvedValue({
-      items: [makeQueueItem(427), makeQueueItem(428)],
+      items: [makeQueueItem(427, "platform-run-427"), makeQueueItem(428, "platform-run-428")],
       status: "waiting",
     });
 
@@ -403,14 +405,16 @@ describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334
     expect(await manager.holdsRemoteRun("platform-run-428")).toBe(true);
     expect(await manager.holdsRemoteRun("elsewhere")).toBe(false);
 
-    // A verb on the queued run says it has not started, not that no run here
-    // carries it.
-    expect(await manager.cancelByRemoteRunId("platform-run-428")).toBe("not-started");
+    // A pause or resume of the queued run says it has not started, not that
+    // no run here carries it.
     expect(await manager.pauseByRemoteRunId("platform-run-428")).toBe("not-started");
     expect(await manager.resumeByRemoteRunId("platform-run-428")).toBe("not-started");
 
-    // A dispatch abandoned before its slot opened stops holding the run.
-    manager.clearPendingRemoteRunId(428);
+    // An item that left the queue no longer holds its run.
+    queueService.getQueue.mockResolvedValue({
+      items: [makeQueueItem(427, "platform-run-427")],
+      status: "waiting",
+    });
     expect(await manager.holdsRemoteRun("platform-run-428")).toBe(false);
 
     controllable.finishWith(427, {
@@ -421,7 +425,8 @@ describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334
       totalDurationMs: 1,
     });
     await manager.settleForTest(427);
-    // The run ended: no window holds it any more.
+    // The run ended and its queue item was completed: no window holds it any more.
+    queueService.getQueue.mockResolvedValue({ items: [], status: "idle" });
     expect(await manager.holdsRemoteRun("platform-run-427")).toBe(false);
   });
 
@@ -430,32 +435,59 @@ describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334
   // claim the run, and must not answer that it is queued here.
   it("does not hold a triggered run whose issue was removed from the queue", async () => {
     const { manager, queueService } = buildManager([]);
-    manager.setPendingRemoteRunId(430, "platform-run-430");
-    queueService.getQueue.mockResolvedValue({ items: [makeQueueItem(430)], status: "waiting" });
+    const queued = { items: [makeQueueItem(430, "platform-run-430")], status: "waiting" };
+    const placed = await manager.placeRemoteRun(
+      { remoteRunId: "platform-run-430", issueNumber: 430, repo: "" },
+      async () => {
+        queueService.getQueue.mockResolvedValue(queued);
+        return true;
+      }
+    );
+    expect(placed).toBe("queued");
     expect(await manager.holdsRemoteRun("platform-run-430")).toBe(true);
+    // When the queue cannot be read, its latest state still carries the run.
+    queueService.getQueue.mockRejectedValueOnce(new Error("IPC closed"));
+    expect(await manager.holdsRemoteRun("platform-run-430")).toBe(true);
+
+    // The same issue queued again locally is not the platform's run.
+    queueService.getQueue.mockResolvedValue({ items: [makeQueueItem(430)], status: "waiting" });
+    expect(await manager.holdsRemoteRun("platform-run-430")).toBe(false);
 
     queueService.getQueue.mockResolvedValue({ items: [], status: "idle" });
     expect(await manager.holdsRemoteRun("platform-run-430")).toBe(false);
 
-    // When the queue cannot be read, the accepted trigger keeps its claim.
+    // Nor once the queue cannot be read: its latest state no longer has it.
     queueService.getQueue.mockRejectedValue(new Error("IPC closed"));
-    expect(await manager.holdsRemoteRun("platform-run-430")).toBe(true);
+    expect(await manager.holdsRemoteRun("platform-run-430")).toBe(false);
   });
 
   it("stops holding a queued run once Stop All clears the queue", async () => {
     const { manager, queueService } = buildManager([]);
-    manager.setPendingRemoteRunId(429, "platform-run-429");
-    queueService.getQueue.mockResolvedValue({ items: [makeQueueItem(429)], status: "waiting" });
+    await manager.placeRemoteRun(
+      { remoteRunId: "platform-run-429", issueNumber: 429, repo: "" },
+      async () => {
+        queueService.getQueue.mockResolvedValue({
+          items: [makeQueueItem(429, "platform-run-429")],
+          status: "waiting",
+        });
+        return true;
+      }
+    );
+    queueService.clear.mockImplementation(async () => {
+      queueService.getQueue.mockResolvedValue({ items: [], status: "idle" });
+    });
     expect(await manager.holdsRemoteRun("platform-run-429")).toBe(true);
 
     await manager.abortAll();
 
     expect(await manager.holdsRemoteRun("platform-run-429")).toBe(false);
+    // Nor when the queue cannot be read afterwards.
+    queueService.getQueue.mockRejectedValue(new Error("IPC closed"));
+    expect(await manager.holdsRemoteRun("platform-run-429")).toBe(false);
   });
 
   it("reports a run id no local slot carries as a no-op", async () => {
-    const { manager, controllable } = buildManager([424]);
-    manager.setPendingRemoteRunId(424, "platform-run-424");
+    const { manager, controllable } = buildManager([makeQueueItem(424, "platform-run-424")]);
     await manager.fillSlots();
 
     for (const verb of [
@@ -474,5 +506,47 @@ describe("ConcurrentPipelineManager — platform verbs on a remote run id (#2334
       totalDurationMs: 1,
     });
     await manager.settleForTest(424);
+  });
+
+  // #2339: a window reload ends the held runPipeline() call of a paused run;
+  // the paused snapshot names its platform run id. The window that finds it
+  // holds the run and says why a platform resume cannot continue it.
+  it("holds a paused run a reload ended, and refuses a resume of it with the reason", async () => {
+    const { manager } = buildManager([]);
+    const published: string[][] = [];
+    manager.onHeldRemoteRunsChanged((runIds) => published.push(runIds));
+
+    manager.holdReloadInterruptedRun("platform-run-2339", 2339);
+    expect(await manager.holdsRemoteRun("platform-run-2339")).toBe(true);
+    expect(manager.heldRemoteRunIds()).toEqual(["platform-run-2339"]);
+    expect(await manager.resumeByRemoteRunId("platform-run-2339")).toBe("resume-in-window");
+    expect(await manager.pauseByRemoteRunId("platform-run-2339")).toBe("already-paused");
+
+    // The window's Resume prompt starts a new run from the snapshot: the
+    // platform run is no longer held here.
+    manager.dropReloadInterruptedRun("platform-run-2339");
+    expect(await manager.holdsRemoteRun("platform-run-2339")).toBe(false);
+    expect(await manager.resumeByRemoteRunId("platform-run-2339")).toBe("no-active-run");
+    expect(published).toEqual([["platform-run-2339"], []]);
+  });
+
+  // A platform cancel ends such a run: its paused snapshot is consumed, so
+  // the platform run is over and the window no longer holds it.
+  it("cancels a paused run a reload ended by consuming its snapshot", async () => {
+    const { manager } = buildManager([]);
+    const end = vi.fn().mockResolvedValue(undefined);
+    manager.holdReloadInterruptedRun("platform-run-2340", 2340, end);
+
+    expect(await manager.cancelByRemoteRunId("platform-run-2340")).toBe("applied");
+    expect(end).toHaveBeenCalledTimes(1);
+    expect(await manager.holdsRemoteRun("platform-run-2340")).toBe(false);
+    expect(manager.heldRemoteRunIds()).toEqual([]);
+    expect(await manager.cancelByRemoteRunId("platform-run-2340")).toBe("no-active-run");
+
+    // A snapshot that cannot be consumed keeps the hold, and the cancel fails.
+    const stuck = vi.fn().mockRejectedValue(new Error("EACCES"));
+    manager.holdReloadInterruptedRun("platform-run-2341", 2341, stuck);
+    await expect(manager.cancelByRemoteRunId("platform-run-2341")).rejects.toThrow("EACCES");
+    expect(await manager.holdsRemoteRun("platform-run-2341")).toBe(true);
   });
 });

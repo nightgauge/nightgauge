@@ -16,6 +16,50 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The daemon and the headless schedulers follow the platform's workspace
+  throttle** (#2352). Only the extension applied it (#2337), so work the Go
+  side started itself ran at its configured concurrency while the platform
+  held the workspace throttled. The daemon now reads its own workspace's
+  throttle by slug from the platform's workspace list while it has a
+  signed-in session: when its agent starts, after every agent registration,
+  on every `throttle` command (still relayed to the extension), each time its
+  command stream opens, and when the session changes; never the command's
+  payload or the registration's agent-wide value. The autonomous scheduler holds the runs it
+  dispatches without the extension, and `nightgauge pipeline run --auto` its
+  loop, to the lower of the configured concurrency and the cap, until the
+  throttle is cleared or reaches `resumeAt`; a running pipeline is never
+  stopped, and work handed to the extension is not capped twice. Each read is
+  bounded, so one that never answers holds back no later read. `pipeline run
+--auto` checks the throttle again after reading the board, and an epic's
+  waves start no more sub-issues at once than the cap leaves room for. A
+  headless `nightgauge autonomous run` or `pipeline run --auto`, which holds
+  only a license key, follows the throttle through the workspace's daemon
+  (`platform.workspaceThrottle` on the socket), asking it once before its
+  first dispatch; when the daemon stops answering, or follows the throttle
+  but has not read it yet (it has just started, or its reads fail), the last
+  throttle it reported is kept, and the log says so and until when. A daemon
+  without a signed-in session, which is any daemon the extension is not
+  attached to, still follows no throttle: the license key cannot read the
+  workspace's own throttle yet, and the read, like the extension's, is by
+  slug in one team's workspace list (#2352 stays open for both).
+- **The daemon says which workspace writes its registration was refused**
+  (#2372). The platform's `POST /v1/agents/register` reply lists
+  `refused_workspace_writes`: the workspace writes skipped because the
+  operator's role on the workspace's team is developer or viewer (creating
+  the named workspace, updating its agent or display name, linking the
+  declared repositories). The agent still registers, and the daemon dropped
+  the list, so a developer's repositories stayed unlinked from the team's
+  workspace and every remote trigger for them was refused with no hint why.
+  Each registration now logs one line per refusal, naming the workspace and
+  the permission it needs; `platform.status` reports the latest
+  registration's refusals; and the extension shows each new set of refusals
+  as a warning. The window's own registration reply is read the same way:
+  its refusals are logged and shown through the same warning, and the
+  workspace sync status reads failed, not synced, while writes are refused.
+  Only bounded, printable fields of the reply are logged or shown (no line
+  break, line separator or bidirectional override, square brackets as
+  parentheses so no markdown link reaches the warning, and never the
+  platform's own message).
 - **The platform's workspace throttle caps local dispatch** (#2337). A
   `throttle` command (`set` with `maxConcurrent` and an optional `resumeAt`,
   or `cleared`) was refused as unsupported, so a workspace throttle never
@@ -100,9 +144,117 @@ changelog, and the release workflow refuses a tag that does not.
   would use and its source, and warns (NGD047) when that URL is not absolute
   or is plain HTTP to a host other than localhost. See
   [CONFIGURATION.md § Pointing at another platform deployment](docs/CONFIGURATION.md#pointing-at-another-platform-deployment).
+- **A pre-push hook checks the publication boundary before a push to this
+  repository leaves the machine** (#2365). Until now CI checked the boundary
+  only on pull requests, after GitHub had already stored and published the
+  push, and never checked a branch or tag that did not become a pull request.
+  `npm install` now installs a pre-push hook for every worktree of the clone,
+  the pipeline's included, and the hook runs whatever is checked out. It
+  refuses a push to this repository's URL that carries a history unrelated to
+  `main`, an allowlist change made together with anything else, or a commit the
+  boundary checker rejects, even one that a later commit in the same push
+  cleans up. A push is judged by the remote `main`'s checker,
+  allowlist-isolation script and `.gitattributes`, and nothing from the pushed
+  commits runs, so a branch that changes the checker is held to `main`'s until
+  that change merges. `npm install` installs `main`'s copy of the guard, not
+  the checkout's own. It asks the remote what it already has rather than
+  trusting remote-tracking refs. A pushed branch usually costs one checker run,
+  however many commits it has, and a refusal says how to rewrite the commits
+  without a force-push. A deletion or a release tag on `main` passes at once,
+  and pushes to other remotes are untouched. It is a client-side hook, so
+  `--no-verify` skips it. The VS Code orchestrator now gives every `git push`
+  ten minutes rather than 30 or 60 seconds, and the SDK gives its push of a
+  steering repair the two minutes it was meant to have rather than 30 seconds,
+  so the hook's scan is not cut short. See
+  [PUBLIC_CORE_BOUNDARY.md § Checked before it is pushed](docs/PUBLIC_CORE_BOUNDARY.md#checked-before-it-is-pushed).
 
 ### Fixed
 
+- **`nightgauge git push` pushes only the current branch, and runs the
+  repository's pre-push hook** (#2365). It went through go-git, which runs no
+  hooks and, given no refspec, pushes every local branch, so a push through it,
+  or through the IPC method `git.push`, published every branch past the
+  publication hook. It now goes through git, as the pipeline's other pushes
+  do, refuses a detached `HEAD`, and leaves credentials to git: the binary no
+  longer builds HTTPS credentials from `GITHUB_TOKEN` for it.
+- **Stages run through the SDK get the tools their skill declares** (#2358).
+  `nightgauge-sdk stage` and `run`, which the VS Code extension uses for every
+  non-Claude adapter, and the SDK's exported stage classes built every query
+  with no tools. They now pass the stage SKILL.md's `allowed-tools` without
+  `AskUserQuestion`, as the Go pipeline does: to the Claude Agent SDK as
+  `allowedTools`, to `claude-headless` as `--allowedTools`, to Codex as the
+  sandbox they justify on a fresh start and on a resume, and to OpenCode to
+  tell a refused granted tool from one never granted. The SDK path reads the
+  base SKILL.md and applies no overlay (#2381). Shipped stages keep full Codex
+  access, since each grants `Bash`.
+- **Every reader takes the same tools from a skill's `allowed-tools`** (#2358).
+  The binary, the SDK and the extension read entries separated by spaces or
+  commas, a YAML list written inline (`[Read, Grep]`) or one entry per line,
+  and a value on the lines indented below its key. A `Tool(pattern)` entry such
+  as `Bash(gh *)` stays whole, and a `# comment` is skipped. A form a reader did
+  not know read as no list and got the default tools, `Bash`, `Write` and
+  `Edit` among them, and a comment that named a tool granted it.
+- **A platform resume of a run a window reload paused says why it cannot
+  continue the run** (#2339). A platform `pause` holds the run in its window;
+  a reload ends that held call, and a later platform `resume` found no slot,
+  went unanswered and expired. The run's snapshot now records the platform run
+  id (`remoteRunId`), and the window that finds the paused snapshot after a
+  reload, with its owning process gone, holds the run: a `resume` is refused
+  `resume-in-window` (only the window's Resume prompt can continue the run,
+  as a new run), a `pause` is `already_resolved`, and a `cancel` ends the run
+  by consuming its paused snapshot and is `applied`. Every window on a
+  worktree of the clone finds the same snapshot, so only the first to claim
+  the run in the machine's ledger holds it. The window holds every such run
+  before it shows the first Resume prompt, and a Resume chosen after a
+  platform cancel starts nothing: consuming a snapshot renames it away first,
+  since two concurrent unlinks of one file can both succeed, so a cancel and
+  a Resume, or the Resumes of two windows, never both take one snapshot. Continuing the run from a
+  platform resume waits for ADR-017's consume-on-claim step; #2339 stays open
+  for it.
+- **A run verb no window holds is refused again, and never ahead of the
+  holder's answer** (#2357). Every editor window of a machine shares one
+  agent, so each receives a platform `cancel`, `pause`, `resume`, `approve`
+  or `reject`, and the platform keeps the first acknowledgement. #2340 made
+  only the window holding the run answer, so a refusal from another window
+  no longer reached the platform first; but a verb for a run no window held
+  then went unanswered for five minutes, until it expired. The windows now
+  agree through a ledger in the machine-state directory
+  (`STATE/agent-commands/`): each lists every platform run it answers for
+  (slots, dispatches on their way to a slot, triggers being queued, the runs
+  its queue carries, and paused runs a reload ended there) from the moment it
+  is wired, and the first to answer a command claims it. A window that closes
+  or reloads keeps its listing for a minute, so its runs are not refused while
+  it comes back; a verb only such a listing held is looked at again when the
+  minute is over, and a claim left by a window that closed before it
+  answered is taken over. A window holds a triggered run from the moment its
+  ack comes back, before the run is queued, so a verb for it is answered
+  even while a fill holds the queue. The holder claims the answer before it applies the verb; a
+  window without the run waits two seconds and refuses `no-active-run` only
+  when it still does not hold the run, no window lists it, and it claims the
+  answer first. The platform gets one acknowledgement per command, the
+  holder's whenever a window holds the run.
+- **A platform cancel of a triggered run that has not started yet applies**
+  (#2344). A cancel of a run this window accepted the trigger for, still
+  queued behind other slots or with its worktree being created, was refused
+  `not-started`, and the requester had to wait for the run to start and cancel
+  it again. The cancel now tombstones the platform run id and is acknowledged
+  `applied`; the queued item is removed, or, when a fill already took it, the
+  dispatch drops it wherever it is, so no slot ever opens for it. A cancel
+  that arrives while the trigger's run waits for the queue, or is being
+  queued, applies too, and a cancelled run is never put back in the queue (a
+  lowered dispatch ceiling, a failed start), which a reload would otherwise
+  start. A later trigger of the same issue runs under its own run id. The queued item now
+  carries the platform run id and the slot adopts it from there, so a run id
+  can no longer be adopted by a later dispatch of the same issue number from
+  a local re-queue or another repository, and a re-queued remote run keeps its
+  run id. A trigger for an issue the operator already queued here serves that
+  work: it attaches its run id to the waiting item, or to the issue's dispatch
+  already on its way to a slot, decided in one turn with the fill's dequeue,
+  and cancelling such a run only detaches it, leaving the operator's work
+  queued. A trigger for an issue queued or dispatched here for another
+  platform run is refused `already-queued` before its ack.
+  `queue.removeRemoteRun` removes one remote run's item that no dispatch has
+  taken, or detaches the run from the operator's item.
 - **A slow reap of the complexity-model lock broker no longer hides why the
   transaction failed** (#2356). The extension waited for a broker it had sent
   SIGKILL as briefly as for one asked to exit, and an error from that wait
@@ -146,6 +298,196 @@ changelog, and the release workflow refuses a tag that does not.
   `--ask-for-approval never` before `exec`. No shipped stage changes yet: the SDK
   stage command passes no allowed tools (#2358), and every pipeline stage skill
   grants `Bash`, which keeps full access on a fresh start and on a resume alike.
+
+- **No script pipes into a reader that stops early, so a check can no longer
+  read a match as a miss** (#2360). `grep -q`, `head`, `sed q` and an awk
+  `exit` stop reading before the end of their input. The command still
+  writing into them then dies of SIGPIPE, and under `pipefail` that is the
+  pipeline's status. Gate runs went red that way under load with matching
+  content; on a large input it fails every time. Every shell script and
+  workflow `run:` block now reads a here-string, a file or a captured
+  variable instead. The worst case was `scripts/branch-merged-check.sh`: once
+  the PR index outgrew a pipe buffer, the head or base branch of an open PR
+  that is an ancestor of `main` read SAFE-DELETE, exit 0. Its open-PR and
+  worktree lookups and its content diff now fail closed: one that cannot run
+  (a full temp directory, a failed `git worktree list` or `git diff`, a `gh`
+  that is missing or cannot fetch the PR index) answers UNKNOWN, exit 2,
+  never "no open PR" or "identical content". Only `NO_PR=1` still judges on
+  content alone. Issue creation's epic gate found its markers the same broken
+  way in a long issue body, and reads a here-string now. `state-backstop.sh`
+  reported a changed file as removed beside a large leak, and now lists a
+  mass leak without a process per path. The release and staging VSIX checks
+  could fail a good package, or pass one that ships source maps. A new gate,
+  `scripts/check-pipefail-early-exit.py`, keeps the shape out, in `ci-local.sh`
+  and `lint.yml`. Its suite reproduces the failure on a 3 MB input instead of
+  waiting for load. `cmd | grep PAT >/dev/null` is no substitute: GNU grep
+  treats an output of `/dev/null` as `-q`, and the gate flags that too.
+
+- **The OpenCode integration tests no longer fail on a busy machine** (#2348,
+  #1810).
+  `TestOpenCodeIntegrationInheritUserConfigOptIn` told OpenCode's "already
+  installed" fast path from an install wait by a 20 s wall-clock bound, and
+  under load the fast path itself ran past it. It now checks the two facts
+  the bound stood in for: the operator-install-risk watchdog never armed, and
+  a counting npm registry stand-in saw no connection, so OpenCode attempted
+  no install. Without the satisfied seed the test still fails, at any load.
+  The 35 s caps on `HomeDotOpenCode`, `HomeDirBinOnlyNeverArmsTheWatchdog` and
+  `AbsentInheritedConfigDirOffline` gave way the same way: the last now reads
+  "bounded by the watchdog" from the watchdog's own timeout.
+  `HostBinaryIsARealNightgauge` identifies the binary the plugin spawns by
+  its `version` line instead of a 2 s bound, which `/usr/bin/true` passed. The
+  opt-in tests' install-risk marker checks read the run's own stderr, where
+  the manager writes those markers; before, they could never fail.
+
+- **Go tests that timed the machine now wait on the event they test**
+  (#2366). `TestOpenCodeFoldBoundedProcesses` gave every fold helper 300 ms,
+  so on a loaded machine a fast helper timed out first and the hung one never
+  started. Now the hung helper's deadline passes once it is running, and the
+  test checks that it, and no other helper, timed out. A second case, where
+  every helper hangs and nothing else can end one, pins each helper's own
+  timeout. The other fold tests bounded their helpers by 5 s each and 30 s
+  in all; the 64-session case runs 67 helpers in turn, so 0.45 s per helper
+  failed it. Both limits now catch only a hang.
+  `TestContract_Attention`'s sweep subtest (#2367) went to GitHub for real
+  under a 10 s read. A loopback proxy that refuses every connection now
+  keeps every IPC test off the network: unsealed, 14 of them sent 43
+  requests in one run, to GitHub and to the platform API. The subtest checks
+  the sweep's degraded result and counts the requests the seal refused. The
+  harness's read bound only catches a daemon that never answers, so it now
+  allows 60 s. A subtest can bind the harness to itself, so a harness
+  failure fails that subtest instead of its parent.
+  The pipeline E2E tests (#2368) gave a whole run a fixed budget (30 s, 15 s,
+  150 s), and each run spent 10 s of it on a license check nobody answered.
+  They now answer the check as the extension does. They stop only when the
+  pipeline makes no progress for two minutes or dispatches too many stages,
+  and they make no network calls. The lifecycle test takes about 11 s instead
+  of 20 s. When the concurrent-pipelines test timed out, its main thread could
+  wait forever; now it fails.
+
+- **PERFORMANCE_MODES.md describes the modes the pipeline has** (#2343). It
+  listed `economy`, `balanced`, `quality` and `custom`, which neither resolver
+  knows. It now gives the four real modes (`efficiency`, `elevated`, `maximum`,
+  `frontier`) with each one's model and effort bounds and pins, as the routing
+  tables define them, and the order in which the active mode is resolved. The
+  `pipeline.performance_mode.default` config key is removed: both
+  CONFIGURATION.md and the extension's schema described it as the mode used
+  when no state file is present, but neither resolver ever read it. The mode
+  comes from `NIGHTGAUGE_PERFORMANCE_MODE`, then the checkout's
+  `performance-mode.yaml` (the status-bar picker), then `elevated`. A config
+  that still sets the key is reported as invalid instead of being ignored.
+  CONFIGURATION.md no longer says `pipeline.performance_mode.overrides.maximum`
+  tunes the `maximum` profile, or that `pipeline.supercharge` is its synonym:
+  nothing reads the overrides (#2378). Of the legacy block only `codex_model`
+  changes what is dispatched (the Codex model under `maximum`); its `model`
+  only labels notifications. The docs also no longer say `pipeline.stage_models`
+  overrides a `maximum` pin: only a stage's
+  `NIGHTGAUGE_PIPELINE_STAGE_MODEL_<STAGE>` override does.
+- **A `stall_kill_multiplier` nested inside another `pipeline` key no longer
+  sets the global one** (#2378). The extension read the key at any depth under
+  `pipeline:`, so one under `performance_mode.overrides.maximum`, as
+  CONFIGURATION.md's example showed, or under `supercharge` changed the stall
+  window of every stage in every mode. Only `pipeline.stall_kill_multiplier`
+  itself is the global multiplier now.
+- **An epic's branch, epic PR, accumulated context and checkpoint are found in
+  the epic's own repository** (#2377). Four call sites still resolved a
+  sub-issue's parent epic by number in the sub-issue's repository. When the
+  epic lived elsewhere, the epic-PR step that runs on auto-close read that
+  repository's same-numbered issue for the title, and opened and merged the PR
+  there, from whichever `epic/<N>-*` branch the launch checkout held. Issue
+  pickup (the scheduler, its deterministic runner and `git branch-create`)
+  based the sub-issue on `epic/<N>-*` of its own repository, which is that
+  repository's own `#N`'s branch, or created a second one that no epic PR would
+  merge. A sub-issue's prompt could also be handed another epic's accumulated
+  findings. The epic PR is now opened in the epic's repository, from the epic
+  branch in that repository's checkout. A sub-issue whose epic lives in another
+  repository has no epic branch: it branches from and merges into its own
+  repository's default branch, and `git branch-create` reports no
+  `parent_issue` for it. Epic context is kept in the pipeline state of the
+  epic's repository. The between-epic checkpoint's halt reason and card name
+  the epic as `owner/repo#N`. The extension decides the same way: its
+  post-pickup epic base-branch check and its concurrent slots look for an epic
+  branch only when the epic lives in the sub-issue's repository, using the
+  epic repository the queue now records for each sub-issue, and the Go pickup
+  runner's issue context carries no `parent_issue` for a parent elsewhere. A
+  wave run executes each sub-issue in its own repository, not as the epic
+  repository's issue with the same number, and the dispatcher's cross-epic hold
+  no longer holds an unrelated issue that shares a number with a blocked
+  epic's sub-issue. A wave reads each sub-issue's run back from the checkout of
+  the sub-issue's repository, where the run was rooted, and only that
+  repository's run of the number: a merged sub-issue in another repository
+  counted as failed, which ended the wave and queued the epic instead, or the
+  launch repository's same-numbered run answered for it. The wave's results,
+  budgets, dependency edges and recorded findings are keyed by repository and
+  number too, and its plan and status files are kept with the epic's context.
+  Queuing an epic keeps each sub-issue's blockers apart by repository: two
+  sub-issues sharing a number in different repositories shared one blocker
+  list, so one could be queued without its open blocker. A queued blocker,
+  the epic's own included, records its repository and is re-read and matched
+  there. An auto-retro issue is linked under the failed issue's parent epic
+  only when the epic is in the same repository; it was linked under that
+  repository's same-numbered issue. The unused `epic.readContext`,
+  `epic.appendContext` and `wave.status` IPC methods, which read the launch
+  checkout by epic number alone, are removed.
+- **A blocker that shares its number with a parent epic in another repository
+  is no longer deleted, refused or flagged as circular** (#2369). Three checks
+  for "an issue blocked by its own parent epic" compared only the number. The
+  scheduler's dispatch gate deleted such a blocker from GitHub and dispatched
+  the sub-issue over it, `issue add-blocked-by` refused the edge, and
+  `epic validate` reported a circular blocker that issue-audit's repair then
+  removes. All three now match the parent by repository and number.
+  `epic validate` also tells two sub-issues that share a number in different
+  repositories apart, and each gap names its sub-issue's and blocker's
+  repositories (`subIssueRepo`, `blockerRepo`). issue-audit repairs a gap only
+  when both are the same repository, and leaves a cross-repository pair for a
+  human, since `remove-blocked-by` works within one repository.
+- **The `issue-create` skill, `issue create-sub --blocked-by` and
+  GO_BINARY.md no longer call body-declared dependencies cosmetic** (#2351).
+  Native `blockedBy` is still the relationship to create, but the pickup gate
+  and the dispatcher also honour `Depends on:` / `Blocked by` lines and
+  `## Dependencies` entries, so a stale one holds an issue until it is removed
+  or marked `⏸️`. `hook check-deps --help` and the hook contract now say it
+  reads both, and the contract documents its JSON and exit codes.
+- **The epic cascade finds a parent epic in another repository in that
+  repository** (#2350). A sub-issue's parent was looked up by number in the
+  sub-issue's own repository, because the board read recorded the parent's
+  number but not its repository. For a sub-issue whose epic lives elsewhere,
+  the dispatcher and the stuck-epic watchdog therefore cascaded through an
+  unrelated, same-numbered issue. The real epic's open blockers never held
+  the sub-issue, while the unrelated issue's blockers did whenever it was open
+  on a board. Both board reads (GraphQL and REST) now record the parent's
+  repository, and the dispatcher, the watchdog, its own-sub-issue check and
+  the knowledge graph's part-of edge key the epic by repository and number. A
+  hold through a cross-repository epic names it, and each of its blockers
+  outside the sub-issue's repository, in full:
+  `(via epic owner/repo#20) blocked by owner/repo#10 (open)`. The REST board
+  cache's stored shape changed, so its entries are read fresh once. The
+  ready-to-ship alert names the closed epic in its own repository.
+- **Short repository names in body-declared dependencies resolve against the
+  workspace's own repositories** (#2349). The pickup gate, the dispatcher's
+  dependency graph, `graph build`, `next`, `hook check-deps`, the `pr merge`
+  blocker guard and the `deps-gate promote` sweep resolved a short name, such
+  as `widget-api` in `Blocked by widget-api #12`, through a built-in map of the
+  documentation's example repositories. In any other workspace a sibling's
+  name glued to its `#` dropped the dependency, so the issue dispatched over an
+  open blocker; written with a space, it gated on the declaring repository's
+  own `#12`; and `platform` gated on `acme/platform`, which no board holds.
+  Every caller now builds the map from the workspace's repositories: the
+  checkout itself, the manifest's members and the sibling checkouts, each
+  counted when its own `.nightgauge/config.yaml` names its owner and repo, plus
+  the scheduler's repo set, found from the main checkout even when the command
+  runs in a pipeline worktree. A repository
+  name may contain a dot (`site.dev`), which no spelling but the issue URL
+  could name before. A name that resolves to no repository, or a bare name two
+  repositories share, now holds the issue (the dispatcher fails closed and
+  names the line) wherever it is plainly a repository: right after the
+  keyword, as a dependency-section entry, or glued to the `#`. It no longer
+  gates on the declaring repository's own same-numbered issue or drops the
+  dependency. `owner/repo#N` always resolves. Repo-qualified entries now gate
+  under `## Dependencies`, `## Blocked by` and `## Depends on` as they do under
+  `## Cross-Repo Dependencies`, and a repo-qualified `Part of owner/repo#N`
+  there stays a parent link. A keyword no longer reaches a reference on the
+  next line, so prose hard-wrapped after "does not … depend on" no longer
+  declares the dependency it denies.
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
   the phone app or the dashboard used to sit `routing` until it expired,
@@ -301,6 +643,14 @@ changelog, and the release workflow refuses a tag that does not.
   OpenCode permission map. An explicit `deny` in that map is now the main
   source; an `ask` rule from other OpenCode config, auto-rejected headless, is
   the narrower case.
+- **The docs link check no longer passes a file it could not check** (#2379).
+  When `markdown-link-check` exited non-zero without reporting a link (it
+  crashed, or could not read its config or the file), the step recorded
+  nothing and printed "passed", so a malformed `.markdown-link-check.json`
+  turned the check off for every file. Such a file now fails the step with a
+  `HARNESS ERROR` line, which `scripts/ci-local.sh` reports as an
+  infrastructure error. Beside a dead link, the step still fails as an
+  ordinary check failure and names the unchecked file.
 - **The docs link check re-probes an HTTP 408 instead of failing on it**
   (#2317). A shields.io badge in `README.md` answered 408 Request Timeout and
   failed the required `link-check` job on a pull request that did not touch
@@ -405,9 +755,22 @@ changelog, and the release workflow refuses a tag that does not.
   clone moves. The summary no longer says "nothing moved" after files moved,
   and findings an earlier remedy in the same `--fix` run already resolved are
   reported as resolved, not BLOCKED.
+- **Syncing discovery state no longer makes a full clone shallow** (#2373).
+  `scripts/discovery-state-sync.sh` and `scripts/discovery-state-publish.sh`
+  fetched the `discovery-state` branch with `--depth 1`. Once the branch had a
+  second commit, that recorded a shallow boundary, and git then reported the
+  whole clone as shallow. The publication-boundary checker refuses to run in a
+  shallow clone, so the local gate would have failed in every clone that
+  synced. Both scripts now fetch the whole branch, which holds one small commit
+  per run.
 
 ### Changed
 
+- **A skill whose `allowed-tools` lists no tool is refused** (#2358).
+  `nightgauge skill render` exits with an error that names the file, and the
+  SDK and the extension fail the stage. Such a field used to read as absent,
+  which gets the runner's default: the extension's default tools, or full
+  access under Codex. A skill without the field still gets that default.
 - **`claude-opus-5-5` defaults to `low` effort** (#2120), in both model
   registries. The default is provisional until the control-eval sweep confirms
   or reverts it. Explicit per-stage efforts and `model_routing.default_effort`

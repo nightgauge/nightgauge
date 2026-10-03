@@ -126,7 +126,7 @@ fi
 
 # The host scrub must sit inside the cleanup trap, which is what makes it run
 # on `die`, on a failed docker run, and on ^C.
-if awk '/^cleanup\(\)/,/^trap cleanup EXIT/' "$HOST_SH" | grep -q 'scrub-evidence.sh'; then
+if grep -q 'scrub-evidence.sh' <<<"$(awk '/^cleanup\(\)/,/^trap cleanup EXIT/' "$HOST_SH")"; then
   ok "the host scrub is inside the cleanup trap"
 else
   bad "the host scrub is outside the cleanup trap — it will be skipped on every abnormal exit"

@@ -111,8 +111,11 @@ func stuckEpicsFromGraph(graph *depgraph.Graph, o stuckEpicScanOpts) []StuckEpic
 		if isEpicNode(n) {
 			epicByKey[n.ID().String()] = n
 		}
-		if n.EpicNumber != 0 {
-			ek := depgraph.NodeID{Repo: n.Repo, Number: n.EpicNumber}.String()
+		// The parent is keyed in its own repository: a sub-issue of an epic
+		// in another repository is that epic's work, not that of the
+		// same-numbered issue in the sub-issue's repository (#2350).
+		if parent, ok := n.EpicID(); ok {
+			ek := parent.String()
 			subsByEpic[ek] = append(subsByEpic[ek], n)
 		}
 	}
@@ -214,9 +217,10 @@ func dispatchable(n *depgraph.Node, adj map[string][]string, graph *depgraph.Gra
 	}
 	// Epic-level cascade: a sub is not dispatchable when its parent epic is OPEN
 	// with an open, non-work-complete blocker — matching prioritize() in
-	// autonomous.go (gated by the same DisableEpicBlockedByCascade config).
-	if !disableEpicCascade && n.EpicNumber != 0 {
-		epicKey := depgraph.NodeID{Repo: n.Repo, Number: n.EpicNumber}.String()
+	// autonomous.go (gated by the same DisableEpicBlockedByCascade config),
+	// including keying the epic in its own repository (#2350).
+	if epicID, isSub := n.EpicID(); !disableEpicCascade && isSub {
+		epicKey := graph.NodeKey(epicID)
 		if epic, ok := graph.Nodes[epicKey]; ok && strings.EqualFold(epic.State, "OPEN") {
 			if gating, _ := epicCascadeDeps(graph, adj, epicKey); hasOpenBlocker(gating, graph) {
 				return false
@@ -234,17 +238,30 @@ func dispatchable(n *depgraph.Node, adj map[string][]string, graph *depgraph.Gra
 // sibling that waits on the epic. That is how #478, ready and unblocked, was
 // reported as "(via epic #477) blocked by #478" and never dispatched (#1937).
 // Both the dispatcher and the stuck-epic watchdog use this, so they cannot
-// disagree about which edges gate.
+// disagree about which edges gate. A sub-issue is recognised by its parent's
+// repository and number together, so one in another repository is still the
+// epic's own and one in the epic's repository whose parent merely shares the
+// number is not (#2350).
 func epicCascadeDeps(g *depgraph.Graph, adj map[string][]string, epicKey string) (gating, ownSubs []string) {
 	epic, ok := g.Nodes[epicKey]
 	for _, depKey := range adj[epicKey] {
-		if dep, found := g.Nodes[depKey]; ok && found && dep.Repo == epic.Repo && dep.EpicNumber == epic.Number {
+		if dep, found := g.Nodes[depKey]; ok && found && dep.IsSubIssueOf(epic) {
 			ownSubs = append(ownSubs, depKey)
 			continue
 		}
 		gating = append(gating, depKey)
 	}
 	return gating, ownSubs
+}
+
+// epicRefFor names a sub-issue's parent epic in a hold reason: "#N" when the
+// epic shares the sub-issue's repository, "owner/repo#N" when it does not, so
+// a cross-repository hold names the issue that actually holds it (#2350).
+func epicRefFor(n *depgraph.Node, epic depgraph.NodeID) string {
+	if strings.EqualFold(epic.Repo, n.Repo) {
+		return fmt.Sprintf("#%d", epic.Number)
+	}
+	return epic.String()
 }
 
 // hasOpenBlocker reports whether any dependency in depKeys is OPEN and not
@@ -264,25 +281,43 @@ func hasOpenBlocker(depKeys []string, graph *depgraph.Graph) bool {
 	return false
 }
 
-// openBlockerRefs returns the sorted "#N" refs of the OPEN, non-work-complete
-// dependencies in depKeys (the same set hasOpenBlocker counts), for use in a
-// human reason string.
-func openBlockerRefs(depKeys []string, graph *depgraph.Graph) []string {
-	var nums []int
+// openBlockerRefs returns the refs of the OPEN, non-work-complete dependencies
+// in depKeys (the same set hasOpenBlocker counts), for use in a human reason
+// string about an issue in home. A dependency in home reads "#N"; one in any
+// other repository reads "owner/repo#N", because in a reason about home's issue
+// a bare "#N" names home's own #N, and an epic's blocker in another
+// repository is not that issue (#2350 review). home's own refs come first, by
+// number, then the others by repository and number.
+func openBlockerRefs(depKeys []string, graph *depgraph.Graph, home string) []string {
+	var deps []depgraph.NodeID
 	for _, depKey := range depKeys {
 		dep, ok := graph.Nodes[depKey]
 		if !ok || !strings.EqualFold(dep.State, "OPEN") || isWorkCompleteStatus(dep.BoardStatus) {
 			continue
 		}
-		nums = append(nums, dep.Number)
+		deps = append(deps, dep.ID())
 	}
-	if len(nums) == 0 {
+	if len(deps) == 0 {
 		return nil
 	}
-	sort.Ints(nums)
-	refs := make([]string, len(nums))
-	for i, b := range nums {
-		refs[i] = fmt.Sprintf("#%d", b)
+	local := func(id depgraph.NodeID) bool { return strings.EqualFold(id.Repo, home) }
+	sort.Slice(deps, func(i, j int) bool {
+		a, b := deps[i], deps[j]
+		if local(a) != local(b) {
+			return local(a)
+		}
+		if !local(a) && !strings.EqualFold(a.Repo, b.Repo) {
+			return strings.ToLower(a.Repo) < strings.ToLower(b.Repo)
+		}
+		return a.Number < b.Number
+	})
+	refs := make([]string, len(deps))
+	for i, id := range deps {
+		if local(id) {
+			refs[i] = fmt.Sprintf("#%d", id.Number)
+		} else {
+			refs[i] = id.String()
+		}
 	}
 	return refs
 }
@@ -298,19 +333,19 @@ func blockerReasonFor(n *depgraph.Node, adj map[string][]string, graph *depgraph
 	// Direct blocker takes precedence (matches the dispatcher's ordering: own-dep
 	// before epic cascade). Only OPEN, non-work-complete deps are real blockers —
 	// an "In review" dep (PR up) does not block downstream work (#4073 review).
-	if refs := openBlockerRefs(adj[n.ID().String()], graph); len(refs) > 0 {
+	if refs := openBlockerRefs(adj[n.ID().String()], graph, n.Repo); len(refs) > 0 {
 		return "blocked by " + strings.Join(refs, ", ") + " (open)"
 	}
 
 	// Held back solely by the parent epic's blockedBy cascade — surface that
 	// "(via epic #N)" reason instead of mislabeling the sub as merely
 	// "ready but undispatched" (matches autonomous.go's blocked-by-epic-dep).
-	if !disableEpicCascade && n.EpicNumber != 0 {
-		epicKey := depgraph.NodeID{Repo: n.Repo, Number: n.EpicNumber}.String()
+	if epicID, isSub := n.EpicID(); !disableEpicCascade && isSub {
+		epicKey := graph.NodeKey(epicID)
 		if epic, ok := graph.Nodes[epicKey]; ok && strings.EqualFold(epic.State, "OPEN") {
 			gating, _ := epicCascadeDeps(graph, adj, epicKey)
-			if refs := openBlockerRefs(gating, graph); len(refs) > 0 {
-				return fmt.Sprintf("(via epic #%d) blocked by %s (open)", n.EpicNumber, strings.Join(refs, ", "))
+			if refs := openBlockerRefs(gating, graph, n.Repo); len(refs) > 0 {
+				return fmt.Sprintf("(via epic %s) blocked by %s (open)", epicRefFor(n, epicID), strings.Join(refs, ", "))
 			}
 		}
 	}

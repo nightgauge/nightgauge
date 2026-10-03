@@ -44,6 +44,7 @@ const BOARD_ITEM_GO_ONLY_FIELDS = new Set([
   "isPR",
   "authorAssociation",
   "labelsTruncated",
+  "parentIssueRepo",
 ]);
 
 const BOARD_ITEM_ALL_KNOWN = new Set([

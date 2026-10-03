@@ -194,7 +194,16 @@ markers. CI validates this via `scripts/validate-skill-metadata.sh`.
 | `metadata.author`  | string | `"nightgauge"`                                   |
 | `metadata.version` | string | Semver, quoted (e.g., `"1.0.0"`)                 |
 | `metadata.source`  | string | `"https://github.com/nightgauge/nightgauge"`     |
-| `allowed-tools`    | string | Space-separated tool names                       |
+| `allowed-tools`    | string | Tool names the skill is granted (see below)      |
+
+`allowed-tools` names the tools a stage is granted, separated by spaces or commas
+(`Read Grep`, `Read, Grep`) or written as a YAML list (`[Read, Grep]`, or one `- Read`
+per line). With nothing after the key, the value is read from the lines indented below
+it. A `Tool(pattern)` entry such as `Bash(gh *)` is one entry, and a `# comment` is not
+read. A skill whose field lists no tool is refused when it is rendered; a skill without
+the field gets the runner's default tools. `programmatic-tools` and `mcp-tools` use the
+same grammar, and an empty one lists none. The binary and the SDK read it alike, pinned
+by `internal/skillrender/testdata/allowed_tools_expected.json`.
 
 Canonical skills must **not** set `disable-model-invocation` themselves —
 `scripts/install-agent-skills.sh` injects it into the generated plugin copy at

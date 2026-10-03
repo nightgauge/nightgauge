@@ -10,7 +10,7 @@
 #   0  SAFE-DELETE  content is in base, or the branch is exactly what a merged PR merged,
 #                   or its tip is inside a merged PR's head (folded in by merge commit)
 #   1  KEEP         carries content base does not have, or has commits past the merge
-#   2  UNKNOWN      undecidable — do NOT delete
+#   2  UNKNOWN      undecidable, or a lookup that guards deletion could not run — do NOT delete
 #
 # Why this is a script and not a one-liner
 # ----------------------------------------
@@ -57,7 +57,8 @@
 # commit (the batching rule) has no PR of its own; the forge's commit -> PRs
 # lookup finds the PR that carried it, and an ancestry compare against that
 # PR's head proves the tip landed (#2313). Set NO_PR=1 to skip the forge
-# lookup entirely; the result is then conservative by design.
+# lookup entirely and judge on content alone: no merged PR can prove a merge,
+# and no open PR is looked for.
 
 set -uo pipefail
 
@@ -74,33 +75,63 @@ BASE_DEFAULT="origin/main"
 # ---------------------------------------------------------------------------
 # PR index: "<state>\t<headRefName>\t<headRefOid>\t<number>\t<baseRefName>",
 # fetched once for open AND merged PRs. Open ones mark a branch in use (as head
-# OR as base, #2175); merged ones prove a branch already landed. Empty when NO_PR=1, gh is missing, unauthenticated, or
-# the remote is not a forge we can query — classification stays content-only.
+# OR as base, #2175); merged ones prove a branch already landed.
+#
+# NO_PR=1 skips the fetch, and classification is content-only: no open-PR
+# guard, no merged-PR proof. Nothing else does. When gh is not installed, or
+# its fetch fails (unauthenticated, offline, a remote it cannot query),
+# PR_INDEX_ERR says why, and every verdict the open-PR guards stand before is
+# UNKNOWN: an empty index would read as "no open PR" for a branch no guard
+# looked at (#2360).
 # ---------------------------------------------------------------------------
 PR_INDEX=""
+PR_INDEX_ERR=""
 build_pr_index() {
   [ "${NO_PR:-0}" = "1" ] && return 0
-  command -v gh >/dev/null 2>&1 || return 0
+  if ! command -v gh >/dev/null 2>&1; then
+    PR_INDEX_ERR="gh is not installed; NO_PR=1 judges on content alone"
+    return 0
+  fi
+  local rc
   PR_INDEX=$(gh pr list --state all --limit 500 \
     --json state,headRefName,headRefOid,number,baseRefName \
     --jq '.[] | select(.state=="OPEN" or .state=="MERGED")
-          | "\(.state)\t\(.headRefName)\t\(.headRefOid)\t\(.number)\t\(.baseRefName)"' 2>/dev/null) || PR_INDEX=""
+          | "\(.state)\t\(.headRefName)\t\(.headRefOid)\t\(.number)\t\(.baseRefName)"' 2>/dev/null)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    PR_INDEX=""
+    PR_INDEX_ERR="gh pr list failed (status $rc)"
+  fi
 }
+
+# The lookups below read PR_INDEX from a here-string, never `printf | awk`:
+# awk's `exit` at the first match stops reading, and under pipefail a printf
+# still writing the index then dies of SIGPIPE and the lookup reads as "no
+# such PR". For open_pr_for that skipped the open-PR KEEP, and a branch the
+# ancestor rule called merged read SAFE-DELETE (#2360).
+#
+# A lookup answers 0 (found) or NOT_FOUND, and nothing else means "no such
+# PR". Any other status is a lookup that did not run: bash could not create
+# the here-string's temporary file (an index larger than a pipe buffer, a
+# full or read-only temp directory, a file-size limit), or awk failed.
+# classify() answers UNKNOWN for that, never "no open PR": the open-PR checks
+# guard every SAFE-DELETE, so a failed one must fail closed.
+NOT_FOUND=3
 
 # open_pr_for <branch> -> prints the PR number if an OPEN PR uses this branch
 open_pr_for() {
-  [ -n "$PR_INDEX" ] || return 1
-  printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" \
-    '$1=="OPEN" && $2==b {print $4; found=1; exit} END{exit !found}'
+  [ -n "$PR_INDEX" ] || return "$NOT_FOUND"
+  awk -F'\t' -v b="$1" -v nf="$NOT_FOUND" \
+    '$1=="OPEN" && $2==b {print $4; found=1; exit} END{if (!found) exit nf}' <<<"$PR_INDEX"
 }
 
 # open_pr_based_on <branch> -> prints the PR number if an OPEN PR targets this
 # branch as its BASE (#2175). Deleting a base branch breaks every PR stacked on
 # it, and a pipeline epic branch is exactly that base.
 open_pr_based_on() {
-  [ -n "$PR_INDEX" ] || return 1
-  printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" \
-    '$1=="OPEN" && $5==b {print $4; found=1; exit} END{exit !found}'
+  [ -n "$PR_INDEX" ] || return "$NOT_FOUND"
+  awk -F'\t' -v b="$1" -v nf="$NOT_FOUND" \
+    '$1=="OPEN" && $5==b {print $4; found=1; exit} END{if (!found) exit nf}' <<<"$PR_INDEX"
 }
 
 # epic_issue_state <N> -> prints the issue's state (OPEN/CLOSED); non-zero and
@@ -114,11 +145,13 @@ epic_issue_state() {
   printf '%s' "$st"
 }
 
-# merged_pr_for <branch> -> prints "<sha>\t<number>" if a merged PR used it
+# merged_pr_for <branch> -> prints "<sha>\t<number>" if a merged PR used it.
+# Its caller treats every non-zero status alike: a merged PR only ever adds a
+# SAFE-DELETE, so a lookup that did not run costs a deletion, never work.
 merged_pr_for() {
-  [ -n "$PR_INDEX" ] || return 1
-  printf '%s\n' "$PR_INDEX" | awk -F'\t' -v b="$1" \
-    '$1=="MERGED" && $2==b {print $3 "\t" $4; found=1; exit} END{exit !found}'
+  [ -n "$PR_INDEX" ] || return "$NOT_FOUND"
+  awk -F'\t' -v b="$1" -v nf="$NOT_FOUND" \
+    '$1=="MERGED" && $2==b {print $3 "\t" $4; found=1; exit} END{if (!found) exit nf}' <<<"$PR_INDEX"
 }
 
 # merged_pr_head_parents <sha> -> prints one parent SHA per line for a merged
@@ -239,7 +272,7 @@ classify() {
     tracking_sha=$(git rev-parse "$ref" 2>/dev/null)
     live_line=$(git ls-remote origin "refs/heads/$branch" 2>/dev/null)
     # ls-remote matches patterns by ref-name tail, so pick the exact ref only.
-    live_sha=$(printf '%s\n' "$live_line" | awk -v want="refs/heads/$branch" '$2 == want {print $1; exit}')
+    live_sha=$(awk -v want="refs/heads/$branch" '$2 == want {print $1; exit}' <<<"$live_line")
     if [ -z "$live_sha" ]; then
       echo "UNKNOWN      remote-only ref $branch — \`git ls-remote origin refs/heads/$branch\` failed or found nothing; cannot confirm the cached tracking ref ${tracking_sha:0:7} is current"
       return 2
@@ -267,35 +300,77 @@ classify() {
   # Skipped for a remote-only branch: `git worktree list` matches local
   # branch refs (refs/heads/<branch>), and remote_only means that ref does
   # not exist — there is no local checkout for this branch name to hold.
+  #
+  # Like the open-PR checks below, it fails closed: a worktree list git could
+  # not produce, or a lookup that did not run, is UNKNOWN, never "not checked
+  # out" (#2360).
+  local rc
   if [ "$remote_only" = 0 ]; then
-    local wt
-    wt=$(git worktree list --porcelain 2>/dev/null \
-      | awk -v b="refs/heads/$branch" '
+    local wt worktrees
+    if ! worktrees=$(git worktree list --porcelain 2>/dev/null); then
+      echo "UNKNOWN      \`git worktree list\` failed — cannot rule out a checkout of this branch"
+      return 2
+    fi
+    wt=$(awk -v b="refs/heads/$branch" -v nf="$NOT_FOUND" '
           /^worktree /  { w = substr($0, 10) }
-          /^branch /    { if (substr($0, 8) == b) { print w; exit } }')
-    if [ -n "$wt" ]; then
+          /^branch /    { if (substr($0, 8) == b) { print w; found = 1; exit } }
+          END           { if (!found) exit nf }' <<<"$worktrees")
+    rc=$?
+    case "$rc" in
+    0)
       echo "KEEP         checked out in a worktree: $wt"
       return 1
-    fi
+      ;;
+    "$NOT_FOUND") ;;
+    *)
+      echo "UNKNOWN      the worktree lookup did not run (status $rc) — cannot rule out a checkout of this branch"
+      return 2
+      ;;
+    esac
+  fi
+
+  # Both open-PR guards below read the PR index. One that could not be
+  # fetched is no evidence of "no open PR" (see build_pr_index).
+  if [ -n "$PR_INDEX_ERR" ]; then
+    echo "UNKNOWN      ${remote_note}the open-PR lookups did not run ($PR_INDEX_ERR) — cannot rule out an open PR on this branch"
+    return 2
   fi
 
   # An OPEN PR means the branch is in use no matter what its content says.
   # Deleting the head branch of an open PR closes that PR. Content cannot see
   # this: a PR whose changes were already applied to base by another route
   # compares identical and would otherwise read SAFE-DELETE.
-  if pr_num=$(open_pr_for "$branch"); then
+  pr_num=$(open_pr_for "$branch")
+  rc=$?
+  case "$rc" in
+  0)
     echo "KEEP         open PR #$pr_num — deleting this branch would close it"
     return 1
-  fi
+    ;;
+  "$NOT_FOUND") ;;
+  *)
+    echo "UNKNOWN      ${remote_note}the open-PR lookup did not run (status $rc) — cannot rule out an open PR on this branch"
+    return 2
+    ;;
+  esac
 
   # An OPEN PR whose BASE is this branch (#2175): deleting it breaks that PR.
   # Like the worktree guard, this must precede every SAFE-DELETE — and unlike
   # it, it applies to a remote-only ref too, because a stacked PR's base
   # usually exists only on the remote.
-  if pr_num=$(open_pr_based_on "$branch"); then
+  pr_num=$(open_pr_based_on "$branch")
+  rc=$?
+  case "$rc" in
+  0)
     echo "KEEP         ${remote_note}open PR #$pr_num targets this branch as its base — deleting it would break that PR"
     return 1
-  fi
+    ;;
+  "$NOT_FOUND") ;;
+  *)
+    echo "UNKNOWN      ${remote_note}the open-PR lookup did not run (status $rc) — cannot rule out an open PR based on this branch"
+    return 2
+    ;;
+  esac
 
   # A pipeline epic branch (`epic/<N>-…`) is the base every sub-issue branch
   # of epic N is cut from and merges into (#2175). Freshly created it has no
@@ -328,7 +403,14 @@ classify() {
     return 0
   fi
 
-  files=$(git diff --name-only "$base...$ref" 2>/dev/null)
+  # Each diff below fails closed like the lookups above: an empty result from
+  # a git (or xargs) that did not run would read as "no files" or "identical
+  # content", the second a SAFE-DELETE (#2360). pipefail is set, so a failure
+  # anywhere in the residual pipeline is its status.
+  if ! files=$(git diff --name-only "$base...$ref" 2>/dev/null); then
+    echo "UNKNOWN      ${remote_note}the file list did not run (\`git diff --name-only\` failed) — cannot compare content with $base"
+    return 2
+  fi
   if [ -z "$files" ]; then
     # NOT "merged" — undecidable, and NOT the ancestor case (ruled out above).
     # A branch that introduces nothing yet is not contained in base means the
@@ -339,8 +421,11 @@ classify() {
 
   # Base TIP vs branch TIP, restricted to those paths. NUL-split so the list
   # never routes through shell word-splitting and spaces are safe.
-  residual=$(git diff --name-only -z "$base...$ref" \
-    | xargs -0 git diff --stat "$base" "$ref" -- 2>/dev/null)
+  if ! residual=$(git diff --name-only -z "$base...$ref" \
+    | xargs -0 git diff --stat "$base" "$ref" -- 2>/dev/null); then
+    echo "UNKNOWN      ${remote_note}the content diff did not run (\`git diff --stat\` or xargs failed) — cannot compare content with $base"
+    return 2
+  fi
 
   if [ -z "$residual" ]; then
     echo "SAFE-DELETE  ${remote_note}content identical in $base ($(printf '%s\n' "$files" | grep -c .) files)"

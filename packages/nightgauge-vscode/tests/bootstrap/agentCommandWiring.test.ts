@@ -66,7 +66,59 @@ describe("platform agent command wiring in bootstrap/services.ts", () => {
 
   it("gives the run-verb handler the window's pause UI", () => {
     expect(servicesSource).toMatch(
-      /new RunVerbCommandHandler\([\s\S]*?createRemotePauseUi\(statusBar, \(runId\) => pipelineManager\.remoteRunState\(runId\)\)\s*\)/
+      /new RunVerbCommandHandler\([\s\S]*?createRemotePauseUi\(statusBar, \(runId\) => pipelineManager\.remoteRunState\(runId\)\),/
+    );
+  });
+
+  // #2357: a verb no window holds is refused through the machine's ledger,
+  // which follows this window's held runs from the start (its current set,
+  // and the queue read once and on every reconnect) and is marked closed
+  // when the window goes.
+  it("gives the run-verb handler the machine's remote-run ledger, kept current", () => {
+    expect(servicesSource).toMatch(
+      /new RunVerbCommandHandler\([\s\S]*?remoteRunLedger \? \{ ledger: remoteRunLedger \} : undefined\s*\)/
+    );
+    expect(servicesSource).toContain(
+      "pipelineManager.onHeldRemoteRunsChanged((runIds) => void remoteRunLedger.publish(runIds))"
+    );
+    expect(servicesSource).toContain(
+      "void remoteRunLedger.publish(pipelineManager.heldRemoteRunIds());"
+    );
+    expect(servicesSource).toMatch(
+      /ipcClient\.onDidChangeStatus\(\(connected\) => \{\s*if \(connected\) void pipelineManager\.syncQueuedRemoteRuns\(\);/
+    );
+    expect(servicesSource).toContain(
+      "if (remoteRunLedger) context.subscriptions.push(remoteRunLedger);"
+    );
+  });
+
+  // #2339: the paused-snapshot scan hands every paused run, with the platform
+  // run a reload ended, to restorePausedRuns over the window's holds, which
+  // claim it in the ledger, so one window of the clone holds it. The
+  // behaviour is tested in reloadInterruptedHolds.test.ts and
+  // pausedRunRestore.test.ts.
+  it("hands the paused runs a reload ended to the window's exclusive holds", () => {
+    expect(servicesSource).toContain("interrupted: reloadInterruptedRemoteRun(runtime),");
+    expect(servicesSource).toContain(
+      "const reloadInterruptedHolds = new ReloadInterruptedRunHolds(remoteRunLedger);"
+    );
+    expect(servicesSource).toMatch(
+      /await restorePausedRuns\(paused, \{\s*holds: reloadInterruptedHolds,/
+    );
+    expect(servicesSource).toContain("reloadInterruptedHolds.attach(concurrentPipelineManager);");
+  });
+
+  // #2372: the window's own registration is refused workspace writes too; its
+  // success paths report the workspace synced only when none was refused, and
+  // its refusals and the daemon's go through one notice.
+  it("reports the window's own registration refusals, and does not call that synced", () => {
+    expect(extensionSource.match(/if \(workspaceMeta\) showRegisteredSync\(/g)).toHaveLength(2);
+    expect(extensionSource).toMatch(
+      /const showRegisteredSync = [\s\S]*?if \(refused\.length > 0\) \{[\s\S]*?setStatus\("failed"/
+    );
+    expect(servicesSource).toContain("(refusals) => refusedWorkspaceWritesNotice.report(refusals)");
+    expect(servicesSource).toContain(
+      "followRefusedWorkspaceWrites(ipcClient, refusedWorkspaceWritesNotice)"
     );
   });
 });

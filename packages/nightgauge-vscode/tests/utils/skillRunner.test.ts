@@ -3642,6 +3642,126 @@ allowed-tools: Read Write Glob Grep
     );
   });
 
+  it("reads injected tool lists as the binary does: commas, and a pattern whole (#2358)", () => {
+    const injectedContent = `---
+name: platform-skill
+allowed-tools: Read, Bash(gh *), AskUserQuestion
+mcp-tools: mcp__github__*, mcp__slack__*
+---
+# Platform Skill
+`;
+    vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      injectedContent
+    );
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const tools = args[args.indexOf("--allowedTools") + 1].split(",");
+    // The headless dispatch drops AskUserQuestion; the MCP tools follow.
+    expect(tools.slice(0, 2)).toEqual(["Read", "Bash(gh *)"]);
+    expect(tools).not.toContain("AskUserQuestion");
+    expect(tools).toContain("mcp__github__*");
+    expect(tools).toContain("mcp__slack__*");
+    // A comma left on an entry would join into an empty one.
+    expect(tools).not.toContain("");
+  });
+
+  it("grants an injected YAML block list exactly, not the default set (#2358)", () => {
+    // Read as no list, a block list used to get the default set, Bash,
+    // Write and Edit among it, which this skill does not ask for.
+    const injectedContent = `---
+name: platform-skill
+allowed-tools:
+  - Read
+  - Grep
+---
+# Read-only platform skill
+`;
+    vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      injectedContent
+    );
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    expect(args[args.indexOf("--allowedTools") + 1]).toBe("Read,Grep");
+  });
+
+  it.each([
+    ["a flow sequence", "allowed-tools: [Read, Grep] # read only"],
+    ["a value on the line below the key", "allowed-tools:\n  Read Grep"],
+  ])("grants an injected list written as %s exactly (#2358)", (_form, field) => {
+    // Each of these used to read as no list, which got the default set.
+    const injectedContent = `---\nname: platform-skill\n${field}\n---\n# Read-only platform skill\n`;
+    vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      injectedContent
+    );
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    expect(args[args.indexOf("--allowedTools") + 1]).toBe("Read,Grep");
+  });
+
+  it("fails a stage whose injected allowed-tools lists no tool, running nothing (#2358)", () => {
+    // Read as no list, it got the default set; the disk render must not run
+    // in its place either.
+    const injectedContent = `---\nname: platform-skill\nallowed-tools: ""\n---\n# Platform skill\n`;
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      { onComplete, onError },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      injectedContent
+    );
+
+    expect(vi.mocked(spawn)).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("lists no tool") })
+    );
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+  });
+
   it("should fall back to disk on injected content parse failure", () => {
     // Empty string content — parseSkillContent should return null
     const injectedContent = "";

@@ -72,16 +72,19 @@ func TestRenderEpicContext_DeterministicSiblingOrder(t *testing.T) {
 	root := writeEpicCtx(t, 7, epicContext{
 		EpicNumber: 7,
 		SubIssueFindings: map[string]*subIssueFindings{
-			"30": {Decisions: []string{"note-from-30"}},
-			"9":  {Decisions: []string{"note-from-9"}},
-			"21": {Decisions: []string{"note-from-21"}},
+			"30":                 {Decisions: []string{"note-from-30"}},
+			"9":                  {Decisions: []string{"note-from-9"}},
+			"21":                 {Decisions: []string{"note-from-21"}},
+			"example-org/app#21": {Decisions: []string{"note-from-app-21"}},
 		},
 	})
 	got := renderEpicContextForPrompt(root, 7)
-	// Ascending numeric order: 9, 21, 30.
-	i9, i21, i30 := strings.Index(got, "note-from-9"), strings.Index(got, "note-from-21"), strings.Index(got, "note-from-30")
-	if !(i9 >= 0 && i9 < i21 && i21 < i30) {
-		t.Errorf("sibling notes not in ascending issue order: 9=%d 21=%d 30=%d", i9, i21, i30)
+	// Ascending numeric order: 9, 21, then app#21 (a sub-issue in another
+	// repository, keyed "owner/repo#N", #2377), 30.
+	i9, i21, iApp, i30 := strings.Index(got, "note-from-9"), strings.Index(got, "note-from-21"),
+		strings.Index(got, "note-from-app-21"), strings.Index(got, "note-from-30")
+	if !(i9 >= 0 && i9 < i21 && i21 < iApp && iApp < i30) {
+		t.Errorf("sibling notes not in ascending issue order: 9=%d 21=%d app#21=%d 30=%d", i9, i21, iApp, i30)
 	}
 }
 

@@ -128,7 +128,7 @@ if HOME="$HOME_A" PATH="$SAFE_PATH" bash "$INSTALLER" >/dev/null 2>"$TMP/a.err";
     ok "(a) default install copies Codex and Grok skills (incl. _includes + _shared)"
   else
     nope "(a) expected Codex and Grok dest files after default install"
-    find "$HOME_A" -name SKILL.md | head
+    find "$HOME_A" -name SKILL.md | sed -n '1,10p'
   fi
 else
   nope "(a) default install exited non-zero"
@@ -150,7 +150,7 @@ if HOME="$HOME_B" PATH="$SAFE_PATH" bash "$INSTALLER" --grok-only >/dev/null 2>"
     ok "(b) --grok-only installs Grok and leaves Codex dest untouched"
   else
     nope "(b) --grok-only touched Codex or missed Grok"
-    find "$HOME_B" | sed 's/^/    /' | head
+    find "$HOME_B" | sed -n '1,10s/^/    /p'
   fi
 else
   nope "(b) --grok-only exited non-zero"
@@ -166,7 +166,7 @@ if HOME="$HOME_C" PATH="$SAFE_PATH" bash "$INSTALLER" --codex-only >/dev/null 2>
     ok "(c) --codex-only installs Codex and leaves Grok dest untouched"
   else
     nope "(c) --codex-only touched Grok or missed Codex"
-    find "$HOME_C" | sed 's/^/    /' | head
+    find "$HOME_C" | sed -n '1,10s/^/    /p'
   fi
 else
   nope "(c) --codex-only exited non-zero"
@@ -182,7 +182,7 @@ if HOME="$HOME_D" PATH="$SAFE_PATH" bash "$INSTALLER" --grok-only >"$TMP/d.out" 
   else
     nope "(d) skip path did not skip, or created ~/.grok"
     cat "$TMP/d.out" "$TMP/d.err"
-    find "$HOME_D" | sed 's/^/    /' | head
+    find "$HOME_D" | sed -n '1,10s/^/    /p'
   fi
 else
   nope "(d) skip path exited non-zero"
@@ -197,7 +197,7 @@ if HOME="$HOME_E" PATH="$SAFE_PATH" bash "$INSTALLER" --claude-only >/dev/null 2
     ok "(e) --claude-only leaves Codex and Grok dests untouched"
   else
     nope "(e) --claude-only copied Codex or Grok skills"
-    find "$HOME_E" | sed 's/^/    /' | head
+    find "$HOME_E" | sed -n '1,10s/^/    /p'
   fi
 else
   nope "(e) --claude-only exited non-zero"
@@ -444,7 +444,7 @@ if [ -f "$TMP/o8-first/skills/nightgauge-retro/SKILL.md" ] &&
   ok "(o8) a second run gives the same tree"
 else
   nope "(o8) a second run changed the tree"
-  diff -r "$TMP/o8-first" "$R8" | head | sed 's/^/    /'
+  diff -r "$TMP/o8-first" "$R8" | sed -n '1,10s/^/    /p'
 fi
 rm -r "$SB8/skills/nightgauge-retro"
 oc_run "$HOME_O8" "$SB8/scripts/install-agent-skills.sh" --opencode-only --with-plugin --yes \

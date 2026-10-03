@@ -65,6 +65,8 @@ import {
   TIER_BANDS_STRONGEST_FIRST as SDK_TIER_BANDS_STRONGEST_FIRST,
   readRoutingAdvice,
   pickAdvice,
+  skillAllowedTools,
+  skillFrontmatterTools,
   type JobClass,
   type ModelSelectionResult,
   type IssueMetadata,
@@ -3059,8 +3061,9 @@ export function renderSkill(stage: PipelineStage, model?: string, adapter?: stri
 
   return {
     content: envelope.content,
-    // The binary omits an empty list, so absence means "frontmatter declared
-    // none" — which is the case the historical default exists for.
+    // The binary omits an empty list and refuses a field that lists no tool,
+    // so absence means "frontmatter declared none" — which is the case the
+    // historical default exists for.
     allowedTools: envelope.allowed_tools?.length ? envelope.allowed_tools : DEFAULT_ALLOWED_TOOLS,
     mcpTools: envelope.mcp_tools ?? [],
     programmaticTools: envelope.programmatic_tools,
@@ -3134,30 +3137,20 @@ function parseSkillContent(raw: string): {
   mcpTools: string[];
   programmaticTools?: string[];
 } | null {
+  // Each tool list is read as the binary reads a SKILL.md on disk (#2358):
+  // entries separated by spaces or commas, a `Tool(pattern)` entry whole,
+  // inline or as a YAML list. An absent list reads as the render envelope's
+  // omitted one: the historical default for allowed-tools, none for the
+  // others. An allowed-tools field that lists no tool throws, as the binary
+  // refuses it, and is read outside the try below so the stage fails rather
+  // than running the disk render in the injected skill's place.
+  const declaredTools = skillAllowedTools(raw);
   try {
     const frontmatterMatch = raw.match(/^---\n([\s\S]*?)\n---/);
-    let allowedTools: string[] = [...DEFAULT_ALLOWED_TOOLS];
-    let mcpTools: string[] = [];
-    let programmaticTools: string[] | undefined;
-
-    if (frontmatterMatch) {
-      const frontmatter = frontmatterMatch[1];
-      const toolsMatch = frontmatter.match(/allowed-tools:\s*(.+)/);
-      if (toolsMatch) {
-        allowedTools = toolsMatch[1].trim().split(/\s+/);
-      }
-
-      const mcpMatch = frontmatter.match(/mcp-tools:\s*(.+)/);
-      if (mcpMatch) {
-        const rawMcp = mcpMatch[1].trim();
-        mcpTools = rawMcp === "all" ? ["all"] : rawMcp.split(/\s+/);
-      }
-
-      const ptcMatch = frontmatter.match(/programmatic-tools:\s*(.+)/);
-      if (ptcMatch) {
-        programmaticTools = ptcMatch[1].trim().split(/\s+/);
-      }
-    }
+    const allowedTools = declaredTools.length > 0 ? declaredTools : [...DEFAULT_ALLOWED_TOOLS];
+    const mcpTools = skillFrontmatterTools(raw, "mcp-tools");
+    const declaredProgrammatic = skillFrontmatterTools(raw, "programmatic-tools");
+    const programmaticTools = declaredProgrammatic.length > 0 ? declaredProgrammatic : undefined;
 
     // Strip frontmatter from the content passed to the executing agent.
     // Frontmatter keys like `agent:` and `context: fork` are metadata for the
@@ -4828,8 +4821,10 @@ function runStageSkillHeadlessImpl(
   const codexEnv: Record<string, string> = {};
   if (adapter === "codex") {
     // When the active performance mode is `maximum` (or legacy supercharge),
-    // prefer the user-configurable Codex override
-    // (`pipeline.performance_mode.maximum.codex_model` or env var) so users
+    // prefer the user-configurable Codex override (the
+    // `NIGHTGAUGE_SUPERCHARGE_CODEX_MODEL` env var or the legacy
+    // `pipeline.supercharge.codex_model`; nothing reads
+    // `pipeline.performance_mode.overrides.maximum.codex_model`, #2378) so users
     // can point the heavy tier at a new model without a code change. Falls
     // through to modelDecision.model, which for `maximum` already resolves
     // to the registry's opus tier (CODEX_TIER_MODEL_MAP.opus) via

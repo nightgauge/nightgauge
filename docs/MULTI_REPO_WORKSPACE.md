@@ -705,6 +705,33 @@ The nightly sweep and the post-merge hook now read the same membership record
 sub-issues?" differently the way they did when the hook was looking in the
 wrong repository.
 
+### Epic Branches in a Cross-Repo Epic (#2377)
+
+An epic branch, `epic/<N>-<slug>`, names issue `#N` of the repository it is
+pushed to, so it belongs to the epic's own repository:
+
+- **A sub-issue in the epic's repository** branches from the epic branch and
+  its PR targets it, as in a single-repo epic. When the epic auto-closes, the
+  epic PR (epic branch → `main`) is titled, opened and merged in the epic's
+  repository, from the epic branch in that repository's checkout.
+- **A sub-issue in another repository has no epic branch.** It branches from,
+  and merges into, its own repository's default branch, like an issue without
+  a parent. `epic/<N>-*` in its repository is the branch of that repository's
+  own `#N`. Basing the sub-issue on it, or creating one beside it, left work on
+  a branch that no epic PR merges, because the epic PR is opened in the epic's
+  repository.
+- **A workspace with no checkout of the epic's repository opens no epic PR.**
+  None of the epic's own sub-issues ran there, so it holds no epic branch to
+  merge.
+
+The epic's other per-epic state is keyed the same way. Its accumulated context
+(`epic-context-<N>.json`), wave plan and wave status are kept in the pipeline
+state of the epic's repository, and each sub-issue's prompt reads the context
+from there. A wave runs each sub-issue in the sub-issue's own repository and
+reads its result back from that repository's checkout. A queued sub-issue's
+blockers, the epic's own included, record their repository and are read
+there. The between-epic checkpoint names the epic as `owner/repo#N`.
+
 ### Cross-Repo Issue Creation
 
 Create issues in any workspace repository:

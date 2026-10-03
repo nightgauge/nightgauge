@@ -46,12 +46,12 @@ log_debug()   { [[ "${NIGHTGAUGE_HOOKS_DEBUG:-false}" == "true" ]] && echo "[DEB
 
 # Inline utility functions (replaces deleted common.sh)
 get_current_branch()     { git branch --show-current 2>/dev/null; }
-get_issue_from_branch()  { echo "$1" | grep -oE '[0-9]+' | head -1; }
+get_issue_from_branch()  { grep -oE '[0-9]+' <<<"$1" | sed -n 1p; }
 get_repo_owner()         { gh repo view --json owner -q '.owner.login' 2>/dev/null; }
 get_project_number() {
   local cfg="$PROJECT_ROOT/.nightgauge/config.yaml"
   if [[ -f "$cfg" ]]; then
-    grep -E '^\s*number:' "$cfg" | head -1 | grep -oE '[0-9]+' | head -1
+    grep -m1 -E '^\s*number:' "$cfg" | grep -oE '[0-9]+' | sed -n 1p
   else
     echo "${NIGHTGAUGE_PROJECT_NUMBER:-}"
   fi
@@ -222,7 +222,7 @@ detect_drift() {
 
   # Get issue status label
   local status_label
-  status_label=$(get_issue_status_labels "$issue_num" | head -1)
+  status_label=$(get_issue_status_labels "$issue_num" | sed -n 1p)
 
   if [[ -z "$status_label" ]]; then
     log_debug "validate-issue-sync: No status label on issue #$issue_num (not drift, needs label)"

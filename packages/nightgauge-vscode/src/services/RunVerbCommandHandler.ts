@@ -17,11 +17,12 @@
  *   - `already_resolved` with a fixed reason: the run was already in the state
  *     the verb asks for, a pause of a paused run or a resume of a run that is
  *     not paused (#2341). The platform keeps the status the verb set;
- *   - `rejected` with a fixed reason: it could not act (the run is still
- *     queued here, the run has no state to pause yet, or the run ended after
- *     this window was found to hold it), it was an `approve` or `reject`, or
- *     its payload had no runId. On a pause or resume the platform then
- *     restores the run's earlier status.
+ *   - `rejected` with a fixed reason: it could not act (a pause or resume of
+ *     a run still queued here, the run has no state to pause yet, or the run
+ *     ended after this window was found to hold it), it was an `approve` or
+ *     `reject`, or its payload had no runId. On a pause or resume the
+ *     platform then restores the run's earlier status. A cancel of a run
+ *     still queued here applies (#2344).
  *
  * `approve` and `reject` name a run's `stage` and `gateType`, but no local
  * run ever waits at a gate a platform decision could release (#2336): the
@@ -48,14 +49,25 @@
  * sends a command to every connection that shares the agent id, and the agent
  * identity is per machine, so every window on this machine receives the verb;
  * the first ack ends the command. A window that does not hold the run (no
- * slot carries the runId, and no trigger it accepted for it is still queued
- * there) leaves the verb without acknowledging it, as TriggerCommandHandler
- * leaves a trigger for a repo the window does not have open. The holder
- * answers whatever repositories it has open now. A no-op ack from such a
- * window would race the holder's ack, and a `rejected` pause or resume makes
- * the platform undo the hold the holder applied. `rejected` therefore comes
- * only from the holder, when it cannot apply the verb. When no window holds
- * the run, nobody acknowledges, and the platform expires the command.
+ * slot carries the runId, and no item queued for it is on its way to a slot
+ * there) does not apply the verb. The holder answers whatever repositories it
+ * has open now. A no-op ack from another window would race the holder's ack,
+ * and a `rejected` pause or resume makes the platform undo the hold the
+ * holder applied.
+ *
+ * When no window holds the run, the verb is still refused, `no-active-run`,
+ * within seconds (#2357), through the machine's RemoteRunLedger: the holder
+ * claims the command's one answer before it applies the verb, and a window
+ * that does not hold the run waits UNHELD_VERB_GRACE_MS, then refuses only
+ * when it still does not hold it, no window of the machine lists the run as
+ * held (a window that closed or is reloading still counts for a minute, and
+ * a verb only such a window listed is looked at again after that minute),
+ * and it claims the answer first. So the platform receives one acknowledgement
+ * per command, and never a refusal ahead of the holder's. A holder that finds
+ * the answer claimed already answers all the same: the platform takes its
+ * later `applied` over a refusal from a window that could not see the run
+ * held. Without a ledger (no machine-state directory) such a verb is left
+ * alone and expires.
  *
  * Replaces the separate Cancel/Approve/RejectCommandHandler classes, which
  * acted on the run and acknowledged nothing.
@@ -70,6 +82,7 @@ import type { IpcClient } from "./IpcClient";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import type { Logger } from "../utils/logger";
 import type { RemotePauseUi } from "../utils/pauseUi";
+import type { RemoteRunLedger } from "./RemoteRunLedger";
 
 /** The verbs that act on an existing run, as the platform names them. */
 export const RUN_VERB_COMMAND_TYPES = ["cancel", "approve", "reject", "pause", "resume"] as const;
@@ -96,6 +109,8 @@ const NO_OP_DETAIL: Record<Exclude<RemoteVerbResult, "applied" | AlreadyResolved
   "no-active-run": "no-active-run: no pipeline on this agent carries this runId",
   "not-started": "not-started: the run is queued on this agent and has not started yet",
   "no-run-state": "no-run-state: the run has no local state to pause yet",
+  "resume-in-window":
+    "resume-in-window: a window reload ended the paused run; only its window can resume it",
 };
 
 const INVALID_PAYLOAD_DETAIL = "invalid-payload: runId is required";
@@ -105,6 +120,38 @@ const APPLY_FAILED_DETAIL = "apply-failed: the agent could not carry out the com
 
 function isAlreadyResolved(result: RemoteVerbResult): result is AlreadyResolvedResult {
   return result in ALREADY_RESOLVED_DETAIL;
+}
+
+/**
+ * How long a window that does not hold a run waits before it may refuse a
+ * verb for it (#2357): long enough for the holder to have claimed the answer
+ * and for the ack of a trigger this window is accepting to have come back,
+ * from which on the window holds the trigger's run.
+ */
+export const UNHELD_VERB_GRACE_MS = 2_000;
+
+/**
+ * How often a window looks again at a verb that only closed or reloading
+ * windows' listings held (#2357), each time once those listings stopped
+ * counting: a bound, since a window that closes holding the run can extend
+ * the wait, and the platform expires the command after five minutes anyway.
+ */
+const CLOSED_HOLD_LOOKS = 5;
+
+/** Looked at this long after a closed listing stops counting, not on the edge. */
+const CLOSED_HOLD_MARGIN_MS = 50;
+
+/** The machine's record of which window answers a verb (#2357). */
+export type UnheldVerbLedger = Pick<
+  RemoteRunLedger,
+  "heldElsewhere" | "closedHoldLeftMs" | "claimAnswer"
+>;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
 }
 
 export type RunVerbTarget = Pick<
@@ -129,6 +176,8 @@ function runIdOf(cmd: ReceivedCommand): string | null {
 export class RunVerbCommandHandler implements CommandHandler {
   private agentId: string | null = null;
   private readonly redelivery = new CommandRedeliveryGuard<VerbAck>();
+  /** Commands waiting out the grace before a refusal no window holds (#2357). */
+  private readonly waitingRefusals = new Set<string>();
 
   constructor(
     private readonly runs: RunVerbTarget,
@@ -141,7 +190,12 @@ export class RunVerbCommandHandler implements CommandHandler {
      */
     private readonly workspaceManager?: Pick<WorkspaceManager, "findRepositoryByGitHub">,
     /** Optional: shows an applied pause or resume in this window. */
-    private readonly pauseUi?: RemotePauseUi
+    private readonly pauseUi?: RemotePauseUi,
+    /**
+     * Optional (#2357): the machine's ledger, through which a verb no window
+     * holds is refused after `graceMs` (default UNHELD_VERB_GRACE_MS).
+     */
+    private readonly unheld?: { ledger: UnheldVerbLedger; graceMs?: number }
   ) {}
 
   /** The agent this window's own command stream belongs to. */
@@ -175,18 +229,116 @@ export class RunVerbCommandHandler implements CommandHandler {
         );
         return;
       }
-    } else if (!this.redelivery.remembers(cmd.id) && !(await this.runs.holdsRemoteRun(runId))) {
-      this.logger.info(
-        "RunVerbCommandHandler: this window does not hold the run — leaving the command for the window that does",
-        { verb, runId, commandId: cmd.id }
-      );
-      return;
+    } else if (!this.redelivery.remembers(cmd.id)) {
+      if (!(await this.runs.holdsRemoteRun(runId))) {
+        this.logger.info(
+          "RunVerbCommandHandler: this window does not hold the run — leaving the command for the window that does",
+          { verb, runId, commandId: cmd.id }
+        );
+        return this.refuseIfNobodyHolds(cmd, verb, runId);
+      }
+      // The holder claims the command's one answer before it applies the
+      // verb, so no window that waited out the grace refuses it (#2357).
+      await this.claimAsHolder(cmd, verb, runId);
     }
+    return this.consumeAsHolder(cmd, verb, runId);
+  }
+
+  /**
+   * Claim the command's one answer as the window that holds the run. The
+   * holder applies and answers the verb even when another window answered
+   * first: that window refused a run it could not see held, and the
+   * platform lets the holder's later `applied` replace that refusal.
+   */
+  private async claimAsHolder(
+    cmd: ReceivedCommand,
+    verb: RunVerbCommandType,
+    runId: string
+  ): Promise<void> {
+    if (!this.unheld) return;
+    if (await this.unheld.ledger.claimAnswer(cmd.id)) return;
+    this.logger.warn(
+      "RunVerbCommandHandler: another window answered a verb for a run this window holds — answering as the holder",
+      { verb, runId, commandId: cmd.id }
+    );
+  }
+
+  private consumeAsHolder(
+    cmd: ReceivedCommand,
+    verb: RunVerbCommandType,
+    runId: string | null
+  ): Promise<void> {
     return this.redelivery.consume(
       cmd.id,
       () => this.decide(cmd, verb, runId),
       (ack) => this.acknowledge(cmd, verb, ack)
     );
+  }
+
+  /**
+   * Refuse a verb for a run no window of the machine holds (#2357), once the
+   * grace has passed: unless this window holds the run by then (a trigger it
+   * was accepting queued it), another window lists it, or another window
+   * answered the command first. A run listed only by windows that closed or
+   * are reloading is looked at again once their listings stop counting: a
+   * window back from a reload lists the runs it still holds by then, and a
+   * run that did not survive the reload is refused instead of expiring.
+   */
+  private async refuseIfNobodyHolds(
+    cmd: ReceivedCommand,
+    verb: RunVerbCommandType,
+    runId: string
+  ): Promise<void> {
+    const unheld = this.unheld;
+    if (!unheld || this.waitingRefusals.has(cmd.id)) return;
+    this.waitingRefusals.add(cmd.id);
+    try {
+      let wait = unheld.graceMs ?? UNHELD_VERB_GRACE_MS;
+      for (let look = 0; ; look++) {
+        await delay(wait);
+        if (this.redelivery.remembers(cmd.id)) return;
+        if (await this.runs.holdsRemoteRun(runId)) {
+          await this.claimAsHolder(cmd, verb, runId);
+          return this.consumeAsHolder(cmd, verb, runId);
+        }
+        if (!(await unheld.ledger.heldElsewhere(runId))) break;
+        const left = await unheld.ledger.closedHoldLeftMs(runId);
+        if (left === null || look >= CLOSED_HOLD_LOOKS) {
+          this.logger.debug("RunVerbCommandHandler: another window holds the run — it answers", {
+            verb,
+            runId,
+            commandId: cmd.id,
+          });
+          return;
+        }
+        this.logger.debug(
+          "RunVerbCommandHandler: only a closed or reloading window lists the run — looking again when its listing lapses",
+          { verb, runId, commandId: cmd.id, inMs: left }
+        );
+        wait = left + CLOSED_HOLD_MARGIN_MS;
+      }
+      if (!(await unheld.ledger.claimAnswer(cmd.id))) {
+        this.logger.debug("RunVerbCommandHandler: another window answered the command", {
+          verb,
+          runId,
+          commandId: cmd.id,
+        });
+        return;
+      }
+      this.logger.info("RunVerbCommandHandler: no window holds the run — refusing the verb", {
+        verb,
+        runId,
+        commandId: cmd.id,
+      });
+      const agentId = cmd.agentId ?? this.agentId;
+      return this.redelivery.consume(
+        cmd.id,
+        async () => ({ agentId, outcome: "rejected", detail: NO_OP_DETAIL["no-active-run"] }),
+        (ack) => this.acknowledge(cmd, verb, ack)
+      );
+    } finally {
+      this.waitingRefusals.delete(cmd.id);
+    }
   }
 
   /** Carry the verb out and decide its ack. Never throws. */

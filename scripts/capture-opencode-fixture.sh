@@ -319,12 +319,19 @@ run_capture() {
     [ "$(jq -s '[.[] | select(.type == "tool_use" and .part.state.status == "error")] | length' "$STAGING/stage/$name.jsonl")" = 1 ] ||
       die "refused: the $name capture does not have one rejected tool_use event"
   done
-  grep -F 'permission requested: bash (' "$STAGING/stage/reject.stderr" | grep -F 'auto-rejecting' >/dev/null ||
+  # Read into variables, then matched: piped into grep with its output on
+  # /dev/null (which GNU grep treats as -q) under pipefail, an early match
+  # could SIGPIPE the writer and refuse a good capture (#2360).
+  local notices first last
+  notices="$(grep -F 'permission requested: bash (' "$STAGING/stage/reject.stderr" || true)"
+  grep -qF 'auto-rejecting' <<<"$notices" ||
     die "refused: the reject capture's stderr has no auto-reject line"
   # The heredoc's notice starts on one line and ends on a later one.
-  if ! { head -n 1 "$STAGING/stage/heredoc.stderr" | grep -F 'permission requested: bash (' | grep -vF 'auto-rejecting' >/dev/null &&
+  first="$(head -n 1 "$STAGING/stage/heredoc.stderr")"
+  last="$(tail -n 1 "$STAGING/stage/heredoc.stderr")"
+  if ! { [[ $first == *'permission requested: bash ('* && $first != *auto-rejecting* ]] &&
     [ "$(grep -c '' "$STAGING/stage/heredoc.stderr")" -gt 1 ] &&
-    tail -n 1 "$STAGING/stage/heredoc.stderr" | grep -E '\); auto-rejecting$' >/dev/null; }; then
+    grep -qE '\); auto-rejecting$' <<<"$last"; }; then
     die "refused: the heredoc capture's stderr does not spread one auto-reject notice over several lines"
   fi
 

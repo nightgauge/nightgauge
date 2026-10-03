@@ -57,6 +57,57 @@ describe("AgentRegistrationService", () => {
     );
   });
 
+  // #2372: the platform refused some workspace writes, and the agent
+  // registered all the same; the window learns which, in bounded form.
+  it("reports the workspace writes a registration was refused, once", async () => {
+    const shown = vi.fn();
+    const withNotice = new AgentRegistrationService(
+      () => PLATFORM_URL,
+      tokenStorage,
+      logger,
+      undefined,
+      shown
+    );
+    vi.mocked(fetch).mockResolvedValueOnce(
+      makeResponse(201, {
+        agentId: "agent-xyz",
+        refused_workspace_writes: [
+          {
+            workspace: "acme-platform",
+            team_id: "team-1",
+            code: "PERMISSION_DENIED",
+            permission: "workspace:update",
+            message: "the platform's own sentence",
+          },
+        ],
+      })
+    );
+
+    expect(await withNotice.register(PAYLOAD)).toBe("agent-xyz");
+    const refused = withNotice.getLastRefusedWorkspaceWrites();
+    expect(refused).toHaveLength(1);
+    expect(refused[0]).toMatchObject({
+      workspace: "acme-platform",
+      permission: "workspace:update",
+    });
+    expect(refused[0].description).toContain('did not write workspace "acme-platform"');
+    expect(shown).toHaveBeenCalledTimes(1);
+    expect(shown).toHaveBeenCalledWith(refused);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('did not write workspace "acme-platform"')
+    );
+    expect(JSON.stringify(logger.warn.mock.calls)).not.toContain("the platform's own sentence");
+
+    // The next registration was refused nothing: nothing is shown, and the
+    // last refusals are gone.
+    vi.mocked(fetch).mockResolvedValueOnce(
+      makeResponse(201, { agentId: "agent-xyz", refused_workspace_writes: [] })
+    );
+    await withNotice.register(PAYLOAD);
+    expect(withNotice.getLastRefusedWorkspaceWrites()).toEqual([]);
+    expect(shown).toHaveBeenCalledTimes(1);
+  });
+
   it("returns null and logs warning on 401", async () => {
     vi.mocked(fetch).mockResolvedValueOnce(makeResponse(401, {}));
 

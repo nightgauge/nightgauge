@@ -8,6 +8,8 @@
  *   - if creation fails → return { ok: false } so the caller fails the stage
  *     instead of silently merging the sub-issue to main
  *   - non-epic issues, or unconfirmable parents, return { ok: true } (no block)
+ *   - a parent in ANOTHER repository has no epic branch here: the base branch
+ *     is kept and nothing is looked up or created (#2377)
  *
  * Root cause this guards: the Go scheduler created the epic branch and this TS
  * method only retargeted to it, but the extension's autonomous slots never run
@@ -37,15 +39,21 @@ vi.mock("../../src/services/BinaryResolver", () => ({
 }));
 
 const {
-  parentNumber,
+  parentJson,
+  graphqlQueries,
   existingEpicBranch,
+  lsRemoteCalls,
   createReturnsBranch,
   writtenBase,
   createBranchCalls,
   contextBase,
 } = vi.hoisted(() => ({
-  parentNumber: { value: "null" as string },
+  // What `gh api graphql --jq .data.repository.issue.parent` prints: the
+  // parent as compact JSON, or an empty line when there is none.
+  parentJson: { value: "" as string },
+  graphqlQueries: { value: [] as string[] },
   existingEpicBranch: { value: "" as string },
+  lsRemoteCalls: { value: 0 },
   createReturnsBranch: { value: "epic/3-backend-contract" as string },
   writtenBase: { value: "" as string },
   createBranchCalls: { value: 0 },
@@ -53,6 +61,13 @@ const {
   // the mock's return value is observable, not a constant nobody can see.
   contextBase: { value: "main" as string },
 }));
+
+/** The orchestrator below runs for nightgauge/acmeapp-platform. */
+const THIS_REPO = "nightgauge/acmeapp-platform";
+
+function setParent(number: number, repo: string = THIS_REPO): void {
+  parentJson.value = JSON.stringify({ number, repository: { nameWithOwner: repo } });
+}
 
 vi.mock("child_process", async () => {
   const actual = await vi.importActual<typeof import("child_process")>("child_process");
@@ -75,12 +90,14 @@ vi.mock("child_process", async () => {
         stderr: "",
       });
     }
-    // gh api graphql → parent number
+    // gh api graphql → the parent, with its repository
     if (args?.[0] === "api" && args?.includes("graphql")) {
-      return Promise.resolve({ stdout: parentNumber.value, stderr: "" });
+      graphqlQueries.value.push(args.join(" "));
+      return Promise.resolve({ stdout: parentJson.value + "\n", stderr: "" });
     }
     // git ls-remote --heads origin epic/<n>-*
     if (args?.[0] === "ls-remote") {
+      lsRemoteCalls.value++;
       const out = existingEpicBranch.value ? `abc123\trefs/heads/${existingEpicBranch.value}` : "";
       return Promise.resolve({ stdout: out, stderr: "" });
     }
@@ -129,8 +146,10 @@ describe("HeadlessOrchestrator.enforceEpicBaseBranch (fail-closed)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    parentNumber.value = "null";
+    parentJson.value = "";
+    graphqlQueries.value = [];
     existingEpicBranch.value = "";
+    lsRemoteCalls.value = 0;
     createReturnsBranch.value = "epic/3-backend-contract";
     writtenBase.value = "";
     createBranchCalls.value = 0;
@@ -141,12 +160,12 @@ describe("HeadlessOrchestrator.enforceEpicBaseBranch (fail-closed)", () => {
 
   function makeOrchestrator(): any {
     const o = new HeadlessOrchestrator(createMockStateService(), logger, { contextFileWaitMs: 0 });
-    o.setRepoOverride("nightgauge/acmeapp-platform");
+    o.setRepoOverride(THIS_REPO);
     return o;
   }
 
   it("returns ok and does nothing for a non-epic issue", async () => {
-    parentNumber.value = "null";
+    parentJson.value = "";
     const o = makeOrchestrator();
     const res = await o.enforceEpicBaseBranch(7);
     expect(res.ok).toBe(true);
@@ -155,7 +174,7 @@ describe("HeadlessOrchestrator.enforceEpicBaseBranch (fail-closed)", () => {
   });
 
   it("retargets base_branch to an existing epic branch without creating one", async () => {
-    parentNumber.value = "3";
+    setParent(3);
     existingEpicBranch.value = "epic/3-backend-contract";
     const o = makeOrchestrator();
     const res = await o.enforceEpicBaseBranch(7);
@@ -165,7 +184,7 @@ describe("HeadlessOrchestrator.enforceEpicBaseBranch (fail-closed)", () => {
   });
 
   it("creates the epic branch when missing and retargets to it (the acmeapp case)", async () => {
-    parentNumber.value = "3";
+    setParent(3);
     existingEpicBranch.value = ""; // not on remote yet
     createReturnsBranch.value = "epic/3-backend-contract";
     const o = makeOrchestrator();
@@ -176,7 +195,7 @@ describe("HeadlessOrchestrator.enforceEpicBaseBranch (fail-closed)", () => {
   });
 
   it("fails closed when the epic branch cannot be created", async () => {
-    parentNumber.value = "3";
+    setParent(3);
     existingEpicBranch.value = "";
     createReturnsBranch.value = ""; // create returns no branch → failure
     const o = makeOrchestrator();
@@ -195,7 +214,7 @@ describe("HeadlessOrchestrator.enforceEpicBaseBranch (fail-closed)", () => {
     // parent #3 resolves to epic/3-backend-contract, and writtenBase is
     // rewritten — so this test fails rather than silently passing.
     contextBase.value = "epic/99-preexisting-target";
-    parentNumber.value = "3";
+    setParent(3);
     existingEpicBranch.value = "epic/3-backend-contract";
 
     const o = makeOrchestrator();
@@ -206,8 +225,33 @@ describe("HeadlessOrchestrator.enforceEpicBaseBranch (fail-closed)", () => {
     expect(createBranchCalls.value).toBe(0);
   });
 
+  // #2377: epic/3-* in this repository is the branch of ITS #3. Basing a
+  // sub-issue of another repository's #3 on it, or creating one beside it,
+  // strands the work on a branch the epic's PR (opened in the epic's own
+  // repository) never merges.
+  it("keeps the base branch of a sub-issue whose epic lives in another repository", async () => {
+    setParent(3, "nightgauge/acmeapp-backend");
+    existingEpicBranch.value = "epic/3-this-repos-own-issue";
+    const o = makeOrchestrator();
+    const res = await o.enforceEpicBaseBranch(7);
+    expect(res.ok).toBe(true);
+    expect(graphqlQueries.value[0]).toContain("repository { nameWithOwner }");
+    expect(lsRemoteCalls.value).toBe(0); // no epic/3-* looked up here
+    expect(createBranchCalls.value).toBe(0); // and none created
+    expect(writtenBase.value).toBe(""); // base_branch left as written
+  });
+
+  it("matches the parent's repository case-insensitively", async () => {
+    setParent(3, "NightGauge/AcmeApp-Platform");
+    existingEpicBranch.value = "epic/3-backend-contract";
+    const o = makeOrchestrator();
+    const res = await o.enforceEpicBaseBranch(7);
+    expect(res.ok).toBe(true);
+    expect(writtenBase.value).toBe("epic/3-backend-contract");
+  });
+
   it("preserves the historical fall-through when auto_create_epic_branch is disabled", async () => {
-    parentNumber.value = "3";
+    setParent(3);
     existingEpicBranch.value = "";
     process.env.NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH = "false";
     const o = makeOrchestrator();

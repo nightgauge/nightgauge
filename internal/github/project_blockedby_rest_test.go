@@ -182,24 +182,77 @@ func TestBlockedByNumber_UnresolvableBlockedIssueIsAnError(t *testing.T) {
 
 func TestBlocksOwnParent(t *testing.T) {
 	cases := []struct {
-		name                      string
-		blockedParent, blockerNum int
-		want                      bool
+		name        string
+		parentRepo  string
+		parentNum   int
+		blockerRepo string
+		blockerNum  int
+		want        bool
 	}{
-		{"blocker is the parent", 842, 842, true},
-		{"blocker is a sibling", 842, 848, false},
-		// Zero means "no parent, or parent unknown". It must never guard: a
-		// false positive rejects a legitimate edge, which is the expensive
+		{"blocker is the parent", "o/r", 842, "o/r", 842, true},
+		{"repository names compare case-insensitively", "O/R", 842, "o/r", 842, true},
+		{"blocker is a sibling", "o/r", 842, "o/r", 848, false},
+		// The parent lives in another repository: a blocker that only shares
+		// its number is a different issue and a legitimate edge (#2369).
+		{"same number, parent in another repository", "o/platform", 842, "o/r", 842, false},
+		// Zero means "no parent, or parent unknown", and so does a parent
+		// whose repository could not be read. Neither may guard: a false
+		// positive rejects a legitimate edge, which is the expensive
 		// direction of this decision.
-		{"no parent", 0, 848, false},
-		{"no parent, blocker numbered zero", 0, 0, false},
+		{"no parent", "", 0, "o/r", 848, false},
+		{"no parent, blocker numbered zero", "", 0, "o/r", 0, false},
+		{"parent repository unknown", "", 842, "o/r", 842, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := blocksOwnParent(tc.blockedParent, tc.blockerNum); got != tc.want {
-				t.Errorf("blocksOwnParent(%d, %d) = %v, want %v",
-					tc.blockedParent, tc.blockerNum, got, tc.want)
+			if got := blocksOwnParent(tc.parentRepo, tc.parentNum, tc.blockerRepo, tc.blockerNum); got != tc.want {
+				t.Errorf("blocksOwnParent(%q, %d, %q, %d) = %v, want %v",
+					tc.parentRepo, tc.parentNum, tc.blockerRepo, tc.blockerNum, got, tc.want)
 			}
 		})
+	}
+}
+
+// #2369: the blocked issue's parent is o/platform#842, and the blocker is
+// o/r#842, an unrelated issue that shares the number. The edge is legitimate,
+// so the guard must let it through to the write. The fixture serves no write
+// endpoint, so the call fails there, after the guard.
+func TestAddBlockedByNumber_SameNumberAsAParentInAnotherRepoIsNotCircular(t *testing.T) {
+	var seen []string
+	srv := blockedByRESTServer(t, map[int]string{
+		849: issueJSON(849, "I_child", "https://api.github.com/repos/o/platform/issues/842"),
+		842: issueJSON(842, "I_unrelated", ""),
+	}, &seen)
+	defer srv.Close()
+
+	p := &ProjectService{client: newClientForRESTTest(srv)}
+	err := p.AddBlockedByNumber(context.Background(), "o", "r", 849, 842)
+	if err != nil && strings.Contains(err.Error(), "circular dependency") {
+		t.Fatalf("refused a legitimate edge: %v", err)
+	}
+	wrote := false
+	for _, req := range seen {
+		if strings.HasPrefix(req, "POST /repos/o/r/issues/849/dependencies/blocked_by") {
+			wrote = true
+		}
+	}
+	if !wrote {
+		t.Errorf("the edge never reached the write; requests = %v", seen)
+	}
+}
+
+func TestParentIssueRepo(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://api.github.com/repos/o/platform/issues/842": "o/platform",
+		"https://ghe.example/api/v3/repos/o/r/issues/7":      "o/r",
+		"":                                 "",
+		"https://api.github.com/repos/o/r": "",
+		"https://api.github.com/repos//r/issues/7": "",
+		"https://api.github.com/issues/7":          "",
+		"not a url":                                "",
+	} {
+		if got := parentIssueRepo(raw); got != want {
+			t.Errorf("parentIssueRepo(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }

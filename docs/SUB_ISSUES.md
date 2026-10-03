@@ -137,6 +137,10 @@ Epics use a two-tier merge strategy:
 This means each sub-issue remains independently revertable and bisectable on
 main, while keeping the epic branch history clean during development.
 
+Both tiers live in the epic's own repository. A sub-issue in another repository
+has no epic branch: it merges into its own repository's default branch. See
+[MULTI_REPO_WORKSPACE.md](MULTI_REPO_WORKSPACE.md#epic-branches-in-a-cross-repo-epic-2377).
+
 See [GIT_WORKFLOW.md](GIT_WORKFLOW.md#epic-merge-strategy) for configuration
 details.
 

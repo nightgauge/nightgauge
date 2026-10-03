@@ -306,6 +306,30 @@ A part outside the service's bounds is dropped and logged rather than
 costing the registration, and an account that belongs to no team is
 registered again without the `workspace` block.
 
+Creating the named workspace, updating its agent or display name, and
+linking the declared repositories need the owner or admin role on the
+workspace's team. For a developer or viewer the service skips those writes,
+registers the agent all the same, and lists each skipped write in the reply's
+`refused_workspace_writes` (#2372). The daemon logs one line per refusal on
+every registration, naming the workspace and the permission the write needs
+(`workspace:create` or `workspace:update`); `platform.status` reports the
+latest registration's refusals as `refusedWorkspaceWrites`; and the daemon
+sends the extension a `platform.workspaceWritesRefused` event, which the
+window shows as a warning, once for each set of refusals it has not shown
+yet (it also reads `platform.status` whenever it connects, for a
+registration it missed). The window's own registration reply carries the
+same list, and the window shows it through the same once-per-set warning;
+its workspace sync status then reads failed, with the refusals as the
+reason, rather than synced, and the window registers again on its next
+activation instead of reusing that registration. Every field the daemon or
+the window logs or shows is cut to a bounded form with only graphic
+characters, so no line break, line separator or bidirectional override in
+the reply reaches a log line, and square brackets show as parentheses, since
+the warning renders markdown link syntax as a link; the platform's own
+message is never reported. Until someone with that role
+registers the workspace, the declared repositories stay unlinked from it and
+a remote trigger for one is refused.
+
 The service places a trigger or a run verb on any agent that declares the
 run's repository, so the daemon's stream can receive one. The daemon executes
 only `attention_resolve` itself. It relays every other command to the
@@ -334,20 +358,104 @@ Only the window that holds a run answers a verb for it (#2340). The platform
 sends a command to every connection that shares the agent id, so every window
 on the machine receives the verb, and the first acknowledgement ends it. A
 window holds a run while one of its slots carries the run id, and from the
-moment it accepts the run's trigger until that slot opens, while the issue is
-still queued there or its worktree is being created; a verb that arrives in
-that interval is refused as `not-started`. An issue removed from the queue
-since (Clear Queue, Remove from Queue, a halt's drain) will never start, and
-the window no longer holds its run. The holder answers whichever repositories
-it has open now, so a manifest reload that drops the run's repository does not
-silence it. A window that does not hold the run drops the verb without
-acknowledging it, so `rejected` only ever comes from the holder, when it
-cannot apply the verb. A refused pause or resume makes the platform put the
-run back to its earlier status, so a refusal from a window that does not hold
-the run would undo the holder's hold. When no window holds the run, nobody
-acknowledges, and the platform expires the command. A verb with no `runId`
-names no run, and every window that has the repository open refuses it as
-`invalid-payload`.
+moment the ack of the run's trigger comes back until that slot opens: while
+the run waits to be queued (a fill can hold the queue for as long as Go takes
+to read the issues' blockers), while it is queued, and while its worktree is
+being created. The queued item carries
+the run id (`remoteRunId` on the queue item), and the slot adopts it from the
+item it dequeues, so a window still holds a queued run after a reload.
+
+A trigger for an issue the operator already queued here serves that work
+instead of queueing the issue twice (#2344). The window places the run in one
+turn with its fill's dequeue, so the dequeue cannot take the issue between the
+two: a trigger for an issue still waiting in the queue attaches its run id to
+the waiting item (`remoteRunAttached`), and one for an issue whose dispatch is
+already on its way to a slot (dequeued, or creating its worktree) attaches to
+that dispatch, whose slot then adopts the run id. A trigger for an issue
+queued or dispatched here for another platform run, or taken from the queue
+by anything else, is refused `already-queued` before its ack; one whose slot
+is already open is left alone, as before.
+
+A pause or resume that arrives before the slot opens is refused as
+`not-started`. A cancel applies (#2344): it tombstones the run id, takes the
+run off the queue if no fill has taken its item yet (`queue.removeRemoteRun`,
+which touches no other item), and the dispatch drops a tombstoned item
+wherever it is, waiting for an earlier start or with its worktree being
+created, last in the tick its slot would open, so no slot ever opens for it.
+A cancel that arrives while the trigger's run is still being queued applies
+as well: nothing is queued for it, and a run the enqueue had queued already is
+taken back out. A tombstoned run is never put back in the queue, which
+outlives the in-memory tombstone across a window reload: not when the
+dispatch ceiling drops during the fill, and not when its slot fails to start.
+A run attached to the operator's own item or dispatch is detached instead:
+the operator's work stays queued, or goes on to its slot, as it was before
+the trigger. The tombstone is keyed by the platform run id, so a later trigger
+of the same issue runs. An issue removed from the queue since (Clear Queue,
+Remove from Queue, a halt's drain) will never start, and the window no longer
+holds its run. The holder answers whichever repositories it has open now, so a
+manifest reload that drops the run's repository does not silence it. A window that does not hold the run never applies the verb, and
+never refuses it ahead of the holder's answer: a refused pause or resume
+makes the platform put the run back to its earlier status, so such a refusal
+would undo the holder's hold. When no window holds the run, the verb is still refused, `no-active-run`,
+within about two seconds (#2357). The windows of a machine agree on it
+through a ledger in the machine-state directory, `STATE/agent-commands/`:
+each window lists every platform run id it answers for (`holders/<pid>.json`:
+its slots, the dispatches on their way to a slot, the triggers it is
+queueing, the runs its queue carries, and the paused runs a reload ended
+there), from the moment it is wired, after reading its queue, which after a
+reload can carry runs no queue change announces, and again on every daemon
+reconnect. A window that closes or reloads marks its listing closed, and the
+others still honour it for a minute, so its runs are not refused while it
+comes back; any other listing counts only while its process lives. A window
+that left a verb to such a listing looks at it again once the listing lapses,
+and refuses it then when no window lists the run again, rather than leaving
+it to expire. The first window to answer a command claims it
+(`answers/<command id>`, created exclusively, naming the window); a claim
+whose window is gone before it answered is taken over by one window, which
+answers instead. The holder claims the answer before it applies the verb. A
+window that does not hold the run waits two seconds, and refuses only when
+it still does not hold it, no window lists the run, and it claims the answer
+first. So the platform receives one acknowledgement per command, the holder's
+whenever a window holds the run. A holder that finds the answer claimed
+already still applies the verb and answers: the window that answered first
+could not see the run held, and the platform takes the holder's later
+`applied` over that refusal. A ledger that cannot be read or written refuses
+nothing, and the verb then expires as before. Windows still on an extension
+from before the ledger list nothing, so while a machine runs both, a newer
+window can refuse an older window's run first; reloading every window ends
+that. A verb with no `runId` names no run, and every window that has the
+repository open refuses it as `invalid-payload`.
+
+A platform `pause` holds a run in the window that executes it (#2334): the
+slot's pipeline call stays in flight at the stage boundary, and a `resume`
+lets that same call continue. A window reload ends the call, and the daemon
+that owned the run's runtime with it; the paused snapshot
+(`runtime-<issue>-<run>.json`) is all that is left. It records the platform
+run id (`remoteRunId`, #2339) and its owner process (`ownerPid`). Every
+window on a worktree of the clone reads the same snapshots, so the window
+that finds such a snapshot when it activates, with the owner gone, holds the
+run for the platform's verbs only when it claims it first in the remote-run
+ledger (`claims/<run id>.json`; a claim whose window is gone is taken over),
+and lists it there. The window holds every such run before it shows the
+first Resume prompt, so a run waiting behind another prompt is answered too.
+A `resume` is refused `resume-in-window`: only the window's Resume prompt can
+continue the run, as a new run. A `pause` is `already_resolved`. A `cancel`
+ends the run: the window consumes the paused snapshot, so neither its Resume
+prompt nor a later activation brings the run back (Resume on a prompt still
+on screen starts nothing), gives the claim up, and acknowledges `applied`; a
+snapshot it cannot remove keeps the hold, and the cancel is refused
+`apply-failed`. Consuming a snapshot renames it away before removing it: a
+rename has one winner, where two concurrent unlinks of one file can both
+succeed, so a cancel and a Resume, or the Resumes of two windows, never both
+take one snapshot. Once the
+prompt's Resume starts the new run, the window no longer holds the platform
+run: the new run does not report under its run id, so the platform run stays
+paused, and its later verbs are refused `no-active-run`, until a platform
+`resume` can continue the run itself. A snapshot whose owner is alive is
+another window's live run, which answers for itself. Continuing the run from a
+platform `resume` waits for ADR-017's consume-on-claim step (step 8), so that
+a platform resume and the local prompt cannot both start a run from one
+snapshot.
 
 No local run waits for a platform `approve` or `reject` (#2336). The verbs
 name a run's `stage` and `gateType`, one of the platform's quality-gate types
@@ -409,8 +517,53 @@ undoes a newer change; a read that fails changes nothing.
   refused `invalid-payload`. A window with no platform session leaves the
   command to the windows that have one.
 
-The daemon does not apply the throttle, and neither does the Go scheduler when
-it dispatches without the extension (#2352).
+The Go side follows the same throttle for the work it starts itself (#2352):
+
+- The daemon follows the throttle of the workspace it serves, read by the
+  workspace's slug from the same workspace list, while it has a signed-in
+  session (the extension hands it the session). It reads it when its agent
+  starts, after every agent registration, on every `throttle` command its
+  agent receives (which
+  it still relays to the extension, whose window acknowledges it), each time
+  its command stream opens, and whenever the session is installed or
+  cleared. Reads run one at a time, each bounded to 30 seconds so one that
+  never answers holds back no later read, a read asked for during another
+  runs again after it, and a read that fails changes nothing. Neither the
+  command's payload nor the registration response's agent-wide `throttle` is
+  applied. The read is by slug in the list the platform returns for the
+  account, which is one team's (without a team named, the account's default
+  team), so for an account on several teams the daemon, like the extension,
+  can follow another team's workspace of the same slug, or find none when
+  its workspace belongs to another team; scoping the read to the team the
+  registration used stays open in #2352. Without a session nothing is
+  followed and the cap is lifted, as in the extension. With one, the throttle
+  is followed but unread until a read succeeds.
+  Only the extension hands the daemon a session, so a daemon the extension is
+  not attached to follows no throttle: the license key it holds cannot read
+  the workspace's own throttle yet, and that stays open in #2352.
+- The autonomous scheduler holds the runs it dispatches without the extension
+  (the Go queue, or the cloud dispatcher) below the lower of its configured
+  concurrency (`pipeline.max_concurrent`) and the throttle's cap, and the
+  auto-scheduler loop (`nightgauge pipeline run --auto`) starts nothing while
+  as many pipelines run as the cap allows: it checks before reading the board
+  and again after, for a throttle that arrived meanwhile, and an epic's waves
+  start no more sub-issues at once than the cap leaves room for. Work the
+  scheduler hands to the extension is capped where the extension opens slots,
+  never a second time. A running pipeline is never stopped, and a cap below
+  the running count starts nothing until enough of them finish. A change, or
+  the throttle reaching `resumeAt`, wakes the scheduler at once.
+- A headless scheduler (`nightgauge autonomous run` or
+  `nightgauge pipeline run --auto`) holds only a license key, which the
+  workspace list refuses, so it asks the daemon serving the same workspace
+  (`platform.workspaceThrottle` on the workspace socket) before it starts,
+  so its first dispatch already follows the answer, then every 30 seconds. A
+  daemon that cannot be reached changes nothing, and neither does one that
+  follows the throttle but has not read it yet (it has just started, or its
+  reads fail; `platform.workspaceThrottle` answers `unread`): a throttle the
+  daemon reported before is kept, until its `resumeAt` or until a daemon
+  reports the workspace's throttle again, and the log says so. A daemon that
+  follows no throttle, with no signed-in session, lifts it. With no daemon
+  serving the workspace, the throttle is not followed.
 
 ## CLI Command Reference
 
@@ -1127,7 +1280,11 @@ nightgauge issue edit <number> --append-body "\n\nappended text" [--owner ORG] [
 # Create sub-issue under a parent epic
 nightgauge issue create-sub <parent-number> "<title>" "<body>"
 #   --blocked-by    Comma-separated blocker issue numbers (e.g. --blocked-by 280,290).
-#                   Body text "Blocked by #N" is cosmetic and NOT parsed. Default: none.
+#                   Native blockedBy is the relationship to create. Body lines
+#                   ("Depends on: #N", "Blocked by #N", "## Dependencies") are
+#                   honoured too, by the pickup gate and the dispatcher, so a
+#                   stale one holds the issue until removed or marked ⏸️.
+#                   Default: none.
 #   --depends-on    Semantic alias for --blocked-by. Creates addBlockedBy relationships.
 #                   Both flags can be used simultaneously; their blocker lists are merged.
 #   --wave          Wave number (integer). Embeds "(Wave N)" annotation in the issue body.
@@ -1322,9 +1479,11 @@ nightgauge epic check-completion <epic-number> [--json]
 nightgauge epic validate <epic-number> [--owner ORG] [--repo REPO] [--json]
 # JSON output schema: { "epicNumber": N, "title": "...", "repo": "...",
 #   "totalSubIssues": N, "valid": true|false,
-#   "gaps": [{ "subIssueNumber": N, "subIssueTitle": "...",
+#   "gaps": [{ "subIssueNumber": N, "subIssueRepo": "owner/name", "subIssueTitle": "...",
 #              "gapType": "circular_blocker"|"stale_blocker",
-#              "blockerNumber": N, "detail": "..." }] }
+#              "blockerNumber": N, "blockerRepo": "owner/name", "detail": "..." }] }
+# subIssueRepo / blockerRepo: where each number lives; a cross-repo epic's
+# sub-issues and their blockers can be in several repositories.
 # Exit codes: 0 = success (gaps reported in JSON/stdout); non-zero = error fetching epic
 
 # Assess epic sub-issues for batch vs sequential strategy
@@ -1398,7 +1557,10 @@ nightgauge epic plan-waves --sub-issues <N,M,...> [--owner ORG] [--repo REPO] [-
 
 `add-blocked-by` also enforces a parent-epic guard: it rejects the relationship
 when the blocker is the parent epic of the blocked issue, preventing circular
-dependencies at the source.
+dependencies at the source. The parent is matched in its own repository: when
+the epic lives in another repository, an issue that only shares its number is
+a legitimate blocker (#2369). `epic validate`'s `circular_blocker` check and
+the scheduler's circular-parent auto-fix match the same way.
 
 ### Git Operations
 
@@ -1416,6 +1578,14 @@ dependencies at the source.
 # `--issue` and a positional name are mutually exclusive.
 nightgauge git branch-create [<branch-name> | --issue N] [--json]
 ```
+
+**An epic branch belongs to its epic's repository (#2377).** A sub-issue whose
+parent epic lives in the same repository is based on `epic/<N>-<slug>`, which is
+created from the default branch when absent, and `--json` reports `parent_issue`
+and `epic_branch`. A parent in another repository leaves both `null` and the
+branch is based on the default branch: `epic/<N>-*` here would be the branch of
+this repository's own `#N`. See
+[MULTI_REPO_WORKSPACE.md](MULTI_REPO_WORKSPACE.md#epic-branches-in-a-cross-repo-epic-2377).
 
 **The git service is common-dir aware, and must stay that way (#535).** Every
 pipeline stage runs inside a linked worktree, where `.git` is a file pointing at

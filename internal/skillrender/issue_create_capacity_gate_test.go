@@ -61,8 +61,10 @@ func runScopeGate(t *testing.T, c scopeGateCase) scopeGateRun {
 		}
 	}
 	file := filepath.Join(work, "scope-gate.sh")
-	// pipefail, as the stage's shell may run it: a marker check that pipes
-	// into `grep -q` can lose a found marker to SIGPIPE under it.
+	// pipefail, the worst case: the fence runs in the agent tool's shell,
+	// whose options this repository does not set, and under pipefail a
+	// marker check that pipes into `grep -q` can lose a found marker to
+	// SIGPIPE. This fence decides a hard gate, so it must hold under it.
 	if err := os.WriteFile(file, []byte("set -o pipefail\n"+script), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +91,67 @@ func runScopeGate(t *testing.T, c scopeGateCase) scopeGateRun {
 		run.capacityCalls = strings.Count(string(b), "x")
 	}
 	return run
+}
+
+const epicGateHeading = "## Phase 2.9: Epic Decomposition Hard-Gate"
+
+// TestEpicGateMarkersInALongBodyUnderPipefail runs Phase 2.9's detection
+// fence, lifted verbatim out of scope-gates.md, under pipefail with each body
+// marker on the first line of a body several pipe buffers long (#2360). The
+// marker checks used to pipe the body into `grep -q`, which exits at its first
+// match, so printf died of SIGPIPE writing the rest and pipefail turned the
+// found marker into a miss. That is no race at this size: the body cannot fit
+// in the pipe, so the writer is always still writing when grep exits.
+func TestEpicGateMarkersInALongBodyUnderPipefail(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(scopeGatesRel)))
+	if err != nil {
+		t.Fatalf("read %s: %v", scopeGatesRel, err)
+	}
+	detect := nthFencedBashAfter(t, string(data), epicGateHeading, 1)
+	filler := strings.Repeat("filler line\n", 40000) // 480 KB
+
+	for _, tc := range []struct{ name, marker, flag string }{
+		{"a decompose-later placeholder", "<!-- nightgauge:decompose-later -->", "HAS_PLACEHOLDER_MARKER"},
+		{"a standalone epic", "<!-- nightgauge:standalone-epic -->", "HAS_STANDALONE_MARKER"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			work := t.TempDir()
+			bin := t.TempDir()
+			for _, tool := range []string{"bash", "grep", "cat"} {
+				src, err := exec.LookPath(tool)
+				if err != nil {
+					t.Skipf("%s is not on PATH; the skill's shell needs it", tool)
+				}
+				if err := os.Symlink(src, filepath.Join(bin, tool)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// The body is read from a file, not the environment, which could
+			// not carry half a megabyte everywhere.
+			body := filepath.Join(work, "body.md")
+			if err := os.WriteFile(body, []byte(tc.marker+"\n"+filler), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			script := "set -o pipefail\n" +
+				"ISSUE_BODY=\"$(cat " + shellQuote(body) + ")\"\n" +
+				detect + "\n" +
+				"echo \"" + tc.flag + "=${" + tc.flag + "}\"\n"
+			file := filepath.Join(work, "epic-gate.sh")
+			if err := os.WriteFile(file, []byte(script), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("bash", file)
+			cmd.Dir = work
+			cmd.Env = []string{"PATH=" + bin, "HOME=" + work, "TYPE_LABEL=epic", "SUB_ISSUE_COUNT=0"}
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("Phase 2.9 detection exited %v\n%s", err, out)
+			}
+			if want := tc.flag + "=true"; !strings.Contains(string(out), want) {
+				t.Errorf("Phase 2.9 missed %s on the first line of a long body under pipefail: want %s\n%s", tc.marker, want, out)
+			}
+		})
+	}
 }
 
 func TestScopeGateCapacity(t *testing.T) {

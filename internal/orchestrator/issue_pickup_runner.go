@@ -109,7 +109,11 @@ func (r *deterministicIssuePickup) Run(_ context.Context, in IssuePickupInput) (
 	if err != nil {
 		return res, fmt.Errorf("derive branch name: %w", err)
 	}
-	br, err := r.ensure(in.Dir, name, in.Issue.ParentIssueNumber, in.EpicTitle)
+	// The epic branch is the epic's own repository's: a parent in another
+	// repository bases this branch on the default branch, never on
+	// epic/<N>-* of this repository's own #N (#2377).
+	parent := git.EpicBranchParent(in.Issue.Repo, in.Issue.ParentIssueNumber, in.Issue.ParentIssueRepo)
+	br, err := r.ensure(in.Dir, name, parent, in.EpicTitle)
 	if err != nil {
 		return res, fmt.Errorf("create branch %s: %w", name, err)
 	}
@@ -133,7 +137,7 @@ func (r *deterministicIssuePickup) Run(_ context.Context, in IssuePickupInput) (
 	if err != nil {
 		return res, err
 	}
-	doc := buildIssueContext(in, res.Branch, res.BaseBranch, r.now())
+	doc := buildIssueContext(in, res.Branch, res.BaseBranch, parent, r.now())
 	if err := writeIssueContextMerged(path, doc); err != nil {
 		return res, err
 	}
@@ -194,7 +198,12 @@ type pickupRecommendation struct {
 
 var acceptanceLine = regexp.MustCompile(`^\s*-\s*\[`)
 
-func buildIssueContext(in IssuePickupInput, branch, base string, now time.Time) issueContextDoc {
+// parent is the parent epic the branch was based on: EpicBranchParent's
+// answer, 0 for a parent in another repository. parent_issue is read as a
+// number in this repository (feature-planning finds the epic's batch file in
+// this checkout by it), so a parent elsewhere is recorded as none, as
+// `git branch-create` reports it on the skill path (#2377).
+func buildIssueContext(in IssuePickupInput, branch, base string, parent int, now time.Time) issueContextDoc {
 	iss := in.Issue
 	labels := append([]string{}, iss.Labels...)
 
@@ -229,10 +238,9 @@ func buildIssueContext(in IssuePickupInput, branch, base string, now time.Time) 
 	}
 	riskReasons := append([]string{}, d.RiskReasons...)
 
-	var parent *int
-	if iss.ParentIssueNumber > 0 {
-		p := iss.ParentIssueNumber
-		parent = &p
+	var parentIssue *int
+	if parent > 0 {
+		parentIssue = &parent
 	}
 	if base == "" {
 		base = "main"
@@ -251,7 +259,7 @@ func buildIssueContext(in IssuePickupInput, branch, base string, now time.Time) 
 			AcceptanceCriteria: ac,
 		},
 		Labels:      labels,
-		ParentIssue: parent,
+		ParentIssue: parentIssue,
 		Routing: issueContextRouting{
 			ChangeType:           d.ChangeType,
 			TaskType:             d.TaskType,
@@ -421,12 +429,17 @@ func (s *Scheduler) tryDeterministicIssuePickup(
 	if iss.Number == 0 {
 		iss.Number = item.Number
 	}
+	if iss.Repo == "" {
+		iss.Repo = owner + "/" + repo
+	}
 
 	decision := deriveRoutingDecision(workspaceRoot, item)
 	devModel := routing.NewRouter(nil, workspaceRoot).
 		Route(ctx, string(state.StageFeatureDev), complexity.Score{Value: decision.ComplexityScore}).Model
 
-	parent := iss.ParentIssueNumber
+	// Run creates an epic branch only for a parent in this repository, so the
+	// title is read here, by this repository's number (#2377).
+	parent := git.EpicBranchParent(iss.Repo, iss.ParentIssueNumber, iss.ParentIssueRepo)
 	in := IssuePickupInput{
 		Issue:    iss,
 		Dir:      dir,

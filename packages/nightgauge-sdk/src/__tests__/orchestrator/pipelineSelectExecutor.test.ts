@@ -454,3 +454,71 @@ describe("PipelineOrchestrator.selectExecutor", () => {
     });
   });
 });
+
+describe("fan-out units are granted the stage skill's tools (#2358)", () => {
+  let ws: { dir: string; cleanup: () => Promise<void> } | undefined;
+
+  afterEach(async () => {
+    if (ws) await ws.cleanup();
+    ws = undefined;
+  });
+
+  /** A workspace whose feature-dev fan-out skill declares `tools`, if any. */
+  async function fanoutWorkspace(tools?: string): Promise<string> {
+    ws = await makeWorkspace(["feature-dev"]);
+    if (tools !== undefined) {
+      await fs.writeFile(
+        path.join(ws.dir, "skills", SKILL_DIRS["feature-dev"], "SKILL.md"),
+        FANOUT_SKILL.replace("name: stage\n", `name: stage\nallowed-tools: ${tools}\n`),
+        "utf-8"
+      );
+    }
+    return ws.dir;
+  }
+
+  it("selectExecutor puts the skill's headless tools on the spec", async () => {
+    const dir = await fanoutWorkspace("Read, Grep AskUserQuestion");
+    const orch = makeOrchestrator(dir, { ...withBackend(), orchestration: { disabled: false } });
+    const sel = await orch.selectExecutor("feature-dev", 42);
+    if (sel.kind !== "workflow") throw new Error("expected workflow");
+
+    expect(sel.spec.allowedTools).toEqual(["Read", "Grep"]);
+  });
+
+  it("leaves them unset for a skill that declares none", async () => {
+    const dir = await fanoutWorkspace();
+    const orch = makeOrchestrator(dir, { ...withBackend(), orchestration: { disabled: false } });
+    const sel = await orch.selectExecutor("feature-dev", 42);
+    if (sel.kind !== "workflow") throw new Error("expected workflow");
+
+    expect(sel.spec.allowedTools).toBeUndefined();
+  });
+
+  it("runStage hands every fanned-out unit the tools", async () => {
+    const dir = await fanoutWorkspace("Read Grep");
+    const seen: Array<readonly string[] | undefined> = [];
+    const bindings: WorkflowExecutorBindings = {
+      async runAgent(_agent, unit) {
+        seen.push(unit?.allowedTools);
+        return { usage: usage(), terminalKind: "success" as const };
+      },
+      async runJudge(_judge, _target, unit) {
+        seen.push(unit?.allowedTools);
+        return { verdict: "pass" as const, usage: usage() };
+      },
+    };
+    const orch = makeOrchestrator(dir, {
+      workflowAdapter: fakeAdapter(),
+      workflowBindings: bindings,
+      workflowJournalFs: new FakeFs(),
+      orchestration: { disabled: false },
+    });
+
+    const result = await orch.runStage("feature-dev", 42);
+    expect(result.success).toBe(true);
+    expect(seen).toEqual([
+      ["Read", "Grep"],
+      ["Read", "Grep"],
+    ]);
+  });
+});

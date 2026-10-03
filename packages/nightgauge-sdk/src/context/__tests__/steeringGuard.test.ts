@@ -16,6 +16,7 @@ import { CodexContextGenerator } from "../CodexContextGenerator.js";
 import { CODEX_MANAGED_BEGIN, CODEX_MANAGED_END } from "../steeringSources.js";
 import {
   containsManagedSteering,
+  gitTimeoutMs,
   guardUpstreamHead,
   repairCommittedSteering,
   repairCommittedSteeringSync,
@@ -203,5 +204,16 @@ describe("steeringGuard (issue 1675)", { timeout: GIT_TEST_TIMEOUT_MS }, () => {
     const out = stripManagedSteering(`${USER}${CODEX_MANAGED_BEGIN}\n`);
     expect(containsManagedSteering(out)).toBe(false);
     expect(out).toContain("User rules.");
+  });
+});
+
+// The default runner pushes a steering repair. A push runs the remote's
+// pre-push hook first, and this repository's hook scans what it sends (#2365),
+// so a push may not get the 30 seconds every other git call does.
+describe("gitTimeoutMs", () => {
+  it("gives a push the push bound, and every other call the shorter one", () => {
+    expect(gitTimeoutMs(["push", "origin", "HEAD:refs/heads/feat/x"])).toBe(120_000);
+    expect(gitTimeoutMs(["fetch", "-q", "origin"])).toBe(30_000);
+    expect(gitTimeoutMs(["rev-parse", "HEAD"])).toBe(30_000);
   });
 });

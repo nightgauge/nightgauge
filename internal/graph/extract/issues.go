@@ -64,10 +64,11 @@ func IssuesFromGraph(dg *depgraph.Graph) Result {
 			res.Skipped = err.Error()
 			return res
 		}
-		if node.EpicNumber > 0 {
-			epic := node.Repo + "#" + strconv.Itoa(node.EpicNumber)
+		// The epic in its own repository: a sub-issue of an epic elsewhere
+		// is not part of the same-numbered issue in its own repo (#2350).
+		if parent, ok := node.EpicID(); ok {
 			if err := addEdge(res.Graph, graph.EdgePartOf, id,
-				graph.MakeNodeID(graph.NodeEpic, epic), prov, nil); err != nil {
+				graph.MakeNodeID(graph.NodeEpic, parent.String()), prov, nil); err != nil {
 				res.Skipped = err.Error()
 				return res
 			}

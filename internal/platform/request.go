@@ -30,6 +30,12 @@ import (
 // diagnosable 401 into a false local refusal.
 var ErrCredentialInsufficient = errors.New("credential insufficient for operation")
 
+// ErrNoSession is returned before a session-only request (requestSpec's
+// SessionOnly) leaves the process when no signed-in session is installed. It
+// is an ErrCredentialInsufficient: such a request is never sent with the API
+// key or license key the client falls back to elsewhere.
+var ErrNoSession = fmt.Errorf("%w: no signed-in session", ErrCredentialInsufficient)
+
 // credentialKind classifies the bearer the client would present.
 type credentialKind string
 
@@ -128,6 +134,13 @@ type requestSpec struct {
 
 	// Headers are set verbatim on the request, before Authorization.
 	Headers map[string]string
+
+	// SessionOnly sends the request with the signed-in session token and
+	// nothing else: with no session it is refused with ErrNoSession before
+	// anything is sent, never sent with the API key or license key. The
+	// token is read once, here, so a sign-out after a caller checked for a
+	// session cannot send the request with the fallback credential.
+	SessionOnly bool
 }
 
 // newRequest is the only way this package builds a request against the
@@ -135,8 +148,9 @@ type requestSpec struct {
 //
 // It owns three things that were previously re-implemented at every call site:
 // URL construction from the contract's path template, the Authorization header
-// (always from bearer(), the single credential source established in #742),
-// and the credential/security check above.
+// (from bearer(), the single credential source established in #742, or from
+// sessionBearer() for a SessionOnly request), and the credential/security
+// check above.
 //
 // internal/preflight's platform-raw-http check fails the build when a raw
 // http.NewRequest* targeting the platform base URL reappears, so this function
@@ -150,7 +164,14 @@ func (c *Client) newRequest(ctx context.Context, spec requestSpec) (*http.Reques
 		return nil, fmt.Errorf("platform request %s: path expects %d argument(s), got %d", op, want, got)
 	}
 
-	bearer := c.bearer()
+	var bearer string
+	if spec.SessionOnly {
+		if bearer = c.sessionBearer(); bearer == "" {
+			return nil, fmt.Errorf("platform request %s: %w", op, ErrNoSession)
+		}
+	} else {
+		bearer = c.bearer()
+	}
 	if kind := credentialKindOf(bearer); !kind.satisfies(op.Security) {
 		return nil, fmt.Errorf("platform request %s: %w: holding a %s, operation requires a user-scoped session token",
 			op, ErrCredentialInsufficient, kind)

@@ -71,13 +71,13 @@ expect_rejected() {
   else
     fail "$label — exits 0 (expected non-zero)"
   fi
-  if echo "$out" | grep -qF "$needle"; then
+  if grep -qF "$needle" <<<"$out"; then
     pass "$label — names the cause"
   else
     fail "$label — output does not mention \"$needle\""
     echo "    output: $out"
   fi
-  if echo "$out" | grep -q "RECOVERABLE: missing_arrival_coverage"; then
+  if grep -q "RECOVERABLE: missing_arrival_coverage" <<<"$out"; then
     pass "$label — emits the RECOVERABLE marker"
   else
     fail "$label — no RECOVERABLE marker"

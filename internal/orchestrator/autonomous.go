@@ -1039,6 +1039,12 @@ type AutonomousScheduler struct {
 	// (e.g. IPC emit to TypeScript extension) instead of using the Go queue.
 	onDispatch func(owner, repo string, issueNumber int, title string)
 
+	// dispatchThrottle is the platform's workspace throttle (#2352). It caps
+	// the global ceiling only when the scheduler dispatches without the
+	// extension: work fed to the extension is capped where the extension
+	// opens slots (#2337), never a second time here. Nil caps nothing.
+	dispatchThrottle *DispatchThrottle
+
 	// onStatusChange is fired whenever state.Status transitions. Used by the
 	// IPC server to push an `autonomous.statusChanged` event to the VSCode
 	// extension so the status bar badge stays in sync without polling.
@@ -1252,6 +1258,11 @@ const MaxConflictRestarts = 3
 
 // NewAutonomousScheduler creates a new autonomous scheduler that wraps the
 // existing Scheduler and uses the depgraph for cross-repo coordination.
+//
+// repoAliases is the workspace's alias map (depgraph.WorkspaceRepoAliases),
+// through which every graph build resolves the short repository names in
+// body-declared dependencies. Build it from the whole workspace, not only
+// repos: FilterRepos narrows what is scanned, never what a body may name.
 func NewAutonomousScheduler(
 	scheduler *Scheduler,
 	ghClient *gh.Client,
@@ -1347,9 +1358,9 @@ func NewAutonomousScheduler(
 	// dedicated setter rather than by chaining OnEpicComplete — that slot is
 	// re-assigned per pipeline.run request and a chain built on it is silently
 	// wiped (#991). SetEpicCheckpointFn is nil-receiver safe.
-	scheduler.SetEpicCheckpointFn(func(epicNumber int) {
+	scheduler.SetEpicCheckpointFn(func(epicRepo string, epicNumber int) {
 		if as.safetyRails != nil {
-			as.safetyRails.RecordEpicComplete(epicNumber)
+			as.safetyRails.RecordEpicComplete(epicRepo, epicNumber)
 		}
 	})
 
@@ -1815,6 +1826,44 @@ func (as *AutonomousScheduler) SetDispatcher(d Dispatcher) {
 // with as.mu released, so it may call back into the scheduler.
 func (as *AutonomousScheduler) SetBuildGraph(fn func(ctx context.Context) (*depgraph.Graph, error)) {
 	as.buildGraphFn = fn
+}
+
+// SetDispatchThrottle holds the scheduler's own dispatch to the platform's
+// workspace throttle (#2352): while the throttle is in force, and the
+// scheduler dispatches without the extension, no new run starts above the
+// lower of MaxConcurrent and the throttle's cap. A change, or the throttle
+// lifting at its resumeAt, wakes the dispatch loop without refetching the
+// board. Call before Run().
+func (as *AutonomousScheduler) SetDispatchThrottle(d *DispatchThrottle) {
+	as.dispatchThrottle = d
+	if d == nil {
+		return
+	}
+	d.OnChange(func() {
+		select {
+		case as.rescanCh <- struct{}{}:
+		default:
+			// A rescan is already pending.
+		}
+	})
+}
+
+// dispatchesWithoutExtension reports whether this scheduler starts the runs
+// it dispatches itself (the Go queue, or the cloud dispatcher) rather than
+// handing them to the extension, which applies the throttle on its own.
+func (as *AutonomousScheduler) dispatchesWithoutExtension() bool {
+	return as.dispatcher != nil || as.onDispatch == nil
+}
+
+// dispatchCeiling is the global concurrency ceiling dispatch may reach now:
+// MaxConcurrent, held to the workspace throttle when it applies (#2352).
+// Called with as.mu held.
+func (as *AutonomousScheduler) dispatchCeilingLocked() int {
+	ceiling := as.config.MaxConcurrent
+	if as.dispatchThrottle != nil && as.dispatchesWithoutExtension() {
+		ceiling = as.dispatchThrottle.Ceiling(ceiling)
+	}
+	return ceiling
 }
 
 // OnDispatch sets a callback for dispatching issues to the pipeline.
@@ -3554,8 +3603,8 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 	availableSlots := as.effectiveAvailableSlots()
 	if availableSlots <= 0 {
 		as.mu.Lock()
-		log.Printf("autonomous: no effective slots available (MaxConcurrent=%d, running=%d), skipping graph build",
-			as.config.MaxConcurrent, len(as.state.Running))
+		log.Printf("autonomous: no effective slots available (MaxConcurrent=%d, ceiling=%d, running=%d), skipping graph build",
+			as.config.MaxConcurrent, as.dispatchCeilingLocked(), len(as.state.Running))
 		as.mu.Unlock()
 		as.persistState()
 		if as.onCycleComplete != nil {
@@ -3840,7 +3889,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 				// the next graceful shutdown writes "cancelled" over
 				// safety_tripped and the trip is gone on restart.
 				as.latchMachineHaltLocked("safety_tripped", "safety:rail-check")
-				lastEpic := safetySnap.LastEpicNumber
+				lastEpic := safetySnap.LastEpicRef()
 				pausedForCheckpoint := safetySnap.PausedForCheckpoint
 				as.fireStatusChangeLocked()
 				as.mu.Unlock()
@@ -3851,7 +3900,7 @@ func (as *AutonomousScheduler) runCycle(ctx context.Context) {
 				// even tells the operator to "resolve the card". Until now there
 				// was no card to resolve, and the whole signal was a status-bar
 				// icon. Outside the lock: raiseAttention writes to the store.
-				epicForCard := 0
+				epicForCard := ""
 				if pausedForCheckpoint {
 					epicForCard = lastEpic
 				}
@@ -4232,6 +4281,15 @@ type depBlockResult struct {
 	// graph (resolved — or left unresolved — via the issue service instead)
 }
 
+// depKeyNamesNoRepository reports whether depKey's repository is not spelled
+// "owner/repo": the dependency is an issue-body reference to a repository the
+// workspace cannot identify (depgraph.CrossRepoRef.Unresolved), so no lookup
+// can resolve it and the hold reason says which kind of line to fix (#2349).
+func depKeyNamesNoRepository(depKey string) bool {
+	repo, _, ok := splitNodeKey(depKey)
+	return ok && !isOwnerRepo(repo)
+}
+
 // evaluateDeps scans depKeys — a node's outgoing dependency edges from
 // rawAdjacency — and reports whether any of them still blocks dispatch.
 //
@@ -4261,6 +4319,11 @@ func evaluateDeps(depKeys []string, g *depgraph.Graph, resolved map[string]strin
 		if !exists {
 			state, ok := resolved[depKey]
 			switch {
+			case !ok && depKeyNamesNoRepository(depKey):
+				return depBlockResult{
+					blocked: true, blocker: depKey, offBoard: true,
+					status: "unresolvable (the issue body names a repository that is not one of the workspace's — failing closed; name it as owner/repo#N)",
+				}
 			case !ok:
 				return depBlockResult{
 					blocked: true, blocker: depKey, offBoard: true,
@@ -4626,9 +4689,11 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 		// treat the sub-issue as blocked too. This prevents out-of-order
 		// execution when epics are wired with blockedBy dependencies but their
 		// sub-issues have no individual blockers. Opt-out via
-		// DisableEpicBlockedByCascade in AutonomousConfig.
-		if !as.config.DisableEpicBlockedByCascade && node.EpicNumber != 0 {
-			epicKey := g.NodeKey(depgraph.NodeID{Repo: node.Repo, Number: node.EpicNumber})
+		// DisableEpicBlockedByCascade in AutonomousConfig. The epic is keyed
+		// in its own repository (Node.EpicID), never by number in the
+		// sub-issue's (#2350).
+		if epicID, isSub := node.EpicID(); !as.config.DisableEpicBlockedByCascade && isSub {
+			epicKey := g.NodeKey(epicID)
 			if epicNode, ok := g.Nodes[epicKey]; ok && strings.EqualFold(epicNode.State, "OPEN") {
 				gating, ownSubs := epicCascadeDeps(g, adj, epicKey)
 				if len(ownSubs) > 0 && !ownSubEdgeLogged[epicKey] {
@@ -4641,9 +4706,9 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 					blocker = res.blocker
 					offBoard = res.offBoard
 					blockerEdge = describeEdgeSource(g, epicKey, res.blocker)
-					prefix := "(via epic #" + strconv.Itoa(node.EpicNumber) + ") "
+					prefix := "(via epic " + epicRefFor(node, epicID) + ") "
 					if res.offBoard {
-						prefix = "(via epic #" + strconv.Itoa(node.EpicNumber) + ", off-board) "
+						prefix = "(via epic " + epicRefFor(node, epicID) + ", off-board) "
 					}
 					blockerStatus = prefix + res.status
 				}
@@ -4713,7 +4778,8 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 			if !hasOpenBlocker {
 				continue
 			}
-			// Find candidates that are sub-issues of this epic (same repo).
+			// Find candidates that are sub-issues of this epic, in whichever
+			// repository each lives (#2350).
 			var danglingKeys []string
 			for _, c := range candidates {
 				subKey := fmt.Sprintf("%s#%d", c.Repo, c.Number)
@@ -4721,7 +4787,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 					continue
 				}
 				subNode, ok := g.Nodes[subKey]
-				if ok && subNode.EpicNumber == node.Number && subNode.Repo == node.Repo {
+				if ok && subNode.IsSubIssueOf(node) {
 					danglingKeys = append(danglingKeys, subKey)
 				}
 			}
@@ -6876,8 +6942,9 @@ func (as *AutonomousScheduler) hasDispatchHeadroom() (bool, string) {
 }
 
 // effectiveAvailableSlots returns how many additional pipelines can be
-// dispatched right now, considering both the global MaxConcurrent ceiling and
-// any per-repo caps. Returns 0 when all effective capacity is consumed.
+// dispatched right now, considering both the global MaxConcurrent ceiling
+// (held to the workspace throttle when it applies, #2352) and any per-repo
+// caps. Returns 0 when all effective capacity is consumed.
 //
 // When every active repo has an explicit cap, the per-repo sum is the binding
 // limit (e.g. MaxConcurrent=3 but only one repo with cap=1 means at most 1
@@ -6887,7 +6954,7 @@ func (as *AutonomousScheduler) hasDispatchHeadroom() (bool, string) {
 // Must be called without as.mu held.
 func (as *AutonomousScheduler) effectiveAvailableSlots() int {
 	as.mu.Lock()
-	globalAvail := as.config.MaxConcurrent - len(as.state.Running)
+	globalAvail := as.dispatchCeilingLocked() - len(as.state.Running)
 	repos := as.repos
 	as.mu.Unlock()
 

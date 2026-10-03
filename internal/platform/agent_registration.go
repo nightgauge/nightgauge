@@ -8,6 +8,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
+	"unicode"
 
 	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 )
@@ -43,6 +45,100 @@ type AgentRegistration struct {
 	AgentID     string `json:"agentId"`
 	CommandsURL string `json:"commandsUrl"`
 	TTLSeconds  int    `json:"ttl_seconds"`
+	// RefusedWorkspaceWrites are the workspace writes this registration was
+	// refused (#2372): creating the named workspace, updating its agent or
+	// display name, or linking the declared repositories to it, which need
+	// the owner or admin role on the workspace's team. The agent registers
+	// all the same, so nothing else tells the operator; the daemon reports
+	// each one (see RefusedWorkspaceWrite.Describe). Empty when none was.
+	RefusedWorkspaceWrites []RefusedWorkspaceWrite `json:"refused_workspace_writes,omitempty"`
+}
+
+// RefusedWorkspaceWrite is one workspace write the platform refused a
+// registration, as its reply carries it.
+type RefusedWorkspaceWrite struct {
+	// Workspace is the named workspace's slug, or "default" for the team's
+	// Default workspace the declared repositories are linked to.
+	Workspace string `json:"workspace"`
+	TeamID    string `json:"team_id"`
+	// Code is the refusal's code, PERMISSION_DENIED.
+	Code string `json:"code"`
+	// Permission is the permission the write needs: workspace:create or
+	// workspace:update.
+	Permission string `json:"permission"`
+	// Message is the platform's own sentence for the refusal.
+	Message string `json:"message"`
+}
+
+// Describe is the operator's line for the refusal: the workspace that was not
+// written and the permission the write needs. It is built from the fields,
+// each cut to a bounded printable form, so a reply cannot put arbitrary text
+// into the daemon's log.
+func (r RefusedWorkspaceWrite) Describe() string {
+	workspace := fmt.Sprintf("workspace %q", printableField(r.Workspace))
+	if r.Workspace == "default" {
+		workspace = "the team's Default workspace"
+	}
+	return fmt.Sprintf("the platform did not write %s: %s needs the owner or admin role on its team (team %s, %s); repositories this agent declares stay unlinked from it, so a remote trigger for one is refused",
+		workspace, printableField(r.Permission), printableField(r.TeamID), printableField(r.Code))
+}
+
+// RefusedWorkspaceWriteReport is a refusal as the daemon reports it to a
+// client (#2372): every field cut to its bounded printable form, and the
+// operator's line, never the platform's own message, which is unbounded.
+type RefusedWorkspaceWriteReport struct {
+	Workspace  string `json:"workspace"`
+	TeamID     string `json:"teamId"`
+	Code       string `json:"code"`
+	Permission string `json:"permission"`
+	// Description is Describe(): the workspace that was not written and the
+	// permission the write needs.
+	Description string `json:"description"`
+}
+
+// Report is the refusal's bounded form, for the daemon's status and the
+// extension.
+func (r RefusedWorkspaceWrite) Report() RefusedWorkspaceWriteReport {
+	return RefusedWorkspaceWriteReport{
+		Workspace:   printableField(r.Workspace),
+		TeamID:      printableField(r.TeamID),
+		Code:        printableField(r.Code),
+		Permission:  printableField(r.Permission),
+		Description: r.Describe(),
+	}
+}
+
+// printableField bounds one field of a platform reply for a log line and
+// the operator's notification: at most 100 runes, keeping only graphic ones
+// (letters, marks, numbers, punctuation, symbols and spaces), so no control,
+// format or separator character, such as a line break, U+2028 or a
+// bidirectional override, reaches the line. Square brackets become
+// parentheses: the extension shows the line in a notification, which renders
+// markdown link syntax as a link, and a `command:` link runs a command.
+func printableField(s string) string {
+	var b strings.Builder
+	n := 0
+	for _, r := range s {
+		if !unicode.IsGraphic(r) {
+			continue
+		}
+		if n == 100 {
+			b.WriteString("…")
+			break
+		}
+		switch r {
+		case '[':
+			r = '('
+		case ']':
+			r = ')'
+		}
+		b.WriteRune(r)
+		n++
+	}
+	if b.Len() == 0 {
+		return "unknown"
+	}
+	return b.String()
 }
 
 // agentRegisterBody is the POST /v1/agents/register request body. The platform's

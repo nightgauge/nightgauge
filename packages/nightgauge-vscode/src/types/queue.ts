@@ -116,8 +116,28 @@ export interface QueueItem {
   epicOrder?: number;
   /** Parent epic issue number (set for sub-issues of an epic) */
   epicNumber?: number;
+  /**
+   * The repository (`owner/name`) of the epic `epicNumber` names. A sub-issue
+   * of an epic in another repository has no epic branch in its own (#2377).
+   */
+  epicRepo?: string;
   /** Repository name (for cross-repo queue display, Issue #2188) */
   repoName?: string;
+  /**
+   * The platform run id of the trigger this item was queued for (#2344): the
+   * run id a dashboard or mobile trigger's ack returned. The slot that opens
+   * for the item adopts it, so the platform's verbs for the run reach that
+   * slot, and a cancel before the slot opens drops the item. Absent on every
+   * other item.
+   */
+  remoteRunId?: string;
+  /**
+   * The run id was attached to an item queued for the issue before its
+   * trigger arrived (#2344): the item is the operator's work, and serves the
+   * remote run too. A cancel of the run before its slot opens detaches the
+   * run id and leaves the item to run as it was queued.
+   */
+  remoteRunAttached?: boolean;
   /**
    * A remote run request's pin (#1656, ADR-022 § 2): the adapter and model a
    * dashboard or mobile trigger asked for, already accepted by Go's

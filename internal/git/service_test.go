@@ -1768,6 +1768,66 @@ func TestPushBranchRefusesAnOptionLikeName(t *testing.T) {
 	}
 }
 
+// TestPushRunsThePrePushHookForTheCurrentBranchOnly pins what `nightgauge git
+// push` and the IPC method git.push do. They went through go-git, which runs no
+// hooks, so the repository's pre-push hook, the publication guard (#2365)
+// among them, never saw the push; and go-git's default refspec,
+// refs/heads/*:refs/heads/*, pushed every local branch, not the current one.
+func TestPushRunsThePrePushHookForTheCurrentBranchOnly(t *testing.T) {
+	svc, workDir := setupTestRepoWithRemote(t)
+
+	const other = "wip/not-for-origin"
+	gitExecTest(t, workDir, "branch", other)
+	const branch = "feat/push-the-current-branch"
+	if err := svc.BranchCreate(branch); err != nil {
+		t.Fatalf("BranchCreate: %v", err)
+	}
+	commitFile(t, svc, workDir, "pushed.txt", "work", "feat: work")
+
+	// A pre-push hook that records the ref lines git hands it.
+	hooks := t.TempDir()
+	seen := filepath.Join(hooks, "seen")
+	hook := "#!/bin/sh\ncat > '" + seen + "'\n"
+	if err := os.WriteFile(filepath.Join(hooks, "pre-push"), []byte(hook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	gitExecTest(t, workDir, "config", "core.hooksPath", hooks)
+
+	if err := svc.Push(); err != nil {
+		t.Fatalf("Push: %v", err)
+	}
+
+	lines, err := os.ReadFile(seen)
+	if err != nil {
+		t.Fatalf("the pre-push hook never ran: %v", err)
+	}
+	if !strings.Contains(string(lines), "refs/heads/"+branch) {
+		t.Errorf("the pre-push hook was not told about %s; it got:\n%s", branch, lines)
+	}
+	remote := gitExecTest(t, workDir, "ls-remote", "--heads", "origin")
+	if !strings.Contains(remote, "refs/heads/"+branch) {
+		t.Errorf("%s did not reach the remote:\n%s", branch, remote)
+	}
+	if strings.Contains(remote, "refs/heads/"+other) {
+		t.Errorf("Push published %s, which is not the current branch:\n%s", other, remote)
+	}
+}
+
+// TestPushRefusesADetachedHead: with no current branch there is nothing Push
+// may name, and git's own `git push origin HEAD` would guess.
+func TestPushRefusesADetachedHead(t *testing.T) {
+	svc, workDir := setupTestRepoWithRemote(t)
+	gitExecTest(t, workDir, "checkout", "-q", "--detach")
+
+	err := svc.Push()
+	if err == nil {
+		t.Fatal("Push succeeded with a detached HEAD")
+	}
+	if !strings.Contains(err.Error(), "detached") {
+		t.Errorf("error = %v, want it to say HEAD is detached", err)
+	}
+}
+
 // TestResetLocalBranchToRemote_RefusesBranchHeldByAnotherWorktree pins the
 // 2026-09-06 containment incident (#1499) at its source.
 //
@@ -1893,17 +1953,6 @@ func TestResetLocalBranchToRemote_MovesTreeWhenOwnWorktreeHoldsBranch(t *testing
 	// The point of the whole issue: the tree followed the ref.
 	if status := gitExecTest(t, workDir, "status", "--porcelain"); strings.TrimSpace(status) != "" {
 		t.Errorf("tree did not follow the ref move — phantom dirt:\n%s", status)
-	}
-}
-
-// #1955: GitHub documents x-access-token for an installation token over
-// HTTPS; a personal token keeps its username.
-func TestPushUsername(t *testing.T) {
-	if got := pushUsername("ghs_installation"); got != "x-access-token" {
-		t.Errorf("installation token username = %q", got)
-	}
-	if got := pushUsername("ghp_personal"); got != "token" {
-		t.Errorf("personal token username = %q", got)
 	}
 }
 

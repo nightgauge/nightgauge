@@ -25,7 +25,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "prepare": "husky",
+    "prepare": "husky && bash scripts/install-publication-push-hook.sh",
     "setup-hooks": "bash scripts/setup-git-hooks.sh",
     "backfill-model": "tsx scripts/backfill-complexity-model.ts",
     "backfill-model:dry-run": "tsx scripts/backfill-complexity-model.ts --dry-run",

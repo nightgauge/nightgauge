@@ -144,7 +144,7 @@ if [ -r "$INDEX_FILE" ]; then
         if (index(v, "nightgauge.nightgauge-vscode-") == 1) print v
       }
     }
-  ' "$INDEX_FILE" | head -1)"
+  ' "$INDEX_FILE" | sed -n 1p)"
 fi
 printf '  "recorded_relative_location": "%s",\n' "$(json_escape "$recorded")"
 printf '  "bundles": [\n'
@@ -174,7 +174,7 @@ for dir in "$EXT_GLOB"*; do
     mtime="$(TZ=UTC stat -f '%Sm' -t '%Y-%m-%dT%H:%M:%SZ' "$binary" 2>/dev/null || TZ=UTC stat -c '%y' "$binary" 2>/dev/null)"
     digest="$(sha256_of "$binary")"
     if [ -x "$binary" ]; then
-      version_output="$("$binary" version 2>&1 | head -1)"
+      version_output="$("$binary" version 2>&1 | sed -n 1p)"
     fi
   fi
 

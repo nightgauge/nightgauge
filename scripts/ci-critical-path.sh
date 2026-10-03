@@ -185,7 +185,7 @@ printf '%s' "$HEADER" | while IFS=$'\t' read -r id name branch sha event status;
 done
 echo ""
 
-CRITICAL=$(printf '%s\n' "$JOB_LINES" | head -1 | cut -f1)
+CRITICAL=$(head -n1 <<<"$JOB_LINES" | cut -f1)
 printf 'critical path: %s  (the longest job; shortening anything else changes nothing)\n' \
   "$(fmt "$CRITICAL")"
 if [ "$RUNNING" -gt 0 ]; then
@@ -208,7 +208,7 @@ printf 'STEPS, longest first (top %s; share is of the critical path, %s)\n' \
 # boundary (allowlist, fail-closed)` both overflow it, and the step name then
 # runs straight into the job name while every shorter row still aligns at 22.
 # Alignment is the whole readability of a ranking.
-TOP_STEPS=$(printf '%s\n' "$STEP_LINES" | head -n "$STEPS")
+TOP_STEPS=$(head -n "$STEPS" <<<"$STEP_LINES")
 JOBW=$(printf '%s\n' "$TOP_STEPS" | cut -f2 |
   LC_ALL=C awk '{ if (length($0) > m) m = length($0) } END { print m + 0 }')
 [ "$JOBW" -gt 0 ] || JOBW=22

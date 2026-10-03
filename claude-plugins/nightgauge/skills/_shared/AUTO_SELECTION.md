@@ -58,8 +58,8 @@ row. Then, and only then, check blockers on the survivors:
 ```bash
 # Step 2: blocker check, on the selected tier's candidates only.
 # (blockedBy is not a --json field on any CLI; check-deps reads the native
-# GraphQL relationship. It is one call per issue, so it runs on the tier
-# that matched, never on all seven.)
+# relationship and the dependencies the issue body declares. It is one call
+# per issue, so it runs on the tier that matched, never on all seven.)
 ISSUE=$(printf '%s\n' "$TIER_CANDIDATES" | jq -r '.[].number' | while read -r n; do
   RESULT=$("$BINARY" hook check-deps "$n" --check-only 2>/dev/null || echo '{"has_open_dependencies":false}')
   if [ "$(printf '%s\n' "$RESULT" | jq -r '.has_open_dependencies')" = "false" ]; then
@@ -72,9 +72,10 @@ rm -f "$BOARD"
 ```
 
 **NOTE**: No CLI `issue list --json` surface supports `blockedBy` as a
-field. Blocking relationships must be queried via GraphQL (which
-`nightgauge hook check-deps` handles). Do NOT use `trackedInIssues` — that is a
-different GitHub feature (task list checkboxes) and does not represent blocking.
+field. Ask `nightgauge hook check-deps`, which reads the native relationships
+through GraphQL and also the dependencies the issue body declares. Do NOT use
+`trackedInIssues` — that is a different GitHub feature (task list checkboxes)
+and does not represent blocking.
 
 Tier-specific `[TIER_FLAGS]`:
 

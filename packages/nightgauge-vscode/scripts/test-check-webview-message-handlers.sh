@@ -116,13 +116,13 @@ if [ $EXIT -ne 0 ]; then
 else
   fail "orphaned handler exits 0 (expected non-zero)"
 fi
-if echo "$STDOUT" | grep -q 'ORPHANED HANDLER: "fixtureOrphan"'; then
+if grep -q 'ORPHANED HANDLER: "fixtureOrphan"' <<<"$STDOUT"; then
   pass "orphaned handler type named in the output (Test 3)"
 else
   fail "orphaned handler type NOT named in the output (Test 3)"
   echo "    output was: $STDOUT"
 fi
-if echo "$STDOUT" | grep -q "RECOVERABLE: orphaned_message_handler"; then
+if grep -q "RECOVERABLE: orphaned_message_handler" <<<"$STDOUT"; then
   pass "RECOVERABLE: orphaned_message_handler emitted (Test 3)"
 else
   fail "RECOVERABLE: orphaned_message_handler NOT found in output (Test 3)"
@@ -160,7 +160,7 @@ if [ $EXIT -ne 0 ]; then
 else
   fail "unhandled post exits 0 (expected non-zero)"
 fi
-if echo "$STDOUT" | grep -q 'UNHANDLED POST: "fixtureUnhandled"'; then
+if grep -q 'UNHANDLED POST: "fixtureUnhandled"' <<<"$STDOUT"; then
   pass "unhandled post type named in the output (Test 4)"
 else
   fail "unhandled post type NOT named in the output (Test 4)"
@@ -297,7 +297,7 @@ else
   fail "unhandled post behind an arrow-property handler exits 0 (expected non-zero) — arrow-property extraction regressed"
   echo "    output: $STDOUT"
 fi
-if echo "$STDOUT" | grep -q 'UNHANDLED POST: "fixtureArrowOrphanPost"'; then
+if grep -q 'UNHANDLED POST: "fixtureArrowOrphanPost"' <<<"$STDOUT"; then
   pass "unhandled post type named in the output (Test 7)"
 else
   fail "unhandled post type NOT named in the output (Test 7)"
@@ -344,7 +344,7 @@ else
   fail "unparseable handleMessage declaration exits 0 (expected non-zero) — the group was silently skipped"
   echo "    output: $STDOUT"
 fi
-if echo "$STDOUT" | grep -q "UNPARSED handleMessage"; then
+if grep -q "UNPARSED handleMessage" <<<"$STDOUT"; then
   pass "unparsed declaration reported in the output (Test 8)"
 else
   fail "unparsed declaration NOT reported in the output (Test 8)"

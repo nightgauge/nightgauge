@@ -157,7 +157,7 @@ Create the issue with `nightgauge issue create`/`create-sub`, capturing the issu
 
 ### Phase 3.5: Set Dependency Relationships (Epic Sub-Issues)
 
-**Gate**: Always runs for epics with 2+ sub-issues. Set GitHub's native `addBlockedBy` relationships (cross-epic in Step 1, intra-epic in Step 2) so the pipeline respects execution ordering — body text and labels are invisible to it.
+**Gate**: Always runs for epics with 2+ sub-issues. Set GitHub's native `blockedBy` relationships (cross-epic in Step 1, intra-epic in Step 2) so the pipeline respects execution ordering. Native `blockedBy` is the relationship to create: labels are invisible to the pipeline and wave planning reads only native edges, while the pickup gate and the dispatcher also honour `Depends on:` / `Blocked by` lines in a body, so keep the two in agreement.
 
 > **Read `_includes/create-and-dependencies.md` (same directory as this SKILL.md) now and follow its instructions before continuing this phase.**
 

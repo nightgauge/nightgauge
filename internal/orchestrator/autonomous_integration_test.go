@@ -1143,7 +1143,7 @@ func TestIntegration_EpicCheckpointPause(t *testing.T) {
 	h := newTestHarness(t, cfg, graphProvider)
 
 	// Simulate an epic completing
-	h.scheduler.safetyRails.RecordEpicComplete(42)
+	h.scheduler.safetyRails.RecordEpicComplete("o/r", 42)
 
 	// Now try to run a cycle — should be blocked by checkpoint
 	h.runOneCycle(t)

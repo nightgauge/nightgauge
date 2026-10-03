@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // CrossRepoRef is a dependency reference extracted from an issue body.
@@ -17,23 +18,55 @@ type CrossRepoRef struct {
 	// exists so a scheduler that blocks on a body-derived edge can name the
 	// prose responsible instead of leaving an operator to read this file (#126).
 	SourceLine string
+	// Unresolved marks a reference whose repository token names no repository
+	// the workspace can identify: a name that is not one of its repositories,
+	// or a short name two of them share. Repo then holds the token as written,
+	// never an "owner/repo", so the reference resolves to no issue: the
+	// dispatcher holds the declaring issue (fails closed) until the line names
+	// a repository, instead of gating on the declaring repository's own
+	// same-numbered issue or dropping the dependency (#2349).
+	Unresolved bool
 }
 
-// DefaultRepoAliases maps short names used in issue bodies to full GitHub
-// repo names. Callers may extend or override these.
-var DefaultRepoAliases = map[string]string{
-	"platform":              "acme/platform",
-	"acme-platform":         "acme/platform",
-	"flutter":               "acme/mobile",
-	"acme-mobile":           "acme/mobile",
-	"angular":               "acme/dashboard",
-	"acme-dashboard":        "acme/dashboard",
-	"core":                  "nightgauge/nightgauge",
-	"nightgauge":            "nightgauge/nightgauge",
-	"nightgauge/nightgauge": "nightgauge/nightgauge",
-	"acme/platform":         "acme/platform",
-	"acme/mobile":           "acme/mobile",
-	"acme/dashboard":        "acme/dashboard",
+// WorkspaceRepoAliases builds the alias map that a body-declared dependency's
+// repo token resolves through, from the workspace's own repositories. Each
+// "owner/name" slug contributes its full spelling and its bare name, so
+// "Blocked by widget-api #12", "Blocked by widget-api#12" and
+// "Blocked by example-org/widget-api#12" all reach example-org/widget-api#12.
+//
+// Before #2349 every caller passed nil, and nil meant a built-in map of the
+// documentation's example repositories (acme/platform, acme/mobile, …). In a
+// workspace whose repositories carry any other names, a sibling's short name
+// resolved to nothing: glued to the `#` it dropped the dependency, and with a
+// space it gated on the declaring repository's own same-numbered issue. Only the
+// full owner/repo spelling worked, and `platform` resolved to an acme
+// repository no board holds.
+//
+// A bare name that two of the slugs share (org-a/app and org-b/app) maps to "":
+// it names a repository, just not one this map can choose, so a reference
+// through it is Unresolved and holds the issue rather than gating on either
+// repository or on the declaring repository's own #N. The full spellings still
+// resolve. Slugs that are not exactly "owner/name" are skipped. Keys match
+// case-insensitively, so no case variants are added.
+func WorkspaceRepoAliases(slugs []string) map[string]string {
+	// The hint is one entry per slug; the bare names grow the map past it.
+	// No arithmetic sizes the allocation (CodeQL go/allocation-size-overflow).
+	aliases := make(map[string]string, len(slugs))
+	for _, slug := range slugs {
+		slug = strings.TrimSpace(slug)
+		owner, name, ok := strings.Cut(slug, "/")
+		if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+			continue
+		}
+		aliases[slug] = slug
+		short := strings.ToLower(name)
+		if prev, seen := aliases[short]; seen && !strings.EqualFold(prev, slug) {
+			aliases[short] = "" // ambiguous: kept, so it is never read as prose
+			continue
+		}
+		aliases[short] = slug
+	}
+	return aliases
 }
 
 // The dependency keyword, defined ONCE and composed into every pattern that
@@ -58,8 +91,15 @@ const (
 	// depBlockedByCore and depDependsOnCore are the two halves. They are kept
 	// as complete pairs rather than a `(?:blocked|depends?)…(?:by|on)`
 	// cross-product so that "blocked on" and "depends by" stay unmatched.
-	depBlockedByCore = `blocked[\s_-]*by\b`
-	depDependsOnCore = `depends?[\s_-]*on\b`
+	//
+	// Every gap in a keyword, and between it and its reference, is spaces or
+	// tabs and never a line break: a declaration lives on one line, as the
+	// same-repo pass, the non-gating markers and SourceLine all assume. A
+	// lead that crossed the break read a keyword ending one line onto the
+	// reference opening the next, so prose hard-wrapped after "does not …
+	// depend on" declared the reference it denied (#2349 review).
+	depBlockedByCore = `blocked[ \t_-]*by\b`
+	depDependsOnCore = `depends?[ \t_-]*on\b`
 
 	// depKeywordCore is either of them.
 	depKeywordCore = `(?:` + depBlockedByCore + `|` + depDependsOnCore + `)`
@@ -75,7 +115,22 @@ const (
 	// depKeywordLead is what may sit between the keyword and the reference it
 	// introduces: the closing wrapper, an optional colon, more wrapping
 	// (`**Depends on:**`), and whitespace.
-	depKeywordLead = depKeywordWrap + `\s*:?` + depKeywordWrap + `\s*`
+	depKeywordLead = depKeywordWrap + `[ \t]*:?` + depKeywordWrap + `[ \t]*`
+
+	// repoSegment is one part of a repository's spelling: an owner, or a
+	// repository name. A name may contain dots and begin with one
+	// (nightgauge.dev, example.github.io, .github) but never ends with one, so
+	// a sentence's full stop is not read as part of the name. Before the
+	// #2349 review the class had no dot at all, so a dotted repository could
+	// be named in no slug spelling: "nightgauge.dev #12" gated on the
+	// declaring repository's own #12 and "org/nightgauge.dev#12" was dropped.
+	repoSegment = `\.?[\w-]+(?:\.[\w-]+)*`
+
+	// repoToken is a repository spelled short ("widget-api") or in full
+	// ("example-org/widget-api"). Every pattern below that reads a repository
+	// in front of a `#N` composes it, so they cannot disagree about what a
+	// repository name may contain.
+	repoToken = repoSegment + `(?:/` + repoSegment + `)?`
 )
 
 // Compiled regex patterns for parsing cross-repo references.
@@ -84,14 +139,14 @@ var (
 	// Also matches "Blocked by acme/platform#535" and "`blockedBy` acme/platform#535".
 	reBlockedBy = regexp.MustCompile(
 		`(?i)` + depKeywordWrap + depBlockedByCore + depKeywordLead +
-			`([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
+			`(` + repoToken + `)[ \t]*#(\d+)`,
 	)
 
 	// "Depends on: platform #NNN" / "depends on acme/platform#NNN"
 	// Can match multiple comma/semicolon separated refs on the same line.
 	reDependsOn = regexp.MustCompile(
 		`(?i)` + depKeywordWrap + depDependsOnCore + depKeywordLead +
-			`([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
+			`(` + repoToken + `)[ \t]*#(\d+)`,
 	)
 
 	// A dependency DECLARATION keyword anywhere on a line: "Blocked by …",
@@ -119,7 +174,7 @@ var (
 	// epic's "blockedBy wiring: #479 ← #478, #480 ← #478" — not a dependency
 	// of the issue whose body it is in (#1937).
 	reRelationArrow = regexp.MustCompile(
-		`#\d+[ \t]*(?:←|→|⟵|⟶|<-+|-+>)[ \t]*(?:[\w-]+(?:/[\w-]+)?[ \t]*)?#\d+`,
+		`#\d+[ \t]*(?:←|→|⟵|⟶|<-+|-+>)[ \t]*(?:` + repoToken + `[ \t]*)?#\d+`,
 	)
 
 	// A fenced code block's opening or closing line: three or more backticks
@@ -131,13 +186,21 @@ var (
 	// enumeration written with semicolons, which the "Depends on" spelling has
 	// always accepted — so a `;` in front of another reference separates items
 	// rather than ending the declaration. A `;` in front of prose ends it.
-	reRefListContinues = regexp.MustCompile(`^[ \t]*(?:[\w-]+(?:/[\w-]+)?[ \t]*)?#\d`)
+	reRefListContinues = regexp.MustCompile(`^[ \t]*(?:` + repoToken + `[ \t]*)?#\d`)
 
-	// A possibly repo-qualified reference: the token in front of a `#N`, and
-	// the gap between them. The same-repo pass uses it to decide which `#N`
-	// tokens already belong to another repository — see maskQualifiedRefs.
+	// A possibly repo-qualified reference: the token in front of a `#N`, the
+	// gap between them, and the number. Both passes classify each one through
+	// fragmentRefs, so the cross-repo pass and the same-repo pass agree about
+	// which `#N` tokens belong to another repository.
 	reQualifiedRef = regexp.MustCompile(
-		`([\w-]+(?:/[\w-]+)?)([ \t]*)#\d+`,
+		`(` + repoToken + `)([ \t]*)#(\d+)`,
+	)
+
+	// A reference in a declaration's REPO POSITION: the token that opens a
+	// keyword's fragment, directly after "Blocked by" / "Depends on:", the
+	// spot reBlockedBy and reDependsOn read a repository from.
+	reLeadingQualifiedRef = regexp.MustCompile(
+		`^(` + repoToken + `)([ \t]*)#(\d+)`,
 	)
 
 	// A bare issue reference with no repo in front of it.
@@ -153,8 +216,17 @@ var (
 	// decision rather than an accident of which runes the class happens to
 	// contain. The marker group is optional so a bare, unmarked entry also
 	// matches — see docs/AUTONOMOUS_ORCHESTRATOR.md for the marker contract.
+	//
+	// It is matched one line at a time, against every line under any
+	// dependency-section header (see depDeclarationFragments): before the #2349
+	// review only "## Cross-Repo Dependencies" read it, so "- widget-api #12"
+	// under "## Dependencies" declared nothing at all. The entry's token sits in
+	// the repo position, like the token after a keyword. Any list bullet (`-`,
+	// `*`, `+`, `1.`), a task checkbox, or none at all may open the entry: a
+	// line under the header is an entry by virtue of where it sits.
 	reStructuredEntry = regexp.MustCompile(
-		`(?m)^[ \t]*-\s*([✅❌⚠️⏸]*)\s*([\w-]+(?:/[\w-]+)?)\s*#(\d+)`,
+		`^[ \t]*(?:(?:[-*+]|\d+[.)])[ \t]*)?(?:\[[ xX]?\][ \t]*)?([✅❌⚠️⏸]*)[ \t]*` +
+			`(` + repoToken + `)([ \t]*)#(\d+)`,
 	)
 
 	// Textual tokens that declare a line to be documentation rather than a
@@ -183,16 +255,16 @@ var (
 	// "- #535 — needed for the epic rollout" — is still a dependency. Matching
 	// the word anywhere on the line would reintroduce the quiet direction this
 	// regex exists to remove.
+	//
+	// The reference may be repo-qualified: "Part of example-org/platform#46" is
+	// the same parent link, and once a section line's qualified references
+	// gate (#2349 review) an unmasked one would deadlock the issue on its epic
+	// exactly as `Part of #308` did.
 	reBookkeepingRef = regexp.MustCompile(
 		`(?i)\b(part\s+of|parent(?:\s+issue)?|epic|sub[- ]?issue\s+of|` +
 			`child\s+of|tracks|tracked\s+by|related\s+to|related|see\s+also|` +
 			`closes|closed\s+by|fixes|fixed\s+by|resolves|resolved\s+by|` +
-			`wave)\b[\s:.,;—–-]*#\d+`,
-	)
-
-	// Section header detection for "## Cross-Repo Dependencies"
-	reCrossRepoSection = regexp.MustCompile(
-		`(?im)^#{1,3}\s+cross[- ]?repo\s+dependenc`,
+			`wave)\b[\s:.,;—–-]*(?:` + repoToken + `[ \t]*)?#\d+`,
 	)
 
 	// Dependency-declaration section headers. URL-based ref extraction is
@@ -386,24 +458,30 @@ func extractDepContext(body string) string {
 // ParseCrossRepoRefs extracts cross-repo dependency references from an issue body.
 // It handles three patterns:
 //  1. "Blocked by <repo> #NNN"
-//  2. "## Cross-Repo Dependencies" section with "- ✅/❌/⚠️/⏸️ <repo> #NNN" entries
+//  2. "- ✅/❌/⚠️/⏸️ <repo> #NNN" entries under a dependency-section header
+//     ("## Cross-Repo Dependencies", "## Dependencies", "## Blocked by",
+//     "## Depends on")
 //  3. "Depends on: <repo> #NNN" / "Depends on <repo> #NNN"
+//
+// plus every other repo-qualified reference in a declaration's sentence or
+// section line, and issue URLs in dependency contexts.
 //
 // A line that carries a non-gating marker (⏸️, or a textual "deferred" /
 // "not-gating" / "non-gating" token) yields no reference from any pattern —
 // it is documentation, not a dependency. See isNonGatingLine and
 // docs/AUTONOMOUS_ORCHESTRATOR.md for the marker contract.
 //
-// repoAliases maps short names to full "owner/repo" names. If nil,
-// DefaultRepoAliases is used.
+// repoAliases maps short names to full "owner/repo" names; build it with
+// WorkspaceRepoAliases. A nil map resolves only the full "owner/repo"
+// spelling (#2349). A repository token that resolves to nothing yields an
+// Unresolved reference wherever it is unmistakably a repository — see
+// classifyRepoRef — so a dependency on an unnamed repository holds the issue
+// instead of vanishing.
 func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoRef {
 	if body == "" {
 		return nil
 	}
 	body = maskFencedCode(body)
-	if repoAliases == nil {
-		repoAliases = DefaultRepoAliases
-	}
 
 	seen := make(map[string]bool) // "repo#number" dedup
 	var refs []CrossRepoRef
@@ -416,6 +494,28 @@ func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoR
 		seen[key] = true
 		refs = append(refs, ref)
 	}
+	// addClassified adds a classified reference unless it is bare: a bare `#N`
+	// is the same-repo pass's (ParseDependencyRefs), not a cross-repo one.
+	addClassified := func(c classifiedRef, source, line string) {
+		if c.kind == refBare || c.number <= 0 {
+			return
+		}
+		addRef(CrossRepoRef{
+			Repo:       c.repo,
+			Number:     c.number,
+			Source:     source,
+			Verified:   c.verified,
+			SourceLine: line,
+			Unresolved: c.kind == refUnresolved,
+		})
+	}
+	// keywordRef classifies the reference a keyword pattern captured, in the
+	// repo position. Groups: 1 the token, 2 the number.
+	keywordRef := func(m []int) classifiedRef {
+		num, _ := strconv.Atoi(body[m[4]:m[5]])
+		glued := body[m[3]:m[4]] == "#"
+		return classifyRepoRef(body[m[2]:m[3]], num, glued, true, repoAliases)
+	}
 
 	// 1. "Blocked by ..." pattern
 	for _, m := range reBlockedBy.FindAllStringSubmatchIndex(body, -1) {
@@ -423,50 +523,22 @@ func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoR
 		if isNonGatingLine(line) {
 			continue
 		}
-		repo := resolveAlias(body[m[2]:m[3]], repoAliases)
-		num, _ := strconv.Atoi(body[m[4]:m[5]])
-		if repo != "" && num > 0 {
-			addRef(CrossRepoRef{Repo: repo, Number: num, Source: "body_text", SourceLine: line})
-		}
+		addClassified(keywordRef(m), "body_text", line)
 	}
 
-	// 2. Structured "## Cross-Repo Dependencies" section
-	if loc := reCrossRepoSection.FindStringIndex(body); loc != nil {
-		// Extract the section: from header to next ## header or end of body
-		sectionStart := loc[0]
-		sectionBody := body[sectionStart:]
-		// Find next ## header
-		nextHeader := regexp.MustCompile(`(?m)^#{1,3}\s+[^\n]`)
-		remaining := sectionBody[len(body[loc[0]:loc[1]]):]
-		if nextLoc := nextHeader.FindStringIndex(remaining); nextLoc != nil {
-			sectionBody = sectionBody[:len(body[loc[0]:loc[1]])+nextLoc[0]]
-		}
+	fragments := depDeclarationFragments(body)
 
-		for _, m := range reStructuredEntry.FindAllStringSubmatchIndex(sectionBody, -1) {
-			line := lineAt(sectionBody, m[0])
-			// ⏸️ / "deferred" / "not-gating" entries are documentation the
-			// author recorded for context — they must not become scheduler
-			// edges. ✅, ❌ and ⚠️ all still gate; ⚠️ reads as "watch this",
-			// which is a dependency worth honouring (#126).
-			if isNonGatingLine(line) {
-				continue
-			}
-			// status may be "" for an unmarked entry (marker group is
-			// optional). An empty status is treated as gating-unverified,
-			// same as ❌/⚠️ — only an explicit ✅ marks Verified true (#132).
-			status := sectionBody[m[2]:m[3]]
-			repo := resolveAlias(sectionBody[m[4]:m[5]], repoAliases)
-			num, _ := strconv.Atoi(sectionBody[m[6]:m[7]])
-			if repo != "" && num > 0 {
-				verified := strings.Contains(status, "✅")
-				addRef(CrossRepoRef{
-					Repo:       repo,
-					Number:     num,
-					Source:     "structured_section",
-					Verified:   verified,
-					SourceLine: line,
-				})
-			}
+	// 2. Entries under a dependency-section header. ⏸️ / "deferred" /
+	// "not-gating" entries are documentation the author recorded for
+	// context, and depDeclarationFragments has already dropped them; ✅, ❌
+	// and ⚠️ all still gate — ⚠️ reads as "watch this", which is a dependency
+	// worth honouring (#126). Only an explicit ✅ marks Verified (#132).
+	for _, frag := range fragments {
+		if frag.source != "structured_section" {
+			continue
+		}
+		if c, ok := sectionEntryRef(frag.text, repoAliases); ok {
+			addClassified(c, frag.source, frag.line)
 		}
 	}
 
@@ -476,16 +548,13 @@ func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoR
 		if isNonGatingLine(line) {
 			continue
 		}
-		repo := resolveAlias(body[m[2]:m[3]], repoAliases)
-		num, _ := strconv.Atoi(body[m[4]:m[5]])
-		if repo != "" && num > 0 {
-			addRef(CrossRepoRef{Repo: repo, Number: num, Source: "depends_on", SourceLine: line})
-		}
+		addClassified(keywordRef(m), "depends_on", line)
 	}
 
-	// 3b. Repo-qualified references elsewhere in a keyword's own SENTENCE.
-	// Patterns 1 and 3 only see a reference sitting immediately after the
-	// keyword, so a sentence that enumerates two blockers across a clause —
+	// 3b. Repo-qualified references elsewhere in a keyword's own SENTENCE, or
+	// anywhere on a dependency-section line. Patterns 1 and 3 only see a
+	// reference sitting immediately after the keyword, so a sentence that
+	// enumerates two blockers across a clause —
 	//
 	//	This issue is `blockedBy` acme/platform#1253 and, per the epic's
 	//	Wave-1-first rule, acme/platform#1252 …
@@ -495,26 +564,13 @@ func ParseCrossRepoRefs(body string, repoAliases map[string]string) []CrossRepoR
 	// this makes the qualified spelling agree with it, which is the same
 	// symmetry #1492 restored between the cross-repo and same-repo forms.
 	//
-	// Section fragments are excluded: their references have no keyword and are
-	// governed by the structured-entry pattern and its ✅/⏸️ markers.
-	for _, frag := range depDeclarationFragments(body) {
-		if frag.source == "structured_section" {
-			continue
-		}
-		for _, m := range reQualifiedRef.FindAllStringSubmatchIndex(frag.text, -1) {
-			repo := resolveAlias(frag.text[m[2]:m[3]], repoAliases)
-			if repo == "" {
-				continue // prose in front of a bare reference, not a repo
-			}
-			num, _ := strconv.Atoi(strings.TrimPrefix(frag.text[m[5]:m[1]], "#"))
-			if num > 0 {
-				addRef(CrossRepoRef{
-					Repo:       repo,
-					Number:     num,
-					Source:     frag.source,
-					SourceLine: frag.line,
-				})
-			}
+	// Section lines count too: the bare-`#N` pass reads every one as a
+	// declaration, and until the #2349 review the qualified spelling on the
+	// same line ("- example-org/widget-api#12" under "## Dependencies")
+	// declared nothing.
+	for _, frag := range fragments {
+		for _, c := range fragmentRefs(frag, repoAliases) {
+			addClassified(c, frag.source, frag.line)
 		}
 	}
 
@@ -708,39 +764,197 @@ func depDeclarationFragments(body string) []depFragment {
 	return out
 }
 
-// maskQualifiedRefs blanks every REPO-QUALIFIED reference in s, preserving
-// length, so that what survives is exactly the bare `#N` tokens. Without it
-// "Blocked by platform #535" would yield both a cross-repo edge to
-// platform#535 and a same-repo edge to #535 — a hold on an unrelated issue
-// that happens to share a number.
-//
-// A token in front of a `#N` qualifies it only when the token names a
-// repository: it resolves through the alias map (or already looks like
-// "owner/repo"), or it is glued to the `#` with no space, which is the
-// unambiguous "owner/repo#N" / "repo#N" spelling. Everything else is ordinary
-// prose — "and #1195", the "-" of a list bullet, a version number — and the
-// reference after it is bare.
-//
-// The residual ambiguity is "Depends on: someunknownrepo #55", which this
-// reads as same-repo #55. That is deliberate: an unrecognised token yields a
-// dependency the scheduler HOLDS on rather than one it silently drops, and
-// holding a dispatch is the recoverable direction. Dropping it is what #1492
-// was.
-func maskQualifiedRefs(s string, aliases map[string]string) string {
-	locs := reQualifiedRef.FindAllStringSubmatchIndex(s, -1)
-	if len(locs) == 0 {
-		return s
+// refKind is what a `#N` in a dependency declaration names.
+type refKind int
+
+const (
+	// refBare is the declaring repository's own #N: nothing in front of it,
+	// or prose ("issue #5", "and #6").
+	refBare refKind = iota
+	// refRepo is #N in the repository its token resolves to.
+	refRepo
+	// refUnresolved is #N in a repository its token names but the workspace
+	// cannot identify (see CrossRepoRef.Unresolved).
+	refUnresolved
+)
+
+// classifiedRef is one `token #N` reference in a declaration, classified.
+type classifiedRef struct {
+	kind     refKind
+	repo     string // the repository (refRepo), or the token as written (refUnresolved)
+	number   int
+	verified bool // a section entry marked ✅
+	start    int  // the reference's span, token through number, in its text
+	end      int
+}
+
+// proseQualifiers are words that stand in front of an issue's `#N` to say what
+// it is, not which repository it is in: "Blocked by issue #5", "Depends on PR
+// #6", "Blocked by Epic #295", "- Needs #7", "PR#8". In the repo position, or
+// glued to the `#`, any other word that is not one of the workspace's
+// repositories is read as a repository the workspace cannot name, so this list
+// is what keeps such prose a reference to the declaring repository's own
+// issue. The alias map is consulted first, so a repository that happens to be
+// called one of these words still resolves.
+var proseQualifiers = func() map[string]bool {
+	words := []string{
+		// What the reference is.
+		"issue", "issues", "pr", "prs", "pull", "request", "requests", "mr",
+		"epic", "epics", "story", "stories", "task", "tasks", "ticket", "tickets",
+		"bug", "bugs", "feature", "features", "spike", "spikes", "item", "items",
+		"sub-issue", "sub-issues", "subissue", "subissues", "parent", "child",
+		"sibling", "siblings", "blocker", "blockers", "dependency",
+		"dependencies", "prerequisite", "prerequisites", "prereq", "prereqs",
+		"follow-up", "followup", "fix", "change", "work", "gh", "no", "number",
+		// Words a sentence or a list item puts in front of one.
+		"the", "a", "an", "and", "or", "and/or", "both", "either", "all", "also",
+		"only", "plus", "then", "see", "via", "per", "on", "in", "of", "by", "to",
+		"for", "with", "from", "after", "before", "until", "once", "when", "its",
+		"their", "this", "that", "these", "those", "our", "upstream",
+		"downstream", "needs", "need", "requires", "require", "waits", "waiting",
+		"blocks",
 	}
-	b := []byte(s)
-	for _, loc := range locs {
-		token := s[loc[2]:loc[3]]
-		gap := s[loc[4]:loc[5]]
-		if gap != "" && resolveAlias(token, aliases) == "" {
-			continue // prose in front of a bare reference, not a repo
+	m := make(map[string]bool, len(words))
+	for _, w := range words {
+		m[w] = true
+	}
+	return m
+}()
+
+// isProseQualifier reports whether token, in front of a `#N`, is prose rather
+// than a repository: a word from proseQualifiers, or a token with no letter in
+// it (a count or a version: "2 #5", "1.2 #5").
+func isProseQualifier(token string) bool {
+	t := strings.ToLower(strings.TrimSpace(token))
+	return proseQualifiers[t] || !strings.ContainsFunc(t, unicode.IsLetter)
+}
+
+// classifyRepoRef classifies the reference `token #number`. glued is true when
+// nothing separates the token from the `#`; repoPosition is true when the token
+// sits directly after a dependency keyword ("Blocked by core #12") or after a
+// dependency-section entry's bullet and marker ("- ❌ platform #535").
+//
+//   - A token that resolves through the alias map is that repository's #N.
+//   - A short name two workspace repositories share is Unresolved wherever it
+//     appears: it plainly names a repository, just not one the parser can
+//     choose.
+//   - A prose qualifier ("issue", "PR", "epic", …) or a count leaves the
+//     reference bare.
+//   - A token spelled "owner/repo" is that repository's #N.
+//   - Any other token is a repository the workspace cannot name, and the
+//     reference is Unresolved, when the token is unmistakably a repository:
+//     glued to the `#` (the repo#N spelling) or in the repo position.
+//   - Anywhere else a spaced word is prose ("… until release #6"), and the
+//     reference is bare.
+//
+// Unresolved holds the issue: the dispatcher fails closed on a dependency it
+// cannot resolve, and the hold names the body line. Before the #2349 review an
+// unknown or ambiguous name read as prose when spaced, so "Blocked by core #12"
+// gated on the declaring repository's own #12 — which may be closed, and then
+// the issue dispatched over its real blocker — and as nothing when glued.
+// Holding is the recoverable direction; dropping a dependency is what #1492
+// was.
+func classifyRepoRef(token string, number int, glued, repoPosition bool, aliases map[string]string) classifiedRef {
+	c := classifiedRef{number: number}
+	token = strings.TrimSpace(token)
+	switch repo, kind := lookupAlias(token, aliases); kind {
+	case aliasRepo:
+		c.kind, c.repo = refRepo, repo
+		return c
+	case aliasAmbiguous:
+		c.kind, c.repo = refUnresolved, token
+		return c
+	}
+	switch {
+	case isProseQualifier(token):
+		// bare
+	case strings.Contains(token, "/"):
+		c.kind, c.repo = refRepo, token
+	case glued || repoPosition:
+		c.kind, c.repo = refUnresolved, token
+	}
+	return c
+}
+
+// keywordLeadRef classifies the reference in a keyword fragment's repo
+// position: the token its text opens with, directly after the keyword.
+func keywordLeadRef(text string, aliases map[string]string) (classifiedRef, bool) {
+	m := reLeadingQualifiedRef.FindStringSubmatchIndex(text)
+	if m == nil {
+		return classifiedRef{}, false
+	}
+	num, _ := strconv.Atoi(text[m[6]:m[7]])
+	c := classifyRepoRef(text[m[2]:m[3]], num, m[4] == m[5], true, aliases)
+	c.start, c.end = m[2], m[1]
+	return c, true
+}
+
+// sectionEntryRef classifies the reference in a dependency-section entry's
+// repo position — "- ❌ widget-api #12" — and reports false for a line with
+// none ("- #12", prose).
+func sectionEntryRef(text string, aliases map[string]string) (classifiedRef, bool) {
+	m := reStructuredEntry.FindStringSubmatchIndex(text)
+	if m == nil {
+		return classifiedRef{}, false
+	}
+	num, _ := strconv.Atoi(text[m[8]:m[9]])
+	c := classifyRepoRef(text[m[4]:m[5]], num, m[6] == m[7], true, aliases)
+	// status may be "" for an unmarked entry (the marker group is optional),
+	// which gates unverified like ❌/⚠️: only an explicit ✅ is Verified (#132).
+	c.verified = strings.Contains(text[m[2]:m[3]], "✅")
+	c.start, c.end = m[4], m[1]
+	return c, true
+}
+
+// fragmentRefs classifies every repo-qualified reference in a declaration
+// fragment: the one in its repo position first (the keyword's, or the section
+// entry's), then each later `token #N`. ParseCrossRepoRefs emits those that
+// are not bare and ParseDependencyRefs masks them, so the two passes cannot
+// both claim one: "platform #535" is never also the declaring repository's
+// #535, a hold on an unrelated issue that happens to share a number.
+func fragmentRefs(frag depFragment, aliases map[string]string) []classifiedRef {
+	var (
+		out  []classifiedRef
+		lead classifiedRef
+		ok   bool
+		rest int
+	)
+	if frag.source == "structured_section" {
+		lead, ok = sectionEntryRef(frag.text, aliases)
+	} else {
+		lead, ok = keywordLeadRef(frag.text, aliases)
+	}
+	if ok {
+		out = append(out, lead)
+		rest = lead.end
+	}
+	for _, m := range reQualifiedRef.FindAllStringSubmatchIndex(frag.text[rest:], -1) {
+		num, _ := strconv.Atoi(frag.text[rest+m[6] : rest+m[7]])
+		c := classifyRepoRef(frag.text[rest+m[2]:rest+m[3]], num, m[4] == m[5], false, aliases)
+		c.start, c.end = rest+m[2], rest+m[1]
+		out = append(out, c)
+	}
+	return out
+}
+
+// maskNonBareRefs blanks, preserving length, every reference in the fragment
+// that fragmentRefs does not classify as bare, so what survives is exactly the
+// declaring repository's own `#N` tokens.
+func maskNonBareRefs(frag depFragment, aliases map[string]string) string {
+	var b []byte
+	for _, c := range fragmentRefs(frag, aliases) {
+		if c.kind == refBare {
+			continue
 		}
-		for i := loc[0]; i < loc[1]; i++ {
+		if b == nil {
+			b = []byte(frag.text)
+		}
+		for i := c.start; i < c.end; i++ {
 			b[i] = ' '
 		}
+	}
+	if b == nil {
+		return frag.text
 	}
 	return string(b)
 }
@@ -761,16 +975,14 @@ func maskQualifiedRefs(s string, aliases map[string]string) string {
 // and feature-planning discovered the prerequisite by reading prose the
 // scheduler had ignored.
 //
-// selfRepo == "" degrades to exactly ParseCrossRepoRefs.
+// selfRepo == "" degrades to exactly ParseCrossRepoRefs. repoAliases is the
+// workspace's alias map (WorkspaceRepoAliases), as for ParseCrossRepoRefs.
 func ParseDependencyRefs(body, selfRepo string, repoAliases map[string]string) []CrossRepoRef {
 	refs := ParseCrossRepoRefs(body, repoAliases)
 	if body == "" || selfRepo == "" {
 		return refs
 	}
 	body = maskFencedCode(body)
-	if repoAliases == nil {
-		repoAliases = DefaultRepoAliases
-	}
 
 	seen := make(map[string]bool, len(refs))
 	for _, r := range refs {
@@ -778,7 +990,7 @@ func ParseDependencyRefs(body, selfRepo string, repoAliases map[string]string) [
 	}
 
 	for _, frag := range depDeclarationFragments(body) {
-		for _, m := range reBareRef.FindAllStringSubmatch(maskQualifiedRefs(frag.text, repoAliases), -1) {
+		for _, m := range reBareRef.FindAllStringSubmatch(maskNonBareRefs(frag, repoAliases), -1) {
 			num, _ := strconv.Atoi(m[1])
 			if num <= 0 {
 				continue
@@ -829,22 +1041,45 @@ func maskFencedCode(body string) string {
 	return strings.Join(lines, "\n")
 }
 
-// resolveAlias normalizes a repo reference using the alias map.
-// Returns "" if the alias is unknown.
-func resolveAlias(raw string, aliases map[string]string) string {
+// aliasKind is what an alias-map lookup found.
+type aliasKind int
+
+const (
+	aliasUnknown   aliasKind = iota // no key matches
+	aliasRepo                       // a key maps to a repository
+	aliasAmbiguous                  // a key maps to "": a name several repositories share
+)
+
+// lookupAlias looks raw up in the alias map, exactly and then
+// case-insensitively.
+func lookupAlias(raw string, aliases map[string]string) (string, aliasKind) {
 	raw = strings.TrimSpace(raw)
-	// Try exact match first
-	if full, ok := aliases[raw]; ok {
-		return full
-	}
-	// Try case-insensitive match
-	lower := strings.ToLower(raw)
-	for k, v := range aliases {
-		if strings.ToLower(k) == lower {
-			return v
+	full, ok := aliases[raw]
+	if !ok {
+		for k, v := range aliases {
+			if strings.EqualFold(k, raw) {
+				full, ok = v, true
+				break
+			}
 		}
 	}
-	// If it already looks like "owner/repo", accept it as-is
+	switch {
+	case !ok:
+		return "", aliasUnknown
+	case full == "":
+		return "", aliasAmbiguous
+	}
+	return full, aliasRepo
+}
+
+// resolveAlias normalizes a repo reference using the alias map. A name the
+// map does not hold is returned as-is when it is spelled "owner/repo", and as
+// "" otherwise; so is a name the map marks ambiguous.
+func resolveAlias(raw string, aliases map[string]string) string {
+	if full, kind := lookupAlias(raw, aliases); kind != aliasUnknown {
+		return full
+	}
+	raw = strings.TrimSpace(raw)
 	if strings.Contains(raw, "/") {
 		return raw
 	}

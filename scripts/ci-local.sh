@@ -234,10 +234,12 @@ decide_go_scope() {
       *.go|go.mod|go.sum|*/go.mod|*/go.sum) hit="$p (a Go source or module file)"; break ;;
     esac
     d="$(dirname "$p")"
-    if printf '%s\n' "$pkg_dirs" | grep -qxF -- "$d"; then
+    # Here-strings, not `printf | grep -q` (#2360): a reader that exits at
+    # its match can SIGPIPE the writer and, under pipefail, read it as a miss.
+    if grep -qxF -- "$d" <<<"$pkg_dirs"; then
       hit="$p (inside the Go package directory $d)"; break
     fi
-    if printf '%s\n' "$codegen_paths" | grep -qxF -- "$p"; then
+    if grep -qxF -- "$p" <<<"$codegen_paths"; then
       hit="$p (a Go codegen input or output)"; break
     fi
     local g
@@ -331,6 +333,10 @@ REQUIRED_FILES=(
   scripts/test-publication-boundary-hermeticity.sh
   scripts/check-boundary-allowlist-isolation.sh
   scripts/test-check-boundary-allowlist-isolation.sh
+  scripts/publication-push-guard.sh
+  scripts/install-publication-push-hook.sh
+  scripts/test-publication-push-guard.sh
+  .husky/pre-push
   scripts/check-band-vocabulary.py
   scripts/test-band-vocabulary-check.sh
   scripts/check-visibility-prose.py
@@ -364,6 +370,8 @@ REQUIRED_FILES=(
   scripts/check-issue-body-contract.py
   scripts/test-skill-echo-json.sh
   scripts/check-skill-echo-json.py
+  scripts/test-pipefail-early-exit.sh
+  scripts/check-pipefail-early-exit.py
   scripts/install-agent-skills.sh
   scripts/test-mirror-link-check.sh
   scripts/check-mirror-links.py
@@ -1442,6 +1450,13 @@ run_step "Publication boundary suite hermeticity" \
 run_step "Publication boundary allowlist isolation regression suite" \
   bash scripts/test-check-boundary-allowlist-isolation.sh
 
+# 5b-iii. The pre-push guard (#2365) — the boundary checked before a push to
+#     the public repository, which CI only sees after GitHub has stored it.
+#     Real pushes through the hooks npm install installs, into throwaway
+#     repositories; no tree scan of this checkout.
+run_step "Publication push guard regression suite" \
+  bash scripts/test-publication-push-guard.sh
+
 # 5c. Band-vocabulary reintroduction gate (#582) — fails on hand-inlined band
 #     closed sets / regex alternations in production source, outside the
 #     allowed surfaces (spike #568 §5).
@@ -1601,6 +1616,17 @@ run_group "Skill echo-into-jq gate regression suite" \
 run_step "Skill echo-into-jq gate" \
   python3 scripts/check-skill-echo-json.py
 
+# 11a3. Pipefail early-exit gate (#2360) — a command piped into a reader that
+#       stops early (grep -q, head, sed q, awk exit) dies of SIGPIPE once the
+#       reader is gone, and under pipefail a match then reads as a miss. Two
+#       of this gate's own suites went red that way under load with matching
+#       content; on a large input it happens every time. Covers every shell
+#       script and workflow `run:` block. Self-test first, same reasoning as 11.
+run_group "Pipefail early-exit gate regression suite" \
+  bash scripts/test-pipefail-early-exit.sh
+run_step "Pipefail early-exit gate" \
+  python3 scripts/check-pipefail-early-exit.py
+
 # 11b. Plugin skills mirror drift — claude-plugins/nightgauge/skills/ is
 #      generated output committed on purpose (the marketplace manifest ships it
 #      as the plugin source), so a canonical skills/ edit that never reached it
@@ -1671,7 +1697,7 @@ print_timing_summary() {
   local i
   for i in "${!STEP_LABELS[@]}"; do
     printf '%6s  %s\n' "${STEP_SECONDS[$i]}s" "${STEP_LABELS[$i]}"
-  done | sort -rn | head -8 | sed 's/^/  /'
+  done | sort -rn | sed -n '1,8s/^/  /p'
 }
 
 echo ""

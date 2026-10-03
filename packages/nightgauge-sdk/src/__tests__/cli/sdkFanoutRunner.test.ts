@@ -415,3 +415,43 @@ describe("SdkFanoutRunner (#3905)", () => {
     ]);
   });
 });
+
+describe("every unit is granted the spec's tools (#2358)", () => {
+  /** Bindings that record the tools each agent and judge was handed. */
+  function recordingBindings(seen: Array<readonly string[] | undefined>): WorkflowExecutorBindings {
+    return {
+      async runAgent(_agent, unit) {
+        seen.push(unit?.allowedTools);
+        return { usage: usage(), terminalKind: "success" as const };
+      },
+      async runJudge(_judge, _target, unit) {
+        seen.push(unit?.allowedTools);
+        return { verdict: "pass" as const, usage: usage() };
+      },
+    };
+  }
+
+  it("hands each agent and judge the spec's allowedTools", async () => {
+    const seen: Array<readonly string[] | undefined> = [];
+    const spec = makeSpec(2, 1, { allowedTools: ["Read", "Grep"] });
+    await runSdkFanout(spec, new ArrayWorkflowEventSink(), recordingBindings(seen));
+
+    expect(seen).toEqual([
+      ["Read", "Grep"],
+      ["Read", "Grep"],
+      ["Read", "Grep"],
+    ]);
+  });
+
+  it("hands none when the spec grants none", async () => {
+    const seen: Array<readonly string[] | undefined> = [];
+    await runSdkFanout(makeSpec(1, 1), new ArrayWorkflowEventSink(), recordingBindings(seen));
+    await runSdkFanout(
+      makeSpec(1, 0, { allowedTools: [] }),
+      new ArrayWorkflowEventSink(),
+      recordingBindings(seen)
+    );
+
+    expect(seen).toEqual([undefined, undefined, undefined]);
+  });
+});

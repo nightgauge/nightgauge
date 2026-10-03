@@ -111,11 +111,11 @@ snapshot() { # snapshot <dir>
 }
 
 compare() { # compare <before> <after>
-  local before="$1" after="$2" legacy state fail=0 line rel
+  local before="$1" after="$2" legacy state fail=0 rel
   legacy="$(cat "$before/legacy.root")"
   state="$(cat "$before/state.root")"
 
-  local removed added changed
+  local removed added was now
   # Legacy root: any difference fails. comm needs sorted input; both lists are
   # sorted by path with LC_ALL=C, and a changed file differs on the same path.
   removed="$(LC_ALL=C comm -23 "$before/legacy.list" "$after/legacy.list")"
@@ -126,23 +126,23 @@ compare() { # compare <before> <after>
     if [ "$(head -1 "$after/legacy.list")" = "ABSENT" ]; then
       echo "    the directory itself is gone"
     fi
-    while IFS= read -r line; do
-      [ -n "$line" ] || continue
-      rel="${line%%	*}"
-      if printf '%s\n' "$added" | cut -f1 | grep -qxF -- "$rel"; then
-        echo "    changed: $legacy/$rel"
-      elif [ "$rel" != "ABSENT" ]; then
-        echo "    removed: $legacy/$rel"
-      fi
-    done <<<"$removed"
-    changed="$(printf '%s\n' "$removed" | cut -f1)"
-    while IFS= read -r line; do
-      [ -n "$line" ] || continue
-      rel="${line%%	*}"
-      [ "$rel" = "ABSENT" ] && continue
-      printf '%s\n' "$changed" | grep -qxF -- "$rel" && continue
-      echo "    added:   $legacy/$rel"
-    done <<<"$added"
+    # A path on both sides changed, one only before was removed, and one only
+    # after was added: comm over the two path lists. Not a grep per path, as
+    # this was: that piped the whole added list into grep -q under pipefail,
+    # where grep exiting at its match SIGPIPEs the writer, so a changed file
+    # read as removed every time the list was large (#2360). It also spawned
+    # a process for every line of a mass leak.
+    was="$(cut -f1 <<<"$removed" | grep -vx -e ABSENT -e '' | LC_ALL=C sort -u)"
+    now="$(cut -f1 <<<"$added" | grep -vx -e ABSENT -e '' | LC_ALL=C sort -u)"
+    while IFS= read -r rel; do
+      [ -n "$rel" ] && echo "    changed: $legacy/$rel"
+    done < <(LC_ALL=C comm -12 <(printf '%s\n' "$was") <(printf '%s\n' "$now"))
+    while IFS= read -r rel; do
+      [ -n "$rel" ] && echo "    removed: $legacy/$rel"
+    done < <(LC_ALL=C comm -23 <(printf '%s\n' "$was") <(printf '%s\n' "$now"))
+    while IFS= read -r rel; do
+      [ -n "$rel" ] && echo "    added:   $legacy/$rel"
+    done < <(LC_ALL=C comm -13 <(printf '%s\n' "$was") <(printf '%s\n' "$now"))
   fi
 
   # Default STATE: a removed path fails; an added one is information.
@@ -158,7 +158,7 @@ compare() { # compare <before> <after>
   fi
   if [ -n "$added" ]; then
     echo "  (information) paths added to $state during the run:"
-    printf '%s\n' "$added" | head -20 | sed "s|^|    added:   $state/|"
+    head -n 20 <<<"$added" | sed "s|^|    added:   $state/|"
   fi
 
   if [ "$fail" -ne 0 ]; then

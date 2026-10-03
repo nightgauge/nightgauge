@@ -314,6 +314,7 @@ func (b *BoardService) nodeToItem(node projectItemNode, rels IssueRelations) *ty
 		if parentNum := int(f.Parent.Number); parentNum != 0 {
 			item.ParentNumber = parentNum
 			item.ParentTitle = string(f.Parent.Title)
+			item.ParentRepo = string(f.Parent.Repository.NameWithOwner)
 		}
 		if blockedBy != nil {
 			for _, b := range blockedBy.Nodes {

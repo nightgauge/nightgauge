@@ -47,8 +47,10 @@ function makeRuns(verbResult: RemoteVerbResult, holds = true) {
   return {
     holdsRemoteRun: vi.fn().mockResolvedValue(holds),
     isRunning: vi.fn().mockReturnValue(false),
-    setPendingRemoteRunId: vi.fn(),
-    clearPendingRemoteRunId: vi.fn(),
+    remoteTriggerConflict: vi.fn().mockResolvedValue(null),
+    placeRemoteRun: vi.fn(async (_run: unknown, enqueue: () => Promise<boolean>) =>
+      (await enqueue()) ? "queued" : "not-queued"
+    ),
     fillSlots: vi.fn().mockResolvedValue(undefined),
     cancelByRemoteRunId: vi.fn().mockResolvedValue(verbResult),
     pauseByRemoteRunId: vi.fn().mockResolvedValue(verbResult),

@@ -2,7 +2,12 @@ package orchestrator
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -34,15 +39,15 @@ func TestNewAutonomousScheduler_WiresEpicCheckpointIntoScheduler(t *testing.T) {
 	}
 
 	// Fire it the way epic.go does.
-	sched.epicCheckpoint(42)
+	sched.epicCheckpoint("example-org/platform", 42)
 
 	st := as.safetyRails.State()
 	if !st.PausedForCheckpoint {
 		t.Error("PausedForCheckpoint = false after an epic completed — the rail is wired " +
 			"but does not latch")
 	}
-	if st.LastEpicNumber != 42 {
-		t.Errorf("LastEpicNumber = %d, want 42", st.LastEpicNumber)
+	if st.LastEpicNumber != 42 || st.LastEpicRepo != "example-org/platform" {
+		t.Errorf("last epic = %s#%d, want example-org/platform#42", st.LastEpicRepo, st.LastEpicNumber)
 	}
 
 	// The pause must actually stop the next dispatch, or the latch is decoration.
@@ -50,8 +55,8 @@ func TestNewAutonomousScheduler_WiresEpicCheckpointIntoScheduler(t *testing.T) {
 	if allowed {
 		t.Error("CheckBeforeEnqueue allowed a dispatch while paused for checkpoint")
 	}
-	if reason == "" {
-		t.Error("refusal carried no reason")
+	if !strings.Contains(reason, "epic example-org/platform#42 complete") {
+		t.Errorf("refusal %q does not name the epic in its repository (#2377)", reason)
 	}
 }
 
@@ -64,7 +69,7 @@ func TestEpicCheckpoint_DisabledDoesNotLatch(t *testing.T) {
 	cfg.SafetyRails = &SafetyConfig{RateLimitPerHour: 100, EpicCheckpoint: false}
 	as := NewAutonomousScheduler(sched, nil, nil, nil, cfg, layouttest.Repo(t))
 
-	sched.epicCheckpoint(42)
+	sched.epicCheckpoint("example-org/platform", 42)
 
 	if as.safetyRails.State().PausedForCheckpoint {
 		t.Error("PausedForCheckpoint = true with the checkpoint disabled")
@@ -93,7 +98,7 @@ func TestEpicCheckpoint_SurvivesOnEpicCompleteReassignment(t *testing.T) {
 	if sched.epicCheckpoint == nil {
 		t.Fatal("registering OnEpicComplete destroyed the epic-checkpoint wiring")
 	}
-	sched.epicCheckpoint(7)
+	sched.epicCheckpoint("o/r", 7)
 	sched.onEpicComplete("o/r", 7)
 
 	if !as.safetyRails.State().PausedForCheckpoint {
@@ -154,7 +159,8 @@ func TestRaiseSafetyRailTrip_RaisesABlockingFleetCard(t *testing.T) {
 	as := NewAutonomousScheduler(nil, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
 	as.attention = store
 
-	as.raiseSafetyRailTrip("paused for epic checkpoint (epic #42 complete — awaiting human review)", 42)
+	as.raiseSafetyRailTrip("paused for epic checkpoint (epic example-org/platform#42 complete — awaiting human review)",
+		"example-org/platform#42")
 
 	reqs, err := store.List(attention.ListFilter{})
 	if err != nil {
@@ -169,6 +175,11 @@ func TestRaiseSafetyRailTrip_RaisesABlockingFleetCard(t *testing.T) {
 	}
 	if card == nil {
 		t.Fatal("a fleet-stopping machine halt raised no Action Center card")
+	}
+	// The card names the epic in its own repository: in a fleet that spans
+	// repositories, "#42" alone does not say which epic finished (#2377).
+	if !strings.Contains(card.Body, "Epic example-org/platform#42 finished") {
+		t.Errorf("card body does not name the epic in its repository:\n%s", card.Body)
 	}
 	if card.Severity != attention.SeverityBlockingFleet {
 		t.Errorf("severity = %q, want %q — the whole fleet is stopped, across every repo",
@@ -235,6 +246,86 @@ func TestCheckEpicCompletion_LatchesTheCheckpoint(t *testing.T) {
 	}
 }
 
+// TestCheckEpicCompletion_NamesACrossRepoEpicInItsOwnRepository: when the
+// merged sub-issue's epic lives in another repository, the checkpoint and the
+// epic-PR callback receive the repository the hook resolved the epic in. The
+// callback used to receive the sub-issue's repository, so the IPC server read
+// that repository's same-numbered issue and opened the epic PR there (#2377).
+func TestCheckEpicCompletion_NamesACrossRepoEpicInItsOwnRepository(t *testing.T) {
+	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
+	as := NewAutonomousScheduler(sched, nil, nil, nil, DefaultAutonomousConfig(), layouttest.Repo(t))
+
+	sched.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
+		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer,
+		_ hooks.PostMergeInput) hooks.PostMergeResult {
+		return hooks.PostMergeResult{IssueClosed: true, AutoClosed: true,
+			EpicNumber: 20, EpicRepo: "example-org/platform"}
+	}
+	var gotRepo string
+	var gotEpic int
+	sched.OnEpicComplete(func(epicRepo string, epicNumber int) { gotRepo, gotEpic = epicRepo, epicNumber })
+
+	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "example-org/app", Number: 21}, 0)
+
+	if gotRepo != "example-org/platform" || gotEpic != 20 {
+		t.Errorf("epic-PR callback got %s#%d, want example-org/platform#20 — "+
+			"example-org/app#20 is a different issue", gotRepo, gotEpic)
+	}
+	st := as.safetyRails.State()
+	if st.LastEpicRepo != "example-org/platform" || st.LastEpicNumber != 20 {
+		t.Errorf("checkpoint recorded %s#%d, want example-org/platform#20", st.LastEpicRepo, st.LastEpicNumber)
+	}
+
+	// The hook reporting no repository leaves the sub-issue's, the one place
+	// its bare number can name.
+	sched.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
+		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer,
+		_ hooks.PostMergeInput) hooks.PostMergeResult {
+		return hooks.PostMergeResult{IssueClosed: true, AutoClosed: true, EpicNumber: 30}
+	}
+	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "example-org/app", Number: 31}, 0)
+	if gotRepo != "example-org/app" || gotEpic != 30 {
+		t.Errorf("epic-PR callback got %s#%d, want example-org/app#30", gotRepo, gotEpic)
+	}
+}
+
+// TestCheckEpicCompletion_ReadyToShipNamesTheEpicInItsOwnRepository: the
+// ready-to-ship alert names the epic the hook closed, in the repository the
+// hook resolved it against. It used to name the merged sub-issue's
+// repository, which for an epic elsewhere is a different issue (#2350
+// review).
+func TestCheckEpicCompletion_ReadyToShipNamesTheEpicInItsOwnRepository(t *testing.T) {
+	posted := make(chan []byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		select {
+		case posted <- body:
+		default:
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	t.Setenv(config.DefaultShipNotifyWebhookEnv, srv.URL)
+
+	sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: t.TempDir()})
+	sched.evaluatePostMergeFn = func(_ context.Context, _ hooks.IssueFetcher, _ hooks.IssueCloser,
+		_ hooks.EpicAutoCloser, _ hooks.PRVerifier, _ hooks.BoardSyncer,
+		_ hooks.PostMergeInput) hooks.PostMergeResult {
+		return hooks.PostMergeResult{IssueClosed: true, AutoClosed: true, EpicNumber: 20, EpicRepo: "o/platform"}
+	}
+
+	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/app", Number: 21}, 0)
+
+	select {
+	case body := <-posted:
+		if !strings.Contains(string(body), "epic o/platform#20 closed") {
+			t.Errorf("ready-to-ship alert = %s, want it to name o/platform#20", body)
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("no ready-to-ship alert was posted")
+	}
+}
+
 // TestCheckEpicCompletion_DoesNotLatchWithoutAutoClose is the control: a merged
 // sub-issue that does NOT complete its epic must not pause the fleet. Without
 // this, a fix that latched on every post-merge call would pass the test above
@@ -291,7 +382,7 @@ func TestResumeCheckpoint_LeavesOtherRailsAlone(t *testing.T) {
 	}
 
 	// And it must still do its actual job.
-	sr.RecordEpicComplete(9)
+	sr.RecordEpicComplete("o/r", 9)
 	if !sr.State().PausedForCheckpoint {
 		t.Fatal("fixture: checkpoint did not latch")
 	}

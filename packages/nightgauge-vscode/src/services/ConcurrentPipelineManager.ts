@@ -136,6 +136,14 @@ function isTransientNetworkFailureText(errMsg: string): boolean {
   return kind === "api_connection_lost" || kind === "github_network_outage";
 }
 
+/**
+ * Whether two "owner/repo" names are the same repository (#2344). GitHub
+ * names are case-insensitive; an absent name is the empty one.
+ */
+function sameRepo(a: string | undefined, b: string | undefined): boolean {
+  return (a ?? "").toLowerCase() === (b ?? "").toLowerCase();
+}
+
 import type { IssueQueueService } from "./IssueQueueService";
 import type { HeadlessOrchestrator } from "./HeadlessOrchestrator";
 import type { PipelineRunResult, RequestedPin } from "./HeadlessOrchestrator";
@@ -144,6 +152,7 @@ import type { Logger } from "../utils/logger";
 import type { ActiveSlot, QueueItem } from "../types/queue";
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
 import { postFailureComment } from "../utils/failureComment";
+import { epicBranchParent } from "../utils/epicBranchParent";
 import { getConcurrentPipelineConfig } from "../utils/nightgaugeConfig";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import { throttleInForce, type WorkspaceThrottle } from "./WorkspaceThrottle";
@@ -174,8 +183,11 @@ export type OrchestratorFactory = (
  * `abandoned` means the abort deadline force-cleared this dispatch while it was
  * still inside worktree creation — its queue mark is already released and the
  * operator asked for it to stop, so re-enqueueing would silently undo the stop.
+ * `cancelled` means the platform cancelled the remote run this dispatch serves
+ * before its slot opened (#2344): the start tore down what it had built and
+ * reported the cancellation, and the item must neither start nor go back.
  */
-type StartSlotOutcome = "started" | "failed" | "abandoned";
+type StartSlotOutcome = "started" | "failed" | "abandoned" | "cancelled";
 
 /**
  * A dispatch that has taken a slot's identity but has not yet become a
@@ -189,6 +201,12 @@ interface SlotReservation {
   repo: string;
   /** Per-dispatch run identity — see {@link PipelineSlot.runId}. */
   runId: string;
+  /**
+   * The platform run id this dispatch serves, from its queue item (#2344):
+   * a platform verb for the run reaches the dispatch through it before the
+   * slot opens.
+   */
+  remoteRunId?: string;
   /**
    * THE CLAIM on this dispatch's single terminal outcome, with exactly the
    * semantics of {@link PipelineSlot.terminalOutcomeDispatched} (#307). A
@@ -211,12 +229,20 @@ interface SlotReservation {
 /**
  * What a platform verb did to a local run (#2334): "applied", or why it found
  * nothing to act on. The verb's ack reports it, so a requester can tell an
- * applied command from a no-op. "not-started": this window accepted the
- * run's trigger, but the run is still queued here and has no slot yet
- * (#2340).
+ * applied command from a no-op. "not-started": the run is still queued here
+ * and has no slot yet (#2340), which a pause or resume cannot act on; a cancel
+ * of such a run applies (#2344). "resume-in-window": the run was paused here
+ * and a window reload ended it; only the window's own Resume can continue it
+ * until the paused snapshot can be claimed (#2339).
  */
 export type RemoteVerbResult =
-  "applied" | "no-active-run" | "not-started" | "already-paused" | "not-paused" | "no-run-state";
+  | "applied"
+  | "no-active-run"
+  | "not-started"
+  | "already-paused"
+  | "not-paused"
+  | "no-run-state"
+  | "resume-in-window";
 
 interface PipelineSlot {
   /** Slot index (0-based) */
@@ -518,8 +544,69 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * and the per-repo running set reflect intent-to-run immediately. #3874.
    */
   private reservedSlots: Map<number, SlotReservation> = new Map();
-  /** Platform ack run id, applied to {@link PipelineSlot.remoteRunId} when the slot opens. */
-  private pendingRemoteRunIds: Map<number, string> = new Map();
+  /**
+   * The remote runs whose trigger this window accepted and is placing, keyed
+   * by the platform run id (#2340, #2344): from the ack on, while
+   * {@link placeRemoteRun} waits for the queue turn and then for the
+   * enqueue. From then on the queued item carries the run id itself
+   * (QueueItem.remoteRunId), and the slot adopts it from there.
+   */
+  private acceptedRemoteRuns: Map<string, { issueNumber: number; repo: string }> = new Map();
+  /**
+   * The items a fill dequeued that have not opened a slot or been released
+   * yet (#2344): waiting for an earlier start in the batch, or inside
+   * `startSlot`. A trigger for one of their issues attaches its run to that
+   * dispatch (see {@link placeRemoteRun}), which then serves it.
+   */
+  private readonly dispatchingItems = new Set<QueueItem>();
+  /**
+   * Serializes a fill's dequeue with a trigger's placement (#2344): a
+   * trigger's run either reaches the queue before a fill takes its issue, or
+   * finds the issue's dispatch in {@link dispatchingItems}. Without it the
+   * dequeue could take the issue between the trigger's check and its
+   * enqueue, which the queue then skips, and the run would start without its
+   * platform run id.
+   */
+  private queueTurn: Promise<void> = Promise.resolve();
+  /**
+   * The platform run ids this window's queue carries, waiting or dequeued,
+   * as the latest queue state reports them, and that state's time (#2357).
+   * The window holds a queued run (see {@link holdsRemoteRun}), so it lists
+   * it as held for the machine's other windows too.
+   */
+  private queuedRemoteRunIds = new Set<string>();
+  private queuedRemoteRunIdsAt = Number.NEGATIVE_INFINITY;
+  /**
+   * TOMBSTONES: platform runs cancelled before their slot opened (#2344).
+   *
+   * A cancel can reach a remote run anywhere between the queue and its slot:
+   * still queued, dequeued by a fill and waiting for an earlier start, or
+   * reserved while its worktree is created. Removing the queued item alone
+   * races the fill, which can still open a slot for it. So the cancel records
+   * the run id here first, and the dispatch path drops an item whose run id
+   * is here at every step, last in the same tick the slot would open.
+   *
+   * Keyed by the PLATFORM RUN ID, never by issue number: the platform never
+   * reuses a run id, so a later trigger of the same issue, under its own run
+   * id, is unaffected. Permanent for the session, like
+   * {@link forceClearedRunIds}: one short string per cancelled queued run, at
+   * the rate an operator cancels runs.
+   */
+  private readonly cancelledRemoteRunIds = new Set<string>();
+  /**
+   * Paused runs a window reload ended, keyed by the platform run id their
+   * snapshot names, with their issue number (#2339). The held runPipeline()
+   * call died with the extension host, so no slot carries the run; the
+   * snapshot is all that is left, and the window's Resume prompt is the only
+   * way to continue it, as a new run. This window still holds the run for the
+   * platform's verbs, and refuses a resume with that reason instead of
+   * leaving the requester waiting for an expiry. A cancel ends the run
+   * through `end`, which consumes the snapshot.
+   */
+  private readonly reloadInterruptedRuns = new Map<
+    string,
+    { issueNumber: number; end?: () => Promise<void> }
+  >();
 
   /**
    * TOMBSTONES: run identities the abort deadline force-cleared (#307).
@@ -586,6 +673,15 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   private _onSlotsChanged = new vscode.EventEmitter<ActiveSlot[]>();
   readonly onSlotsChanged = this._onSlotsChanged.event;
 
+  /**
+   * Fires with {@link heldRemoteRunIds} whenever that set changes (#2357):
+   * the other windows of the machine read it from the remote-run ledger.
+   */
+  private _onHeldRemoteRunsChanged = new vscode.EventEmitter<string[]>();
+  readonly onHeldRemoteRunsChanged = this._onHeldRemoteRunsChanged.event;
+  /** The last set fired, sorted and joined, so an unchanged set fires nothing. */
+  private lastHeldRemoteRuns = "";
+
   /** Optional WorkspaceManager for resolving cross-repo local paths */
   private workspaceManager: WorkspaceManager | undefined;
 
@@ -615,7 +711,11 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     this.worktreeManager = new WorktreeManager(repoRoot);
     this.workspaceManager = workspaceManager;
 
-    this.disposables.push(this._onSlotsChanged);
+    this.disposables.push(this._onSlotsChanged, this._onHeldRemoteRunsChanged);
+    // The queued platform runs this window lists as held (#2357).
+    if (typeof queueService.onQueueChanged === "function") {
+      this.disposables.push(queueService.onQueueChanged((state) => this.noteQueueState(state)));
+    }
   }
 
   /**
@@ -931,7 +1031,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           available,
           runningItems,
         });
-        const items = await this.queueService.dequeueIndependent(available, runningItems);
+        // A trigger placing its run waits for this dequeue, and this dequeue
+        // for its placement (#2344); the dequeued items are recorded in the
+        // same turn, so the trigger finds them.
+        const items = await this.withQueueTurn(async () => {
+          const dequeued = await this.queueService.dequeueIndependent(available, runningItems);
+          for (const item of dequeued) this.dispatchingItems.add(item);
+          return dequeued;
+        });
 
         if (items.length === 0) {
           this.logger.info(
@@ -951,91 +1058,148 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // cause "could not lock config file" errors. Pipelines still run in
         // parallel after worktree creation (startSlot fires runPromise async).
         for (const item of items) {
-          // Re-check after each async worktree creation — Stop may have been
-          // pressed while we were awaiting the previous startSlot.
-          // These items were marked "processing" by the dequeue and will never
-          // reach a terminal run, so release the mark before abandoning them
-          // (#254) — otherwise a stop leaves them undispatchable forever.
-          if (this.isShuttingDown) {
-            await this.completeQueueItem(item, "shutdown before dispatch");
-            continue;
-          }
-          // #188: per-issue in-flight guard at the dispatch boundary. An
-          // issue with a live slot (or a reservation whose worktree is still
-          // being created) must be skipped by subsequent fills regardless of
-          // how many onItemAdded events fired — the dogfood pr-merge deadlock
-          // double-ran runPipeline within 3s (two pre-flights, overlapping stage
-          // starts, races on the same context files and worktree). Skip
-          // WITHOUT re-enqueueing: the issue is already being worked.
-          if (this.slots.has(item.issueNumber) || this.reservedSlots.has(item.issueNumber)) {
-            this.logger.warn("Skipping duplicate dispatch — issue already in flight (#188)", {
-              issueNumber: item.issueNumber,
-              hasLiveSlot: this.slots.has(item.issueNumber),
-              hasReservation: this.reservedSlots.has(item.issueNumber),
-            });
-            // The live slot's own completion clears ITS mark; this duplicate
-            // dequeue put a second one on and no run will ever clear it (#254).
-            await this.completeQueueItem(item, "duplicate dispatch skipped");
-            continue;
-          }
-          // The ceiling can drop while this batch starts: a workspace throttle
-          // applied during an earlier item's worktree creation (#2337), or a
-          // lower max_concurrent. `available` was read before that, and
-          // reservations keep availableSlotCount exact, so check it again
-          // before each start, and hand an item the old ceiling admitted back
-          // to the queue instead of opening a slot above the new one.
-          if (this.availableSlotCount <= 0) {
-            await this.returnToQueue(item, "dispatch ceiling lowered during the fill");
-            continue;
-          }
-          const outcome = await this.startSlot(item);
-          if (outcome === "started") {
-            totalStarted++;
-          } else if (outcome === "abandoned") {
-            // #307: the abort deadline force-cleared this dispatch while it was
-            // inside worktree creation. It already released this dispatch's
-            // queue mark and told the operator. Re-enqueueing here would undo
-            // the stop they asked for, and `completeQueueItem` would clear a
-            // mark that may now belong to a successor.
-            this.logger.info("Dispatch abandoned by the abort deadline — not re-enqueued (#307)", {
-              issueNumber: item.issueNumber,
-            });
-          } else {
-            // Re-enqueue failed items so they aren't lost.
-            // Set fillAgain so the do-while loop re-dequeues after this batch
-            // completes — without this, re-enqueued items sit in the queue
-            // until the next external event (slot completion, etc.) and can
-            // be silently lost if no further events fire. See Issue #2359.
-            try {
-              // Clear the dispatch's "processing" mark FIRST (#254). The
-              // re-enqueue below adds a fresh pending item; leaving the old
-              // mark in place would keep both, and the processing one makes
-              // the issue undispatchable — so the re-enqueue would be inert.
-              await this.completeQueueItem(item, "slot start failed");
-              await this.queueService.enqueue(item.issueNumber, item.title, item.labels);
-              this.fillAgain = true;
-              this.logger.info("Re-enqueued item after slot start failure", {
+          try {
+            // Re-check after each async worktree creation — Stop may have been
+            // pressed while we were awaiting the previous startSlot.
+            // These items were marked "processing" by the dequeue and will never
+            // reach a terminal run, so release the mark before abandoning them
+            // (#254) — otherwise a stop leaves them undispatchable forever.
+            if (this.isShuttingDown) {
+              await this.completeQueueItem(item, "shutdown before dispatch");
+              continue;
+            }
+            // #188: per-issue in-flight guard at the dispatch boundary. An
+            // issue with a live slot (or a reservation whose worktree is still
+            // being created) must be skipped by subsequent fills regardless of
+            // how many onItemAdded events fired — the dogfood pr-merge deadlock
+            // double-ran runPipeline within 3s (two pre-flights, overlapping stage
+            // starts, races on the same context files and worktree). Skip
+            // WITHOUT re-enqueueing: the issue is already being worked.
+            if (this.slots.has(item.issueNumber) || this.reservedSlots.has(item.issueNumber)) {
+              this.logger.warn("Skipping duplicate dispatch — issue already in flight (#188)", {
                 issueNumber: item.issueNumber,
-                fillAgain: true,
+                hasLiveSlot: this.slots.has(item.issueNumber),
+                hasReservation: this.reservedSlots.has(item.issueNumber),
               });
-            } catch (err) {
-              const reEnqueueError = err instanceof Error ? err : new Error(String(err));
-              this.logger.error("Failed to re-enqueue item after slot failure", {
-                issueNumber: item.issueNumber,
-                error: reEnqueueError.message,
-                stack: reEnqueueError.stack,
-              });
+              // The live slot's own completion clears ITS mark; this duplicate
+              // dequeue put a second one on and no run will ever clear it (#254).
+              await this.completeQueueItem(item, "duplicate dispatch skipped");
+              continue;
+            }
+            // The platform cancelled this item's remote run while it waited for
+            // an earlier start in this batch, or before the dequeue (#2344). A
+            // run attached to the operator's own item only leaves it. Checked
+            // before the ceiling, so a cancelled run is never handed back to
+            // the queue, which outlives the tombstone across a reload.
+            if (this.isCancelledRemoteRun(item) && !this.detachCancelledRemoteRun(item)) {
+              await this.dropCancelledRemoteRun(
+                item,
+                "cancelled by the platform before its slot opened"
+              );
+              continue;
+            }
+            // The ceiling can drop while this batch starts: a workspace throttle
+            // applied during an earlier item's worktree creation (#2337), or a
+            // lower max_concurrent. `available` was read before that, and
+            // reservations keep availableSlotCount exact, so check it again
+            // before each start, and hand an item the old ceiling admitted back
+            // to the queue instead of opening a slot above the new one.
+            if (this.availableSlotCount <= 0) {
+              await this.returnToQueue(item, "dispatch ceiling lowered during the fill");
+              continue;
+            }
+            const outcome = await this.startSlot(item);
+            if (outcome === "started") {
+              totalStarted++;
+            } else if (outcome === "cancelled") {
+              // The start tore down what it built and reported the cancellation
+              // (#2344); release the dispatch's queue mark, and never re-enqueue.
+              await this.dropCancelledRemoteRun(
+                item,
+                "cancelled by the platform while its slot was prepared"
+              );
+            } else if (outcome === "abandoned") {
+              // #307: the abort deadline force-cleared this dispatch while it was
+              // inside worktree creation. It already released this dispatch's
+              // queue mark and told the operator. Re-enqueueing here would undo
+              // the stop they asked for, and `completeQueueItem` would clear a
+              // mark that may now belong to a successor.
+              this.logger.info(
+                "Dispatch abandoned by the abort deadline — not re-enqueued (#307)",
+                {
+                  issueNumber: item.issueNumber,
+                }
+              );
+            } else if (this.isCancelledRemoteRun(item) && !this.detachCancelledRemoteRun(item)) {
+              // The platform cancelled the run while its start failed (#2344):
+              // it is dropped, never queued again under its run id.
+              await this.dropCancelledRemoteRun(
+                item,
+                "cancelled by the platform while its slot failed to start"
+              );
+            } else {
+              // Re-enqueue failed items so they aren't lost.
+              // Set fillAgain so the do-while loop re-dequeues after this batch
+              // completes — without this, re-enqueued items sit in the queue
+              // until the next external event (slot completion, etc.) and can
+              // be silently lost if no further events fire. See Issue #2359.
               try {
-                this.callbacks.onReEnqueueFailed?.(item.issueNumber, reEnqueueError);
-              } catch {
-                // Never let a callback error break the fill loop.
+                // Clear the dispatch's "processing" mark FIRST (#254). The
+                // re-enqueue below adds a fresh pending item; leaving the old
+                // mark in place would keep both, and the processing one makes
+                // the issue undispatchable — so the re-enqueue would be inert.
+                await this.completeQueueItem(item, "slot start failed");
+                if (item.remoteRunId) {
+                  // A remote run goes back as the run it is (#2344): under its
+                  // repository and platform run id, so the slot that opens for
+                  // it later still serves it and the platform's verbs reach it.
+                  await this.queueService.enqueue(
+                    item.issueNumber,
+                    item.title,
+                    item.labels,
+                    undefined,
+                    this.requeueOptions(item)
+                  );
+                  // A cancel that arrived while it went back takes it out again.
+                  if (this.isCancelledRemoteRun(item)) {
+                    await this.unqueueCancelledRemoteRun(item.remoteRunId);
+                  }
+                } else {
+                  await this.queueService.enqueue(item.issueNumber, item.title, item.labels);
+                }
+                this.fillAgain = true;
+                this.logger.info("Re-enqueued item after slot start failure", {
+                  issueNumber: item.issueNumber,
+                  fillAgain: true,
+                });
+              } catch (err) {
+                const reEnqueueError = err instanceof Error ? err : new Error(String(err));
+                this.logger.error("Failed to re-enqueue item after slot failure", {
+                  issueNumber: item.issueNumber,
+                  error: reEnqueueError.message,
+                  stack: reEnqueueError.stack,
+                });
+                try {
+                  this.callbacks.onReEnqueueFailed?.(item.issueNumber, reEnqueueError);
+                } catch {
+                  // Never let a callback error break the fill loop.
+                }
               }
             }
+          } finally {
+            // Its slot opened, or the dispatch released it (#2344).
+            this.dispatchingItems.delete(item);
           }
         }
       } while (this.fillAgain && !this.isShuttingDown);
     } finally {
       this.isFilling = false;
+      // Every dispatch of this fill opened its slot or ended; an item a
+      // thrown iteration never reached is not on its way to a slot either.
+      if (this.dispatchingItems.size > 0) {
+        this.dispatchingItems.clear();
+        this.noteHeldRemoteRuns();
+      }
     }
 
     return totalStarted;
@@ -1088,28 +1252,35 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * Put an item this fill dequeued back in the queue without starting it
    * (#2337): its "processing" mark is cleared and it is queued again, behind
    * what is already waiting, under the repository, platform run id and
-   * requested adapter and model it was dequeued with. Its pending platform run
-   * id stays in {@link pendingRemoteRunIds}, so the slot that opens for it
-   * later still adopts it. A failure to queue it again is reported like the
-   * one after a failed slot start.
+   * requested adapter and model it was dequeued with, so the slot that opens
+   * for it later still serves the same remote run. A failure to queue it
+   * again is reported like the one after a failed slot start.
    */
   private async returnToQueue(item: QueueItem, reason: string): Promise<void> {
     await this.completeQueueItem(item, reason);
-    const [owner, repo] = item.repoName?.split("/") ?? [];
+    // The platform may cancel the run while it goes back (#2344): a
+    // cancelled run is not queued again, and one cancelled during the
+    // enqueue is taken back out, since the queue outlives the tombstone.
+    if (this.isCancelledRemoteRun(item) && !this.detachCancelledRemoteRun(item)) {
+      this.logger.info("Dropped a remote run the platform cancelled on its way back to the queue", {
+        issueNumber: item.issueNumber,
+        repo: item.repoName ?? "",
+        remoteRunId: item.remoteRunId,
+        reason,
+      });
+      return;
+    }
     try {
       const queued = await this.queueService.enqueue(
         item.issueNumber,
         item.title,
         item.labels,
         undefined,
-        {
-          ...(owner && repo ? { repoOverride: { owner, repo } } : {}),
-          remoteRunId: this.pendingRemoteRunIds.get(item.issueNumber),
-          ...(item.requestedAdapter
-            ? { requestedAdapter: item.requestedAdapter, requestedModel: item.requestedModel }
-            : {}),
-        }
+        this.requeueOptions(item)
       );
+      if (item.remoteRunId !== undefined && this.isCancelledRemoteRun(item)) {
+        await this.unqueueCancelledRemoteRun(item.remoteRunId);
+      }
       this.logger.info("Returned a dequeued item to the queue", {
         issueNumber: item.issueNumber,
         repo: item.repoName ?? "",
@@ -1129,6 +1300,74 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // Never let a callback error break the fill loop.
       }
     }
+  }
+
+  /**
+   * The enqueue options that queue a dequeued item again as it was: under
+   * its repository, the platform run id it serves (#2344) and its requested
+   * adapter and model (#1656). Without them a re-queued remote run would
+   * start under no run id, so the platform's verbs could not reach it.
+   */
+  private requeueOptions(item: QueueItem): Parameters<IssueQueueService["enqueue"]>[4] {
+    const [owner, repo] = item.repoName?.split("/") ?? [];
+    return {
+      ...(owner && repo ? { repoOverride: { owner, repo } } : {}),
+      ...(item.remoteRunId ? { remoteRunId: item.remoteRunId } : {}),
+      ...(item.remoteRunId && item.remoteRunAttached ? { remoteRunAttached: true } : {}),
+      ...(item.requestedAdapter
+        ? { requestedAdapter: item.requestedAdapter, requestedModel: item.requestedModel }
+        : {}),
+    };
+  }
+
+  /** Whether the platform cancelled the remote run this item serves (#2344). */
+  private isCancelledRemoteRun(item: QueueItem): boolean {
+    return item.remoteRunId !== undefined && this.cancelledRemoteRunIds.has(item.remoteRunId);
+  }
+
+  /**
+   * Detach a cancelled remote run from the operator's own item it was
+   * attached to (#2344), and from the reservation of its dispatch. Returns
+   * false when the item is the run's own, which the dispatch drops instead.
+   */
+  private detachCancelledRemoteRun(item: QueueItem, reservation?: SlotReservation): boolean {
+    if (!item.remoteRunAttached) return false;
+    const remoteRunId = item.remoteRunId;
+    this.detachRemoteRun(item, reservation ?? this.reservedSlots.get(item.issueNumber));
+    this.logger.info("Detached a cancelled remote run from the operator's queued item", {
+      issueNumber: item.issueNumber,
+      repo: item.repoName ?? "",
+      remoteRunId,
+    });
+    return true;
+  }
+
+  /** Clear the remote run an item, and its dispatch's reservation, serve. */
+  private detachRemoteRun(item: QueueItem, reservation: SlotReservation | undefined): void {
+    if (reservation && reservation.remoteRunId === item.remoteRunId) {
+      delete reservation.remoteRunId;
+    }
+    delete item.remoteRunId;
+    delete item.remoteRunAttached;
+    this.noteHeldRemoteRuns();
+  }
+
+  /**
+   * Drop a dequeued item whose remote run the platform cancelled before its
+   * slot opened (#2344): its "processing" mark is released, it is not queued
+   * again, and the fill runs once more for the capacity it would have taken.
+   */
+  private async dropCancelledRemoteRun(item: QueueItem, reason: string): Promise<void> {
+    if (item.remoteRunId !== undefined) this.acceptedRemoteRuns.delete(item.remoteRunId);
+    this.noteHeldRemoteRuns();
+    this.logger.info("Dropped a remote run the platform cancelled before its slot opened", {
+      issueNumber: item.issueNumber,
+      repo: item.repoName ?? "",
+      remoteRunId: item.remoteRunId,
+      reason,
+    });
+    await this.completeQueueItem(item, reason);
+    this.fillAgain = true;
   }
 
   /**
@@ -1198,8 +1437,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       index: slotIndex,
       repo: item.repoName ?? "",
       runId,
+      ...(item.remoteRunId ? { remoteRunId: item.remoteRunId } : {}),
     };
     this.reservedSlots.set(item.issueNumber, reservation);
+    this.noteHeldRemoteRuns();
     let reservationReleased = false;
     const releaseReservation = () => {
       if (reservationReleased) return;
@@ -1211,6 +1452,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // duplicate-dispatch guard and the per-repo concurrency cap correct.
       if (this.reservedSlots.get(item.issueNumber)?.runId === runId) {
         this.reservedSlots.delete(item.issueNumber);
+        this.noteHeldRemoteRuns();
       }
     };
     try {
@@ -1396,12 +1638,15 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     }
 
     // Detect epic branch for sub-issues so the worktree branches from the
-    // epic branch (with main merged in) instead of bare main.
+    // epic branch (with main merged in) instead of bare main. Only an epic in
+    // the item's own repository has one there: epic/<N>-* in another
+    // repository is the branch of that repository's own #N (#2377).
     let baseBranch: string | undefined;
-    if (item.epicNumber) {
+    const localEpicNumber = epicBranchParent(item.repoName, item.epicNumber, item.epicRepo);
+    if (localEpicNumber) {
       try {
         const { stdout } = await execAsync(
-          `git ls-remote --heads origin "epic/${item.epicNumber}-*" | head -1 | awk '{print $2}' | sed 's|refs/heads/||'`,
+          `git ls-remote --heads origin "epic/${localEpicNumber}-*" | head -1 | awk '{print $2}' | sed 's|refs/heads/||'`,
           { cwd: slotWorktreeManager.getRepoRoot(), timeout: 15_000 }
         );
         const epicBranch = stdout.trim();
@@ -1409,13 +1654,22 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           baseBranch = epicBranch;
           this.logger.info("Epic branch detected for sub-issue worktree", {
             issueNumber: item.issueNumber,
-            epicNumber: item.epicNumber,
+            epicNumber: localEpicNumber,
             epicBranch,
           });
         }
       } catch {
         // Non-critical — fall back to main
       }
+    } else if (item.epicNumber) {
+      this.logger.info(
+        "Sub-issue's epic lives in another repository — worktree uses the default branch",
+        {
+          issueNumber: item.issueNumber,
+          repo: item.repoName,
+          epic: `${item.epicRepo}#${item.epicNumber}`,
+        }
+      );
     }
 
     this.logger.info("Starting concurrent pipeline slot", {
@@ -1573,14 +1827,41 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // no claim race to lose (unlike the singleton mint sites, which resolve
     // before their check for exactly that reason).
     const slotRepoSlug = await this.resolveSlotRepoSlug(item, slotWorktreeManager, orchestrator);
+    // The last await before the slot opens. A platform cancel of the remote
+    // run this dispatch serves (#2344) tombstones the run id in one tick, and
+    // the slot opens below in one tick, so checking here means no slot opens
+    // for a run cancelled at any point before this. A run attached to the
+    // operator's own item is detached instead, and the item runs as queued.
+    if (this.isCancelledRemoteRun(item) && !this.detachCancelledRemoteRun(item, reservation)) {
+      this.logger.info("Platform cancel arrived while the slot was prepared — not starting it", {
+        issueNumber: item.issueNumber,
+        remoteRunId: item.remoteRunId,
+      });
+      try {
+        orchestrator.dispose();
+        stateService.dispose();
+      } catch {
+        // Best effort: nothing has run on them.
+      }
+      try {
+        await slotWorktreeManager.cleanup(item.issueNumber, true);
+      } catch {
+        // Best effort cleanup
+      }
+      this.claimReservationOutcome(reservation, () =>
+        this.callbacks.onSlotFailed?.(
+          slotIndex,
+          item.issueNumber,
+          new Error(`Cancelled by user`),
+          0, // no pipeline ran — there is no spend to report
+          item.repoName
+        )
+      );
+      return "cancelled";
+    }
     // #1656: the trigger's platform run id rides on the run so Go records that
     // trigger's remote run request pin on this run and on no other.
-    stateService.beginRun(
-      runId,
-      slotRepoSlug,
-      item.issueNumber,
-      this.pendingRemoteRunIds.get(item.issueNumber)
-    );
+    stateService.beginRun(runId, slotRepoSlug, item.issueNumber, item.remoteRunId);
     // Issue #3704: seed _lastState so updateTokens() does not no-op before
     // any IPC pipeline.notifyStageTransition fires for this worktree slot.
     stateService.initEmpty();
@@ -1610,10 +1891,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // Capture the slot's worktreeManager so cleanup uses the correct repo
     // even if updateRepoRoot() is called while this slot is running.
     // For cross-repo items, this is the target repo's manager (not this.worktreeManager).
-    const pendingRemoteRunId = this.pendingRemoteRunIds.get(item.issueNumber);
-    if (pendingRemoteRunId !== undefined) {
-      this.pendingRemoteRunIds.delete(item.issueNumber);
-    }
+    // The slot serves the remote run its queue item carries (#2344); from
+    // here the slot holds the run, not the accepted trigger.
+    if (item.remoteRunId !== undefined) this.acceptedRemoteRuns.delete(item.remoteRunId);
 
     const slot: PipelineSlot = {
       index: slotIndex,
@@ -1628,7 +1908,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       stateService,
       startedAt: new Date().toISOString(),
       epicOrder: item.epicOrder,
-      remoteRunId: pendingRemoteRunId,
+      remoteRunId: item.remoteRunId,
       requestedPin: item.requestedAdapter
         ? { adapter: item.requestedAdapter, model: item.requestedModel }
         : undefined,
@@ -3197,7 +3477,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // no longer holds it, and must not answer the platform's verbs for it
     // (#2340). A dispatch already creating its worktree is refused by the
     // shutdown check before its slot would adopt the id.
-    this.pendingRemoteRunIds.clear();
+    this.acceptedRemoteRuns.clear();
+    this.noteHeldRemoteRuns();
 
     // Stop all running orchestrators. Mark each slot as user-cancelled BEFORE
     // issuing the stop so the slot's runSlot completion handler treats the
@@ -3799,29 +4080,176 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
-   * Store a pending PLATFORM run id for an issue before fillSlots() creates
-   * the slot. Applied to {@link PipelineSlot.remoteRunId} when startSlot()
-   * creates the PipelineSlot for that issueNumber.
-   *
-   * NOT this run's identity (ADR-017 Decision 2). The dispatch mints its own
-   * UUIDv7 in `startSlot`; this value comes from the dashboard trigger's ack
-   * and exists only so the platform's cancel/approve/reject commands — which
-   * address a run by the id THEY minted — reach the right slot.
-   * @see Issue #3552 — cancel command handler
+   * Why a trigger for this issue cannot be served here, checked before its
+   * ack (#2344): "running" when the issue's slot is open, "busy" when the
+   * issue is queued or on its way to a slot here for another platform run,
+   * or was taken from the queue by something other than this window's
+   * dispatch. Null when the trigger can be placed. Read in the queue turn, so
+   * a fill's dequeue is either visible in full or not yet made. A queue that
+   * cannot be read refuses nothing; {@link placeRemoteRun} decides again
+   * after the ack.
    */
-  setPendingRemoteRunId(issueNumber: number, remoteRunId: string): void {
-    this.pendingRemoteRunIds.set(issueNumber, remoteRunId);
+  async remoteTriggerConflict(
+    issueNumber: number,
+    repo: string
+  ): Promise<"running" | "busy" | null> {
+    return this.withQueueTurn(async () => {
+      const local = this.dispatchFor(issueNumber, repo);
+      if (local === "running") return "running";
+      if (local !== null) return local.remoteRunId !== undefined ? "busy" : null;
+      let queue: Awaited<ReturnType<IssueQueueService["getQueue"]>>;
+      try {
+        queue = await this.queueService.getQueue();
+      } catch {
+        return null;
+      }
+      this.noteQueueState(queue);
+      const queued = queue?.items.find(
+        (item) => item.issueNumber === issueNumber && sameRepo(item.repoName, repo)
+      );
+      if (!queued) return null;
+      return queued.remoteRunId || queued.status === "processing" ? "busy" : null;
+    });
   }
 
   /**
-   * Drop a pending platform run id that will never be consumed because the
-   * dispatch was abandoned before a slot opened (e.g. an enqueue refused by
-   * the stop guard after the ack already returned one). Leaving it set would
-   * let a future, unrelated dispatch of the same issueNumber wrongly adopt it.
+   * Place the PLATFORM run whose trigger this window acked (#2340, #2344):
+   * attach it to the issue's dispatch already on its way to a slot here, or
+   * queue it through `enqueue`, under the run id. Decided in one queue turn,
+   * so no fill can take the issue between the decision and the enqueue.
+   *
+   * - "attached": the issue's dispatch, which the operator queued, serves the
+   *   run; its slot adopts the run id.
+   * - "queued": the queue carries the run, on a new item or attached to the
+   *   operator's item already waiting for the issue (Go's QueueAddItem).
+   * - "running": the issue's slot opened without it, so it cannot serve the
+   *   run (the trigger raced the slot).
+   * - "busy": the issue is queued or dispatched here for another remote run.
+   * - "not-queued": `enqueue` refused (resolved false) or the queue would not
+   *   take it.
+   * - "cancelled": the platform cancelled the run before it was placed.
+   *
+   * This window holds the run from the moment this is called, right after
+   * the ack (#2357): the run is recorded as accepted before the queue turn
+   * is awaited, and a fill's dequeue can hold that turn for as long as Go
+   * takes to read the issues' blockers. A platform verb that arrives
+   * meanwhile is this window's to answer: a cancel tombstones the run and
+   * applies, and the placement then queues nothing. A cancel that arrives
+   * while the enqueue is in flight finds nothing queued to remove yet, so
+   * the placement takes the run back out of the queue itself.
+   *
+   * The run id is NOT this run's identity (ADR-017 Decision 2). The dispatch
+   * mints its own UUIDv7 in `startSlot`; this value comes from the trigger's
+   * ack and exists only so the platform's verbs, which address a run by the
+   * id THEY minted, reach the right run. `enqueue` may throw; the run is then
+   * not held here.
+   * @see Issue #3552 — cancel command handler
    * @see Issue #4118 — dashboard trigger enqueue path
    */
-  clearPendingRemoteRunId(issueNumber: number): void {
-    this.pendingRemoteRunIds.delete(issueNumber);
+  async placeRemoteRun(
+    run: { remoteRunId: string; issueNumber: number; repo: string },
+    enqueue: () => Promise<boolean>
+  ): Promise<"attached" | "queued" | "running" | "busy" | "not-queued" | "cancelled"> {
+    // No await before this: the window holds the run from the ack on.
+    this.acceptedRemoteRuns.set(run.remoteRunId, {
+      issueNumber: run.issueNumber,
+      repo: run.repo,
+    });
+    this.noteHeldRemoteRuns();
+    try {
+      return await this.withQueueTurn(async () => {
+        if (this.cancelledRemoteRunIds.has(run.remoteRunId)) return "cancelled";
+        const local = this.dispatchFor(run.issueNumber, run.repo);
+        if (local === "running") {
+          // A copy of a trigger whose run the slot already serves is placed.
+          return this.findSlotByRemoteRunId(run.remoteRunId) !== null ? "attached" : "running";
+        }
+        if (local !== null) {
+          if (local.remoteRunId !== undefined) {
+            return local.remoteRunId === run.remoteRunId ? "attached" : "busy";
+          }
+          local.remoteRunId = run.remoteRunId;
+          local.remoteRunAttached = true;
+          const reservation = this.reservedSlots.get(local.issueNumber);
+          if (reservation && sameRepo(reservation.repo, run.repo) && !reservation.remoteRunId) {
+            reservation.remoteRunId = run.remoteRunId;
+          }
+          this.noteHeldRemoteRuns();
+          this.logger.info("Attached a platform run to the issue's dispatch already under way", {
+            issueNumber: run.issueNumber,
+            repo: run.repo,
+            remoteRunId: run.remoteRunId,
+          });
+          return "attached";
+        }
+        if (!(await enqueue())) return "not-queued";
+        if (this.cancelledRemoteRunIds.has(run.remoteRunId)) {
+          await this.unqueueCancelledRemoteRun(run.remoteRunId);
+          return "cancelled";
+        }
+        let queue: Awaited<ReturnType<IssueQueueService["getQueue"]>>;
+        try {
+          queue = await this.queueService.getQueue();
+        } catch {
+          // Unknown: the enqueue succeeded, so the queue most likely has it.
+          return "queued";
+        }
+        this.noteQueueState(queue);
+        // The queue skips an issue it already holds; only the issue's item
+        // tells whether this run is on it.
+        const queued = queue?.items.some((item) => item.remoteRunId === run.remoteRunId) ?? false;
+        return queued ? "queued" : "busy";
+      });
+    } finally {
+      // Placed or not, the run is no longer in transit: the queue or the
+      // issue's dispatch carries it now, or nothing here serves it.
+      this.acceptedRemoteRuns.delete(run.remoteRunId);
+      this.noteHeldRemoteRuns();
+    }
+  }
+
+  /**
+   * Take a cancelled remote run back out of the queue (#2344), where an
+   * enqueue that was in flight when the cancel arrived put it. The
+   * tombstone keeps this window's fills from starting it, but the queue
+   * outlives a window reload, and the tombstone does not. Best effort.
+   */
+  private async unqueueCancelledRemoteRun(remoteRunId: string): Promise<void> {
+    try {
+      await this.queueService.removeRemoteRun(remoteRunId);
+    } catch (err) {
+      this.logger.warn(
+        "Could not take a cancelled remote run back out of the queue — this window's dispatch still drops it",
+        { remoteRunId, err: err instanceof Error ? err.message : String(err) }
+      );
+    }
+  }
+
+  /**
+   * The issue's slot ("running") or its dispatch on the way to a slot here,
+   * if either exists (#2344).
+   */
+  private dispatchFor(issueNumber: number, repo: string): "running" | QueueItem | null {
+    for (const slot of this.slots.values()) {
+      if (slot.issueNumber === issueNumber && sameRepo(slot.repo, repo)) return "running";
+    }
+    for (const item of this.dispatchingItems) {
+      if (item.issueNumber === issueNumber && sameRepo(item.repoName, repo)) return item;
+    }
+    return null;
+  }
+
+  /** Run `fn` in the queue turn a fill's dequeue also takes (#2344). */
+  private async withQueueTurn<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.queueTurn;
+    let release!: () => void;
+    this.queueTurn = new Promise<void>((resolve) => (release = resolve));
+    try {
+      await previous;
+      return await fn();
+    } finally {
+      release();
+    }
   }
 
   /**
@@ -3842,8 +4270,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
   /**
    * Whether this window holds the run the platform's run id names (#2340): a
-   * slot carries the id, or this window accepted the run's trigger and the
-   * run is still queued here (its pending id is applied when the slot opens).
+   * slot carries the id, a dispatch creating its worktree serves it, or this
+   * window's queue holds an item queued for it (#2344), waiting or dequeued
+   * by a fill.
    *
    * The platform sends a verb to every connection that shares the agent id,
    * so several windows on one machine all receive it, and the first ack ends
@@ -3851,60 +4280,226 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * ack from another window would race the holder's, and a `rejected` pause
    * or resume makes the platform undo a hold the holder applied.
    *
-   * An accepted trigger is held only while its issue is still on its way to
-   * a slot: in the queue (waiting, or dequeued by a fill), or reserved while
-   * its worktree is created. An issue removed from the queue since (Clear
-   * Queue, Remove from Queue, a halt's drain) will never start here, so the
-   * window does not claim the run. When the queue cannot be read, the
-   * accepted trigger keeps its claim.
+   * A triggered run is held only while its item is still on its way to a
+   * slot. An item removed from the queue since (Clear Queue, Remove from
+   * Queue, a halt's drain) will never start here, so the window does not
+   * claim the run. The queue carries the run id, so a window holds a queued
+   * run after a reload too. When the queue cannot be read, its latest known
+   * state decides.
    */
   async holdsRemoteRun(remoteRunId: string): Promise<boolean> {
-    if (this.findSlotByRemoteRunId(remoteRunId) !== null) return true;
-    const issueNumber = this.pendingIssueFor(remoteRunId);
-    if (issueNumber === null) return false;
-    if (this.reservedSlots.has(issueNumber)) return true;
+    if (this.holdsRemoteRunNow(remoteRunId)) return true;
     try {
-      const queue = await this.queueService.getQueue();
-      return queue?.items.some((item) => item.issueNumber === issueNumber) ?? false;
+      if (await this.isRemoteRunQueued(remoteRunId)) return true;
     } catch (err) {
-      this.logger.warn("holdsRemoteRun: could not read the queue — keeping the trigger's claim", {
+      this.logger.warn("holdsRemoteRun: could not read the queue — using its latest state", {
         remoteRunId,
-        issueNumber,
         err: err instanceof Error ? err.message : String(err),
       });
-      return true;
+      return this.queuedRemoteRunIds.has(remoteRunId) || this.holdsRemoteRunNow(remoteRunId);
     }
-  }
-
-  /** The issue whose accepted trigger carries this platform run id, with no slot yet. */
-  private pendingIssueFor(remoteRunId: string): number | null {
-    for (const [issueNumber, pending] of this.pendingRemoteRunIds) {
-      if (pending === remoteRunId) return issueNumber;
-    }
-    return null;
-  }
-
-  /** Whether a trigger this window accepted is queued for the run, with no slot yet. */
-  private isQueuedRemoteRun(remoteRunId: string): boolean {
-    return this.pendingIssueFor(remoteRunId) !== null;
-  }
-
-  /** Why a verb found no slot for the run: still queued here, or not here at all. */
-  private noSlotFor(remoteRunId: string): RemoteVerbResult {
-    return this.isQueuedRemoteRun(remoteRunId) ? "not-started" : "no-active-run";
+    // The slot may have opened while the queue was read.
+    return this.holdsRemoteRunNow(remoteRunId);
   }
 
   /**
-   * Cancel the pipeline slot identified by the platform's run id.
-   * Sets userCancelled=true so the slot completion handler suppresses failure
-   * bookkeeping, then calls gracefulStop(SIGTERM → 10s → SIGKILL).
+   * A slot carries the run, a dispatch on its way to a slot serves it, its
+   * trigger is being queued here, or it is a paused run a reload ended here
+   * (#2339).
+   */
+  private holdsRemoteRunNow(remoteRunId: string): boolean {
+    return (
+      this.findSlotByRemoteRunId(remoteRunId) !== null ||
+      this.reservationFor(remoteRunId) !== undefined ||
+      this.dispatchingItemFor(remoteRunId) !== undefined ||
+      this.acceptedRemoteRuns.has(remoteRunId) ||
+      this.reloadInterruptedRuns.has(remoteRunId)
+    );
+  }
+
+  /** The dispatched item that serves this platform run, if one is on its way to a slot. */
+  private dispatchingItemFor(remoteRunId: string): QueueItem | undefined {
+    for (const item of this.dispatchingItems) {
+      if (item.remoteRunId === remoteRunId) return item;
+    }
+    return undefined;
+  }
+
+  /**
+   * Hold a paused run a window reload ended (#2339): its paused snapshot
+   * names the platform run id, and no live process owns it any more. `end`
+   * consumes the snapshot when the platform cancels the run.
+   */
+  holdReloadInterruptedRun(
+    remoteRunId: string,
+    issueNumber: number,
+    end?: () => Promise<void>
+  ): void {
+    this.reloadInterruptedRuns.set(remoteRunId, { issueNumber, ...(end ? { end } : {}) });
+    this.noteHeldRemoteRuns();
+  }
+
+  /** The window's Resume prompt consumed the snapshot: the run is no longer held. */
+  dropReloadInterruptedRun(remoteRunId: string): void {
+    if (this.reloadInterruptedRuns.delete(remoteRunId)) this.noteHeldRemoteRuns();
+  }
+
+  /** The reservation of the dispatch that serves this platform run, if one is in flight. */
+  private reservationFor(remoteRunId: string): SlotReservation | undefined {
+    for (const reservation of this.reservedSlots.values()) {
+      if (reservation.remoteRunId === remoteRunId) return reservation;
+    }
+    return undefined;
+  }
+
+  /** Whether this window's queue holds an item queued for the run, waiting or dequeued. */
+  private async isRemoteRunQueued(remoteRunId: string): Promise<boolean> {
+    const queue = await this.queueService.getQueue();
+    this.noteQueueState(queue);
+    return queue?.items.some((item) => item.remoteRunId === remoteRunId) ?? false;
+  }
+
+  /**
+   * Record the platform runs a queue state carries (#2357), unless a later
+   * state was recorded already: the daemon announces queue changes
+   * concurrently, so an older state can arrive after a newer one.
+   */
+  private noteQueueState(state: Awaited<ReturnType<IssueQueueService["getQueue"]>>): void {
+    if (!state) return;
+    const at = Date.parse(state.updated_at ?? "");
+    if (Number.isFinite(at)) {
+      if (at < this.queuedRemoteRunIdsAt) return;
+      this.queuedRemoteRunIdsAt = at;
+    }
+    const ids = new Set<string>();
+    for (const item of state.items ?? []) if (item.remoteRunId) ids.add(item.remoteRunId);
+    this.queuedRemoteRunIds = ids;
+    this.noteHeldRemoteRuns();
+  }
+
+  /**
+   * Read the queue once, so the runs it carries are listed as held (#2357):
+   * at activation the queue persisted from before a reload can carry runs
+   * that no queue change has announced yet. A queue that cannot be read
+   * changes nothing.
+   */
+  async syncQueuedRemoteRuns(): Promise<void> {
+    try {
+      this.noteQueueState(await this.queueService.getQueue());
+    } catch (err) {
+      this.logger.debug("syncQueuedRemoteRuns: could not read the queue", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Why a pause or resume found no slot for the run: it is still on its way
+   * to one here, or it is not here at all. A run cancelled before its slot
+   * opened is not here any more.
+   */
+  private async noSlotFor(remoteRunId: string): Promise<RemoteVerbResult> {
+    if (this.cancelledRemoteRunIds.has(remoteRunId)) return "no-active-run";
+    if (this.reservationFor(remoteRunId) !== undefined) return "not-started";
+    if (this.dispatchingItemFor(remoteRunId) !== undefined) return "not-started";
+    if (this.acceptedRemoteRuns.has(remoteRunId)) return "not-started";
+    try {
+      if (await this.isRemoteRunQueued(remoteRunId)) return "not-started";
+    } catch {
+      if (this.queuedRemoteRunIds.has(remoteRunId)) return "not-started";
+    }
+    return "no-active-run";
+  }
+
+  /**
+   * Cancel the run the platform's run id names.
+   *
+   * A slot carrying it is stopped: userCancelled=true so the slot completion
+   * handler suppresses failure bookkeeping, then gracefulStop(SIGTERM → 10s
+   * → SIGKILL).
+   *
+   * A run still on its way to a slot (#2344) is tombstoned first, in the same
+   * tick the slot was found missing, so no slot can open for it afterwards:
+   * the dispatch path drops an item whose run id is tombstoned, wherever the
+   * item is. Its item is then removed from the queue when no fill has taken
+   * it yet. Applied when the run was queued here or its slot was being
+   * prepared; "no-active-run" when it is not here at all.
    * @see Issue #3552 — cancel command handler
    */
   async cancelByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
-    if (!slot) return this.noSlotFor(remoteRunId);
-    slot.userCancelled = true;
-    await slot.orchestrator.gracefulStop(10_000);
+    if (slot) {
+      slot.userCancelled = true;
+      await slot.orchestrator.gracefulStop(10_000);
+      return "applied";
+    }
+    // A paused run a reload ended: nothing runs to stop, and cancelling it
+    // consumes its paused snapshot, so it ends here (#2339).
+    const interrupted = this.reloadInterruptedRuns.get(remoteRunId);
+    if (interrupted) return this.endReloadInterruptedRun(remoteRunId, interrupted);
+    // No await between the lookup above and the tombstone below.
+    this.cancelledRemoteRunIds.add(remoteRunId);
+    const dispatching = this.dispatchingItemFor(remoteRunId);
+    const preparing = dispatching !== undefined || this.reservationFor(remoteRunId) !== undefined;
+    // A run attached to the operator's own dispatch leaves it at once; the
+    // dispatch goes on as the operator queued it.
+    if (dispatching?.remoteRunAttached) {
+      this.detachCancelledRemoteRun(dispatching);
+    }
+    const accepted = this.acceptedRemoteRuns.delete(remoteRunId);
+    this.noteHeldRemoteRuns();
+    let removed = false;
+    try {
+      removed = await this.queueService.removeRemoteRun(remoteRunId);
+    } catch (err) {
+      this.logger.warn(
+        "cancelByRemoteRunId: could not remove the queued item — the dispatch drops it",
+        {
+          remoteRunId,
+          err: err instanceof Error ? err.message : String(err),
+        }
+      );
+    }
+    let dequeued = false;
+    if (!preparing && !accepted && !removed) {
+      try {
+        dequeued = await this.isRemoteRunQueued(remoteRunId);
+      } catch {
+        // Unknown: the tombstone still keeps a slot from opening for it.
+      }
+    }
+    if (!preparing && !accepted && !removed && !dequeued) return "no-active-run";
+    this.logger.info("Cancelled a remote run before its slot opened", {
+      remoteRunId,
+      removedFromQueue: removed,
+      preparing,
+    });
+    return "applied";
+  }
+
+  /**
+   * End a paused run a reload ended, for a platform cancel (#2339): the hold
+   * is dropped and `end` consumes its paused snapshot, so neither the
+   * window's Resume prompt nor a later activation brings it back. A snapshot
+   * that cannot be consumed keeps the hold, and the cancel fails.
+   */
+  private async endReloadInterruptedRun(
+    remoteRunId: string,
+    held: { issueNumber: number; end?: () => Promise<void> }
+  ): Promise<RemoteVerbResult> {
+    this.reloadInterruptedRuns.delete(remoteRunId);
+    this.noteHeldRemoteRuns();
+    try {
+      await held.end?.();
+    } catch (err) {
+      this.reloadInterruptedRuns.set(remoteRunId, held);
+      this.noteHeldRemoteRuns();
+      throw err;
+    }
+    this.logger.info("Cancelled a paused run a window reload ended", {
+      remoteRunId,
+      issueNumber: held.issueNumber,
+    });
     return "applied";
   }
 
@@ -3917,6 +4512,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   async pauseByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
+    if (!slot && this.reloadInterruptedRuns.has(remoteRunId)) return "already-paused";
     if (!slot) return this.noSlotFor(remoteRunId);
     // The flag lives on the run's loaded state; a slot with none yet cannot
     // hold, and must not report that it does. Decided before the flag moves,
@@ -3936,6 +4532,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   async resumeByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
     const slot = this.slotByRemoteRunId(remoteRunId);
+    // A reload ended the held call that a resume would let continue (#2339).
+    if (!slot && this.reloadInterruptedRuns.has(remoteRunId)) return "resume-in-window";
     if (!slot) return this.noSlotFor(remoteRunId);
     if (!slot.stateService.isPaused()) return "not-paused";
     await slot.stateService.resumePipeline();
@@ -4060,6 +4658,44 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
   private emitSlotsChanged(): void {
     this._onSlotsChanged.fire(this.getActiveSlots());
+    this.noteHeldRemoteRuns();
+  }
+
+  /**
+   * The platform run ids this window holds (#2357), every run
+   * {@link holdsRemoteRun} answers for: those its slots carry, those the
+   * dispatches on their way to a slot serve, the triggers it is queueing,
+   * those its queue carries (from the latest queue state), and the paused
+   * runs a reload ended here. The machine's other windows read it to tell a
+   * verb this window will answer from one nobody holds.
+   */
+  heldRemoteRunIds(): string[] {
+    const held = new Set<string>([
+      ...this.acceptedRemoteRuns.keys(),
+      ...this.reloadInterruptedRuns.keys(),
+      ...this.queuedRemoteRunIds,
+    ]);
+    for (const slot of this.slots.values()) if (slot.remoteRunId) held.add(slot.remoteRunId);
+    for (const reservation of this.reservedSlots.values()) {
+      if (reservation.remoteRunId) held.add(reservation.remoteRunId);
+    }
+    for (const item of this.dispatchingItems) if (item.remoteRunId) held.add(item.remoteRunId);
+    return [...held].sort();
+  }
+
+  /** Fire {@link onHeldRemoteRunsChanged} when the held set changed. */
+  private noteHeldRemoteRuns(): void {
+    const held = this.heldRemoteRunIds();
+    const key = held.join("\n");
+    if (key === this.lastHeldRemoteRuns) return;
+    this.lastHeldRemoteRuns = key;
+    try {
+      this._onHeldRemoteRunsChanged.fire(held);
+    } catch (err) {
+      this.logger.warn("onHeldRemoteRunsChanged listener threw", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   dispose(): void {

@@ -51,8 +51,11 @@ type SafetyState struct {
 	HourWindowStart        time.Time `json:"hourWindowStart"`
 	PausedForCheckpoint    bool      `json:"pausedForCheckpoint"`
 	LastEpicNumber         int       `json:"lastEpicNumber,omitempty"`
-	LastHealthScore        int       `json:"lastHealthScore"`
-	TripReason             string    `json:"tripReason,omitempty"`
+	// LastEpicRepo is LastEpicNumber's own repository, "owner/name": a number
+	// alone names no issue in a fleet that spans repositories (#2377).
+	LastEpicRepo    string `json:"lastEpicRepo,omitempty"`
+	LastHealthScore int    `json:"lastHealthScore"`
+	TripReason      string `json:"tripReason,omitempty"`
 
 	// Refinement rate limit (separate from pipeline rate limit)
 	RefinementStartsThisHour int       `json:"refinementStartsThisHour"`
@@ -131,8 +134,8 @@ func (sr *SafetyRails) CheckBeforeEnqueue(tokensEstimate int64) (bool, string) {
 
 	// 5. Epic checkpoint pause
 	if sr.state.PausedForCheckpoint {
-		reason := fmt.Sprintf("paused for epic checkpoint (epic #%d complete — awaiting human review)",
-			sr.state.LastEpicNumber)
+		reason := fmt.Sprintf("paused for epic checkpoint (epic %s complete — awaiting human review)",
+			sr.state.LastEpicRef())
 		sr.state.TripReason = reason
 		return false, reason
 	}
@@ -193,13 +196,24 @@ func (sr *SafetyRails) RecordNonFaultOutcome(tokensUsed int64) {
 }
 
 // RecordEpicComplete triggers a checkpoint pause if EpicCheckpoint is enabled.
-func (sr *SafetyRails) RecordEpicComplete(epicNumber int) {
+// epicRepo is the epic's own repository, "owner/name".
+func (sr *SafetyRails) RecordEpicComplete(epicRepo string, epicNumber int) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 	if sr.config.EpicCheckpoint {
 		sr.state.PausedForCheckpoint = true
 		sr.state.LastEpicNumber = epicNumber
+		sr.state.LastEpicRepo = epicRepo
 	}
+}
+
+// LastEpicRef names the epic that latched the checkpoint as "owner/name#N",
+// or "#N" when its repository was not recorded.
+func (st SafetyState) LastEpicRef() string {
+	if st.LastEpicRepo == "" {
+		return fmt.Sprintf("#%d", st.LastEpicNumber)
+	}
+	return fmt.Sprintf("%s#%d", st.LastEpicRepo, st.LastEpicNumber)
 }
 
 // UpdateHealthScore feeds in the latest health score (0–100).

@@ -147,7 +147,8 @@ const (
 // registration succeeds the attention sync stays mirror-only (agent_id omitted).
 // Both the heartbeat 404 (TTL eviction) and the command stream 404 (agent gone)
 // funnel into a single re-register path that swaps the id and restarts the
-// stream against the new id. Returns when ctx is cancelled.
+// stream against the new id. onRegistered sees every successful registration's
+// reply, the first and each re-registration. Returns when ctx is cancelled.
 func runAttentionAgentRegistration(
 	ctx context.Context,
 	reg *platform.AgentRegistrationService,
@@ -155,8 +156,10 @@ func runAttentionAgentRegistration(
 	platformClient *platform.Client,
 	resolver platform.AttentionResolver,
 	relay platform.AgentCommandRelay,
+	onRegistered func(platform.AgentRegistration),
+	onConnected func(),
 ) {
-	agentID := registerAttentionAgentWithRetry(ctx, reg)
+	agentID := registerAttentionAgentWithRetry(ctx, reg, onRegistered)
 	if agentID == "" {
 		return // ctx cancelled before registration succeeded
 	}
@@ -176,7 +179,7 @@ func runAttentionAgentRegistration(
 	startStream := func(id string) {
 		var streamCtx context.Context
 		streamCtx, pollCancel = context.WithCancel(ctx)
-		startAttentionCommandStream(streamCtx, platformClient, resolver, relay, id, signalGone)
+		startAttentionCommandStream(streamCtx, platformClient, resolver, relay, id, signalGone, onConnected)
 	}
 
 	// Late-bind the real agent id: subsequent sync pushes carry it, and the
@@ -192,7 +195,7 @@ func runAttentionAgentRegistration(
 	reRegister := func(reason string) bool {
 		log.Printf("[nightgauge] attention agent %s: %s — re-registering", agentID, reason)
 		pollCancel()
-		newID := registerAttentionAgentWithRetry(ctx, reg)
+		newID := registerAttentionAgentWithRetry(ctx, reg, onRegistered)
 		if newID == "" {
 			return false // ctx cancelled during re-registration
 		}
@@ -237,11 +240,15 @@ func runAttentionAgentRegistration(
 
 // registerAttentionAgentWithRetry attempts registration immediately, then every
 // attentionRegisterRetryInterval until it succeeds or ctx is cancelled. Returns
-// the platform-assigned agent id, or "" if ctx was cancelled first.
-func registerAttentionAgentWithRetry(ctx context.Context, reg *platform.AgentRegistrationService) string {
+// the platform-assigned agent id, or "" if ctx was cancelled first. The reply
+// of the registration that succeeded goes to onRegistered, once.
+func registerAttentionAgentWithRetry(ctx context.Context, reg *platform.AgentRegistrationService, onRegistered func(platform.AgentRegistration)) string {
 	for {
 		info, err := reg.RegisterAgent(ctx)
 		if err == nil && info.AgentID != "" {
+			if onRegistered != nil {
+				onRegistered(info)
+			}
 			return info.AgentID
 		}
 		if err != nil {
@@ -259,13 +266,14 @@ func registerAttentionAgentWithRetry(ctx context.Context, reg *platform.AgentReg
 // (used for the ack path) and opens the agent-command SSE stream against it. A
 // new consumer is built on every (re-)registration so the ack carries the
 // current id. onAgentGone is invoked if the stream sees a 404 (agent evicted).
-// Every command type but attention_resolve goes to relay (#2335).
-func startAttentionCommandStream(ctx context.Context, platformClient *platform.Client, resolver platform.AttentionResolver, relay platform.AgentCommandRelay, agentID string, onAgentGone func()) {
+// Every command type but attention_resolve goes to relay (#2335). onConnected,
+// when set, runs each time the stream opens (#2352).
+func startAttentionCommandStream(ctx context.Context, platformClient *platform.Client, resolver platform.AttentionResolver, relay platform.AgentCommandRelay, agentID string, onAgentGone func(), onConnected func()) {
 	consumer := platform.NewAttentionCommandConsumer(
 		resolver, // *ipc.Server implements platform.AttentionResolver
 		platform.NewCommandService(platformClient).AcknowledgeAgentCommand,
 		agentID,
-	).WithRelay(relay)
+	).WithRelay(relay).WithOnConnected(onConnected)
 	platform.StartAttentionCommandStream(ctx, platformClient, consumer, agentID, onAgentGone)
 }
 
@@ -291,12 +299,36 @@ type eventEmitter interface {
 }
 
 // daemonAgentIPC is what the daemon's platform agent needs from the IPC
-// server: the single writer that applies an attention_resolve, and the event
-// channel that relays every other command to the extension. *ipc.Server is
-// both.
+// server: the single writer that applies an attention_resolve, the event
+// channel that relays every other command to the extension, and the status
+// that reports what the latest registration was refused (#2372).
+// *ipc.Server is all three.
 type daemonAgentIPC interface {
 	platform.AttentionResolver
 	eventEmitter
+	SetRefusedWorkspaceWrites([]platform.RefusedWorkspaceWrite)
+	// OnSessionToken learns that the extension installed or cleared the
+	// signed-in session, which the workspace throttle read needs (#2352).
+	OnSessionToken(fn func())
+}
+
+// reportRefusedWorkspaceWrites surfaces the workspace writes a registration
+// was refused (#2372), once per registration: one log line each, naming the
+// workspace and the permission the write needs; the daemon's status
+// (platform.status), which each registration replaces; and an event the
+// extension shows the operator. The agent registers all the same, so
+// without this a developer's repositories silently stay unlinked from the
+// team's workspace and every remote trigger for them is refused.
+func reportRefusedWorkspaceWrites(status daemonAgentIPC, info platform.AgentRegistration) {
+	reports := make([]platform.RefusedWorkspaceWriteReport, 0, len(info.RefusedWorkspaceWrites))
+	for _, refused := range info.RefusedWorkspaceWrites {
+		log.Printf("[nightgauge] agent registration: %s", refused.Describe())
+		reports = append(reports, refused.Report())
+	}
+	status.SetRefusedWorkspaceWrites(info.RefusedWorkspaceWrites)
+	if len(reports) > 0 {
+		status.Emit(ipc.EventWorkspaceWritesRefused, ipc.WorkspaceWritesRefusedEvent{Refusals: reports})
+	}
 }
 
 // runDaemonPlatformAgent is serve's platform agent (#330, #2335): it
@@ -307,6 +339,12 @@ type daemonAgentIPC interface {
 // nil; the declaration is the extension's for that window when it is set,
 // and the one for workspaceRoot otherwise. Every command the daemon does not
 // execute is relayed to the extension over ext.
+//
+// throttle, when set, follows the platform throttle of the workspace the
+// daemon serves (#2352), read by its slug while a signed-in session exists:
+// at start, after every registration, on every `throttle` command (which is
+// still relayed), each time the command stream opens, and when the session
+// changes.
 func runDaemonPlatformAgent(
 	ctx context.Context,
 	platformClient *platform.Client,
@@ -314,7 +352,11 @@ func runDaemonPlatformAgent(
 	ext daemonAgentIPC,
 	version, workspaceRoot string,
 	window []string,
+	throttle *orchestrator.DispatchThrottle,
 ) {
+	served := func() (platform.WorkspaceDeclaration, error) {
+		return agentworkspace.ResolveServed(window, workspaceRoot)
+	}
 	reg := platform.NewAgentRegistrationService(platformClient, version).
 		WithExecutionProfile(func() (platform.ExecutionProfile, bool, error) {
 			p, err := executionprofile.Resolve(workspaceRoot)
@@ -323,10 +365,40 @@ func runDaemonPlatformAgent(
 		// Declare the workspace this daemon serves, the same repos and
 		// workspace block the extension declares for it, so workspace
 		// presence counts the daemon (#2335).
-		WithWorkspace(func() (platform.WorkspaceDeclaration, error) {
-			return agentworkspace.ResolveServed(window, workspaceRoot)
-		})
-	runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, ext, relayAgentCommandToExtension(ext))
+		WithWorkspace(served)
+	relay := relayAgentCommandToExtension(ext)
+	refreshThrottle := func() {}
+	if throttle != nil {
+		follower := platform.NewWorkspaceThrottleFollower(
+			platformClient.ReadWorkspaceThrottle,
+			func() (string, bool, error) {
+				decl, err := served()
+				if err != nil {
+					return "", false, err
+				}
+				if decl.Workspace == nil {
+					return "", false, nil
+				}
+				return decl.Workspace.Slug, true, nil
+			},
+			platformClient.HasSessionToken,
+			throttle,
+		)
+		refreshThrottle = func() { follower.Refresh(ctx) }
+		ext.OnSessionToken(refreshThrottle)
+		relay = refreshThrottleOnCommand(relay, refreshThrottle)
+		// Read now, not only after the first registration: a session the
+		// extension installed before this listener existed, or a platform
+		// that refuses registration for a while, would otherwise leave the
+		// throttle reported as not followed (#2352).
+		go refreshThrottle()
+	}
+	runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, ext, relay,
+		func(info platform.AgentRegistration) {
+			reportRefusedWorkspaceWrites(ext, info)
+			go refreshThrottle()
+		},
+		refreshThrottle)
 }
 
 func main() {
@@ -1618,7 +1690,7 @@ func issueCreateSubCmd() *cobra.Command {
 	cmd.Flags().StringVar(&body, "body", "", "Sub-issue body")
 	cmd.Flags().StringSliceVar(&labels, "labels", nil, "Label names to apply, comma-separated (e.g. type:bug,component:sdk). Unknown names fail before anything is created.")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number (skips board sync when 0)")
-	cmd.Flags().StringVar(&blockedBy, "blocked-by", "", "Comma-separated blocker issue numbers (e.g. 280,290). Body text 'Blocked by #N' is not parsed.")
+	cmd.Flags().StringVar(&blockedBy, "blocked-by", "", "Comma-separated blocker issue numbers (e.g. 280,290); creates native blockedBy relationships. A 'Blocked by #N' line in the body also gates pickup and dispatch.")
 	cmd.Flags().StringVar(&dependsOn, "depends-on", "", "Comma-separated blocker issue numbers (semantic alias for --blocked-by; creates addBlockedBy relationships)")
 	cmd.Flags().IntVar(&wave, "wave", 0, "Wave number for this sub-issue — embeds '(Wave N)' annotation in issue body")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
@@ -4562,6 +4634,15 @@ func runCmd() *cobra.Command {
 
 			if auto {
 				interval := time.Duration(pollSeconds) * time.Second
+				// Hold new dispatch to the platform's workspace throttle,
+				// followed through the workspace's daemon (#2352), read once
+				// before the first poll.
+				throttle := orchestrator.NewDispatchThrottle()
+				sched.SetDispatchThrottle(throttle)
+				startFollowingDaemonWorkspaceThrottle(cmd.Context(), throttle, daemonThrottleInterval,
+					func(ctx context.Context) (ipc.PlatformWorkspaceThrottleResult, error) {
+						return readDaemonWorkspaceThrottle(ctx, cwd)
+					})
 				return sched.RunAuto(cmd.Context(), interval)
 			}
 
@@ -5322,6 +5403,12 @@ func serveCmd() *cobra.Command {
 			// Tracked so startup orphan recovery can run against it once the
 			// IPC server context is available (below).
 			var autoSched *orchestrator.AutonomousScheduler
+			// The platform workspace throttle the daemon follows (#2352): its
+			// platform agent keeps it current, the scheduler's own dispatch is
+			// held to it, and platform.workspaceThrottle reports it to a
+			// headless scheduler on the socket.
+			dispatchThrottle := orchestrator.NewDispatchThrottle()
+			server.SetDispatchThrottle(dispatchThrottle)
 
 			// Resolve the scheduler identity once. For a manifest-based multi-repo
 			// root with no root config.yaml, config.Load returned DefaultConfig
@@ -5457,8 +5544,12 @@ func serveCmd() *cobra.Command {
 							schedulerLeaseHolderLine(workspaceRoot))
 					}
 					if len(repoConfigs) > 0 && weHoldSchedulerLease {
+						// Short repo names in issue bodies resolve against this
+						// workspace's repositories, not the docs' examples (#2349).
 						autoSched = orchestrator.NewAutonomousScheduler(
-							sched, client, repoConfigs, nil, autoCfg, workspaceRoot,
+							sched, client, repoConfigs,
+							workspaceRepoAliases(workspaceRoot, repoConfigs),
+							autoCfg, workspaceRoot,
 						)
 						// Refinement runs through the same stage bridge every
 						// pipeline stage crosses in extension (IPC) mode —
@@ -5506,6 +5597,7 @@ func serveCmd() *cobra.Command {
 						}
 
 						server.SetAutonomousScheduler(autoSched)
+						autoSched.SetDispatchThrottle(dispatchThrottle)
 						fmt.Fprintf(os.Stderr, "[nightgauge] autonomous scheduler ready (%d repos)\n", len(repoConfigs))
 					}
 				}
@@ -5626,7 +5718,7 @@ func serveCmd() *cobra.Command {
 					// heartbeat. Runs in a goroutine so an offline start self-heals
 					// without blocking IPC startup.
 					go runDaemonPlatformAgent(ctx, platformClient, attnSync, server, version, workspaceRoot,
-						agentworkspace.WindowFolders(os.Getenv))
+						agentworkspace.WindowFolders(os.Getenv), dispatchThrottle)
 				}
 			}
 
@@ -6371,9 +6463,12 @@ func hookCheckDepsCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:          "check-deps [issue-number]",
-		Short:        "Check issue blockedBy dependencies on GitHub",
-		Long:         "Queries GitHub's blockedBy relationships for the given issue. Without an issue number, falls back to checking local tool dependencies.",
+		Use:   "check-deps [issue-number]",
+		Short: "Check an issue's open dependencies: native blockedBy and body declarations",
+		Long: "Reports the open dependencies of the given issue: GitHub's native blockedBy relationships " +
+			"and the dependencies its body declares (\"Depends on: #N\", \"Blocked by <repo> #N\", entries " +
+			"under a ## Dependencies section), resolved against the workspace's repositories. " +
+			"Without an issue number, falls back to checking local tool dependencies.",
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// No issue number provided — fall back to legacy tool-availability check
@@ -6392,7 +6487,8 @@ func hookCheckDepsCmd() *cobra.Command {
 			}
 			issueSvc := gh.NewIssueService(client)
 
-			result, err := hooks.EvaluateIssueDeps(cmd.Context(), issueSvc, owner, repo, issueNumber)
+			result, err := hooks.EvaluateIssueDeps(cmd.Context(), issueSvc, owner, repo, issueNumber,
+				launchRepoAliases(owner+"/"+repo))
 			if err != nil {
 				return err
 			}
@@ -7156,12 +7252,13 @@ func checkPRMergeBlockers(
 	repo string,
 	issueNumber int,
 	force bool,
+	repoAliases map[string]string,
 ) error {
 	if issueNumber <= 0 || force {
 		return nil
 	}
 
-	result, err := hooks.EvaluateIssueDeps(ctx, fetcher, owner, repo, issueNumber)
+	result, err := hooks.EvaluateIssueDeps(ctx, fetcher, owner, repo, issueNumber, repoAliases)
 	if err != nil {
 		return fmt.Errorf("check blockedBy for issue #%d: %w", issueNumber, err)
 	}
@@ -7232,7 +7329,8 @@ func prMergeCmd() *cobra.Command {
 			if force && issueNumber > 0 && !outputJSON {
 				fmt.Fprintf(os.Stderr, "WARNING: bypassing blockedBy merge guard for issue #%d via --force\n", issueNumber)
 			}
-			if err := checkPRMergeBlockers(cmd.Context(), issueSvc, ownerPart, repoPart, issueNumber, force); err != nil {
+			if err := checkPRMergeBlockers(cmd.Context(), issueSvc, ownerPart, repoPart, issueNumber, force,
+				launchRepoAliases(ownerPart+"/"+repoPart)); err != nil {
 				return err
 			}
 
@@ -8450,7 +8548,9 @@ func gitBranchCreateCmd() *cobra.Command {
 						return err
 					}
 				}
-				parentIssue = issue.ParentIssueNumber
+				// 0 for a parent in another repository, so the title read
+				// below is always this repository's #N (#2377).
+				parentIssue = epicBranchParentFor(issue, owner, repo)
 				epicTitle = func() (string, error) {
 					if issueSvc == nil {
 						client, clientErr := clientFromConfig()
@@ -10243,7 +10343,8 @@ func depgraphBuildCmd() *cobra.Command {
 			}
 
 			ctx := context.Background()
-			graph, err := depgraph.BuildGraph(ctx, client, repoConfigs, nil)
+			graph, err := depgraph.BuildGraph(ctx, client, repoConfigs,
+				workspaceRepoAliases(workdir, repoConfigs))
 			if err != nil {
 				return fmt.Errorf("build graph: %w", err)
 			}
@@ -11039,7 +11140,9 @@ func autonomousRunCmd() *cobra.Command {
 			})
 
 			autoSched := orchestrator.NewAutonomousScheduler(
-				sched, client, repoConfigs, nil, autoCfg, workdir,
+				sched, client, repoConfigs,
+				workspaceRepoAliases(workdir, repoConfigs),
+				autoCfg, workdir,
 			)
 			// (#4151) Resolve the post-merge survival observation window from
 			// pipeline.survival.window_days (safe on a nil Pipeline; cfg guarded).
@@ -11093,7 +11196,16 @@ func autonomousRunCmd() *cobra.Command {
 				fmt.Printf("  Clear it with `nightgauge autonomous resume`, or answer the Action Center card (`nightgauge attention list`).\n\n")
 			}
 
-			ctx := context.Background()
+			// Hold the scheduler's own dispatch to the platform's workspace
+			// throttle, followed through the workspace's daemon (#2352).
+			throttle := orchestrator.NewDispatchThrottle()
+			autoSched.SetDispatchThrottle(throttle)
+			ctx, stopThrottle := context.WithCancel(context.Background())
+			defer stopThrottle()
+			startFollowingDaemonWorkspaceThrottle(ctx, throttle, daemonThrottleInterval,
+				func(ctx context.Context) (ipc.PlatformWorkspaceThrottleResult, error) {
+					return readDaemonWorkspaceThrottle(ctx, workdir)
+				})
 			err = autoSched.Run(ctx)
 
 			if outputJSON {

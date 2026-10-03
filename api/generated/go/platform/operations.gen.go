@@ -249,6 +249,15 @@ var OpTelemetryIngestPipelineRun = Operation{
 	Upstream: UpstreamDeclared,
 }
 
+// OpWorkspacesList is GET /v1/workspaces.
+var OpWorkspacesList = Operation{
+	ID:       "workspaces.list",
+	Method:   "GET",
+	Path:     "/v1/workspaces",
+	Security: SecurityUserJWT,
+	Upstream: UpstreamDeclared,
+}
+
 // Operations is every declared platform operation, ordered by Go name.
 // The contract conformance test in internal/platform iterates this slice, so
 // an operation added to the manifest cannot escape the credential check.
@@ -273,6 +282,7 @@ var Operations = []Operation{
 	OpPipelineIngestEvent,
 	OpQueueSync,
 	OpTelemetryIngestPipelineRun,
+	OpWorkspacesList,
 }
 
 // OperationByID looks an operation up by its contract id.

@@ -3,12 +3,16 @@
  * AgentCommandStreamService.
  *
  * Flow:
- *   1. Fetch the issue's title + labels (best-effort) so the run has a real
+ *   1. Reject if issueNumber is already running (concurrent guard)
+ *   2. Fetch the issue's title + labels (best-effort) so the run has a real
  *      branch name and pipeline state
- *   2. Ack the command via Go IPC → receive runId
- *   3. Reject if issueNumber is already running (concurrent guard)
- *   4. Enqueue the issue (with repoOverride) so the queue has something to
- *      dequeue, then start the local pipeline via ConcurrentPipelineManager
+ *   3. Refuse, acked rejected, an issue queued or on its way to a slot here
+ *      for another platform run (#2344)
+ *   4. Ack the command via Go IPC → receive runId
+ *   5. Place the run through ConcurrentPipelineManager (#2344): on the
+ *      issue's dispatch already under way here, or enqueued (with
+ *      repoOverride) so the queue has something to dequeue, then start the
+ *      local pipeline
  *
  * The platform publishes the trigger payload with SEPARATE `owner` and `repo`
  * fields (see pipeline-trigger-dispatcher-service.ts) — the dashboard can
@@ -35,6 +39,14 @@ import type { ConcurrentPipelineManager } from "./ConcurrentPipelineManager";
 import type { IssueQueueService } from "./IssueQueueService";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import type { Logger } from "../utils/logger";
+
+/**
+ * The public reason a trigger is refused when its issue is already queued or
+ * on its way to a slot here for another platform run (#2344): this agent
+ * runs an issue once at a time, so it cannot serve a second run of it.
+ */
+const ALREADY_QUEUED_DETAIL =
+  "already-queued: the issue is already queued on this agent for another run";
 
 interface TriggerPayload {
   owner: string;
@@ -163,6 +175,41 @@ export class TriggerCommandHandler implements CommandHandler {
     const requested = await this.checkRequestedPin(agentId, cmd.id, payload, labels);
     if (requested === "refused") return;
 
+    // Checked again just before the ack (#2344): the issue's slot may have
+    // opened while the issue was fetched, and an issue queued or on its way
+    // to a slot here for another platform run cannot serve this one.
+    const conflict = await this.concurrentManager.remoteTriggerConflict(
+      issueNumber,
+      `${owner}/${repo}`
+    );
+    if (conflict === "running") {
+      this.logger.warn(
+        "TriggerCommandHandler: concurrent trigger rejected — issue already running",
+        { issueNumber, commandId: cmd.id }
+      );
+      return;
+    }
+    if (conflict === "busy") {
+      this.logger.warn(
+        "TriggerCommandHandler: the issue is already queued here for another platform run — acking as rejected",
+        { issueNumber, repo: `${owner}/${repo}`, commandId: cmd.id }
+      );
+      try {
+        await this.ipcClient.agentAcknowledgeCommand(
+          agentId,
+          cmd.id,
+          "rejected",
+          ALREADY_QUEUED_DETAIL
+        );
+      } catch (err) {
+        this.logger.error("TriggerCommandHandler: rejected ack failed", {
+          commandId: cmd.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+      return;
+    }
+
     // Ack must complete before pipeline starts (AC#1). The ack returns the
     // platform runId the dashboard polls for status and that RunVerbCommandHandler
     // uses to route a cancel to the right slot.
@@ -185,37 +232,43 @@ export class TriggerCommandHandler implements CommandHandler {
       runId,
     });
 
-    // Store runId BEFORE the issue can be dequeued so the slot adopts it when it
-    // opens (#3552). enqueue() can trigger a debounced fillSlots via onItemAdded,
-    // so the pending runId must be in place first.
-    this.concurrentManager.setPendingRemoteRunId(issueNumber, runId);
-
-    // Enqueue the issue so fillSlots() has something to dequeue. Without this the
-    // command acked but the run never started — fillSlots found an empty queue
-    // (#4118). The repoOverride routes the queued item to the triggered repo,
-    // independent of the workspace's primary repo, so a dashboard trigger can run
-    // any repo linked to the team workspace.
-    try {
-      const queued = await this.queueService.enqueue(issueNumber, title, labels, undefined, {
+    // This window holds the run from the ack on (#2340): placeRemoteRun is
+    // called with no await after the ack, and records the run before it
+    // waits for the queue turn (#2357), so a verb for it is answered here
+    // even while a fill holds that turn. The manager places it in one queue
+    // turn (#2344): on the issue's dispatch already under way here, or in the
+    // queue, where the item carries the run id the slot will adopt.
+    // enqueue() can trigger a debounced fillSlots via onItemAdded; that
+    // fill's dequeue waits for the turn. The queued item routes to the
+    // triggered repo through repoOverride, independent of the workspace's
+    // primary repo, so a dashboard trigger can run any repo linked to the team
+    // workspace. Without the enqueue the command acked but the run never
+    // started (#4118).
+    const enqueue = async (): Promise<boolean> =>
+      (await this.queueService.enqueue(issueNumber, title, labels, undefined, {
         repoOverride: { owner, repo },
         // Adopt the ack runId as the pipeline-run id (via the Go queue item's
         // RemoteRunID) so command.runId === pipeline_runs.runId and the
-        // dashboard's run deep-link resolves instead of 404ing (#4120). This is
-        // the same value passed to setPendingRemoteRunId above for cancel-routing.
+        // dashboard's run deep-link resolves instead of 404ing (#4120).
         remoteRunId: runId,
         // Only a remote run request adds keys; without one the options are
         // exactly what they were before #1656.
         ...(requested
           ? { requestedAdapter: requested.adapter, requestedModel: requested.model }
           : {}),
-      });
-      if (!queued) {
-        this.logger.error(
-          "TriggerCommandHandler: enqueue refused (stop in progress?) — pipeline not started",
-          { issueNumber, commandId: cmd.id, runId }
+      })) !== null;
+    let placement: Awaited<ReturnType<ConcurrentPipelineManager["placeRemoteRun"]>>;
+    try {
+      // An epic is queued as its sub-issues, each dispatched as a run of its
+      // own (IssueQueueService.enqueueEpic), so no queued item carries the
+      // epic's platform run id and nothing here serves that run to place.
+      if (labels.includes("type:epic")) {
+        placement = (await enqueue()) ? "queued" : "not-queued";
+      } else {
+        placement = await this.concurrentManager.placeRemoteRun(
+          { remoteRunId: runId, issueNumber, repo: `${owner}/${repo}` },
+          enqueue
         );
-        this.concurrentManager.clearPendingRemoteRunId(issueNumber);
-        return;
       }
     } catch (err) {
       this.logger.error("TriggerCommandHandler: enqueue failed — pipeline not started", {
@@ -224,8 +277,40 @@ export class TriggerCommandHandler implements CommandHandler {
         runId,
         err: err instanceof Error ? err.message : String(err),
       });
-      this.concurrentManager.clearPendingRemoteRunId(issueNumber);
       return;
+    }
+    switch (placement) {
+      case "not-queued":
+        this.logger.error(
+          "TriggerCommandHandler: enqueue refused (stop in progress?) — pipeline not started",
+          { issueNumber, commandId: cmd.id, runId }
+        );
+        return;
+      case "running":
+      case "busy":
+        // The issue's slot opened, or it was queued for another platform
+        // run, while the trigger was acked: nothing here serves this run.
+        this.logger.error(
+          "TriggerCommandHandler: the issue is already running or queued for another run here — this run was acked but is not served",
+          { issueNumber, commandId: cmd.id, runId, placement }
+        );
+        return;
+      case "attached":
+        this.logger.info(
+          "TriggerCommandHandler: the issue's dispatch already under way here serves the run",
+          { issueNumber, commandId: cmd.id, runId }
+        );
+        return;
+      case "cancelled":
+        // The platform cancelled the run while it was placed (#2344): this
+        // window applied the cancel, and nothing is queued for it.
+        this.logger.info(
+          "TriggerCommandHandler: the platform cancelled the run before it was queued — not started",
+          { issueNumber, commandId: cmd.id, runId }
+        );
+        return;
+      case "queued":
+        break;
     }
 
     // Explicitly fill slots now. A dashboard trigger is an on-demand request to

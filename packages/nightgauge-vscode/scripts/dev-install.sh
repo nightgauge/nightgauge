@@ -44,7 +44,7 @@ if [[ "${1:-}" == "--from-release" ]]; then
     exit 1
   fi
 
-  VSIX=$(ls "$TMPDIR_RELEASE"/nightgauge-vscode-"$TARGET"-*.vsix 2>/dev/null | head -1)
+  VSIX=$(ls "$TMPDIR_RELEASE"/nightgauge-vscode-"$TARGET"-*.vsix 2>/dev/null | sed -n 1p)
   if [[ -z "$VSIX" ]]; then
     echo "ERROR: No $TARGET .vsix found in latest GitHub release."
     echo "       Has the Release workflow run? Check: gh release list"
@@ -221,7 +221,7 @@ fi
 $VSCE_BIN package --no-dependencies
 
 # Find the most recently created .vsix file (handles any version)
-VSIX=$(ls -t *.vsix 2>/dev/null | head -1)
+VSIX=$(ls -t *.vsix 2>/dev/null | sed -n 1p)
 
 if [[ -z "$VSIX" ]]; then
   echo "ERROR: No .vsix file found after build."

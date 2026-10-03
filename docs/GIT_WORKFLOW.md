@@ -780,10 +780,12 @@ not by hand:
 ```bash
 scripts/branch-merged-check.sh feat/my-feature   # 0 SAFE-DELETE, 1 KEEP, 2 UNKNOWN
 scripts/branch-merged-check.sh --all             # sweep every local branch
-NO_PR=1 scripts/branch-merged-check.sh --all     # offline; conservative by design
+NO_PR=1 scripts/branch-merged-check.sh --all     # offline: content only, no open-PR check
 ```
 
-Only exit `0` authorizes a delete. `2` means undecidable, not safe. Every
+Only exit `0` authorizes a delete. `2` means undecidable, not safe, and is
+also the answer when a check that guards deletion could not run: with no `gh`,
+or a `gh pr list` that fails, no open PR can be ruled out. Every
 `SAFE-DELETE` cites its evidence — either identical content or the merged PR
 number — so the verdict is auditable rather than trusted.
 
@@ -916,6 +918,9 @@ All repositories use the same tag conventions:
 ### Tag Rules
 
 - Tags are **only** created from the `main` branch
+- Pushing a tag runs the publication pre-push hook (§ Mandatory Local CI
+  Validation). A tag on `main` publishes no new commit, so the hook passes it
+  without a scan, after one `git ls-remote` to ask the remote what it has.
 - Tags are **annotated** (`git tag -a`) with a changelog summary
 - Tags are **never deleted or moved** — immutable release history
 - RC tags can be created freely; production tags should follow a validated RC
@@ -1286,6 +1291,27 @@ Every push that fails CI wastes time and pollutes the PR with fix-up commits.
 > automatically via `npm install` (husky). If it is not running, execute
 > `npm run setup-hooks`.
 
+> **Pre-push hook**: a push to this repository's URL first runs
+> `scripts/publication-push-guard.sh`, in every worktree of the clone, whatever
+> it has checked out. `npm install` installs it, and `npm run setup-hooks`
+> installs it again. CI checks the publication boundary only after GitHub has
+> stored a push, and it never checks a branch or tag that does not become a pull
+> request. The hook refuses a history unrelated to `main`, an allowlist change
+> made together with anything else, and a new commit that the public `main`'s
+> boundary checker rejects, even when a later commit in the same push cleans it
+> up. Nothing from the pushed commits runs, so a branch that changes the
+> checker is judged by `main`'s until that change merges. It also
+> refuses a push it cannot verify. A pushed branch usually costs one checker
+> run, which takes several seconds. A deletion or a release tag on `main` costs
+> almost nothing, and pushes to other remotes pass straight through. When an
+> agent pushes, give the command a few minutes, not the default two.
+> `--no-verify` skips the hook, so do not use it to get a refused push through.
+> A new commit that removes the content does not help either, because the
+> commit that adds it is published too: rewrite the unpushed commits with
+> `git reset --soft`, as the refusal says. What the hook checks and what it
+> cannot cover:
+> [PUBLIC_CORE_BOUNDARY.md § Checked before it is pushed](PUBLIC_CORE_BOUNDARY.md#checked-before-it-is-pushed).
+
 Run these commands **before every `git push`**:
 
 ```bash
@@ -1535,6 +1561,11 @@ nightgauge pre-push install
 This creates `.git/hooks/pre-push` which calls the validation gate before each
 push. The hook only activates for pipeline branches (branches with issue
 numbers). Non-pipeline branches pass through.
+
+In this repository, `npm install` points `core.hooksPath` at a hook directory
+of its own (`scripts/install-publication-push-hook.sh`), so git never runs
+`.git/hooks/pre-push`. The pre-push hook that runs here is the publication
+guard (§ Mandatory Local CI Validation).
 
 ### Reading the Context File
 

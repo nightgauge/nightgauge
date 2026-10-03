@@ -1,0 +1,13 @@
+# Refuse a push that would publish, to the public repository, a history
+# unrelated to main or content the publication boundary rejects (#2365).
+# Pushes to any other remote pass straight through. The guard reads git's
+# ref lines on stdin, so exec it rather than run it in a pipeline.
+#
+# scripts/install-publication-push-hook.sh, which npm install runs, installs a
+# pre-push hook that runs the guard whatever is checked out and then runs this
+# file. It sets NG_PUBLICATION_GUARD_RAN to its own process id, which is this
+# file's parent's, so the guard runs once. A value inherited from anywhere else
+# does not match, and the guard runs.
+# See docs/PUBLIC_CORE_BOUNDARY.md § Checked before it is pushed.
+[ "${NG_PUBLICATION_GUARD_RAN:-}" = "$PPID" ] && exit 0
+exec bash "$(git rev-parse --show-toplevel)/scripts/publication-push-guard.sh" "$@"

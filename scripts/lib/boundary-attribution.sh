@@ -58,12 +58,15 @@ suite_write_surface() {
 # $SURFACE must be set by the caller (see require_surface).
 new_owned_dirt() {
   local before="$1" after="$2" line path
+  # Here-strings, never `printf | grep -q`: the callers run under pipefail,
+  # where grep -q exiting at its match SIGPIPEs the writer and reads the
+  # match as a miss (#2360).
   printf '%s\n' "$after" | while IFS= read -r line; do
     [ -n "$line" ] || continue
-    printf '%s\n' "$before" | grep -qxF "$line" && continue
+    grep -qxF -- "$line" <<<"$before" && continue
     # porcelain: XY<space>path ; a rename shows "old -> new"
     path="$(printf '%s' "$line" | cut -c4- | sed 's/.* -> //')"
-    printf '%s\n' "$SURFACE" | grep -qxF "$path" && printf '%s\n' "$line"
+    grep -qxF -- "$path" <<<"$SURFACE" && printf '%s\n' "$line"
   done
 }
 

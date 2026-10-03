@@ -225,7 +225,7 @@ cmd_install() {
     bounded "$INSTALL_TIMEOUT" env "GROK_BIN_DIR=$bindir" /bin/bash "$script" "$requested" >&2 \
       || die "$adapter: the installer failed for '${requested:-latest}'"
     bin="$bindir/$binary"
-    version="$(bounded "$HELP_TIMEOUT" "$bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+    version="$(bounded "$HELP_TIMEOUT" "$bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sed -n 1p)"
     [ -n "$version" ] || die "$adapter: could not read the installed version from $bin --version"
   else
     die "$adapter: the manifest names neither an npm package nor an installer"
@@ -263,7 +263,7 @@ cmd_capture_help() {
   # (ADAPTER_CANARY_VERSION), else read from the binary itself.
   version="${ADAPTER_CANARY_VERSION:-}"
   if [ -z "$version" ]; then
-    version="$(bounded "$HELP_TIMEOUT" "$bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"
+    version="$(bounded "$HELP_TIMEOUT" "$bin" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | sed -n 1p)"
   fi
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "$adapter: could not resolve a MAJOR.MINOR.PATCH version to name the capture"
 
@@ -300,7 +300,7 @@ cmd_capture_help() {
   # version is still missed until a human re-probes it — the same limitation
   # exact-match carryover already had for any version it DID carry forward to.
   local committed
-  committed="$(ls -t "$COMMITTED_HELP_DIR/$stem"-*.txt.hidden 2>/dev/null | head -n1)"
+  committed="$(ls -t "$COMMITTED_HELP_DIR/$stem"-*.txt.hidden 2>/dev/null | sed -n 1p)"
   if [ -n "$committed" ]; then
     cp "$committed" "$outdir/$stem-$version.txt.hidden"
   fi
@@ -380,14 +380,15 @@ cmd_flag_contract() {
       json_row adapter="$adapter" version="$version" check=flag-contract result=pass detail=""
       continue
     fi
-    failed="$(printf '%s\n' "$problem_lines" | grep -E "^\s*[a-z_.]+_test\.go:[0-9]+: ${adapter}: " | head -n1 || true)"
+    # grep -m1 on a here-string, not `printf | grep | head`: no reader here
+    # stops early on a pipe another command is still writing (#2360).
+    failed="$(grep -m1 -E "^\s*[a-z_.]+_test\.go:[0-9]+: ${adapter}: " <<<"$problem_lines" || true)"
     local stem file_version=""
     stem="$(adapter_stem "$adapter")"
     if [ -z "$failed" ]; then
-      failed="$(printf '%s\n' "$problem_lines" | grep -E -- "${stem}-[0-9]+\.[0-9]+\.[0-9]+\.txt" | head -n1 || true)"
+      failed="$(grep -m1 -E -- "${stem}-[0-9]+\.[0-9]+\.[0-9]+\.txt" <<<"$problem_lines" || true)"
       if [ -n "$failed" ]; then
-        file_version="$(printf '%s\n' "$failed" \
-          | grep -oE -- "${stem}-[0-9]+\.[0-9]+\.[0-9]+\.txt" | head -n1 \
+        file_version="$(grep -oE -- "${stem}-[0-9]+\.[0-9]+\.[0-9]+\.txt" <<<"$failed" | sed -n 1p \
           | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')"
       fi
     fi
@@ -425,7 +426,7 @@ cmd_flag_contract() {
     fi
     if [ -n "$remaining" ]; then
       local fallback
-      fallback="$(printf '%s\n' "$remaining" | head -n1)"
+      fallback="$(head -n1 <<<"$remaining")"
       json_row adapter=flag-contract version="" check=flag-contract result=fail \
         detail="$(echo "$fallback" | sed -E 's/^[^:]+:[0-9]+: //')"
     fi
@@ -752,7 +753,7 @@ cmd_report() {
     [ -n "$title" ] || continue
     local existing
     existing="$(gh issue list --state open --search "in:title \"$title\"" --json title,url \
-      | jq -r --arg t "$title" '.[] | select(.title == $t) | .url' | head -n1)"
+      | jq -r --arg t "$title" 'first(.[] | select(.title == $t) | .url)')"
     if [ -n "$existing" ]; then
       gh issue comment "$existing" --body "$body"
       echo "commented on $existing"

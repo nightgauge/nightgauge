@@ -33,3 +33,16 @@ func branchNameForIssue(ctx context.Context, issues issueFetcher, owner, repo st
 	}
 	return fetched, name, nil
 }
+
+// epicBranchParentFor is the parent epic number branch-create bases issue's
+// branch on: the parent's number when it lives in issue's own repository
+// (owner/repo), and 0 when it lives in another. An epic branch epic/<N>-*
+// names #N of the repository it is pushed to, so in this one it is the branch
+// of this repository's own #N, not of the parent's (#2377).
+func epicBranchParentFor(issue *types.Issue, owner, repo string) int {
+	issueRepo := issue.Repo
+	if issueRepo == "" {
+		issueRepo = owner + "/" + repo
+	}
+	return gitpkg.EpicBranchParent(issueRepo, issue.ParentIssueNumber, issue.ParentIssueRepo)
+}

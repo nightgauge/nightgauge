@@ -18,6 +18,7 @@
   "isEpic": false,
   "parentIssueNumber": 10,
   "parentIssueTitle": "Epic: Photo Management",
+  "parentIssueRepo": "nightgauge/nightgauge",
   "subIssues": [
     {
       "nodeId": "I_sub789",

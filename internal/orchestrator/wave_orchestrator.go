@@ -17,6 +17,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -106,18 +107,23 @@ type WaveOrchestrator struct {
 	scalingConfig ScalingConfig // Dynamic scaling settings
 
 	// State tracking
-	mu           sync.Mutex
-	epicNumber   int
-	repo         string
-	waves        []teams.WaveAssignment
-	currentWave  int
-	agentResults map[int]*AgentResult // issue number → result
+	mu          sync.Mutex
+	epicNumber  int
+	repo        string
+	waves       []teams.WaveAssignment
+	currentWave int
+	// agentResults is keyed by the sub-issue's repository and number
+	// (repoIssueKey): an epic's sub-issues can live in several repositories,
+	// where one number names a different issue in each (#2377).
+	agentResults map[string]*AgentResult
 	strategy     batch.Strategy
 }
 
 // AgentResult tracks the outcome of a single subagent pipeline execution.
 type AgentResult struct {
-	IssueNumber  int           `json:"issueNumber"`
+	IssueNumber int `json:"issueNumber"`
+	// Repo is the sub-issue's own repository ("owner/name").
+	Repo         string        `json:"repo,omitempty"`
 	Success      bool          `json:"success"`
 	Error        string        `json:"error,omitempty"`
 	InputTokens  int           `json:"inputTokens"`
@@ -129,22 +135,24 @@ type AgentResult struct {
 
 // WaveStatus represents the current state of wave orchestration.
 type WaveStatus struct {
-	EpicNumber    int                  `json:"epicNumber"`
-	Repo          string               `json:"repo"`
-	Strategy      string               `json:"strategy"`
-	TotalWaves    int                  `json:"totalWaves"`
-	CurrentWave   int                  `json:"currentWave"`
-	MaxConcurrent int                  `json:"maxConcurrent"`
-	Waves         []WaveDetail         `json:"waves"`
-	AgentResults  map[int]*AgentResult `json:"agentResults"`
-	Summary       *WaveSummary         `json:"summary,omitempty"`
+	EpicNumber    int          `json:"epicNumber"`
+	Repo          string       `json:"repo"`
+	Strategy      string       `json:"strategy"`
+	TotalWaves    int          `json:"totalWaves"`
+	CurrentWave   int          `json:"currentWave"`
+	MaxConcurrent int          `json:"maxConcurrent"`
+	Waves         []WaveDetail `json:"waves"`
+	// AgentResults is keyed by repoIssueKey ("owner/repo#N").
+	AgentResults map[string]*AgentResult `json:"agentResults"`
+	Summary      *WaveSummary            `json:"summary,omitempty"`
 }
 
 // WaveDetail describes a single wave.
 type WaveDetail struct {
-	WaveIndex int    `json:"waveIndex"`
-	Issues    []int  `json:"issues"`
-	Status    string `json:"status"` // pending, running, completed, failed
+	WaveIndex int `json:"waveIndex"`
+	// Issues names each sub-issue as "owner/repo#N".
+	Issues []string `json:"issues"`
+	Status string   `json:"status"` // pending, running, completed, failed
 }
 
 // WaveSummary provides aggregate metrics after epic completion.
@@ -188,7 +196,7 @@ func newWaveOrchestrator(s *Scheduler, epicNumber int, repo string, maxConcurren
 		scalingConfig: sc,
 		epicNumber:    epicNumber,
 		repo:          repo,
-		agentResults:  make(map[int]*AgentResult),
+		agentResults:  make(map[string]*AgentResult),
 	}
 }
 
@@ -202,7 +210,7 @@ func (s *Scheduler) RunEpicWaves(ctx context.Context, item types.BoardItem) bool
 
 	// Phase 1: Fetch sub-issues and their details
 	ownerPart, repoPart := splitOwnerRepo(item.Repo)
-	subIssues, issueDetails, err := wo.fetchSubIssueDetails(ctx, ownerPart, repoPart, item)
+	subIssues, issueDetails, blockedBy, err := wo.fetchSubIssueDetails(ctx, ownerPart, repoPart, item)
 	if err != nil {
 		log.Printf("epic #%d: failed to fetch sub-issues: %v", item.Number, err)
 		return false
@@ -226,7 +234,7 @@ func (s *Scheduler) RunEpicWaves(ctx context.Context, item types.BoardItem) bool
 	}
 
 	// Phase 3: Detect dependencies and calculate waves
-	deps := wo.detectDependencies(subIssues, issueDetails)
+	deps := wo.detectDependencies(subIssues, issueDetails, blockedBy)
 	waves, err := teams.CalculateWaves(subIssues, deps)
 	if err != nil {
 		log.Printf("epic #%d: wave calculation failed: %v", item.Number, err)
@@ -239,15 +247,11 @@ func (s *Scheduler) RunEpicWaves(ctx context.Context, item types.BoardItem) bool
 
 	log.Printf("epic #%d: planned %d waves:", item.Number, len(waves))
 	for _, w := range waves {
-		nums := make([]int, len(w.Issues))
-		for i, si := range w.Issues {
-			nums[i] = si.Number
-		}
-		log.Printf("  wave %d: %v", w.WaveIndex, nums)
+		log.Printf("  wave %d: %v", w.WaveIndex, wo.subIssueRefs(w.Issues))
 	}
 
 	// Phase 4: Persist wave plan
-	wo.persistWavePlan(s.execMgr.WorkspaceRoot())
+	wo.persistWavePlan()
 
 	// Phase 5: Execute waves sequentially, issues within each wave in parallel
 	epicStart := time.Now()
@@ -268,12 +272,8 @@ func (s *Scheduler) RunEpicWaves(ctx context.Context, item types.BoardItem) bool
 		wo.currentWave = waveIdx
 		wo.mu.Unlock()
 
-		waveNums := make([]int, len(wave.Issues))
-		for i, si := range wave.Issues {
-			waveNums[i] = si.Number
-		}
 		log.Printf("epic #%d: ═══ Wave %d/%d — issues %v ═══",
-			item.Number, waveIdx+1, len(waves), waveNums)
+			item.Number, waveIdx+1, len(waves), wo.subIssueRefs(wave.Issues))
 
 		// Dynamic scaling: determine concurrency for this wave
 		decision := scaleAgents(len(wave.Issues), remainingBudget, wo.scalingConfig)
@@ -308,7 +308,7 @@ func (s *Scheduler) RunEpicWaves(ctx context.Context, item types.BoardItem) bool
 			if hasError {
 				log.Printf("epic #%d: wave %d has file conflicts — running sequentially", item.Number, waveIdx)
 				for _, si := range wave.Issues {
-					result := wo.runSubagent(ctx, si, item, waveIdx, wo.budgetForIssue(budgetResult, si.Number))
+					result := wo.runSubagent(ctx, si, item, waveIdx, wo.budgetForIssue(budgetResult, si))
 					wo.recordResult(result)
 					if !result.Success {
 						allSuccess = false
@@ -328,8 +328,8 @@ func (s *Scheduler) RunEpicWaves(ctx context.Context, item types.BoardItem) bool
 				allSuccess = false
 				// Check if downstream waves depend on this failed issue
 				// We don't abort the entire epic — just log the failure
-				log.Printf("epic #%d: wave %d issue #%d failed — downstream dependencies may be affected",
-					item.Number, waveIdx, result.IssueNumber)
+				log.Printf("epic #%d: wave %d issue %s#%d failed — downstream dependencies may be affected",
+					item.Number, waveIdx, result.Repo, result.IssueNumber)
 			}
 		}
 
@@ -355,20 +355,25 @@ func (s *Scheduler) RunEpicWaves(ctx context.Context, item types.BoardItem) bool
 	log.Printf("epic #%d:   duration: %s (%.1fx speedup)", item.Number, epicDuration, summary.SpeedupFactor)
 
 	// Persist final status
-	wo.persistWaveStatus(s.execMgr.WorkspaceRoot(), summary)
+	wo.persistWaveStatus(summary)
 
 	return allSuccess
 }
 
 // fetchSubIssueDetails fetches all open sub-issues and their full details.
-func (wo *WaveOrchestrator) fetchSubIssueDetails(ctx context.Context, owner, repo string, item types.BoardItem) ([]teams.SubIssue, []batch.IssueInput, error) {
+// subIssues and issueDetails are index-aligned. blockedBy maps each sub-issue
+// (wo.subIssueKey) to the repoIssueKey of each of its open blockers: a
+// blocker's number names an issue in the blocker's own repository, and the
+// epic's sub-issues can share a number across repositories (#2377).
+func (wo *WaveOrchestrator) fetchSubIssueDetails(ctx context.Context, owner, repo string, item types.BoardItem) ([]teams.SubIssue, []batch.IssueInput, map[string][]string, error) {
 	epic, err := wo.scheduler.issueSvc.GetEpicProgressByNumber(ctx, owner, repo, item.Number)
 	if err != nil {
-		return nil, nil, fmt.Errorf("fetch epic progress: %w", err)
+		return nil, nil, nil, fmt.Errorf("fetch epic progress: %w", err)
 	}
 
 	var subIssues []teams.SubIssue
 	var issueDetails []batch.IssueInput
+	blockedByKeys := make(map[string][]string)
 
 	for _, si := range epic.SubIssues {
 		if !strings.EqualFold(si.State, "OPEN") {
@@ -391,7 +396,7 @@ func (wo *WaveOrchestrator) fetchSubIssueDetails(ctx context.Context, owner, rep
 			// A blocker list read only in part would plan the sub-issue into
 			// an earlier wave than its unseen blockers allow, and leaving it
 			// out would drop its siblings' edges to it as well.
-			return nil, nil, fmt.Errorf("fetch sub-issue #%d: %w", si.Number, err)
+			return nil, nil, nil, fmt.Errorf("fetch sub-issue %s/%s#%d: %w", siOwner, siRepo, si.Number, err)
 		}
 		if err != nil {
 			log.Printf("epic #%d: warn — failed to fetch sub-issue #%d: %v", wo.epicNumber, si.Number, err)
@@ -412,17 +417,26 @@ func (wo *WaveOrchestrator) fetchSubIssueDetails(ctx context.Context, owner, rep
 			}
 		}
 
-		subIssues = append(subIssues, teams.SubIssue{
+		sub := teams.SubIssue{
 			Number:     si.Number,
 			Title:      si.Title,
+			Repo:       siOwner + "/" + siRepo,
 			Files:      files,
 			Complexity: complexity,
-		})
+		}
+		subIssues = append(subIssues, sub)
 
+		// A blocker that records no repository is in the sub-issue's own.
 		blockedBy := make([]int, 0, len(issue.BlockedBy))
 		for _, b := range issue.BlockedBy {
 			if strings.EqualFold(b.State, "OPEN") {
 				blockedBy = append(blockedBy, b.Number)
+				blockerRepo := b.Repo
+				if blockerRepo == "" {
+					blockerRepo = sub.Repo
+				}
+				key := wo.subIssueKey(sub)
+				blockedByKeys[key] = append(blockedByKeys[key], repoIssueKey(blockerRepo, b.Number))
 			}
 		}
 
@@ -435,7 +449,7 @@ func (wo *WaveOrchestrator) fetchSubIssueDetails(ctx context.Context, owner, rep
 		})
 	}
 
-	return subIssues, issueDetails, nil
+	return subIssues, issueDetails, blockedByKeys, nil
 }
 
 // assessBatch runs the batch assessor on the sub-issues.
@@ -445,41 +459,41 @@ func (wo *WaveOrchestrator) assessBatch(issues []batch.IssueInput) batch.Assessm
 }
 
 // detectDependencies uses the teams package to detect inter-issue dependencies.
-func (wo *WaveOrchestrator) detectDependencies(subIssues []teams.SubIssue, issueDetails []batch.IssueInput) map[int][]int {
+//
+// issueDetails is index-aligned with subIssues, as fetchSubIssueDetails builds
+// them. blockedBy is fetchSubIssueDetails' map of each sub-issue's open
+// blockers. Both are matched by repository and number: two sub-issues of one
+// epic can share a number in different repositories, and matched by number
+// alone the second read the first's body, and a blocker in one repository
+// ordered the sub-issue with its number in another (#2377).
+func (wo *WaveOrchestrator) detectDependencies(subIssues []teams.SubIssue, issueDetails []batch.IssueInput, blockedBy map[string][]string) map[int][]int {
 	// Build source text array (issue bodies) for heuristic analysis
 	sources := make([]string, len(subIssues))
 	for i, si := range subIssues {
-		for _, detail := range issueDetails {
-			if detail.Number == si.Number {
-				sources[i] = detail.Body
-				break
-			}
+		if i < len(issueDetails) && issueDetails[i].Number == si.Number {
+			sources[i] = issueDetails[i].Body
 		}
 	}
 
 	config := teams.DefaultDependencyConfig()
 	deps := teams.DetectDependencies(subIssues, sources, config)
 
-	// Also incorporate explicit blockedBy relationships from GitHub
+	// Also incorporate explicit blockedBy relationships from GitHub. A blocker
+	// outside the epic's open sub-issues is no edge here.
+	index := make(map[string]int, len(subIssues))
+	for j, si := range subIssues {
+		index[wo.subIssueKey(si)] = j
+	}
 	for i, si := range subIssues {
-		for _, detail := range issueDetails {
-			if detail.Number != si.Number {
+		for _, blocker := range blockedBy[wo.subIssueKey(si)] {
+			j, ok := index[blocker]
+			if !ok || j == i {
 				continue
 			}
-			for _, blockerNum := range detail.BlockedBy {
-				// Find the blocker's index in subIssues
-				for j, otherSI := range subIssues {
-					if otherSI.Number == blockerNum {
-						// i depends on j
-						existing := deps[i]
-						if !containsInt(existing, j) {
-							deps[i] = append(deps[i], j)
-						}
-						break
-					}
-				}
+			// i depends on j
+			if !containsInt(deps[i], j) {
+				deps[i] = append(deps[i], j)
 			}
-			break
 		}
 	}
 
@@ -495,7 +509,7 @@ func (wo *WaveOrchestrator) runWaveParallel(ctx context.Context, wave teams.Wave
 		wg.Add(1)
 		go func(idx int, issue teams.SubIssue) { // lifecycle: joined via wg.Wait() below (#491 pin)
 			defer wg.Done()
-			budget := wo.budgetForIssue(budgetResult, issue.Number)
+			budget := wo.budgetForIssue(budgetResult, issue)
 			results[idx] = wo.runSubagent(ctx, issue, epicItem, waveIdx, budget)
 		}(i, si)
 	}
@@ -514,20 +528,27 @@ func (wo *WaveOrchestrator) runWaveParallel(ctx context.Context, wave teams.Wave
 func (wo *WaveOrchestrator) runWaveScaled(ctx context.Context, wave teams.WaveAssignment, epicItem types.BoardItem, waveIdx int, budgetResult teams.BudgetResult, concurrency int) []*AgentResult {
 	issues := wave.Issues
 
-	// Fast path: concurrency >= wave size, run all in parallel
-	if concurrency >= len(issues) {
+	// Fast path: concurrency >= wave size, run all in parallel, unless the
+	// workspace throttle is followed (#2352): each batch then starts only as
+	// many sub-issues as it leaves room for.
+	if concurrency >= len(issues) && !wo.scheduler.followsDispatchThrottle() {
 		return wo.runWaveParallel(ctx, wave, epicItem, waveIdx, budgetResult)
 	}
 
 	// Slow path: split into sequential batches
 	results := make([]*AgentResult, len(issues))
-	for batchStart := 0; batchStart < len(issues); batchStart += concurrency {
+	for batchStart := 0; batchStart < len(issues); {
+		batchSize := concurrency
+		if wo.scheduler.followsDispatchThrottle() {
+			batchSize = wo.scheduler.waitForThrottleRoom(ctx, concurrency)
+		}
 		select {
 		case <-ctx.Done():
 			// Fill remaining slots with cancellation results
 			for i := batchStart; i < len(issues); i++ {
 				results[i] = &AgentResult{
 					IssueNumber: issues[i].Number,
+					Repo:        wo.subIssueRepo(issues[i]),
 					WaveIndex:   waveIdx,
 					Error:       "cancelled",
 				}
@@ -535,57 +556,71 @@ func (wo *WaveOrchestrator) runWaveScaled(ctx context.Context, wave teams.WaveAs
 			return results
 		default:
 		}
+		if batchSize < 1 {
+			batchSize = 1
+		}
 
-		batchEnd := batchStart + concurrency
+		batchEnd := batchStart + batchSize
 		if batchEnd > len(issues) {
 			batchEnd = len(issues)
 		}
 		batchIssues := issues[batchStart:batchEnd]
 
-		log.Printf("epic #%d: wave %d batch %d/%d — issues %d-%d of %d (concurrency=%d)",
-			wo.epicNumber, waveIdx, batchStart/concurrency+1,
-			(len(issues)+concurrency-1)/concurrency,
-			batchStart+1, batchEnd, len(issues), concurrency)
+		log.Printf("epic #%d: wave %d batch — issues %d-%d of %d (concurrency=%d)",
+			wo.epicNumber, waveIdx, batchStart+1, batchEnd, len(issues), batchSize)
 
 		var wg sync.WaitGroup
 		for i, si := range batchIssues {
 			wg.Add(1)
 			go func(globalIdx int, issue teams.SubIssue) { // lifecycle: joined via wg.Wait() below (#491 pin)
 				defer wg.Done()
-				budget := wo.budgetForIssue(budgetResult, issue.Number)
+				budget := wo.budgetForIssue(budgetResult, issue)
 				results[globalIdx] = wo.runSubagent(ctx, issue, epicItem, waveIdx, budget)
 			}(batchStart+i, si)
 		}
 		wg.Wait()
+		batchStart = batchEnd
 	}
 
 	return results
+}
+
+// subIssueItem is the synthetic board item a wave runs a sub-issue as.
+//
+// The sub-issue runs in its own repository (si.Repo). A sub-issue of this epic
+// in another repository used to run as the epic repository's issue with the
+// same number (#2377). ParentNumber and ParentRepo link it to the epic, so the
+// scheduler can inject accumulated sibling context into the planning/dev
+// prompt (#4096); left 0, they kept the epic-context loop open.
+func (wo *WaveOrchestrator) subIssueItem(si teams.SubIssue, epicItem types.BoardItem) types.BoardItem {
+	repo := si.Repo
+	if repo == "" {
+		repo = epicItem.Repo
+	}
+	return types.BoardItem{
+		Number:       si.Number,
+		Title:        si.Title,
+		Repo:         repo,
+		Labels:       epicItem.Labels,
+		ID:           fmt.Sprintf("epic-%d-sub-%d", wo.epicNumber, si.Number),
+		ParentNumber: wo.epicNumber,
+		ParentRepo:   epicItem.Repo,
+	}
 }
 
 // runSubagent executes the full pipeline for a single sub-issue.
 // Each subagent gets its own worktree for isolation.
 func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, epicItem types.BoardItem, waveIdx int, tokenBudget int) *AgentResult {
 	start := time.Now()
+	subItem := wo.subIssueItem(si, epicItem)
 	result := &AgentResult{
 		IssueNumber: si.Number,
+		Repo:        subItem.Repo,
 		WaveIndex:   waveIdx,
 	}
 
-	log.Printf("epic #%d: wave %d — starting subagent for #%d %q",
-		wo.epicNumber, waveIdx, si.Number, si.Title)
-
-	// Build a synthetic BoardItem for the sub-issue. ParentNumber links it to
-	// the epic so the scheduler can inject accumulated sibling context into the
-	// planning/dev prompt (#4096) — previously left 0, which kept the
-	// epic-context loop open.
-	subItem := types.BoardItem{
-		Number:       si.Number,
-		Title:        si.Title,
-		Repo:         epicItem.Repo,
-		Labels:       epicItem.Labels,
-		ID:           fmt.Sprintf("epic-%d-sub-%d", wo.epicNumber, si.Number),
-		ParentNumber: wo.epicNumber,
-	}
+	log.Printf("epic #%d: wave %d — starting subagent for %s#%d %q",
+		wo.epicNumber, waveIdx, subItem.Repo, si.Number, si.Title)
 
 	// Create a per-subagent child context for cancellation isolation
 	subCtx, cancel := context.WithCancel(ctx)
@@ -617,8 +652,9 @@ func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, 
 	}
 
 	// runPipeline fires onPipelineComplete in its defer, which persists the
-	// runtime state — read it back from the state file.
-	pipelineSuccess, pipelineRuntime = wo.readPipelineState(si.Number)
+	// runtime state — read it back from the state file, in the checkout the
+	// run was rooted in.
+	pipelineSuccess, pipelineRuntime = wo.readPipelineState(subItem.Repo, si.Number)
 
 	result.Success = pipelineSuccess
 	result.Duration = time.Since(start)
@@ -630,8 +666,8 @@ func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, 
 	}
 
 	if result.Success {
-		log.Printf("epic #%d: wave %d — subagent #%d completed successfully in %s",
-			wo.epicNumber, waveIdx, si.Number, result.Duration)
+		log.Printf("epic #%d: wave %d — subagent %s#%d completed successfully in %s",
+			wo.epicNumber, waveIdx, subItem.Repo, si.Number, result.Duration)
 		// Append sub-issue findings to epic context accumulator
 		wo.appendSubIssueToEpicContext(si)
 	} else {
@@ -639,24 +675,36 @@ func (wo *WaveOrchestrator) runSubagent(ctx context.Context, si teams.SubIssue, 
 		if result.Error != "" {
 			errMsg = result.Error
 		}
-		log.Printf("epic #%d: wave %d — subagent #%d failed: %s",
-			wo.epicNumber, waveIdx, si.Number, errMsg)
+		log.Printf("epic #%d: wave %d — subagent %s#%d failed: %s",
+			wo.epicNumber, waveIdx, subItem.Repo, si.Number, errMsg)
 		result.Error = errMsg
 	}
 
 	return result
 }
 
-// readPipelineState reads the persisted pipeline state for an issue.
-func (wo *WaveOrchestrator) readPipelineState(issueNumber int) (bool, *state.RuntimeState) {
-	stateDir, err := layout.PipelineStateDir(wo.scheduler.execMgr.WorkspaceRoot())
+// readPipelineState reads the persisted pipeline state of repo's issueNumber.
+//
+// runPipeline roots a run, and persists its runtime snapshot, in the checkout
+// of the run's own repository (resolveRunRoot(item.Repo)), so the snapshot is
+// read there. Since a wave runs a sub-issue in its own repository (#2377), the
+// launch checkout holds no snapshot of a sub-issue in another repository: read
+// there, a merged sub-issue counted as failed, or the launch repository's run
+// of the same number answered for it. Only repo's snapshots count, because the
+// file name carries the number alone.
+func (wo *WaveOrchestrator) readPipelineState(repo string, issueNumber int) (bool, *state.RuntimeState) {
+	root := wo.scheduler.runRoot(repo)
+	if root == "" {
+		return false, nil
+	}
+	stateDir, err := layout.PipelineStateDir(root)
 	if err != nil {
 		return false, nil
 	}
 	// Issue-addressed: the wave orchestrator asks "did sub-issue #N succeed?",
 	// which is a question about the run it just drove. Standard pick — prefer
 	// non-terminal, then newest StartedAt (ADR-017 Decision 8).
-	runtime, err := state.PickPersistedStateForIssue(stateDir, issueNumber)
+	runtime, err := state.PickPersistedStateForRepoIssue(stateDir, repo, issueNumber)
 	if err != nil {
 		return false, nil
 	}
@@ -673,19 +721,23 @@ func (wo *WaveOrchestrator) readPipelineState(issueNumber int) (bool, *state.Run
 	}
 	if wo.scheduler != nil {
 		if merged, reason := wo.scheduler.verifyPRMerged(context.Background(), runtime.PrUrl, issueNumber); !merged {
-			log.Printf("epic #%d: sub-issue #%d pr-merge stage completed but PR not merged — %s",
-				wo.epicNumber, issueNumber, reason)
+			log.Printf("epic #%d: sub-issue %s#%d pr-merge stage completed but PR not merged — %s",
+				wo.epicNumber, repo, issueNumber, reason)
 			return false, runtime
 		}
 	}
 	return true, runtime
 }
 
-// recordResult stores an agent result.
+// recordResult stores an agent result under its sub-issue's repository and
+// number. A result that records no repository is the epic repository's.
 func (wo *WaveOrchestrator) recordResult(result *AgentResult) {
 	wo.mu.Lock()
 	defer wo.mu.Unlock()
-	wo.agentResults[result.IssueNumber] = result
+	if result.Repo == "" {
+		result.Repo = wo.repo
+	}
+	wo.agentResults[repoIssueKey(result.Repo, result.IssueNumber)] = result
 }
 
 // waveSuccessCount returns how many issues succeeded in a wave.
@@ -701,14 +753,40 @@ func (wo *WaveOrchestrator) waveSuccessCount(waveIdx int) int {
 	return count
 }
 
-// budgetForIssue returns the token budget allocated to a specific issue.
-func (wo *WaveOrchestrator) budgetForIssue(budgetResult teams.BudgetResult, issueNumber int) int {
+// budgetForIssue returns the token budget allocated to si, matched by
+// repository and number: two sub-issues in one wave can share a number.
+func (wo *WaveOrchestrator) budgetForIssue(budgetResult teams.BudgetResult, si teams.SubIssue) int {
 	for _, alloc := range budgetResult.Allocations {
-		if alloc.IssueNumber == issueNumber {
+		if alloc.IssueNumber == si.Number && strings.EqualFold(alloc.Repo, si.Repo) {
 			return alloc.TokenBudget
 		}
 	}
 	return wo.totalBudget / 6 // Fallback: equal split
+}
+
+// subIssueRepo is si's own repository; a sub-issue that records none is the
+// epic repository's.
+func (wo *WaveOrchestrator) subIssueRepo(si teams.SubIssue) string {
+	if si.Repo != "" {
+		return si.Repo
+	}
+	return wo.repo
+}
+
+// subIssueKey keys si by repository and number (repoIssueKey), as
+// agentResults and the blocker map are keyed.
+func (wo *WaveOrchestrator) subIssueKey(si teams.SubIssue) string {
+	return repoIssueKey(wo.subIssueRepo(si), si.Number)
+}
+
+// subIssueRefs names each sub-issue as "owner/repo#N", for logs and the wave
+// status file.
+func (wo *WaveOrchestrator) subIssueRefs(issues []teams.SubIssue) []string {
+	refs := make([]string, len(issues))
+	for i, si := range issues {
+		refs[i] = fmt.Sprintf("%s#%d", wo.subIssueRepo(si), si.Number)
+	}
+	return refs
 }
 
 // buildSummary creates aggregate metrics for the epic run.
@@ -743,9 +821,22 @@ func (wo *WaveOrchestrator) buildSummary(totalDuration time.Duration) *WaveSumma
 	return summary
 }
 
+// epicStateDir is the pipeline state of the epic's own repository, where
+// the wave plan, the wave status and the epic context are kept. The files are
+// named by the epic's number, which names an issue only in that repository:
+// kept in the launch checkout, two epics that share a number shared them
+// (#2377).
+func (wo *WaveOrchestrator) epicStateDir() (string, error) {
+	root, err := wo.scheduler.resolveRunRoot(wo.repo)
+	if err != nil {
+		return "", err
+	}
+	return layout.PipelineStateDir(root)
+}
+
 // persistWavePlan writes the wave plan to disk for observability.
-func (wo *WaveOrchestrator) persistWavePlan(workspaceRoot string) {
-	dir, err := layout.PipelineStateDir(workspaceRoot)
+func (wo *WaveOrchestrator) persistWavePlan() {
+	dir, err := wo.epicStateDir()
 	if err != nil {
 		log.Printf("epic #%d: pipeline dir not resolved: %v", wo.epicNumber, err)
 		return
@@ -786,8 +877,8 @@ func (wo *WaveOrchestrator) persistWavePlan(workspaceRoot string) {
 }
 
 // persistWaveStatus writes the final wave execution status to disk.
-func (wo *WaveOrchestrator) persistWaveStatus(workspaceRoot string, summary *WaveSummary) {
-	dir, err := layout.PipelineStateDir(workspaceRoot)
+func (wo *WaveOrchestrator) persistWaveStatus(summary *WaveSummary) {
+	dir, err := wo.epicStateDir()
 	if err != nil {
 		log.Printf("epic #%d: pipeline dir not resolved: %v", wo.epicNumber, err)
 		return
@@ -811,15 +902,13 @@ func (wo *WaveOrchestrator) persistWaveStatus(workspaceRoot string, summary *Wav
 	for _, w := range wo.waves {
 		detail := WaveDetail{
 			WaveIndex: w.WaveIndex,
-		}
-		for _, si := range w.Issues {
-			detail.Issues = append(detail.Issues, si.Number)
+			Issues:    wo.subIssueRefs(w.Issues),
 		}
 		// Determine wave status from results
 		allDone := true
 		anyFailed := false
-		for _, issueNum := range detail.Issues {
-			if r, ok := wo.agentResults[issueNum]; ok {
+		for _, si := range w.Issues {
+			if r, ok := wo.agentResults[wo.subIssueKey(si)]; ok {
 				if !r.Success {
 					anyFailed = true
 				}
@@ -879,13 +968,27 @@ type sharedResearch struct {
 // epicContextPath returns the path to the epic context file. Delegates to the
 // shared helper so the accumulator and the prompt-injection read side
 // (epic_context_prompt.go) compute the same path.
+//
+// The file lives in the pipeline state of the epic's own repository
+// (wo.repo), where its number names this epic. In the launch checkout's, an
+// epic of another repository shared the file of every epic with its number,
+// and a sub-issue could be handed another epic's findings (#2377).
 func (wo *WaveOrchestrator) epicContextPath() (string, error) {
-	return epicContextFilePath(wo.scheduler.execMgr.WorkspaceRoot(), wo.epicNumber)
+	root, err := wo.scheduler.resolveRunRoot(wo.repo)
+	if err != nil {
+		return "", err
+	}
+	return epicContextFilePath(root, wo.epicNumber)
 }
 
-// readEpicContext reads the epic context file, returning nil if it doesn't exist.
+// readEpicContext reads the epic context file, returning nil if it doesn't
+// exist or the epic's repository has no checkout here.
 func (wo *WaveOrchestrator) readEpicContext() *epicContext {
-	return readEpicContextFile(wo.scheduler.execMgr.WorkspaceRoot(), wo.epicNumber)
+	root, err := wo.scheduler.resolveRunRoot(wo.repo)
+	if err != nil {
+		return nil
+	}
+	return readEpicContextFile(root, wo.epicNumber)
 }
 
 // writeEpicContext writes the epic context file atomically.
@@ -911,6 +1014,19 @@ func (wo *WaveOrchestrator) writeEpicContext(ec *epicContext) error {
 		return fmt.Errorf("rename temp file: %w", err)
 	}
 	return nil
+}
+
+// findingKey is si's key in the epic context's sub_issue_findings: the bare
+// number for a sub-issue in the epic's own repository, which is how every
+// writer has keyed it, and "owner/repo#N" for one in another repository, so
+// it does not overwrite the findings of the epic repository's issue with the
+// same number (#2377).
+func (wo *WaveOrchestrator) findingKey(si teams.SubIssue) string {
+	repo := wo.subIssueRepo(si)
+	if strings.EqualFold(repo, wo.repo) {
+		return strconv.Itoa(si.Number)
+	}
+	return fmt.Sprintf("%s#%d", repo, si.Number)
 }
 
 // appendSubIssueToEpicContext records a completed sub-issue's findings
@@ -948,7 +1064,7 @@ func (wo *WaveOrchestrator) appendSubIssueToEpicContext(si teams.SubIssue) {
 	if findings.FilesTouched == nil {
 		findings.FilesTouched = []string{}
 	}
-	ec.SubIssueFindings[fmt.Sprintf("%d", si.Number)] = findings
+	ec.SubIssueFindings[wo.findingKey(si)] = findings
 
 	// Merge files into shared relevant_files (deduplicate)
 	if len(si.Files) > 0 {

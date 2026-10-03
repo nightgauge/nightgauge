@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -269,34 +270,47 @@ func writeGatePassingSkillOutput(workDir, worktreeDir string, issueNumber int, s
 	}
 }
 
-// pipelineStageResponder runs in a goroutine, reading events from the harness.
-// When it sees a pipeline.runStage event, it:
-// 1. Records the stage name
-// 2. Writes the output context file (from params.outputFile)
-// 3. Sends a pipeline.stageResult request back with success=true
+// pipelineStageResponder runs in a goroutine, reading the harness's lines and
+// playing the extension's part in a pipeline run:
 //
-// The filter function, if non-nil, is called for each event and returns true
-// to process it as a runStage event, false to skip.
+//   - pipeline.validateLicense: it answers, as answerLicenseCheck says.
+//   - pipeline.runStage: it records the stage, writes the stage's output
+//     context and skill outputs, and answers pipeline.stageResult with success.
 //
-// Returns channels for: dispatched stage names, all collected events, and done.
+// The filter function, if non-nil, is called with each runStage's issue and
+// returns true to answer it, false to skip it.
+//
+// It stops at pipeline.complete, when the daemon's stdout closes, after more
+// than maxStages dispatches (a pipeline that loops is counted, not waited
+// out), or when the pipeline makes no progress for stall. Every pipeline,
+// stage and phase event restarts the stall bound, so it ends only a pipeline
+// that has stopped moving, never a healthy one on a loaded machine: a fixed
+// budget for the whole run measured the machine's load instead (#2368). end
+// says why it stopped; read it once done is closed.
+//
+// Returns channels for: dispatched stages, all collected lines, and done.
 func pipelineStageResponder(
 	h *ipcTestHarness,
 	issueFilter func(issueNumber int) bool,
-	timeout time.Duration,
-) (stages chan stageDispatch, events chan string, done chan struct{}) {
+	maxStages int,
+	stall time.Duration,
+) (stages chan stageDispatch, events chan string, done chan struct{}, end *responderEnd) {
 	stages = make(chan stageDispatch, 64)
 	events = make(chan string, 256)
 	done = make(chan struct{})
+	end = &responderEnd{}
 
 	go func() {
 		defer close(done)
-		timer := time.NewTimer(timeout)
+		timer := time.NewTimer(stall)
 		defer timer.Stop()
+		dispatched := 0
 
 		for {
 			select {
 			case line, ok := <-h.lines:
 				if !ok {
+					end.reason = "the daemon's stdout closed"
 					return
 				}
 
@@ -322,8 +336,14 @@ func pipelineStageResponder(
 				if err := json.Unmarshal(rawEvt, &evtName); err != nil {
 					continue
 				}
+				if pipelineProgress(evtName) {
+					timer.Reset(stall)
+				}
 
 				switch evtName {
+				case "pipeline.validateLicense":
+					answerLicenseCheck(h, msg, issueFilter)
+
 				case "pipeline.runStage":
 					// Parse runStage data
 					var data RunStageParams
@@ -347,6 +367,11 @@ func pipelineStageResponder(
 					select {
 					case stages <- sd:
 					default:
+					}
+					dispatched++
+					if dispatched > maxStages {
+						end.reason = fmt.Sprintf("the daemon dispatched more than %d stages", maxStages)
+						return
 					}
 
 					// Write the output context file so the next stage's prerequisite check passes
@@ -372,16 +397,56 @@ func pipelineStageResponder(
 					})
 
 				case "pipeline.complete":
-					return // Pipeline done — stop listening
+					end.reason = "pipeline.complete"
+					return
 				}
 
 			case <-timer.C:
+				end.reason = fmt.Sprintf("the pipeline made no progress for %s", stall)
 				return
 			}
 		}
 	}()
 
-	return stages, events, done
+	return stages, events, done, end
+}
+
+// answerLicenseCheck answers a pipeline.validateLicense event the way the
+// extension does with no license key: allowed, on the community tier. Left
+// unanswered, the daemon waits out its own 10 s license timeout and then fails
+// open to the same answer, so every E2E run spent 10 s waiting inside its
+// time budget (#2368). An issue the filter rejects is left alone.
+func answerLicenseCheck(h *ipcTestHarness, msg map[string]json.RawMessage, issueFilter func(issueNumber int) bool) {
+	var req LicenseCheckRequest
+	if rawData, ok := msg["data"]; ok {
+		if err := json.Unmarshal(rawData, &req); err != nil {
+			return
+		}
+	}
+	if issueFilter != nil && !issueFilter(req.IssueNumber) {
+		return
+	}
+	h.sendRequest("pipeline.licenseResult", LicenseCheckResult{
+		IssueNumber: req.IssueNumber,
+		Allowed:     true,
+		Tier:        "community",
+	})
+}
+
+// responderEnd records why pipelineStageResponder stopped.
+type responderEnd struct {
+	reason string
+}
+
+// pipelineProgress reports whether an event is the pipeline moving: any
+// pipeline, stage or phase event. Nothing else restarts the stall bound.
+func pipelineProgress(event string) bool {
+	for _, prefix := range []string{"pipeline.", "stage.", "phase."} {
+		if strings.HasPrefix(event, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // stageDispatch records a dispatched stage execution.
@@ -461,6 +526,8 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 		t.Skip("skipping E2E test in short mode")
 	}
 
+	// The pr-merge stage polls GitHub for the fixture's PR. TestMain's network
+	// seal refuses each read on this machine at once.
 	h, workDir := newIpcTestHarnessWithSkills(t)
 	h.awaitReady()
 
@@ -495,12 +562,19 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 		t.Errorf("expected status=queued, got %v", result["status"])
 	}
 
-	// Now launch stage responder goroutine (sole consumer of h.lines from here)
-	stages, events, done := pipelineStageResponder(h, nil, 30*time.Second)
+	// Now launch stage responder goroutine (sole consumer of h.lines from here).
+	// It waits on the pipeline's own events, not on a clock: a fixed 30 s for
+	// the whole run expired under load before the sixth stage (#2368). Its
+	// stall bound ends only a pipeline that stops moving, so it is sized far
+	// above any one step on a loaded machine.
+	stages, events, done, end := pipelineStageResponder(h, nil, 6, 2*time.Minute)
 
 	// Wait for pipeline completion
 	allEvents := collectEvents(events, done)
 	allEvents = append(preEvents, allEvents...)
+	if end.reason != "pipeline.complete" {
+		t.Errorf("the responder stopped before pipeline.complete: %s", end.reason)
+	}
 
 	// Collect all dispatched stages
 	close(stages)
@@ -553,11 +627,15 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 		}
 	}
 
-	// pipeline.complete is emitted from the scheduler's terminal defer just
-	// before SealAndRemove runs. Wait for that defer to finish, then assert the
-	// durable terminal contract rather than racing the transient snapshot.
+	// pipeline.complete is emitted from the scheduler's terminal defer before
+	// SealAndRemove runs, with worktree and branch cleanup (git processes)
+	// between them, and no event follows the seal. Poll for that defer to
+	// finish, then assert the durable terminal contract rather than racing the
+	// transient snapshot. The poll ends the moment the snapshot is gone; its
+	// limit bounds a failure only (a snapshot never removed), at the stall
+	// bound's 2 minutes, so no load can fail a run that removes it (#2368).
 	stateDir := layouttest.PipelineDir(t, workDir)
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(2 * time.Minute)
 	for {
 		snapshots, err := state.FindPersistedStatesForIssue(stateDir, issueNumber)
 		if err != nil {
@@ -603,9 +681,15 @@ func TestE2E_StageExecutionRoundTrip(t *testing.T) {
 		t.Fatalf("pipeline.runItem returned error: %+v", resp.Error)
 	}
 
-	// Wait for the first pipeline.runStage event (issue-pickup)
+	// Wait for the first pipeline.runStage event (issue-pickup), answering the
+	// license check on the way as the extension does. The wait ends on the
+	// event; the stall bound ends only a pipeline that stopped moving. A fixed
+	// 15 s here held the daemon's 10 s wait for an unanswered license check,
+	// leaving 5 s for the work itself (#2368).
+	const stallAfter = 2 * time.Minute
 	var runStageEvent RunStageParams
-	deadline := time.After(15 * time.Second)
+	stall := time.NewTimer(stallAfter)
+	defer stall.Stop()
 	for {
 		select {
 		case line, ok := <-h.lines:
@@ -624,14 +708,20 @@ func TestE2E_StageExecutionRoundTrip(t *testing.T) {
 			if err := json.Unmarshal(rawEvt, &evtName); err != nil {
 				continue
 			}
-			if evtName == "pipeline.runStage" {
+			if pipelineProgress(evtName) {
+				stall.Reset(stallAfter)
+			}
+			switch evtName {
+			case "pipeline.validateLicense":
+				answerLicenseCheck(h, msg, nil)
+			case "pipeline.runStage":
 				if rawData, ok := msg["data"]; ok {
 					json.Unmarshal(rawData, &runStageEvent)
 				}
 				goto foundRunStage
 			}
-		case <-deadline:
-			t.Fatal("timeout waiting for pipeline.runStage event")
+		case <-stall.C:
+			t.Fatalf("the pipeline made no progress for %s before its first pipeline.runStage", stallAfter)
 		}
 	}
 foundRunStage:
@@ -858,11 +948,17 @@ func TestE2E_ConcurrentPipelines(t *testing.T) {
 	lastStage := make(map[int]string)     // issueNumber → last dispatched stage (for diagnostics)
 	allEvents := make([]string, 0, 256)
 
-	// Single shared timeout for both the responder and the main thread.
-	// 150s accounts for variable CI performance. With the file race eliminated,
-	// 3 pipelines × 6 stages typically complete in 30-45s on slow CI.
-	deadline := time.NewTimer(150 * time.Second)
-	defer deadline.Stop()
+	// The wait ends on the pipelines' own events, not on a clock (#2368). A
+	// shared 150 s timer bounded the whole run before, so it measured the
+	// machine's load; and its channel delivers one tick to one receiver, so
+	// when the responder took it, the main thread below waited on forever.
+	// Now the responder owns a stall bound that every pipeline, stage and
+	// phase event restarts, and a count of dispatches, and it closes stopped,
+	// which wakes every receiver, when either trips.
+	const stallAfter = 2 * time.Minute
+	const maxDispatches = 3 * 6
+	stopped := make(chan struct{})
+	var stopReason string // written before stopped closes
 
 	// WaitGroup tracks pipeline.complete events (replaces counter + channel).
 	var wg sync.WaitGroup
@@ -873,15 +969,25 @@ func TestE2E_ConcurrentPipelines(t *testing.T) {
 		close(wgDone)
 	}()
 
-	// Background goroutine: read events and respond to pipeline.runStage.
-	// Uses the shared deadline — no independent timer.
+	// Background goroutine: read events, answer the license checks and
+	// pipeline.runStage, and stop the wait if the pipelines stall or loop.
 	responderDone := make(chan struct{})
 	go func() {
 		defer close(responderDone)
+		stall := time.NewTimer(stallAfter)
+		defer stall.Stop()
+		stop := func(reason string) {
+			stopReason = reason
+			close(stopped)
+		}
+		dispatched, completed := 0, 0
 		for {
 			select {
 			case line, ok := <-h.lines:
 				if !ok {
+					if completed < len(pipelines) {
+						stop("the daemon's stdout closed")
+					}
 					return
 				}
 
@@ -900,12 +1006,23 @@ func TestE2E_ConcurrentPipelines(t *testing.T) {
 				}
 				var evtName string
 				json.Unmarshal(rawEvt, &evtName)
+				if pipelineProgress(evtName) && completed < len(pipelines) {
+					stall.Reset(stallAfter)
+				}
 
 				switch evtName {
+				case "pipeline.validateLicense":
+					answerLicenseCheck(h, msg, nil)
+
 				case "pipeline.runStage":
 					var data RunStageParams
 					if rawData, ok := msg["data"]; ok {
 						json.Unmarshal(rawData, &data)
+					}
+					dispatched++
+					if dispatched > maxDispatches {
+						stop(fmt.Sprintf("the daemon dispatched more than %d stages", maxDispatches))
+						return
 					}
 
 					mu.Lock()
@@ -945,12 +1062,15 @@ func TestE2E_ConcurrentPipelines(t *testing.T) {
 					})
 
 				case "pipeline.complete":
+					completed++
 					wg.Done()
+					if completed == len(pipelines) {
+						stall.Stop() // done; keep draining until stdout closes
+					}
 				}
 
-			case <-deadline.C:
-				// Shared deadline fired — stop reading. The main thread
-				// will detect the timeout via the same channel.
+			case <-stall.C:
+				stop(fmt.Sprintf("the pipelines made no progress for %s", stallAfter))
 				return
 			}
 		}
@@ -969,12 +1089,12 @@ func TestE2E_ConcurrentPipelines(t *testing.T) {
 		})
 	}
 
-	// Wait for all 3 pipeline.complete events OR the shared deadline.
+	// Wait for all 3 pipeline.complete events, or for the responder to stop.
 	select {
 	case <-wgDone:
 		// All 3 pipelines completed — success path.
-	case <-deadline.C:
-		// Timeout — collect diagnostics before failing.
+	case <-stopped:
+		// Stalled or looping — collect diagnostics before failing.
 		mu.Lock()
 		var diag string
 		for _, p := range pipelines {
@@ -984,8 +1104,8 @@ func TestE2E_ConcurrentPipelines(t *testing.T) {
 				p.issueNumber, p.owner, p.repo, len(stages), last, stages)
 		}
 		mu.Unlock()
-		t.Fatalf("timeout waiting for 3 concurrent pipelines to complete."+
-			"\nPer-pipeline state:%s", diag)
+		t.Fatalf("3 concurrent pipelines did not complete: %s."+
+			"\nPer-pipeline state:%s", stopReason, diag)
 	}
 
 	mu.Lock()

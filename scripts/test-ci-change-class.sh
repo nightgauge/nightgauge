@@ -210,8 +210,8 @@ fail_open_case "merge_group with no base SHA runs heavy" \
 # A merge-queue run classifies the group's diff exactly like a pull request:
 # merge_group.base_sha..head_sha of a docs-only group is docs_only.
 mg_out="$(classify "$PUSH_REPO" merge_group "$PUSH_BASE" "$PUSH_HEAD")"
-if printf '%s\n' "$mg_out" | grep -qx 'change_class=docs_only' &&
-  printf '%s\n' "$mg_out" | grep -qx 'run_heavy=false'; then
+if grep -qx 'change_class=docs_only' <<<"$mg_out" &&
+  grep -qx 'run_heavy=false' <<<"$mg_out"; then
   ok "merge_group docs-only group → change_class=docs_only run_heavy=false"
 else
   bad "merge_group docs-only group" "want docs_only/false; got: $(printf '%s' "$mg_out" | tr '\n' ' ')"
@@ -399,11 +399,10 @@ assert_ungated_step go './internal/preflight/' \
 # moved: the workflow would keep running a package that no longer guards
 # anything, on exactly the PRs where nothing else does.
 guard_step="$(step_block go './internal/preflight/')"
-# A here-string, not `printf ... | sed ... | head -1` — `head -1` is the same
-# early-exiting-reader shape as block_matches' grep (see above) and would
-# carry the same race if this result were ever checked by exit status instead
-# of content.
-guard_pkg="$(sed -n 's|^.*go test \(\./[A-Za-z0-9_./-]*\).*|\1|p' <<<"$guard_step" | head -1)"
+# A here-string, and `sed -n 1p` rather than `head -1`: `head -1` is the same
+# early-exiting-reader shape as block_matches' grep (see above), and
+# scripts/check-pipefail-early-exit.py forbids it (#2360).
+guard_pkg="$(sed -n 's|^.*go test \(\./[A-Za-z0-9_./-]*\).*|\1|p' <<<"$guard_step" | sed -n 1p)"
 if [ -z "$guard_pkg" ] || [ ! -d "$REPO_ROOT/${guard_pkg#./}" ]; then
   bad "the ungated guard step names a real package" \
     "could not resolve a package directory from: ${guard_step:-<no such step>}"

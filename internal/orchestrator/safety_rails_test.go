@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -191,22 +192,29 @@ func TestEpicCheckpoint_PausesAfterEpicComplete(t *testing.T) {
 		EpicCheckpoint: true,
 	})
 
-	sr.RecordEpicComplete(42)
+	sr.RecordEpicComplete("example-org/platform", 42)
 
 	allowed, reason := sr.CheckBeforeEnqueue(0)
 	if allowed {
 		t.Error("expected denied: paused for epic checkpoint")
 	}
-	if reason == "" {
-		t.Error("expected checkpoint reason")
+	// The reason names the epic in its repository (#2377).
+	if want := "paused for epic checkpoint (epic example-org/platform#42 complete"; !strings.HasPrefix(reason, want) {
+		t.Errorf("reason = %q, want prefix %q", reason, want)
 	}
 
 	state := sr.State()
 	if !state.PausedForCheckpoint {
 		t.Error("expected PausedForCheckpoint to be true")
 	}
-	if state.LastEpicNumber != 42 {
-		t.Errorf("expected LastEpicNumber 42, got %d", state.LastEpicNumber)
+	if state.LastEpicNumber != 42 || state.LastEpicRepo != "example-org/platform" {
+		t.Errorf("last epic = %s#%d, want example-org/platform#42", state.LastEpicRepo, state.LastEpicNumber)
+	}
+	if got := state.LastEpicRef(); got != "example-org/platform#42" {
+		t.Errorf("LastEpicRef() = %q, want example-org/platform#42", got)
+	}
+	if got := (SafetyState{LastEpicNumber: 42}).LastEpicRef(); got != "#42" {
+		t.Errorf("LastEpicRef() with no repository = %q, want #42", got)
 	}
 }
 
@@ -215,7 +223,7 @@ func TestEpicCheckpoint_DisabledWhenFalse(t *testing.T) {
 		EpicCheckpoint: false,
 	})
 
-	sr.RecordEpicComplete(42)
+	sr.RecordEpicComplete("o/r", 42)
 
 	allowed, _ := sr.CheckBeforeEnqueue(0)
 	if !allowed {
@@ -233,7 +241,7 @@ func TestEpicCheckpoint_ResumeClears(t *testing.T) {
 		EpicCheckpoint: true,
 	})
 
-	sr.RecordEpicComplete(42)
+	sr.RecordEpicComplete("o/r", 42)
 
 	allowed, _ := sr.CheckBeforeEnqueue(0)
 	if allowed {
@@ -386,7 +394,7 @@ func TestReset_ClearsCounters(t *testing.T) {
 	sr.RecordPipelineStart()
 	sr.RecordPipelineStart()
 	sr.RecordPipelineStart()
-	sr.RecordEpicComplete(10)
+	sr.RecordEpicComplete("o/r", 10)
 
 	// Verify tripped
 	if !sr.IsTripped() {
@@ -464,7 +472,7 @@ func TestIsTripped_Checkpoint(t *testing.T) {
 	sr := NewSafetyRails(SafetyConfig{
 		EpicCheckpoint: true,
 	})
-	sr.RecordEpicComplete(1)
+	sr.RecordEpicComplete("o/r", 1)
 
 	if !sr.IsTripped() {
 		t.Error("expected tripped when paused for checkpoint")

@@ -109,13 +109,14 @@ func TestFetchSubIssueDetails_TruncatedBlockerListIsAnError(t *testing.T) {
 	})
 	wo := newWaveOrchestrator(forgeScheduler(forge), 100, "acme/widgets", 4, 0)
 
-	subIssues, details, err := wo.fetchSubIssueDetails(context.Background(), githubtest.Owner, githubtest.Repo,
+	subIssues, details, blockedBy, err := wo.fetchSubIssueDetails(context.Background(), githubtest.Owner, githubtest.Repo,
 		types.BoardItem{Number: 100, Repo: "acme/widgets"})
 	if !errors.Is(err, gh.ErrConnectionTruncated) {
 		t.Fatalf("fetchSubIssueDetails err = %v, want ErrConnectionTruncated", err)
 	}
-	if subIssues != nil || details != nil {
-		t.Fatalf("returned a plan input (%d sub-issues, %d details) alongside a truncated read", len(subIssues), len(details))
+	if subIssues != nil || details != nil || blockedBy != nil {
+		t.Fatalf("returned a plan input (%d sub-issues, %d details, %d blocker lists) alongside a truncated read",
+			len(subIssues), len(details), len(blockedBy))
 	}
 }
 
@@ -131,7 +132,7 @@ func TestFetchSubIssueDetails_LongListsItDoesNotUseCannotFailIt(t *testing.T) {
 	})
 	wo := newWaveOrchestrator(forgeScheduler(forge), 100, "acme/widgets", 4, 0)
 
-	subIssues, details, err := wo.fetchSubIssueDetails(context.Background(), githubtest.Owner, githubtest.Repo,
+	subIssues, details, blockedBy, err := wo.fetchSubIssueDetails(context.Background(), githubtest.Owner, githubtest.Repo,
 		types.BoardItem{Number: 100, Repo: "acme/widgets"})
 	if err != nil {
 		t.Fatalf("fetchSubIssueDetails: %v", err)
@@ -141,6 +142,9 @@ func TestFetchSubIssueDetails_LongListsItDoesNotUseCannotFailIt(t *testing.T) {
 	}
 	if fmt.Sprint(details[0].BlockedBy) != "[102]" {
 		t.Errorf("#101 blockers = %v, want [102]", details[0].BlockedBy)
+	}
+	if got := fmt.Sprint(blockedBy[wo.subIssueKey(subIssues[0])]); got != "[acme/widgets#102]" {
+		t.Errorf("#101 repo-qualified blockers = %v, want [acme/widgets#102]", got)
 	}
 	if n := forge.FollowUps(); n != 0 {
 		t.Errorf("the plan read %d later page(s) of lists it does not use", n)

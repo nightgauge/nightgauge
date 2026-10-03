@@ -404,7 +404,7 @@ func TestBuildGraphFromItemsSkipsPRs(t *testing.T) {
 		{Number: 2, Title: "PR", State: "OPEN", Repo: "O/R", IsPR: true},
 	}
 
-	g := BuildGraphFromItems(items, nil, nil, nil)
+	g := BuildGraphFromItems(items, nil, nil, testRepoAliases)
 	if len(g.Nodes) != 1 {
 		t.Errorf("expected 1 node (PR should be skipped), got %d", len(g.Nodes))
 	}
@@ -428,7 +428,7 @@ func TestEdgeResolvability(t *testing.T) {
 		// O/external is NOT in workspace
 	}
 
-	g := BuildGraphFromItems(items, nil, workspace, nil)
+	g := BuildGraphFromItems(items, nil, workspace, testRepoAliases)
 	if len(g.Edges) != 1 {
 		t.Fatalf("expected 1 edge, got %d", len(g.Edges))
 	}

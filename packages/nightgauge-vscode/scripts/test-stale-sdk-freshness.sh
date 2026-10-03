@@ -62,7 +62,7 @@ fi
 # ── Test 3: stale dist emits RECOVERABLE: stale_sdk_dist ────────────────────
 echo ""
 echo "--- Test 3: emits RECOVERABLE: stale_sdk_dist marker ---"
-if echo "$STDERR_2" | grep -q "RECOVERABLE: stale_sdk_dist"; then
+if grep -q "RECOVERABLE: stale_sdk_dist" <<<"$STDERR_2"; then
   pass "RECOVERABLE: stale_sdk_dist emitted to stderr"
 else
   fail "RECOVERABLE: stale_sdk_dist NOT found in stderr"
@@ -101,7 +101,7 @@ else
   fail "check-sdk-freshness.sh exits 0 on missing dist (expected non-zero)"
 fi
 
-if echo "$STDERR_5" | grep -q "RECOVERABLE: stale_sdk_dist"; then
+if grep -q "RECOVERABLE: stale_sdk_dist" <<<"$STDERR_5"; then
   pass "RECOVERABLE: stale_sdk_dist emitted for missing dist"
 else
   fail "RECOVERABLE: stale_sdk_dist NOT found in stderr for missing dist"

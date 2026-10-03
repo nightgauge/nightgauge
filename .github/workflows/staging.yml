@@ -174,13 +174,17 @@ jobs:
           COUNT=0
           for VSIX in *.vsix; do
             COUNT=$((COUNT + 1))
-            unzip -l "$VSIX" | grep -q 'extension/dist/build-info.json' \
+            # One listing, then here-strings: `unzip -l | grep -q` under
+            # pipefail can SIGPIPE unzip at an early match and fail a good
+            # VSIX, or pass one that ships a source map (#2360).
+            LISTING="$(unzip -l "$VSIX")"
+            grep -q 'extension/dist/build-info.json' <<<"$LISTING" \
               || { echo "ERROR: $VSIX missing build-info.json"; exit 1; }
-            unzip -l "$VSIX" | grep -q 'extension/dist/bin/nightgauge' \
+            grep -q 'extension/dist/bin/nightgauge' <<<"$LISTING" \
               || { echo "ERROR: $VSIX missing bundled Go binary"; exit 1; }
-            unzip -l "$VSIX" | grep -q 'extension/dist/sdk-cli.cjs' \
+            grep -q 'extension/dist/sdk-cli.cjs' <<<"$LISTING" \
               || { echo "ERROR: $VSIX missing bundled SDK CLI"; exit 1; }
-            if unzip -l "$VSIX" | grep -qE '\.(map|d\.ts)$'; then echo "ERROR: $VSIX ships source maps or type declarations"; exit 1; fi
+            if grep -qE '\.(map|d\.ts)$' <<<"$LISTING"; then echo "ERROR: $VSIX ships source maps or type declarations"; exit 1; fi
             # No shipped file may carry a fetch piped to a shell or a base64
             # decode, from whichever package it was bundled (#2320, #2321).
             bash scripts/check-shipped-code.sh "$VSIX"
@@ -194,15 +198,18 @@ jobs:
               *darwin*)
                 unzip -p "$VSIX" extension/dist/bin/nightgauge > "$RUNNER_TEMP/packaged-bin"
                 if [[ -n "${APPLE_SIGNING_EXPECTED:-}" ]]; then
-                  codesign -dvvv "$RUNNER_TEMP/packaged-bin" 2>&1 \
-                    | grep -q 'Authority=Developer ID Application' \
+                  # -dvvv prints everything -dv does (the flags line too).
+                  SIGNATURE="$(codesign -dvvv "$RUNNER_TEMP/packaged-bin" 2>&1 || true)"
+                  grep -q 'Authority=Developer ID Application' <<<"$SIGNATURE" \
                     || { echo "ERROR: $VSIX ships a binary that is not Developer ID signed"; exit 1; }
-                  codesign -dv "$RUNNER_TEMP/packaged-bin" 2>&1 | grep -q 'flags=0x10000(runtime)' \
+                  grep -q 'flags=0x10000(runtime)' <<<"$SIGNATURE" \
                     || { echo "ERROR: $VSIX binary lacks the hardened runtime"; exit 1; }
                   echo "OK: $VSIX carries a Developer ID signature with hardened runtime"
                 else
-                  codesign -dv "$RUNNER_TEMP/packaged-bin" 2>&1 | grep -q 'adhoc' \
-                    && echo "NOTE: $VSIX binary is ad-hoc signed (no Apple secrets configured)"
+                  SIGNATURE="$(codesign -dv "$RUNNER_TEMP/packaged-bin" 2>&1 || true)"
+                  if grep -q 'adhoc' <<<"$SIGNATURE"; then
+                    echo "NOTE: $VSIX binary is ad-hoc signed (no Apple secrets configured)"
+                  fi
                 fi
                 rm -f "$RUNNER_TEMP/packaged-bin"
                 ;;

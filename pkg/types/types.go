@@ -56,6 +56,14 @@ type BoardItem struct {
 	SubIssues    []SubIssueRef `json:"subIssues,omitempty"`
 	ParentNumber int           `json:"parentIssueNumber,omitempty"` // parent epic number (0 = no parent)
 	ParentTitle  string        `json:"parentIssueTitle,omitempty"`  // parent epic title (for cross-status resolution)
+	// ParentRepo is the parent epic's own repository, "owner/name". Issue
+	// numbers are per repository, so ParentNumber alone names an issue only
+	// when the epic lives in this item's repository; a parent in another
+	// repository resolved by number in this one is a different issue (#2350).
+	// Both board readers fill it whenever ParentNumber is set; it is empty
+	// only on items built before #2350 or by hand, which consumers read as
+	// this item's own repository, the one place a bare number can name.
+	ParentRepo string `json:"parentIssueRepo,omitempty"`
 
 	// Blocking relationships (GitHub native)
 	BlockedBy []BlockingRef `json:"blockedBy,omitempty"`

@@ -51,7 +51,6 @@ import type {
   DoctorHistoryResult,
   DoctorRecheckResult,
   DoctorRunResult,
-  EpicContextResult,
   EpicProgress,
   ExecutionInfo,
   FailureClassification,
@@ -85,6 +84,7 @@ import type {
   PlatformSyncTelemetryResult,
   PortalSessionResult,
   PullRequestDetail,
+  QueueRemoveRemoteRunResult,
   QueueValidatePinResult,
   RateLimitInfo,
   RecordStageExitResult,
@@ -223,14 +223,6 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<{epicNumber:number;newStatus:string;epicSynced:boolean;subIssueTotal:number;subIssueMoved:number}>('epic.transitionStatus', { owner, repo, epicNumber, projectNumber, newStatus, githubUser });
   }
 
-  async epicReadContext(): Promise<EpicContextResult> {
-    return this.call<EpicContextResult>('epic.readContext');
-  }
-
-  async epicAppendContext(): Promise<void> {
-    await this.call<void>('epic.appendContext');
-  }
-
 
   // -------------------------------------------------------------------------
   // Pipeline
@@ -290,8 +282,8 @@ export class IpcClientGenerated extends IpcClientBase {
   // Queue
   // -------------------------------------------------------------------------
 
-  async queueAdd(owner: string, repo: string, issueNumber: number, title?: string, labels?: string[], priority?: string, remoteRunId?: string, adapter?: string, model?: string): Promise<void> {
-    await this.call<void>('queue.add', { owner, repo, issueNumber, title, labels, priority, remoteRunId, adapter, model });
+  async queueAdd(owner: string, repo: string, issueNumber: number, title?: string, labels?: string[], priority?: string, remoteRunId?: string, remoteRunAttached?: boolean, adapter?: string, model?: string): Promise<void> {
+    await this.call<void>('queue.add', { owner, repo, issueNumber, title, labels, priority, remoteRunId, remoteRunAttached, adapter, model });
   }
 
   async queueValidatePin(adapter?: string, model?: string, owner?: string, repo?: string, issueNumber?: number): Promise<QueueValidatePinResult> {
@@ -304,6 +296,10 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async queueRemove(issueNumber: number): Promise<void> {
     await this.call<void>('queue.remove', { issueNumber });
+  }
+
+  async queueRemoveRemoteRun(remoteRunId: string): Promise<QueueRemoveRemoteRunResult> {
+    return this.call<QueueRemoveRemoteRunResult>('queue.removeRemoteRun', { remoteRunId });
   }
 
   async queueClear(): Promise<void> {
