@@ -193,11 +193,14 @@ changelog, and the release workflow refuses a tag that does not.
   started. Now the hung helper's deadline passes once it is running, and the
   test checks that it, and no other helper, timed out. A second case, where
   every helper hangs and nothing else can end one, pins each helper's own
-  timeout.
+  timeout. The other fold tests bounded their helpers by 5 s each and 30 s
+  in all; the 64-session case runs 67 helpers in turn, so 0.45 s per helper
+  failed it. Both limits now catch only a hang.
   `TestContract_Attention`'s sweep subtest (#2367) went to GitHub for real
   under a 10 s read. A loopback proxy that refuses every connection now
-  keeps the IPC test daemon off the network, and the subtest checks the
-  sweep's degraded result and counts the requests the seal refused. The
+  keeps every IPC test off the network: unsealed, 14 of them sent 43
+  requests in one run, to GitHub and to the platform API. The subtest checks
+  the sweep's degraded result and counts the requests the seal refused. The
   harness's read bound only catches a daemon that never answers, so it now
   allows 60 s. A subtest can bind the harness to itself, so a harness
   failure fails that subtest instead of its parent.
