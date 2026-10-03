@@ -44,27 +44,33 @@ written in the replacement forms by hand, as issue-create's scope gates are.
 Converting the other fences is a mechanical sweep of its own (#2360 records
 why).
 
-Early-exit readers, as the first command of the stage after a pipe, looking
-inside a `{ }` or `( )` group or an `if` condition, and past wrappers such as
-env, nice, nohup, stdbuf, sudo and timeout: grep (egrep, fgrep, ggrep) with
--q, -m, -l or -L or their long forms, or with its output sent to /dev/null,
-which GNU grep treats as -q (so trading -q for that redirect is no fix); head
-(ghead) unless it prints all but the last lines (`-n -N`); sed (gsed) with a q
-or Q command; awk with an exit or nextfile outside END, or with only BEGIN
-rules, which read no input (a getline that reads a file or a command reads
-none of it either); perl -n or -p with exit or last; read; an until loop
-conditioned on a read, which ends at the first line; and a while or until
-loop whose body can break, exit or return. An awk, sed or perl program
-holding an expansion is read with the expansion as an opaque word. A
-pipeline that ends an input process substitution `<(...)` is exempt: no one
-reads its status.
+Early-exit readers, as the command of the stage after a pipe, past wrappers
+such as env, nice, nohup, stdbuf, sudo and timeout: grep (egrep, fgrep, ggrep)
+with -q, -m, -l or -L or their long forms, or with its output sent to
+/dev/null, which GNU grep treats as -q (so trading -q for that redirect is no
+fix); head (ghead) unless it prints all but the last lines (`-n -N`); sed
+(gsed) with a q or Q command; awk with an exit or nextfile outside END, or
+with only BEGIN rules, which read no input (a getline that reads a file or a
+command reads none of it either); perl -n or -p with exit or last; read; an
+until loop conditioned on a read, which ends at the first line; and a while
+or until loop whose body can break, exit or return. An awk, sed or perl
+program holding an expansion is read with the expansion as an opaque word. A
+compound stage, a `{ }` or `( )` group, an if, case, for or select, gives
+every command in it the same input, so each one is read, at any depth, and
+not only the first; one fed by a pipe of its own is not. A stage that calls
+a function the same file defines reads with the function's body, read the
+same way. A pipeline that ends an input process substitution `<(...)` is
+exempt: no one reads its status.
 
 Not seen: a command named by an expansion (`$GREP -q`), jq, a program read
 from a file (`awk -f`, `sed -f`), any other loop condition that can end the
-loop before the end of input, and code in a quoted string handed to another
-shell. Flagged although it drains its input: a group that reads a line and
-then reads the rest, such as `{ read -r first; cat; }`; capture the input
-first instead.
+loop before the end of input, a function defined in another file (a sourced
+library) or called through a wrapper or an expansion, a reader in a command
+substitution that reads the stage's input (`cmd | v=$(head -1)`), and code in
+a quoted string handed to another shell. Flagged although the input is read
+to its end: a compound whose reader stops early before a later command reads
+the rest, such as `{ read -r first; cat; }`, or whose reader has input of its
+own (`{ grep -q x <<<"$v"; cat; }`); capture the input first instead.
 
 WHY THIS IS NOT A GREP
 
@@ -155,6 +161,15 @@ TAKES_DURATION = {"timeout", "gtimeout"}
 LOOP_WORDS = {"while", "until"}
 # Inside a loop body, these end the loop before its input does.
 LOOP_EXITS = {"break", "exit", "return"}
+# Each compound command's opener and the word, or operator, that ends it.
+# Every command inside one reads the input a pipe gives the compound.
+COMPOUND_END = {"{": "}", "(": ")", "if": "fi", "case": "esac", "for": "done", "select": "done",
+                "while": "done", "until": "done"}
+# Reserved words that stand where a command can start but run none.
+CLAUSE_WORDS = {"then", "do", "else", "elif"}
+# What can precede the command a function is called by: a wrapper such as
+# env or command runs a program, never a function.
+CALL_PREFIXES = {"!", "time"}
 
 PIPE_OPS = {"|", "|&"}
 CASE_BREAKS = {";;", ";&", ";;&"}
@@ -1110,29 +1125,178 @@ def until_reads(toks: list[Tok], j: int) -> bool:
     return k < len(words) and words[k].value == "read"
 
 
-def stage_hazard(toks: list[Tok], j: int) -> tuple[Tok, str, str, int] | None:
-    """(token, reader, why, end) when the pipeline stage at toks[j] stops
-    reading before the end of its input; `end` indexes the operator after it."""
+def opens_compound(tok: Tok) -> bool:
+    if tok.kind == "op":
+        return tok.text == "("
+    return tok.value in COMPOUND_END
+
+
+def skip_lines(toks: list[Tok], j: int) -> int:
     while j < len(toks) and toks[j].kind == "op" and toks[j].text == "nl":
         j += 1
+    return j
+
+
+def definition(toks: list[Tok], k: int) -> tuple[str, int] | None:
+    """(name, index of the body) when toks[k], a word at a command's start,
+    defines a function: `name() body` or `function name [()] body`."""
+    t = toks[k]
+    if t.value == "function" and k + 1 < len(toks) and toks[k + 1].kind == "word":
+        name, n = toks[k + 1].value, k + 2
+        if n + 1 < len(toks) and toks[n].text == "(" and toks[n + 1].text == ")" \
+                and toks[n].kind == toks[n + 1].kind == "op":
+            n += 2
+    elif (
+        k + 2 < len(toks)
+        and toks[k + 1].kind == toks[k + 2].kind == "op"
+        and toks[k + 1].text == "("
+        and toks[k + 2].text == ")"
+        and not is_assignment(t)  # `a=()` is an empty array
+    ):
+        name, n = t.value, k + 3
+    else:
+        return None
+    n = skip_lines(toks, n)
+    if name is None or n >= len(toks) or not opens_compound(toks[n]):
+        return None
+    return name, n
+
+
+def functions(toks: list[Tok]) -> dict[str, list[int]]:
+    """The body of each function the file defines, by name."""
+    found: dict[str, list[int]] = {}
+    prev: Tok | None = None
+    for k, t in enumerate(toks):
+        if t.kind == "word" and starts_command(prev):
+            d = definition(toks, k)
+            if d:
+                found.setdefault(d[0], []).append(d[1])
+        prev = t
+    return found
+
+
+def compound(toks: list[Tok], j: int) -> tuple[list[int], int]:
+    """The commands that read the input of the compound command opening at
+    toks[j], and the index just past its end.
+
+    They are every command in it, at any depth, except one fed by a pipe of
+    its own, a function it only defines, and code in a substitution. A while
+    or until loop is one of them, whole: its own rule reads it.
+    """
+    opener = toks[j].text if toks[j].kind == "op" else toks[j].value
+    end = COMPOUND_END[opener]
+    case = "word" if opener == "case" else ""  # this level's case: word, pattern or body
+    readers: list[int] = []
+    parens = 0  # `(` that opens no subshell: `name()`, `a=(...)`
+    in_test = False
+    prev: Tok | None = toks[j]
+    k = j + 1
+    while k < len(toks):
+        t = toks[k]
+        if t.kind == "op" and t.text in OPENERS:
+            k = skip_block(toks, k)  # the word holding it follows, where it stood
+            continue
+        if in_test:
+            in_test = not (t.kind == "word" and t.text == "]]")
+        elif case in ("word", "pattern"):
+            if t.kind == "word" and t.value == "in" and case == "word":
+                case = "pattern"
+            elif t.kind == "word" and t.value == "esac" and case == "pattern":
+                return readers, k + 1
+            elif t.kind == "op" and t.text == ")" and case == "pattern":
+                case = "body"
+                prev = Tok("op", "nl", None, t.line)
+                k += 1
+                continue
+        elif t.kind == "op":
+            if t.text == "(" and starts_command(prev):
+                inner, k = compound(toks, k)
+                if not (prev is not None and prev.text in PIPE_OPS):
+                    readers += inner
+                prev = toks[k - 1]
+                continue
+            if t.text == "(":
+                parens += 1
+            elif t.text == ")" and parens:
+                parens -= 1
+            elif t.text == ")" and end == ")":
+                return readers, k + 1
+            elif t.text in CASE_BREAKS and opener == "case":
+                case = "pattern"
+        elif starts_command(prev):
+            piped = prev is not None and prev.text in PIPE_OPS
+            defined = definition(toks, k)
+            if defined:
+                _, k = compound(toks, defined[1])  # defining a function runs none of it
+                prev = toks[k - 1]
+                continue
+            if t.value == end:
+                return readers, k + 1
+            if t.text == "[[":
+                in_test = True
+            elif t.value in COMPOUND_END:
+                inner, after = compound(toks, k)
+                if not piped:
+                    readers += [k] if t.value in LOOP_WORDS else inner
+                k = after
+                prev = toks[k - 1]
+                continue
+            elif t.value not in CLAUSE_WORDS and not piped:
+                readers.append(k)
+        prev = t
+        k += 1
+    return readers, k
+
+
+def stage_hazard(
+    toks: list[Tok], j: int, funcs: dict[str, list[int]] | None = None, calling: frozenset[str] = frozenset()
+) -> tuple[Tok, str, str, int] | None:
+    """(token, reader, why, end) when the pipeline stage at toks[j] stops
+    reading before the end of its input; `end` indexes the operator after it.
+
+    funcs holds the functions the file defines, and calling the ones whose
+    body is being read, so that a recursive one is read once.
+    """
+    funcs = funcs or {}
+    j = skip_lines(toks, j)
     if j >= len(toks):
         return None
-    t = toks[j]
-    # A group, a subshell or an `if` reads first with its first command.
-    if (t.kind == "word" and t.value in ("{", "if")) or (t.kind == "op" and t.text == "("):
-        hit = stage_hazard(toks, j + 1)
-        return (hit[0], hit[1], hit[2], len(toks)) if hit else None
-    if t.kind == "word" and t.value == "until" and until_reads(toks, j):
+    k = j
+    while k < len(toks) and toks[k].kind == "word" and toks[k].value in CALL_PREFIXES:
+        k += 1  # `cmd | ! { head -1; }`
+    t = toks[k] if k < len(toks) else toks[j]
+    if t.kind == "word" and t.value == "until" and until_reads(toks, k):
         return (t, "until read", "stops at the first line its read takes", len(toks))
     if t.kind == "word" and t.value in LOOP_WORDS:
-        stop = loop_exit(toks, j)
+        stop = loop_exit(toks, k)
         if stop is None:
             return None
         why = f"can {stop.value} (line {stop.line}) before the end of its input"
         return (t, f"{t.value} loop", why, len(toks))
+    # A group, a subshell, an if, case, for or select: every command in it
+    # reads the same input, so each is a stage of its own, not only the first.
+    if opens_compound(t):
+        for r in compound(toks, k)[0]:
+            hit = stage_hazard(toks, r, funcs, calling)
+            if hit:
+                return (hit[0], hit[1], hit[2], len(toks))
+        return None
     words, stdout, end = command_words(toks, j)
     hit = early_exit(words, stdout)
-    return (words[0], hit[0], hit[1], end) if hit else None
+    if hit:
+        return (words[0], hit[0], hit[1], end)
+    # A function the file defines reads with its body.
+    c = 0
+    while c < len(words) and (is_assignment(words[c]) or words[c].value in CALL_PREFIXES):
+        c += 1
+    name = words[c].value if c < len(words) else None
+    if name in funcs and name not in calling:
+        for body in funcs[name]:
+            inner = stage_hazard(toks, body, funcs, calling | {name})
+            if inner:
+                via = inner[1] if " -> " in inner[1] else f"{inner[1]} on line {inner[0].line}"
+                return (words[c], f"{name}() -> {via}", inner[2], end)
+    return None
 
 
 def ends_substitution(toks: list[Tok], j: int) -> bool:
@@ -1174,6 +1338,7 @@ class Scope:
 
 def scan_tokens(toks: list[Tok]) -> list[Finding]:
     findings: list[Finding] = []
+    funcs = functions(toks)
     stack = [Scope()]
     for i, t in enumerate(toks):
         st = stack[-1]
@@ -1213,7 +1378,7 @@ def scan_tokens(toks: list[Tok]) -> list[Finding]:
         elif t.kind == "op" and t.text in CASE_BREAKS and st.case:
             st.case[-1] = "pattern"
         elif t.kind == "op" and t.text in PIPE_OPS:
-            hit = stage_hazard(toks, i + 1)
+            hit = stage_hazard(toks, i + 1, funcs)
             if hit and not (st.input_sub and ends_substitution(toks, hit[3])):
                 findings.append(Finding(hit[0].line, hit[1], hit[2]))
         st.prev = t

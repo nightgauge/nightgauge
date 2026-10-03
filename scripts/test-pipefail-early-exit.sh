@@ -13,19 +13,22 @@
 #      gate forbids the shape because a test cannot be trusted to lose the race.
 #   B. Every replacement the gate recommends succeeds on the same input.
 #   C. The gate goes red on each forbidden shape, naming the file and line of
-#      the reader, including one inside a group or an `if`, behind a wrapper
-#      such as timeout, in a program holding an expansion, a loop that can
-#      break, an `until read`, a negated `!(...)` subshell, and a `((` or `$((`
-#      that bash reads as a subshell because it does not end in `))`. It keeps
-#      reading past an arithmetic `<<`, an assignment's subscript included,
-#      which is no heredoc. It
-#      stays green on the look-alikes it must not flag: quoted text, comments,
-#      heredoc bodies, case patterns, regex alternations inside [[ ]] on any of
-#      its lines, `||`, `exit` in awk text or END, `head -n -N`, the end of an
-#      input process substitution, and readers that read to the end. It reads
-#      workflow `run:` blocks and husky hooks, skips a step whose shell is not
-#      sh or bash, and exits 2 rather than passing when it cannot read a file,
-#      such as one whose heredoc never ends.
+#      the reader, including one behind a wrapper such as timeout, in a
+#      program holding an expansion, a loop that can break, an `until read`, a
+#      negated `!(...)` subshell, and a `((` or `$((` that bash reads as a
+#      subshell because it does not end in `))`; any command of a piped group,
+#      if, case or for, not only the first; and a function the file defines,
+#      named at the call. It keeps reading past an arithmetic `<<`, an
+#      assignment's subscript included, which is no heredoc. It stays green on
+#      the look-alikes it must not flag: quoted text, comments, heredoc bodies,
+#      case patterns, regex alternations inside [[ ]] on any of its lines,
+#      `||`, `exit` in awk text or END, `head -n -N`, the end of an input
+#      process substitution, readers that read to the end, a loop's own read
+#      inside a group, a function only defined there, or called through
+#      `command`, which runs a program. It reads workflow `run:` blocks and
+#      husky hooks, skips a step whose shell is not sh or bash, and exits 2
+#      rather than passing when it cannot read a file, such as one whose
+#      heredoc never ends.
 #
 # Run: bash scripts/test-pipefail-early-exit.sh
 # Also run by scripts/ci-local.sh and .github/workflows/lint.yml.
@@ -185,6 +188,28 @@ cmd | awk 'BEGIN { while (("sort" | getline line) > 0) n++ }' # BAD
 cmd | LC_ALL=$loc grep -q needle # BAD
 cmd | env X="$(id)" head -1 # BAD
 a[$i]=1 cmd | sed 1q # BAD
+cmd | (cd /tmp && grep -q needle) # BAD
+cmd | { echo header; head -5; } # BAD
+cmd | if true; then grep -q needle; fi # BAD
+cmd | if [ -n "$v" ]; then cat; else head -1; fi # BAD
+cmd | case "$v" in
+  a) cat ;;
+  *) grep -q needle ;; # BAD
+esac
+cmd | for x in a b; do read -r w; done # BAD
+cmd | ! { head -1; } # BAD
+cmd | { { echo; sed 1q; } | cat; } # BAD
+cmd | { while read -r l; do [ "$l" = x ] && break; done; } # BAD
+# Flagged although cat reads the rest: the gate's doc says why.
+cmd | { read -r first; cat; } # BAD
+has() { grep -qF -- "$1"; }
+printf '%s\n' "$v" | has needle # BAD
+cmd | LC_ALL=C has needle # BAD
+function first_line { head -1; }
+cmd | first_line # BAD
+outer() { inner; }
+inner() { awk '{ exit }'; }
+cmd | outer # BAD
 SH
 
 cat >"$FIX/good.sh" <<'SH'
@@ -253,6 +278,19 @@ cmd | until ! read -r l; do :; done
 if ! (cmd | grep needle); then :; fi
 (( (x) | 1 ))
 echo $(( (1 + 2) | 4 ))
+cmd | { while read -r line; do :; done; }
+cmd | case "$v" in read) cat ;; head | grep) wc -l ;; esac
+cmd | if [ -n "$v" ]; then cat; elif [ -z "$w" ]; then wc -l; else sort; fi
+cmd | ( cd /tmp && sort )
+cmd | { echo header; cat; } | sed -n 1p
+cmd | { quiet() { grep -q needle; }; a=(); cat; }
+drain() { cat; }
+cmd | drain
+again() { again; }
+cmd | again
+quiet() { grep -q needle; }
+cmd | command quiet
+quiet <<<"$v"
 SH
 
 # With extglob on, `!(a|head)` at a command's start is a pattern, so its `|`
