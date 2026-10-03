@@ -41,6 +41,7 @@ import {
   shouldRestoreWorkspaceSyncState,
 } from "./views/workspaceSyncState";
 import type { WorkspaceSyncSidebarState } from "./views/items/WorkspaceSyncSidebarItem";
+import { beginAgentInstance } from "./services/agentInstance";
 
 /**
  * Extension services — initialized in activate(), used in deactivate().
@@ -60,6 +61,9 @@ let extensionContext: vscode.ExtensionContext | null = null;
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   extensionContext = context;
+  // A new activation is a new platform agent instance (#2395): its
+  // registration, heartbeats and deregistration carry a fresh instance id.
+  beginAgentInstance();
   // Inject per-repo GH_TOKEN/GITHUB_TOKEN into the integrated-terminal env so
   // every `gh` call authenticates as this workspace's configured user instead of
   // the machine-global `gh auth` active account. This is what lets concurrent

@@ -115,7 +115,7 @@ much of my Claude plan I have used" are still different decisions:
 
 | Tier                 | What is sent                                                |
 | -------------------- | ----------------------------------------------------------- |
-| `off`                | Nothing. The agent heartbeat carries no body at all.        |
+| `off`                | Nothing. The agent heartbeat carries no `usage` field.      |
 | `minimal`            | Allowance windows only — **no monetary figure ever leaves** |
 | `full` (**default**) | Additionally the locally-derived per-adapter dollar spend   |
 
@@ -144,6 +144,12 @@ with the payload, so a surface reading it can tell "no dollar spend" from
 **What it does not contain**: any account identifier for your AI provider, any
 model or prompt detail, and nothing from the
 [What we never collect](#what-we-never-collect) list above.
+
+**Every heartbeat carries an instance id** (#2395), whatever the tier: a
+random UUID made when the window activates (the daemon makes one per process),
+held in memory only, and never derived from a path, host, user or workspace.
+The windows of a machine share one platform agent, so the platform uses it to
+keep each window's execution profile apart. A reload makes a new one.
 
 ### Local skill-usage log (not transmitted)
 

@@ -7,6 +7,7 @@ import {
   type ExecutionProfile,
   type ExecutionProfileSource,
 } from "../../src/services/executionProfile";
+import { agentInstanceId } from "../../src/services/agentInstance";
 import { makeMockTokenStorage } from "../mocks/token-storage";
 import { makeMockLogger } from "../mocks/logger";
 
@@ -128,7 +129,7 @@ describe("AgentHeartbeatService execution profile (#1567)", () => {
     ]);
   });
 
-  it("stays bodiless with no profile and no usage, and survives a failing provider", async () => {
+  it("sends only the instance id with no profile and no usage, and survives a failing provider", async () => {
     service = new AgentHeartbeatService(
       () => "https://api.nightgauge.dev",
       makeMockTokenStorage(),
@@ -143,6 +144,6 @@ describe("AgentHeartbeatService execution profile (#1567)", () => {
     await vi.advanceTimersByTimeAsync(30_000);
 
     expect(fetch).toHaveBeenCalledTimes(1);
-    expect(bodies()).toEqual([undefined]);
+    expect(bodies()).toEqual([{ instance_id: agentInstanceId() }]);
   });
 });

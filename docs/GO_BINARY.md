@@ -306,6 +306,16 @@ A part outside the service's bounds is dropped and logged rather than
 costing the registration, and an account that belongs to no team is
 registered again without the `workspace` block.
 
+The registration and every heartbeat carry `instance_id` (#2395), top-level
+beside `execution_profile`: a random UUID v4 the daemon makes once per process
+and keeps in memory only. Each editor window sends its own (one per
+activation), on its registration, every heartbeat, and its deregistration
+(`DELETE /v1/agents/{id}?instance_id=`). Every client of an agent advertises
+its own execution profile onto it, and the instance id is how the service
+keeps one record per client, so one window whose profile changed reads
+differently from two windows that disagree. A service that predates the field
+ignores it.
+
 Creating the named workspace, updating its agent or display name, and
 linking the declared repositories need the owner or admin role on the
 workspace's team. For a developer or viewer the service skips those writes,

@@ -16,6 +16,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **Each editor window and the daemon send the platform agent an instance id**
+  (#2395). The windows of a machine share one agent and each advertises its
+  own execution profile onto it, so the platform could not tell one window
+  whose profile changed from two windows that disagree. The registration,
+  every heartbeat and the extension's deregistration now carry `instance_id`:
+  a random UUID made once per window activation (once per daemon process),
+  kept in memory only and never derived from the machine, user or workspace.
+  A beat with nothing else to report now carries a body with only this field.
+  A platform that predates the field ignores it.
 - **The daemon and the headless schedulers follow the platform's workspace
   throttle** (#2352). Only the extension applied it (#2337), so work the Go
   side started itself ran at its configured concurrency while the platform

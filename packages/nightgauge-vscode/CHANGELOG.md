@@ -11,6 +11,11 @@ and this project adheres to
 
 ### Added
 
+- **Each window sends the platform a random instance id** with its
+  registration, every heartbeat and its deregistration, so the hosted service
+  can keep each window's execution profile apart. It is made when the window
+  activates, held in memory only, and never derived from your machine, user
+  or workspace (#2395).
 - **A concurrency cap set on the workspace from the dashboard applies to this
   window.** While you are signed in, the window applies the cap of the
   workspace its `.vscode/nightgauge-workspace.yaml` names: no new pipeline

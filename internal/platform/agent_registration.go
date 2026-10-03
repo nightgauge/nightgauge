@@ -8,8 +8,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
+	"sync"
 	"unicode"
+
+	"github.com/google/uuid"
 
 	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
 )
@@ -33,6 +37,30 @@ import (
 // AgentRegisterCapabilityResolve is the capability the daemon advertises so the
 // platform relays `attention_resolve` commands to it (the Action Center bridge).
 const AgentRegisterCapabilityResolve = "attention_resolve"
+
+// processInstanceID is this process's instance id on its platform agent
+// (#2395). Every client of an agent (each editor window, and this daemon)
+// advertises its own execution profile onto it, so the platform keeps one
+// record per instance to tell one client whose profile changed from two that
+// disagree. The registration and every heartbeat carry it.
+//
+// A random UUID v4, made once per process and kept in memory only: never
+// persisted, and never derived from a path, host, user or workspace. The
+// platform only compares it for equality and never returns it.
+var processInstanceID = sync.OnceValue(uuid.NewString)
+
+// instanceIDPattern is what the platform accepts as an instance id: 1–64 of
+// [A-Za-z0-9_-].
+var instanceIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
+// wireInstanceID is id when the platform accepts it, else "", which leaves the
+// field out: the bound on what leaves the machine is enforced at the wire.
+func wireInstanceID(id string) string {
+	if !instanceIDPattern.MatchString(id) {
+		return ""
+	}
+	return id
+}
 
 // ErrAgentNotFound is returned by Heartbeat when the platform reports the agent
 // no longer exists (HTTP 404 — evicted after the 90s TTL, or the platform lost
@@ -145,7 +173,9 @@ func printableField(s string) string {
 // RegisterAgentSchema (zod) requires `machine_id`; `agent_version` is optional
 // (omitted when the build version is unknown) and `capabilities` is always sent.
 // `repos` and `workspace` declare the workspace this daemon serves (#2335);
-// the service reads an absent `repos` as none.
+// the service reads an absent `repos` as none. `instance_id` (#2395) rides
+// top-level beside `execution_profile`, never inside it; a platform that
+// predates it strips the unknown key.
 type agentRegisterBody struct {
 	MachineID        string            `json:"machine_id"`
 	AgentVersion     string            `json:"agent_version,omitempty"`
@@ -153,6 +183,7 @@ type agentRegisterBody struct {
 	Repos            []AgentRepo       `json:"repos,omitempty"`
 	Workspace        *AgentWorkspace   `json:"workspace,omitempty"`
 	ExecutionProfile *ExecutionProfile `json:"execution_profile,omitempty"`
+	InstanceID       string            `json:"instance_id,omitempty"`
 }
 
 // errNoTeamMembershipCode is the service's answer to a `workspace` block from
@@ -160,11 +191,12 @@ type agentRegisterBody struct {
 // already written by then, but the registration reports failure.
 const errNoTeamMembershipCode = "NO_TEAM_MEMBERSHIP"
 
-// agentHeartbeatBody is the PUT /v1/agents/:agentId/heartbeat body. It is only
-// sent when a profile resolved; otherwise the beat stays the bodiless PUT the
-// platform has always accepted.
+// agentHeartbeatBody is the PUT /v1/agents/:agentId/heartbeat body: the
+// instance id on every beat (#2395), and the profile when one resolved. A beat
+// with neither stays the bodiless PUT the platform has always accepted.
 type agentHeartbeatBody struct {
 	ExecutionProfile *ExecutionProfile `json:"execution_profile,omitempty"`
+	InstanceID       string            `json:"instance_id,omitempty"`
 }
 
 // ProfileFunc resolves the execution profile to advertise and whether the
@@ -181,13 +213,20 @@ type AgentRegistrationService struct {
 	agentVersion string
 	profile      ProfileFunc
 	workspace    WorkspaceFunc
+	// instanceID is the process's instance id as the wire carries it ("" when
+	// it fails the platform's bound, and is then left out).
+	instanceID string
 }
 
 // NewAgentRegistrationService builds a registration service bound to the platform
 // client. agentVersion is the build version reported to the platform (pass ""
 // to omit it — e.g. an unknown/dev build).
 func NewAgentRegistrationService(client *Client, agentVersion string) *AgentRegistrationService {
-	return &AgentRegistrationService{client: client, agentVersion: agentVersion}
+	return &AgentRegistrationService{
+		client:       client,
+		agentVersion: agentVersion,
+		instanceID:   wireInstanceID(processInstanceID()),
+	}
 }
 
 // WithExecutionProfile sets the profile source advertised on registration and
@@ -266,6 +305,7 @@ func (s *AgentRegistrationService) RegisterAgent(ctx context.Context) (AgentRegi
 		MachineID:    machineID,
 		AgentVersion: s.agentVersion,
 		Capabilities: []string{AgentRegisterCapabilityResolve},
+		InstanceID:   s.instanceID,
 	}
 	if p, conversation := s.resolveProfile(); p != nil {
 		body.ExecutionProfile = p
@@ -330,9 +370,10 @@ func (s *AgentRegistrationService) postRegister(ctx context.Context, body agentR
 }
 
 // Heartbeat PUTs /v1/agents/:agentId/heartbeat to keep the agent alive (the
-// platform TTL is 90s; the bridge heartbeats every 30s). It returns
-// ErrAgentNotFound on a 404 so the caller re-registers, and a generic error on
-// any other non-2xx. Offline → nil (no-op; the sweep re-registers when online).
+// platform TTL is 90s; the bridge heartbeats every 30s). Every beat carries
+// the process's instance id (#2395). It returns ErrAgentNotFound on a 404 so
+// the caller re-registers, and a generic error on any other non-2xx. Offline
+// → nil (no-op; the sweep re-registers when online).
 func (s *AgentRegistrationService) Heartbeat(ctx context.Context, agentID string) error {
 	if s == nil || s.client == nil {
 		return fmt.Errorf("agent heartbeat: no platform client")
@@ -345,8 +386,12 @@ func (s *AgentRegistrationService) Heartbeat(ctx context.Context, agentID string
 		PathArgs: []string{agentID},
 		Headers:  map[string]string{"Accept": "application/json"},
 	}
+	body := agentHeartbeatBody{InstanceID: s.instanceID}
 	if p, _ := s.resolveProfile(); p != nil {
-		data, err := json.Marshal(agentHeartbeatBody{ExecutionProfile: p})
+		body.ExecutionProfile = p
+	}
+	if body != (agentHeartbeatBody{}) {
+		data, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("agent heartbeat: marshal: %w", err)
 		}
