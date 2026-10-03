@@ -10,6 +10,8 @@
  *   - non-epic issues, or unconfirmable parents, return { ok: true } (no block)
  *   - a parent in ANOTHER repository has no epic branch here: the base branch
  *     is kept and nothing is looked up or created (#2377)
+ *   - with the repository unidentified, no issue is looked up, and an epic
+ *     branch is created without naming a repository (#2388)
  *
  * Root cause this guards: the Go scheduler created the epic branch and this TS
  * method only retargeted to it, but the extension's autonomous slots never run
@@ -46,7 +48,9 @@ const {
   createReturnsBranch,
   writtenBase,
   createBranchCalls,
+  createBranchArgs,
   contextBase,
+  contextNativeParent,
 } = vi.hoisted(() => ({
   // What `gh api graphql --jq .data.repository.issue.parent` prints: the
   // parent as compact JSON, or an empty line when there is none.
@@ -57,9 +61,13 @@ const {
   createReturnsBranch: { value: "epic/3-backend-contract" as string },
   writtenBase: { value: "" as string },
   createBranchCalls: { value: 0 },
+  // The arguments of the last `epic create-branch` call.
+  createBranchArgs: { value: [] as string[] },
   // `base_branch` the intercepted issue context file hands back. Per-test so
   // the mock's return value is observable, not a constant nobody can see.
   contextBase: { value: "main" as string },
+  // `native_parent` the context file hands back; null leaves it out.
+  contextNativeParent: { value: null as number | null },
 }));
 
 /** The orchestrator below runs for nightgauge/acmeapp-platform. */
@@ -82,6 +90,7 @@ vi.mock("child_process", async () => {
     // nightgauge epic create-branch <n> --json
     if (typeof cmd === "string" && cmd.includes("nightgauge") && args?.[0] === "epic") {
       createBranchCalls.value++;
+      createBranchArgs.value = [...args];
       if (!createReturnsBranch.value) {
         return Promise.resolve({ stdout: JSON.stringify({ created: false }), stderr: "" });
       }
@@ -123,7 +132,12 @@ vi.mock("fs", async () => {
       // ambient checkout path (e.g. .nightgauge/worktrees/issue-422/...), so
       // every unrelated read returned an issue context document.
       if (isIssueJsonPath(p)) {
-        return JSON.stringify({ base_branch: contextBase.value });
+        return JSON.stringify({
+          base_branch: contextBase.value,
+          ...(contextNativeParent.value === null
+            ? {}
+            : { native_parent: contextNativeParent.value }),
+        });
       }
       return "{}";
     }),
@@ -153,7 +167,9 @@ describe("HeadlessOrchestrator.enforceEpicBaseBranch (fail-closed)", () => {
     createReturnsBranch.value = "epic/3-backend-contract";
     writtenBase.value = "";
     createBranchCalls.value = 0;
+    createBranchArgs.value = [];
     contextBase.value = "main";
+    contextNativeParent.value = null;
     delete process.env.NIGHTGAUGE_PIPELINE_AUTO_CREATE_EPIC_BRANCH;
     logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger;
   });
@@ -191,6 +207,37 @@ describe("HeadlessOrchestrator.enforceEpicBaseBranch (fail-closed)", () => {
     const res = await o.enforceEpicBaseBranch(7);
     expect(res.ok).toBe(true);
     expect(createBranchCalls.value).toBe(1);
+    expect(createBranchArgs.value).toEqual(
+      expect.arrayContaining(["--owner", "nightgauge", "--repo", "acmeapp-platform"])
+    );
+    expect(writtenBase.value).toBe("epic/3-backend-contract");
+  });
+
+  // #2388: with no repository override and no answer from `gh repo view`, the
+  // check fell back to nightgauge/nightgauge: it read that repository's #7 for
+  // a parent and named it to `epic create-branch`.
+  it("looks nothing up when it cannot identify the repository", async () => {
+    setParent(3);
+    existingEpicBranch.value = "epic/3-backend-contract";
+    const o = new HeadlessOrchestrator(createMockStateService(), logger, { contextFileWaitMs: 0 });
+    const res = await (o as any).enforceEpicBaseBranch(7);
+    expect(res.ok).toBe(true);
+    expect(graphqlQueries.value).toHaveLength(0);
+    expect(lsRemoteCalls.value).toBe(0);
+    expect(createBranchCalls.value).toBe(0);
+    expect(writtenBase.value).toBe("");
+  });
+
+  it("names no repository to epic create-branch when it cannot identify one", async () => {
+    contextNativeParent.value = 3; // the context assembler confirmed the parent
+    existingEpicBranch.value = "";
+    const o = new HeadlessOrchestrator(createMockStateService(), logger, { contextFileWaitMs: 0 });
+    const res = await (o as any).enforceEpicBaseBranch(7);
+    expect(res.ok).toBe(true);
+    expect(graphqlQueries.value).toHaveLength(0);
+    expect(createBranchCalls.value).toBe(1);
+    expect(createBranchArgs.value).not.toContain("--owner");
+    expect(createBranchArgs.value).not.toContain("--repo");
     expect(writtenBase.value).toBe("epic/3-backend-contract");
   });
 

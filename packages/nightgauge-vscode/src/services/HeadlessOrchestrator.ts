@@ -5940,9 +5940,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       let parentNumber: number | null = ctx.native_parent ?? null;
 
       // Resolve owner/repo from repoOverride or CWD's git remote (also used by
-      // the epic-branch create command below).
-      let gqlOwner = "nightgauge";
-      let gqlRepo = "nightgauge";
+      // the epic-branch create command below). An issue number names an issue
+      // only within one repository, so when neither answers the repository
+      // stays unknown: this used to fall back to nightgauge/nightgauge and
+      // read that repository's issue for the parent (#2388).
+      let gqlOwner = "";
+      let gqlRepo = "";
       if (this.repoOverride?.includes("/")) {
         [gqlOwner, gqlRepo] = this.repoOverride.split("/");
       } else {
@@ -5957,8 +5960,21 @@ export class HeadlessOrchestrator implements vscode.Disposable {
             [gqlOwner, gqlRepo] = nwo.split("/");
           }
         } catch {
-          // Use defaults
+          // The repository stays unknown.
         }
+      }
+
+      if (parentNumber === null && !(gqlOwner && gqlRepo)) {
+        // Nothing can confirm epic membership without the repository, so
+        // nothing is enforced, as when the parent lookup itself fails.
+        this.logger.warn(
+          "Cannot identify this checkout's repository — skipping the parent lookup",
+          {
+            issueNumber,
+            currentBase,
+          }
+        );
+        return { ok: true };
       }
 
       if (parentNumber === null) {
@@ -6091,6 +6107,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
    * (`nightgauge epic create-branch`), reusing the same EnsureEpicBranch
    * logic the Go scheduler uses. Idempotent. Returns the branch name, or "" if
    * the binary is unavailable or creation failed.
+   *
+   * With `owner`/`repo` unknown ("") no repository is named: the binary
+   * resolves it from the checkout (config.yaml `default_repo`, else origin)
+   * and refuses a checkout whose origin is not that repository (#2388).
    */
   private async createEpicBranch(
     parentNumber: number,
@@ -6106,7 +6126,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       }
       const { stdout } = await execFileAsync(
         binary,
-        ["epic", "create-branch", String(parentNumber), "--owner", owner, "--repo", repo, "--json"],
+        [
+          "epic",
+          "create-branch",
+          String(parentNumber),
+          ...(owner && repo ? ["--owner", owner, "--repo", repo] : []),
+          "--json",
+        ],
         { encoding: "utf-8", cwd: workspaceRoot, timeout: 60_000 }
       );
       const parsed = JSON.parse(stdout.trim()) as { branch?: string; created?: boolean };

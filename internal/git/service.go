@@ -1542,6 +1542,22 @@ func (s *Service) RemoteRepoSlug() (string, error) {
 	return parseGitHubRemoteSlug(remote.Config().URLs[0])
 }
 
+// RequireOriginRepo returns an error unless the checkout's origin is the
+// GitHub repository slug ("owner/name", matched case-insensitively), naming
+// the repository it is instead. A branch such as epic/<N>-* names #N of the
+// repository it is pushed to, so a command that creates, merges or deletes
+// one for slug must act in a checkout of slug (#2388).
+func (s *Service) RequireOriginRepo(slug string) error {
+	got, err := s.RemoteRepoSlug()
+	if err != nil {
+		return fmt.Errorf("the checkout at %s is not a checkout of %s: its origin is unknown: %w", s.repoPath, slug, err)
+	}
+	if !strings.EqualFold(got, slug) {
+		return fmt.Errorf("the checkout at %s is a checkout of %s, not %s", s.repoPath, got, slug)
+	}
+	return nil
+}
+
 // RepoPath returns the repository root path.
 func (s *Service) RepoPath() string {
 	return s.repoPath

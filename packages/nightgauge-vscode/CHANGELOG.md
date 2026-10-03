@@ -28,6 +28,11 @@ and this project adheres to
   an issue whose branch predates Nightgauge's publication hook turned that
   hook off. An absolute `core.hooksPath` is now put back after the install,
   with a warning in the log (#2389).
+- **The epic base-branch check after issue pickup no longer assumes the
+  `nightgauge/nightgauge` repository** when it cannot identify the window's
+  repository. It used to look up that repository's issue for a parent epic;
+  it now skips the lookup, and an epic branch it has to create is created for
+  the checkout's own repository (#2388).
 - **Model escalation stays inside the performance mode's ceiling.** Under
   `efficiency`, a stage that asked for a stronger model, a proactive
   escalation and the health-gated escalate-all policy could each move a Sonnet

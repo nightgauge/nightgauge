@@ -169,3 +169,29 @@ func TestEnsureBranchForIssue_EpicBranchOnlyForAParentInThisRepository(t *testin
 		}
 	})
 }
+
+// TestEpicCreateBranch_RefusesACheckoutOfAnotherRepository (#2388): the
+// command creates and pushes epic/<N>-* in the checkout it runs in, so from a
+// checkout of example-org/app it refuses --repo example-org/platform before it
+// reads the epic or creates a branch.
+func TestEpicCreateBranch_RefusesACheckoutOfAnotherRepository(t *testing.T) {
+	root := gittest.InitRepo(t, t.TempDir(), "-b", "main")
+	if err := os.WriteFile(filepath.Join(root, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gittest.Run(t, root, "add", ".")
+	gittest.Run(t, root, "commit", "-m", "seed")
+	gittest.Run(t, root, "remote", "add", "origin", "https://github.com/example-org/app.git")
+	t.Chdir(root)
+
+	cmd := epicCreateBranchCmd()
+	cmd.SetArgs([]string{"20", "--owner", "example-org", "--repo", "example-org/platform", "--json"})
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	err := cmd.Execute()
+	if err == nil || !strings.Contains(err.Error(), "a checkout of example-org/app, not example-org/platform") {
+		t.Fatalf("err = %v, want a refusal naming the checkout's repository", err)
+	}
+	if local := gittest.Run(t, root, "branch", "--list", "epic/*"); local != "" {
+		t.Errorf("local epic branches %q, want none", local)
+	}
+}

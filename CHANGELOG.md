@@ -178,6 +178,18 @@ changelog, and the release workflow refuses a tag that does not.
   pipeline now puts an absolute hooks path back after its install, and warns
   that it did. An `npm install` run by hand in such a checkout still turns the
   hook off until the next `npm install` in a current checkout.
+- **`nightgauge epic create-branch` and `epic complete` refuse a checkout of
+  another repository** (#2388). Both act on the current directory's checkout:
+  `create-branch` creates and pushes `epic/<N>-<slug>` there, and `complete`
+  finds, merges and deletes `epic/<N>-*` there. Neither checked that the
+  checkout's origin was `--repo`, so from a checkout of another repository
+  `create-branch` pushed a branch named after `--repo`'s issue to it, and
+  `complete` could merge and delete the branch of that repository's own `#N`.
+  Both now refuse such a checkout before they read or change anything, and
+  name the repository it is. The extension's epic base-branch check after
+  issue pickup no longer falls back to `nightgauge/nightgauge` when it cannot
+  identify its repository: it looks nothing up, and leaves
+  `epic create-branch` to take the repository from the checkout.
 - **Escalation on a run the extension orchestrates stays inside the
   performance mode's ceiling** (#2386). PERFORMANCE_MODES.md says the mode's
   ceiling caps post-failure escalation, and the Go dispatch path clamps it,

@@ -3068,7 +3068,11 @@ func epicCompleteCmd() *cobra.Command {
 4. Merge the PR
 5. Cleanup epic branch (local + remote)
 
-If sub-issues remain open, reports progress and exits without action.`,
+If sub-issues remain open, reports progress and exits without action.
+
+Run it in a checkout of --repo: the epic branch is found, merged and deleted in
+the current checkout, so a checkout whose origin is another repository is
+refused before anything changes.`,
 		Args:    cobra.ExactArgs(1),
 		Example: "  nightgauge epic complete 1650 --json",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -3416,7 +3420,10 @@ func epicCreateBranchCmd() *cobra.Command {
 		Short: "Create epic branch from main if it does not already exist",
 		Long: `Create the epic/<number>-<slug> branch on the remote if it does not yet exist.
 The branch is created from the repository default branch (main/master).
-This is idempotent: if the epic branch already exists, the command exits successfully.`,
+This is idempotent: if the epic branch already exists, the command exits successfully.
+
+Run it in a checkout of --repo: the branch is created and pushed in the current
+checkout, so a checkout whose origin is another repository is refused.`,
 		Example: `  nightgauge epic create-branch 2650
   nightgauge epic create-branch 2650 --json`,
 		Args: cobra.ExactArgs(1),
@@ -3426,22 +3433,26 @@ This is idempotent: if the epic branch already exists, the command exits success
 				return fmt.Errorf("epic-number must be a positive integer, got %q", args[0])
 			}
 
+			ownerPart, repoPart := splitRepo(owner, repo)
+			// The branch is created and pushed in this checkout, and names
+			// #N of the repository it is pushed to (#2388).
+			gitSvc, err := openGitService()
+			if err != nil {
+				return fmt.Errorf("open git service: %w", err)
+			}
+			if err := gitSvc.RequireOriginRepo(ownerPart + "/" + repoPart); err != nil {
+				return fmt.Errorf("epic create-branch %s/%s#%d: %w", ownerPart, repoPart, epicNumber, err)
+			}
+
 			client, err := clientFromConfig()
 			if err != nil {
 				return err
 			}
-
-			ownerPart, repoPart := splitRepo(owner, repo)
 			issueSvc := gh.NewIssueService(client)
 			// Only the title names the branch, so no list is read.
 			epicIssue, err := issueSvc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, epicNumber, gh.NoRelations)
 			if err != nil {
 				return fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
-			}
-
-			gitSvc, err := openGitService()
-			if err != nil {
-				return fmt.Errorf("open git service: %w", err)
 			}
 
 			branchName, created, err := gitSvc.EnsureEpicBranch(epicNumber, epicIssue.Title)

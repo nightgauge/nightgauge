@@ -602,6 +602,18 @@ type EpicCompleteResult struct {
 // 2. If complete: close the epic issue, create epic→main PR, merge it, cleanup branches
 // This is the CLI equivalent of the OnEpicComplete callback in server.go.
 func (e *EpicService) CompleteEpic(ctx context.Context, owner, repo string, epicNumber int, repoPath string) (*EpicCompleteResult, error) {
+	// The epic branch is found, merged and deleted in repoPath's checkout,
+	// and epic/<N>-* names #N of the repository it was pushed to: in a
+	// checkout of another repository it is that repository's #N's branch.
+	// Refuse such a checkout before anything changes (#2388). With no
+	// checkout at all, the epic is still closed and no branch is touched.
+	gitSvc, gitErr := git.NewService(repoPath)
+	if gitErr == nil {
+		if err := gitSvc.RequireOriginRepo(owner + "/" + repo); err != nil {
+			return nil, fmt.Errorf("epic complete %s/%s#%d: %w", owner, repo, epicNumber, err)
+		}
+	}
+
 	// Step 1: Check completion
 	check, err := e.CheckCompletion(ctx, owner, repo, epicNumber)
 	if err != nil {
@@ -638,7 +650,6 @@ func (e *EpicService) CompleteEpic(ctx context.Context, owner, repo string, epic
 	}
 
 	// Step 3: Find epic branch
-	gitSvc, gitErr := git.NewService(repoPath)
 	if gitErr != nil {
 		// No git service — still report completion but can't create PR
 		result.Action = "no_epic_branch"
