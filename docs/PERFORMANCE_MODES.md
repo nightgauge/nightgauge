@@ -24,7 +24,9 @@ the extension. The two tables mirror each other.
   at effort `high` on `issue-pickup`, `feature-planning`, `feature-dev`,
   `feature-validate`, `pr-create` and `pr-merge`. It pins neither
   `issue-refine` nor `spike-materialize`; its envelope holds those to `opus`,
-  with effort at least `high`.
+  with effort at least `high`. Refinement starts from `sonnet` and is clamped
+  into the band like any routed tier, so the other modes keep it on `sonnet`
+  unless `model_routing.max_model` caps it lower.
 - **Frontier.** `fable` is the ceiling on `feature-planning` and `feature-dev`
   only; every other stage is capped at `opus`. The router reaches `fable` on
   those two stages only for an issue in the top complexity band (`L`/`XL`).
@@ -34,10 +36,11 @@ the extension. The two tables mirror each other.
   `CLAUDE_CODE_DISABLE_THINKING` overrides any policy.
 - **Budget ceiling.** Under `maximum`, the scheduler's pipeline token ceiling
   is observe-only: it is logged and does not stop the run.
-- **Routing advice.** When evaluation evidence exists for an issue's job class,
-  the mode sets the posture of the pick: `efficiency` takes the cheapest
-  candidate, `elevated` the best quality per dollar, and `maximum` and
-  `frontier` the highest quality.
+- **Routing advice.** Unless `model_routing.use_eval_recommendations` is
+  `false` (it defaults to `true`), evaluation evidence for an issue's job class
+  can re-pick a routed stage's model inside the band. The mode sets the posture
+  of that pick: `efficiency` takes the cheapest candidate, `elevated` the best
+  quality per dollar, and `maximum` and `frontier` the highest quality.
 
 A stage's `NIGHTGAUGE_PIPELINE_STAGE_MODEL_<STAGE>` environment override
 overrides the mode for that stage in every mode, a `maximum` pin included. An

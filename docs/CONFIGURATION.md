@@ -8014,11 +8014,13 @@ workspace is unrefined, so the backlog can never take the rail from work that is
 about to run.
 
 **Why it is off by default — the cost.** A backlog sweep is unbounded work at
-one Sonnet call per issue, and the refinement rail allows 10 starts an hour. A
-workspace with 165 unrefined open issues therefore spends roughly **17 hours of
-model calls** refining issues that may never be dispatched. Turning this on is a
-deliberate cost decision; leaving it off keeps a new install's refinement spend
-proportional to what it actually dispatches (#1514).
+one model call per issue (Sonnet, or Opus under the `maximum` performance mode;
+see [PERFORMANCE_MODES.md](PERFORMANCE_MODES.md)), and the refinement rail
+allows 10 starts an hour. A workspace with 165 unrefined open issues therefore
+spends roughly **17 hours of model calls** refining issues that may never be
+dispatched. Turning this on is a deliberate cost decision; leaving it off keeps
+a new install's refinement spend proportional to what it actually dispatches
+(#1514).
 
 ---
 

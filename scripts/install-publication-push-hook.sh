@@ -40,15 +40,16 @@
 # main does not reinstall; the next npm install, or `npm run setup-hooks`, does.
 #
 # Re-running is safe. An npm install in a checkout that predates this script
-# puts husky's relative path back for the whole clone, and the pipeline runs
-# npm install in every worktree it creates, so a worktree on a branch older
-# than this script (an epic branch cut before it, say) does exactly that. The
-# next npm install in a current checkout restores this. The path is absolute,
-# so a clone moved to another directory runs no hooks at all until this runs
-# again. It is not git's own hooks directory, because `nightgauge pre-push
-# install` writes .git/hooks/pre-push. HUSKY=0 skips this, as it skips husky,
-# and so does a package that is not the top of its own checkout: inside
-# another repository, the hooks path would be that repository's.
+# puts husky's relative path back for the whole clone. The pipeline runs npm
+# install in every worktree it creates or reuses, one on a branch older than
+# this script included, and then puts an absolute hooks path back (#2389). An
+# npm install run by hand, or by an agent, in such a checkout is not covered:
+# the next npm install in a current checkout restores this. The path is
+# absolute, so a clone moved to another directory runs no hooks at all until
+# this runs again. It is not git's own hooks directory, because `nightgauge
+# pre-push install` writes .git/hooks/pre-push. HUSKY=0 skips this, as it
+# skips husky, and so does a package that is not the top of its own checkout:
+# inside another repository, the hooks path would be that repository's.
 #
 # Usage: bash scripts/install-publication-push-hook.sh
 

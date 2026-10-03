@@ -1,8 +1,9 @@
 /**
- * Eval-advice consumption in resolveModel (#581, spike #568 §4.2): opt-in via
- * `model_routing.use_eval_recommendations` (default OFF), applied on the
- * selector branch only, only from advisable entries, only for a job class the
- * issue directly names, and only INSIDE the stage's clamps.
+ * Eval-advice consumption in resolveModel (#581, spike #568 §4.2): on unless
+ * `model_routing.use_eval_recommendations` is false (the shipped default is
+ * true, ADR-021, as on the Go side: #2387), applied on the selector branch
+ * only, only from advisable entries, only for a job class the issue directly
+ * names, and only INSIDE the stage's clamps.
  *
  * Go twin: internal/orchestrator/dispatch_routing_advice_test.go.
  */
@@ -42,6 +43,8 @@ vi.mock("../../src/utils/mergedConfigReader", () => ({
 }));
 
 import { resolveModel } from "../../src/utils/skillRunner";
+import { resolveConfigPathSync } from "../../src/utils/configPathResolver";
+import { readEffectiveConfigTextSync } from "../../src/utils/mergedConfigReader";
 
 const STAGE = "feature-dev" as PipelineStage;
 const METADATA = { labels: ["size:M", "type:bug"], title: "fix the widget" };
@@ -90,9 +93,42 @@ afterEach(() => {
 });
 
 describe("resolveModel — eval-advice consumption (#581)", () => {
-  it("ignores the advice file by default (conservative rollout: key off = today's behavior)", () => {
+  // #2387: this side fell back to a literal false while Go, DEFAULT_CONFIG and
+  // the docs all ship true, so the same issue took the advice autonomously and
+  // not from the extension.
+  it("consults the advice file when the key is unset (the shipped default, as in Go)", () => {
     const decision = resolveModel(STAGE, root, METADATA);
-    expect(decision.model).toBe("sonnet"); // the selector's own M-complexity pick
+    expect(decision.model).toBe("opus"); // claude-opus-5 → opus band, inside elevated
+    expect(decision.evalAdvisory).toMatchObject({ modelId: "claude-opus-5", band: "opus" });
+  });
+
+  it("ignores the advice file when model_routing.use_eval_recommendations is false", () => {
+    const configPath = vi.mocked(resolveConfigPathSync);
+    const configText = vi.mocked(readEffectiveConfigTextSync);
+    configPath.mockReturnValue({
+      path: join(root, ".nightgauge", "config.yaml"),
+      isLegacy: false,
+      exists: true,
+    } as ReturnType<typeof resolveConfigPathSync>);
+    configText.mockReturnValue("model_routing:\n  use_eval_recommendations: false\n");
+    try {
+      const decision = resolveModel(STAGE, root, METADATA);
+      expect(decision.model).toBe("sonnet"); // the selector's own M-complexity pick
+      expect(decision.evalAdvisory).toBeUndefined();
+    } finally {
+      configPath.mockReturnValue({
+        path: "/test/workspace/.nightgauge/config.yaml",
+        isLegacy: false,
+        exists: false,
+      } as ReturnType<typeof resolveConfigPathSync>);
+      configText.mockReturnValue("");
+    }
+  });
+
+  it("ignores the advice file when the env override is false", () => {
+    process.env.NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS = "false";
+    const decision = resolveModel(STAGE, root, METADATA);
+    expect(decision.model).toBe("sonnet");
     expect(decision.evalAdvisory).toBeUndefined();
   });
 

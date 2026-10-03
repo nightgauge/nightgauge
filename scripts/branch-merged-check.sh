@@ -74,34 +74,64 @@ BASE_DEFAULT="origin/main"
 
 # ---------------------------------------------------------------------------
 # PR index: "<state>\t<headRefName>\t<headRefOid>\t<number>\t<baseRefName>",
-# fetched once for open AND merged PRs. Open ones mark a branch in use (as head
-# OR as base, #2175); merged ones prove a branch already landed.
+# fetched once: every OPEN PR, then the newest MERGED ones. Open ones mark a
+# branch in use (as head OR as base, #2175); merged ones prove a branch
+# already landed.
+#
+# The two lists fail in opposite directions, so each has its own query. A
+# merged PR past the merged window only withholds a SAFE-DELETE. An open PR
+# missing from the open list reads as "no open PR", and the ancestor rule then
+# calls its head SAFE-DELETE, so that list must be whole: a shared
+# `--state all --limit 500` window dropped every open PR older than the newest
+# 500 PRs. An open list that fills OPEN_PR_LIMIT may have been cut short, and
+# counts as a fetch that failed.
 #
 # NO_PR=1 skips the fetch, and classification is content-only: no open-PR
 # guard, no merged-PR proof. Nothing else does. When gh is not installed, or
-# its fetch fails (unauthenticated, offline, a remote it cannot query),
+# a fetch fails (unauthenticated, offline, a remote it cannot query),
 # PR_INDEX_ERR says why, and every verdict the open-PR guards stand before is
 # UNKNOWN: an empty index would read as "no open PR" for a branch no guard
 # looked at (#2360).
 # ---------------------------------------------------------------------------
 PR_INDEX=""
 PR_INDEX_ERR=""
+OPEN_PR_LIMIT=1000
+MERGED_PR_LIMIT=500
+PR_FIELDS=state,headRefName,headRefOid,number,baseRefName
+PR_ROW='.[] | "\(.state)\t\(.headRefName)\t\(.headRefOid)\t\(.number)\t\(.baseRefName)"'
 build_pr_index() {
   [ "${NO_PR:-0}" = "1" ] && return 0
   if ! command -v gh >/dev/null 2>&1; then
     PR_INDEX_ERR="gh is not installed; NO_PR=1 judges on content alone"
     return 0
   fi
-  local rc
-  PR_INDEX=$(gh pr list --state all --limit 500 \
-    --json state,headRefName,headRefOid,number,baseRefName \
-    --jq '.[] | select(.state=="OPEN" or .state=="MERGED")
-          | "\(.state)\t\(.headRefName)\t\(.headRefOid)\t\(.number)\t\(.baseRefName)"' 2>/dev/null)
+  local open merged rc
+  open=$(gh pr list --state open --limit "$OPEN_PR_LIMIT" --json "$PR_FIELDS" --jq "$PR_ROW" 2>/dev/null)
   rc=$?
   if [ "$rc" -ne 0 ]; then
-    PR_INDEX=""
     PR_INDEX_ERR="gh pr list failed (status $rc)"
+    return 0
   fi
+  # Counted in bash: a here-string can fail to run, and a count that did not
+  # run must not read as a list that was not cut.
+  local newlines rows=0
+  if [ -n "$open" ]; then
+    newlines="${open//[!$'\n']/}"
+    rows=$((${#newlines} + 1))
+  fi
+  if [ "$rows" -ge "$OPEN_PR_LIMIT" ]; then
+    PR_INDEX_ERR="the open-PR list filled its $OPEN_PR_LIMIT-row limit, so an open PR past it would read as none"
+    return 0
+  fi
+  merged=$(gh pr list --state merged --limit "$MERGED_PR_LIMIT" --json "$PR_FIELDS" --jq "$PR_ROW" 2>/dev/null)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    PR_INDEX_ERR="gh pr list failed (status $rc)"
+    return 0
+  fi
+  PR_INDEX="$open"
+  [ -n "$merged" ] && PR_INDEX="${PR_INDEX:+$PR_INDEX$'\n'}$merged"
+  return 0
 }
 
 # The lookups below read PR_INDEX from a here-string, never `printf | awk`:

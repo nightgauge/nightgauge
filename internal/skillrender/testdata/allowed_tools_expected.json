@@ -1,5 +1,5 @@
 {
-  "about": "A SKILL.md per case and the tool lists a reader must take from it: `declared` is its allowed-tools read verbatim, `headless` what a non-interactive run is granted, and `mcp` / `programmatic`, where a case has them, its mcp-tools and programmatic-tools. A case with `refused` is a skill whose allowed-tools field is there but lists no tool, which both readers refuse. internal/skillrender (splitFrontmatter, splitTools, FilterHeadlessTools) and the SDK (skillAllowedTools.ts) both read this file (#2358).",
+  "about": "A SKILL.md per case and the tool lists a reader must take from it: `declared` is its allowed-tools read verbatim, `headless` what a non-interactive run is granted, and `mcp` / `programmatic`, where a case has them, its mcp-tools and programmatic-tools. A case with `refused` is a skill whose allowed-tools field is there but lists no tool, or is written only in a form neither reader can read; both readers refuse it. internal/skillrender (splitFrontmatter, splitTools, FilterHeadlessTools) and the SDK (skillAllowedTools.ts) both read this file (#2358, #2385).",
   "cases": [
     {
       "name": "a pipeline stage's space-separated set",
@@ -86,6 +86,36 @@
       "headless": ["Read", "Bash"]
     },
     {
+      "name": "a double-quoted key",
+      "skill": "---\nname: s\n\"allowed-tools\": Read Grep\n---\nBody\n",
+      "declared": ["Read", "Grep"],
+      "headless": ["Read", "Grep"]
+    },
+    {
+      "name": "a single-quoted key, with spaces and a tab before the colon",
+      "skill": "---\nname: s\n'allowed-tools' \t: Read, Bash\n---\nBody\n",
+      "declared": ["Read", "Bash"],
+      "headless": ["Read", "Bash"]
+    },
+    {
+      "name": "spaces before a bare key's colon, with a block list",
+      "skill": "---\nname: s\nallowed-tools  :\n  - Read\n  - Grep\n---\nBody\n",
+      "declared": ["Read", "Grep"],
+      "headless": ["Read", "Grep"]
+    },
+    {
+      "name": "an explicit key",
+      "skill": "---\nname: s\n? allowed-tools\n: Read Grep\n---\nBody\n",
+      "declared": ["Read", "Grep"],
+      "headless": ["Read", "Grep"]
+    },
+    {
+      "name": "an explicit quoted key, its value a block list below its colon",
+      "skill": "---\nname: s\n? \"allowed-tools\" # tools\n\n:\n  - Read\n  - AskUserQuestion\n---\nBody\n",
+      "declared": ["Read", "AskUserQuestion"],
+      "headless": ["Read"]
+    },
+    {
       "name": "AskUserQuestion is declared but not granted headless",
       "skill": "---\nname: s\nallowed-tools: Read AskUserQuestion Bash\n---\nBody\n",
       "declared": ["Read", "AskUserQuestion", "Bash"],
@@ -146,10 +176,10 @@
       "headless": ["Read"]
     },
     {
-      "name": "a value on the key's line is not followed by a block list",
+      "name": "a value on the key's line continues over the deeper lines, a dash included, as in YAML",
       "skill": "---\nname: s\nallowed-tools: Read\n  - Bash\n---\nBody\n",
-      "declared": ["Read"],
-      "headless": ["Read"]
+      "declared": ["Read", "-", "Bash"],
+      "headless": ["Read", "-", "Bash"]
     },
     {
       "name": "a value on the line below the key",
@@ -190,6 +220,56 @@
     {
       "name": "a flow sequence over the lines below the key",
       "skill": "---\nname: s\nallowed-tools:\n  [Read,\n   Grep]\n---\nBody\n",
+      "declared": ["Read", "Grep"],
+      "headless": ["Read", "Grep"]
+    },
+    {
+      "name": "a flow sequence from the key's line over the lines below, with a comment",
+      "skill": "---\nname: s\nallowed-tools: [Read, # files\n  'Bash(gh *)',\n  AskUserQuestion]\n---\nBody\n",
+      "declared": ["Read", "Bash(gh *)", "AskUserQuestion"],
+      "headless": ["Read", "Bash(gh *)"]
+    },
+    {
+      "name": "a plain value continued over the deeper lines below the key's line",
+      "skill": "---\nname: s\nallowed-tools: Read,\n  Grep\n\n  Bash(gh *)\ndescription: d\n  Write\n---\nBody\n",
+      "declared": ["Read", "Grep", "Bash(gh *)"],
+      "headless": ["Read", "Grep", "Bash(gh *)"]
+    },
+    {
+      "name": "a quoted value continued below the key's line",
+      "skill": "---\nname: s\nallowed-tools: 'Read,\n  Grep'\n---\nBody\n",
+      "declared": ["Read", "Grep"],
+      "headless": ["Read", "Grep"]
+    },
+    {
+      "name": "a folded block scalar",
+      "skill": "---\nname: s\nallowed-tools: >-\n  Read\n  Bash\n---\nBody\n",
+      "declared": ["Read", "Bash"],
+      "headless": ["Read", "Bash"]
+    },
+    {
+      "name": "a literal block scalar, with a comment on its header and a blank line in it, ends at the next key",
+      "skill": "---\nname: s\nallowed-tools: | # tools\n  Read, Grep\n\n  Bash(gh *)\ndescription: d\n  Write\n---\nBody\n",
+      "declared": ["Read", "Grep", "Bash(gh *)"],
+      "headless": ["Read", "Grep", "Bash(gh *)"]
+    },
+    {
+      "name": "a # in a block scalar is text, as YAML reads it",
+      "skill": "---\nname: s\nallowed-tools: |\n  Read # files\n  # Grep\n---\nBody\n",
+      "declared": ["Read", "#", "files", "#", "Grep"],
+      "headless": ["Read", "#", "files", "#", "Grep"]
+    },
+    {
+      "name": "block scalar indicators, in either order",
+      "skill": "---\nname: s\nallowed-tools: |2-\n   Read\n  Grep\nmcp-tools: >-1\n mcp__github__*\nprogrammatic-tools: |+\n  run_tests\n\n---\nBody\n",
+      "declared": ["Read", "Grep"],
+      "headless": ["Read", "Grep"],
+      "mcp": ["mcp__github__*"],
+      "programmatic": ["run_tests"]
+    },
+    {
+      "name": "a block scalar ends at the first line no deeper than its key",
+      "skill": "---\nname: s\nmetadata:\n  allowed-tools: >\n    Read\n\n    Grep\n  version: 1\n---\nBody\n",
       "declared": ["Read", "Grep"],
       "headless": ["Read", "Grep"]
     },
@@ -274,8 +354,44 @@
       "refused": true
     },
     {
+      "name": "a quoted key with no tool is refused",
+      "skill": "---\nname: s\n\"allowed-tools\":\n---\nBody\n",
+      "refused": true
+    },
+    {
+      "name": "an explicit key with no value is refused",
+      "skill": "---\nname: s\n? allowed-tools\ndescription: d\n---\nBody\n",
+      "refused": true
+    },
+    {
+      "name": "an empty block scalar is refused",
+      "skill": "---\nname: s\nallowed-tools: >\ndescription: d\n---\nBody\n",
+      "refused": true
+    },
+    {
+      "name": "a block scalar header with more after it is refused",
+      "skill": "---\nname: s\nallowed-tools: |x\n  Read\n---\nBody\n",
+      "refused": true
+    },
+    {
+      "name": "a block scalar on the line below the key is refused, not read as >-",
+      "skill": "---\nname: s\nallowed-tools:\n  >-\n    Read\n---\nBody\n",
+      "refused": true
+    },
+    {
+      "name": "a flow sequence that never closes is refused",
+      "skill": "---\nname: s\nallowed-tools: [Read, Grep\ndescription: d\n---\nBody\n",
+      "refused": true
+    },
+    {
       "name": "no allowed-tools field",
       "skill": "---\nname: s\ndescription: d\n---\nBody\n",
+      "declared": [],
+      "headless": []
+    },
+    {
+      "name": "a longer key is another field",
+      "skill": "---\nname: s\nallowed-tools-extra: Bash\nallowed-toolsx : Bash\n? allowed-tools x\n---\nBody\n",
       "declared": [],
       "headless": []
     },

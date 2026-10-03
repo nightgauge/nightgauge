@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -369,6 +370,14 @@ func runDaemonPlatformAgent(
 	relay := relayAgentCommandToExtension(ext)
 	refreshThrottle := func() {}
 	if throttle != nil {
+		// The extension pushes its session, or says it has none, once the
+		// daemon is up (PlatformCredentialBridge.sync). Until then a daemon
+		// without a session has not decided that it follows no throttle, so
+		// it reports the throttle unread, and a headless scheduler keeps
+		// the throttle it learned from the daemon before this one started
+		// (#2352). A daemon no extension attaches to decides after
+		// daemonSessionDecisionGrace.
+		var sessionDecided atomic.Bool
 		follower := platform.NewWorkspaceThrottleFollower(
 			platformClient.ReadWorkspaceThrottle,
 			func() (string, bool, error) {
@@ -383,9 +392,15 @@ func runDaemonPlatformAgent(
 			},
 			platformClient.HasSessionToken,
 			throttle,
-		)
+		).WithSessionDecision(sessionDecided.Load)
 		refreshThrottle = func() { follower.Refresh(ctx) }
-		ext.OnSessionToken(refreshThrottle)
+		decide := func() {
+			sessionDecided.Store(true)
+			refreshThrottle()
+		}
+		ext.OnSessionToken(decide)
+		decideAnyway := afterSessionDecisionGrace(decide)
+		defer decideAnyway.Stop()
 		relay = refreshThrottleOnCommand(relay, refreshThrottle)
 		// Read now, not only after the first registration: a session the
 		// extension installed before this listener existed, or a platform
@@ -3068,7 +3083,11 @@ func epicCompleteCmd() *cobra.Command {
 4. Merge the PR
 5. Cleanup epic branch (local + remote)
 
-If sub-issues remain open, reports progress and exits without action.`,
+If sub-issues remain open, reports progress and exits without action.
+
+Run it in a checkout of --repo: the epic branch is found, merged and deleted in
+the current checkout, so a checkout whose origin is another repository is
+refused before anything changes.`,
 		Args:    cobra.ExactArgs(1),
 		Example: "  nightgauge epic complete 1650 --json",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -3416,7 +3435,10 @@ func epicCreateBranchCmd() *cobra.Command {
 		Short: "Create epic branch from main if it does not already exist",
 		Long: `Create the epic/<number>-<slug> branch on the remote if it does not yet exist.
 The branch is created from the repository default branch (main/master).
-This is idempotent: if the epic branch already exists, the command exits successfully.`,
+This is idempotent: if the epic branch already exists, the command exits successfully.
+
+Run it in a checkout of --repo: the branch is created and pushed in the current
+checkout, so a checkout whose origin is another repository is refused.`,
 		Example: `  nightgauge epic create-branch 2650
   nightgauge epic create-branch 2650 --json`,
 		Args: cobra.ExactArgs(1),
@@ -3426,22 +3448,26 @@ This is idempotent: if the epic branch already exists, the command exits success
 				return fmt.Errorf("epic-number must be a positive integer, got %q", args[0])
 			}
 
+			ownerPart, repoPart := splitRepo(owner, repo)
+			// The branch is created and pushed in this checkout, and names
+			// #N of the repository it is pushed to (#2388).
+			gitSvc, err := openGitService()
+			if err != nil {
+				return fmt.Errorf("open git service: %w", err)
+			}
+			if err := gitSvc.RequireOriginRepo(ownerPart + "/" + repoPart); err != nil {
+				return fmt.Errorf("epic create-branch %s/%s#%d: %w", ownerPart, repoPart, epicNumber, err)
+			}
+
 			client, err := clientFromConfig()
 			if err != nil {
 				return err
 			}
-
-			ownerPart, repoPart := splitRepo(owner, repo)
 			issueSvc := gh.NewIssueService(client)
 			// Only the title names the branch, so no list is read.
 			epicIssue, err := issueSvc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, epicNumber, gh.NoRelations)
 			if err != nil {
 				return fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
-			}
-
-			gitSvc, err := openGitService()
-			if err != nil {
-				return fmt.Errorf("open git service: %w", err)
 			}
 
 			branchName, created, err := gitSvc.EnsureEpicBranch(epicNumber, epicIssue.Title)
@@ -5717,6 +5743,11 @@ func serveCmd() *cobra.Command {
 					// the platform-assigned agent id onto the sync + command poller +
 					// heartbeat. Runs in a goroutine so an offline start self-heals
 					// without blocking IPC startup.
+					//
+					// The agent follows the workspace throttle, and until it has
+					// learned whether a session exists the throttle is unread, not
+					// unknown, from before the socket serves (#2352).
+					dispatchThrottle.MarkUnread()
 					go runDaemonPlatformAgent(ctx, platformClient, attnSync, server, version, workspaceRoot,
 						agentworkspace.WindowFolders(os.Getenv), dispatchThrottle)
 				}
@@ -8523,9 +8554,19 @@ func gitBranchCreateCmd() *cobra.Command {
 				}
 			}
 
-			parentIssue := 0
-			var epicTitle func() (string, error)
+			var issueSvc issueFetcher
+			issues := func() (issueFetcher, error) {
+				if issueSvc == nil {
+					client, err := clientFromConfig()
+					if err != nil {
+						return nil, err
+					}
+					issueSvc = gh.NewIssueService(client)
+				}
+				return issueSvc, nil
+			}
 
+			var issue *types.Issue
 			if issueNumber != 0 {
 				if owner == "" || repo == "" {
 					remoteSlug, slugErr := svc.RemoteRepoSlug()
@@ -8535,65 +8576,29 @@ func gitBranchCreateCmd() *cobra.Command {
 					owner, repo = splitRepo("", remoteSlug)
 				}
 
-				var issueSvc *gh.IssueService
-				issue := prefetchedIssue
+				issue = prefetchedIssue
 				if issue == nil {
-					client, err := clientFromConfig()
+					fetcher, err := issues()
 					if err != nil {
 						return err
 					}
-					issueSvc = gh.NewIssueService(client)
-					issue, err = issueSvc.GetIssueWithRelations(cmd.Context(), owner, repo, issueNumber, gh.NoRelations)
+					issue, err = fetcher.GetIssueWithRelations(cmd.Context(), owner, repo, issueNumber, gh.NoRelations)
 					if err != nil {
 						return err
 					}
-				}
-				// 0 for a parent in another repository, so the title read
-				// below is always this repository's #N (#2377).
-				parentIssue = epicBranchParentFor(issue, owner, repo)
-				epicTitle = func() (string, error) {
-					if issueSvc == nil {
-						client, clientErr := clientFromConfig()
-						if clientErr != nil {
-							return "", clientErr
-						}
-						issueSvc = gh.NewIssueService(client)
-					}
-					epic, epicErr := issueSvc.GetIssueWithRelations(cmd.Context(), owner, repo, parentIssue, gh.NoRelations)
-					if epicErr != nil {
-						return "", epicErr
-					}
-					return epic.Title, nil
 				}
 			}
 
-			// One implementation shared with the scheduler's deterministic
-			// issue-pickup runner (#1904).
-			res, err := svc.EnsureIssueBranch(branchName, parentIssue, epicTitle)
+			res, err := ensureBranchForIssue(cmd.Context(), svc, issues, owner, repo, issue, branchName)
 			if err != nil {
 				return err
 			}
+			if outputJSON {
+				return printJSON(branchCreatePayload(res))
+			}
 			// A re-dispatch may continue on the issue's existing branch
 			// under an earlier name (#1901); report the branch actually used.
-			branchName = res.Branch
-			baseBranch, action, epicBranch := res.BaseBranch, res.Action, res.EpicBranch
-
-			if outputJSON {
-				payload := map[string]interface{}{
-					"success":      true,
-					"branch":       branchName,
-					"base_branch":  baseBranch,
-					"action":       action,
-					"parent_issue": nil,
-					"epic_branch":  nil,
-				}
-				if parentIssue != 0 {
-					payload["parent_issue"] = parentIssue
-					payload["epic_branch"] = epicBranch
-				}
-				return printJSON(payload)
-			}
-			fmt.Printf("Created and checked out branch: %s\n", branchName)
+			fmt.Printf("Created and checked out branch: %s\n", res.Branch)
 			return nil
 		},
 	}

@@ -11,7 +11,7 @@
  * @see Issue #1621 - Git worktree-based concurrent pipeline execution
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Use vi.hoisted() to avoid hoisting issues with vi.mock
 const { execAsyncMock, execFileAsyncMock, fsMock } = vi.hoisted(() => ({
@@ -557,6 +557,144 @@ describe("WorktreeManager", () => {
         ],
         expect.objectContaining({ cwd: repoRoot })
       );
+    });
+  });
+
+  // #2389. husky 9 sets the RELATIVE `.husky/_` in the config every worktree
+  // of the clone shares, so npm install in a checkout older than the
+  // publication hook's installer (#2365), whose `prepare` is husky alone, put
+  // husky's path back over the installer's absolute one for the whole clone.
+  describe("create — the clone's hooks path survives the worktree's npm install (#2389)", () => {
+    const WORKTREE = `${BASE}/repo-issue-42`;
+    const INSTALLED = "/repo/.git/nightgauge-hooks";
+    const isRead = (args: unknown) =>
+      Array.isArray(args) && args.join(" ") === "config --local --get core.hooksPath";
+    const isWrite = (args: unknown) =>
+      Array.isArray(args) &&
+      args.length === 4 &&
+      args[0] === "config" &&
+      args[1] === "--local" &&
+      args[2] === "core.hooksPath";
+    const writes = () => execFileAsyncMock.mock.calls.filter(([, args]: any[]) => isWrite(args));
+
+    // clearAllMocks keeps implementations, and later suites expect every path
+    // to exist.
+    afterEach(() => {
+      fsMock.access.mockResolvedValue(undefined);
+    });
+
+    /**
+     * The clone's hooks path reads `before` until the worktree's npm install
+     * starts and `after` from then on, as `prepare` rewrites it; null is
+     * unset, which `git config --get` reports by exiting 1.
+     */
+    function hooksPathAcrossInstall(
+      before: string | null,
+      after: string | null,
+      { installFails = false } = {}
+    ) {
+      let installed = false;
+      execAsyncMock.mockImplementation((cmd: string) => {
+        if (cmd.includes("npm install")) {
+          installed = true;
+          if (installFails) return Promise.reject(new Error("npm ERR! code 1"));
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+      execFileAsyncMock.mockImplementation((_file: string, args: string[]) => {
+        if (isRead(args)) {
+          const value = installed ? after : before;
+          return value === null
+            ? Promise.reject(Object.assign(new Error("git config: exit 1"), { code: 1 }))
+            : Promise.resolve({ stdout: `${value}\n`, stderr: "" });
+        }
+        return Promise.resolve({ stdout: "", stderr: "" });
+      });
+    }
+
+    it("puts back an absolute hooks path the install replaced with husky's relative one", async () => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      hooksPathAcrossInstall(INSTALLED, ".husky/_");
+
+      await manager.create(42, "feat/42-cut-before-the-installer");
+
+      expect(writes()).toEqual([
+        [
+          "git",
+          ["config", "--local", "core.hooksPath", INSTALLED],
+          expect.objectContaining({ cwd: WORKTREE }),
+        ],
+      ]);
+      // After the install, which would otherwise undo it.
+      const install = execAsyncMock.mock.calls.findIndex(([cmd]: any[]) =>
+        String(cmd).includes("npm install")
+      );
+      const write = execFileAsyncMock.mock.calls.findIndex(([, args]: any[]) => isWrite(args));
+      expect(execFileAsyncMock.mock.invocationCallOrder[write]).toBeGreaterThan(
+        execAsyncMock.mock.invocationCallOrder[install]
+      );
+      const warned = warnSpy.mock.calls
+        .map(([m]) => String(m))
+        .find((m) => m.includes("hooksPath"));
+      expect(warned).toContain("'.husky/_'");
+      expect(warned).toContain(`'${INSTALLED}' back`);
+      warnSpy.mockRestore();
+    });
+
+    it.each<[string, string | null, { installFails?: boolean }]>([
+      ["the install failed after its prepare script ran", ".husky/_", { installFails: true }],
+      ["the install unset it", null, {}],
+    ])("puts it back when %s", async (_case, after, opts) => {
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      hooksPathAcrossInstall(INSTALLED, after, opts);
+
+      await manager.create(42, "feat/42-test");
+
+      expect(writes().map(([, args]: any[]) => args[3])).toEqual([INSTALLED]);
+      warnSpy.mockRestore();
+    });
+
+    it("leaves husky's path when the absolute directory is gone, as after the clone moved", async () => {
+      const MOVED = "/moved/away/.git/nightgauge-hooks";
+      fsMock.access.mockImplementation((p: string) =>
+        p === MOVED ? Promise.reject(new Error("ENOENT")) : Promise.resolve(undefined)
+      );
+      hooksPathAcrossInstall(MOVED, ".husky/_");
+
+      await manager.create(42, "feat/42-test");
+
+      expect(fsMock.access).toHaveBeenCalledWith(MOVED);
+      expect(writes()).toEqual([]);
+    });
+
+    it.each<[string, string | null, string | null]>([
+      ["husky's own relative path, set again", ".husky/_", ".husky/_"],
+      ["unset before, as husky first sets itself up", null, ".husky/_"],
+      ["an absolute path the install did not change", INSTALLED, INSTALLED],
+      [
+        "an absolute path the install replaced with another, as after the clone moved",
+        "/old/.git/nightgauge-hooks",
+        INSTALLED,
+      ],
+    ])("leaves the hooks path alone: %s", async (_case, before, after) => {
+      hooksPathAcrossInstall(before, after);
+
+      await manager.create(42, "feat/42-test");
+
+      expect(writes()).toEqual([]);
+      expect(execFileAsyncMock.mock.calls.some(([, args]: any[]) => isRead(args))).toBe(true);
+    });
+
+    it("reads and writes no git configuration when the install is skipped", async () => {
+      hooksPathAcrossInstall(INSTALLED, ".husky/_");
+
+      await manager.create(42, "feat/42-test", { npmInstall: false });
+
+      expect(
+        execFileAsyncMock.mock.calls.some(
+          ([, args]: any[]) => Array.isArray(args) && args[0] === "config"
+        )
+      ).toBe(false);
     });
   });
 

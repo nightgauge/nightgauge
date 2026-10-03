@@ -260,3 +260,25 @@ func TestRefinementDisabledSendsNoStageTraffic(t *testing.T) {
 		t.Fatalf("expected the disabled reason on the unrefined-dispatch line, got:\n%s", out)
 	}
 }
+
+// TestRefineViaStageRunnerCarriesMaximumsEnvelope: the extension runs the wire
+// model verbatim, so under maximum the refinement it runs must arrive as opus
+// at effort high, the mode's envelope for an unpinned stage (#2384). It used
+// to arrive as sonnet at effort high.
+func TestRefineViaStageRunnerCarriesMaximumsEnvelope(t *testing.T) {
+	isolateRoutingEnv(t)
+	t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", "maximum")
+	runner := &refinementStageRunner{}
+	as, _ := ipcRefinementScheduler(t, runner)
+
+	if err := as.refineViaStageRunner(context.Background(), "acme", "widgets", 42); err != nil {
+		t.Fatalf("refineViaStageRunner: %v", err)
+	}
+	calls := runner.dispatches()
+	if len(calls) != 1 {
+		t.Fatalf("expected exactly one stage dispatch, got %d", len(calls))
+	}
+	if got := calls[0]; got.Model != "opus" || got.Effort != "high" {
+		t.Errorf("dispatch = {model %q, effort %q}, want {opus, high}", got.Model, got.Effort)
+	}
+}

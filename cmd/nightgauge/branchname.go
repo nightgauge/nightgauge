@@ -46,3 +46,52 @@ func epicBranchParentFor(issue *types.Issue, owner, repo string) int {
 	}
 	return gitpkg.EpicBranchParent(issueRepo, issue.ParentIssueNumber, issue.ParentIssueRepo)
 }
+
+// ensureBranchForIssue creates or reuses branchName in svc's checkout of
+// owner/repo and checks it out. issue is the issue the branch is for, nil for
+// a name that carries no issue number. Its parent epic is the base only when
+// the epic lives in owner/repo (#2377); issues is asked for the epic's title
+// only when that epic's branch has to be created. The branch itself comes
+// from the one implementation shared with the scheduler's deterministic
+// issue-pickup runner (#1904).
+func ensureBranchForIssue(ctx context.Context, svc *gitpkg.Service, issues func() (issueFetcher, error),
+	owner, repo string, issue *types.Issue, branchName string) (gitpkg.IssueBranchResult, error) {
+	parentIssue := 0
+	var epicTitle func() (string, error)
+	if issue != nil {
+		// 0 for a parent in another repository, so the title read below is
+		// always this repository's #N.
+		parentIssue = epicBranchParentFor(issue, owner, repo)
+		epicTitle = func() (string, error) {
+			fetcher, err := issues()
+			if err != nil {
+				return "", err
+			}
+			epic, err := fetcher.GetIssueWithRelations(ctx, owner, repo, parentIssue, gh.NoRelations)
+			if err != nil {
+				return "", err
+			}
+			return epic.Title, nil
+		}
+	}
+	return svc.EnsureIssueBranch(branchName, parentIssue, epicTitle)
+}
+
+// branchCreatePayload is the `git branch-create --json` report of res.
+// parent_issue and epic_branch are null unless the branch is based on an epic
+// branch in this repository.
+func branchCreatePayload(res gitpkg.IssueBranchResult) map[string]interface{} {
+	payload := map[string]interface{}{
+		"success":      true,
+		"branch":       res.Branch,
+		"base_branch":  res.BaseBranch,
+		"action":       res.Action,
+		"parent_issue": nil,
+		"epic_branch":  nil,
+	}
+	if res.ParentIssue != 0 {
+		payload["parent_issue"] = res.ParentIssue
+		payload["epic_branch"] = res.EpicBranch
+	}
+	return payload
+}

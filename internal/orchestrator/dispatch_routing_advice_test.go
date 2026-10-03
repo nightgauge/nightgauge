@@ -10,9 +10,9 @@ import (
 )
 
 // dispatch_routing_advice_test.go — eval-advice consumption on the Go
-// dispatch path (#581): opt-in via model_routing.use_eval_recommendations
-// (default OFF), applied only on the router-chosen branch, only within the
-// stage's routed-tier envelope.
+// dispatch path (#581): on unless model_routing.use_eval_recommendations is
+// false (the shipped default is true, ADR-021), applied only on the
+// router-chosen branch, only within the stage's routed-tier envelope.
 
 const adviceFixture = `{
   "schema_version": 1,
@@ -46,14 +46,32 @@ func clearRoutingEnv(t *testing.T) {
 	t.Setenv("NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS", "")
 }
 
-func TestStageBaseModelIgnoresAdviceByDefault(t *testing.T) {
+// TestStageBaseModelAppliesAdviceByDefault: with the key unset the advice is
+// consulted, because the shipped default is true (ADR-021). The test this
+// replaces passed no job class, so it held whatever the default was, and the
+// extension's resolver had kept a default of false unnoticed (#2387).
+func TestStageBaseModelAppliesAdviceByDefault(t *testing.T) {
+	isolateRoutingEnv(t)
 	clearRoutingEnv(t)
 	root := t.TempDir()
 	writeAdvice(t, root)
 
-	// Default (key off): the advice file exists but is never consulted — the
-	// axis query alone decides. Routed tier sonnet stays sonnet.
-	model, explicit := stageBaseModel(root, routing.ModeElevated, state.StageFeatureDev, "sonnet", "")
+	model, explicit := stageBaseModel(root, routing.ModeElevated, state.StageFeatureDev, "sonnet", "bugfix")
+	if model != "opus" || explicit {
+		t.Fatalf("stageBaseModel with the key unset = (%q, %v), want (opus, false)", model, explicit)
+	}
+}
+
+// TestStageBaseModelIgnoresAdviceWhenTheKeyIsOff: model_routing.
+// use_eval_recommendations: false leaves the advice file unread even for an
+// attributed job class with advisable evidence. Routed tier sonnet stays
+// sonnet.
+func TestStageBaseModelIgnoresAdviceWhenTheKeyIsOff(t *testing.T) {
+	root := routedWorkspace(t, "model_routing:\n  use_eval_recommendations: false\n")
+	clearRoutingEnv(t)
+	writeAdvice(t, root)
+
+	model, explicit := stageBaseModel(root, routing.ModeElevated, state.StageFeatureDev, "sonnet", "bugfix")
 	if model != "sonnet" || explicit {
 		t.Fatalf("stageBaseModel with advice OFF = (%q, %v), want (sonnet, false)", model, explicit)
 	}

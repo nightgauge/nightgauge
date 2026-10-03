@@ -29,6 +29,18 @@ const throttleCommandType = "throttle"
 // autonomous scheduler's default scan interval.
 const daemonThrottleInterval = 30 * time.Second
 
+// daemonSessionDecisionGrace bounds how long a daemon with no session reports
+// the throttle unread while it waits for the extension to push the session it
+// holds, or to say it holds none (#2352). A daemon no extension attaches to
+// then reports that it follows no throttle.
+const daemonSessionDecisionGrace = 2 * time.Minute
+
+// afterSessionDecisionGrace runs decide once daemonSessionDecisionGrace has
+// passed: time.AfterFunc, but a test ends the grace itself.
+var afterSessionDecisionGrace = func(decide func()) interface{ Stop() bool } {
+	return time.AfterFunc(daemonSessionDecisionGrace, decide)
+}
+
 // refreshThrottleOnCommand wraps relay so a `throttle` command the daemon's
 // agent receives makes the daemon read its workspace throttle again (#2352),
 // and is then relayed to the extension as before. The command names no

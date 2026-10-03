@@ -38,8 +38,12 @@ changelog, and the release workflow refuses a tag that does not.
   first dispatch; when the daemon stops answering, or follows the throttle
   but has not read it yet (it has just started, or its reads fail), the last
   throttle it reported is kept, and the log says so and until when. A daemon
-  without a signed-in session, which is any daemon the extension is not
-  attached to, still follows no throttle: the license key cannot read the
+  that has just started, as after a window reload, has no session until the
+  extension pushes it, and reports the throttle unread meanwhile, so a
+  headless scheduler no longer lifts the cap it learned and dispatches above
+  it until the next read. A daemon without a signed-in session, which is any
+  daemon the extension is not attached to (two minutes after it starts),
+  still follows no throttle: the license key cannot read the
   workspace's own throttle yet, and the read, like the extension's, is by
   slug in one team's workspace list (#2352 stays open for both).
 - **The daemon says which workspace writes its registration was refused**
@@ -170,6 +174,52 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A pipeline worktree on a branch older than the publication hook no longer
+  turns the hook off for the whole clone** (#2389). The pipeline's
+  `npm install` in such a worktree ran that checkout's `prepare` script, husky
+  alone, which set husky's relative hooks path for every worktree of the clone
+  in place of the hook directory that `npm install` installs (#2365). The
+  pipeline now puts an absolute hooks path back after its install, and warns
+  that it did. An `npm install` run by hand in such a checkout still turns the
+  hook off until the next `npm install` in a current checkout.
+- **`nightgauge epic create-branch` and `epic complete` refuse a checkout of
+  another repository** (#2388). Both act on the current directory's checkout:
+  `create-branch` creates and pushes `epic/<N>-<slug>` there, and `complete`
+  finds, merges and deletes `epic/<N>-*` there. Neither checked that the
+  checkout's origin was `--repo`, so from a checkout of another repository
+  `create-branch` pushed a branch named after `--repo`'s issue to it, and
+  `complete` could merge and delete the branch of that repository's own `#N`.
+  Both now refuse such a checkout before they read or change anything, and
+  name the repository it is. The extension's epic base-branch check after
+  issue pickup no longer falls back to `nightgauge/nightgauge` when it cannot
+  identify its repository: it looks nothing up, and leaves
+  `epic create-branch` to take the repository from the checkout.
+- **Escalation on a run the extension orchestrates stays inside the
+  performance mode's ceiling** (#2386). PERFORMANCE_MODES.md says the mode's
+  ceiling caps post-failure escalation, and the Go dispatch path clamps it,
+  but the extension's three escalation paths did not: a stage's request for a
+  stronger model, the proactive escalation before a stage when the health
+  trend is declining, and the health-gated policy that escalates every stage.
+  Under `efficiency` a Sonnet stage was retried on Opus, and
+  `model_routing.max_model` did not cap it either. Each path now escalates
+  only within the stage's ceiling, and a stage already at it is reported as at
+  the ceiling.
+- **The extension consults eval routing advice by default, as the Go pipeline
+  does** (#2387). `model_routing.use_eval_recommendations` ships `true`
+  (ADR-021), and the Go resolver and the extension's defaults say so, but the
+  extension's resolver fell back to `false` when the key was unset. An issue
+  whose job class had advisable evidence was re-picked by the advice on an
+  autonomous run and not on a run the extension orchestrated. Both now consult
+  the advice unless the key is `false`, and PERFORMANCE_MODES.md names the key.
+- **Refinement runs on the performance mode's model** (#2384). `issue-refine`
+  dispatched Sonnet in every mode, so under `maximum` it ran below the mode's
+  Opus floor, a `model_routing.max_model: haiku` cap did not lower it, and
+  neither `NIGHTGAUGE_PIPELINE_STAGE_MODEL_ISSUE_REFINE` nor a
+  `pipeline.stage_models` entry changed it. Its model now resolves as a
+  pipeline stage's does: an explicit per-stage model wins, and otherwise
+  Sonnet is clamped into the mode's band. Under `maximum` refinement runs on
+  Opus at effort `high`; the other modes keep Sonnet unless `max_model` caps it
+  lower.
 - **`nightgauge git push` pushes only the current branch, and runs the
   repository's pre-push hook** (#2365). It went through go-git, which runs no
   hooks and, given no refspec, pushes every local branch, so a push through it,
@@ -194,6 +244,16 @@ changelog, and the release workflow refuses a tag that does not.
   as `Bash(gh *)` stays whole, and a `# comment` is skipped. A form a reader did
   not know read as no list and got the default tools, `Bash`, `Write` and
   `Edit` among them, and a comment that named a tool granted it.
+- **More spellings of `allowed-tools` read as YAML reads them** (#2385). A
+  quoted key (`"allowed-tools":`), a space before the colon and YAML's
+  explicit `? allowed-tools` form read as no field, so the skill got the
+  runner's default tools, `Bash`, `Write` and `Edit` among them, and full
+  access under Codex. A block scalar (`|` or `>`) read as the single entry `|`
+  or `>`, and a value continued from the key's line onto the lines below kept
+  only its first line. The binary, the SDK and the extension now read each of
+  these, and an `allowed-tools` written only in a form none of them can read,
+  such as a flow sequence that never closes, is refused rather than read as an
+  entry that names no tool.
 - **A platform resume of a run a window reload paused says why it cannot
   continue the run** (#2339). A platform `pause` holds the run in its window;
   a reload ends that held call, and a later platform `resume` found no slot,
@@ -223,16 +283,20 @@ changelog, and the release workflow refuses a tag that does not.
   (slots, dispatches on their way to a slot, triggers being queued, the runs
   its queue carries, and paused runs a reload ended there) from the moment it
   is wired, and the first to answer a command claims it. A window that closes
-  or reloads keeps its listing for a minute, so its runs are not refused while
-  it comes back; a verb only such a listing held is looked at again when the
-  minute is over, and a claim left by a window that closed before it
-  answered is taken over. A window holds a triggered run from the moment its
-  ack comes back, before the run is queued, so a verb for it is answered
-  even while a fill holds the queue. The holder claims the answer before it applies the verb; a
-  window without the run waits two seconds and refuses `no-active-run` only
-  when it still does not hold the run, no window lists it, and it claims the
-  answer first. The platform gets one acknowledgement per command, the
-  holder's whenever a window holds the run.
+  or reloads keeps its listing for a minute, in a file of its own that a
+  listing write still in flight cannot replace, so its runs are not refused
+  while it comes back; a verb only such a listing held is looked at again
+  when the minute is over, and a claim left by a window that closed before it
+  answered is taken over, never one whose answer reached the platform. A
+  window holds a triggered run from the moment its ack comes back, before the
+  run is queued, so a verb for it is answered even while a fill holds the
+  queue. The holder claims the answer before it applies the verb, and applies
+  the verbs for one run in the order they arrived, so a pause and a resume
+  replayed together never leave the run paused; a window without the run
+  waits two seconds and refuses `no-active-run` only when it still does not
+  hold the run, no window lists it, and it claims the answer first. The
+  platform gets one acknowledgement per command, the holder's whenever a
+  window holds the run.
 - **A platform cancel of a triggered run that has not started yet applies**
   (#2344). A cancel of a run this window accepted the trigger for, still
   queued behind other slots or with its worktree being created, was refused
@@ -240,10 +304,13 @@ changelog, and the release workflow refuses a tag that does not.
   it again. The cancel now tombstones the platform run id and is acknowledged
   `applied`; the queued item is removed, or, when a fill already took it, the
   dispatch drops it wherever it is, so no slot ever opens for it. A cancel
-  that arrives while the trigger's run waits for the queue, or is being
-  queued, applies too, and a cancelled run is never put back in the queue (a
-  lowered dispatch ceiling, a failed start), which a reload would otherwise
-  start. A later trigger of the same issue runs under its own run id. The queued item now
+  that arrives while the trigger's run waits for the queue, is being queued,
+  or is being dequeued by a fill applies too, and a cancelled run is never
+  put back in the queue (a lowered dispatch ceiling, a failed start), which a
+  reload would otherwise start. A cancel refused `no-active-run`, also when
+  the queue cannot be read and its latest state does not show the run, drops
+  nothing, so a run it could not see still starts as the refusal says. A
+  later trigger of the same issue runs under its own run id. The queued item now
   carries the platform run id and the slot adopts it from there, so a run id
   can no longer be adopted by a later dispatch of the same issue number from
   a local re-queue or another repository, and a re-queued remote run keeps its
@@ -252,9 +319,12 @@ changelog, and the release workflow refuses a tag that does not.
   already on its way to a slot, decided in one turn with the fill's dequeue,
   and cancelling such a run only detaches it, leaving the operator's work
   queued. A trigger for an issue queued or dispatched here for another
-  platform run is refused `already-queued` before its ack.
-  `queue.removeRemoteRun` removes one remote run's item that no dispatch has
-  taken, or detaches the run from the operator's item.
+  platform run is refused `already-queued` before its ack, and so is one that
+  asks for its own adapter and model (#1656) while the operator's work for the
+  issue is queued or dispatched here: it is never attached to that work, which
+  runs on the operator's. `queue.removeRemoteRun` removes one remote run's
+  item that no dispatch has taken, or detaches the run from the operator's
+  item.
 - **A slow reap of the complexity-model lock broker no longer hides why the
   transaction failed** (#2356). The extension waited for a broker it had sent
   SIGKILL as briefly as for one asked to exit, and an error from that wait
@@ -363,6 +433,34 @@ changelog, and the release workflow refuses a tag that does not.
   and they make no network calls. The lifecycle test takes about 11 s instead
   of 20 s. When the concurrent-pipelines test timed out, its main thread could
   wait forever; now it fails.
+
+- **`branch-merged-check.sh` no longer reads an open PR it did not list as no
+  open PR** (#2391). Both open-PR guards read one
+  `gh pr list --state all --limit 500` window, so an open PR older than the
+  newest 500 PRs was not in it, and its head or base branch, if an ancestor of
+  `main`, read SAFE-DELETE. Open PRs now have a list of their own; one that
+  fills its limit may have been cut short and answers UNKNOWN. Merged PRs stay
+  a window of the newest 500: one past it only withholds a SAFE-DELETE.
+
+- **The pipefail early-exit gate reads five more shapes** (#2392). A grep
+  whose output a group, `if`, loop or function body sends to `/dev/null`
+  (`{ cmd | grep x; } >/dev/null`), which GNU grep treats as `-q`; another
+  shell's literal `-c` script after a pipe (`cmd | sh -c 'head -1'`), whose
+  commands read the pipe while the writer dies in this file's pipeline;
+  `mapfile -n`/`readarray -n` and `dd count=`; and a workflow step whose
+  `shell:` is a path or a command line (`/usr/bin/bash -eo pipefail {0}`),
+  which it skipped. A step is skipped only when its shell runs another
+  language, such as pwsh or python.
+
+- **The OpenCode stage-run tests no longer pass or fail on the clock**
+  (#2393). Every stage they dispatched had a 20 s timeout and folded its
+  usage through the production 10 s helper limit, and the tests assert that
+  no drift marker was recorded, so a helper the load slowed failed them; a
+  held stage was stopped after 20 s whether or not it was ready; and the
+  cancelled-context test failed when its refusal took over 5 s. One two-minute
+  watchdog now bounds a stage and only catches a hang, the stop test's output
+  holder lets go no sooner, a held stage is stopped once it is ready, and the
+  cancelled-context test checks that no process started.
 
 - **PERFORMANCE_MODES.md describes the modes the pipeline has** (#2343). It
   listed `economy`, `balanced`, `quality` and `custom`, which neither resolver

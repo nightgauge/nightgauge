@@ -931,8 +931,8 @@ export interface ModelDecision {
   /** Experiment assignment when source is 'experiment' (Issue #949) */
   experimentAssignment?: ExperimentAssignment;
   /**
-   * Set when an eval-advice entry re-picked the selector's model (#581,
-   * opt-in via `model_routing.use_eval_recommendations`). The decision's
+   * Set when an eval-advice entry re-picked the selector's model (#581; on
+   * unless `model_routing.use_eval_recommendations` is false). The decision's
    * `source` stays "auto" — the selector chain still decided, with advice as
    * one clamp-bounded input — and this field carries the attribution.
    */
@@ -1636,11 +1636,11 @@ export function resolveModel(
         // (#340).
         const model = withFloor(result.model as DefaultModel);
 
-        // Eval-advice re-pick (#581, opt-in, default off): the advisor slots
-        // between the selector's pick and the return, inside the same clamps
-        // (`withFloor` gates the advised band). With the key off, no advice
-        // file, no matching job class, or sparse evidence, this is inert and
-        // the compatibility table's pre-cutover behavior holds exactly.
+        // Eval-advice re-pick (#581, on by default since ADR-021): the advisor
+        // slots between the selector's pick and the return, inside the same
+        // clamps (`withFloor` gates the advised band). With the key off, no
+        // advice file, no matching job class, or sparse evidence, this is inert
+        // and the compatibility table's pre-cutover behavior holds exactly.
         if (isEvalRecommendationsEnabled(workspaceRoot)) {
           const advisory = consultEvalAdvice(
             workspaceRoot,

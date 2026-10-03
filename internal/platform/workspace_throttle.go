@@ -132,12 +132,15 @@ const workspaceThrottleReadTimeout = 30 * time.Second
 // throttle is followed only while a signed-in session exists, as the
 // extension follows it: without one the cap is lifted and unknown. With one,
 // it is unread until a read succeeds, so a headless scheduler that asks the
-// daemon keeps what it learned before.
+// daemon keeps what it learned before. A process whose session is still to
+// come (WithSessionDecision) is unread, not unknown, until it is decided.
 type WorkspaceThrottleFollower struct {
 	read    func(ctx context.Context, slug string) (*WorkspaceThrottle, error)
 	slug    func() (string, bool, error)
 	session func() bool
-	target  WorkspaceThrottleTarget
+	// sessionDecided reports whether "no session" is final; nil: always.
+	sessionDecided func() bool
+	target         WorkspaceThrottleTarget
 	// readTimeout bounds each read; workspaceThrottleReadTimeout but in tests.
 	readTimeout time.Duration
 
@@ -153,8 +156,9 @@ type WorkspaceThrottleTarget interface {
 	// known false it lifts the throttle, which no session can read.
 	Set(throttle *WorkspaceThrottle, known bool)
 	// MarkUnread records that a session exists, so the throttle is
-	// followed, though no read has succeeded since it came; it changes a
-	// known throttle in nothing.
+	// followed, though no read has succeeded since it came, or that one may
+	// still come (WithSessionDecision); it changes a known throttle in
+	// nothing.
 	MarkUnread()
 }
 
@@ -174,6 +178,18 @@ func NewWorkspaceThrottleFollower(
 		read: read, slug: slug, session: session, target: target,
 		readTimeout: workspaceThrottleReadTimeout,
 	}
+}
+
+// WithSessionDecision makes a follower with no session report the throttle
+// unread instead of unknown until decided reports true (#2352). A daemon has
+// no session when it starts, until the extension pushes the one it holds or
+// says it holds none; reporting meanwhile that the daemon follows no throttle
+// would make a headless scheduler that asks it lift the throttle it learned
+// from the daemon before, and dispatch above it until the next read. Refresh
+// once decided changes, so the decision is applied.
+func (f *WorkspaceThrottleFollower) WithSessionDecision(decided func() bool) *WorkspaceThrottleFollower {
+	f.sessionDecided = decided
+	return f
 }
 
 // Refresh reads the throttle and applies it. It returns once a read that
@@ -204,6 +220,11 @@ func (f *WorkspaceThrottleFollower) Refresh(ctx context.Context) {
 
 func (f *WorkspaceThrottleFollower) readAndApply(ctx context.Context) {
 	if !f.session() {
+		if f.sessionDecided != nil && !f.sessionDecided() {
+			// A session may still come: not known, and not "none" either.
+			f.target.MarkUnread()
+			return
+		}
 		f.target.Set(nil, false)
 		return
 	}

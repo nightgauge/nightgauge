@@ -238,6 +238,46 @@ describe("RemoteRunLedger (#2357)", () => {
     expect(await b.claimAnswer("cmd-2")).toBe(false);
   });
 
+  // Only a claim whose window is gone BEFORE it answered is taken over: an
+  // answer the platform has is never followed by a second, contrary one.
+  it("never takes over an answer a gone window delivered, and marks only its own claim", async () => {
+    let aliveA = true;
+    const a = windowOf(101);
+    const b = windowOf(102, (pid) => pid !== 101 || aliveA);
+    const answer = path.join(dir, "answers", "cmd-1");
+
+    expect(await a.claimAnswer("cmd-1")).toBe(true);
+    // Another window cannot mark a claim that is not its own.
+    await b.markAnswered("cmd-1");
+    expect(JSON.parse(fs.readFileSync(answer, "utf8"))).toEqual({ pid: 101 });
+
+    await a.markAnswered("cmd-1");
+    expect(JSON.parse(fs.readFileSync(answer, "utf8"))).toEqual({ pid: 101, answered: true });
+    aliveA = false;
+    expect(await b.claimAnswer("cmd-1")).toBe(false);
+    expect(fs.existsSync(`${answer}.taken-from-101`)).toBe(false);
+  });
+
+  // A listing write still in flight when the window closes lands after the
+  // closed listing was written; the closed listing must still count for the
+  // grace once the window's process is gone.
+  it("keeps a closing window's runs held when a listing write was in flight as it closed", async () => {
+    let aliveA = true;
+    const a = windowOf(101);
+    const b = windowOf(102, (pid) => pid !== 101 || aliveA);
+
+    const inFlight = a.publish(["run-1"]);
+    a.dispose();
+    await inFlight;
+    aliveA = false;
+
+    expect(await b.heldElsewhere("run-1")).toBe(true);
+    const left = await b.closedHoldLeftMs("run-1");
+    expect(left).not.toBeNull();
+    expect(left!).toBeGreaterThan(0);
+    expect(left!).toBeLessThanOrEqual(CLOSED_LISTING_GRACE_MS);
+  });
+
   it("claims nothing when the answer cannot be recorded", async () => {
     // The answers directory is a file: nothing can be created in it.
     fs.writeFileSync(path.join(dir, "answers"), "");

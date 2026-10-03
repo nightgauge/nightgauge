@@ -193,6 +193,9 @@ describe("RunVerbCommandHandler — a verb no window of the machine holds (#2357
     await only.handler.consume(verb("cancel"), "cancel");
     expect(platform.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
     expect(platform.agentAcknowledgeCommand.mock.calls[0][2]).toBe("rejected");
+    expect(platform.agentAcknowledgeCommand.mock.calls[0][3]).toBe(
+      "no-active-run: no pipeline on this agent carries this runId"
+    );
   });
 
   it("does not refuse a run another live window lists, which answers it itself", async () => {
@@ -257,7 +260,12 @@ describe("RunVerbCommandHandler — a verb no window of the machine holds (#2357
     expect(await closedHoldLeftMs.mock.results[0].value).toBe(20);
     expect(platform.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
     expect(platform.agentAcknowledgeCommand.mock.calls[0][2]).toBe("rejected");
-    expect(platform.agentAcknowledgeCommand.mock.calls[0][3]).toMatch(/^no-active-run: /);
+    // The closed window's queue may still carry the run and start it when the
+    // window opens again: the refusal says the holder closed, not that no
+    // pipeline carries the run.
+    expect(platform.agentAcknowledgeCommand.mock.calls[0][3]).toBe(
+      "no-active-run: no open window on this agent holds this run; the window that held it has closed"
+    );
   });
 
   it("stays quiet while a window back from its reload lists the run again", async () => {
@@ -316,6 +324,43 @@ describe("RunVerbCommandHandler — a verb no window of the machine holds (#2357
     expect(platform.agentAcknowledgeCommand.mock.calls[0][2]).toBe("rejected");
   });
 
+  // The holder's applied cancel reached the platform, and then its window
+  // closed. A copy of the command delivered to another window afterwards must
+  // not record the opposite outcome over it.
+  it("does not answer again a verb a window that is gone now answered", async () => {
+    const platform = makePlatform();
+    const holder = new RunVerbCommandHandler(
+      makeRuns(true) as never,
+      platform,
+      makeLogger() as never,
+      undefined,
+      undefined,
+      {
+        ledger: new RemoteRunLedger(dir, { windowId: 102, isAlive: () => true }),
+        graceMs: GRACE_MS,
+      }
+    );
+    holder.setAgentId("agent-machine");
+    await holder.consume(verb("cancel"), "cancel");
+    expect(platform.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
+    expect(platform.agentAcknowledgeCommand.mock.calls[0][2]).toBe("applied");
+
+    const other = new RunVerbCommandHandler(
+      makeRuns(false) as never,
+      platform,
+      makeLogger() as never,
+      undefined,
+      undefined,
+      {
+        ledger: new RemoteRunLedger(dir, { windowId: 101, isAlive: (pid) => pid !== 102 }),
+        graceMs: GRACE_MS,
+      }
+    );
+    other.setAgentId("agent-machine");
+    await other.consume(verb("cancel"), "cancel");
+    expect(platform.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
+  });
+
   // A trigger this window was accepting queued the run during the grace.
   it("answers as the holder when it comes to hold the run during the grace", async () => {
     const platform = makePlatform();
@@ -358,5 +403,107 @@ describe("RunVerbCommandHandler — a verb no window of the machine holds (#2357
     handler.setAgentId("agent-machine");
     await handler.consume(verb("cancel"), "cancel");
     expect(platform.agentAcknowledgeCommand).not.toHaveBeenCalled();
+  });
+});
+
+/** A run that pauses and resumes, recording each verb as it is applied. */
+function makePausableRuns() {
+  const run = { paused: false, applied: [] as string[] };
+  const runs = makeRuns(true);
+  runs.pauseByRemoteRunId.mockImplementation(async () => {
+    run.applied.push("pause");
+    if (run.paused) return "already-paused";
+    run.paused = true;
+    return "applied";
+  });
+  runs.resumeByRemoteRunId.mockImplementation(async () => {
+    run.applied.push("resume");
+    if (!run.paused) return "not-paused";
+    run.paused = false;
+    return "applied";
+  });
+  return { runs, run };
+}
+
+/** Let every pending timer, I/O callback and microtask run. */
+async function settleEverything(): Promise<void> {
+  for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+}
+
+// The platform replays the commands a reconnect finds unacknowledged, and the
+// daemon relays them line by line in one tick. The holder claims each
+// command's answer on the machine's ledger before applying it, which takes as
+// long as the disk; the verbs for one run must still apply in arrival order,
+// or a pause and a resume leave the run paused though the last request was a
+// resume.
+describe("RunVerbCommandHandler — the verbs for one run apply in arrival order (#2357)", () => {
+  it("applies a pause and a resume delivered in one tick in that order, however long the pause's claim takes", async () => {
+    const { runs, run } = makePausableRuns();
+    const claims = new Map<string, { promise: Promise<boolean>; resolve: (v: boolean) => void }>();
+    const ledger = {
+      heldElsewhere: vi.fn().mockResolvedValue(false),
+      closedHoldLeftMs: vi.fn().mockResolvedValue(null),
+      claimAnswer: vi.fn((commandId: string) => {
+        const claim = deferred<boolean>();
+        claims.set(commandId, claim);
+        return claim.promise;
+      }),
+      markAnswered: vi.fn().mockResolvedValue(undefined),
+    };
+    const platform = makePlatform();
+    const handler = new RunVerbCommandHandler(
+      runs as never,
+      platform,
+      makeLogger() as never,
+      undefined,
+      undefined,
+      { ledger, graceMs: GRACE_MS }
+    );
+    handler.setAgentId("agent-machine");
+
+    const done = Promise.all([
+      handler.consume(verb("pause"), "pause"),
+      handler.consume(verb("resume"), "resume"),
+    ]);
+    await vi.waitFor(() => expect(claims.has("cmd-pause")).toBe(true));
+    await settleEverything();
+    // The resume's claim, were it under way, answers first.
+    claims.get("cmd-resume")?.resolve(true);
+    await settleEverything();
+    expect(run.applied).toEqual([]);
+
+    claims.get("cmd-pause")!.resolve(true);
+    await vi.waitFor(() => expect(claims.has("cmd-resume")).toBe(true));
+    claims.get("cmd-resume")!.resolve(true);
+    await done;
+
+    expect(run.applied).toEqual(["pause", "resume"]);
+    expect(run.paused).toBe(false);
+    const acks = platform.agentAcknowledgeCommand.mock.calls.map((call) => [call[1], call[2]]);
+    expect(acks).toHaveLength(2);
+    expect(acks).toEqual(
+      expect.arrayContaining([
+        ["cmd-pause", "applied"],
+        ["cmd-resume", "applied"],
+      ])
+    );
+  });
+
+  it("leaves the run as the last of a pause and a resume asked, burst after burst, with the real ledger", async () => {
+    const { runs, run } = makePausableRuns();
+    const platform = makePlatform();
+    const w = makeWindow(101, runs, platform);
+    await w.ledger.publish(["run-1"]);
+
+    for (let burst = 0; burst < 20; burst++) {
+      run.applied.length = 0;
+      await Promise.all([
+        w.handler.consume(verb("pause", `cmd-pause-${burst}`), "pause"),
+        w.handler.consume(verb("resume", `cmd-resume-${burst}`), "resume"),
+      ]);
+      expect(run.applied).toEqual(["pause", "resume"]);
+      expect(run.paused).toBe(false);
+    }
+    expect(platform.agentAcknowledgeCommand).toHaveBeenCalledTimes(40);
   });
 });

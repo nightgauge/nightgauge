@@ -48,6 +48,16 @@ import type { Logger } from "../utils/logger";
 const ALREADY_QUEUED_DETAIL =
   "already-queued: the issue is already queued on this agent for another run";
 
+/**
+ * The public reason a trigger that asks for its own adapter and model (#1656)
+ * is refused when the operator's work for the issue is queued or on its way
+ * to a slot here: that work runs on the operator's adapter and model, and
+ * the run is never served by another. Go's `queue.validatePin` refuses the
+ * same case under the same category.
+ */
+const PINNED_ALREADY_QUEUED_DETAIL =
+  "already-queued: the issue is already queued on this agent, so the requested adapter and model cannot apply";
+
 interface TriggerPayload {
   owner: string;
   repo: string;
@@ -180,7 +190,8 @@ export class TriggerCommandHandler implements CommandHandler {
     // to a slot here for another platform run cannot serve this one.
     const conflict = await this.concurrentManager.remoteTriggerConflict(
       issueNumber,
-      `${owner}/${repo}`
+      `${owner}/${repo}`,
+      requested !== undefined
     );
     if (conflict === "running") {
       this.logger.warn(
@@ -189,9 +200,11 @@ export class TriggerCommandHandler implements CommandHandler {
       );
       return;
     }
-    if (conflict === "busy") {
+    if (conflict === "busy" || conflict === "pinned") {
       this.logger.warn(
-        "TriggerCommandHandler: the issue is already queued here for another platform run — acking as rejected",
+        conflict === "busy"
+          ? "TriggerCommandHandler: the issue is already queued here for another platform run — acking as rejected"
+          : "TriggerCommandHandler: the issue is already queued here, so the requested adapter and model cannot apply — acking as rejected",
         { issueNumber, repo: `${owner}/${repo}`, commandId: cmd.id }
       );
       try {
@@ -199,7 +212,7 @@ export class TriggerCommandHandler implements CommandHandler {
           agentId,
           cmd.id,
           "rejected",
-          ALREADY_QUEUED_DETAIL
+          conflict === "busy" ? ALREADY_QUEUED_DETAIL : PINNED_ALREADY_QUEUED_DETAIL
         );
       } catch (err) {
         this.logger.error("TriggerCommandHandler: rejected ack failed", {
@@ -266,7 +279,12 @@ export class TriggerCommandHandler implements CommandHandler {
         placement = (await enqueue()) ? "queued" : "not-queued";
       } else {
         placement = await this.concurrentManager.placeRemoteRun(
-          { remoteRunId: runId, issueNumber, repo: `${owner}/${repo}` },
+          {
+            remoteRunId: runId,
+            issueNumber,
+            repo: `${owner}/${repo}`,
+            ...(requested ? { pinned: true } : {}),
+          },
           enqueue
         );
       }
@@ -293,6 +311,14 @@ export class TriggerCommandHandler implements CommandHandler {
         this.logger.error(
           "TriggerCommandHandler: the issue is already running or queued for another run here — this run was acked but is not served",
           { issueNumber, commandId: cmd.id, runId, placement }
+        );
+        return;
+      case "pinned":
+        // The operator's dispatch of the issue began while the trigger was
+        // acked, and runs on the operator's adapter and model (#1656).
+        this.logger.error(
+          "TriggerCommandHandler: the operator's dispatch of the issue is under way here, so the requested adapter and model cannot apply — this run was acked but is not served",
+          { issueNumber, commandId: cmd.id, runId }
         );
         return;
       case "attached":

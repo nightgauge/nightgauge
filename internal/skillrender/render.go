@@ -677,7 +677,9 @@ func (r *Result) applyFrontmatter(fm frontmatter) {
 // the extension's default set, which grants Bash, Write and Edit, and full
 // access under Codex. A field that read as empty used to get that default too,
 // so a list written in a form the reader did not know granted more than it
-// named. The SDK refuses the same skill (skillAllowedTools.ts).
+// named. A field written only in a form the reader cannot read, such as a flow
+// sequence that never closes, lists no tool and is refused too (#2385). The
+// SDK refuses the same skill (skillAllowedTools.ts).
 var errNoAllowedTools = errors.New("allowed-tools is present but lists no tool: " +
 	"list the tools the skill needs (allowed-tools: Read Grep), or remove the field")
 
@@ -723,57 +725,173 @@ func extractYAMLField(frontmatter string, key string) string {
 }
 
 // extractToolList reads a frontmatter tool field into its entries, and reports
-// whether the field is there at all. The field is the first line whose trimmed
-// text starts with `key:`. A value on that line, without its comment
-// (stripComment), is read by toolValue. With no value there, the value is on
-// the lines after it: a YAML block list, one `- entry` per line with each entry
-// read by toolValue, or else the lines indented deeper than the key, joined
-// with spaces and read by toolValue as one value, which is how YAML continues a
-// plain value or a flow sequence onto the next lines. Whichever the first of
-// those lines is decides which it is. Blank and `#` comment lines are skipped,
-// and the first other line ends the value.
+// whether the field is there at all. The field is the first line that is the
+// key's entry (keyEntry), or YAML's explicit form of it (explicitKey), whose
+// value is on the next line that is not blank or a comment when that line is
+// a `:` at the key's indent. An explicit key with no such line has no value.
+// fieldValue reads the value.
 //
 // It used to read the key's line alone, so a block list declared no tools, and
 // the extension, which gives a skill that declares none its default set, then
 // granted Bash, Write and Edit to a skill that asked for Read and Grep (#2358).
-// The SDK reads the same grammar (skillAllowedTools.ts).
+// It used to match only a line starting with `key:`, so a quoted key or a
+// space before the colon read as no field, with the same result (#2385). The
+// SDK reads the same grammar (skillAllowedTools.ts).
 func extractToolList(frontmatter string, key string) (entries []string, present bool) {
-	prefix := key + ":"
 	lines := strings.Split(frontmatter, "\n")
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, prefix) {
+		if entry, ok := keyEntry(trimmed, key); ok {
+			return fieldValue(lines, i, entry), true
+		}
+		if !explicitKey(trimmed, key) {
 			continue
 		}
-		if value := stripComment(strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))); value != "" {
-			return toolValue(value), true
-		}
-		keyIndent := indentOf(line)
-		inList, inValue := false, false
-		var continued []string
-		for _, next := range lines[i+1:] {
-			item := strings.TrimSpace(next)
-			if item == "" || strings.HasPrefix(item, "#") {
+		for j := i + 1; j < len(lines); j++ {
+			next := strings.TrimSpace(lines[j])
+			if next == "" || strings.HasPrefix(next, "#") {
 				continue
 			}
-			if rest, ok := listItem(item); ok && !inValue {
-				inList = true
-				entries = append(entries, toolValue(stripComment(rest))...)
-				continue
-			}
-			if !inList && indentOf(next) > keyIndent {
-				inValue = true
-				continued = append(continued, stripComment(item))
-				continue
+			if value, ok := strings.CutPrefix(next, ":"); ok && indentOf(lines[j]) == indentOf(line) {
+				return fieldValue(lines, j, value), true
 			}
 			break
 		}
-		if inValue {
-			entries = toolValue(strings.Join(continued, " "))
-		}
-		return entries, true
+		return nil, true
 	}
 	return nil, false
+}
+
+// keyEntry returns the text after the colon when a trimmed line is key's
+// entry, the key written as YAML writes an implicit one: bare, double-quoted
+// or single-quoted, then any spaces or tabs, then the colon.
+func keyEntry(trimmed, key string) (string, bool) {
+	rest, ok := strings.CutPrefix(trimmed, key)
+	if !ok && trimmed != "" && (trimmed[0] == '"' || trimmed[0] == '\'') {
+		rest, ok = strings.CutPrefix(trimmed[1:], key+trimmed[:1])
+	}
+	if !ok {
+		return "", false
+	}
+	return strings.CutPrefix(strings.TrimLeft(rest, " \t"), ":")
+}
+
+// explicitKey reports whether a trimmed line is YAML's explicit form of key's
+// entry: `?`, whitespace, the key bare or quoted, and nothing after it but a
+// comment. Its value follows on a `:` line.
+func explicitKey(trimmed, key string) bool {
+	rest, ok := strings.CutPrefix(trimmed, "?")
+	if !ok || rest == "" {
+		return false
+	}
+	if r, _ := utf8.DecodeRuneInString(rest); !unicode.IsSpace(r) {
+		return false
+	}
+	name := stripComment(strings.TrimSpace(rest))
+	return name == key || name == `"`+key+`"` || name == "'"+key+"'"
+}
+
+// fieldValue reads the entries of a tool field whose entry is on line at,
+// entry being the text after its colon.
+//
+// A value there is read without its comment (stripComment). A block scalar
+// header (`|` or `>`) reads as the block's text (blockScalar), split by
+// splitTools. A quoted value or a flow sequence closed on that line
+// (closedOnItsLine) is read by toolValue. Any other value there continues
+// over the lines indented deeper than the key: they are joined to it with
+// spaces and read by toolValue as one value, which is how YAML continues a
+// plain value, a quoted one or a flow sequence onto the next lines.
+//
+// With no value there, the value is on the lines after it: a YAML block list,
+// one `- entry` per line with each entry read by toolValue, or else the lines
+// indented deeper than the key, joined with spaces and read by toolValue as
+// one value. Whichever the first of those lines is decides which it is. Blank
+// and `#` comment lines are skipped, and the first other line ends the value.
+func fieldValue(lines []string, at int, entry string) []string {
+	keyIndent := indentOf(lines[at])
+	below := lines[at+1:]
+	value := stripComment(strings.TrimSpace(entry))
+	if blockScalarHeader(value) {
+		return splitTools(blockScalar(below, keyIndent))
+	}
+	if closedOnItsLine(value) {
+		return toolValue(value)
+	}
+	var entries, continued []string
+	inList, inValue := false, value != ""
+	if inValue {
+		continued = append(continued, value)
+	}
+	for _, next := range below {
+		item := strings.TrimSpace(next)
+		if item == "" || strings.HasPrefix(item, "#") {
+			continue
+		}
+		if rest, ok := listItem(item); ok && !inValue {
+			inList = true
+			entries = append(entries, toolValue(stripComment(rest))...)
+			continue
+		}
+		if !inList && indentOf(next) > keyIndent {
+			inValue = true
+			continued = append(continued, stripComment(item))
+			continue
+		}
+		break
+	}
+	if inValue {
+		return toolValue(strings.Join(continued, " "))
+	}
+	return entries
+}
+
+// blockScalarHeader reports whether a value is a YAML block scalar header:
+// `|` or `>`, then at most one chomping indicator (`+` or `-`) and one
+// indentation indicator (a digit 1 to 9), in either order.
+func blockScalarHeader(value string) bool {
+	if !strings.HasPrefix(value, "|") && !strings.HasPrefix(value, ">") {
+		return false
+	}
+	chomping, indentation := false, false
+	for _, r := range value[1:] {
+		switch {
+		case (r == '+' || r == '-') && !chomping:
+			chomping = true
+		case r >= '1' && r <= '9' && !indentation:
+			indentation = true
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// blockScalar returns the text of a block scalar whose header is on the key's
+// line: the lines below it up to the first line, not blank, that is no deeper
+// than the key. A `#` in it is text, as YAML reads it, not a comment.
+func blockScalar(below []string, keyIndent int) string {
+	var text []string
+	for _, line := range below {
+		if strings.TrimSpace(line) != "" && indentOf(line) <= keyIndent {
+			break
+		}
+		text = append(text, line)
+	}
+	return strings.Join(text, "\n")
+}
+
+// closedOnItsLine reports whether a value is a quoted value or a flow
+// sequence that ends on its own line. Any other value on the key's line
+// continues over the deeper lines below it, as YAML continues a plain value
+// and a quoted value or flow sequence that is not closed yet.
+func closedOnItsLine(value string) bool {
+	if strings.HasPrefix(value, "[") {
+		return strings.Contains(value, "]")
+	}
+	if value == "" || (value[0] != '"' && value[0] != '\'') {
+		return false
+	}
+	return len(value) >= 2 && value[len(value)-1] == value[0]
 }
 
 // listItem reports whether a trimmed line is a YAML block list item, a dash
@@ -817,7 +935,15 @@ func stripComment(value string) string {
 // `[Read, "Bash(gh *)"]` lists Read and Bash(gh *). It used to read as `[Read`
 // and `"Bash(gh *)"]`, which grant nothing. Any other value loses the quotes
 // around it as a whole and is split by splitTools.
+//
+// A value that starts with `|` or `>` is a block scalar this reader takes no
+// text for (one on the key's line is read by fieldValue), and a flow sequence
+// with no `]` is never closed: neither lists a tool. Each used to read as a
+// junk entry such as `|` or `[Read`, which grants nothing (#2385).
 func toolValue(value string) []string {
+	if strings.HasPrefix(value, "|") || strings.HasPrefix(value, ">") {
+		return nil
+	}
 	if inner, ok := strings.CutPrefix(value, "["); ok {
 		if inner, ok := strings.CutSuffix(inner, "]"); ok {
 			var entries []string
@@ -827,6 +953,9 @@ func toolValue(value string) []string {
 				}
 			}
 			return entries
+		}
+		if !strings.Contains(inner, "]") {
+			return nil
 		}
 	}
 	return splitTools(strings.Trim(value, "\"'"))

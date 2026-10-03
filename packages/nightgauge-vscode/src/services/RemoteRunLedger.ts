@@ -17,20 +17,23 @@
  *     (every run it answers a verb for: its slots, the dispatches on their
  *     way to a slot, the triggers it is queueing, the runs its queue
  *     carries, and the paused runs a reload ended there), rewritten whenever
- *     that set changes. A window that closes, or reloads, marks its listing
- *     closed instead of removing it, and the others still honour it for
- *     CLOSED_LISTING_GRACE_MS: a reloading window holds its queued runs again
- *     once it is back, and must not have them refused meanwhile. Any other
- *     file whose process is gone is ignored and removed.
+ *     that set changes. It counts while its process lives.
+ *   - `holders/<pid>.closed.json`: the runs a window held when it closed or
+ *     reloaded, which the others still honour for CLOSED_LISTING_GRACE_MS: a
+ *     reloading window holds its queued runs again once it is back, and must
+ *     not have them refused meanwhile. A file of its own, so a listing write
+ *     still in flight when the window closes cannot replace it. Any file
+ *     that stopped counting is removed.
  *   - `answers/<command id>`: created exclusively by the first window that
- *     answers a command, naming that window. The holder creates it before
- *     it applies the verb; a window that does not hold the run refuses the
- *     verb only when no window lists the run and it creates this file
- *     first, so the platform gets one acknowledgement per command, and never
- *     a refusal ahead of the holder's answer. A claim whose window is gone
- *     before it answered is taken over by the first window to create
- *     `answers/<command id>.taken-from-<pid>`. Files older than a day are
- *     swept.
+ *     answers a command, naming that window, and marked answered once its
+ *     acknowledgement reached the platform. The holder creates it before it
+ *     applies the verb; a window that does not hold the run refuses the verb
+ *     only when no window lists the run and it creates this file first, so
+ *     the platform gets one acknowledgement per command, and never a refusal
+ *     ahead of the holder's answer. A claim whose window is gone before it
+ *     answered is taken over by the first window to create
+ *     `answers/<command id>.taken-from-<pid>`; an answered claim never is.
+ *     Files older than a day are swept.
  *   - `claims/<run id>.json`: the window that holds a paused run a reload
  *     ended (#2339). Every window of one clone reads the same paused
  *     snapshots, so the first live window to claim the run holds it, and the
@@ -107,6 +110,10 @@ export class RemoteRunLedger implements vscode.Disposable {
     return path.join(this.holdersDir, `${this.windowId}.json`);
   }
 
+  private get closedFile(): string {
+    return path.join(this.holdersDir, `${this.windowId}.closed.json`);
+  }
+
   /**
    * Record the platform run ids this window holds now. Writes are queued one
    * at a time, and only the latest set is written, so an older set never
@@ -179,7 +186,7 @@ export class RemoteRunLedger implements vscode.Disposable {
     }
     let closedUntil: number | null = null;
     for (const name of names) {
-      const match = /^(\d+)\.json$/.exec(name);
+      const match = /^(\d+)(?:\.closed)?\.json$/.exec(name);
       if (!match) continue;
       const pid = Number(match[1]);
       if (pid === this.windowId) continue;
@@ -247,9 +254,19 @@ export class RemoteRunLedger implements vscode.Disposable {
 
   /** The window a claim file names, or null when there is none or it is unreadable. */
   private async claimOwner(file: string): Promise<number | null> {
+    return (await this.readClaim(file))?.pid ?? null;
+  }
+
+  /** A claim file's window and whether its answer was delivered; null when unreadable. */
+  private async readClaim(file: string): Promise<{ pid: number; answered: boolean } | null> {
     try {
-      const claim = JSON.parse(await fs.promises.readFile(file, "utf8")) as { pid?: unknown };
-      return typeof claim.pid === "number" ? claim.pid : null;
+      const claim = JSON.parse(await fs.promises.readFile(file, "utf8")) as {
+        pid?: unknown;
+        answered?: unknown;
+      };
+      return typeof claim.pid === "number"
+        ? { pid: claim.pid, answered: claim.answered === true }
+        : null;
     } catch {
       return null;
     }
@@ -323,14 +340,35 @@ export class RemoteRunLedger implements vscode.Disposable {
   }
 
   /**
-   * Take over an answer whose claimer is gone (#2357). The first window to
-   * create the takeover marker for that claimer wins it. A claim that names
-   * no claimer (one being written, or an unreadable one) is kept, as is a
-   * live window's.
+   * Record that this window's answer to a command reached the platform, so
+   * the claim is never taken over once this window is gone: a copy of the
+   * command delivered again later gets no second, contrary acknowledgement.
+   * Only this window's own claim is marked. Best effort: an unmarked claim is
+   * taken over only once its window is gone.
+   */
+  async markAnswered(commandId: string): Promise<void> {
+    const file = path.join(this.answersDir, answerFileName(commandId));
+    try {
+      if ((await this.claimOwner(file)) !== this.windowId) return;
+      const tmp = `${file}.${process.pid}.answered.tmp`;
+      await fs.promises.writeFile(tmp, JSON.stringify({ pid: this.windowId, answered: true }));
+      await fs.promises.rename(tmp, file);
+    } catch {
+      // Best effort, as above.
+    }
+  }
+
+  /**
+   * Take over an answer whose claimer is gone before it answered (#2357).
+   * The first window to create the takeover marker for that claimer wins
+   * it. A claim that names no claimer (one being written, or an unreadable
+   * one) is kept, as is a live window's and one already answered.
    */
   private async takeOverAnswer(file: string): Promise<boolean> {
-    const owner = await this.claimOwner(file);
-    if (owner === null || owner === this.windowId || this.isAlive(owner)) return false;
+    const claim = await this.readClaim(file);
+    if (claim === null || claim.answered) return false;
+    const owner = claim.pid;
+    if (owner === this.windowId || this.isAlive(owner)) return false;
     try {
       const marker = await fs.promises.open(`${file}.taken-from-${owner}`, "wx");
       await marker.close();
@@ -357,25 +395,27 @@ export class RemoteRunLedger implements vscode.Disposable {
   }
 
   /**
-   * The window closes or reloads: its listing is marked closed, so the other
-   * windows honour it for CLOSED_LISTING_GRACE_MS more, and a reloading
-   * window's queued runs are not refused before it lists them again.
+   * The window closes or reloads: the runs it holds are listed as closed, so
+   * the other windows honour them for CLOSED_LISTING_GRACE_MS more, and a
+   * reloading window's queued runs are not refused before it lists them
+   * again. The closed listing is a file of its own: a write of the live
+   * listing still in flight lands on the live file, which stops counting
+   * once this process is gone.
    */
   dispose(): void {
     this.disposed = true;
     this.pending = null;
     try {
-      if (this.latest.length === 0) {
-        fs.rmSync(this.ownFile, { force: true });
-        return;
+      if (this.latest.length > 0) {
+        fs.mkdirSync(this.holdersDir, { recursive: true });
+        const tmp = `${this.closedFile}.${process.pid}.tmp`;
+        fs.writeFileSync(
+          tmp,
+          JSON.stringify({ pid: this.windowId, runIds: this.latest, closedAt: this.now() })
+        );
+        fs.renameSync(tmp, this.closedFile);
       }
-      fs.mkdirSync(this.holdersDir, { recursive: true });
-      const tmp = `${this.ownFile}.${process.pid}.closing.tmp`;
-      fs.writeFileSync(
-        tmp,
-        JSON.stringify({ pid: this.windowId, runIds: this.latest, closedAt: this.now() })
-      );
-      fs.renameSync(tmp, this.ownFile);
+      fs.rmSync(this.ownFile, { force: true });
     } catch {
       // Best effort: a dead window's file is ignored and removed by the others.
     }

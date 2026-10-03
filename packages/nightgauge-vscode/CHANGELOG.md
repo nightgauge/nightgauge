@@ -22,6 +22,25 @@ and this project adheres to
 
 ### Fixed
 
+- **A pipeline worktree's `npm install` no longer replaces a hook directory
+  set for the whole clone.** A checkout whose `prepare` script runs husky set
+  husky's per-worktree hooks path for every worktree of the clone, so resuming
+  an issue whose branch predates Nightgauge's publication hook turned that
+  hook off. An absolute `core.hooksPath` is now put back after the install,
+  with a warning in the log (#2389).
+- **The epic base-branch check after issue pickup no longer assumes the
+  `nightgauge/nightgauge` repository** when it cannot identify the window's
+  repository. It used to look up that repository's issue for a parent epic;
+  it now skips the lookup, and an epic branch it has to create is created for
+  the checkout's own repository (#2388).
+- **Model escalation stays inside the performance mode's ceiling.** Under
+  `efficiency`, a stage that asked for a stronger model, a proactive
+  escalation and the health-gated escalate-all policy could each move a Sonnet
+  stage to Opus, and `model_routing.max_model` did not cap them (#2386).
+- **Runs the extension orchestrates consult eval routing advice unless
+  `model_routing.use_eval_recommendations` is `false`,** as autonomous runs
+  already did. The extension treated an unset key as `false`, although the
+  shipped default is `true` (#2387).
 - **Codex and OpenCode stages get the tools their skill grants.** They ran
   with no tool list, so a skill that grants only read tools still ran Codex
   with full access, and OpenCode reported a refusal of a granted tool as one
@@ -34,6 +53,12 @@ and this project adheres to
   `Bash`, `Write` and `Edit` among them, instead of the ones its skill grants.
   A `# comment` after the list is no longer read as tools, and a field that
   lists no tool now fails the stage (#2358).
+- **More spellings of a skill's `allowed-tools` read as YAML reads them.** A
+  quoted key or a space before the colon used to read as no list, so the stage
+  ran with the default tools, `Bash`, `Write` and `Edit` among them. A block
+  scalar (`|` or `>`), or a list continued on the lines below its key, lost its
+  tools. A list written only in a form the extension cannot read now fails the
+  stage (#2385).
 - **Resuming a run from the phone app or the dashboard after its window was
   reloaded says to resume it in the window,** instead of waiting five minutes
   to expire. The reload ended the paused run; the window's own Resume prompt
@@ -51,17 +76,19 @@ and this project adheres to
   answered again within about two seconds,** instead of waiting five minutes
   to expire. With several windows open, only the one running the pipeline
   answers for it, so the app never shows a stop or a pause as refused while
-  the run is stopping or holding. After a window reload, a command for a run
-  that did not survive it is answered once the reloaded window has had a
-  minute to come back (#2357).
+  the run is stopping or holding, and a pause and a resume sent together
+  apply in that order, so the run is never left paused after a resume. After
+  a window reload, a command for a run that did not survive it is answered
+  once the reloaded window has had a minute to come back (#2357).
 - **Cancelling a run from the phone app or the dashboard before it starts
   works.** A run still waiting for a free slot, or whose worktree was being
   created, refused the cancel as not started. It is now removed and never
-  starts, even when the cancel arrives the moment the run is triggered, and
-  triggering the same issue again runs normally. Triggering an
-  issue you already queued, even one already starting, follows your queued
-  run, and cancelling it from there leaves your run as you queued it
-  (#2344).
+  starts, even when the cancel arrives the moment the run is triggered or
+  picked up for a slot, and triggering the same issue again runs normally.
+  Triggering an issue you already queued, even one already starting, follows
+  your queued run, and cancelling it from there leaves your run as you queued
+  it; a trigger that asks for its own adapter and model is refused instead,
+  since your run uses yours (#2344).
 - **Approve and reject from the phone app or the dashboard say why they
   cannot apply:** no run in the extension waits at an approval gate, so the
   window running the pipeline answers both with that reason (#2336).

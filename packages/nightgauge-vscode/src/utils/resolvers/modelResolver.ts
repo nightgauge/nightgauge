@@ -26,7 +26,7 @@ import {
 } from "@nightgauge/sdk";
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
-import { AdapterEnumSchema, ADAPTER_ID_ALTERNATION } from "../../config/schema";
+import { AdapterEnumSchema, ADAPTER_ID_ALTERNATION, DEFAULT_CONFIG } from "../../config/schema";
 
 // ============================================================================
 // Core model types and selection
@@ -1457,17 +1457,20 @@ export function getModelRoutingBoolean(
  * (`.nightgauge/model-evals/routing-advice.json`, #581 / spike #568 §4.2).
  *
  * Priority: `NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS` env →
- * `model_routing.use_eval_recommendations` → **false** — the conservative
- * rollout default: with the key off (or no advice file, or no advisable
- * evidence) the axis query alone decides, which reproduces pre-advice
- * behavior exactly. Go pair: `useEvalRecommendations`
- * (internal/orchestrator/dispatch_routing.go).
+ * `model_routing.use_eval_recommendations` → the shipped default in
+ * `DEFAULT_CONFIG`, `true` (ADR-021). The read is read-only: with no advice
+ * file, or no advisable evidence, the axis query alone decides, exactly as
+ * before advice existed. Go pair: `useEvalRecommendations`
+ * (internal/orchestrator/dispatch_routing.go), whose default is
+ * `config.DefaultUseEvalRecommendations`. This side used to fall back to a
+ * literal `false`, so with the key unset the Go dispatch path took the advice
+ * and an extension-orchestrated run of the same issue did not (#2387).
  */
 export function isEvalRecommendationsEnabled(workspaceRoot?: string): boolean {
   return getModelRoutingBoolean(
     "use_eval_recommendations",
     "USE_EVAL_RECOMMENDATIONS",
-    false,
+    DEFAULT_CONFIG.model_routing?.use_eval_recommendations === true,
     workspaceRoot
   );
 }
@@ -1809,4 +1812,21 @@ export function getEscalatedModel(currentModel: DefaultModel): DefaultModel | nu
   const idx = ESCALATION_PATH.indexOf(currentModel);
   if (idx === -1 || idx === ESCALATION_PATH.length - 1) return null; // at ceiling or unknown
   return ESCALATION_PATH[idx + 1];
+}
+
+/**
+ * The tier an escalation moves `currentModel` to without passing `ceiling`,
+ * or null when there is none: `getEscalatedModel`'s next tier, unless that
+ * tier is stronger than the ceiling (#2386). The ceiling is a stage's
+ * routed-tier ceiling, so a performance mode that caps cost caps escalation
+ * too. Go pair: `resolveDispatchModel` clamping the RetryEngine's escalated
+ * tier with `routing.ClampToCeiling`.
+ */
+export function getEscalatedModelWithin(
+  currentModel: DefaultModel,
+  ceiling: DefaultModel
+): DefaultModel | null {
+  const next = getEscalatedModel(currentModel);
+  if (!next) return null;
+  return TIER_BANDS.indexOf(next) > TIER_BANDS.indexOf(ceiling) ? null : next;
 }

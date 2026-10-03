@@ -17,16 +17,22 @@
 #      program holding an expansion, a loop that can break, an `until read`, a
 #      negated `!(...)` subshell, and a `((` or `$((` that bash reads as a
 #      subshell because it does not end in `))`; any command of a piped group,
-#      if, case or for, not only the first; and a function the file defines,
-#      named at the call. It keeps reading past an arithmetic `<<`, an
+#      if, case or for, not only the first; a function the file defines,
+#      named at the call; a grep whose output a group, if, loop or function
+#      body around it sends to /dev/null; another shell's literal -c script;
+#      and mapfile -n and dd count=. It keeps reading past an arithmetic `<<`, an
 #      assignment's subscript included, which is no heredoc. It stays green on
 #      the look-alikes it must not flag: quoted text, comments, heredoc bodies,
 #      case patterns, regex alternations inside [[ ]] on any of its lines,
 #      `||`, `exit` in awk text or END, `head -n -N`, the end of an input
 #      process substitution, readers that read to the end, a loop's own read
 #      inside a group, a function only defined there, or called through
-#      `command`, which runs a program. It reads workflow `run:` blocks and
-#      husky hooks, skips a step whose shell is not sh or bash, and exits 2
+#      `command`, which runs a program, a redirection that does not reach the
+#      grep (a pipe, its own, a substitution or a function it only defines),
+#      and a pipe inside another shell's -c script. It reads workflow `run:`
+#      blocks and husky hooks, a step whose shell is a path or a command line
+#      (`/usr/bin/bash -eo pipefail {0}`), skips one whose shell is another
+#      language such as pwsh or python, and exits 2
 #      rather than passing when it cannot read a file, such as one whose
 #      heredoc never ends.
 #
@@ -74,6 +80,9 @@ hazard() {
   hazard "cat | head -n 1" 'cat "$1" | head -n 1 >/dev/null'
   hazard "cat | awk exit" 'cat "$1" | awk "{ exit }"'
   hazard "cat | sed q" 'cat "$1" | sed -n "1{p;q;}" >/dev/null'
+  hazard "cat | bash -c grep -q" 'cat "$1" | bash -c "grep -q needle"'
+  hazard "cat | mapfile -n 1" 'cat "$1" | mapfile -n 1 first'
+  hazard "cat | dd count=1" 'cat "$1" | dd count=1 bs=1 2>/dev/null >/dev/null'
 }
 
 echo "B. the replacements, on the same input, under this suite's pipefail"
@@ -210,6 +219,19 @@ cmd | first_line # BAD
 outer() { inner; }
 inner() { awk '{ exit }'; }
 cmd | outer # BAD
+{ cmd | grep needle; } >/dev/null # BAD
+cmd | { grep needle; } >/dev/null # BAD
+if cmd | grep needle; then :; fi >/dev/null # BAD
+while read -r l; do cmd | grep needle; done <"$f" >/dev/null # BAD
+quiet_out() { cmd | grep needle; } >/dev/null # BAD
+{ { cmd | grep needle; }; } &>/dev/null # BAD
+cmd | bash -c 'grep -q needle' # BAD
+cmd | sh -c 'head -1' # BAD
+cmd | sh -ec 'read -r first' # BAD
+cmd | env LC_ALL=C bash -o pipefail -c 'grep needle' >/dev/null # BAD
+cmd | mapfile -n 1 lines # BAD
+cmd | readarray -t -n 2 lines # BAD
+cmd | dd count=1 bs=1 # BAD
 SH
 
 cat >"$FIX/good.sh" <<'SH'
@@ -291,6 +313,22 @@ cmd | again
 quiet() { grep -q needle; }
 cmd | command quiet
 quiet <<<"$v"
+{ cmd | grep needle | wc -l; } >/dev/null
+{ cmd | grep needle >"$out"; } >/dev/null
+{ v=$(cmd | grep needle); } >/dev/null
+{ cmd | grep needle; } | cat >/dev/null
+{ cmd | grep needle; } 2>/dev/null
+cmd | { { grep needle; } | wc -l; } >/dev/null
+cmd | { { grep needle; } >"$out"; } >/dev/null
+{ g() { cmd | grep needle; }; } >/dev/null
+cmd | sh -c 'cat; echo done'
+cmd | bash -c "$script"
+cmd | sh -c 'printf "%s\n" x | grep -q x'
+cmd | bash
+cmd | mapfile -t lines
+cmd | mapfile -n 0 lines
+cmd | readarray -u 3 -n 1 lines
+cmd | dd of=/dev/null bs=1
 SH
 
 # With extglob on, `!(a|head)` at a command's start is a pattern, so its `|`
@@ -318,6 +356,21 @@ jobs:
         shell: python
         run: |
           print("a | grep -q b")
+          x = 1 | head
+      - name: bash by path, with options
+        shell: /usr/bin/bash -eo pipefail {0}
+        run: cmd | head -1 # BAD
+      - name: a quoted command line
+        shell: "bash -e {0}"
+        run: |
+          cmd | grep -q needle # BAD
+      - name: powershell
+        shell: pwsh
+        run: |
+          Get-Content f | head -1
+      - name: python by command line
+        shell: python3 {0}
+        run: |
           x = 1 | head
 YML
 cat >"$FIX/wf/good.yml" <<'YML'

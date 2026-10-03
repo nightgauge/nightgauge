@@ -155,10 +155,11 @@ func stageConfiguredModel(workspaceRoot string, stage state.PipelineStage) strin
 }
 
 // useEvalRecommendations resolves `model_routing.use_eval_recommendations`
-// (#581): the env var wins over config, and absence means false — the
-// conservative default that keeps the axis query the sole authority. Mirrors
-// the TS isEvalRecommendationsEnabled (modelResolver.ts) INCLUDING its parse
-// vocabulary: getModelRoutingBoolean lowercases and accepts yes/no alongside
+// (#581): the env var wins over config, and absence means the shipped default,
+// config.DefaultUseEvalRecommendations (true since ADR-021). Mirrors the TS
+// isEvalRecommendationsEnabled (modelResolver.ts) INCLUDING its default, which
+// it reads from DEFAULT_CONFIG (#2387), and its parse vocabulary:
+// getModelRoutingBoolean lowercases and accepts yes/no alongside
 // true/1/false/0, so `...=yes` must enable both resolvers, not just one.
 func useEvalRecommendations(workspaceRoot string) bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv("NIGHTGAUGE_MODEL_ROUTING_USE_EVAL_RECOMMENDATIONS"))) {
@@ -245,7 +246,7 @@ func stageBaseModel(
 		return routing.ClampToEnvelope(lightweight, envelope), false
 	}
 	if predictedModel != "" {
-		// Eval-advice re-pick (#581, opt-in, default off): on the
+		// Eval-advice re-pick (#581, on by default since ADR-021): on the
 		// router-chosen branch only — the same slot the TS resolver consults
 		// the advisor in (after the selector, inside the clamps). Keyed on
 		// the issue's job class (#606, routing.JobClassForLabels at pickup) —

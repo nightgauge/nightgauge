@@ -198,12 +198,16 @@ markers. CI validates this via `scripts/validate-skill-metadata.sh`.
 
 `allowed-tools` names the tools a stage is granted, separated by spaces or commas
 (`Read Grep`, `Read, Grep`) or written as a YAML list (`[Read, Grep]`, or one `- Read`
-per line). With nothing after the key, the value is read from the lines indented below
-it. A `Tool(pattern)` entry such as `Bash(gh *)` is one entry, and a `# comment` is not
-read. A skill whose field lists no tool is refused when it is rendered; a skill without
-the field gets the runner's default tools. `programmatic-tools` and `mcp-tools` use the
-same grammar, and an empty one lists none. The binary and the SDK read it alike, pinned
-by `internal/skillrender/testdata/allowed_tools_expected.json`.
+per line). A value continues on the lines indented below its key, as in YAML, and with
+nothing after the key it is read from those lines; a block scalar (`|` or `>`) reads as
+its text. The key may be quoted, spaced from its colon or written in YAML's explicit `?`
+form. A `Tool(pattern)` entry such as `Bash(gh *)` is one entry, and a `# comment` is not
+read, except inside a block scalar, where YAML reads it as text. A skill whose field lists
+no tool, or is written only in a form the readers cannot read (a flow sequence that never
+closes), is refused when it is rendered; a skill without the field gets the runner's
+default tools. `programmatic-tools` and `mcp-tools` use the same grammar, and an empty
+one lists none. The binary and the SDK read it alike, pinned by
+`internal/skillrender/testdata/allowed_tools_expected.json`.
 
 Canonical skills must **not** set `disable-model-invocation` themselves —
 `scripts/install-agent-skills.sh` injects it into the generated plugin copy at

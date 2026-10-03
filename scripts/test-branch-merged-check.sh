@@ -114,30 +114,58 @@ squash_merge_to_main() {
 }
 
 # install_fake_gh puts a scripted `gh` first on PATH. It answers `pr list`
-# with one line built from FAKE_PR_* env vars (FAKE_PR_BASE is the base
-# branch, default main), `issue view` with FAKE_ISSUE_STATE (fails if unset), (nothing at all if
-# FAKE_PR_STATE is unset — an unauthenticated/no-PR forge) and
-# `api repos/{owner}/{repo}/commits/<sha>` with FAKE_PR_PARENTS, one SHA per
-# line, when <sha> matches FAKE_PR_SHA. FAKE_PR_FILLER=<n> appends n merged
-# PRs for unrelated branches after that line, to make the index larger than
-# any pipe buffer (#2360). FAKE_PR_LIST_STATUS=<n> makes `pr list` fail with
-# status n, as an unauthenticated or offline gh does.
+# from a PR list built of FAKE_PR_* env vars, newest first, as gh lists:
+# FAKE_PR_NEWER=<n> merged PRs for unrelated branches, then one row from
+# FAKE_PR_STATE/BRANCH/SHA/NUM/BASE (FAKE_PR_BASE is the base branch, default
+# main; no row if FAKE_PR_STATE is unset — an unauthenticated/no-PR forge),
+# then FAKE_PR_OPEN_FILLER=<n> open PRs and FAKE_PR_FILLER=<n> merged PRs for
+# unrelated branches. Like gh, it keeps only the --state asked for and stops
+# at --limit, so a PR past the limit is not listed. A filler row's branch name
+# is long, so that 500 of them are larger than any pipe buffer (#2360).
+# FAKE_PR_LIST_STATUS=<n> makes `pr list` fail with status n, as an
+# unauthenticated or offline gh does; with FAKE_PR_LIST_FAIL_STATE=<state>
+# only the list of that --state fails. `issue view` answers FAKE_ISSUE_STATE
+# (fails if unset), and `api repos/{owner}/{repo}/commits/<sha>` answers
+# FAKE_PR_PARENTS, one SHA per line, when <sha> matches FAKE_PR_SHA.
 install_fake_gh() {
   [ -n "$FAKE_BIN" ] && return 0
   FAKE_BIN="$(mktemp -d)"
   cat >"$FAKE_BIN/gh" <<'FAKE_GH'
 #!/usr/bin/env bash
 if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
-  if [ -n "${FAKE_PR_LIST_STATUS:-}" ]; then
+  state=open limit=30
+  shift 2
+  while [ $# -gt 0 ]; do
+    case "$1" in
+    --state) state="$2" && shift ;;
+    --limit) limit="$2" && shift ;;
+    esac
+    shift
+  done
+  if [ -n "${FAKE_PR_LIST_STATUS:-}" ] && [ "${FAKE_PR_LIST_FAIL_STATE:-$state}" = "$state" ]; then
     echo "gh: simulated failure" >&2
     exit "$FAKE_PR_LIST_STATUS"
   fi
+  row=""
   if [ -n "${FAKE_PR_STATE:-}" ]; then
-    printf '%s\t%s\t%s\t%s\t%s\n' "$FAKE_PR_STATE" "$FAKE_PR_BRANCH" "$FAKE_PR_SHA" "$FAKE_PR_NUM" "${FAKE_PR_BASE:-main}"
+    row="$(printf '%s\t%s\t%s\t%s\t%s' "$FAKE_PR_STATE" "$FAKE_PR_BRANCH" "$FAKE_PR_SHA" "$FAKE_PR_NUM" "${FAKE_PR_BASE:-main}")"
   fi
-  awk -v n="${FAKE_PR_FILLER:-0}" 'BEGIN {
-    for (i = 1; i <= n; i++) printf "MERGED\tfiller/%05d-branch\t%040d\t%d\tmain\n", i, i, 50000 + i
-  }'
+  pad="$(printf '%0200d' 0)"
+  awk -v state="$state" -v limit="$limit" -v row="$row" -v pad="$pad" \
+    -v newer="${FAKE_PR_NEWER:-0}" -v open="${FAKE_PR_OPEN_FILLER:-0}" -v n="${FAKE_PR_FILLER:-0}" '
+    function emit(line, st) {
+      st = substr(line, 1, index(line, "\t") - 1)
+      if (state != "all" && tolower(st) != state) return
+      if (listed >= limit) exit
+      print line
+      listed++
+    }
+    BEGIN {
+      for (i = 1; i <= newer; i++) emit(sprintf("MERGED\tnewer/%05d-%s\t%040d\t%d\tmain", i, pad, i, 60000 + i))
+      if (row != "") emit(row)
+      for (i = 1; i <= open; i++) emit(sprintf("OPEN\topen/%05d-%s\t%040d\t%d\tmain", i, pad, i, 70000 + i))
+      for (i = 1; i <= n; i++) emit(sprintf("MERGED\tfiller/%05d-%s\t%040d\t%d\tmain", i, pad, i, 50000 + i))
+    }'
   exit 0
 fi
 if [ "$1" = "issue" ] && [ "$2" = "view" ]; then
@@ -523,12 +551,13 @@ expect 1 "a tip the forge knows no PR for stays KEEP" "" \
 
 # ── (q) an open PR on the first row of a large PR index is KEEP (#2360) ────
 # The open-PR lookups piped the index into `awk '… {…; exit}'` under pipefail.
-# awk stops reading at its match; with the matching row first and over half
-# a megabyte behind it, printf was still writing, died of SIGPIPE, and the
-# lookup read as "no open PR". This branch is an ancestor of main, so the rule
-# after those lookups answered SAFE-DELETE: exit 0, permission to delete the
-# head (or the base) of an open PR, every time, on any machine. The real index
-# holds up to 500 PRs, whose rows can outgrow a pipe buffer the same way.
+# awk stops reading at its match; with the matching row first and over twice
+# a pipe buffer behind it (500 merged PRs with long branch names), printf was
+# still writing, died of SIGPIPE, and the lookup read as "no open PR". This
+# branch is an ancestor of main, so the rule after those lookups answered
+# SAFE-DELETE: exit 0, permission to delete the head (or the base) of an open
+# PR, every time, on any machine. The real index holds up to 500 merged PRs,
+# whose rows can outgrow a pipe buffer the same way.
 new_fixture
 root="$TMP/clone"
 git_in "$root" branch -q fix/4100-open-head main
@@ -637,6 +666,38 @@ expect 2 "with no gh installed, the open-PR guards cannot look: UNKNOWN" "gh is 
   -- run_in "$root" env PATH="$nogh_bin" "$SCRIPT" fix/4300-ancestor origin/main
 expect 0 "with no gh and NO_PR=1, an ancestor branch is SAFE-DELETE on content alone" "ancestor" \
   -- run_in "$root" env PATH="$nogh_bin" NO_PR=1 "$SCRIPT" fix/4300-ancestor origin/main
+
+# ── (u) an open PR the PR list did not reach is no "no open PR" ───────────
+# Both open-PR guards read one `gh pr list --state all --limit 500` window,
+# newest first. An open PR older than the newest 500 PRs was not in it, read
+# as "no open PR", and its head, an ancestor of main, read SAFE-DELETE. The
+# open PRs now have a list of their own, and one that fills its limit may
+# have been cut, so it is UNKNOWN. The merged list stays a window: a merged
+# PR past it only withholds a SAFE-DELETE.
+new_fixture
+root="$TMP/clone"
+git_in "$root" branch -q fix/4400-old-open main
+install_fake_gh
+expect 1 "an open PR older than the newest 500 PRs is KEEP" \
+  "deleting this branch would close it" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_NEWER=600 \
+  FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=fix/4400-old-open FAKE_PR_SHA=deadbeef FAKE_PR_NUM=4401 \
+  "$SCRIPT" fix/4400-old-open origin/main
+expect 1 "an open PR based on the branch, older than the newest 500 PRs, is KEEP" \
+  "targets this branch as its base" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_NEWER=600 \
+  FAKE_PR_STATE=OPEN FAKE_PR_BRANCH=feat/4402-stacked FAKE_PR_SHA=deadbeef FAKE_PR_NUM=4403 \
+  FAKE_PR_BASE=fix/4400-old-open "$SCRIPT" fix/4400-old-open origin/main
+expect 0 "an open-PR list one row short of its limit is whole: SAFE-DELETE (control)" "ancestor" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_OPEN_FILLER=999 \
+  "$SCRIPT" fix/4400-old-open origin/main
+expect 2 "an open-PR list that fills its limit may be cut short: UNKNOWN" \
+  "the open-PR list filled its 1000-row limit" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_OPEN_FILLER=1000 \
+  "$SCRIPT" fix/4400-old-open origin/main
+expect 2 "a merged-PR list gh pr list could not fetch is UNKNOWN" "gh pr list failed (status 1)" \
+  -- run_in "$root" env PATH="$FAKE_BIN:$PATH" FAKE_PR_LIST_STATUS=1 FAKE_PR_LIST_FAIL_STATE=merged \
+  "$SCRIPT" fix/4400-old-open origin/main
 
 echo ""
 if [ "$FAIL" -gt 0 ]; then

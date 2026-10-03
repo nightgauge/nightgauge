@@ -280,8 +280,9 @@ A client-side hook narrows the window, but it does not close it:
 - A clone where `npm install` never ran has no hook at all. An `npm install` in
   a checkout older than the installer puts husky's relative hooks path back
   for the whole clone. The pipeline runs `npm install` in every worktree it
-  creates, so a worktree on a branch older than the installer, such as an epic
-  branch cut before it, does exactly that. Coverage is then husky's alone: a
+  creates or reuses, including one on a branch older than the installer, and
+  then puts the hook directory back. An `npm install` run by hand, or by an
+  agent, in such a checkout is not covered. Coverage is then husky's alone: a
   worktree whose own `npm install` ran in a current checkout runs the guard
   through `.husky/pre-push`, and any other worktree runs none, until the next
   `npm install` in a current checkout or `npm run setup-hooks` restores the
