@@ -3,6 +3,10 @@ import type { ITokenStorage } from "../platform/TokenStorage";
 import type { Logger } from "../utils/logger";
 import type { IOnDemandTokenRefresher } from "../platform/TokenRefreshManager";
 import type { ExecutionProfile } from "./executionProfile";
+import {
+  refusalsFromRegistrationReply,
+  type RefusedWorkspaceWriteReport,
+} from "../platform/refusedWorkspaceWrites";
 
 export interface WorkspaceRegisterMetadata {
   slug: string;
@@ -33,6 +37,12 @@ export class AgentRegistrationService implements vscode.Disposable {
    */
   private _lastFailureDetail: string | undefined;
 
+  /**
+   * The workspace writes the platform refused the last successful
+   * registration (#2372), bounded; empty when none was refused.
+   */
+  private _lastRefusedWorkspaceWrites: RefusedWorkspaceWriteReport[] = [];
+
   constructor(
     private readonly getPlatformUrl: () => string,
     private readonly tokenStorage: ITokenStorage,
@@ -40,7 +50,12 @@ export class AgentRegistrationService implements vscode.Disposable {
     // Refresh is centralized in TokenRefreshManager so registration's 401
     // recovery shares the single-use-token dedup guard (#3751). Optional so the
     // service degrades gracefully when the platform layer is disabled.
-    private readonly tokenRefresher?: IOnDemandTokenRefresher
+    private readonly tokenRefresher?: IOnDemandTokenRefresher,
+    /**
+     * Shows the operator the workspace writes a registration was refused
+     * (#2372), once per registration that was refused any.
+     */
+    private readonly onRefusedWorkspaceWrites?: (refusals: RefusedWorkspaceWriteReport[]) => void
   ) {}
 
   dispose(): void {
@@ -50,6 +65,15 @@ export class AgentRegistrationService implements vscode.Disposable {
   /** Detail of the last registration failure; undefined after a success. */
   getLastFailureDetail(): string | undefined {
     return this._lastFailureDetail;
+  }
+
+  /**
+   * The workspace writes the platform refused the last successful
+   * registration (#2372): the agent registered, but the declared
+   * repositories stay unlinked from the workspace. Empty when none was.
+   */
+  getLastRefusedWorkspaceWrites(): RefusedWorkspaceWriteReport[] {
+    return [...this._lastRefusedWorkspaceWrites];
   }
 
   /**
@@ -100,10 +124,30 @@ export class AgentRegistrationService implements vscode.Disposable {
       }
       this._lastFailureDetail = undefined;
       this.logger.info("AgentRegistrationService: registered", { agentId });
+      this.noteRefusedWorkspaceWrites(body["refused_workspace_writes"]);
       return agentId;
     } catch (err) {
       this.failWith(`network error: ${err instanceof Error ? err.message : String(err)}`);
       return null;
+    }
+  }
+
+  /**
+   * The workspace writes this registration was refused (#2372): one log line
+   * each, from bounded fields, and the operator is shown them. The
+   * platform's own message is not used.
+   */
+  private noteRefusedWorkspaceWrites(value: unknown): void {
+    const refused = refusalsFromRegistrationReply(value);
+    this._lastRefusedWorkspaceWrites = refused;
+    if (refused.length === 0) return;
+    for (const r of refused) this.logger.warn(`AgentRegistrationService: ${r.description}`);
+    try {
+      this.onRefusedWorkspaceWrites?.(refused);
+    } catch (err) {
+      this.logger.warn("AgentRegistrationService: could not show the refused workspace writes", {
+        err: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 

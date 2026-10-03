@@ -35,6 +35,7 @@ import { WorkspaceRegistrationPayloadBuilder } from "./services/WorkspaceRegistr
 import { WorkspaceSyncStatusItem } from "./views/WorkspaceSyncStatusItem";
 import { EventStreamStatusBarItem } from "./views/EventStreamStatusBarItem";
 import { PlatformEnvironmentStatusBarItem } from "./platform/PlatformEnvironmentStatusBarItem";
+import { refusedWorkspaceWritesSummary } from "./platform/refusedWorkspaceWrites";
 import {
   shouldPersistWorkspaceSyncState,
   shouldRestoreWorkspaceSyncState,
@@ -609,6 +610,25 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       .sort()
       .join(",");
 
+  // The workspace writes the platform refused the last registration (#2372).
+  // The agent registered, but the declared repositories stay unlinked from
+  // the workspace, so it is not synced: the status says so, the operator was
+  // shown the refusals, and the registration is not reused across a reload,
+  // so the next activation registers again and reports what is still refused.
+  const refusedWrites = () =>
+    services?.agentRegistrationService?.getLastRefusedWorkspaceWrites() ?? [];
+  const showRegisteredSync = (repoCount: number): void => {
+    const refused = refusedWrites();
+    if (refused.length > 0) {
+      const detail = refusedWorkspaceWritesSummary(refused);
+      workspaceSyncStatusItem.setStatus("failed", 0, detail);
+      syncSidebarStatus("failed", 0, detail);
+      return;
+    }
+    workspaceSyncStatusItem.setStatus("synced", repoCount);
+    syncSidebarStatus("synced", repoCount);
+  };
+
   // AgentRegistrationService — register agent on authentication (#3544).
   // Fires once per authenticated session; re-registers only when stored agentId is absent or cleared.
   if (services.sessionManager && services.agentRegistrationService) {
@@ -719,16 +739,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (agentId) {
           await context.globalState.update("nightgauge.agentId", agentId);
           // Remember which repos this registration covers so a later reload
-          // can detect a repo change and re-register (#3544 follow-up).
-          await context.globalState.update("nightgauge.agentRepos", currentReposSig);
+          // can detect a repo change and re-register (#3544 follow-up). A
+          // registration refused workspace writes is not reused (#2372).
+          await context.globalState.update(
+            "nightgauge.agentRepos",
+            refusedWrites().length > 0 ? undefined : currentReposSig
+          );
           services!.agentHeartbeatService?.start(agentId);
           // Open the SSE command stream so remotely-triggered pipelines are
           // received and acked, not just left queued (#3544).
           services!.agentCommandStreamService?.start(agentId);
-          if (workspaceMeta) {
-            workspaceSyncStatusItem.setStatus("synced", repos.length);
-            syncSidebarStatus("synced", repos.length);
-          }
+          if (workspaceMeta) showRegisteredSync(repos.length);
         } else {
           await context.globalState.update("nightgauge.agentId", undefined);
           // Surface the REAL failure (expired token / 5xx / network / bad body)
@@ -871,18 +892,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             });
             if (agentId) {
               await context.globalState.update("nightgauge.agentId", agentId);
+              // A registration refused workspace writes is not reused (#2372).
               await context.globalState.update(
                 "nightgauge.agentRepos",
-                reposSignature(workspaceRepos)
+                refusedWrites().length > 0 ? undefined : reposSignature(workspaceRepos)
               );
               services!.agentHeartbeatService?.start(agentId);
               // Open the SSE command stream so remotely-triggered pipelines are
               // received and acked, not just left queued (#3544).
               services!.agentCommandStreamService?.start(agentId);
-              if (workspaceMeta) {
-                workspaceSyncStatusItem.setStatus("synced", workspaceRepos.length);
-                syncSidebarStatus("synced", workspaceRepos.length);
-              }
+              if (workspaceMeta) showRegisteredSync(workspaceRepos.length);
             } else if (workspaceMeta) {
               // Surface the REAL re-registration failure so a retry that keeps
               // failing tells the operator WHY, not just "no agentId" (#360).

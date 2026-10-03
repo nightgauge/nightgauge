@@ -108,10 +108,13 @@ func (r RefusedWorkspaceWrite) Report() RefusedWorkspaceWriteReport {
 	}
 }
 
-// printableField bounds one field of a platform reply for a log line: at most
-// 100 runes, keeping only graphic ones (letters, marks, numbers, punctuation,
-// symbols and spaces), so no control, format or separator character, such
-// as a line break, U+2028 or a bidirectional override, reaches the line.
+// printableField bounds one field of a platform reply for a log line and
+// the operator's notification: at most 100 runes, keeping only graphic ones
+// (letters, marks, numbers, punctuation, symbols and spaces), so no control,
+// format or separator character, such as a line break, U+2028 or a
+// bidirectional override, reaches the line. Square brackets become
+// parentheses: the extension shows the line in a notification, which renders
+// markdown link syntax as a link, and a `command:` link runs a command.
 func printableField(s string) string {
 	var b strings.Builder
 	n := 0
@@ -122,6 +125,12 @@ func printableField(s string) string {
 		if n == 100 {
 			b.WriteString("…")
 			break
+		}
+		switch r {
+		case '[':
+			r = '('
+		case ']':
+			r = ')'
 		}
 		b.WriteRune(r)
 		n++

@@ -122,7 +122,10 @@ import { AgentCommandStreamService } from "../services/AgentCommandStreamService
 import { TriggerCommandHandler } from "../services/TriggerCommandHandler";
 import { RunVerbCommandHandler } from "../services/RunVerbCommandHandler";
 import { REMOTE_RUN_LEDGER_DIR, RemoteRunLedger } from "../services/RemoteRunLedger";
-import { followRefusedWorkspaceWrites } from "../platform/refusedWorkspaceWrites";
+import {
+  RefusedWorkspaceWritesNotice,
+  followRefusedWorkspaceWrites,
+} from "../platform/refusedWorkspaceWrites";
 import { resolveStateHome } from "../utils/machineStateDir";
 import {
   ReloadInterruptedRunHolds,
@@ -4257,13 +4260,23 @@ export async function initializeServices(
     context.subscriptions.push(agentHeartbeatService);
   }
 
+  // The workspace writes the platform refused an agent registration (#2372),
+  // the window's own or the daemon's: the declared repositories stay
+  // unlinked from the workspace, and every remote trigger for them is
+  // refused, so the operator is told, once per distinct set.
+  const refusedWorkspaceWritesNotice = new RefusedWorkspaceWritesNotice((message) => {
+    logger.warn(message);
+    void vscode.window.showWarningMessage(message);
+  });
+
   let agentRegistrationService: AgentRegistrationService | null = null;
   if (agentHeartbeatTokenStorage) {
     agentRegistrationService = new AgentRegistrationService(
       getPlatformUrl,
       agentHeartbeatTokenStorage,
       logger,
-      onDemandTokenRefresher
+      onDemandTokenRefresher,
+      (refusals) => refusedWorkspaceWritesNotice.report(refusals)
     );
     context.subscriptions.push(agentRegistrationService);
   }
@@ -4504,14 +4517,8 @@ export async function initializeServices(
   // and the last transport error per platform surface.
   context.subscriptions.push(registerShowDiagnosticsCommand({ logger, platformStatusBarItem }));
   // The workspace writes the platform refused the daemon's agent registration
-  // (#2372): the declared repositories stay unlinked from the workspace, and
-  // every remote trigger for them is refused, so the operator is told.
-  context.subscriptions.push(
-    followRefusedWorkspaceWrites(ipcClient, (message) => {
-      logger.warn(message);
-      void vscode.window.showWarningMessage(message);
-    })
-  );
+  // (#2372), shown through the same notice as the window's own.
+  context.subscriptions.push(followRefusedWorkspaceWrites(ipcClient, refusedWorkspaceWritesNotice));
 
   // Pipeline-aware connectivity badge (Issue #3203). Shown only when a
   // pipeline stage is running and ConnectivityStateBus reports degraded or

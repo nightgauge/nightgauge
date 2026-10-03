@@ -107,4 +107,18 @@ describe("platform agent command wiring in bootstrap/services.ts", () => {
     );
     expect(servicesSource).toContain("reloadInterruptedHolds.attach(concurrentPipelineManager);");
   });
+
+  // #2372: the window's own registration is refused workspace writes too; its
+  // success paths report the workspace synced only when none was refused, and
+  // its refusals and the daemon's go through one notice.
+  it("reports the window's own registration refusals, and does not call that synced", () => {
+    expect(extensionSource.match(/if \(workspaceMeta\) showRegisteredSync\(/g)).toHaveLength(2);
+    expect(extensionSource).toMatch(
+      /const showRegisteredSync = [\s\S]*?if \(refused\.length > 0\) \{[\s\S]*?setStatus\("failed"/
+    );
+    expect(servicesSource).toContain("(refusals) => refusedWorkspaceWritesNotice.report(refusals)");
+    expect(servicesSource).toContain(
+      "followRefusedWorkspaceWrites(ipcClient, refusedWorkspaceWritesNotice)"
+    );
+  });
 });

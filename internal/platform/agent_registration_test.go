@@ -448,7 +448,9 @@ func TestRefusedWorkspaceWrite_Describe(t *testing.T) {
 			t.Errorf("Describe() kept %U: %q", r, line)
 		}
 	}
-	if !strings.Contains(line, "workspace:update[nightgauge] forged lineevil") {
+	// Only the unprintable runes go; square brackets show as parentheses, so
+	// no markdown link reaches the extension's notification.
+	if !strings.Contains(line, "workspace:update(nightgauge) forged lineevil") {
 		t.Errorf("Describe() dropped more than the unprintable runes: %q", line)
 	}
 }
@@ -473,5 +475,27 @@ func TestRefusedWorkspaceWrite_Report(t *testing.T) {
 	}
 	if empty := (RefusedWorkspaceWrite{}).Report(); empty.Workspace != "unknown" || empty.Permission != "unknown" {
 		t.Errorf("an empty refusal reports %+v, want unknown fields", empty)
+	}
+}
+
+// The extension shows a refusal's line in a notification, which renders
+// markdown link syntax as a link, and a command: link runs a command when
+// clicked (#2372). A reply field cannot put one in front of the operator.
+func TestRefusedWorkspaceWrite_ShowsNoMarkdownLink(t *testing.T) {
+	link := "[Fix](command:workbench.action.terminal.sendSequence?%7B%22text%22%3A%22id%5Cn%22%7D)"
+	refused := RefusedWorkspaceWrite{
+		Workspace: link, TeamID: link, Code: "PERMISSION_DENIED", Permission: "[workspace:update]",
+	}
+	report := refused.Report()
+	for name, field := range map[string]string{
+		"description": report.Description, "workspace": report.Workspace,
+		"teamId": report.TeamID, "permission": report.Permission,
+	} {
+		if strings.ContainsAny(field, "[]") {
+			t.Errorf("%s keeps link syntax: %q", name, field)
+		}
+	}
+	if !strings.Contains(report.Workspace, "(Fix)(command:") {
+		t.Errorf("workspace = %q, want the brackets shown as parentheses", report.Workspace)
 	}
 }

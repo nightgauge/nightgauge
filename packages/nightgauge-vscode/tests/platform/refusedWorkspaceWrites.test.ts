@@ -7,9 +7,13 @@
 import { describe, it, expect, vi } from "vitest";
 
 import {
+  RefusedWorkspaceWritesNotice,
   WORKSPACE_WRITES_REFUSED_EVENT,
   followRefusedWorkspaceWrites,
+  printableField,
+  refusalsFromRegistrationReply,
   refusedWorkspaceWritesMessage,
+  refusedWorkspaceWritesSummary,
   type RefusedWorkspaceWriteReport,
 } from "../../src/platform/refusedWorkspaceWrites";
 
@@ -53,7 +57,7 @@ describe("followRefusedWorkspaceWrites (#2372)", () => {
   it("shows a registration's refusals from the daemon's event, once per distinct set", async () => {
     const daemon = makeDaemon();
     const show = vi.fn();
-    followRefusedWorkspaceWrites(daemon.ipc, show);
+    followRefusedWorkspaceWrites(daemon.ipc, new RefusedWorkspaceWritesNotice(show));
     await flush();
     expect(show).not.toHaveBeenCalled();
 
@@ -73,7 +77,7 @@ describe("followRefusedWorkspaceWrites (#2372)", () => {
   it("reads the daemon's status at start and on every connect, for a registration it missed", async () => {
     const daemon = makeDaemon({ refusedWorkspaceWrites: [refusal("acme-platform")] });
     const show = vi.fn();
-    followRefusedWorkspaceWrites(daemon.ipc, show);
+    followRefusedWorkspaceWrites(daemon.ipc, new RefusedWorkspaceWritesNotice(show));
     await flush();
     expect(daemon.ipc.platformStatus).toHaveBeenCalledTimes(1);
     expect(show).toHaveBeenCalledTimes(1);
@@ -89,7 +93,7 @@ describe("followRefusedWorkspaceWrites (#2372)", () => {
     const daemon = makeDaemon();
     daemon.ipc.platformStatus.mockRejectedValue(new Error("not connected"));
     const show = vi.fn();
-    followRefusedWorkspaceWrites(daemon.ipc, show);
+    followRefusedWorkspaceWrites(daemon.ipc, new RefusedWorkspaceWritesNotice(show));
     await flush();
     for (const payload of [null, {}, { refusals: "x" }, { refusals: [{ workspace: "a" }] }]) {
       daemon.emit(payload);
@@ -100,7 +104,7 @@ describe("followRefusedWorkspaceWrites (#2372)", () => {
   it("stops following once disposed", () => {
     const daemon = makeDaemon();
     const show = vi.fn();
-    followRefusedWorkspaceWrites(daemon.ipc, show).dispose();
+    followRefusedWorkspaceWrites(daemon.ipc, new RefusedWorkspaceWritesNotice(show)).dispose();
     expect(daemon.handlers.size).toBe(0);
     expect(daemon.connections).toHaveLength(0);
   });
@@ -112,5 +116,91 @@ describe("followRefusedWorkspaceWrites (#2372)", () => {
     expect(message).not.toContain('workspace "d"');
     expect(message).toContain("and 2 more");
     expect(refusedWorkspaceWritesMessage([refusal("a")])).toContain("a workspace write:");
+  });
+
+  // #2372: the window's own registration and the daemon's report through one
+  // notice, so a set the operator saw from one is not shown again by the other.
+  it("shows a set the window's own registration reported once, whichever source repeats it", async () => {
+    const daemon = makeDaemon();
+    const show = vi.fn();
+    const notice = new RefusedWorkspaceWritesNotice(show);
+    followRefusedWorkspaceWrites(daemon.ipc, notice);
+    notice.report([refusal("acme-platform")]);
+    expect(show).toHaveBeenCalledTimes(1);
+    daemon.emit({ refusals: [refusal("acme-platform")] });
+    expect(show).toHaveBeenCalledTimes(1);
+  });
+
+  // A notification renders markdown link syntax as a link, and a command:
+  // link runs a command when clicked; a description from the daemon cannot
+  // put one in front of the operator.
+  it("shows no markdown link a description carries", () => {
+    const hostile = {
+      ...refusal("acme"),
+      description: "[Fix it](command:workbench.action.terminal.sendSequence?%7B%7D)",
+    };
+    const message = refusedWorkspaceWritesMessage([hostile]);
+    expect(message).not.toMatch(/\[[^\]]*\]\(/);
+    expect(message).toContain("(Fix it)(command:");
+  });
+});
+
+describe("the window's own registration reply (#2372)", () => {
+  it("bounds every field the platform sends, and drops its message", () => {
+    const [r] = refusalsFromRegistrationReply([
+      {
+        workspace: "acme-platform",
+        team_id: "team-1",
+        code: "PERMISSION_DENIED",
+        permission: "workspace:update",
+        message: "anything at all, never shown",
+      },
+    ]);
+    expect(r).toEqual({
+      workspace: "acme-platform",
+      teamId: "team-1",
+      code: "PERMISSION_DENIED",
+      permission: "workspace:update",
+      description:
+        'the platform did not write workspace "acme-platform": workspace:update needs the owner ' +
+        "or admin role on its team (team team-1, PERMISSION_DENIED); repositories this agent " +
+        "declares stay unlinked from it, so a remote trigger for one is refused",
+    });
+    expect(JSON.stringify(r)).not.toContain("never shown");
+    const [byDefault] = refusalsFromRegistrationReply([
+      {
+        workspace: "default",
+        team_id: "t",
+        code: "PERMISSION_DENIED",
+        permission: "workspace:update",
+      },
+    ]);
+    expect(byDefault.description).toContain("did not write the team's Default workspace:");
+  });
+
+  it("keeps no control, format or link character, and no more than 100 characters", () => {
+    expect(printableField("acme\nrm -rf \u202e/\u2028x")).toBe("acmerm -rf /x");
+    expect(printableField("[Fix](command:x)")).toBe("(Fix)(command:x)");
+    expect(printableField("a".repeat(150))).toBe(`${"a".repeat(100)}…`);
+    expect(printableField("")).toBe("unknown");
+    expect(printableField("\u0000\u200b")).toBe("unknown");
+    expect(printableField(42)).toBe("unknown");
+    // A reply that is not a list, or entries that are not objects, refuse nothing.
+    expect(refusalsFromRegistrationReply(null)).toEqual([]);
+    expect(refusalsFromRegistrationReply(["x", null, 7])).toEqual([]);
+    const [hostile] = refusalsFromRegistrationReply([
+      { workspace: "[Fix](command:workbench.action.reloadWindow)", team_id: 1 },
+    ]);
+    expect(hostile.description).not.toMatch(/\[[^\]]*\]\(/);
+    expect(hostile.teamId).toBe("unknown");
+  });
+
+  it("summarises the refusals for the workspace sync status", () => {
+    expect(refusedWorkspaceWritesSummary([refusal("a")])).toMatch(
+      /^the platform refused a workspace write, /
+    );
+    expect(refusedWorkspaceWritesSummary([refusal("a"), refusal("b")])).toMatch(
+      /^the platform refused 2 workspace writes, /
+    );
   });
 });
