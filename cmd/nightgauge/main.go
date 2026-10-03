@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -369,6 +370,14 @@ func runDaemonPlatformAgent(
 	relay := relayAgentCommandToExtension(ext)
 	refreshThrottle := func() {}
 	if throttle != nil {
+		// The extension pushes its session, or says it has none, once the
+		// daemon is up (PlatformCredentialBridge.sync). Until then a daemon
+		// without a session has not decided that it follows no throttle, so
+		// it reports the throttle unread, and a headless scheduler keeps
+		// the throttle it learned from the daemon before this one started
+		// (#2352). A daemon no extension attaches to decides after
+		// daemonSessionDecisionGrace.
+		var sessionDecided atomic.Bool
 		follower := platform.NewWorkspaceThrottleFollower(
 			platformClient.ReadWorkspaceThrottle,
 			func() (string, bool, error) {
@@ -383,9 +392,15 @@ func runDaemonPlatformAgent(
 			},
 			platformClient.HasSessionToken,
 			throttle,
-		)
+		).WithSessionDecision(sessionDecided.Load)
 		refreshThrottle = func() { follower.Refresh(ctx) }
-		ext.OnSessionToken(refreshThrottle)
+		decide := func() {
+			sessionDecided.Store(true)
+			refreshThrottle()
+		}
+		ext.OnSessionToken(decide)
+		decideAnyway := afterSessionDecisionGrace(decide)
+		defer decideAnyway.Stop()
 		relay = refreshThrottleOnCommand(relay, refreshThrottle)
 		// Read now, not only after the first registration: a session the
 		// extension installed before this listener existed, or a platform
@@ -5728,6 +5743,11 @@ func serveCmd() *cobra.Command {
 					// the platform-assigned agent id onto the sync + command poller +
 					// heartbeat. Runs in a goroutine so an offline start self-heals
 					// without blocking IPC startup.
+					//
+					// The agent follows the workspace throttle, and until it has
+					// learned whether a session exists the throttle is unread, not
+					// unknown, from before the socket serves (#2352).
+					dispatchThrottle.MarkUnread()
 					go runDaemonPlatformAgent(ctx, platformClient, attnSync, server, version, workspaceRoot,
 						agentworkspace.WindowFolders(os.Getenv), dispatchThrottle)
 				}

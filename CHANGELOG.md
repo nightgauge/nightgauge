@@ -38,8 +38,12 @@ changelog, and the release workflow refuses a tag that does not.
   first dispatch; when the daemon stops answering, or follows the throttle
   but has not read it yet (it has just started, or its reads fail), the last
   throttle it reported is kept, and the log says so and until when. A daemon
-  without a signed-in session, which is any daemon the extension is not
-  attached to, still follows no throttle: the license key cannot read the
+  that has just started, as after a window reload, has no session until the
+  extension pushes it, and reports the throttle unread meanwhile, so a
+  headless scheduler no longer lifts the cap it learned and dispatches above
+  it until the next read. A daemon without a signed-in session, which is any
+  daemon the extension is not attached to (two minutes after it starts),
+  still follows no throttle: the license key cannot read the
   workspace's own throttle yet, and the read, like the extension's, is by
   slug in one team's workspace list (#2352 stays open for both).
 - **The daemon says which workspace writes its registration was refused**

@@ -551,7 +551,11 @@ The Go side follows the same throttle for the work it starts itself (#2352):
   its workspace belongs to another team; scoping the read to the team the
   registration used stays open in #2352. Without a session nothing is
   followed and the cap is lifted, as in the extension. With one, the throttle
-  is followed but unread until a read succeeds.
+  is followed but unread until a read succeeds. A daemon has no session when
+  it starts, until the extension pushes the one it holds or says it holds
+  none, so until then, or for two minutes when no extension says anything,
+  the throttle is unread too: a window reload's new daemon does not tell a
+  headless scheduler that it follows no throttle.
   Only the extension hands the daemon a session, so a daemon the extension is
   not attached to follows no throttle: the license key it holds cannot read
   the workspace's own throttle yet, and that stays open in #2352.

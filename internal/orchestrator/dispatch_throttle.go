@@ -82,7 +82,9 @@ func (d *DispatchThrottle) Set(throttle *platform.WorkspaceThrottle, known bool)
 
 // MarkUnread records that the throttle is followed, since a signed-in
 // session exists, but not known yet: its first read is in flight, or every
-// read so far failed (#2352). Like an unknown throttle it caps nothing, but a
+// read so far failed (#2352). A daemon also marks it while it has not yet
+// learned whether a session exists, from its start until the extension
+// pushes its session or says it has none. Like an unknown throttle it caps nothing, but a
 // headless scheduler asking the daemon keeps the throttle it learned before,
 // where a daemon that follows none lifts it. A known throttle is left as it
 // is: a read that fails changes nothing.

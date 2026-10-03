@@ -371,6 +371,120 @@ func TestRunDaemonPlatformAgent_FollowsItsWorkspaceThrottle(t *testing.T) {
 	})
 }
 
+// A daemon starts with no session, until the extension pushes the one it
+// holds or says it holds none (#2352), so a window reload's new daemon has
+// none for a while. Meanwhile it reports the throttle unread, and a headless
+// scheduler asking it keeps the throttle it learned from the daemon before;
+// it used to report that it follows no throttle, and the scheduler lifted the
+// cap and dispatched above it. Once the extension says there is no session,
+// or after a grace when no extension says anything, it follows none.
+func TestRunDaemonPlatformAgent_ThrottleUnreadUntilTheSessionIsDecided(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_AGENT_ID", "test-machine-uuid")
+	ws := t.TempDir()
+	writeTestFile(t, filepath.Join(ws, ".vscode", "nightgauge-workspace.yaml"),
+		"workspace:\n  name: Acme Platform\nrepositories:\n  - name: api\n    path: api\n")
+	writeTestFile(t, filepath.Join(ws, "api", ".nightgauge", "config.yaml"), "github:\n  owner: acme\n  repo: api\n")
+	windowJSON, _ := json.Marshal([]string{ws, filepath.Join(ws, "api")})
+	t.Setenv(agentworkspace.WindowFoldersEnv, string(windowJSON))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/register":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"agentId":"agent-daemon","ttl_seconds":90}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/agents/agent-daemon/commands":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	graceEnds := make(chan func(), 2)
+	previous := afterSessionDecisionGrace
+	afterSessionDecisionGrace = func(decide func()) interface{ Stop() bool } {
+		graceEnds <- decide
+		return time.NewTimer(time.Hour)
+	}
+	t.Cleanup(func() { afterSessionDecisionGrace = previous })
+
+	// One daemon's agent, started with no session; reports what its throttle
+	// says on the socket, as platform.workspaceThrottle does.
+	start := func(t *testing.T, ext *extensionSide) (report func() (ipc.PlatformWorkspaceThrottleResult, error), endGrace func()) {
+		client, err := platform.NewClient(platform.Config{BaseURL: srv.URL, APIKey: "test-key"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		daemon := orchestrator.NewDispatchThrottle()
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test",
+				filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), daemon)
+		}()
+		t.Cleanup(func() {
+			cancel()
+			<-done
+		})
+		select {
+		case endGrace = <-graceEnds:
+		case <-time.After(10 * time.Second):
+			t.Fatal("the daemon armed no session-decision grace")
+		}
+		report = func() (ipc.PlatformWorkspaceThrottleResult, error) {
+			throttle, known, unread := daemon.Report()
+			return ipc.PlatformWorkspaceThrottleResult{Known: known, Unread: unread, Throttle: throttle}, nil
+		}
+		return report, endGrace
+	}
+	unread := func(report func() (ipc.PlatformWorkspaceThrottleResult, error)) bool {
+		r, _ := report()
+		return !r.Known && r.Unread
+	}
+	followsNone := func(report func() (ipc.PlatformWorkspaceThrottleResult, error)) bool {
+		r, _ := report()
+		return !r.Known && !r.Unread
+	}
+	// A headless scheduler that learned a cap of 1 from the daemon before.
+	headlessOn := func(report func() (ipc.PlatformWorkspaceThrottleResult, error)) *daemonThrottleFollower {
+		throttle := orchestrator.NewDispatchThrottle()
+		throttle.Set(&platform.WorkspaceThrottle{MaxConcurrent: 1}, true)
+		return &daemonThrottleFollower{throttle: throttle, read: func(context.Context) (ipc.PlatformWorkspaceThrottleResult, error) {
+			return report()
+		}}
+	}
+
+	t.Run("the extension says there is no session", func(t *testing.T) {
+		ext := &extensionSide{}
+		report, _ := start(t, ext)
+		waitUntil(t, "the new daemon's throttle reported unread", func() bool { return unread(report) })
+		headless := headlessOn(report)
+		headless.step(context.Background())
+		if got := headless.throttle.Ceiling(4); got != 1 {
+			t.Fatalf("asking the new daemon: ceiling = %d, want the learned cap, 1", got)
+		}
+
+		ext.sessionChanged()
+		waitUntil(t, "the daemon following no throttle", func() bool { return followsNone(report) })
+		headless.step(context.Background())
+		if got := headless.throttle.Ceiling(4); got != 4 {
+			t.Fatalf("no session, decided: ceiling = %d, want none, 4", got)
+		}
+	})
+
+	t.Run("no extension says anything", func(t *testing.T) {
+		report, endGrace := start(t, &extensionSide{})
+		waitUntil(t, "the new daemon's throttle reported unread", func() bool { return unread(report) })
+		endGrace()
+		waitUntil(t, "the daemon following no throttle after the grace", func() bool { return followsNone(report) })
+	})
+}
+
 // A headless scheduler follows the throttle the workspace's daemon follows:
 // a daemon that cannot be reached changes nothing, one that follows none
 // lifts it (#2352).

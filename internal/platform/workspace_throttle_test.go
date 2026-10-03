@@ -199,6 +199,36 @@ func TestWorkspaceThrottleFollower_UnreadUntilARead(t *testing.T) {
 	}
 }
 
+// A daemon has no session when it starts, until the extension pushes one or
+// says it has none (#2352). Until that is decided, no session means unread,
+// never "follows no throttle", so a headless scheduler asking the daemon
+// keeps the throttle it learned; once decided, no session lifts it.
+func TestWorkspaceThrottleFollower_UnreadUntilTheSessionIsDecided(t *testing.T) {
+	var decided atomic.Bool
+	reads := 0
+	rec := &throttleRecorder{}
+	f := NewWorkspaceThrottleFollower(
+		func(context.Context, string) (*WorkspaceThrottle, error) {
+			reads++
+			return &WorkspaceThrottle{MaxConcurrent: 1}, nil
+		},
+		func() (string, bool, error) { return "w", true, nil },
+		func() bool { return false },
+		rec,
+	).WithSessionDecision(decided.Load)
+
+	f.Refresh(context.Background())
+	if rec.unreads() != 1 || len(rec.sets()) != 0 || reads != 0 {
+		t.Fatalf("no session yet, undecided: unread %d, sets %+v, reads %d; want unread once, nothing set or read",
+			rec.unreads(), rec.sets(), reads)
+	}
+	decided.Store(true)
+	f.Refresh(context.Background())
+	if got := rec.sets(); len(got) != 1 || got[0].known || got[0].throttle != nil || reads != 0 {
+		t.Fatalf("no session, decided: sets = %+v, reads %d; want unknown, nothing read", got, reads)
+	}
+}
+
 // The follower applies the served workspace's throttle while a session
 // exists, lifts it (unknown) without one, applies none for a workspace config
 // that names no workspace, and changes nothing when a read fails.
