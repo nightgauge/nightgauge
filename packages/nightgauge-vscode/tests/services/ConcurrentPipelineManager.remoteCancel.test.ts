@@ -261,13 +261,19 @@ function buildManager(queued: Item[]) {
     finishers.get(issueNumber)?.(SUCCESS);
     await manager.settleForTest(issueNumber);
   };
-  /** A trigger's placement, its enqueue done as Go's queue.add does it. */
-  const place = (issueNumber: number, remoteRunId: string, repo = REPO) => {
+  /**
+   * A trigger's placement, its enqueue done as Go's queue.add does it.
+   * `pinned`: the trigger asks for its own adapter and model (#1656).
+   */
+  const place = (issueNumber: number, remoteRunId: string, repo = REPO, pinned = false) => {
     const enqueue = vi.fn(async () => {
       addLikeGo(repo, issueNumber, remoteRunId);
       return true;
     });
-    const placed = manager.placeRemoteRun({ remoteRunId, issueNumber, repo }, enqueue);
+    const placed = manager.placeRemoteRun(
+      { remoteRunId, issueNumber, repo, ...(pinned ? { pinned } : {}) },
+      enqueue
+    );
     return { placed, enqueue };
   };
   return {
@@ -408,6 +414,37 @@ describe("ConcurrentPipelineManager — a platform cancel before the slot opens 
     expect(queueService.complete).not.toHaveBeenCalledWith("", 505);
   });
 
+  // A queue that cannot be read (the daemon restarting) is judged by its
+  // latest known state, as for a pause or resume: the cancel applies, and the
+  // run is dropped once the queue answers again.
+  it("applies a cancel the queue cannot answer for a run it last showed queued", async () => {
+    const { manager, queueService, built } = buildManager([item(511, "run-511")]);
+    expect(await manager.holdsRemoteRun("run-511")).toBe(true);
+    queueService.removeRemoteRun.mockRejectedValueOnce(new Error("daemon restarting"));
+    queueService.getQueue.mockRejectedValueOnce(new Error("daemon restarting"));
+
+    expect(await manager.cancelByRemoteRunId("run-511")).toBe("applied");
+
+    await manager.fillSlots();
+    expect(built.has(511)).toBe(false);
+    expect(queueService.complete).toHaveBeenCalledWith("", 511);
+  });
+
+  // A refusal says the run is not here, so it leaves no tombstone behind: a
+  // run the cancel could not see, which does start, is not dropped unseen.
+  it("refuses a cancel for a run it cannot find, and does not drop that run later", async () => {
+    const { manager, queueService, built, finish } = buildManager([item(512, "run-512")]);
+    queueService.removeRemoteRun.mockRejectedValueOnce(new Error("daemon restarting"));
+    queueService.getQueue.mockRejectedValueOnce(new Error("daemon restarting"));
+
+    expect(await manager.cancelByRemoteRunId("run-512")).toBe("no-active-run");
+
+    await manager.fillSlots();
+    expect(started(built, 512)).toBe(true);
+    expect(manager.findSlotByRemoteRunId("run-512")).toBe(512);
+    await finish(512);
+  });
+
   it("re-queues a dequeued remote run with its run id after a failed start", async () => {
     const { manager, queueService } = buildManager([item(506, "run-506")]);
     // The first start fails to build the worktree; the item goes back, still
@@ -503,7 +540,7 @@ describe("ConcurrentPipelineManager — a trigger for an issue already queued he
     const fill = manager.fillSlots();
     await vi.waitFor(() => expect(gate.reached).toBe(true));
 
-    expect(await manager.remoteTriggerConflict(700, REPO)).toBeNull();
+    expect(await manager.remoteTriggerConflict(700, REPO, false)).toBeNull();
     const { placed, enqueue } = place(700, "run-700");
     expect(await placed).toBe("attached");
     // The issue is dispatched already; queueing it again would be skipped.
@@ -596,7 +633,7 @@ describe("ConcurrentPipelineManager — a trigger for an issue already queued he
 
   it("refuses a trigger for an issue queued or dispatched here for another platform run", async () => {
     const queued = buildManager([{ ...local(705), remoteRunId: "run-705a" }]);
-    expect(await queued.manager.remoteTriggerConflict(705, REPO)).toBe("busy");
+    expect(await queued.manager.remoteTriggerConflict(705, REPO, false)).toBe("busy");
     expect(await queued.place(705, "run-705b").placed).toBe("busy");
     expect(await queued.manager.holdsRemoteRun("run-705b")).toBe(false);
     expect(queued.manager.heldRemoteRunIds()).toEqual(["run-705a"]);
@@ -605,7 +642,7 @@ describe("ConcurrentPipelineManager — a trigger for an issue already queued he
     gate.worktreeIssue = 706;
     const fill = dispatched.manager.fillSlots();
     await vi.waitFor(() => expect(gate.reached).toBe(true));
-    expect(await dispatched.manager.remoteTriggerConflict(706, REPO)).toBe("busy");
+    expect(await dispatched.manager.remoteTriggerConflict(706, REPO, false)).toBe("busy");
     const { placed, enqueue } = dispatched.place(706, "run-706b");
     expect(await placed).toBe("busy");
     expect(enqueue).not.toHaveBeenCalled();
@@ -615,10 +652,36 @@ describe("ConcurrentPipelineManager — a trigger for an issue already queued he
     await dispatched.finish(706);
   });
 
+  // #1656: a trigger that asks for its own adapter and model is never served
+  // by the operator's work for the issue, which runs on the operator's. It is
+  // refused before the ack, and a placement that raced the operator's
+  // dispatch does not attach to it.
+  it("refuses a pinned trigger for an issue the operator queued or is dispatching here", async () => {
+    const queued = buildManager([local(708)]);
+    expect(await queued.manager.remoteTriggerConflict(708, REPO, true)).toBe("pinned");
+    expect(await queued.manager.remoteTriggerConflict(708, REPO, false)).toBeNull();
+
+    const dispatched = buildManager([local(709)]);
+    gate.worktreeIssue = 709;
+    const fill = dispatched.manager.fillSlots();
+    await vi.waitFor(() => expect(gate.reached).toBe(true));
+    expect(await dispatched.manager.remoteTriggerConflict(709, REPO, true)).toBe("pinned");
+    const { placed, enqueue } = dispatched.place(709, "run-709", REPO, true);
+    expect(await placed).toBe("pinned");
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(await dispatched.manager.holdsRemoteRun("run-709")).toBe(false);
+    gate.release();
+    await fill;
+    // The operator's dispatch runs as queued, under no platform run id.
+    expect(dispatched.built.get(709)?.stateService.beginRun.mock.calls[0][3]).toBeUndefined();
+    expect(dispatched.manager.findSlotByRemoteRunId("run-709")).toBeNull();
+    await dispatched.finish(709);
+  });
+
   it("does not place a trigger whose issue's slot is open", async () => {
     const { manager, place, finish } = buildManager([local(707)]);
     await manager.fillSlots();
-    expect(await manager.remoteTriggerConflict(707, REPO)).toBe("running");
+    expect(await manager.remoteTriggerConflict(707, REPO, false)).toBe("running");
     const { placed, enqueue } = place(707, "run-707");
     expect(await placed).toBe("running");
     expect(enqueue).not.toHaveBeenCalled();
@@ -758,6 +821,43 @@ describe("ConcurrentPipelineManager — a cancel while the run is placed or goes
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  // Go marks a dequeued item taken before its reply reaches the window, and
+  // leaves a taken item to its dispatch, so a cancel that arrives meanwhile
+  // cannot remove it. The dispatch drops it when the reply lands, which can
+  // be before the cancel reads the queue: the cancel still applied.
+  it("applies a cancel whose run a fill was dequeuing, though the fill dropped it before the cancel read the queue", async () => {
+    const { manager, queueService, built, waiting, taken } = buildManager([item(902, "run-902")]);
+    const dequeueReply = deferred();
+    const dequeue = queueService.dequeueIndependent.getMockImplementation()!;
+    queueService.dequeueIndependent.mockImplementationOnce(async (n: number) => {
+      const out = await dequeue(n);
+      await dequeueReply.promise;
+      return out;
+    });
+    const removalReply = deferred();
+    const remove = queueService.removeRemoteRun.getMockImplementation()!;
+    queueService.removeRemoteRun.mockImplementationOnce(async (remoteRunId: string) => {
+      const removed = await remove(remoteRunId);
+      await removalReply.promise;
+      return removed;
+    });
+
+    const fill = manager.fillSlots();
+    await vi.waitFor(() => expect(taken.map((t) => t.issueNumber)).toEqual([902]));
+    const cancel = manager.cancelByRemoteRunId("run-902");
+    await vi.waitFor(() => expect(queueService.removeRemoteRun).toHaveBeenCalled());
+    dequeueReply.resolve();
+    await fill;
+    // The dispatch found the run tombstoned and released it.
+    expect(queueService.complete).toHaveBeenCalledWith("", 902);
+    expect(taken).toEqual([]);
+    removalReply.resolve();
+
+    expect(await cancel).toBe("applied");
+    expect(built.has(902)).toBe(false);
+    expect(waiting).toEqual([]);
   });
 
   // A cancel that arrives while the enqueue is in flight finds nothing queued

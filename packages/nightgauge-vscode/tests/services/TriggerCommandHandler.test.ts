@@ -160,7 +160,8 @@ describe("TriggerCommandHandler", () => {
     expect(placeOrder).toBeLessThan(enqOrder);
     expect(concurrentManager.remoteTriggerConflict).toHaveBeenCalledWith(
       10,
-      "nightgauge/nightgauge"
+      "nightgauge/nightgauge",
+      false
     );
 
     expect(logger.info).toHaveBeenCalledWith(
@@ -558,6 +559,49 @@ describe("TriggerCommandHandler — remote run request (#1656)", () => {
       requestedAdapter: "opencode",
       requestedModel: MODEL,
     });
+  });
+
+  // The operator queued the issue, or began its dispatch, after Go checked
+  // the pair: the trigger is refused just before the ack, as Go refuses it,
+  // and is never served on the operator's adapter and model.
+  it("refuses a pinned trigger whose issue the operator queued here since Go's check, before the ack", async () => {
+    concurrentManager.remoteTriggerConflict.mockResolvedValue("pinned");
+    handler.handle(pinnedCmd({ adapter: "opencode", model: MODEL }));
+
+    await vi.waitFor(() => expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledTimes(1));
+    expect(concurrentManager.remoteTriggerConflict).toHaveBeenCalledWith(
+      42,
+      "nightgauge/nightgauge",
+      true
+    );
+    expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledWith(
+      "agent-1",
+      "cmd-1",
+      "rejected",
+      "already-queued: the issue is already queued on this agent, so the requested adapter and model cannot apply"
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    expect(concurrentManager.placeRemoteRun).not.toHaveBeenCalled();
+    expect(queueService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("places a pinned run as pinned, and reports it not served when the operator's dispatch began meanwhile", async () => {
+    concurrentManager.placeRemoteRun.mockResolvedValue("pinned");
+    handler.handle(pinnedCmd({ adapter: "opencode", model: MODEL }));
+
+    await vi.waitFor(() =>
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining("acked but is not served"),
+        expect.objectContaining({ runId: "run-abc" })
+      )
+    );
+    expect(concurrentManager.placeRemoteRun.mock.calls[0][0]).toEqual({
+      remoteRunId: "run-abc",
+      issueNumber: 42,
+      repo: "nightgauge/nightgauge",
+      pinned: true,
+    });
+    expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
   });
 
   it("acks a refused pair as rejected with Go's public category, and never enqueues", async () => {

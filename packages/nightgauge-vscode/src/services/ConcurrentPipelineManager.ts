@@ -594,6 +594,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   private readonly cancelledRemoteRunIds = new Set<string>();
   /**
+   * The cancelled runs whose dispatch the tombstone acted on (#2344): dropped,
+   * detached from the operator's item, or taken back out of the queue. A
+   * cancel that arrives while a fill's dequeue of the run is in flight finds
+   * it neither in the queue (Go leaves a dequeued item to its dispatch) nor
+   * among the dispatches yet, and the dispatch can drop it before the cancel
+   * reads the queue; this record tells the cancel that it applied. Like the
+   * tombstones, one short string per cancelled run.
+   */
+  private readonly tombstoneActedRemoteRunIds = new Set<string>();
+  /**
    * Paused runs a window reload ended, keyed by the platform run id their
    * snapshot names, with their issue number (#2339). The held runPipeline()
    * call died with the extension host, so no slot carries the run; the
@@ -1262,6 +1272,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // cancelled run is not queued again, and one cancelled during the
     // enqueue is taken back out, since the queue outlives the tombstone.
     if (this.isCancelledRemoteRun(item) && !this.detachCancelledRemoteRun(item)) {
+      if (item.remoteRunId !== undefined) this.tombstoneActedRemoteRunIds.add(item.remoteRunId);
       this.logger.info("Dropped a remote run the platform cancelled on its way back to the queue", {
         issueNumber: item.issueNumber,
         repo: item.repoName ?? "",
@@ -1333,6 +1344,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   private detachCancelledRemoteRun(item: QueueItem, reservation?: SlotReservation): boolean {
     if (!item.remoteRunAttached) return false;
     const remoteRunId = item.remoteRunId;
+    if (remoteRunId !== undefined) this.tombstoneActedRemoteRunIds.add(remoteRunId);
     this.detachRemoteRun(item, reservation ?? this.reservedSlots.get(item.issueNumber));
     this.logger.info("Detached a cancelled remote run from the operator's queued item", {
       issueNumber: item.issueNumber,
@@ -1358,7 +1370,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * again, and the fill runs once more for the capacity it would have taken.
    */
   private async dropCancelledRemoteRun(item: QueueItem, reason: string): Promise<void> {
-    if (item.remoteRunId !== undefined) this.acceptedRemoteRuns.delete(item.remoteRunId);
+    if (item.remoteRunId !== undefined) {
+      this.acceptedRemoteRuns.delete(item.remoteRunId);
+      this.tombstoneActedRemoteRunIds.add(item.remoteRunId);
+    }
     this.noteHeldRemoteRuns();
     this.logger.info("Dropped a remote run the platform cancelled before its slot opened", {
       issueNumber: item.issueNumber,
@@ -4084,19 +4099,27 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * ack (#2344): "running" when the issue's slot is open, "busy" when the
    * issue is queued or on its way to a slot here for another platform run,
    * or was taken from the queue by something other than this window's
-   * dispatch. Null when the trigger can be placed. Read in the queue turn, so
-   * a fill's dequeue is either visible in full or not yet made. A queue that
-   * cannot be read refuses nothing; {@link placeRemoteRun} decides again
-   * after the ack.
+   * dispatch. "pinned" when the trigger asks for its own adapter and model
+   * (#1656) and the issue is queued or on its way to a slot here for the
+   * operator, whose work would serve it on the operator's: Go refuses the
+   * same pin before the ack (`queue.validatePin`), and this checks it again
+   * just before the ack. Null when the trigger can be placed. Read in the
+   * queue turn, so a fill's dequeue is either visible in full or not yet
+   * made. A queue that cannot be read refuses nothing; {@link placeRemoteRun}
+   * decides again after the ack.
    */
   async remoteTriggerConflict(
     issueNumber: number,
-    repo: string
-  ): Promise<"running" | "busy" | null> {
+    repo: string,
+    pinned: boolean
+  ): Promise<"running" | "busy" | "pinned" | null> {
     return this.withQueueTurn(async () => {
       const local = this.dispatchFor(issueNumber, repo);
       if (local === "running") return "running";
-      if (local !== null) return local.remoteRunId !== undefined ? "busy" : null;
+      if (local !== null) {
+        if (local.remoteRunId !== undefined) return "busy";
+        return pinned ? "pinned" : null;
+      }
       let queue: Awaited<ReturnType<IssueQueueService["getQueue"]>>;
       try {
         queue = await this.queueService.getQueue();
@@ -4108,7 +4131,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         (item) => item.issueNumber === issueNumber && sameRepo(item.repoName, repo)
       );
       if (!queued) return null;
-      return queued.remoteRunId || queued.status === "processing" ? "busy" : null;
+      if (queued.remoteRunId || queued.status === "processing") return "busy";
+      return pinned ? "pinned" : null;
     });
   }
 
@@ -4125,6 +4149,11 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * - "running": the issue's slot opened without it, so it cannot serve the
    *   run (the trigger raced the slot).
    * - "busy": the issue is queued or dispatched here for another remote run.
+   * - "pinned": the run asks for its own adapter and model (`pinned`, #1656)
+   *   and the issue's dispatch under way here is the operator's, which runs
+   *   on the operator's: it is never served by another adapter or model. A
+   *   pinned run is not attached to an operator's waiting item either; Go
+   *   refuses that enqueue (QueueAddPinnedItem).
    * - "not-queued": `enqueue` refused (resolved false) or the queue would not
    *   take it.
    * - "cancelled": the platform cancelled the run before it was placed.
@@ -4147,9 +4176,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * @see Issue #4118 — dashboard trigger enqueue path
    */
   async placeRemoteRun(
-    run: { remoteRunId: string; issueNumber: number; repo: string },
+    run: { remoteRunId: string; issueNumber: number; repo: string; pinned?: boolean },
     enqueue: () => Promise<boolean>
-  ): Promise<"attached" | "queued" | "running" | "busy" | "not-queued" | "cancelled"> {
+  ): Promise<"attached" | "queued" | "running" | "busy" | "pinned" | "not-queued" | "cancelled"> {
     // No await before this: the window holds the run from the ack on.
     this.acceptedRemoteRuns.set(run.remoteRunId, {
       issueNumber: run.issueNumber,
@@ -4168,6 +4197,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           if (local.remoteRunId !== undefined) {
             return local.remoteRunId === run.remoteRunId ? "attached" : "busy";
           }
+          if (run.pinned) return "pinned";
           local.remoteRunId = run.remoteRunId;
           local.remoteRunAttached = true;
           const reservation = this.reservedSlots.get(local.issueNumber);
@@ -4215,6 +4245,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * outlives a window reload, and the tombstone does not. Best effort.
    */
   private async unqueueCancelledRemoteRun(remoteRunId: string): Promise<void> {
+    this.tombstoneActedRemoteRunIds.add(remoteRunId);
     try {
       await this.queueService.removeRemoteRun(remoteRunId);
     } catch (err) {
@@ -4422,8 +4453,11 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * tick the slot was found missing, so no slot can open for it afterwards:
    * the dispatch path drops an item whose run id is tombstoned, wherever the
    * item is. Its item is then removed from the queue when no fill has taken
-   * it yet. Applied when the run was queued here or its slot was being
-   * prepared; "no-active-run" when it is not here at all.
+   * it yet. Applied when the run was queued here, its slot was being
+   * prepared, or its dispatch dropped it meanwhile; "no-active-run" when it
+   * is not here at all, and the run is then not tombstoned, so the refusal
+   * never hides a run that does start here. A queue that cannot be read is
+   * judged by its latest known state, as for a pause or resume.
    * @see Issue #3552 — cancel command handler
    */
   async cancelByRemoteRunId(remoteRunId: string): Promise<RemoteVerbResult> {
@@ -4438,6 +4472,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     const interrupted = this.reloadInterruptedRuns.get(remoteRunId);
     if (interrupted) return this.endReloadInterruptedRun(remoteRunId, interrupted);
     // No await between the lookup above and the tombstone below.
+    const tombstonedBefore = this.cancelledRemoteRunIds.has(remoteRunId);
     this.cancelledRemoteRunIds.add(remoteRunId);
     const dispatching = this.dispatchingItemFor(remoteRunId);
     const preparing = dispatching !== undefined || this.reservationFor(remoteRunId) !== undefined;
@@ -4465,10 +4500,20 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       try {
         dequeued = await this.isRemoteRunQueued(remoteRunId);
       } catch {
-        // Unknown: the tombstone still keeps a slot from opening for it.
+        dequeued = this.queuedRemoteRunIds.has(remoteRunId);
       }
     }
-    if (!preparing && !accepted && !removed && !dequeued) return "no-active-run";
+    // A fill's dequeue of the run may have been in flight: Go leaves a
+    // dequeued item to its dispatch, which drops it, maybe before the queue
+    // above was read.
+    const dispatched =
+      this.tombstoneActedRemoteRunIds.has(remoteRunId) ||
+      this.dispatchingItemFor(remoteRunId) !== undefined ||
+      this.reservationFor(remoteRunId) !== undefined;
+    if (!preparing && !accepted && !removed && !dequeued && !dispatched) {
+      if (!tombstonedBefore) this.cancelledRemoteRunIds.delete(remoteRunId);
+      return "no-active-run";
+    }
     this.logger.info("Cancelled a remote run before its slot opened", {
       remoteRunId,
       removedFromQueue: removed,
