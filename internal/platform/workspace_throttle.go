@@ -43,16 +43,18 @@ func (t WorkspaceThrottle) InForce(now time.Time) bool {
 // the workspace has none, or when no workspace of the account's teams has the
 // slug. It returns an error when the list cannot be read or the throttle is
 // malformed, so a failure is never taken for "no throttle". The route needs a
-// signed-in user's session: a client holding only a license key is refused
-// with ErrCredentialInsufficient before anything is sent.
+// signed-in user's session, so the read carries the session token and nothing
+// else: a client without one, even one that signed out after its caller
+// checked, is refused with ErrNoSession before anything is sent.
 //
 // The read is not skipped while the client's health poll reports it offline:
 // it is asked for when the platform has just answered (a registration, a
 // command, a stream that opened), and a read that fails changes nothing.
 func (c *Client) ReadWorkspaceThrottle(ctx context.Context, slug string) (*WorkspaceThrottle, error) {
 	req, err := c.newRequest(ctx, requestSpec{
-		Op:      api.OpWorkspacesList,
-		Headers: map[string]string{"Accept": "application/json"},
+		Op:          api.OpWorkspacesList,
+		Headers:     map[string]string{"Accept": "application/json"},
+		SessionOnly: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("workspace throttle: %w", err)
@@ -220,6 +222,12 @@ func (f *WorkspaceThrottleFollower) readAndApply(ctx context.Context) {
 	readCtx, cancel := context.WithTimeout(ctx, f.readTimeout)
 	defer cancel()
 	throttle, err := f.read(readCtx, slug)
+	if errors.Is(err, ErrNoSession) {
+		// The session ended after the check above, and the read sent
+		// nothing: no session follows no throttle.
+		f.target.Set(nil, false)
+		return
+	}
 	if err != nil {
 		log.Printf("[nightgauge] workspace throttle: could not read the throttle of workspace %q (keeping the last one): %v", slug, err)
 		return

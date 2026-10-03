@@ -107,6 +107,20 @@ func TestReadWorkspaceThrottle_NeedsASession(t *testing.T) {
 	}
 }
 
+// The read carries the session and nothing else. A client whose only other
+// credential is an API key the license-key guard cannot classify is refused
+// before anything is sent too, never sent that key.
+func TestReadWorkspaceThrottle_NeverFallsBackToTheAPIKey(t *testing.T) {
+	srv, hits := workspaceListServer(t, http.StatusOK, `{"workspaces":[]}`)
+	_, err := onlineClient(t, srv.URL).ReadWorkspaceThrottle(context.Background(), "w")
+	if !errors.Is(err, ErrNoSession) || !errors.Is(err, ErrCredentialInsufficient) {
+		t.Fatalf("err = %v, want ErrNoSession, which is an ErrCredentialInsufficient", err)
+	}
+	if atomic.LoadInt32(hits) != 0 {
+		t.Fatal("an API-key request reached the platform")
+	}
+}
+
 type throttleApplied struct {
 	throttle *WorkspaceThrottle
 	known    bool
@@ -278,6 +292,41 @@ func TestWorkspaceThrottleFollower_ReadsAgainAfterAReadInFlight(t *testing.T) {
 	got := applied()
 	if len(got) != 2 || got[1].throttle.MaxConcurrent != 2 {
 		t.Fatalf("applied = %+v, want the newer read last", got)
+	}
+}
+
+// A sign-out that lands after the follower checked for a session and before
+// its read sends nothing (#2352). The read takes the session token as it
+// builds the request and refuses without one, instead of falling back to the
+// client's API key, and the follower lifts the throttle as it does with no
+// session. Before, the read went out with the API key: the daemon test that
+// signs out while a coalesced read was resolving its workspace failed so.
+func TestWorkspaceThrottleFollower_SignOutDuringARead(t *testing.T) {
+	var hits int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&hits, 1)
+		_, _ = w.Write([]byte(`{"workspaces":[{"slug":"w","throttle":{"maxConcurrent":1,"resumeAt":null}}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := signedInClient(t, srv.URL) // its fallback credential is the API key "test-key"
+	rec := &throttleRecorder{}
+	f := NewWorkspaceThrottleFollower(
+		c.ReadWorkspaceThrottle,
+		func() (string, bool, error) {
+			c.SetSessionToken("") // signed out after the session check, before the read
+			return "w", true, nil
+		},
+		c.HasSessionToken,
+		rec,
+	)
+	f.Refresh(context.Background())
+
+	if n := atomic.LoadInt32(&hits); n != 0 {
+		t.Fatalf("%d read(s) reached the platform after the sign-out", n)
+	}
+	got := rec.sets()
+	if len(got) != 1 || got[0].throttle != nil || got[0].known {
+		t.Fatalf("applied = %+v, want the throttle lifted and unknown", got)
 	}
 }
 
