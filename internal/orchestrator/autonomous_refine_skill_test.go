@@ -165,3 +165,48 @@ func containsStr(hay []string, needle string) bool {
 	}
 	return false
 }
+
+// TestRefineStageOptionsModelFollowsThePerformanceMode pins #2384. Refinement
+// used to dispatch the literal "sonnet" in every mode, below maximum's
+// [opus, opus] envelope and above a haiku max_model. It now resolves through
+// the per-stage chain: no mode pins issue-refine, so maximum's envelope raises
+// the Sonnet base, max_model caps it, and an explicit per-stage model wins.
+func TestRefineStageOptionsModelFollowsThePerformanceMode(t *testing.T) {
+	cases := []struct {
+		name   string
+		mode   string
+		config string // workspace config body; "" = no config file
+		env    string // NIGHTGAUGE_PIPELINE_STAGE_MODEL_ISSUE_REFINE
+		want   string
+	}{
+		{"elevated keeps the sonnet base", "elevated", "", "", "sonnet"},
+		{"efficiency keeps the sonnet base", "efficiency", "", "", "sonnet"},
+		{"frontier keeps the sonnet base", "frontier", "", "", "sonnet"},
+		{"maximum raises it to its opus floor", "maximum", "", "", "opus"},
+		{"max_model caps it", "elevated", "model_routing:\n  max_model: haiku\n", "", "haiku"},
+		{"the stage's environment override wins over the mode", "maximum", "", "haiku", "haiku"},
+		{"pipeline.stage_models wins over the mode",
+			"maximum", "model_routing:\n  mode: hybrid\npipeline:\n  stage_models:\n    issue-refine: haiku\n", "", "haiku"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			ws := isolatedWorkspace(t)
+			if c.config != "" {
+				ws = routedWorkspace(t, c.config)
+			}
+			t.Setenv("NIGHTGAUGE_PERFORMANCE_MODE", c.mode)
+			t.Setenv("NIGHTGAUGE_PIPELINE_STAGE_MODEL_ISSUE_REFINE", c.env)
+			withRefineRoots(t, ws, refineSkillFixture(t))
+
+			sched := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: ws})
+			as := NewAutonomousScheduler(sched, nil, []depgraph.RepoConfig{}, nil, DefaultAutonomousConfig(), ws)
+			opts, err := as.refineStageOptions("acme", "widgets", 42, "claude")
+			if err != nil {
+				t.Fatalf("refineStageOptions: %v", err)
+			}
+			if opts.Model != c.want {
+				t.Errorf("refinement model = %q, want %q", opts.Model, c.want)
+			}
+		})
+	}
+}

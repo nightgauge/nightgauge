@@ -24,7 +24,9 @@ the extension. The two tables mirror each other.
   at effort `high` on `issue-pickup`, `feature-planning`, `feature-dev`,
   `feature-validate`, `pr-create` and `pr-merge`. It pins neither
   `issue-refine` nor `spike-materialize`; its envelope holds those to `opus`,
-  with effort at least `high`.
+  with effort at least `high`. Refinement starts from `sonnet` and is clamped
+  into the band like any routed tier, so the other modes keep it on `sonnet`
+  unless `model_routing.max_model` caps it lower.
 - **Frontier.** `fable` is the ceiling on `feature-planning` and `feature-dev`
   only; every other stage is capped at `opus`. The router reaches `fable` on
   those two stages only for an issue in the top complexity band (`L`/`XL`).

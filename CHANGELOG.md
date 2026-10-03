@@ -178,6 +178,15 @@ changelog, and the release workflow refuses a tag that does not.
   pipeline now puts an absolute hooks path back after its install, and warns
   that it did. An `npm install` run by hand in such a checkout still turns the
   hook off until the next `npm install` in a current checkout.
+- **Refinement runs on the performance mode's model** (#2384). `issue-refine`
+  dispatched Sonnet in every mode, so under `maximum` it ran below the mode's
+  Opus floor, a `model_routing.max_model: haiku` cap did not lower it, and
+  neither `NIGHTGAUGE_PIPELINE_STAGE_MODEL_ISSUE_REFINE` nor a
+  `pipeline.stage_models` entry changed it. Its model now resolves as a
+  pipeline stage's does: an explicit per-stage model wins, and otherwise
+  Sonnet is clamped into the mode's band. Under `maximum` refinement runs on
+  Opus at effort `high`; the other modes keep Sonnet unless `max_model` caps it
+  lower.
 - **`nightgauge git push` pushes only the current branch, and runs the
   repository's pre-push hook** (#2365). It went through go-git, which runs no
   hooks and, given no refspec, pushes every local branch, so a push through it,

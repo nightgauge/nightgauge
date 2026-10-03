@@ -8344,6 +8344,25 @@ func (as *AutonomousScheduler) refineIssue(ctx context.Context, owner, repo stri
 // bundle root must be searched.
 var refineSkillRoots = skillrender.DefaultRoots
 
+// refinementBaseTier is the tier refinement starts from. Refinement is a
+// lighter workload than the pipeline stages and runs before pickup, so it has
+// no routed tier of its own; Sonnet stands in for one.
+const refinementBaseTier = tierSonnet
+
+// refinementModel resolves the model refinement dispatches on, through the
+// same per-stage chain as a pipeline stage (#2384): the issue-refine
+// environment override, then pipeline.stage_models, and otherwise the Sonnet
+// base clamped into the performance mode's routed-tier envelope with
+// model_routing.max_model applied. No mode pins issue-refine, so under maximum
+// the envelope [opus, opus] raises it to opus. It used to be the literal
+// "sonnet" in every mode, below maximum's floor and above a haiku max_model.
+// The issue has no job class before pickup, so eval advice never re-picks it.
+func refinementModel(workspaceRoot string) string {
+	mode := routing.ResolvePerformanceMode(workspaceRoot)
+	model, _ := stageBaseModel(workspaceRoot, mode, state.StageIssueRefine, refinementBaseTier, "")
+	return normalizeDispatchTier(model)
+}
+
 // refineStageOptions composes the dispatch for the issue-refine skill.
 //
 // Extracted from refineViaCLI so the composition is assertable without an
@@ -8357,9 +8376,10 @@ func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumbe
 	// fallback #874 added: <workspaceRoot>/skills first, then
 	// <binary>/../skills, which is the only root that exists in a workspace
 	// that is not the nightgauge source tree.
+	model := refinementModel(as.workspaceRoot)
 	rendered, err := skillrender.Render(skillrender.Options{
 		Stage:       string(state.StageIssueRefine),
-		Model:       "sonnet", // Refinement is a lighter workload
+		Model:       model,
 		Adapter:     adapterName,
 		SkillsRoots: refineSkillRoots(as.workspaceRoot),
 		Warn:        func(msg string) { log.Printf("[refinement] %s", msg) },
@@ -8374,7 +8394,7 @@ func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumbe
 		IssueNumber: issueNumber,
 		Stage:       string(state.StageIssueRefine),
 		SkillPath:   rendered.SkillPath,
-		Model:       "sonnet",
+		Model:       model,
 		Timeout:     5 * time.Minute,
 		CostBudget:  PipelineBudgetCeilingUSD(as.workspaceRoot),
 		TargetRepo:  fullRepo,
