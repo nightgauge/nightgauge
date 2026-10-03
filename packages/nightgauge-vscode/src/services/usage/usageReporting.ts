@@ -45,7 +45,7 @@
  *
  * | Tier                 | What is sent                                       |
  * | -------------------- | -------------------------------------------------- |
- * | `off`                | Nothing. No body at all.                           |
+ * | `off`                | No usage. The beat carries only its instance id.   |
  * | `minimal`            | Allowance windows only — no monetary figure leaves. |
  * | `full` (**default**) | Every window, including per-adapter spend.          |
  *

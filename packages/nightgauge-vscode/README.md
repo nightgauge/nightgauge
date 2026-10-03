@@ -53,10 +53,12 @@ clone the repository.)
    [latest release](https://github.com/nightgauge/nightgauge/releases/latest) and
    install it with `code --install-extension nightgauge-vscode-<target>-<version>.vsix`,
    or **Extensions: Install from VSIX** in the Command Palette.
-2. **Sign in (optional)** — Run **Nightgauge: Sign In with GitHub** from the
-   Command Palette. This connects a Nightgauge account for hosted features. It
-   is **not** how the pipeline reaches GitHub — that is `gh auth login` above,
-   or a token in `.nightgauge/config.yaml`.
+2. **Sign in (optional)** — Sign-in appears once
+   [cloud features](#cloud-features-optional) are on
+   (`"nightgauge.cloud.enabled": true`); then run **Nightgauge: Sign In with
+   GitHub** from the Command Palette. This connects a Nightgauge account for
+   hosted features. It is **not** how the pipeline reaches GitHub — that is
+   `gh auth login` above, or a token in `.nightgauge/config.yaml`.
 3. **Trust the folder** — Open the repository you want to automate. VS Code
    opens a folder it has not seen before in **Restricted Mode**, which
    disables Nightgauge entirely: there is no Nightgauge icon in the activity
@@ -215,15 +217,15 @@ A full, current list of contributed commands is visible in VS Code's
 Extensions view under this extension's "Feature Contributions" tab (sourced
 directly from `package.json`). The most commonly used:
 
-| Command                                      | Description                                                                                                                                                              |
-| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `Nightgauge: Sign In with GitHub`            | Connect a Nightgauge account for hosted features (optional); not how the pipeline reaches GitHub. `Nightgauge: Sign In` offers the same plus a browser device-code flow. |
-| `Nightgauge: Pick Up Issue`                  | Claim an issue and start the pipeline                                                                                                                                    |
-| `Nightgauge: Run Stage...`                   | Run a single pipeline stage                                                                                                                                              |
-| `Nightgauge: Show Dashboard`                 | Open the pipeline dashboard                                                                                                                                              |
-| `Nightgauge: Open Knowledge Value Dashboard` | Open the Knowledge Value dashboard                                                                                                                                       |
-| `Nightgauge: Stop Pipeline`                  | Stop the currently running pipeline                                                                                                                                      |
-| `Nightgauge: Open Settings`                  | Open the visual settings panel                                                                                                                                           |
+| Command                                      | Description                                                                                                                                                                                                                            |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Nightgauge: Sign In with GitHub`            | Connect a Nightgauge account for hosted features (optional; shown once [cloud features](#cloud-features-optional) are on); not how the pipeline reaches GitHub. `Nightgauge: Sign In` offers the same plus a browser device-code flow. |
+| `Nightgauge: Pick Up Issue`                  | Claim an issue and start the pipeline                                                                                                                                                                                                  |
+| `Nightgauge: Run Stage...`                   | Run a single pipeline stage                                                                                                                                                                                                            |
+| `Nightgauge: Show Dashboard`                 | Open the pipeline dashboard                                                                                                                                                                                                            |
+| `Nightgauge: Open Knowledge Value Dashboard` | Open the Knowledge Value dashboard                                                                                                                                                                                                     |
+| `Nightgauge: Stop Pipeline`                  | Stop the currently running pipeline                                                                                                                                                                                                    |
+| `Nightgauge: Open Settings`                  | Open the visual settings panel                                                                                                                                                                                                         |
 
 ## Active Issue Knowledge Panel
 
@@ -298,16 +300,19 @@ telemetry, and more) is best browsed through
 Cloud features are optional and off by default. The local pipeline needs
 neither of the two switches below.
 
-- **`"nightgauge.cloud.enabled": true`** in VS Code settings shows sign-in and
-  the account and team commands in the Command Palette, and the account
-  sections in the sidebar. It changes what the extension shows, not what it
-  sends.
+- **`"nightgauge.cloud.enabled": true`** in VS Code settings shows the account,
+  subscription and team commands in the Command Palette, sign-in among them,
+  and the Subscription and Team sections in the sidebar. It changes what the
+  extension shows, not what it sends.
 - **`platform.enabled: true`** in `.nightgauge/config.yaml` decides whether the
   extension and its bundled binary talk to the hosted service on their own:
   restoring your session, registering this machine and sending the telemetry
   described in [Privacy and Telemetry](#privacy-and-telemetry). With the
-  default, `false`, none of that happens, and signing in is always your own
-  explicit action.
+  default, `false`, the extension does none of that, and signing in is always
+  your own explicit action. One exception: once a license key is stored in VS
+  Code (by activating a license or starting a trial), the extension hands it to
+  the bundled binary, which then registers this machine and sends heartbeats
+  even with `platform.enabled` off.
 
 ```jsonc
 // settings.json
