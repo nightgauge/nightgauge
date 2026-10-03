@@ -19,14 +19,24 @@ import { makeMockLogger } from "../mocks/logger";
 
 vi.mock("vscode", () => ({}));
 
-const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/**
+ * A random UUID v4 (RFC 9562), checked field by field: lowercase hex in
+ * 8-4-4-4-12 groups, version nibble 4, variant bits 10.
+ */
+function expectUuidV4(id: string): void {
+  const groups = id.split("-");
+  expect(groups.map((group) => group.length)).toEqual([8, 4, 4, 4, 12]);
+  expect(groups.join("")).toMatch(/^[0-9a-f]{32}$/);
+  expect(groups[2][0]).toBe("4");
+  expect(["8", "9", "a", "b"]).toContain(groups[3][0]);
+}
 const PLATFORM_URL = "https://api.nightgauge.dev";
 
 describe("agent instance id", () => {
   it("is a random UUID v4 within the platform's bound, stable within an activation", () => {
     beginAgentInstance();
     const id = agentInstanceId();
-    expect(id).toMatch(UUID_V4);
+    expectUuidV4(id);
     expect(isValidAgentInstanceId(id)).toBe(true);
     expect(agentInstanceId()).toBe(id);
   });
