@@ -193,6 +193,9 @@ describe("RunVerbCommandHandler — a verb no window of the machine holds (#2357
     await only.handler.consume(verb("cancel"), "cancel");
     expect(platform.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
     expect(platform.agentAcknowledgeCommand.mock.calls[0][2]).toBe("rejected");
+    expect(platform.agentAcknowledgeCommand.mock.calls[0][3]).toBe(
+      "no-active-run: no pipeline on this agent carries this runId"
+    );
   });
 
   it("does not refuse a run another live window lists, which answers it itself", async () => {
@@ -257,7 +260,12 @@ describe("RunVerbCommandHandler — a verb no window of the machine holds (#2357
     expect(await closedHoldLeftMs.mock.results[0].value).toBe(20);
     expect(platform.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
     expect(platform.agentAcknowledgeCommand.mock.calls[0][2]).toBe("rejected");
-    expect(platform.agentAcknowledgeCommand.mock.calls[0][3]).toMatch(/^no-active-run: /);
+    // The closed window's queue may still carry the run and start it when the
+    // window opens again: the refusal says the holder closed, not that no
+    // pipeline carries the run.
+    expect(platform.agentAcknowledgeCommand.mock.calls[0][3]).toBe(
+      "no-active-run: no open window on this agent holds this run; the window that held it has closed"
+    );
   });
 
   it("stays quiet while a window back from its reload lists the run again", async () => {

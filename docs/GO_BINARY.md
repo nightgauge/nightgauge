@@ -419,7 +419,11 @@ its runs are not refused while it comes back; any other listing counts only
 while its process lives. A window
 that left a verb to such a listing looks at it again once the listing lapses,
 and refuses it then when no window lists the run again, rather than leaving
-it to expire. The first window to answer a command claims it
+it to expire. That refusal says the window that held the run has closed, not
+that no pipeline carries it: a window closed for good can still carry the run
+in its queue and start it, under the same run id, when it opens again, which
+matches what the platform records for a refused verb (not applied, the run as
+it was). The first window to answer a command claims it
 (`answers/<command id>`, created exclusively, naming the window, and marked
 answered once its acknowledgement reached the platform); a claim whose window
 is gone before it answered is taken over by one window, which answers

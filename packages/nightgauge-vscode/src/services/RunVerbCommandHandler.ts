@@ -121,6 +121,15 @@ const NO_OP_DETAIL: Record<Exclude<RemoteVerbResult, "applied" | AlreadyResolved
     "resume-in-window: a window reload ended the paused run; only its window can resume it",
 };
 
+/**
+ * ...or no window holds the run now and only the listing of a window that
+ * closed or reloaded did, until it lapsed (#2357). The run may still wait in
+ * that window's queue, which starts it under the same run id when the window
+ * opens again, so the refusal does not say that no pipeline carries it.
+ */
+const HOLDER_CLOSED_DETAIL =
+  "no-active-run: no open window on this agent holds this run; the window that held it has closed";
+
 const INVALID_PAYLOAD_DETAIL = "invalid-payload: runId is required";
 const NO_APPROVAL_GATE_DETAIL =
   "no-approval-gate: runs on this agent never wait at an approval gate";
@@ -344,6 +353,7 @@ export class RunVerbCommandHandler implements CommandHandler {
     this.waitingRefusals.add(cmd.id);
     try {
       let wait = unheld.graceMs ?? UNHELD_VERB_GRACE_MS;
+      let holderClosed = false;
       for (let look = 0; ; look++) {
         await delay(wait);
         if (this.redelivery.remembers(cmd.id)) return;
@@ -364,6 +374,7 @@ export class RunVerbCommandHandler implements CommandHandler {
           "RunVerbCommandHandler: only a closed or reloading window lists the run — looking again when its listing lapses",
           { verb, runId, commandId: cmd.id, inMs: left }
         );
+        holderClosed = true;
         wait = left + CLOSED_HOLD_MARGIN_MS;
       }
       if (!(await unheld.ledger.claimAnswer(cmd.id))) {
@@ -380,9 +391,10 @@ export class RunVerbCommandHandler implements CommandHandler {
         commandId: cmd.id,
       });
       const agentId = cmd.agentId ?? this.agentId;
+      const detail = holderClosed ? HOLDER_CLOSED_DETAIL : NO_OP_DETAIL["no-active-run"];
       return this.redelivery.consume(
         cmd.id,
-        async () => ({ agentId, outcome: "rejected", detail: NO_OP_DETAIL["no-active-run"] }),
+        async () => ({ agentId, outcome: "rejected", detail }),
         (ack) => this.acknowledge(cmd, verb, ack)
       );
     } finally {
