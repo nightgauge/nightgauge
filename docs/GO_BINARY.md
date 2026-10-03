@@ -374,7 +374,11 @@ already on its way to a slot (dequeued, or creating its worktree) attaches to
 that dispatch, whose slot then adopts the run id. A trigger for an issue
 queued or dispatched here for another platform run, or taken from the queue
 by anything else, is refused `already-queued` before its ack; one whose slot
-is already open is left alone, as before.
+is already open is left alone, as before. A trigger that asks for its own
+adapter and model (#1656) is never served by the operator's work for the
+issue, which runs on the operator's: it is refused `already-queued` when that
+work is queued or dispatched here (Go's `queue.validatePin` checks it, and the
+window again just before the ack), and is never attached to it.
 
 A pause or resume that arrives before the slot opens is refused as
 `not-started`. A cancel applies (#2344): it tombstones the run id, takes the
@@ -384,7 +388,11 @@ wherever it is, waiting for an earlier start or with its worktree being
 created, last in the tick its slot would open, so no slot ever opens for it.
 A cancel that arrives while the trigger's run is still being queued applies
 as well: nothing is queued for it, and a run the enqueue had queued already is
-taken back out. A tombstoned run is never put back in the queue, which
+taken back out. So does one that arrives while a fill's dequeue of the run is
+in flight: Go leaves a dequeued item to its dispatch, which drops it. A cancel
+that finds the run nowhere here, nor in the latest queue state when the queue
+cannot be read, is refused `no-active-run` and tombstones nothing, so it never
+drops a run it said was not here. A tombstoned run is never put back in the queue, which
 outlives the in-memory tombstone across a window reload: not when the
 dispatch ceiling drops during the fill, and not when its slot fails to start.
 A run attached to the operator's own item or dispatch is detached instead:
@@ -404,15 +412,21 @@ its slots, the dispatches on their way to a slot, the triggers it is
 queueing, the runs its queue carries, and the paused runs a reload ended
 there), from the moment it is wired, after reading its queue, which after a
 reload can carry runs no queue change announces, and again on every daemon
-reconnect. A window that closes or reloads marks its listing closed, and the
-others still honour it for a minute, so its runs are not refused while it
-comes back; any other listing counts only while its process lives. A window
+reconnect. A window that closes or reloads lists the runs it held as closed
+(`holders/<pid>.closed.json`, a file of its own, so a listing write still in
+flight cannot replace it), and the others still honour that for a minute, so
+its runs are not refused while it comes back; any other listing counts only
+while its process lives. A window
 that left a verb to such a listing looks at it again once the listing lapses,
 and refuses it then when no window lists the run again, rather than leaving
 it to expire. The first window to answer a command claims it
-(`answers/<command id>`, created exclusively, naming the window); a claim
-whose window is gone before it answered is taken over by one window, which
-answers instead. The holder claims the answer before it applies the verb. A
+(`answers/<command id>`, created exclusively, naming the window, and marked
+answered once its acknowledgement reached the platform); a claim whose window
+is gone before it answered is taken over by one window, which answers
+instead, and an answered claim never is. The holder claims the answer before
+it applies the verb. The verbs for one run are applied in the order they
+arrived: each takes its run's turn on arrival, before the holder check and
+the claim, which take as long as the disk. A
 window that does not hold the run waits two seconds, and refuses only when
 it still does not hold it, no window lists the run, and it claims the answer
 first. So the platform receives one acknowledgement per command, the holder's

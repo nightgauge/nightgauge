@@ -76,17 +76,19 @@ and this project adheres to
   answered again within about two seconds,** instead of waiting five minutes
   to expire. With several windows open, only the one running the pipeline
   answers for it, so the app never shows a stop or a pause as refused while
-  the run is stopping or holding. After a window reload, a command for a run
-  that did not survive it is answered once the reloaded window has had a
-  minute to come back (#2357).
+  the run is stopping or holding, and a pause and a resume sent together
+  apply in that order, so the run is never left paused after a resume. After
+  a window reload, a command for a run that did not survive it is answered
+  once the reloaded window has had a minute to come back (#2357).
 - **Cancelling a run from the phone app or the dashboard before it starts
   works.** A run still waiting for a free slot, or whose worktree was being
   created, refused the cancel as not started. It is now removed and never
-  starts, even when the cancel arrives the moment the run is triggered, and
-  triggering the same issue again runs normally. Triggering an
-  issue you already queued, even one already starting, follows your queued
-  run, and cancelling it from there leaves your run as you queued it
-  (#2344).
+  starts, even when the cancel arrives the moment the run is triggered or
+  picked up for a slot, and triggering the same issue again runs normally.
+  Triggering an issue you already queued, even one already starting, follows
+  your queued run, and cancelling it from there leaves your run as you queued
+  it; a trigger that asks for its own adapter and model is refused instead,
+  since your run uses yours (#2344).
 - **Approve and reject from the phone app or the dashboard say why they
   cannot apply:** no run in the extension waits at an approval gate, so the
   window running the pipeline answers both with that reason (#2336).

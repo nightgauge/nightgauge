@@ -279,16 +279,20 @@ changelog, and the release workflow refuses a tag that does not.
   (slots, dispatches on their way to a slot, triggers being queued, the runs
   its queue carries, and paused runs a reload ended there) from the moment it
   is wired, and the first to answer a command claims it. A window that closes
-  or reloads keeps its listing for a minute, so its runs are not refused while
-  it comes back; a verb only such a listing held is looked at again when the
-  minute is over, and a claim left by a window that closed before it
-  answered is taken over. A window holds a triggered run from the moment its
-  ack comes back, before the run is queued, so a verb for it is answered
-  even while a fill holds the queue. The holder claims the answer before it applies the verb; a
-  window without the run waits two seconds and refuses `no-active-run` only
-  when it still does not hold the run, no window lists it, and it claims the
-  answer first. The platform gets one acknowledgement per command, the
-  holder's whenever a window holds the run.
+  or reloads keeps its listing for a minute, in a file of its own that a
+  listing write still in flight cannot replace, so its runs are not refused
+  while it comes back; a verb only such a listing held is looked at again
+  when the minute is over, and a claim left by a window that closed before it
+  answered is taken over, never one whose answer reached the platform. A
+  window holds a triggered run from the moment its ack comes back, before the
+  run is queued, so a verb for it is answered even while a fill holds the
+  queue. The holder claims the answer before it applies the verb, and applies
+  the verbs for one run in the order they arrived, so a pause and a resume
+  replayed together never leave the run paused; a window without the run
+  waits two seconds and refuses `no-active-run` only when it still does not
+  hold the run, no window lists it, and it claims the answer first. The
+  platform gets one acknowledgement per command, the holder's whenever a
+  window holds the run.
 - **A platform cancel of a triggered run that has not started yet applies**
   (#2344). A cancel of a run this window accepted the trigger for, still
   queued behind other slots or with its worktree being created, was refused
@@ -296,10 +300,13 @@ changelog, and the release workflow refuses a tag that does not.
   it again. The cancel now tombstones the platform run id and is acknowledged
   `applied`; the queued item is removed, or, when a fill already took it, the
   dispatch drops it wherever it is, so no slot ever opens for it. A cancel
-  that arrives while the trigger's run waits for the queue, or is being
-  queued, applies too, and a cancelled run is never put back in the queue (a
-  lowered dispatch ceiling, a failed start), which a reload would otherwise
-  start. A later trigger of the same issue runs under its own run id. The queued item now
+  that arrives while the trigger's run waits for the queue, is being queued,
+  or is being dequeued by a fill applies too, and a cancelled run is never
+  put back in the queue (a lowered dispatch ceiling, a failed start), which a
+  reload would otherwise start. A cancel refused `no-active-run`, also when
+  the queue cannot be read and its latest state does not show the run, drops
+  nothing, so a run it could not see still starts as the refusal says. A
+  later trigger of the same issue runs under its own run id. The queued item now
   carries the platform run id and the slot adopts it from there, so a run id
   can no longer be adopted by a later dispatch of the same issue number from
   a local re-queue or another repository, and a re-queued remote run keeps its
@@ -308,9 +315,12 @@ changelog, and the release workflow refuses a tag that does not.
   already on its way to a slot, decided in one turn with the fill's dequeue,
   and cancelling such a run only detaches it, leaving the operator's work
   queued. A trigger for an issue queued or dispatched here for another
-  platform run is refused `already-queued` before its ack.
-  `queue.removeRemoteRun` removes one remote run's item that no dispatch has
-  taken, or detaches the run from the operator's item.
+  platform run is refused `already-queued` before its ack, and so is one that
+  asks for its own adapter and model (#1656) while the operator's work for the
+  issue is queued or dispatched here: it is never attached to that work, which
+  runs on the operator's. `queue.removeRemoteRun` removes one remote run's
+  item that no dispatch has taken, or detaches the run from the operator's
+  item.
 - **A slow reap of the complexity-model lock broker no longer hides why the
   transaction failed** (#2356). The extension waited for a broker it had sent
   SIGKILL as briefly as for one asked to exit, and an error from that wait
