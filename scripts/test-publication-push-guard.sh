@@ -312,6 +312,25 @@ else
   bad "a hooks path that is not husky's is left alone, and the install says so (exit $rc)"
 fi
 
+#    A package that sits inside another repository without a .git of its own is
+#    not a checkout of this one. husky declines there, and so must the installer:
+#    the hooks path it would set is the enclosing repository's.
+nest="$tmp/nest"
+{
+  g init -q "$nest" &&
+    mkdir -p "$nest/package/scripts" &&
+    cp "$REPO/scripts/install-publication-push-hook.sh" "$REPO/scripts/publication-push-guard.sh" \
+      "$nest/package/scripts/"
+} || harness "could not build a package inside another repository"
+(cd "$nest/package" && bash scripts/install-publication-push-hook.sh) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] && [ -z "$(git -C "$nest" config --get core.hooksPath)" ] &&
+  [ ! -e "$nest/.git/nightgauge-hooks" ]; then
+  ok "a package inside another repository installs nothing in that repository"
+else
+  bad "a package inside another repository installs nothing in that repository (exit $rc)"
+fi
+
 # ── 3. A feature branch off main passes, in one scan ─────────────────────────
 #    The tip rewrote the file the first commit added, and that first version is
 #    published too, so it is merged into the scan. The guard runs once, though
@@ -443,12 +462,12 @@ expect_refused "a violation a later commit deletes is still refused" refs/heads/
 # ── 11. The allowlist changes alone (#1970) ──────────────────────────────────
 #    An exception for docs/strategy/plan.md, added to the deny rule that would
 #    refuse it, together with the file: the checker alone would pass that.
-loosen() { # loosen <checkout>
-  local m="$1/.github/publication-boundary.yaml"
-  awk '{ print } $0 == "  - path: \"docs/strategy/**\"" {
-         print "    except: [\"docs/strategy/plan.md\"]" }' "$m" >"$m.tmp" &&
+loosen() { # loosen <checkout> [<path>]: except <path>, docs/strategy/plan.md by default
+  local m="$1/.github/publication-boundary.yaml" p="${2:-docs/strategy/plan.md}"
+  awk -v p="$p" '{ print } $0 == "  - path: \"docs/strategy/**\"" {
+         print "    except: [\"" p "\"]" }' "$m" >"$m.tmp" &&
     mv "$m.tmp" "$m" &&
-    grep -qF 'except: ["docs/strategy/plan.md"]' "$m"
+    grep -qF "except: [\"$p\"]" "$m"
 }
 {
   g -C "$work" checkout -q -b feat/allow-and-add origin/main &&
@@ -507,6 +526,40 @@ expect_refused "paths that differ only in case are refused or both read" refs/he
   "$case_sha" "$phrase"
 g -C "$work" checkout -q -f feat/ok || harness "could not leave feat/case"
 
+# ── 12b. ...but a rename by case alone, after an edit, passes ───────────────
+#    The edited version is merged into its old path for the combined scan, next
+#    to the renamed one, so that scan holds both. No commit does, so where they
+#    are one file the commits are scanned one at a time instead of refused.
+{
+  g -C "$work" fetch -q origin &&
+    g -C "$work" checkout -q -f -b feat/case-rename origin/main &&
+    printf 'More notes.\n' >>"$work/docs/notes.md" &&
+    g -C "$work" commit -q -am "docs: more notes" &&
+    notes_blob="$(git -C "$work" rev-parse HEAD:docs/notes.md)" &&
+    g -C "$work" rm -q --cached docs/notes.md &&
+    g -C "$work" update-index --add --cacheinfo "100644,$notes_blob,docs/Notes.md" &&
+    g -C "$work" commit -q -m "docs: rename the notes by case alone"
+} || harness "could not build feat/case-rename"
+push "$work" case-rename origin feat/case-rename
+expect_pass "a file renamed by case alone after an edit passes" refs/heads/feat/case-rename \
+  "$(head_of "$work" feat/case-rename)"
+
+#    The other way round, the path that stays is the one the colliding checkout
+#    wrote last, so removing the other path removes the file both shared. The
+#    next scan must check it out again, not report it missing as a collision.
+{
+  g -C "$work" checkout -q -f -b feat/case-rename-down origin/main &&
+    commit_file "$work" docs/Guide.md "A guide." "docs: a guide" &&
+    g -C "$work" rm -q --cached docs/Guide.md &&
+    guide_blob="$(printf 'A guide, renamed.\n' | git -C "$work" hash-object -w --stdin)" &&
+    g -C "$work" update-index --add --cacheinfo "100644,$guide_blob,docs/guide.md" &&
+    g -C "$work" commit -q -m "docs: rename the guide by case, and edit it"
+} || harness "could not build feat/case-rename-down"
+push "$work" case-rename-down origin feat/case-rename-down
+expect_pass "...also to a name that sorts after the old one" refs/heads/feat/case-rename-down \
+  "$(head_of "$work" feat/case-rename-down)"
+g -C "$work" checkout -q -f feat/ok || harness "could not leave feat/case-rename-down"
+
 # ── 13. A commit that cannot be checked fails closed ─────────────────────────
 {
   g -C "$work" checkout -q -b feat/no-manifest origin/main &&
@@ -516,6 +569,9 @@ g -C "$work" checkout -q -f feat/ok || harness "could not leave feat/case"
 push "$work" no-manifest origin feat/no-manifest
 expect_refused "a commit whose checker cannot run is refused" refs/heads/feat/no-manifest \
   "$(head_of "$work" feat/no-manifest)" "the boundary checker could not run"
+if logged "one at a time"; then
+  bad "a checker that could not run sent the guard looking for a commit that breaks the boundary"
+fi
 
 {
   g -C "$work" checkout -q -b feat/no-checker origin/main &&
@@ -525,6 +581,28 @@ expect_refused "a commit whose checker cannot run is refused" refs/heads/feat/no
 push "$work" no-checker origin feat/no-checker
 expect_refused "a commit without the checker is refused" refs/heads/feat/no-checker \
   "$(head_of "$work" feat/no-checker)" "has no"
+
+#    A python3 that cannot import yaml cannot run the checker, so the push is
+#    refused before any scan. The stand-in is the suite's own python3 without
+#    its site directories, which is where PyYAML is installed.
+nopy="$tmp/no-pyyaml"
+{
+  mkdir -p "$nopy" &&
+    printf '#!/bin/sh\nexec "%s" -S "$@"\n' "$(command -v python3)" >"$nopy/python3" &&
+    chmod 755 "$nopy/python3" &&
+    ! "$nopy/python3" -c 'import yaml' 2>/dev/null &&
+    g -C "$work" checkout -q -f -b feat/no-pyyaml origin/main &&
+    commit_file "$work" docs/np.md "Not checked." "docs: not checked"
+} || harness "could not build a python3 without PyYAML"
+saved_path="$PATH"
+PATH="$nopy:$PATH"
+push "$work" no-pyyaml origin feat/no-pyyaml
+PATH="$saved_path"
+expect_refused "a python3 without PyYAML is refused before any scan" refs/heads/feat/no-pyyaml \
+  "$(head_of "$work" feat/no-pyyaml)" "cannot import yaml"
+if logged "scanning"; then
+  bad "the guard scanned with a python3 that cannot run the checker"
+fi
 
 # ── 14. Deleting a branch publishes nothing ──────────────────────────────────
 push "$work" delete origin --delete feat/multi
@@ -601,6 +679,28 @@ if [ "$(wt_state)" = "$wt_before" ]; then
 else
   bad "the pushing worktree's HEAD, index and files are untouched"
 fi
+
+# ── 18b. The installed guard decides, not a worktree's own copy ──────────────
+#    A worktree at an older commit, or one where the guard is being edited,
+#    carries a guard of its own. The copy npm install put beside the hook judges
+#    every push; the tree's copy runs only when no copy is installed.
+printf '#!/usr/bin/env bash\nexit 0\n' >"$wt/scripts/publication-push-guard.sh" ||
+  harness "could not edit the worktree's guard"
+push "$wt" wt-edited origin feat/leak
+expect_refused "a worktree's own edited guard does not decide its pushes" refs/heads/feat/leak \
+  "$leak" "PRIVATE path is present: docs/strategy/plan.md"
+g -C "$wt" checkout -q -- scripts/publication-push-guard.sh || harness "could not restore the guard"
+
+{
+  g -C "$work" checkout -q -f -b feat/leak-tree origin/main &&
+    commit_file "$work" docs/strategy/tree.md "A plan." "docs: a plan" &&
+    mv "$dispatch/publication-push-guard.sh" "$tmp/installed-guard.sh"
+} || harness "could not set the installed guard aside"
+push "$work" tree-guard origin feat/leak-tree
+mv "$tmp/installed-guard.sh" "$dispatch/publication-push-guard.sh" ||
+  harness "could not put the installed guard back"
+expect_refused "with no installed copy, the tree's own guard runs" refs/heads/feat/leak-tree \
+  "$(head_of "$work" feat/leak-tree)" "PRIVATE path is present: docs/strategy/tree.md"
 
 # ── 19. With husky alone, .husky/pre-push runs the guard ─────────────────────
 #    A clone where the publication hook was never installed, for instance after
@@ -751,14 +851,102 @@ expect_refused "a violation on a branch that conflicts with main is refused" \
   refs/heads/feat/conflict-leak "$(head_of "$work" feat/conflict)" \
   "PRIVATE path is present: docs/strategy/conflict.md"
 
+# ── 23b. ...by main's rules, not the older ones it forked with ───────────────
+#    main denies docs/later/** after the branch forked. The branch never touched
+#    the manifest, so main's rule applies to it, as it would to the merge.
+{
+  g -C "$work" fetch -q origin &&
+    g -C "$work" checkout -q -f -b feat/stale-rules origin/main &&
+    first_line "$work/README.md" "# ours" &&
+    g -C "$work" commit -q -am "docs: our readme" &&
+    commit_file "$work" docs/later/plan.md "A plan." "docs: a plan" &&
+    awk '{ print } $0 == "deny:" {
+      print "  - path: \"docs/later/**\""
+      print "    class: PRIVATE"
+      print "    rationale: \"A rule main adds after a branch forked, for this suite.\""
+    }' "$seed/.github/publication-boundary.yaml" >"$seed/manifest.tmp" &&
+    mv "$seed/manifest.tmp" "$seed/.github/publication-boundary.yaml" &&
+    grep -qF '  - path: "docs/later/**"' "$seed/.github/publication-boundary.yaml" &&
+    g -C "$seed" commit -q -am "chore: deny docs/later (#$((++seq)))" &&
+    publish "docs: their readme (#$((++seq)))" README.md "# theirs
+"
+} || harness "could not build feat/stale-rules"
+push "$work" stale-rules origin feat/stale-rules
+stale_rules="a branch that conflicts with main is judged by main's rules, not its older ones"
+if logged "does not merge cleanly"; then
+  expect_refused "$stale_rules" refs/heads/feat/stale-rules "$(head_of "$work" feat/stale-rules)" \
+    "PRIVATE path is present: docs/later/plan.md"
+else
+  bad "$stale_rules"
+fi
+
+# ── 23c. ...and not for the files it never touched ───────────────────────────
+#    main retires a file, and the rule that classified it, after the branch
+#    forked. The branch still carries the file unchanged, which publishes
+#    nothing, so main's rules, which no longer name it, are not applied to it.
+{
+  awk '{ print } $0 == "allow:" {
+      print "  - path: \"LEGACY.md\""
+      print "    class: PUBLIC"
+      print "    rationale: \"A file main retires later, for this suite.\""
+    }' "$seed/.github/publication-boundary.yaml" >"$seed/manifest.tmp" &&
+    mv "$seed/manifest.tmp" "$seed/.github/publication-boundary.yaml" &&
+    printf 'Legacy.\n' >"$seed/LEGACY.md" &&
+    g -C "$seed" add -A &&
+    g -C "$seed" commit -q -m "docs: a legacy note (#$((++seq)))" &&
+    g -C "$seed" push -q "$public" main &&
+    g -C "$work" fetch -q origin &&
+    g -C "$work" checkout -q -f -b feat/retired origin/main &&
+    first_line "$work/README.md" "# ours, again" &&
+    g -C "$work" commit -q -am "docs: our readme again" &&
+    awk '$0 == "  - path: \"LEGACY.md\"" { skip = 3 } skip > 0 { skip--; next } { print }' \
+      "$seed/.github/publication-boundary.yaml" >"$seed/manifest.tmp" &&
+    mv "$seed/manifest.tmp" "$seed/.github/publication-boundary.yaml" &&
+    ! grep -qF LEGACY.md "$seed/.github/publication-boundary.yaml" &&
+    g -C "$seed" rm -q LEGACY.md &&
+    g -C "$seed" commit -q -am "docs: retire the legacy note (#$((++seq)))" &&
+    publish "docs: their readme again (#$((++seq)))" README.md "# theirs, again
+"
+} || harness "could not build feat/retired"
+push "$work" retired origin feat/retired
+if logged "does not merge cleanly"; then
+  expect_pass "a branch that conflicts with main is not judged on files it never touched" \
+    refs/heads/feat/retired "$(head_of "$work" feat/retired)"
+else
+  bad "a branch that conflicts with main is not judged on files it never touched"
+fi
+
+# ── 23d. ...nor charged for a line it kept from its merge base ───────────────
+#    The branch edits a file whose dead reference main drops after it forked.
+#    The line was public before the push, so it is not one the branch adds.
+{
+  publish "docs: a note with a dead reference (#$((++seq)))" docs/kept.md "First.
+See $(printf '#%s' 99999).
+" &&
+    g -C "$work" fetch -q origin &&
+    g -C "$work" checkout -q -f -b feat/kept origin/main &&
+    first_line "$work/docs/kept.md" "First, ours." &&
+    g -C "$work" commit -q -am "docs: our first line" &&
+    publish "docs: their first line, without the dead reference (#$((++seq)))" docs/kept.md \
+      "First, theirs.
+"
+} || harness "could not build feat/kept"
+push "$work" kept origin feat/kept
+if logged "does not merge cleanly"; then
+  expect_pass "a branch that conflicts with main is not charged for a line its merge base had" \
+    refs/heads/feat/kept "$(head_of "$work" feat/kept)"
+else
+  bad "a branch that conflicts with main is not charged for a line its merge base had"
+fi
+
 # ── 24. The combined scan can fail where no commit does: a count ratchet. A
 #    second public repository carries a forbidden-content rule with
 #    `file_baseline: 2`, and main holds one marked file. On each branch below
 #    two commits each add a marked file that a later commit removes, so every
 #    commit holds two and passes, and the combined scan holds three and fails.
 #    Each commit is then scanned alone. One merged into main, or scanned as
-#    itself with main's own checker and manifest, clears the failure; one
-#    judged by a manifest of its own cannot.
+#    itself by main's own checker and manifest, clears the failure; one judged
+#    by a checker or manifest of its own cannot.
 mark="$(printf 'RATCHET-%s' MARKER)"
 seed2="$tmp/seed2"
 public2="$tmp/remote3/nightgauge/nightgauge.git"
@@ -871,14 +1059,43 @@ fi
     g -C "$seed2" commit -q -am "chore: a note in the allowlist (#$((++seq)))" &&
     g -C "$seed2" push -q "$public2" HEAD:main
 } || harness "could not build ratchet-own-rules"
-own_rules="$(head_of "$work2" ratchet-own-rules)"
+#    main changed its manifest after that branch forked. Its commits never did,
+#    so each is scanned as itself by main's newer manifest, not the older one it
+#    carries, and they clear it.
 push2 ratchet-own-rules ratchet-own-rules
-if [ "$RC" -ne 0 ] && logged "cannot be pinned on any of them" && logged "git reset --soft" &&
-  [ -z "$(remote2_ref refs/heads/ratchet-own-rules)" ] &&
-  ! git --git-dir="$public2" cat-file -e "$own_rules" 2>/dev/null; then
-  ok "commits judged by a manifest of their own cannot clear it, and the push is refused"
+if [ "$RC" -eq 0 ] && logged "does not merge cleanly" &&
+  logged "every new commit passes on its own" &&
+  [ "$(remote2_ref refs/heads/ratchet-own-rules)" = "$(head_of "$work2" ratchet-own-rules)" ]; then
+  ok "commits forked before main changed its manifest are judged by main's, and clear it"
 else
-  bad "commits judged by a manifest of their own cannot clear it, and the push is refused (exit $RC)"
+  bad "commits forked before main changed its manifest are judged by main's (exit $RC)"
+fi
+
+#    A commit with a manifest of its own is judged by that manifest, so it cannot
+#    clear the failure. The first commit adds a note to the manifest and nothing
+#    else, which the allowlist-isolation check allows; the next takes it out.
+{
+  g -C "$work2" fetch -q origin &&
+    g -C "$work2" checkout -q -f -b ratchet-manifest origin/main &&
+    printf '# A note of its own.\n' >>"$work2/.github/publication-boundary.yaml" &&
+    g -C "$work2" commit -q -am "chore: a note in the allowlist" &&
+    g -C "$work2" checkout -q origin/main -- .github/publication-boundary.yaml &&
+    printf '%s two.\n' "$mark" >"$work2/docs/r2.md" &&
+    g -C "$work2" add -A && g -C "$work2" commit -q -m "docs: r2, and the note out again" &&
+    g -C "$work2" rm -q docs/r2.md &&
+    printf '%s three.\n' "$mark" >"$work2/docs/r3.md" &&
+    g -C "$work2" add -A && g -C "$work2" commit -q -m "docs: r3 for r2" &&
+    g -C "$work2" rm -q docs/r3.md &&
+    g -C "$work2" commit -q -m "docs: drop r3"
+} || harness "could not build ratchet-manifest"
+own_rules="$(head_of "$work2" ratchet-manifest)"
+push2 ratchet-manifest ratchet-manifest
+if [ "$RC" -ne 0 ] && logged "cannot be pinned on any of them" && logged "git reset --soft" &&
+  [ -z "$(remote2_ref refs/heads/ratchet-manifest)" ] &&
+  ! git --git-dir="$public2" cat-file -e "$own_rules" 2>/dev/null; then
+  ok "a commit judged by a manifest of its own cannot clear it, and the push is refused"
+else
+  bad "a commit judged by a manifest of its own cannot clear it, and the push is refused (exit $RC)"
 fi
 
 # ── 24b. A commit that carries the public main's own manifest is judged by
@@ -900,6 +1117,86 @@ fi
 push "$work" same-manifest origin feat/same-manifest
 expect_pass "a commit carrying main's own manifest is not held to allowlist isolation" \
   refs/heads/feat/same-manifest "$(head_of "$work" feat/same-manifest)"
+
+# ── 24c. ...nor is one whose allowlist change main already has ───────────────
+#    A stacked branch: one commit made an exception together with the file it
+#    lets in, the exception was then merged on its own, main's allowlist moved on
+#    again, and the branch merged main. That commit's allowlist differs from its
+#    merge base's and from main's, but main already has its change.
+{
+  g -C "$work" fetch -q origin &&
+    g -C "$work" checkout -q -f -b feat/stacked origin/main &&
+    loosen "$work" docs/strategy/stacked.md &&
+    mkdir -p "$work/docs/strategy" &&
+    printf 'A plan, excepted on its own.\n' >"$work/docs/strategy/stacked.md" &&
+    g -C "$work" add -A &&
+    g -C "$work" commit -q -m "docs: except a plan, and add it" &&
+    loosen "$seed" docs/strategy/stacked.md &&
+    g -C "$seed" commit -q -am "chore: except a plan (#$((++seq)))" &&
+    printf '# A later reviewed note.\n' >>"$seed/.github/publication-boundary.yaml" &&
+    g -C "$seed" commit -q -am "chore: a later note in the allowlist (#$((++seq)))" &&
+    g -C "$seed" push -q "$public" main &&
+    g -C "$work" fetch -q origin &&
+    g -C "$work" merge -q --no-edit origin/main
+} || harness "could not build feat/stacked"
+push "$work" stacked origin feat/stacked
+expect_pass "a commit whose allowlist change main already has is not held to isolation" \
+  refs/heads/feat/stacked "$(head_of "$work" feat/stacked)"
+
+# ── 24d. A pushed .gitattributes cannot hide content from the scan ──────────
+#    The checker reads the files the scan checks out, and a working-tree-encoding
+#    attribute makes git re-encode a file as it checks it out, so the checker
+#    would read UTF-16 instead of the text. The scan reads every file as stored.
+#    The content is put together here so that this file does not carry it.
+figure="$(printf 'Our CO%s are 14 percent.' GS)"
+# attr_commit <attributes line> <path> <content>: a commit that adds a
+# .gitattributes and a file, stored as given.
+attr_commit() {
+  local blob
+  blob="$(printf '%s\n' "$3" | git -C "$work" hash-object -w --stdin)" &&
+    printf '%s\n' "$1" >"$work/.gitattributes" &&
+    g -C "$work" add .gitattributes &&
+    g -C "$work" update-index --add --cacheinfo "100644,$blob,$2" &&
+    g -C "$work" commit -q -m "docs: $2, with an attribute"
+}
+# attr_undo <path>: a commit that takes the .gitattributes and <path> out again.
+attr_undo() {
+  g -C "$work" rm -q --cached .gitattributes "$1" &&
+    rm -f "$work/.gitattributes" &&
+    g -C "$work" commit -q -m "docs: take $1 out again"
+}
+{
+  g -C "$work" fetch -q origin &&
+    g -C "$work" checkout -q -f -b feat/encoded origin/main &&
+    attr_commit "docs/encoded.md working-tree-encoding=UTF-16LE" docs/encoded.md "$figure"
+} || harness "could not build feat/encoded"
+push "$work" encoded origin feat/encoded
+expect_refused "content a pushed working-tree-encoding would re-encode is still read" \
+  refs/heads/feat/encoded "$(head_of "$work" feat/encoded)" "FORBIDDEN CONTENT [cost-of-goods]"
+
+{
+  g -C "$work" checkout -q -f -b feat/encoded-undone origin/main &&
+    attr_commit "docs/encoded.md working-tree-encoding=UTF-16LE" docs/encoded.md "$figure" &&
+    attr_undo docs/encoded.md
+} || harness "could not build feat/encoded-undone"
+push "$work" encoded-undone origin feat/encoded-undone
+expect_refused "...also when a later commit takes it out, so the commit is scanned on its own" \
+  refs/heads/feat/encoded-undone "$(head_of "$work" feat/encoded-undone~1)" \
+  "FORBIDDEN CONTENT [cost-of-goods]"
+
+#    An attribute can also hide a file's added lines from git diff, which the
+#    issue-reference rule reads. A commit scanned with a .gitattributes other
+#    than main's is judged by rules of its own, so it cannot clear a combined
+#    failure.
+{
+  g -C "$work" checkout -q -f -b feat/no-diff origin/main &&
+    attr_commit "docs/no-diff.md -diff" docs/no-diff.md "See $dead." &&
+    attr_undo docs/no-diff.md
+} || harness "could not build feat/no-diff"
+push "$work" no-diff origin feat/no-diff
+expect_refused "a commit scanned with a .gitattributes of its own cannot clear a combined failure" \
+  refs/heads/feat/no-diff "$(head_of "$work" feat/no-diff~1)" "cannot be pinned on any of them"
+g -C "$work" checkout -q -f feat/ok || harness "could not leave feat/no-diff"
 
 # ── 25. A clone behind the public main fetches it, and changes no ref ────────
 publish "docs: newer (#$((++seq)))" docs/newer.md "Newer.

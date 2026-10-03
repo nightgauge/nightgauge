@@ -19,16 +19,17 @@
 #
 # WHERE IT RUNS. scripts/install-publication-push-hook.sh, which npm install
 # runs after husky, points core.hooksPath at a hook directory in the clone's
-# shared git directory. Its pre-push hook runs this script for a push from any
-# worktree of the clone, whatever that worktree has checked out: the copy in the
-# checked-out tree when there is one, else the copy installed beside the hook.
-# husky alone is not enough. Its hooks path is relative, so a worktree where
-# npm install never ran has no hooks, and its runner skips a hook the
-# checked-out tree does not have: an orphan branch, another repository's
-# history or a commit older than this guard. .husky/pre-push still runs this,
-# for a clone where only husky is installed. Nothing below may depend on the
-# checkout: everything comes from the commits being pushed and from the public
-# repository itself.
+# shared git directory and copies this script into it. Its pre-push hook runs
+# that copy for a push from any worktree of the clone, whatever the worktree has
+# checked out, so neither an older copy in a worktree nor one being edited
+# decides; the checked-out tree's copy runs only when none is installed. husky
+# alone is not enough. Its hooks path is relative, so a worktree where npm
+# install never ran has no hooks, and its runner skips a hook the checked-out
+# tree does not have: an orphan branch, another repository's history or a
+# commit older than this guard. .husky/pre-push still runs this, for a clone
+# where only husky is installed. Nothing below may depend on the checkout:
+# everything comes from the commits being pushed and from the public repository
+# itself.
 #
 # Only a push whose URL names the public repository is examined: the URL's path
 # ends in nightgauge/nightgauge, whatever the transport, host or host alias. It
@@ -64,7 +65,9 @@
 #     which is what CI requires of a pull request. CI's own script judges each
 #     such commit, so loosening the manifest in one commit and adding what it
 #     lets through in the next is refused as well as doing both in one. A
-#     commit that carries MAIN's own manifest is judged by MAIN's rules anyway.
+#     commit that carries MAIN's own manifest is judged by MAIN's rules anyway,
+#     and one whose manifest change MAIN already has (a stacked branch whose
+#     allowlist change was then merged on its own) changes nothing MAIN allows.
 #   * ONE SCAN covers the ref. The boundary checker runs on a synthetic commit:
 #     the merge of the ref's tip into MAIN, as git merge-tree computes it, which
 #     is what CI's pull-request run checks. It is diffed against MAIN, so
@@ -76,17 +79,26 @@
 #     line, so it sees every line the push publishes, under the path it is
 #     published at. Content that one commit adds and a later one rewrites or
 #     deletes is caught, for the cost of one scan rather than one per commit.
-#   * A ref that does not merge cleanly into MAIN is scanned as its own tip
-#     instead (with the same earlier versions merged in), with the tip's own
-#     checker and manifest, diffed against its merge base with MAIN.
+#   * A ref that does not merge cleanly into MAIN is scanned as that merge with
+#     every conflict settled the ref's way: MAIN's tree with the ref's version
+#     of every path it changed since its merge base with MAIN (and the same
+#     earlier versions merged in), diffed against MAIN's tree with the merge
+#     base's version of those paths. The lines read as added are the ref's own,
+#     and everything it did not change is MAIN's, the checker, the manifest and
+#     the isolation script included: a ref forked before MAIN tightened its
+#     rules is held to the tighter ones, and files it never touched, which MAIN
+#     may since have dropped along with the rules that classified them, are
+#     not judged again.
 #   * If that scan fails, the commits are scanned one at a time, the tip first,
 #     each the same way, to name the commit that breaks the boundary. The
 #     combined scan can fail where no commit does: a line one commit inherited
 #     from an older main that the current main has since dropped, or a count
 #     summed across commits. When every commit passes on its own, each scan
-#     running MAIN's own checker and manifest, the push proceeds. Otherwise a
-#     commit was judged by rules of its own, the failure cannot be pinned on
-#     any of them, and the push is refused as unverified.
+#     running MAIN's own checker, manifest and .gitattributes, the push
+#     proceeds. Otherwise a commit was judged by rules of its own, the failure
+#     cannot be pinned on any of them, and the push is refused as unverified.
+#     A checker that could not run (exit 2) blames no commit: the push is
+#     refused as unverified at once.
 #   * A version of a file the scan runs (the checker, the manifest, the
 #     isolation script) or reads to diff (a .gitattributes) cannot join the
 #     combined scan. Each commit that first holds one is scanned on its own as
@@ -98,13 +110,19 @@
 # Each scan checks the synthetic commit out in a scratch repository that
 # borrows this repository's objects through objects/info/alternates. The
 # checkout being pushed is never touched, and no worktree is registered in it.
-# Paths that differ only in case or Unicode normalization become one file on a
-# filesystem that folds them, which would hide a version from the checker, so a
-# checkout that collides is refused.
+# Every file is checked out as stored, whatever a .gitattributes in the pushed
+# tree asks for (working-tree-encoding, a filter, ident, end-of-line
+# conversion), since the checker reads the checked-out bytes. Paths that differ
+# only in case or Unicode normalization become one file on a filesystem that
+# folds them, which would hide a version from the checker. When only the
+# combined scan has such paths, because an earlier version was merged in at a
+# path a later commit renamed by case alone, the commits are scanned one at a
+# time instead; a commit whose own scan collides is refused.
 #
 # Fails closed when it cannot tell: the public repository cannot be listed or
 # has no main, MAIN cannot be fetched, a shallow boundary lies inside a history
-# it walks, no python3, or a checker that cannot run.
+# it walks, no python3 that can import yaml (PyYAML), or a checker that cannot
+# run.
 #
 # A scan stops when the git push that started it exits (a caller's timeout, or
 # a killed terminal), rather than running on as an orphan.
@@ -322,20 +340,50 @@ union_into() {
   LC_ALL=C sort -u "$@" >"$out.tmp" && mv "$out.tmp" "$out"
 }
 
+# A .gitattributes path as ls-tree prints it, which quotes a path with unusual
+# bytes: the quoted form ends in a double quote.
+ATTRIBUTES_RE='(^|/)\.gitattributes"?$'
+
 # runs_the_scan: from "<object> TAB <path>" lines, keep those whose path the
 # scan itself runs or reads to diff: the checker, the manifest, the isolation
 # script and any .gitattributes. With -v, keep the others.
 runs_the_scan() {
-  awk -F '\t' -v m="$MANIFEST" -v k="$CHECKER" -v s="$ISOLATION" -v keep="${1:-}" '{
-    r = ($2 == m || $2 == k || $2 == s || $2 == ".gitattributes" || $2 ~ /\/\.gitattributes$/)
+  awk -F '\t' -v m="$MANIFEST" -v k="$CHECKER" -v s="$ISOLATION" -v a="$ATTRIBUTES_RE" \
+    -v keep="${1:-}" '{
+    r = ($2 == m || $2 == k || $2 == s || $2 ~ a)
     if ((keep == "-v") != r) print
   }'
+}
+
+# attributes <commit>: every .gitattributes in <commit>'s tree, as
+# "<object> TAB <path>" lines.
+attributes() {
+  git ls-tree -r --full-tree "$1" |
+    awk -F '\t' -v a="$ATTRIBUTES_RE" '$2 ~ a { sub(/^[^ ]* [^ ]* /, ""); print }'
+}
+
+# main_has_change <base> <blob> <main>: does MAIN's manifest, blob <main>,
+# already have the change from <base> to <blob>? It does when merging that
+# change into it leaves it as it is: a commit of a stacked branch whose
+# allowlist change was then merged on its own. An empty name reads as no file.
+main_has_change() {
+  local f="$WORK/manifest" i=0 b
+  for b in "$1" "$2" "$3"; do
+    i=$((i + 1))
+    if [ -n "$b" ]; then
+      git cat-file blob "$b" >"$f.$i" || return 1
+    else
+      : >"$f.$i"
+    fi
+  done
+  git merge-file -p "$f.3" "$f.1" "$f.2" >"$f.merged" 2>/dev/null && cmp -s "$f.merged" "$f.3"
 }
 
 # plan <i> <tip> <old>: everything about ref i that needs no scan. Its new
 # commits are in $WORK/new.<i>. Writes:
 #   isolate.<i>   new commits whose manifest differs from both their merge base
-#                 with MAIN and MAIN's own: each must change nothing else
+#                 with MAIN and MAIN's own, by a change MAIN does not already
+#                 have: each must change nothing else
 #   novel.<i>     the file versions earlier new commits hold that nothing
 #                 scanned or already public holds, for the combined scan, as
 #                 "<merge base> <object> TAB <path>": the merge base of the
@@ -365,7 +413,8 @@ plan() {
     mb="$(git merge-base "$MAIN_SHA" "$c")" || return 2
     m_c="$(git rev-parse --verify --quiet "$c:$MANIFEST")"
     m_mb="$(git rev-parse --verify --quiet "$mb:$MANIFEST")"
-    if [ "$m_c" != "$m_mb" ] && [ "$m_c" != "$m_main" ]; then
+    if [ "$m_c" != "$m_mb" ] && [ "$m_c" != "$m_main" ] &&
+      ! main_has_change "$m_mb" "$m_c" "$m_main"; then
       printf '%s\n' "$c" >>"$WORK/isolate.$i"
     fi
     [ "$c" = "$tip" ] && continue
@@ -412,6 +461,12 @@ in_scratch() {
   )
 }
 
+# make_scratch: the scratch repository. Its info/attributes, which outranks
+# every .gitattributes in a tree, has git check each file out as stored. The
+# checker reads the checked-out files, and an attribute in the pushed tree could
+# otherwise change what it reads: working-tree-encoding re-encodes a file (to
+# UTF-16, say, which no rule's text matches), and a filter, ident or end-of-line
+# conversion rewrites it.
 make_scratch() {
   local objects format
   objects="$(git rev-parse --path-format=absolute --git-path objects)" &&
@@ -421,6 +476,8 @@ make_scratch() {
     in_scratch git init -q --template= --initial-branch=main \
       --object-format="$format" >/dev/null 2>&1 &&
     printf '%s\n' "$objects" >"$TREE/.git/objects/info/alternates" &&
+    mkdir -p "$TREE/.git/info" &&
+    printf '%s\n' '* !working-tree-encoding -filter -ident -text' >"$TREE/.git/info/attributes" &&
     # The checker reads origin/main for its reference ceiling.
     in_scratch git update-ref refs/remotes/origin/main "$MAIN_SHA" &&
     write_synthesizer
@@ -429,13 +486,21 @@ make_scratch() {
 # write_synthesizer: the program that builds a synthetic commit. It is Python,
 # like the checker, because it reads and writes file contents byte for byte.
 #
-#   synth.py merge|own <main> <head> <index-file> [<versions-file>]
+#   synth.py merge|own <main> <head> <index-file> <versions-file> [<base>]
 #
 # Builds, in a private index of the scratch repository, the tree to scan:
 #
 #   merge  <head> merged into <main> by `git merge-tree --write-tree`, which is
 #          what CI's pull-request run checks. Exit 4 when they conflict.
-#   own    <head>'s own tree.
+#   own    <main>'s tree with <head>'s version of every path <head> changed
+#          since <base>, its merge base with <main>, and without the paths it
+#          deleted: a merge with every conflict settled <head>'s way. Every
+#          other path is <main>'s, the files the scan runs included, so a ref
+#          forked before <main> tightened its rules is judged by the tightened
+#          ones, by its own only where it changes them, and files it never
+#          touched are not judged again.
+#
+# <versions-file> may be empty.
 #
 # Then, for each path in <versions-file> ("<base> <blob> TAB <path>" lines, the
 # path as ls-tree quotes it), it appends to that path every line of every
@@ -445,8 +510,13 @@ make_scratch() {
 # otherwise read as new. The tree's own version of the path, when it has one,
 # stays first and verbatim, and a path is never dropped, however few lines it
 # keeps. Prints a commit with that tree whose parents are <main> and <head>
-# (merge) or <head> (own), so the checker reads the right first-parent history
-# for its reference ceiling.
+# (merge), so the checker reads the right first-parent history for its
+# reference ceiling. In own mode its parent is the commit to diff it against,
+# which is printed next: <main>'s tree with <base>'s version of the paths <head>
+# changed, a child of <main>. The lines the checker reads as added are then
+# <head>'s and the versions', its diff is as small as a merge's, and its
+# ceiling is <main>'s. (The checker diffs against the merge base of the base it
+# is given and HEAD, so a base that is not HEAD's ancestor would not be read.)
 #
 # Exit 3 when the versions cannot be merged into one file: a path holding both
 # UTF-8 text and other bytes, a link or a submodule, a file where the tree or
@@ -525,9 +595,46 @@ def parents_of(path):
     return [b"/".join(parts[:k]) for k in range(1, len(parts))]
 
 
+def own_trees(main_c, head, base, env):
+    """Own mode. Leaves in the index <main>'s tree with <head>'s version of every
+    path <head> changed since <base>, without the paths it deleted, and returns
+    the tree to diff that against: <main>'s with <base>'s version of the same
+    paths. The difference is exactly <head>'s own change, while every path it
+    did not change, the files the scan runs included, is <main>'s."""
+    out = git(["diff-tree", "-r", "-z", "--no-renames", base, head], env=env).stdout
+    fields = out.split(b"\0")
+    sides = ([], [])  # (<base>'s, <head>'s): (mode, object, path); mode 0 removes
+    for meta, path in zip(fields[0::2], fields[1::2]):
+        parts = meta[1:].split(b" ")
+        if meta[:1] != b":" or len(parts) != 5:
+            sys.stderr.write("synth.py: unexpected diff-tree output\n")
+            sys.exit(2)
+        old_mode, new_mode, old, new = parts[:4]
+        for side, mode_, oid in ((sides[0], old_mode, old), (sides[1], new_mode, new)):
+            side.append((b"0", oid, path) if oid.strip(b"0") == b"" else (mode_, oid, path))
+
+    def index_main_with(side):
+        git(["read-tree", main_c], env=env)
+        # Removals first, so that a path that became a file where a directory
+        # was, or the other way round, is free when it is added.
+        info = bytearray()
+        for gone in (True, False):
+            for mode_, oid, path in side:
+                if (mode_ == b"0") == gone:
+                    info += mode_ + b" " + oid + b"\t" + path + b"\0"
+        if info:
+            git(["update-index", "-z", "--index-info"], data=bytes(info), env=env)
+
+    index_main_with(sides[0])
+    base_tree = git(["write-tree"], env=env).stdout.strip().decode()
+    index_main_with(sides[1])
+    return base_tree
+
+
 def main():
     mode, main_c, head, index = sys.argv[1:5]
     versions_file = sys.argv[5] if len(sys.argv) > 5 else ""
+    base = sys.argv[6] if len(sys.argv) > 6 else ""
     env = dict(os.environ, GIT_INDEX_FILE=index)
 
     if mode == "merge":
@@ -537,13 +644,17 @@ def main():
             sys.exit(4)
         tree = r.stdout.split(b"\n", 1)[0].strip().decode()
         parents = [main_c, head]
-    elif mode == "own":
-        tree = head + "^{tree}"
-        parents = [head]
+    elif mode == "own" and base:
+        tree = None
+        parents = []
     else:
-        sys.stderr.write("synth.py: unknown mode %r\n" % mode)
+        sys.stderr.write("synth.py: unknown mode %r, or own without a base\n" % mode)
         sys.exit(2)
-    git(["read-tree", tree], env=env)
+    if tree:
+        git(["read-tree", tree], env=env)
+        base_tree = None
+    else:
+        base_tree = own_trees(main_c, head, base, env)
 
     groups, order, base_of = {}, [], {}
     if versions_file:
@@ -635,11 +746,19 @@ def main():
     who = dict(env, GIT_AUTHOR_NAME="publication guard", GIT_AUTHOR_EMAIL="guard@invalid",
                GIT_AUTHOR_DATE="2000-01-01T00:00:00Z", GIT_COMMITTER_NAME="publication guard",
                GIT_COMMITTER_EMAIL="guard@invalid", GIT_COMMITTER_DATE="2000-01-01T00:00:00Z")
+    if base_tree:
+        # The checker diffs against the merge base of the base it is given and
+        # HEAD, so the base must be the scan's parent to be the one it reads.
+        base_commit = git(["commit-tree", base_tree, "-p", main_c, "-m",
+                           "publication guard: synthetic base"], env=who).stdout
+        parents = [base_commit.decode().strip()]
     args = ["commit-tree", tree]
     for p in parents:
         args += ["-p", p]
     commit = git(args + ["-m", "publication guard: synthetic scan"], env=who).stdout
     sys.stdout.write(commit.decode().strip() + "\n")
+    if base_tree:
+        sys.stdout.write(parents[0] + "\n")
 
 
 main()
@@ -649,10 +768,10 @@ PY
 # synthesize <commit> [<versions-file>]: the synthetic commit that scans
 # <commit>, with the versions merged in. Sets SYNTH to it, SYNTH_MODE to merge
 # or own, and SYNTH_BASE to the commit the checker diffs it against: MAIN when
-# <commit> merges cleanly into MAIN, else <commit>'s merge base with MAIN.
+# <commit> merges cleanly into MAIN, else own mode's synthetic base.
 # Returns 0, 3 when the versions cannot be merged into one scan, or 2.
 synthesize() {
-  local c="$1" versions="${2:-}" rc
+  local c="$1" versions="${2:-}" rc mb out
   SYNTH_MODE="merge"
   SYNTH_BASE="$MAIN_SHA"
   rm -f "$WORK/synth.index"
@@ -661,25 +780,41 @@ synthesize() {
   rc=$?
   [ "$rc" -eq 4 ] || return "$rc"
   SYNTH_MODE="own"
-  SYNTH_BASE="$(git merge-base "$MAIN_SHA" "$c")" || return 2
+  mb="$(git merge-base "$MAIN_SHA" "$c")" || return 2
   rm -f "$WORK/synth.index"
-  SYNTH="$(in_scratch python3 "$WORK/synth.py" own "$MAIN_SHA" "$c" "$WORK/synth.index" \
-    "$versions" 2>"$WORK/synth.log")"
+  out="$(in_scratch python3 "$WORK/synth.py" own "$MAIN_SHA" "$c" "$WORK/synth.index" \
+    "$versions" "$mb" 2>"$WORK/synth.log")"
+  rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  SYNTH="$(printf '%s\n' "$out" | sed -n 1p)"
+  SYNTH_BASE="$(printf '%s\n' "$out" | sed -n 2p)"
+  is_oid "$SYNTH" && is_oid "$SYNTH_BASE" || return 2
 }
 
 # checkout <commit>: the scratch working tree becomes <commit>'s tree.
 # Returns 2 when it cannot, 4 when two of its paths are one file here.
+#
+# A checkout writes only what changed since the last one. When the last one had
+# two paths that are one file here, removing one of them removes the file the
+# other path still names, and git does not write that again. So a checkout that
+# does not come out clean is repeated into an empty tree before two of its own
+# paths are blamed.
 checkout() {
-  if ! in_scratch git read-tree --reset -u "$1" >"$WORK/checkout.log" 2>&1 ||
-    ! in_scratch git update-ref --no-deref HEAD "$1" >>"$WORK/checkout.log" 2>&1; then
-    cat "$WORK/checkout.log" >&2
-    return 2
-  fi
-  in_scratch git update-index -q --refresh >/dev/null 2>&1
-  if ! in_scratch git diff-files --quiet; then
-    in_scratch git diff-files --name-only | sed 's/^/    /' >&2
-    return 4
-  fi
+  local try
+  for try in again last; do
+    if ! in_scratch git read-tree --reset -u "$1" >"$WORK/checkout.log" 2>&1 ||
+      ! in_scratch git update-ref --no-deref HEAD "$1" >>"$WORK/checkout.log" 2>&1; then
+      cat "$WORK/checkout.log" >&2
+      return 2
+    fi
+    in_scratch git update-index -q --refresh >/dev/null 2>&1
+    in_scratch git diff-files --quiet && return 0
+    [ "$try" = last ] && break
+    rm -f "$TREE/.git/index" &&
+      find "$TREE" -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} + || return 2
+  done
+  in_scratch git diff-files --name-only | sed 's/^/    /' >&2
+  return 4
 }
 
 # run_checker <base>: the checked-out tree's own boundary checker, diffed
@@ -742,8 +877,9 @@ fix_hint() {
 }
 
 # by_main_rules <synthetic commit>: does the scan of it run MAIN's own checker
-# and manifest? A commit that changes either, merged into MAIN or not, is
-# judged by rules of its own.
+# and manifest, with MAIN's own .gitattributes? A commit that changes any of
+# them is judged by rules of its own: an attribute decides what git diff shows
+# the checker (-diff hides a file's added lines from the issue-reference rule).
 by_main_rules() {
   local f a b
   for f in "$CHECKER" "$MANIFEST"; do
@@ -751,6 +887,8 @@ by_main_rules() {
     b="$(git rev-parse --verify --quiet "$MAIN_SHA:$f")" || return 1
     [ "$a" = "$b" ] || return 1
   done
+  # The synthetic commit is in the scratch repository, which can read MAIN too.
+  a="$(in_scratch attributes "$1")" && b="$(in_scratch attributes "$MAIN_SHA")" && [ "$a" = "$b" ]
 }
 
 # isolation <i>: CI's "allowlist changes alone" check (#1970) on each new commit
@@ -777,20 +915,26 @@ isolation() {
   done <"$WORK/isolate.$i"
 }
 
+# collision <i> <what>: refuse ref i, because <what> has paths that are one
+# file on this filesystem.
+collision() {
+  say "cannot verify ${R_REF[$1]}: in $2, the paths above differ only in case or"
+  say "  Unicode normalization, so they are one file on this filesystem and the"
+  say "  checker would read only one of them. Push from a filesystem that tells"
+  say "  them apart, or give them names that differ by more."
+}
+
 # scan <i> <what>: check SYNTH out and run the checker on it against
 # SYNTH_BASE; on the first checkout for ref i, run the isolation check too.
-# Returns 0, 1 or 2 for the ref, or 3 when the checker failed (RC says how,
-# $WORK/checker.log says why).
+# Returns 0, 1 or 2 for the ref, 3 when the checker failed (RC says how,
+# $WORK/checker.log says why), or 4 when two of its paths are one file on this
+# filesystem, which the caller judges.
 scan() {
   local i="$1" what="$2" rc
   checkout "$SYNTH"
   rc=$?
   if [ "$rc" -eq 4 ]; then
-    say "cannot verify ${R_REF[$i]}: in $what, the paths above differ only in case or"
-    say "  Unicode normalization, so they are one file on this filesystem and the"
-    say "  checker would read only one of them. Push from a filesystem that tells"
-    say "  them apart, or give them names that differ by more."
-    return 2
+    return 4
   elif [ "$rc" -ne 0 ]; then
     say "cannot verify ${R_REF[$i]}: $what could not be checked out for the scan."
     return 2
@@ -828,7 +972,9 @@ check_ref() {
       say "scanning $ref: $n new commit(s)..."
     fi
     if [ "$SYNTH_MODE" = "own" ]; then
-      say "  it does not merge cleanly into the public main, so its own tip is scanned."
+      say "  it does not merge cleanly into the public main, so the files it changes are"
+      say "  scanned in the public main's tree, by main's checker and manifest unless it"
+      say "  changes them."
     fi
     scan "$i" "the scan of $ref"
     rc=$?
@@ -839,12 +985,28 @@ check_ref() {
         say "  and, on its own, each commit with its own version of the checker, the"
         say "  manifest, the isolation script or a .gitattributes..."
       fi
+    elif [ "$rc" -eq 3 ] && [ "$RC" -ne 1 ]; then
+      # No commit can be blamed for a checker that cannot run.
+      cat "$WORK/checker.log" >&2
+      say "cannot verify $ref: the boundary checker could not run on the scan of it"
+      say "  (exit $RC, report above). Nothing was sent."
+      return 2
     elif [ "$rc" -eq 3 ]; then
       combined=1
       list="$WORK/each.$i"
       cp "$WORK/checker.log" "$WORK/combined.log"
       say "  that scan failed; scanning the new commits one at a time to find the one"
       say "  that breaks the boundary..."
+    elif [ "$rc" -eq 4 ] && [ -s "$WORK/novel.$i" ]; then
+      # An earlier version, merged in at its old path, can meet a later path
+      # that differs only in case, as after a rename by case alone, where no
+      # commit holds both.
+      list="$WORK/each.$i"
+      say "  in that scan the paths above are one file on this filesystem; scanning"
+      say "  the new commits one at a time instead..."
+    elif [ "$rc" -eq 4 ]; then
+      collision "$i" "the scan of $ref"
+      return 2
     else
       return "$rc"
     fi
@@ -877,6 +1039,10 @@ check_ref() {
     scan "$i" "commit ${c:0:12}"
     rc=$?
     [ "$rc" -eq 0 ] && continue
+    if [ "$rc" -eq 4 ]; then
+      collision "$i" "commit ${c:0:12}"
+      return 2
+    fi
     [ "$rc" -eq 3 ] || return "$rc"
     cat "$WORK/checker.log" >&2
     if [ "$RC" -eq 1 ]; then
@@ -900,9 +1066,9 @@ check_ref() {
   fi
   cat "$WORK/combined.log" >&2
   say "cannot verify $ref: the combined scan failed (report above). Every commit"
-  say "  passes on its own, but some were judged by a checker or manifest other than"
-  say "  the public main's, so the failure cannot be pinned on any of them. Nothing"
-  say "  was sent."
+  say "  passes on its own, but some were judged by rules other than the public"
+  say "  main's (a checker, manifest or .gitattributes of their own), so the failure"
+  say "  cannot be pinned on any of them. Nothing was sent."
   squash_hint "$i" "and commit again: one commit publishes only what the tip holds."
   return 2
 }
@@ -1003,6 +1169,11 @@ main() {
     if ! command -v python3 >/dev/null 2>&1; then
       say "cannot verify this push: python3 is not on PATH, and the boundary checker"
       say "  needs it (with PyYAML: pip install -r .github/requirements-ci.txt)."
+      exit 2
+    fi
+    if ! python3 -c 'import yaml' >/dev/null 2>&1; then
+      say "cannot verify this push: $(command -v python3) cannot import yaml, and the"
+      say "  boundary checker needs PyYAML: pip install -r .github/requirements-ci.txt."
       exit 2
     fi
     if ! make_scratch; then

@@ -24,17 +24,21 @@
 #
 # Every hook but pre-push behaves exactly as husky's relative path did: it runs
 # the worktree's .husky/_/<hook> when npm install set husky up there, and does
-# nothing otherwise. pre-push first runs the guard: the checked-out tree's
-# scripts/publication-push-guard.sh when there is one, else the copy installed
-# here. It then runs the worktree's husky pre-push, if any, which skips the
-# guard it has just run.
+# nothing otherwise. pre-push first runs the guard: the copy installed here, so
+# that a worktree checked out at an older commit, or one where the guard is
+# being edited, does not decide; the checked-out tree's
+# scripts/publication-push-guard.sh only when no copy is installed. It then runs
+# the worktree's husky pre-push, if any, which skips the guard it has just run.
 #
-# Re-running is safe. An npm install in a checkout that predates this script
-# puts husky's relative path back, and the next npm install in a current one
-# restores this. The path is absolute, so a clone moved to another directory
+# Re-running is safe, and each run installs the guard of the checkout it runs
+# in, for the whole clone. An npm install in a checkout that predates this
+# script puts husky's relative path back, and the next npm install in a current
+# one restores this. The path is absolute, so a clone moved to another directory
 # runs no hooks at all until this runs again. It is not git's own hooks
 # directory, because `nightgauge pre-push install` writes .git/hooks/pre-push.
-# HUSKY=0 skips this, as it skips husky.
+# HUSKY=0 skips this, as it skips husky, and so does a package that is not the
+# top of its own checkout: inside another repository, the hooks path would be
+# that repository's.
 #
 # Usage: bash scripts/install-publication-push-hook.sh
 
@@ -55,8 +59,12 @@ if [ ! -f "$guard" ]; then
 fi
 
 cd "$here/.."
-if [ "$(git rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]; then
-  say "not a git checkout, so nothing to install."
+# husky declines where there is no .git, and so does this: a package copied or
+# unpacked into another repository is not a checkout of its own, and setting
+# that repository's hooks path would turn its own hooks off.
+top="$(git rev-parse --show-toplevel 2>/dev/null)" || top=""
+if [ -z "$top" ] || [ "$(cd "$top" && pwd -P)" != "$(pwd -P)" ]; then
+  say "$(pwd) is not the top of a git checkout, so nothing to install."
   exit 0
 fi
 
@@ -99,15 +107,18 @@ for h in $hooks; do
 # npm install, rather than editing this.
 #
 # The publication guard for a push from any worktree of this clone, whatever
-# is checked out: the tree's own copy when it has one, else the copy installed
-# beside this file. Then this worktree's husky pre-push hook, when npm install
-# set husky up here. NG_PUBLICATION_GUARD_RAN, this process's id, tells
-# .husky/pre-push that the guard has already run.
-guard=scripts/publication-push-guard.sh
-[ -f "$guard" ] || guard="$(dirname "$0")/publication-push-guard.sh"
+# is checked out: the copy installed beside this file, which every npm install
+# refreshes, so an older or edited copy in the worktree does not decide; the
+# worktree's own copy only when none is installed. Then this worktree's husky
+# pre-push hook, when npm install set husky up here.
+# NG_PUBLICATION_GUARD_RAN, this process's id, tells .husky/pre-push that the
+# guard has already run.
+guard="$(dirname "$0")/publication-push-guard.sh"
+[ -f "$guard" ] || guard=scripts/publication-push-guard.sh
 if [ ! -f "$guard" ]; then
-  echo "publication guard: $guard is missing, so this push cannot be checked." >&2
-  echo "  Run npm install, or bash scripts/install-publication-push-hook.sh." >&2
+  echo "publication guard: no copy is installed beside $0 and the checked-out tree" >&2
+  echo "  has none, so this push cannot be checked. Run npm install, or" >&2
+  echo "  bash scripts/install-publication-push-hook.sh, in a current checkout." >&2
   exit 2
 fi
 refs=$(cat)

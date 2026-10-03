@@ -161,9 +161,12 @@ nothing done afterwards takes the content back. So a `pre-push` hook runs
 hook directory in the clone's shared git directory (`npm run setup-hooks` does
 the same). Every worktree of the clone then runs the guard on every push,
 including a worktree where `npm install` never ran, such as one the pipeline
-creates. It runs whatever the worktree has checked out: an orphan branch,
-another repository's history or an old commit has no hook of its own, so the
-guard comes from the copy installed beside the hook. husky's own hooks did
+creates. It runs whatever the worktree has checked out, and the guard it runs
+is the copy installed beside the hook, not the worktree's own: an orphan
+branch, another repository's history or an old commit has no guard or an older
+one, and a guard being edited would judge its own pushes. Each `npm install`
+installs the guard of the checkout it runs in, for the whole clone. The
+worktree's own copy runs only when no copy is installed. husky's own hooks did
 neither, because their path is relative to each worktree and husky skips a
 hook the checked-out tree lacks. `.husky/pre-push` still runs the guard in a
 clone where only husky is installed.
@@ -186,7 +189,13 @@ they go stale when a branch is deleted upstream, and a push to a separate
   (#1970). A new commit whose `.github/publication-boundary.yaml` differs from
   both its merge base with `main` and `main`'s own must change nothing else, by
   CI's own `scripts/check-boundary-allowlist-isolation.sh`. Loosening the
-  allowlist and adding what it lets in is refused, in one commit or in two.
+  allowlist and adding what it lets in is refused, in one commit or in two. A
+  commit whose allowlist change `main` already has is not held to this, as on
+  a stacked branch whose allowlist change was then merged on its own. This is
+  stricter than CI, which judges a pull request's changes as a whole. A branch
+  that changed the allowlist in an earlier commit together with other work is
+  refused even after it takes `main`'s allowlist, unless `main` has that
+  earlier change exactly. Squash its unpushed commits, as the refusal says.
 - **The new commits are scanned** with `scripts/publication-boundary-check.py`,
   the check CI runs. A commit is new when nothing the remote has can reach it.
   One scan covers a ref: the ref merged into the remote's `main`, which is what
@@ -195,14 +204,22 @@ they go stale when a branch is deleted upstream, and a push to a separate
   version an earlier commit holds that the tip does not is merged into the same
   path for that scan, less the lines that commit's merge base already had there.
   Content that one commit adds and a later one rewrites or deletes is refused.
-  A ref that does not merge cleanly is scanned as its own tip, by its own checker
-  and manifest. A commit with its own version of the checker, the manifest, the
-  isolation script or a `.gitattributes` is also scanned on its own.
+  A ref that does not merge cleanly is scanned as if each conflict were settled
+  its way: `main`'s tree with the ref's version of every file it changed. So
+  `main`'s checker and manifest still apply unless the ref changes them, a
+  branch forked before `main` tightened its rules is held to the tighter ones,
+  and files the ref never touched are not judged again. A commit with its own
+  version of the checker, the manifest, the isolation script or a
+  `.gitattributes` is also scanned on its own. Every file is scanned as stored:
+  a `.gitattributes` in the pushed tree cannot re-encode or filter what the
+  checker reads.
 - When that scan fails, the commits are scanned one at a time to name the one
   at fault. The combined scan can fail where no commit does, for example on a
   count that the commits add up to. If every commit then passes by `main`'s
-  rules, the push proceeds. If any commit was judged by rules of its own, the
-  push is refused as unverified.
+  rules, the push proceeds. If any commit was judged by rules of its own (its
+  own checker, manifest or `.gitattributes`), the push is refused as
+  unverified. A checker that cannot run blames no commit, so the push is
+  refused at once.
 - A push with nothing new, such as a release tag on `main`, scans nothing.
 - **Anything the hook cannot verify is refused:**
   - a remote it cannot list, or one without a `main`;
@@ -210,8 +227,9 @@ they go stale when a branch is deleted upstream, and a push to a separate
   - no `python3` with PyYAML;
   - a ref that is neither a branch nor a tag;
   - a checker that cannot run;
-  - two paths that differ only in case or Unicode normalization, on a
-    filesystem that folds them into one file.
+  - two paths in one commit that differ only in case or Unicode
+    normalization, on a filesystem that folds them into one file. A rename by
+    case alone is not refused: the commits are then scanned one at a time.
 
 A refusal names the commit at fault. A later commit that removes the content
 does not help, because the commit that adds it is published as well, so the
@@ -222,9 +240,12 @@ Each scan checks a synthetic commit out in a scratch repository that borrows
 this repository's objects, so the checkout doing the push is never touched. A
 scan of this repository costs about 13 CPU-seconds. Replaying real pull-request
 branches of 6 to 8 commits on a 12-core machine at a load average of 15 to 35
-took one scan and 5 to 7 seconds each. A 17-commit branch that carried two
-versions of the manifest took three scans and 15 seconds. A push with nothing
-new costs one `git ls-remote`, and a push to another remote costs nothing.
+took one scan and 5 to 7 seconds each, two of them branches that do not merge
+cleanly. A branch 150 commits behind `main` that conflicts with it took one
+scan and 6 seconds. A 17-commit branch that carried two versions of the
+manifest took three scans and 15 seconds with the allowlist-isolation check set
+aside; the check refuses that branch, as above. A push with nothing new costs
+one `git ls-remote`, and a push to another remote costs nothing.
 `scripts/test-publication-push-guard.sh` proves each case by installing the
 hooks as `npm install` does, pushing for real into throwaway repositories, and
 then reading the remote.
@@ -238,9 +259,10 @@ A client-side hook narrows the window, but it does not close it:
 - A clone where `npm install` never ran has no hook at all. An `npm install` in
   a checkout older than the installer puts husky's relative hooks path back,
   which leaves only husky's coverage, until the next `npm install` in a current
-  checkout or `npm run setup-hooks` restores it. The hook directory is named by
-  absolute path, so a clone moved elsewhere runs no hooks until one of those
-  runs again.
+  checkout or `npm run setup-hooks` restores it. Likewise, an `npm install` in
+  a checkout with an older guard installs that guard for the whole clone. The
+  hook directory is named by absolute path, so a clone moved elsewhere runs no
+  hooks until one of those runs again.
 - The hook runs only in a clone of this repository. A checkout of a different
   repository that pushes to this repository's URL runs that repository's hooks,
   or none. That is the most likely way for an unrelated history to be pushed.
