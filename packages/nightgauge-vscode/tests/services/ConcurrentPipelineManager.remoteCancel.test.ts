@@ -94,7 +94,12 @@ vi.mock("../../src/services/IpcClient", () => ({
   },
 }));
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipelineManager";
+import { RemoteRunLedger } from "../../src/services/RemoteRunLedger";
+import { RunVerbCommandHandler } from "../../src/services/RunVerbCommandHandler";
 import { fakeCloneLayout } from "../helpers/cloneLayout";
 
 const SUCCESS = {
@@ -646,5 +651,217 @@ describe("ConcurrentPipelineManager — a trigger for an issue already queued he
     expect(built.get(708)?.stateService.beginRun.mock.calls[0][3]).toBe("run-708");
     expect(manager.findSlotByRemoteRunId("run-708")).toBe(708);
     await finish(708);
+  });
+});
+
+/** A promise and the function that settles it. */
+function deferred<T = void>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => (resolve = r));
+  return { promise, resolve };
+}
+
+/**
+ * Make the next dequeue wait at a gate, as Go's does while it reads the
+ * issues' blockers from GitHub: the fill holds the queue turn meanwhile.
+ */
+function gateNextDequeue(queueService: ReturnType<typeof buildManager>["queueService"]) {
+  const gate = deferred();
+  const dequeue = queueService.dequeueIndependent.getMockImplementation()!;
+  queueService.dequeueIndependent.mockImplementationOnce(async (n: number) => {
+    await gate.promise;
+    return dequeue(n);
+  });
+  return gate;
+}
+
+describe("ConcurrentPipelineManager — a cancel while the run is placed or goes back (#2344, #2357)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fakeCloneLayout("/test-repo");
+    gate.worktreeIssue = null;
+    gate.slugIssue = null;
+    gate.reached = false;
+    gate.release = () => {};
+  });
+
+  // A fill's dequeue holds the queue turn the trigger's placement waits for.
+  // The ack is out, so the platform can already send verbs for the run.
+  it("holds a trigger's run from the ack on, while a fill's dequeue holds the queue turn", async () => {
+    const { manager, queueService, built, place } = buildManager([]);
+    const dequeue = gateNextDequeue(queueService);
+    const fill = manager.fillSlots();
+    await vi.waitFor(() => expect(queueService.dequeueIndependent).toHaveBeenCalled());
+
+    const { placed, enqueue } = place(900, "run-900");
+    expect(await manager.holdsRemoteRun("run-900")).toBe(true);
+    expect(manager.heldRemoteRunIds()).toEqual(["run-900"]);
+    expect(await manager.pauseByRemoteRunId("run-900")).toBe("not-started");
+
+    expect(await manager.cancelByRemoteRunId("run-900")).toBe("applied");
+    expect(await manager.holdsRemoteRun("run-900")).toBe(false);
+
+    dequeue.resolve();
+    expect(await placed).toBe("cancelled");
+    await fill;
+    // Nothing was queued for it, and no slot opens for it.
+    expect(enqueue).not.toHaveBeenCalled();
+    await manager.fillSlots();
+    expect(built.has(900)).toBe(false);
+    expect(manager.heldRemoteRunIds()).toEqual([]);
+  });
+
+  // The same gap seen from the platform: one window, the real run-verb
+  // handler and ledger. Before the fix the cancel was refused no-active-run
+  // after the grace, and the run was then queued and started.
+  it("gives the platform an applied cancel for a run acked while a fill holds the queue turn", async () => {
+    const { manager, queueService, built, place } = buildManager([]);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "remote-cancel-turn-"));
+    try {
+      const dequeue = gateNextDequeue(queueService);
+      const fill = manager.fillSlots();
+      await vi.waitFor(() => expect(queueService.dequeueIndependent).toHaveBeenCalled());
+      const { placed } = place(901, "run-901");
+
+      const platform = { agentAcknowledgeCommand: vi.fn().mockResolvedValue({ runId: "" }) };
+      const handler = new RunVerbCommandHandler(
+        manager,
+        platform as any,
+        { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as any,
+        undefined,
+        undefined,
+        { ledger: new RemoteRunLedger(dir, { windowId: 101, isAlive: () => true }), graceMs: 30 }
+      );
+      handler.setAgentId("agent-machine");
+      await handler.consume(
+        {
+          id: "cmd-cancel-901",
+          type: "cancel",
+          payload: { runId: "run-901" },
+          createdAt: "2026-10-02T00:00:00.000Z",
+          owner: "acme",
+          repo: "api",
+        },
+        "cancel"
+      );
+      expect(platform.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
+      expect(platform.agentAcknowledgeCommand.mock.calls[0].slice(1, 3)).toEqual([
+        "cmd-cancel-901",
+        "applied",
+      ]);
+
+      dequeue.resolve();
+      expect(await placed).toBe("cancelled");
+      await fill;
+      await manager.fillSlots();
+      expect(built.has(901)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  // A cancel that arrives while the enqueue is in flight finds nothing queued
+  // yet; the placement takes the run back out, or a reload would start it.
+  it("takes a run cancelled during its enqueue back out of the queue", async () => {
+    const { manager, queueService, waiting, built, addLikeGo } = buildManager([]);
+    const enqueueGate = deferred();
+    let enqueueReached = false;
+    const placing = manager.placeRemoteRun(
+      { remoteRunId: "run-902", issueNumber: 902, repo: REPO },
+      async () => {
+        enqueueReached = true;
+        await enqueueGate.promise;
+        addLikeGo(REPO, 902, "run-902");
+        return true;
+      }
+    );
+    await vi.waitFor(() => expect(enqueueReached).toBe(true));
+
+    expect(await manager.cancelByRemoteRunId("run-902")).toBe("applied");
+    enqueueGate.resolve();
+    expect(await placing).toBe("cancelled");
+    expect(queueService.removeRemoteRun).toHaveBeenLastCalledWith("run-902");
+    expect(waiting).toEqual([]);
+    await manager.fillSlots();
+    expect(built.has(902)).toBe(false);
+  });
+
+  // The ceiling drops while the batch starts, and the platform cancels a run
+  // the fill already took: the run is dropped, not handed back to the queue,
+  // which outlives the in-memory tombstone across a window reload.
+  it("never hands a cancelled run back to the queue when the ceiling dropped during the fill", async () => {
+    const { manager, queueService, built, finish } = buildManager([
+      local(1),
+      { ...item(903, "run-903"), repoName: REPO },
+    ]);
+    gate.worktreeIssue = 1;
+    const fill = manager.fillSlots();
+    await vi.waitFor(() => expect(gate.reached).toBe(true));
+
+    expect(await manager.cancelByRemoteRunId("run-903")).toBe("applied");
+    manager.setWorkspaceThrottle({ maxConcurrent: 1, resumeAt: null });
+    gate.release();
+    await fill;
+
+    expect(started(built, 903)).toBe(false);
+    expect(queueService.complete).toHaveBeenCalledWith(REPO, 903);
+    expect(queueService.enqueue).not.toHaveBeenCalled();
+    await finish(1);
+    manager.dispose();
+  });
+
+  it("never hands back a run cancelled while it goes back to the queue", async () => {
+    const { manager, queueService, built, finish } = buildManager([
+      local(1),
+      { ...item(904, "run-904"), repoName: REPO },
+    ]);
+    gate.worktreeIssue = 1;
+    const fill = manager.fillSlots();
+    await vi.waitFor(() => expect(gate.reached).toBe(true));
+    manager.setWorkspaceThrottle({ maxConcurrent: 1, resumeAt: null });
+
+    // 904's processing mark is being released when the cancel arrives.
+    const completeGate = deferred();
+    let completeReached = false;
+    const complete = queueService.complete.getMockImplementation()!;
+    queueService.complete.mockImplementationOnce(async (repo: string, issueNumber: number) => {
+      completeReached = true;
+      await completeGate.promise;
+      return complete(repo, issueNumber);
+    });
+    gate.release();
+    await vi.waitFor(() => expect(completeReached).toBe(true));
+    expect(await manager.cancelByRemoteRunId("run-904")).toBe("applied");
+    completeGate.resolve();
+    await fill;
+
+    expect(started(built, 904)).toBe(false);
+    expect(queueService.enqueue).not.toHaveBeenCalled();
+    await finish(1);
+    manager.dispose();
+  });
+
+  it("drops a cancelled run whose slot failed to start, instead of queueing it again", async () => {
+    const { manager, queueService, built } = buildManager([item(905, "run-905")]);
+    const { WorktreeManager } = await import("../../src/utils/WorktreeManager");
+    const instance = vi.mocked(WorktreeManager).mock.results[0].value;
+    const createGate = deferred();
+    let createReached = false;
+    instance.create.mockImplementationOnce(async () => {
+      createReached = true;
+      await createGate.promise;
+      throw new Error("disk full");
+    });
+    const fill = manager.fillSlots();
+    await vi.waitFor(() => expect(createReached).toBe(true));
+
+    expect(await manager.cancelByRemoteRunId("run-905")).toBe("applied");
+    createGate.resolve();
+    await fill;
+
+    expect(started(built, 905)).toBe(false);
+    expect(queueService.complete).toHaveBeenCalledWith("", 905);
+    expect(queueService.enqueue).not.toHaveBeenCalled();
+    expect(await manager.holdsRemoteRun("run-905")).toBe(false);
   });
 });

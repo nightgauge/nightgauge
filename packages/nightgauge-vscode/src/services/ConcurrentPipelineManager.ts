@@ -545,11 +545,11 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   private reservedSlots: Map<number, SlotReservation> = new Map();
   /**
-   * The remote runs whose trigger this window accepted and is queueing,
-   * keyed by the platform run id (#2340, #2344): only while
-   * {@link placeRemoteRun} waits for the enqueue. From then on the queued
-   * item carries the run id itself (QueueItem.remoteRunId), and the slot
-   * adopts it from there.
+   * The remote runs whose trigger this window accepted and is placing, keyed
+   * by the platform run id (#2340, #2344): from the ack on, while
+   * {@link placeRemoteRun} waits for the queue turn and then for the
+   * enqueue. From then on the queued item carries the run id itself
+   * (QueueItem.remoteRunId), and the slot adopts it from there.
    */
   private acceptedRemoteRuns: Map<string, { issueNumber: number; repo: string }> = new Map();
   /**
@@ -1086,6 +1086,18 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
               await this.completeQueueItem(item, "duplicate dispatch skipped");
               continue;
             }
+            // The platform cancelled this item's remote run while it waited for
+            // an earlier start in this batch, or before the dequeue (#2344). A
+            // run attached to the operator's own item only leaves it. Checked
+            // before the ceiling, so a cancelled run is never handed back to
+            // the queue, which outlives the tombstone across a reload.
+            if (this.isCancelledRemoteRun(item) && !this.detachCancelledRemoteRun(item)) {
+              await this.dropCancelledRemoteRun(
+                item,
+                "cancelled by the platform before its slot opened"
+              );
+              continue;
+            }
             // The ceiling can drop while this batch starts: a workspace throttle
             // applied during an earlier item's worktree creation (#2337), or a
             // lower max_concurrent. `available` was read before that, and
@@ -1094,16 +1106,6 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             // to the queue instead of opening a slot above the new one.
             if (this.availableSlotCount <= 0) {
               await this.returnToQueue(item, "dispatch ceiling lowered during the fill");
-              continue;
-            }
-            // The platform cancelled this item's remote run while it waited for
-            // an earlier start in this batch, or before the dequeue (#2344). A
-            // run attached to the operator's own item only leaves it.
-            if (this.isCancelledRemoteRun(item) && !this.detachCancelledRemoteRun(item)) {
-              await this.dropCancelledRemoteRun(
-                item,
-                "cancelled by the platform before its slot opened"
-              );
               continue;
             }
             const outcome = await this.startSlot(item);
@@ -1128,6 +1130,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
                   issueNumber: item.issueNumber,
                 }
               );
+            } else if (this.isCancelledRemoteRun(item) && !this.detachCancelledRemoteRun(item)) {
+              // The platform cancelled the run while its start failed (#2344):
+              // it is dropped, never queued again under its run id.
+              await this.dropCancelledRemoteRun(
+                item,
+                "cancelled by the platform while its slot failed to start"
+              );
             } else {
               // Re-enqueue failed items so they aren't lost.
               // Set fillAgain so the do-while loop re-dequeues after this batch
@@ -1151,6 +1160,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
                     undefined,
                     this.requeueOptions(item)
                   );
+                  // A cancel that arrived while it went back takes it out again.
+                  if (this.isCancelledRemoteRun(item)) {
+                    await this.unqueueCancelledRemoteRun(item.remoteRunId);
+                  }
                 } else {
                   await this.queueService.enqueue(item.issueNumber, item.title, item.labels);
                 }
@@ -1245,6 +1258,18 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   private async returnToQueue(item: QueueItem, reason: string): Promise<void> {
     await this.completeQueueItem(item, reason);
+    // The platform may cancel the run while it goes back (#2344): a
+    // cancelled run is not queued again, and one cancelled during the
+    // enqueue is taken back out, since the queue outlives the tombstone.
+    if (this.isCancelledRemoteRun(item) && !this.detachCancelledRemoteRun(item)) {
+      this.logger.info("Dropped a remote run the platform cancelled on its way back to the queue", {
+        issueNumber: item.issueNumber,
+        repo: item.repoName ?? "",
+        remoteRunId: item.remoteRunId,
+        reason,
+      });
+      return;
+    }
     try {
       const queued = await this.queueService.enqueue(
         item.issueNumber,
@@ -1253,6 +1278,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         undefined,
         this.requeueOptions(item)
       );
+      if (item.remoteRunId !== undefined && this.isCancelledRemoteRun(item)) {
+        await this.unqueueCancelledRemoteRun(item.remoteRunId);
+      }
       this.logger.info("Returned a dequeued item to the queue", {
         issueNumber: item.issueNumber,
         repo: item.repoName ?? "",
@@ -4099,6 +4127,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * - "busy": the issue is queued or dispatched here for another remote run.
    * - "not-queued": `enqueue` refused (resolved false) or the queue would not
    *   take it.
+   * - "cancelled": the platform cancelled the run before it was placed.
+   *
+   * This window holds the run from the moment this is called, right after
+   * the ack (#2357): the run is recorded as accepted before the queue turn
+   * is awaited, and a fill's dequeue can hold that turn for as long as Go
+   * takes to read the issues' blockers. A platform verb that arrives
+   * meanwhile is this window's to answer: a cancel tombstones the run and
+   * applies, and the placement then queues nothing. A cancel that arrives
+   * while the enqueue is in flight finds nothing queued to remove yet, so
+   * the placement takes the run back out of the queue itself.
    *
    * The run id is NOT this run's identity (ADR-017 Decision 2). The dispatch
    * mints its own UUIDv7 in `startSlot`; this value comes from the trigger's
@@ -4111,39 +4149,44 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   async placeRemoteRun(
     run: { remoteRunId: string; issueNumber: number; repo: string },
     enqueue: () => Promise<boolean>
-  ): Promise<"attached" | "queued" | "running" | "busy" | "not-queued"> {
-    return this.withQueueTurn(async () => {
-      const local = this.dispatchFor(run.issueNumber, run.repo);
-      if (local === "running") {
-        // A copy of a trigger whose run the slot already serves is placed.
-        return this.findSlotByRemoteRunId(run.remoteRunId) !== null ? "attached" : "running";
-      }
-      if (local !== null) {
-        if (local.remoteRunId !== undefined) {
-          return local.remoteRunId === run.remoteRunId ? "attached" : "busy";
+  ): Promise<"attached" | "queued" | "running" | "busy" | "not-queued" | "cancelled"> {
+    // No await before this: the window holds the run from the ack on.
+    this.acceptedRemoteRuns.set(run.remoteRunId, {
+      issueNumber: run.issueNumber,
+      repo: run.repo,
+    });
+    this.noteHeldRemoteRuns();
+    try {
+      return await this.withQueueTurn(async () => {
+        if (this.cancelledRemoteRunIds.has(run.remoteRunId)) return "cancelled";
+        const local = this.dispatchFor(run.issueNumber, run.repo);
+        if (local === "running") {
+          // A copy of a trigger whose run the slot already serves is placed.
+          return this.findSlotByRemoteRunId(run.remoteRunId) !== null ? "attached" : "running";
         }
-        local.remoteRunId = run.remoteRunId;
-        local.remoteRunAttached = true;
-        const reservation = this.reservedSlots.get(local.issueNumber);
-        if (reservation && sameRepo(reservation.repo, run.repo) && !reservation.remoteRunId) {
-          reservation.remoteRunId = run.remoteRunId;
+        if (local !== null) {
+          if (local.remoteRunId !== undefined) {
+            return local.remoteRunId === run.remoteRunId ? "attached" : "busy";
+          }
+          local.remoteRunId = run.remoteRunId;
+          local.remoteRunAttached = true;
+          const reservation = this.reservedSlots.get(local.issueNumber);
+          if (reservation && sameRepo(reservation.repo, run.repo) && !reservation.remoteRunId) {
+            reservation.remoteRunId = run.remoteRunId;
+          }
+          this.noteHeldRemoteRuns();
+          this.logger.info("Attached a platform run to the issue's dispatch already under way", {
+            issueNumber: run.issueNumber,
+            repo: run.repo,
+            remoteRunId: run.remoteRunId,
+          });
+          return "attached";
         }
-        this.noteHeldRemoteRuns();
-        this.logger.info("Attached a platform run to the issue's dispatch already under way", {
-          issueNumber: run.issueNumber,
-          repo: run.repo,
-          remoteRunId: run.remoteRunId,
-        });
-        return "attached";
-      }
-      // In transit until the queue carries it: this window holds the run.
-      this.acceptedRemoteRuns.set(run.remoteRunId, {
-        issueNumber: run.issueNumber,
-        repo: run.repo,
-      });
-      this.noteHeldRemoteRuns();
-      try {
         if (!(await enqueue())) return "not-queued";
+        if (this.cancelledRemoteRunIds.has(run.remoteRunId)) {
+          await this.unqueueCancelledRemoteRun(run.remoteRunId);
+          return "cancelled";
+        }
         let queue: Awaited<ReturnType<IssueQueueService["getQueue"]>>;
         try {
           queue = await this.queueService.getQueue();
@@ -4156,11 +4199,30 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // tells whether this run is on it.
         const queued = queue?.items.some((item) => item.remoteRunId === run.remoteRunId) ?? false;
         return queued ? "queued" : "busy";
-      } finally {
-        this.acceptedRemoteRuns.delete(run.remoteRunId);
-        this.noteHeldRemoteRuns();
-      }
-    });
+      });
+    } finally {
+      // Placed or not, the run is no longer in transit: the queue or the
+      // issue's dispatch carries it now, or nothing here serves it.
+      this.acceptedRemoteRuns.delete(run.remoteRunId);
+      this.noteHeldRemoteRuns();
+    }
+  }
+
+  /**
+   * Take a cancelled remote run back out of the queue (#2344), where an
+   * enqueue that was in flight when the cancel arrived put it. The
+   * tombstone keeps this window's fills from starting it, but the queue
+   * outlives a window reload, and the tombstone does not. Best effort.
+   */
+  private async unqueueCancelledRemoteRun(remoteRunId: string): Promise<void> {
+    try {
+      await this.queueService.removeRemoteRun(remoteRunId);
+    } catch (err) {
+      this.logger.warn(
+        "Could not take a cancelled remote run back out of the queue — this window's dispatch still drops it",
+        { remoteRunId, err: err instanceof Error ? err.message : String(err) }
+      );
+    }
   }
 
   /**

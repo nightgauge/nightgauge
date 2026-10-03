@@ -232,10 +232,13 @@ export class TriggerCommandHandler implements CommandHandler {
       runId,
     });
 
-    // This window holds the run from the ack on (#2340). The manager places
-    // it in one queue turn (#2344): on the issue's dispatch already under way
-    // here, or in the queue, where the item carries the run id the slot will
-    // adopt. enqueue() can trigger a debounced fillSlots via onItemAdded; that
+    // This window holds the run from the ack on (#2340): placeRemoteRun is
+    // called with no await after the ack, and records the run before it
+    // waits for the queue turn (#2357), so a verb for it is answered here
+    // even while a fill holds that turn. The manager places it in one queue
+    // turn (#2344): on the issue's dispatch already under way here, or in the
+    // queue, where the item carries the run id the slot will adopt.
+    // enqueue() can trigger a debounced fillSlots via onItemAdded; that
     // fill's dequeue waits for the turn. The queued item routes to the
     // triggered repo through repoOverride, independent of the workspace's
     // primary repo, so a dashboard trigger can run any repo linked to the team
@@ -295,6 +298,14 @@ export class TriggerCommandHandler implements CommandHandler {
       case "attached":
         this.logger.info(
           "TriggerCommandHandler: the issue's dispatch already under way here serves the run",
+          { issueNumber, commandId: cmd.id, runId }
+        );
+        return;
+      case "cancelled":
+        // The platform cancelled the run while it was placed (#2344): this
+        // window applied the cancel, and nothing is queued for it.
+        this.logger.info(
+          "TriggerCommandHandler: the platform cancelled the run before it was queued — not started",
           { issueNumber, commandId: cmd.id, runId }
         );
         return;

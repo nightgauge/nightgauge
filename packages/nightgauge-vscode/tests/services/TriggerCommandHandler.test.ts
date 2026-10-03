@@ -25,6 +25,7 @@ vi.mock("vscode", () => ({
 }));
 
 import { TriggerCommandHandler } from "../../src/services/TriggerCommandHandler";
+import type { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipelineManager";
 import type { ReceivedCommand } from "../../src/services/AgentCommandStreamService";
 
 // ── Minimal mock builders ─────────────────────────────────────────────────────
@@ -47,6 +48,9 @@ function makeIpcClient(runId = "run-abc") {
   };
 }
 
+/** Every placement the manager can report for a trigger's run. */
+type Placement = Awaited<ReturnType<ConcurrentPipelineManager["placeRemoteRun"]>>;
+
 function makeConcurrentManager(isRunning = false) {
   return {
     isRunning: vi.fn().mockReturnValue(isRunning),
@@ -54,8 +58,9 @@ function makeConcurrentManager(isRunning = false) {
     remoteTriggerConflict: vi.fn().mockResolvedValue(null),
     // As the manager places a run when nothing of the issue is under way
     // here (#2344): it queues it through the handler's enqueue.
-    placeRemoteRun: vi.fn(async (_run: unknown, enqueue: () => Promise<boolean>) =>
-      (await enqueue()) ? "queued" : "not-queued"
+    placeRemoteRun: vi.fn(
+      async (_run: unknown, enqueue: () => Promise<boolean>): Promise<Placement> =>
+        (await enqueue()) ? "queued" : "not-queued"
     ),
   };
 }
@@ -314,6 +319,22 @@ describe("TriggerCommandHandler", () => {
       expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
     }
   );
+
+  // #2357: the platform cancelled the run while it waited for the queue turn;
+  // this window applied the cancel, and nothing is queued or started.
+  it("starts nothing when the platform cancelled the run while it was placed", async () => {
+    concurrentManager.placeRemoteRun.mockResolvedValue("cancelled");
+    handler.handle(makeTriggerCmd(42));
+
+    await vi.waitFor(() =>
+      expect(logger.info).toHaveBeenCalledWith(
+        expect.stringContaining("cancelled the run before it was queued"),
+        expect.objectContaining({ runId: "run-abc" })
+      )
+    );
+    expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
 
   it("logs error when pipeline start throws", async () => {
     concurrentManager.fillSlots.mockRejectedValue(new Error("slot error"));
