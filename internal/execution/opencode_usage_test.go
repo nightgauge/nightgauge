@@ -35,14 +35,18 @@ func writeFakeOpenCode(t *testing.T, body string) string {
 	return path
 }
 
-// testFold is a fold of bin with a short helper timeout, run in dir.
+// testFold is a fold of bin, run in dir. Its helper timeout and budget bound
+// a hang only. A fake helper answers at once, so no pass waits on either, and
+// no load reaches them: 5 s and 30 s did, when the 64-session cap's 67
+// sequential helpers took over 0.45 s each on a loaded machine (#2366). A test
+// of the timeout path sets its own.
 func testFold(bin, dir string, env ...string) openCodeFold {
 	return openCodeFold{
 		bin:            bin,
 		env:            append([]string{"PATH=/usr/bin:/bin"}, env...),
 		dir:            dir,
-		timeout:        5 * time.Second,
-		budget:         30 * time.Second,
+		timeout:        time.Minute,
+		budget:         2 * time.Hour,
 		maxDescendants: openCodeMaxDescendants,
 	}
 }
