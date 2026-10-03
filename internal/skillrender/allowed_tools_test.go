@@ -2,9 +2,11 @@ package skillrender
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -16,6 +18,9 @@ type allowedToolsFixture struct {
 		Skill    string   `json:"skill"`
 		Declared []string `json:"declared"`
 		Headless []string `json:"headless"`
+		// Refused is a skill whose allowed-tools field is there but lists no
+		// tool, which splitFrontmatter refuses (errNoAllowedTools).
+		Refused bool `json:"refused"`
 		// MCP and Programmatic are checked only where a case has them.
 		MCP          []string `json:"mcp"`
 		Programmatic []string `json:"programmatic"`
@@ -40,7 +45,16 @@ func TestAllowedToolsFixture(t *testing.T) {
 	}
 	for _, c := range fixture.Cases {
 		t.Run(c.Name, func(t *testing.T) {
-			_, fm := splitFrontmatter(c.Skill)
+			_, fm, err := splitFrontmatter(c.Skill)
+			if c.Refused {
+				if !errors.Is(err, errNoAllowedTools) {
+					t.Fatalf("err = %v, want errNoAllowedTools (declared %q)", err, fm.AllowedTools)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("err = %v, want the skill read", err)
+			}
 			// nil and empty are the same answer here: the skill declares none.
 			if !slices.Equal(fm.AllowedTools, c.Declared) {
 				t.Errorf("declared = %q, want %q", fm.AllowedTools, c.Declared)
@@ -74,4 +88,55 @@ func TestRenderReportsAPatternWhole(t *testing.T) {
 	if want := []string{"Read", "Bash(gh *)"}; !slices.Equal(FilterHeadlessTools(res.AllowedTools), want) {
 		t.Errorf("headless AllowedTools = %q, want %q", FilterHeadlessTools(res.AllowedTools), want)
 	}
+}
+
+// TestRenderRefusesAnEmptyAllowedTools is the refusal through the public
+// Render, whichever file the tools come from: the base SKILL.md, the base one a
+// compact profile reads its tools from, or a whole-file override. A skill whose
+// allowed-tools lists no tool used to render as one that declares none, which
+// every runner grants its default (#2358).
+func TestRenderRefusesAnEmptyAllowedTools(t *testing.T) {
+	const empty = "---\nname: s\nallowed-tools: []\n---\n\n# Body\n"
+
+	t.Run("base", func(t *testing.T) {
+		root := t.TempDir()
+		writeSkill(t, root, "nightgauge-feature-dev", empty)
+		_, err := Render(Options{Stage: "feature-dev", SkillsRoots: []string{root}})
+		if !errors.Is(err, errNoAllowedTools) {
+			t.Fatalf("err = %v, want errNoAllowedTools", err)
+		}
+		if want := filepath.Join("nightgauge-feature-dev", "SKILL.md"); !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to name %s", err, want)
+		}
+	})
+
+	t.Run("compact profile", func(t *testing.T) {
+		root := t.TempDir()
+		writeSkill(t, root, "nightgauge-feature-dev", empty)
+		profiles := filepath.Join(root, "nightgauge-feature-dev", profilesDir)
+		if err := os.MkdirAll(profiles, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(profiles, ProfileCompact+".md"), []byte("# Compact\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := Render(Options{Stage: "feature-dev", SkillsRoots: []string{root}, Profile: ProfileCompact})
+		if !errors.Is(err, errNoAllowedTools) {
+			t.Fatalf("err = %v, want errNoAllowedTools", err)
+		}
+	})
+
+	t.Run("whole-file override", func(t *testing.T) {
+		root := t.TempDir()
+		writeSkill(t, root, "nightgauge-feature-dev", "---\nname: s\nallowed-tools: Read\n---\n\n# Body\n")
+		override := filepath.Join(root, "nightgauge-feature-dev", "_overlays", "claude-opus-5.SKILL.md")
+		write(t, override, "---\nname: overridden\nallowed-tools:\n---\n\n# Override\n")
+		_, err := Render(Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{root}})
+		if !errors.Is(err, errNoAllowedTools) {
+			t.Fatalf("err = %v, want errNoAllowedTools", err)
+		}
+		if !strings.Contains(err.Error(), override) {
+			t.Errorf("err = %q, want it to name %s", err, override)
+		}
+	})
 }

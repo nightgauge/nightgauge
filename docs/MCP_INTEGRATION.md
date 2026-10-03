@@ -26,11 +26,10 @@ You do not maintain a second, provider-specific server list.
 
 The `allowed-tools` frontmatter field in each SKILL.md controls which tools that
 stage's agent may invoke. Adding an MCP server tool name to `allowed-tools`
-grants that stage permission to use it. Entries are separated by spaces or
-commas, or written one per line as a YAML block list (`- Read`), and a
-`Tool(pattern)` entry such as `Bash(gh *)` is one entry. The Go binary and the
-SDK read the field the same way, and a non-interactive stage is granted every
-entry but `AskUserQuestion`.
+grants that stage permission to use it. A `Tool(pattern)` entry such as
+`Bash(gh *)` is one entry; [CODE_STANDARDS.md](CODE_STANDARDS.md#required-fields-in-order)
+gives the field's grammar. The Go binary and the SDK read the field the same way,
+and a non-interactive stage is granted every entry but `AskUserQuestion`.
 
 ### How It Fits Together
 

@@ -3061,8 +3061,9 @@ export function renderSkill(stage: PipelineStage, model?: string, adapter?: stri
 
   return {
     content: envelope.content,
-    // The binary omits an empty list, so absence means "frontmatter declared
-    // none" — which is the case the historical default exists for.
+    // The binary omits an empty list and refuses a field that lists no tool,
+    // so absence means "frontmatter declared none" — which is the case the
+    // historical default exists for.
     allowedTools: envelope.allowed_tools?.length ? envelope.allowed_tools : DEFAULT_ALLOWED_TOOLS,
     mcpTools: envelope.mcp_tools ?? [],
     programmaticTools: envelope.programmatic_tools,
@@ -3136,14 +3137,16 @@ function parseSkillContent(raw: string): {
   mcpTools: string[];
   programmaticTools?: string[];
 } | null {
+  // Each tool list is read as the binary reads a SKILL.md on disk (#2358):
+  // entries separated by spaces or commas, a `Tool(pattern)` entry whole,
+  // inline or as a YAML list. An absent list reads as the render envelope's
+  // omitted one: the historical default for allowed-tools, none for the
+  // others. An allowed-tools field that lists no tool throws, as the binary
+  // refuses it, and is read outside the try below so the stage fails rather
+  // than running the disk render in the injected skill's place.
+  const declaredTools = skillAllowedTools(raw);
   try {
     const frontmatterMatch = raw.match(/^---\n([\s\S]*?)\n---/);
-    // Each tool list is read as the binary reads a SKILL.md on disk (#2358):
-    // entries separated by spaces or commas, a `Tool(pattern)` entry whole,
-    // inline or as a YAML block list. An absent or empty list reads as the
-    // render envelope's omitted one: the historical default for allowed-tools,
-    // none for the others.
-    const declaredTools = skillAllowedTools(raw);
     const allowedTools = declaredTools.length > 0 ? declaredTools : [...DEFAULT_ALLOWED_TOOLS];
     const mcpTools = skillFrontmatterTools(raw, "mcp-tools");
     const declaredProgrammatic = skillFrontmatterTools(raw, "programmatic-tools");

@@ -167,6 +167,24 @@ changelog, and the release workflow refuses a tag that does not.
   them, in its place. Shipped stages keep full Codex access, since each
   grants `Bash`.
 
+- **Stages run through the SDK get the tools their skill declares** (#2358).
+  `nightgauge-sdk stage` and `run`, which the VS Code extension uses for every
+  non-Claude adapter, and the SDK's exported stage classes built every query
+  with no tools. They now pass the stage SKILL.md's `allowed-tools` without
+  `AskUserQuestion`, as the Go pipeline does: to the Claude Agent SDK as
+  `allowedTools`, to `claude-headless` as `--allowedTools`, to Codex as the
+  sandbox they justify on a fresh start and on a resume, and to OpenCode to
+  tell a refused granted tool from one never granted. The SDK path reads the
+  base SKILL.md and applies no overlay (#2381). Shipped stages keep full Codex
+  access, since each grants `Bash`.
+- **Every reader takes the same tools from a skill's `allowed-tools`** (#2358).
+  The binary, the SDK and the extension read entries separated by spaces or
+  commas, a YAML list written inline (`[Read, Grep]`) or one entry per line,
+  and a value on the lines indented below its key. A `Tool(pattern)` entry such
+  as `Bash(gh *)` stays whole, and a `# comment` is skipped. A form a reader did
+  not know read as no list and got the default tools, `Bash`, `Write` and
+  `Edit` among them, and a comment that named a tool granted it.
+
 - **A slow reap of the complexity-model lock broker no longer hides why the
   transaction failed** (#2356). The extension waited for a broker it had sent
   SIGKILL as briefly as for one asked to exit, and an error from that wait
@@ -707,6 +725,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Changed
 
+- **A skill whose `allowed-tools` lists no tool is refused** (#2358).
+  `nightgauge skill render` exits with an error that names the file, and the
+  SDK and the extension fail the stage. Such a field used to read as absent,
+  which gets the runner's default: the extension's default tools, or full
+  access under Codex. A skill without the field still gets that default.
 - **`claude-opus-5-5` defaults to `low` effort** (#2120), in both model
   registries. The default is provisional until the control-eval sweep confirms
   or reverts it. Explicit per-stage efforts and `model_routing.default_effort`

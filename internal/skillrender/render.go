@@ -17,10 +17,13 @@
 // Fail-open is the designed default at every step. An unknown model, a local
 // provider with no registry entry, or an unreadable fragment all render
 // base-only and exit 0 — exactly today's behavior. A malformed overlay must
-// never take down a pipeline run.
+// never take down a pipeline run. The tool grant is the exception: there,
+// failing open grants tools the skill did not name, so an `allowed-tools`
+// field that lists no tool fails the render (errNoAllowedTools).
 package skillrender
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,6 +31,7 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/models"
 )
@@ -392,7 +396,10 @@ func Render(opts Options) (*Result, error) {
 		if err != nil {
 			continue
 		}
-		body, fm := splitFrontmatter(string(raw))
+		body, fm, err := splitFrontmatter(string(raw))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", override, err)
+		}
 		res.applyFrontmatter(fm)
 		res.WholeFile = override
 		res.InjectionSite = SiteWholeFile
@@ -405,7 +412,10 @@ func Render(opts Options) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read skill: %w", err)
 	}
-	body, fm := splitFrontmatter(string(rawBytes))
+	body, fm, err := splitFrontmatter(string(rawBytes))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", baseSourcePath, err)
+	}
 	if baseSourcePath != skillPath {
 		// A compact profile is a body-only skeleton (no frontmatter of its
 		// own — see skills/nightgauge-pr-merge/_profiles/compact.md). The
@@ -418,7 +428,9 @@ func Render(opts Options) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("read skill: %w", err)
 		}
-		_, fm = splitFrontmatter(string(baseRaw))
+		if _, fm, err = splitFrontmatter(string(baseRaw)); err != nil {
+			return nil, fmt.Errorf("%s: %w", skillPath, err)
+		}
 	}
 	res.applyFrontmatter(fm)
 
@@ -660,26 +672,42 @@ func (r *Result) applyFrontmatter(fm frontmatter) {
 	r.MCPTools = fm.MCPTools
 }
 
+// errNoAllowedTools refuses a skill whose `allowed-tools` field is there but
+// lists no tool (#2358). A skill without the field gets each runner's default:
+// the extension's default set, which grants Bash, Write and Edit, and full
+// access under Codex. A field that read as empty used to get that default too,
+// so a list written in a form the reader did not know granted more than it
+// named. The SDK refuses the same skill (skillAllowedTools.ts).
+var errNoAllowedTools = errors.New("allowed-tools is present but lists no tool: " +
+	"list the tools the skill needs (allowed-tools: Read Grep), or remove the field")
+
 // splitFrontmatter strips a leading YAML frontmatter block and returns the
 // body plus the parsed header. A document without frontmatter is not an error:
-// the plugin-command layout carries none.
-func splitFrontmatter(content string) (body string, fm frontmatter) {
+// the plugin-command layout carries none. A header whose allowed-tools field
+// lists no tool is (errNoAllowedTools).
+func splitFrontmatter(content string) (body string, fm frontmatter, err error) {
 	body = content
 	if !strings.HasPrefix(content, "---\n") {
-		return body, fm
+		return body, fm, nil
 	}
 	endIdx := strings.Index(content[4:], "\n---")
 	if endIdx < 0 {
-		return body, fm
+		return body, fm, nil
 	}
 	head := content[4 : 4+endIdx]
 	body = content[4+endIdx+4:]
+	allowedTools, declared := extractToolList(head, "allowed-tools")
+	if declared && len(allowedTools) == 0 {
+		return body, fm, errNoAllowedTools
+	}
+	programmaticTools, _ := extractToolList(head, "programmatic-tools")
+	mcpTools, _ := extractToolList(head, "mcp-tools")
 	return body, frontmatter{
 		Name:              extractYAMLField(head, "name"),
-		AllowedTools:      extractToolList(head, "allowed-tools"),
-		ProgrammaticTools: extractToolList(head, "programmatic-tools"),
-		MCPTools:          extractToolList(head, "mcp-tools"),
-	}
+		AllowedTools:      allowedTools,
+		ProgrammaticTools: programmaticTools,
+		MCPTools:          mcpTools,
+	}, nil
 }
 
 // extractYAMLField does line-based extraction of a top-level YAML field.
@@ -694,18 +722,22 @@ func extractYAMLField(frontmatter string, key string) string {
 	return ""
 }
 
-// extractToolList reads a frontmatter tool field into its entries: the value
-// on the key's line, as extractYAMLField reads it and splitTools splits it,
-// or, when that line has no value at all, the YAML block list on the lines
-// after it, one `- entry` per line. Blank and `#` comment lines inside the list
-// are skipped, and the first other line ends it. Each item is unquoted and
-// split as an inline value is.
+// extractToolList reads a frontmatter tool field into its entries, and reports
+// whether the field is there at all. The field is the first line whose trimmed
+// text starts with `key:`. A value on that line, without its comment
+// (stripComment), is read by toolValue. With no value there, the value is on
+// the lines after it: a YAML block list, one `- entry` per line with each entry
+// read by toolValue, or else the lines indented deeper than the key, joined
+// with spaces and read by toolValue as one value, which is how YAML continues a
+// plain value or a flow sequence onto the next lines. Whichever the first of
+// those lines is decides which it is. Blank and `#` comment lines are skipped,
+// and the first other line ends the value.
 //
 // It used to read the key's line alone, so a block list declared no tools, and
 // the extension, which gives a skill that declares none its default set, then
 // granted Bash, Write and Edit to a skill that asked for Read and Grep (#2358).
 // The SDK reads the same grammar (skillAllowedTools.ts).
-func extractToolList(frontmatter string, key string) []string {
+func extractToolList(frontmatter string, key string) (entries []string, present bool) {
 	prefix := key + ":"
 	lines := strings.Split(frontmatter, "\n")
 	for i, line := range lines {
@@ -713,25 +745,91 @@ func extractToolList(frontmatter string, key string) []string {
 		if !strings.HasPrefix(trimmed, prefix) {
 			continue
 		}
-		if value := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix)); value != "" {
-			return splitTools(strings.Trim(value, "\"'"))
+		if value := stripComment(strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))); value != "" {
+			return toolValue(value), true
 		}
-		var entries []string
+		keyIndent := indentOf(line)
+		inList, inValue := false, false
+		var continued []string
 		for _, next := range lines[i+1:] {
 			item := strings.TrimSpace(next)
 			if item == "" || strings.HasPrefix(item, "#") {
 				continue
 			}
-			// A list item is a dash alone or a dash and a space: `-Read` is not one.
-			rest, ok := strings.CutPrefix(item, "-")
-			if !ok || (rest != "" && strings.TrimLeftFunc(rest, unicode.IsSpace) == rest) {
-				break
+			if rest, ok := listItem(item); ok && !inValue {
+				inList = true
+				entries = append(entries, toolValue(stripComment(rest))...)
+				continue
 			}
-			entries = append(entries, splitTools(strings.Trim(strings.TrimSpace(rest), "\"'"))...)
+			if !inList && indentOf(next) > keyIndent {
+				inValue = true
+				continued = append(continued, stripComment(item))
+				continue
+			}
+			break
 		}
-		return entries
+		if inValue {
+			entries = toolValue(strings.Join(continued, " "))
+		}
+		return entries, true
 	}
-	return nil
+	return nil, false
+}
+
+// listItem reports whether a trimmed line is a YAML block list item, a dash
+// alone or a dash and whitespace (`-Read` is not one), and returns its text.
+func listItem(item string) (string, bool) {
+	rest, ok := strings.CutPrefix(item, "-")
+	if !ok || (rest != "" && strings.TrimLeftFunc(rest, unicode.IsSpace) == rest) {
+		return "", false
+	}
+	return strings.TrimSpace(rest), true
+}
+
+// indentOf counts the whitespace characters (unicode.IsSpace) a line starts
+// with. It counts characters, not bytes, as the SDK does.
+func indentOf(line string) int {
+	return utf8.RuneCountInString(line) - utf8.RuneCountInString(strings.TrimLeftFunc(line, unicode.IsSpace))
+}
+
+// stripComment drops a YAML comment from a trimmed value: a `#` at its start
+// or after whitespace, outside parentheses as splitTools counts them, and
+// everything after it. `Read Grep # not Bash` used to grant Bash.
+func stripComment(value string) string {
+	depth, afterSpace := 0, true
+	for i, r := range value {
+		switch {
+		case r == '#' && depth == 0 && afterSpace:
+			return strings.TrimSpace(value[:i])
+		case r == '(':
+			depth++
+		case r == ')' && depth > 0:
+			depth--
+		}
+		afterSpace = unicode.IsSpace(r)
+	}
+	return value
+}
+
+// toolValue reads one value of a tool field, trimmed and without its comment.
+// A YAML flow sequence, from `[` to `]`, reads as its items: splitTools splits
+// what is between the brackets, and each item loses the quotes around it, so
+// `[Read, "Bash(gh *)"]` lists Read and Bash(gh *). It used to read as `[Read`
+// and `"Bash(gh *)"]`, which grant nothing. Any other value loses the quotes
+// around it as a whole and is split by splitTools.
+func toolValue(value string) []string {
+	if inner, ok := strings.CutPrefix(value, "["); ok {
+		if inner, ok := strings.CutSuffix(inner, "]"); ok {
+			var entries []string
+			for _, entry := range splitTools(inner) {
+				if entry = strings.Trim(entry, "\"'"); entry != "" {
+					entries = append(entries, entry)
+				}
+			}
+			return entries
+		}
+	}
+	return splitTools(strings.Trim(value, "\"'"))
 }
 
 // splitTools splits a frontmatter tool list into its entries.

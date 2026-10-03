@@ -279,9 +279,12 @@ simply downgrades orchestration to the `sdk-fanout` floor.
 
 **Allowed tools:** a stage's query, and each unit's query when the stage fans out,
 receives the stage skill's allowed-tools as the Agent SDK's `allowedTools`, the tools
-it runs without asking (#2358). Before #2358 it received none. Any other tool that asks for permission is refused in a headless
-run, as under the Go adapters' `--allowedTools`. The query does not set `tools`, so
-the model's built-in tool list is unchanged.
+it runs without asking (#2358). Before #2358 it received none. Any other tool that asks for
+permission is refused in a headless run, as under the Go adapters' `--allowedTools`.
+`allowedTools` takes no tool away: the Agent SDK's `tools` option sets which tools exist, and
+the query does not set it. It can add two: a native build searches with `find` and `grep`
+through `Bash` instead of offering the dedicated `Grep` and `Glob` tools, and naming those
+two in `allowedTools` makes them available. Every shipped stage names both.
 
 **Environment variables:**
 
@@ -345,7 +348,9 @@ Error message: `codex CLI is not authenticated. Run 'codex login' to authenticat
 
   Both paths map the tools a headless run is granted, so `AskUserQuestion` is dropped
   first: a skill whose only declared tool is `AskUserQuestion` grants none and runs with
-  full access, while one that declares `Read AskUserQuestion` runs read-only.
+  full access, while one that declares `Read AskUserQuestion` runs read-only. A skill whose
+  `allowed-tools` field is there but lists no tool never reaches Codex: both paths refuse
+  it (#2358).
 
 - **Model routing:** `NIGHTGAUGE_CODEX_MODEL` env var → `--model <value>`
 

@@ -8,6 +8,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  NO_ALLOWED_TOOLS,
   filterHeadlessTools,
   skillAllowedTools,
   skillFrontmatterTools,
@@ -19,8 +20,10 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..
 interface AllowedToolsCase {
   name: string;
   skill: string;
-  declared: string[];
-  headless: string[];
+  declared?: string[];
+  headless?: string[];
+  /** A skill whose allowed-tools field is there but lists no tool: refused. */
+  refused?: boolean;
   /** Checked only where a case has them, as the Go suite does. */
   mcp?: string[];
   programmatic?: string[];
@@ -39,6 +42,10 @@ describe("skillAllowedTools — the Go side's grammar (#2358)", () => {
   });
 
   it.each(FIXTURE.cases.map((c) => [c.name, c] as const))("%s", (_name, c) => {
+    if (c.refused) {
+      expect(() => skillAllowedTools(c.skill)).toThrow(NO_ALLOWED_TOOLS);
+      return;
+    }
     const declared = skillAllowedTools(c.skill);
     expect(declared).toEqual(c.declared);
     expect(filterHeadlessTools(declared)).toEqual(c.headless);
@@ -57,5 +64,12 @@ describe("skillAllowedTools — the Go side's grammar (#2358)", () => {
       "mcp__github__*",
     ]);
     expect(splitAllowedTools("")).toEqual([]);
+  });
+
+  it("refuses only allowed-tools: an empty mcp-tools or programmatic-tools lists none", () => {
+    const skill = "---\nname: s\nallowed-tools:\nmcp-tools:\nprogrammatic-tools: []\n---\n";
+    expect(() => skillFrontmatterTools(skill, "allowed-tools")).toThrow(NO_ALLOWED_TOOLS);
+    expect(skillFrontmatterTools(skill, "mcp-tools")).toEqual([]);
+    expect(skillFrontmatterTools(skill, "programmatic-tools")).toEqual([]);
   });
 });

@@ -22,7 +22,7 @@ import { CodexContextGenerator } from "../context/CodexContextGenerator.js";
 import { CodexMcpProvisioner } from "../context/CodexMcpProvisioner.js";
 import { systemPromptPresetForAdapter } from "./providerSteering.js";
 import { withBehavioralPreamble } from "./behavioralPreamble.js";
-import { skillAllowedTools } from "./skillAllowedTools.js";
+import { skillFileAllowedTools } from "./skillAllowedTools.js";
 
 /**
  * Configuration options for executing a pipeline stage
@@ -379,7 +379,8 @@ export interface LoadedStageSkill {
   /**
    * The tools the content's `allowed-tools` frontmatter declares, verbatim
    * (skillAllowedTools). A headless caller drops what it cannot use with
-   * filterHeadlessTools. @see Issue #2358
+   * filterHeadlessTools. A field that lists no tool fails the load, naming the
+   * file. @see Issue #2358
    */
   allowedTools: string[];
 }
@@ -444,7 +445,7 @@ export async function loadStageSkill(
     skillContent,
     logicalSkillPath,
     skillDirectory: path.dirname(skillPath),
-    allowedTools: skillAllowedTools(skillContent),
+    allowedTools: skillFileAllowedTools(skillContent, skillPath),
   };
 }
 

@@ -21,6 +21,7 @@ import type {
   StageExecutorOptions,
   SDKMessage,
 } from "../orchestrator/StageExecutor.js";
+import { filterHeadlessTools, skillFileAllowedTools } from "../orchestrator/skillAllowedTools.js";
 
 /**
  * Configuration for a pipeline stage
@@ -119,12 +120,9 @@ export abstract class BaseStage<TInput, TOutput> {
         inputContext = await this.readInputContext(contextManager, options.issueNumber);
       }
 
-      // Build the prompt
-      const prompt = await this.buildPrompt(
-        options.issueNumber,
-        inputContext,
-        options.skillsBasePath
-      );
+      // Build the prompt from the skill, and grant the query its tools
+      const skill = await this.readSkill(options.skillsBasePath);
+      const prompt = await this.buildPrompt(options.issueNumber, inputContext, skill.content);
 
       // Execute via StageExecutor
       const executorOptions: StageExecutorOptions = {
@@ -134,6 +132,7 @@ export abstract class BaseStage<TInput, TOutput> {
         model: options.model,
         maxTurns: options.maxTurns,
         cwd: options.cwd,
+        ...(skill.allowedTools && { allowedTools: skill.allowedTools }),
       };
 
       for await (const message of executor.execute(executorOptions)) {
@@ -160,26 +159,38 @@ export abstract class BaseStage<TInput, TOutput> {
   }
 
   /**
-   * Build the prompt by reading SKILL.md and injecting context
+   * Read this stage's SKILL.md, `config.skillPath` under `skillsBasePath` (a
+   * leading `skills/` naming that base): its content, which {@link execute}
+   * builds the prompt from, and the tools a query of the stage is granted, its
+   * `allowed-tools` without AskUserQuestion as `nightgauge-sdk stage` grants
+   * them, unset when the skill declares none. These classes used to grant no
+   * tools at all (#2358).
    */
-  protected async buildPrompt(
-    issueNumber: number,
-    inputContext?: TInput,
+  protected async readSkill(
     skillsBasePath: string = "skills"
-  ): Promise<string> {
-    // Resolve the skill path
-    const skillPath = this.config.skillPath.startsWith("skills/")
-      ? this.config.skillPath
-      : path.join(skillsBasePath, this.config.skillPath);
-
-    // Read the SKILL.md content
-    let skillContent: string;
+  ): Promise<{ content: string; allowedTools?: string[] }> {
+    const relative = this.config.skillPath.startsWith("skills/")
+      ? this.config.skillPath.slice("skills/".length)
+      : this.config.skillPath;
+    const skillPath = path.join(skillsBasePath, relative);
+    let content: string;
     try {
-      skillContent = await fs.readFile(skillPath, "utf-8");
+      content = await fs.readFile(skillPath, "utf-8");
     } catch (error) {
       throw new Error(`Failed to read skill file: ${skillPath}`, { cause: error });
     }
+    const allowedTools = filterHeadlessTools(skillFileAllowedTools(content, skillPath));
+    return { content, ...(allowedTools.length > 0 && { allowedTools }) };
+  }
 
+  /**
+   * Build the prompt from the stage's SKILL.md content, injecting context
+   */
+  protected async buildPrompt(
+    issueNumber: number,
+    inputContext: TInput | undefined,
+    skillContent: string
+  ): Promise<string> {
     // Build structured prompt
     const sections: string[] = [
       `# Pipeline Stage: ${this.config.name}`,

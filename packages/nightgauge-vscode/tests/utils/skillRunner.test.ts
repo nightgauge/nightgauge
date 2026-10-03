@@ -3708,6 +3708,60 @@ allowed-tools:
     expect(args[args.indexOf("--allowedTools") + 1]).toBe("Read,Grep");
   });
 
+  it.each([
+    ["a flow sequence", "allowed-tools: [Read, Grep] # read only"],
+    ["a value on the line below the key", "allowed-tools:\n  Read Grep"],
+  ])("grants an injected list written as %s exactly (#2358)", (_form, field) => {
+    // Each of these used to read as no list, which got the default set.
+    const injectedContent = `---\nname: platform-skill\n${field}\n---\n# Read-only platform skill\n`;
+    vi.mocked(spawn).mockReturnValue(createMockChildProcess());
+
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      injectedContent
+    );
+
+    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    expect(args[args.indexOf("--allowedTools") + 1]).toBe("Read,Grep");
+  });
+
+  it("fails a stage whose injected allowed-tools lists no tool, running nothing (#2358)", () => {
+    // Read as no list, it got the default set; the disk render must not run
+    // in its place either.
+    const injectedContent = `---\nname: platform-skill\nallowed-tools: ""\n---\n# Platform skill\n`;
+    const onComplete = vi.fn();
+    const onError = vi.fn();
+
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      { onComplete, onError },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      injectedContent
+    );
+
+    expect(vi.mocked(spawn)).not.toHaveBeenCalled();
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("lists no tool") })
+    );
+    expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+  });
+
   it("should fall back to disk on injected content parse failure", () => {
     // Empty string content — parseSkillContent should return null
     const injectedContent = "";

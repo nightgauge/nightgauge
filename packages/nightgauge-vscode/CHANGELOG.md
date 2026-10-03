@@ -28,10 +28,12 @@ and this project adheres to
   the stage was never granted. A `Tool(pattern)` entry such as `Bash(gh *)` is
   now read whole, and a comma-separated `allowed-tools` list reads as a
   space-separated one (#2358).
-- **A skill's `allowed-tools` written as a YAML block list is read.** A list
-  with one `- Read` entry per line used to read as no list, so a stage ran
-  with the default tools, `Bash`, `Write` and `Edit` among them, instead of
-  the ones its skill grants (#2358).
+- **A skill's `allowed-tools` is read in every YAML form.** A list written
+  inline (`[Read, Grep]`) or one entry per line, or a value on the lines below
+  the key, used to read as no list, so a stage ran with the default tools,
+  `Bash`, `Write` and `Edit` among them, instead of the ones its skill grants.
+  A `# comment` after the list is no longer read as tools, and a field that
+  lists no tool now fails the stage (#2358).
 - **Approve and reject from the phone app or the dashboard say why they
   cannot apply:** no run in the extension waits at an approval gate, so the
   window running the pipeline answers both with that reason (#2336).

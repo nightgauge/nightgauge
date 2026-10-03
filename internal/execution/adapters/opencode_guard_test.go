@@ -15,6 +15,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/opencodeallow"
+	"github.com/nightgauge/nightgauge/internal/skillrender"
 )
 
 // The permission map and the project-config tamper gate (ADR-022 § 9, § 8;
@@ -33,35 +34,28 @@ func repoRootForTest(t *testing.T) string {
 	return filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(file))))
 }
 
-// stageSkillAllowedTools reads name's SKILL.md frontmatter for its
-// allowed-tools line, the same shape internal/skillrender/render.go's own
-// splitFrontmatter/splitTools parse (a duplicate, tiny, test-only reader,
-// so this test exercises the real committed skill files rather than a
-// hand-typed copy of their tool list, without importing skillrender and
-// its heavier Render/Options surface for a single frontmatter field).
+// stageSkillAllowedTools is the tool list a headless dispatch of the stage
+// skill in skillsRoot/name grants, read the way `nightgauge opencode` reads it
+// (skillrender.Render, then FilterHeadlessTools), so this test exercises the
+// real committed skill files through the real grammar. It used to re-parse the
+// frontmatter itself, splitting on whitespace alone, so a skill written with
+// commas, a Tool(pattern) entry or a YAML list would have fed it a wrong list
+// while the render read the skill correctly (#2358).
 func stageSkillAllowedTools(t *testing.T, skillsRoot, name string) []string {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join(skillsRoot, name, "SKILL.md"))
+	stage, ok := strings.CutPrefix(name, "nightgauge-")
+	if !ok || skillrender.StageSkillDirs[stage] != name {
+		t.Fatalf("%s is not a pipeline stage's skill directory", name)
+	}
+	res, err := skillrender.Render(skillrender.Options{Stage: stage, SkillsRoots: []string{skillsRoot}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := string(raw)
-	if !strings.HasPrefix(content, "---\n") {
-		t.Fatalf("%s/SKILL.md has no frontmatter", name)
+	tools := skillrender.FilterHeadlessTools(res.AllowedTools)
+	if len(tools) == 0 {
+		t.Fatalf("%s/SKILL.md grants a headless run no tool", name)
 	}
-	end := strings.Index(content[4:], "\n---")
-	if end < 0 {
-		t.Fatalf("%s/SKILL.md frontmatter is not closed", name)
-	}
-	head := content[4 : 4+end]
-	for _, line := range strings.Split(head, "\n") {
-		trimmed := strings.TrimSpace(line)
-		if v, ok := strings.CutPrefix(trimmed, "allowed-tools:"); ok {
-			return strings.Fields(strings.Trim(strings.TrimSpace(v), "\"'"))
-		}
-	}
-	t.Fatalf("%s/SKILL.md has no allowed-tools frontmatter field", name)
-	return nil
+	return tools
 }
 
 // openCodeCollectValues walks a decoded JSON value (map[string]any,

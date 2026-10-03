@@ -28,6 +28,7 @@ import { ClaudeHeadlessAdapter } from "../../src/cli/adapters/ClaudeHeadlessAdap
 import { ClaudeSdkAdapter } from "../../src/cli/adapters/ClaudeSdkAdapter.js";
 import { CodexAdapter } from "../../src/cli/adapters/CodexAdapter.js";
 import { withClaudeAllowedTools } from "../../src/cli/adapters/cliQueryHelper.js";
+import { NO_ALLOWED_TOOLS } from "../../src/orchestrator/skillAllowedTools.js";
 import { createMockResult } from "../mocks/agent-sdk.js";
 
 // The CLI adapters' queries spawn their CLI; record the argv instead. The rest
@@ -133,6 +134,20 @@ describe("a stage's query carries its skill's allowed-tools (#2358)", () => {
     await new PipelineOrchestrator(recordingQuery(seen)).runStage("feature-planning", 7);
 
     expect(seen[0].options?.allowedTools).toEqual(["Read", "Bash(gh *)"]);
+  });
+
+  it("fails a stage whose skill's allowed-tools lists no tool, naming the file", async () => {
+    // Read as no list, it got the runner's default: full access under Codex.
+    stageSkill("[]");
+    const seen: SDKQueryOptions[] = [];
+    const result = await new PipelineOrchestrator(recordingQuery(seen)).runStage(
+      "feature-planning",
+      7
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toBe(`${path.join(skillDir, "SKILL.md")}: ${NO_ALLOWED_TOOLS}`);
+    expect(seen).toHaveLength(0);
   });
 
   it("leaves the option unset for a skill that declares none, as the Go path does", async () => {
