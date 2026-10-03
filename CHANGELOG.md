@@ -372,6 +372,16 @@ changelog, and the release workflow refuses a tag that does not.
   fills its limit may have been cut short and answers UNKNOWN. Merged PRs stay
   a window of the newest 500: one past it only withholds a SAFE-DELETE.
 
+- **The pipefail early-exit gate reads five more shapes** (#2392). A grep
+  whose output a group, `if`, loop or function body sends to `/dev/null`
+  (`{ cmd | grep x; } >/dev/null`), which GNU grep treats as `-q`; another
+  shell's literal `-c` script after a pipe (`cmd | sh -c 'head -1'`), whose
+  commands read the pipe while the writer dies in this file's pipeline;
+  `mapfile -n`/`readarray -n` and `dd count=`; and a workflow step whose
+  `shell:` is a path or a command line (`/usr/bin/bash -eo pipefail {0}`),
+  which it skipped. A step is skipped only when its shell runs another
+  language, such as pwsh or python.
+
 - **PERFORMANCE_MODES.md describes the modes the pipeline has** (#2343). It
   listed `economy`, `balanced`, `quality` and `custom`, which neither resolver
   knows. It now gives the four real modes (`efficiency`, `elevated`, `maximum`,

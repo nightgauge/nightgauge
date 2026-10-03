@@ -27,11 +27,14 @@ The fix is to give the reader no concurrent writer:
 SCOPE
 
 Every tracked shell script (`*.sh`, `*.bash`, a shell shebang, or a Git hook
-under `.husky/`, which has none) and every shell `run:` block in
-`.github/workflows/`. It applies whether or not the file sets pipefail
-itself: a sourced library runs under its caller's options, a step with
-`shell: bash` gets pipefail implicitly, and a script that does not set it
-today is one line away from it. The replacement forms cost nothing.
+under `.husky/`, which has none) and every `run:` block in
+`.github/workflows/` unless its step's `shell:` runs another language (pwsh,
+python, cmd and the like); a `shell:` command line such as
+`/usr/bin/bash -eo pipefail {0}` is named by its first word. It applies
+whether or not the file sets pipefail itself: a sourced library runs under
+its caller's options, a step with `shell: bash` gets pipefail implicitly, and
+a script that does not set it today is one line away from it. The
+replacement forms cost nothing.
 
 Fenced shell in Markdown (skill bodies and their includes) is out of scope. A
 fence is an instruction an agent runs in its own tool's shell, often with
@@ -48,29 +51,37 @@ Early-exit readers, as the command of the stage after a pipe, past wrappers
 such as env, nice, nohup, stdbuf, sudo and timeout: grep (egrep, fgrep, ggrep)
 with -q, -m, -l or -L or their long forms, or with its output sent to
 /dev/null, which GNU grep treats as -q (so trading -q for that redirect is no
-fix); head (ghead) unless it prints all but the last lines (`-n -N`); sed
-(gsed) with a q or Q command; awk with an exit or nextfile outside END, or
-with only BEGIN rules, which read no input (a getline that reads a file or a
-command reads none of it either); perl -n or -p with exit or last; read; an
-until loop conditioned on a read, which ends at the first line; and a while
-or until loop whose body can break, exit or return. An awk, sed or perl
-program holding an expansion is read with the expansion as an opaque word. A
+fix), whether the redirection is its own or one on a group, if, loop or
+function body around it (`{ cmd | grep x; } >/dev/null`); head (ghead) unless
+it prints all but the last lines (`-n -N`); sed (gsed) with a q or Q command;
+awk with an exit or nextfile outside END, or with only BEGIN rules, which
+read no input (a getline that reads a file or a command reads none of it
+either); perl -n or -p with exit or last; read; mapfile or readarray with a
+count (-n) other than 0; dd with a count=; an until loop
+conditioned on a read, which ends at the first line; and a while or until
+loop whose body can break, exit or return. An awk, sed or perl program
+holding an expansion is read with the expansion as an opaque word. A
 compound stage, a `{ }` or `( )` group, an if, case, for or select, gives
 every command in it the same input, so each one is read, at any depth, and
-not only the first; one fed by a pipe of its own is not. A stage that calls
-a function the same file defines reads with the function's body, read the
+not only the first; one fed by a pipe of its own is not. So does another
+shell's literal -c script (`cmd | sh -c 'head -1'`): its commands read the
+pipe, and the writer dies in this file's pipeline. A stage that calls a
+function the same file defines reads with the function's body, read the
 same way. A pipeline that ends an input process substitution `<(...)` is
 exempt: no one reads its status.
 
-Not seen: a command named by an expansion (`$GREP -q`), jq, a program read
-from a file (`awk -f`, `sed -f`), any other loop condition that can end the
-loop before the end of input, a function defined in another file (a sourced
-library) or called through a wrapper or an expansion, a reader in a command
-substitution that reads the stage's input (`cmd | v=$(head -1)`), and code in
-a quoted string handed to another shell. Flagged although the input is read
-to its end: a compound whose reader stops early before a later command reads
-the rest, such as `{ read -r first; cat; }`, or whose reader has input of its
-own (`{ grep -q x <<<"$v"; cat; }`); capture the input first instead.
+Not seen: a command named by an expansion (`$GREP -q`), jq, cmp (which stops
+at the first difference), a perl program without -n or -p that reads STDIN
+itself, a program read from a file (`awk -f`, `sed -f`), any other loop
+condition that can end the loop before the end of input, a function defined
+in another file (a sourced library) or called through a wrapper or an
+expansion, the redirection on a call of a function whose body holds the pipe
+(`f >/dev/null`), a reader in a command substitution that reads the stage's
+input (`cmd | v=$(head -1)`), and a -c script held in an expansion
+(`sh -c "$script"`). Flagged although the input is read to its end: a
+compound whose reader stops early before a later command reads the rest,
+such as `{ read -r first; cat; }`, or whose reader has input of its own
+(`{ grep -q x <<<"$v"; cat; }`); capture the input first instead.
 
 WHY THIS IS NOT A GREP
 
@@ -84,8 +95,8 @@ a backslash. Bash's own readings are followed where they surprise: a `((` or
 `$((` that does not end in `))` is a subshell or a command substitution,
 whose `|` is a pipe, and `!(...)` at a command's start is a negated subshell
 unless the file turns extglob on. So this file carries a small shell lexer.
-Code in a quoted string handed to another shell (`sh -c '...'`) is out of its
-reach; it does not run under this file's options anyway.
+A pipe inside a quoted string handed to another shell (`sh -c '...'`) runs
+under that shell's options, not this file's, so it is not read.
 
 Exit 0 clean, 1 on a violation, 2 if the gate cannot run: a file it cannot
 lex, or a path that does not exist, is a failure, never a silent pass. A
@@ -116,6 +127,11 @@ GREP_COMMANDS = {"grep", "egrep", "fgrep", "ggrep"}
 AWK_COMMANDS = {"awk", "gawk", "mawk", "nawk"}
 HEAD_COMMANDS = {"head", "ghead"}
 SED_COMMANDS = {"sed", "gsed"}
+MAPFILE_COMMANDS = {"mapfile", "readarray"}
+# mapfile's options that take an argument; -n is the count, -u the descriptor.
+MAPFILE_ARG_OPTS = set("dnOsuCc")
+# Shells whose -c script a stage can run, read as a group of its own.
+SHELL_COMMANDS = {"sh", "bash", "dash", "ksh", "zsh"}
 # Short grep options that take an argument: the rest of the cluster, or the
 # next word, is that argument rather than more options.
 GREP_ARG_OPTS = set("efmABCdD")
@@ -780,7 +796,91 @@ def early_exit(words: list[Tok], stdout: set[str | None] = frozenset()) -> tuple
         return ("perl exit", "stops reading at its exit or last")
     if name == "read":
         return ("read", "reads one line and leaves the rest unread")
+    if name in MAPFILE_COMMANDS and mapfile_stops(args):
+        return (f"{name} -n", "stops reading after the lines it counts")
+    if name == "dd" and dd_stops(shapes):
+        return ("dd count=", "stops reading after the blocks it counts")
     return None
+
+
+def mapfile_stops(args: list[str | None]) -> bool:
+    """mapfile or readarray with a count (-n) other than 0, reading stdin."""
+    count: str | None = "0"
+    fd: str | None = "0"
+    i = 0
+    while i < len(args):
+        a = args[i]
+        i += 1
+        if a is None or a == "--" or not a.startswith("-") or a == "-":
+            break
+        cluster = a[1:]
+        for pos, ch in enumerate(cluster):
+            if ch in MAPFILE_ARG_OPTS:
+                arg = cluster[pos + 1 :] or (args[i] if i < len(args) else "")
+                if not cluster[pos + 1 :]:
+                    i += 1
+                if ch == "n":
+                    count = arg
+                elif ch == "u":
+                    fd = arg
+                break
+    return fd == "0" and count != "0"
+
+
+def dd_stops(shapes: list[str]) -> bool:
+    """dd with a count=: it reads that many blocks, of its input or of its
+    if= (which leaves its input unread)."""
+    return any(a.startswith("count=") for a in shapes)
+
+
+def shell_script(words: list[Tok]) -> tuple[str, str] | None:
+    """(shell, script) when the stage runs another shell on a literal script:
+    `sh -c '...'` or `bash -o pipefail -c '...'`, past wrappers."""
+    k = skip_wrappers(words)
+    if k >= len(words) or words[k].value is None:
+        return None
+    name = words[k].value.rsplit("/", 1)[-1]
+    if name not in SHELL_COMMANDS:
+        return None
+    script_flag = False
+    i = k + 1
+    while i < len(words):
+        a = words[i].value
+        if a is None:
+            return None  # an option, or the script, held in an expansion
+        if a == "--":
+            i += 1
+            break
+        if a.startswith("--"):
+            i += 1
+            continue
+        if len(a) < 2 or a[0] not in "-+":
+            break
+        script_flag = script_flag or (a[0] == "-" and "c" in a[1:])
+        # -o and -O take their argument from the next word, each in turn.
+        i += 1 + a[1:].count("o") + a[1:].count("O")
+    if not script_flag or i >= len(words) or words[i].value is None:
+        return None
+    return name, words[i].value
+
+
+def shell_c_hazard(words: list[Tok], stdout: frozenset[str | None]) -> tuple[str, str] | None:
+    """(reader, why) when the stage is another shell whose script reads the
+    stage's input and stops early. Every command of the script reads that
+    input, as every command of a group does, and the writer dies of SIGPIPE
+    in this file's pipeline, under this file's options. A pipe inside the
+    script runs under that shell's own options, so it is not read."""
+    found = shell_script(words)
+    if found is None:
+        return None
+    try:
+        toks = Lexer("{\n" + found[1] + "\n}\n").lex()
+    except LexError:
+        return None
+    hit = stage_hazard(toks, 0, functions(toks), frozenset(), stdout)
+    if hit is None:
+        return None
+    return (f"{found[0]} -c -> {hit[1]}", hit[2])
 
 
 def grep_early_flag(args: list[str | None]) -> str | None:
@@ -1175,18 +1275,21 @@ def functions(toks: list[Tok]) -> dict[str, list[int]]:
     return found
 
 
-def compound(toks: list[Tok], j: int) -> tuple[list[int], int]:
+def compound(toks: list[Tok], j: int) -> tuple[list[tuple[int, tuple[int, ...]]], int]:
     """The commands that read the input of the compound command opening at
     toks[j], and the index just past its end.
 
     They are every command in it, at any depth, except one fed by a pipe of
     its own, a function it only defines, and code in a substitution. A while
-    or until loop is one of them, whole: its own rule reads it.
+    or until loop is one of them, whole: its own rule reads it. Each comes
+    with the end of every compound nested between it and this one, outermost
+    first, so that its stdout can be read through their redirections
+    (compound_out).
     """
     opener = toks[j].text if toks[j].kind == "op" else toks[j].value
     end = COMPOUND_END[opener]
     case = "word" if opener == "case" else ""  # this level's case: word, pattern or body
-    readers: list[int] = []
+    readers: list[tuple[int, tuple[int, ...]]] = []
     parens = 0  # `(` that opens no subshell: `name()`, `a=(...)`
     in_test = False
     prev: Tok | None = toks[j]
@@ -1212,7 +1315,7 @@ def compound(toks: list[Tok], j: int) -> tuple[list[int], int]:
             if t.text == "(" and starts_command(prev):
                 inner, k = compound(toks, k)
                 if not (prev is not None and prev.text in PIPE_OPS):
-                    readers += inner
+                    readers += [(r, (k,) + ends) for r, ends in inner]
                 prev = toks[k - 1]
                 continue
             if t.text == "(":
@@ -1237,25 +1340,55 @@ def compound(toks: list[Tok], j: int) -> tuple[list[int], int]:
             elif t.value in COMPOUND_END:
                 inner, after = compound(toks, k)
                 if not piped:
-                    readers += [k] if t.value in LOOP_WORDS else inner
+                    if t.value in LOOP_WORDS:
+                        readers.append((k, ()))
+                    else:
+                        readers += [(r, (after,) + ends) for r, ends in inner]
                 k = after
                 prev = toks[k - 1]
                 continue
             elif t.value not in CLAUSE_WORDS and not piped:
-                readers.append(k)
+                readers.append((k, ()))
         prev = t
         k += 1
     return readers, k
 
 
+def piped_on(toks: list[Tok], end: int) -> bool:
+    """True when the operator at toks[end] pipes the command before it on."""
+    return end < len(toks) and toks[end].kind == "op" and toks[end].text in PIPE_OPS
+
+
+def compound_out(
+    toks: list[Tok], after: int, inherit: frozenset[str | None]
+) -> frozenset[str | None]:
+    """Where the compound command ending just before toks[after] sends the
+    stdout of a command in it that sends its own nowhere else: the target of
+    the compound's own redirection, none (a pipe) when it is piped on, and
+    otherwise what the compound inherits. `{ cmd | grep x; } >/dev/null`
+    gives grep the /dev/null it would have had from `grep x >/dev/null`."""
+    _, own, end = command_words(toks, after)
+    if own:
+        return frozenset(own)
+    if piped_on(toks, end):
+        return frozenset()
+    return inherit
+
+
 def stage_hazard(
-    toks: list[Tok], j: int, funcs: dict[str, list[int]] | None = None, calling: frozenset[str] = frozenset()
+    toks: list[Tok],
+    j: int,
+    funcs: dict[str, list[int]] | None = None,
+    calling: frozenset[str] = frozenset(),
+    inherit: frozenset[str | None] = frozenset(),
 ) -> tuple[Tok, str, str, int] | None:
     """(token, reader, why, end) when the pipeline stage at toks[j] stops
     reading before the end of its input; `end` indexes the operator after it.
 
     funcs holds the functions the file defines, and calling the ones whose
-    body is being read, so that a recursive one is read once.
+    body is being read, so that a recursive one is read once. inherit is the
+    stdout the stage's last command gets from the redirections around it
+    when it has none of its own (compound_out).
     """
     funcs = funcs or {}
     j = skip_lines(toks, j)
@@ -1276,13 +1409,20 @@ def stage_hazard(
     # A group, a subshell, an if, case, for or select: every command in it
     # reads the same input, so each is a stage of its own, not only the first.
     if opens_compound(t):
-        for r in compound(toks, k)[0]:
-            hit = stage_hazard(toks, r, funcs, calling)
+        readers, after = compound(toks, k)
+        out = compound_out(toks, after, inherit)
+        for r, ends in readers:
+            sub = out
+            for e in ends:
+                sub = compound_out(toks, e, sub)
+            hit = stage_hazard(toks, r, funcs, calling, sub)
             if hit:
                 return (hit[0], hit[1], hit[2], len(toks))
         return None
     words, stdout, end = command_words(toks, j)
-    hit = early_exit(words, stdout)
+    if not stdout and not piped_on(toks, end):
+        stdout = set(inherit)
+    hit = early_exit(words, stdout) or shell_c_hazard(words, frozenset(stdout))
     if hit:
         return (words[0], hit[0], hit[1], end)
     # A function the file defines reads with its body.
@@ -1292,7 +1432,7 @@ def stage_hazard(
     name = words[c].value if c < len(words) else None
     if name in funcs and name not in calling:
         for body in funcs[name]:
-            inner = stage_hazard(toks, body, funcs, calling | {name})
+            inner = stage_hazard(toks, body, funcs, calling | {name}, frozenset(stdout))
             if inner:
                 via = inner[1] if " -> " in inner[1] else f"{inner[1]} on line {inner[0].line}"
                 return (words[c], f"{name}() -> {via}", inner[2], end)
@@ -1334,14 +1474,22 @@ class Scope:
     in_test: bool = False  # inside [[ ... ]]
     test_line: int = 0
     input_sub: bool = False  # inside <(...), whose status no one reads
+    # The compound commands open here, innermost last: the index just past
+    # each one's end, and the stdout it gives its commands (compound_out).
+    outs: list[tuple[int, frozenset[str | None]]] = field(default_factory=list)
 
 
 def scan_tokens(toks: list[Tok]) -> list[Finding]:
     findings: list[Finding] = []
     funcs = functions(toks)
+    # A function body's redirection applies at each call; the redirections
+    # around its definition do not.
+    bodies = {b for found in funcs.values() for b in found}
     stack = [Scope()]
     for i, t in enumerate(toks):
         st = stack[-1]
+        while st.outs and st.outs[-1][0] <= i:
+            st.outs.pop()
         if t.kind == "op" and t.text in OPENERS:
             stack.append(Scope(input_sub=t.text == "<("))
             continue
@@ -1367,6 +1515,10 @@ def scan_tokens(toks: list[Tok]) -> list[Finding]:
                 continue
             st.prev = t
             continue
+        if i in bodies or (starts_command(st.prev) and opens_compound(t)):
+            after = compound(toks, i)[1]
+            parent = st.outs[-1][1] if st.outs and i not in bodies else frozenset()
+            st.outs.append((after, compound_out(toks, after, parent)))
         if t.kind == "word" and starts_command(st.prev):
             if t.value == "case":
                 st.case.append("word")
@@ -1378,7 +1530,8 @@ def scan_tokens(toks: list[Tok]) -> list[Finding]:
         elif t.kind == "op" and t.text in CASE_BREAKS and st.case:
             st.case[-1] = "pattern"
         elif t.kind == "op" and t.text in PIPE_OPS:
-            hit = stage_hazard(toks, i + 1, funcs)
+            around = st.outs[-1][1] if st.outs else frozenset()
+            hit = stage_hazard(toks, i + 1, funcs, inherit=around)
             if hit and not (st.input_sub and ends_substitution(toks, hit[3])):
                 findings.append(Finding(hit[0].line, hit[1], hit[2]))
         st.prev = t
@@ -1392,6 +1545,8 @@ def scan_shell(text: str, first_line: int = 1) -> list[Finding]:
 
 
 # ---- workflows ----------------------------------------------------------------
+# A step `shell:` that runs no POSIX shell: its `run:` is not shell code.
+NON_POSIX_SHELLS = {"pwsh", "powershell", "python", "python3", "cmd", "node", "perl", "ruby"}
 RUN_KEY = re.compile(r"^(?P<lead>\s*(?:-\s+)?)run:\s*(?P<rest>.*)$")
 SHELL_KEY = re.compile(r"^(?P<lead>\s*(?:-\s+)?)shell:\s*(?P<value>\S+)")
 
@@ -1436,7 +1591,9 @@ def run_blocks(text: str) -> list[tuple[int, str]]:
 
 
 def runs_in_sh(lines: list[str], idx: int, col: int) -> bool:
-    """False when the step's own `shell:` names something other than sh or bash."""
+    """False when the step's own `shell:` runs a language that is no POSIX
+    shell. The value is a keyword (`bash`) or a command line whose first word
+    is a path (`/usr/bin/bash -eo pipefail {0}`), and both run with pipefail."""
     # The step's mapping runs from its `- ` line (this one, for `- run:`) to
     # the next line indented less than its keys.
     start = idx
@@ -1458,7 +1615,8 @@ def runs_in_sh(lines: list[str], idx: int, col: int) -> bool:
     for k in range(start, end):
         m = SHELL_KEY.match(lines[k])
         if m and len(m.group("lead")) == col:
-            return m.group("value").strip("'\"") in ("bash", "sh")
+            name = m.group("value").strip("'\"").replace("\\", "/").rsplit("/", 1)[-1].lower()
+            return (name[:-4] if name.endswith(".exe") else name) not in NON_POSIX_SHELLS
     return True
 
 
