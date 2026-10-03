@@ -382,6 +382,16 @@ changelog, and the release workflow refuses a tag that does not.
   which it skipped. A step is skipped only when its shell runs another
   language, such as pwsh or python.
 
+- **The OpenCode stage-run tests no longer pass or fail on the clock**
+  (#2393). Every stage they dispatched had a 20 s timeout and folded its
+  usage through the production 10 s helper limit, and the tests assert that
+  no drift marker was recorded, so a helper the load slowed failed them; a
+  held stage was stopped after 20 s whether or not it was ready; and the
+  cancelled-context test failed when its refusal took over 5 s. One two-minute
+  watchdog now bounds a stage and only catches a hang, the stop test's output
+  holder lets go no sooner, a held stage is stopped once it is ready, and the
+  cancelled-context test checks that no process started.
+
 - **PERFORMANCE_MODES.md describes the modes the pipeline has** (#2343). It
   listed `economy`, `balanced`, `quality` and `custom`, which neither resolver
   knows. It now gives the four real modes (`efficiency`, `elevated`, `maximum`,

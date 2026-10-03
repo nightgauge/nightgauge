@@ -695,9 +695,19 @@ type openCodeHelperCall struct {
 // output ends leaves the child blocked on a full pipe, and RunStage then never
 // returns, which is the failure a long line used to cause; the watchdog kills
 // the fake's process group so the test fails instead of hanging.
+//
+// The watchdog is the only clock, and it only fails a stage that hangs. The
+// stage's own timeout and the fold's per-helper limit are lifted past it, and
+// a held stage is stopped once it says it is ready, never after a wait: a
+// stage that completes is not timed, so load cannot fail it (#2393). The
+// production 10 s helper limit would otherwise record a drift marker for a
+// fake the load slowed, and these tests assert there is none.
 func openCodeStageRunWith(t *testing.T, stage openCodeStage) openCodeStageOutcome {
 	t.Helper()
 	isolateOpenCodeHome(t)
+	helperTimeout := openCodeHelperTimeout
+	openCodeHelperTimeout = 2 * openCodeStageWatchdog
+	t.Cleanup(func() { openCodeHelperTimeout = helperTimeout })
 	if stage.machineConfig != "" {
 		writeOpenCodeMachineConfig(t, stage.machineConfig)
 	}
@@ -774,7 +784,7 @@ exit %[4]d
 	opts := openCodeStageOptions(model, nil)
 	opts.AllowedTools = stage.allowedTools
 	opts.Streamer = stage.streamer
-	opts.Timeout = 20 * time.Second
+	opts.Timeout = 2 * openCodeStageWatchdog
 	workspace := openCodeWorkspace(t)
 	worktree := filepath.Join(workspace, ".nightgauge", "worktrees", "nightgauge-issue-1612")
 	if stage.worktree != nil {
@@ -785,25 +795,18 @@ exit %[4]d
 	var err error
 	hung := false
 	logged := captureStderr(t, func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
 			result, err = manager.RunStage(ctx, opts)
 		}()
-		if stage.during != nil {
-			for deadline := time.Now().Add(20 * time.Second); time.Now().Before(deadline); time.Sleep(20 * time.Millisecond) {
-				if _, statErr := os.Stat(readyFile); statErr == nil {
-					break
-				}
-			}
-			stage.during(manager, readyFile)
-		}
-		select {
-		case <-done:
-		case <-time.After(45 * time.Second):
+		watchdog := time.NewTimer(openCodeStageWatchdog)
+		defer watchdog.Stop()
+		kill := func() {
 			hung = true
+			cancel()
 			if raw, readErr := os.ReadFile(pidFile); readErr == nil {
 				if pgid, convErr := strconv.Atoi(strings.TrimSpace(string(raw))); convErr == nil && pgid > 0 {
 					_ = syscall.Kill(-pgid, syscall.SIGKILL)
@@ -811,9 +814,33 @@ exit %[4]d
 			}
 			<-done
 		}
+		if stage.during != nil {
+			poll := time.NewTicker(20 * time.Millisecond)
+			defer poll.Stop()
+		wait:
+			for {
+				if _, statErr := os.Stat(readyFile); statErr == nil {
+					break
+				}
+				select {
+				case <-done:
+					break wait
+				case <-watchdog.C:
+					kill()
+					return
+				case <-poll.C:
+				}
+			}
+			stage.during(manager, readyFile)
+		}
+		select {
+		case <-done:
+		case <-watchdog.C:
+			kill()
+		}
 	})
 	if hung {
-		t.Fatal("RunStage did not return within 45s: the stage's output was not read to its end, so the child blocked on a full pipe")
+		t.Fatalf("the stage did not finish within the %s watchdog: either it never became ready, or RunStage did not return because the stage's output was not read to its end and the child blocked on a full pipe", openCodeStageWatchdog)
 	}
 	if err != nil {
 		t.Fatalf("RunStage: %v", err)
@@ -821,6 +848,10 @@ exit %[4]d
 	before, after := readHelperLog(t, helperLog)
 	return openCodeStageOutcome{result: result, logged: logged, helpers: after, preDispatch: before, worktree: worktree}
 }
+
+// openCodeStageWatchdog bounds one stage openCodeStageRunWith dispatches,
+// sized like the fold cases' hang guards. It fails only a stage that hangs.
+const openCodeStageWatchdog = 2 * time.Minute
 
 // readHelperLog parses the fake's record of the processes started around the
 // stage: before, those started before the stage's own run (the version
@@ -1714,10 +1745,11 @@ func TestOpenCodeStopOutlivedByItsOutputIsAStop(t *testing.T) {
 	// The holder leaves the stage's process group, so neither the stop's
 	// SIGTERM nor its SIGKILL reaches it, and only then touches its own
 	// file. It holds the stage's stdout until the test releases it, or for
-	// 20 s. The stage waits for it, then holds as holdUntilStopped does: the
-	// helper touches ready once it traps the stop.
+	// the watchdog's two minutes, a cap that only ends a holder a failed
+	// test left behind (#2393). The stage waits for it, then holds as
+	// holdUntilStopped does: the helper touches ready once it traps the stop.
 	holder := `perl -e 'setpgrp(0, 0); open(my $r, ">", $ARGV[0]) or die; close($r); ` +
-		`for (1 .. 1000) { last if -e $ARGV[1]; select(undef, undef, undef, 0.02) }' "$READY.held" "$READY.release" &` +
+		`for (1 .. 6000) { last if -e $ARGV[1]; select(undef, undef, undef, 0.02) }' "$READY.held" "$READY.release" &` +
 		"\nwhile [ ! -e \"$READY.held\" ]; do sleep 0.01; done"
 	graceful := true
 	out := openCodeStageRunWith(t, openCodeStage{
@@ -1752,7 +1784,9 @@ func TestOpenCodeStopOutlivedByItsOutputIsAStop(t *testing.T) {
 
 // TestOpenCodeCancelledStageStartsNoProcess: a stage whose context is done
 // before it is dispatched starts no process, the version policy's probe
-// included, and returns at once with the context's error (#1627).
+// included, and returns with the context's error (#1627). Starting nothing is
+// what makes the refusal immediate, so that is what it asserts; how long the
+// refusal took on a loaded machine is no evidence either way (#2393).
 func TestOpenCodeCancelledStageStartsNoProcess(t *testing.T) {
 	isolateOpenCodeHome(t)
 	calls := filepath.Join(t.TempDir(), "calls")
@@ -1766,13 +1800,9 @@ func TestOpenCodeCancelledStageStartsNoProcess(t *testing.T) {
 	cancel()
 	var result *adapters.RunResult
 	var err error
-	start := time.Now()
 	captureStderr(t, func() { result, err = manager.RunStage(ctx, opts) })
 	if !errors.Is(err, context.Canceled) || result != nil {
 		t.Fatalf("RunStage under a done context = %v, %v; want no result and the context's error", result, err)
-	}
-	if elapsed := time.Since(start); elapsed > 5*time.Second {
-		t.Errorf("RunStage took %s to refuse a done context", elapsed)
 	}
 	if raw, readErr := os.ReadFile(calls); readErr == nil {
 		t.Errorf("a stage whose context was done started opencode: %q", raw)

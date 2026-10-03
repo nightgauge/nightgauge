@@ -37,9 +37,13 @@ import (
 	"github.com/nightgauge/nightgauge/internal/models"
 )
 
+// openCodeHelperTimeout bounds each opencode process the fold starts. It is
+// a variable only so that a test driving a whole stage can lift it past its
+// watchdog: how long a fake helper took on a loaded machine is no evidence
+// about the fold (#2393).
+var openCodeHelperTimeout = 10 * time.Second
+
 const (
-	// openCodeHelperTimeout bounds each opencode process the fold starts.
-	openCodeHelperTimeout = 10 * time.Second
 	// openCodeFoldBudget bounds the whole fold of one stage, whatever the
 	// number of sessions: 64 exports that each run close to the timeout
 	// cannot hold a stage's end for ten minutes.
