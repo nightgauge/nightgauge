@@ -170,6 +170,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A pipeline worktree on a branch older than the publication hook no longer
+  turns the hook off for the whole clone** (#2389). The pipeline's
+  `npm install` in such a worktree ran that checkout's `prepare` script, husky
+  alone, which set husky's relative hooks path for every worktree of the clone
+  in place of the hook directory that `npm install` installs (#2365). The
+  pipeline now puts an absolute hooks path back after its install, and warns
+  that it did. An `npm install` run by hand in such a checkout still turns the
+  hook off until the next `npm install` in a current checkout.
 - **`nightgauge git push` pushes only the current branch, and runs the
   repository's pre-push hook** (#2365). It went through go-git, which runs no
   hooks and, given no refspec, pushes every local branch, so a push through it,

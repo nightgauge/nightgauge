@@ -22,6 +22,12 @@ and this project adheres to
 
 ### Fixed
 
+- **A pipeline worktree's `npm install` no longer replaces a hook directory
+  set for the whole clone.** A checkout whose `prepare` script runs husky set
+  husky's per-worktree hooks path for every worktree of the clone, so resuming
+  an issue whose branch predates Nightgauge's publication hook turned that
+  hook off. An absolute `core.hooksPath` is now put back after the install,
+  with a warning in the log (#2389).
 - **Codex and OpenCode stages get the tools their skill grants.** They ran
   with no tool list, so a skill that grants only read tools still ran Codex
   with full access, and OpenCode reported a refusal of a granted tool as one

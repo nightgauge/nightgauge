@@ -436,6 +436,9 @@ export class WorktreeManager {
       .then(() => true)
       .catch(() => false);
     if (shouldInstall && hasPackageJson) {
+      // The install runs the checkout's `prepare` script, which can rewrite
+      // the hooks path of the whole clone (#2389): see keepCloneHooksPath.
+      const hooksPathBefore = await this.readCloneHooksPath(worktreePath);
       try {
         await execAsync("npm install --prefer-offline", {
           cwd: worktreePath,
@@ -452,6 +455,8 @@ export class WorktreeManager {
           }`
         );
       }
+      // Also after a failed install: `prepare` may have run before it failed.
+      await this.keepCloneHooksPath(worktreePath, hooksPathBefore, issueNumber);
     }
 
     // Run Flutter codegen if this is a Flutter project that uses .g.dart parts.
@@ -469,6 +474,81 @@ export class WorktreeManager {
       issueNumber,
       exists: true,
     };
+  }
+
+  /**
+   * The clone's `core.hooksPath`, or "" when it is unset or cannot be read.
+   * `--local` is the config that every worktree of the clone shares, which is
+   * where husky writes the value.
+   */
+  private async readCloneHooksPath(worktreePath: string): Promise<string> {
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["config", "--local", "--get", "core.hooksPath"],
+        { cwd: worktreePath, timeout: 10_000, encoding: "utf-8" }
+      );
+      return String(stdout).trim();
+    } catch {
+      // Exit 1 is "unset", and another failure reads the same way: before the
+      // install it puts nothing back, and after it the value read before is
+      // written again, which changes nothing if the install left it alone.
+      return "";
+    }
+  }
+
+  /**
+   * Put back a clone-wide hook directory that the worktree's npm install
+   * replaced (#2389).
+   *
+   * `core.hooksPath` lives in the config every worktree of the clone shares,
+   * and a `prepare` script can rewrite it: husky 9 sets its RELATIVE `.husky/_`
+   * on every install. An ABSOLUTE path is a hook directory installed for the
+   * whole clone on purpose, such as the publication push guard's
+   * (scripts/install-publication-push-hook.sh, #2365), which a current
+   * checkout's install puts back straight after husky. A checkout older than
+   * that installer runs husky alone, and the pipeline installs in every
+   * worktree it creates or reuses, so resuming an issue whose branch predates
+   * the installer turned the guard off for every worktree of the clone, this
+   * one included, before its push.
+   *
+   * So an absolute path that the install replaced with a relative or empty
+   * one is written back. A path that was relative or unset is left as the
+   * install set it, which is how husky sets itself up. So is a change from one
+   * absolute path to another, which is a hook directory installed again
+   * somewhere else, and a directory that no longer exists, as after the clone
+   * moved: it ran no hooks before the install, and husky's path runs some. An
+   * install run later in the worktree, by hand or by an agent, is not covered.
+   */
+  private async keepCloneHooksPath(
+    worktreePath: string,
+    before: string,
+    issueNumber: number
+  ): Promise<void> {
+    if (!path.isAbsolute(before)) return;
+    const after = await this.readCloneHooksPath(worktreePath);
+    if (path.isAbsolute(after)) return;
+    const exists = await fs.access(before).then(
+      () => true,
+      () => false
+    );
+    if (!exists) return;
+    const replaced =
+      `npm install in the worktree for issue #${issueNumber} set the clone's ` +
+      `core.hooksPath to ${after === "" ? "nothing" : `'${after}'`}`;
+    try {
+      await execFileAsync("git", ["config", "--local", "core.hooksPath", before], {
+        cwd: worktreePath,
+        timeout: 10_000,
+      });
+      console.warn(`[WorktreeManager] ${replaced}; put '${before}' back (#2389).`);
+    } catch (error) {
+      console.warn(
+        `[WorktreeManager] ${replaced}, and putting '${before}' back failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }. Set it back by hand (#2389).`
+      );
+    }
   }
 
   /**
