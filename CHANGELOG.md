@@ -364,6 +364,14 @@ changelog, and the release workflow refuses a tag that does not.
   of 20 s. When the concurrent-pipelines test timed out, its main thread could
   wait forever; now it fails.
 
+- **`branch-merged-check.sh` no longer reads an open PR it did not list as no
+  open PR** (#2391). Both open-PR guards read one
+  `gh pr list --state all --limit 500` window, so an open PR older than the
+  newest 500 PRs was not in it, and its head or base branch, if an ancestor of
+  `main`, read SAFE-DELETE. Open PRs now have a list of their own; one that
+  fills its limit may have been cut short and answers UNKNOWN. Merged PRs stay
+  a window of the newest 500: one past it only withholds a SAFE-DELETE.
+
 - **PERFORMANCE_MODES.md describes the modes the pipeline has** (#2343). It
   listed `economy`, `balanced`, `quality` and `custom`, which neither resolver
   knows. It now gives the four real modes (`efficiency`, `elevated`, `maximum`,
