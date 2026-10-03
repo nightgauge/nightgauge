@@ -11,6 +11,11 @@ and this project adheres to
 
 ### Added
 
+- **"Cloud features (optional)" in this README** says what the two cloud
+  switches do: `"nightgauge.cloud.enabled": true` shows sign-in and the account
+  and team commands, and `platform.enabled` in `.nightgauge/config.yaml`
+  decides whether the extension talks to the hosted service. Both are off by
+  default, and the local pipeline needs neither.
 - **Each window sends the platform a random instance id** with its
   registration, every heartbeat and its deregistration, so the hosted service
   can keep each window's execution profile apart. It is made when the window

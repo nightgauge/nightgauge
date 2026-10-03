@@ -16,6 +16,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The extension's listing explains its optional cloud features.** A new
+  "Cloud features (optional)" section in the extension README says they are off
+  by default, that `"nightgauge.cloud.enabled": true` shows sign-in and the
+  account and team commands, that `platform.enabled` in
+  `.nightgauge/config.yaml` decides whether the extension talks to the hosted
+  service, and that the local pipeline needs neither. No setting changed.
 - **Each editor window and the daemon send the platform agent an instance id**
   (#2395). The windows of a machine share one agent and each advertises its
   own execution profile onto it, so the platform could not tell one window
