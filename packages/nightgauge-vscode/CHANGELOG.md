@@ -34,20 +34,9 @@ and this project adheres to
   `Bash`, `Write` and `Edit` among them, instead of the ones its skill grants.
   A `# comment` after the list is no longer read as tools, and a field that
   lists no tool now fails the stage (#2358).
-
 - **Resuming a run from the phone app or the dashboard after its window was
   reloaded says to resume it in the window,** instead of waiting five minutes
   to expire. The reload ended the paused run; the window's own Resume prompt
-  continues it (#2339).
-
-  continues it. Cancelling such a run from there ends it, and its Resume
-  prompt no longer comes back. With several windows on one repository, only
-  one of them answers for it (#2339).
-- **The window warns you when the platform refused to write your workspace.**
-  When your role on the team cannot create or update the workspace, its
-  repositories stay unlinked and triggers for them are refused; the warning
-  names the workspace and the permission needed (#2372).
-
   continues it. Cancelling such a run from there ends it, its Resume prompt
   no longer comes back, and choosing Resume on a prompt already on screen
   starts nothing. With several paused runs, each is answered for while the
@@ -58,20 +47,10 @@ and this project adheres to
   repositories stay unlinked and triggers for them are refused; the warning
   names the workspace and the permission needed, and the workspace sync
   status shows the sync as failed rather than synced (#2372).
-
 - **A command from the phone app or the dashboard for a run no window has is
   answered again within about two seconds,** instead of waiting five minutes
   to expire. With several windows open, only the one running the pipeline
   answers for it, so the app never shows a stop or a pause as refused while
-  the run is stopping or holding (#2357).
-
-- **Cancelling a run from the phone app or the dashboard before it starts
-  works.** A run still waiting for a free slot, or whose worktree was being
-  created, refused the cancel as not started. It is now removed and never
-  starts, and triggering the same issue again runs normally (#2344).
-
-  starts, and triggering the same issue again runs normally. Triggering an
-
   the run is stopping or holding. After a window reload, a command for a run
   that did not survive it is answered once the reloaded window has had a
   minute to come back (#2357).
@@ -80,11 +59,9 @@ and this project adheres to
   created, refused the cancel as not started. It is now removed and never
   starts, even when the cancel arrives the moment the run is triggered, and
   triggering the same issue again runs normally. Triggering an
-
   issue you already queued, even one already starting, follows your queued
   run, and cancelling it from there leaves your run as you queued it
   (#2344).
-
 - **Approve and reject from the phone app or the dashboard say why they
   cannot apply:** no run in the extension waits at an approval gate, so the
   window running the pipeline answers both with that reason (#2336).
@@ -102,28 +79,23 @@ and this project adheres to
   repository's publication hook does, which can take longer than that on a busy
   machine. The orchestrator now gives every push ten minutes, the one that
   saves a run's work when its budget stops it included (#2365).
-
 - **`pipeline.performance_mode.default` is reported as invalid.** The key was
   documented as the mode used when no state file is present, but the extension
   never read it. Choose the mode with the status-bar picker, or set
   `NIGHTGAUGE_PERFORMANCE_MODE`, and remove the key (#2343).
-
 - **A `stall_kill_multiplier` under `performance_mode` or `supercharge` no
   longer changes every stage's stall window.** Only
   `pipeline.stall_kill_multiplier` itself sets the global multiplier (#2378).
-
 - **A sub-issue whose epic lives in another repository is based on its own
   default branch.** The base-branch check after issue pickup and the concurrent
   slots used to look for the epic's branch by number in the sub-issue's
   repository, where it belongs to a different issue, and the check created one
   there when none existed (#2377).
-
 - **An auto-retro issue is no longer linked under another repository's
   issue.** With `feedback_loop.auto_retro.auto_create_issues` on, the issue
   filed for a failed sub-issue was made a sub-issue of the parent epic's
   number in the failed issue's repository. It is now linked only when the
   epic is in that repository (#2377).
-
 - **Pause, resume, cancel, approve and reject from the phone app or the
   dashboard are acknowledged.** Each one used to show as unacknowledged and
   then expired, even when it had been carried out. Pause and resume now work:

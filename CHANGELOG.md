@@ -177,40 +177,6 @@ changelog, and the release workflow refuses a tag that does not.
   publication hook. It now goes through git, as the pipeline's other pushes
   do, refuses a detached `HEAD`, and leaves credentials to git: the binary no
   longer builds HTTPS credentials from `GITHUB_TOKEN` for it.
-
-- **A stage the SDK runs is granted the tools its skill declares** (#2358).
-  `nightgauge-sdk stage` and `run`, which the VS Code extension uses for every
-  non-Claude adapter, built each stage's query with no tools. A stage now gets
-  its SKILL.md's `allowed-tools` without `AskUserQuestion`, as the Go pipeline
-  does: the Claude Agent SDK receives them as `allowedTools` where it received
-  none, `claude-headless` as `--allowedTools` (without it, `--print` refused
-  any tool that needs permission unless the user's settings allowed it),
-  Codex scopes its sandbox to them on a fresh start and on a resume, and
-  OpenCode tells a refused granted tool from one never granted. The binary, the SDK and the extension read the field the
-  same way: entries are separated by spaces or commas, and a `Tool(pattern)`
-  entry such as `Bash(gh *)`, which the binary used to cut in two, stays
-  whole. Shipped stages keep full Codex access, since each grants `Bash`.
-
-- **A stage `nightgauge-sdk stage` or `run` runs is granted the tools its
-  skill declares** (#2358). Those commands, which the VS Code extension uses
-  for every non-Claude adapter, built each stage's query, and each fanned-out
-  unit's, with no tools. Both now get the stage SKILL.md's `allowed-tools`
-  without `AskUserQuestion`, as the Go pipeline grants them from the same
-  file: the Claude Agent SDK receives them as `allowedTools` where it received
-  none, `claude-headless` as `--allowedTools` (without it, `--print` refused
-  any tool that needs permission unless the user's settings allowed it),
-  Codex scopes its sandbox to them on a fresh start and on a resume, and
-  OpenCode tells a refused granted tool from one never granted. That file is
-  the stage's base SKILL.md: the SDK path applies no skill overlay, so a
-  whole-file override changes neither its prompt nor its tools (#2381).
-  The binary, the SDK and the extension read the field the same way: entries
-  are separated by spaces or commas or written one per line as a YAML block
-  list, and a `Tool(pattern)` entry such as `Bash(gh *)`, which the binary
-  used to cut in two, stays whole. A block list used to read as no list, so
-  the extension granted its default tools, `Bash`, `Write` and `Edit` among
-  them, in its place. Shipped stages keep full Codex access, since each
-  grants `Bash`.
-
 - **Stages run through the SDK get the tools their skill declares** (#2358).
   `nightgauge-sdk stage` and `run`, which the VS Code extension uses for every
   non-Claude adapter, and the SDK's exported stage classes built every query
@@ -228,18 +194,11 @@ changelog, and the release workflow refuses a tag that does not.
   as `Bash(gh *)` stays whole, and a `# comment` is skipped. A form a reader did
   not know read as no list and got the default tools, `Bash`, `Write` and
   `Edit` among them, and a comment that named a tool granted it.
-
 - **A platform resume of a run a window reload paused says why it cannot
   continue the run** (#2339). A platform `pause` holds the run in its window;
   a reload ends that held call, and a later platform `resume` found no slot,
   went unanswered and expired. The run's snapshot now records the platform run
   id (`remoteRunId`), and the window that finds the paused snapshot after a
-  reload, with its owning process gone, holds the run: a `resume` or `cancel`
-  is refused `resume-in-window` (only the window's Resume prompt can continue
-  the run, as a new run), and a `pause` is `already_resolved`. Continuing the
-  run from a platform resume waits for ADR-017's consume-on-claim step; #2339
-  stays open for it.
-
   reload, with its owning process gone, holds the run: a `resume` is refused
   `resume-in-window` (only the window's Resume prompt can continue the run,
   as a new run), a `pause` is `already_resolved`, and a `cancel` ends the run
@@ -252,7 +211,6 @@ changelog, and the release workflow refuses a tag that does not.
   a Resume, or the Resumes of two windows, never both take one snapshot. Continuing the run from a
   platform resume waits for ADR-017's consume-on-claim step; #2339 stays open
   for it.
-
 - **A run verb no window holds is refused again, and never ahead of the
   holder's answer** (#2357). Every editor window of a machine shares one
   agent, so each receives a platform `cancel`, `pause`, `resume`, `approve`
@@ -261,13 +219,6 @@ changelog, and the release workflow refuses a tag that does not.
   no longer reached the platform first; but a verb for a run no window held
   then went unanswered for five minutes, until it expired. The windows now
   agree through a ledger in the machine-state directory
-  (`STATE/agent-commands/`): each lists the platform runs it holds, and the
-  first to answer a command claims it. The holder claims the answer before it
-  applies the verb; a window without the run waits two seconds and refuses
-  `no-active-run` only when it still does not hold the run, no live window
-  lists it, and it claims the answer first. The platform gets one
-  acknowledgement per command, the holder's whenever a window holds the run.
-
   (`STATE/agent-commands/`): each lists every platform run it answers for
   (slots, dispatches on their way to a slot, triggers being queued, the runs
   its queue carries, and paused runs a reload ended there) from the moment it
@@ -282,7 +233,6 @@ changelog, and the release workflow refuses a tag that does not.
   when it still does not hold the run, no window lists it, and it claims the
   answer first. The platform gets one acknowledgement per command, the
   holder's whenever a window holds the run.
-
 - **A platform cancel of a triggered run that has not started yet applies**
   (#2344). A cancel of a run this window accepted the trigger for, still
   queued behind other slots or with its worktree being created, was refused
@@ -296,11 +246,6 @@ changelog, and the release workflow refuses a tag that does not.
   start. A later trigger of the same issue runs under its own run id. The queued item now
   carries the platform run id and the slot adopts it from there, so a run id
   can no longer be adopted by a later dispatch of the same issue number from
-  a local re-queue or another repository, a re-queued remote run keeps its
-  run id, and a trigger for an issue already waiting in the queue attaches its
-  run id to that item. `queue.removeRemoteRun` removes one remote run's item
-  that no dispatch has taken.
-
   a local re-queue or another repository, and a re-queued remote run keeps its
   run id. A trigger for an issue the operator already queued here serves that
   work: it attaches its run id to the waiting item, or to the issue's dispatch
@@ -310,7 +255,6 @@ changelog, and the release workflow refuses a tag that does not.
   platform run is refused `already-queued` before its ack.
   `queue.removeRemoteRun` removes one remote run's item that no dispatch has
   taken, or detaches the run from the operator's item.
-
 - **A slow reap of the complexity-model lock broker no longer hides why the
   transaction failed** (#2356). The extension waited for a broker it had sent
   SIGKILL as briefly as for one asked to exit, and an error from that wait
@@ -431,7 +375,6 @@ changelog, and the release workflow refuses a tag that does not.
   comes from `NIGHTGAUGE_PERFORMANCE_MODE`, then the checkout's
   `performance-mode.yaml` (the status-bar picker), then `elevated`. A config
   that still sets the key is reported as invalid instead of being ignored.
-
   CONFIGURATION.md no longer says `pipeline.performance_mode.overrides.maximum`
   tunes the `maximum` profile, or that `pipeline.supercharge` is its synonym:
   nothing reads the overrides (#2378). Of the legacy block only `codex_model`
@@ -445,7 +388,6 @@ changelog, and the release workflow refuses a tag that does not.
   CONFIGURATION.md's example showed, or under `supercharge` changed the stall
   window of every stage in every mode. Only `pipeline.stall_kill_multiplier`
   itself is the global multiplier now.
-
 - **An epic's branch, epic PR, accumulated context and checkpoint are found in
   the epic's own repository** (#2377). Four call sites still resolved a
   sub-issue's parent epic by number in the sub-issue's repository. When the
@@ -462,8 +404,6 @@ changelog, and the release workflow refuses a tag that does not.
   repository's default branch, and `git branch-create` reports no
   `parent_issue` for it. Epic context is kept in the pipeline state of the
   epic's repository. The between-epic checkpoint's halt reason and card name
-  the epic as `owner/repo#N`.
-
   the epic as `owner/repo#N`. The extension decides the same way: its
   post-pickup epic base-branch check and its concurrent slots look for an epic
   branch only when the epic lives in the sub-issue's repository, using the
@@ -472,10 +412,6 @@ changelog, and the release workflow refuses a tag that does not.
   wave run executes each sub-issue in its own repository, not as the epic
   repository's issue with the same number, and the dispatcher's cross-epic hold
   no longer holds an unrelated issue that shares a number with a blocked
-  epic's sub-issue. The unused `epic.readContext`, `epic.appendContext` and
-  `wave.status` IPC methods, which read the launch checkout by epic number
-  alone, are removed.
-
   epic's sub-issue. A wave reads each sub-issue's run back from the checkout of
   the sub-issue's repository, where the run was rooted, and only that
   repository's run of the number: a merged sub-issue in another repository
@@ -492,7 +428,6 @@ changelog, and the release workflow refuses a tag that does not.
   repository's same-numbered issue. The unused `epic.readContext`,
   `epic.appendContext` and `wave.status` IPC methods, which read the launch
   checkout by epic number alone, are removed.
-
 - **A blocker that shares its number with a parent epic in another repository
   is no longer deleted, refused or flagged as circular** (#2369). Three checks
   for "an issue blocked by its own parent epic" compared only the number. The
@@ -500,23 +435,18 @@ changelog, and the release workflow refuses a tag that does not.
   the sub-issue over it, `issue add-blocked-by` refused the edge, and
   `epic validate` reported a circular blocker that issue-audit's repair then
   removes. All three now match the parent by repository and number.
-
   `epic validate` also tells two sub-issues that share a number in different
   repositories apart, and each gap names its sub-issue's and blocker's
   repositories (`subIssueRepo`, `blockerRepo`). issue-audit repairs a gap only
   when both are the same repository, and leaves a cross-repository pair for a
   human, since `remove-blocked-by` works within one repository.
-
 - **The `issue-create` skill, `issue create-sub --blocked-by` and
   GO_BINARY.md no longer call body-declared dependencies cosmetic** (#2351).
   Native `blockedBy` is still the relationship to create, but the pickup gate
   and the dispatcher also honour `Depends on:` / `Blocked by` lines and
   `## Dependencies` entries, so a stale one holds an issue until it is removed
-  or marked `⏸️`.
-
   or marked `⏸️`. `hook check-deps --help` and the hook contract now say it
   reads both, and the contract documents its JSON and exit codes.
-
 - **The epic cascade finds a parent epic in another repository in that
   repository** (#2350). A sub-issue's parent was looked up by number in the
   sub-issue's own repository, because the board read recorded the parent's
@@ -527,19 +457,11 @@ changelog, and the release workflow refuses a tag that does not.
   on a board. Both board reads (GraphQL and REST) now record the parent's
   repository, and the dispatcher, the watchdog, its own-sub-issue check and
   the knowledge graph's part-of edge key the epic by repository and number. A
-  hold through a cross-repository epic names it in full:
-  `(via epic owner/repo#20)`. The REST board cache's stored shape changed, so
-  its entries are read fresh once.
-
   hold through a cross-repository epic names it, and each of its blockers
   outside the sub-issue's repository, in full:
   `(via epic owner/repo#20) blocked by owner/repo#10 (open)`. The REST board
   cache's stored shape changed, so its entries are read fresh once. The
-  ready-to-ship alert names the closed epic in its own repository, and the epic
-  branch is named from the epic's own title.
-
   ready-to-ship alert names the closed epic in its own repository.
-
 - **Short repository names in body-declared dependencies resolve against the
   workspace's own repositories** (#2349). The pickup gate, the dispatcher's
   dependency graph, `graph build`, `next`, `hook check-deps`, the `pr merge`
@@ -549,12 +471,6 @@ changelog, and the release workflow refuses a tag that does not.
   name glued to its `#` dropped the dependency, so the issue dispatched over an
   open blocker; written with a space, it gated on the declaring repository's
   own `#12`; and `platform` gated on `acme/platform`, which no board holds.
-  Every caller now builds the map from the workspace's repositories (the
-  manifest's members, the sibling checkouts and the scheduler's repo set),
-  found from the main checkout even when the command runs in a pipeline
-  worktree. A bare name that two repositories share resolves to neither, and
-  the full `owner/repo#N` spelling always works.
-
   Every caller now builds the map from the workspace's repositories: the
   checkout itself, the manifest's members and the sibling checkouts, each
   counted when its own `.nightgauge/config.yaml` names its owner and repo, plus
@@ -572,7 +488,6 @@ changelog, and the release workflow refuses a tag that does not.
   there stays a parent link. A keyword no longer reaches a reference on the
   next line, so prose hard-wrapped after "does not … depend on" no longer
   declares the dependency it denies.
-
 - **The VS Code agent acknowledges every command it consumes, and carries out
   pause and resume** (#2334). A cancel, approve, reject, pause or resume from
   the phone app or the dashboard used to sit `routing` until it expired,
