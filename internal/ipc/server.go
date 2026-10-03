@@ -2462,8 +2462,8 @@ func (s *Server) registerMethods() {
 		if d == nil {
 			return PlatformWorkspaceThrottleResult{}, nil
 		}
-		throttle, known := d.Snapshot()
-		return PlatformWorkspaceThrottleResult{Known: known, Throttle: throttle}, nil
+		throttle, known, unread := d.Report()
+		return PlatformWorkspaceThrottleResult{Known: known, Unread: unread, Throttle: throttle}, nil
 	}
 
 	// --- Auth methods ---

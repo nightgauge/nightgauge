@@ -112,19 +112,76 @@ type throttleApplied struct {
 	known    bool
 }
 
+// throttleRecorder is a follower's target that records what it is told.
+type throttleRecorder struct {
+	mu      sync.Mutex
+	applied []throttleApplied
+	unread  int
+}
+
+func (r *throttleRecorder) Set(t *WorkspaceThrottle, known bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.applied = append(r.applied, throttleApplied{t, known})
+}
+
+func (r *throttleRecorder) MarkUnread() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.unread++
+}
+
+func (r *throttleRecorder) sets() []throttleApplied {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]throttleApplied(nil), r.applied...)
+}
+
+func (r *throttleRecorder) unreads() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.unread
+}
+
 // followerFor builds a follower over fakes and records what it applies.
 func followerFor(read func(context.Context, string) (*WorkspaceThrottle, error), slug func() (string, bool, error), session func() bool) (*WorkspaceThrottleFollower, func() []throttleApplied) {
-	var mu sync.Mutex
-	var applied []throttleApplied
-	f := NewWorkspaceThrottleFollower(read, slug, session, func(t *WorkspaceThrottle, known bool) {
-		mu.Lock()
-		defer mu.Unlock()
-		applied = append(applied, throttleApplied{t, known})
-	})
-	return f, func() []throttleApplied {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]throttleApplied(nil), applied...)
+	rec := &throttleRecorder{}
+	return NewWorkspaceThrottleFollower(read, slug, session, rec), rec.sets
+}
+
+// With a session the throttle is followed, and unread until a read succeeds
+// (#2352): a daemon that just started, or whose reads fail, tells a headless
+// scheduler so, and it keeps what it learned. Without a session nothing is
+// followed, which is not unread.
+func TestWorkspaceThrottleFollower_UnreadUntilARead(t *testing.T) {
+	session := true
+	readErr := errors.New("the platform returned 503")
+	rec := &throttleRecorder{}
+	f := NewWorkspaceThrottleFollower(
+		func(context.Context, string) (*WorkspaceThrottle, error) {
+			if readErr != nil {
+				return nil, readErr
+			}
+			return &WorkspaceThrottle{MaxConcurrent: 1}, nil
+		},
+		func() (string, bool, error) { return "w", true, nil },
+		func() bool { return session },
+		rec,
+	)
+
+	f.Refresh(context.Background())
+	if rec.unreads() != 1 || len(rec.sets()) != 0 {
+		t.Fatalf("a session, a failed read: unread %d, sets %+v; want unread once, nothing set", rec.unreads(), rec.sets())
+	}
+	readErr = nil
+	f.Refresh(context.Background())
+	if got := rec.sets(); len(got) != 1 || !got[0].known || got[0].throttle.MaxConcurrent != 1 {
+		t.Fatalf("a read: sets = %+v, want the throttle, known", got)
+	}
+	session = false
+	f.Refresh(context.Background())
+	if got := rec.sets(); len(got) != 2 || got[1].known || rec.unreads() != 2 {
+		t.Fatalf("no session: sets = %+v, unread %d; want unknown, and no unread mark", got, rec.unreads())
 	}
 }
 
@@ -249,7 +306,7 @@ func TestWorkspaceThrottleFollower_BoundsEachRead(t *testing.T) {
 	if got := applied(); len(got) != 1 || got[0].throttle.MaxConcurrent != 1 {
 		t.Fatalf("applied = %+v, want the next read's throttle", got)
 	}
-	if NewWorkspaceThrottleFollower(nil, nil, nil, nil).readTimeout != workspaceThrottleReadTimeout {
+	if NewWorkspaceThrottleFollower(nil, nil, nil, &throttleRecorder{}).readTimeout != workspaceThrottleReadTimeout {
 		t.Fatal("a follower is built without the read bound")
 	}
 }

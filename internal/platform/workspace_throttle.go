@@ -126,13 +126,16 @@ const workspaceThrottleReadTimeout = 30 * time.Second
 // Reads run one at a time, and a Refresh asked for while one is in flight
 // runs again after it, so the value applied last always comes from a read
 // that started after the last change was signalled. Each read is bounded by
-// workspaceThrottleReadTimeout, and a read that fails changes nothing. The throttle is followed only while a signed-in session exists, as
-// the extension follows it: without one the cap is lifted and unknown.
+// workspaceThrottleReadTimeout, and a read that fails changes nothing. The
+// throttle is followed only while a signed-in session exists, as the
+// extension follows it: without one the cap is lifted and unknown. With one,
+// it is unread until a read succeeds, so a headless scheduler that asks the
+// daemon keeps what it learned before.
 type WorkspaceThrottleFollower struct {
 	read    func(ctx context.Context, slug string) (*WorkspaceThrottle, error)
 	slug    func() (string, bool, error)
 	session func() bool
-	apply   func(throttle *WorkspaceThrottle, known bool)
+	target  WorkspaceThrottleTarget
 	// readTimeout bounds each read; workspaceThrottleReadTimeout but in tests.
 	readTimeout time.Duration
 
@@ -141,19 +144,32 @@ type WorkspaceThrottleFollower struct {
 	again   bool
 }
 
+// WorkspaceThrottleTarget receives what a WorkspaceThrottleFollower learns
+// (#2352); orchestrator.DispatchThrottle is one.
+type WorkspaceThrottleTarget interface {
+	// Set applies a read's throttle, or nil for none, with known true; with
+	// known false it lifts the throttle, which no session can read.
+	Set(throttle *WorkspaceThrottle, known bool)
+	// MarkUnread records that a session exists, so the throttle is
+	// followed, though no read has succeeded since it came; it changes a
+	// known throttle in nothing.
+	MarkUnread()
+}
+
 // NewWorkspaceThrottleFollower follows the throttle through read. slug names
 // the served workspace (false when the workspace config names none, which has
 // no throttle; an error when the config cannot be read, which changes
-// nothing), session reports whether a signed-in session exists, and apply
-// receives each result: a throttle or nil, known, or unknown with no session.
+// nothing), session reports whether a signed-in session exists, and target
+// receives each result: a throttle or nil, known; unknown with no session;
+// or, with a session, unread until a read succeeds.
 func NewWorkspaceThrottleFollower(
 	read func(ctx context.Context, slug string) (*WorkspaceThrottle, error),
 	slug func() (string, bool, error),
 	session func() bool,
-	apply func(throttle *WorkspaceThrottle, known bool),
+	target WorkspaceThrottleTarget,
 ) *WorkspaceThrottleFollower {
 	return &WorkspaceThrottleFollower{
-		read: read, slug: slug, session: session, apply: apply,
+		read: read, slug: slug, session: session, target: target,
 		readTimeout: workspaceThrottleReadTimeout,
 	}
 }
@@ -186,16 +202,19 @@ func (f *WorkspaceThrottleFollower) Refresh(ctx context.Context) {
 
 func (f *WorkspaceThrottleFollower) readAndApply(ctx context.Context) {
 	if !f.session() {
-		f.apply(nil, false)
+		f.target.Set(nil, false)
 		return
 	}
+	// Followed from here on: unknown until a read succeeds, which is not
+	// the same as following none (#2352).
+	f.target.MarkUnread()
 	slug, ok, err := f.slug()
 	if err != nil {
 		log.Printf("[nightgauge] workspace throttle: could not resolve the served workspace (keeping the last throttle): %v", err)
 		return
 	}
 	if !ok {
-		f.apply(nil, true)
+		f.target.Set(nil, true)
 		return
 	}
 	readCtx, cancel := context.WithTimeout(ctx, f.readTimeout)
@@ -205,5 +224,5 @@ func (f *WorkspaceThrottleFollower) readAndApply(ctx context.Context) {
 		log.Printf("[nightgauge] workspace throttle: could not read the throttle of workspace %q (keeping the last one): %v", slug, err)
 		return
 	}
-	f.apply(throttle, true)
+	f.target.Set(throttle, true)
 }

@@ -342,8 +342,9 @@ func reportRefusedWorkspaceWrites(status daemonAgentIPC, info platform.AgentRegi
 //
 // throttle, when set, follows the platform throttle of the workspace the
 // daemon serves (#2352), read by its slug while a signed-in session exists:
-// after every registration, on every `throttle` command (which is still
-// relayed), each time the command stream opens, and when the session changes.
+// at start, after every registration, on every `throttle` command (which is
+// still relayed), each time the command stream opens, and when the session
+// changes.
 func runDaemonPlatformAgent(
 	ctx context.Context,
 	platformClient *platform.Client,
@@ -381,11 +382,16 @@ func runDaemonPlatformAgent(
 				return decl.Workspace.Slug, true, nil
 			},
 			platformClient.HasSessionToken,
-			throttle.Set,
+			throttle,
 		)
 		refreshThrottle = func() { follower.Refresh(ctx) }
 		ext.OnSessionToken(refreshThrottle)
 		relay = refreshThrottleOnCommand(relay, refreshThrottle)
+		// Read now, not only after the first registration: a session the
+		// extension installed before this listener existed, or a platform
+		// that refuses registration for a while, would otherwise leave the
+		// throttle reported as not followed (#2352).
+		go refreshThrottle()
 	}
 	runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, ext, relay,
 		func(info platform.AgentRegistration) {

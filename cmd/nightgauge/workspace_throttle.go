@@ -65,11 +65,13 @@ type daemonThrottleFollower struct {
 	last     string
 }
 
-// step asks the daemon once and applies its answer. A daemon that cannot be
-// reached changes nothing: a throttle it reported before is kept, until its
-// resumeAt or until a daemon reports the workspace's throttle again, and the
-// log says so; with none learned, nothing is capped. Each change of state is
-// logged once.
+// step asks the daemon once and applies its answer. Only an answer that names
+// the throttle, or says the daemon follows none, changes what is applied. A
+// daemon that cannot be reached, or that follows the throttle but has not
+// read it yet (just started, or its reads failing), changes nothing: a
+// throttle it reported before is kept, until its resumeAt or until a daemon
+// reports the workspace's throttle again, and the log says so; with none
+// learned, nothing is capped. Each change of state is logged once.
 func (f *daemonThrottleFollower) step(ctx context.Context) {
 	result, err := f.read(ctx)
 	switch {
@@ -81,15 +83,23 @@ func (f *daemonThrottleFollower) step(ctx context.Context) {
 		} else {
 			f.report("unreachable", "no daemon serves this workspace with a signed-in session, so the platform's throttle is not followed (%v)", err)
 		}
-	case !result.Known:
-		f.throttle.Set(nil, false)
-		f.report("unknown", "the workspace's daemon has no signed-in session, so the platform's throttle is not followed")
-	case result.Throttle == nil:
+	case result.Known && result.Throttle == nil:
 		f.throttle.Set(nil, true)
 		f.report("none", "the workspace has no throttle")
-	default:
+	case result.Known:
 		f.throttle.Set(result.Throttle, true)
 		f.report("throttled "+describeWorkspaceThrottle(result.Throttle), "the workspace is throttled to %s", describeWorkspaceThrottle(result.Throttle))
+	case result.Unread:
+		if kept, _ := f.throttle.Snapshot(); kept != nil {
+			f.report("unread, kept "+describeWorkspaceThrottle(kept),
+				"the workspace's daemon has not read the platform's throttle yet, so the last throttle it reported is kept: %s",
+				describeWorkspaceThrottle(kept))
+		} else {
+			f.report("unread", "the workspace's daemon has not read the platform's throttle yet, so none is applied yet")
+		}
+	default:
+		f.throttle.Set(nil, false)
+		f.report("unknown", "the workspace's daemon follows no throttle (it has no signed-in session), so the platform's throttle is not followed")
 	}
 }
 

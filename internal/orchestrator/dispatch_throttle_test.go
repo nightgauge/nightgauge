@@ -68,6 +68,33 @@ func TestDispatchThrottle_Ceiling(t *testing.T) {
 
 // Listeners hear every change once, nothing for the same throttle again, and
 // the throttle lifting at its resumeAt without a further Set.
+// A followed throttle that has not been read yet is unread, not unknown
+// (#2352): it caps nothing, but the daemon tells a headless scheduler to keep
+// what it learned. A known throttle stays known through a later failed read,
+// and a lost session makes it unknown again.
+func TestDispatchThrottle_ReportsAFollowedThrottleNotReadYet(t *testing.T) {
+	d := NewDispatchThrottle()
+	if th, known, unread := d.Report(); th != nil || known || unread {
+		t.Fatalf("followed by nothing: %v %v %v, want unknown, not unread", th, known, unread)
+	}
+	d.MarkUnread()
+	if th, known, unread := d.Report(); th != nil || known || !unread {
+		t.Fatalf("a session, no read yet: %v %v %v, want unread", th, known, unread)
+	}
+	if got := d.Ceiling(3); got != 3 {
+		t.Fatalf("unread: ceiling = %d, want 3", got)
+	}
+	d.Set(throttleAt(1, nil), true)
+	d.MarkUnread() // a later read that failed
+	if th, known, unread := d.Report(); th == nil || th.MaxConcurrent != 1 || !known || unread {
+		t.Fatalf("known, then a failed read: %v %v %v, want the throttle, known", th, known, unread)
+	}
+	d.Set(nil, false)
+	if th, known, unread := d.Report(); th != nil || known || unread {
+		t.Fatalf("the session is gone: %v %v %v, want unknown, not unread", th, known, unread)
+	}
+}
+
 func TestDispatchThrottle_AnnouncesChangesAndTheLift(t *testing.T) {
 	d := NewDispatchThrottle()
 	changes := make(chan struct{}, 16)

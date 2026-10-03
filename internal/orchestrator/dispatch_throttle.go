@@ -25,7 +25,10 @@ type DispatchThrottle struct {
 	mu       sync.Mutex
 	throttle *platform.WorkspaceThrottle
 	known    bool
-	now      func() time.Time
+	// unread is true while the throttle is followed (a signed-in session
+	// exists) but not known: no read has succeeded since the session came.
+	unread bool
+	now    func() time.Time
 	// afterFunc arms the lift at resumeAt: time.AfterFunc, but in tests.
 	afterFunc func(time.Duration, func()) liftTimer
 	liftTimer liftTimer
@@ -52,6 +55,7 @@ func (d *DispatchThrottle) Set(throttle *platform.WorkspaceThrottle, known bool)
 	if !known {
 		throttle = nil
 	}
+	d.unread = false
 	if throttle != nil {
 		copied := *throttle
 		throttle = &copied
@@ -76,16 +80,44 @@ func (d *DispatchThrottle) Set(throttle *platform.WorkspaceThrottle, known bool)
 	}
 }
 
+// MarkUnread records that the throttle is followed, since a signed-in
+// session exists, but not known yet: its first read is in flight, or every
+// read so far failed (#2352). Like an unknown throttle it caps nothing, but a
+// headless scheduler asking the daemon keeps the throttle it learned before,
+// where a daemon that follows none lifts it. A known throttle is left as it
+// is: a read that fails changes nothing.
+func (d *DispatchThrottle) MarkUnread() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.known {
+		d.unread = true
+	}
+}
+
+// Report is what the daemon tells a headless scheduler (#2352): the throttle
+// in force (nil when none is), whether it is known, and, when it is not,
+// whether it is followed but not read yet (MarkUnread).
+func (d *DispatchThrottle) Report() (throttle *platform.WorkspaceThrottle, known, unread bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.inForceLocked(), d.known, !d.known && d.unread
+}
+
 // Snapshot returns the throttle in force now (nil when none is), and whether
 // the throttle is known at all.
 func (d *DispatchThrottle) Snapshot() (*platform.WorkspaceThrottle, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	return d.inForceLocked(), d.known
+}
+
+// inForceLocked is a copy of the throttle in force now, nil when none is.
+func (d *DispatchThrottle) inForceLocked() *platform.WorkspaceThrottle {
 	if d.throttle == nil || !d.throttle.InForce(d.now()) {
-		return nil, d.known
+		return nil
 	}
 	copied := *d.throttle
-	return &copied, d.known
+	return &copied
 }
 
 // Ceiling is the concurrency dispatch may reach: configured, or the

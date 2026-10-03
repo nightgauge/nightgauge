@@ -417,10 +417,216 @@ func TestFollowDaemonWorkspaceThrottle(t *testing.T) {
 	if got := throttle.Ceiling(3); got != 1 {
 		t.Fatalf("daemon unreachable: ceiling = %d, want the last throttle, 1", got)
 	}
+	// A daemon that follows the throttle but has not read it yet (it just
+	// started, or its reads fail) changes nothing either.
+	ask(answer{result: ipc.PlatformWorkspaceThrottleResult{Unread: true}})
+	ask(answer{err: errors.New("dial unix: no such file")}) // the previous answer has been handled
+	if got := throttle.Ceiling(3); got != 1 {
+		t.Fatalf("daemon has not read the throttle: ceiling = %d, want the last throttle, 1", got)
+	}
 	ask(answer{result: ipc.PlatformWorkspaceThrottleResult{Known: false}})
 	<-changes
 	if got := throttle.Ceiling(3); got != 3 {
 		t.Fatalf("daemon without a session: ceiling = %d, want 3", got)
+	}
+}
+
+// The review's case for #2352, end to end over the workspace socket: a
+// headless scheduler learned a throttle from the workspace's daemon; that
+// daemon restarts with a session, and its first read of the workspace list
+// fails. The new daemon has not read the throttle, which is not the same as
+// following none, so the headless scheduler keeps it. A daemon that then
+// loses its session follows none, and the throttle is lifted.
+func TestHeadlessKeepsTheThrottleWhileTheDaemonHasNotReadIt(t *testing.T) {
+	dir := t.TempDir()
+	srv := ipc.NewServer(nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sock, err := ipc.DaemonSocketPath(dir)
+	if err != nil {
+		t.Fatalf("socket path: %v", err)
+	}
+	ln, err := srv.BindSocket(sock)
+	if err != nil {
+		t.Fatalf("bind the daemon socket: %v", err)
+	}
+	go func() { _ = srv.ServeSocket(ctx, ln, sock) }()
+
+	// The first daemon read the workspace's throttle: nothing at once.
+	first := orchestrator.NewDispatchThrottle()
+	first.Set(&platform.WorkspaceThrottle{MaxConcurrent: 0}, true)
+	srv.SetDispatchThrottle(first)
+	headless := orchestrator.NewDispatchThrottle()
+	f := &daemonThrottleFollower{throttle: headless, read: func(ctx context.Context) (ipc.PlatformWorkspaceThrottleResult, error) {
+		return readDaemonWorkspaceThrottle(ctx, dir)
+	}}
+	f.step(ctx)
+	if got := headless.Ceiling(4); got != 0 {
+		t.Fatalf("learned from the first daemon: ceiling = %d, want 0", got)
+	}
+
+	// The daemon restarts: it has a session, and the platform answers 503.
+	restarted := orchestrator.NewDispatchThrottle()
+	srv.SetDispatchThrottle(restarted)
+	platform.NewWorkspaceThrottleFollower(
+		func(context.Context, string) (*platform.WorkspaceThrottle, error) {
+			return nil, errors.New("workspace throttle: the platform returned 503")
+		},
+		func() (string, bool, error) { return "acme-platform", true, nil },
+		func() bool { return true },
+		restarted,
+	).Refresh(ctx)
+	f.step(ctx)
+	if got := headless.Ceiling(4); got != 0 {
+		t.Fatalf("the restarted daemon has not read the throttle: ceiling = %d, want the kept 0", got)
+	}
+
+	// The session is gone: the daemon follows no throttle, and it is lifted.
+	restarted.Set(nil, false)
+	f.step(ctx)
+	if got := headless.Ceiling(4); got != 4 {
+		t.Fatalf("the daemon follows no throttle: ceiling = %d, want 4", got)
+	}
+}
+
+// The daemon reads its throttle as soon as its agent starts, not only after
+// its first registration (#2352): while the platform refuses registration, a
+// daemon with a session reports the throttle followed but not read yet,
+// rather than not followed at all.
+func TestRunDaemonPlatformAgent_FollowsTheThrottleBeforeItRegisters(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_AGENT_ID", "test-machine-uuid")
+	ws := t.TempDir()
+	writeTestFile(t, filepath.Join(ws, ".vscode", "nightgauge-workspace.yaml"),
+		"workspace:\n  name: Acme Platform\nrepositories:\n  - name: api\n    path: api\n")
+	writeTestFile(t, filepath.Join(ws, "api", ".nightgauge", "config.yaml"), "github:\n  owner: acme\n  repo: api\n")
+	windowJSON, _ := json.Marshal([]string{ws, filepath.Join(ws, "api")})
+	t.Setenv(agentworkspace.WindowFoldersEnv, string(windowJSON))
+
+	var reads int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/register":
+			w.WriteHeader(http.StatusServiceUnavailable)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/workspaces":
+			atomic.AddInt32(&reads, 1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client, err := platform.NewClient(platform.Config{BaseURL: srv.URL, APIKey: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.SetSessionToken("header.payload.signature")
+	throttle := orchestrator.NewDispatchThrottle()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), &extensionSide{}, "test",
+			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), throttle)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitUntil(t, "the throttle read at start", func() bool { return atomic.LoadInt32(&reads) >= 1 })
+	waitUntil(t, "the throttle reported followed but unread", func() bool {
+		_, known, unread := throttle.Report()
+		return !known && unread
+	})
+}
+
+// The daemon reads its throttle again each time its command stream opens
+// (#2352): a throttle set while the stream was down is learned when it
+// reconnects, without a registration or a throttle command in between.
+func TestRunDaemonPlatformAgent_ReadsTheThrottleAgainWhenTheStreamReopens(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_AGENT_ID", "test-machine-uuid")
+	ws := t.TempDir()
+	writeTestFile(t, filepath.Join(ws, ".vscode", "nightgauge-workspace.yaml"),
+		"workspace:\n  name: Acme Platform\nrepositories:\n  - name: api\n    path: api\n")
+	writeTestFile(t, filepath.Join(ws, "api", ".nightgauge", "config.yaml"), "github:\n  owner: acme\n  repo: api\n")
+	windowJSON, _ := json.Marshal([]string{ws, filepath.Join(ws, "api")})
+	t.Setenv(agentworkspace.WindowFoldersEnv, string(windowJSON))
+
+	var registrations, streams int32
+	dropFirstStream := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/register":
+			atomic.AddInt32(&registrations, 1)
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"agentId":"agent-daemon","ttl_seconds":90}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/workspaces":
+			// The throttle was changed while the stream was down: only a
+			// read made once the stream reopened can see the new cap.
+			workspaceCap := 2
+			if atomic.LoadInt32(&streams) >= 2 {
+				workspaceCap = 1
+			}
+			_, _ = fmt.Fprintf(w, `{"workspaces":[{"slug":"acme-platform","throttle":{"maxConcurrent":%d,"resumeAt":null}}]}`, workspaceCap)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/agents/agent-daemon/commands":
+			n := atomic.AddInt32(&streams, 1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			if n == 1 {
+				select {
+				case <-dropFirstStream: // the stream goes down
+				case <-r.Context().Done():
+				}
+				return
+			}
+			<-r.Context().Done()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client, err := platform.NewClient(platform.Config{BaseURL: srv.URL, APIKey: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.SetSessionToken("header.payload.signature")
+	throttle := orchestrator.NewDispatchThrottle()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), &extensionSide{}, "test",
+			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), throttle)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitUntil(t, "the stream open and the throttle applied", func() bool {
+		return atomic.LoadInt32(&streams) == 1 && throttle.Ceiling(5) == 2
+	})
+
+	// The stream goes down; the throttle changed meanwhile, and nothing
+	// announces it.
+	close(dropFirstStream)
+	deadline := time.Now().Add(30 * time.Second) // the reconnect waits out a 1 s backoff
+	for throttle.Ceiling(5) != 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the throttle was not read again when the stream reopened: ceiling = %d, streams = %d", throttle.Ceiling(5), atomic.LoadInt32(&streams))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := atomic.LoadInt32(&streams); n < 2 {
+		t.Fatalf("streams = %d, want the reconnect to have read it", n)
+	}
+	if n := atomic.LoadInt32(&registrations); n != 1 {
+		t.Fatalf("registrations = %d, want 1: the stream reopened without a re-registration", n)
 	}
 }
 

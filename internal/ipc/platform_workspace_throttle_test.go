@@ -38,8 +38,15 @@ func TestPlatformWorkspaceThrottle_ReportsWhatTheDaemonFollows(t *testing.T) {
 
 	d := orchestrator.NewDispatchThrottle()
 	s.SetDispatchThrottle(d)
-	if got := workspaceThrottleResult(t, s); got.Known {
-		t.Fatalf("followed nothing yet: %+v, want unknown", got)
+	if got := workspaceThrottleResult(t, s); got.Known || got.Unread {
+		t.Fatalf("followed nothing yet: %+v, want unknown, not unread", got)
+	}
+
+	// A session exists, but no read has succeeded yet: unread, which tells a
+	// headless scheduler to keep the throttle it learned before.
+	d.MarkUnread()
+	if got := workspaceThrottleResult(t, s); got.Known || !got.Unread || got.Throttle != nil {
+		t.Fatalf("followed, not read yet: %+v, want unread", got)
 	}
 
 	resumeAt := time.Now().Add(time.Hour).UTC().Truncate(time.Millisecond)
@@ -50,8 +57,13 @@ func TestPlatformWorkspaceThrottle_ReportsWhatTheDaemonFollows(t *testing.T) {
 	}
 
 	d.Set(nil, true)
-	if got := workspaceThrottleResult(t, s); !got.Known || got.Throttle != nil {
+	if got := workspaceThrottleResult(t, s); !got.Known || got.Unread || got.Throttle != nil {
 		t.Fatalf("cleared: %+v, want known, none", got)
+	}
+
+	d.Set(nil, false)
+	if got := workspaceThrottleResult(t, s); got.Known || got.Unread {
+		t.Fatalf("no session: %+v, want unknown, not unread", got)
 	}
 }
 

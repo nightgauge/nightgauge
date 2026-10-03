@@ -528,10 +528,15 @@ type QueueValidatePinResult struct {
 // PlatformWorkspaceThrottleResult is the platform workspace throttle this
 // daemon follows (#2352), for a process that cannot read it itself: a headless
 // scheduler holding only a license key asks the workspace's daemon over the
-// socket. Known is false while the daemon follows no throttle (it has no
-// signed-in session); Throttle is the throttle in force, or null for none.
+// socket. Known is true once the daemon has read the throttle; Throttle is
+// then the throttle in force, or null for none. With Known false, Unread
+// tells why: true while the daemon follows the throttle (it has a signed-in
+// session) but has not read it yet, its first read in flight or every read
+// so far failed, so a caller keeps the throttle it learned before; false
+// when the daemon follows no throttle (no signed-in session).
 type PlatformWorkspaceThrottleResult struct {
 	Known    bool                        `json:"known"`
+	Unread   bool                        `json:"unread,omitempty"`
 	Throttle *platform.WorkspaceThrottle `json:"throttle"`
 }
 
