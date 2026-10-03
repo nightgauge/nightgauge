@@ -227,6 +227,16 @@ func (c *Client) StartHealthPolling(ctx context.Context) {
 	}()
 }
 
+// ProbeHealth runs one health check now, in the caller's goroutine, and
+// reports whether the platform answered online. A client built on demand
+// starts offline and polls in the background (#2398), so an account action
+// that gates on IsOnline probes first rather than reporting the platform
+// unreachable before its first check has run.
+func (c *Client) ProbeHealth(ctx context.Context) bool {
+	c.checkHealth(ctx)
+	return c.IsOnline()
+}
+
 // StopHealthPolling stops the background health poller.
 func (c *Client) StopHealthPolling() {
 	if c.pollCancel != nil {

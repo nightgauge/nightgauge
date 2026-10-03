@@ -5320,6 +5320,10 @@ func serveCmd() *cobra.Command {
 			// poller (below) and the #330 Action Center bridge stay dormant
 			// in the product's primary deployment mode.
 			resolvedPlatform := resolvePlatformConfig(platformURL, apiKey, licenseKey, cfg, newLicenseStore().ResolveLicenseKey)
+			// The user's own account actions (sign-in, license activation, a
+			// trial) build a client on demand when there is none, and go to
+			// the URL they configured whatever platform.enabled says (#2398).
+			opts = append(opts, ipc.WithPlatformEndpoint(onDemandPlatformEndpoint(platformURL, cfg)))
 			platformURL, apiKey, licenseKey = resolvedPlatform.URL, resolvedPlatform.APIKey, resolvedPlatform.LicenseKey
 			if resolvedPlatform.Configured() {
 				apiURLForLog := platformURL

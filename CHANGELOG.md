@@ -189,6 +189,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A license key stored in VS Code no longer registers the machine with
+  `platform.enabled: false`** (#2398). The extension handed its stored key to
+  the daemon in `NIGHTGAUGE_LICENSE_KEY`, which the daemon reads as an explicit
+  opt-in, so activating a license or starting a trial made it register the
+  machine, send heartbeats and poll for commands with the switch off. It
+  forwarded `platform.api_url` and `platform.api_key` from the config files
+  the same way. Now the extension forwards neither: the daemon reads the
+  stored key from the shared keychain entry (or the machine-tier file) and its
+  own config, and uses them only when `platform.enabled` is true. A key in the
+  environment VS Code was started from is still an explicit opt-in. Signing
+  in, verifying a license and starting a trial are the user's own actions and
+  keep working with the switch off: the daemon builds a platform client for
+  them on demand, against `platform.api_url` when it is set, and that client
+  carries no stored credential, so it starts no platform agent.
 - **A window reload with a pipeline running no longer empties the queue**
   (#2396). `deactivate` ended the window's runs through the same path as Stop
   All, which clears the queue, so every waiting issue, runs triggered from the

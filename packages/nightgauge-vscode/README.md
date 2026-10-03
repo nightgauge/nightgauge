@@ -304,15 +304,21 @@ neither of the two switches below.
   subscription and team commands in the Command Palette, sign-in among them,
   and the Subscription and Team sections in the sidebar. It changes what the
   extension shows, not what it sends.
-- **`platform.enabled: true`** in `.nightgauge/config.yaml` decides whether the
-  extension and its bundled binary talk to the hosted service on their own:
-  restoring your session, registering this machine and sending the telemetry
-  described in [Privacy and Telemetry](#privacy-and-telemetry). With the
-  default, `false`, the extension does none of that, and signing in is always
-  your own explicit action. One exception: once a license key is stored in VS
-  Code (by activating a license or starting a trial), the extension hands it to
-  the bundled binary, which then registers this machine and sends heartbeats
-  even with `platform.enabled` off.
+- **`platform.enabled: true`** in your machine-tier `config.yaml`
+  ([where it lives](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md#global-config-location);
+  a repository's `.nightgauge/config.yaml` cannot set it for the bundled
+  binary) decides whether the extension and its bundled binary talk to the
+  hosted service on their own: restoring your session, registering this
+  machine, using a stored license key and sending the telemetry described in
+  [Privacy and Telemetry](#privacy-and-telemetry). With the default, `false`,
+  they do none of that.
+
+Signing in, activating a license and starting a trial are your own explicit
+actions, and they work with `platform.enabled` off. A license key they store
+is kept in VS Code and in the OS keychain, and nothing uses it until you turn
+`platform.enabled` on. A `NIGHTGAUGE_LICENSE_KEY` in the environment VS Code
+was started from is different: setting it is an explicit opt-in, and the
+bundled binary uses it whatever `platform.enabled` says.
 
 ```jsonc
 // settings.json
@@ -320,7 +326,7 @@ neither of the two switches below.
 ```
 
 ```yaml
-# .nightgauge/config.yaml
+# the machine-tier config.yaml (~/.nightgauge/config.yaml on macOS)
 platform:
   enabled: true
 ```

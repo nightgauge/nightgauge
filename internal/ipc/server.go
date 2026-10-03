@@ -103,11 +103,12 @@ type Server struct {
 	// talk to the platform, even when the daemon was spawned with no
 	// api_url/api_key/license_key at all (nothing for the eager path to
 	// construct from). ensurePlatformClient lazily builds the default client
-	// the first time platform.setSessionToken sees a real token — from a
-	// request-handling goroutine, since IPC requests are dispatched one
-	// goroutine per call (see handleRequest). That write has to be visible to
-	// every OTHER handler goroutine reading these same fields, so both the
-	// write and every read go through platformClientMu — see
+	// the first time platform.setSessionToken sees a real token, or the user
+	// takes an explicit account action (sign-in, license activation, a trial;
+	// #2398) — from a request-handling goroutine, since IPC requests are
+	// dispatched one goroutine per call (see handleRequest). That write has to
+	// be visible to every OTHER handler goroutine reading these same fields, so
+	// both the write and every read go through platformClientMu — see
 	// setPlatformServicesLocked and the getPlatformClient/getXSvc getters.
 	//
 	// authSvc is deliberately NOT part of this group: it drives the daemon's
@@ -115,6 +116,9 @@ type Server struct {
 	// created, not something a session's arrival should construct.
 	platformClientMu sync.RWMutex
 	platformClient   *platform.Client
+	// platformEndpoint is the URL a client built on demand talks to (#2398);
+	// see WithPlatformEndpoint. Set once by an option, before Run().
+	platformEndpoint string
 	licenseSvc       *platform.LicenseService
 	authSvc          *platform.AuthService
 	skillSvc         *platform.SkillService
@@ -400,6 +404,17 @@ func WithPlatformClient(pc *platform.Client) ServerOption {
 	}
 }
 
+// WithPlatformEndpoint names the platform URL a client built on demand talks
+// to (#2398): the --platform-url flag or NIGHTGAUGE_PLATFORM_URL, else the
+// machine tier's platform.api_url whatever platform.enabled says. A URL says
+// where a request goes, not whether one is sent, so honouring it for the
+// user's own account actions opts nothing in. Empty means the default URL.
+func WithPlatformEndpoint(url string) ServerOption {
+	return func(s *Server) {
+		s.platformEndpoint = url
+	}
+}
+
 // setPlatformServicesLocked wires pc and every service built on it onto the
 // server, replacing whatever was there before. Callers must hold
 // platformClientMu for writing.
@@ -435,13 +450,18 @@ func (s *Server) attachPlatformClient(pc *platform.Client) {
 	s.setPlatformServicesLocked(pc)
 }
 
-// ensurePlatformClient lazily builds the default platform client — and every
-// service on top of it — the first time a signed-in session token arrives on
-// a daemon that was never given a platform URL, API key, or license key at
-// startup (#756). A signed-in session is itself proof a platform exists; the
-// session token carries no URL of its own, so this defaults to
+// ensurePlatformClient lazily builds the platform client — and every service
+// on top of it — the first time a signed-in session token arrives, or the
+// user takes an explicit account action, on a daemon that was given no
+// platform client at startup (#756, #2398). A signed-in session or an account
+// action is itself proof the user wants a platform; neither carries a URL, so
+// the client talks to the endpoint WithPlatformEndpoint named, else to
 // platform.DefaultConfig()'s base URL exactly as the eagerly-configured path
 // in cmd/nightgauge/main.go does when api_url is unset.
+//
+// The client it builds carries no stored credential. The platform agent
+// (registration, heartbeat, command poller) is wired only at startup, from a
+// license key the user opted in with, so nothing built here starts it.
 //
 // Double-checked under platformClientMu: two setSessionToken calls racing on
 // a cold daemon (e.g. a stale sign-in event replayed alongside a fresh one)
@@ -455,31 +475,62 @@ func (s *Server) attachPlatformClient(pc *platform.Client) {
 // round trip to the platform. The eager path in cmd/nightgauge/main.go can
 // afford that cost inline because it runs once at startup, before the IPC
 // server accepts any request; this path runs mid-Run(), under contention.
-// sessionOnlyPlatformConfig is the config the lazy path builds from when a
-// session token arrives and no client exists yet. A signed-in session carries
-// no api_url, so the base URL can only come from the default.
+// onDemandPlatformConfig is the config the lazy path builds from when no
+// client exists yet: the default config, at endpoint when one was named.
 //
 // It is a named function rather than an inline platform.DefaultConfig() so a
 // test can assert what the lazy path resolves to WITHOUT reading Client.base —
 // that field has exactly one sanctioned reader (Client.newRequest, #750), and
 // re-exposing it through an accessor would put a second URL source back in
 // reach of the very code the guard exists to constrain.
-func sessionOnlyPlatformConfig() platform.Config {
-	return platform.DefaultConfig()
+func onDemandPlatformConfig(endpoint string) platform.Config {
+	cfg := platform.DefaultConfig()
+	if endpoint != "" {
+		cfg.BaseURL = endpoint
+	}
+	return cfg
 }
 
 func (s *Server) ensurePlatformClient() (*platform.Client, error) {
+	pc, _, err := s.ensurePlatformClientBuilt()
+	return pc, err
+}
+
+// ensurePlatformClientBuilt is ensurePlatformClient that also reports whether
+// this call built the client.
+func (s *Server) ensurePlatformClientBuilt() (*platform.Client, bool, error) {
 	s.platformClientMu.Lock()
 	defer s.platformClientMu.Unlock()
 	if s.platformClient != nil {
-		return s.platformClient, nil
+		return s.platformClient, false, nil
 	}
-	pc, err := platform.NewClient(sessionOnlyPlatformConfig())
+	pc, err := platform.NewClient(onDemandPlatformConfig(s.platformEndpoint))
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	go pc.StartHealthPolling(context.Background())
 	s.setPlatformServicesLocked(pc)
+	return pc, true, nil
+}
+
+// accountActionClient returns the platform client for an account action the
+// user took explicitly (sign-in, license activation, a trial, sign-out),
+// building one on demand when the daemon has none (#2398). platform.enabled
+// gates what the product does on its own, not what the user asks for: with it
+// off, a stored license key no longer gives the daemon a client at startup,
+// and these actions must keep working without one.
+//
+// A client built here starts offline until its first health check, and
+// license validation answers "not valid" while offline, so the check runs
+// once in the caller's goroutine, outside platformClientMu.
+func (s *Server) accountActionClient(ctx context.Context) (*platform.Client, error) {
+	pc, built, err := s.ensurePlatformClientBuilt()
+	if err != nil {
+		return nil, fmt.Errorf("platform client: %w", err)
+	}
+	if built {
+		pc.ProbeHealth(ctx)
+	}
 	return pc, nil
 }
 
@@ -2012,8 +2063,10 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformValidateLicense params:PlatformValidateLicenseParams result:LicenseInfo
 	s.methods["platform.validateLicense"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.getLicenseSvc() == nil {
-			return nil, fmt.Errorf("platform client not configured")
+		// Activate License verifies a key before it is stored: an explicit
+		// account action, so it works whatever platform.enabled says (#2398).
+		if _, err := s.accountActionClient(ctx); err != nil {
+			return nil, err
 		}
 		var p PlatformValidateLicenseParams
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -2042,8 +2095,9 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformStartTrial params:PlatformStartTrialParams result:TrialResult
 	s.methods["platform.startTrial"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.getLicenseSvc() == nil {
-			return nil, fmt.Errorf("platform client not configured")
+		// Start Free Trial is an explicit account action (#2398).
+		if _, err := s.accountActionClient(ctx); err != nil {
+			return nil, err
 		}
 		var p PlatformStartTrialParams
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -2278,10 +2332,12 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthDeviceCode params:none result:{device_code:string;expires_in:number;interval:number;user_code:string;verification_uri:string}
 	s.methods["platform.authDeviceCode"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.getPlatformClient() == nil {
-			return nil, fmt.Errorf("platform client not configured")
+		// Sign-in is an explicit account action (#2398).
+		pc, err := s.accountActionClient(ctx)
+		if err != nil {
+			return nil, err
 		}
-		resp, err := s.getPlatformClient().API().AuthDeviceCodeWithResponse(ctx)
+		resp, err := pc.API().AuthDeviceCodeWithResponse(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("authDeviceCode: %w", err)
 		}
@@ -2293,9 +2349,6 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthDeviceToken params:PlatformAuthDeviceTokenParams result:unknown
 	s.methods["platform.authDeviceToken"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.getPlatformClient() == nil {
-			return nil, fmt.Errorf("platform client not configured")
-		}
 		var p PlatformAuthDeviceTokenParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
@@ -2303,7 +2356,12 @@ func (s *Server) registerMethods() {
 		if p.DeviceCode == "" {
 			return nil, fmt.Errorf("deviceCode is required")
 		}
-		resp, err := s.getPlatformClient().API().AuthDeviceTokenWithResponse(ctx, platformapi.AuthDeviceTokenJSONRequestBody{
+		// Polling for the token completes the sign-in the user started (#2398).
+		pc, err := s.accountActionClient(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := pc.API().AuthDeviceTokenWithResponse(ctx, platformapi.AuthDeviceTokenJSONRequestBody{
 			DeviceCode: p.DeviceCode,
 		})
 		if err != nil {
@@ -2323,9 +2381,6 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthGithub params:PlatformAuthGithubParams result:{access_token:string;expires_in:number;refresh_token:string;status:string;token_type:string}
 	s.methods["platform.authGithub"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.getPlatformClient() == nil {
-			return nil, fmt.Errorf("platform client not configured")
-		}
 		var p PlatformAuthGithubParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
@@ -2333,7 +2388,12 @@ func (s *Server) registerMethods() {
 		if p.GithubAccessToken == "" {
 			return nil, fmt.Errorf("githubAccessToken is required")
 		}
-		resp, err := s.getPlatformClient().API().AuthGithubWithResponse(ctx, platformapi.AuthGithubJSONRequestBody{
+		// Sign In with GitHub is an explicit account action (#2398).
+		pc, err := s.accountActionClient(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := pc.API().AuthGithubWithResponse(ctx, platformapi.AuthGithubJSONRequestBody{
 			GithubAccessToken: p.GithubAccessToken,
 		})
 		if err != nil {
@@ -2371,9 +2431,6 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthSignout params:PlatformAuthSignoutParams result:{message:string;status:string}
 	s.methods["platform.authSignout"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.getPlatformClient() == nil {
-			return nil, fmt.Errorf("platform client not configured")
-		}
 		var p PlatformAuthSignoutParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
@@ -2381,7 +2438,12 @@ func (s *Server) registerMethods() {
 		if p.RefreshToken == "" {
 			return nil, fmt.Errorf("refreshToken is required")
 		}
-		resp, err := s.getPlatformClient().API().AuthSignoutWithResponse(ctx, platformapi.AuthSignoutJSONRequestBody{
+		// Signing out revokes the session the user holds (#2398).
+		pc, err := s.accountActionClient(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := pc.API().AuthSignoutWithResponse(ctx, platformapi.AuthSignoutJSONRequestBody{
 			RefreshToken: p.RefreshToken,
 		})
 		if err != nil {

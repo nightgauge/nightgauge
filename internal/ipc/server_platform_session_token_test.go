@@ -161,8 +161,11 @@ func TestPlatformSetSessionToken_LazyClientUsesDefaultBaseURL(t *testing.T) {
 	if want == "" {
 		t.Fatal("platform.DefaultConfig().BaseURL is empty — the lazy path would build a client with no host")
 	}
-	if got := sessionOnlyPlatformConfig().BaseURL; got != want {
+	if got := onDemandPlatformConfig("").BaseURL; got != want {
 		t.Errorf("lazy-path base URL = %q, want the default %q", got, want)
+	}
+	if got := onDemandPlatformConfig("https://staging.example.test").BaseURL; got != "https://staging.example.test" {
+		t.Errorf("lazy-path base URL with a configured endpoint = %q, want it (#2398)", got)
 	}
 }
 

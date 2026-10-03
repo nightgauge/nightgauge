@@ -566,51 +566,57 @@ describe("IpcClientBase", () => {
   // ── Platform env forwarding ────────────────────────────────────────────────
 
   describe("platform env forwarding", () => {
-    it("sets NIGHTGAUGE_PLATFORM_URL from platform.api_url in config.yaml", async () => {
-      const { spawn } = await import("child_process");
+    // #2398: the daemon reads NIGHTGAUGE_LICENSE_KEY / NIGHTGAUGE_API_KEY /
+    // NIGHTGAUGE_PLATFORM_URL as an explicit opt-in, whatever platform.enabled
+    // says. Stored and config-file values are the daemon's to read, and it uses
+    // them only when platform.enabled is true — so the extension forwards none
+    // of them, with the switch off or on.
+    for (const enabled of [false, true]) {
+      it(`never forwards the SecretStorage license key (platform.enabled: ${enabled})`, async () => {
+        const { spawn } = await import("child_process");
+        const { SecretStorageService, SECRET_KEYS } =
+          await import("../../src/services/SecretStorageService");
 
-      // Use the real-fs spy (covers require("fs") in IpcClientBase method bodies)
-      // so the platform config YAML is returned for the global config path.
-      existsSyncSpy.mockReturnValue(true);
-      readFileSyncSpy.mockReturnValue("platform:\n  api_url: https://api.nightgauge.test\n");
+        const mockSecrets = {
+          get: vi.fn(async (k: string) =>
+            k === SECRET_KEYS.platformLicenseKey ? "live_from_keychain" : undefined
+          ),
+          store: vi.fn(),
+          delete: vi.fn(),
+          onDidChange: vi.fn(),
+        } as unknown as import("vscode").SecretStorage;
+        SecretStorageService.resetInstance();
+        SecretStorageService.initialize(mockSecrets);
+        existsSyncSpy.mockReturnValue(true);
+        readFileSyncSpy.mockReturnValue(`platform:\n  enabled: ${enabled}\n`);
 
-      await startTestClient(client);
+        await startTestClient(client);
 
-      const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as
-        Record<string, string> | undefined;
-      expect(spawnEnv?.NIGHTGAUGE_PLATFORM_URL).toBe("https://api.nightgauge.test");
-    });
+        const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as
+          Record<string, string> | undefined;
+        expect(spawnEnv?.NIGHTGAUGE_LICENSE_KEY).toBeUndefined();
 
-    it("sets NIGHTGAUGE_LICENSE_KEY from SecretStorage, not from config.yaml", async () => {
-      const { spawn } = await import("child_process");
-      const { SecretStorageService, SECRET_KEYS } =
-        await import("../../src/services/SecretStorageService");
+        SecretStorageService.resetInstance();
+      });
 
-      // Simulate SecretStorageService being initialized with a key
-      const mockSecrets = {
-        get: vi.fn(async (k: string) =>
-          k === SECRET_KEYS.platformLicenseKey ? "live_from_keychain" : undefined
-        ),
-        store: vi.fn(),
-        delete: vi.fn(),
-        onDidChange: vi.fn(),
-      } as unknown as import("vscode").SecretStorage;
-      SecretStorageService.resetInstance();
-      SecretStorageService.initialize(mockSecrets);
+      it(`never forwards platform values read from the config files (platform.enabled: ${enabled})`, async () => {
+        const { spawn } = await import("child_process");
 
-      // YAML has license_key — it must NOT be used
-      existsSyncSpy.mockReturnValue(true);
-      readFileSyncSpy.mockReturnValue("platform:\n  license_key: live_from_yaml\n");
+        existsSyncSpy.mockReturnValue(true);
+        readFileSyncSpy.mockReturnValue(
+          `platform:\n  enabled: ${enabled}\n  api_url: https://from-config.example.com\n` +
+            "  api_key: key_from_config\n  license_key: lic_from_config\n"
+        );
 
-      await startTestClient(client);
+        await startTestClient(client);
 
-      const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as
-        Record<string, string> | undefined;
-      // Must use the SecretStorage value, not the YAML value
-      expect(spawnEnv?.NIGHTGAUGE_LICENSE_KEY).toBe("live_from_keychain");
-
-      SecretStorageService.resetInstance();
-    });
+        const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as
+          Record<string, string> | undefined;
+        expect(spawnEnv?.NIGHTGAUGE_PLATFORM_URL).toBeUndefined();
+        expect(spawnEnv?.NIGHTGAUGE_API_KEY).toBeUndefined();
+        expect(spawnEnv?.NIGHTGAUGE_LICENSE_KEY).toBeUndefined();
+      });
+    }
 
     it("does not override NIGHTGAUGE_PLATFORM_URL already set in process.env", async () => {
       const { spawn } = await import("child_process");

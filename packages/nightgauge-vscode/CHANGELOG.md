@@ -32,6 +32,13 @@ and this project adheres to
 
 ### Fixed
 
+- **A stored license key waits for `platform.enabled`.** Activating a license
+  or starting a trial stores the key in VS Code and the OS keychain, and the
+  extension used to hand it to the Nightgauge binary as an explicit opt-in, so
+  the binary registered this machine and sent heartbeats with
+  `platform.enabled: false`. The binary now treats it as a stored key and
+  uses it only when `platform.enabled` is true. Signing in, activating a
+  license and starting a trial still work with the switch off (#2398).
 - **Reloading the window while a pipeline runs keeps your queue.** The reload
   ended the running pipelines and also cleared every queued issue, including
   runs triggered from the dashboard. Now only the running pipelines end, and

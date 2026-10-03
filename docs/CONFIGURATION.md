@@ -7350,10 +7350,10 @@ platform:
 extension does **not** hold a platform client — it routes all platform calls
 through the Go binary via IPC.
 
-| Config Consumer            | What It Uses                                                                                                                                                                                                                                                                                                                                          |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Go binary** (`serve`)    | `enabled`, `api_url`, and the license key — explicit flags/environment variables opt in directly; the stored license key (OS keychain, then machine-tier `license_key`) and config-derived values are used only when `platform.enabled: true`. `connection_timeout_ms` and `retry_policy` are schema-validated but not yet consumed by the Go binary. |
-| **Extension** (TypeScript) | Reads `platform.enabled` only to decide whether to display platform-related UI (license badge, skill tier badge). Does **not** make direct platform API calls.                                                                                                                                                                                        |
+| Config Consumer            | What It Uses                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Go binary** (`serve`)    | `enabled`, `api_url`, and the license key — explicit flags/environment variables opt in directly; the stored license key (OS keychain, then machine-tier `license_key`) and config-derived values are used only when `platform.enabled: true`. The user's own account actions (sign-in, license activation, a trial) work either way, against `api_url` when it is set. `connection_timeout_ms` and `retry_policy` are schema-validated but not yet consumed by the Go binary. |
+| **Extension** (TypeScript) | Reads `platform.enabled` only to decide whether to display platform-related UI (license badge, skill tier badge). Does **not** make direct platform API calls.                                                                                                                                                                                                                                                                                                                 |
 
 ### Behavior
 
@@ -7384,7 +7384,10 @@ and the daemon it starts (#1474):
    daemon as `NIGHTGAUGE_PLATFORM_URL`, which takes effect when the daemon next
    starts)
 3. `platform.environment` / `platform.api_url` from the config files (the
-   daemon reads `platform.api_url` only when `platform.enabled: true`)
+   daemon uses `platform.api_url` on its own only when
+   `platform.enabled: true`, and for your account actions, such as sign-in,
+   license activation or a trial, either way; the extension does not hand it
+   to the daemon)
 4. the production API, `https://api.nightgauge.dev`
 
 The platform environment status bar item marks any URL other than production as

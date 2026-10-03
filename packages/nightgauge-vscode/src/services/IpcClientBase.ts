@@ -19,7 +19,6 @@ import * as vscode from "vscode";
 import { BinaryResolver } from "./BinaryResolver";
 import { getActiveCallSource, setActiveCallSource } from "./callSource";
 import { getGitHubAuthToken, getGitHubAuthTokens } from "../utils/nightgaugeConfig";
-import { SecretStorageService, SECRET_KEYS } from "./SecretStorageService";
 import { whenLicenseReconciled } from "./licenseKeychainBridge";
 import { TokenStorage } from "../platform/TokenStorage";
 import { PlatformCredentialBridge } from "../platform/PlatformCredentialBridge";
@@ -1923,7 +1922,6 @@ export abstract class IpcClientBase implements vscode.Disposable {
   private workspaceRoot: string | null = null;
   private resolvedGitHubToken: string | null = null;
   private resolvedTokenSource: string | null = null;
-  private resolvedLicenseKey: string | null = null;
   /** Keeps the daemon's platform credential equal to the current session (#742). */
   private credentialBridge: PlatformCredentialBridge | null = null;
   private readonly tokenCache = new Map<string, string>();
@@ -2016,7 +2014,10 @@ export abstract class IpcClientBase implements vscode.Disposable {
     }
     this.binaryPath = path;
     await this.resolveGitHubToken();
-    await this.resolveLicenseKey();
+    // The daemon reads a stored license key from the CLI's store, which the
+    // startup reconciliation may be writing or replacing (#2027); let it
+    // settle so the daemon does not start against a key about to change.
+    await whenLicenseReconciled();
     this.spawnProcess();
     // A freshly spawned daemon knows only the license key it was handed in
     // its environment. Hand it the signed-in user's JWT as well, and keep
@@ -2047,12 +2048,8 @@ export abstract class IpcClientBase implements vscode.Disposable {
       env.GITHUB_TOKEN = this.resolvedGitHubToken;
     }
 
-    // Forward platform config to Go binary via env vars (Issue #XXXX)
-    // The Go binary reads NIGHTGAUGE_PLATFORM_URL as the default for its
-    // --platform-url flag, and NIGHTGAUGE_API_KEY and NIGHTGAUGE_LICENSE_KEY
-    // from the environment only (no flag: ADR-024 § 5 keeps credentials off
-    // argv). Without these, platformClient stays nil and all
-    // platform.* IPC methods return "platform client not configured".
+    // Only the platform URL setting is forwarded (#1474). Stored and
+    // config-file platform values are the daemon's to read (#2398).
     this.forwardPlatformEnv(env);
 
     // The window's folders, in order, so the daemon's platform agent declares
@@ -2454,7 +2451,7 @@ export abstract class IpcClientBase implements vscode.Disposable {
   /**
    * Resolve the GitHub user for the current workspace from config files.
    * Reads github_user (per-repo) and github_auth.users (global fallback)
-   * using the same simple YAML line-scanning pattern as forwardPlatformEnv.
+   * using a simple YAML line scan.
    * Priority: per-repo github_user > github_auth.users[owner] > null
    */
   private resolveGitHubUserFromConfig(): string | null {
@@ -2687,25 +2684,6 @@ export abstract class IpcClientBase implements vscode.Disposable {
     return this.resolvedTokenSource;
   }
 
-  /** Read the license key from VSCode SecretStorage (OS keychain). */
-  private async resolveLicenseKey(): Promise<void> {
-    if (process.env.NIGHTGAUGE_LICENSE_KEY) {
-      this.resolvedLicenseKey = process.env.NIGHTGAUGE_LICENSE_KEY;
-      this.log("[IpcClientBase] Using NIGHTGAUGE_LICENSE_KEY from environment");
-      return;
-    }
-    const svc = SecretStorageService.getInstance();
-    if (!svc) return;
-    // Startup reconciliation may drop a SecretStorage key that is stale
-    // against the CLI's keychain entry (#2027); never hand the daemon one.
-    await whenLicenseReconciled();
-    const key = await svc.getSecret(SECRET_KEYS.platformLicenseKey);
-    if (key) {
-      this.resolvedLicenseKey = key;
-      this.log("[IpcClientBase] Resolved license key from SecretStorage");
-    }
-  }
-
   /**
    * Give the daemon the signed-in user's session token, and keep giving it one
    * for as long as the extension lives.
@@ -2761,106 +2739,25 @@ export abstract class IpcClientBase implements vscode.Disposable {
   }
 
   /**
-   * Forward platform configuration to the Go binary via environment variables.
+   * Forward the `nightgauge.platform.url` setting to the daemon as
+   * NIGHTGAUGE_PLATFORM_URL (#1474), so the daemon resolves the endpoint the
+   * extension shows. A URL says where requests go, not whether any are sent.
    *
-   * Reads platform.api_url, platform.license_key from config YAML files
-   * (workspace-level first, then global ~/.nightgauge/config.yaml) and
-   * sets the corresponding NIGHTGAUGE_* env vars so the Go binary
-   * initializes its platform client.
-   *
-   * Env vars already set in the process environment take precedence.
+   * Nothing stored is forwarded (#2398). The daemon reads NIGHTGAUGE_LICENSE_KEY
+   * and NIGHTGAUGE_API_KEY from its environment as an explicit opt-in to the
+   * platform, whatever `platform.enabled` says, so handing it the key from
+   * SecretStorage (or values read from the config files) there registered the
+   * machine with `platform.enabled: false`. The daemon reads the stored key
+   * itself — the keychain entry the extension writes through `nightgauge auth
+   * license set`, or the machine-tier file — and its config, and uses them only
+   * when `platform.enabled` is true. A key in the environment that started VS
+   * Code is inherited untouched and stays an explicit opt-in.
    */
   private forwardPlatformEnv(env: Record<string, string | undefined>): void {
-    const fs = require("fs") as typeof import("fs");
-    const path = require("path") as typeof import("path");
-
-    // Inject license key from SecretStorage (resolved asynchronously in start()).
-    // This takes priority over any YAML-based value.
-    if (this.resolvedLicenseKey && !env.NIGHTGAUGE_LICENSE_KEY) {
-      env.NIGHTGAUGE_LICENSE_KEY = this.resolvedLicenseKey;
-      this.log("Platform config: NIGHTGAUGE_LICENSE_KEY set from SecretStorage");
-    }
-
-    // The `nightgauge.platform.url` setting sits between the process
-    // environment and the config files (#1474), so the daemon resolves the
-    // same endpoint the extension shows.
     const urlOverride = readPlatformUrlOverride(env);
     if (urlOverride?.source === PLATFORM_URL_SETTING) {
       env[PLATFORM_URL_ENV_VAR] = urlOverride.url;
       this.log(`Platform config: ${PLATFORM_URL_ENV_VAR} set from ${PLATFORM_URL_SETTING}`);
-    }
-
-    // Collect candidate config paths: workspace first, global second
-    const configPaths: string[] = [];
-    if (this.workspaceRoot) {
-      configPaths.push(path.join(this.workspaceRoot, ".nightgauge", "config.yaml"));
-    }
-    const globalConfig = getGlobalConfigPath();
-    configPaths.push(globalConfig);
-
-    // Simple YAML key extraction — avoids importing a YAML parser in the
-    // critical startup path. Handles:
-    //   platform:
-    //     api_url: https://...
-    //     api_key: ...
-    // Note: license_key is no longer read from YAML (migrated to SecretStorage).
-    const envMap: Record<string, { yamlKey: string; envKey: string }> = {
-      api_url: {
-        yamlKey: "api_url",
-        envKey: "NIGHTGAUGE_PLATFORM_URL",
-      },
-      api_key: {
-        yamlKey: "api_key",
-        envKey: "NIGHTGAUGE_API_KEY",
-      },
-    };
-
-    for (const configPath of configPaths) {
-      if (!fs.existsSync(configPath)) continue;
-
-      try {
-        const content = fs.readFileSync(configPath, "utf-8");
-        const lines = content.split("\n");
-        let inPlatform = false;
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-
-          // Detect platform: top-level section
-          if (trimmed === "platform:") {
-            inPlatform = true;
-            continue;
-          }
-
-          // Exit platform section on new top-level key (not indented)
-          if (
-            inPlatform &&
-            trimmed &&
-            !trimmed.startsWith("#") &&
-            /^[a-z_]+:/.test(trimmed) &&
-            !line.startsWith(" ") &&
-            !line.startsWith("\t")
-          ) {
-            inPlatform = false;
-            continue;
-          }
-
-          if (!inPlatform) continue;
-
-          const match = trimmed.match(/^([a-z_]+):\s*(.+)$/);
-          if (!match) continue;
-          const [, key, rawValue] = match;
-          const value = rawValue.replace(/^['"]|['"]$/g, "").trim();
-
-          const mapping = envMap[key];
-          if (mapping && value && !env[mapping.envKey]) {
-            env[mapping.envKey] = value;
-            this.log(`Platform config: ${mapping.envKey} set from ${configPath}`);
-          }
-        }
-      } catch (err) {
-        this.log(`Warning: failed to read platform config from ${configPath}: ${err}`);
-      }
     }
   }
 

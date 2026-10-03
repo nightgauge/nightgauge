@@ -48,6 +48,22 @@ func (r resolvedPlatformConfig) Configured() bool {
 	return r.URL != "" || r.APIKey != "" || r.LicenseKey != ""
 }
 
+// onDemandPlatformEndpoint is the URL a platform client built on demand talks
+// to (#2398): the --platform-url flag or NIGHTGAUGE_PLATFORM_URL (flagURL,
+// taken before resolvePlatformConfig), else the machine tier's
+// platform.api_url whatever platform.enabled says. The user's own account
+// actions go where the user pointed them; a URL opts nothing in. Empty means
+// the default URL.
+func onDemandPlatformEndpoint(flagURL string, cfg *config.Config) string {
+	if flagURL != "" {
+		return flagURL
+	}
+	if cfg != nil {
+		return cfg.PlatformURL
+	}
+	return ""
+}
+
 // resolvePlatformConfig applies flag > env > config precedence to the
 // platform client's connection settings (#333).
 //

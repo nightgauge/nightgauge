@@ -214,3 +214,51 @@ func TestResolvePlatformConfig_FullyOfflineUnchanged(t *testing.T) {
 		t.Errorf("Source = %q, want %q", got.Source, platformSourceAbsent)
 	}
 }
+
+// TestResolvePlatformConfig_ExtensionStoredKeyIsAStoredCredential pins #2398.
+// The extension no longer hands the daemon its stored license key in
+// NIGHTGAUGE_LICENSE_KEY, where it read as an explicit opt-in: the key it
+// stored reaches serve through the shared store (the keychain entry the
+// extension writes with `auth license set`, or the machine-tier file), and a
+// stored key is used only when platform.enabled is true.
+func TestResolvePlatformConfig_ExtensionStoredKeyIsAStoredCredential(t *testing.T) {
+	enabled, disabled := true, false
+	storedByTheExtension := storedAt("lic_from_vscode", keychain.SourceKeychain)
+
+	off := resolvePlatformConfig("", "", "", &config.Config{PlatformEnabled: &disabled}, storedByTheExtension)
+	if off.LicenseKey != "" || off.Configured() {
+		t.Fatalf("platform.enabled false: got %+v, want no license and no client — the platform agent (registration, heartbeat, command poller) starts from this key", off)
+	}
+
+	on := resolvePlatformConfig("", "", "", &config.Config{PlatformEnabled: &enabled}, storedByTheExtension)
+	if on.LicenseKey != "lic_from_vscode" {
+		t.Fatalf("platform.enabled true: LicenseKey = %q, want the stored key", on.LicenseKey)
+	}
+	if on.Source != platformSourceKeychain {
+		t.Errorf("platform.enabled true: Source = %q, want %q", on.Source, platformSourceKeychain)
+	}
+
+	// A key in the environment that started VS Code is still an explicit
+	// opt-in: the extension's spawn inherits it untouched.
+	explicit := resolvePlatformConfig("", "", "lic_from_env", &config.Config{PlatformEnabled: &disabled}, storedByTheExtension)
+	if explicit.LicenseKey != "lic_from_env" || explicit.Source != platformSourceFlagEnv {
+		t.Errorf("explicit env key with platform.enabled false: got %+v, want it used as an opt-in", explicit)
+	}
+}
+
+// TestOnDemandPlatformEndpoint pins where an account action's on-demand client
+// goes (#2398): the flag or environment URL, else the configured
+// platform.api_url whatever platform.enabled says, else the default ("").
+func TestOnDemandPlatformEndpoint(t *testing.T) {
+	disabled := false
+	cfg := &config.Config{PlatformEnabled: &disabled, PlatformURL: "https://cfg.example.com"}
+	if got := onDemandPlatformEndpoint("https://flag.example.com", cfg); got != "https://flag.example.com" {
+		t.Errorf("flag URL: got %q", got)
+	}
+	if got := onDemandPlatformEndpoint("", cfg); got != "https://cfg.example.com" {
+		t.Errorf("config URL with platform.enabled false: got %q, want it", got)
+	}
+	if got := onDemandPlatformEndpoint("", nil); got != "" {
+		t.Errorf("no config: got %q, want the default", got)
+	}
+}

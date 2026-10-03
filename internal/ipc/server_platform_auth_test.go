@@ -90,23 +90,79 @@ func TestPlatformAuthDeviceCode_Success(t *testing.T) {
 	}
 }
 
-func TestPlatformAuthDeviceCode_NilClient(t *testing.T) {
-	// Construct a server with no platformClient to test the nil guard.
-	s := &Server{
-		writer:  &bytes.Buffer{},
-		methods: make(map[string]Handler),
-	}
-	// Replicate the nil-client guard from the real handler.
-	s.methods["platform.authDeviceCode"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.platformClient == nil {
-			return nil, fmt.Errorf("platform client not configured")
+// TestPlatformAuthDeviceCode_BuildsClientOnDemand pins #2398: sign-in is an
+// explicit account action, so a daemon with no platform client (platform.enabled
+// off, so a stored license key gave it none at startup) builds one on demand,
+// at the endpoint it was told, instead of answering "not configured".
+func TestPlatformAuthDeviceCode_BuildsClientOnDemand(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/auth/device-code" && r.Method == http.MethodPost {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(200)
+			fmt.Fprint(w, `{"device_code":"abc123","expires_in":900,"interval":5,"user_code":"ABCD-EFGH","verification_uri":"https://example.com/device"}`)
+			return
 		}
-		return nil, nil
+		http.NotFound(w, r)
+	}))
+	defer mock.Close()
+
+	s := NewServer(nil, WithPlatformEndpoint(mock.URL))
+	s.writer = &bytes.Buffer{}
+	if s.getPlatformClient() != nil {
+		t.Fatal("precondition: the server must start with no platform client")
 	}
 
-	_, err := callHandler(t, s, "platform.authDeviceCode", nil)
-	if err == nil || !strings.Contains(err.Error(), "platform client not configured") {
-		t.Fatalf("expected 'platform client not configured', got: %v", err)
+	result, err := callHandler(t, s, "platform.authDeviceCode", nil)
+	if err != nil {
+		t.Fatalf("authDeviceCode with no client: %v — an explicit sign-in must build one", err)
+	}
+	b, _ := json.Marshal(result)
+	var got platformapi.AuthDeviceCodeResult
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if got.DeviceCode != "abc123" {
+		t.Errorf("DeviceCode = %q, want abc123 from the configured endpoint", got.DeviceCode)
+	}
+	if s.getPlatformClient() == nil {
+		t.Error("the client built for the sign-in was not attached")
+	}
+}
+
+// TestPlatformValidateLicense_OnDemandClientIsOnline pins the other half of
+// #2398's account actions: Activate License verifies a key with no client at
+// startup. A client built on demand starts offline and validation answers
+// "not valid" offline, so the handler must probe before validating.
+func TestPlatformValidateLicense_OnDemandClientIsOnline(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/health":
+			fmt.Fprint(w, `{"status":"ok"}`)
+		case "/v1/license/validate":
+			fmt.Fprint(w, `{"valid":true,"status":"active","tier":"pro","expiresAt":"2027-01-01T00:00:00Z","expiresSoon":false,"machineBound":false,"machineCount":1,"features":{"batchProcessing":true,"concurrentPipelines":3,"pipelineRunsPerDay":50,"pipelineRunsPerMonth":null,"skillResolveRatePerMin":60}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer mock.Close()
+
+	s := NewServer(nil, WithPlatformEndpoint(mock.URL))
+	s.writer = &bytes.Buffer{}
+
+	result, err := callHandler(t, s, "platform.validateLicense", PlatformValidateLicenseParams{
+		LicenseKey: "lic_entered_by_the_user",
+		MachineID:  "machine-1",
+	})
+	if err != nil {
+		t.Fatalf("validateLicense with no client: %v", err)
+	}
+	info, ok := result.(*platform.LicenseInfo)
+	if !ok {
+		t.Fatalf("result is %T, want *platform.LicenseInfo", result)
+	}
+	if !info.Valid || info.Tier != "pro" {
+		t.Errorf("license = valid %v tier %q, want a valid pro license — the on-demand client validated while still offline", info.Valid, info.Tier)
 	}
 }
 

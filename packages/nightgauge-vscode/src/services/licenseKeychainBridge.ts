@@ -3,9 +3,10 @@
  * key in step with the extension's.
  *
  * The extension keeps the license key in VS Code SecretStorage, which nothing
- * outside VS Code can read. The CLI and a daemon started from a terminal read
- * the OS-keychain entry the Go binary owns (service `nightgauge`, account
- * `platform.license_key`; docs/GO_BINARY.md § Platform license key). So every
+ * outside VS Code can read. The CLI and every daemon, the one the extension
+ * starts included (#2398), read the OS-keychain entry the Go binary owns
+ * (service `nightgauge`, account `platform.license_key`; docs/GO_BINARY.md §
+ * Platform license key). So every
  * place the extension stores or clears the key also runs
  * `nightgauge auth license set` / `clear`, with the key on stdin only. There
  * is one writer for that entry — the binary — and no keychain code here.
@@ -20,7 +21,7 @@
  * the CLI still holds that recorded key, the extension's newer write never
  * reached it and is retried; otherwise the key was changed outside VS Code,
  * the CLI's key wins, and the stale SecretStorage copy is dropped so the
- * daemon the extension spawns is never handed it.
+ * extension stops using it.
  *
  * The CLI contract (subcommands and JSON fields) is pinned on both sides by
  * cmd/nightgauge/testdata/auth-license-contract.json.
@@ -260,9 +261,9 @@ export class LicenseKeychainBridge {
       let message: string;
       if (reason === OUTDATED) {
         message =
-          "Nightgauge: your nightgauge binary is too old to share the license key with the CLI and daemon (it has no `auth license` command). Update the nightgauge binary; until then the CLI outside VS Code can't see the key.";
+          "Nightgauge: your nightgauge binary is too old to share the license key with the CLI and daemon (it has no `auth license` command). Update the nightgauge binary; until then the CLI and the daemon can't see the key.";
       } else if (action === "set") {
-        message = `Nightgauge: the license key is saved in VS Code, but the CLI and daemon outside VS Code can't see it (${reason}). Run \`${MANUAL_LICENSE_SET_COMMAND}\` in a terminal and paste the key.`;
+        message = `Nightgauge: the license key is saved in VS Code, but the CLI and the daemon can't see it (${reason}). Run \`${MANUAL_LICENSE_SET_COMMAND}\` in a terminal and paste the key.`;
       } else {
         message = `Nightgauge: the license key was removed from VS Code, but the CLI's stored copy may remain (${reason}). Run \`${MANUAL_LICENSE_CLEAR_COMMAND}\` in a terminal.`;
       }
@@ -472,8 +473,8 @@ export async function forgetLicenseKey(
 
 /**
  * Bring SecretStorage and the CLI's store into agreement. Returns the key the
- * extension may use (and hand the daemon), or undefined when it has none it
- * can trust. The rule is in the module comment.
+ * extension may use, or undefined when it has none it can trust. The rule is
+ * in the module comment.
  *
  * The SecretStorage copy is deleted only on positive evidence of rotation: a
  * well-formed fingerprint from the CLI that differs from both the extension's
@@ -592,8 +593,9 @@ export function setLicenseReconciliation(p: Promise<unknown>): void {
 }
 
 /**
- * Wait (bounded) for the startup reconciliation, so the daemon is not spawned
- * with a SecretStorage key that reconciliation is about to drop.
+ * Wait (bounded) for the startup reconciliation, so the daemon does not start
+ * while the reconciliation is still writing the key into the CLI's store,
+ * which is where the daemon reads it (#2398).
  */
 export async function whenLicenseReconciled(timeoutMs = 5_000): Promise<void> {
   let timer: NodeJS.Timeout | undefined;
