@@ -383,6 +383,8 @@ REQUIRED_FILES=(
   scripts/test-ci-local-changed-scope.sh
   scripts/state-backstop.sh
   scripts/test-state-backstop.sh
+  scripts/doctor-app-permission-walkthrough.sh
+  scripts/test-doctor-app-permission-walkthrough.sh
 )
 
 # Makefile targets the gate invokes. `[ -f Makefile ] && grep -q '^t:' Makefile`
@@ -1495,6 +1497,12 @@ run_group "CLA gate regression suite" node --test .github/scripts/cla-check.test
 
 # 4b. Cache-boundary measurement smoke test
 run_step "Cache-boundary measurement smoke" bash scripts/test-measure-cache-boundary-loss.sh
+
+# 4b2. The #2094 App permission walkthrough's own logic (seconds, against a
+#      fake binary): a verification script that reads a wrong state as a pass
+#      is worse than none.
+run_step "doctor-app-permission-walkthrough.sh regression suite" \
+  bash scripts/test-doctor-app-permission-walkthrough.sh
 
 # 4b. Test-tree typecheck (#499).
 # tsconfig.json covers src/** only, vitest transforms through esbuild

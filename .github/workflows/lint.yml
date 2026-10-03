@@ -123,6 +123,10 @@ jobs:
       # (#2217) broke two of its assertions without any CI signal (#2228).
       - name: Adapter canary regression suite
         run: bash scripts/test-adapter-canary.sh
+      # The #2094 App permission walkthrough's own logic: the evidence for a
+      # manual verification must not read a wrong state as a pass.
+      - name: Doctor App permission walkthrough regression suite
+        run: bash scripts/test-doctor-app-permission-walkthrough.sh
       - name: Nonexistent-workflow-reference gate
         run: python3 scripts/check-workflow-refs.py
       # Proves the gate below still FAILS CLOSED rather than passing vacuously

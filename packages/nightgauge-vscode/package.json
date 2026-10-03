@@ -1775,6 +1775,7 @@
     "test:host": "npm run build:host-tests && tsx tests/vscode-host/launch.ts",
     "mock-server": "tsx src/mocks/start-server.ts",
     "demo": "tsx scripts/demo-session.ts",
+    "demo:doctor-screenshots": "tsx scripts/doctor-theme-screenshots.ts",
     "demo:inventory": "npm run build:host-tests && tsx tests/vscode-host/launch.ts --write-ipc-inventory"
   },
   "dependencies": {
