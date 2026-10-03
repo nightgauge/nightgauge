@@ -42,6 +42,14 @@
  * (CommandRedeliveryGuard): a later copy re-sends the first copy's ack only
  * when that ack did not reach the platform.
  *
+ * The verbs for one run are applied in the order they arrived. Each takes its
+ * run's turn when it arrives, before anything is awaited, and keeps it until
+ * it is being applied or is found not to be this window's. Checking that the
+ * window holds the run and claiming the answer both take time, a claim as
+ * long as the disk takes; without the turn, a pause and a resume a reconnect
+ * replays together could be applied in either order, and the run would end
+ * paused though the last request was a resume.
+ *
  * A pause or resume that took effect also shows in this window the way the
  * local Pause/Resume Pipeline commands show it (RemotePauseUi).
  *
@@ -144,7 +152,7 @@ const CLOSED_HOLD_MARGIN_MS = 50;
 /** The machine's record of which window answers a verb (#2357). */
 export type UnheldVerbLedger = Pick<
   RemoteRunLedger,
-  "heldElsewhere" | "closedHoldLeftMs" | "claimAnswer"
+  "heldElsewhere" | "closedHoldLeftMs" | "claimAnswer" | "markAnswered"
 >;
 
 function delay(ms: number): Promise<void> {
@@ -178,6 +186,8 @@ export class RunVerbCommandHandler implements CommandHandler {
   private readonly redelivery = new CommandRedeliveryGuard<VerbAck>();
   /** Commands waiting out the grace before a refusal no window holds (#2357). */
   private readonly waitingRefusals = new Set<string>();
+  /** Each run's turn: settles when the last verb that took it gives it up. */
+  private readonly runTurns = new Map<string, Promise<void>>();
 
   constructor(
     private readonly runs: RunVerbTarget,
@@ -229,19 +239,59 @@ export class RunVerbCommandHandler implements CommandHandler {
         );
         return;
       }
-    } else if (!this.redelivery.remembers(cmd.id)) {
-      if (!(await this.runs.holdsRemoteRun(runId))) {
-        this.logger.info(
-          "RunVerbCommandHandler: this window does not hold the run — leaving the command for the window that does",
-          { verb, runId, commandId: cmd.id }
-        );
-        return this.refuseIfNobodyHolds(cmd, verb, runId);
-      }
-      // The holder claims the command's one answer before it applies the
-      // verb, so no window that waited out the grace refuses it (#2357).
-      await this.claimAsHolder(cmd, verb, runId);
+      return this.consumeAsHolder(cmd, verb, runId);
     }
-    return this.consumeAsHolder(cmd, verb, runId);
+    if (this.redelivery.remembers(cmd.id)) return this.consumeAsHolder(cmd, verb, runId);
+    // The run's turn is taken here, before the first await, so the verbs for
+    // one run are applied in the order they arrived.
+    const held = await this.inRunTurn(runId, () => this.applyIfHeld(cmd, verb, runId));
+    if (held) return held.consumption;
+    this.logger.info(
+      "RunVerbCommandHandler: this window does not hold the run — leaving the command for the window that does",
+      { verb, runId, commandId: cmd.id }
+    );
+    return this.refuseIfNobodyHolds(cmd, verb, runId);
+  }
+
+  /**
+   * Run `step` in the run's turn, after every step an earlier verb for the
+   * run took. A step that throws gives the turn up all the same.
+   */
+  private inRunTurn<T>(runId: string, step: () => Promise<T>): Promise<T> {
+    const turn = (this.runTurns.get(runId) ?? Promise.resolve()).then(step);
+    const released = turn.then(
+      () => undefined,
+      () => undefined
+    );
+    this.runTurns.set(runId, released);
+    void released.then(() => {
+      if (this.runTurns.get(runId) === released) this.runTurns.delete(runId);
+    });
+    return turn;
+  }
+
+  /**
+   * In the run's turn: when this window holds the run, claim the command's
+   * one answer and hand the verb to the guard, which starts applying it
+   * before this resolves. Null when this window does not hold the run. The
+   * consumption is wrapped so the turn ends once the verb is being applied,
+   * not once it has been applied and acknowledged: a cancel waits for its run
+   * to stop.
+   */
+  private async applyIfHeld(
+    cmd: ReceivedCommand,
+    verb: RunVerbCommandType,
+    runId: string
+  ): Promise<{ consumption: Promise<void> } | null> {
+    // A copy that waited for the turn behind the copy that consumed it.
+    if (this.redelivery.remembers(cmd.id)) {
+      return { consumption: this.consumeAsHolder(cmd, verb, runId) };
+    }
+    if (!(await this.runs.holdsRemoteRun(runId))) return null;
+    // The holder claims the command's one answer before it applies the
+    // verb, so no window that waited out the grace refuses it (#2357).
+    await this.claimAsHolder(cmd, verb, runId);
+    return { consumption: this.consumeAsHolder(cmd, verb, runId) };
   }
 
   /**
@@ -297,10 +347,9 @@ export class RunVerbCommandHandler implements CommandHandler {
       for (let look = 0; ; look++) {
         await delay(wait);
         if (this.redelivery.remembers(cmd.id)) return;
-        if (await this.runs.holdsRemoteRun(runId)) {
-          await this.claimAsHolder(cmd, verb, runId);
-          return this.consumeAsHolder(cmd, verb, runId);
-        }
+        // Applied in the run's turn, after the verbs that took it meanwhile.
+        const held = await this.inRunTurn(runId, () => this.applyIfHeld(cmd, verb, runId));
+        if (held) return held.consumption;
         if (!(await unheld.ledger.heldElsewhere(runId))) break;
         const left = await unheld.ledger.closedHoldLeftMs(runId);
         if (left === null || look >= CLOSED_HOLD_LOOKS) {
@@ -450,7 +499,6 @@ export class RunVerbCommandHandler implements CommandHandler {
     }
     try {
       await this.ipcClient.agentAcknowledgeCommand(ack.agentId, cmd.id, ack.outcome, ack.detail);
-      return true;
     } catch (err) {
       this.logger.error("RunVerbCommandHandler: ack failed", {
         verb,
@@ -460,5 +508,9 @@ export class RunVerbCommandHandler implements CommandHandler {
       });
       return false;
     }
+    // The answer reached the platform: no window takes it over now, even
+    // once this one is gone.
+    await this.unheld?.ledger.markAnswered(cmd.id);
+    return true;
   }
 }
