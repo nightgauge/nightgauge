@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
@@ -942,6 +943,10 @@ type Scheduler struct {
 
 	// Queue — authoritative, file-backed
 	queue []QueueItem
+	// dropGeneration counts QueueDropProcessing calls (#2396). A dequeue
+	// reads it before its unlocked blocker refresh and gives up when a drop
+	// landed meanwhile, so a closing window's drop releases every item.
+	dropGeneration atomic.Uint64
 
 	// OnFailureStatus: "ready" (default), "backlog", or "unchanged"
 	onFailureStatus string
@@ -2933,6 +2938,40 @@ func (s *Scheduler) QueueClear() {
 	s.emitQueueChangedUnlocked()
 }
 
+// QueueDropProcessing removes every item a dispatch has taken ("processing")
+// and keeps every other one, and reports how many it removed (#2396).
+//
+// It is what a window reload or close does to the queue. The window's runs
+// end with it, and nothing else would release their marks, so their items
+// go; but the queue outlives the window, so everything still waiting stays
+// for the next one: pending, ready and paused items, a pending re-queue of an
+// issue whose run is ending, and the platform runs the waiting items carry.
+// QueueClear, which the operator's Stop uses, would drop all of those.
+//
+// A dequeue already under way when it is called (reading blockers, outside the
+// lock) dequeues nothing: it would otherwise mark items processing for a
+// window that is going away, after the drop that was to release them.
+func (s *Scheduler) QueueDropProcessing() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropGeneration.Add(1)
+	kept := make([]QueueItem, 0, len(s.queue))
+	for _, item := range s.queue {
+		if item.Status != "processing" {
+			kept = append(kept, item)
+		}
+	}
+	dropped := len(s.queue) - len(kept)
+	if dropped == 0 {
+		return 0
+	}
+	s.queue = kept
+	s.recalculatePositions()
+	s.persistQueue()
+	s.emitQueueChangedUnlocked()
+	return dropped
+}
+
 // DequeueIndependent removes and returns up to maxSlots items that have no
 // unresolved blockers among runningIssues or items ahead in the queue.
 // capForRepo returns the per-repository concurrency cap: an explicit
@@ -2958,6 +2997,11 @@ func (s *Scheduler) capForRepo(repo string) int {
 }
 
 func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, running []RunningItem) []QueueItem {
+	// A window closing while this dequeue reads blockers drops its dispatched
+	// items (QueueDropProcessing, #2396); nothing this call marked afterwards
+	// would ever be released, so it then dequeues nothing.
+	generation := s.dropGeneration.Load()
+
 	// Refresh blocker states from GitHub before acquiring the lock.
 	// This ensures we don't skip items whose blockers have been closed
 	// since the queue was last persisted.
@@ -2965,6 +3009,9 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.dropGeneration.Load() != generation {
+		return nil
+	}
 
 	// Issues already in flight (for the blockedBy guard) and per-repo
 	// in-flight counts (for the per-repo cap). Seeded from the caller's

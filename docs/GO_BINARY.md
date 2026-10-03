@@ -373,7 +373,11 @@ the run waits to be queued (a fill can hold the queue for as long as Go takes
 to read the issues' blockers), while it is queued, and while its worktree is
 being created. The queued item carries
 the run id (`remoteRunId` on the queue item), and the slot adopts it from the
-item it dequeues, so a window still holds a queued run after a reload.
+item it dequeues, so a window still holds a queued run after a reload. A
+reload or close with a pipeline running keeps the queue too (#2396): it drops
+only the items its dispatches took (`queue.dropProcessing`), and a dequeue
+still reading blockers when that lands dequeues nothing. Stop All clears the
+queue.
 
 A trigger for an issue the operator already queued here serves that work
 instead of queueing the issue twice (#2344). The window places the run in one

@@ -84,6 +84,7 @@ import type {
   PlatformSyncTelemetryResult,
   PortalSessionResult,
   PullRequestDetail,
+  QueueDropProcessingResult,
   QueueRemoveRemoteRunResult,
   QueueValidatePinResult,
   RateLimitInfo,
@@ -304,6 +305,10 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async queueClear(): Promise<void> {
     await this.call<void>('queue.clear');
+  }
+
+  async queueDropProcessing(): Promise<QueueDropProcessingResult> {
+    return this.call<QueueDropProcessingResult>('queue.dropProcessing');
   }
 
   async queueDequeueIndependent(maxSlots: number, runningItems: unknown[]): Promise<IpcQueueItem[]> {

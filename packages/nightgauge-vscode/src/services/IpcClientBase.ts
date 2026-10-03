@@ -938,6 +938,14 @@ export interface QueueRemoveRemoteRunResult {
   removed: boolean;
 }
 
+/**
+ * Result of queue.dropProcessing (#2396): how many dispatched ("processing")
+ * items a window reload or close removed. Every waiting item stays.
+ */
+export interface QueueDropProcessingResult {
+  dropped: number;
+}
+
 export interface QueueValidatePinResult {
   ok: boolean;
   reason?: string;

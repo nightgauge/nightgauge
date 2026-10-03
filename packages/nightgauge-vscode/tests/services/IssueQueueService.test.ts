@@ -23,6 +23,7 @@ const mockQueueList = vi.fn().mockResolvedValue({
 const mockQueueRemove = vi.fn().mockResolvedValue(undefined);
 const mockQueueRemoveRemoteRun = vi.fn().mockResolvedValue({ removed: true });
 const mockQueueClear = vi.fn().mockResolvedValue(undefined);
+const mockQueueDropProcessing = vi.fn().mockResolvedValue({ dropped: 2 });
 const mockQueueDequeueIndependent = vi.fn().mockResolvedValue([]);
 const mockQueueEnqueueEpic = vi.fn().mockResolvedValue(undefined);
 
@@ -43,6 +44,7 @@ vi.mock("../../src/services/IpcClient", () => ({
       queueRemove: mockQueueRemove,
       queueRemoveRemoteRun: mockQueueRemoveRemoteRun,
       queueClear: mockQueueClear,
+      queueDropProcessing: mockQueueDropProcessing,
       queueDequeueIndependent: mockQueueDequeueIndependent,
       queueEnqueueEpic: mockQueueEnqueueEpic,
       on: mockOn,
@@ -487,6 +489,23 @@ describe("IssueQueueService (IPC delegation)", () => {
       await service.clear();
 
       expect(onQueueCleared).toHaveBeenCalled();
+    });
+  });
+
+  describe("dropProcessing()", () => {
+    // #2396: a window reload drops only the dispatched items and keeps every
+    // waiting one, so it neither clears the queue nor tells anyone it did.
+    it("drops the dispatched items over IPC, never clears, and fires no callback", async () => {
+      const onQueueCleared = vi.fn();
+      const onItemRemoved = vi.fn();
+      service.setCallbacks({ onQueueCleared, onItemRemoved });
+
+      expect(await service.dropProcessing()).toBe(2);
+
+      expect(mockQueueDropProcessing).toHaveBeenCalledTimes(1);
+      expect(mockQueueClear).not.toHaveBeenCalled();
+      expect(onQueueCleared).not.toHaveBeenCalled();
+      expect(onItemRemoved).not.toHaveBeenCalled();
     });
   });
 

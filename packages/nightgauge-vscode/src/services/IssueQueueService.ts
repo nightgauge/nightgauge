@@ -392,6 +392,20 @@ export class IssueQueueService implements vscode.Disposable {
     this.callbacks.onQueueCleared?.();
   }
 
+  /**
+   * What a window reload or close does to the queue (#2396): remove the
+   * items dispatches took ("processing"), whose runs end with the window, and
+   * keep every waiting item, with the platform runs it carries, for the next
+   * window. {@link clear}, the operator's Stop, drops those too. No local
+   * callback fires: the dequeue already emitted `onItemRemoved` for each
+   * dropped item. Resolves how many items were dropped.
+   */
+  async dropProcessing(): Promise<number> {
+    const ipc = IpcClient.getInstance();
+    const result = await ipc.queueDropProcessing();
+    return result.dropped;
+  }
+
   async getQueue(): Promise<QueueState | null> {
     const ipc = IpcClient.getInstance();
     const ipcState = await ipc.queueList();

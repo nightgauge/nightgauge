@@ -409,6 +409,7 @@ func collectImportTypes(methods []MethodDef) []string {
 		"AgentExecutionProfileResult":        true, // Issue #1567
 		"QueueValidatePinResult":             true, // #1656 — remote run request pin
 		"QueueRemoveRemoteRunResult":         true, // #2344 — cancel of a queued remote run
+		"QueueDropProcessingResult":          true, // #2396 — a window reload keeps the queue
 		"ConfigTierAuditResult":              true, // Issue #3645
 		"WorkflowQuotaStateResult":           true, // Issue #3909
 		"AttentionListResult":                true, // ADR 015 — Action Center

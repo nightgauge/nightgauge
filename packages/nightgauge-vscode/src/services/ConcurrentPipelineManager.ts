@@ -869,6 +869,21 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
+   * Whether this window has any dispatch under way (#2396): a running slot,
+   * a worktree being created, an item waiting for an earlier start in its
+   * batch, or a fill. Each holds a queue item marked processing that a
+   * window reload or close must release.
+   */
+  get hasDispatchInFlight(): boolean {
+    return (
+      this.slots.size > 0 ||
+      this.reservedSlots.size > 0 ||
+      this.dispatchingItems.size > 0 ||
+      this.isFilling
+    );
+  }
+
+  /**
    * Number of available slots.
    *
    * Subtracts in-flight reservations (slots whose worktree is still being
@@ -3473,27 +3488,47 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
-   * Abort all running pipelines
+   * Abort all running pipelines.
+   *
+   * The operator's Stop All and Abort clear the queue too. A window reload or
+   * close passes `keepQueued` (#2396): it ends the runs under way and nothing
+   * more. The queue outlives the window, so every waiting item, with the
+   * platform runs it carries, stays for the next window; only the items the
+   * ending dispatches took ("processing") are dropped, since nothing else
+   * would release them once the window is gone.
    */
-  async abortAll(): Promise<void> {
+  async abortAll(options: { keepQueued?: boolean } = {}): Promise<void> {
+    const keepQueued = options.keepQueued === true;
     this.isAbortAllInProgress = true;
     this.isShuttingDown = true;
     this.logger.info("Aborting all concurrent pipeline slots", {
       activeSlots: this.slots.size,
+      keepQueued,
     });
 
-    // Clear the queue first so no new items get dequeued by fillSlots
+    // The queue request goes out first, before any await: on a reload the
+    // window may be gone before anything after the first await runs. Stop
+    // clears the queue so fillSlots dequeues nothing more; a reload drops
+    // only the dispatched items, and Go refuses a dequeue already under way.
     try {
-      await this.queueService.clear();
+      if (keepQueued) {
+        await this.queueService.dropProcessing();
+      } else {
+        await this.queueService.clear();
+      }
     } catch {
-      // Best effort — queue clear is non-critical
+      // Best effort — the queue step is non-critical
     }
-    // A triggered run still queued here will never start now, so this window
-    // no longer holds it, and must not answer the platform's verbs for it
-    // (#2340). A dispatch already creating its worktree is refused by the
-    // shutdown check before its slot would adopt the id.
-    this.acceptedRemoteRuns.clear();
-    this.noteHeldRemoteRuns();
+    if (!keepQueued) {
+      // A triggered run still queued here will never start now, so this
+      // window no longer holds it, and must not answer the platform's verbs
+      // for it (#2340). A dispatch already creating its worktree is refused
+      // by the shutdown check before its slot would adopt the id. A reload
+      // keeps the queue, so the window holds its queued runs until it is gone
+      // and lists them as closed for the next window to take up.
+      this.acceptedRemoteRuns.clear();
+      this.noteHeldRemoteRuns();
+    }
 
     // Stop all running orchestrators. Mark each slot as user-cancelled BEFORE
     // issuing the stop so the slot's runSlot completion handler treats the

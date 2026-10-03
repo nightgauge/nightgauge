@@ -559,6 +559,12 @@ type QueueRemoveRemoteRunResult struct {
 	Removed bool `json:"removed"`
 }
 
+// QueueDropProcessingResult reports how many dispatched ("processing") items
+// queue.dropProcessing removed (#2396).
+type QueueDropProcessingResult struct {
+	Dropped int `json:"dropped"`
+}
+
 // QueueCompleteParams are parameters for queue.complete — the terminal
 // counterpart to queue.dequeueIndependent.
 //

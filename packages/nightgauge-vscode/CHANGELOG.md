@@ -27,6 +27,11 @@ and this project adheres to
 
 ### Fixed
 
+- **Reloading the window while a pipeline runs keeps your queue.** The reload
+  ended the running pipelines and also cleared every queued issue, including
+  runs triggered from the dashboard. Now only the running pipelines end, and
+  the queued issues are still there when the window comes back. Stop All
+  still clears the queue (#2396).
 - **A pipeline worktree's `npm install` no longer replaces a hook directory
   set for the whole clone.** A checkout whose `prepare` script runs husky set
   husky's per-worktree hooks path for every worktree of the clone, so resuming

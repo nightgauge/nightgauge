@@ -989,9 +989,13 @@ export function deactivate(): void {
   // Disconnect audit/pipeline event SSE consumer (Issue #3321)
   EventStreamService.resetInstance();
 
-  // Stop unified pipeline manager (handles all worktree-based slots, #1831)
-  if ((concurrentPipelineManager?.activeSlotCount ?? 0) > 0) {
-    concurrentPipelineManager!.abortAll().catch(() => {});
+  // Stop unified pipeline manager (handles all worktree-based slots, #1831).
+  // A reload or close ends this window's runs and nothing more (#2396): the
+  // queue outlives the window, so every waiting item, platform runs included,
+  // stays for the next one, and only the items the ending dispatches took are
+  // dropped. Stop All, not a reload, is what clears the queue.
+  if (concurrentPipelineManager?.hasDispatchInFlight) {
+    concurrentPipelineManager.abortAll({ keepQueued: true }).catch(() => {});
   }
 
   // Also stop main orchestrator if running (batch processing, resume)

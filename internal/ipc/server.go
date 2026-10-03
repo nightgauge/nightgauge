@@ -4336,6 +4336,18 @@ func (s *Server) registerMethods() {
 		return map[string]string{"status": "ok"}, nil
 	}
 
+	// queue.dropProcessing is what a window reload or close does to the queue
+	// (#2396): the items its dispatches took go with their runs, and every
+	// waiting item stays for the next window (Scheduler.QueueDropProcessing).
+	// queue.clear, the operator's Stop, drops those too.
+	//ipc:method queueDropProcessing params:none result:QueueDropProcessingResult
+	s.methods["queue.dropProcessing"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
+		if s.scheduler == nil {
+			return nil, errors.New(errSchedulerNotConfigured)
+		}
+		return QueueDropProcessingResult{Dropped: s.scheduler.QueueDropProcessing()}, nil
+	}
+
 	//ipc:method queueDequeueIndependent params:QueueDequeueIndependentParams result:IpcQueueItem[]
 	s.methods["queue.dequeueIndependent"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		var p QueueDequeueIndependentParams
