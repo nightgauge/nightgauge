@@ -55,6 +55,12 @@ and this project adheres to
   repository, where it belongs to a different issue, and the check created one
   there when none existed (#2377).
 
+- **An auto-retro issue is no longer linked under another repository's
+  issue.** With `feedback_loop.auto_retro.auto_create_issues` on, the issue
+  filed for a failed sub-issue was made a sub-issue of the parent epic's
+  number in the failed issue's repository. It is now linked only when the
+  epic is in that repository (#2377).
+
 - **Pause, resume, cancel, approve and reject from the phone app or the
   dashboard are acknowledged.** Each one used to show as unacknowledged and
   then expired, even when it had been carried out. Pause and resume now work:

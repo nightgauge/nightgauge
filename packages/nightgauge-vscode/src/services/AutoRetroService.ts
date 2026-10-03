@@ -202,6 +202,20 @@ const DEFAULT_CONFIG: AutoRetroConfig = {
 const SEVERITY_RANK: Record<string, number> = { low: 0, medium: 1, high: 2 };
 
 /**
+ * Whether a parent epic's repository is the one an issue is created in.
+ * GitHub compares repository names case-insensitively.
+ */
+function sameRepo(
+  parent: { owner: string; name: string },
+  identity: { owner: string; repo: string }
+): boolean {
+  return (
+    `${parent.owner}/${parent.name}`.toLowerCase() ===
+    `${identity.owner}/${identity.repo}`.toLowerCase()
+  );
+}
+
+/**
  * Source tag for classifier evidence. Lets the keyword-pass distinguish
  * subagent stdout (where `tsc error` is a real validation failure) from
  * extension cleanup logs (where `TypeError: fetch failed` is post-failure
@@ -2071,8 +2085,11 @@ export class AutoRetroService {
         if (newIssueNumber) {
           finding.issueNumber = newIssueNumber;
 
-          // Link to parent epic via native sub-issue API
-          if (epicInfo) {
+          // Link to parent epic via native sub-issue API. issue.linkSubIssue
+          // links two issues of one repository, so a parent epic in another
+          // repository is not linked: its number would name this repository's
+          // issue with that number (#2377).
+          if (epicInfo && sameRepo(epicInfo, identity)) {
             await this.linkSubIssueToEpic(
               epicInfo.parentNumber,
               newIssueNumber,
@@ -2080,6 +2097,11 @@ export class AutoRetroService {
               epicInfo.name,
               logger
             );
+          } else if (epicInfo) {
+            logger.info("Auto-retro: parent epic is in another repository — not linked", {
+              newIssueNumber,
+              parentEpic: `${epicInfo.owner}/${epicInfo.name}#${epicInfo.parentNumber}`,
+            });
           }
         }
 
@@ -2238,9 +2260,9 @@ export class AutoRetroService {
   }
 
   /**
-   * Look up the parent epic's node ID for a given issue.
-   * Returns repo owner/name alongside the parent node ID so callers can
-   * make follow-up GraphQL calls without re-detecting the repo.
+   * Look up the parent epic of a given issue: its number and its own
+   * repository (`parentIssueRepo`, or the issue's repository when the read
+   * names none). An issue number names an issue only within one repository.
    * Returns null if the issue has no parent or repo detection fails.
    */
   private static async getParentEpicInfo(
@@ -2257,6 +2279,10 @@ export class AutoRetroService {
       const parentNumber = issue?.parentIssueNumber;
       if (!parentNumber) return null;
 
+      const [parentOwner, parentName] = (issue.parentIssueRepo ?? "").split("/");
+      if (parentOwner && parentName) {
+        return { parentNumber, owner: parentOwner, name: parentName };
+      }
       return {
         parentNumber,
         owner: identity.owner,

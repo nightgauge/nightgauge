@@ -219,6 +219,7 @@ func pauseBlockedDependencyItem(sched *orchestrator.Scheduler, owner, repo strin
 			Number: d.Number,
 			Title:  d.Title,
 			State:  d.State,
+			Repo:   d.Repo,
 		})
 	}
 	sched.PauseDeferred(orchestrator.QueueItem{

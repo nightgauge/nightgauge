@@ -295,6 +295,23 @@ changelog, and the release workflow refuses a tag that does not.
   `wave.status` IPC methods, which read the launch checkout by epic number
   alone, are removed.
 
+  epic's sub-issue. A wave reads each sub-issue's run back from the checkout of
+  the sub-issue's repository, where the run was rooted, and only that
+  repository's run of the number: a merged sub-issue in another repository
+  counted as failed, which ended the wave and queued the epic instead, or the
+  launch repository's same-numbered run answered for it. The wave's results,
+  budgets, dependency edges and recorded findings are keyed by repository and
+  number too, and its plan and status files are kept with the epic's context.
+  Queuing an epic keeps each sub-issue's blockers apart by repository: two
+  sub-issues sharing a number in different repositories shared one blocker
+  list, so one could be queued without its open blocker. A queued blocker,
+  the epic's own included, records its repository and is re-read and matched
+  there. An auto-retro issue is linked under the failed issue's parent epic
+  only when the epic is in the same repository; it was linked under that
+  repository's same-numbered issue. The unused `epic.readContext`,
+  `epic.appendContext` and `wave.status` IPC methods, which read the launch
+  checkout by epic number alone, are removed.
+
 - **A blocker that shares its number with a parent epic in another repository
   is no longer deleted, refused or flagged as circular** (#2369). Three checks
   for "an issue blocked by its own parent epic" compared only the number. The

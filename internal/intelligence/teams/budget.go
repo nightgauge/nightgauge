@@ -14,7 +14,10 @@ const (
 
 // BudgetAllocation is the token budget for a single issue.
 type BudgetAllocation struct {
-	IssueNumber int     `json:"issueNumber"`
+	IssueNumber int `json:"issueNumber"`
+	// Repo is the issue's repository (SubIssue.Repo). An epic's sub-issues can
+	// share a number across repositories, so a reader matches both.
+	Repo        string  `json:"repo,omitempty"`
 	TokenBudget int     `json:"tokenBudget"`
 	Percentage  float64 `json:"percentage"`
 }
@@ -76,6 +79,7 @@ func splitEqual(issues []SubIssue, totalBudget int) []BudgetAllocation {
 	for i, issue := range issues {
 		allocs[i] = BudgetAllocation{
 			IssueNumber: issue.Number,
+			Repo:        issue.Repo,
 			TokenBudget: perIssue,
 			Percentage:  pct,
 		}
@@ -103,6 +107,7 @@ func splitProportional(issues []SubIssue, totalBudget int) []BudgetAllocation {
 		tokens := int(math.Floor(fraction * float64(totalBudget)))
 		allocs[i] = BudgetAllocation{
 			IssueNumber: issue.Number,
+			Repo:        issue.Repo,
 			TokenBudget: tokens,
 			Percentage:  fraction,
 		}

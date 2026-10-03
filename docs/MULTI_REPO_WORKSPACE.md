@@ -725,9 +725,12 @@ pushed to, so it belongs to the epic's own repository:
   merge.
 
 The epic's other per-epic state is keyed the same way. Its accumulated context
-(`epic-context-<N>.json`) is kept in the pipeline state of the epic's
-repository, and each sub-issue's prompt reads it from there. The between-epic
-checkpoint names the epic as `owner/repo#N`.
+(`epic-context-<N>.json`), wave plan and wave status are kept in the pipeline
+state of the epic's repository, and each sub-issue's prompt reads the context
+from there. A wave runs each sub-issue in the sub-issue's own repository and
+reads its result back from that repository's checkout. A queued sub-issue's
+blockers, the epic's own included, record their repository and are read
+there. The between-epic checkpoint names the epic as `owner/repo#N`.
 
 ### Cross-Repo Issue Creation
 

@@ -123,21 +123,32 @@ func renderEpicContextForPrompt(workspaceRoot string, epicNumber int) string {
 	return truncate(sb.String(), epicCtxMaxChars)
 }
 
-// sortedFindingKeys returns the sub-issue map keys in ascending numeric order
-// (keys are stringified issue numbers) for deterministic output.
+// sortedFindingKeys returns the sub-issue map keys in ascending issue-number
+// order for deterministic output. A key is a stringified issue number, or
+// "owner/repo#N" for a sub-issue in another repository than the epic
+// (WaveOrchestrator.findingKey); equal numbers sort by key.
 func sortedFindingKeys(m map[string]*subIssueFindings) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool {
-		ni, nj := atoiSafe(keys[i]), atoiSafe(keys[j])
+		ni, nj := findingKeyNumber(keys[i]), findingKeyNumber(keys[j])
 		if ni != nj {
 			return ni < nj
 		}
 		return keys[i] < keys[j]
 	})
 	return keys
+}
+
+// findingKeyNumber is the issue number a sub_issue_findings key names: the
+// digits after the last '#', or the whole key when it has none.
+func findingKeyNumber(key string) int {
+	if i := strings.LastIndexByte(key, '#'); i >= 0 {
+		key = key[i+1:]
+	}
+	return atoiSafe(key)
 }
 
 func atoiSafe(s string) int {

@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/runstate"
 )
@@ -171,16 +172,51 @@ func PickPersistedStateForIssue(stateDir string, issueNumber int) (*RuntimeState
 	if err != nil {
 		return nil, err
 	}
+	return pickStandard(candidates, fmt.Sprintf("#%d", issueNumber), stateDir)
+}
+
+// PickPersistedStateForRepoIssue is PickPersistedStateForIssue restricted to
+// the snapshots of repo's issue. The file name carries only the issue number,
+// which names an issue only within one repository, so a pipeline-state
+// directory can hold another repository's run of the same number: one launch
+// checkout rooting the runs of several repositories, or snapshots left from
+// before runs were rooted in their own repository. The repository is compared
+// case-insensitively, as GitHub compares it. An empty repo applies no filter.
+//
+// Returns an error wrapping fs.ErrNotExist when repo's issue has no snapshot.
+func PickPersistedStateForRepoIssue(stateDir, repo string, issueNumber int) (*RuntimeState, error) {
+	candidates, err := FindPersistedStatesForIssue(stateDir, issueNumber)
+	if err != nil {
+		return nil, err
+	}
+	label := fmt.Sprintf("#%d", issueNumber)
+	if repo != "" {
+		label = repo + label
+		kept := candidates[:0]
+		for _, c := range candidates {
+			if strings.EqualFold(c.Repo, repo) {
+				kept = append(kept, c)
+			}
+		}
+		candidates = kept
+	}
+	return pickStandard(candidates, label, stateDir)
+}
+
+// pickStandard is the standard pick over candidates sorted newest-first:
+// prefer a non-terminal snapshot, then the newest StartedAt. label names the
+// issue in the log line and the not-found error.
+func pickStandard(candidates []*RuntimeState, label, stateDir string) (*RuntimeState, error) {
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no runtime snapshot for #%d in %s: %w", issueNumber, stateDir, fs.ErrNotExist)
+		return nil, fmt.Errorf("no runtime snapshot for %s in %s: %w", label, stateDir, fs.ErrNotExist)
 	}
 	if len(candidates) > 1 {
 		ids := make([]string, 0, len(candidates))
 		for _, c := range candidates {
 			ids = append(ids, c.RunID)
 		}
-		log.Printf("state: #%d has %d runtime snapshots (%v) — picking by non-terminal, then newest StartedAt",
-			issueNumber, len(candidates), ids)
+		log.Printf("state: %s has %d runtime snapshots (%v) — picking by non-terminal, then newest StartedAt",
+			label, len(candidates), ids)
 	}
 	// candidates is already newest-first, so the first non-terminal entry is
 	// both non-terminal and newest among the non-terminal ones.

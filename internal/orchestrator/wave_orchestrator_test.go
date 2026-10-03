@@ -230,7 +230,7 @@ func TestWaveOrchestrator_FetchSubIssueDetails(t *testing.T) {
 	wo := newWaveOrchestrator(s, 100, "Org/repo", 4, 0)
 
 	epicItem := types.BoardItem{Number: 100, Repo: "Org/repo"}
-	subIssues, issueDetails, err := wo.fetchSubIssueDetails(context.Background(), "Org", "repo", epicItem)
+	subIssues, issueDetails, _, err := wo.fetchSubIssueDetails(context.Background(), "Org", "repo", epicItem)
 	if err != nil {
 		t.Fatalf("fetchSubIssueDetails error: %v", err)
 	}
@@ -260,8 +260,9 @@ func TestWaveOrchestrator_DetectDependencies_WithBlockedBy(t *testing.T) {
 		{Number: 102, Title: "Issue B", Body: "Independent"},
 		{Number: 103, Title: "Issue C", Body: "Needs A first", BlockedBy: []int{101}},
 	}
+	blockedBy := map[string][]string{"org/repo#103": {"org/repo#101"}}
 
-	deps := wo.detectDependencies(subIssues, issueDetails)
+	deps := wo.detectDependencies(subIssues, issueDetails, blockedBy)
 
 	// Issue C (index 2) should depend on Issue A (index 0)
 	if deps, ok := deps[2]; ok {
@@ -283,7 +284,7 @@ func TestWaveOrchestrator_BuildSummary(t *testing.T) {
 	s := &Scheduler{}
 	wo := newWaveOrchestrator(s, 100, "test", 4, 0)
 
-	wo.agentResults[101] = &AgentResult{
+	wo.agentResults[repoIssueKey(wo.repo, 101)] = &AgentResult{
 		IssueNumber:  101,
 		Success:      true,
 		InputTokens:  1000,
@@ -292,7 +293,7 @@ func TestWaveOrchestrator_BuildSummary(t *testing.T) {
 		Duration:     60_000_000_000, // 60s
 		WaveIndex:    0,
 	}
-	wo.agentResults[102] = &AgentResult{
+	wo.agentResults[repoIssueKey(wo.repo, 102)] = &AgentResult{
 		IssueNumber:  102,
 		Success:      true,
 		InputTokens:  800,
@@ -301,7 +302,7 @@ func TestWaveOrchestrator_BuildSummary(t *testing.T) {
 		Duration:     45_000_000_000, // 45s
 		WaveIndex:    0,
 	}
-	wo.agentResults[103] = &AgentResult{
+	wo.agentResults[repoIssueKey(wo.repo, 103)] = &AgentResult{
 		IssueNumber:  103,
 		Success:      false,
 		Error:        "pipeline failed",
@@ -357,7 +358,7 @@ func TestWaveOrchestrator_PersistWavePlan(t *testing.T) {
 		},
 	}
 
-	wo.persistWavePlan(tmpDir)
+	wo.persistWavePlan()
 
 	planPath := filepath.Join(layouttest.PipelineDir(t, tmpDir), "wave-plan-100.json")
 	data, err := os.ReadFile(planPath)
@@ -395,14 +396,14 @@ func TestWaveOrchestrator_PersistWaveStatus(t *testing.T) {
 	wo.waves = []teams.WaveAssignment{
 		{WaveIndex: 0, Issues: []teams.SubIssue{{Number: 101}}},
 	}
-	wo.agentResults[101] = &AgentResult{
+	wo.agentResults[repoIssueKey(wo.repo, 101)] = &AgentResult{
 		IssueNumber: 101, Success: true, WaveIndex: 0,
 	}
 
 	summary := &WaveSummary{
 		TotalIssues: 1, Succeeded: 1,
 	}
-	wo.persistWaveStatus(tmpDir, summary)
+	wo.persistWaveStatus(summary)
 
 	statusPath := filepath.Join(layouttest.PipelineDir(t, tmpDir), "wave-status-100.json")
 	data, err := os.ReadFile(statusPath)
@@ -615,10 +616,10 @@ func TestWaveOrchestrator_WaveSuccessCount(t *testing.T) {
 	s := &Scheduler{}
 	wo := newWaveOrchestrator(s, 100, "test", 4, 0)
 
-	wo.agentResults[1] = &AgentResult{IssueNumber: 1, WaveIndex: 0, Success: true}
-	wo.agentResults[2] = &AgentResult{IssueNumber: 2, WaveIndex: 0, Success: false}
-	wo.agentResults[3] = &AgentResult{IssueNumber: 3, WaveIndex: 0, Success: true}
-	wo.agentResults[4] = &AgentResult{IssueNumber: 4, WaveIndex: 1, Success: true}
+	wo.agentResults[repoIssueKey(wo.repo, 1)] = &AgentResult{IssueNumber: 1, WaveIndex: 0, Success: true}
+	wo.agentResults[repoIssueKey(wo.repo, 2)] = &AgentResult{IssueNumber: 2, WaveIndex: 0, Success: false}
+	wo.agentResults[repoIssueKey(wo.repo, 3)] = &AgentResult{IssueNumber: 3, WaveIndex: 0, Success: true}
+	wo.agentResults[repoIssueKey(wo.repo, 4)] = &AgentResult{IssueNumber: 4, WaveIndex: 1, Success: true}
 
 	if count := wo.waveSuccessCount(0); count != 2 {
 		t.Errorf("wave 0 success count = %d, want 2", count)
@@ -639,12 +640,12 @@ func TestWaveOrchestrator_BudgetForIssue(t *testing.T) {
 		},
 	}
 
-	if b := wo.budgetForIssue(budgetResult, 101); b != 500_000 {
+	if b := wo.budgetForIssue(budgetResult, teams.SubIssue{Number: 101}); b != 500_000 {
 		t.Errorf("budget for 101 = %d, want 500000", b)
 	}
 
 	// Unknown issue gets fallback
-	fallback := wo.budgetForIssue(budgetResult, 999)
+	fallback := wo.budgetForIssue(budgetResult, teams.SubIssue{Number: 999})
 	if fallback != 1_000_000/6 {
 		t.Errorf("fallback budget = %d, want %d", fallback, 1_000_000/6)
 	}

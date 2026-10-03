@@ -1172,6 +1172,21 @@ type QueueBlockingRef struct {
 	Number int    `json:"number"`
 	Title  string `json:"title"`
 	State  string `json:"state"`
+	// Repo is the blocker's repository ("owner/name"). Empty means the queue
+	// item's own repository. An epic's blockers, and a sub-issue's, can live
+	// in another repository than the sub-issue, where the same number names a
+	// different issue (#2377).
+	Repo string `json:"repo,omitempty"`
+}
+
+// queueBlockerKey keys the blocker b of a queue item in itemRepo by
+// repository and number (repoIssueKey).
+func queueBlockerKey(itemRepo string, b QueueBlockingRef) string {
+	repo := b.Repo
+	if repo == "" {
+		repo = itemRepo
+	}
+	return repoIssueKey(repo, b.Number)
 }
 
 // QueueState is the persistent queue state.
@@ -2791,19 +2806,29 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Numbers already in-flight (for the blockedBy guard) and per-repo
+	// Issues already in flight (for the blockedBy guard) and per-repo
 	// in-flight counts (for the per-repo cap). Seeded from the caller's
 	// running set; both grow as we dequeue this call.
-	dequeuedNums := make(map[int]bool)
+	//
+	// The guard keys issues by repository and number (repoIssueKey): an
+	// issue number names an issue only within one repository, and a queued
+	// sub-issue's blocker can sit in another repository (#2377). A running
+	// item that names no repository holds a blocker of its number in any.
+	inFlight := make(map[string]bool)
+	inFlightAnyRepo := make(map[int]bool)
 	repoInFlight := make(map[string]int)
 	for _, r := range running {
-		dequeuedNums[r.Number] = true
+		if r.Repo == "" {
+			inFlightAnyRepo[r.Number] = true
+		} else {
+			inFlight[repoIssueKey(r.Repo, r.Number)] = true
+		}
 		repoInFlight[r.Repo]++
 	}
 
-	allQueueNums := make(map[int]bool)
+	queued := make(map[string]bool, len(s.queue))
 	for _, item := range s.queue {
-		allQueueNums[item.IssueNumber] = true
+		queued[repoIssueKey(item.Repo, item.IssueNumber)] = true
 	}
 
 	var dequeued []QueueItem
@@ -2879,8 +2904,11 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 		if len(item.BlockedBy) > 0 {
 			blocked := false
 			for _, b := range item.BlockedBy {
-				if strings.EqualFold(b.State, "OPEN") &&
-					(dequeuedNums[b.Number] || allQueueNums[b.Number]) {
+				if !strings.EqualFold(b.State, "OPEN") {
+					continue
+				}
+				key := queueBlockerKey(item.Repo, b)
+				if inFlight[key] || queued[key] || inFlightAnyRepo[b.Number] {
 					blocked = true
 					break
 				}
@@ -2910,7 +2938,7 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 
 		item.Status = "processing"
 		dequeued = append(dequeued, item)
-		dequeuedNums[item.IssueNumber] = true
+		inFlight[repoIssueKey(item.Repo, item.IssueNumber)] = true
 		repoInFlight[item.Repo]++
 		toRemoveIdx = append(toRemoveIdx, i)
 	}
@@ -3000,7 +3028,10 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 	}
 	log.Printf("EnqueueEpic: epic #%d has %d sub-issues, title=%q", epicNumber, len(issue.SubIssues), issue.Title)
 
-	// Build the eligible-sub-issue set when a whitelist was supplied.
+	// Build the eligible-sub-issue set when a whitelist was supplied. The
+	// whitelist names sub-issues by number alone (queue.enqueueEpic's
+	// eligibleSubIssues, from the extension's drag filter), so a number admits
+	// every sub-issue of this epic that has it, in any repository.
 	var eligibleSet map[int]struct{}
 	if len(eligibleSubIssues) > 0 {
 		eligibleSet = make(map[int]struct{}, len(eligibleSubIssues))
@@ -3013,7 +3044,11 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 	// Fetch per-sub-issue blockedBy relationships before taking the lock.
 	// The epic query only returns lightweight SubIssueRef (no blocking data),
 	// so each sub-issue is read for its own blocker list, and only that list.
-	subIssueBlockedBy := make(map[int][]types.BlockingRef, len(issue.SubIssues))
+	//
+	// Keyed by the sub-issue's repository and number: an epic's sub-issues can
+	// share a number across repositories, and keyed by number the second one
+	// read replaced the first one's blockers (#2377).
+	subIssueBlockedBy := make(map[string][]types.BlockingRef, len(issue.SubIssues))
 	for _, si := range issue.SubIssues {
 		if strings.EqualFold(si.State, "CLOSED") {
 			continue
@@ -3034,13 +3069,13 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 			// The sub-issue's blocker list could not be read whole.
 			// Enqueuing it without the blockers past the part that was read
 			// would let DequeueIndependent dispatch it while one is still open.
-			return fmt.Errorf("enqueue epic #%d: blockers of sub-issue #%d: %w", epicNumber, si.Number, err)
+			return fmt.Errorf("enqueue epic #%d: blockers of sub-issue %s/%s#%d: %w", epicNumber, siOwner, siRepo, si.Number, err)
 		}
 		if err != nil {
-			log.Printf("WARN: failed to fetch blockedBy for sub-issue #%d: %v", si.Number, err)
+			log.Printf("WARN: failed to fetch blockedBy for sub-issue %s/%s#%d: %v", siOwner, siRepo, si.Number, err)
 			continue
 		}
-		subIssueBlockedBy[si.Number] = siIssue.BlockedBy
+		subIssueBlockedBy[repoIssueKey(siOwner+"/"+siRepo, si.Number)] = siIssue.BlockedBy
 	}
 
 	s.mu.Lock()
@@ -3088,21 +3123,16 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 			IsBatch:     true,
 			AddedAt:     time.Now().UTC(),
 		}
-		// Epic-level blockers apply to all sub-issues
+		// Epic-level blockers apply to all sub-issues. Each keeps its own
+		// repository: copied as a bare number onto a sub-issue in another
+		// repository, it was re-read and matched there as that repository's
+		// issue with the same number.
 		for _, b := range issue.BlockedBy {
-			item.BlockedBy = append(item.BlockedBy, QueueBlockingRef{
-				Number: b.Number,
-				Title:  b.Title,
-				State:  b.State,
-			})
+			item.BlockedBy = append(item.BlockedBy, queueBlockingRef(b, fullRepo))
 		}
 		// Sub-issue-level blockers (e.g., #1335 blockedBy #1336 within the epic)
-		for _, b := range subIssueBlockedBy[si.Number] {
-			item.BlockedBy = append(item.BlockedBy, QueueBlockingRef{
-				Number: b.Number,
-				Title:  b.Title,
-				State:  b.State,
-			})
+		for _, b := range subIssueBlockedBy[repoIssueKey(subIssueRepo, si.Number)] {
+			item.BlockedBy = append(item.BlockedBy, queueBlockingRef(b, subIssueRepo))
 		}
 		// Skip if already in queue (e.g., re-enqueued individually after a
 		// prior failure). Without this, the same issue can be dequeued into
@@ -3121,6 +3151,16 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 	s.persistQueue()
 	s.emitQueueChangedUnlocked()
 	return nil
+}
+
+// queueBlockingRef is the queue's record of blocker b of an issue in
+// ownerRepo, the repository b's number is read in when b names none.
+func queueBlockingRef(b types.BlockingRef, ownerRepo string) QueueBlockingRef {
+	repo := b.Repo
+	if repo == "" {
+		repo = ownerRepo
+	}
+	return QueueBlockingRef{Number: b.Number, Title: b.Title, State: b.State, Repo: repo}
 }
 
 // OnQueueChanged sets a callback for queue state changes.
@@ -8226,10 +8266,16 @@ func (s *Scheduler) refreshBlockerStates(ctx context.Context) {
 	for i, item := range s.queue {
 		for j, b := range item.BlockedBy {
 			if strings.EqualFold(b.State, "OPEN") {
+				// A blocker is read in its own repository; one that names
+				// none is in the item's (#2377).
+				repo := b.Repo
+				if repo == "" {
+					repo = item.Repo
+				}
 				targets = append(targets, refreshTarget{
 					queueIdx:   i,
 					blockerIdx: j,
-					repo:       item.Repo,
+					repo:       repo,
 					number:     b.Number,
 				})
 			}

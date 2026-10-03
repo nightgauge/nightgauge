@@ -14,11 +14,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/git"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/gittest"
+	"github.com/nightgauge/nightgauge/internal/intelligence/batch"
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
+	"github.com/nightgauge/nightgauge/internal/runstate"
+	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
@@ -282,7 +286,7 @@ func TestWaveOrchestrator_RunsASubIssueInItsOwnRepository(t *testing.T) {
 	wo := newWaveOrchestrator(&Scheduler{issueSvc: issueSvc}, 20, "example-org/platform", 2, 0)
 	epicItem := types.BoardItem{Number: 20, Repo: "example-org/platform"}
 
-	subIssues, _, err := wo.fetchSubIssueDetails(context.Background(), "example-org", "platform", epicItem)
+	subIssues, _, _, err := wo.fetchSubIssueDetails(context.Background(), "example-org", "platform", epicItem)
 	if err != nil {
 		t.Fatalf("fetchSubIssueDetails: %v", err)
 	}
@@ -351,5 +355,389 @@ func TestPickNext_EpicBlockingHoldsOnlyTheEpicsOwnSubIssue(t *testing.T) {
 	}
 	if item == nil || item.Repo != "example-org/platform" || item.Number != 21 {
 		t.Fatalf("PickNext = %+v, want example-org/platform#21: the blocked epic's sub-issue is example-org/app#21", item)
+	}
+}
+
+// platformLaunchedScheduler is crossRepoEpicScheduler launched in the epic's
+// repository: the wave orchestrator runs in the checkout of
+// example-org/platform, and example-org/app has a checkout of its own.
+func platformLaunchedScheduler(platform, app string) *Scheduler {
+	s := NewScheduler(nil, SchedulerConfig{WorkspaceRoot: platform})
+	s.launchRepo = "example-org/platform"
+	s.WithRepoPathResolver(func(repo string) string {
+		switch repo {
+		case "example-org/app":
+			return app
+		case "example-org/platform":
+			return platform
+		}
+		return ""
+	})
+	return s
+}
+
+// persistWaveRun persists a run of repo#number into root's pipeline state, as
+// runPipeline does: merged runs account for all six stages and end at
+// pr-merge, failed ones stop at feature-dev.
+func persistWaveRun(t *testing.T, root, repo string, number int, merged bool, inputTokens int) {
+	t.Helper()
+	id, err := runstate.NewRunID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := state.NewRuntimeState(repo, number, "item", id)
+	rs.InputTokens = inputTokens
+	rs.Stage = state.StageFeatureDev
+	if merged {
+		rs.Stage = state.StagePRMerge
+		for _, st := range []state.PipelineStage{state.StageIssuePickup, state.StageFeaturePlanning,
+			state.StageFeatureDev, state.StageFeatureValidate, state.StagePRCreate, state.StagePRMerge} {
+			rs.CompletedStages = append(rs.CompletedStages, state.StageResult{Stage: st})
+		}
+	}
+	if err := persistPipelineState(rs, root); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// describeRun names the run a readback returned, for failure messages.
+func describeRun(rs *state.RuntimeState) string {
+	if rs == nil {
+		return "no run"
+	}
+	return fmt.Sprintf("%s#%d at %s (%d input tokens)", rs.Repo, rs.IssueNumber, rs.Stage, rs.InputTokens)
+}
+
+// A wave reads a sub-issue's run back from the checkout the run was rooted
+// in, and only that repository's run. Since a wave runs example-org/app#21 in
+// its own repository, its snapshot is in example-org/app's pipeline state;
+// read from the launch checkout by number, a merged sub-issue counted as
+// failed, or example-org/platform#21's run answered for it.
+func TestWaveOrchestrator_ReadsASubIssuesRunInItsOwnRepository(t *testing.T) {
+	sub := teams.SubIssue{Number: 21, Repo: "example-org/app"}
+	epicItem := types.BoardItem{Number: 20, Repo: "example-org/platform"}
+
+	t.Run("merged in its own checkout", func(t *testing.T) {
+		platform, app := layouttest.Repo(t), layouttest.Repo(t)
+		s := platformLaunchedScheduler(platform, app)
+		wo := newWaveOrchestrator(s, 20, "example-org/platform", 2, 0)
+		item := wo.subIssueItem(sub, epicItem)
+		// The root runPipeline persists the run's snapshot in.
+		runRoot, err := s.resolveRunRoot(item.Repo)
+		if err != nil || runRoot != app {
+			t.Fatalf("run root = %q (%v), want the app checkout", runRoot, err)
+		}
+		persistWaveRun(t, runRoot, item.Repo, 21, true, 700)
+
+		ok, rs := wo.readPipelineState(item.Repo, 21)
+		if !ok || rs == nil || rs.InputTokens != 700 {
+			t.Errorf("readPipelineState = %v, %s; want example-org/app#21's merged run (700 input tokens)", ok, describeRun(rs))
+		}
+	})
+
+	t.Run("the launch repository's same-numbered run does not answer for it", func(t *testing.T) {
+		platform, app := layouttest.Repo(t), layouttest.Repo(t)
+		s := platformLaunchedScheduler(platform, app)
+		wo := newWaveOrchestrator(s, 20, "example-org/platform", 2, 0)
+		persistWaveRun(t, platform, "example-org/platform", 21, true, 999)
+		persistWaveRun(t, app, "example-org/app", 21, false, 700)
+
+		ok, rs := wo.readPipelineState("example-org/app", 21)
+		if ok || rs == nil || rs.InputTokens != 700 {
+			t.Errorf("readPipelineState = %v, %s; want example-org/app#21's failed run (700 input tokens)", ok, describeRun(rs))
+		}
+	})
+
+	t.Run("one pipeline state holding both repositories' runs", func(t *testing.T) {
+		root := layouttest.Repo(t)
+		s := platformLaunchedScheduler(root, root)
+		wo := newWaveOrchestrator(s, 20, "example-org/platform", 2, 0)
+		persistWaveRun(t, root, "example-org/platform", 21, true, 999)
+		persistWaveRun(t, root, "example-org/app", 21, false, 700)
+
+		ok, rs := wo.readPipelineState("example-org/app", 21)
+		if ok || rs == nil || rs.InputTokens != 700 {
+			t.Errorf("readPipelineState = %v, %s; want example-org/app#21's failed run (700 input tokens)", ok, describeRun(rs))
+		}
+		if ok, rs := wo.readPipelineState("example-org/elsewhere", 21); ok || rs != nil {
+			t.Errorf("a repository with no run of #21 read back %v, %s", ok, describeRun(rs))
+		}
+	})
+}
+
+// Everything else a wave keeps per sub-issue is keyed by repository and
+// number: the dependency edges, the token budget, the results and the epic
+// context's findings. example-org/platform#21 and example-org/app#21 are both
+// sub-issues of example-org/platform#20.
+func TestWaveOrchestrator_KeysSubIssuesByRepository(t *testing.T) {
+	platform, app := layouttest.Repo(t), layouttest.Repo(t)
+	s := platformLaunchedScheduler(platform, app)
+	wo := newWaveOrchestrator(s, 20, "example-org/platform", 2, 0)
+	p21 := teams.SubIssue{Number: 21, Repo: "example-org/platform", Files: []string{"internal/p.go"}}
+	a21 := teams.SubIssue{Number: 21, Repo: "example-org/app", Files: []string{"lib/a.dart"}}
+	p22 := teams.SubIssue{Number: 22, Repo: "example-org/platform"}
+	subs := []teams.SubIssue{p21, a21, p22}
+
+	// example-org/platform#22 is blocked by example-org/app#21 only.
+	details := []batch.IssueInput{{Number: 21, Body: "platform body"}, {Number: 21, Body: "app body"}, {Number: 22}}
+	deps := wo.detectDependencies(subs, details, map[string][]string{
+		wo.subIssueKey(p22): {repoIssueKey("example-org/app", 21)},
+	})
+	if got := deps[2]; len(got) != 1 || got[0] != 1 {
+		t.Errorf("example-org/platform#22 depends on %v, want only index 1 (example-org/app#21)", got)
+	}
+	if len(deps[0]) != 0 || len(deps[1]) != 0 {
+		t.Errorf("the #21s gained edges: %v", deps)
+	}
+
+	budget := teams.SplitBudget(subs, 900, teams.StrategyEqual)
+	budget.Allocations[1].TokenBudget = 123
+	if got := wo.budgetForIssue(budget, a21); got != 123 {
+		t.Errorf("example-org/app#21's budget = %d, want its own allocation 123", got)
+	}
+	if got := wo.budgetForIssue(budget, p21); got != 300 {
+		t.Errorf("example-org/platform#21's budget = %d, want 300", got)
+	}
+
+	wo.waves = []teams.WaveAssignment{{WaveIndex: 0, Issues: []teams.SubIssue{p21, a21}}}
+	wo.recordResult(&AgentResult{IssueNumber: 21, Repo: "example-org/platform", Success: true})
+	wo.recordResult(&AgentResult{IssueNumber: 21, Repo: "example-org/app", Success: false})
+	if summary := wo.buildSummary(time.Second); summary.TotalIssues != 2 || summary.Failed != 1 {
+		t.Errorf("summary = %+v, want two results, one failed", summary)
+	}
+	wo.persistWaveStatus(wo.buildSummary(time.Second))
+	data, err := os.ReadFile(filepath.Join(layouttest.PipelineDir(t, platform), "wave-status-20.json"))
+	if err != nil {
+		t.Fatalf("wave status not written in the epic's repository: %v", err)
+	}
+	var status WaveStatus
+	if err := json.Unmarshal(data, &status); err != nil {
+		t.Fatal(err)
+	}
+	if len(status.Waves) != 1 || status.Waves[0].Status != "failed" ||
+		strings.Join(status.Waves[0].Issues, ",") != "example-org/platform#21,example-org/app#21" {
+		t.Errorf("wave status = %+v, want the two #21s by repository, and failed", status.Waves)
+	}
+
+	wo.appendSubIssueToEpicContext(p21)
+	wo.appendSubIssueToEpicContext(a21)
+	ec := readEpicContextFile(platform, 20)
+	if ec == nil || ec.SubIssueFindings["21"] == nil || ec.SubIssueFindings["example-org/app#21"] == nil {
+		t.Fatalf("epic context findings = %+v, want \"21\" and \"example-org/app#21\"", ec)
+	}
+	if got := ec.SubIssueFindings["21"].FilesTouched; len(got) != 1 || got[0] != "internal/p.go" {
+		t.Errorf("example-org/platform#21's findings = %v, overwritten by example-org/app#21's", got)
+	}
+}
+
+// The wave plan and the wave status are kept in the epic repository's
+// pipeline state, named by the epic's number like its context; in the launch
+// checkout, example-org/app#20's wave files were example-org/platform#20's.
+func TestWaveOrchestrator_WaveFilesLiveInTheEpicsRepository(t *testing.T) {
+	launch, platform := layouttest.Repo(t), layouttest.Repo(t)
+	s := crossRepoEpicScheduler(launch, platform)
+	wo := newWaveOrchestrator(s, 20, "example-org/platform", 2, 0)
+	wo.waves = []teams.WaveAssignment{{WaveIndex: 0, Issues: []teams.SubIssue{{Number: 21, Repo: "example-org/app"}}}}
+
+	wo.persistWavePlan()
+	wo.persistWaveStatus(wo.buildSummary(time.Second))
+	for _, name := range []string{"wave-plan-20.json", "wave-status-20.json"} {
+		if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, platform), name)); err != nil {
+			t.Errorf("%s not written in the epic's repository: %v", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(layouttest.PipelineDir(t, launch), name)); err == nil {
+			t.Errorf("%s written in the launch checkout, where #20 is example-org/app#20", name)
+		}
+	}
+}
+
+// EnqueueEpic keeps each sub-issue's blockers apart by repository. Keyed by
+// number, example-org/app#21's empty blocker list replaced
+// example-org/platform#21's, and example-org/platform#21 was queued without
+// its open blocker example-org/platform#30.
+func TestEnqueueEpic_SameNumberedSubIssuesKeepTheirOwnBlockers(t *testing.T) {
+	mock := newMockIssueSvc()
+	mock.addIssue("example-org", "platform", 20, &types.Issue{
+		NodeID: "I_p20", Number: 20, Title: "Platform Epic", State: "OPEN", Repo: "example-org/platform",
+		SubIssues: []types.SubIssueRef{
+			{NodeID: "I_p21", Number: 21, Title: "Platform task", State: "OPEN", Repo: "example-org/platform"},
+			{NodeID: "I_a21", Number: 21, Title: "App task", State: "OPEN", Repo: "example-org/app"},
+		},
+		// The epic's own blocker, in the epic's repository but named without one.
+		BlockedBy: []types.BlockingRef{{Number: 5, Title: "Epic blocker", State: "OPEN"}},
+	})
+	mock.addIssue("example-org", "platform", 21, &types.Issue{NodeID: "I_p21", Number: 21, State: "OPEN", Repo: "example-org/platform",
+		BlockedBy: []types.BlockingRef{{Number: 30, Title: "Platform blocker", State: "OPEN", Repo: "example-org/platform"}}})
+	mock.addIssue("example-org", "app", 21, &types.Issue{NodeID: "I_a21", Number: 21, State: "OPEN", Repo: "example-org/app"})
+	s := &Scheduler{issueSvc: mock, repoRunning: map[string]int{}, mergeLocks: map[string]*sync.Mutex{}}
+
+	if err := s.EnqueueEpic(context.Background(), "example-org", "platform", 20, "Platform Epic", nil, nil); err != nil {
+		t.Fatalf("EnqueueEpic: %v", err)
+	}
+	if len(s.queue) != 2 {
+		t.Fatalf("queue = %+v, want both sub-issues", s.queue)
+	}
+	want := map[string]string{
+		"example-org/platform": "[example-org/platform#5 example-org/platform#30]",
+		"example-org/app":      "[example-org/platform#5]",
+	}
+	for _, it := range s.queue {
+		var got []string
+		for _, b := range it.BlockedBy {
+			got = append(got, fmt.Sprintf("%s#%d", b.Repo, b.Number))
+		}
+		if fmt.Sprint(got) != want[it.Repo] {
+			t.Errorf("%s#%d blockers = %v, want %s", it.Repo, it.IssueNumber, got, want[it.Repo])
+		}
+	}
+}
+
+// A queued sub-issue's blocker is refreshed and matched in the blocker's own
+// repository. example-org/app#21 is blocked by example-org/platform#5, and
+// example-org/app has an unrelated #5.
+func TestQueueBlockers_AreReadAndMatchedInTheirOwnRepository(t *testing.T) {
+	blocked := QueueItem{Repo: "example-org/app", IssueNumber: 21, Status: "pending",
+		BlockedBy: []QueueBlockingRef{{Number: 5, State: "OPEN", Repo: "example-org/platform"}}}
+
+	t.Run("refresh reads the blocker's repository", func(t *testing.T) {
+		mock := newMockIssueSvc()
+		mock.addIssue("example-org", "platform", 5, &types.Issue{Number: 5, State: "CLOSED"})
+		mock.addIssue("example-org", "app", 5, &types.Issue{Number: 5, State: "OPEN"})
+		s := &Scheduler{issueSvc: mock}
+		s.queue = []QueueItem{blocked}
+		s.queue[0].BlockedBy = append([]QueueBlockingRef(nil), blocked.BlockedBy...)
+
+		s.refreshBlockerStates(context.Background())
+		if got := s.queue[0].BlockedBy[0].State; got != "CLOSED" {
+			t.Errorf("blocker state = %s, want example-org/platform#5's CLOSED", got)
+		}
+	})
+
+	dequeue := func(queue []QueueItem, running []RunningItem) []string {
+		s := &Scheduler{repoRunning: map[string]int{}, mergeLocks: map[string]*sync.Mutex{}, maxPerRepo: 4}
+		s.queue = append([]QueueItem(nil), queue...)
+		var got []string
+		for _, it := range s.DequeueIndependent(context.Background(), 4, running) {
+			got = append(got, fmt.Sprintf("%s#%d", it.Repo, it.IssueNumber))
+		}
+		return got
+	}
+	appFive := QueueItem{Repo: "example-org/app", IssueNumber: 5, Status: "pending"}
+
+	t.Run("a same-numbered queued issue elsewhere does not hold it", func(t *testing.T) {
+		if got := dequeue([]QueueItem{appFive, blocked}, nil); fmt.Sprint(got) != "[example-org/app#5 example-org/app#21]" {
+			t.Errorf("dequeued %v, want both: example-org/app#5 is not the blocker", got)
+		}
+	})
+	t.Run("the blocker in flight holds it", func(t *testing.T) {
+		got := dequeue([]QueueItem{blocked}, []RunningItem{{Repo: "example-org/platform", Number: 5}})
+		if len(got) != 0 {
+			t.Errorf("dequeued %v while example-org/platform#5 is running", got)
+		}
+	})
+	t.Run("a same-numbered issue in flight elsewhere does not hold it", func(t *testing.T) {
+		got := dequeue([]QueueItem{blocked}, []RunningItem{{Repo: "example-org/app", Number: 5}})
+		if fmt.Sprint(got) != "[example-org/app#21]" {
+			t.Errorf("dequeued %v, want example-org/app#21: example-org/app#5 is not the blocker", got)
+		}
+	})
+	t.Run("a running item that names no repository holds it", func(t *testing.T) {
+		if got := dequeue([]QueueItem{blocked}, []RunningItem{{Number: 5}}); len(got) != 0 {
+			t.Errorf("dequeued %v while an unnamed repository's #5 is running", got)
+		}
+	})
+}
+
+// promptCapturingRunner records each stage's prompt. issue-pickup writes its
+// output context so feature-planning dispatches; feature-planning fails, which
+// ends the run.
+type promptCapturingRunner struct {
+	mu      sync.Mutex
+	prompts map[state.PipelineStage]string
+}
+
+func (r *promptCapturingRunner) HonoursPrompt() bool { return true }
+
+func (r *promptCapturingRunner) RunStage(_ context.Context, p StageRunParams) (*StageRunResult, error) {
+	r.mu.Lock()
+	if r.prompts == nil {
+		r.prompts = map[state.PipelineStage]string{}
+	}
+	r.prompts[p.Stage] = p.Prompt
+	r.mu.Unlock()
+	if p.Stage == state.StageFeaturePlanning {
+		return &StageRunResult{ExitCode: 1, ErrorText: "planning failed (fixture)"}, nil
+	}
+	if p.OutputFile != "" {
+		data, _ := json.Marshal(map[string]any{"schema_version": "1.0", "issue_number": p.IssueNumber, "ok": true})
+		_ = os.MkdirAll(filepath.Dir(p.OutputFile), 0o755)
+		_ = os.WriteFile(p.OutputFile, data, 0o644)
+	}
+	return &StageRunResult{}, nil
+}
+
+func (r *promptCapturingRunner) prompt(stage state.PipelineStage) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	p, ok := r.prompts[stage]
+	return p, ok
+}
+
+// runPipeline appends the epic context of a sub-issue's parent from the
+// parent's own repository to the feature-planning prompt. Read from the
+// checkout the run is rooted in, example-org/app#21 was handed
+// example-org/app#20's accumulated findings instead of its epic's.
+func TestRunPipeline_PromptCarriesTheParentsEpicContextFromItsOwnRepository(t *testing.T) {
+	stubReconcileGhUnreachable(t)
+	launch := gitWorkspace(t) // example-org/app's checkout
+	for _, dir := range []string{
+		"nightgauge-issue-pickup", "nightgauge-feature-planning", "nightgauge-feature-dev",
+		"nightgauge-feature-validate", "nightgauge-pr-create", "nightgauge-pr-merge",
+	} {
+		writeSkillFile(t, launch, dir)
+	}
+	gitIn(t, launch, "add", ".")
+	gitIn(t, launch, "commit", "-m", "fixture")
+	platform := layouttest.Repo(t)
+	writeEpicCtxAt(t, launch, 20, "note recorded for example-org/app#20")
+	writeEpicCtxAt(t, platform, 20, "note recorded for example-org/platform#20")
+
+	runner := &promptCapturingRunner{}
+	s := &Scheduler{
+		repoRunning:    make(map[string]int),
+		mergeLocks:     make(map[string]*sync.Mutex),
+		retryEngine:    NewRetryEngine(RetryConfig{MaxBacktracks: 0, MaxEscalationsPerStage: 0}),
+		budgetEngine:   NewBudgetEnforcer(DefaultBudgetConfig()),
+		ralphEngine:    NewRalphLoopController(DefaultRalphConfig()),
+		issueSvc:       newMockIssueSvc(),
+		execMgr:        execution.NewManager(launch, nil),
+		stageRunner:    runner,
+		budgetRetries:  make(map[string]int),
+		workspaceRoot:  launch,
+		launchRepo:     "example-org/app",
+		prCreateRunner: alwaysPuntPRCreateRunner{},
+	}
+	s.WithRepoPathResolver(func(repo string) string {
+		switch repo {
+		case "example-org/app":
+			return launch
+		case "example-org/platform":
+			return platform
+		}
+		return ""
+	})
+
+	s.runPipeline(context.Background(), types.BoardItem{Number: 21, Repo: "example-org/app", ID: "item-a21",
+		Title: "App task", ParentNumber: 20, ParentRepo: "example-org/platform"})
+
+	prompt, ok := runner.prompt(state.StageFeaturePlanning)
+	if !ok {
+		t.Fatalf("feature-planning was not dispatched; stages run: %v", runner.prompts)
+	}
+	if !strings.Contains(prompt, "Accumulated Epic Context") || !strings.Contains(prompt, "example-org/platform#20") {
+		t.Errorf("feature-planning prompt lacks example-org/platform#20's epic context:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "example-org/app#20") {
+		t.Errorf("feature-planning prompt carries example-org/app#20's epic context:\n%s", prompt)
 	}
 }

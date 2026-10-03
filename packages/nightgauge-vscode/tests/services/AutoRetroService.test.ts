@@ -1413,6 +1413,61 @@ describe("AutoRetroService", () => {
       expect(mockIssueLinkSubIssue).toHaveBeenCalledWith("TestOwner", "test-repo", 100, 999);
     });
 
+    // #2377: an issue number names an issue only within one repository.
+    // issue.linkSubIssue links two issues of one repository, so a parent in
+    // another repository is not linked; before, the retro issue became a
+    // sub-issue of this repository's unrelated issue with the parent's number.
+    it.each([
+      ["links under a parent in this repository", "testowner/Test-Repo", true],
+      ["does not link under a parent in another repository", "TestOwner/platform", false],
+    ])("%s", async (_name, parentIssueRepo, linked) => {
+      const configYaml = [
+        "feedback_loop:",
+        "  auto_retro:",
+        "    enabled: true",
+        "    auto_create_issues: true",
+        "    severity_threshold: low",
+      ].join("\n");
+      vi.mocked(fs.readFile).mockResolvedValue(configYaml as any);
+      mockIssueView.mockResolvedValue({
+        number: ISSUE_NUMBER,
+        title: "Test Issue",
+        body: "",
+        state: "OPEN",
+        labels: [],
+        assignees: [],
+        url: "",
+        isEpic: false,
+        parentIssueNumber: 100,
+        parentIssueRepo,
+      });
+      mockIssueCreate.mockResolvedValue({
+        number: 999,
+        title: "",
+        body: "",
+        state: "OPEN",
+        labels: [],
+        assignees: [],
+        url: "https://github.com/TestOwner/test-repo/issues/999",
+        isEpic: false,
+      });
+      mockIssueLinkSubIssue.mockResolvedValue(undefined);
+
+      const result = await AutoRetroService.runAfterFailure(
+        WORKSPACE,
+        ISSUE_NUMBER,
+        FAILED_STAGE,
+        logger as any
+      );
+
+      expect(result!.issuesCreated).toBe(1);
+      if (linked) {
+        expect(mockIssueLinkSubIssue).toHaveBeenCalledWith("testowner", "Test-Repo", 100, 999);
+      } else {
+        expect(mockIssueLinkSubIssue).not.toHaveBeenCalled();
+      }
+    });
+
     it("skips sub-issue linking when parent epic lookup fails", async () => {
       const configYaml = [
         "feedback_loop:",
