@@ -493,6 +493,9 @@ function buildHandlers(state) {
           isDraft: false,
           createdAt: state.now,
         })),
+    // A window closing hands its queue back (#2396). The demo dispatches
+    // nothing, so it neither drops nor keeps an item.
+    "queue.dropProcessing": () => ({ dropped: 0, kept: 0 }),
     "queue.list": () => ({
       schema_version: "1",
       status: state.queue.length ? "active" : "idle",

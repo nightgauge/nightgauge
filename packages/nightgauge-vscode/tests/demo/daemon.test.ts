@@ -37,6 +37,7 @@ import type {
   PipelineMaxConcurrentResult,
   PlatformStatus,
   PullRequestDetail,
+  QueueDropProcessingResult,
   RateLimitInfo,
   RetentionConfig,
   RunningPipelinesResult,
@@ -357,6 +358,8 @@ const guards: Record<string, (v: unknown) => boolean> = {
         isDraft: bool,
       })
     ),
+  "queue.dropProcessing": (v): v is QueueDropProcessingResult =>
+    has(v, { dropped: num, kept: num }),
   "queue.list": (v): v is IpcQueueState =>
     has(v, {
       schema_version: str,
