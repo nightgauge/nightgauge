@@ -90,6 +90,7 @@ export {
   getMaxModel,
   getConfidenceThreshold,
   getEscalatedModel,
+  getEscalatedModelWithin,
   isEvalRecommendationsEnabled,
 } from "./resolvers/modelResolver";
 

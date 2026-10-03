@@ -1813,3 +1813,20 @@ export function getEscalatedModel(currentModel: DefaultModel): DefaultModel | nu
   if (idx === -1 || idx === ESCALATION_PATH.length - 1) return null; // at ceiling or unknown
   return ESCALATION_PATH[idx + 1];
 }
+
+/**
+ * The tier an escalation moves `currentModel` to without passing `ceiling`,
+ * or null when there is none: `getEscalatedModel`'s next tier, unless that
+ * tier is stronger than the ceiling (#2386). The ceiling is a stage's
+ * routed-tier ceiling, so a performance mode that caps cost caps escalation
+ * too. Go pair: `resolveDispatchModel` clamping the RetryEngine's escalated
+ * tier with `routing.ClampToCeiling`.
+ */
+export function getEscalatedModelWithin(
+  currentModel: DefaultModel,
+  ceiling: DefaultModel
+): DefaultModel | null {
+  const next = getEscalatedModel(currentModel);
+  if (!next) return null;
+  return TIER_BANDS.indexOf(next) > TIER_BANDS.indexOf(ceiling) ? null : next;
+}

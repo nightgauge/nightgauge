@@ -63,6 +63,7 @@ import { OrchestratorEventDispatcher } from "../orchestrator/events/Orchestrator
 import { WorktreeManager } from "../utils/WorktreeManager";
 import { isValidBranchName } from "../utils/branchUtils";
 import { epicBranchParent } from "../utils/epicBranchParent";
+import { getRoutedTierEnvelope } from "../utils/modeProfiles";
 
 const execAsync = promisify(exec);
 import {
@@ -149,7 +150,9 @@ import {
   getPipelineCeilingConfig,
   getMaxBacktracks,
   getMaxEscalationsPerStage,
-  getEscalatedModel,
+  getEscalatedModelWithin,
+  getMaxModel,
+  getPerformanceMode,
   getAuditConfig,
   getContextSchemaRepairConfig,
   getSkipAuthPreflight,
@@ -8614,10 +8617,47 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
+   * The tier a model escalation moves `stage` to from `current`, or null when
+   * there is none: the next tier on the escalation ladder, provided it stays
+   * inside the stage's routed-tier ceiling under the active performance mode
+   * and `model_routing.max_model`, the band `resolveModel` routes the stage
+   * within. Every escalation path here goes through it. Go clamps its own
+   * escalation to the same ceiling in `resolveDispatchModel`; before this, an
+   * `efficiency` run escalated a `sonnet` stage to `opus` (#2386).
+   */
+  private escalationTarget(
+    stage: PipelineStage,
+    current: import("../utils/nightgaugeConfig").DefaultModel
+  ): import("../utils/nightgaugeConfig").DefaultModel | null {
+    const root = this.getWorkingDirectory();
+    const { ceiling } = getRoutedTierEnvelope(getPerformanceMode(root), stage, getMaxModel(root));
+    return getEscalatedModelWithin(current, ceiling);
+  }
+
+  /**
+   * The health-gated `escalateAllStages` policy (#1395): every stage but the
+   * bookends and issue-pickup moves one tier up, within its ceiling.
+   */
+  private escalateAllStages(): void {
+    for (const s of STAGE_ORDER) {
+      if (!isBookendStage(s) && s !== "issue-pickup") {
+        const current = (this.stageModelOverrides.get(s) ??
+          resolveModel(s, this.getWorkingDirectory())
+            .model) as import("../utils/nightgaugeConfig").DefaultModel;
+        const escalated = this.escalationTarget(s, current);
+        if (escalated) {
+          this.stageModelOverrides.set(s, escalated);
+        }
+      }
+    }
+  }
+
+  /**
    * Evaluate whether a model escalation is allowed.
    *
    * Checks:
-   * 1. Ceiling guard (getEscalatedModel returns null when at opus)
+   * 1. Ceiling guard (escalationTarget returns null at the top of the ladder
+   *    or at the stage's routed-tier ceiling)
    * 2. max_escalations_per_stage limit
    *
    * Returns the next model if escalation is allowed, null if blocked.
@@ -8634,11 +8674,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       resolveModel(stage, this.getWorkingDirectory())
         .model) as import("../utils/nightgaugeConfig").DefaultModel;
 
-    const nextModel = getEscalatedModel(currentModel);
+    const nextModel = this.escalationTarget(stage, currentModel);
 
     if (!nextModel) {
       const reason = "escalation_ceiling_reached";
-      this.logger.warn("Escalation blocked: already at most capable model", {
+      this.logger.warn("Escalation blocked: already at the most capable model the mode allows", {
         issueNumber,
         stage,
         currentModel,
@@ -8896,8 +8936,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     const currentModel = (this.stageModelOverrides.get(stage) ??
       resolveModel(stage, this.getWorkingDirectory())
         .model) as import("../utils/nightgaugeConfig").DefaultModel;
-    const nextModel = getEscalatedModel(currentModel);
-    if (!nextModel) return null; // Already at ceiling
+    const nextModel = this.escalationTarget(stage, currentModel);
+    if (!nextModel) return null; // Already at the ceiling
 
     // 4. Apply proactive escalation
     this.proactiveEscalationApplied = true;
@@ -10554,17 +10594,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
         this.policyRetryBudgetIncrease = policies.retryBudgetIncrease;
 
         if (policies.escalateAllStages) {
-          for (const s of STAGE_ORDER) {
-            if (!isBookendStage(s) && s !== "issue-pickup") {
-              const current = (this.stageModelOverrides.get(s) ??
-                resolveModel(s, this.getWorkingDirectory())
-                  .model) as import("../utils/nightgaugeConfig").DefaultModel;
-              const escalated = getEscalatedModel(current);
-              if (escalated) {
-                this.stageModelOverrides.set(s, escalated);
-              }
-            }
-          }
+          this.escalateAllStages();
         }
 
         this.pauseAutoRouting = policies.pauseAutoRouting;

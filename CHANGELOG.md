@@ -178,6 +178,16 @@ changelog, and the release workflow refuses a tag that does not.
   pipeline now puts an absolute hooks path back after its install, and warns
   that it did. An `npm install` run by hand in such a checkout still turns the
   hook off until the next `npm install` in a current checkout.
+- **Escalation on a run the extension orchestrates stays inside the
+  performance mode's ceiling** (#2386). PERFORMANCE_MODES.md says the mode's
+  ceiling caps post-failure escalation, and the Go dispatch path clamps it,
+  but the extension's three escalation paths did not: a stage's request for a
+  stronger model, the proactive escalation before a stage when the health
+  trend is declining, and the health-gated policy that escalates every stage.
+  Under `efficiency` a Sonnet stage was retried on Opus, and
+  `model_routing.max_model` did not cap it either. Each path now escalates
+  only within the stage's ceiling, and a stage already at it is reported as at
+  the ceiling.
 - **The extension consults eval routing advice by default, as the Go pipeline
   does** (#2387). `model_routing.use_eval_recommendations` ships `true`
   (ADR-021), and the Go resolver and the extension's defaults say so, but the

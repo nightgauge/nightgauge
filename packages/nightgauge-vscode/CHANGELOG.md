@@ -28,6 +28,10 @@ and this project adheres to
   an issue whose branch predates Nightgauge's publication hook turned that
   hook off. An absolute `core.hooksPath` is now put back after the install,
   with a warning in the log (#2389).
+- **Model escalation stays inside the performance mode's ceiling.** Under
+  `efficiency`, a stage that asked for a stronger model, a proactive
+  escalation and the health-gated escalate-all policy could each move a Sonnet
+  stage to Opus, and `model_routing.max_model` did not cap them (#2386).
 - **Runs the extension orchestrates consult eval routing advice unless
   `model_routing.use_eval_recommendations` is `false`,** as autonomous runs
   already did. The extension treated an unset key as `false`, although the
