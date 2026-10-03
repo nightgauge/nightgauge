@@ -49,7 +49,9 @@ type CrossRepoRef struct {
 // resolve. Slugs that are not exactly "owner/name" are skipped. Keys match
 // case-insensitively, so no case variants are added.
 func WorkspaceRepoAliases(slugs []string) map[string]string {
-	aliases := make(map[string]string, 2*len(slugs))
+	// The hint is one entry per slug; the bare names grow the map past it.
+	// No arithmetic sizes the allocation (CodeQL go/allocation-size-overflow).
+	aliases := make(map[string]string, len(slugs))
 	for _, slug := range slugs {
 		slug = strings.TrimSpace(slug)
 		owner, name, ok := strings.Cut(slug, "/")
