@@ -178,6 +178,13 @@ changelog, and the release workflow refuses a tag that does not.
   pipeline now puts an absolute hooks path back after its install, and warns
   that it did. An `npm install` run by hand in such a checkout still turns the
   hook off until the next `npm install` in a current checkout.
+- **The extension consults eval routing advice by default, as the Go pipeline
+  does** (#2387). `model_routing.use_eval_recommendations` ships `true`
+  (ADR-021), and the Go resolver and the extension's defaults say so, but the
+  extension's resolver fell back to `false` when the key was unset. An issue
+  whose job class had advisable evidence was re-picked by the advice on an
+  autonomous run and not on a run the extension orchestrated. Both now consult
+  the advice unless the key is `false`, and PERFORMANCE_MODES.md names the key.
 - **Refinement runs on the performance mode's model** (#2384). `issue-refine`
   dispatched Sonnet in every mode, so under `maximum` it ran below the mode's
   Opus floor, a `model_routing.max_model: haiku` cap did not lower it, and

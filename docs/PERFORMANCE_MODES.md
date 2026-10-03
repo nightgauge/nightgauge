@@ -36,10 +36,11 @@ the extension. The two tables mirror each other.
   `CLAUDE_CODE_DISABLE_THINKING` overrides any policy.
 - **Budget ceiling.** Under `maximum`, the scheduler's pipeline token ceiling
   is observe-only: it is logged and does not stop the run.
-- **Routing advice.** When evaluation evidence exists for an issue's job class,
-  the mode sets the posture of the pick: `efficiency` takes the cheapest
-  candidate, `elevated` the best quality per dollar, and `maximum` and
-  `frontier` the highest quality.
+- **Routing advice.** Unless `model_routing.use_eval_recommendations` is
+  `false` (it defaults to `true`), evaluation evidence for an issue's job class
+  can re-pick a routed stage's model inside the band. The mode sets the posture
+  of that pick: `efficiency` takes the cheapest candidate, `elevated` the best
+  quality per dollar, and `maximum` and `frontier` the highest quality.
 
 A stage's `NIGHTGAUGE_PIPELINE_STAGE_MODEL_<STAGE>` environment override
 overrides the mode for that stage in every mode, a `maximum` pin included. An

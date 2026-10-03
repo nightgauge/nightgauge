@@ -28,6 +28,10 @@ and this project adheres to
   an issue whose branch predates Nightgauge's publication hook turned that
   hook off. An absolute `core.hooksPath` is now put back after the install,
   with a warning in the log (#2389).
+- **Runs the extension orchestrates consult eval routing advice unless
+  `model_routing.use_eval_recommendations` is `false`,** as autonomous runs
+  already did. The extension treated an unset key as `false`, although the
+  shipped default is `true` (#2387).
 - **Codex and OpenCode stages get the tools their skill grants.** They ran
   with no tool list, so a skill that grants only read tools still ran Codex
   with full access, and OpenCode reported a refusal of a granted tool as one
