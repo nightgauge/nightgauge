@@ -189,6 +189,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **An issue the queue started automatically can be queued again once its run
+  ends** (#2397). The main orchestrator's auto-start dequeues the next item,
+  which marks it `processing` in the daemon's queue, and nothing released it:
+  until the window reloaded the issue could not be queued again, **Remove from
+  Queue** refused it and a remote trigger for it read `busy`. The orchestrator
+  now remembers the item and sends `queue.complete` for it exactly once: when
+  its run reaches a terminal state, whatever the outcome, before the next item
+  is dequeued; when the start fails; and when a stop lands during the
+  auto-start delay, which now also keeps the issue from starting.
 - **Nothing about a run is sent unless the user turned the cloud on.** A
   signed-in session builds the daemon a platform client on its own, and the
   daemon then sent every interactive run's live stage events and completed-run

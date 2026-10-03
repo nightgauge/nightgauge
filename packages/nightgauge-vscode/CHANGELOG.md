@@ -32,6 +32,11 @@ and this project adheres to
 
 ### Fixed
 
+- **An issue the queue started on its own can be queued again after its run.**
+  It stayed marked as processing until the window reloaded, so adding it again,
+  **Remove from Queue** and a remote trigger for it were all refused. Stopping
+  the pipeline during the few seconds before a queued issue starts now also
+  keeps it from starting (#2397).
 - **Nothing about your runs is sent unless cloud features are on.** Signing in
   was enough for the Nightgauge binary and this extension to upload your runs.
   Now they upload only with `platform.enabled: true` in your machine-tier
