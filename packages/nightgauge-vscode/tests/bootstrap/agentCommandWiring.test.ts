@@ -92,19 +92,18 @@ describe("platform agent command wiring in bootstrap/services.ts", () => {
     );
   });
 
-  // #2339: the paused-snapshot scan offers a platform run a reload ended to
-  // the window's holds, which claim it in the ledger, so one window of the
-  // clone holds it; the behaviour is tested in reloadInterruptedHolds.test.ts.
+  // #2339: the paused-snapshot scan hands every paused run, with the platform
+  // run a reload ended, to restorePausedRuns over the window's holds, which
+  // claim it in the ledger, so one window of the clone holds it. The
+  // behaviour is tested in reloadInterruptedHolds.test.ts and
+  // pausedRunRestore.test.ts.
   it("hands the paused runs a reload ended to the window's exclusive holds", () => {
-    expect(servicesSource).toContain("const interrupted = reloadInterruptedRemoteRun(runtime);");
+    expect(servicesSource).toContain("interrupted: reloadInterruptedRemoteRun(runtime),");
     expect(servicesSource).toContain(
       "const reloadInterruptedHolds = new ReloadInterruptedRunHolds(remoteRunLedger);"
     );
     expect(servicesSource).toMatch(
-      /await reloadInterruptedHolds\.found\(interrupted, async \(\) => \{\s*await fs\.unlink\(filePath\)/
-    );
-    expect(servicesSource).toContain(
-      "if (interrupted) await reloadInterruptedHolds.resumed(interrupted.remoteRunId);"
+      /await restorePausedRuns\(paused, \{\s*holds: reloadInterruptedHolds,/
     );
     expect(servicesSource).toContain("reloadInterruptedHolds.attach(concurrentPipelineManager);");
   });

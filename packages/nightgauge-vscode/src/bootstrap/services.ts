@@ -128,6 +128,7 @@ import {
   ReloadInterruptedRunHolds,
   reloadInterruptedRemoteRun,
 } from "../utils/reloadInterruptedRun";
+import { type PausedSnapshot, restorePausedRuns } from "./pausedRunRestore";
 import { ThrottleCommandHandler } from "../services/ThrottleCommandHandler";
 import { WorkspaceThrottleState } from "../services/WorkspaceThrottle";
 import {
@@ -1354,6 +1355,7 @@ export async function initializeServices(
         // `fs.unlink`, and an inline regex here could be widened back to one
         // with the whole suite green.
         const runtimeFiles = files.filter((f) => ANY_RUNTIME_FILE.test(f));
+        const paused: PausedSnapshot[] = [];
         for (const file of runtimeFiles) {
           const filePath = path.join(pipelineDir, file);
           try {
@@ -1383,81 +1385,71 @@ export async function initializeServices(
               await fs.unlink(filePath).catch(() => {});
               continue;
             }
-            if (runtime.paused) {
+            if (runtime.paused && typeof runtime.issueNumber === "number") {
               logger.info("Paused pipeline detected on activation", {
                 issueNumber: runtime.issueNumber,
                 file,
               });
-              // A paused run that a platform trigger started, whose owning
-              // daemon is gone: a reload ended it, and this window holds it
-              // for the platform's verbs until its Resume runs (#2339). A
-              // live owner is another window's daemon, which answers itself.
-              const interrupted = reloadInterruptedRemoteRun(runtime);
-              if (interrupted) {
-                await reloadInterruptedHolds.found(interrupted, async () => {
-                  await fs.unlink(filePath).catch((err: NodeJS.ErrnoException) => {
-                    if (err.code !== "ENOENT") throw err;
-                  });
-                });
-              }
-              vscode.commands.executeCommand("setContext", "nightgauge.pipelinePaused", true);
-              vscode.commands.executeCommand("setContext", "nightgauge.pipelineRunning", false);
-              const action = await vscode.window.showInformationMessage(
-                `Pipeline for #${runtime.issueNumber} is paused. Resume from where you left off?`,
-                "Resume",
-                "Cancel"
-              );
-              if (action === "Resume") {
-                // The new run does not serve the platform run (#2339).
-                if (interrupted) await reloadInterruptedHolds.resumed(interrupted.remoteRunId);
-                // CONSUME THE SNAPSHOT THIS PROMPT WAS BUILT FROM.
-                //
-                // Resume does not continue the paused run — it starts a NEW one
-                // (`runPipeline` below), under a new identity and, since
-                // ADR-017 step 1, under its own filename. The paused snapshot is
-                // therefore dead the moment the operator accepts, and nothing
-                // else removes it: before step 1 the new run's Persist
-                // overwrote the shared `runtime-{issue}.json` and the prompt
-                // stopped by accident. Without this unlink the prompt re-fires
-                // on EVERY activation, each acceptance launching another full
-                // pipeline run of the same issue and leaving another snapshot
-                // behind, which then feeds the issue-addressed readers more
-                // candidates. Best-effort by design — a failed unlink must not
-                // stop the resume the operator just asked for. (Step 8's
-                // consume-on-claim rename replaces this with a claim protocol.)
-                await fs.unlink(filePath).catch((err) => {
-                  logger.warn("Could not remove the paused snapshot after Resume", {
-                    file,
-                    issueNumber: runtime.issueNumber,
-                    err,
-                  });
-                });
-                if (pipelineStateService) {
-                  // Say it out loud when nothing was cleared on the Go side.
-                  // The resume runs BEFORE `runPipeline` installs an identity,
-                  // so `setPaused` refuses and only the in-memory flag moves.
-                  // ADR-017 step 8 fixes this by construction (pause-restore
-                  // parses the id from the claimed filename and installs it
-                  // via `beginRun` after winning the rename); until then the
-                  // log is the record, not a claim of success.
-                  const clearedOnGo = await pipelineStateService.resumePipeline();
-                  if (!clearedOnGo) {
-                    logger.warn(
-                      "Resume was not persisted — no run identity installed yet (ADR-017 step 8). " +
-                        "The in-memory pause flag is cleared; Go still holds the paused state.",
-                      { issueNumber: runtime.issueNumber }
-                    );
-                  }
-                }
-                headlessOrchestrator.runPipeline(runtime.issueNumber!).catch((err) => {
-                  logger.error("Failed to resume paused pipeline", { err });
-                });
-              }
+              paused.push({
+                filePath,
+                issueNumber: runtime.issueNumber,
+                // A paused run that a platform trigger started, whose owning
+                // daemon is gone: a reload ended it, and this window holds
+                // it for the platform's verbs until its Resume runs (#2339).
+                // A live owner is another window's daemon, which answers
+                // itself.
+                interrupted: reloadInterruptedRemoteRun(runtime),
+              });
             }
           } catch {
             // Ignore malformed runtime files
           }
         }
+        if (paused.length === 0) return;
+        vscode.commands.executeCommand("setContext", "nightgauge.pipelinePaused", true);
+        vscode.commands.executeCommand("setContext", "nightgauge.pipelineRunning", false);
+        // Every run a reload ended is held before the first prompt waits for
+        // the operator, and a Resume consumes its snapshot before it starts
+        // the new run, so it starts none for a run the platform cancelled
+        // meanwhile (pausedRunRestore).
+        await restorePausedRuns(paused, {
+          holds: reloadInterruptedHolds,
+          ask: (issueNumber) =>
+            vscode.window.showInformationMessage(
+              `Pipeline for #${issueNumber} is paused. Resume from where you left off?`,
+              "Resume",
+              "Cancel"
+            ),
+          resume: async (issueNumber) => {
+            if (pipelineStateService) {
+              // Say it out loud when nothing was cleared on the Go side.
+              // The resume runs BEFORE `runPipeline` installs an identity,
+              // so `setPaused` refuses and only the in-memory flag moves.
+              // ADR-017 step 8 fixes this by construction (pause-restore
+              // parses the id from the claimed filename and installs it
+              // via `beginRun` after winning the rename); until then the
+              // log is the record, not a claim of success.
+              const clearedOnGo = await pipelineStateService.resumePipeline();
+              if (!clearedOnGo) {
+                logger.warn(
+                  "Resume was not persisted — no run identity installed yet (ADR-017 step 8). " +
+                    "The in-memory pause flag is cleared; Go still holds the paused state.",
+                  { issueNumber }
+                );
+              }
+            }
+            headlessOrchestrator.runPipeline(issueNumber).catch((err) => {
+              logger.error("Failed to resume paused pipeline", { err });
+            });
+          },
+          gone: (issueNumber) => {
+            void vscode.window.showInformationMessage(
+              `Nightgauge: the paused pipeline for #${issueNumber} was cancelled from the platform ` +
+                "or resumed in another window, so it was not resumed here."
+            );
+          },
+          logger,
+        });
       } catch {
         // Non-critical — skip if pipeline dir doesn't exist
       }
