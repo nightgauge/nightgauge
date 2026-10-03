@@ -130,9 +130,14 @@ type Server struct {
 	cloudOptIn        bool
 	telemetryConfigOn bool
 	editorTelemetry   atomic.Int32
-	licenseSvc        *platform.LicenseService
-	authSvc           *platform.AuthService
-	skillSvc          *platform.SkillService
+	// editorStreams is the set of telemetry streams the editor allows
+	// (nightgauge.telemetry.streams), seeded by WithEditorTelemetryStreams
+	// and replaced by platform.setTelemetryConsent. nil until the editor
+	// reports it, which allows every stream.
+	editorStreams atomic.Pointer[map[string]bool]
+	licenseSvc    *platform.LicenseService
+	authSvc       *platform.AuthService
+	skillSvc      *platform.SkillService
 	// analyticsSvc is the EMISSION seam only — an interface so a test can count
 	// emissions (#472). It is nil exactly when no platform client is attached;
 	// see setPlatformServicesLocked for why the assignment is guarded.
@@ -457,6 +462,59 @@ func WithTelemetryPolicy(cloudOptIn, telemetryOn bool) ServerOption {
 	}
 }
 
+// EditorTelemetryStreamsEnv is the variable the extension sets on the daemon
+// it starts to the telemetry streams the editor allows, comma-separated, or
+// "none" when it allows none (nightgauge.telemetry.streams).
+const EditorTelemetryStreamsEnv = "NIGHTGAUGE_EDITOR_TELEMETRY_STREAMS"
+
+// StreamPipelineRun is the telemetry stream of completed-run records, which
+// the daemon sends to POST /v1/telemetry/pipeline-run and the extension
+// uploads from the local history. Turning it off in the editor stops both.
+const StreamPipelineRun = "pipeline-run"
+
+// WithEditorTelemetryStreams seeds the streams the editor allows from
+// EditorTelemetryStreamsEnv's value. Unset (a daemon no editor started) leaves
+// them unreported, which allows every stream.
+func WithEditorTelemetryStreams(value string) ServerOption {
+	return func(s *Server) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		var streams []string
+		if value != "none" {
+			streams = strings.Split(value, ",")
+		}
+		s.setEditorStreams(streams)
+	}
+}
+
+// setEditorStreams records the streams the editor allows.
+func (s *Server) setEditorStreams(streams []string) {
+	set := make(map[string]bool, len(streams))
+	for _, stream := range streams {
+		if stream = strings.TrimSpace(stream); stream != "" {
+			set[stream] = true
+		}
+	}
+	s.editorStreams.Store(&set)
+}
+
+// editorStreamAllowed reports whether the editor allows stream; every stream
+// is allowed until the editor reports its set.
+func (s *Server) editorStreamAllowed(stream string) bool {
+	set := s.editorStreams.Load()
+	return set == nil || (*set)[stream]
+}
+
+// RunRecordsAllowed reports whether a completed-run record may be sent now:
+// TelemetryAllowed holds and the editor has not turned off the pipeline-run
+// stream. The interactive push, the history sync and the scheduler's push all
+// ask it.
+func (s *Server) RunRecordsAllowed() bool {
+	return s.TelemetryAllowed() && s.editorStreamAllowed(StreamPipelineRun)
+}
+
 // WithEditorTelemetry seeds the editor's consent from EditorTelemetryEnv's
 // value: "off" withdraws it, "on" grants it, anything else (a daemon no
 // editor started) leaves it unreported, which defers to the configuration.
@@ -495,6 +553,7 @@ func (s *Server) setPlatformServicesLocked(pc *platform.Client) {
 	if pc != nil {
 		as := platform.NewAnalyticsService(pc)
 		as.SetSendGate(s.TelemetryAllowed)
+		as.SetRunGate(func() bool { return s.editorStreamAllowed(StreamPipelineRun) })
 		s.analyticsAPI = as
 		s.analyticsSvc = as
 	} else {
@@ -2342,6 +2401,9 @@ func (s *Server) registerMethods() {
 		if !s.TelemetryAllowed() {
 			return nil, fmt.Errorf("telemetry is off: run history is sent only with platform.enabled true and telemetry on")
 		}
+		if !s.RunRecordsAllowed() {
+			return nil, fmt.Errorf("the pipeline-run telemetry stream is off: run history is not sent")
+		}
 		if s.workspaceRootPath() == "" {
 			return nil, fmt.Errorf("workspace root not set")
 		}
@@ -2593,11 +2655,13 @@ func (s *Server) registerMethods() {
 
 	// platform.setTelemetryConsent records the editor's telemetry consent:
 	// VS Code's telemetry level and nightgauge.telemetry.enabled, as the
-	// extension reads them. The daemon learns the consent at spawn from
-	// EditorTelemetryEnv; the extension sends this whenever either setting
-	// changes afterwards, so turning telemetry off in the editor stops this
-	// daemon's sending at once, buffered items included (the analytics send
-	// gate drops them at the next flush).
+	// extension reads them, and the streams nightgauge.telemetry.streams
+	// allows. The daemon learns them at spawn from EditorTelemetryEnv and
+	// EditorTelemetryStreamsEnv; the extension sends this whenever one of
+	// those settings changes afterwards, so turning telemetry (or the
+	// pipeline-run stream) off in the editor stops this daemon's sending at
+	// once, buffered items included (the analytics gates drop them at the
+	// next flush).
 	//ipc:method platformSetTelemetryConsent params:PlatformSetTelemetryConsentParams result:StatusOK
 	s.methods["platform.setTelemetryConsent"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
 		var p PlatformSetTelemetryConsentParams
@@ -2608,6 +2672,9 @@ func (s *Server) registerMethods() {
 			s.editorTelemetry.Store(editorTelemetryOn)
 		} else {
 			s.editorTelemetry.Store(editorTelemetryOff)
+		}
+		if p.Streams != nil {
+			s.setEditorStreams(p.Streams)
 		}
 		return map[string]bool{"ok": true}, nil
 	}
@@ -4134,9 +4201,10 @@ func (s *Server) registerMethods() {
 			//
 			// Consent first: a signed-in session builds a platform client on
 			// its own, so "a client exists" is no consent at all. The record
-			// leaves only when TelemetryAllowed says the user opted in to the
-			// cloud and left telemetry on, in config and in the editor.
-			if s.getAnalyticsSvc() != nil && s.TelemetryAllowed() {
+			// leaves only when RunRecordsAllowed says the user opted in to the
+			// cloud and left telemetry on, in config and in the editor, and
+			// left the editor's pipeline-run stream on.
+			if s.getAnalyticsSvc() != nil && s.RunRecordsAllowed() {
 				repoForPush := record.Repo
 				if repoForPush == "" {
 					repoForPush = p.Repo

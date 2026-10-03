@@ -5327,7 +5327,8 @@ func serveCmd() *cobra.Command {
 			// Run telemetry needs the cloud opt-in and telemetry on, in config
 			// and in the editor that started this daemon; a signed-in session
 			// alone sends nothing (docs/TELEMETRY_PRIVACY.md).
-			opts = append(opts, serveTelemetryOptions(resolvedPlatform, cfg, os.Getenv(ipc.EditorTelemetryEnv))...)
+			opts = append(opts, serveTelemetryOptions(resolvedPlatform, cfg,
+				os.Getenv(ipc.EditorTelemetryEnv), os.Getenv(ipc.EditorTelemetryStreamsEnv))...)
 			platformURL, apiKey, licenseKey = resolvedPlatform.URL, resolvedPlatform.APIKey, resolvedPlatform.LicenseKey
 			if resolvedPlatform.Configured() {
 				apiURLForLog := platformURL
@@ -5516,7 +5517,7 @@ func serveCmd() *cobra.Command {
 							fmt.Fprintf(os.Stderr, "warning: could not record telemetry notice: %v\n", werr)
 						}
 					}
-					telemetrySvc := schedulerTelemetryService(platformClient, server.TelemetryAllowed)
+					telemetrySvc := schedulerTelemetryService(platformClient, server.TelemetryAllowed, server.RunRecordsAllowed)
 					sched.WithTelemetryService(telemetrySvc, telemetryEnabled)
 					telemetrySvc.StartAutoFlush(context.Background())
 				}

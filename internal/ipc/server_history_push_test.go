@@ -10,6 +10,7 @@ package ipc
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -225,5 +226,87 @@ func TestSetTelemetryConsent_RestoresSending(t *testing.T) {
 	case <-pushed:
 	case <-time.After(3 * time.Second):
 		t.Fatal("expected the completed run to be posted once consent was restored")
+	}
+}
+
+// TestNotifyComplete_PipelineRunStreamOff pins #1796's stream toggle: with the
+// editor's pipeline-run stream off, a completed interactive run posts no run
+// record, at spawn (the environment) or after a change (the IPC method), and
+// the record goes again once the stream is back on.
+func TestNotifyComplete_PipelineRunStreamOff(t *testing.T) {
+	for name, streamsAtSpawn := range map[string]string{
+		"off at spawn":     "health,recommendation,trace",
+		"turned off later": "",
+		"no stream at all": "none",
+	} {
+		t.Run(name, func(t *testing.T) {
+			pushed := make(chan struct{}, 4)
+			mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1/health":
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"status":"ok"}`))
+				case "/v1/telemetry/pipeline-run":
+					pushed <- struct{}{}
+					w.WriteHeader(http.StatusAccepted)
+				default:
+					w.WriteHeader(http.StatusAccepted)
+				}
+			}))
+			defer mock.Close()
+
+			pc, err := platform.NewClient(platform.Config{BaseURL: mock.URL})
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			pc.StartHealthPolling(context.Background())
+			defer pc.StopHealthPolling()
+
+			s := NewServer(nil, WithPlatformClient(pc), WithWorkspaceRoot(t.TempDir()),
+				WithTelemetryPolicy(true, true), WithEditorTelemetry("on"),
+				WithEditorTelemetryStreams(streamsAtSpawn))
+			if streamsAtSpawn == "" {
+				if !s.RunRecordsAllowed() {
+					t.Fatal("precondition: an unreported stream set allows run records")
+				}
+				if _, err := s.methods["platform.setTelemetryConsent"](t.Context(),
+					[]byte(`{"enabled":true,"streams":["health","trace"]}`)); err != nil {
+					t.Fatalf("setTelemetryConsent: %v", err)
+				}
+			}
+			if !s.TelemetryAllowed() || s.RunRecordsAllowed() {
+				t.Fatalf("TelemetryAllowed %v RunRecordsAllowed %v, want telemetry on and run records off",
+					s.TelemetryAllowed(), s.RunRecordsAllowed())
+			}
+
+			complete := func(issue int) {
+				t.Helper()
+				runID := fmt.Sprintf("01900309-0000-7000-8000-%012d", issue)
+				if _, err := s.methods["pipeline.notifyStageTransition"](t.Context(), []byte(fmt.Sprintf(`{"repo":"nightgauge/acmeapp","issueNumber":%d,"stage":"feature-dev","status":"running","runId":"%s"}`, issue, runID))); err != nil {
+					t.Fatalf("notifyStageTransition: %v", err)
+				}
+				if _, err := s.methods["pipeline.notifyComplete"](t.Context(), []byte(fmt.Sprintf(`{"repo":"nightgauge/acmeapp","issueNumber":%d,"success":true,"totalDurationMs":1000,"runId":"%s"}`, issue, runID))); err != nil {
+					t.Fatalf("notifyComplete: %v", err)
+				}
+			}
+
+			complete(780)
+			select {
+			case <-pushed:
+				t.Fatal("a run record was posted with the pipeline-run stream off")
+			case <-time.After(300 * time.Millisecond):
+			}
+
+			if _, err := s.methods["platform.setTelemetryConsent"](t.Context(),
+				[]byte(`{"enabled":true,"streams":["pipeline-run"]}`)); err != nil {
+				t.Fatalf("setTelemetryConsent: %v", err)
+			}
+			complete(781)
+			select {
+			case <-pushed:
+			case <-time.After(3 * time.Second):
+				t.Fatal("expected the run record once the stream was back on")
+			}
+		})
 	}
 }

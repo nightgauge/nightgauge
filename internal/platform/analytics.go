@@ -125,6 +125,10 @@ type AnalyticsService struct {
 	// editor's consent not withdrawn); nil, as the CLI's explicit backfill
 	// leaves it, means allowed. See SetSendGate.
 	sendGate atomic.Pointer[func() bool]
+	// runGate, when set, is asked on top of sendGate before a completed-run
+	// record is sent or flushed: the editor's pipeline-run stream. See
+	// SetRunGate.
+	runGate atomic.Pointer[func() bool]
 }
 
 type bufferedBatch struct {
@@ -161,6 +165,28 @@ func (s *AnalyticsService) SetSendGate(gate func() bool) {
 // sendAllowed reports whether the gate (if any) allows sending now.
 func (s *AnalyticsService) sendAllowed() bool {
 	gate := s.sendGate.Load()
+	return gate == nil || (*gate)()
+}
+
+// SetRunGate installs the check a completed-run record asks on top of the
+// send gate (PushPipelineRun, SyncTelemetry and the flush of buffered
+// records): the daemon sets it to the editor's pipeline-run stream. With it
+// closed a record is dropped, not buffered, and buffered records are dropped
+// at the next flush. nil removes it.
+func (s *AnalyticsService) SetRunGate(gate func() bool) {
+	if gate == nil {
+		s.runGate.Store(nil)
+		return
+	}
+	s.runGate.Store(&gate)
+}
+
+// runsAllowed reports whether a completed-run record may be sent now.
+func (s *AnalyticsService) runsAllowed() bool {
+	if !s.sendAllowed() {
+		return false
+	}
+	gate := s.runGate.Load()
 	return gate == nil || (*gate)()
 }
 
@@ -277,12 +303,17 @@ func (s *AnalyticsService) FlushBuffered(ctx context.Context) int {
 		flushed += len(batch.Events)
 	}
 
-	// Flush buffered pipeline run records
+	// Flush buffered pipeline run records — or drop them, once the run gate
+	// (the editor's pipeline-run stream) has closed.
 	s.mu.Lock()
 	pendingRuns := make([]ExecutionHistoryRunRecord, len(s.runQueue))
 	copy(pendingRuns, s.runQueue)
 	s.runQueue = nil
 	s.mu.Unlock()
+	if len(pendingRuns) > 0 && !s.runsAllowed() {
+		log.Printf("analytics: dropped %d buffered run records — the pipeline-run stream is off", len(pendingRuns))
+		pendingRuns = nil
+	}
 
 	for _, run := range pendingRuns {
 		if err := s.pushPipelineRunSync(ctx, run); err != nil {
@@ -399,7 +430,7 @@ type UsageSummaryResult struct {
 // errors, does not block the caller. Buffers the record for retry when
 // offline or on HTTP failure.
 func (s *AnalyticsService) PushPipelineRun(ctx context.Context, run ExecutionHistoryRunRecord) {
-	if !s.sendAllowed() {
+	if !s.runsAllowed() {
 		return
 	}
 	go func() {
@@ -846,6 +877,10 @@ func (s *AnalyticsService) SyncTelemetry(ctx context.Context, records []state.V2
 	var result SyncTelemetryResult
 	if !s.sendAllowed() {
 		result.Errors = append(result.Errors, "sending is off: the cloud is not enabled or telemetry is off")
+		return result
+	}
+	if !s.runsAllowed() {
+		result.Errors = append(result.Errors, "the pipeline-run telemetry stream is off")
 		return result
 	}
 	canonical, _ := CanonicalizeRuns(records)

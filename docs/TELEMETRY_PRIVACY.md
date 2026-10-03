@@ -82,7 +82,9 @@ actions you take yourself.
   whatever it quotes: the issue body excerpt, a failed stage's error message,
   and the reasons and evidence in the `trace` stream (see below).
 - You can disable individual streams (`pipeline-run`, `health`,
-  `recommendation`, `trace`) without disabling telemetry overall.
+  `recommendation`, `trace`) without disabling telemetry overall. With
+  `pipeline-run` off, no completed-run record is sent, by the extension or by
+  the daemon it starts.
 
 ## What a run sends
 
@@ -139,7 +141,7 @@ history in these streams:
 
 | Stream           | What it carries                                                                                                                                                                                                                                                |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `pipeline-run`   | A copy of the completed-run record above, without the issue title, labels and body excerpt                                                                                                                                                                     |
+| `pipeline-run`   | A copy of the completed-run record above, without the issue title, labels and body excerpt. Turning this stream off also stops the record the daemon sends                                                                                                     |
 | `health`         | Queue, retry and error counters for self-improvement loops                                                                                                                                                                                                     |
 | `recommendation` | Whether self-recommendations were accepted or ignored                                                                                                                                                                                                          |
 | `trace`          | The run's decision trace: each stage start and exit, phase change, model routing decision (the model chosen, the router's reasoning and the alternatives), skip, escalation, backtrack, retry and gate result (its reason and evidence lines), and the outcome |
@@ -362,7 +364,7 @@ within 30 days of the request.
 | `platform.enabled`                           | boolean | `false`                                                 | Cloud features: off, only your own actions reach the hosted service |
 | `nightgauge.telemetry.enabled`               | boolean | `true`                                                  | Master switch — set `false` to stop all run telemetry               |
 | `platform.telemetry.enabled`                 | boolean | `true`                                                  | The same switch in the machine-tier config, for every component     |
-| `nightgauge.telemetry.streams`               | array   | `["pipeline-run", "health", "recommendation", "trace"]` | Streams the extension may upload when enabled                       |
+| `nightgauge.telemetry.streams`               | array   | `["pipeline-run", "health", "recommendation", "trace"]` | Streams that may be sent when enabled (see the stream table)        |
 | `nightgauge.telemetry.uploadIntervalMinutes` | integer | `15`                                                    | How often the queue flushes (1–1440 min)                            |
 | `platform.telemetry.usage_reporting`         | enum    | `full`                                                  | Allowance reporting: `off` / `minimal` / `full`                     |
 

@@ -211,9 +211,12 @@ changelog, and the release workflow refuses a tag that does not.
   analytics events, the history sync) only when the user opted in to the cloud
   (`platform.enabled: true`, or a license or API key in its environment),
   `platform.telemetry.enabled` is not false, and the editor that started it has
-  not withdrawn its consent. The extension hands the daemon VS Code's telemetry
-  level and `nightgauge.telemetry.enabled` at spawn
-  (`NIGHTGAUGE_EDITOR_TELEMETRY`) and on every change (the new
+  not withdrawn its consent; a completed-run record also needs the editor's
+  `pipeline-run` stream on, whoever sends it (the interactive push, the
+  scheduler, the history sync). The extension hands the daemon VS Code's
+  telemetry level, `nightgauge.telemetry.enabled` and
+  `nightgauge.telemetry.streams` at spawn (`NIGHTGAUGE_EDITOR_TELEMETRY`,
+  `NIGHTGAUGE_EDITOR_TELEMETRY_STREAMS`) and on every change (the new
   `platform.setTelemetryConsent`). When the answer turns to no, buffered items
   are dropped at the next flush, not sent. The extension's uploader runs only
   with `platform.enabled`, and stops when `platform.telemetry.enabled` is

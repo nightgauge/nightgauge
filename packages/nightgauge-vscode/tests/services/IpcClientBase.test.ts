@@ -678,12 +678,14 @@ describe("IpcClientBase", () => {
   // ── Editor telemetry consent ──────────────────────────────────────────────
 
   describe("editor telemetry consent", () => {
-    function withTelemetrySetting(enabled: boolean | undefined): void {
+    function withTelemetrySetting(enabled: boolean | undefined, streams?: string[]): void {
       (vscode.workspace.getConfiguration as unknown as MockInstance).mockImplementation(
         (section?: string) => ({
           get: vi.fn(<T>(key: string, defaultValue?: T): T | undefined => {
             if (section === "nightgauge" && key === "telemetry.enabled")
               return enabled as unknown as T;
+            if (section === "nightgauge" && key === "telemetry.streams")
+              return streams as unknown as T;
             if (key === "binaryPath") return "" as unknown as T;
             if (key === "timeoutSeconds") return 30 as unknown as T;
             return defaultValue;
@@ -711,6 +713,22 @@ describe("IpcClientBase", () => {
       expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY).toBe("off");
     });
 
+    it("hands the daemon the streams the editor allows: all by default", async () => {
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY_STREAMS).toBe(
+        "pipeline-run,health,recommendation,trace"
+      );
+    });
+
+    it("hands the daemon only the streams the setting lists, or 'none'", async () => {
+      withTelemetrySetting(true, ["trace", "health", "bogus"]);
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY_STREAMS).toBe("trace,health");
+    });
+
+    it("hands the daemon 'none' when the setting lists no stream", async () => {
+      withTelemetrySetting(true, []);
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY_STREAMS).toBe("none");
+    });
+
     it("hands the daemon 'off' when VS Code's telemetry is off, whatever the setting", async () => {
       withTelemetrySetting(true);
       (vscode.env as { isTelemetryEnabled: boolean }).isTelemetryEnabled = false;
@@ -735,12 +753,23 @@ describe("IpcClientBase", () => {
       withTelemetrySetting(false);
       onChange!({ affectsConfiguration: (k) => k === "nightgauge.telemetry.enabled" });
       await flushPromises();
-      expect(consentWrites().map((r) => r.params)).toEqual([{ enabled: false }]);
+      expect(consentWrites().map((r) => r.params)).toEqual([
+        { enabled: false, streams: ["pipeline-run", "health", "recommendation", "trace"] },
+      ]);
+
+      // Turning a stream off is a consent change too (#1796).
+      withTelemetrySetting(true, ["health"]);
+      onChange!({ affectsConfiguration: (k) => k === "nightgauge.telemetry.streams" });
+      await flushPromises();
+      expect(consentWrites().map((r) => r.params)[1]).toEqual({
+        enabled: true,
+        streams: ["health"],
+      });
 
       // A setting that is not the consent sends nothing.
       onChange!({ affectsConfiguration: (k) => k === "nightgauge.backend.timeoutSeconds" });
       await flushPromises();
-      expect(consentWrites()).toHaveLength(1);
+      expect(consentWrites()).toHaveLength(2);
     });
   });
 

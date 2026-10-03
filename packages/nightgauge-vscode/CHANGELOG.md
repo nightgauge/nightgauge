@@ -42,10 +42,11 @@ and this project adheres to
   was enough for the Nightgauge binary and this extension to upload your runs.
   Now they upload only with `platform.enabled: true` in your machine-tier
   config, and the binary follows your VS Code telemetry settings, including a
-  change, at once. `platform.telemetry.enabled: false` in that config stops
-  this extension's uploads as well as the binary's, and the telemetry settings
-  can be set in your user settings only, so a repository cannot turn them back
-  on (#1796).
+  change, at once: turning the `pipeline-run` stream off now stops the run
+  records the binary sends, too. `platform.telemetry.enabled: false` in that
+  config stops this extension's uploads as well as the binary's, and the
+  telemetry settings can be set in your user settings only, so a repository
+  cannot turn them back on (#1796).
 - **With cloud features off, nothing reaches the hosted service in the
   background.** After you signed in, the Nightgauge binary checked the
   service's health every minute under your session, cloud features or not.

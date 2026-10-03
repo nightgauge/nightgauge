@@ -20,7 +20,12 @@ import { BinaryResolver } from "./BinaryResolver";
 import { getActiveCallSource, setActiveCallSource } from "./callSource";
 import { getGitHubAuthToken, getGitHubAuthTokens } from "../utils/nightgaugeConfig";
 import { whenLicenseReconciled } from "./licenseKeychainBridge";
-import { editorTelemetryConsent, TELEMETRY_ENABLED_SETTING } from "./TelemetryConsentService";
+import {
+  editorTelemetryConsent,
+  editorTelemetryStreams,
+  TELEMETRY_ENABLED_SETTING,
+  TELEMETRY_STREAMS_SETTING,
+} from "./TelemetryConsentService";
 import { TokenStorage } from "../platform/TokenStorage";
 import { PlatformCredentialBridge } from "../platform/PlatformCredentialBridge";
 import { redactSecrets } from "../utils/redaction";
@@ -82,6 +87,20 @@ export const WINDOW_FOLDERS_ENV_VAR = "NIGHTGAUGE_WINDOW_FOLDERS";
  * platform.telemetry.enabled is not false; see docs/TELEMETRY_PRIVACY.md.
  */
 export const EDITOR_TELEMETRY_ENV_VAR = "NIGHTGAUGE_EDITOR_TELEMETRY";
+
+/**
+ * The environment variable that hands the daemon the telemetry streams the
+ * editor allows at spawn, comma-separated, or "none"
+ * (ipc.EditorTelemetryStreamsEnv on the Go side). With `pipeline-run` off the
+ * daemon sends no completed-run record.
+ */
+export const EDITOR_TELEMETRY_STREAMS_ENV_VAR = "NIGHTGAUGE_EDITOR_TELEMETRY_STREAMS";
+
+/** The streams the editor allows, as EDITOR_TELEMETRY_STREAMS_ENV_VAR carries them. */
+function editorTelemetryStreamsEnvValue(): string {
+  const streams = editorTelemetryStreams();
+  return streams.length > 0 ? streams.join(",") : "none";
+}
 
 // ---------------------------------------------------------------------------
 // Workspace types (matches Go internal/ipc/protocol.go Workspace* structs)
@@ -2069,6 +2088,7 @@ export abstract class IpcClientBase implements vscode.Disposable {
     // The editor's telemetry consent, so the daemon never sends run telemetry
     // the user turned off here, not even before the first consent sync.
     env[EDITOR_TELEMETRY_ENV_VAR] = editorTelemetryConsent() ? "on" : "off";
+    env[EDITOR_TELEMETRY_STREAMS_ENV_VAR] = editorTelemetryStreamsEnvValue();
 
     // The window's folders, in order, so the daemon's platform agent declares
     // the workspace this extension's agent declares (#2335). The extension
@@ -2736,11 +2756,12 @@ export abstract class IpcClientBase implements vscode.Disposable {
 
   /**
    * Tell the daemon the editor's telemetry consent whenever VS Code's
-   * telemetry level or `nightgauge.telemetry.enabled` changes, so turning
-   * telemetry off in the editor stops the daemon's sending at once (buffered
-   * items included). The daemon learns the consent at spawn from its
-   * environment (EDITOR_TELEMETRY_ENV_VAR), so a start sends nothing; the
-   * watch is created once and survives restarts.
+   * telemetry level, `nightgauge.telemetry.enabled` or
+   * `nightgauge.telemetry.streams` changes, so turning telemetry (or the
+   * pipeline-run stream) off in the editor stops the daemon's sending at once
+   * (buffered items included). The daemon learns the consent at spawn from its
+   * environment (EDITOR_TELEMETRY_ENV_VAR, EDITOR_TELEMETRY_STREAMS_ENV_VAR),
+   * so a start sends nothing; the watch is created once and survives restarts.
    */
   private watchTelemetryConsent(): void {
     if (this.telemetryConsentWatch) return;
@@ -2748,13 +2769,19 @@ export abstract class IpcClientBase implements vscode.Disposable {
       if (!this.isConnected) return; // the next spawn reads it from its env
       this.call<{ ok: boolean }>("platform.setTelemetryConsent", {
         enabled: editorTelemetryConsent(),
+        streams: editorTelemetryStreams(),
       }).catch((err: unknown) => {
         this.log(`[IpcClientBase] telemetry consent sync failed: ${String(err)}`);
       });
     };
     const watches: vscode.Disposable[] = [];
     const onSetting = vscode.workspace.onDidChangeConfiguration?.((e) => {
-      if (e.affectsConfiguration(TELEMETRY_ENABLED_SETTING)) send();
+      if (
+        e.affectsConfiguration(TELEMETRY_ENABLED_SETTING) ||
+        e.affectsConfiguration(TELEMETRY_STREAMS_SETTING)
+      ) {
+        send();
+      }
     });
     if (onSetting) watches.push(onSetting);
     const onLevel = vscode.env?.onDidChangeTelemetryEnabled?.(() => send());

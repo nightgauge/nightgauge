@@ -26,25 +26,32 @@ func TestServeTelemetryOptions(t *testing.T) {
 	telemetryOn := &config.Config{Telemetry: &config.TelemetryConfig{Enabled: &on}}
 
 	cases := []struct {
-		name      string
-		optedIn   bool
-		cfg       *config.Config
-		editorEnv string
-		want      bool
+		name       string
+		optedIn    bool
+		cfg        *config.Config
+		editorEnv  string
+		streamsEnv string
+		want       bool
+		wantRuns   bool
 	}{
-		{"opted in, telemetry on, editor on", true, telemetryOn, "on", true},
-		{"opted in, telemetry unset, no editor", true, &config.Config{}, "", true},
-		{"opted in, no config, no editor", true, nil, "", true},
-		{"not opted in", false, telemetryOn, "on", false},
-		{"platform.telemetry.enabled false", true, telemetryOff, "on", false},
-		{"editor withdrew consent", true, telemetryOn, "off", false},
+		{"opted in, telemetry on, editor on", true, telemetryOn, "on", "pipeline-run,trace", true, true},
+		{"opted in, telemetry unset, no editor", true, &config.Config{}, "", "", true, true},
+		{"opted in, no config, no editor", true, nil, "", "", true, true},
+		{"not opted in", false, telemetryOn, "on", "", false, false},
+		{"platform.telemetry.enabled false", true, telemetryOff, "on", "", false, false},
+		{"editor withdrew consent", true, telemetryOn, "off", "", false, false},
+		{"editor's pipeline-run stream off", true, telemetryOn, "on", "health,trace", true, false},
+		{"editor allows no stream", true, telemetryOn, "on", "none", true, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			opts := serveTelemetryOptions(resolvedPlatformConfig{OptedIn: tc.optedIn}, tc.cfg, tc.editorEnv)
+			opts := serveTelemetryOptions(resolvedPlatformConfig{OptedIn: tc.optedIn}, tc.cfg, tc.editorEnv, tc.streamsEnv)
 			s := ipc.NewServer(nil, opts...)
 			if got := s.TelemetryAllowed(); got != tc.want {
 				t.Errorf("TelemetryAllowed() = %v, want %v", got, tc.want)
+			}
+			if got := s.RunRecordsAllowed(); got != tc.wantRuns {
+				t.Errorf("RunRecordsAllowed() = %v, want %v", got, tc.wantRuns)
 			}
 		})
 	}
@@ -77,8 +84,9 @@ func TestSchedulerTelemetryService_AsksTheGate(t *testing.T) {
 		t.Fatal("precondition: the client must read online")
 	}
 
-	var allowed atomic.Bool
-	svc := schedulerTelemetryService(pc, allowed.Load)
+	var allowed, runsAllowed atomic.Bool
+	runsAllowed.Store(true)
+	svc := schedulerTelemetryService(pc, allowed.Load, runsAllowed.Load)
 	record := state.V2RunRecord{
 		SchemaVersion: "2",
 		RecordType:    "run",
@@ -96,13 +104,30 @@ func TestSchedulerTelemetryService_AsksTheGate(t *testing.T) {
 		t.Fatalf("the scheduler's telemetry sent %d requests with the gate closed, want 0", n)
 	}
 
+	// The editor's pipeline-run stream off: the run record stays, the queue
+	// snapshot goes.
 	allowed.Store(true)
+	runsAllowed.Store(false)
 	svc.PushPipelineRun(context.Background(), record)
 	svc.SyncQueue(context.Background(), []platform.QueueSyncItem{{IssueNumber: 7}})
+	waitForPosts(t, &posts, 1)
+	time.Sleep(100 * time.Millisecond)
+	if n := posts.Load(); n != 1 {
+		t.Fatalf("with the pipeline-run stream off the scheduler sent %d requests, want only the queue snapshot", n)
+	}
+
+	runsAllowed.Store(true)
+	svc.PushPipelineRun(context.Background(), record)
+	waitForPosts(t, &posts, 2)
+}
+
+// waitForPosts waits until the mock has seen want requests.
+func waitForPosts(t *testing.T, posts *atomic.Int32, want int32) {
+	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
-	for posts.Load() < 2 {
+	for posts.Load() < want {
 		if time.Now().After(deadline) {
-			t.Fatalf("the scheduler's telemetry sent %d of 2 requests with the gate open", posts.Load())
+			t.Fatalf("the scheduler's telemetry sent %d of %d requests", posts.Load(), want)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

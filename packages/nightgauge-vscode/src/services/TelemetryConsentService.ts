@@ -78,6 +78,24 @@ const ACTION_KEEP_ON = "Keep on";
 /** The setting `editorTelemetryConsent` reads, for change subscriptions. */
 export const TELEMETRY_ENABLED_SETTING = `${CONFIG_NAMESPACE}.${SETTING_ENABLED}`;
 
+/** The setting `editorTelemetryStreams` reads, for change subscriptions. */
+export const TELEMETRY_STREAMS_SETTING = `${CONFIG_NAMESPACE}.${SETTING_STREAMS}`;
+
+/**
+ * The telemetry streams `nightgauge.telemetry.streams` allows: every stream
+ * when unset or malformed, otherwise the known streams it lists. The
+ * extension hands them to the daemon it starts too, which sends no
+ * completed-run record while `pipeline-run` is off.
+ */
+export function editorTelemetryStreams(): TelemetryStream[] {
+  const cfg = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
+  const raw = cfg.get<unknown>(SETTING_STREAMS);
+  if (!Array.isArray(raw)) {
+    return [...ALL_STREAMS];
+  }
+  return Array.from(new Set(raw.filter(isTelemetryStream)));
+}
+
 /**
  * The editor's telemetry consent: VS Code's own telemetry level (the hard
  * kill switch) and `nightgauge.telemetry.enabled` (opt-out, so only an
@@ -148,13 +166,7 @@ export class TelemetryConsentService {
   }
 
   getStreams(): TelemetryStream[] {
-    const cfg = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-    const raw = cfg.get<unknown>(SETTING_STREAMS);
-    if (!Array.isArray(raw)) {
-      return [...ALL_STREAMS];
-    }
-    const filtered = raw.filter(isTelemetryStream);
-    return Array.from(new Set(filtered));
+    return editorTelemetryStreams();
   }
 
   getUploadIntervalMinutes(): number {

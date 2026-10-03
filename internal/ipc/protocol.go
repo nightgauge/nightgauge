@@ -1033,6 +1033,10 @@ type PlatformAuthSignoutParams struct {
 // platform.setTelemetryConsent: the editor's telemetry consent.
 type PlatformSetTelemetryConsentParams struct {
 	Enabled bool `json:"enabled"`
+	// Streams are the telemetry streams the editor allows
+	// (nightgauge.telemetry.streams). Absent leaves them as they were; an
+	// empty list allows none.
+	Streams []string `json:"streams,omitempty"`
 }
 
 // PlatformSetSessionTokenParams are parameters for platform.setSessionToken.

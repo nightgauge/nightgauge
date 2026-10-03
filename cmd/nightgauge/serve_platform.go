@@ -60,24 +60,29 @@ func (r resolvedPlatformConfig) Configured() bool {
 // telemetry consent: the cloud opt-in (resolved.OptedIn), the machine tier's
 // platform.telemetry.enabled (on unless explicitly false; cfg nil reads as
 // on, since the opt-in still has to hold), and the consent of the editor that
-// started the daemon (editorEnv, ipc.EditorTelemetryEnv's value). The
-// server's TelemetryAllowed is the conjunction, and every send asks it.
-func serveTelemetryOptions(resolved resolvedPlatformConfig, cfg *config.Config, editorEnv string) []ipc.ServerOption {
+// started the daemon (editorEnv and editorStreamsEnv, the values of
+// ipc.EditorTelemetryEnv and ipc.EditorTelemetryStreamsEnv). The server's
+// TelemetryAllowed is the conjunction, and every send asks it; a run record
+// also asks RunRecordsAllowed, the editor's pipeline-run stream.
+func serveTelemetryOptions(resolved resolvedPlatformConfig, cfg *config.Config, editorEnv, editorStreamsEnv string) []ipc.ServerOption {
 	telemetryConfigOn := cfg == nil || cfg.Telemetry.IsEnabled()
 	return []ipc.ServerOption{
 		ipc.WithTelemetryPolicy(resolved.OptedIn, telemetryConfigOn),
 		ipc.WithEditorTelemetry(editorEnv),
+		ipc.WithEditorTelemetryStreams(editorStreamsEnv),
 	}
 }
 
 // schedulerTelemetryService is the autonomous scheduler's telemetry service
-// on pc. Every push asks allowed first (the IPC server's TelemetryAllowed), so
-// the scheduler's run records, live events and queue snapshots need the same
+// on pc. Every push asks allowed first (the IPC server's TelemetryAllowed), and
+// a run record also asks runsAllowed (its RunRecordsAllowed), so the
+// scheduler's run records, live events and queue snapshots need the same
 // consent as the interactive path's, and anything buffered is dropped once it
 // is withdrawn.
-func schedulerTelemetryService(pc *platform.Client, allowed func() bool) *platform.TelemetryService {
+func schedulerTelemetryService(pc *platform.Client, allowed, runsAllowed func() bool) *platform.TelemetryService {
 	svc := platform.NewTelemetryService(pc)
 	svc.SetSendGate(allowed)
+	svc.SetRunGate(runsAllowed)
 	return svc
 }
 
