@@ -292,6 +292,56 @@ else
   bad "installing again changes nothing"
 fi
 
+#    The guard it installs is the public main's, as the clone last fetched it.
+#    npm install runs in every checkout, and one where the guard is being
+#    edited, or one on an older or unmerged commit, must not decide every push
+#    of the clone. The installed copy starts out as another one, an older
+#    install say, so that keeping it does not pass for installing main's.
+{
+  printf '# An older guard.\nexit 0\n' >"$dispatch/publication-push-guard.sh" &&
+    printf '#!/usr/bin/env bash\nexit 0\n' >"$work/scripts/publication-push-guard.sh" &&
+    (cd "$work" && bash scripts/install-publication-push-hook.sh) >/dev/null 2>&1
+} || harness "could not install from a checkout whose guard is edited"
+if git -C "$work" show origin/main:scripts/publication-push-guard.sh |
+  cmp -s - "$dispatch/publication-push-guard.sh"; then
+  ok "a checkout's edited guard is not installed, nor an older one kept: the public main's is"
+else
+  bad "a checkout's edited guard is not installed, nor an older one kept: the public main's is"
+fi
+# Whatever happened, main's copy goes back, so that a failure here is not
+# every later case's failure too.
+{
+  g -C "$work" checkout -q -- scripts/publication-push-guard.sh &&
+    git -C "$work" show origin/main:scripts/publication-push-guard.sh \
+      >"$dispatch/publication-push-guard.sh"
+} || harness "could not restore the guard"
+
+#    With no remote whose URL names the public repository there is no public
+#    main to take it from: the checkout's own guard is installed when none is,
+#    and an installed one is kept.
+fork="$tmp/fork"
+{
+  g clone -q "$public" "$fork" &&
+    g -C "$fork" remote set-url origin "$elsewhere"
+} || harness "could not build a clone with no public remote"
+fork_guard="$(git -C "$fork" rev-parse --path-format=absolute --git-common-dir)/nightgauge-hooks/publication-push-guard.sh"
+(cd "$fork" && bash scripts/install-publication-push-hook.sh) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] && cmp -s "$fork_guard" "$fork/scripts/publication-push-guard.sh"; then
+  ok "with no public main to take it from, the checkout's own guard is installed"
+else
+  bad "with no public main to take it from, the checkout's own guard is installed (exit $rc)"
+fi
+printf '# An edit.\n' >>"$fork/scripts/publication-push-guard.sh" || harness "could not edit a guard"
+(cd "$fork" && bash scripts/install-publication-push-hook.sh) >/dev/null 2>&1
+rc=$?
+if [ "$rc" -eq 0 ] && git -C "$fork" show HEAD:scripts/publication-push-guard.sh |
+  cmp -s - "$fork_guard"; then
+  ok "...and then kept, rather than replaced by a checkout's own"
+else
+  bad "...and then kept, rather than replaced by a checkout's own (exit $rc)"
+fi
+
 fresh="$tmp/fresh"
 g clone -q "$public" "$fresh" || harness "could not clone for the installer cases"
 (cd "$fresh" && HUSKY=0 bash scripts/install-publication-push-hook.sh) >/dev/null 2>&1
@@ -493,6 +543,80 @@ push "$work" allow-then-add origin feat/allow-then-add
 expect_refused "loosening the allowlist and then adding what it lets in is refused" \
   refs/heads/feat/allow-then-add "$then_add" "allowlist-isolation"
 
+#    The other way round: one commit adds the content, and the next takes it
+#    out and loosens the allowlist for it. That commit changes only the
+#    allowlist, which the isolation check allows, and its allowlist would let
+#    the content through. The earlier commit is published as it is, so it is
+#    judged by the allowlist it carries, which is main's.
+{
+  g -C "$work" checkout -q -f -b feat/add-then-allow origin/main &&
+    commit_file "$work" docs/strategy/plan.md "A plan." "docs: add the plan" &&
+    g -C "$work" rm -q docs/strategy/plan.md &&
+    loosen "$work" &&
+    g -C "$work" commit -q -am "chore: take the plan out, and allow it"
+} || harness "could not build feat/add-then-allow"
+push "$work" add-then-allow origin feat/add-then-allow
+expect_refused "adding content and then loosening the allowlist for it is refused" \
+  refs/heads/feat/add-then-allow "$(head_of "$work" feat/add-then-allow~1)" \
+  "PRIVATE path is present: docs/strategy/plan.md"
+if ! logged "It is not the tip"; then
+  bad "the refusal of feat/add-then-allow does not blame the earlier commit"
+fi
+
+# ── 11b. No code from the pushed commits runs ────────────────────────────────
+#    The public main's checker and isolation script judge every push. A pushed
+#    commit's own would decide its own verdict, and would run with the pusher's
+#    credentials. Each stand-in below passes, and records that it ran.
+export NG_SUITE_RAN="$tmp/pushed-code-ran"
+stand_in() { # stand_in <path>: a script that records that it ran, and passes
+  case "$1" in
+    *.py) printf 'import os\nopen(os.environ["NG_SUITE_RAN"], "w").close()\n' >"$work/$1" ;;
+    *)
+      # shellcheck disable=SC2016 # the stand-in expands it when it runs
+      printf '#!/usr/bin/env bash\n: >"$NG_SUITE_RAN"\n' >"$work/$1"
+      ;;
+  esac
+}
+{
+  g -C "$work" checkout -q -f -b feat/own-checker origin/main &&
+    commit_file "$work" docs/strategy/plan.md "A plan." "docs: add the plan" &&
+    g -C "$work" rm -q docs/strategy/plan.md &&
+    stand_in scripts/publication-boundary-check.py &&
+    g -C "$work" commit -q -am "chore: take the plan out, and a checker that passes it"
+} || harness "could not build feat/own-checker"
+push "$work" own-checker origin feat/own-checker
+expect_refused "a pushed checker does not judge its own push" refs/heads/feat/own-checker \
+  "$(head_of "$work" feat/own-checker~1)" "PRIVATE path is present: docs/strategy/plan.md"
+LOG=""
+if [ -e "$NG_SUITE_RAN" ]; then
+  bad "the pushed checker ran"
+else
+  ok "the pushed checker never ran"
+fi
+rm -f "$NG_SUITE_RAN"
+
+{
+  g -C "$work" checkout -q -f -b feat/own-isolation origin/main &&
+    stand_in scripts/check-boundary-allowlist-isolation.sh &&
+    g -C "$work" commit -q -am "chore: an isolation check that passes" &&
+    loosen "$work" &&
+    mkdir -p "$work/docs/strategy" &&
+    printf 'A plan.\n' >"$work/docs/strategy/plan.md" &&
+    g -C "$work" add -A &&
+    g -C "$work" commit -q -m "docs: allow a plan, and add it"
+} || harness "could not build feat/own-isolation"
+push "$work" own-isolation origin feat/own-isolation
+expect_refused "a pushed isolation script does not judge its own push" \
+  refs/heads/feat/own-isolation "$(head_of "$work" feat/own-isolation)" "allowlist-isolation"
+LOG=""
+if [ -e "$NG_SUITE_RAN" ]; then
+  bad "the pushed isolation script ran"
+else
+  ok "the pushed isolation script never ran"
+fi
+rm -f "$NG_SUITE_RAN"
+unset NG_SUITE_RAN
+
 {
   g -C "$work" checkout -q -b feat/allow-only origin/main &&
     printf '# A reviewed note.\n' >>"$work/.github/publication-boundary.yaml" &&
@@ -579,8 +703,8 @@ fi
     g -C "$work" commit -q -m "chore: drop the checker"
 } || harness "could not build feat/no-checker"
 push "$work" no-checker origin feat/no-checker
-expect_refused "a commit without the checker is refused" refs/heads/feat/no-checker \
-  "$(head_of "$work" feat/no-checker)" "has no"
+expect_pass "a commit without the checker is judged by the public main's" \
+  refs/heads/feat/no-checker "$(head_of "$work" feat/no-checker)"
 
 #    A python3 that cannot import yaml cannot run the checker, so the push is
 #    refused before any scan. The stand-in is the suite's own python3 without
@@ -812,8 +936,25 @@ else
   bad "a file where the tip has a directory is scanned commit by commit"
 fi
 
-# ── 22b. A version of the checker cannot join the combined scan: the commit
-#    that holds it is scanned on its own as well, and nothing else is.
+# ── 22b. A version of the manifest cannot join the combined scan: the commit
+#    that holds it is scanned on its own as well, and nothing else is. The
+#    checker is the public main's whatever a commit holds, so a version of it
+#    is content like any other, and joins the one scan.
+{
+  g -C "$work" checkout -q -f -b feat/manifest-notes origin/main &&
+    printf '# A note.\n' >>"$work/.github/publication-boundary.yaml" &&
+    g -C "$work" commit -q -am "chore: a note in the allowlist" &&
+    printf '# A second note.\n' >>"$work/.github/publication-boundary.yaml" &&
+    g -C "$work" commit -q -am "chore: another note in the allowlist"
+} || harness "could not build feat/manifest-notes"
+push "$work" manifest-notes origin feat/manifest-notes
+if logged "2 new commit(s) in 2 scan(s)" && logged "on its own, each commit with its own version"; then
+  expect_pass "an earlier version of the manifest costs one more scan, not one per commit" \
+    refs/heads/feat/manifest-notes "$(head_of "$work" feat/manifest-notes)"
+else
+  bad "an earlier version of the manifest costs one more scan, not one per commit"
+fi
+
 {
   g -C "$work" checkout -q -f -b feat/checker-notes origin/main &&
     printf '# A note.\n' >>"$work/scripts/publication-boundary-check.py" &&
@@ -822,11 +963,11 @@ fi
     g -C "$work" commit -q -am "chore: another note in the checker"
 } || harness "could not build feat/checker-notes"
 push "$work" checker-notes origin feat/checker-notes
-if logged "2 new commit(s) in 2 scan(s)" && logged "on its own, each commit with its own version"; then
-  expect_pass "an earlier version of the checker costs one more scan, not one per commit" \
+if logged "2 new commit(s) in 1 scan(s)" && logged "content merged in"; then
+  expect_pass "an earlier version of the checker joins the one scan" \
     refs/heads/feat/checker-notes "$(head_of "$work" feat/checker-notes)"
 else
-  bad "an earlier version of the checker costs one more scan, not one per commit"
+  bad "an earlier version of the checker joins the one scan"
 fi
 
 # ── 23. A branch that does not merge cleanly into main is scanned as itself ──
@@ -945,8 +1086,8 @@ fi
 #    two commits each add a marked file that a later commit removes, so every
 #    commit holds two and passes, and the combined scan holds three and fails.
 #    Each commit is then scanned alone. One merged into main, or scanned as
-#    itself by main's own checker and manifest, clears the failure; one judged
-#    by a checker or manifest of its own cannot.
+#    itself by main's own manifest, clears the failure; one judged by a
+#    manifest of its own cannot. The checker is always main's.
 mark="$(printf 'RATCHET-%s' MARKER)"
 seed2="$tmp/seed2"
 public2="$tmp/remote3/nightgauge/nightgauge.git"
@@ -1021,13 +1162,13 @@ push2 ratchet-own ratchet-own
 if [ "$RC" -eq 0 ] && logged "does not merge cleanly" &&
   logged "every new commit passes on its own" &&
   [ "$(remote2_ref refs/heads/ratchet-own)" = "$(head_of "$work2" ratchet-own)" ]; then
-  ok "commits scanned as themselves, with main's own checker and manifest, clear it too"
+  ok "commits scanned as themselves, with main's own manifest, clear it too"
 else
-  bad "commits scanned as themselves, with main's own checker and manifest, clear it too (exit $RC)"
+  bad "commits scanned as themselves, with main's own manifest, clear it too (exit $RC)"
 fi
 
-# A commit that merges cleanly into main but carries a checker of its own is
-# judged by that checker, so it cannot clear the failure either.
+# A commit that carries a checker of its own is judged by main's all the same,
+# so it clears the failure too.
 {
   g -C "$work2" fetch -q origin &&
     g -C "$work2" checkout -q -f -b ratchet-checker origin/main &&
@@ -1043,12 +1184,11 @@ fi
 } || harness "could not build ratchet-checker"
 with_checker="$(head_of "$work2" ratchet-checker)"
 push2 ratchet-checker ratchet-checker
-if [ "$RC" -ne 0 ] && logged "cannot be pinned on any of them" &&
-  [ -z "$(remote2_ref refs/heads/ratchet-checker)" ] &&
-  ! git --git-dir="$public2" cat-file -e "$with_checker" 2>/dev/null; then
-  ok "a commit judged by a checker of its own cannot clear it, merged into main or not"
+if [ "$RC" -eq 0 ] && logged "every new commit passes on its own" &&
+  [ "$(remote2_ref refs/heads/ratchet-checker)" = "$with_checker" ]; then
+  ok "a commit with a checker of its own is judged by main's, and clears it too"
 else
-  bad "a commit judged by a checker of its own cannot clear it, merged into main or not (exit $RC)"
+  bad "a commit with a checker of its own is judged by main's, and clears it too (exit $RC)"
 fi
 
 {
@@ -1096,6 +1236,28 @@ if [ "$RC" -ne 0 ] && logged "cannot be pinned on any of them" && logged "git re
   ok "a commit judged by a manifest of its own cannot clear it, and the push is refused"
 else
   bad "a commit judged by a manifest of its own cannot clear it, and the push is refused (exit $RC)"
+fi
+
+#    The other way round, the combined scan can pass where a commit fails: a
+#    marked file the tip deletes offsets two that an earlier commit added. main's
+#    manifest counts files, so each earlier commit is also scanned on its own.
+{
+  g -C "$work2" fetch -q origin &&
+    g -C "$work2" checkout -q -f -b ratchet-offset origin/main &&
+    printf '%s two.\n' "$mark" >"$work2/docs/r2.md" &&
+    printf '%s three.\n' "$mark" >"$work2/docs/r3.md" &&
+    g -C "$work2" add -A && g -C "$work2" commit -q -m "docs: r2 and r3" &&
+    g -C "$work2" rm -q docs/r1.md docs/r2.md docs/r3.md &&
+    g -C "$work2" commit -q -m "docs: drop r1, r2 and r3"
+} || harness "could not build ratchet-offset"
+offset="$(head_of "$work2" ratchet-offset~1)"
+push2 ratchet-offset ratchet-offset
+if [ "$RC" -ne 0 ] && logged "counts files" && logged "COUNT ROSE" && logged "It is not the tip" &&
+  [ -z "$(remote2_ref refs/heads/ratchet-offset)" ] &&
+  ! git --git-dir="$public2" cat-file -e "$offset" 2>/dev/null; then
+  ok "a count the tip offsets is still judged commit by commit"
+else
+  bad "a count the tip offsets is still judged commit by commit (exit $RC)"
 fi
 
 # ── 24b. A commit that carries the public main's own manifest is judged by
@@ -1184,18 +1346,21 @@ expect_refused "...also when a later commit takes it out, so the commit is scann
   refs/heads/feat/encoded-undone "$(head_of "$work" feat/encoded-undone~1)" \
   "FORBIDDEN CONTENT [cost-of-goods]"
 
-#    An attribute can also hide a file's added lines from git diff, which the
-#    issue-reference rule reads. A commit scanned with a .gitattributes other
-#    than main's is judged by rules of its own, so it cannot clear a combined
-#    failure.
+#    An attribute could also hide a file's added lines from git diff, which the
+#    issue-reference rule reads. git diff takes main's .gitattributes in the
+#    scan, so a pushed -diff hides nothing, and the commit that adds the line is
+#    named.
 {
   g -C "$work" checkout -q -f -b feat/no-diff origin/main &&
     attr_commit "docs/no-diff.md -diff" docs/no-diff.md "See $dead." &&
     attr_undo docs/no-diff.md
 } || harness "could not build feat/no-diff"
 push "$work" no-diff origin feat/no-diff
-expect_refused "a commit scanned with a .gitattributes of its own cannot clear a combined failure" \
-  refs/heads/feat/no-diff "$(head_of "$work" feat/no-diff~1)" "cannot be pinned on any of them"
+expect_refused "a pushed -diff does not hide a line from the issue-reference rule" \
+  refs/heads/feat/no-diff "$(head_of "$work" feat/no-diff~1)" "UNRESOLVABLE ISSUE REFERENCE"
+if ! logged "It is not the tip"; then
+  bad "the refusal of feat/no-diff does not blame the commit that adds the line"
+fi
 g -C "$work" checkout -q -f feat/ok || harness "could not leave feat/no-diff"
 
 # ── 25. A clone behind the public main fetches it, and changes no ref ────────
@@ -1229,6 +1394,30 @@ else
   bad "a public repository with no main is refused (push exit $RC)"
 fi
 
+# ── 26b. A public main without the checker fails closed ─────────────────────
+#    Every push is judged by the public main's checker, so with none there is
+#    nothing to judge it by.
+nochecker="$tmp/remote4/nightgauge/nightgauge.git"
+{
+  mkdir -p "$tmp/remote4/nightgauge" &&
+    g clone -q --bare "$public" "$nochecker" &&
+    g clone -q "$nochecker" "$tmp/nochecker" &&
+    g -C "$tmp/nochecker" rm -q scripts/publication-boundary-check.py &&
+    g -C "$tmp/nochecker" commit -q -m "chore: no checker" &&
+    g -C "$tmp/nochecker" push -q origin main &&
+    g -C "$work" checkout -q -f -b feat/to-no-checker origin/main &&
+    commit_file "$work" docs/nc.md "Not checked." "docs: not checked"
+} || harness "could not build a public repository whose main has no checker"
+push "$work" no-checker-main "$nochecker" feat/to-no-checker
+if [ "$RC" -ne 0 ] && logged "has no scripts/publication-boundary-check.py" &&
+  ! git --git-dir="$nochecker" rev-parse --verify --quiet refs/heads/feat/to-no-checker \
+    >/dev/null &&
+  ! git --git-dir="$nochecker" cat-file -e "$(head_of "$work" feat/to-no-checker)" 2>/dev/null; then
+  ok "a public main without the checker is refused"
+else
+  bad "a public main without the checker is refused (push exit $RC)"
+fi
+
 # ── 27. A shallow history fails closed; a shallow fetch elsewhere does not ───
 shallow="$tmp/shallow"
 {
@@ -1258,8 +1447,8 @@ expect_pass "a shallow fetch of an unrelated branch does not block a push" \
 #    scanning would finish the stand-in's sleep and return its exit 0, not 2.
 stop="$tmp/stop"
 {
-  mkdir -p "$stop/tree/scripts" "$stop/work" &&
-    cat >"$stop/tree/scripts/publication-boundary-check.py" <<'PY'
+  mkdir -p "$stop/tree" "$stop/work/rules" &&
+    cat >"$stop/work/rules/publication-boundary-check.py" <<'PY'
 import os
 import time
 

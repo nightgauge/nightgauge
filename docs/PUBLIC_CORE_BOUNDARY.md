@@ -164,12 +164,26 @@ including a worktree where `npm install` never ran, such as one the pipeline
 creates. It runs whatever the worktree has checked out, and the guard it runs
 is the copy installed beside the hook, not the worktree's own: an orphan
 branch, another repository's history or an old commit has no guard or an older
-one, and a guard being edited would judge its own pushes. Each `npm install`
-installs the guard of the checkout it runs in, for the whole clone. The
-worktree's own copy runs only when no copy is installed. husky's own hooks did
-neither, because their path is relative to each worktree and husky skips a
-hook the checked-out tree lacks. `.husky/pre-push` still runs the guard in a
-clone where only husky is installed.
+one, and a guard being edited would judge its own pushes. The copy each
+`npm install` installs is the public `main`'s, as the clone last fetched it
+(the `main` of a remote whose URL names this repository), not the checkout's
+own, so no checkout decides for the whole clone, however old or unmerged it is.
+A checkout's own copy is installed only when no such `main` has a guard and
+none is installed yet, and the worktree's own copy runs only when no copy is
+installed. husky's own hooks did neither, because their path is relative to
+each worktree and husky skips a hook the checked-out tree lacks.
+`.husky/pre-push` still runs the guard in a clone where only husky is
+installed.
+
+Nothing from the pushed commits runs. The boundary checker and the
+allowlist-isolation script are the remote `main`'s, read from its tree, and
+`git diff`, whose added lines the checker reads, takes `main`'s
+`.gitattributes`. A pushed commit's own checker would decide its own verdict,
+and it would run with the pusher's credentials, which a push of a commit nobody
+checked out, a fork's say, must not do. So a branch that changes the checker is
+still judged by `main`'s: land a checker change before the content it lets
+through, as with the allowlist. The allowlist is the one rule a branch brings,
+and only as the isolation rule below allows.
 
 The hook examines a push only when its URL names this repository. It matches on
 the URL's path, so any transport or SSH host alias counts. It asks the remote
@@ -188,41 +202,48 @@ they go stale when a branch is deleted upstream, and a push to a separate
 - **An allowlist change must stand alone**, as CI requires of a pull request
   (#1970). A new commit whose `.github/publication-boundary.yaml` differs from
   both its merge base with `main` and `main`'s own must change nothing else, by
-  CI's own `scripts/check-boundary-allowlist-isolation.sh`. Loosening the
-  allowlist and adding what it lets in is refused, in one commit or in two. A
-  commit whose allowlist change `main` already has is not held to this, as on
+  `main`'s copy of CI's `scripts/check-boundary-allowlist-isolation.sh`.
+  Loosening the allowlist and adding what it lets in is refused, in one commit
+  or in two, and so is adding content and then taking it out in a commit that
+  loosens the allowlist for it: the earlier commit is judged by the allowlist
+  it carries. A commit whose allowlist change `main` already has is not held
+  to this, as on
   a stacked branch whose allowlist change was then merged on its own. This is
   stricter than CI, which judges a pull request's changes as a whole. A branch
   that changed the allowlist in an earlier commit together with other work is
   refused even after it takes `main`'s allowlist, unless `main` has that
   earlier change exactly. Squash its unpushed commits, as the refusal says.
-- **The new commits are scanned** with `scripts/publication-boundary-check.py`,
-  the check CI runs. A commit is new when nothing the remote has can reach it.
+- **The new commits are scanned** with `main`'s
+  `scripts/publication-boundary-check.py`, the check CI runs. A commit is new
+  when nothing the remote has can reach it.
   One scan covers a ref: the ref merged into the remote's `main`, which is what
-  CI's pull-request run checks, so `main`'s checker and manifest apply unless
-  the ref changes them. A push publishes every commit it reaches, so every file
+  CI's pull-request run checks, so `main`'s manifest applies unless the ref
+  changes it. A push publishes every commit it reaches, so every file
   version an earlier commit holds that the tip does not is merged into the same
   path for that scan, less the lines that commit's merge base already had there.
   Content that one commit adds and a later one rewrites or deletes is refused.
   A ref that does not merge cleanly is scanned as if each conflict were settled
   its way: `main`'s tree with the ref's version of every file it changed. So
-  `main`'s checker and manifest still apply unless the ref changes them, a
-  branch forked before `main` tightened its rules is held to the tighter ones,
-  and files the ref never touched are not judged again. A commit with its own
-  version of the checker, the manifest, the isolation script or a
-  `.gitattributes` is also scanned on its own. Every file is scanned as stored:
-  a `.gitattributes` in the pushed tree cannot re-encode or filter what the
-  checker reads.
+  `main`'s manifest still applies unless the ref changes it, a branch forked
+  before `main` tightened its rules is held to the tighter ones, and files the
+  ref never touched are not judged again. A commit with its own version of the
+  manifest is also scanned on its own. So is every earlier commit whose
+  content was merged into the scan, when the ref changes the manifest, because
+  a later allowlist must not judge earlier content, or when `main`'s manifest
+  has a rule that counts files (`file_baseline`), because a file the tip
+  deletes must not offset, in that count, one an earlier commit added. Every
+  file is scanned as stored: a `.gitattributes` in the pushed tree cannot
+  re-encode, filter or hide (`-diff`) what the checker reads.
 - When that scan fails, the commits are scanned one at a time to name the one
   at fault. The combined scan can fail where no commit does, for example on a
   count that the commits add up to. If every commit then passes by `main`'s
-  rules, the push proceeds. If any commit was judged by rules of its own (its
-  own checker, manifest or `.gitattributes`), the push is refused as
-  unverified. A checker that cannot run blames no commit, so the push is
-  refused at once.
+  rules, the push proceeds. If any commit was judged by an allowlist of its
+  own, the push is refused as unverified. A checker that cannot run blames no
+  commit, so the push is refused at once.
 - A push with nothing new, such as a release tag on `main`, scans nothing.
 - **Anything the hook cannot verify is refused:**
-  - a remote it cannot list, or one without a `main`;
+  - a remote it cannot list, or one without a `main`, or whose `main` has no
+    checker;
   - a shallow history (`git fetch --unshallow`);
   - no `python3` with PyYAML;
   - a ref that is neither a branch nor a tag;
@@ -257,12 +278,16 @@ A client-side hook narrows the window, but it does not close it:
 - `git push --no-verify` skips the hook. `HUSKY=0` skips it only in a clone
   where the publication hook is not installed.
 - A clone where `npm install` never ran has no hook at all. An `npm install` in
-  a checkout older than the installer puts husky's relative hooks path back,
-  which leaves only husky's coverage, until the next `npm install` in a current
-  checkout or `npm run setup-hooks` restores it. Likewise, an `npm install` in
-  a checkout with an older guard installs that guard for the whole clone. The
-  hook directory is named by absolute path, so a clone moved elsewhere runs no
-  hooks until one of those runs again.
+  a checkout older than the installer puts husky's relative hooks path back
+  for the whole clone. The pipeline runs `npm install` in every worktree it
+  creates, so a worktree on a branch older than the installer, such as an epic
+  branch cut before it, does exactly that. Coverage is then husky's alone: a
+  worktree whose own `npm install` ran in a current checkout runs the guard
+  through `.husky/pre-push`, and any other worktree runs none, until the next
+  `npm install` in a current checkout or `npm run setup-hooks` restores the
+  hook. Fetching a newer `main` does not update the installed guard; the next
+  of those does. The hook directory is named by absolute path, so a clone
+  moved elsewhere runs no hooks until one of those runs again.
 - The hook runs only in a clone of this repository. A checkout of a different
   repository that pushes to this repository's URL runs that repository's hooks,
   or none. That is the most likely way for an unrelated history to be pushed.

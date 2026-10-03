@@ -1297,8 +1297,10 @@ Every push that fails CI wastes time and pollutes the PR with fix-up commits.
 > installs it again. CI checks the publication boundary only after GitHub has
 > stored a push, and it never checks a branch or tag that does not become a pull
 > request. The hook refuses a history unrelated to `main`, an allowlist change
-> made together with anything else, and a new commit that the boundary checker
-> rejects, even when a later commit in the same push cleans it up. It also
+> made together with anything else, and a new commit that the public `main`'s
+> boundary checker rejects, even when a later commit in the same push cleans it
+> up. Nothing from the pushed commits runs, so a branch that changes the
+> checker is judged by `main`'s until that change merges. It also
 > refuses a push it cannot verify. A pushed branch usually costs one checker
 > run, which takes several seconds. A deletion or a release tag on `main` costs
 > almost nothing, and pushes to other remotes pass straight through. When an
