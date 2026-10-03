@@ -211,9 +211,11 @@ export class TelemetrySettingsPanel implements vscode.Disposable {
   <p class="meta">
     Telemetry is opt-out. With cloud features on (<code>platform.enabled</code>),
     run telemetry is sent to your account unless you turn it off here: the
-    repository and issue number, the issue title and labels, the branch, stage
-    timings, tokens, cost and outcome. It never includes source code, file
-    contents, secrets or the issue body.
+    repository and issue number, the issue title, labels and the first 8,192
+    characters of its body, the branch, stage timings, tokens, cost and
+    outcome. It never includes source code, file contents or secrets.
+    <code>platform.telemetry.enabled: false</code> in your machine-tier
+    <code>config.yaml</code> also turns it off.
     <button class="link" id="privacyLink" type="button">Read the Privacy Document</button>.
   </p>
 

@@ -119,13 +119,15 @@ type Server struct {
 	// platformEndpoint is the URL a client built on demand talks to (#2398);
 	// see WithPlatformEndpoint. Set once by an option, before Run().
 	platformEndpoint string
-	// telemetryOptIn, telemetryConfigOn and editorTelemetry are the consent
+	// cloudOptIn, telemetryConfigOn and editorTelemetry are the consent
 	// TelemetryAllowed reads before any run data leaves the machine. The
 	// first two are set once by WithTelemetryPolicy, before Run(); with no
-	// policy both are false and nothing is sent. editorTelemetry is the
-	// editor's own consent, seeded by WithEditorTelemetry and changed by
+	// policy both are false and nothing is sent. cloudOptIn also decides
+	// whether a client built on demand may poll the platform's health in the
+	// background (ensurePlatformClient). editorTelemetry is the editor's
+	// own consent, seeded by WithEditorTelemetry and changed by
 	// platform.setTelemetryConsent from any request goroutine.
-	telemetryOptIn    bool
+	cloudOptIn        bool
 	telemetryConfigOn bool
 	editorTelemetry   atomic.Int32
 	licenseSvc        *platform.LicenseService
@@ -445,10 +447,12 @@ const EditorTelemetryEnv = "NIGHTGAUGE_EDITOR_TELEMETRY"
 // key or a platform URL is not one. telemetryOn is platform.telemetry.enabled
 // (on unless explicitly false). Run data is sent only when both hold and the
 // editor has not withdrawn its consent; a server built without this option
-// sends nothing.
+// sends nothing. Without the cloud opt-in a client the server builds on
+// demand polls nothing either: it checks the platform only when a request
+// the user made needs it (platform.Config.OnDemandHealth).
 func WithTelemetryPolicy(cloudOptIn, telemetryOn bool) ServerOption {
 	return func(s *Server) {
-		s.telemetryOptIn = cloudOptIn
+		s.cloudOptIn = cloudOptIn
 		s.telemetryConfigOn = telemetryOn
 	}
 }
@@ -474,7 +478,7 @@ func WithEditorTelemetry(value string) ServerOption {
 // emission path asks it, and so does the analytics service's send gate, which
 // also drops anything buffered once it turns false.
 func (s *Server) TelemetryAllowed() bool {
-	return s.telemetryOptIn && s.telemetryConfigOn && s.editorTelemetry.Load() != editorTelemetryOff
+	return s.cloudOptIn && s.telemetryConfigOn && s.editorTelemetry.Load() != editorTelemetryOff
 }
 
 // setPlatformServicesLocked wires pc and every service built on it onto the
@@ -524,15 +528,21 @@ func (s *Server) attachPlatformClient(pc *platform.Client) {
 //
 // The client it builds carries no stored credential. The platform agent
 // (registration, heartbeat, command poller) is wired only at startup, from a
-// license key the user opted in with, so nothing built here starts it.
+// license key the user opted in with, so nothing built here starts it. Unless
+// the user opted in to the cloud (WithTelemetryPolicy), it does not poll the
+// platform's health either: a signed-in session with cloud features off must
+// not ping the hosted service every minute under the user's identity. Such a
+// client checks the platform's health only when a request needs it
+// (platform.Config.OnDemandHealth).
 //
 // Double-checked under platformClientMu: two setSessionToken calls racing on
 // a cold daemon (e.g. a stale sign-in event replayed alongside a fresh one)
 // must not each build their own client. The loser reuses whatever the winner
 // built and applies its own token to that one client.
 //
-// StartHealthPolling is started in its own goroutine, not inline: its first
-// check runs synchronously before it returns (see platform.Client), and
+// StartHealthPolling, when it runs, is started in its own goroutine, not
+// inline: its first check runs synchronously before it returns (see
+// platform.Client), and
 // running that here would hold platformClientMu.Lock() — blocking every
 // OTHER platform.* request on this daemon — for the length of a real network
 // round trip to the platform. The eager path in cmd/nightgauge/main.go can
@@ -555,25 +565,22 @@ func onDemandPlatformConfig(endpoint string) platform.Config {
 }
 
 func (s *Server) ensurePlatformClient() (*platform.Client, error) {
-	pc, _, err := s.ensurePlatformClientBuilt()
-	return pc, err
-}
-
-// ensurePlatformClientBuilt is ensurePlatformClient that also reports whether
-// this call built the client.
-func (s *Server) ensurePlatformClientBuilt() (*platform.Client, bool, error) {
 	s.platformClientMu.Lock()
 	defer s.platformClientMu.Unlock()
 	if s.platformClient != nil {
-		return s.platformClient, false, nil
+		return s.platformClient, nil
 	}
-	pc, err := platform.NewClient(onDemandPlatformConfig(s.platformEndpoint))
+	cfg := onDemandPlatformConfig(s.platformEndpoint)
+	cfg.OnDemandHealth = !s.cloudOptIn
+	pc, err := platform.NewClient(cfg)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	go pc.StartHealthPolling(context.Background())
+	if s.cloudOptIn {
+		go pc.StartHealthPolling(context.Background())
+	}
 	s.setPlatformServicesLocked(pc)
-	return pc, true, nil
+	return pc, nil
 }
 
 // accountActionClient returns the platform client for an account action the
@@ -583,15 +590,18 @@ func (s *Server) ensurePlatformClientBuilt() (*platform.Client, bool, error) {
 // off, a stored license key no longer gives the daemon a client at startup,
 // and these actions must keep working without one.
 //
-// A client built here starts offline until its first health check, and
-// license validation answers "not valid" while offline, so the check runs
-// once in the caller's goroutine, outside platformClientMu.
+// License validation answers "not valid" while the client reads offline, and
+// a client can read offline when the action arrives: one built moments ago
+// (by this call or by platform.setSessionToken) has not checked yet, and a
+// polling one's last check may have failed. So whenever the client is not
+// online, the check runs once more, in the caller's goroutine, outside
+// platformClientMu.
 func (s *Server) accountActionClient(ctx context.Context) (*platform.Client, error) {
-	pc, built, err := s.ensurePlatformClientBuilt()
+	pc, err := s.ensurePlatformClient()
 	if err != nil {
 		return nil, fmt.Errorf("platform client: %w", err)
 	}
-	if built {
+	if !pc.IsOnline() {
 		pc.ProbeHealth(ctx)
 	}
 	return pc, nil
@@ -2383,7 +2393,10 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformHealthCheck params:none result:HealthResponse
 	s.methods["platform.healthCheck"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.getPlatformClient() == nil {
+		// The extension polls this on a timer. Without the cloud opt-in that
+		// poll must not reach the hosted service, whatever client a sign-in or
+		// an account action built: cloud features off reads as offline.
+		if s.getPlatformClient() == nil || !s.cloudOptIn {
 			return map[string]interface{}{"status": "offline", "mode": "offline"}, nil
 		}
 		resp, err := s.getPlatformClient().API().GetHealthWithResponse(ctx)
@@ -2580,10 +2593,11 @@ func (s *Server) registerMethods() {
 
 	// platform.setTelemetryConsent records the editor's telemetry consent:
 	// VS Code's telemetry level and nightgauge.telemetry.enabled, as the
-	// extension reads them. The extension sends it after every daemon start
-	// and whenever either changes, so turning telemetry off in the editor
-	// stops this daemon's sending at once, buffered items included (the
-	// analytics send gate drops them at the next flush).
+	// extension reads them. The daemon learns the consent at spawn from
+	// EditorTelemetryEnv; the extension sends this whenever either setting
+	// changes afterwards, so turning telemetry off in the editor stops this
+	// daemon's sending at once, buffered items included (the analytics send
+	// gate drops them at the next flush).
 	//ipc:method platformSetTelemetryConsent params:PlatformSetTelemetryConsentParams result:StatusOK
 	s.methods["platform.setTelemetryConsent"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
 		var p PlatformSetTelemetryConsentParams
@@ -3836,8 +3850,8 @@ func (s *Server) registerMethods() {
 			input := state.V2RunInput{
 				Title: snap.Title,
 				// Issue body captured at pickup (#183). Empty unless the
-				// runtime state carried a body (autonomous path). Local
-				// only: the telemetry mapper never sends it.
+				// runtime state carried a body (autonomous path); flows to
+				// the telemetry wire's issueBody when present.
 				Body:       snap.Body,
 				Branch:     snap.Branch,
 				BaseBranch: "main",

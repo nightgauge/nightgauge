@@ -226,7 +226,7 @@ machine-state and cache directories from their own rows.
 | Machine config (the machine tier)                                                                                                                                                                                                                                                         | `~/.config/nightgauge/config.yaml`                                                                       | `~/.nightgauge/config.yaml`    | `%APPDATA%\nightgauge\config.yaml` | `NIGHTGAUGE_CONFIG_HOME`, `XDG_CONFIG_HOME`                                                                                | No                                                                                               |
 | License key                                                                                                                                                                                                                                                                               | Secret Service                                                                                           | Keychain                       | Credential Manager                 | `NIGHTGAUGE_LICENSE_KEY`                                                                                                   | Never; see [the license key](#the-license-key-nightgauge-auth-license)                           |
 | GitHub tokens                                                                                                                                                                                                                                                                             | gh's credential store                                                                                    | same                           | same                               | `GITHUB_TOKEN`, `GH_TOKEN`, or an `env:` reference                                                                         | Never; see [plaintext secrets](#plaintext-secrets-in-repository-config-are-refused)              |
-| Machine state (`STATE`): the serve registry `serve/`, `rate-limit.json`, `ratelimit-gitlab-<host>.json`, `machine-id`, `telemetry-notice-v1`, the doctor fix log `doctor/fix-log.jsonl`, the GitHub App installation-token cache, the editor windows' remote-run ledger `agent-commands/` | `~/.local/state/nightgauge/`                                                                             | `~/.nightgauge/state/`         | `%LOCALAPPDATA%\nightgauge\state\` | `NIGHTGAUGE_STATE_HOME`, `XDG_STATE_HOME`                                                                                  | Never                                                                                            |
+| Machine state (`STATE`): the serve registry `serve/`, `rate-limit.json`, `ratelimit-gitlab-<host>.json`, `machine-id`, `telemetry-notice-v2`, the doctor fix log `doctor/fix-log.jsonl`, the GitHub App installation-token cache, the editor windows' remote-run ledger `agent-commands/` | `~/.local/state/nightgauge/`                                                                             | `~/.nightgauge/state/`         | `%LOCALAPPDATA%\nightgauge\state\` | `NIGHTGAUGE_STATE_HOME`, `XDG_STATE_HOME`                                                                                  | Never                                                                                            |
 | Usage readings and OpenCode state: `usage/`, `opencode/runs/`, `opencode/evidence/`, `opencode/last-dispatch.json`, `opencode/endpoint-slots.json`                                                                                                                                        | `STATE/`                                                                                                 | same                           | same                               | follows `STATE`                                                                                                            | Never                                                                                            |
 | Machine logs                                                                                                                                                                                                                                                                              | `STATE/logs/`                                                                                            | same                           | same                               | follows `STATE`                                                                                                            | Never                                                                                            |
 | Caches (`CACHE`): the GitHub conditional-request store `github-conditional/`, the recall index `recall/<root-key>/`                                                                                                                                                                       | `~/.cache/nightgauge/`                                                                                   | `~/Library/Caches/nightgauge/` | `%LOCALAPPDATA%\nightgauge\cache\` | `NIGHTGAUGE_CACHE_HOME`, `XDG_CACHE_HOME`                                                                                  | Never; disposable                                                                                |
@@ -384,7 +384,7 @@ fallback afterwards.
 - **`nightgauge doctor --dry-run`** previews every move and changes nothing.
 - **`nightgauge doctor --fix`** runs the one migration for the clone and for
   machine state. Files left in `~/.nightgauge/` by an earlier release move to
-  `STATE`: the rate-limit hints, `telemetry-notice-v1`, usage readings,
+  `STATE`: the rate-limit hints, `telemetry-notice-v2`, usage readings,
   OpenCode state (`opencode/runs/`, `evidence/`, `last-dispatch.json`,
   `endpoint-slots.json`), machine logs, and the serve registry. While a daemon
   holds a serve lease, the serve registry and `opencode/runs/` stay where they
@@ -454,7 +454,7 @@ The global config path is determined by platform and environment:
 Machine state that is not configuration (the serve daemon's claim registry
 `serve/`, the rate-limit hints `rate-limit.json` and
 `ratelimit-gitlab-<host>.json`, this device's `machine-id`, the
-`telemetry-notice-v1` marker, usage readings `usage/`, OpenCode run state under
+`telemetry-notice-v2` marker, usage readings `usage/`, OpenCode run state under
 `opencode/`, machine logs `logs/` and, by default, pipeline worktrees
 `worktrees/`) lives in one directory, created with mode `0700` (ADR-024 § 8).
 Every other location is in
@@ -7320,7 +7320,8 @@ development without cloud access.
 All settings live under the `platform:` key in the machine-tier `config.yaml`
 ([where it lives](#global-config-location)). A repository's
 `.nightgauge/config.yaml` or `config.local.yaml` cannot set them: the daemon
-strips the block from those tiers, and the extension ignores `enabled` there.
+and the extension both ignore the block in those tiers, and the daemon logs a
+warning when it finds one there.
 
 ```yaml
 platform:

@@ -46,9 +46,9 @@ type RuntimeState struct {
 	ItemID      string `json:"itemId"`
 	Title       string `json:"title,omitempty"`
 	// Body is the GitHub issue body captured at pickup (#183), bounded to a
-	// sensible excerpt at capture time. Threaded onto the local V2 run record;
-	// it never reaches the platform (docs/TELEMETRY_PRIVACY.md). Empty when no
-	// issue body was resolved.
+	// sensible excerpt at capture time. Threaded onto the V2 run record and the
+	// telemetry wire so the dashboard run-detail page can show what the run is
+	// doing without leaving the dashboard. Empty when no issue body was resolved.
 	Body   string `json:"body,omitempty"`
 	Branch string `json:"branch,omitempty"`
 	// RunID is the run identity (canonical lowercase UUIDv7, runstate.NewRunID).

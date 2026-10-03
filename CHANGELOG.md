@@ -194,43 +194,68 @@ changelog, and the release workflow refuses a tag that does not.
   which marks it `processing` in the daemon's queue, and nothing released it:
   until the window reloaded the issue could not be queued again, **Remove from
   Queue** refused it and a remote trigger for it read `busy`. The orchestrator
-  now remembers the item and sends `queue.complete` for it exactly once: when
-  its run reaches a terminal state, whatever the outcome, before the next item
-  is dequeued; when the start fails; and when a stop lands during the
-  auto-start delay, which now also keeps the issue from starting.
-- **Nothing about a run is sent unless the user turned the cloud on.** A
-  signed-in session builds the daemon a platform client on its own, and the
-  daemon then sent every interactive run's live stage events and completed-run
-  record whatever `platform.enabled`, `platform.telemetry.enabled` or the
-  editor's telemetry settings said; the extension's telemetry uploader needed
-  only a session too. The daemon now sends run data (live stage events, the run
-  record, the queue snapshot, analytics events, the history sync) only when the
-  user opted in to the cloud (`platform.enabled: true`, or a license or API key
-  in its environment), `platform.telemetry.enabled` is not false, and the
-  editor that started it has not withdrawn its consent. The extension hands the
-  daemon VS Code's telemetry level and `nightgauge.telemetry.enabled` at spawn
+  now remembers the item and releases it exactly once. A run that began sends
+  `queue.complete` when it reaches a terminal state, whatever the outcome,
+  before the next item is dequeued. An item whose run never began goes back
+  to the queue, as the concurrent path returns a dispatch it could not start:
+  when the start fails or is refused (say, a pipeline started by hand during
+  the auto-start delay), and when a stop lands during that delay, which now
+  also keeps the issue from starting.
+- **Nothing about a run is sent unless the user turned the cloud on**
+  (#1796). A signed-in session builds the daemon a platform client on its own,
+  and the daemon then sent every interactive run's live stage events and
+  completed-run record whatever `platform.enabled`,
+  `platform.telemetry.enabled` or the editor's telemetry settings said; the
+  extension's telemetry uploader needed only a session too. The daemon now
+  sends run data (live stage events, the run record, the queue snapshot,
+  analytics events, the history sync) only when the user opted in to the cloud
+  (`platform.enabled: true`, or a license or API key in its environment),
+  `platform.telemetry.enabled` is not false, and the editor that started it has
+  not withdrawn its consent. The extension hands the daemon VS Code's telemetry
+  level and `nightgauge.telemetry.enabled` at spawn
   (`NIGHTGAUGE_EDITOR_TELEMETRY`) and on every change (the new
   `platform.setTelemetryConsent`). When the answer turns to no, buffered items
   are dropped at the next flush, not sent. The extension's uploader runs only
-  with `platform.enabled`, and a repository's project or local tier no longer
-  turns `platform.enabled` on for the extension's cloud services or its audit
-  trail (the daemon already ignored it there); the settings UI writes
-  `platform.enabled` and `platform.telemetry` to the machine tier.
-- **The completed-run record no longer carries the issue body.** It sent an
-  excerpt of up to 8,192 characters for the hosted dashboard's run detail,
-  which shows the issue title and labels and links to the issue. The body
-  stays in the local run history, for the run's own gates.
+  with `platform.enabled`, and stops when `platform.telemetry.enabled` is
+  false. `nightgauge.telemetry.enabled` and `nightgauge.telemetry.streams` are
+  machine-scoped, so a repository's `.vscode/settings.json` can no longer turn
+  them back on.
+- **With cloud features off, nothing reaches the hosted service in the
+  background.** A signed-in session, an account action or a
+  `nightgauge.platform.url` gave the daemon a platform client that checked the
+  service's health every minute, under the user's session, and the
+  extension's periodic `platform.healthCheck` went through it. Without the
+  cloud opt-in the daemon's clients now poll nothing and check the service
+  only for a request the user made, and `platform.healthCheck` answers
+  offline. An account action checks again whenever the client reads offline,
+  so activating a license no longer answers "not valid" because a check
+  failed or had not run.
+- **A repository can set no `platform` setting, for the extension either.**
+  The daemon has ignored the `platform` block in a repository's
+  `.nightgauge/config.yaml` and `config.local.yaml` since #1049, but the
+  extension took it from there: a committed `platform.api_url` redirected the
+  extension's license key or session to another host, and a committed
+  `platform.telemetry` overrode the machine's switches. The extension's config
+  merge now drops the block from those tiers too. The Settings panel saves a
+  `platform` edit made on the Project or Local tab to the machine tier and
+  never copies one the file already held, which let a committed
+  `platform.enabled: true` opt the machine in. **Switch Platform Environment**
+  writes the machine tier, and the daemon now warns about a `platform` block in
+  a repository tier whether or not the machine tier sets the same key.
 - **The privacy documentation says what is sent, when and why.**
   `docs/TELEMETRY_PRIVACY.md`, the first-run notices of the CLI and the
   extension, the telemetry setting and panel, and the READMEs said no payload
-  carried branch names or issue titles. The run record carries the issue title
-  and labels, live events carry the branch for runs the autonomous scheduler
-  starts, the queue snapshot carries queued issues' titles, and a failed
-  stage's error message is sent. They now list every field, the three
-  conditions for sending, and the free-text fields that can quote command
-  output. The opt-out instructions name the machine-tier `config.yaml`, the
-  only tier the daemon reads `platform` from, and `docs/CONFIGURATION.md` no
-  longer says the extension makes no platform calls of its own.
+  carried branch names or issue titles. The run record carries the issue
+  title, labels and the first 8,192 characters of its body; live events carry
+  the branch for runs the autonomous scheduler starts; the queue snapshot
+  carries queued issues' titles; and a failed stage's error message is sent.
+  They now list every field, the conditions for sending, what cloud features
+  send whatever the telemetry switches say (registration, heartbeat, remote
+  commands, the Action Center, the audit trail), and the free-text fields that
+  can quote command output. The opt-out instructions name the machine-tier
+  `config.yaml`, and `docs/CONFIGURATION.md` no longer says the extension
+  makes no platform calls of its own. Both notices are shown once more, so
+  everyone who saw the old text sees the corrected one.
 - **A license key stored in VS Code no longer registers the machine with
   `platform.enabled: false`** (#2398). The extension handed its stored key to
   the daemon in `NIGHTGAUGE_LICENSE_KEY`, which the daemon reads as an explicit

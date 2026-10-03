@@ -82,7 +82,7 @@ const SECRET_KEY_PATHS = new Set<string>(["platform.license_key"]);
  * importing this panel; re-exported here for existing importers.
  */
 export { MACHINE_TIER_KEY_PATHS } from "./tierRouting";
-import { MACHINE_TIER_KEY_PATHS } from "./tierRouting";
+import { MACHINE_TIER_KEY_PATHS, isMachineOwnedPath } from "./tierRouting";
 
 /**
  * SettingsPanel - WebView panel for Nightgauge configuration
@@ -148,6 +148,13 @@ export class SettingsPanel implements vscode.Disposable {
   // saved through the UI (#3997).
   private globalConfig: NightgaugeConfig = {};
   private hasUnsavedChanges = false;
+  /**
+   * The paths the operator changed in this panel since the last load or save,
+   * per tier. A save of a repository tier moves a machine-owned key (the
+   * `platform` block) to the machine tier only when it is here: the value
+   * the file already held is the repository's, not the operator's.
+   */
+  private editedPaths = new Map<EditableTier, Set<string>>();
   private externalReloadPrompt: Promise<void> | null = null;
 
   // Callback fired after a runtime-tier write changes pipeline.max_concurrent
@@ -354,6 +361,8 @@ export class SettingsPanel implements vscode.Disposable {
     this.projectConfig = projectResult.config ?? {};
     this.localConfig = localResult.config ?? {};
     this.globalConfig = globalResult.config ?? {};
+    // The working configs are the files again: nothing is the operator's edit.
+    this.editedPaths.clear();
 
     // Load forge instances from IPC for the Forge Instances section.
     try {
@@ -795,6 +804,17 @@ export class SettingsPanel implements vscode.Disposable {
     setConfigValue(config, path, coerced);
     setConfigValue(this.currentConfig, path, coerced);
     this.hasUnsavedChanges = true;
+    this.recordEdit(tier, path);
+  }
+
+  /** Remember that the operator changed `path` in `tier` (see editedPaths). */
+  private recordEdit(tier: EditableTier, path: string): void {
+    let paths = this.editedPaths.get(tier);
+    if (!paths) {
+      paths = new Set<string>();
+      this.editedPaths.set(tier, paths);
+    }
+    paths.add(path);
   }
 
   /**
@@ -816,6 +836,7 @@ export class SettingsPanel implements vscode.Disposable {
     setConfigValue(config, path, nextList);
     setConfigValue(this.currentConfig, path, nextList);
     this.hasUnsavedChanges = true;
+    this.recordEdit(tier, path);
     this.updatePanel();
   }
 
@@ -839,6 +860,7 @@ export class SettingsPanel implements vscode.Disposable {
     setConfigValue(config, path, newList);
     setConfigValue(this.currentConfig, path, newList);
     this.hasUnsavedChanges = true;
+    this.recordEdit(tier, path);
     this.updatePanel();
   }
 
@@ -887,10 +909,26 @@ export class SettingsPanel implements vscode.Disposable {
     // strip machine-tier keys and route them to ~/.nightgauge/config.yaml.
     const machineTierCaptured = new Map<string, unknown>();
     if (tier !== "global") {
+      const edited = this.editedPaths.get(tier) ?? new Set<string>();
       for (const machinePath of MACHINE_TIER_KEY_PATHS) {
-        const value = getConfigValue(config, machinePath);
-        if (value !== undefined) {
-          machineTierCaptured.set(machinePath, value);
+        if (isMachineOwnedPath(machinePath)) {
+          // A machine-owned block (`platform`) is ignored in a repository
+          // file (#1049), so what the file already held is the repository's
+          // say, not the operator's: copying it would let a committed config
+          // turn cloud features on for this machine, or overwrite its
+          // telemetry opt-out. Only what the operator set here moves.
+          for (const path of edited) {
+            if (path !== machinePath && !path.startsWith(`${machinePath}.`)) continue;
+            const value = getConfigValue(config, path);
+            if (value !== undefined) {
+              machineTierCaptured.set(path, value);
+            }
+          }
+        } else {
+          const value = getConfigValue(config, machinePath);
+          if (value !== undefined) {
+            machineTierCaptured.set(machinePath, value);
+          }
         }
         // Always strip machine-tier keys from the project/local write, even
         // when empty, so they never land in a committed file.
@@ -910,6 +948,7 @@ export class SettingsPanel implements vscode.Disposable {
 
     if (result.success) {
       this.hasUnsavedChanges = false;
+      this.editedPaths.delete(tier);
       // Route tier-3 keys to the runtime store. Failures are logged but do
       // not fail the save — the YAML write already persisted everything else.
       if (tier3Captured.size > 0 && this.runtimeStateStore) {

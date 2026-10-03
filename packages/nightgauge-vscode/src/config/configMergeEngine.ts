@@ -220,6 +220,33 @@ export function getLeafPaths(obj: Record<string, unknown>, prefix = ""): string[
 }
 
 // ============================================================================
+// Machine-owned keys
+// ============================================================================
+
+/**
+ * Top-level keys only the machine tier may set. The committed project file
+ * and the per-checkout local file say whatever the repository says, and these
+ * blocks are the machine's own: the Go loader deletes them from those tiers
+ * before it merges (#1049, `repoTierProtectedKeys` in internal/config), and
+ * the extension merges the same way. So a cloned repository cannot turn
+ * cloud features on, point the platform client (and the credentials it
+ * sends) at another host, or override this machine's telemetry switches.
+ */
+export const MACHINE_OWNED_ROOT_KEYS: readonly string[] = ["platform"];
+
+/** A repository tier without the keys only the machine tier may set. */
+export function withoutMachineOwnedKeys<T extends object>(tier: T): T {
+  let stripped: Record<string, unknown> | null = null;
+  for (const key of MACHINE_OWNED_ROOT_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(tier, key)) {
+      stripped ??= { ...(tier as Record<string, unknown>) };
+      delete stripped[key];
+    }
+  }
+  return (stripped ?? tier) as T;
+}
+
+// ============================================================================
 // Core Merge Function
 // ============================================================================
 
@@ -254,16 +281,18 @@ export function mergeConfigs(tiers: ConfigTiers, options: MergeOptions = {}): Co
     trackObjectSources(sources, tiers.global as Record<string, unknown>, "", "global");
   }
 
-  // 3. Merge project config
-  if (tiers.project && Object.keys(tiers.project).length > 0) {
-    merged = deepMerge(merged, tiers.project);
-    trackObjectSources(sources, tiers.project as Record<string, unknown>, "", "project");
+  // 3. Merge project config — never its machine-owned keys (#1049)
+  const project = tiers.project && withoutMachineOwnedKeys(tiers.project);
+  if (project && Object.keys(project).length > 0) {
+    merged = deepMerge(merged, project);
+    trackObjectSources(sources, project as Record<string, unknown>, "", "project");
   }
 
-  // 4. Merge local config
-  if (tiers.local && Object.keys(tiers.local).length > 0) {
-    merged = deepMerge(merged, tiers.local);
-    trackObjectSources(sources, tiers.local as Record<string, unknown>, "", "local");
+  // 4. Merge local config — never its machine-owned keys (#1049)
+  const local = tiers.local && withoutMachineOwnedKeys(tiers.local);
+  if (local && Object.keys(local).length > 0) {
+    merged = deepMerge(merged, local);
+    trackObjectSources(sources, local as Record<string, unknown>, "", "local");
   }
 
   // 4.5. Merge runtime tier (VSCode memento snapshot — Issue #3335)

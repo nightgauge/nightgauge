@@ -763,6 +763,68 @@ platform:
 	}
 }
 
+// A repository tier's platform block is ignored whether or not the machine
+// tier sets the same key, so the warning must not wait for the machine tier to
+// set it: an opt-out written where older docs said to write it would otherwise
+// be discarded without a word.
+func TestLoadMergedWarnsForARepositoryPlatformBlockTheMachineTierLacks(t *testing.T) {
+	const optOut = `
+schema_version: "2"
+project:
+  owner: acme
+  number: 1
+platform:
+  telemetry:
+    enabled: false
+`
+	cases := []struct {
+		name    string
+		machine string // "" means no machine-tier file at all
+		write   func(t *testing.T, dir string)
+		tier    string
+	}{
+		{"project, machine tier without platform", "schema_version: \"2\"\n", func(t *testing.T, dir string) {
+			writeProjectYAML(t, dir, optOut)
+		}, "project"},
+		{"project, no machine tier", "", func(t *testing.T, dir string) {
+			writeProjectYAML(t, dir, optOut)
+		}, "project"},
+		{"local, no machine tier", "", func(t *testing.T, dir string) {
+			writeProjectYAML(t, dir, "schema_version: \"2\"\nproject:\n  owner: acme\n  number: 1\n")
+			writeLocalYAML(t, dir, "platform:\n  telemetry:\n    enabled: false\n")
+		}, "local"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetShadowWarnDedup()
+			if tc.machine == "" {
+				withNoMachineConfig(t)
+			} else {
+				withMachineConfig(t, tc.machine)
+			}
+			dir := t.TempDir()
+			tc.write(t, dir)
+
+			var cfg *Config
+			logged := captureLog(t, func() {
+				var err error
+				if cfg, err = LoadMerged(dir); err != nil {
+					t.Fatalf("LoadMerged: %v", err)
+				}
+			})
+
+			want := "platform is in " + tc.tier + " YAML"
+			if !strings.Contains(logged, want) || !strings.Contains(logged, "IGNORED") {
+				t.Errorf("no IGNORED warning containing %q for a %s-tier platform block:\n%s", want, tc.tier, logged)
+			}
+			// The value really is ignored: the warning describes the loader.
+			if cfg.Telemetry != nil && cfg.Telemetry.IsExplicitlySet() {
+				t.Errorf("a %s-tier platform.telemetry reached the merged config", tc.tier)
+			}
+		})
+	}
+}
+
 // The machine tier must still win regardless of the warning — the reorder is
 // bookkeeping only and must not change precedence.
 func TestLoadMergedPlatformPrecedenceUnchangedByTheWarning(t *testing.T) {

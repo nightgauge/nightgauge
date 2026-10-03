@@ -6,7 +6,8 @@
  * issue then could not be queued again (the queue dedups by repository and
  * issue), Remove from Queue refused it and a remote trigger read `busy` until
  * the window reloaded. The orchestrator now sends `queue.complete` for the
- * item, exactly once, on every path where its run ends or never starts.
+ * item, exactly once, on every path where its run ends or never starts; an
+ * item whose run never started goes back to the queue instead of being lost.
  *
  * The queue here is a small model of the daemon's: a dequeue marks an item
  * processing, `queue.complete` removes the processing item of that repository
@@ -53,6 +54,19 @@ class FakeQueue {
   });
   onPipelineComplete = vi.fn(async () => {});
   getConfig = () => ({ autoStartDelay: this.autoStartDelay });
+  /** IssueQueueService.enqueue: the item back as pending, under its repository. */
+  enqueue = vi.fn(
+    async (
+      issueNumber: number,
+      _title: string,
+      _labels?: string[],
+      _blockedBy?: unknown,
+      opts?: { repoOverride?: { owner: string; repo: string } }
+    ) => {
+      const repo = opts?.repoOverride ? `${opts.repoOverride.owner}/${opts.repoOverride.repo}` : "";
+      return this.add(repo, issueNumber) ? { issueNumber } : null;
+    }
+  );
 
   /** QueueAdd: refused while the repository's issue is still in the queue. */
   add(repo: string, issueNumber: number): boolean {
@@ -68,7 +82,14 @@ type Internals = {
   runPipeline: (...args: unknown[]) => Promise<unknown>;
   stop: () => void;
   setQueueService: (q: unknown) => void;
+  autoStartedQueueItem: { started: boolean } | null;
+  isRunning: boolean;
 };
+
+/** What runPipelineInner does when it takes the issue: the run has begun. */
+function markStarted(orch: Internals): void {
+  if (orch.autoStartedQueueItem) orch.autoStartedQueueItem.started = true;
+}
 
 function makeOrch(): Internals {
   const orch = new HeadlessOrchestrator(
@@ -113,6 +134,7 @@ describe("HeadlessOrchestrator — the auto-started queue item is released (#239
     });
     // runPipeline's every terminal path calls handleQueueAutoStart for its issue.
     vi.spyOn(orch, "runPipeline").mockImplementation(async (issueNumber: unknown) => {
+      markStarted(orch);
       await orch.handleQueueAutoStart(false, issueNumber as number);
       return { success: false };
     });
@@ -126,27 +148,50 @@ describe("HeadlessOrchestrator — the auto-started queue item is released (#239
     expect(queue.add(REPO, 9)).toBe(true);
   });
 
-  it("when the run ends on a path that never reaches the terminal hook", async () => {
-    vi.spyOn(orch, "runPipeline").mockResolvedValue({ success: false });
+  it("when the run began and ended on a path that never reaches the terminal hook", async () => {
+    vi.spyOn(orch, "runPipeline").mockImplementation(async () => {
+      markStarted(orch);
+      return { success: false };
+    });
 
     await orch.handleQueueAutoStart(true, 1);
 
     expect(queue.complete).toHaveBeenCalledTimes(1);
     expect(queue.complete).toHaveBeenCalledWith(REPO, 9);
+    expect(queue.enqueue).not.toHaveBeenCalled();
     expect(queue.add(REPO, 9)).toBe(true);
   });
 
-  it("when the start throws", async () => {
+  // A run that never began is put back, not lost: the operator queued it.
+  function expectReturnedToTheQueue(): void {
+    expect(queue.complete).toHaveBeenCalledTimes(1);
+    expect(queue.complete).toHaveBeenCalledWith(REPO, 9);
+    expect(queue.enqueue).toHaveBeenCalledTimes(1);
+    expect(queue.enqueue.mock.calls[0][4]).toEqual({
+      repoOverride: { owner: "nightgauge", repo: "acmeapp" },
+    });
+    expect(queue.items).toEqual([{ repo: REPO, issueNumber: 9, status: "pending" }]);
+  }
+
+  it("when the start throws: the item goes back to the queue", async () => {
     vi.spyOn(orch, "startNextQueuedIssue").mockRejectedValue(new Error("state service down"));
 
     await orch.handleQueueAutoStart(true, 1);
 
-    expect(queue.complete).toHaveBeenCalledTimes(1);
-    expect(queue.complete).toHaveBeenCalledWith(REPO, 9);
-    expect(queue.add(REPO, 9)).toBe(true);
+    expectReturnedToTheQueue();
   });
 
-  it("when a stop lands during the auto-start delay: not started, and released at once", async () => {
+  it("when a manual run took the orchestrator during the delay: the item goes back", async () => {
+    // A pipeline started by hand while the auto-start waited: runPipelineInner
+    // refuses the queued issue with "Pipeline is already running".
+    orch.isRunning = true;
+
+    await orch.handleQueueAutoStart(true, 1);
+
+    expectReturnedToTheQueue();
+  });
+
+  it("when a stop lands during the auto-start delay: not started, and back in the queue", async () => {
     queue.autoStartDelay = 60_000;
     const start = vi.spyOn(orch, "startNextQueuedIssue").mockResolvedValue();
 
@@ -156,9 +201,7 @@ describe("HeadlessOrchestrator — the auto-started queue item is released (#239
     await pending;
 
     expect(start).not.toHaveBeenCalled();
-    expect(queue.complete).toHaveBeenCalledTimes(1);
-    expect(queue.complete).toHaveBeenCalledWith(REPO, 9);
-    expect(queue.add(REPO, 9)).toBe(true);
+    expectReturnedToTheQueue();
   });
 
   it("a successor run of the same issue keeps its own processing mark", async () => {
@@ -167,6 +210,7 @@ describe("HeadlessOrchestrator — the auto-started queue item is released (#239
     // backstop must not release the successor's mark.
     let runs = 0;
     vi.spyOn(orch, "runPipeline").mockImplementation(async (issueNumber: unknown) => {
+      markStarted(orch);
       runs++;
       if (runs === 1) {
         expect(queue.add(REPO, 9)).toBe(false); // still processing: deduplicated

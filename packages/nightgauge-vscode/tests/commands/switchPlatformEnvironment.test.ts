@@ -45,12 +45,12 @@ vi.mock("vscode", () => ({
   },
 }));
 
-const mockWriteLocal = vi.fn((): Promise<WriteResult> => Promise.resolve({ success: true }));
+const mockWriteGlobal = vi.fn((): Promise<WriteResult> => Promise.resolve({ success: true }));
 const mockDispose = vi.fn();
 
 vi.mock("../../src/views/settings/NightgaugeYamlService", () => ({
   NightgaugeYamlService: vi.fn(function (this: any) {
-    this.writeLocal = mockWriteLocal;
+    this.writeGlobal = mockWriteGlobal;
     this.dispose = mockDispose;
   }),
 }));
@@ -125,7 +125,7 @@ describe("switchPlatformEnvironment command", () => {
     quickPickResponses = [];
     quickPickCallIndex = 0;
     inputBoxResponse = undefined;
-    mockWriteLocal.mockResolvedValue({ success: true });
+    mockWriteGlobal.mockResolvedValue({ success: true });
     mockGetPlatform.mockReturnValue({ environment: "production" });
     mockIsConnected.mockReturnValue(false);
   });
@@ -136,7 +136,7 @@ describe("switchPlatformEnvironment command", () => {
     registerSwitchPlatformEnvironmentCommand(mockLogger as never, null);
     await invokeCommand();
 
-    expect(mockWriteLocal).toHaveBeenCalledWith(
+    expect(mockWriteGlobal).toHaveBeenCalledWith(
       expect.objectContaining({
         platform: expect.objectContaining({ environment: "production" }),
       })
@@ -153,7 +153,7 @@ describe("switchPlatformEnvironment command", () => {
     registerSwitchPlatformEnvironmentCommand(mockLogger as never, null);
     await invokeCommand();
 
-    expect(mockWriteLocal).toHaveBeenCalledWith(
+    expect(mockWriteGlobal).toHaveBeenCalledWith(
       expect.objectContaining({
         platform: expect.objectContaining({ environment: "canary" }),
       })
@@ -171,7 +171,7 @@ describe("switchPlatformEnvironment command", () => {
     registerSwitchPlatformEnvironmentCommand(mockLogger as never, null);
     await invokeCommand();
 
-    expect(mockWriteLocal).toHaveBeenCalledWith(
+    expect(mockWriteGlobal).toHaveBeenCalledWith(
       expect.objectContaining({
         platform: expect.objectContaining({
           environment: "custom",
@@ -194,7 +194,7 @@ describe("switchPlatformEnvironment command", () => {
     registerSwitchPlatformEnvironmentCommand(mockLogger as never, null);
     await invokeCommand();
 
-    expect(mockWriteLocal).toHaveBeenCalledWith(
+    expect(mockWriteGlobal).toHaveBeenCalledWith(
       expect.objectContaining({
         platform: expect.objectContaining({
           environment: "custom",
@@ -210,7 +210,7 @@ describe("switchPlatformEnvironment command", () => {
     registerSwitchPlatformEnvironmentCommand(mockLogger as never, null);
     await invokeCommand();
 
-    expect(mockWriteLocal).not.toHaveBeenCalled();
+    expect(mockWriteGlobal).not.toHaveBeenCalled();
     expect(mockReload).not.toHaveBeenCalled();
   });
 
@@ -221,13 +221,13 @@ describe("switchPlatformEnvironment command", () => {
     registerSwitchPlatformEnvironmentCommand(mockLogger as never, null);
     await invokeCommand();
 
-    expect(mockWriteLocal).not.toHaveBeenCalled();
+    expect(mockWriteGlobal).not.toHaveBeenCalled();
     expect(mockReload).not.toHaveBeenCalled();
   });
 
   it("shows error and does not reload on write failure", async () => {
     quickPickResponses = [{ label: "Production", value: "production" }];
-    mockWriteLocal.mockResolvedValue({ success: false, error: "disk full" });
+    mockWriteGlobal.mockResolvedValue({ success: false, error: "disk full" });
 
     registerSwitchPlatformEnvironmentCommand(mockLogger as never, null);
     await invokeCommand();

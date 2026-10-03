@@ -27,7 +27,11 @@ import (
 // The version suffix is load-bearing: a future material change to what is
 // collected needs a new marker so the notice is shown again, rather than being
 // suppressed by a file that attests to a different disclosure.
-const markerName = "telemetry-notice-v1"
+//
+// v2: the notice now says what a run sends (the issue title, labels and body
+// excerpt, the branch, error messages), where v1 called it anonymous usage
+// data that never included branch names.
+const markerName = "telemetry-notice-v2"
 
 // Text is the disclosure itself. It states what is happening now, not what
 // might happen, and it leads with the off switch — an operator scanning this
@@ -36,9 +40,10 @@ const Text = `
 ┌─ Nightgauge telemetry ─────────────────────────────────────────────────────┐
   This machine is opted in to the hosted service, so each pipeline run is
   reported to your account: the repository and issue number, the issue
-  title and labels, the branch, stage timings, tokens, cost and outcome, and
-  a failed stage's error message (which can quote command output). Never
-  your source code, file contents, secrets or the issue body.
+  title, labels and the first 8,192 characters of its body, the branch,
+  stage timings, tokens, cost and outcome, and a failed stage's error
+  message (which can quote command output). Never your source code, file
+  contents or secrets.
 
   To turn it off, add this to your machine-tier config.yaml
   (~/.nightgauge/config.yaml on macOS, ~/.config/nightgauge/config.yaml on

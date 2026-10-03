@@ -4,7 +4,9 @@ import (
 	"log"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/ipc"
 	"github.com/nightgauge/nightgauge/internal/keychain"
+	"github.com/nightgauge/nightgauge/internal/platform"
 )
 
 // platformConfigSource identifies where a serve invocation's effective
@@ -52,6 +54,31 @@ type resolvedPlatformConfig struct {
 // remote-command poller gate, and the Action Center bridge gate all need.
 func (r resolvedPlatformConfig) Configured() bool {
 	return r.URL != "" || r.APIKey != "" || r.LicenseKey != ""
+}
+
+// serveTelemetryOptions are the IPC server options that carry serve's run
+// telemetry consent: the cloud opt-in (resolved.OptedIn), the machine tier's
+// platform.telemetry.enabled (on unless explicitly false; cfg nil reads as
+// on, since the opt-in still has to hold), and the consent of the editor that
+// started the daemon (editorEnv, ipc.EditorTelemetryEnv's value). The
+// server's TelemetryAllowed is the conjunction, and every send asks it.
+func serveTelemetryOptions(resolved resolvedPlatformConfig, cfg *config.Config, editorEnv string) []ipc.ServerOption {
+	telemetryConfigOn := cfg == nil || cfg.Telemetry.IsEnabled()
+	return []ipc.ServerOption{
+		ipc.WithTelemetryPolicy(resolved.OptedIn, telemetryConfigOn),
+		ipc.WithEditorTelemetry(editorEnv),
+	}
+}
+
+// schedulerTelemetryService is the autonomous scheduler's telemetry service
+// on pc. Every push asks allowed first (the IPC server's TelemetryAllowed), so
+// the scheduler's run records, live events and queue snapshots need the same
+// consent as the interactive path's, and anything buffered is dropped once it
+// is withdrawn.
+func schedulerTelemetryService(pc *platform.Client, allowed func() bool) *platform.TelemetryService {
+	svc := platform.NewTelemetryService(pc)
+	svc.SetSendGate(allowed)
+	return svc
 }
 
 // onDemandPlatformEndpoint is the URL a platform client built on demand talks

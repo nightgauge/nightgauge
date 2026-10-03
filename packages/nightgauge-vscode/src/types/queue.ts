@@ -347,3 +347,29 @@ export function recalculatePositions(items: QueueItem[]): QueueItem[] {
     position: index + 1,
   }));
 }
+
+/** The enqueue options that put a dequeued item back as the run it is. */
+export interface QueueRequeueOptions {
+  repoOverride?: { owner: string; repo: string };
+  remoteRunId?: string;
+  remoteRunAttached?: boolean;
+  requestedAdapter?: string;
+  requestedModel?: string;
+}
+
+/**
+ * The enqueue options that put a dequeued item back as the run it is
+ * (#2337, #2344): under its repository, platform run id and requested adapter
+ * and model, so whatever later starts it still serves the same remote run.
+ */
+export function requeueOptionsFor(item: QueueItem): QueueRequeueOptions {
+  const [owner, repo] = item.repoName?.split("/") ?? [];
+  return {
+    ...(owner && repo ? { repoOverride: { owner, repo } } : {}),
+    ...(item.remoteRunId ? { remoteRunId: item.remoteRunId } : {}),
+    ...(item.remoteRunId && item.remoteRunAttached ? { remoteRunAttached: true } : {}),
+    ...(item.requestedAdapter
+      ? { requestedAdapter: item.requestedAdapter, requestedModel: item.requestedModel }
+      : {}),
+  };
+}

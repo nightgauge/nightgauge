@@ -5327,10 +5327,7 @@ func serveCmd() *cobra.Command {
 			// Run telemetry needs the cloud opt-in and telemetry on, in config
 			// and in the editor that started this daemon; a signed-in session
 			// alone sends nothing (docs/TELEMETRY_PRIVACY.md).
-			telemetryConfigOn := cfg == nil || cfg.Telemetry.IsEnabled()
-			opts = append(opts,
-				ipc.WithTelemetryPolicy(resolvedPlatform.OptedIn, telemetryConfigOn),
-				ipc.WithEditorTelemetry(os.Getenv(ipc.EditorTelemetryEnv)))
+			opts = append(opts, serveTelemetryOptions(resolvedPlatform, cfg, os.Getenv(ipc.EditorTelemetryEnv))...)
 			platformURL, apiKey, licenseKey = resolvedPlatform.URL, resolvedPlatform.APIKey, resolvedPlatform.LicenseKey
 			if resolvedPlatform.Configured() {
 				apiURLForLog := platformURL
@@ -5358,6 +5355,11 @@ func serveCmd() *cobra.Command {
 				// Stable per-machine id so the platform scopes this machine's
 				// queue snapshot (delete-by-machine) and tags runs by origin.
 				pcfg.AgentID = platform.ResolveMachineID()
+				// Without the cloud opt-in this client has only a URL (the
+				// nightgauge.platform.url setting, say), and it polls
+				// nothing: it checks the platform only for a request the user
+				// made (docs/TELEMETRY_PRIVACY.md).
+				pcfg.OnDemandHealth = !resolvedPlatform.OptedIn
 
 				pc, err := platform.NewClient(pcfg)
 				if err != nil {
@@ -5489,8 +5491,11 @@ func serveCmd() *cobra.Command {
 					sched.WithIdentityChecker(ic)
 				}
 
-				// Wire platform skill resolution for paid tiers
-				if platformClient != nil {
+				// Wire platform skill resolution for paid tiers — a cloud
+				// feature, so only with the cloud opt-in: a client built from a
+				// URL alone must not resolve skills over the network for the
+				// scheduler's own runs.
+				if platformClient != nil && resolvedPlatform.OptedIn {
 					sched.WithSkillService(platform.NewSkillService(platformClient))
 				}
 
@@ -5511,11 +5516,7 @@ func serveCmd() *cobra.Command {
 							fmt.Fprintf(os.Stderr, "warning: could not record telemetry notice: %v\n", werr)
 						}
 					}
-					telemetrySvc := platform.NewTelemetryService(platformClient)
-					// The scheduler's pushes ask the same consent as the IPC
-					// path's: the cloud opted in, telemetry on, and the editor's
-					// consent not withdrawn.
-					telemetrySvc.SetSendGate(server.TelemetryAllowed)
+					telemetrySvc := schedulerTelemetryService(platformClient, server.TelemetryAllowed)
 					sched.WithTelemetryService(telemetrySvc, telemetryEnabled)
 					telemetrySvc.StartAutoFlush(context.Background())
 				}

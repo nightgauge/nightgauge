@@ -188,15 +188,16 @@ extension repairs the absolute path it previously wrote there, since its own
 update invalidated it; it never touches a `statusLine` it did not write.
 
 **What leaves your machine.** With [cloud features](#cloud-features-optional)
-off, the default, nothing goes to Nightgauge's hosted service except the
-account actions you take yourself: signing in, activating a license, starting
-a trial. With them on, the run telemetry described in
-[Privacy and Telemetry](#privacy-and-telemetry) below goes to
-`api.nightgauge.dev`, with this machine's registration and heartbeat. The
-telemetry honors VS Code's global telemetry setting as a hard stop that no
-Nightgauge setting can override. Your AI provider's CLI makes its own calls to its own
-provider, under your own account and credentials, and `git` and `gh` talk to
-your forge. There is no other egress.
+off, the default, Nightgauge's hosted service hears from this machine only when
+you act: signing in or out, activating a license, starting a trial, managing
+your subscription, or opening a dashboard tab that shows your account's cloud
+data. Nothing runs in the background. With them on, the run telemetry
+described in [Privacy and Telemetry](#privacy-and-telemetry) below goes to
+`api.nightgauge.dev`, with this machine's registration, heartbeat and the
+other cloud features. The telemetry honors VS Code's global telemetry setting
+as a hard stop that no Nightgauge setting can override. Your AI provider's CLI
+makes its own calls to its own provider, under your own account and
+credentials, and `git` and `gh` talk to your forge. There is no other egress.
 
 For the security reporting process and supported versions, see
 [SECURITY.md](https://github.com/nightgauge/nightgauge/blob/main/SECURITY.md).
@@ -207,14 +208,15 @@ Nothing about your work is uploaded unless
 [cloud features](#cloud-features-optional) are on (`platform.enabled: true`)
 and you are signed in or have a license key. With them on, telemetry is on by
 default and you are told so on first activation; turning it off there, or later
-in Settings, is honored permanently, by the extension and by the binary it
-starts. VS Code's global telemetry-off setting is honored as a hard stop. Each
-run then sends its repository and issue number, the issue title and labels,
-the branch, its timings, token counts, cost and outcome, and a failed stage's
-error message (which can quote command output), so the hosted dashboard can
-show your runs. It never sends your source code, file contents, prompts,
-secrets, the issue body or commit SHAs.
-Streams can be disabled independently at any time.
+in your user settings, is honored permanently, by the extension and by the
+binary it starts, and so is `platform.telemetry.enabled: false` in your
+machine-tier config. VS Code's global telemetry-off setting is honored as a
+hard stop. Each run then sends its repository and issue number, the issue
+title, labels and the first 8,192 characters of its body, the branch, its
+timings, token counts, cost and outcome, and a failed stage's error message
+(which can quote command output), so the hosted dashboard can show your runs.
+It never sends your source code, file contents, prompts, secrets or commit
+SHAs. Streams can be disabled independently at any time.
 
 Read [Telemetry Privacy](https://github.com/nightgauge/nightgauge/blob/main/docs/TELEMETRY_PRIVACY.md)
 for the complete field list, retention policy, controls, and deletion
@@ -315,10 +317,11 @@ neither of the two switches below.
   extension shows, not what it sends.
 - **`platform.enabled: true`** in your machine-tier `config.yaml`
   ([where it lives](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md#global-config-location);
-  a repository's `.nightgauge/config.yaml` cannot set it for the bundled
-  binary) decides whether the extension and its bundled binary talk to the
-  hosted service on their own: restoring your session, registering this
-  machine, using a stored license key and sending the telemetry described in
+  a repository's `.nightgauge/config.yaml` or `config.local.yaml` cannot set
+  it, or any other `platform` setting) decides whether the extension and its
+  bundled binary talk to the hosted service on their own: restoring your
+  session, registering this machine, checking that the service is reachable,
+  using a stored license key and sending the telemetry described in
   [Privacy and Telemetry](#privacy-and-telemetry). With the default, `false`,
   they do none of that.
 

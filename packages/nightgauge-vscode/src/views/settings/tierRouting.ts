@@ -10,6 +10,8 @@
  * @see Issue #1516 — runtime writes must never touch the committed team file
  */
 
+import { MACHINE_OWNED_ROOT_KEYS } from "../../config/configMergeEngine";
+
 /**
  * Dotted-path config keys that are personal/machine-specific — routed to
  * `~/.nightgauge/config.yaml` (machine tier) and stripped from the
@@ -29,17 +31,27 @@ export const MACHINE_TIER_KEY_PATHS = new Set<string>([
   // stripped as machine-tier keys. Found by #499.
   "notifications.discord.webhook_env",
   "notifications.mattermost.webhook_env",
-  "platform.license_key",
-  // The cloud and telemetry switches are this machine's consent, not a team
-  // policy: the Go daemon reads the platform block from the machine tier only
-  // (#1049), and the extension ignores platform.enabled from a repository
-  // tier (ConfigBridge.getPlatform), so a write anywhere else does nothing.
-  "platform.enabled",
-  "platform.telemetry",
+  // The whole platform block is the machine's (#1049): the license key, the
+  // cloud and telemetry switches, the URL the credentials go to. Neither the
+  // Go daemon nor the extension reads it from a repository tier
+  // (MACHINE_OWNED_ROOT_KEYS), so a write anywhere else would do nothing.
+  "platform",
   // The whole `opencode:` block is machine tier (ADR-022 § 7): the Go loader
   // refuses it in a committed project config (#2138).
   "opencode",
 ]);
+
+/**
+ * True when `dottedPath` is in a block only the machine tier may set, which
+ * the merge ignores in a repository tier (MACHINE_OWNED_ROOT_KEYS). A value
+ * read from a repository file there is the repository's, never the
+ * operator's, so a save moves only what the operator set in the panel.
+ */
+export function isMachineOwnedPath(dottedPath: string): boolean {
+  return MACHINE_OWNED_ROOT_KEYS.some(
+    (root) => dottedPath === root || dottedPath.startsWith(`${root}.`)
+  );
+}
 
 /**
  * True when `dottedPath` is a machine-tier key, or sits underneath one.

@@ -240,7 +240,7 @@ describe("TelemetryConsentService — read accessors", () => {
 });
 
 describe("TelemetryConsentService.maybeShowFirstRunPrompt — disclosure notice (#738)", () => {
-  const NOTICE_KEY = "nightgauge.telemetry.optOutNoticeSeen";
+  const NOTICE_KEY = "nightgauge.telemetry.disclosureSeen.v2";
 
   /**
    * Count only modal notices. `showInformationMessage` also carries the
@@ -267,12 +267,35 @@ describe("TelemetryConsentService.maybeShowFirstRunPrompt — disclosure notice 
     expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
   });
 
-  it("does not show the notice when consent is already explicitly set", async () => {
-    configStore.globalEnabled = true;
+  it("does not show the notice when telemetry is already turned off", async () => {
+    configStore.enabled = false;
+    configStore.globalEnabled = false;
     const { ctx, globalStore } = makeContext();
     const svc = new TelemetryConsentService(ctx, makeLogger() as any);
     await svc.maybeShowFirstRunPrompt();
     expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
+    expect(globalStore.get(NOTICE_KEY)).toBe(true);
+  });
+
+  // An explicit true was chosen on an earlier, different description of what
+  // is sent (the first notice called it anonymous usage data), so the
+  // corrected disclosure is still owed, once.
+  it("shows the notice once to an operator who kept telemetry on under the old notice", async () => {
+    configStore.enabled = true;
+    configStore.globalEnabled = true;
+    vi.mocked(vscode.window.showInformationMessage).mockResolvedValue(undefined as any);
+    const { ctx, globalStore } = makeContext();
+    globalStore.set("nightgauge.telemetry.optOutNoticeSeen", true);
+    const svc = new TelemetryConsentService(ctx, makeLogger() as any);
+    await svc.maybeShowFirstRunPrompt();
+    await svc.maybeShowFirstRunPrompt();
+    expect(modalCallCount()).toBe(1);
+    const detail = String(
+      (vi.mocked(vscode.window.showInformationMessage).mock.calls[0][1] as { detail: string })
+        .detail
+    );
+    expect(detail).toMatch(/issue title, labels and the first 8,192 characters of its body/);
+    expect(detail).toMatch(/branch/);
     expect(globalStore.get(NOTICE_KEY)).toBe(true);
   });
 

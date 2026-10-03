@@ -125,6 +125,7 @@ import type { RepositoryContextLoader, ContextFileType } from "./RepositoryConte
 import type { Logger } from "../utils/logger";
 import { resolveRuntimeSnapshotPath } from "../utils/runtimeSnapshotResolver";
 import type { IssueQueueService } from "./IssueQueueService";
+import { requeueOptionsFor, type QueueItem } from "../types/queue";
 import type { ProjectBoardService } from "./ProjectBoardService";
 import type { RoutingDecision } from "../utils/routingDecision";
 import {
@@ -438,11 +439,16 @@ export type PipelineStartRefusal =
 
 /**
  * A queue item the main orchestrator dequeued for an auto-start (#2397):
- * which `queue.complete` releases it, and whether it already has.
+ * which `queue.complete` releases it, whether its run began, and whether it
+ * has been released already.
  */
 interface AutoStartedQueueItem {
+  /** The item as it was dequeued, to put it back when its run never starts. */
+  item: QueueItem;
   repo: string;
   issueNumber: number;
+  /** runPipeline took the issue: its end completes the item, never puts it back. */
+  started: boolean;
   released: boolean;
 }
 
@@ -9920,6 +9926,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     this.eventDispatcher = new OrchestratorEventDispatcher(callbacks, this.logger);
 
     this.isRunning = true;
+    // The run an auto-start dequeued has begun (#2397): from here its queue
+    // item is completed when the run ends, never put back in the queue.
+    const autoStarted = this.autoStartedQueueItem;
+    if (autoStarted && autoStarted.issueNumber === issueNumber) {
+      autoStarted.started = true;
+    }
     this.abortController = new AbortController();
     this.completedStageSet.clear(); // Reset duplicate-prevention tracker (#698)
     this.cachedIssueMetadata = null; // Clear stale metadata from previous run (#732)
@@ -13384,6 +13396,7 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // can be queued again and a blocked successor sees it gone.
     const finished = this.autoStartedQueueItem;
     if (finished && finished.issueNumber === completedIssueNumber) {
+      finished.started = true; // its terminal hook fired, so the run ran
       await this.releaseAutoStartedQueueItem(finished, "run finished");
     }
 
@@ -13421,8 +13434,10 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // releases it (#2397). The finally below is the backstop for every path
       // on which that run never reaches its terminal hook.
       const taken: AutoStartedQueueItem = {
+        item: nextItem,
         repo: nextItem.repoName ?? "",
         issueNumber: nextItem.issueNumber,
+        started: false,
         released: false,
       };
       this.autoStartedQueueItem = taken;
@@ -13479,10 +13494,17 @@ export class HeadlessOrchestrator implements vscode.Disposable {
   }
 
   /**
-   * Send `queue.complete` for an auto-started queue item, once (#2397). The
-   * terminal hook and the auto-start's own backstop both call this; the
+   * Release an auto-started queue item's `processing` mark, once (#2397).
+   * The terminal hook and the auto-start's own backstop both call this; the
    * second call is a no-op, so a successor run of the same issue — dequeued
    * between the two — keeps its own processing mark.
+   *
+   * A run that began is over, so its item is completed. One that never began
+   * — a stop during the auto-start delay, or a start that was refused or
+   * threw — goes back to the queue as it was, the way the concurrent path
+   * returns a dispatch it could not start (#2337): the operator queued that
+   * issue, and nothing ran it. While Stop All is in progress the queue refuses
+   * the item, which is what Stop All asks for.
    *
    * Best-effort: a dead socket must not mask the run's outcome. A window
    * reload releases any mark left behind (`queue.dropProcessing`, #2396).
@@ -13498,10 +13520,23 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     }
     try {
       await this.queueService?.complete(item.repo, item.issueNumber);
+      let returned = false;
+      if (!item.started && this.queueService) {
+        const queued = await this.queueService.enqueue(
+          item.item.issueNumber,
+          item.item.title,
+          item.item.labels,
+          undefined,
+          requeueOptionsFor(item.item)
+        );
+        returned = queued !== null;
+      }
       this.logger.debug("Released the auto-started queue item", {
         issueNumber: item.issueNumber,
         repo: item.repo,
         reason,
+        started: item.started,
+        returnedToQueue: returned,
       });
     } catch (error) {
       this.logger.warn(

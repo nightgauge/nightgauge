@@ -19,7 +19,10 @@ func newSessionTokenServer(t *testing.T, baseURL string) (*Server, *platform.Cli
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	s := NewServer(nil, WithPlatformClient(pc))
+	// A daemon holding a license key at startup was opted in to the cloud
+	// (serve uses a stored key only then), so platform.healthCheck reaches
+	// the platform and shows the credential on the wire.
+	s := NewServer(nil, WithPlatformClient(pc), WithTelemetryPolicy(true, true))
 	s.writer = &bytes.Buffer{}
 	return s, pc
 }

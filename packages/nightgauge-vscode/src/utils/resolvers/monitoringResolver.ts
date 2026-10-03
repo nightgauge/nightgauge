@@ -17,6 +17,7 @@ import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResol
 import { checkoutPath, isUsableWorkspaceRoot } from "../cloneLayout";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
 import { resolveGlobalConfigPathSync } from "../globalConfigResolver";
+import { parse as parseYaml } from "yaml";
 import type { DefaultModel } from "./modelResolver";
 import type { ClaudeEffort } from "./stageResolver";
 import type { ExecutionAdapter } from "../../config/schema";
@@ -3427,8 +3428,10 @@ export function getMcpToolsConfig(workspaceRoot?: string, stage?: string): strin
  * @see Issue #1582 - Pipeline execution audit trail emission
  */
 /**
- * `platform.enabled` as the machine-tier config file sets it; false when the
- * file is absent or unreadable. A line scan, like the reader below.
+ * `platform.enabled` as the machine-tier config file sets it: true only for a
+ * boolean `true` directly under `platform:`, never for a nested key such as
+ * `platform.telemetry.enabled`. False when the file is absent, unreadable or
+ * not YAML. Parsed, not line-scanned, because the nesting is the point.
  */
 export function machineTierPlatformEnabled(): boolean {
   let text: string;
@@ -3439,20 +3442,15 @@ export function machineTierPlatformEnabled(): boolean {
   } catch {
     return false;
   }
-  let inPlatform = false;
-  for (const line of text.split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    if (!line.startsWith(" ") && !line.startsWith("\t")) {
-      inPlatform = trimmed === "platform:";
-      continue;
-    }
-    if (inPlatform) {
-      const pm = trimmed.match(/^enabled:\s*(.+)$/);
-      if (pm) return pm[1].replace(/\s+#.*$/, "").trim() === "true";
-    }
+  try {
+    const doc: unknown = parseYaml(text);
+    if (!doc || typeof doc !== "object") return false;
+    const platform = (doc as { platform?: unknown }).platform;
+    if (!platform || typeof platform !== "object") return false;
+    return (platform as { enabled?: unknown }).enabled === true;
+  } catch {
+    return false;
   }
-  return false;
 }
 
 /**

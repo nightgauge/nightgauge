@@ -642,7 +642,11 @@ export class TelemetryUploaderService implements vscode.Disposable {
     this.lastUploadStartedAt = Date.now();
     this.progressSinceFlush = 0;
 
-    if (!this.consentService.isEnabled()) {
+    // The editor's consent (VS Code's telemetry level and
+    // nightgauge.telemetry.enabled) and the machine tier's
+    // platform.telemetry.enabled must both allow it: either one off stops the
+    // extension's uploads, as it stops the daemon's (docs/TELEMETRY_PRIVACY.md).
+    if (!this.consentService.isEnabled() || !this.consentService.isPlatformTelemetryEnabled()) {
       this.logger?.info("TelemetryUploaderService: skipping — consent not granted");
       return;
     }

@@ -61,6 +61,32 @@ describe("audit emission reads platform.enabled from the machine tier only", () 
     expect(cfg.batchSize).toBe(10);
   });
 
+  // platform.telemetry.enabled is not platform.enabled: the nested key must
+  // neither turn audit emission on nor, written first, hide the real switch.
+  it.each([
+    [
+      "a nested telemetry.enabled: true alone",
+      "platform:\n  telemetry:\n    enabled: true\n",
+      false,
+    ],
+    [
+      "a nested telemetry.enabled: true before enabled: false",
+      "platform:\n  telemetry:\n    enabled: true\n  enabled: false\n",
+      false,
+    ],
+    [
+      "a nested telemetry.enabled: false before enabled: true",
+      "platform:\n  telemetry:\n    enabled: false\n  enabled: true\n",
+      true,
+    ],
+    ["enabled under another block", "audit:\n  enabled: true\nplatform:\n  api_url: x\n", false],
+  ])("reads only platform.enabled itself: %s", (_name, machine, want) => {
+    writeProject("audit:\n  batch_size: 10\n");
+    writeMachine(machine);
+    expect(machineTierPlatformEnabled()).toBe(want);
+    expect(getAuditConfig(workspace).enabled).toBe(want);
+  });
+
   it("stays off when the machine tier says false, whatever the project says", () => {
     writeProject("platform:\n  enabled: true\n");
     writeMachine("platform:\n  enabled: false\n");

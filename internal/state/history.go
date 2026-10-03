@@ -16,9 +16,10 @@ import (
 	"github.com/nightgauge/nightgauge/internal/intelligence/actualsize"
 )
 
-// v2RunBodyMax bounds V2RunRecord.Body (#183) — the same 8192-rune excerpt
-// the pickup capture keeps, so any caller-supplied body is clipped before it
-// lands in the JSONL history.
+// v2RunBodyMax bounds V2RunRecord.Body (#183) — matches the platform's
+// telemetry issueBody `.max(8192)` so a body already capped at pickup is never
+// re-expanded past the wire ceiling, and any caller-supplied body is clipped
+// before it lands in the JSONL history.
 const v2RunBodyMax = 8192
 
 // TerminalFailureDetailMax bounds V2RunRecord.TerminalFailureDetail in runes.
@@ -85,8 +86,9 @@ type V2RunRecord struct {
 	Title string `json:"title"`
 	// Body is the GitHub issue body captured at pickup (#183), a bounded excerpt.
 	// Additive `omitempty` — records written before capture omit it, and the TS
-	// reader's non-strict z.object() strips it for older readers. Local only:
-	// the platform telemetry mapper never sends it (docs/TELEMETRY_PRIVACY.md).
+	// reader's non-strict z.object() strips it for older readers. Emitted on the
+	// telemetry wire as `issueBody` so the dashboard run-detail page can show the
+	// issue context without leaving the dashboard.
 	Body string `json:"body,omitempty"`
 	// Branch is the feature branch the run executed on, or "" when no branch
 	// could be determined from any source (#397). NO omitempty, deliberately:
@@ -1727,7 +1729,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		// Issue body captured at pickup (#183). Bounded here as a safety net in
 		// case a caller (e.g. the IPC path reading a runtime state the extension
 		// populated) supplies an unbounded value; the pickup capture already caps
-		// it. Local only — it is never sent to the platform.
+		// it. 8192 matches the platform issueBody .max(8192) telemetry bound.
 		Body:        clipHistoryRunes(input.Body, v2RunBodyMax),
 		Labels:      input.Labels,
 		Size:        sizePtr,
