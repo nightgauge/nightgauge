@@ -16,6 +16,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The extension's listing explains its optional cloud features.** A new
+  "Cloud features (optional)" section in the extension README says they are off
+  by default, that `"nightgauge.cloud.enabled": true` shows sign-in and the
+  account and team commands, that `platform.enabled` in
+  `.nightgauge/config.yaml` decides whether the extension talks to the hosted
+  service, and that the local pipeline needs neither. No setting changed.
+- **Each editor window and the daemon send the platform agent an instance id**
+  (#2395). The windows of a machine share one agent and each advertises its
+  own execution profile onto it, so the platform could not tell one window
+  whose profile changed from two windows that disagree. The registration,
+  every heartbeat and the extension's deregistration now carry `instance_id`:
+  a random UUID made once per window activation (once per daemon process),
+  kept in memory only and never derived from the machine, user or workspace.
+  A beat with nothing else to report now carries a body with only this field.
+  A platform that predates the field ignores it.
 - **The daemon and the headless schedulers follow the platform's workspace
   throttle** (#2352). Only the extension applied it (#2337), so work the Go
   side started itself ran at its configured concurrency while the platform
@@ -174,6 +189,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A window reload with a pipeline running no longer empties the queue**
+  (#2396). `deactivate` ended the window's runs through the same path as Stop
+  All, which clears the queue, so every waiting issue, runs triggered from the
+  dashboard included, was gone when the window came back. A reload or close
+  now removes only the queue items of the runs it ends (the new
+  `queue.dropProcessing`) and keeps every waiting item for the next window,
+  with each issue it had dequeued but not begun to start, still serving its
+  platform run. The window's daemon then dispatches nothing more, so neither
+  a dequeue still under way nor one a stopping pipeline sends afterwards
+  leaves an item marked as taken by a window that is gone. Stop All still
+  clears the queue.
 - **A pipeline worktree on a branch older than the publication hook no longer
   turns the hook off for the whole clone** (#2389). The pipeline's
   `npm install` in such a worktree ran that checkout's `prepare` script, husky

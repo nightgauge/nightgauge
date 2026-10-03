@@ -1415,7 +1415,11 @@ affordance in **Nightgauge: Stop After Current Issue**
 What discards running slots is the **window reload**: the extension's
 `deactivate` calls `abortAll()`. Installing a new build ends in a reload, so a
 rebuild during a busy fleet kills every in-flight run, and each one restarts
-from scratch and re-spends its planning.
+from scratch and re-spends its planning. The reload keeps the queue (#2396):
+it drops only the items of the runs it ends, and every waiting issue,
+platform-triggered runs and issues it had dequeued but not begun to start
+included, is still queued when the window comes back.
+Stop All, not a reload, is what clears the queue.
 
 The gap this closes was never a missing verb — it was that nothing said **when
 the last slot had landed**. `Autonomous Mode: Stopped` reads exactly like "safe

@@ -413,6 +413,23 @@
       }
     },
     {
+      "method": "queue.dropProcessing",
+      "resultType": "QueueDropProcessingResult",
+      "client": "generated",
+      "surfaces": [
+        "ipc inventory > no error notification was shown while running against the stub",
+        "demo mode > the scenario played to its end without outbound HTTP"
+      ],
+      "sampleParams": {
+        "handBack": [],
+        "unanswered": []
+      },
+      "paramsShape": {
+        "handBack": [],
+        "unanswered": []
+      }
+    },
+    {
       "method": "queue.list",
       "resultType": "IpcQueueState",
       "client": "generated",

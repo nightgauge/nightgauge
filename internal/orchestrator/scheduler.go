@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/attention"
@@ -942,6 +943,18 @@ type Scheduler struct {
 
 	// Queue — authoritative, file-backed
 	queue []QueueItem
+	// dispatchEnded latches when the window this daemon serves hands its
+	// queue back (QueueDropProcessing, #2396): from then on DequeueIndependent
+	// takes nothing, including a dequeue already reading blockers when the
+	// drop lands. The daemon is the window's own stdio child and ends with it,
+	// so nothing it marked processing afterwards would ever be released.
+	dispatchEnded atomic.Bool
+	// dequeuedBy maps each item a DequeueIndependentFor call marked
+	// processing (repoIssueKey) to the dispatch token its caller passed
+	// (#2396), so QueueDropProcessing can hand back the items of a dequeue
+	// whose answer the window never read. In memory only: a token names one
+	// call of this process. Guarded by mu.
+	dequeuedBy map[string]string
 
 	// OnFailureStatus: "ready" (default), "backlog", or "unchanged"
 	onFailureStatus string
@@ -2929,8 +2942,89 @@ func (s *Scheduler) QueueClear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.queue = nil
+	s.dequeuedBy = nil
 	s.persistQueue()
 	s.emitQueueChangedUnlocked()
+}
+
+// QueueHandBack names a dispatch a closing window had dequeued but not begun
+// to start (#2396): QueueDropProcessing puts its item back to waiting, serving
+// the platform run the dispatch served when the window let it go.
+type QueueHandBack struct {
+	Repo              string
+	IssueNumber       int
+	RemoteRunID       string
+	RemoteRunAttached bool
+}
+
+// QueueDropProcessing is what a window reload or close does to the queue
+// (#2396). It reports how many dispatched ("processing") items it removed and
+// how many it put back to waiting.
+//
+// The window's runs end with it and nothing else would release their marks,
+// so the items those runs took are removed. The queue outlives the window, so
+// everything still waiting stays for the next one: pending, ready and paused
+// items, a pending re-queue of an issue whose run is ending, and the platform
+// runs the waiting items carry. QueueClear, which the operator's Stop uses,
+// would drop all of those.
+//
+// A dispatch whose run had not begun is waiting work too, so its item goes
+// back to "pending" instead of being removed: each one handBack names (the
+// window dequeued it and had not begun its start), with the platform run it
+// served, and each one a dequeue whose answer the window never read had
+// marked (its dispatch token is in unanswered).
+//
+// It also ends dispatch for this process: every later DequeueIndependent, and
+// one already reading blockers, takes nothing (dispatchEnded).
+func (s *Scheduler) QueueDropProcessing(handBack []QueueHandBack, unanswered []string) (dropped, kept int) {
+	s.dispatchEnded.Store(true)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	back := make(map[string]QueueHandBack, len(handBack))
+	for _, h := range handBack {
+		back[repoIssueKey(h.Repo, h.IssueNumber)] = h
+	}
+	unread := make(map[string]bool, len(unanswered))
+	for _, token := range unanswered {
+		if token != "" {
+			unread[token] = true
+		}
+	}
+
+	remaining := make([]QueueItem, 0, len(s.queue))
+	for _, item := range s.queue {
+		if item.Status != "processing" {
+			remaining = append(remaining, item)
+			continue
+		}
+		key := repoIssueKey(item.Repo, item.IssueNumber)
+		token := s.dequeuedBy[key]
+		delete(s.dequeuedBy, key)
+		if h, ok := back[key]; ok {
+			item.Status = "pending"
+			item.RemoteRunID = h.RemoteRunID
+			item.RemoteRunAttached = h.RemoteRunID != "" && h.RemoteRunAttached
+			remaining = append(remaining, item)
+			kept++
+			continue
+		}
+		if unread[token] {
+			item.Status = "pending"
+			remaining = append(remaining, item)
+			kept++
+			continue
+		}
+		dropped++
+	}
+	if dropped == 0 && kept == 0 {
+		return 0, 0
+	}
+	s.queue = remaining
+	s.recalculatePositions()
+	s.persistQueue()
+	s.emitQueueChangedUnlocked()
+	return dropped, kept
 }
 
 // DequeueIndependent removes and returns up to maxSlots items that have no
@@ -2958,6 +3052,19 @@ func (s *Scheduler) capForRepo(repo string) int {
 }
 
 func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, running []RunningItem) []QueueItem {
+	return s.DequeueIndependentFor(ctx, "", maxSlots, running)
+}
+
+// DequeueIndependentFor is DequeueIndependent for a caller that names its
+// dispatch (#2396): each item this call marks processing records dispatch, so
+// a window that closes before it reads the answer can hand those items back
+// (QueueDropProcessing's unanswered tokens). An empty dispatch records none.
+func (s *Scheduler) DequeueIndependentFor(ctx context.Context, dispatch string, maxSlots int, running []RunningItem) []QueueItem {
+	// The window this daemon serves has handed its queue back (#2396).
+	if s.dispatchEnded.Load() {
+		return nil
+	}
+
 	// Refresh blocker states from GitHub before acquiring the lock.
 	// This ensures we don't skip items whose blockers have been closed
 	// since the queue was last persisted.
@@ -2965,6 +3072,13 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// A window that closed while this dequeue read blockers has dropped or
+	// handed back every dispatched item; anything marked now would never be
+	// released.
+	if s.dispatchEnded.Load() {
+		log.Printf("queue: dequeue refused — the window this daemon serves handed its queue back (#2396)")
+		return nil
+	}
 
 	// Issues already in flight (for the blockedBy guard) and per-repo
 	// in-flight counts (for the per-repo cap). Seeded from the caller's
@@ -3110,6 +3224,12 @@ func (s *Scheduler) DequeueIndependent(ctx context.Context, maxSlots int, runnin
 	// once the pipeline reaches a terminal state.
 	for _, idx := range toRemoveIdx {
 		s.queue[idx].Status = "processing"
+		if dispatch != "" {
+			if s.dequeuedBy == nil {
+				s.dequeuedBy = make(map[string]string)
+			}
+			s.dequeuedBy[repoIssueKey(s.queue[idx].Repo, s.queue[idx].IssueNumber)] = dispatch
+		}
 	}
 
 	if len(dequeued) > 0 || pausedByLabel {
@@ -3132,6 +3252,7 @@ func (s *Scheduler) completeQueueItemLocked(repo string, issueNumber int) {
 		if item.Status != "processing" || item.IssueNumber != issueNumber || item.Repo != repo {
 			continue
 		}
+		delete(s.dequeuedBy, repoIssueKey(repo, issueNumber))
 		s.queue = append(s.queue[:i], s.queue[i+1:]...)
 		s.recalculatePositions()
 		s.persistQueue()

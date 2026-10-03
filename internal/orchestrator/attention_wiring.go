@@ -1222,7 +1222,8 @@ func IsAbandonedDispatchSituation(s string) bool {
 // the population was traced. `forceClearStuckSlots` has exactly ONE call site:
 // the ABORT_ALL_TIMEOUT_MS branch of `abortAll`, which is reached only from
 // `nightgauge.stopPipeline`, `nightgauge.abortPipeline`, and `deactivate()`.
-// Before that deadline can fire, `abortAll` has already cleared the queue and
+// Before that deadline can fire, `abortAll` has already taken the queue step
+// (Stop clears the queue; a reload drops only the dispatched items, #2396) and
 // set `userCancelled` on every slot, and the terminal error booked is literally
 // "Cancelled by user". So one hundred percent of this producer's population is
 // "the operator pressed Stop and a slot took longer than the deadline to

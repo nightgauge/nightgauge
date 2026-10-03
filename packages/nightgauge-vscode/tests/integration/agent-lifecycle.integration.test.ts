@@ -22,6 +22,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AgentRegistrationService } from "../../src/services/AgentRegistrationService";
 import type { AgentRegistrationPayload } from "../../src/services/AgentRegistrationService";
 import { AgentHeartbeatService } from "../../src/services/AgentHeartbeatService";
+import { agentInstanceId } from "../../src/services/agentInstance";
 import { makeMockTokenStorage } from "../mocks/token-storage";
 import { makeMockLogger } from "../mocks/logger";
 
@@ -165,7 +166,8 @@ describe("agent lifecycle integration", () => {
     expect(hb2.path).toBe("/v1/agents/test-agent-001/heartbeat");
 
     expect(deregister.method).toBe("DELETE");
-    expect(deregister.path).toBe("/v1/agents/test-agent-001");
+    // The window's own instance record is dropped at once (#2395).
+    expect(deregister.path).toBe(`/v1/agents/test-agent-001?instance_id=${agentInstanceId()}`);
     expect(deregister.headers["authorization"]).toBe("Bearer test-token");
   });
 

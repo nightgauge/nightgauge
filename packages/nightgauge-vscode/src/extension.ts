@@ -41,6 +41,7 @@ import {
   shouldRestoreWorkspaceSyncState,
 } from "./views/workspaceSyncState";
 import type { WorkspaceSyncSidebarState } from "./views/items/WorkspaceSyncSidebarItem";
+import { beginAgentInstance } from "./services/agentInstance";
 
 /**
  * Extension services — initialized in activate(), used in deactivate().
@@ -60,6 +61,9 @@ let extensionContext: vscode.ExtensionContext | null = null;
  */
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   extensionContext = context;
+  // A new activation is a new platform agent instance (#2395): its
+  // registration, heartbeats and deregistration carry a fresh instance id.
+  beginAgentInstance();
   // Inject per-repo GH_TOKEN/GITHUB_TOKEN into the integrated-terminal env so
   // every `gh` call authenticates as this workspace's configured user instead of
   // the machine-global `gh auth` active account. This is what lets concurrent
@@ -985,10 +989,16 @@ export function deactivate(): void {
   // Disconnect audit/pipeline event SSE consumer (Issue #3321)
   EventStreamService.resetInstance();
 
-  // Stop unified pipeline manager (handles all worktree-based slots, #1831)
-  if ((concurrentPipelineManager?.activeSlotCount ?? 0) > 0) {
-    concurrentPipelineManager!.abortAll().catch(() => {});
-  }
+  // Stop unified pipeline manager (handles all worktree-based slots, #1831).
+  // A reload or close ends this window's runs and nothing more (#2396): the
+  // queue outlives the window, so every waiting item, platform runs included,
+  // stays for the next one, with each dispatch not yet begun, and only the
+  // items of the runs that end are dropped. Stop All, not a reload, is what
+  // clears the queue. Always, not only with a dispatch in flight: the queue
+  // request also releases the items the main orchestrator took, and ends
+  // dispatch in the daemon before that orchestrator's stop below can start
+  // its next queued issue.
+  concurrentPipelineManager?.abortAll({ keepQueued: true }).catch(() => {});
 
   // Also stop main orchestrator if running (batch processing, resume)
   if (headlessOrchestrator?.getIsRunning()) {

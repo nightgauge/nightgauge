@@ -179,6 +179,7 @@ var contractTestedMethods = map[string]bool{
 	"queue.clear":              true,
 	"queue.complete":           true,
 	"queue.dequeueIndependent": true,
+	"queue.dropProcessing":     true,
 	"queue.enqueueEpic":        true,
 	"queue.list":               true,
 	"queue.remove":             true,
@@ -876,6 +877,11 @@ func TestContract_Queue(t *testing.T) {
 	t.Run("queue.clear/registered", func(t *testing.T) {
 		id := h.sendRequest("queue.clear", nil)
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "queue.clear")
+	})
+
+	t.Run("queue.dropProcessing/registered", func(t *testing.T) {
+		id := h.sendRequest("queue.dropProcessing", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "queue.dropProcessing")
 	})
 
 	// queue.complete is the terminal counterpart to queue.dequeueIndependent.

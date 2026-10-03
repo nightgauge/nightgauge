@@ -92,15 +92,20 @@ func TestRegisterAgent_OmitsAProfileThatDidNotResolveOrValidate(t *testing.T) {
 }
 
 // The heartbeat re-resolves the profile on every beat, so a change reaches the
-// platform within one interval; without a source the beat stays bodiless.
+// platform within one interval; without a source the beat carries no profile,
+// only the instance id (#2395).
 func TestAgentHeartbeat_CarriesTheCurrentProfile(t *testing.T) {
 	srv, body, contentType := captureServer(t, http.StatusOK, `{}`)
 
 	if err := NewAgentRegistrationService(onlineClient(t, srv.URL), "").Heartbeat(context.Background(), "agent-1"); err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	if len(*body) != 0 {
-		t.Errorf("heartbeat without a profile source sent a body: %s", *body)
+	var bare map[string]any
+	if err := json.Unmarshal(*body, &bare); err != nil {
+		t.Fatalf("heartbeat body %q: %v", *body, err)
+	}
+	if _, ok := bare["execution_profile"]; ok {
+		t.Errorf("heartbeat without a profile source sent a profile: %s", *body)
 	}
 
 	current := testProfile()

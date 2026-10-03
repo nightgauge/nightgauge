@@ -157,7 +157,7 @@ import { getConcurrentPipelineConfig } from "../utils/nightgaugeConfig";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import { throttleInForce, type WorkspaceThrottle } from "./WorkspaceThrottle";
 import { IpcClient } from "./IpcClient";
-import type { AbandonedDispatchSituation } from "./IpcClientBase";
+import type { AbandonedDispatchSituation, QueueHandBackRef } from "./IpcClientBase";
 
 /**
  * Factory function to create a HeadlessOrchestrator for a worktree.
@@ -674,6 +674,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   private throttleLiftTimer: ReturnType<typeof setTimeout> | null = null;
   private callbacks: ConcurrentPipelineCallbacks = {};
   private isShuttingDown = false;
+  /**
+   * Latched by a window reload or close (`abortAll({ keepQueued: true })`,
+   * #2396): the queue went back to the daemon for the next window, so this
+   * window dispatches nothing more and releases no queue mark itself, even
+   * after an abort deadline resets {@link isShuttingDown}.
+   */
+  private windowEnding = false;
   private isAbortAllInProgress = false;
   private isFilling = false;
   private fillAgain = false;
@@ -853,7 +860,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
   /** Start what the queue holds now that the throttle allows more slots. */
   private fillAfterThrottleChange(): void {
-    if (this.isShuttingDown) return;
+    if (this.isShuttingDown || this.windowEnding) return;
     this.fillSlots().catch((err) => {
       this.logger.error("fillSlots after a workspace throttle change failed", {
         err: err instanceof Error ? err.message : String(err),
@@ -964,7 +971,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * It dequeues up to N independent issues and starts a pipeline for each.
    */
   async fillSlots(): Promise<number> {
-    if (this.isShuttingDown) return 0;
+    if (this.isShuttingDown || this.windowEnding) return 0;
     if (this.authCircuitOpen) {
       this.logger.warn(
         "fillSlots skipped — auth circuit breaker is open (Claude Code session expired)"
@@ -1015,7 +1022,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           break;
         }
 
-        if (this.isShuttingDown) break;
+        if (this.isShuttingDown || this.windowEnding) break;
 
         // Pass each in-flight slot's repo so the scheduler can enforce per-repo
         // concurrency caps (concurrency.per_repo_max / repository_overrides).
@@ -1045,6 +1052,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // for its placement (#2344); the dequeued items are recorded in the
         // same turn, so the trigger finds them.
         const items = await this.withQueueTurn(async () => {
+          // A stop, or a window closing, that began while this fill waited
+          // for its turn takes nothing more (#2396): the dequeue would mark
+          // items for dispatches that will never start.
+          if (this.isShuttingDown || this.windowEnding) return [];
           const dequeued = await this.queueService.dequeueIndependent(available, runningItems);
           for (const item of dequeued) this.dispatchingItems.add(item);
           return dequeued;
@@ -1074,8 +1085,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             // These items were marked "processing" by the dequeue and will never
             // reach a terminal run, so release the mark before abandoning them
             // (#254) — otherwise a stop leaves them undispatchable forever.
-            if (this.isShuttingDown) {
-              await this.completeQueueItem(item, "shutdown before dispatch");
+            //
+            // A closing window's drop already put this item back to waiting
+            // (#2396), and a mark released now could reach the daemon first
+            // and remove the item instead.
+            if (this.isShuttingDown || this.windowEnding) {
+              if (!this.windowEnding) {
+                await this.completeQueueItem(item, "shutdown before dispatch");
+              }
               continue;
             }
             // #188: per-issue in-flight guard at the dispatch boundary. An
@@ -1140,6 +1157,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
                   issueNumber: item.issueNumber,
                 }
               );
+            } else if (this.windowEnding) {
+              // The window closed while this start was under way (#2396): the
+              // drop removed its item with the runs that end, and a re-queue
+              // from a closing window would race that.
+              this.logger.info("Dispatch ended with the window — not re-enqueued (#2396)", {
+                issueNumber: item.issueNumber,
+              });
             } else if (this.isCancelledRemoteRun(item) && !this.detachCancelledRemoteRun(item)) {
               // The platform cancelled the run while its start failed (#2344):
               // it is dropped, never queued again under its run id.
@@ -1201,7 +1225,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             this.dispatchingItems.delete(item);
           }
         }
-      } while (this.fillAgain && !this.isShuttingDown);
+      } while (this.fillAgain && !this.isShuttingDown && !this.windowEnding);
     } finally {
       this.isFilling = false;
       // Every dispatch of this fill opened its slot or ended; an item a
@@ -3473,27 +3497,51 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
-   * Abort all running pipelines
+   * Abort all running pipelines.
+   *
+   * The operator's Stop All and Abort clear the queue too. A window reload or
+   * close passes `keepQueued` (#2396): it ends the runs under way and nothing
+   * more. The queue outlives the window, so every waiting item, with the
+   * platform runs it carries, stays for the next window, and so does each
+   * dispatch this window had not begun to start ({@link dispatchesNotStarted}).
+   * Only the items of the dispatches that end are dropped, since nothing else
+   * would release them once the window is gone; the daemon, and this
+   * manager, dispatch nothing more.
    */
-  async abortAll(): Promise<void> {
+  async abortAll(options: { keepQueued?: boolean } = {}): Promise<void> {
+    const keepQueued = options.keepQueued === true;
     this.isAbortAllInProgress = true;
     this.isShuttingDown = true;
     this.logger.info("Aborting all concurrent pipeline slots", {
       activeSlots: this.slots.size,
+      keepQueued,
     });
 
-    // Clear the queue first so no new items get dequeued by fillSlots
+    // The queue request goes out first, before any await: on a reload the
+    // window may be gone before anything after the first await runs. Stop
+    // clears the queue so fillSlots dequeues nothing more; a reload drops the
+    // items of the dispatches that end, hands the rest back to waiting, and
+    // ends dispatch in the daemon, a dequeue already under way included.
     try {
-      await this.queueService.clear();
+      if (keepQueued) {
+        this.windowEnding = true;
+        await this.queueService.dropProcessing(this.dispatchesNotStarted());
+      } else {
+        await this.queueService.clear();
+      }
     } catch {
-      // Best effort — queue clear is non-critical
+      // Best effort — the queue step is non-critical
     }
-    // A triggered run still queued here will never start now, so this window
-    // no longer holds it, and must not answer the platform's verbs for it
-    // (#2340). A dispatch already creating its worktree is refused by the
-    // shutdown check before its slot would adopt the id.
-    this.acceptedRemoteRuns.clear();
-    this.noteHeldRemoteRuns();
+    if (!keepQueued) {
+      // A triggered run still queued here will never start now, so this
+      // window no longer holds it, and must not answer the platform's verbs
+      // for it (#2340). A dispatch already creating its worktree is refused
+      // by the shutdown check before its slot would adopt the id. A reload
+      // keeps the queue, so the window holds its queued runs until it is gone
+      // and lists them as closed for the next window to take up.
+      this.acceptedRemoteRuns.clear();
+      this.noteHeldRemoteRuns();
+    }
 
     // Stop all running orchestrators. Mark each slot as user-cancelled BEFORE
     // issuing the stop so the slot's runSlot completion handler treats the
@@ -4268,6 +4316,31 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       if (item.issueNumber === issueNumber && sameRepo(item.repoName, repo)) return item;
     }
     return null;
+  }
+
+  /**
+   * The dispatches a fill dequeued that have not begun to start (#2396):
+   * waiting behind an earlier start in their batch, so no slot, reservation
+   * or worktree exists for them yet. A window reload or close hands them back
+   * to the queue, each with the platform run it serves. A run the platform
+   * cancelled is not handed back: its own item goes, as the fill would drop
+   * it, and the operator's item it was attached to goes back without it.
+   */
+  private dispatchesNotStarted(): QueueHandBackRef[] {
+    const handBack: QueueHandBackRef[] = [];
+    for (const item of this.dispatchingItems) {
+      if (this.slots.has(item.issueNumber) || this.reservedSlots.has(item.issueNumber)) continue;
+      const cancelled = this.isCancelledRemoteRun(item);
+      if (cancelled && !item.remoteRunAttached) continue;
+      const serves = item.remoteRunId !== undefined && !cancelled;
+      handBack.push({
+        repo: item.repoName ?? "",
+        issueNumber: item.issueNumber,
+        ...(serves ? { remoteRunId: item.remoteRunId } : {}),
+        ...(serves && item.remoteRunAttached ? { remoteRunAttached: true } : {}),
+      });
+    }
+    return handBack;
   }
 
   /** Run `fn` in the queue turn a fill's dequeue also takes (#2344). */

@@ -306,6 +306,16 @@ A part outside the service's bounds is dropped and logged rather than
 costing the registration, and an account that belongs to no team is
 registered again without the `workspace` block.
 
+The registration and every heartbeat carry `instance_id` (#2395), top-level
+beside `execution_profile`: a random UUID v4 the daemon makes once per process
+and keeps in memory only. Each editor window sends its own (one per
+activation), on its registration, every heartbeat, and its deregistration
+(`DELETE /v1/agents/{id}?instance_id=`). Every client of an agent advertises
+its own execution profile onto it, and the instance id is how the service
+keeps one record per client, so one window whose profile changed reads
+differently from two windows that disagree. A service that predates the field
+ignores it.
+
 Creating the named workspace, updating its agent or display name, and
 linking the declared repositories need the owner or admin role on the
 workspace's team. For a developer or viewer the service skips those writes,
@@ -363,7 +373,12 @@ the run waits to be queued (a fill can hold the queue for as long as Go takes
 to read the issues' blockers), while it is queued, and while its worktree is
 being created. The queued item carries
 the run id (`remoteRunId` on the queue item), and the slot adopts it from the
-item it dequeues, so a window still holds a queued run after a reload.
+item it dequeues, so a window still holds a queued run after a reload. A
+reload or close keeps the queue too (#2396): `queue.dropProcessing` removes
+only the items of the runs that end, puts each dispatch the window had not
+begun to start back to waiting (named in `handBack`, or by the `dispatch`
+token of a `queue.dequeueIndependent` whose answer the window never read),
+and ends dispatch in that daemon. Stop All clears the queue.
 
 A trigger for an issue the operator already queued here serves that work
 instead of queueing the issue twice (#2344). The window places the run in one

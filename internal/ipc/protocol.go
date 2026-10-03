@@ -559,6 +559,36 @@ type QueueRemoveRemoteRunResult struct {
 	Removed bool `json:"removed"`
 }
 
+// QueueDropProcessingParams are the parameters for queue.dropProcessing, what
+// a window reload or close does to the queue (#2396).
+type QueueDropProcessingParams struct {
+	// HandBack names the dispatches the window had dequeued but not begun to
+	// start. Their items go back to waiting, serving the platform run each
+	// dispatch served, instead of being removed with the runs that end.
+	HandBack []QueueHandBackRef `json:"handBack,omitempty"`
+	// Unanswered lists the dispatch tokens of the window's dequeues whose
+	// answer it had not read (queue.dequeueIndependent's dispatch). Their
+	// items never reached a dispatch, so they go back to waiting too.
+	Unanswered []string `json:"unanswered,omitempty"`
+}
+
+// QueueHandBackRef is one dispatch queue.dropProcessing puts back to waiting:
+// its queue item, by repository and issue number, and the platform run it
+// serves (an empty remoteRunId serves none).
+type QueueHandBackRef struct {
+	Repo              string `json:"repo"`
+	IssueNumber       int    `json:"issueNumber"`
+	RemoteRunID       string `json:"remoteRunId,omitempty"`
+	RemoteRunAttached bool   `json:"remoteRunAttached,omitempty"`
+}
+
+// QueueDropProcessingResult reports how many dispatched ("processing") items
+// queue.dropProcessing removed and how many it put back to waiting (#2396).
+type QueueDropProcessingResult struct {
+	Dropped int `json:"dropped"`
+	Kept    int `json:"kept"`
+}
+
 // QueueCompleteParams are parameters for queue.complete — the terminal
 // counterpart to queue.dequeueIndependent.
 //
@@ -588,6 +618,10 @@ type QueueDequeueIndependentParams struct {
 	// Repo is required for per-repo cap enforcement (the IPC dispatch path
 	// tracks the running set, not the Go scheduler).
 	RunningItems []QueueRunningRef `json:"runningItems"`
+	// Dispatch is a token the caller mints for this dequeue (#2396). The items
+	// it marks remember it, so a window that closes before reading the answer
+	// can name it in queue.dropProcessing and get those items back.
+	Dispatch string `json:"dispatch,omitempty"`
 }
 
 // QueueEnqueueEpicParams are parameters for queue.enqueueEpic.

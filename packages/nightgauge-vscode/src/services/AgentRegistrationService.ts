@@ -3,6 +3,7 @@ import type { ITokenStorage } from "../platform/TokenStorage";
 import type { Logger } from "../utils/logger";
 import type { IOnDemandTokenRefresher } from "../platform/TokenRefreshManager";
 import type { ExecutionProfile } from "./executionProfile";
+import { agentInstanceId, isValidAgentInstanceId } from "./agentInstance";
 import {
   refusalsFromRegistrationReply,
   type RefusedWorkspaceWriteReport,
@@ -43,6 +44,13 @@ export class AgentRegistrationService implements vscode.Disposable {
    */
   private _lastRefusedWorkspaceWrites: RefusedWorkspaceWriteReport[] = [];
 
+  /**
+   * This activation's instance id (#2395), sent beside the payload on
+   * registration and as a query on deregistration; null, and not sent, when
+   * it fails the platform's bound.
+   */
+  private readonly instanceId: string | null;
+
   constructor(
     private readonly getPlatformUrl: () => string,
     private readonly tokenStorage: ITokenStorage,
@@ -56,7 +64,10 @@ export class AgentRegistrationService implements vscode.Disposable {
      * (#2372), once per registration that was refused any.
      */
     private readonly onRefusedWorkspaceWrites?: (refusals: RefusedWorkspaceWriteReport[]) => void
-  ) {}
+  ) {
+    const id = agentInstanceId();
+    this.instanceId = isValidAgentInstanceId(id) ? id : null;
+  }
 
   dispose(): void {
     // No persistent resources
@@ -173,6 +184,10 @@ export class AgentRegistrationService implements vscode.Disposable {
     }
   }
 
+  /**
+   * The instance id rides top-level beside `execution_profile`, never inside
+   * it (#2395). A platform that predates it strips the unknown key.
+   */
   private postRegister(token: string, payload: AgentRegistrationPayload): Promise<Response> {
     return fetch(`${this.getPlatformUrl()}/v1/agents/register`, {
       method: "POST",
@@ -180,7 +195,9 @@ export class AgentRegistrationService implements vscode.Disposable {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify(payload),
+      body: JSON.stringify(
+        this.instanceId === null ? payload : { ...payload, instance_id: this.instanceId }
+      ),
     });
   }
 
@@ -191,7 +208,9 @@ export class AgentRegistrationService implements vscode.Disposable {
   /**
    * DELETE /v1/agents/{agentId}. Fire-and-forget — caller should not await.
    * Notifies the platform the agent is going offline so it can re-queue pending
-   * commands immediately rather than waiting for heartbeat TTL expiry.
+   * commands immediately rather than waiting for heartbeat TTL expiry. The
+   * `instance_id` query drops this window's own record at once (#2395),
+   * rather than when it ages out.
    */
   async deregister(agentId: string): Promise<void> {
     const token = await this.tokenStorage.retrieve("accessToken");
@@ -199,8 +218,10 @@ export class AgentRegistrationService implements vscode.Disposable {
       this.logger.warn("AgentRegistrationService: no accessToken, skipping deregister");
       return;
     }
+    const query =
+      this.instanceId === null ? "" : `?instance_id=${encodeURIComponent(this.instanceId)}`;
     try {
-      const response = await fetch(`${this.getPlatformUrl()}/v1/agents/${agentId}`, {
+      const response = await fetch(`${this.getPlatformUrl()}/v1/agents/${agentId}${query}`, {
         method: "DELETE",
         headers: {
           Authorization: `Bearer ${token}`,

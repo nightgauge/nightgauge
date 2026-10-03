@@ -12,6 +12,7 @@ import { STAGED_CHECKOUT_ENTRIES } from "../../demo/workspace-clone";
 import { DEMO_WORKSPACE_NOW, HISTORY_DIR } from "../../demo/workspace-dates";
 import {
   DEMO_DAEMON,
+  DEMO_THEMES,
   DEMO_WORKSPACE,
   REFERENCE_SCENARIO,
   parseArgs,
@@ -71,6 +72,17 @@ describe("demo session options", () => {
     expect(() => parseArgs(["--speed", "0"])).toThrow(/--speed must be a positive number/);
     expect(() => parseArgs(["--speed"])).toThrow(/--speed needs a value/);
     expect(() => parseArgs(["--record"])).toThrow(/unknown option --record/);
+  });
+
+  // #2099: screenshots in each theme, written to the demo profile only.
+  it("opens in a built-in theme only when --theme names one", () => {
+    expect(plan(["--theme", "dark"]).settings["workbench.colorTheme"]).toBe(DEMO_THEMES.dark);
+    expect(plan(["--theme", "high-contrast"]).settings["workbench.colorTheme"]).toBe(
+      "Default High Contrast"
+    );
+    expect(plan().settings).not.toHaveProperty("workbench.colorTheme");
+    expect(() => parseArgs(["--theme", "solarized"])).toThrow(/--theme must be one of light, dark/);
+    expect(() => parseArgs(["--theme"])).toThrow(/--theme needs a value/);
   });
 });
 

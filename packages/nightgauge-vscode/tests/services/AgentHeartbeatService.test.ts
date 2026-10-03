@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { AgentHeartbeatService } from "../../src/services/AgentHeartbeatService";
+import { agentInstanceId } from "../../src/services/agentInstance";
 import { makeMockTokenStorage } from "../mocks/token-storage";
 import { makeMockLogger } from "../mocks/logger";
 
@@ -303,27 +304,31 @@ describe("AgentHeartbeatService — adapter usage reporting (#736)", () => {
     return vi.mocked(fetch).mock.calls.at(-1)?.[1] as RequestInit;
   }
 
-  it("sends no body when no provider is wired", async () => {
+  function lastBody(): Record<string, unknown> {
+    return JSON.parse(lastInit().body as string) as Record<string, unknown>;
+  }
+
+  it("sends no usage report when no provider is wired", async () => {
     startWith(undefined);
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(Object.hasOwn(lastInit(), "body")).toBe(false);
+    expect(lastBody()).toEqual({ instance_id: agentInstanceId() });
   });
 
-  it("sends no body when the provider declines — the default configuration", async () => {
+  it("sends no usage report when the provider declines — the default configuration", async () => {
     startWith(async () => null);
     await vi.advanceTimersByTimeAsync(30_000);
 
-    // Not an empty body, not `{}`: byte-for-byte the request the heartbeat
-    // made before reporting existed.
-    expect(Object.hasOwn(lastInit(), "body")).toBe(false);
+    // No `usage` key at all, not an empty report: the beat carries only the
+    // window's instance id (#2395).
+    expect(lastBody()).toEqual({ instance_id: agentInstanceId() });
   });
 
   it("attaches the report when one is produced", async () => {
     startWith(async () => REPORT);
     await vi.advanceTimersByTimeAsync(30_000);
 
-    expect(JSON.parse(lastInit().body as string)).toEqual({ usage: REPORT });
+    expect(lastBody()).toEqual({ instance_id: agentInstanceId(), usage: REPORT });
   });
 
   it("still beats when the provider throws", async () => {
@@ -332,10 +337,10 @@ describe("AgentHeartbeatService — adapter usage reporting (#736)", () => {
     });
     await vi.advanceTimersByTimeAsync(30_000);
 
-    // Presence is worth more than a usage sample: the beat goes out bodiless
-    // and the dashboard keeps whatever it was last told.
+    // Presence is worth more than a usage sample: the beat goes out without
+    // a report and the dashboard keeps whatever it was last told.
     expect(fetch).toHaveBeenCalled();
-    expect(Object.hasOwn(lastInit(), "body")).toBe(false);
+    expect(lastBody()).toEqual({ instance_id: agentInstanceId() });
     expect(logger.warn).toHaveBeenCalled();
   });
 

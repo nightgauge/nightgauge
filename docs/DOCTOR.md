@@ -19,6 +19,7 @@ Machine-state locations (the fix log's directory) follow
 - [VS Code](#vs-code)
 - [JSON v2](#json-v2)
 - [Security](#security)
+- [Verifying by hand](#verifying-by-hand)
 - [Finding codes](#finding-codes)
 - [Adapter health in detail](#adapter-health-in-detail)
 
@@ -273,6 +274,49 @@ entries as an array.
 - **Links.** A manual remedy's link opens only for `https` URLs on `github.com`,
   `docs.github.com` and `nightgauge.dev`, passed to the OS opener as one argument.
   Any other link renders as text.
+
+## Verifying by hand
+
+Three checks need a person: real GitHub App permission changes, a terminal
+recording, and screenshots of VS Code itself. Each is scripted, so the
+maintainer only runs it and attaches what it writes.
+
+- **The App permission sequence (#2094).** From a checkout that authenticates as
+  an organization's GitHub App, with autonomous mode stopped and an
+  organization owner available. The change applies to the App across the whole
+  organization: from the removal until the owner accepts the restored
+  permission, every machine, session and CI job that uses the App cannot read
+  or write the board.
+
+  ```bash
+  scripts/doctor-app-permission-walkthrough.sh --record
+  ```
+
+  It walks the #1955 sequence (remove Organization → Projects from the App,
+  restore it, accept it on the installation), waits for Enter after each change,
+  and checks that doctor names each state: nothing, then [NGD036](#ngd036), then
+  [NGD037](#ngd037), then nothing, with any board finding re-diagnosed as
+  [NGD041](#ngd041). It changes nothing itself and writes a transcript to paste
+  into the issue. If it stops after the removal, it prints how to restore and
+  accept the permission. Exit `0` means every state read as expected, `1` names
+  the state that did not, `2` means the walk could not run.
+
+- **The guided-repair recording (#2095).** `--record` above records it in the
+  NGD036 state with [vhs](https://github.com/charmbracelet/vhs) from
+  `scripts/doctor-guided-repair.tape`, a GIF and an MP4, or with asciinema when
+  vhs is not installed.
+- **Doctor panel themes and keyboard (#2099).** After
+  `npm run -w nightgauge-vscode build`:
+
+  ```bash
+  npm run -w nightgauge-vscode demo:doctor-screenshots
+  ```
+
+  It opens a demo window (its own profile and the demo daemon's fictional
+  findings) in the light, dark and high-contrast themes in turn, and prompts for
+  each capture, including a keyboard-only fix of a housekeeping item in the
+  first. `npm run -w nightgauge-vscode demo -- --theme <name>` opens one demo
+  window in a theme by hand.
 
 ## Finding codes
 

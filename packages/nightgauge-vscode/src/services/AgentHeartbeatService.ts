@@ -5,6 +5,7 @@ import type { IOnDemandTokenRefresher } from "../platform/TokenRefreshManager";
 import type { ReportedUsage } from "./usage/usageReporting";
 import { isDemoMode } from "./DemoModeController";
 import type { ExecutionProfile } from "./executionProfile";
+import { agentInstanceId, isValidAgentInstanceId } from "./agentInstance";
 
 /**
  * Supplies the adapter usage report to attach to a beat, or `null` to send
@@ -14,7 +15,7 @@ import type { ExecutionProfile } from "./executionProfile";
  * nothing about the usage model: it transports whatever it is handed, and
  * every decision about what may leave the machine stays in
  * `usageReporting.ts`. Returning `null` — which is the default configuration —
- * leaves the heartbeat exactly as it was before reporting existed.
+ * sends no usage report at all.
  */
 export type UsageReportProvider = () => Promise<ReportedUsage | null>;
 
@@ -61,6 +62,13 @@ export class AgentHeartbeatService implements vscode.Disposable {
    * not learn the plan mid-session.
    */
   private localPlanDowngraded = false;
+  /**
+   * This activation's instance id (#2395), sent on every beat: a reloaded
+   * window reuses its stored agent id and skips registration, so the beat is
+   * the only request that tells the platform this instance is alive. Null,
+   * and not sent, when it fails the platform's bound.
+   */
+  private readonly instanceId: string | null;
 
   constructor(
     private readonly getPlatformUrl: () => string,
@@ -68,14 +76,14 @@ export class AgentHeartbeatService implements vscode.Disposable {
     private readonly logger: Logger,
     // Centralized refresh (#3751) — see AgentRegistrationService for rationale.
     private readonly tokenRefresher?: IOnDemandTokenRefresher,
-    /**
-     * Optional. Absent, or returning null, means the bodiless PUT — the only
-     * behaviour that existed before Issue #736 and still the default.
-     */
+    /** Optional. Absent, or returning null, sends no usage report (#736). */
     private readonly getUsageReport?: UsageReportProvider,
     /** Optional (#1567). Absent, or returning null, sends no profile. */
     private readonly getExecutionProfile?: ExecutionProfileProvider
-  ) {}
+  ) {
+    const id = agentInstanceId();
+    this.instanceId = isValidAgentInstanceId(id) ? id : null;
+  }
 
   /** Call once agentId is available from registration. No-op if already started. */
   start(agentId: string): void {
@@ -162,12 +170,18 @@ export class AgentHeartbeatService implements vscode.Disposable {
     }
   }
 
+  /**
+   * One beat. The instance id rides top-level beside `execution_profile`,
+   * never inside it (#2395); a platform that predates it strips the unknown
+   * key. A beat with nothing to carry is still the bodiless PUT.
+   */
   private async putHeartbeat(
     token: string,
     usage: ReportedUsage | null,
     profile: ExecutionProfile | null
   ): Promise<Response> {
     const body = {
+      ...(this.instanceId === null ? {} : { instance_id: this.instanceId }),
       ...(usage === null ? {} : { usage }),
       ...(profile === null ? {} : { execution_profile: profile }),
     };
@@ -177,7 +191,7 @@ export class AgentHeartbeatService implements vscode.Disposable {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      ...(usage === null && profile === null ? {} : { body: JSON.stringify(body) }),
+      ...(Object.keys(body).length === 0 ? {} : { body: JSON.stringify(body) }),
     });
   }
 
@@ -198,14 +212,14 @@ export class AgentHeartbeatService implements vscode.Disposable {
   }
 
   /**
-   * The usage report for this beat, or `null` for a bodiless PUT — no `body`
-   * key at all. Once the session is downgraded, a `local` report is sent as
+   * The usage report for this beat, or `null` to send none — no `usage` key
+   * at all. Once the session is downgraded, a `local` report is sent as
    * `unknown`.
    *
    * A usage report must never cost the operator agent presence, so a provider
-   * that throws is swallowed: the beat proceeds bodiless and the dashboard
-   * keeps whatever it was last told. Losing one sample is a far better trade
-   * than flipping a machine offline over telemetry.
+   * that throws is swallowed: the beat proceeds without a report and the
+   * dashboard keeps whatever it was last told. Losing one sample is a far
+   * better trade than flipping a machine offline over telemetry.
    */
   private async usageReport(): Promise<ReportedUsage | null> {
     if (!this.getUsageReport) {

@@ -12,6 +12,7 @@
 
 import * as vscode from "vscode";
 import { IpcClient, type IpcQueueItem, type IpcQueueState } from "./IpcClient";
+import type { QueueDropProcessingResult, QueueHandBackRef } from "./IpcClientBase";
 import { getRepoIdentity } from "../utils/configPathResolver";
 import type { QueueState, QueueItem, QueueConfig, QueueCallbacks } from "../types/queue";
 import { DEFAULT_QUEUE_CONFIG } from "../types/queue";
@@ -46,6 +47,10 @@ export class IssueQueueService implements vscode.Disposable {
    * that the user just cleared. See fix/stop-controls-drain-queue.
    */
   private shutdownGuard: (() => boolean) | null = null;
+  /** Numbers each dequeue's dispatch token (#2396). */
+  private dequeueCount = 0;
+  /** The dispatch tokens of the dequeues whose answer has not arrived (#2396). */
+  private readonly unansweredDequeues = new Set<string>();
 
   private readonly _onQueueChanged = new vscode.EventEmitter<QueueState | null>();
   readonly onQueueChanged = this._onQueueChanged.event;
@@ -330,7 +335,16 @@ export class IssueQueueService implements vscode.Disposable {
     runningItems: Array<{ repo: string; number: number }>
   ): Promise<QueueItem[]> {
     const ipc = IpcClient.getInstance();
-    const ipcItems = await ipc.queueDequeueIndependent(maxSlots, runningItems);
+    // Named, so a window that closes before reading the answer can hand the
+    // items it marked back to the queue (#2396, {@link dropProcessing}).
+    const dispatch = `dequeue-${++this.dequeueCount}`;
+    this.unansweredDequeues.add(dispatch);
+    let ipcItems: IpcQueueItem[];
+    try {
+      ipcItems = await ipc.queueDequeueIndependent(maxSlots, runningItems, dispatch);
+    } finally {
+      this.unansweredDequeues.delete(dispatch);
+    }
     const items = ipcItems.map((i) => this.ipcItemToQueueItem(i));
     for (const item of items) {
       this.callbacks.onItemRemoved?.(item.issueNumber);
@@ -390,6 +404,25 @@ export class IssueQueueService implements vscode.Disposable {
     const ipc = IpcClient.getInstance();
     await ipc.queueClear();
     this.callbacks.onQueueCleared?.();
+  }
+
+  /**
+   * What a window reload or close does to the queue (#2396): remove the
+   * items whose runs end with the window, and keep every waiting item, with
+   * the platform runs it carries, for the next window. A dispatch that had
+   * not begun goes back to waiting: each one `handBack` names, and each item
+   * of a dequeue whose answer has not arrived yet. The daemon dispatches
+   * nothing afterwards. {@link clear}, the operator's Stop, drops everything.
+   *
+   * The request is written before this returns its promise, since a closing
+   * window may be gone before any await resumes. A daemon that is not running
+   * is never started for it. No local callback fires: the dequeue already
+   * emitted `onItemRemoved` for each dispatched item.
+   */
+  async dropProcessing(handBack: QueueHandBackRef[] = []): Promise<QueueDropProcessingResult> {
+    const ipc = IpcClient.getInstance();
+    if (!ipc.isConnected) return { dropped: 0, kept: 0 };
+    return ipc.queueDropProcessing(handBack, [...this.unansweredDequeues]);
   }
 
   async getQueue(): Promise<QueueState | null> {

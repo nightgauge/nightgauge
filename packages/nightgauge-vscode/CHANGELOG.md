@@ -11,6 +11,16 @@ and this project adheres to
 
 ### Added
 
+- **"Cloud features (optional)" in this README** says what the two cloud
+  switches do: `"nightgauge.cloud.enabled": true` shows sign-in and the account
+  and team commands, and `platform.enabled` in `.nightgauge/config.yaml`
+  decides whether the extension talks to the hosted service. Both are off by
+  default, and the local pipeline needs neither.
+- **Each window sends the platform a random instance id** with its
+  registration, every heartbeat and its deregistration, so the hosted service
+  can keep each window's execution profile apart. It is made when the window
+  activates, held in memory only, and never derived from your machine, user
+  or workspace (#2395).
 - **A concurrency cap set on the workspace from the dashboard applies to this
   window.** While you are signed in, the window applies the cap of the
   workspace its `.vscode/nightgauge-workspace.yaml` names: no new pipeline
@@ -22,6 +32,11 @@ and this project adheres to
 
 ### Fixed
 
+- **Reloading the window while a pipeline runs keeps your queue.** The reload
+  ended the running pipelines and also cleared every queued issue, including
+  runs triggered from the dashboard. Now only the running pipelines end, and
+  the queued issues, those about to start included, are still there when the
+  window comes back. Stop All still clears the queue (#2396).
 - **A pipeline worktree's `npm install` no longer replaces a hook directory
   set for the whole clone.** A checkout whose `prepare` script runs husky set
   husky's per-worktree hooks path for every worktree of the clone, so resuming

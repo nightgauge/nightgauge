@@ -3055,7 +3055,8 @@ export const PlatformTelemetrySchema = z.object({
    * machine you run. This report goes to **your own account**, not to
    * Nightgauge as product analytics, which is why it defaults on.
    *
-   * - `off`     — nothing is sent; the agent heartbeat stays a bodiless PUT.
+   * - `off`     — no usage is sent; the agent heartbeat carries no `usage`
+   *   field, only the window's random instance id (#2395).
    * - `minimal` — allowance windows only. **No monetary figure ever leaves**:
    *   the Claude subscription percentages travel, the locally-derived
    *   per-adapter dollar spend does not.

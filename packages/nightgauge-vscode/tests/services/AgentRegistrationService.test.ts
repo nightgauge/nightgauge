@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AgentRegistrationService } from "../../src/services/AgentRegistrationService";
 import type { AgentRegistrationPayload } from "../../src/services/AgentRegistrationService";
+import { agentInstanceId } from "../../src/services/agentInstance";
 import { makeMockTokenStorage } from "../mocks/token-storage";
 import { makeMockLogger } from "../mocks/logger";
 
@@ -267,7 +268,7 @@ describe("AgentRegistrationService", () => {
       await service.deregister(AGENT_ID);
 
       expect(fetch).toHaveBeenCalledWith(
-        `${PLATFORM_URL}/v1/agents/${AGENT_ID}`,
+        `${PLATFORM_URL}/v1/agents/${AGENT_ID}?instance_id=${agentInstanceId()}`,
         expect.objectContaining({
           method: "DELETE",
           headers: expect.objectContaining({ Authorization: "Bearer test-token" }),

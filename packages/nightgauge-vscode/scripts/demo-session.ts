@@ -46,6 +46,11 @@
  *
  * Close the previous demo window before starting another: VS Code hands a
  * second launch on the same profile to the running window.
+ *
+ * Theme: `--theme light|dark|high-contrast|high-contrast-light` opens the
+ * window in that built-in VS Code theme (written to the demo profile only),
+ * for screenshots that must cover each (#2099; see
+ * `scripts/doctor-theme-screenshots.ts`).
  */
 
 import { spawn } from "node:child_process";
@@ -58,6 +63,20 @@ import { placeCloneData } from "../demo/workspace-clone";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PACKAGE_ROOT = path.resolve(here, "..");
+
+/** The built-in VS Code themes a demo session can open in (#2099). */
+export const DEMO_THEMES = {
+  light: "Default Light Modern",
+  dark: "Default Dark Modern",
+  "high-contrast": "Default High Contrast",
+  "high-contrast-light": "Default High Contrast Light",
+} as const;
+
+export type DemoTheme = keyof typeof DEMO_THEMES;
+
+export function isDemoTheme(value: string): value is DemoTheme {
+  return Object.prototype.hasOwnProperty.call(DEMO_THEMES, value);
+}
 
 export interface DemoSessionOptions {
   /** Where the session's profile, workspace, logs and start file live. */
@@ -72,6 +91,8 @@ export interface DemoSessionOptions {
   eventLog?: string;
   /** VS Code executable; the cached test-electron build when unset. */
   code?: string;
+  /** The built-in theme the window opens in; the profile's own when unset. */
+  theme?: DemoTheme;
 }
 
 export interface DemoSessionPlan {
@@ -134,6 +155,14 @@ export function parseArgs(argv: readonly string[]): DemoSessionOptions {
       case "--code":
         options.code = path.resolve(value());
         break;
+      case "--theme": {
+        const theme = value();
+        if (!isDemoTheme(theme)) {
+          throw new Error(`--theme must be one of ${Object.keys(DEMO_THEMES).join(", ")}`);
+        }
+        options.theme = theme;
+        break;
+      }
       default:
         throw new Error(`unknown option ${flag}`);
     }
@@ -161,6 +190,7 @@ export function planDemoSession(options: DemoSessionOptions): DemoSessionPlan {
       "nightgauge.telemetry.enabled": false,
       "workbench.startupEditor": "none",
       "security.workspace.trust.enabled": false,
+      ...(options.theme ? { "workbench.colorTheme": DEMO_THEMES[options.theme] } : {}),
     },
     env: {
       NIGHTGAUGE_DEMO_SCENARIO: options.scenario,
@@ -237,7 +267,7 @@ export function sessionEnv(base: NodeJS.ProcessEnv, plan: DemoSessionPlan): Reco
   return { ...env, ...plan.env };
 }
 
-async function resolveCode(options: DemoSessionOptions): Promise<string> {
+export async function resolveCode(options: Pick<DemoSessionOptions, "code">): Promise<string> {
   if (options.code) return options.code;
   const { downloadAndUnzipVSCode } = await import("@vscode/test-electron");
   const { acquireVSCode } = await import("../tests/launcher/acquireVSCode");
