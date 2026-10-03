@@ -8523,9 +8523,19 @@ func gitBranchCreateCmd() *cobra.Command {
 				}
 			}
 
-			parentIssue := 0
-			var epicTitle func() (string, error)
+			var issueSvc issueFetcher
+			issues := func() (issueFetcher, error) {
+				if issueSvc == nil {
+					client, err := clientFromConfig()
+					if err != nil {
+						return nil, err
+					}
+					issueSvc = gh.NewIssueService(client)
+				}
+				return issueSvc, nil
+			}
 
+			var issue *types.Issue
 			if issueNumber != 0 {
 				if owner == "" || repo == "" {
 					remoteSlug, slugErr := svc.RemoteRepoSlug()
@@ -8535,65 +8545,29 @@ func gitBranchCreateCmd() *cobra.Command {
 					owner, repo = splitRepo("", remoteSlug)
 				}
 
-				var issueSvc *gh.IssueService
-				issue := prefetchedIssue
+				issue = prefetchedIssue
 				if issue == nil {
-					client, err := clientFromConfig()
+					fetcher, err := issues()
 					if err != nil {
 						return err
 					}
-					issueSvc = gh.NewIssueService(client)
-					issue, err = issueSvc.GetIssueWithRelations(cmd.Context(), owner, repo, issueNumber, gh.NoRelations)
+					issue, err = fetcher.GetIssueWithRelations(cmd.Context(), owner, repo, issueNumber, gh.NoRelations)
 					if err != nil {
 						return err
 					}
-				}
-				// 0 for a parent in another repository, so the title read
-				// below is always this repository's #N (#2377).
-				parentIssue = epicBranchParentFor(issue, owner, repo)
-				epicTitle = func() (string, error) {
-					if issueSvc == nil {
-						client, clientErr := clientFromConfig()
-						if clientErr != nil {
-							return "", clientErr
-						}
-						issueSvc = gh.NewIssueService(client)
-					}
-					epic, epicErr := issueSvc.GetIssueWithRelations(cmd.Context(), owner, repo, parentIssue, gh.NoRelations)
-					if epicErr != nil {
-						return "", epicErr
-					}
-					return epic.Title, nil
 				}
 			}
 
-			// One implementation shared with the scheduler's deterministic
-			// issue-pickup runner (#1904).
-			res, err := svc.EnsureIssueBranch(branchName, parentIssue, epicTitle)
+			res, err := ensureBranchForIssue(cmd.Context(), svc, issues, owner, repo, issue, branchName)
 			if err != nil {
 				return err
 			}
+			if outputJSON {
+				return printJSON(branchCreatePayload(res))
+			}
 			// A re-dispatch may continue on the issue's existing branch
 			// under an earlier name (#1901); report the branch actually used.
-			branchName = res.Branch
-			baseBranch, action, epicBranch := res.BaseBranch, res.Action, res.EpicBranch
-
-			if outputJSON {
-				payload := map[string]interface{}{
-					"success":      true,
-					"branch":       branchName,
-					"base_branch":  baseBranch,
-					"action":       action,
-					"parent_issue": nil,
-					"epic_branch":  nil,
-				}
-				if parentIssue != 0 {
-					payload["parent_issue"] = parentIssue
-					payload["epic_branch"] = epicBranch
-				}
-				return printJSON(payload)
-			}
-			fmt.Printf("Created and checked out branch: %s\n", branchName)
+			fmt.Printf("Created and checked out branch: %s\n", res.Branch)
 			return nil
 		},
 	}
