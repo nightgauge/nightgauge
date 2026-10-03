@@ -12,7 +12,10 @@
 #   4. A baseline that is not clean stops the walk after one doctor run.
 #   5. Doctor prints no JSON: exit 2, could not run.
 #   6. No binary: exit 2 before anything runs.
-#   7. Input ends before a step is confirmed: exit 2, never a pass.
+#   7. Input ends before a step is confirmed: exit 2, never a pass, and the
+#      walk says how to restore and accept the permission it had removed.
+#   8. --record with a relative NIGHTGAUGE_BIN: the recorder runs the binary
+#      the walk checked, never another `nightgauge` on PATH.
 #
 # An arm that asserted false prints FAIL; an arm whose fixture could not be
 # built prints HARNESS ERROR and the suite exits 2.
@@ -145,7 +148,8 @@ transcript="$(cat "$d/out/transcript.md" 2>/dev/null)"
 passes="$(grep -c '^PASS$' "$d/out/transcript.md" 2>/dev/null)"
 calls="$(cat "$d/calls" 2>/dev/null)"
 if [ "$rc" -eq 0 ] && [ "$passes" = "4" ] && [[ $transcript == *"Every state read as expected."* ]] &&
-  [[ $calls == "doctor --only github_identity,board_population --json"* ]]; then
+  [[ $calls == "doctor --only github_identity,board_population --json"* ]] &&
+  ! grep -q "walk stopped before step 3" "$d/stderr"; then
   ok "four states read as expected"
 else
   bad "four states: rc=$rc passes=$passes calls=${calls%%$'\n'*}"
@@ -184,7 +188,8 @@ d="$T/dirty"
 fake "$d" removed
 walk "$d" 3
 rc=$?
-if [ "$rc" -eq 1 ] && [ "$(count_of "$d")" = "1" ] && grep -q "baseline is not clean" "$d/stdout"; then
+if [ "$rc" -eq 1 ] && [ "$(count_of "$d")" = "1" ] && grep -q "baseline is not clean" "$d/stdout" &&
+  ! grep -q "walk stopped before step 3" "$d/stderr"; then
   ok "a dirty baseline stops after one doctor run"
 else
   bad "dirty baseline: rc=$rc doctor runs=$(count_of "$d")"
@@ -221,6 +226,38 @@ if [ "$rc" -eq 2 ] && [ "$(count_of "$d")" = "2" ] && grep -q "stopped: no more 
   ok "running out of input is could-not-run, never a pass"
 else
   bad "early EOF: rc=$rc doctor runs=$(count_of "$d")"
+fi
+if grep -q "walk stopped before step 3" "$d/stderr" &&
+  grep -q "Projects: 'Read and write'" "$d/stderr" &&
+  grep -q "organization owner opens the installation" "$d/stderr" &&
+  grep -q "settings/apps/example-app/permissions" "$d/stderr"; then
+  ok "a walk that stops after step 1 says how to restore and accept the permission"
+else
+  bad "no restore instructions after stopping in step 2: $(cat "$d/stderr")"
+fi
+
+# 8. --record with a relative NIGHTGAUGE_BIN, and another nightgauge on PATH.
+d="$T/record"
+fake "$d" clean removed restored clean
+mkdir -p "$d/decoy" "$d/tools" || harness_error "mkdir $d"
+printf '#!/usr/bin/env bash\necho decoy\n' >"$d/decoy/nightgauge" || harness_error "write decoy"
+chmod +x "$d/decoy/nightgauge" || harness_error "chmod decoy"
+# The fake vhs runs what the tape would type, and writes the outputs it names.
+cat >"$d/tools/vhs" <<SH || harness_error "write fake vhs"
+#!/usr/bin/env bash
+nightgauge --version >"$d/recorded-with"
+touch doctor-guided-repair.gif doctor-guided-repair.mp4
+SH
+chmod +x "$d/tools/vhs" || harness_error "chmod fake vhs"
+printf '\n\n\n' >"$d/stdin" || harness_error "write $d/stdin"
+(cd "$d" && PATH="$d/decoy:$d/tools:$PATH" NIGHTGAUGE_BIN="bin/nightgauge" \
+  bash "$SCRIPT" --record --out "$d/out" <"$d/stdin" >"$d/stdout" 2>"$d/stderr")
+rc=$?
+if [ "$rc" -eq 0 ] && [ "$(cat "$d/recorded-with" 2>/dev/null)" = "nightgauge test" ] &&
+  [ -e "$d/out/doctor-guided-repair.gif" ] && grep -q "#2095 recording" "$d/out/transcript.md"; then
+  ok "the recording runs the binary the walk checked"
+else
+  bad "recording: rc=$rc recorded with '$(cat "$d/recorded-with" 2>/dev/null)'"
 fi
 
 echo

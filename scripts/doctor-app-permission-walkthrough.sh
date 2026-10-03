@@ -23,8 +23,13 @@
 # State 3 passing also shows the App token cache was replaced without anyone
 # deleting `github-app-token-*.json` by hand.
 #
-# Between steps 1 and 3 the App cannot read or write the board, so stop
-# autonomous mode first (`nightgauge autonomous stop`) and finish the walk.
+# The change is organization-wide. From step 1 until an organization owner
+# accepts it in step 3, the App cannot read or write the board, so every
+# machine, session and CI job that authenticates as this App loses board
+# access, not only this checkout. Have an organization owner available before
+# you start, stop autonomous mode first (`nightgauge autonomous stop`), and
+# finish the walk. If it stops after step 1 for any reason (Ctrl-C, input
+# ending, doctor failing), it prints how to restore and accept the permission.
 #
 # --record also records #2095's guided-repair session in state 1: with vhs,
 # from scripts/doctor-guided-repair.tape (a GIF and an MP4); without vhs but
@@ -76,6 +81,14 @@ done
 
 command -v "$BIN" >/dev/null 2>&1 || { echo "cannot run: $BIN is not on PATH (set NIGHTGAUGE_BIN)" >&2; exit 2; }
 command -v python3 >/dev/null 2>&1 || { echo "cannot run: python3 is not on PATH" >&2; exit 2; }
+# One binary for the whole walk, the recording included: a relative
+# NIGHTGAUGE_BIN (bin/nightgauge) would name another file, or none, from the
+# recorder's own directory.
+BIN="$(command -v "$BIN")"
+case "$BIN" in
+  /*) ;;
+  *) BIN="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")" ;;
+esac
 
 if [ -z "$OUT" ]; then
   OUT="$(mktemp -d "${TMPDIR:-/tmp}/nightgauge-app-walkthrough.XXXXXX")" || exit 2
@@ -203,8 +216,10 @@ record() {
     local dir
     dir="$(mktemp -d "${TMPDIR:-/tmp}/nightgauge-doctor-recording.XXXXXX")" || return 0
     echo "Recording the guided-repair session with vhs (about a minute; do not touch the keyboard)."
-    # The tape types `nightgauge`: put this walk's binary first on its PATH.
-    if (cd "$dir" && PATH="$(dirname "$(command -v "$BIN")"):$PATH" \
+    # The tape types `nightgauge`: put this walk's binary first on its PATH,
+    # under that name whatever the file is called.
+    mkdir -p "$dir/bin" && ln -s "$BIN" "$dir/bin/nightgauge" || return 0
+    if (cd "$dir" && PATH="$dir/bin:$PATH" \
       NIGHTGAUGE_RECORD_CHECKOUT="$CHECKOUT" vhs "$TAPE"); then
       cp "$dir"/doctor-guided-repair.* "$OUT"/ 2>/dev/null
       echo "Recorded: $OUT/doctor-guided-repair.gif and .mp4 (attach one to #2095)."
@@ -229,6 +244,31 @@ check baseline "0. baseline" || {
   exit 1
 }
 
+# From step 1 until state 3 is checked, a walk that stops leaves the App
+# without Projects across the organization: say how to put it back.
+ACCEPTED=0
+# shellcheck disable=SC2329 # invoked by the EXIT trap below
+remind_restore() {
+  [ "$ACCEPTED" -eq 1 ] && return
+  {
+    echo
+    echo "The walk stopped before step 3. If you removed the permission in step 1, the App"
+    echo "still lacks Organization → Projects, and every machine, session and CI job that"
+    echo "uses it cannot read or write the board until both steps below are done:"
+    echo "  1. The organization's Settings → Developer settings → GitHub Apps → the App →"
+    echo "     Permissions & events → Organization permissions → Projects: 'Read and write', save."
+    echo "  2. An organization owner opens the installation and accepts the requested permissions."
+    local state links
+    for state in removed restored; do
+      [ -s "$OUT/$state.json" ] || continue
+      links="$(links_of "$state" 2>/dev/null)"
+      [ -n "$links" ] && printf '%s\n' "$links" | sed 's/^/     /'
+    done
+  } >&2
+}
+trap remind_restore EXIT
+trap 'exit 130' INT TERM
+
 pause "1. Remove the permission. On GitHub: the organization's Settings → Developer settings →" \
   "   GitHub Apps → the App → Permissions & events → Organization permissions → Projects:" \
   "   set it to 'No access' and save. (A removal applies at once; nothing to accept.)"
@@ -245,6 +285,7 @@ install_links="$(links_of restored)"
 pause "3. Accept the change. An organization owner opens the installation and accepts the" \
   "   requested permissions. Doctor's link for this state:" "${install_links:-   (doctor gave none)}"
 check accepted "3. accepted on the installation"
+ACCEPTED=1
 
 echo
 if [ "$FAILED" -eq 0 ]; then

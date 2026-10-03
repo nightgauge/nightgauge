@@ -282,7 +282,11 @@ recording, and screenshots of VS Code itself. Each is scripted, so the
 maintainer only runs it and attaches what it writes.
 
 - **The App permission sequence (#2094).** From a checkout that authenticates as
-  an organization's GitHub App, with autonomous mode stopped:
+  an organization's GitHub App, with autonomous mode stopped and an
+  organization owner available. The change applies to the App across the whole
+  organization: from the removal until the owner accepts the restored
+  permission, every machine, session and CI job that uses the App cannot read
+  or write the board.
 
   ```bash
   scripts/doctor-app-permission-walkthrough.sh --record
@@ -293,8 +297,9 @@ maintainer only runs it and attaches what it writes.
   and checks that doctor names each state: nothing, then [NGD036](#ngd036), then
   [NGD037](#ngd037), then nothing, with any board finding re-diagnosed as
   [NGD041](#ngd041). It changes nothing itself and writes a transcript to paste
-  into the issue. Exit `0` means every state read as expected, `1` names the
-  state that did not, `2` means the walk could not run.
+  into the issue. If it stops after the removal, it prints how to restore and
+  accept the permission. Exit `0` means every state read as expected, `1` names
+  the state that did not, `2` means the walk could not run.
 
 - **The guided-repair recording (#2095).** `--record` above records it in the
   NGD036 state with [vhs](https://github.com/charmbracelet/vhs) from
