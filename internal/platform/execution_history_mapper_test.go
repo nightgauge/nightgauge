@@ -541,7 +541,8 @@ func TestV2RunRecordToExecutionHistoryRunRecord_ValidOutcomesPassThrough(t *test
 }
 
 // TestV2RunRecordToExecutionHistoryRunRecord_IssueContext asserts the issue
-// title/body/labels captured at pickup (#183) map onto the wire fields.
+// title and labels captured at pickup (#183) map onto the wire fields, and
+// that the issue body, which the local record keeps, never reaches the wire.
 func TestV2RunRecordToExecutionHistoryRunRecord_IssueContext(t *testing.T) {
 	rec := fullTestRecord()
 	rec.Title = "Add rate limiting to the ingest endpoint"
@@ -555,11 +556,16 @@ func TestV2RunRecordToExecutionHistoryRunRecord_IssueContext(t *testing.T) {
 	if got.IssueTitle == nil || *got.IssueTitle != rec.Title {
 		t.Errorf("IssueTitle = %v, want %q", got.IssueTitle, rec.Title)
 	}
-	if got.IssueBody == nil || *got.IssueBody != rec.Body {
-		t.Errorf("IssueBody = %v, want %q", got.IssueBody, rec.Body)
-	}
 	if want := []string{"type:feature", "component:api"}; !equalStrings(got.Labels, want) {
 		t.Errorf("Labels = %v, want %v", got.Labels, want)
+	}
+
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytesContains(data, "issueBody") || bytesContains(data, "No per-account throttle") {
+		t.Errorf("the issue body must never reach the wire: %s", data)
 	}
 }
 
@@ -575,9 +581,6 @@ func TestV2RunRecordToExecutionHistoryRunRecord_IssueContextOmittedWhenEmpty(t *
 	}
 	if got.IssueTitle != nil {
 		t.Errorf("IssueTitle = %v, want nil", *got.IssueTitle)
-	}
-	if got.IssueBody != nil {
-		t.Errorf("IssueBody = %v, want nil", *got.IssueBody)
 	}
 	if got.Labels != nil {
 		t.Errorf("Labels = %v, want nil", got.Labels)
@@ -596,12 +599,12 @@ func TestV2RunRecordToExecutionHistoryRunRecord_IssueContextOmittedWhenEmpty(t *
 
 // TestV2RunRecordToExecutionHistoryRunRecord_IssueContextBounds asserts the
 // wire values are clipped to the platform's telemetry bounds (#183): title 256,
-// body 8192, labels count 50 — exceeding any would reject the whole record under
-// the platform's `.strict()` validation.
+// labels count 50 — exceeding either would reject the whole record under the
+// platform's `.strict()` validation.
 func TestV2RunRecordToExecutionHistoryRunRecord_IssueContextBounds(t *testing.T) {
 	rec := fullTestRecord()
 	rec.Title = strings.Repeat("t", executionHistoryIssueTitleMax+50)
-	rec.Body = strings.Repeat("b", executionHistoryIssueBodyMax+100)
+	rec.Body = strings.Repeat("b", 9000)
 	labels := make([]string, executionHistoryLabelsMax+10)
 	for i := range labels {
 		labels[i] = "label"
@@ -614,9 +617,6 @@ func TestV2RunRecordToExecutionHistoryRunRecord_IssueContextBounds(t *testing.T)
 	}
 	if got.IssueTitle == nil || len([]rune(*got.IssueTitle)) != executionHistoryIssueTitleMax {
 		t.Errorf("IssueTitle len = %d, want %d", len([]rune(deref(got.IssueTitle))), executionHistoryIssueTitleMax)
-	}
-	if got.IssueBody == nil || len([]rune(*got.IssueBody)) != executionHistoryIssueBodyMax {
-		t.Errorf("IssueBody len = %d, want %d", len([]rune(deref(got.IssueBody))), executionHistoryIssueBodyMax)
 	}
 	if len(got.Labels) != executionHistoryLabelsMax {
 		t.Errorf("Labels count = %d, want %d", len(got.Labels), executionHistoryLabelsMax)

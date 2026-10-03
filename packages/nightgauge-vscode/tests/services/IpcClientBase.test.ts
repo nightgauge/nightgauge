@@ -675,6 +675,75 @@ describe("IpcClientBase", () => {
     });
   });
 
+  // ── Editor telemetry consent ──────────────────────────────────────────────
+
+  describe("editor telemetry consent", () => {
+    function withTelemetrySetting(enabled: boolean | undefined): void {
+      (vscode.workspace.getConfiguration as unknown as MockInstance).mockImplementation(
+        (section?: string) => ({
+          get: vi.fn(<T>(key: string, defaultValue?: T): T | undefined => {
+            if (section === "nightgauge" && key === "telemetry.enabled")
+              return enabled as unknown as T;
+            if (key === "binaryPath") return "" as unknown as T;
+            if (key === "timeoutSeconds") return 30 as unknown as T;
+            return defaultValue;
+          }),
+        })
+      );
+    }
+
+    async function spawnEnv(): Promise<Record<string, string> | undefined> {
+      const { spawn } = await import("child_process");
+      await startTestClient(client);
+      return vi.mocked(spawn).mock.calls[0]?.[2]?.env as Record<string, string> | undefined;
+    }
+
+    afterEach(() => {
+      (vscode.env as { isTelemetryEnabled: boolean }).isTelemetryEnabled = true;
+    });
+
+    it("hands the daemon the consent at spawn: on by default", async () => {
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY).toBe("on");
+    });
+
+    it("hands the daemon 'off' when nightgauge.telemetry.enabled is false", async () => {
+      withTelemetrySetting(false);
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY).toBe("off");
+    });
+
+    it("hands the daemon 'off' when VS Code's telemetry is off, whatever the setting", async () => {
+      withTelemetrySetting(true);
+      (vscode.env as { isTelemetryEnabled: boolean }).isTelemetryEnabled = false;
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY).toBe("off");
+    });
+
+    it("sends the new consent when the setting changes, and nothing at start", async () => {
+      let onChange: ((e: { affectsConfiguration: (s: string) => boolean }) => void) | null = null;
+      (vscode.workspace.onDidChangeConfiguration as unknown as MockInstance).mockImplementation(
+        (listener: typeof onChange) => {
+          onChange = listener;
+          return { dispose: vi.fn() };
+        }
+      );
+      await startTestClient(client);
+      const consentWrites = () =>
+        capturedStdinWrites
+          .map((w) => JSON.parse(w.trimEnd()))
+          .filter((r) => r.method === "platform.setTelemetryConsent");
+      expect(consentWrites()).toEqual([]);
+
+      withTelemetrySetting(false);
+      onChange!({ affectsConfiguration: (k) => k === "nightgauge.telemetry.enabled" });
+      await flushPromises();
+      expect(consentWrites().map((r) => r.params)).toEqual([{ enabled: false }]);
+
+      // A setting that is not the consent sends nothing.
+      onChange!({ affectsConfiguration: (k) => k === "nightgauge.backend.timeoutSeconds" });
+      await flushPromises();
+      expect(consentWrites()).toHaveLength(1);
+    });
+  });
+
   // ── dispose() ─────────────────────────────────────────────────────────────
 
   describe("dispose()", () => {

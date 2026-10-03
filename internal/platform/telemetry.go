@@ -70,6 +70,12 @@ func (s *TelemetryService) SyncQueue(ctx context.Context, items []QueueSyncItem)
 	})
 }
 
+// SetSendGate installs the consent check every push asks first; see
+// AnalyticsService.SetSendGate.
+func (s *TelemetryService) SetSendGate(gate func() bool) {
+	s.analytics.SetSendGate(gate)
+}
+
 // StartAutoFlush starts periodic background flushing of buffered analytics data.
 func (s *TelemetryService) StartAutoFlush(ctx context.Context) {
 	s.analytics.StartAutoFlush(ctx)

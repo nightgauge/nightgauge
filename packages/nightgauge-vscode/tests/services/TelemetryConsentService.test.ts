@@ -285,7 +285,7 @@ describe("TelemetryConsentService.maybeShowFirstRunPrompt — disclosure notice 
     await svc.maybeShowFirstRunPrompt();
     expect(vscode.window.showInformationMessage).toHaveBeenCalledTimes(1);
     const args = vi.mocked(vscode.window.showInformationMessage).mock.calls[0];
-    expect(args[0]).toMatch(/anonymous usage data/i);
+    expect(args[0]).toMatch(/sends run telemetry/i);
     expect(args[0]).not.toMatch(/\?$/); // a statement, not a question
     expect(args[1]).toMatchObject({ modal: true });
     expect(args.slice(2)).toEqual(["Turn off", "Keep on"]);

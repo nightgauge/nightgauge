@@ -5324,6 +5324,13 @@ func serveCmd() *cobra.Command {
 			// trial) build a client on demand when there is none, and go to
 			// the URL they configured whatever platform.enabled says (#2398).
 			opts = append(opts, ipc.WithPlatformEndpoint(onDemandPlatformEndpoint(platformURL, cfg)))
+			// Run telemetry needs the cloud opt-in and telemetry on, in config
+			// and in the editor that started this daemon; a signed-in session
+			// alone sends nothing (docs/TELEMETRY_PRIVACY.md).
+			telemetryConfigOn := cfg == nil || cfg.Telemetry.IsEnabled()
+			opts = append(opts,
+				ipc.WithTelemetryPolicy(resolvedPlatform.OptedIn, telemetryConfigOn),
+				ipc.WithEditorTelemetry(os.Getenv(ipc.EditorTelemetryEnv)))
 			platformURL, apiKey, licenseKey = resolvedPlatform.URL, resolvedPlatform.APIKey, resolvedPlatform.LicenseKey
 			if resolvedPlatform.Configured() {
 				apiURLForLog := platformURL
@@ -5493,9 +5500,11 @@ func serveCmd() *cobra.Command {
 				// disclosure — the CLI has no consent dialog to carry it.
 				if platformClient != nil && cfg != nil {
 					telemetryEnabled := cfg.Telemetry.IsEnabled()
+					// The notice discloses what is sent, so it is owed only when
+					// something will be: the cloud is opted in.
 					if notifier, nerr := telemetrynotice.ForAccount(); nerr == nil {
 						if _, werr := notifier.MaybePrint(
-							os.Stderr, telemetryEnabled, cfg.Telemetry.IsExplicitlySet(),
+							os.Stderr, telemetryEnabled && resolvedPlatform.OptedIn, cfg.Telemetry.IsExplicitlySet(),
 						); werr != nil {
 							// The notice was delivered; only the marker failed,
 							// so the sole consequence is showing it again.
@@ -5503,6 +5512,10 @@ func serveCmd() *cobra.Command {
 						}
 					}
 					telemetrySvc := platform.NewTelemetryService(platformClient)
+					// The scheduler's pushes ask the same consent as the IPC
+					// path's: the cloud opted in, telemetry on, and the editor's
+					// consent not withdrawn.
+					telemetrySvc.SetSendGate(server.TelemetryAllowed)
 					sched.WithTelemetryService(telemetrySvc, telemetryEnabled)
 					telemetrySvc.StartAutoFlush(context.Background())
 				}

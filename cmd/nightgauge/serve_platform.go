@@ -39,6 +39,12 @@ type resolvedPlatformConfig struct {
 	APIKey     string
 	LicenseKey string
 	Source     platformConfigSource
+	// OptedIn is the user's opt-in to the hosted service: platform.enabled
+	// true, or a license or API key in the environment. Run telemetry is
+	// sent only with it (ipc.WithTelemetryPolicy). A platform URL alone, a
+	// stored license key or a signed-in session is not an opt-in: they say
+	// where requests go or who the user is, not that the product may send.
+	OptedIn bool
 }
 
 // Configured reports whether any platform credential resolved to a non-empty
@@ -93,6 +99,7 @@ func onDemandPlatformEndpoint(flagURL string, cfg *config.Config) string {
 // the --api-key flag was removed because it put the key on argv (ADR-024 § 5).
 func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *config.Config, storedLicense func() (keychain.Result, error)) resolvedPlatformConfig {
 	r := resolvedPlatformConfig{URL: flagURL, APIKey: flagAPIKey, LicenseKey: flagLicenseKey}
+	explicitCredential := flagAPIKey != "" || flagLicenseKey != ""
 
 	// licenseFromFlagEnv is captured before the config fallback below
 	// mutates r.LicenseKey — it drives the Source label because LicenseKey
@@ -106,6 +113,7 @@ func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *conf
 	// setting is absent or false. Config-file credentials are used only when
 	// platform.enabled is explicitly true; omitted is the local-only default.
 	configEnabled := cfg != nil && cfg.PlatformEnabled != nil && *cfg.PlatformEnabled
+	r.OptedIn = configEnabled || explicitCredential
 	if configEnabled {
 		if r.URL == "" && cfg.PlatformURL != "" {
 			r.URL = cfg.PlatformURL

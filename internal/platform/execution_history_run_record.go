@@ -78,17 +78,19 @@ type ExecutionHistoryRunRecord struct {
 	// RoutingPath is nullable (unlike Stages/Agents) — nil serializes to
 	// `null`, matching `routingPath: string[] | null` on the wire.
 	RoutingPath []string `json:"routingPath"`
-	// IssueTitle / IssueBody / Labels carry the GitHub issue context captured at
-	// pickup (#183) so the dashboard run-detail page can show what a run is doing
-	// (title in the hero band, body + labels in an "Issue" section) without
-	// leaving the dashboard. Unlike the fields above these are `.optional()` (NOT
-	// just `.nullable()`) in the platform's additive schema — an older payload
-	// that omits them still validates — so they carry `omitempty`: a run with no
-	// captured context simply drops the keys rather than sending `null`. Bounded
-	// to match the platform: issueTitle .max(256), issueBody .max(8192). Labels
-	// mirrors the already-accepted optional `labels` field.
+	// IssueTitle / Labels carry the GitHub issue context captured at pickup
+	// (#183) so the dashboard's run list and run detail can show what a run is
+	// doing without leaving the dashboard. Unlike the fields above these are
+	// `.optional()` (NOT just `.nullable()`) in the platform's additive schema —
+	// an older payload that omits them still validates — so they carry
+	// `omitempty`: a run with no captured context simply drops the keys rather
+	// than sending `null`. Bounded to match the platform: issueTitle .max(256).
+	// Labels mirrors the already-accepted optional `labels` field.
+	//
+	// The schema also accepts an `issueBody` excerpt. It is deliberately not
+	// a field here: nothing the product needs is worth sending the text of a
+	// private issue for, so the body never leaves the machine.
 	IssueTitle *string  `json:"issueTitle,omitempty"`
-	IssueBody  *string  `json:"issueBody,omitempty"`
 	Labels     []string `json:"labels,omitempty"`
 }
 

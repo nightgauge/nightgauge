@@ -262,3 +262,34 @@ func TestOnDemandPlatformEndpoint(t *testing.T) {
 		t.Errorf("no config: got %q, want the default", got)
 	}
 }
+
+// TestResolvePlatformConfig_OptedIn pins what counts as the user's opt-in to
+// the hosted service, which run telemetry needs (ipc.WithTelemetryPolicy):
+// platform.enabled true, or a key in the environment. A platform URL, a
+// stored key or (elsewhere) a signed-in session is not one.
+func TestResolvePlatformConfig_OptedIn(t *testing.T) {
+	enabled, disabled := true, false
+	stored := storedAt("lic_stored", keychain.SourceKeychain)
+	cases := []struct {
+		name                string
+		url, apiKey, licEnv string
+		cfg                 *config.Config
+		want                bool
+	}{
+		{name: "platform.enabled true", cfg: &config.Config{PlatformEnabled: &enabled}, want: true},
+		{name: "license key in the environment", licEnv: "lic_env", cfg: &config.Config{PlatformEnabled: &disabled}, want: true},
+		{name: "api key in the environment", apiKey: "key_env", want: true},
+		{name: "a platform URL alone", url: "https://staging.example.test", cfg: &config.Config{PlatformEnabled: &disabled}},
+		{name: "a stored key with platform.enabled false", cfg: &config.Config{PlatformEnabled: &disabled}},
+		{name: "platform.enabled omitted", cfg: &config.Config{PlatformURL: "https://cfg.example.com"}},
+		{name: "no config", cfg: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolvePlatformConfig(tc.url, tc.apiKey, tc.licEnv, tc.cfg, stored)
+			if got.OptedIn != tc.want {
+				t.Errorf("OptedIn = %v, want %v (%+v)", got.OptedIn, tc.want, got)
+			}
+		})
+	}
+}

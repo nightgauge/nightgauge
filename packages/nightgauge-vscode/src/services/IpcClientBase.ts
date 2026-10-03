@@ -20,6 +20,7 @@ import { BinaryResolver } from "./BinaryResolver";
 import { getActiveCallSource, setActiveCallSource } from "./callSource";
 import { getGitHubAuthToken, getGitHubAuthTokens } from "../utils/nightgaugeConfig";
 import { whenLicenseReconciled } from "./licenseKeychainBridge";
+import { editorTelemetryConsent, TELEMETRY_ENABLED_SETTING } from "./TelemetryConsentService";
 import { TokenStorage } from "../platform/TokenStorage";
 import { PlatformCredentialBridge } from "../platform/PlatformCredentialBridge";
 import { redactSecrets } from "../utils/redaction";
@@ -72,6 +73,15 @@ export type EventHandler = (data: unknown) => void;
  * as agentworkspace.WindowFoldersEnv; an older daemon ignores it.
  */
 export const WINDOW_FOLDERS_ENV_VAR = "NIGHTGAUGE_WINDOW_FOLDERS";
+
+/**
+ * The environment variable that hands the daemon the editor's telemetry
+ * consent at spawn, "on" or "off" (ipc.EditorTelemetryEnv on the Go side).
+ * platform.setTelemetryConsent keeps it current afterwards. The daemon sends
+ * run telemetry only while this consent holds, the cloud is enabled and
+ * platform.telemetry.enabled is not false; see docs/TELEMETRY_PRIVACY.md.
+ */
+export const EDITOR_TELEMETRY_ENV_VAR = "NIGHTGAUGE_EDITOR_TELEMETRY";
 
 // ---------------------------------------------------------------------------
 // Workspace types (matches Go internal/ipc/protocol.go Workspace* structs)
@@ -1924,6 +1934,8 @@ export abstract class IpcClientBase implements vscode.Disposable {
   private resolvedTokenSource: string | null = null;
   /** Keeps the daemon's platform credential equal to the current session (#742). */
   private credentialBridge: PlatformCredentialBridge | null = null;
+  /** Re-sends the editor's telemetry consent whenever it changes. */
+  private telemetryConsentWatch: vscode.Disposable | null = null;
   private readonly tokenCache = new Map<string, string>();
   private outputChannel: vscode.OutputChannel | null = null;
   private logFileStream: fs.WriteStream | null = null;
@@ -2023,6 +2035,8 @@ export abstract class IpcClientBase implements vscode.Disposable {
     // its environment. Hand it the signed-in user's JWT as well, and keep
     // doing so for every later rotation (#742).
     this.syncPlatformSessionToken();
+    // Keep the daemon's copy of the editor's telemetry consent current.
+    this.watchTelemetryConsent();
     this._onDidChangeStatus.fire(true);
   }
 
@@ -2051,6 +2065,10 @@ export abstract class IpcClientBase implements vscode.Disposable {
     // Only the platform URL setting is forwarded (#1474). Stored and
     // config-file platform values are the daemon's to read (#2398).
     this.forwardPlatformEnv(env);
+
+    // The editor's telemetry consent, so the daemon never sends run telemetry
+    // the user turned off here, not even before the first consent sync.
+    env[EDITOR_TELEMETRY_ENV_VAR] = editorTelemetryConsent() ? "on" : "off";
 
     // The window's folders, in order, so the daemon's platform agent declares
     // the workspace this extension's agent declares (#2335). The extension
@@ -2243,6 +2261,8 @@ export abstract class IpcClientBase implements vscode.Disposable {
     this.disposed = true;
     this.credentialBridge?.dispose();
     this.credentialBridge = null;
+    this.telemetryConsentWatch?.dispose();
+    this.telemetryConsentWatch = null;
     if (this.restartTimer) {
       clearTimeout(this.restartTimer);
     }
@@ -2712,6 +2732,34 @@ export abstract class IpcClientBase implements vscode.Disposable {
       );
     }
     void this.credentialBridge.sync();
+  }
+
+  /**
+   * Tell the daemon the editor's telemetry consent whenever VS Code's
+   * telemetry level or `nightgauge.telemetry.enabled` changes, so turning
+   * telemetry off in the editor stops the daemon's sending at once (buffered
+   * items included). The daemon learns the consent at spawn from its
+   * environment (EDITOR_TELEMETRY_ENV_VAR), so a start sends nothing; the
+   * watch is created once and survives restarts.
+   */
+  private watchTelemetryConsent(): void {
+    if (this.telemetryConsentWatch) return;
+    const send = (): void => {
+      if (!this.isConnected) return; // the next spawn reads it from its env
+      this.call<{ ok: boolean }>("platform.setTelemetryConsent", {
+        enabled: editorTelemetryConsent(),
+      }).catch((err: unknown) => {
+        this.log(`[IpcClientBase] telemetry consent sync failed: ${String(err)}`);
+      });
+    };
+    const watches: vscode.Disposable[] = [];
+    const onSetting = vscode.workspace.onDidChangeConfiguration?.((e) => {
+      if (e.affectsConfiguration(TELEMETRY_ENABLED_SETTING)) send();
+    });
+    if (onSetting) watches.push(onSetting);
+    const onLevel = vscode.env?.onDidChangeTelemetryEnabled?.(() => send());
+    if (onLevel) watches.push(onLevel);
+    this.telemetryConsentWatch = { dispose: () => watches.forEach((w) => w.dispose()) };
   }
 
   private async resolveBinaryPath(): Promise<string | null> {

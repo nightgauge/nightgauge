@@ -4145,9 +4145,12 @@ export async function initializeServices(
   void telemetryConsentService.maybeShowFirstRunPrompt();
 
   // Initialize TelemetryUploaderService — ships local JSONL history to the
-  // platform's POST /v1/telemetry/pipeline-run endpoint (#3315).
+  // platform's POST /v1/telemetry/pipeline-run endpoint (#3315). Only with the
+  // cloud enabled: a signed-in session alone is no consent to upload, and
+  // platform.enabled is the switch that says the product may talk to the
+  // hosted service on its own (docs/TELEMETRY_PRIVACY.md).
   let telemetryUploaderService: TelemetryUploaderService | null = null;
-  if (nightgaugeRoot) {
+  if (nightgaugeRoot && platformEnabled) {
     telemetryUploaderService = new TelemetryUploaderService(
       () => cachedLicenseKey ?? null,
       telemetryConsentService,

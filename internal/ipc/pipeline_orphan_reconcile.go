@@ -710,7 +710,7 @@ func (s *Server) applyReconcileAction(stateDir string, act reconcileAction) {
 		s.releaseStaleClaim(stateDir, act)
 		return
 	case dispositionEmitAndRemove:
-		if s.analyticsSvc != nil {
+		if s.analyticsSvc != nil && s.TelemetryAllowed() {
 			s.analyticsSvc.EmitPipelineEvent(context.Background(), act.Event)
 		}
 	case dispositionRemove:

@@ -72,6 +72,9 @@ export interface PlatformHostChangedEvent {
   newHost: string;
 }
 
+/** The config tiers a repository supplies: committed project, per-checkout local. */
+const REPOSITORY_TIERS: ReadonlySet<string> = new Set(["project", "local"]);
+
 /**
  * Debounce delay for file watcher events (matches NightgaugeYamlService)
  */
@@ -463,7 +466,19 @@ export class ConfigBridge implements vscode.Disposable {
    * @see Issue #1461 - Platform connection status indicator
    */
   getPlatform(): PlatformConfig | undefined {
-    return applyPlatformUrlOverride(this.cachedResult?.config.platform, this.platformUrlOverride);
+    const platform = applyPlatformUrlOverride(
+      this.cachedResult?.config.platform,
+      this.platformUrlOverride
+    );
+    // platform.enabled is this machine's opt-in to the hosted service, so a
+    // repository tier — the committed project file every clone carries, or
+    // the per-checkout local file — cannot turn it on. The Go daemon strips
+    // the whole platform block from those tiers (#1049); the extension's own
+    // cloud services follow the same switch (docs/TELEMETRY_PRIVACY.md).
+    if (platform?.enabled && REPOSITORY_TIERS.has(this.getSource("platform.enabled"))) {
+      return { ...platform, enabled: false };
+    }
+    return platform;
   }
 
   /**

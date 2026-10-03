@@ -4945,11 +4945,12 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	if reqAdapter, reqModel, _ := s.QueueItemRequestedPin(item.Repo, item.Number); reqAdapter != "" {
 		runtime.SetRequestedPin(reqAdapter, reqModel)
 	}
-	// Capture the issue body at pickup (#183) so the run record + telemetry can
-	// show the issue context (title, labels, body) on the dashboard run-detail
-	// page without leaving the dashboard. Title/labels are already on the board
-	// item; the body is fetched here (best-effort — a fetch failure leaves it
-	// empty and the run proceeds). Bounded to a sensible excerpt at capture.
+	// Capture the issue body at pickup (#183) for the run's local record and
+	// the gates that read it (the capacity gate's decomposed-child check).
+	// Title/labels are already on the board item; the body is fetched here
+	// (best-effort — a fetch failure leaves it empty and the run proceeds).
+	// Bounded to a sensible excerpt at capture. It is never sent to the
+	// platform (docs/TELEMETRY_PRIVACY.md).
 	runtime.Body = s.captureIssueBody(ctx, item)
 
 	// Per-run lifecycle decision trace writer (#179 / ADR 013). Nil-safe and
@@ -8769,14 +8770,13 @@ func resolveIssueStatesByKey(ctx context.Context, issueSvc issueGetter, keys []s
 }
 
 // issueBodyCaptureMax bounds the issue body captured at pickup (#183) to a
-// sensible excerpt so runtime-{issue}-{runId}.json / the JSONL history stay lean and the
-// telemetry wire's issueBody .max(8192) is never exceeded. The platform enforces
-// the same ceiling; capping here keeps the on-disk state small too.
+// sensible excerpt so runtime-{issue}-{runId}.json / the JSONL history stay
+// lean.
 const issueBodyCaptureMax = 8192
 
-// captureIssueBody fetches the dispatched issue's body at pickup so the run
-// record and telemetry can surface issue context on the dashboard run-detail
-// page (#183). Best-effort and non-fatal: a missing client, an unparseable
+// captureIssueBody fetches the dispatched issue's body at pickup for the
+// run's local record and gates (#183); it is never sent to the platform.
+// Best-effort and non-fatal: a missing client, an unparseable
 // repo, or a GetIssue error leaves the body empty and the run proceeds. The
 // result is bounded to issueBodyCaptureMax runes.
 func (s *Scheduler) captureIssueBody(ctx context.Context, item types.BoardItem) string {

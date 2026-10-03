@@ -80,9 +80,11 @@ No account and no hosted service required.
 Everything in this repository is Apache-2.0 licensed. The VS Code extension,
 SDK, portable skills, Claude plugin, and Go binary run locally using model and
 forge credentials you control. No Nightgauge account or hosted service is
-required, cloud connectivity is disabled by default, and telemetry is opt-out
-(on by default, disclosed on first run, one line of config to stop — see
-[docs/TELEMETRY_PRIVACY.md](docs/TELEMETRY_PRIVACY.md)).
+required, and cloud connectivity is disabled by default: nothing about your
+work is sent until you turn it on. With it on, run telemetry is opt-out (on by
+default, disclosed on first run, one line of config to stop — see
+[docs/TELEMETRY_PRIVACY.md](docs/TELEMETRY_PRIVACY.md) for what is sent, when
+and why).
 
 Optional services may integrate through public contracts, but their private
 implementations and commercial plans are outside this repository. See

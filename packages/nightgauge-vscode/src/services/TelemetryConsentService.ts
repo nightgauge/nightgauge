@@ -53,17 +53,39 @@ const DEFAULT_UPLOAD_INTERVAL_MIN = 15;
 const MIN_UPLOAD_INTERVAL_MIN = 1;
 const MAX_UPLOAD_INTERVAL_MIN = 1440;
 
-const NOTICE_MESSAGE = "Nightgauge shares anonymous usage data to improve the product.";
+const NOTICE_MESSAGE = "With cloud features on, Nightgauge sends run telemetry to your account.";
 const NOTICE_DETAIL =
-  "This is on by default. We collect aggregate counts and outcome categories — " +
-  "never source code, file contents, secrets, branch names, paths, or " +
-  "repository identifiers. Adapter usage (how much of your AI plan is left) is " +
-  "reported to your own account dashboard so you can see it across machines. " +
-  "You can turn any of it off now or later in Nightgauge: Telemetry Settings, " +
-  "and view the full list in docs/TELEMETRY_PRIVACY.md.";
+  "This is on by default. Nothing is sent unless cloud features are on " +
+  "(platform.enabled in your machine-tier config.yaml) and you are signed in or " +
+  "have a license key. Each run then sends its repository and issue number, the " +
+  "issue title and labels, the branch, stage timings, token counts, cost and " +
+  "outcome, and a failed stage's error message (which can quote command " +
+  "output) — never your source code, file contents, secrets or the issue body. " +
+  "Adapter usage (how much of your AI plan is left) is reported to your own " +
+  "account dashboard so you can see it across machines. You can turn any of it " +
+  "off now or later in Nightgauge: Telemetry Settings, and read what is sent, " +
+  "when and why in docs/TELEMETRY_PRIVACY.md.";
 
 const ACTION_TURN_OFF = "Turn off";
 const ACTION_KEEP_ON = "Keep on";
+
+/** The setting `editorTelemetryConsent` reads, for change subscriptions. */
+export const TELEMETRY_ENABLED_SETTING = `${CONFIG_NAMESPACE}.${SETTING_ENABLED}`;
+
+/**
+ * The editor's telemetry consent: VS Code's own telemetry level (the hard
+ * kill switch) and `nightgauge.telemetry.enabled` (opt-out, so only an
+ * explicit `false` withdraws it). The extension hands this to the daemon it
+ * starts, which sends run telemetry only while it holds (and only with the
+ * cloud enabled); see docs/TELEMETRY_PRIVACY.md.
+ */
+export function editorTelemetryConsent(): boolean {
+  if (!vscode.env?.isTelemetryEnabled) {
+    return false;
+  }
+  const cfg = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
+  return cfg.get<boolean>(SETTING_ENABLED) !== false;
+}
 
 export class TelemetryConsentService {
   private readonly context: vscode.ExtensionContext;
@@ -89,11 +111,7 @@ export class TelemetryConsentService {
    * install and stays off for anyone who ever declined.
    */
   isEnabled(): boolean {
-    if (!vscode.env.isTelemetryEnabled) {
-      return false;
-    }
-    const cfg = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-    return cfg.get<boolean>(SETTING_ENABLED) !== false;
+    return editorTelemetryConsent();
   }
 
   isStreamEnabled(stream: TelemetryStream): boolean {

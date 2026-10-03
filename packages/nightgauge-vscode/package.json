@@ -1669,8 +1669,8 @@
         "nightgauge.telemetry.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Send anonymous usage data to help improve Nightgauge. On by default — set to false to opt out. Never includes source code, file contents, secrets, branch names, or commit SHAs. Honors VS Code's telemetry.telemetryLevel as a hard kill switch. See docs/TELEMETRY_PRIVACY.md for what is collected.",
-          "markdownDescription": "Send anonymous usage data to help improve Nightgauge. **On by default** — set to `false` to opt out. Never includes source code, file contents, secrets, branch names, or commit SHAs, and VS Code's `#telemetry.telemetryLevel#` is honored as a hard kill switch. See [TELEMETRY_PRIVACY.md](command:nightgauge.openTelemetrySettingsPanel) for what is collected."
+          "description": "Send run telemetry to your account. On by default — set to false to opt out. Nothing is sent unless cloud features are on (platform.enabled) and you are signed in or have a license key; each run then sends its repository and issue number, the issue title and labels, the branch, timings, tokens, cost and outcome. Never includes source code, file contents, secrets or the issue body. Honors VS Code's telemetry.telemetryLevel as a hard kill switch. See docs/TELEMETRY_PRIVACY.md for what is sent, when and why.",
+          "markdownDescription": "Send run telemetry to your account. **On by default** — set to `false` to opt out. Nothing is sent unless cloud features are on (`platform.enabled`) and you are signed in or have a license key; each run then sends its repository and issue number, the issue title and labels, the branch, timings, tokens, cost and outcome. Never includes source code, file contents, secrets or the issue body, and VS Code's `#telemetry.telemetryLevel#` is honored as a hard kill switch. See [TELEMETRY_PRIVACY.md](command:nightgauge.openTelemetrySettingsPanel) for what is sent, when and why."
         },
         "nightgauge.telemetry.streams": {
           "type": "array",

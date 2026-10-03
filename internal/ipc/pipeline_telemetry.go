@@ -161,7 +161,7 @@ func buildPipelineDoneEvent(runID string, p PipelineNotifyCompleteParams, now ti
 // per-stage totals for a "complete" transition (#233), threaded from the notify
 // params #227 populates; they are 0 (and unused) for running/failed.
 func (s *Server) emitStageTelemetry(runID, repo string, issueNumber int, stage, status, errMsg string, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, rt *state.RuntimeState) {
-	if s.analyticsSvc == nil {
+	if s.analyticsSvc == nil || !s.TelemetryAllowed() {
 		return
 	}
 	durationMs := 0
@@ -181,7 +181,7 @@ func (s *Server) emitStageTelemetry(runID, repo string, issueNumber int, stage, 
 // the IPC handler. Best-effort — a missing runID or bookend stage is skipped by
 // buildStageProgressEvent rather than emitted.
 func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int, stage string, inputTokens, outputTokens, cacheReadTokens int, costUsd float64) {
-	if s.analyticsSvc == nil {
+	if s.analyticsSvc == nil || !s.TelemetryAllowed() {
 		return
 	}
 	event, ok := buildStageProgressEvent(runID, repo, issueNumber, stage, inputTokens, outputTokens, cacheReadTokens, costUsd, time.Now())
@@ -194,7 +194,7 @@ func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int,
 // emitPipelineDoneTelemetry emits the terminal pipeline_done event so the live
 // Pipelines view transitions the run from 'running' to 'complete'/'failed'.
 func (s *Server) emitPipelineDoneTelemetry(runID string, p PipelineNotifyCompleteParams) {
-	if s.analyticsSvc == nil {
+	if s.analyticsSvc == nil || !s.TelemetryAllowed() {
 		return
 	}
 	event, ok := buildPipelineDoneEvent(runID, p, time.Now())

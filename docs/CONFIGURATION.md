@@ -7317,7 +7317,10 @@ development without cloud access.
 
 ### Config Reference
 
-All settings live under the `platform:` key in `.nightgauge/config.yaml`:
+All settings live under the `platform:` key in the machine-tier `config.yaml`
+([where it lives](#global-config-location)). A repository's
+`.nightgauge/config.yaml` or `config.local.yaml` cannot set them: the daemon
+strips the block from those tiers, and the extension ignores `enabled` there.
 
 ```yaml
 platform:
@@ -7329,7 +7332,7 @@ platform:
     backoff_ms: 1000 # Initial backoff delay (ms)
     backoff_multiplier: 2 # Exponential backoff multiplier
   telemetry:
-    enabled: true # Opt-out. Send anonymized telemetry to the platform
+    enabled: true # Opt-out. Send run telemetry (needs enabled: true above)
   feature_flags: {} # Platform feature flag overrides
 ```
 
@@ -7341,19 +7344,20 @@ platform:
 | `retry_policy.attempts`           | integer (1–10)    | `3`                            | Number of retry attempts before giving up on a failed request                     |
 | `retry_policy.backoff_ms`         | integer (≥0)      | `1000`                         | Initial backoff delay in milliseconds before the first retry                      |
 | `retry_policy.backoff_multiplier` | number (1–10)     | `2`                            | Multiplier applied to `backoff_ms` on each subsequent retry (exponential backoff) |
-| `telemetry.enabled`               | boolean           | `true`                         | Opt-out. Set `false` to stop sending anonymized usage telemetry to the platform   |
+| `telemetry.enabled`               | boolean           | `true`                         | Opt-out. Set `false` to stop sending run telemetry (see TELEMETRY_PRIVACY.md)     |
 | `feature_flags`                   | record (str→bool) | `{}`                           | Platform feature flag map. Keys are flag names, values enable/disable the flag    |
 
 ### Who Reads Platform Config
 
-**The Go binary** is the sole consumer of `platform.*` configuration. The
-extension does **not** hold a platform client — it routes all platform calls
-through the Go binary via IPC.
+**The Go binary** reads `platform.*` for its own platform client, which serves
+the extension's account and analytics calls over IPC. The extension also talks
+to the hosted service directly for a few services of its own (listed below),
+and only with `enabled: true`.
 
 | Config Consumer            | What It Uses                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Go binary** (`serve`)    | `enabled`, `api_url`, and the license key — explicit flags/environment variables opt in directly; the stored license key (OS keychain, then machine-tier `license_key`) and config-derived values are used only when `platform.enabled: true`. The user's own account actions (sign-in, license activation, a trial) work either way, against `api_url` when it is set. `connection_timeout_ms` and `retry_policy` are schema-validated but not yet consumed by the Go binary. |
-| **Extension** (TypeScript) | Reads `platform.enabled` only to decide whether to display platform-related UI (license badge, skill tier badge). Does **not** make direct platform API calls.                                                                                                                                                                                                                                                                                                                 |
+| **Extension** (TypeScript) | Reads `platform.enabled` (machine tier only) to decide whether to show platform-related UI and to start its own cloud services: session restore and token refresh, this window's agent registration and heartbeat, the audit log, and the telemetry uploader ([TELEMETRY_PRIVACY.md](TELEMETRY_PRIVACY.md)). With it off, it talks to the hosted service only for your own account actions.                                                                                    |
 
 ### Behavior
 

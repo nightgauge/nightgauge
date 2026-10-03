@@ -187,6 +187,7 @@ export {
   getStageMcpTools,
   getMcpToolsConfig,
   getAuditConfig,
+  machineTierPlatformEnabled,
   writeSuperchargeStateFile,
   isSuperchargeModeActive,
   getSuperchargeModel,

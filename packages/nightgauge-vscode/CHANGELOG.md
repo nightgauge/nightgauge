@@ -32,6 +32,16 @@ and this project adheres to
 
 ### Fixed
 
+- **Nothing about your runs is sent unless cloud features are on.** Signing in
+  was enough for the Nightgauge binary and this extension to upload your runs.
+  Now they upload only with `platform.enabled: true` in your machine-tier
+  config, and the binary follows your VS Code telemetry settings, including a
+  change, at once. A repository's `.nightgauge/config.yaml` can no longer turn
+  cloud features on for you. The issue body is no longer sent.
+- **The privacy notice, the telemetry setting and the Telemetry Settings panel
+  say what a run sends:** its repository and issue number, the issue title and
+  labels, the branch, timings, tokens, cost and outcome, and a failed stage's
+  error message. They used to say branch names were never sent.
 - **A stored license key waits for `platform.enabled`.** Activating a license
   or starting a trial stores the key in VS Code and the OS keychain, and the
   extension used to hand it to the Nightgauge binary as an explicit opt-in, so

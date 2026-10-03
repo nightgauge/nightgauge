@@ -34,17 +34,21 @@ const markerName = "telemetry-notice-v1"
 // in a wall of build output should be able to act on it without reading twice.
 const Text = `
 ┌─ Nightgauge telemetry ─────────────────────────────────────────────────────┐
-  Anonymous usage data is being sent to help improve Nightgauge. No source
-  code, file contents, secrets, branch names, or commit SHAs are ever
-  collected.
+  This machine is opted in to the hosted service, so each pipeline run is
+  reported to your account: the repository and issue number, the issue
+  title and labels, the branch, stage timings, tokens, cost and outcome, and
+  a failed stage's error message (which can quote command output). Never
+  your source code, file contents, secrets or the issue body.
 
-  To turn it off, add this to .nightgauge/config.yaml:
+  To turn it off, add this to your machine-tier config.yaml
+  (~/.nightgauge/config.yaml on macOS, ~/.config/nightgauge/config.yaml on
+  Linux; a repository's .nightgauge/config.yaml cannot set it):
 
       platform:
         telemetry:
           enabled: false
 
-  What is collected, in full: docs/TELEMETRY_PRIVACY.md
+  What is sent, when and why: docs/TELEMETRY_PRIVACY.md
 └────────────────────────────────────────────────────────────────────────────┘
 `
 

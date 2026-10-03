@@ -167,6 +167,15 @@ describe("#30 — license key SecretStorage persistence", () => {
     expect(MACHINE_TIER_KEY_PATHS.has("platform.license_key")).toBe(true);
   });
 
+  // The cloud and telemetry switches are this machine's consent; a write to a
+  // repository tier would be ignored by the daemon and the extension alike.
+  it("routes platform.enabled and platform.telemetry.* to the machine tier", async () => {
+    const { isMachineTierPath } = await import("../../../src/views/settings/tierRouting");
+    expect(isMachineTierPath("platform.enabled")).toBe(true);
+    expect(isMachineTierPath("platform.telemetry.enabled")).toBe(true);
+    expect(isMachineTierPath("platform.telemetry.usage_reporting")).toBe(true);
+  });
+
   it("exposes the Global tier as editable", () => {
     const globalTab = TIER_TABS.find((t) => t.id === "global");
     expect(globalTab?.editable).toBe(true);

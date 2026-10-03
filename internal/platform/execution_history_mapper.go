@@ -21,12 +21,11 @@ const executionHistoryStagesMax = 32
 const executionHistoryFieldMax = 100
 
 // Issue-context bounds (#183) — match the platform's telemetry schema:
-// issueTitle `.max(256)` (GitHub's own issue-title ceiling) and issueBody
-// `.max(8192)` (a bounded excerpt). Exceeding either would reject the whole
-// record under `.strict()`, so clip here.
+// issueTitle `.max(256)` (GitHub's own issue-title ceiling). Exceeding it
+// would reject the whole record under `.strict()`, so clip here. The issue
+// body is never sent (see V2RunRecordToExecutionHistoryRunRecord).
 const (
 	executionHistoryIssueTitleMax = 256
-	executionHistoryIssueBodyMax  = 8192
 	// executionHistoryLabelsMax caps the number of labels emitted so a
 	// pathologically-labelled issue can't bloat the wire payload. Each label is
 	// truncated to executionHistoryFieldMax like every other bounded identifier.
@@ -466,12 +465,13 @@ func V2RunRecordToExecutionHistoryRunRecord(record state.V2RunRecord, input Exec
 		Stages:              stages,
 		Agents:              []any{},
 		RoutingPath:         toTelemetryRoutingPath(record.Routing.Path),
-		// Issue context captured at pickup (#183) — title/body/labels so the
-		// dashboard run-detail page shows what the run is doing. Optional on the
-		// wire (omitempty): a record with no captured context drops the keys.
-		// Bounded to the platform's issueTitle .max(256) / issueBody .max(8192).
+		// Issue context captured at pickup (#183): the title and labels the
+		// hosted dashboard's run list and run detail show. Optional on the wire
+		// (omitempty): a record with no captured context drops the keys. The
+		// issue body is NOT sent — it stays in the local history (record.Body)
+		// for the run's own use; the dashboard links to the issue instead
+		// (docs/TELEMETRY_PRIVACY.md lists every field this record carries).
 		IssueTitle: nonEmptyTruncatedPtr(record.Title, executionHistoryIssueTitleMax),
-		IssueBody:  nonEmptyTruncatedPtr(record.Body, executionHistoryIssueBodyMax),
 		Labels:     toTelemetryLabels(record.Labels),
 	}, nil
 }

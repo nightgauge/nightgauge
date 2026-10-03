@@ -209,16 +209,18 @@ export class TelemetrySettingsPanel implements vscode.Disposable {
 <body>
   <h1>Telemetry Settings</h1>
   <p class="meta">
-    Telemetry is opt-out — anonymous usage data is sent unless you turn it off
-    here. It never includes source code, file contents, secrets, branch names,
-    or commit SHAs.
+    Telemetry is opt-out. With cloud features on (<code>platform.enabled</code>),
+    run telemetry is sent to your account unless you turn it off here: the
+    repository and issue number, the issue title and labels, the branch, stage
+    timings, tokens, cost and outcome. It never includes source code, file
+    contents, secrets or the issue body.
     <button class="link" id="privacyLink" type="button">Read the Privacy Document</button>.
   </p>
 
   <div class="section">
     <label class="row">
       <input type="checkbox" id="masterEnabled" />
-      <strong>Send anonymous usage data</strong>
+      <strong>Send run telemetry</strong>
     </label>
     <div class="meta" id="lastUpload">Last upload: —</div>
   </div>

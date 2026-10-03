@@ -119,9 +119,18 @@ type Server struct {
 	// platformEndpoint is the URL a client built on demand talks to (#2398);
 	// see WithPlatformEndpoint. Set once by an option, before Run().
 	platformEndpoint string
-	licenseSvc       *platform.LicenseService
-	authSvc          *platform.AuthService
-	skillSvc         *platform.SkillService
+	// telemetryOptIn, telemetryConfigOn and editorTelemetry are the consent
+	// TelemetryAllowed reads before any run data leaves the machine. The
+	// first two are set once by WithTelemetryPolicy, before Run(); with no
+	// policy both are false and nothing is sent. editorTelemetry is the
+	// editor's own consent, seeded by WithEditorTelemetry and changed by
+	// platform.setTelemetryConsent from any request goroutine.
+	telemetryOptIn    bool
+	telemetryConfigOn bool
+	editorTelemetry   atomic.Int32
+	licenseSvc        *platform.LicenseService
+	authSvc           *platform.AuthService
+	skillSvc          *platform.SkillService
 	// analyticsSvc is the EMISSION seam only — an interface so a test can count
 	// emissions (#472). It is nil exactly when no platform client is attached;
 	// see setPlatformServicesLocked for why the assignment is guarded.
@@ -415,6 +424,59 @@ func WithPlatformEndpoint(url string) ServerOption {
 	}
 }
 
+// The editor's telemetry consent, as the extension reports it.
+const (
+	editorTelemetryUnreported int32 = iota
+	editorTelemetryOn
+	editorTelemetryOff
+)
+
+// EditorTelemetryEnv is the variable the extension sets on the daemon it
+// starts to "on" or "off": VS Code's telemetry level and
+// nightgauge.telemetry.enabled together. It seeds the editor's consent before
+// the first request, so nothing can be sent in the moment between the spawn
+// and the extension's first platform.setTelemetryConsent.
+const EditorTelemetryEnv = "NIGHTGAUGE_EDITOR_TELEMETRY"
+
+// WithTelemetryPolicy sets the two halves of the telemetry consent that come
+// from the daemon's own configuration. cloudOptIn is the user's opt-in to the
+// hosted service: platform.enabled true in the machine tier, or a license or
+// API key in the daemon's environment. A signed-in session, a stored license
+// key or a platform URL is not one. telemetryOn is platform.telemetry.enabled
+// (on unless explicitly false). Run data is sent only when both hold and the
+// editor has not withdrawn its consent; a server built without this option
+// sends nothing.
+func WithTelemetryPolicy(cloudOptIn, telemetryOn bool) ServerOption {
+	return func(s *Server) {
+		s.telemetryOptIn = cloudOptIn
+		s.telemetryConfigOn = telemetryOn
+	}
+}
+
+// WithEditorTelemetry seeds the editor's consent from EditorTelemetryEnv's
+// value: "off" withdraws it, "on" grants it, anything else (a daemon no
+// editor started) leaves it unreported, which defers to the configuration.
+func WithEditorTelemetry(value string) ServerOption {
+	return func(s *Server) {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "off":
+			s.editorTelemetry.Store(editorTelemetryOff)
+		case "on":
+			s.editorTelemetry.Store(editorTelemetryOn)
+		}
+	}
+}
+
+// TelemetryAllowed reports whether run data (live stage events, completed-run
+// records, queue snapshots, analytics events) may be sent to the platform now:
+// the user opted in to the cloud, platform.telemetry.enabled is not false, and
+// the editor that started this daemon has not withdrawn its consent. Every
+// emission path asks it, and so does the analytics service's send gate, which
+// also drops anything buffered once it turns false.
+func (s *Server) TelemetryAllowed() bool {
+	return s.telemetryOptIn && s.telemetryConfigOn && s.editorTelemetry.Load() != editorTelemetryOff
+}
+
 // setPlatformServicesLocked wires pc and every service built on it onto the
 // server, replacing whatever was there before. Callers must hold
 // platformClientMu for writing.
@@ -428,6 +490,7 @@ func (s *Server) setPlatformServicesLocked(pc *platform.Client) {
 	// would pass and dereference it. Assign only when pc is real.
 	if pc != nil {
 		as := platform.NewAnalyticsService(pc)
+		as.SetSendGate(s.TelemetryAllowed)
 		s.analyticsAPI = as
 		s.analyticsSvc = as
 	} else {
@@ -2115,7 +2178,7 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if s.getAnalyticsSvc() != nil {
+		if s.getAnalyticsSvc() != nil && s.TelemetryAllowed() {
 			// Fire-and-forget: buffer locally, return immediately
 			s.getAnalyticsSvc().Ingest(ctx, "", 0, []platform.AnalyticsEvent{{
 				Type:      p.EventType,
@@ -2265,6 +2328,9 @@ func (s *Server) registerMethods() {
 		}
 		if s.getAnalyticsSvc() == nil {
 			return nil, fmt.Errorf("platform client not configured")
+		}
+		if !s.TelemetryAllowed() {
+			return nil, fmt.Errorf("telemetry is off: run history is sent only with platform.enabled true and telemetry on")
 		}
 		if s.workspaceRootPath() == "" {
 			return nil, fmt.Errorf("workspace root not set")
@@ -2508,6 +2574,26 @@ func (s *Server) registerMethods() {
 		s.throttleMu.RUnlock()
 		for _, fn := range listeners {
 			go fn()
+		}
+		return map[string]bool{"ok": true}, nil
+	}
+
+	// platform.setTelemetryConsent records the editor's telemetry consent:
+	// VS Code's telemetry level and nightgauge.telemetry.enabled, as the
+	// extension reads them. The extension sends it after every daemon start
+	// and whenever either changes, so turning telemetry off in the editor
+	// stops this daemon's sending at once, buffered items included (the
+	// analytics send gate drops them at the next flush).
+	//ipc:method platformSetTelemetryConsent params:PlatformSetTelemetryConsentParams result:StatusOK
+	s.methods["platform.setTelemetryConsent"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p PlatformSetTelemetryConsentParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if p.Enabled {
+			s.editorTelemetry.Store(editorTelemetryOn)
+		} else {
+			s.editorTelemetry.Store(editorTelemetryOff)
 		}
 		return map[string]bool{"ok": true}, nil
 	}
@@ -3750,8 +3836,8 @@ func (s *Server) registerMethods() {
 			input := state.V2RunInput{
 				Title: snap.Title,
 				// Issue body captured at pickup (#183). Empty unless the
-				// runtime state carried a body (autonomous path); flows to
-				// the telemetry wire's issueBody when present.
+				// runtime state carried a body (autonomous path). Local
+				// only: the telemetry mapper never sends it.
 				Body:       snap.Body,
 				Branch:     snap.Branch,
 				BaseBranch: "main",
@@ -4031,7 +4117,12 @@ func (s *Server) registerMethods() {
 			// so this server-side push is safe alongside that best-effort
 			// uploader. Fire-and-forget: PushPipelineRun buffers + retries
 			// internally and never blocks the pipeline.
-			if s.getAnalyticsSvc() != nil {
+			//
+			// Consent first: a signed-in session builds a platform client on
+			// its own, so "a client exists" is no consent at all. The record
+			// leaves only when TelemetryAllowed says the user opted in to the
+			// cloud and left telemetry on, in config and in the editor.
+			if s.getAnalyticsSvc() != nil && s.TelemetryAllowed() {
 				repoForPush := record.Repo
 				if repoForPush == "" {
 					repoForPush = p.Repo

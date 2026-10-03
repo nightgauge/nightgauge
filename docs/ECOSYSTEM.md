@@ -47,10 +47,10 @@ the public client contract needed to build or operate the open-source side.
 
 ### Telemetry
 
-Telemetry is enabled unless explicitly disabled, and its first run says so.
-The allowed event schema,
-redaction rules, and user controls are documented in
-[TELEMETRY_PRIVACY.md](TELEMETRY_PRIVACY.md).
+Nothing is sent until the user turns cloud features on; with them on,
+telemetry is enabled unless explicitly disabled, and its first run says so.
+What is sent, when and why, the redaction rules, and user controls are
+documented in [TELEMETRY_PRIVACY.md](TELEMETRY_PRIVACY.md).
 
 ## Compatibility rules
 

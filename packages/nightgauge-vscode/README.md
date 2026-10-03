@@ -187,25 +187,34 @@ and can be reversed from the same command. After an extension update the
 extension repairs the absolute path it previously wrote there, since its own
 update invalidated it; it never touches a `statusLine` it did not write.
 
-**What leaves your machine.** Telemetry, on by default and disclosed in
-[Privacy and Telemetry](#privacy-and-telemetry) above, to `api.nightgauge.dev`.
-It honors VS Code's global telemetry setting as a hard stop that no Nightgauge
-setting can override. Your AI provider's CLI makes its own calls to its own
-provider, under your own account and credentials. There is no other egress.
+**What leaves your machine.** With [cloud features](#cloud-features-optional)
+off, the default, nothing goes to Nightgauge's hosted service except the
+account actions you take yourself: signing in, activating a license, starting
+a trial. With them on, the run telemetry described in
+[Privacy and Telemetry](#privacy-and-telemetry) below goes to
+`api.nightgauge.dev`, with this machine's registration and heartbeat. The
+telemetry honors VS Code's global telemetry setting as a hard stop that no
+Nightgauge setting can override. Your AI provider's CLI makes its own calls to its own
+provider, under your own account and credentials, and `git` and `gh` talk to
+your forge. There is no other egress.
 
 For the security reporting process and supported versions, see
 [SECURITY.md](https://github.com/nightgauge/nightgauge/blob/main/SECURITY.md).
 
 ## Privacy and Telemetry
 
-Telemetry is on by default and you are asked on first activation whether to
-keep it on; turning it off there, or later in Settings, is honored permanently.
-VS Code's global telemetry-off setting is honored as a hard stop. Without a
-platform license key or sign-in nothing is uploaded at all. When enabled, the
-`pipeline-run` stream includes the repository slug and issue number as
-correlation keys, plus bounded outcome, duration, and token counters; it never
-sends source code, file contents, prompts, secrets, branch names, or commit
-SHAs. Streams can be disabled independently at any time.
+Nothing about your work is uploaded unless
+[cloud features](#cloud-features-optional) are on (`platform.enabled: true`)
+and you are signed in or have a license key. With them on, telemetry is on by
+default and you are told so on first activation; turning it off there, or later
+in Settings, is honored permanently, by the extension and by the binary it
+starts. VS Code's global telemetry-off setting is honored as a hard stop. Each
+run then sends its repository and issue number, the issue title and labels,
+the branch, its timings, token counts, cost and outcome, and a failed stage's
+error message (which can quote command output), so the hosted dashboard can
+show your runs. It never sends your source code, file contents, prompts,
+secrets, the issue body or commit SHAs.
+Streams can be disabled independently at any time.
 
 Read [Telemetry Privacy](https://github.com/nightgauge/nightgauge/blob/main/docs/TELEMETRY_PRIVACY.md)
 for the complete field list, retention policy, controls, and deletion

@@ -1029,6 +1029,12 @@ type PlatformAuthSignoutParams struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
+// PlatformSetTelemetryConsentParams are parameters for
+// platform.setTelemetryConsent: the editor's telemetry consent.
+type PlatformSetTelemetryConsentParams struct {
+	Enabled bool `json:"enabled"`
+}
+
 // PlatformSetSessionTokenParams are parameters for platform.setSessionToken.
 // An empty Token clears the credential (sign-out), leaving the client on its
 // API-key/license-key fallback.

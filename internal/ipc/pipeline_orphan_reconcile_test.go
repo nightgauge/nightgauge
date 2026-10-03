@@ -859,7 +859,7 @@ func TestApplyReconcileAction_EmitAndRemoveEmitsExactlyOnce(t *testing.T) {
 	file := staleSnapshot(t, stateDir, 472, runID, now)
 
 	fake := &countingEmitter{}
-	s := NewServer(nil, WithWorkspaceRoot(root))
+	s := NewServer(nil, WithWorkspaceRoot(root), WithTelemetryPolicy(true, true))
 	s.analyticsSvc = fake
 
 	acts := collectReconcileActions(stateDir, s.serverEvidence(now), now)
