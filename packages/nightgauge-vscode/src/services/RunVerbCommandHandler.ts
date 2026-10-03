@@ -60,8 +60,9 @@
  * claims the command's one answer before it applies the verb, and a window
  * that does not hold the run waits UNHELD_VERB_GRACE_MS, then refuses only
  * when it still does not hold it, no window of the machine lists the run as
- * held (a window that closed or is reloading still counts for a minute), and
- * it claims the answer first. So the platform receives one acknowledgement
+ * held (a window that closed or is reloading still counts for a minute, and
+ * a verb only such a window listed is looked at again after that minute),
+ * and it claims the answer first. So the platform receives one acknowledgement
  * per command, and never a refusal ahead of the holder's. A holder that finds
  * the answer claimed already answers all the same: the platform takes its
  * later `applied` over a refusal from a window that could not see the run
@@ -124,12 +125,27 @@ function isAlreadyResolved(result: RemoteVerbResult): result is AlreadyResolvedR
 /**
  * How long a window that does not hold a run waits before it may refuse a
  * verb for it (#2357): long enough for the holder to have claimed the answer
- * and for a trigger being accepted to have queued its run.
+ * and for the ack of a trigger this window is accepting to have come back,
+ * from which on the window holds the trigger's run.
  */
 export const UNHELD_VERB_GRACE_MS = 2_000;
 
+/**
+ * How often a window looks again at a verb that only closed or reloading
+ * windows' listings held (#2357), each time once those listings stopped
+ * counting: a bound, since a window that closes holding the run can extend
+ * the wait, and the platform expires the command after five minutes anyway.
+ */
+const CLOSED_HOLD_LOOKS = 5;
+
+/** Looked at this long after a closed listing stops counting, not on the edge. */
+const CLOSED_HOLD_MARGIN_MS = 50;
+
 /** The machine's record of which window answers a verb (#2357). */
-export type UnheldVerbLedger = Pick<RemoteRunLedger, "heldElsewhere" | "claimAnswer">;
+export type UnheldVerbLedger = Pick<
+  RemoteRunLedger,
+  "heldElsewhere" | "closedHoldLeftMs" | "claimAnswer"
+>;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -263,7 +279,10 @@ export class RunVerbCommandHandler implements CommandHandler {
    * Refuse a verb for a run no window of the machine holds (#2357), once the
    * grace has passed: unless this window holds the run by then (a trigger it
    * was accepting queued it), another window lists it, or another window
-   * answered the command first.
+   * answered the command first. A run listed only by windows that closed or
+   * are reloading is looked at again once their listings stop counting: a
+   * window back from a reload lists the runs it still holds by then, and a
+   * run that did not survive the reload is refused instead of expiring.
    */
   private async refuseIfNobodyHolds(
     cmd: ReceivedCommand,
@@ -274,19 +293,29 @@ export class RunVerbCommandHandler implements CommandHandler {
     if (!unheld || this.waitingRefusals.has(cmd.id)) return;
     this.waitingRefusals.add(cmd.id);
     try {
-      await delay(unheld.graceMs ?? UNHELD_VERB_GRACE_MS);
-      if (this.redelivery.remembers(cmd.id)) return;
-      if (await this.runs.holdsRemoteRun(runId)) {
-        await this.claimAsHolder(cmd, verb, runId);
-        return this.consumeAsHolder(cmd, verb, runId);
-      }
-      if (await unheld.ledger.heldElsewhere(runId)) {
-        this.logger.debug("RunVerbCommandHandler: another window holds the run — it answers", {
-          verb,
-          runId,
-          commandId: cmd.id,
-        });
-        return;
+      let wait = unheld.graceMs ?? UNHELD_VERB_GRACE_MS;
+      for (let look = 0; ; look++) {
+        await delay(wait);
+        if (this.redelivery.remembers(cmd.id)) return;
+        if (await this.runs.holdsRemoteRun(runId)) {
+          await this.claimAsHolder(cmd, verb, runId);
+          return this.consumeAsHolder(cmd, verb, runId);
+        }
+        if (!(await unheld.ledger.heldElsewhere(runId))) break;
+        const left = await unheld.ledger.closedHoldLeftMs(runId);
+        if (left === null || look >= CLOSED_HOLD_LOOKS) {
+          this.logger.debug("RunVerbCommandHandler: another window holds the run — it answers", {
+            verb,
+            runId,
+            commandId: cmd.id,
+          });
+          return;
+        }
+        this.logger.debug(
+          "RunVerbCommandHandler: only a closed or reloading window lists the run — looking again when its listing lapses",
+          { verb, runId, commandId: cmd.id, inMs: left }
+        );
+        wait = left + CLOSED_HOLD_MARGIN_MS;
       }
       if (!(await unheld.ledger.claimAnswer(cmd.id))) {
         this.logger.debug("RunVerbCommandHandler: another window answered the command", {

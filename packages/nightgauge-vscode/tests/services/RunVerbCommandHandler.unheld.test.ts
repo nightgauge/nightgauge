@@ -22,7 +22,7 @@ import {
   RunVerbCommandHandler,
   type RunVerbTarget,
 } from "../../src/services/RunVerbCommandHandler";
-import { RemoteRunLedger } from "../../src/services/RemoteRunLedger";
+import { CLOSED_LISTING_GRACE_MS, RemoteRunLedger } from "../../src/services/RemoteRunLedger";
 import type { ReceivedCommand } from "../../src/services/AgentCommandStreamService";
 import type { RemoteVerbResult } from "../../src/services/ConcurrentPipelineManager";
 
@@ -208,6 +208,99 @@ describe("RunVerbCommandHandler — a verb no window of the machine holds (#2357
     const platform = makePlatform();
     const ledger = new RemoteRunLedger(dir, { windowId: 101, isAlive: (pid) => pid !== 102 });
     await new RemoteRunLedger(dir, { windowId: 102 }).publish(["run-1"]);
+    const handler = new RunVerbCommandHandler(
+      makeRuns(false) as never,
+      platform,
+      makeLogger() as never,
+      undefined,
+      undefined,
+      { ledger, graceMs: GRACE_MS }
+    );
+    handler.setAgentId("agent-machine");
+
+    await handler.consume(verb("cancel"), "cancel");
+    expect(platform.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
+    expect(platform.agentAcknowledgeCommand.mock.calls[0][2]).toBe("rejected");
+  });
+
+  // A window reload marks the window's listing closed, and the others honour
+  // it for a minute. A run that did not survive the reload is held by nobody
+  // once that minute is over: the verb is refused then, not left to expire.
+  // The clock is the test's: the listing has 20 ms of its grace left at the
+  // first look, and has lapsed by the next one, however slow the machine.
+  it("refuses a verb only a closed window listed, once that listing lapses", async () => {
+    const platform = makePlatform();
+    const closedAt = Date.now();
+    const reloaded = new RemoteRunLedger(dir, { windowId: 102, now: () => closedAt });
+    await reloaded.publish(["run-1"]);
+    reloaded.dispose();
+    let now = closedAt + CLOSED_LISTING_GRACE_MS - 20;
+    const ledger = new RemoteRunLedger(dir, { windowId: 101, isAlive: () => true, now: () => now });
+    const closedHoldLeftMs = vi
+      .spyOn(ledger, "closedHoldLeftMs")
+      .mockImplementationOnce(async (runId) => {
+        const left = await RemoteRunLedger.prototype.closedHoldLeftMs.call(ledger, runId);
+        now += CLOSED_LISTING_GRACE_MS;
+        return left;
+      });
+    const handler = new RunVerbCommandHandler(
+      makeRuns(false) as never,
+      platform,
+      makeLogger() as never,
+      undefined,
+      undefined,
+      { ledger, graceMs: GRACE_MS }
+    );
+    handler.setAgentId("agent-machine");
+
+    await handler.consume(verb("cancel"), "cancel");
+    expect(await closedHoldLeftMs.mock.results[0].value).toBe(20);
+    expect(platform.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
+    expect(platform.agentAcknowledgeCommand.mock.calls[0][2]).toBe("rejected");
+    expect(platform.agentAcknowledgeCommand.mock.calls[0][3]).toMatch(/^no-active-run: /);
+  });
+
+  it("stays quiet while a window back from its reload lists the run again", async () => {
+    const platform = makePlatform();
+    const closedAt = Date.now();
+    const reloaded = new RemoteRunLedger(dir, { windowId: 102, now: () => closedAt });
+    await reloaded.publish(["run-1"]);
+    reloaded.dispose();
+    let now = closedAt + CLOSED_LISTING_GRACE_MS - 20;
+    const ledger = new RemoteRunLedger(dir, { windowId: 101, isAlive: () => true, now: () => now });
+    // While this window waits for the closed listing to lapse, the reloaded
+    // window comes back, under a new process, and lists the run again.
+    const closedHoldLeftMs = vi
+      .spyOn(ledger, "closedHoldLeftMs")
+      .mockImplementationOnce(async (runId) => {
+        const left = await RemoteRunLedger.prototype.closedHoldLeftMs.call(ledger, runId);
+        now += CLOSED_LISTING_GRACE_MS;
+        await new RemoteRunLedger(dir, { windowId: 202 }).publish(["run-1"]);
+        return left;
+      });
+    const handler = new RunVerbCommandHandler(
+      makeRuns(false) as never,
+      platform,
+      makeLogger() as never,
+      undefined,
+      undefined,
+      { ledger, graceMs: GRACE_MS }
+    );
+    handler.setAgentId("agent-machine");
+
+    await handler.consume(verb("pause"), "pause");
+    // It looked twice: once with the closed listing's grace left, then again.
+    expect(closedHoldLeftMs).toHaveBeenCalledTimes(2);
+    expect(await closedHoldLeftMs.mock.results[0].value).toBe(20);
+    expect(platform.agentAcknowledgeCommand).not.toHaveBeenCalled();
+  });
+
+  // The holder claimed the answer, then its window reloaded before it
+  // answered: nobody else would answer, so the claim is taken over.
+  it("refuses a verb whose answer a gone window claimed and never sent", async () => {
+    const platform = makePlatform();
+    expect(await new RemoteRunLedger(dir, { windowId: 102 }).claimAnswer("cmd-cancel")).toBe(true);
+    const ledger = new RemoteRunLedger(dir, { windowId: 101, isAlive: (pid) => pid !== 102 });
     const handler = new RunVerbCommandHandler(
       makeRuns(false) as never,
       platform,

@@ -98,7 +98,7 @@ function makeWindow(
   manager.onHeldRemoteRunsChanged((runIds) => void ledger.publish(runIds));
   const handler = new RunVerbCommandHandler(
     manager,
-    platform,
+    platform as never,
     makeLogger() as never,
     undefined,
     undefined,

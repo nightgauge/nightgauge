@@ -186,6 +186,58 @@ describe("RemoteRunLedger (#2357)", () => {
     expect(fs.existsSync(path.join(dir, "answers", "cmd-new"))).toBe(true);
   });
 
+  // #2357: a window that reloaded lists its runs as closed for a while; a
+  // run it no longer holds is then held by nobody once that listing lapses.
+  it("says how long only a closed window's listing still holds a run", async () => {
+    let now = Date.now();
+    const at = (pid: number) =>
+      new RemoteRunLedger(dir, { windowId: pid, isAlive: () => true, now: () => now });
+    const a = at(101);
+    const b = at(102);
+    await a.publish(["run-1", "run-2"]);
+    expect(await b.closedHoldLeftMs("run-1")).toBeNull();
+
+    a.dispose();
+    now += 1000;
+    expect(await b.heldElsewhere("run-1")).toBe(true);
+    expect(await b.closedHoldLeftMs("run-1")).toBe(CLOSED_LISTING_GRACE_MS - 1000);
+    // A live window lists run-2 too, and nobody lists run-3.
+    await at(103).publish(["run-2"]);
+    expect(await b.closedHoldLeftMs("run-2")).toBeNull();
+    expect(await b.closedHoldLeftMs("run-3")).toBeNull();
+
+    now += CLOSED_LISTING_GRACE_MS;
+    expect(await b.closedHoldLeftMs("run-1")).toBeNull();
+    expect(await b.heldElsewhere("run-1")).toBe(false);
+  });
+
+  // #2357: a window that claimed an answer and closed or reloaded before it
+  // answered leaves a claim nobody would answer; one window takes it over.
+  it("lets one window take over the answer a gone window claimed", async () => {
+    let aliveA = true;
+    const a = windowOf(101);
+    const b = windowOf(102, (pid) => pid !== 101 || aliveA);
+    const c = windowOf(103, (pid) => pid !== 101 || aliveA);
+    const answer = path.join(dir, "answers", "cmd-1");
+
+    expect(await a.claimAnswer("cmd-1")).toBe(true);
+    expect(JSON.parse(fs.readFileSync(answer, "utf8"))).toEqual({ pid: 101 });
+    expect(await b.claimAnswer("cmd-1")).toBe(false);
+
+    aliveA = false;
+    const taken = await Promise.all([b.claimAnswer("cmd-1"), c.claimAnswer("cmd-1")]);
+    expect(taken.filter(Boolean)).toHaveLength(1);
+    const taker = JSON.parse(fs.readFileSync(answer, "utf8")).pid;
+    expect(taker).toBe(taken[0] ? 102 : 103);
+    // The taker lives: nobody takes the answer from it.
+    expect(await b.claimAnswer("cmd-1")).toBe(false);
+    expect(await c.claimAnswer("cmd-1")).toBe(false);
+
+    // A claim that names no window, such as one still being written, is kept.
+    fs.writeFileSync(path.join(dir, "answers", "cmd-2"), "");
+    expect(await b.claimAnswer("cmd-2")).toBe(false);
+  });
+
   it("claims nothing when the answer cannot be recorded", async () => {
     // The answers directory is a file: nothing can be created in it.
     fs.writeFileSync(path.join(dir, "answers"), "");

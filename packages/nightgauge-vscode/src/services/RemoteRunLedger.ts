@@ -23,11 +23,14 @@
  *     once it is back, and must not have them refused meanwhile. Any other
  *     file whose process is gone is ignored and removed.
  *   - `answers/<command id>`: created exclusively by the first window that
- *     answers a command. The holder creates it before it applies the verb; a
- *     window that does not hold the run refuses the verb only when no live
- *     window lists the run and it creates this file first, so the platform
- *     gets one acknowledgement per command, and never a refusal ahead of the
- *     holder's answer. Files older than a day are swept.
+ *     answers a command, naming that window. The holder creates it before
+ *     it applies the verb; a window that does not hold the run refuses the
+ *     verb only when no window lists the run and it creates this file
+ *     first, so the platform gets one acknowledgement per command, and never
+ *     a refusal ahead of the holder's answer. A claim whose window is gone
+ *     before it answered is taken over by the first window to create
+ *     `answers/<command id>.taken-from-<pid>`. Files older than a day are
+ *     swept.
  *   - `claims/<run id>.json`: the window that holds a paused run a reload
  *     ended (#2339). Every window of one clone reads the same paused
  *     snapshots, so the first live window to claim the run holds it, and the
@@ -145,12 +148,36 @@ export class RemoteRunLedger implements vscode.Disposable {
    * answers true, so a window never refuses a verb it cannot rule out.
    */
   async heldElsewhere(runId: string): Promise<boolean> {
+    const listed = await this.listingsOf(runId);
+    return listed.live || listed.closedUntil !== null;
+  }
+
+  /**
+   * How long, in milliseconds, the run stays held elsewhere only by the
+   * listings of windows that closed or are reloading (#2357); null when a
+   * live window lists it, or none does. A window back from a reload lists
+   * the runs it still holds within that time; a run no window lists again
+   * by then is held by nobody, and a verb for it can be refused.
+   */
+  async closedHoldLeftMs(runId: string): Promise<number | null> {
+    const listed = await this.listingsOf(runId);
+    if (listed.live || listed.closedUntil === null) return null;
+    return Math.max(0, listed.closedUntil - this.now());
+  }
+
+  /**
+   * The other windows' listings of the run: whether a live one lists it (or
+   * one cannot be read), and else when the last closed listing of it stops
+   * counting. Expired and dead listings are removed on the way.
+   */
+  private async listingsOf(runId: string): Promise<{ live: boolean; closedUntil: number | null }> {
     let names: string[];
     try {
       names = await fs.promises.readdir(this.holdersDir);
     } catch (err) {
-      return (err as NodeJS.ErrnoException).code !== "ENOENT";
+      return { live: (err as NodeJS.ErrnoException).code !== "ENOENT", closedUntil: null };
     }
+    let closedUntil: number | null = null;
     for (const name of names) {
       const match = /^(\d+)\.json$/.exec(name);
       if (!match) continue;
@@ -169,22 +196,23 @@ export class RemoteRunLedger implements vscode.Disposable {
           await fs.promises.rm(file, { force: true }).catch(() => {});
           continue;
         }
-        return true;
+        return { live: true, closedUntil: null };
       }
       // A window that closed or reloaded: its listing counts for a while,
       // whether or not its process has exited yet. Any other listing counts
       // while its process lives.
+      const closedAt = typeof held.closedAt === "number" ? held.closedAt : null;
       const expired =
-        typeof held.closedAt === "number"
-          ? this.now() - held.closedAt >= CLOSED_LISTING_GRACE_MS
-          : !this.isAlive(pid);
+        closedAt !== null ? this.now() - closedAt >= CLOSED_LISTING_GRACE_MS : !this.isAlive(pid);
       if (expired) {
         await fs.promises.rm(file, { force: true }).catch(() => {});
         continue;
       }
-      if (Array.isArray(held.runIds) && held.runIds.includes(runId)) return true;
+      if (!Array.isArray(held.runIds) || !held.runIds.includes(runId)) continue;
+      if (closedAt === null) return { live: true, closedUntil: null };
+      closedUntil = Math.max(closedUntil ?? 0, closedAt + CLOSED_LISTING_GRACE_MS);
     }
-    return false;
+    return { live: false, closedUntil };
   }
 
   /**
@@ -265,22 +293,54 @@ export class RemoteRunLedger implements vscode.Disposable {
 
   /**
    * Claim the one answer this machine sends for a command. True for the
-   * first caller; false when another window claimed it, or when the claim
-   * cannot be recorded.
+   * first caller, and for the first window to take over the claim of a
+   * window that is gone: it claimed the answer, then closed or reloaded
+   * before it answered, and nobody else would answer then. False when a
+   * live window claimed it, or when the claim cannot be recorded.
    */
   async claimAnswer(commandId: string): Promise<boolean> {
+    const file = path.join(this.answersDir, answerFileName(commandId));
+    let handle: fs.promises.FileHandle;
     try {
       await fs.promises.mkdir(this.answersDir, { recursive: true });
-      const handle = await fs.promises.open(
-        path.join(this.answersDir, answerFileName(commandId)),
-        "wx"
-      );
-      await handle.close();
+      handle = await fs.promises.open(file, "wx");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return false;
+      if (!(await this.takeOverAnswer(file))) return false;
+      void this.sweepAnswers();
+      return true;
+    }
+    try {
+      // The claimer, so another window can tell when it is gone.
+      await handle.writeFile(JSON.stringify({ pid: this.windowId }));
     } catch {
-      return false;
+      // The claim stands; only a takeover of it is ruled out.
+    } finally {
+      await handle.close().catch(() => {});
     }
     void this.sweepAnswers();
     return true;
+  }
+
+  /**
+   * Take over an answer whose claimer is gone (#2357). The first window to
+   * create the takeover marker for that claimer wins it. A claim that names
+   * no claimer (one being written, or an unreadable one) is kept, as is a
+   * live window's.
+   */
+  private async takeOverAnswer(file: string): Promise<boolean> {
+    const owner = await this.claimOwner(file);
+    if (owner === null || owner === this.windowId || this.isAlive(owner)) return false;
+    try {
+      const marker = await fs.promises.open(`${file}.taken-from-${owner}`, "wx");
+      await marker.close();
+      const tmp = `${file}.${process.pid}.tmp`;
+      await fs.promises.writeFile(tmp, JSON.stringify({ pid: this.windowId }));
+      await fs.promises.rename(tmp, file);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private async sweepAnswers(): Promise<void> {
