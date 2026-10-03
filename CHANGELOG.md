@@ -120,6 +120,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`nightgauge git push` pushes only the current branch, and runs the
+  repository's pre-push hook** (#2365). It went through go-git, which runs no
+  hooks and, given no refspec, pushes every local branch, so a push through it,
+  or through the IPC method `git.push`, published every branch past the
+  publication hook. It now goes through git, as the pipeline's other pushes
+  do, refuses a detached `HEAD`, and leaves credentials to git: the binary no
+  longer builds HTTPS credentials from `GITHUB_TOKEN` for it.
 - **A slow reap of the complexity-model lock broker no longer hides why the
   transaction failed** (#2356). The extension waited for a broker it had sent
   SIGKILL as briefly as for one asked to exit, and an error from that wait

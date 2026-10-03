@@ -20,8 +20,6 @@ import (
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/plumbing/transport/http"
 
 	"github.com/nightgauge/nightgauge/internal/execution/codexprovision"
 	"github.com/nightgauge/nightgauge/internal/issueslug"
@@ -33,7 +31,6 @@ import (
 type Service struct {
 	repo     *gogit.Repository
 	repoPath string
-	auth     transport.AuthMethod
 }
 
 // NewService opens a git repository at the given path.
@@ -63,20 +60,10 @@ func NewService(repoPath string) (*Service, error) {
 		return nil, fmt.Errorf("open repo at %s: %w", repoPath, err)
 	}
 
-	s := &Service{
+	return &Service{
 		repo:     repo,
 		repoPath: repoPath,
-	}
-
-	// Set up auth from GITHUB_TOKEN if available
-	if token := os.Getenv("GITHUB_TOKEN"); token != "" {
-		s.auth = &http.BasicAuth{
-			Username: pushUsername(token),
-			Password: token,
-		}
-	}
-
-	return s, nil
+	}, nil
 }
 
 // NewServiceFromRepo creates a service from an already-opened repository (for testing).
@@ -449,7 +436,7 @@ func (s *Service) BranchDelete(name string) error {
 // caller can say which of "deleted" and "was already gone" happened.
 //
 // The push is a MUTATION and shells out, like PushBranch. It used to go through
-// go-git with the *http.BasicAuth NewService builds from GITHUB_TOKEN, which
+// go-git with the *http.BasicAuth NewService built from GITHUB_TOKEN, which
 // go-git rejects against an SSH remote with "invalid auth method" (#1921).
 // That made the delete fail on every SSH checkout, whether or not the ref was
 // there. git resolves credentials the way the machine already does (SSH agent,
@@ -718,7 +705,7 @@ func (s *Service) DefaultBranch() (string, error) {
 // longer carries when prune is set.
 //
 // It shells out, like PushBranch (#878) and BranchDeleteRemote (#1921). On
-// go-git it sent the *http.BasicAuth NewService builds from GITHUB_TOKEN, which
+// go-git it sent the *http.BasicAuth NewService built from GITHUB_TOKEN, which
 // go-git rejects against an SSH remote with "invalid auth method" before it
 // connects (#2081), and without a token go-git dialled SSH itself, ignoring
 // GIT_SSH_COMMAND, insteadOf rewrites and ~/.ssh/config. git resolves
@@ -735,16 +722,22 @@ func (s *Service) Fetch(prune bool) error {
 	return nil
 }
 
-// Push pushes the current branch to origin.
+// Push pushes the current branch to origin, through PushBranch and so through
+// the git CLI.
+//
+// It used to call go-git's Push with no refspec, which go-git defaults to
+// refs/heads/*:refs/heads/*: every local branch, not the current one. go-git
+// also runs no hooks, so `nightgauge git push` and the IPC method git.push
+// skipped the repository's pre-push hook, the publication guard (#2365)
+// included. git runs the hook, and the refspec names only the current branch.
+// It was the last go-git transport call, so NewService no longer turns
+// GITHUB_TOKEN into an *http.BasicAuth: git resolves credentials itself.
 func (s *Service) Push() error {
-	if err := s.repo.Push(&gogit.PushOptions{
-		RemoteName: "origin",
-		Auth:       s.auth,
-	}); err != nil && err != gogit.NoErrAlreadyUpToDate {
+	branch, err := s.CurrentBranch()
+	if err != nil {
 		return fmt.Errorf("push: %w", err)
 	}
-
-	return nil
+	return s.PushBranch(branch)
 }
 
 // PushBranch pushes the named branch to origin and sets upstream tracking.
@@ -753,7 +746,7 @@ func (s *Service) Push() error {
 // This is a MUTATION, so it shells out — the same split gitExec's header
 // states, applied to the operation that most needed it (#878).
 //
-// It used to go through go-git with the *http.BasicAuth that NewService builds
+// It used to go through go-git with the *http.BasicAuth that NewService built
 // from GITHUB_TOKEN. That auth is only valid for an HTTPS remote: against
 // `git@github.com:owner/repo.git` go-git's transport rejects it outright with
 // transport.ErrInvalidAuthMethod — "invalid auth method" (#593). SSH is the
@@ -837,16 +830,6 @@ func (s *Service) Status() (*StatusResult, error) {
 	sort.Slice(result.UnstagedFiles, func(i, j int) bool { return result.UnstagedFiles[i].Path < result.UnstagedFiles[j].Path })
 
 	return result, nil
-}
-
-// pushUsername is the HTTPS username for token. GitHub documents
-// x-access-token for an App installation token (ghs_); a personal token
-// accepts any username and keeps the one it always had (#1955).
-func pushUsername(token string) string {
-	if strings.HasPrefix(token, "ghs_") {
-		return "x-access-token"
-	}
-	return "token"
 }
 
 // pipelineSignature is the author of commits the service makes. When the

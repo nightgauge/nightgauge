@@ -34,9 +34,9 @@ type liveRunRepo struct {
 // Every branch except wip/999-operator is pushed to origin, so "the remote ref
 // survived" is a real assertion rather than an artefact of it never existing.
 //
-// GITHUB_TOKEN is cleared: NewService turns it into an *http.BasicAuth, and the
-// fixture's origin is a filesystem path. Leaving the developer's own token in
-// the environment would make these tests pass or fail based on who ran them.
+// GITHUB_TOKEN is cleared: NewService once turned it into an *http.BasicAuth,
+// and the fixture's origin is a filesystem path. Leaving the developer's own
+// token in the environment would make these tests depend on who ran them.
 func setupLiveRunRepo(t *testing.T) liveRunRepo {
 	t.Helper()
 	t.Setenv("GITHUB_TOKEN", "")
