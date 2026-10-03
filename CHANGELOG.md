@@ -240,6 +240,16 @@ changelog, and the release workflow refuses a tag that does not.
   as `Bash(gh *)` stays whole, and a `# comment` is skipped. A form a reader did
   not know read as no list and got the default tools, `Bash`, `Write` and
   `Edit` among them, and a comment that named a tool granted it.
+- **More spellings of `allowed-tools` read as YAML reads them** (#2385). A
+  quoted key (`"allowed-tools":`), a space before the colon and YAML's
+  explicit `? allowed-tools` form read as no field, so the skill got the
+  runner's default tools, `Bash`, `Write` and `Edit` among them, and full
+  access under Codex. A block scalar (`|` or `>`) read as the single entry `|`
+  or `>`, and a value continued from the key's line onto the lines below kept
+  only its first line. The binary, the SDK and the extension now read each of
+  these, and an `allowed-tools` written only in a form none of them can read,
+  such as a flow sequence that never closes, is refused rather than read as an
+  entry that names no tool.
 - **A platform resume of a run a window reload paused says why it cannot
   continue the run** (#2339). A platform `pause` holds the run in its window;
   a reload ends that held call, and a later platform `resume` found no slot,

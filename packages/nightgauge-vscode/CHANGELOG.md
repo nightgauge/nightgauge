@@ -53,6 +53,12 @@ and this project adheres to
   `Bash`, `Write` and `Edit` among them, instead of the ones its skill grants.
   A `# comment` after the list is no longer read as tools, and a field that
   lists no tool now fails the stage (#2358).
+- **More spellings of a skill's `allowed-tools` read as YAML reads them.** A
+  quoted key or a space before the colon used to read as no list, so the stage
+  ran with the default tools, `Bash`, `Write` and `Edit` among them. A block
+  scalar (`|` or `>`), or a list continued on the lines below its key, lost its
+  tools. A list written only in a form the extension cannot read now fails the
+  stage (#2385).
 - **Resuming a run from the phone app or the dashboard after its window was
   reloaded says to resume it in the window,** instead of waiting five minutes
   to expire. The reload ended the paused run; the window's own Resume prompt

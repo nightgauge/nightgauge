@@ -9,7 +9,8 @@
  * (#2358). Both test suites read
  * internal/skillrender/testdata/allowed_tools_expected.json, so the grammar
  * cannot change on one side only. An `allowed-tools` field that is there but
- * lists no tool is refused on both sides (errNoAllowedTools in Go).
+ * lists no tool is refused on both sides (errNoAllowedTools in Go), and so is
+ * one written only in a form neither reader can read (#2385).
  *
  * Written as scans, not regular expressions: an end-anchored quantifier is
  * quadratic on a long run of the character it repeats (CodeQL
@@ -80,8 +81,15 @@ function stripComment(value: string): string {
  * is between the brackets is split, and each item loses the quotes around it,
  * so `[Read, "Bash(gh *)"]` lists Read and Bash(gh *). Any other value loses
  * the quotes around it as a whole and is split.
+ *
+ * A value that starts with `|` or `>` is a block scalar this reader takes no
+ * text for (one on the key's line is read by {@link fieldValue}), and a flow
+ * sequence with no `]` is never closed: neither lists a tool. Each used to
+ * read as a junk entry such as `|` or `[Read`, which grants nothing (#2385).
  */
 function toolValue(value: string): string[] {
+  if (value.startsWith("|") || value.startsWith(">")) return [];
+  if (value.startsWith("[") && !value.includes("]")) return [];
   if (value.length >= 2 && value.startsWith("[") && value.endsWith("]")) {
     return splitAllowedTools(value.slice(1, -1))
       .map((entry) => trimWhere(entry, isQuote))
@@ -91,46 +99,151 @@ function toolValue(value: string): string[] {
 }
 
 /**
- * The entries of the first frontmatter field whose line, trimmed, starts with
- * `key:` (Go's extractToolList), or undefined when no line does. A value on
- * that line is read as one value. With no value there, the value is on the
- * lines after it: a YAML block list, one `- entry` per line with each entry
- * read as one value, or else the lines indented deeper than the key, joined
- * with spaces and read as one value, which is how YAML continues a plain value
- * or a flow sequence onto the next lines. Whichever the first of those lines
- * is decides which it is. Blank and `#` comment lines are skipped, and the
- * first other line ends the value.
+ * The text after the colon when a trimmed line is `key`'s entry, the key
+ * written as YAML writes an implicit one: bare, double-quoted or
+ * single-quoted, then any spaces or tabs, then the colon (Go's keyEntry).
+ * Undefined for any other line. `"allowed-tools": Read` and
+ * `allowed-tools : Read` used to read as no field, which every runner grants
+ * its default tools (#2385).
+ */
+function keyEntry(trimmed: string, key: string): string | undefined {
+  let rest: string;
+  if (trimmed.startsWith(key)) {
+    rest = trimmed.slice(key.length);
+  } else if (isQuote(trimmed.charAt(0)) && trimmed.startsWith(key + trimmed.charAt(0), 1)) {
+    rest = trimmed.slice(key.length + 2);
+  } else {
+    return undefined;
+  }
+  let i = 0;
+  while (i < rest.length && (rest[i] === " " || rest[i] === "\t")) i += 1;
+  return rest[i] === ":" ? rest.slice(i + 1) : undefined;
+}
+
+/**
+ * Whether a trimmed line is YAML's explicit form of `key`'s entry: `?`,
+ * whitespace, the key bare or quoted, and nothing after it but a comment
+ * (Go's explicitKey). Its value follows on a `:` line.
+ */
+function explicitKey(trimmed: string, key: string): boolean {
+  if (!trimmed.startsWith("?") || trimmed.length < 2 || !isSpace(trimmed[1])) return false;
+  const name = stripComment(trimWhere(trimmed.slice(1), isSpace));
+  return name === key || name === `"${key}"` || name === `'${key}'`;
+}
+
+/**
+ * Whether a value is a YAML block scalar header: `|` or `>`, then at most one
+ * chomping indicator (`+` or `-`) and one indentation indicator (a digit 1 to
+ * 9), in either order (Go's blockScalarHeader).
+ */
+function blockScalarHeader(value: string): boolean {
+  if (!value.startsWith("|") && !value.startsWith(">")) return false;
+  let chomping = false;
+  let indentation = false;
+  for (const ch of value.slice(1)) {
+    if ((ch === "+" || ch === "-") && !chomping) chomping = true;
+    else if (ch >= "1" && ch <= "9" && !indentation) indentation = true;
+    else return false;
+  }
+  return true;
+}
+
+/**
+ * The text of a block scalar whose header is on the key's line: the lines
+ * below it up to the first line, not blank, that is no deeper than the key
+ * (Go's blockScalar). A `#` in it is text, as YAML reads it, not a comment.
+ */
+function blockScalar(below: readonly string[], keyIndent: number): string {
+  const text: string[] = [];
+  for (const line of below) {
+    if (trimWhere(line, isSpace) !== "" && indentOf(line) <= keyIndent) break;
+    text.push(line);
+  }
+  return text.join("\n");
+}
+
+/**
+ * Whether a value is a quoted value or a flow sequence that ends on its own
+ * line (Go's closedOnItsLine). Any other value on the key's line continues
+ * over the deeper lines below it, as YAML continues a plain value and a quoted
+ * value or flow sequence that is not closed yet.
+ */
+function closedOnItsLine(value: string): boolean {
+  if (value.startsWith("[")) return value.includes("]");
+  if (!isQuote(value.charAt(0))) return false;
+  return value.length >= 2 && value.endsWith(value.charAt(0));
+}
+
+/**
+ * The entries of a tool field whose entry is on line `at`, `entry` being the
+ * text after its colon (Go's fieldValue).
+ *
+ * A value there is read without its comment. A block scalar header (`|` or
+ * `>`) reads as the block's text, split as one value. A quoted value or a
+ * flow sequence closed on that line is read as one value. Any other value
+ * there continues over the lines indented deeper than the key: they are
+ * joined to it with spaces and read as one value, which is how YAML continues
+ * a plain value, a quoted one or a flow sequence onto the next lines.
+ *
+ * With no value there, the value is on the lines after it: a YAML block list,
+ * one `- entry` per line with each entry read as one value, or else the lines
+ * indented deeper than the key, joined with spaces and read as one value.
+ * Whichever the first of those lines is decides which it is. Blank and `#`
+ * comment lines are skipped, and the first other line ends the value.
+ */
+function fieldValue(lines: readonly string[], at: number, entry: string): string[] {
+  const keyIndent = indentOf(lines[at]);
+  const below = lines.slice(at + 1);
+  const value = stripComment(trimWhere(entry, isSpace));
+  if (blockScalarHeader(value)) return splitAllowedTools(blockScalar(below, keyIndent));
+  if (closedOnItsLine(value)) return toolValue(value);
+  let inList = false;
+  let inValue = value !== "";
+  const entries: string[] = [];
+  const continued: string[] = inValue ? [value] : [];
+  for (const next of below) {
+    const item = trimWhere(next, isSpace);
+    if (item === "" || item.startsWith("#")) continue;
+    const rest = listItem(item);
+    if (rest !== undefined && !inValue) {
+      inList = true;
+      entries.push(...toolValue(stripComment(rest)));
+      continue;
+    }
+    if (!inList && indentOf(next) > keyIndent) {
+      inValue = true;
+      continued.push(stripComment(item));
+      continue;
+    }
+    break;
+  }
+  return inValue ? toolValue(continued.join(" ")) : entries;
+}
+
+/**
+ * The entries of the first frontmatter field that is `key` (Go's
+ * extractToolList), or undefined when there is none. The field is the first
+ * line that is the key's entry ({@link keyEntry}), or YAML's explicit form of
+ * it ({@link explicitKey}), whose value is on the next line that is not blank
+ * or a comment when that line is a `:` at the key's indent. An explicit key
+ * with no such line has no value. {@link fieldValue} reads the value.
  */
 function frontmatterTools(head: string, key: string): string[] | undefined {
-  const prefix = `${key}:`;
   const lines = head.split("\n");
   for (let i = 0; i < lines.length; i += 1) {
     const trimmed = trimWhere(lines[i], isSpace);
-    if (!trimmed.startsWith(prefix)) continue;
-    const value = stripComment(trimWhere(trimmed.slice(prefix.length), isSpace));
-    if (value !== "") return toolValue(value);
-    const keyIndent = indentOf(lines[i]);
-    let inList = false;
-    let inValue = false;
-    const entries: string[] = [];
-    const continued: string[] = [];
-    for (const next of lines.slice(i + 1)) {
-      const item = trimWhere(next, isSpace);
-      if (item === "" || item.startsWith("#")) continue;
-      const rest = listItem(item);
-      if (rest !== undefined && !inValue) {
-        inList = true;
-        entries.push(...toolValue(stripComment(rest)));
-        continue;
-      }
-      if (!inList && indentOf(next) > keyIndent) {
-        inValue = true;
-        continued.push(stripComment(item));
-        continue;
+    const entry = keyEntry(trimmed, key);
+    if (entry !== undefined) return fieldValue(lines, i, entry);
+    if (!explicitKey(trimmed, key)) continue;
+    for (let j = i + 1; j < lines.length; j += 1) {
+      const next = trimWhere(lines[j], isSpace);
+      if (next === "" || next.startsWith("#")) continue;
+      if (next.startsWith(":") && indentOf(lines[j]) === indentOf(lines[i])) {
+        return fieldValue(lines, j, next.slice(1));
       }
       break;
     }
-    return inValue ? toolValue(continued.join(" ")) : entries;
+    return [];
   }
   return undefined;
 }
@@ -171,8 +284,10 @@ export type SkillToolField = "allowed-tools" | "mcp-tools" | "programmatic-tools
  * A skill without the field gets each runner's default, the extension's
  * default set (Bash, Write and Edit among it) and full access under Codex, and
  * a field that read as empty used to get it too, so a list written in a form
- * the reader did not know granted more than it named (#2358). The Go render
- * refuses the same skill with the same words.
+ * the reader did not know granted more than it named (#2358). A field written
+ * only in a form the reader cannot read, such as a flow sequence that never
+ * closes, lists no tool and is refused too (#2385). The Go render refuses the
+ * same skill with the same words.
  */
 export const NO_ALLOWED_TOOLS =
   "allowed-tools is present but lists no tool: " +
