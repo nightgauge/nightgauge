@@ -1880,9 +1880,10 @@ reaches Fable only on a heavy reasoning stage (`feature-planning`,
 `feature-validate` never exceeds Opus. (#19 removed the earlier
 "Fable pinned on every reasoning stage" behavior: it paid frontier rates for
 trivial work and empirically failed validation in dogfooding.) No other mode can
-route to Fable. Two knobs reach it from any mode because no mode clamps them —
-an explicit `pipeline.stage_models` entry (or its
-`NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` env override) and a per-run override.
+route to Fable. Knobs no mode clamps reach it from any mode: the
+`NIGHTGAUGE_PIPELINE_STAGE_MODEL_*` env override and a per-run override. An
+explicit `pipeline.stage_models` entry reaches it too, except on a stage
+`maximum` pins, where the pin wins.
 `model_routing.minimum_model: fable` is a floor, not an explicit model, and
 floors land inside the mode envelope: it reaches Fable only under `frontier`,
 and there only on `feature-planning` / `feature-dev` — the two stages the
@@ -1890,14 +1891,16 @@ frontier ceiling is offered to. On `feature-validate` and the plumbing stages a
 `fable` floor is capped at Opus, in every mode. Unlike `maximum`, `frontier`
 leaves the budget ceiling enabled.
 
-Only `maximum` pins per stage (Opus everywhere, effort `high`). `efficiency`
+Only `maximum` pins per stage (Opus at effort `high` on the six stages
+[PERFORMANCE_MODES.md](PERFORMANCE_MODES.md#modes) lists). `efficiency`
 (`[haiku, sonnet]`), `elevated` (`[haiku, opus]`) and `frontier`
 (`[haiku, fable]`) are `[floor, ceiling]` **envelopes**: the router picks inside
 the band, and the ceiling also caps post-failure escalation, the
 `model_routing.minimum_model` floor and the `run.retryWithEscalation` forced
 tier, so a cost-capping mode actually caps. An explicit per-stage model
 (`pipeline.stage_models`, the manual-mode table, or the env override below) is
-the operator overriding the mode for that stage and is not clamped — but a floor
+the operator overriding the mode for that stage and is not clamped. Only the
+env override also beats a `maximum` pin; the other two lose to it. A floor
 still binds it, the ceiling still binds the raise, and the result is never
 **below** the model the operator named. So under `efficiency`,
 `stage_models.feature-dev: haiku` + `minimum_model.feature-dev: opus` dispatches
@@ -1913,9 +1916,10 @@ checkout's `performance-mode.yaml`
 (#2343); the schema now rejects it.
 
 The legacy `pipeline.supercharge` block is still parsed for one release, by
-the extension only, and only two of its keys: `model` and `codex_model` set the
-Claude and Codex models of the `maximum` profile. Its `stall_kill_multiplier`
-and `disable_budget_ceiling` are not read. See
+the extension only. Of its keys only `codex_model` changes what is dispatched:
+it is the Codex model a stage runs on under `maximum`. `model` only labels the
+run's notifications with a model name; `maximum` dispatches Opus whatever it
+says. `stall_kill_multiplier` and `disable_budget_ceiling` are not read. See
 [DEPRECATIONS.md](DEPRECATIONS.md#supercharge-toggle--performance_mode-selector).
 
 #### `pipeline.recovery.conflict_recovery` (#4072)
@@ -4453,7 +4457,7 @@ export NIGHTGAUGE_PIPELINE_STAGE_EFFORT_FEATURE_DEV=high
 The full model resolution chain is:
 
 ```
-0.   Performance-mode pin    maximum only (Opus, every stage)               → env override wins over it
+0.   Performance-mode pin    maximum only (Opus, six stages)                → env override wins over it
 1.   Environment variable    NIGHTGAUGE_PIPELINE_STAGE_MODEL_*              → highest priority
 2.   Config stage override   pipeline.stage_models.<stage>                  → mode-aware
 2.5. Lightweight stage default  issue-pickup, pr-create → haiku             → before the router

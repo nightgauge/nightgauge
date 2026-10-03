@@ -1414,27 +1414,24 @@ export const PipelineConfigSchema = z.object({
       /**
        * Maximum-profile overrides. Accepted, but nothing reads them: the
        * profile keeps its own values (#2378 decides between wiring them up
-       * and removing them).
+       * and removing them). Each field below names the profile value it was
+       * meant to override.
        */
       overrides: z
         .object({
           maximum: z
             .object({
               /**
-               * Override Claude model for the Maximum profile (default:
-               * 'opus'). The standard band and the one rung below it,
-               * positionally derived from the `TIER_BANDS` authority (#582)
-               * like `soft_route_model` — its consumer twin
-               * (`monitoringResolver.getSuperchargeModel`) derives the same
-               * pair, so neither side can drift alone. Accepted set
-               * unchanged.
+               * The profile's Claude model (it pins 'opus'). The standard
+               * band and the one rung below it, positionally derived from
+               * the `TIER_BANDS` authority (#582) like `soft_route_model`.
                */
               model: z.enum([TIER_BANDS[2], TIER_BANDS[1]]).optional(),
-              /** Override Codex model for the Maximum profile (default: dynamic catalog) */
+              /** The profile's Codex model (default: dynamic catalog). */
               codex_model: z.string().optional(),
-              /** Stall kill multiplier override (default: 10) */
+              /** The stall kill multiplier (default: 10). */
               stall_kill_multiplier: z.number().int().min(1).optional(),
-              /** Disable pipeline-level token budget ceiling (default: true) */
+              /** Whether the pipeline token ceiling only observes (default: true). */
               disable_budget_ceiling: z.boolean().optional(),
             })
             .optional(),
@@ -1445,23 +1442,28 @@ export const PipelineConfigSchema = z.object({
     .optional(),
   /**
    * @deprecated Issue #3009 — replaced by `performance_mode`. Retained for one
-   * release so existing config files keep parsing. The `model` /
-   * `codex_model` / `stall_kill_multiplier` / `disable_budget_ceiling`
-   * sub-fields are read by the legacy resolver as Maximum-mode overrides.
+   * release so existing config files keep parsing. The extension's legacy
+   * parser reads two keys: `codex_model` (`getSuperchargeCodexModel`) is the
+   * Codex model a stage runs on under Maximum, and `model`
+   * (`getSuperchargeModel`) only labels the run's notifications. Maximum
+   * dispatches Opus whatever `model` says, and `stall_kill_multiplier` and
+   * `disable_budget_ceiling` are not read.
    *
    * @see Issue #2433 - Supercharge pipeline mode (deprecated)
    */
   supercharge: z
     .object({
       /**
-       * Override model for the Maximum profile (default: 'opus').
-       * Positionally derived from `TIER_BANDS` (#582) — see the
-       * `performance_mode.overrides.maximum.model` note above.
+       * The model name the run's notifications show for Maximum (default:
+       * 'opus'); not dispatched. Positionally derived from `TIER_BANDS`
+       * (#582), the pair `monitoringResolver.getSuperchargeModel` accepts.
        */
       model: z.enum([TIER_BANDS[2], TIER_BANDS[1]]).optional(),
-      /** Stall kill multiplier override (default: 10) */
+      /** The Codex model a stage runs on under Maximum (default: dynamic catalog). */
+      codex_model: z.string().optional(),
+      /** Not read. */
       stall_kill_multiplier: z.number().int().min(1).optional(),
-      /** Disable pipeline-level token budget ceiling (default: true) */
+      /** Not read. */
       disable_budget_ceiling: z.boolean().optional(),
     })
     .optional(),

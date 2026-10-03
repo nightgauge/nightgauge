@@ -256,8 +256,11 @@ changelog, and the release workflow refuses a tag that does not.
 
   CONFIGURATION.md no longer says `pipeline.performance_mode.overrides.maximum`
   tunes the `maximum` profile, or that `pipeline.supercharge` is its synonym:
-  nothing reads the overrides (#2378), and only the legacy block's `model` and
-  `codex_model` are read.
+  nothing reads the overrides (#2378). Of the legacy block only `codex_model`
+  changes what is dispatched (the Codex model under `maximum`); its `model`
+  only labels notifications. The docs also no longer say `pipeline.stage_models`
+  overrides a `maximum` pin: only a stage's
+  `NIGHTGAUGE_PIPELINE_STAGE_MODEL_<STAGE>` override does.
 - **A `stall_kill_multiplier` nested inside another `pipeline` key no longer
   sets the global one** (#2378). The extension read the key at any depth under
   `pipeline:`, so one under `performance_mode.overrides.maximum`, as

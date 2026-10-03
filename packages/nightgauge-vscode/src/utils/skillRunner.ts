@@ -4828,8 +4828,10 @@ function runStageSkillHeadlessImpl(
   const codexEnv: Record<string, string> = {};
   if (adapter === "codex") {
     // When the active performance mode is `maximum` (or legacy supercharge),
-    // prefer the user-configurable Codex override
-    // (`pipeline.performance_mode.maximum.codex_model` or env var) so users
+    // prefer the user-configurable Codex override (the
+    // `NIGHTGAUGE_SUPERCHARGE_CODEX_MODEL` env var or the legacy
+    // `pipeline.supercharge.codex_model`; nothing reads
+    // `pipeline.performance_mode.overrides.maximum.codex_model`, #2378) so users
     // can point the heavy tier at a new model without a code change. Falls
     // through to modelDecision.model, which for `maximum` already resolves
     // to the registry's opus tier (CODEX_TIER_MODEL_MAP.opus) via

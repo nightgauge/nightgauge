@@ -39,8 +39,10 @@ the extension. The two tables mirror each other.
   candidate, `elevated` the best quality per dollar, and `maximum` and
   `frontier` the highest quality.
 
-An explicit per-stage model (`pipeline.stage_models` or its environment
-override) is the operator overriding the mode for that stage, and
+A stage's `NIGHTGAUGE_PIPELINE_STAGE_MODEL_<STAGE>` environment override
+overrides the mode for that stage in every mode, a `maximum` pin included. An
+explicit `pipeline.stage_models` entry overrides the envelope for its stage,
+but not a pin: under `maximum` the pin wins on every stage it pins.
 `model_routing.max_model` lowers a mode's ceiling without ever raising it. See
 [CONFIGURATION.md](CONFIGURATION.md#capping-automatic-routing-with-max_model)
 for how these interact with the envelope.
