@@ -1378,7 +1378,8 @@ func TestContract_Attention(t *testing.T) {
 	// forge factory and attention.sweep reads the forge for real. It went to
 	// GitHub with the harness's fake token and came back 401, network round
 	// trips under the harness's read bound, and on a loaded machine it
-	// outlived it (#2367). The seal keeps every request on this machine.
+	// outlived it (#2367). TestMain's seal keeps every request on this
+	// machine; this test opens its own to count the sweep's.
 	forgeRequests := sealNetwork(t)
 	h := newIpcTestHarness(t)
 	h.awaitReady()

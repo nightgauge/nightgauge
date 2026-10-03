@@ -526,9 +526,8 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 		t.Skip("skipping E2E test in short mode")
 	}
 
-	// The pr-merge stage polls GitHub for the fixture's PR. Sealed, each read
-	// is refused on this machine at once rather than sent to the network.
-	sealNetwork(t)
+	// The pr-merge stage polls GitHub for the fixture's PR. TestMain's network
+	// seal refuses each read on this machine at once.
 	h, workDir := newIpcTestHarnessWithSkills(t)
 	h.awaitReady()
 
@@ -661,7 +660,6 @@ func TestE2E_StageExecutionRoundTrip(t *testing.T) {
 		t.Skip("skipping E2E test in short mode")
 	}
 
-	sealNetwork(t) // nothing in this run reaches GitHub
 	h, workDir := newIpcTestHarnessWithSkills(t)
 	h.awaitReady()
 
@@ -924,7 +922,6 @@ func TestE2E_ConcurrentPipelines(t *testing.T) {
 		t.Skip("skipping E2E test in short mode")
 	}
 
-	sealNetwork(t) // the pr-create and pr-merge stages' GitHub reads stay on this machine
 	h, workDir := newIpcTestHarnessWithSkills(t)
 	h.awaitReady()
 

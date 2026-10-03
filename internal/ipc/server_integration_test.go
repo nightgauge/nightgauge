@@ -41,6 +41,10 @@ import (
 // binaryPath is set by TestMain after building the binary.
 var binaryPath string
 
+// packageSeal is the network seal TestMain sets for every process the
+// package starts (#2367).
+var packageSeal *networkSeal
+
 // ipcTestHome is the package-lifetime $HOME TestMain isolates every spawned
 // `serve` subprocess to (see below). Tests that need to plant a fixture at
 // the daemon's default rate-limit state path — $HOME/.nightgauge/rate-limit.json,
@@ -132,7 +136,27 @@ func TestMain(m *testing.M) {
 	restoreDoctor := sweep.SwapDoctorScanForTest(func(context.Context, string) ([]doctor.CheckResult, error) {
 		return nil, nil
 	})
+
+	// Seal the package off the network (#2367). The config every harness
+	// writes gives the daemon a scheduler and a forge factory, and the fake
+	// token satisfies the GitHub client, so a method that reads the forge
+	// sent real requests: 43 in one run, from 14 tests, to api.github.com and
+	// to the production platform API. Every harness builds its daemon's
+	// environment from os.Environ(), so the seal set here covers every daemon,
+	// each git or gh a daemon runs, and this binary's own clients, for the
+	// package's lifetime. A test that counts its daemons' requests opens a
+	// seal of its own (sealNetwork).
+	packageSeal, err = openNetworkSeal()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "network seal:", err)
+		os.Exit(1)
+	}
+	for k, v := range packageSeal.env() {
+		os.Setenv(k, v)
+	}
+
 	code := m.Run()
+	packageSeal.close()
 	restoreDoctor()
 	cleanupHome()
 	os.Exit(code)
@@ -185,8 +209,9 @@ func newIpcTestHarness(t *testing.T) *ipcTestHarness {
 	}
 
 	cmd := exec.Command(binaryPath, "serve", "--workspace", workDir)
-	// Supply fake GITHUB_TOKEN — satisfies gh.NewClient() without real API access.
-	// Queue and pipeline.getState methods make no network calls.
+	// A fake GITHUB_TOKEN satisfies gh.NewClient(). A method that reads the
+	// forge still sends requests with it; TestMain's network seal, which
+	// os.Environ() carries, refuses each one on this machine (#2367).
 	cmd.Env = append(os.Environ(), "GITHUB_TOKEN=fake-token-for-integration-test")
 
 	stdinPipe, err := cmd.StdinPipe()
@@ -255,45 +280,88 @@ func (h *ipcTestHarness) nextLine() string {
 	}
 }
 
-// sealNetwork keeps the daemons t starts off the network, and returns how
-// many requests they tried to send there. It listens on loopback and sets
-// itself as the HTTP and HTTPS proxy for the rest of t; a harness passes its
-// environment to the daemon, so call it before newIpcTestHarness. Every
-// request to a host that is not loopback then reaches the seal, which closes
-// the connection at once: nothing goes out, and nothing waits on a network
-// round trip. Loopback is never proxied, so a test's own fixture servers
-// still answer (#2367).
-func sealNetwork(t *testing.T) (requests func() int64) {
-	t.Helper()
+// networkSeal stands in for the network. It listens on loopback and, set as
+// a process's HTTP and HTTPS proxy, receives every request that process
+// sends to a host that is not loopback, counts it and closes the connection
+// at once: nothing goes out, and nothing waits on a network round trip.
+// Loopback is never proxied, so a test's own fixture servers still answer
+// (#2367).
+type networkSeal struct {
+	ln       net.Listener
+	requests atomic.Int64
+	done     chan struct{}
+}
+
+// openNetworkSeal starts a seal on a free loopback port.
+func openNetworkSeal() (*networkSeal, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("network seal: %v", err)
+		return nil, err
 	}
-	var n atomic.Int64
-	done := make(chan struct{})
+	s := &networkSeal{ln: ln, done: make(chan struct{})}
 	go func() {
-		defer close(done)
+		defer close(s.done)
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			n.Add(1)
+			s.requests.Add(1)
 			conn.Close()
 		}
 	}()
-	t.Cleanup(func() {
-		ln.Close()
-		<-done
-	})
-	proxy := "http://" + ln.Addr().String()
+	return s, nil
+}
+
+// env is the environment that sends a process's requests to the seal, with
+// NO_PROXY cleared so that no host is exempt.
+func (s *networkSeal) env() map[string]string {
+	proxy := "http://" + s.ln.Addr().String()
+	env := map[string]string{"NO_PROXY": "", "no_proxy": ""}
 	for _, k := range []string{"HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"} {
-		t.Setenv(k, proxy)
+		env[k] = proxy
 	}
-	for _, k := range []string{"NO_PROXY", "no_proxy"} {
-		t.Setenv(k, "")
+	return env
+}
+
+// close stops the seal and waits for its accept loop to end.
+func (s *networkSeal) close() {
+	s.ln.Close()
+	<-s.done
+}
+
+// sealNetwork gives the daemons t starts a seal of their own, for the rest of
+// t, and returns how many requests they sent to it. TestMain already keeps
+// every test off the network; a test calls this to count its requests. A
+// harness passes its environment to the daemon, so call it before
+// newIpcTestHarness.
+func sealNetwork(t *testing.T) (requests func() int64) {
+	t.Helper()
+	s, err := openNetworkSeal()
+	if err != nil {
+		t.Fatalf("network seal: %v", err)
 	}
-	return n.Load
+	t.Cleanup(s.close)
+	for k, v := range s.env() {
+		t.Setenv(k, v)
+	}
+	return s.requests.Load
+}
+
+// TestNetworkSealCoversThePackage pins TestMain's seal: every harness builds
+// its daemon's environment from os.Environ(), so while these variables hold,
+// a request a daemon sends to a host that is not loopback reaches the seal,
+// never the network. TestContract_Attention shows the daemon's client honours
+// them, by count (#2367).
+func TestNetworkSealCoversThePackage(t *testing.T) {
+	if packageSeal == nil {
+		t.Fatal("TestMain opened no network seal")
+	}
+	for k, want := range packageSeal.env() {
+		if got, ok := os.LookupEnv(k); !ok || got != want {
+			t.Errorf("%s = %q (set: %v), want %q", k, got, ok, want)
+		}
+	}
 }
 
 // bind makes t, a subtest of the test that owns the harness, the one a
