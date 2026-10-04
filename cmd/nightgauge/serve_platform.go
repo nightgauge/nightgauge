@@ -4,7 +4,9 @@ import (
 	"log"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/ipc"
 	"github.com/nightgauge/nightgauge/internal/keychain"
+	"github.com/nightgauge/nightgauge/internal/platform"
 )
 
 // platformConfigSource identifies where a serve invocation's effective
@@ -39,6 +41,12 @@ type resolvedPlatformConfig struct {
 	APIKey     string
 	LicenseKey string
 	Source     platformConfigSource
+	// OptedIn is the user's opt-in to the hosted service: platform.enabled
+	// true, or a license or API key in the environment. Run telemetry is
+	// sent only with it (ipc.WithTelemetryPolicy). A platform URL alone, a
+	// stored license key or a signed-in session is not an opt-in: they say
+	// where requests go or who the user is, not that the product may send.
+	OptedIn bool
 }
 
 // Configured reports whether any platform credential resolved to a non-empty
@@ -46,6 +54,52 @@ type resolvedPlatformConfig struct {
 // remote-command poller gate, and the Action Center bridge gate all need.
 func (r resolvedPlatformConfig) Configured() bool {
 	return r.URL != "" || r.APIKey != "" || r.LicenseKey != ""
+}
+
+// serveTelemetryOptions are the IPC server options that carry serve's run
+// telemetry consent: the cloud opt-in (resolved.OptedIn), the machine tier's
+// platform.telemetry.enabled (on unless explicitly false; cfg nil reads as
+// on, since the opt-in still has to hold), and the consent of the editor that
+// started the daemon (editorEnv and editorStreamsEnv, the values of
+// ipc.EditorTelemetryEnv and ipc.EditorTelemetryStreamsEnv). The server's
+// TelemetryAllowed is the conjunction, and every send asks it; a run record
+// also asks RunRecordsAllowed, the editor's pipeline-run stream.
+func serveTelemetryOptions(resolved resolvedPlatformConfig, cfg *config.Config, editorEnv, editorStreamsEnv string) []ipc.ServerOption {
+	telemetryConfigOn := cfg == nil || cfg.Telemetry.IsEnabled()
+	return []ipc.ServerOption{
+		ipc.WithTelemetryPolicy(resolved.OptedIn, telemetryConfigOn),
+		ipc.WithEditorTelemetry(editorEnv),
+		ipc.WithEditorTelemetryStreams(editorStreamsEnv),
+	}
+}
+
+// schedulerTelemetryService is the autonomous scheduler's telemetry service
+// on pc. Every push asks allowed first (the IPC server's TelemetryAllowed), and
+// a run record also asks runsAllowed (its RunRecordsAllowed), so the
+// scheduler's run records, live events and queue snapshots need the same
+// consent as the interactive path's, and anything buffered is dropped once it
+// is withdrawn.
+func schedulerTelemetryService(pc *platform.Client, allowed, runsAllowed func() bool) *platform.TelemetryService {
+	svc := platform.NewTelemetryService(pc)
+	svc.SetSendGate(allowed)
+	svc.SetRunGate(runsAllowed)
+	return svc
+}
+
+// onDemandPlatformEndpoint is the URL a platform client built on demand talks
+// to (#2398): the --platform-url flag or NIGHTGAUGE_PLATFORM_URL (flagURL,
+// taken before resolvePlatformConfig), else the machine tier's
+// platform.api_url whatever platform.enabled says. The user's own account
+// actions go where the user pointed them; a URL opts nothing in. Empty means
+// the default URL.
+func onDemandPlatformEndpoint(flagURL string, cfg *config.Config) string {
+	if flagURL != "" {
+		return flagURL
+	}
+	if cfg != nil {
+		return cfg.PlatformURL
+	}
+	return ""
 }
 
 // resolvePlatformConfig applies flag > env > config precedence to the
@@ -77,6 +131,7 @@ func (r resolvedPlatformConfig) Configured() bool {
 // the --api-key flag was removed because it put the key on argv (ADR-024 § 5).
 func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *config.Config, storedLicense func() (keychain.Result, error)) resolvedPlatformConfig {
 	r := resolvedPlatformConfig{URL: flagURL, APIKey: flagAPIKey, LicenseKey: flagLicenseKey}
+	explicitCredential := flagAPIKey != "" || flagLicenseKey != ""
 
 	// licenseFromFlagEnv is captured before the config fallback below
 	// mutates r.LicenseKey — it drives the Source label because LicenseKey
@@ -90,6 +145,7 @@ func resolvePlatformConfig(flagURL, flagAPIKey, flagLicenseKey string, cfg *conf
 	// setting is absent or false. Config-file credentials are used only when
 	// platform.enabled is explicitly true; omitted is the local-only default.
 	configEnabled := cfg != nil && cfg.PlatformEnabled != nil && *cfg.PlatformEnabled
+	r.OptedIn = configEnabled || explicitCredential
 	if configEnabled {
 		if r.URL == "" && cfg.PlatformURL != "" {
 			r.URL = cfg.PlatformURL

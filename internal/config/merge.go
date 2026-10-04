@@ -241,6 +241,16 @@ func LoadMerged(workspaceRoot string) (*Config, error) {
 	if hasMachine && hasProject {
 		warnMachineKeysInProjectYAML(projectData, machineData)
 	}
+	// A hard-stripped block is ignored whether or not the machine tier sets
+	// it, so it is reported whenever a repository tier carries it: an opt-out
+	// such as platform.telemetry.enabled: false written there would otherwise
+	// be discarded without a word.
+	if hasProject {
+		warnIgnoredRepoTierKeys(projectData, "project", ProjectConfigPath(workspaceRoot))
+	}
+	if hasLocal {
+		warnIgnoredRepoTierKeys(localData, "local", LocalConfigPath(workspaceRoot))
+	}
 
 	// Platform credentials and preferences are machine-owned. Never allow a
 	// repository-controlled file (including local checkout overrides) to shadow
@@ -441,17 +451,14 @@ func warnMachineKeysInProjectYAML(projectData, machineData []byte) {
 	}
 
 	for _, key := range MachineTierKeys {
+		// A hard-stripped key is reported by warnIgnoredRepoTierKeys, whether
+		// or not the machine tier sets it (#1049).
+		if isHardStrippedMachineKey(key) {
+			continue
+		}
 		segs := strings.Split(key, ".")
 		if nodeHasPath(projectRoot, segs) && nodeHasPath(machineRoot, segs) {
-			// #1049: "shadows" is factually wrong for a key the loader strips
-			// outright — the project value is not merely outranked, it is
-			// deleted before the merge sees it. Say which one happened, or the
-			// warning misdescribes the very case it exists to surface.
-			effect := "The project value shadows your machine setting."
-			if isHardStrippedMachineKey(key) {
-				effect = "The project value is IGNORED — it is removed before the merge and the machine tier wins."
-			}
-			warnShadowOnce("key:"+key, fmt.Sprintf("WARN config: %s is in project YAML but is owned by the machine tier (~/.nightgauge/config.yaml). %s See docs/SETTINGS_ARCHITECTURE.md.", key, effect))
+			warnShadowOnce("key:"+key, fmt.Sprintf("WARN config: %s is in project YAML but is owned by the machine tier (~/.nightgauge/config.yaml). The project value shadows your machine setting. See docs/SETTINGS_ARCHITECTURE.md.", key))
 		}
 	}
 
@@ -463,6 +470,29 @@ func warnMachineKeysInProjectYAML(projectData, machineData []byte) {
 		if machineRepos[slug] {
 			warnShadowOnce("repo:"+slug, fmt.Sprintf("WARN config: autonomous.repositories.%s is in project YAML but is owned by the machine tier. The project value shadows your machine setting. See docs/SETTINGS_ARCHITECTURE.md.", slug))
 		}
+	}
+}
+
+// warnIgnoredRepoTierKeys reports every hard-stripped block (#1049) a
+// repository tier carries: LoadMerged deletes it before the merge, so the
+// value is IGNORED, not merely shadowed, whatever the machine tier says. tier
+// is "project" or "local", and path the file it was read from.
+func warnIgnoredRepoTierKeys(data []byte, tier, path string) {
+	root := parseYAMLRoot(data)
+	if root == nil {
+		return
+	}
+	machinePath := "~/.nightgauge/config.yaml"
+	if p, err := MachineConfigPath(); err == nil && p != "" {
+		machinePath = p
+	}
+	for _, k := range repoTierProtectedKeys {
+		if !k.hardStrip || !nodeHasPath(root, []string{k.root}) {
+			continue
+		}
+		warnShadowOnce("ignored:"+tier+":"+k.root, fmt.Sprintf(
+			"WARN config: %s is in %s YAML (%s) but is owned by the machine tier (%s). The %s value is IGNORED — it is removed before the merge, whether or not the machine tier sets it. See docs/SETTINGS_ARCHITECTURE.md.",
+			k.root, tier, path, machinePath, tier))
 	}
 }
 

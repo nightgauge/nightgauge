@@ -214,3 +214,82 @@ func TestResolvePlatformConfig_FullyOfflineUnchanged(t *testing.T) {
 		t.Errorf("Source = %q, want %q", got.Source, platformSourceAbsent)
 	}
 }
+
+// TestResolvePlatformConfig_ExtensionStoredKeyIsAStoredCredential pins #2398.
+// The extension no longer hands the daemon its stored license key in
+// NIGHTGAUGE_LICENSE_KEY, where it read as an explicit opt-in: the key it
+// stored reaches serve through the shared store (the keychain entry the
+// extension writes with `auth license set`, or the machine-tier file), and a
+// stored key is used only when platform.enabled is true.
+func TestResolvePlatformConfig_ExtensionStoredKeyIsAStoredCredential(t *testing.T) {
+	enabled, disabled := true, false
+	storedByTheExtension := storedAt("lic_from_vscode", keychain.SourceKeychain)
+
+	off := resolvePlatformConfig("", "", "", &config.Config{PlatformEnabled: &disabled}, storedByTheExtension)
+	if off.LicenseKey != "" || off.Configured() {
+		t.Fatalf("platform.enabled false: got %+v, want no license and no client — the platform agent (registration, heartbeat, command poller) starts from this key", off)
+	}
+
+	on := resolvePlatformConfig("", "", "", &config.Config{PlatformEnabled: &enabled}, storedByTheExtension)
+	if on.LicenseKey != "lic_from_vscode" {
+		t.Fatalf("platform.enabled true: LicenseKey = %q, want the stored key", on.LicenseKey)
+	}
+	if on.Source != platformSourceKeychain {
+		t.Errorf("platform.enabled true: Source = %q, want %q", on.Source, platformSourceKeychain)
+	}
+
+	// A key in the environment that started VS Code is still an explicit
+	// opt-in: the extension's spawn inherits it untouched.
+	explicit := resolvePlatformConfig("", "", "lic_from_env", &config.Config{PlatformEnabled: &disabled}, storedByTheExtension)
+	if explicit.LicenseKey != "lic_from_env" || explicit.Source != platformSourceFlagEnv {
+		t.Errorf("explicit env key with platform.enabled false: got %+v, want it used as an opt-in", explicit)
+	}
+}
+
+// TestOnDemandPlatformEndpoint pins where an account action's on-demand client
+// goes (#2398): the flag or environment URL, else the configured
+// platform.api_url whatever platform.enabled says, else the default ("").
+func TestOnDemandPlatformEndpoint(t *testing.T) {
+	disabled := false
+	cfg := &config.Config{PlatformEnabled: &disabled, PlatformURL: "https://cfg.example.com"}
+	if got := onDemandPlatformEndpoint("https://flag.example.com", cfg); got != "https://flag.example.com" {
+		t.Errorf("flag URL: got %q", got)
+	}
+	if got := onDemandPlatformEndpoint("", cfg); got != "https://cfg.example.com" {
+		t.Errorf("config URL with platform.enabled false: got %q, want it", got)
+	}
+	if got := onDemandPlatformEndpoint("", nil); got != "" {
+		t.Errorf("no config: got %q, want the default", got)
+	}
+}
+
+// TestResolvePlatformConfig_OptedIn pins what counts as the user's opt-in to
+// the hosted service, which run telemetry needs (ipc.WithTelemetryPolicy):
+// platform.enabled true, or a key in the environment. A platform URL, a
+// stored key or (elsewhere) a signed-in session is not one.
+func TestResolvePlatformConfig_OptedIn(t *testing.T) {
+	enabled, disabled := true, false
+	stored := storedAt("lic_stored", keychain.SourceKeychain)
+	cases := []struct {
+		name                string
+		url, apiKey, licEnv string
+		cfg                 *config.Config
+		want                bool
+	}{
+		{name: "platform.enabled true", cfg: &config.Config{PlatformEnabled: &enabled}, want: true},
+		{name: "license key in the environment", licEnv: "lic_env", cfg: &config.Config{PlatformEnabled: &disabled}, want: true},
+		{name: "api key in the environment", apiKey: "key_env", want: true},
+		{name: "a platform URL alone", url: "https://staging.example.test", cfg: &config.Config{PlatformEnabled: &disabled}},
+		{name: "a stored key with platform.enabled false", cfg: &config.Config{PlatformEnabled: &disabled}},
+		{name: "platform.enabled omitted", cfg: &config.Config{PlatformURL: "https://cfg.example.com"}},
+		{name: "no config", cfg: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolvePlatformConfig(tc.url, tc.apiKey, tc.licEnv, tc.cfg, stored)
+			if got.OptedIn != tc.want {
+				t.Errorf("OptedIn = %v, want %v (%+v)", got.OptedIn, tc.want, got)
+			}
+		})
+	}
+}

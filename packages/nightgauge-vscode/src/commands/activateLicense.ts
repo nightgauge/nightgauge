@@ -12,11 +12,12 @@
  *     hostname and platform so the platform binds the seat to the same machine
  *     identity the pipeline preflight will later present (#1334).
  *  3. On success, persist the key to SecretStorage under
- *     SECRET_KEYS.platformLicenseKey — the source of truth that
- *     IpcClientBase.resolveLicenseKey() reads and forwardPlatformEnv() injects
- *     into the Go IPC server as NIGHTGAUGE_LICENSE_KEY on the next spawn —
- *     and, through `nightgauge auth license set`, to the OS-keychain entry
- *     the CLI reads (#2027).
+ *     SECRET_KEYS.platformLicenseKey, for the extension's own readers, and,
+ *     through `nightgauge auth license set`, to the OS-keychain entry the CLI
+ *     and the daemon read (#2027). The daemon treats it as a stored
+ *     credential: it uses it only when `platform.enabled` is true (#2398).
+ *     Verifying the key here works either way — it is the user's own action,
+ *     and the daemon builds a platform client for it on demand.
  *  4. The running Go server still holds the previous key, so the new license
  *     applies after a window reload, which we offer inline.
  *

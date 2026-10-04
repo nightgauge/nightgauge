@@ -19,7 +19,10 @@ func newSessionTokenServer(t *testing.T, baseURL string) (*Server, *platform.Cli
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	s := NewServer(nil, WithPlatformClient(pc))
+	// A daemon holding a license key at startup was opted in to the cloud
+	// (serve uses a stored key only then), so platform.healthCheck reaches
+	// the platform and shows the credential on the wire.
+	s := NewServer(nil, WithPlatformClient(pc), WithTelemetryPolicy(true, true))
 	s.writer = &bytes.Buffer{}
 	return s, pc
 }
@@ -161,8 +164,11 @@ func TestPlatformSetSessionToken_LazyClientUsesDefaultBaseURL(t *testing.T) {
 	if want == "" {
 		t.Fatal("platform.DefaultConfig().BaseURL is empty — the lazy path would build a client with no host")
 	}
-	if got := sessionOnlyPlatformConfig().BaseURL; got != want {
+	if got := onDemandPlatformConfig("").BaseURL; got != want {
 		t.Errorf("lazy-path base URL = %q, want the default %q", got, want)
+	}
+	if got := onDemandPlatformConfig("https://staging.example.test").BaseURL; got != "https://staging.example.test" {
+		t.Errorf("lazy-path base URL with a configured endpoint = %q, want it (#2398)", got)
 	}
 }
 

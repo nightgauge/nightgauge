@@ -103,11 +103,12 @@ type Server struct {
 	// talk to the platform, even when the daemon was spawned with no
 	// api_url/api_key/license_key at all (nothing for the eager path to
 	// construct from). ensurePlatformClient lazily builds the default client
-	// the first time platform.setSessionToken sees a real token — from a
-	// request-handling goroutine, since IPC requests are dispatched one
-	// goroutine per call (see handleRequest). That write has to be visible to
-	// every OTHER handler goroutine reading these same fields, so both the
-	// write and every read go through platformClientMu — see
+	// the first time platform.setSessionToken sees a real token, or the user
+	// takes an explicit account action (sign-in, license activation, a trial;
+	// #2398) — from a request-handling goroutine, since IPC requests are
+	// dispatched one goroutine per call (see handleRequest). That write has to
+	// be visible to every OTHER handler goroutine reading these same fields, so
+	// both the write and every read go through platformClientMu — see
 	// setPlatformServicesLocked and the getPlatformClient/getXSvc getters.
 	//
 	// authSvc is deliberately NOT part of this group: it drives the daemon's
@@ -115,9 +116,28 @@ type Server struct {
 	// created, not something a session's arrival should construct.
 	platformClientMu sync.RWMutex
 	platformClient   *platform.Client
-	licenseSvc       *platform.LicenseService
-	authSvc          *platform.AuthService
-	skillSvc         *platform.SkillService
+	// platformEndpoint is the URL a client built on demand talks to (#2398);
+	// see WithPlatformEndpoint. Set once by an option, before Run().
+	platformEndpoint string
+	// cloudOptIn, telemetryConfigOn and editorTelemetry are the consent
+	// TelemetryAllowed reads before any run data leaves the machine. The
+	// first two are set once by WithTelemetryPolicy, before Run(); with no
+	// policy both are false and nothing is sent. cloudOptIn also decides
+	// whether a client built on demand may poll the platform's health in the
+	// background (ensurePlatformClient). editorTelemetry is the editor's
+	// own consent, seeded by WithEditorTelemetry and changed by
+	// platform.setTelemetryConsent from any request goroutine.
+	cloudOptIn        bool
+	telemetryConfigOn bool
+	editorTelemetry   atomic.Int32
+	// editorStreams is the set of telemetry streams the editor allows
+	// (nightgauge.telemetry.streams), seeded by WithEditorTelemetryStreams
+	// and replaced by platform.setTelemetryConsent. nil until the editor
+	// reports it, which allows every stream.
+	editorStreams atomic.Pointer[map[string]bool]
+	licenseSvc    *platform.LicenseService
+	authSvc       *platform.AuthService
+	skillSvc      *platform.SkillService
 	// analyticsSvc is the EMISSION seam only — an interface so a test can count
 	// emissions (#472). It is nil exactly when no platform client is attached;
 	// see setPlatformServicesLocked for why the assignment is guarded.
@@ -400,6 +420,125 @@ func WithPlatformClient(pc *platform.Client) ServerOption {
 	}
 }
 
+// WithPlatformEndpoint names the platform URL a client built on demand talks
+// to (#2398): the --platform-url flag or NIGHTGAUGE_PLATFORM_URL, else the
+// machine tier's platform.api_url whatever platform.enabled says. A URL says
+// where a request goes, not whether one is sent, so honouring it for the
+// user's own account actions opts nothing in. Empty means the default URL.
+func WithPlatformEndpoint(url string) ServerOption {
+	return func(s *Server) {
+		s.platformEndpoint = url
+	}
+}
+
+// The editor's telemetry consent, as the extension reports it.
+const (
+	editorTelemetryUnreported int32 = iota
+	editorTelemetryOn
+	editorTelemetryOff
+)
+
+// EditorTelemetryEnv is the variable the extension sets on the daemon it
+// starts to "on" or "off": VS Code's telemetry level and
+// nightgauge.telemetry.enabled together. It seeds the editor's consent before
+// the first request, so nothing can be sent in the moment between the spawn
+// and the extension's first platform.setTelemetryConsent.
+const EditorTelemetryEnv = "NIGHTGAUGE_EDITOR_TELEMETRY"
+
+// WithTelemetryPolicy sets the two halves of the telemetry consent that come
+// from the daemon's own configuration. cloudOptIn is the user's opt-in to the
+// hosted service: platform.enabled true in the machine tier, or a license or
+// API key in the daemon's environment. A signed-in session, a stored license
+// key or a platform URL is not one. telemetryOn is platform.telemetry.enabled
+// (on unless explicitly false). Run data is sent only when both hold and the
+// editor has not withdrawn its consent; a server built without this option
+// sends nothing. Without the cloud opt-in a client the server builds on
+// demand polls nothing either: it checks the platform only when a request
+// the user made needs it (platform.Config.OnDemandHealth).
+func WithTelemetryPolicy(cloudOptIn, telemetryOn bool) ServerOption {
+	return func(s *Server) {
+		s.cloudOptIn = cloudOptIn
+		s.telemetryConfigOn = telemetryOn
+	}
+}
+
+// EditorTelemetryStreamsEnv is the variable the extension sets on the daemon
+// it starts to the telemetry streams the editor allows, comma-separated, or
+// "none" when it allows none (nightgauge.telemetry.streams).
+const EditorTelemetryStreamsEnv = "NIGHTGAUGE_EDITOR_TELEMETRY_STREAMS"
+
+// StreamPipelineRun is the telemetry stream of completed-run records, which
+// the daemon sends to POST /v1/telemetry/pipeline-run and the extension
+// uploads from the local history. Turning it off in the editor stops both.
+const StreamPipelineRun = "pipeline-run"
+
+// WithEditorTelemetryStreams seeds the streams the editor allows from
+// EditorTelemetryStreamsEnv's value. Unset (a daemon no editor started) leaves
+// them unreported, which allows every stream.
+func WithEditorTelemetryStreams(value string) ServerOption {
+	return func(s *Server) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		var streams []string
+		if value != "none" {
+			streams = strings.Split(value, ",")
+		}
+		s.setEditorStreams(streams)
+	}
+}
+
+// setEditorStreams records the streams the editor allows.
+func (s *Server) setEditorStreams(streams []string) {
+	set := make(map[string]bool, len(streams))
+	for _, stream := range streams {
+		if stream = strings.TrimSpace(stream); stream != "" {
+			set[stream] = true
+		}
+	}
+	s.editorStreams.Store(&set)
+}
+
+// editorStreamAllowed reports whether the editor allows stream; every stream
+// is allowed until the editor reports its set.
+func (s *Server) editorStreamAllowed(stream string) bool {
+	set := s.editorStreams.Load()
+	return set == nil || (*set)[stream]
+}
+
+// RunRecordsAllowed reports whether a completed-run record may be sent now:
+// TelemetryAllowed holds and the editor has not turned off the pipeline-run
+// stream. The interactive push, the history sync and the scheduler's push all
+// ask it.
+func (s *Server) RunRecordsAllowed() bool {
+	return s.TelemetryAllowed() && s.editorStreamAllowed(StreamPipelineRun)
+}
+
+// WithEditorTelemetry seeds the editor's consent from EditorTelemetryEnv's
+// value: "off" withdraws it, "on" grants it, anything else (a daemon no
+// editor started) leaves it unreported, which defers to the configuration.
+func WithEditorTelemetry(value string) ServerOption {
+	return func(s *Server) {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "off":
+			s.editorTelemetry.Store(editorTelemetryOff)
+		case "on":
+			s.editorTelemetry.Store(editorTelemetryOn)
+		}
+	}
+}
+
+// TelemetryAllowed reports whether run data (live stage events, completed-run
+// records, queue snapshots, analytics events) may be sent to the platform now:
+// the user opted in to the cloud, platform.telemetry.enabled is not false, and
+// the editor that started this daemon has not withdrawn its consent. Every
+// emission path asks it, and so does the analytics service's send gate, which
+// also drops anything buffered once it turns false.
+func (s *Server) TelemetryAllowed() bool {
+	return s.cloudOptIn && s.telemetryConfigOn && s.editorTelemetry.Load() != editorTelemetryOff
+}
+
 // setPlatformServicesLocked wires pc and every service built on it onto the
 // server, replacing whatever was there before. Callers must hold
 // platformClientMu for writing.
@@ -413,6 +552,8 @@ func (s *Server) setPlatformServicesLocked(pc *platform.Client) {
 	// would pass and dereference it. Assign only when pc is real.
 	if pc != nil {
 		as := platform.NewAnalyticsService(pc)
+		as.SetSendGate(s.TelemetryAllowed)
+		as.SetRunGate(func() bool { return s.editorStreamAllowed(StreamPipelineRun) })
 		s.analyticsAPI = as
 		s.analyticsSvc = as
 	} else {
@@ -435,37 +576,51 @@ func (s *Server) attachPlatformClient(pc *platform.Client) {
 	s.setPlatformServicesLocked(pc)
 }
 
-// ensurePlatformClient lazily builds the default platform client — and every
-// service on top of it — the first time a signed-in session token arrives on
-// a daemon that was never given a platform URL, API key, or license key at
-// startup (#756). A signed-in session is itself proof a platform exists; the
-// session token carries no URL of its own, so this defaults to
+// ensurePlatformClient lazily builds the platform client — and every service
+// on top of it — the first time a signed-in session token arrives, or the
+// user takes an explicit account action, on a daemon that was given no
+// platform client at startup (#756, #2398). A signed-in session or an account
+// action is itself proof the user wants a platform; neither carries a URL, so
+// the client talks to the endpoint WithPlatformEndpoint named, else to
 // platform.DefaultConfig()'s base URL exactly as the eagerly-configured path
 // in cmd/nightgauge/main.go does when api_url is unset.
+//
+// The client it builds carries no stored credential. The platform agent
+// (registration, heartbeat, command poller) is wired only at startup, from a
+// license key the user opted in with, so nothing built here starts it. Unless
+// the user opted in to the cloud (WithTelemetryPolicy), it does not poll the
+// platform's health either: a signed-in session with cloud features off must
+// not ping the hosted service every minute under the user's identity. Such a
+// client checks the platform's health only when a request needs it
+// (platform.Config.OnDemandHealth).
 //
 // Double-checked under platformClientMu: two setSessionToken calls racing on
 // a cold daemon (e.g. a stale sign-in event replayed alongside a fresh one)
 // must not each build their own client. The loser reuses whatever the winner
 // built and applies its own token to that one client.
 //
-// StartHealthPolling is started in its own goroutine, not inline: its first
-// check runs synchronously before it returns (see platform.Client), and
+// StartHealthPolling, when it runs, is started in its own goroutine, not
+// inline: its first check runs synchronously before it returns (see
+// platform.Client), and
 // running that here would hold platformClientMu.Lock() — blocking every
 // OTHER platform.* request on this daemon — for the length of a real network
 // round trip to the platform. The eager path in cmd/nightgauge/main.go can
 // afford that cost inline because it runs once at startup, before the IPC
 // server accepts any request; this path runs mid-Run(), under contention.
-// sessionOnlyPlatformConfig is the config the lazy path builds from when a
-// session token arrives and no client exists yet. A signed-in session carries
-// no api_url, so the base URL can only come from the default.
+// onDemandPlatformConfig is the config the lazy path builds from when no
+// client exists yet: the default config, at endpoint when one was named.
 //
 // It is a named function rather than an inline platform.DefaultConfig() so a
 // test can assert what the lazy path resolves to WITHOUT reading Client.base —
 // that field has exactly one sanctioned reader (Client.newRequest, #750), and
 // re-exposing it through an accessor would put a second URL source back in
 // reach of the very code the guard exists to constrain.
-func sessionOnlyPlatformConfig() platform.Config {
-	return platform.DefaultConfig()
+func onDemandPlatformConfig(endpoint string) platform.Config {
+	cfg := platform.DefaultConfig()
+	if endpoint != "" {
+		cfg.BaseURL = endpoint
+	}
+	return cfg
 }
 
 func (s *Server) ensurePlatformClient() (*platform.Client, error) {
@@ -474,12 +629,40 @@ func (s *Server) ensurePlatformClient() (*platform.Client, error) {
 	if s.platformClient != nil {
 		return s.platformClient, nil
 	}
-	pc, err := platform.NewClient(sessionOnlyPlatformConfig())
+	cfg := onDemandPlatformConfig(s.platformEndpoint)
+	cfg.OnDemandHealth = !s.cloudOptIn
+	pc, err := platform.NewClient(cfg)
 	if err != nil {
 		return nil, err
 	}
-	go pc.StartHealthPolling(context.Background())
+	if s.cloudOptIn {
+		go pc.StartHealthPolling(context.Background())
+	}
 	s.setPlatformServicesLocked(pc)
+	return pc, nil
+}
+
+// accountActionClient returns the platform client for an account action the
+// user took explicitly (sign-in, license activation, a trial, sign-out),
+// building one on demand when the daemon has none (#2398). platform.enabled
+// gates what the product does on its own, not what the user asks for: with it
+// off, a stored license key no longer gives the daemon a client at startup,
+// and these actions must keep working without one.
+//
+// License validation answers "not valid" while the client reads offline, and
+// a client can read offline when the action arrives: one built moments ago
+// (by this call or by platform.setSessionToken) has not checked yet, and a
+// polling one's last check may have failed. So whenever the client is not
+// online, the check runs once more, in the caller's goroutine, outside
+// platformClientMu.
+func (s *Server) accountActionClient(ctx context.Context) (*platform.Client, error) {
+	pc, err := s.ensurePlatformClient()
+	if err != nil {
+		return nil, fmt.Errorf("platform client: %w", err)
+	}
+	if !pc.IsOnline() {
+		pc.ProbeHealth(ctx)
+	}
 	return pc, nil
 }
 
@@ -2012,8 +2195,10 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformValidateLicense params:PlatformValidateLicenseParams result:LicenseInfo
 	s.methods["platform.validateLicense"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.getLicenseSvc() == nil {
-			return nil, fmt.Errorf("platform client not configured")
+		// Activate License verifies a key before it is stored: an explicit
+		// account action, so it works whatever platform.enabled says (#2398).
+		if _, err := s.accountActionClient(ctx); err != nil {
+			return nil, err
 		}
 		var p PlatformValidateLicenseParams
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -2042,8 +2227,9 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformStartTrial params:PlatformStartTrialParams result:TrialResult
 	s.methods["platform.startTrial"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.getLicenseSvc() == nil {
-			return nil, fmt.Errorf("platform client not configured")
+		// Start Free Trial is an explicit account action (#2398).
+		if _, err := s.accountActionClient(ctx); err != nil {
+			return nil, err
 		}
 		var p PlatformStartTrialParams
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -2061,7 +2247,7 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
-		if s.getAnalyticsSvc() != nil {
+		if s.getAnalyticsSvc() != nil && s.TelemetryAllowed() {
 			// Fire-and-forget: buffer locally, return immediately
 			s.getAnalyticsSvc().Ingest(ctx, "", 0, []platform.AnalyticsEvent{{
 				Type:      p.EventType,
@@ -2212,6 +2398,12 @@ func (s *Server) registerMethods() {
 		if s.getAnalyticsSvc() == nil {
 			return nil, fmt.Errorf("platform client not configured")
 		}
+		if !s.TelemetryAllowed() {
+			return nil, fmt.Errorf("telemetry is off: run history is sent only with platform.enabled true and telemetry on")
+		}
+		if !s.RunRecordsAllowed() {
+			return nil, fmt.Errorf("the pipeline-run telemetry stream is off: run history is not sent")
+		}
 		if s.workspaceRootPath() == "" {
 			return nil, fmt.Errorf("workspace root not set")
 		}
@@ -2263,7 +2455,10 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformHealthCheck params:none result:HealthResponse
 	s.methods["platform.healthCheck"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.getPlatformClient() == nil {
+		// The extension polls this on a timer. Without the cloud opt-in that
+		// poll must not reach the hosted service, whatever client a sign-in or
+		// an account action built: cloud features off reads as offline.
+		if s.getPlatformClient() == nil || !s.cloudOptIn {
 			return map[string]interface{}{"status": "offline", "mode": "offline"}, nil
 		}
 		resp, err := s.getPlatformClient().API().GetHealthWithResponse(ctx)
@@ -2278,10 +2473,12 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthDeviceCode params:none result:{device_code:string;expires_in:number;interval:number;user_code:string;verification_uri:string}
 	s.methods["platform.authDeviceCode"] = func(ctx context.Context, _ json.RawMessage) (interface{}, error) {
-		if s.getPlatformClient() == nil {
-			return nil, fmt.Errorf("platform client not configured")
+		// Sign-in is an explicit account action (#2398).
+		pc, err := s.accountActionClient(ctx)
+		if err != nil {
+			return nil, err
 		}
-		resp, err := s.getPlatformClient().API().AuthDeviceCodeWithResponse(ctx)
+		resp, err := pc.API().AuthDeviceCodeWithResponse(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("authDeviceCode: %w", err)
 		}
@@ -2293,9 +2490,6 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthDeviceToken params:PlatformAuthDeviceTokenParams result:unknown
 	s.methods["platform.authDeviceToken"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.getPlatformClient() == nil {
-			return nil, fmt.Errorf("platform client not configured")
-		}
 		var p PlatformAuthDeviceTokenParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
@@ -2303,7 +2497,12 @@ func (s *Server) registerMethods() {
 		if p.DeviceCode == "" {
 			return nil, fmt.Errorf("deviceCode is required")
 		}
-		resp, err := s.getPlatformClient().API().AuthDeviceTokenWithResponse(ctx, platformapi.AuthDeviceTokenJSONRequestBody{
+		// Polling for the token completes the sign-in the user started (#2398).
+		pc, err := s.accountActionClient(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := pc.API().AuthDeviceTokenWithResponse(ctx, platformapi.AuthDeviceTokenJSONRequestBody{
 			DeviceCode: p.DeviceCode,
 		})
 		if err != nil {
@@ -2323,9 +2522,6 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthGithub params:PlatformAuthGithubParams result:{access_token:string;expires_in:number;refresh_token:string;status:string;token_type:string}
 	s.methods["platform.authGithub"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.getPlatformClient() == nil {
-			return nil, fmt.Errorf("platform client not configured")
-		}
 		var p PlatformAuthGithubParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
@@ -2333,7 +2529,12 @@ func (s *Server) registerMethods() {
 		if p.GithubAccessToken == "" {
 			return nil, fmt.Errorf("githubAccessToken is required")
 		}
-		resp, err := s.getPlatformClient().API().AuthGithubWithResponse(ctx, platformapi.AuthGithubJSONRequestBody{
+		// Sign In with GitHub is an explicit account action (#2398).
+		pc, err := s.accountActionClient(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := pc.API().AuthGithubWithResponse(ctx, platformapi.AuthGithubJSONRequestBody{
 			GithubAccessToken: p.GithubAccessToken,
 		})
 		if err != nil {
@@ -2371,9 +2572,6 @@ func (s *Server) registerMethods() {
 
 	//ipc:method platformAuthSignout params:PlatformAuthSignoutParams result:{message:string;status:string}
 	s.methods["platform.authSignout"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
-		if s.getPlatformClient() == nil {
-			return nil, fmt.Errorf("platform client not configured")
-		}
 		var p PlatformAuthSignoutParams
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
@@ -2381,7 +2579,12 @@ func (s *Server) registerMethods() {
 		if p.RefreshToken == "" {
 			return nil, fmt.Errorf("refreshToken is required")
 		}
-		resp, err := s.getPlatformClient().API().AuthSignoutWithResponse(ctx, platformapi.AuthSignoutJSONRequestBody{
+		// Signing out revokes the session the user holds (#2398).
+		pc, err := s.accountActionClient(ctx)
+		if err != nil {
+			return nil, err
+		}
+		resp, err := pc.API().AuthSignoutWithResponse(ctx, platformapi.AuthSignoutJSONRequestBody{
 			RefreshToken: p.RefreshToken,
 		})
 		if err != nil {
@@ -2446,6 +2649,32 @@ func (s *Server) registerMethods() {
 		s.throttleMu.RUnlock()
 		for _, fn := range listeners {
 			go fn()
+		}
+		return map[string]bool{"ok": true}, nil
+	}
+
+	// platform.setTelemetryConsent records the editor's telemetry consent:
+	// VS Code's telemetry level and nightgauge.telemetry.enabled, as the
+	// extension reads them, and the streams nightgauge.telemetry.streams
+	// allows. The daemon learns them at spawn from EditorTelemetryEnv and
+	// EditorTelemetryStreamsEnv; the extension sends this whenever one of
+	// those settings changes afterwards, so turning telemetry (or the
+	// pipeline-run stream) off in the editor stops this daemon's sending at
+	// once, buffered items included (the analytics gates drop them at the
+	// next flush).
+	//ipc:method platformSetTelemetryConsent params:PlatformSetTelemetryConsentParams result:StatusOK
+	s.methods["platform.setTelemetryConsent"] = func(_ context.Context, params json.RawMessage) (interface{}, error) {
+		var p PlatformSetTelemetryConsentParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		if p.Enabled {
+			s.editorTelemetry.Store(editorTelemetryOn)
+		} else {
+			s.editorTelemetry.Store(editorTelemetryOff)
+		}
+		if p.Streams != nil {
+			s.setEditorStreams(p.Streams)
 		}
 		return map[string]bool{"ok": true}, nil
 	}
@@ -3969,7 +4198,13 @@ func (s *Server) registerMethods() {
 			// so this server-side push is safe alongside that best-effort
 			// uploader. Fire-and-forget: PushPipelineRun buffers + retries
 			// internally and never blocks the pipeline.
-			if s.getAnalyticsSvc() != nil {
+			//
+			// Consent first: a signed-in session builds a platform client on
+			// its own, so "a client exists" is no consent at all. The record
+			// leaves only when RunRecordsAllowed says the user opted in to the
+			// cloud and left telemetry on, in config and in the editor, and
+			// left the editor's pipeline-run stream on.
+			if s.getAnalyticsSvc() != nil && s.RunRecordsAllowed() {
 				repoForPush := record.Repo
 				if repoForPush == "" {
 					repoForPush = p.Repo

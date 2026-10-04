@@ -32,6 +32,48 @@ and this project adheres to
 
 ### Fixed
 
+- **An issue the queue started on its own can be queued again after its run.**
+  It stayed marked as processing until the window reloaded, so adding it again,
+  **Remove from Queue** and a remote trigger for it were all refused. Stopping
+  the pipeline during the few seconds before a queued issue starts now also
+  keeps it from starting, and leaves it in the queue; so does a start that
+  fails before the run begins (#2397).
+- **Nothing about your runs is sent unless cloud features are on.** Signing in
+  was enough for the Nightgauge binary and this extension to upload your runs.
+  Now they upload only with `platform.enabled: true` in your machine-tier
+  config, and the binary follows your VS Code telemetry settings, including a
+  change, at once: turning the `pipeline-run` stream off now stops the run
+  records the binary sends, too. `platform.telemetry.enabled: false` in that
+  config stops this extension's uploads as well as the binary's, and the
+  telemetry settings can be set in your user settings only, so a repository
+  cannot turn them back on (#1796).
+- **With cloud features off, nothing reaches the hosted service in the
+  background.** After you signed in, the Nightgauge binary checked the
+  service's health every minute under your session, cloud features or not.
+  Now only your own actions reach it: signing in or out, activating a license,
+  starting a trial, managing your subscription, or opening a dashboard tab with
+  your cloud data.
+- **A repository cannot set any `platform` setting.** A committed
+  `.nightgauge/config.yaml` could point this extension, and your license key or
+  session with it, at another host, or override your telemetry switches. The
+  extension now ignores the `platform` block in a repository's config, as the
+  binary already did. Saving the Project or Local tab of the settings panel
+  moves a `platform` setting you changed there to your machine-tier config and
+  never copies one the file already held, and **Switch Platform Environment**
+  writes your machine-tier config.
+- **The privacy notice, the telemetry setting and the Telemetry Settings panel
+  say what a run sends:** its repository and issue number, the issue title,
+  labels and the first 8,192 characters of its body, the branch, timings,
+  tokens, cost and outcome, and a failed stage's error message. They used to
+  call it anonymous usage data that never included branch names, so the notice
+  is shown once more, to everyone who has not turned telemetry off.
+- **A stored license key waits for `platform.enabled`.** Activating a license
+  or starting a trial stores the key in VS Code and the OS keychain, and the
+  extension used to hand it to the Nightgauge binary as an explicit opt-in, so
+  the binary registered this machine and sent heartbeats with
+  `platform.enabled: false`. The binary now treats it as a stored key and
+  uses it only when `platform.enabled` is true. Signing in, activating a
+  license and starting a trial still work with the switch off (#2398).
 - **Reloading the window while a pipeline runs keeps your queue.** The reload
   ended the running pipelines and also cleared every queued issue, including
   runs triggered from the dashboard. Now only the running pipelines end, and

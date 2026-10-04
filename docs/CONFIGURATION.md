@@ -226,7 +226,7 @@ machine-state and cache directories from their own rows.
 | Machine config (the machine tier)                                                                                                                                                                                                                                                         | `~/.config/nightgauge/config.yaml`                                                                       | `~/.nightgauge/config.yaml`    | `%APPDATA%\nightgauge\config.yaml` | `NIGHTGAUGE_CONFIG_HOME`, `XDG_CONFIG_HOME`                                                                                | No                                                                                               |
 | License key                                                                                                                                                                                                                                                                               | Secret Service                                                                                           | Keychain                       | Credential Manager                 | `NIGHTGAUGE_LICENSE_KEY`                                                                                                   | Never; see [the license key](#the-license-key-nightgauge-auth-license)                           |
 | GitHub tokens                                                                                                                                                                                                                                                                             | gh's credential store                                                                                    | same                           | same                               | `GITHUB_TOKEN`, `GH_TOKEN`, or an `env:` reference                                                                         | Never; see [plaintext secrets](#plaintext-secrets-in-repository-config-are-refused)              |
-| Machine state (`STATE`): the serve registry `serve/`, `rate-limit.json`, `ratelimit-gitlab-<host>.json`, `machine-id`, `telemetry-notice-v1`, the doctor fix log `doctor/fix-log.jsonl`, the GitHub App installation-token cache, the editor windows' remote-run ledger `agent-commands/` | `~/.local/state/nightgauge/`                                                                             | `~/.nightgauge/state/`         | `%LOCALAPPDATA%\nightgauge\state\` | `NIGHTGAUGE_STATE_HOME`, `XDG_STATE_HOME`                                                                                  | Never                                                                                            |
+| Machine state (`STATE`): the serve registry `serve/`, `rate-limit.json`, `ratelimit-gitlab-<host>.json`, `machine-id`, `telemetry-notice-v2`, the doctor fix log `doctor/fix-log.jsonl`, the GitHub App installation-token cache, the editor windows' remote-run ledger `agent-commands/` | `~/.local/state/nightgauge/`                                                                             | `~/.nightgauge/state/`         | `%LOCALAPPDATA%\nightgauge\state\` | `NIGHTGAUGE_STATE_HOME`, `XDG_STATE_HOME`                                                                                  | Never                                                                                            |
 | Usage readings and OpenCode state: `usage/`, `opencode/runs/`, `opencode/evidence/`, `opencode/last-dispatch.json`, `opencode/endpoint-slots.json`                                                                                                                                        | `STATE/`                                                                                                 | same                           | same                               | follows `STATE`                                                                                                            | Never                                                                                            |
 | Machine logs                                                                                                                                                                                                                                                                              | `STATE/logs/`                                                                                            | same                           | same                               | follows `STATE`                                                                                                            | Never                                                                                            |
 | Caches (`CACHE`): the GitHub conditional-request store `github-conditional/`, the recall index `recall/<root-key>/`                                                                                                                                                                       | `~/.cache/nightgauge/`                                                                                   | `~/Library/Caches/nightgauge/` | `%LOCALAPPDATA%\nightgauge\cache\` | `NIGHTGAUGE_CACHE_HOME`, `XDG_CACHE_HOME`                                                                                  | Never; disposable                                                                                |
@@ -384,7 +384,7 @@ fallback afterwards.
 - **`nightgauge doctor --dry-run`** previews every move and changes nothing.
 - **`nightgauge doctor --fix`** runs the one migration for the clone and for
   machine state. Files left in `~/.nightgauge/` by an earlier release move to
-  `STATE`: the rate-limit hints, `telemetry-notice-v1`, usage readings,
+  `STATE`: the rate-limit hints, `telemetry-notice-v2`, usage readings,
   OpenCode state (`opencode/runs/`, `evidence/`, `last-dispatch.json`,
   `endpoint-slots.json`), machine logs, and the serve registry. While a daemon
   holds a serve lease, the serve registry and `opencode/runs/` stay where they
@@ -454,7 +454,7 @@ The global config path is determined by platform and environment:
 Machine state that is not configuration (the serve daemon's claim registry
 `serve/`, the rate-limit hints `rate-limit.json` and
 `ratelimit-gitlab-<host>.json`, this device's `machine-id`, the
-`telemetry-notice-v1` marker, usage readings `usage/`, OpenCode run state under
+`telemetry-notice-v2` marker, usage readings `usage/`, OpenCode run state under
 `opencode/`, machine logs `logs/` and, by default, pipeline worktrees
 `worktrees/`) lives in one directory, created with mode `0700` (ADR-024 § 8).
 Every other location is in
@@ -7317,7 +7317,11 @@ development without cloud access.
 
 ### Config Reference
 
-All settings live under the `platform:` key in `.nightgauge/config.yaml`:
+All settings live under the `platform:` key in the machine-tier `config.yaml`
+([where it lives](#global-config-location)). A repository's
+`.nightgauge/config.yaml` or `config.local.yaml` cannot set them: the daemon
+and the extension both ignore the block in those tiers, and the daemon logs a
+warning when it finds one there.
 
 ```yaml
 platform:
@@ -7329,7 +7333,7 @@ platform:
     backoff_ms: 1000 # Initial backoff delay (ms)
     backoff_multiplier: 2 # Exponential backoff multiplier
   telemetry:
-    enabled: true # Opt-out. Send anonymized telemetry to the platform
+    enabled: true # Opt-out. Send run telemetry (needs enabled: true above)
   feature_flags: {} # Platform feature flag overrides
 ```
 
@@ -7341,19 +7345,20 @@ platform:
 | `retry_policy.attempts`           | integer (1–10)    | `3`                            | Number of retry attempts before giving up on a failed request                     |
 | `retry_policy.backoff_ms`         | integer (≥0)      | `1000`                         | Initial backoff delay in milliseconds before the first retry                      |
 | `retry_policy.backoff_multiplier` | number (1–10)     | `2`                            | Multiplier applied to `backoff_ms` on each subsequent retry (exponential backoff) |
-| `telemetry.enabled`               | boolean           | `true`                         | Opt-out. Set `false` to stop sending anonymized usage telemetry to the platform   |
+| `telemetry.enabled`               | boolean           | `true`                         | Opt-out. Set `false` to stop sending run telemetry (see TELEMETRY_PRIVACY.md)     |
 | `feature_flags`                   | record (str→bool) | `{}`                           | Platform feature flag map. Keys are flag names, values enable/disable the flag    |
 
 ### Who Reads Platform Config
 
-**The Go binary** is the sole consumer of `platform.*` configuration. The
-extension does **not** hold a platform client — it routes all platform calls
-through the Go binary via IPC.
+**The Go binary** reads `platform.*` for its own platform client, which serves
+the extension's account and analytics calls over IPC. The extension also talks
+to the hosted service directly for a few services of its own (listed below),
+and only with `enabled: true`.
 
-| Config Consumer            | What It Uses                                                                                                                                                                                                                                                                                                                                          |
-| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Go binary** (`serve`)    | `enabled`, `api_url`, and the license key — explicit flags/environment variables opt in directly; the stored license key (OS keychain, then machine-tier `license_key`) and config-derived values are used only when `platform.enabled: true`. `connection_timeout_ms` and `retry_policy` are schema-validated but not yet consumed by the Go binary. |
-| **Extension** (TypeScript) | Reads `platform.enabled` only to decide whether to display platform-related UI (license badge, skill tier badge). Does **not** make direct platform API calls.                                                                                                                                                                                        |
+| Config Consumer            | What It Uses                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Go binary** (`serve`)    | `enabled`, `api_url`, and the license key — explicit flags/environment variables opt in directly; the stored license key (OS keychain, then machine-tier `license_key`) and config-derived values are used only when `platform.enabled: true`. The user's own account actions (sign-in, license activation, a trial) work either way, against `api_url` when it is set. `connection_timeout_ms` and `retry_policy` are schema-validated but not yet consumed by the Go binary. |
+| **Extension** (TypeScript) | Reads `platform.enabled` (machine tier only) to decide whether to show platform-related UI and to start its own cloud services: session restore and token refresh, this window's agent registration and heartbeat, the audit log, and the telemetry uploader ([TELEMETRY_PRIVACY.md](TELEMETRY_PRIVACY.md)). With it off, it talks to the hosted service only for your own account actions.                                                                                    |
 
 ### Behavior
 
@@ -7384,7 +7389,10 @@ and the daemon it starts (#1474):
    daemon as `NIGHTGAUGE_PLATFORM_URL`, which takes effect when the daemon next
    starts)
 3. `platform.environment` / `platform.api_url` from the config files (the
-   daemon reads `platform.api_url` only when `platform.enabled: true`)
+   daemon uses `platform.api_url` on its own only when
+   `platform.enabled: true`, and for your account actions, such as sign-in,
+   license activation or a trial, either way; the extension does not hand it
+   to the daemon)
 4. the production API, `https://api.nightgauge.dev`
 
 The platform environment status bar item marks any URL other than production as

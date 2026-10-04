@@ -33,6 +33,7 @@
 import * as vscode from "vscode";
 import type { Logger } from "../utils/logger.js";
 import { ALL_STREAMS, isTelemetryStream, type TelemetryStream } from "./telemetry/types.js";
+import { ConfigBridge } from "./ConfigBridge.js";
 
 const CONFIG_NAMESPACE = "nightgauge";
 const SETTING_ENABLED = "telemetry.enabled";
@@ -40,30 +41,75 @@ const SETTING_STREAMS = "telemetry.streams";
 const SETTING_UPLOAD_INTERVAL = "telemetry.uploadIntervalMinutes";
 
 /**
- * Bookkeeping for the #738 disclosure notice. This is a **new** key rather than
- * a reuse of the old prompt-seen flag, and that is the point: an operator who
- * saw the old permission dialog has not seen this disclosure, and suppressing
- * it because they once saw a different message would silently switch on the one
- * population most entitled to be told.
+ * Bookkeeping for the disclosure notice. Each material change to what is sent
+ * gets a **new** key rather than a reuse of the last one, and that is the
+ * point: an operator who saw an earlier notice has not seen this disclosure,
+ * and suppressing it because they once saw a different message would silently
+ * keep the one population most entitled to be told on the old description.
+ * v2 (the #738 key was `optOutNoticeSeen`) says what a run sends — the issue
+ * title, labels and body excerpt, the branch, error messages — where the first
+ * notice called it anonymous usage data that never included branch names.
  */
-const GLOBAL_KEY_NOTICE_SEEN = "nightgauge.telemetry.optOutNoticeSeen";
+const GLOBAL_KEY_NOTICE_SEEN = "nightgauge.telemetry.disclosureSeen.v2";
 const GLOBAL_KEY_LAST_UPLOAD_AT = "nightgauge.telemetry.lastUploadAt";
 
 const DEFAULT_UPLOAD_INTERVAL_MIN = 15;
 const MIN_UPLOAD_INTERVAL_MIN = 1;
 const MAX_UPLOAD_INTERVAL_MIN = 1440;
 
-const NOTICE_MESSAGE = "Nightgauge shares anonymous usage data to improve the product.";
+const NOTICE_MESSAGE = "With cloud features on, Nightgauge sends run telemetry to your account.";
 const NOTICE_DETAIL =
-  "This is on by default. We collect aggregate counts and outcome categories — " +
-  "never source code, file contents, secrets, branch names, paths, or " +
-  "repository identifiers. Adapter usage (how much of your AI plan is left) is " +
-  "reported to your own account dashboard so you can see it across machines. " +
-  "You can turn any of it off now or later in Nightgauge: Telemetry Settings, " +
-  "and view the full list in docs/TELEMETRY_PRIVACY.md.";
+  "This is on by default. Nothing is sent unless cloud features are on " +
+  "(platform.enabled in your machine-tier config.yaml, or a license or API key " +
+  "in the environment VS Code was started from) and you are signed in or have " +
+  "a license key. Each run then sends its repository and issue number, the " +
+  "issue title, labels and the first 8,192 characters of its body, the branch, " +
+  "stage timings, token counts, cost and outcome, and a failed stage's error " +
+  "message (which can quote command output) — never your source code, file " +
+  "contents or secrets. " +
+  "Adapter usage (how much of your AI plan is left) is reported to your own " +
+  "account dashboard so you can see it across machines. You can turn any of it " +
+  "off now or later in Nightgauge: Telemetry Settings, and read what is sent, " +
+  "when and why in docs/TELEMETRY_PRIVACY.md.";
 
 const ACTION_TURN_OFF = "Turn off";
 const ACTION_KEEP_ON = "Keep on";
+
+/** The setting `editorTelemetryConsent` reads, for change subscriptions. */
+export const TELEMETRY_ENABLED_SETTING = `${CONFIG_NAMESPACE}.${SETTING_ENABLED}`;
+
+/** The setting `editorTelemetryStreams` reads, for change subscriptions. */
+export const TELEMETRY_STREAMS_SETTING = `${CONFIG_NAMESPACE}.${SETTING_STREAMS}`;
+
+/**
+ * The telemetry streams `nightgauge.telemetry.streams` allows: every stream
+ * when unset or malformed, otherwise the known streams it lists. The
+ * extension hands them to the daemon it starts too, which sends no
+ * completed-run record while `pipeline-run` is off.
+ */
+export function editorTelemetryStreams(): TelemetryStream[] {
+  const cfg = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
+  const raw = cfg.get<unknown>(SETTING_STREAMS);
+  if (!Array.isArray(raw)) {
+    return [...ALL_STREAMS];
+  }
+  return Array.from(new Set(raw.filter(isTelemetryStream)));
+}
+
+/**
+ * The editor's telemetry consent: VS Code's own telemetry level (the hard
+ * kill switch) and `nightgauge.telemetry.enabled` (opt-out, so only an
+ * explicit `false` withdraws it). The extension hands this to the daemon it
+ * starts, which sends run telemetry only while it holds (and only with the
+ * cloud enabled); see docs/TELEMETRY_PRIVACY.md.
+ */
+export function editorTelemetryConsent(): boolean {
+  if (!vscode.env?.isTelemetryEnabled) {
+    return false;
+  }
+  const cfg = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
+  return cfg.get<boolean>(SETTING_ENABLED) !== false;
+}
 
 export class TelemetryConsentService {
   private readonly context: vscode.ExtensionContext;
@@ -89,11 +135,27 @@ export class TelemetryConsentService {
    * install and stays off for anyone who ever declined.
    */
   isEnabled(): boolean {
-    if (!vscode.env.isTelemetryEnabled) {
+    return editorTelemetryConsent();
+  }
+
+  /**
+   * `platform.telemetry.enabled`, the machine-tier switch the daemon and the
+   * CLI read. Opt-out like the setting: only an explicit `false` withdraws
+   * it. A repository's config cannot set it (the merge never takes the
+   * `platform` block from a repository tier, #1049). Fails closed until the
+   * configuration has been read, since an explicit `false` cannot be seen
+   * before then.
+   *
+   * Kept apart from {@link isEnabled}, which is the editor's own consent: the
+   * extension hands that one to the daemon, which reads this one itself, and
+   * the Telemetry Settings panel's switch shows the setting it writes.
+   */
+  isPlatformTelemetryEnabled(): boolean {
+    const bridge = ConfigBridge.getInstance();
+    if (!bridge.isInitialized()) {
       return false;
     }
-    const cfg = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-    return cfg.get<boolean>(SETTING_ENABLED) !== false;
+    return bridge.getPlatform()?.telemetry?.enabled !== false;
   }
 
   isStreamEnabled(stream: TelemetryStream): boolean {
@@ -104,13 +166,7 @@ export class TelemetryConsentService {
   }
 
   getStreams(): TelemetryStream[] {
-    const cfg = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-    const raw = cfg.get<unknown>(SETTING_STREAMS);
-    if (!Array.isArray(raw)) {
-      return [...ALL_STREAMS];
-    }
-    const filtered = raw.filter(isTelemetryStream);
-    return Array.from(new Set(filtered));
+    return editorTelemetryStreams();
   }
 
   getUploadIntervalMinutes(): number {
@@ -157,10 +213,12 @@ export class TelemetryConsentService {
    * No-op when:
    *   - VSCode global telemetry is off (nothing is being sent, so there is
    *     nothing to disclose), or
-   *   - the operator has already set `nightgauge.telemetry.enabled` explicitly
-   *     in any scope — they have made a decision and do not need informing of
-   *     a default that does not apply to them, or
-   *   - the notice has already been shown on this machine.
+   *   - `nightgauge.telemetry.enabled` is `false` — the operator turned it
+   *     off, so nothing is being sent and there is nothing to disclose, or
+   *   - this notice has already been shown on this machine.
+   *
+   * An explicit `true` does not skip it: that choice was made on an earlier,
+   * different description of what is sent, and this one is owed once.
    *
    * Concurrent invocations during activation collapse to a single notice.
    */
@@ -178,11 +236,11 @@ export class TelemetryConsentService {
     if (!vscode.env.isTelemetryEnabled) {
       return;
     }
-    if (this.consentExplicitlySet()) {
-      await this.context.globalState.update(GLOBAL_KEY_NOTICE_SEEN, true);
+    if (this.context.globalState.get<boolean>(GLOBAL_KEY_NOTICE_SEEN, false)) {
       return;
     }
-    if (this.context.globalState.get<boolean>(GLOBAL_KEY_NOTICE_SEEN, false)) {
+    if (!this.isEnabled()) {
+      await this.context.globalState.update(GLOBAL_KEY_NOTICE_SEEN, true);
       return;
     }
 
@@ -234,22 +292,6 @@ export class TelemetryConsentService {
   }
 
   // ─── Internals ──────────────────────────────────────────────────────────
-
-  /**
-   * `inspect()` distinguishes a default value from a real user/workspace
-   * setting. We treat `enabled` as decided when ANY non-default scope has
-   * a value.
-   */
-  private consentExplicitlySet(): boolean {
-    const cfg = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);
-    const inspect = cfg.inspect<boolean>(SETTING_ENABLED);
-    if (!inspect) return false;
-    return (
-      inspect.globalValue !== undefined ||
-      inspect.workspaceValue !== undefined ||
-      inspect.workspaceFolderValue !== undefined
-    );
-  }
 
   private async updateSetting(key: string, value: unknown): Promise<void> {
     const cfg = vscode.workspace.getConfiguration(CONFIG_NAMESPACE);

@@ -463,6 +463,10 @@ export class ConfigBridge implements vscode.Disposable {
    * @see Issue #1461 - Platform connection status indicator
    */
   getPlatform(): PlatformConfig | undefined {
+    // The merge never takes `platform` from a repository tier — the committed
+    // project file every clone carries, or the per-checkout local file — so
+    // a repository can neither turn cloud features on nor redirect the URL
+    // the extension's credentials go to (#1049, MACHINE_OWNED_ROOT_KEYS).
     return applyPlatformUrlOverride(this.cachedResult?.config.platform, this.platformUrlOverride);
   }
 

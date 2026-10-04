@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
@@ -48,6 +49,13 @@ type Client struct {
 	// Health polling
 	pollInterval time.Duration
 	pollCancel   context.CancelFunc
+	// onDemandHealth marks a client that never polls (Config.OnDemandHealth):
+	// IsOnline checks on demand instead, at most once per pollInterval.
+	// lastCheck is when the latest health check ran (UnixNano), and
+	// onDemandMu keeps concurrent IsOnline calls from checking together.
+	onDemandHealth bool
+	lastCheck      atomic.Int64
+	onDemandMu     sync.Mutex
 
 	// Callbacks
 	onModeChange func(old, new ConnectivityMode)
@@ -60,6 +68,12 @@ type Config struct {
 	LicenseKey   string
 	AgentID      string
 	PollInterval time.Duration
+	// OnDemandHealth makes a client that sends nothing on its own: it runs no
+	// health poller (StartHealthPolling is a no-op), and IsOnline checks the
+	// platform when asked, at most once per PollInterval. The daemon builds
+	// its clients this way while the user has not opted in to the cloud, so
+	// the only requests they make are the ones the user's own actions ask for.
+	OnDemandHealth bool
 }
 
 // DefaultConfig returns sensible defaults.
@@ -77,12 +91,13 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 
 	c := &Client{
-		base:         cfg.BaseURL,
-		mode:         ModeOffline, // Start offline until first health check
-		staticAPIKey: cfg.APIKey,
-		licenseKey:   cfg.LicenseKey,
-		agentID:      cfg.AgentID,
-		pollInterval: cfg.PollInterval,
+		base:           cfg.BaseURL,
+		mode:           ModeOffline, // Start offline until first health check
+		staticAPIKey:   cfg.APIKey,
+		licenseKey:     cfg.LicenseKey,
+		agentID:        cfg.AgentID,
+		pollInterval:   cfg.PollInterval,
+		onDemandHealth: cfg.OnDemandHealth,
 	}
 
 	// The editor closes over the client rather than over a bearer resolved once
@@ -182,9 +197,27 @@ func (c *Client) Mode() ConnectivityMode {
 	return c.mode
 }
 
-// IsOnline returns true if the platform is reachable.
+// IsOnline returns true if the platform is reachable. A client built with
+// OnDemandHealth has no poller keeping its mode current, so it checks here
+// when its last check is older than the poll interval: the request the caller
+// is about to make is the user's own, and the check goes with it.
 func (c *Client) IsOnline() bool {
+	if c.onDemandHealth {
+		c.checkIfStale()
+	}
 	return c.Mode() == ModeOnline
+}
+
+// checkIfStale runs a health check when the latest one is older than the
+// poll interval (or none has run). Callers that arrive while a check is in
+// flight wait for it and use its answer.
+func (c *Client) checkIfStale() {
+	c.onDemandMu.Lock()
+	defer c.onDemandMu.Unlock()
+	if last := c.lastCheck.Load(); last != 0 && time.Since(time.Unix(0, last)) < c.pollInterval {
+		return
+	}
+	c.checkHealth(context.Background())
 }
 
 // OnModeChange registers a callback for connectivity changes.
@@ -204,8 +237,12 @@ func (c *Client) setMode(m ConnectivityMode) {
 	}
 }
 
-// StartHealthPolling begins periodic health checks in the background.
+// StartHealthPolling begins periodic health checks in the background. A
+// client built with OnDemandHealth never polls, so for it this does nothing.
 func (c *Client) StartHealthPolling(ctx context.Context) {
+	if c.onDemandHealth {
+		return
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	c.pollCancel = cancel
 
@@ -227,6 +264,16 @@ func (c *Client) StartHealthPolling(ctx context.Context) {
 	}()
 }
 
+// ProbeHealth runs one health check now, in the caller's goroutine, and
+// reports whether the platform answered online. A client built on demand
+// starts offline and polls in the background (#2398), so an account action
+// that gates on IsOnline probes first rather than reporting the platform
+// unreachable before its first check has run.
+func (c *Client) ProbeHealth(ctx context.Context) bool {
+	c.checkHealth(ctx)
+	return c.IsOnline()
+}
+
 // StopHealthPolling stops the background health poller.
 func (c *Client) StopHealthPolling() {
 	if c.pollCancel != nil {
@@ -236,6 +283,7 @@ func (c *Client) StopHealthPolling() {
 
 // checkHealth performs a single health check and updates connectivity mode.
 func (c *Client) checkHealth(ctx context.Context) {
+	c.lastCheck.Store(time.Now().UnixNano())
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 

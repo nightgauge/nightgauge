@@ -446,6 +446,10 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<StatusOK>('platform.setSessionToken', { token });
   }
 
+  async platformSetTelemetryConsent(enabled: boolean, streams?: string[]): Promise<StatusOK> {
+    return this.call<StatusOK>('platform.setTelemetryConsent', { enabled, streams });
+  }
+
 
   // -------------------------------------------------------------------------
   // Project

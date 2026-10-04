@@ -164,7 +164,57 @@ describe("#30 — license key SecretStorage persistence", () => {
   });
 
   it("declares platform.license_key as a machine-tier key", () => {
-    expect(MACHINE_TIER_KEY_PATHS.has("platform.license_key")).toBe(true);
+    expect(MACHINE_TIER_KEY_PATHS.has("platform")).toBe(true);
+  });
+
+  // The cloud and telemetry switches are this machine's consent; a write to a
+  // repository tier would be ignored by the daemon and the extension alike.
+  it("routes platform.enabled and platform.telemetry.* to the machine tier", async () => {
+    const { isMachineTierPath } = await import("../../../src/views/settings/tierRouting");
+    expect(isMachineTierPath("platform.enabled")).toBe(true);
+    expect(isMachineTierPath("platform.telemetry.enabled")).toBe(true);
+    expect(isMachineTierPath("platform.telemetry.usage_reporting")).toBe(true);
+  });
+
+  // A committed config that sets the platform block — as older docs told
+  // teams to — must not reach the machine tier when someone saves an
+  // unrelated edit on the Project tab: that would opt the machine in to the
+  // cloud, or overwrite its telemetry opt-out, on the repository's say.
+  it("never copies a repository file's platform block to the machine tier", async () => {
+    mockReadProject.mockResolvedValue({
+      config: {
+        platform: { enabled: true, telemetry: { enabled: true } },
+        pipeline: { max_retries: 2 },
+      },
+    });
+    const panel = newPanel();
+    await panel.loadAllTiers();
+    panel.tierState = { currentTier: "project", defaultEditTier: "project" };
+
+    panel.handleChange("pipeline.max_retries", 3);
+    await panel.handleSave();
+
+    expect(mockWriteGlobal).not.toHaveBeenCalled();
+    const projectArg = mockWrite.mock.calls[0]?.[0] as { platform?: unknown };
+    expect(projectArg?.platform).toBeUndefined();
+  });
+
+  it("moves what the operator set on the Project tab to the machine tier", async () => {
+    mockReadProject.mockResolvedValue({
+      config: { platform: { telemetry: { usage_reporting: "full" } } },
+    });
+    const panel = newPanel();
+    await panel.loadAllTiers();
+    panel.tierState = { currentTier: "project", defaultEditTier: "project" };
+
+    panel.handleChange("platform.enabled", true);
+    await panel.handleSave();
+
+    expect(mockWriteGlobal).toHaveBeenCalledTimes(1);
+    // Only the operator's edit, not the file's usage_reporting.
+    expect(mockWriteGlobal.mock.calls[0][0]).toEqual({ platform: { enabled: true } });
+    const projectArg = mockWrite.mock.calls[0]?.[0] as { platform?: unknown };
+    expect(projectArg?.platform).toBeUndefined();
   });
 
   it("exposes the Global tier as editable", () => {

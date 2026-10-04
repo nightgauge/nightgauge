@@ -149,7 +149,7 @@ import type { HeadlessOrchestrator } from "./HeadlessOrchestrator";
 import type { PipelineRunResult, RequestedPin } from "./HeadlessOrchestrator";
 import type { PipelineState, PipelineStateService } from "./PipelineStateService";
 import type { Logger } from "../utils/logger";
-import type { ActiveSlot, QueueItem } from "../types/queue";
+import { requeueOptionsFor, type ActiveSlot, type QueueItem } from "../types/queue";
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
 import { postFailureComment } from "../utils/failureComment";
 import { epicBranchParent } from "../utils/epicBranchParent";
@@ -1344,15 +1344,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * start under no run id, so the platform's verbs could not reach it.
    */
   private requeueOptions(item: QueueItem): Parameters<IssueQueueService["enqueue"]>[4] {
-    const [owner, repo] = item.repoName?.split("/") ?? [];
-    return {
-      ...(owner && repo ? { repoOverride: { owner, repo } } : {}),
-      ...(item.remoteRunId ? { remoteRunId: item.remoteRunId } : {}),
-      ...(item.remoteRunId && item.remoteRunAttached ? { remoteRunAttached: true } : {}),
-      ...(item.requestedAdapter
-        ? { requestedAdapter: item.requestedAdapter, requestedModel: item.requestedModel }
-        : {}),
-    };
+    return requeueOptionsFor(item);
   }
 
   /** Whether the platform cancelled the remote run this item serves (#2344). */

@@ -1029,6 +1029,16 @@ type PlatformAuthSignoutParams struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
+// PlatformSetTelemetryConsentParams are parameters for
+// platform.setTelemetryConsent: the editor's telemetry consent.
+type PlatformSetTelemetryConsentParams struct {
+	Enabled bool `json:"enabled"`
+	// Streams are the telemetry streams the editor allows
+	// (nightgauge.telemetry.streams). Absent leaves them as they were; an
+	// empty list allows none.
+	Streams []string `json:"streams,omitempty"`
+}
+
 // PlatformSetSessionTokenParams are parameters for platform.setSessionToken.
 // An empty Token clears the credential (sign-out), leaving the client on its
 // API-key/license-key fallback.

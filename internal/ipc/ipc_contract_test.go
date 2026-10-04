@@ -134,6 +134,7 @@ var contractTestedMethods = map[string]bool{
 	"platform.authRefresh":         true,
 	"platform.authSignout":         true,
 	"platform.setSessionToken":     true,
+	"platform.setTelemetryConsent": true,
 	"platform.createPortalSession": true,
 	"platform.getTeamMembers":      true,
 	"platform.getUsageSummary":     true,
@@ -1201,6 +1202,13 @@ func TestContract_Platform(t *testing.T) {
 			"token": "jwt_test",
 		})
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.setSessionToken")
+	})
+
+	t.Run("platform.setTelemetryConsent/registered", func(t *testing.T) {
+		id := h.sendRequest("platform.setTelemetryConsent", map[string]interface{}{
+			"enabled": false,
+		})
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "platform.setTelemetryConsent")
 	})
 
 	t.Run("platform.getCostAnalytics/registered", func(t *testing.T) {

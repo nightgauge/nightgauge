@@ -64,8 +64,9 @@ chosen model and forge providers. Nightgauge cloud connectivity is disabled by
 default, and the local pipeline does not require a Nightgauge account, license
 key, or hosted control plane.
 
-Telemetry is optional. See [TELEMETRY_PRIVACY.md](TELEMETRY_PRIVACY.md) for the
-data contract and opt-in controls.
+Telemetry is optional: nothing is sent until cloud features are on. See
+[TELEMETRY_PRIVACY.md](TELEMETRY_PRIVACY.md) for what is sent, when and why,
+and its controls.
 
 ## Extending Nightgauge
 

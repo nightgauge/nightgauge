@@ -566,51 +566,57 @@ describe("IpcClientBase", () => {
   // ── Platform env forwarding ────────────────────────────────────────────────
 
   describe("platform env forwarding", () => {
-    it("sets NIGHTGAUGE_PLATFORM_URL from platform.api_url in config.yaml", async () => {
-      const { spawn } = await import("child_process");
+    // #2398: the daemon reads NIGHTGAUGE_LICENSE_KEY / NIGHTGAUGE_API_KEY /
+    // NIGHTGAUGE_PLATFORM_URL as an explicit opt-in, whatever platform.enabled
+    // says. Stored and config-file values are the daemon's to read, and it uses
+    // them only when platform.enabled is true — so the extension forwards none
+    // of them, with the switch off or on.
+    for (const enabled of [false, true]) {
+      it(`never forwards the SecretStorage license key (platform.enabled: ${enabled})`, async () => {
+        const { spawn } = await import("child_process");
+        const { SecretStorageService, SECRET_KEYS } =
+          await import("../../src/services/SecretStorageService");
 
-      // Use the real-fs spy (covers require("fs") in IpcClientBase method bodies)
-      // so the platform config YAML is returned for the global config path.
-      existsSyncSpy.mockReturnValue(true);
-      readFileSyncSpy.mockReturnValue("platform:\n  api_url: https://api.nightgauge.test\n");
+        const mockSecrets = {
+          get: vi.fn(async (k: string) =>
+            k === SECRET_KEYS.platformLicenseKey ? "live_from_keychain" : undefined
+          ),
+          store: vi.fn(),
+          delete: vi.fn(),
+          onDidChange: vi.fn(),
+        } as unknown as import("vscode").SecretStorage;
+        SecretStorageService.resetInstance();
+        SecretStorageService.initialize(mockSecrets);
+        existsSyncSpy.mockReturnValue(true);
+        readFileSyncSpy.mockReturnValue(`platform:\n  enabled: ${enabled}\n`);
 
-      await startTestClient(client);
+        await startTestClient(client);
 
-      const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as
-        Record<string, string> | undefined;
-      expect(spawnEnv?.NIGHTGAUGE_PLATFORM_URL).toBe("https://api.nightgauge.test");
-    });
+        const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as
+          Record<string, string> | undefined;
+        expect(spawnEnv?.NIGHTGAUGE_LICENSE_KEY).toBeUndefined();
 
-    it("sets NIGHTGAUGE_LICENSE_KEY from SecretStorage, not from config.yaml", async () => {
-      const { spawn } = await import("child_process");
-      const { SecretStorageService, SECRET_KEYS } =
-        await import("../../src/services/SecretStorageService");
+        SecretStorageService.resetInstance();
+      });
 
-      // Simulate SecretStorageService being initialized with a key
-      const mockSecrets = {
-        get: vi.fn(async (k: string) =>
-          k === SECRET_KEYS.platformLicenseKey ? "live_from_keychain" : undefined
-        ),
-        store: vi.fn(),
-        delete: vi.fn(),
-        onDidChange: vi.fn(),
-      } as unknown as import("vscode").SecretStorage;
-      SecretStorageService.resetInstance();
-      SecretStorageService.initialize(mockSecrets);
+      it(`never forwards platform values read from the config files (platform.enabled: ${enabled})`, async () => {
+        const { spawn } = await import("child_process");
 
-      // YAML has license_key — it must NOT be used
-      existsSyncSpy.mockReturnValue(true);
-      readFileSyncSpy.mockReturnValue("platform:\n  license_key: live_from_yaml\n");
+        existsSyncSpy.mockReturnValue(true);
+        readFileSyncSpy.mockReturnValue(
+          `platform:\n  enabled: ${enabled}\n  api_url: https://from-config.example.com\n` +
+            "  api_key: key_from_config\n  license_key: lic_from_config\n"
+        );
 
-      await startTestClient(client);
+        await startTestClient(client);
 
-      const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as
-        Record<string, string> | undefined;
-      // Must use the SecretStorage value, not the YAML value
-      expect(spawnEnv?.NIGHTGAUGE_LICENSE_KEY).toBe("live_from_keychain");
-
-      SecretStorageService.resetInstance();
-    });
+        const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as
+          Record<string, string> | undefined;
+        expect(spawnEnv?.NIGHTGAUGE_PLATFORM_URL).toBeUndefined();
+        expect(spawnEnv?.NIGHTGAUGE_API_KEY).toBeUndefined();
+        expect(spawnEnv?.NIGHTGAUGE_LICENSE_KEY).toBeUndefined();
+      });
+    }
 
     it("does not override NIGHTGAUGE_PLATFORM_URL already set in process.env", async () => {
       const { spawn } = await import("child_process");
@@ -666,6 +672,104 @@ describe("IpcClientBase", () => {
       const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as
         Record<string, string> | undefined;
       expect(spawnEnv?.NIGHTGAUGE_PLATFORM_URL).toBe("https://already-set.example.com");
+    });
+  });
+
+  // ── Editor telemetry consent ──────────────────────────────────────────────
+
+  describe("editor telemetry consent", () => {
+    function withTelemetrySetting(enabled: boolean | undefined, streams?: string[]): void {
+      (vscode.workspace.getConfiguration as unknown as MockInstance).mockImplementation(
+        (section?: string) => ({
+          get: vi.fn(<T>(key: string, defaultValue?: T): T | undefined => {
+            if (section === "nightgauge" && key === "telemetry.enabled")
+              return enabled as unknown as T;
+            if (section === "nightgauge" && key === "telemetry.streams")
+              return streams as unknown as T;
+            if (key === "binaryPath") return "" as unknown as T;
+            if (key === "timeoutSeconds") return 30 as unknown as T;
+            return defaultValue;
+          }),
+        })
+      );
+    }
+
+    async function spawnEnv(): Promise<Record<string, string> | undefined> {
+      const { spawn } = await import("child_process");
+      await startTestClient(client);
+      return vi.mocked(spawn).mock.calls[0]?.[2]?.env as Record<string, string> | undefined;
+    }
+
+    afterEach(() => {
+      (vscode.env as { isTelemetryEnabled: boolean }).isTelemetryEnabled = true;
+    });
+
+    it("hands the daemon the consent at spawn: on by default", async () => {
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY).toBe("on");
+    });
+
+    it("hands the daemon 'off' when nightgauge.telemetry.enabled is false", async () => {
+      withTelemetrySetting(false);
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY).toBe("off");
+    });
+
+    it("hands the daemon the streams the editor allows: all by default", async () => {
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY_STREAMS).toBe(
+        "pipeline-run,health,recommendation,trace"
+      );
+    });
+
+    it("hands the daemon only the streams the setting lists, or 'none'", async () => {
+      withTelemetrySetting(true, ["trace", "health", "bogus"]);
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY_STREAMS).toBe("trace,health");
+    });
+
+    it("hands the daemon 'none' when the setting lists no stream", async () => {
+      withTelemetrySetting(true, []);
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY_STREAMS).toBe("none");
+    });
+
+    it("hands the daemon 'off' when VS Code's telemetry is off, whatever the setting", async () => {
+      withTelemetrySetting(true);
+      (vscode.env as { isTelemetryEnabled: boolean }).isTelemetryEnabled = false;
+      expect((await spawnEnv())?.NIGHTGAUGE_EDITOR_TELEMETRY).toBe("off");
+    });
+
+    it("sends the new consent when the setting changes, and nothing at start", async () => {
+      let onChange: ((e: { affectsConfiguration: (s: string) => boolean }) => void) | null = null;
+      (vscode.workspace.onDidChangeConfiguration as unknown as MockInstance).mockImplementation(
+        (listener: typeof onChange) => {
+          onChange = listener;
+          return { dispose: vi.fn() };
+        }
+      );
+      await startTestClient(client);
+      const consentWrites = () =>
+        capturedStdinWrites
+          .map((w) => JSON.parse(w.trimEnd()))
+          .filter((r) => r.method === "platform.setTelemetryConsent");
+      expect(consentWrites()).toEqual([]);
+
+      withTelemetrySetting(false);
+      onChange!({ affectsConfiguration: (k) => k === "nightgauge.telemetry.enabled" });
+      await flushPromises();
+      expect(consentWrites().map((r) => r.params)).toEqual([
+        { enabled: false, streams: ["pipeline-run", "health", "recommendation", "trace"] },
+      ]);
+
+      // Turning a stream off is a consent change too (#1796).
+      withTelemetrySetting(true, ["health"]);
+      onChange!({ affectsConfiguration: (k) => k === "nightgauge.telemetry.streams" });
+      await flushPromises();
+      expect(consentWrites().map((r) => r.params)[1]).toEqual({
+        enabled: true,
+        streams: ["health"],
+      });
+
+      // A setting that is not the consent sends nothing.
+      onChange!({ affectsConfiguration: (k) => k === "nightgauge.backend.timeoutSeconds" });
+      await flushPromises();
+      expect(consentWrites()).toHaveLength(2);
     });
   });
 

@@ -533,9 +533,11 @@ export async function initializeServices(
 
   // ── License key — startup resolution (#3519, #3997) ────────────────────
   // The license key lives in SecretStorage for the extension's runtime
-  // readers (LicensePreflight, forwardPlatformEnv) and in the Go binary's
-  // OS-keychain entry for the CLI and a terminal-started daemon, written
-  // through `nightgauge auth license set` (licenseKeychainBridge). On startup:
+  // readers (LicensePreflight, TelemetryUploader) and in the Go binary's
+  // OS-keychain entry for the CLI and every daemon, the one the extension
+  // starts included, written through `nightgauge auth license set`
+  // (licenseKeychainBridge). The daemon uses that stored key only when
+  // platform.enabled is true (#2398). On startup:
   //   1. Warn about a license key embedded in the PROJECT config.yaml, and
   //      never import it (#2023): a repository file must not choose the key.
   //   2. migrateLicenseKeyAtStartup moves a MACHINE-config key into both
@@ -4143,9 +4145,12 @@ export async function initializeServices(
   void telemetryConsentService.maybeShowFirstRunPrompt();
 
   // Initialize TelemetryUploaderService — ships local JSONL history to the
-  // platform's POST /v1/telemetry/pipeline-run endpoint (#3315).
+  // platform's POST /v1/telemetry/pipeline-run endpoint (#3315). Only with the
+  // cloud enabled: a signed-in session alone is no consent to upload, and
+  // platform.enabled is the switch that says the product may talk to the
+  // hosted service on its own (docs/TELEMETRY_PRIVACY.md).
   let telemetryUploaderService: TelemetryUploaderService | null = null;
-  if (nightgaugeRoot) {
+  if (nightgaugeRoot && platformEnabled) {
     telemetryUploaderService = new TelemetryUploaderService(
       () => cachedLicenseKey ?? null,
       telemetryConsentService,

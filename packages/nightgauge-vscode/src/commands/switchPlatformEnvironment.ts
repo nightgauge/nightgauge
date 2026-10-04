@@ -97,7 +97,10 @@ export function registerSwitchPlatformEnvironmentCommand(
 
     const yamlService = new NightgaugeYamlService(workspaceRoot);
     try {
-      const writeResult = await yamlService.writeLocal(delta);
+      // The machine tier: the `platform` block is never read from a
+      // repository tier, the per-checkout local file included (#1049), by
+      // the extension or the daemon.
+      const writeResult = await yamlService.writeGlobal(delta);
       if (!writeResult.success) {
         vscode.window.showErrorMessage(
           `Failed to save platform environment: ${writeResult.error ?? "unknown error"}`

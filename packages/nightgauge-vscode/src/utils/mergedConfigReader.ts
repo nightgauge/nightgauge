@@ -60,7 +60,7 @@ import * as path from "path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import type { ConfigPathResult } from "./configPathResolver";
 import { resolveGlobalConfigPathSync } from "./globalConfigResolver";
-import { deepMerge } from "../config/configMergeEngine";
+import { deepMerge, withoutMachineOwnedKeys } from "../config/configMergeEngine";
 import { resolveEnvVars } from "../config/envVarResolver";
 
 /** Local-tier file name — mirrors configPathResolver.LOCAL_CONFIG_FILE_NAME. */
@@ -255,7 +255,12 @@ function buildEntry(
   const globalObj = parseTierFile(globalPath, "machine") ?? {};
   const localObj = parseTierFile(localPath, "local") ?? {};
 
-  const merged = deepMerge(deepMerge(globalObj ?? {}, projectObj), localObj ?? {});
+  // The repository tiers never supply a machine-owned key such as `platform`
+  // (#1049): the Go loader deletes them before merging, and so does this.
+  const merged = deepMerge(
+    deepMerge(globalObj ?? {}, withoutMachineOwnedKeys(projectObj)),
+    withoutMachineOwnedKeys(localObj ?? {})
+  );
   if (Object.keys(merged).length === 0) {
     // Nothing in any tier — emit empty text, not "{}", so downstream
     // line parsers see the same shape an empty file always had.

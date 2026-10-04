@@ -1669,11 +1669,13 @@
         "nightgauge.telemetry.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Send anonymous usage data to help improve Nightgauge. On by default — set to false to opt out. Never includes source code, file contents, secrets, branch names, or commit SHAs. Honors VS Code's telemetry.telemetryLevel as a hard kill switch. See docs/TELEMETRY_PRIVACY.md for what is collected.",
-          "markdownDescription": "Send anonymous usage data to help improve Nightgauge. **On by default** — set to `false` to opt out. Never includes source code, file contents, secrets, branch names, or commit SHAs, and VS Code's `#telemetry.telemetryLevel#` is honored as a hard kill switch. See [TELEMETRY_PRIVACY.md](command:nightgauge.openTelemetrySettingsPanel) for what is collected."
+          "scope": "machine",
+          "description": "Send run telemetry to your account. On by default — set to false to opt out. Nothing is sent unless cloud features are on (platform.enabled in your machine-tier config, or a license or API key in the environment VS Code was started from) and you are signed in or have a license key; each run then sends its repository and issue number, the issue title, labels and the first 8,192 characters of its body, the branch, timings, tokens, cost and outcome. Never includes source code, file contents or secrets. Honors VS Code's telemetry.telemetryLevel as a hard kill switch. Set in user settings only: a workspace cannot change it. See docs/TELEMETRY_PRIVACY.md for what is sent, when and why.",
+          "markdownDescription": "Send run telemetry to your account. **On by default** — set to `false` to opt out. Nothing is sent unless cloud features are on (`platform.enabled` in your machine-tier config, or a license or API key in the environment VS Code was started from) and you are signed in or have a license key; each run then sends its repository and issue number, the issue title, labels and the first 8,192 characters of its body, the branch, timings, tokens, cost and outcome. Never includes source code, file contents or secrets, and VS Code's `#telemetry.telemetryLevel#` is honored as a hard kill switch. Set in user settings only: a workspace cannot change it. See [TELEMETRY_PRIVACY.md](command:nightgauge.openTelemetrySettingsPanel) for what is sent, when and why."
         },
         "nightgauge.telemetry.streams": {
           "type": "array",
+          "scope": "machine",
           "items": {
             "type": "string",
             "enum": [

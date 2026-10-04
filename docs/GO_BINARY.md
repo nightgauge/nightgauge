@@ -243,6 +243,12 @@ key in Settings and the startup migration all pipe the key to
 Clearing the key in Settings runs `auth license clear --json`. A binary that
 predates `auth license` is reported as needing an update.
 
+The extension does not hand the key to the daemon it starts (#2398). That
+daemon reads the shared entry like any other, so the key is a stored
+credential, which `serve` uses only when `platform.enabled: true`. A
+`NIGHTGAUGE_LICENSE_KEY` in the environment VS Code was started from reaches
+the daemon unchanged and stays an explicit opt-in.
+
 **The shared keychain entry is the source of truth.** The extension records
 the fingerprint of the last key the CLI confirmed and compares fingerprints
 on startup and after every write:

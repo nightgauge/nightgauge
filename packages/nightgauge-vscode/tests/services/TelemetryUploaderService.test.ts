@@ -79,10 +79,12 @@ function makeLicenseKey(key: string | null = "test-license-key"): () => string |
 
 function makeConsentService(
   enabled = true,
-  streamOverrides: Partial<Record<TelemetryStream, boolean>> = {}
+  streamOverrides: Partial<Record<TelemetryStream, boolean>> = {},
+  platformTelemetry = true
 ) {
   return {
     isEnabled: vi.fn().mockReturnValue(enabled),
+    isPlatformTelemetryEnabled: vi.fn().mockReturnValue(platformTelemetry),
     isStreamEnabled: vi.fn().mockImplementation((stream: TelemetryStream) => {
       if (stream in streamOverrides) return streamOverrides[stream];
       return enabled;
@@ -544,6 +546,26 @@ describe("TelemetryUploaderService", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(vi.mocked(vscode.workspace.fs).readDirectory).not.toHaveBeenCalled();
+  });
+
+  // The machine tier's platform.telemetry.enabled: false stops the daemon's
+  // sending; it must stop the extension's uploads too, whatever the editor's
+  // own consent says.
+  it("uploads nothing when platform.telemetry.enabled is false", async () => {
+    setupFs([{ name: "2026-05-10.jsonl", content: makeJsonlContent(5), sizeBytes: 500 }]);
+    fetchMock.mockResolvedValue(okResponse());
+
+    const service = new TelemetryUploaderService(
+      makeLicenseKey(),
+      makeConsentService(true, {}, false) as never,
+      () => "https://api.example.com",
+      "/workspace",
+      makeLogger() as never
+    );
+
+    await service.runUploadCycle();
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   // ── Test 4: Batch boundary — 250 lines → 3 batches ───────────────────────

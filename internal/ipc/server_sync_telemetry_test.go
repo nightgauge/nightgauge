@@ -25,7 +25,9 @@ func newSyncTelemetryServer(t *testing.T, mockURL string, workspaceRoot string) 
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	s := NewServer(nil, WithPlatformClient(pc))
+	// Opted in, telemetry on: these tests are about the sync itself. The
+	// consent gate is pinned by TestPlatformSyncTelemetry_TelemetryOff.
+	s := NewServer(nil, WithPlatformClient(pc), WithTelemetryPolicy(true, true))
 	s.writer = &bytes.Buffer{}
 	if workspaceRoot != "" {
 		s.workspaceRoot = workspaceRoot
@@ -61,6 +63,43 @@ func TestPlatformSyncTelemetry_NoAnalyticsSvc(t *testing.T) {
 	}
 	if err.Error() != "platform client not configured" {
 		t.Errorf("expected 'platform client not configured', got %q", err.Error())
+	}
+}
+
+// TestPlatformSyncTelemetry_TelemetryOff pins the consent gate on the history
+// sync: with no cloud opt-in, or telemetry off in config or in the editor,
+// nothing is posted and the caller is told why.
+func TestPlatformSyncTelemetry_TelemetryOff(t *testing.T) {
+	var posts int32
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/telemetry/pipeline-run" {
+			atomic.AddInt32(&posts, 1)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer mock.Close()
+
+	root := layouttest.Repo(t)
+	for name, opts := range map[string][]ServerOption{
+		"no cloud opt-in":    {WithTelemetryPolicy(false, true)},
+		"telemetry off":      {WithTelemetryPolicy(true, false)},
+		"editor consent off": {WithTelemetryPolicy(true, true), WithEditorTelemetry("off")},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pc, err := platform.NewClient(platform.Config{BaseURL: mock.URL})
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+			s := NewServer(nil, append([]ServerOption{WithPlatformClient(pc), WithWorkspaceRoot(root)}, opts...)...)
+			s.writer = &bytes.Buffer{}
+			_, err = callHandler(t, s, "platform.syncTelemetry", PlatformSyncTelemetryParams{})
+			if err == nil {
+				t.Fatal("expected the sync to refuse with telemetry not allowed")
+			}
+		})
+	}
+	if n := atomic.LoadInt32(&posts); n != 0 {
+		t.Errorf("%d records posted with telemetry not allowed, want 0", n)
 	}
 }
 

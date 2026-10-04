@@ -16,6 +16,8 @@ import { EFFORT_LEVELS, TIER_BANDS, providerFor, type Provider } from "@nightgau
 import { resolveConfigPathSync, logDeprecationWarning } from "../configPathResolver";
 import { checkoutPath, isUsableWorkspaceRoot } from "../cloneLayout";
 import { readEffectiveConfigTextSync } from "../mergedConfigReader";
+import { resolveGlobalConfigPathSync } from "../globalConfigResolver";
+import { parse as parseYaml } from "yaml";
 import type { DefaultModel } from "./modelResolver";
 import type { ClaudeEffort } from "./stageResolver";
 import type { ExecutionAdapter } from "../../config/schema";
@@ -3426,6 +3428,32 @@ export function getMcpToolsConfig(workspaceRoot?: string, stage?: string): strin
  * @see Issue #1582 - Pipeline execution audit trail emission
  */
 /**
+ * `platform.enabled` as the machine-tier config file sets it: true only for a
+ * boolean `true` directly under `platform:`, never for a nested key such as
+ * `platform.telemetry.enabled`. False when the file is absent, unreadable or
+ * not YAML. Parsed, not line-scanned, because the nesting is the point.
+ */
+export function machineTierPlatformEnabled(): boolean {
+  let text: string;
+  try {
+    const machinePath = resolveGlobalConfigPathSync().path;
+    if (!machinePath || !fs.existsSync(machinePath)) return false;
+    text = fs.readFileSync(machinePath, "utf-8");
+  } catch {
+    return false;
+  }
+  try {
+    const doc: unknown = parseYaml(text);
+    if (!doc || typeof doc !== "object") return false;
+    const platform = (doc as { platform?: unknown }).platform;
+    if (!platform || typeof platform !== "object") return false;
+    return (platform as { enabled?: unknown }).enabled === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Resolve the audit emitter's configuration.
  *
  * `audit.enabled` was removed as an independent switch in ADR-021: audit
@@ -3494,7 +3522,10 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
     let inAudit = false;
     let inPlatform = false;
     let legacyEnabledTrue = false;
-    let platformEnabled = false;
+    // platform.enabled is the machine's opt-in to the hosted service: only the
+    // machine tier can set it, never a repository's project or local file
+    // (#1049; ConfigBridge.getPlatform applies the same rule).
+    const platformEnabled = machineTierPlatformEnabled();
 
     for (const line of lines) {
       const trimmed = line.trim();
@@ -3525,10 +3556,6 @@ export function getAuditConfig(workspaceRoot?: string): AuditConfig {
       }
 
       if (inPlatform) {
-        const pm = trimmed.match(/^enabled:\s*(.+)$/);
-        if (pm) {
-          platformEnabled = pm[1].trim() === "true";
-        }
         continue;
       }
 

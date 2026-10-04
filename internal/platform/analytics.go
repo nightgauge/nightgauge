@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	api "github.com/nightgauge/nightgauge/api/generated/go/platform"
@@ -116,6 +117,18 @@ type AnalyticsService struct {
 	// flush tick (#1103).
 	eventRejectStatus  int
 	eventRejectDropped int
+
+	// sendGate, when set, decides whether anything may be sent at all: every
+	// write path (Ingest, PushPipelineRun, EmitPipelineEvent, SyncQueue,
+	// SyncTelemetry) and every buffered flush asks it first. The daemon sets
+	// it to its telemetry consent (the cloud opted in, telemetry on, the
+	// editor's consent not withdrawn); nil, as the CLI's explicit backfill
+	// leaves it, means allowed. See SetSendGate.
+	sendGate atomic.Pointer[func() bool]
+	// runGate, when set, is asked on top of sendGate before a completed-run
+	// record is sent or flushed: the editor's pipeline-run stream. See
+	// SetRunGate.
+	runGate atomic.Pointer[func() bool]
 }
 
 type bufferedBatch struct {
@@ -136,8 +149,62 @@ func NewAnalyticsService(client *Client) *AnalyticsService {
 	}
 }
 
+// SetSendGate installs the consent check every write path and every flush
+// asks before anything leaves the machine. With the gate closed, a write is
+// dropped rather than buffered, and a flush drops whatever is buffered, so
+// turning telemetry off also stops what was already queued. nil removes the
+// gate (everything allowed).
+func (s *AnalyticsService) SetSendGate(gate func() bool) {
+	if gate == nil {
+		s.sendGate.Store(nil)
+		return
+	}
+	s.sendGate.Store(&gate)
+}
+
+// sendAllowed reports whether the gate (if any) allows sending now.
+func (s *AnalyticsService) sendAllowed() bool {
+	gate := s.sendGate.Load()
+	return gate == nil || (*gate)()
+}
+
+// SetRunGate installs the check a completed-run record asks on top of the
+// send gate (PushPipelineRun, SyncTelemetry and the flush of buffered
+// records): the daemon sets it to the editor's pipeline-run stream. With it
+// closed a record is dropped, not buffered, and buffered records are dropped
+// at the next flush. nil removes it.
+func (s *AnalyticsService) SetRunGate(gate func() bool) {
+	if gate == nil {
+		s.runGate.Store(nil)
+		return
+	}
+	s.runGate.Store(&gate)
+}
+
+// runsAllowed reports whether a completed-run record may be sent now.
+func (s *AnalyticsService) runsAllowed() bool {
+	if !s.sendAllowed() {
+		return false
+	}
+	gate := s.runGate.Load()
+	return gate == nil || (*gate)()
+}
+
+// dropBuffered discards every buffered batch, run record and event, and
+// reports how many there were.
+func (s *AnalyticsService) dropBuffered() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := len(s.buffer) + len(s.runQueue) + len(s.eventQueue)
+	s.buffer, s.runQueue, s.eventQueue = nil, nil, nil
+	return n
+}
+
 // Ingest sends analytics events to the platform. If offline, buffers locally.
 func (s *AnalyticsService) Ingest(ctx context.Context, runID string, issueNumber int, events []AnalyticsEvent) {
+	if !s.sendAllowed() {
+		return
+	}
 	if !s.client.IsOnline() {
 		s.bufferEvents(runID, issueNumber, events)
 		return
@@ -186,8 +253,16 @@ func (s *AnalyticsService) bufferEvents(runID string, issueNumber int, events []
 	})
 }
 
-// FlushBuffered pushes all buffered events to the platform.
+// FlushBuffered pushes all buffered events to the platform. With the send
+// gate closed it drops them instead: they were queued while sending was
+// allowed, and must not leave once it is not.
 func (s *AnalyticsService) FlushBuffered(ctx context.Context) int {
+	if !s.sendAllowed() {
+		if n := s.dropBuffered(); n > 0 {
+			log.Printf("analytics: dropped %d buffered items — sending is off", n)
+		}
+		return 0
+	}
 	if !s.client.IsOnline() {
 		return 0
 	}
@@ -228,12 +303,17 @@ func (s *AnalyticsService) FlushBuffered(ctx context.Context) int {
 		flushed += len(batch.Events)
 	}
 
-	// Flush buffered pipeline run records
+	// Flush buffered pipeline run records — or drop them, once the run gate
+	// (the editor's pipeline-run stream) has closed.
 	s.mu.Lock()
 	pendingRuns := make([]ExecutionHistoryRunRecord, len(s.runQueue))
 	copy(pendingRuns, s.runQueue)
 	s.runQueue = nil
 	s.mu.Unlock()
+	if len(pendingRuns) > 0 && !s.runsAllowed() {
+		log.Printf("analytics: dropped %d buffered run records — the pipeline-run stream is off", len(pendingRuns))
+		pendingRuns = nil
+	}
 
 	for _, run := range pendingRuns {
 		if err := s.pushPipelineRunSync(ctx, run); err != nil {
@@ -350,6 +430,9 @@ type UsageSummaryResult struct {
 // errors, does not block the caller. Buffers the record for retry when
 // offline or on HTTP failure.
 func (s *AnalyticsService) PushPipelineRun(ctx context.Context, run ExecutionHistoryRunRecord) {
+	if !s.runsAllowed() {
+		return
+	}
 	go func() {
 		if !s.client.IsOnline() {
 			log.Printf("platform: PushPipelineRun buffered (offline), issue=%d", run.IssueNumber)
@@ -527,6 +610,9 @@ func (s *AnalyticsService) dropRejectedEvent(err error, status int) {
 // Fire-and-forget: launches a goroutine, logs errors, does not block the caller.
 // Buffers the event for retry when offline or on HTTP failure.
 func (s *AnalyticsService) EmitPipelineEvent(ctx context.Context, event PipelineEvent) {
+	if !s.sendAllowed() {
+		return
+	}
 	go func() {
 		if !s.client.IsOnline() {
 			s.enqueueEvent(event)
@@ -717,7 +803,7 @@ func (s *AnalyticsService) emitPipelineEventSync(ctx context.Context, event Pipe
 // state — replaying a stale snapshot could overwrite newer cloud state. A
 // no-op when the machine id is empty (sync scope is unresolved).
 func (s *AnalyticsService) SyncQueue(ctx context.Context, payload QueueSyncPayload) {
-	if payload.MachineID == "" {
+	if payload.MachineID == "" || !s.sendAllowed() {
 		return
 	}
 	go func() {
@@ -788,9 +874,17 @@ const syncThrottleInterval = 120 * time.Millisecond
 // server-side from the auth credential and is no longer a mapper input — the
 // parameter was accepted here previously but every caller always passed nil.
 func (s *AnalyticsService) SyncTelemetry(ctx context.Context, records []state.V2RunRecord, repo string) SyncTelemetryResult {
+	var result SyncTelemetryResult
+	if !s.sendAllowed() {
+		result.Errors = append(result.Errors, "sending is off: the cloud is not enabled or telemetry is off")
+		return result
+	}
+	if !s.runsAllowed() {
+		result.Errors = append(result.Errors, "the pipeline-run telemetry stream is off")
+		return result
+	}
 	canonical, _ := CanonicalizeRuns(records)
 
-	var result SyncTelemetryResult
 	for i, rec := range canonical {
 		// Throttle between posts to stay under the platform's global per-minute
 		// request budget; skipped before the first record. Abort cleanly (return

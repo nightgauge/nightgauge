@@ -187,24 +187,35 @@ and can be reversed from the same command. After an extension update the
 extension repairs the absolute path it previously wrote there, since its own
 update invalidated it; it never touches a `statusLine` it did not write.
 
-**What leaves your machine.** Telemetry, on by default and disclosed in
-[Privacy and Telemetry](#privacy-and-telemetry) above, to `api.nightgauge.dev`.
-It honors VS Code's global telemetry setting as a hard stop that no Nightgauge
-setting can override. Your AI provider's CLI makes its own calls to its own
-provider, under your own account and credentials. There is no other egress.
+**What leaves your machine.** With [cloud features](#cloud-features-optional)
+off, the default, Nightgauge's hosted service hears from this machine only when
+you act: signing in or out, activating a license, starting a trial, managing
+your subscription, or opening a dashboard tab that shows your account's cloud
+data. Nothing runs in the background. With them on, the run telemetry
+described in [Privacy and Telemetry](#privacy-and-telemetry) below goes to
+`api.nightgauge.dev`, with this machine's registration, heartbeat and the
+other cloud features. The telemetry honors VS Code's global telemetry setting
+as a hard stop that no Nightgauge setting can override. Your AI provider's CLI
+makes its own calls to its own provider, under your own account and
+credentials, and `git` and `gh` talk to your forge. There is no other egress.
 
 For the security reporting process and supported versions, see
 [SECURITY.md](https://github.com/nightgauge/nightgauge/blob/main/SECURITY.md).
 
 ## Privacy and Telemetry
 
-Telemetry is on by default and you are asked on first activation whether to
-keep it on; turning it off there, or later in Settings, is honored permanently.
-VS Code's global telemetry-off setting is honored as a hard stop. Without a
-platform license key or sign-in nothing is uploaded at all. When enabled, the
-`pipeline-run` stream includes the repository slug and issue number as
-correlation keys, plus bounded outcome, duration, and token counters; it never
-sends source code, file contents, prompts, secrets, branch names, or commit
+Nothing about your work is uploaded unless
+[cloud features](#cloud-features-optional) are on (`platform.enabled: true`)
+and you are signed in or have a license key. With them on, telemetry is on by
+default and you are told so on first activation; turning it off there, or later
+in your user settings, is honored permanently, by the extension and by the
+binary it starts, and so is `platform.telemetry.enabled: false` in your
+machine-tier config. VS Code's global telemetry-off setting is honored as a
+hard stop. Each run then sends its repository and issue number, the issue
+title, labels and the first 8,192 characters of its body, the branch, its
+timings, token counts, cost and outcome, and a failed stage's error message
+(which can quote command output), so the hosted dashboard can show your runs.
+It never sends your source code, file contents, prompts, secrets or commit
 SHAs. Streams can be disabled independently at any time.
 
 Read [Telemetry Privacy](https://github.com/nightgauge/nightgauge/blob/main/docs/TELEMETRY_PRIVACY.md)
@@ -304,15 +315,22 @@ neither of the two switches below.
   subscription and team commands in the Command Palette, sign-in among them,
   and the Subscription and Team sections in the sidebar. It changes what the
   extension shows, not what it sends.
-- **`platform.enabled: true`** in `.nightgauge/config.yaml` decides whether the
-  extension and its bundled binary talk to the hosted service on their own:
-  restoring your session, registering this machine and sending the telemetry
-  described in [Privacy and Telemetry](#privacy-and-telemetry). With the
-  default, `false`, the extension does none of that, and signing in is always
-  your own explicit action. One exception: once a license key is stored in VS
-  Code (by activating a license or starting a trial), the extension hands it to
-  the bundled binary, which then registers this machine and sends heartbeats
-  even with `platform.enabled` off.
+- **`platform.enabled: true`** in your machine-tier `config.yaml`
+  ([where it lives](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md#global-config-location);
+  a repository's `.nightgauge/config.yaml` or `config.local.yaml` cannot set
+  it, or any other `platform` setting) decides whether the extension and its
+  bundled binary talk to the hosted service on their own: restoring your
+  session, registering this machine, checking that the service is reachable,
+  using a stored license key and sending the telemetry described in
+  [Privacy and Telemetry](#privacy-and-telemetry). With the default, `false`,
+  they do none of that.
+
+Signing in, activating a license and starting a trial are your own explicit
+actions, and they work with `platform.enabled` off. A license key they store
+is kept in VS Code and in the OS keychain, and nothing uses it until you turn
+`platform.enabled` on. A `NIGHTGAUGE_LICENSE_KEY` in the environment VS Code
+was started from is different: setting it is an explicit opt-in, and the
+bundled binary uses it whatever `platform.enabled` says.
 
 ```jsonc
 // settings.json
@@ -320,7 +338,7 @@ neither of the two switches below.
 ```
 
 ```yaml
-# .nightgauge/config.yaml
+# the machine-tier config.yaml (~/.nightgauge/config.yaml on macOS)
 platform:
   enabled: true
 ```

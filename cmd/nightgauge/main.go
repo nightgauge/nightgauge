@@ -5320,6 +5320,15 @@ func serveCmd() *cobra.Command {
 			// poller (below) and the #330 Action Center bridge stay dormant
 			// in the product's primary deployment mode.
 			resolvedPlatform := resolvePlatformConfig(platformURL, apiKey, licenseKey, cfg, newLicenseStore().ResolveLicenseKey)
+			// The user's own account actions (sign-in, license activation, a
+			// trial) build a client on demand when there is none, and go to
+			// the URL they configured whatever platform.enabled says (#2398).
+			opts = append(opts, ipc.WithPlatformEndpoint(onDemandPlatformEndpoint(platformURL, cfg)))
+			// Run telemetry needs the cloud opt-in and telemetry on, in config
+			// and in the editor that started this daemon; a signed-in session
+			// alone sends nothing (docs/TELEMETRY_PRIVACY.md).
+			opts = append(opts, serveTelemetryOptions(resolvedPlatform, cfg,
+				os.Getenv(ipc.EditorTelemetryEnv), os.Getenv(ipc.EditorTelemetryStreamsEnv))...)
 			platformURL, apiKey, licenseKey = resolvedPlatform.URL, resolvedPlatform.APIKey, resolvedPlatform.LicenseKey
 			if resolvedPlatform.Configured() {
 				apiURLForLog := platformURL
@@ -5347,6 +5356,11 @@ func serveCmd() *cobra.Command {
 				// Stable per-machine id so the platform scopes this machine's
 				// queue snapshot (delete-by-machine) and tags runs by origin.
 				pcfg.AgentID = platform.ResolveMachineID()
+				// Without the cloud opt-in this client has only a URL (the
+				// nightgauge.platform.url setting, say), and it polls
+				// nothing: it checks the platform only for a request the user
+				// made (docs/TELEMETRY_PRIVACY.md).
+				pcfg.OnDemandHealth = !resolvedPlatform.OptedIn
 
 				pc, err := platform.NewClient(pcfg)
 				if err != nil {
@@ -5478,8 +5492,11 @@ func serveCmd() *cobra.Command {
 					sched.WithIdentityChecker(ic)
 				}
 
-				// Wire platform skill resolution for paid tiers
-				if platformClient != nil {
+				// Wire platform skill resolution for paid tiers — a cloud
+				// feature, so only with the cloud opt-in: a client built from a
+				// URL alone must not resolve skills over the network for the
+				// scheduler's own runs.
+				if platformClient != nil && resolvedPlatform.OptedIn {
 					sched.WithSkillService(platform.NewSkillService(platformClient))
 				}
 
@@ -5489,16 +5506,18 @@ func serveCmd() *cobra.Command {
 				// disclosure — the CLI has no consent dialog to carry it.
 				if platformClient != nil && cfg != nil {
 					telemetryEnabled := cfg.Telemetry.IsEnabled()
+					// The notice discloses what is sent, so it is owed only when
+					// something will be: the cloud is opted in.
 					if notifier, nerr := telemetrynotice.ForAccount(); nerr == nil {
 						if _, werr := notifier.MaybePrint(
-							os.Stderr, telemetryEnabled, cfg.Telemetry.IsExplicitlySet(),
+							os.Stderr, telemetryEnabled && resolvedPlatform.OptedIn, cfg.Telemetry.IsExplicitlySet(),
 						); werr != nil {
 							// The notice was delivered; only the marker failed,
 							// so the sole consequence is showing it again.
 							fmt.Fprintf(os.Stderr, "warning: could not record telemetry notice: %v\n", werr)
 						}
 					}
-					telemetrySvc := platform.NewTelemetryService(platformClient)
+					telemetrySvc := schedulerTelemetryService(platformClient, server.TelemetryAllowed, server.RunRecordsAllowed)
 					sched.WithTelemetryService(telemetrySvc, telemetryEnabled)
 					telemetrySvc.StartAutoFlush(context.Background())
 				}
