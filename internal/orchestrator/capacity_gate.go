@@ -201,6 +201,7 @@ func (s *Scheduler) enforceIssueCapacity(ctx context.Context, d capacityDispatch
 				Model:       alt.Model,
 				Adapter:     d.adapterName,
 				SkillsRoots: skillrender.DefaultRoots(d.workspaceRoot),
+				Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 				Warn:        func(msg string) { log.Printf("#%d: %s", d.item.Number, msg) },
 			})
 			if err == nil {

@@ -53,8 +53,17 @@ failure_markers() { # failure_markers <file> [limit]
 # long log is never held in memory or rewritten as a here-string, and a NUL
 # byte in a log does not make bash warn. Its writer's status is never read,
 # so grep -q stopping at the first match cannot fail anything.
+#
+# Only a DECLARATION counts: a line that starts, after optional indent and an
+# optional `✗`, with `HARNESS ERROR` or `INFRASTRUCTURE failure|error`, which is
+# how every suite here prints one. The match used to be unanchored, so any
+# mention of the phrase counted: test-ci-local-concurrency.sh's own PASS lines
+# name it ("PASS: a HARNESS ERROR log classifies as infra"), and every real
+# assertion failure in that suite was summarised as "the check could not run"
+# (#2374), the direction the paragraph above says must never happen.
 classify_failure() { # classify_failure <file> <exit-code>
-  if grep -qaE 'HARNESS ERROR|INFRASTRUCTURE (failure|error)' < <(strip_ansi "$1"); then
+  if grep -qaE '^[[:space:]]*(✗[[:space:]]*)?(HARNESS ERROR|INFRASTRUCTURE (failure|error))' \
+    < <(strip_ansi "$1"); then
     printf 'infra\n'
   else
     printf 'assert\n'

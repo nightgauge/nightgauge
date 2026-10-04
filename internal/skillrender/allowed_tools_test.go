@@ -21,6 +21,9 @@ type allowedToolsFixture struct {
 		// Refused is a skill whose allowed-tools field is there but lists no
 		// tool, which splitFrontmatter refuses (errNoAllowedTools).
 		Refused bool `json:"refused"`
+		// HeadlessRefused is a skill that declares tools but none a headless
+		// run can use, which FilterHeadlessTools refuses (#2390).
+		HeadlessRefused bool `json:"headless_refused"`
 		// MCP and Programmatic are checked only where a case has them.
 		MCP          []string `json:"mcp"`
 		Programmatic []string `json:"programmatic"`
@@ -59,8 +62,13 @@ func TestAllowedToolsFixture(t *testing.T) {
 			if !slices.Equal(fm.AllowedTools, c.Declared) {
 				t.Errorf("declared = %q, want %q", fm.AllowedTools, c.Declared)
 			}
-			if got := FilterHeadlessTools(fm.AllowedTools); !slices.Equal(got, c.Headless) {
-				t.Errorf("headless = %q, want %q", got, c.Headless)
+			got, err := FilterHeadlessTools(fm.AllowedTools)
+			if c.HeadlessRefused {
+				if !errors.Is(err, ErrNoHeadlessTools) {
+					t.Errorf("headless = %q, %v; want ErrNoHeadlessTools", got, err)
+				}
+			} else if err != nil || !slices.Equal(got, c.Headless) {
+				t.Errorf("headless = %q, %v; want %q", got, err, c.Headless)
 			}
 			if c.MCP != nil && !slices.Equal(fm.MCPTools, c.MCP) {
 				t.Errorf("mcp-tools = %q, want %q", fm.MCPTools, c.MCP)
@@ -85,8 +93,9 @@ func TestRenderReportsAPatternWhole(t *testing.T) {
 	if want := []string{"Read", "Bash(gh *)", "AskUserQuestion"}; !slices.Equal(res.AllowedTools, want) {
 		t.Errorf("AllowedTools = %q, want %q", res.AllowedTools, want)
 	}
-	if want := []string{"Read", "Bash(gh *)"}; !slices.Equal(FilterHeadlessTools(res.AllowedTools), want) {
-		t.Errorf("headless AllowedTools = %q, want %q", FilterHeadlessTools(res.AllowedTools), want)
+	headless := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{root}, Headless: true})
+	if want := []string{"Read", "Bash(gh *)"}; !slices.Equal(headless.AllowedTools, want) {
+		t.Errorf("headless AllowedTools = %q, want %q", headless.AllowedTools, want)
 	}
 }
 

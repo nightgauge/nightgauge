@@ -130,6 +130,12 @@ type Options struct {
 	// fit windows the supplied bytes would overflow, so only a caller that
 	// re-checks the fit (the scheduler's local-endpoint branch) sets it.
 	SupplyIncludes bool
+	// Headless renders for a non-interactive run. Result.AllowedTools is then
+	// what such a run is granted (FilterHeadlessTools), and a skill whose
+	// allowed-tools lists nothing a headless run can use fails the render,
+	// naming the file the tools came from (ErrNoHeadlessTools, #2390). Every
+	// headless dispatcher sets it; the interactive ones do not.
+	Headless bool
 }
 
 // Fragment is one overlay file that contributed to the composed block.
@@ -333,7 +339,28 @@ func overlayKeySafe(key string, warn func(string)) (string, bool) {
 // Deterministic: for a fixed input triple and unchanged files the output is
 // byte-stable. Every ordering below is explicit — no map iteration reaches the
 // output.
+//
+// With opts.Headless the allowed tools are the ones a non-interactive run is
+// granted, and a skill that declares tools but none a headless run can use is
+// refused (#2390).
 func Render(opts Options) (*Result, error) {
+	res, err := render(opts)
+	if err != nil || !opts.Headless {
+		return res, err
+	}
+	tools, err := FilterHeadlessTools(res.AllowedTools)
+	if err != nil {
+		source := res.SkillPath
+		if res.WholeFile != "" {
+			source = res.WholeFile
+		}
+		return nil, fmt.Errorf("%s: %w", source, err)
+	}
+	res.AllowedTools = tools
+	return res, nil
+}
+
+func render(opts Options) (*Result, error) {
 	res := &Result{
 		V:             SchemaVersion,
 		Stage:         opts.Stage,
@@ -1007,16 +1034,31 @@ func splitTools(tools string) []string {
 	return entries
 }
 
+// ErrNoHeadlessTools refuses a headless run of a skill whose allowed-tools
+// lists tools but none a non-interactive run can use: today, a skill that
+// declares only AskUserQuestion (#2390). Filtering left such a skill with no
+// tools, which every headless caller then handed its adapter exactly as it
+// hands a skill with no allowed-tools field, and Codex maps that to full
+// access: the skill that asked for the least ran with the sandbox bypassed.
+// Refusing is the fail-closed answer on every adapter: the skill can do
+// nothing but ask a user, and a headless run has none to ask. A skill without
+// the field is not refused; it keeps each runner's documented default.
+var ErrNoHeadlessTools = errors.New("allowed-tools lists no tool a headless run can use " +
+	"(AskUserQuestion needs a user present): add the tools the skill needs, or run it interactively")
+
 // FilterHeadlessTools removes tools that cannot work in a non-interactive run.
 //
 // Exactly one tool qualifies today: the Claude CLI treats an AskUserQuestion
 // call under `-p` as a permission denial, so the agent retries it in a loop and
-// floods the output (#118, #171, #205). Every headless dispatcher calls this —
-// the Go scheduler and the extension's headless path — and the interactive
-// dispatchers deliberately do not.
-func FilterHeadlessTools(tools []string) []string {
+// floods the output (#118, #171, #205). Every headless dispatcher applies it
+// (Options.Headless) and the interactive dispatchers deliberately do not.
+//
+// A list that declares tools and keeps none fails closed with
+// ErrNoHeadlessTools (#2390). An empty input is a skill that declares none
+// and is returned unchanged.
+func FilterHeadlessTools(tools []string) ([]string, error) {
 	if len(tools) == 0 {
-		return tools
+		return tools, nil
 	}
 	out := make([]string, 0, len(tools))
 	for _, t := range tools {
@@ -1024,7 +1066,10 @@ func FilterHeadlessTools(tools []string) []string {
 			out = append(out, t)
 		}
 	}
-	return out
+	if len(out) == 0 {
+		return nil, ErrNoHeadlessTools
+	}
+	return out, nil
 }
 
 // DefaultRoots is the conventional skills-root list for a workspace checkout.

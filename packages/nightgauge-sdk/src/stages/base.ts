@@ -179,7 +179,7 @@ export abstract class BaseStage<TInput, TOutput> {
     } catch (error) {
       throw new Error(`Failed to read skill file: ${skillPath}`, { cause: error });
     }
-    const allowedTools = filterHeadlessTools(skillFileAllowedTools(content, skillPath));
+    const allowedTools = filterHeadlessTools(skillFileAllowedTools(content, skillPath), skillPath);
     return { content, ...(allowedTools.length > 0 && { allowedTools }) };
   }
 

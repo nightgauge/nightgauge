@@ -113,6 +113,32 @@ printf '  \033[31m\xe2\x9c\x97\033[0m manifest.bak: No such file or directory\n'
 [ "$(classify_failure "$TMP/real.log" 2)" = "assert" ]
 check "a real failure at exit 2 still classifies as assert" $?
 
+# ── (4a) a PASS line that MENTIONS HARNESS ERROR is not a declaration (#2374) ─
+# This suite's own PASS lines name the phrase. With an unanchored match, every
+# real failure in it was summarised as INFRASTRUCTURE.
+{
+  printf 'PASS: a HARNESS ERROR log classifies as infra\n'
+  printf 'PASS: a killed drift suite reports a HARNESS ERROR\n'
+  printf 'note: an INFRASTRUCTURE failure is reported by name\n'
+  printf '  \033[31m\xe2\x9c\x97\033[0m concurrent drift-gate suite B exits 0 (got 1)\n'
+} > "$TMP/mention.log"
+[ "$(classify_failure "$TMP/mention.log" 1)" = "assert" ]
+check "a failure beside a PASS line that mentions HARNESS ERROR classifies as assert" $?
+
+# Every form a suite here declares one in still does: bare, indented, behind a
+# coloured ✗, and the INFRASTRUCTURE form.
+declared_all=0
+for decl in 'HARNESS ERROR: gitleaks is not installed' \
+  '  \033[31m\xe2\x9c\x97 HARNESS ERROR\033[0m in arm (l): git could not run' \
+  '\n  \033[31m\xe2\x9c\x97 HARNESS ERROR\033[0m: killed by SIGTERM' \
+  '  INFRASTRUCTURE failure: no temp space' \
+  'INFRASTRUCTURE error: the arm could not run'; do
+  printf "PASS: unrelated\n${decl}\n" > "$TMP/declared.log"
+  [ "$(classify_failure "$TMP/declared.log" 1)" = "infra" ] || declared_all=1
+done
+[ "$declared_all" -eq 0 ]
+check "every HARNESS ERROR and INFRASTRUCTURE declaration form still classifies as infra" $?
+
 # ── (4b, 4c) a long log changes neither answer (#2360) ───────────────────────
 # Both functions run under their caller's pipefail, this suite's included.
 # classify_failure piped the stripped log into grep -q: a HARNESS ERROR near the

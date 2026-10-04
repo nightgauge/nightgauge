@@ -381,7 +381,7 @@ export class PipelineOrchestrator {
 
     // Every fanned-out unit is granted the tools the stage's single-agent query
     // would be, out of the same SKILL.md (#2358).
-    const allowedTools = filterHeadlessTools(skill.allowedTools);
+    const allowedTools = filterHeadlessTools(skill.allowedTools, skill.skillPath);
     return {
       kind: "workflow",
       spec: allowedTools.length > 0 ? { ...spec, allowedTools } : spec,
@@ -804,17 +804,18 @@ export class PipelineOrchestrator {
    * tools leaves `allowedTools` unset, as the Go path leaves
    * RunOptions.AllowedTools empty. @see Issue #2358
    *
-   * That SKILL.md is the stage's base one. This path resolves no ADR-016
-   * overlay, so a whole-file override (`_overlays/<key>.SKILL.md`) replaces
-   * neither the prompt nor the tools here, where the Go render takes the
-   * override's tools (#2381).
+   * A skill whose tools are all ones a headless run cannot use is refused
+   * (#2390). When the dispatcher handed over its render
+   * (STAGE_SKILL_RENDER_ENV, #2381), the prompt and the tools are that
+   * render's, overlays and a whole-file override included; otherwise they are
+   * the base SKILL.md's.
    */
   private async stageSkill(
     stage: PipelineStage,
     issueNumber: number
   ): Promise<{ prompt: string; skillDir: string; allowedTools?: string[] }> {
     const skill = await loadStageSkill(stage, this.config.skillsPath);
-    const allowedTools = filterHeadlessTools(skill.allowedTools);
+    const allowedTools = filterHeadlessTools(skill.allowedTools, skill.skillPath);
     return {
       prompt: composeStagePrompt(skill, stage, issueNumber),
       skillDir: path.resolve(skill.skillDirectory),

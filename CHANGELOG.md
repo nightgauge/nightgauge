@@ -189,6 +189,35 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A headless run refuses a skill whose only tool is `AskUserQuestion`**
+  (#2390). Headless runs drop `AskUserQuestion`, and a skill left with no tool
+  then reached the adapter as one that declares none, which Codex runs with
+  full access: the skill that asked for the least ran with the sandbox
+  bypassed. Every headless dispatcher (the Go scheduler and refinement,
+  `nightgauge opencode`, the extension and the SDK) now fails such a skill
+  with an error naming its file. `nightgauge skill render --headless` reports
+  the tools a non-interactive run is granted and applies the same refusal. A
+  skill with no `allowed-tools` field keeps each runner's default.
+- **A non-Claude stage the extension runs gets its overlays and its injected
+  skill** (#2381). Every adapter but Claude runs as `nightgauge-sdk stage`,
+  which built the prompt from the base `SKILL.md`, so no ADR-016 overlay
+  (`hosts/opencode.md`, `hosts/grok.md`, the Grok model overlays), no
+  whole-file override and no platform-injected skill reached it, and it was
+  granted the base skill's tools. The extension now hands the stage the body
+  and tools it rendered for that stage, adapter and model (or the injected
+  skill) in a file named by `NIGHTGAUGE_STAGE_SKILL_RENDER`, and the SDK
+  prompts with that body and grants those tools.
+- **`ci-local.sh` no longer calls a real failure INFRASTRUCTURE because a PASS
+  line mentions `HARNESS ERROR`** (#2374). A step counted as "could not run"
+  when its log mentioned the phrase anywhere. Only a declaration counts now: a
+  line that starts, after its indent and an optional `✗`, with `HARNESS ERROR`
+  or `INFRASTRUCTURE failure|error`.
+- **Every IPC harness subtest fails itself, not its parent** (#2380). The
+  subtests that share their test's harness now call `h.bind(t)`, so a harness
+  read failure reports the harness's own message on the subtest instead of
+  "subtest may have called FailNow on a parent test". A test parses the
+  package's test files and fails on a harness subtest that does not bind.
+
 - **An issue the queue started automatically can be queued again once its run
   ends** (#2397). The main orchestrator's auto-start dequeues the next item,
   which marks it `processing` in the daemon's queue, and nothing released it:
@@ -973,6 +1002,18 @@ changelog, and the release workflow refuses a tag that does not.
   per run.
 
 ### Changed
+
+- **The signed-in platform canary targets production** (#2401). The project
+  keeps no hosted staging deployment, so `staging-platform-smoke.yml` had
+  nothing to run against. It is now `platform-smoke.yml`, dispatched after
+  each production deploy: `scripts/platform-smoke.sh` probes the public API
+  the daemon uses as a dedicated test account, whose session token the
+  maintainer provisions as the `PLATFORM_SMOKE_SESSION_TOKEN` secret, and
+  still fails when the token is missing. `STAGING_SESSION_TOKEN` and
+  `STAGING_PLATFORM_BASE_URL` are no longer read. Its mock-server suite,
+  `scripts/test-platform-smoke.sh`, now runs in `ci-local.sh` (its header
+  always said it did, #2404) on a port the kernel picks, so concurrent gates
+  do not collide. See [PLATFORM_SMOKE.md](docs/PLATFORM_SMOKE.md).
 
 - **A skill whose `allowed-tools` lists no tool is refused** (#2358).
   `nightgauge skill render` exits with an error that names the file, and the

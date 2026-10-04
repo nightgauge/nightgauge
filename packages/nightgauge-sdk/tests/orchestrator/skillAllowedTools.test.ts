@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   NO_ALLOWED_TOOLS,
+  NO_HEADLESS_TOOLS,
   filterHeadlessTools,
   skillAllowedTools,
   skillFrontmatterTools,
@@ -24,6 +25,8 @@ interface AllowedToolsCase {
   headless?: string[];
   /** A skill whose allowed-tools field is there but lists no tool: refused. */
   refused?: boolean;
+  /** A skill that declares tools but none a headless run can use (#2390). */
+  headless_refused?: boolean;
   /** Checked only where a case has them, as the Go suite does. */
   mcp?: string[];
   programmatic?: string[];
@@ -48,7 +51,13 @@ describe("skillAllowedTools — the Go side's grammar (#2358)", () => {
     }
     const declared = skillAllowedTools(c.skill);
     expect(declared).toEqual(c.declared);
-    expect(filterHeadlessTools(declared)).toEqual(c.headless);
+    if (c.headless_refused) {
+      expect(() => filterHeadlessTools(declared, "/s/SKILL.md")).toThrow(
+        `/s/SKILL.md: ${NO_HEADLESS_TOOLS}`
+      );
+    } else {
+      expect(filterHeadlessTools(declared, "/s/SKILL.md")).toEqual(c.headless);
+    }
     if (c.mcp !== undefined) {
       expect(skillFrontmatterTools(c.skill, "mcp-tools")).toEqual(c.mcp);
     }

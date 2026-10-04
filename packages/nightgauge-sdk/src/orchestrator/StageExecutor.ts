@@ -377,12 +377,83 @@ export interface LoadedStageSkill {
   /** Absolute or resolved directory containing the selected SKILL.md. */
   skillDirectory: string;
   /**
+   * The file the tools came from: the SKILL.md read, or the one the
+   * dispatcher's render took them from (a whole-file override). A refusal
+   * names it.
+   */
+  skillPath: string;
+  /**
    * The tools the content's `allowed-tools` frontmatter declares, verbatim
    * (skillAllowedTools). A headless caller drops what it cannot use with
    * filterHeadlessTools. A field that lists no tool fails the load, naming the
    * file. @see Issue #2358
    */
   allowedTools: string[];
+  /**
+   * The skill body `nightgauge skill render` composed for this stage, adapter
+   * and model, or the platform-injected one, when the dispatcher handed it over
+   * through {@link STAGE_SKILL_RENDER_ENV} (#2381). Overlays are applied,
+   * includes expanded and skill-relative paths already absolute, so
+   * {@link composeStagePrompt} uses it verbatim instead of `skillContent`.
+   */
+  renderedBody?: string;
+}
+
+/**
+ * The environment variable naming the JSON file in which a dispatcher hands
+ * `nightgauge-sdk stage` the skill it composed for the stage (#2381). The VS
+ * Code extension writes it for every non-Claude stage: without it the SDK
+ * would prompt from the base SKILL.md, so no ADR-016 overlay, whole-file
+ * override or platform-injected skill would reach the stage.
+ */
+export const STAGE_SKILL_RENDER_ENV = "NIGHTGAUGE_STAGE_SKILL_RENDER";
+
+/** The file {@link STAGE_SKILL_RENDER_ENV} names. */
+export interface StageSkillRender {
+  /** The stage the render is for; a mismatch refuses the load. */
+  stage: string;
+  /** The file the render's tools came from. */
+  skill_path: string;
+  /** The composed skill body, frontmatter stripped, paths absolute. */
+  content: string;
+  /**
+   * The allowed-tools the skill declares, as a headless run is granted them.
+   * Empty or absent: the skill declares none, so each runner keeps its default.
+   */
+  allowed_tools?: string[];
+}
+
+/** Read and check the render a dispatcher handed over at `file` (#2381). */
+async function readStageSkillRender(
+  file: string,
+  stage: PipelineStage
+): Promise<Required<StageSkillRender>> {
+  let render: Partial<StageSkillRender>;
+  try {
+    render = JSON.parse(await readFile(file, "utf-8")) as Partial<StageSkillRender>;
+  } catch (error) {
+    throw new Error(`${STAGE_SKILL_RENDER_ENV}=${file}: unreadable skill render`, {
+      cause: error,
+    });
+  }
+  if (render.stage !== stage) {
+    throw new Error(
+      `${STAGE_SKILL_RENDER_ENV}=${file}: the render is for stage ${String(render.stage)}, not ${stage}`
+    );
+  }
+  if (typeof render.content !== "string" || typeof render.skill_path !== "string") {
+    throw new Error(`${STAGE_SKILL_RENDER_ENV}=${file}: the render carries no skill`);
+  }
+  const tools: unknown = render.allowed_tools ?? [];
+  if (!Array.isArray(tools) || tools.some((tool) => typeof tool !== "string")) {
+    throw new Error(`${STAGE_SKILL_RENDER_ENV}=${file}: allowed_tools is not a list of tools`);
+  }
+  return {
+    stage,
+    skill_path: render.skill_path,
+    content: render.content,
+    allowed_tools: tools as string[],
+  };
 }
 
 /**
@@ -441,10 +512,30 @@ export async function loadStageSkill(
   }
 
   const skillContent = await readFile(skillPath, "utf-8");
+  const skillDirectory = path.dirname(skillPath);
+
+  // A dispatcher that composed the skill hands the composition over (#2381):
+  // its body is the prompt and its tools the grant. The SKILL.md on disk is
+  // still read for what the render does not carry, the frontmatter's
+  // `orchestration:` block (PipelineOrchestrator.selectExecutor).
+  const renderFile = process.env[STAGE_SKILL_RENDER_ENV];
+  if (renderFile) {
+    const render = await readStageSkillRender(renderFile, stage);
+    return {
+      skillContent,
+      logicalSkillPath,
+      skillDirectory,
+      skillPath: render.skill_path,
+      allowedTools: render.allowed_tools,
+      renderedBody: render.content,
+    };
+  }
+
   return {
     skillContent,
     logicalSkillPath,
-    skillDirectory: path.dirname(skillPath),
+    skillDirectory,
+    skillPath,
     allowedTools: skillFileAllowedTools(skillContent, skillPath),
   };
 }
@@ -506,8 +597,11 @@ export function composeStagePrompt(
   stage: PipelineStage,
   issueNumber: number
 ): string {
-  const { skillContent, logicalSkillPath, skillDirectory } = skill;
-  const resolvedSkillContent = rewriteStageSkillPaths(skillContent, stage, skillDirectory);
+  const { skillContent, logicalSkillPath, skillDirectory, renderedBody } = skill;
+  // A dispatcher's render already has absolute paths; rewriting it again would
+  // expand them twice (#2381).
+  const resolvedSkillContent =
+    renderedBody ?? rewriteStageSkillPaths(skillContent, stage, skillDirectory);
   const invocationLines: string[] = [
     "Execution mode: non-interactive headless stage execution.",
     `Equivalent slash command arguments: $ARGUMENTS="${issueNumber}".`,

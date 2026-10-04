@@ -8382,6 +8382,7 @@ func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumbe
 		Model:       model,
 		Adapter:     adapterName,
 		SkillsRoots: refineSkillRoots(as.workspaceRoot),
+		Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 		Warn:        func(msg string) { log.Printf("[refinement] %s", msg) },
 	})
 	if err != nil {
@@ -8403,7 +8404,7 @@ func (as *AutonomousScheduler) refineStageOptions(owner, repo string, issueNumbe
 		// AllowedTools through to the adapter. A roots-only fix would move the
 		// failure from "skill not found" to "spawns and does nothing", which
 		// is strictly harder to detect.
-		AllowedTools: skillrender.FilterHeadlessTools(rendered.AllowedTools),
+		AllowedTools: rendered.AllowedTools, // Headless: the tools a headless run is granted
 		Prompt: execution.BuildPrompt(
 			state.StageIssueRefine,
 			rendered.Content,

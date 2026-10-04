@@ -32,6 +32,14 @@ and this project adheres to
 
 ### Fixed
 
+- **A stage on Codex, OpenCode, Grok, Gemini or Copilot runs the skill composed
+  for it.** It used to be prompted with the base skill, so the adaptations for
+  its host and model, and a skill the platform resolved, never reached it, and
+  it was granted the base skill's tools. It now gets the same render a Claude
+  stage gets, or the platform's skill, and that skill's tools (#2381).
+- **A stage whose skill only asks questions is refused with a message naming
+  the skill**, instead of running with no tool restriction under Codex (#2390).
+
 - **An issue the queue started on its own can be queued again after its run.**
   It stayed marked as processing until the window reloaded, so adding it again,
   **Remove from Queue** and a remote trigger for it were all refused. Stopping

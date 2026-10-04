@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Staging platform smoke — calls every platform-backed surface against a real
-# deployment with a real signed-in credential and asserts on status codes
-# plus the Health response's live PipelineHealthScore keys. A 200 whose body
-# is the wrong contract still blanks the VSCode Health tab.
+# Platform smoke — calls every platform-backed surface against the production
+# platform API with a dedicated test account's signed-in credential and asserts
+# on status codes plus the Health response's live PipelineHealthScore keys. A
+# 200 whose body is the wrong contract still blanks the VSCode Health tab. It is
+# dispatched after each production deploy (.github/workflows/platform-smoke.yml);
+# the project keeps no hosted pre-production deployment (#2401).
 #
 # Why this exists (nightgauge/nightgauge#754, part of epic #741): every other
 # test tier for the platform integration runs against a stub, and stubs only
@@ -20,46 +22,46 @@
 # credential shape the daemon forwards.
 #
 # Required environment:
-#   STAGING_PLATFORM_BASE_URL  Base URL of the staging platform API
-#                               (e.g. https://staging-api.nightgauge.dev).
-#   STAGING_SESSION_TOKEN      A signed-in session JWT for a DEDICATED staging
-#                               test account. Never a personal credential.
+#   PLATFORM_SMOKE_SESSION_TOKEN  A signed-in session JWT for a DEDICATED test
+#                                  account. Never a personal credential.
 #
-# A missing value for either fails the job immediately (exit 1) — it does not
-# skip. A silently skipped canary reads as green, which is worse than none
-# (see #732, #744: tests that "passed" by never running).
+# A missing token fails the job immediately (exit 1) — it does not skip. A
+# silently skipped canary reads as green, which is worse than none (see #732,
+# #744: tests that "passed" by never running).
 #
 # Optional environment:
-#   STAGING_SMOKE_MACHINE_ID   machine_id used for agent registration.
-#                               Default: ci-staging-smoke. Registration upserts
+#   PLATFORM_SMOKE_BASE_URL    Base URL of the platform API. Default: the public
+#                               API the daemon uses (internal/platform/client.go
+#                               DefaultConfig). Set it to probe a local stack.
+#   PLATFORM_SMOKE_MACHINE_ID  machine_id used for agent registration.
+#                               Default: ci-platform-smoke. Registration upserts
 #                               by machine_id, so reusing the same id across
 #                               runs is idempotent (re-register = revival),
 #                               not a growing pile of agent rows.
 #
-# The dedicated staging account MUST be on a plan tier that has access to
+# The dedicated test account MUST be on a plan tier that has access to
 # EVERY surface under test. Two routes — GET /v1/audit/retention and
 # POST /v1/audit/integrity — are intentionally enterprise-plan-gated on
 # the platform (see internal/platform/audit_retention.go: both return 403 with
 # "enterprise only" for a non-enterprise account, by product design, not by
 # bug). This script does not special-case that 403 away, on purpose: the whole
 # point of this canary is that a 401/403 is never something to route around
-# silently. If the staging account is not on an enterprise plan, provision one
+# silently. If the test account is not on an enterprise plan, provision one
 # that is, or those two rows will legitimately and correctly fail every run.
 #
 # Exit code: 0 only if every endpoint returned a 2xx. Non-zero otherwise.
 set -uo pipefail
 
-BASE_URL="${STAGING_PLATFORM_BASE_URL:-}"
-TOKEN="${STAGING_SESSION_TOKEN:-}"
-MACHINE_ID="${STAGING_SMOKE_MACHINE_ID:-ci-staging-smoke}"
+BASE_URL="${PLATFORM_SMOKE_BASE_URL:-https://api.nightgauge.dev}"
+TOKEN="${PLATFORM_SMOKE_SESSION_TOKEN:-}"
+MACHINE_ID="${PLATFORM_SMOKE_MACHINE_ID:-ci-platform-smoke}"
 
 fail_missing() {
   echo "::error::$1 is not set. This job MUST fail rather than skip when a required credential is missing." >&2
   exit 1
 }
 
-[ -n "$BASE_URL" ] || fail_missing "STAGING_PLATFORM_BASE_URL"
-[ -n "$TOKEN" ] || fail_missing "STAGING_SESSION_TOKEN"
+[ -n "$TOKEN" ] || fail_missing "PLATFORM_SMOKE_SESSION_TOKEN"
 
 # Mask immediately, before the token is used anywhere, so GitHub Actions
 # redacts every subsequent occurrence of it in the log stream. This is
@@ -192,7 +194,7 @@ record_skipped() {
   echo "::error::${label} (${endpoint}) — ${reason}"
 }
 
-echo "Staging platform smoke — target: ${BASE_URL}"
+echo "Platform smoke — target: ${BASE_URL}"
 echo ""
 
 # --- Agent registration + heartbeat -----------------------------------------
@@ -267,8 +269,8 @@ call GET "/v1/audit/retention" "Audit log retention config"
 # The Retention & Integrity panel's verify buttons. Until #822 this probe sent
 # {windowDays: 30} to /v1/audit/integrity/verify — a path the platform has never
 # mounted, with a body its schema has never accepted. Neither could ever have
-# returned a useful 2xx; it went unnoticed because this workflow has never run
-# against a real staging deployment. Send what the client sends: the mounted
+# returned a useful 2xx; it went unnoticed because this workflow had never run
+# against a real deployment. Send what the client sends: the mounted
 # path, and the RFC 3339 bounds VerifyIntegritySchema requires.
 INTEGRITY_START="$(date -u -v-30d '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -d '30 days ago' '+%Y-%m-%dT%H:%M:%SZ')"
 INTEGRITY_END="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -300,7 +302,7 @@ echo "=== Results ==="
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
-    echo "### Staging platform smoke"
+    echo "### Platform smoke"
     echo ""
     echo "Target: \`${BASE_URL}\`"
     echo ""

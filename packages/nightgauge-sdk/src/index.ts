@@ -41,9 +41,11 @@ export {
   buildStagePrompt,
   composeStagePrompt,
   loadStageSkill,
+  STAGE_SKILL_RENDER_ENV,
   StageTimeoutError,
   type StageExecutorOptions,
   type LoadedStageSkill,
+  type StageSkillRender,
   type SDKMessage,
   type SDKQueryFunction,
   type SDKQueryOptions,
@@ -55,6 +57,7 @@ export {
   skillFrontmatterTools,
   splitAllowedTools,
   filterHeadlessTools,
+  NO_HEADLESS_TOOLS,
   type SkillToolField,
 } from "./orchestrator/skillAllowedTools.js";
 

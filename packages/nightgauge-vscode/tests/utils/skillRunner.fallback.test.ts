@@ -37,6 +37,9 @@ vi.mock("vscode", () => ({
 vi.mock("fs", () => ({
   existsSync: vi.fn(),
   readFileSync: vi.fn(),
+  // A non-Claude stage is handed its rendered skill in a file (#2381).
+  writeFileSync: vi.fn(),
+  rmSync: vi.fn(),
 }));
 
 vi.mock("child_process", async () => {

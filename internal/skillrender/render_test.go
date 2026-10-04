@@ -2,6 +2,7 @@ package skillrender
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,10 +76,10 @@ Do the thing.
 
 func TestFilterHeadlessToolsDropsOnlyAskUserQuestion(t *testing.T) {
 	// The headless callers apply this; the interactive ones deliberately do not.
-	got := FilterHeadlessTools([]string{"Read", "AskUserQuestion", "Bash", "Task"})
+	got, err := FilterHeadlessTools([]string{"Read", "AskUserQuestion", "Bash", "Task"})
 	want := []string{"Read", "Bash", "Task"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("FilterHeadlessTools = %v, want %v", got, want)
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("FilterHeadlessTools = %v, %v; want %v", got, err, want)
 	}
 
 	// Nothing to filter is the ordinary case — every shipped stage skill
@@ -86,11 +87,51 @@ func TestFilterHeadlessToolsDropsOnlyAskUserQuestion(t *testing.T) {
 	// empty input must not become a non-nil empty slice that reads as "the
 	// skill declared zero tools" instead of "declared none".
 	unchanged := []string{"Read", "Bash"}
-	if got := FilterHeadlessTools(unchanged); !reflect.DeepEqual(got, unchanged) {
-		t.Errorf("FilterHeadlessTools(%v) = %v, want unchanged", unchanged, got)
+	if got, err := FilterHeadlessTools(unchanged); err != nil || !reflect.DeepEqual(got, unchanged) {
+		t.Errorf("FilterHeadlessTools(%v) = %v, %v; want unchanged", unchanged, got, err)
 	}
-	if got := FilterHeadlessTools(nil); got != nil {
-		t.Errorf("FilterHeadlessTools(nil) = %v, want nil", got)
+	if got, err := FilterHeadlessTools(nil); err != nil || got != nil {
+		t.Errorf("FilterHeadlessTools(nil) = %v, %v; want nil", got, err)
+	}
+}
+
+// TestHeadlessRenderRefusesASkillLeftWithNoTool pins #2390 through the public
+// Render every Go headless dispatcher calls. A skill whose only tool is
+// AskUserQuestion used to reach the adapter with no tools, which Codex maps to
+// full access; a headless render now refuses it, naming the file, whether the
+// tools come from the base SKILL.md or a whole-file override. The interactive
+// render still reads it, and a skill with no allowed-tools field keeps each
+// runner's default (no tools, no refusal).
+func TestHeadlessRenderRefusesASkillLeftWithNoTool(t *testing.T) {
+	const askOnly = "---\nname: s\nallowed-tools: AskUserQuestion\n---\n\n# Body\n"
+
+	root := t.TempDir()
+	writeSkill(t, root, "nightgauge-feature-dev", askOnly)
+	skillPath := filepath.Join(root, "nightgauge-feature-dev", "SKILL.md")
+	_, err := Render(Options{Stage: "feature-dev", SkillsRoots: []string{root}, Headless: true})
+	if !errors.Is(err, ErrNoHeadlessTools) || !strings.Contains(err.Error(), skillPath) {
+		t.Errorf("headless render err = %v, want ErrNoHeadlessTools naming %s", err, skillPath)
+	}
+	res := mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{root}})
+	if want := []string{"AskUserQuestion"}; !reflect.DeepEqual(res.AllowedTools, want) {
+		t.Errorf("interactive AllowedTools = %v, want %v", res.AllowedTools, want)
+	}
+
+	// A whole-file override's tools are the ones refused, and its path named.
+	overrideRoot := overlayFixture(t, nil, nil, "")
+	override := filepath.Join(overrideRoot, "nightgauge-feature-dev", "_overlays", "claude-opus-5.SKILL.md")
+	write(t, override, askOnly)
+	_, err = Render(Options{Stage: "feature-dev", Model: "claude-opus-5", SkillsRoots: []string{overrideRoot}, Headless: true})
+	if !errors.Is(err, ErrNoHeadlessTools) || !strings.Contains(err.Error(), override) {
+		t.Errorf("headless override render err = %v, want ErrNoHeadlessTools naming %s", err, override)
+	}
+
+	// No field: no tools and no refusal, so each runner keeps its default.
+	noField := t.TempDir()
+	writeSkill(t, noField, "nightgauge-feature-dev", "---\nname: s\n---\n\n# Body\n")
+	res = mustRender(t, Options{Stage: "feature-dev", SkillsRoots: []string{noField}, Headless: true})
+	if len(res.AllowedTools) != 0 {
+		t.Errorf("no-field headless AllowedTools = %v, want none", res.AllowedTools)
 	}
 }
 

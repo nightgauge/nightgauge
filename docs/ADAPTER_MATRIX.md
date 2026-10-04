@@ -326,13 +326,14 @@ Error message: `codex CLI is not authenticated. Run 'codex login' to authenticat
 - **Sandbox scoping from allowed-tools (#4026):** Codex has no per-tool allowlist
   flag, so the skill's `allowed-tools` are mapped onto Codex's sandbox mode +
   approval policy (`resolveCodexSandboxMode` in `codexSandbox.ts` / `codex_sandbox.go`,
-  single source of truth shared by both spawn paths). On the SDK path the tools
-  are the stage's base SKILL.md's, which `PipelineOrchestrator` reads as the Go side
-  does and hands to the stage's query and to each fanned-out unit's (#2358). Before
-  #2358 they never reached a query, so every SDK-path stage ran with full access
-  whatever its skill declared. The SDK path applies no skill overlay, so a whole-file
-  override (`_overlays/<key>.SKILL.md`) that narrows a stage's tools narrows them on
-  the Go path only (#2381). The mapping only ever
+  single source of truth shared by both spawn paths). On the SDK path
+  `PipelineOrchestrator` hands the tools to the stage's query and to each fanned-out
+  unit's (#2358). When the VS Code extension dispatches the stage it hands
+  `nightgauge-sdk stage` the render it composed (`NIGHTGAUGE_STAGE_SKILL_RENDER`, a
+  JSON file of the body and the headless tools), so the tools are those of
+  `nightgauge skill render --headless` for the stage, adapter and model, a whole-file
+  override's included, or of a platform-injected skill (#2381). Without that file
+  (`nightgauge-sdk stage` run by hand) they are the base SKILL.md's. The mapping only ever
   TIGHTENS with positive evidence — default is full access so autonomous runs are
   never locked out:
 
@@ -347,10 +348,15 @@ Error message: `codex CLI is not authenticated. Run 'codex login' to authenticat
   | `-c sandbox_mode="<mode>"` (#2342).                                       |
 
   Both paths map the tools a headless run is granted, so `AskUserQuestion` is dropped
-  first: a skill whose only declared tool is `AskUserQuestion` grants none and runs with
-  full access, while one that declares `Read AskUserQuestion` runs read-only. A skill whose
-  `allowed-tools` field is there but lists no tool never reaches Codex: both paths refuse
-  it (#2358).
+  first: one that declares `Read AskUserQuestion` runs read-only. A skill whose only
+  declared tool is `AskUserQuestion` never reaches Codex: every headless dispatcher (the
+  Go scheduler, `nightgauge opencode`, the extension and the SDK) refuses it with an
+  error that names the file, because filtered to nothing it would read as a skill that
+  declares none and run with full access (#2390). Refusing, rather than running it
+  read-only, is the same answer on every adapter: such a skill can only ask a user, and
+  a headless run has none. A skill whose `allowed-tools` field is there but lists no
+  tool is refused as well (#2358). A skill with no `allowed-tools` field keeps each
+  runner's default, full access under Codex.
 
 - **Model routing:** `NIGHTGAUGE_CODEX_MODEL` env var → `--model <value>`
 

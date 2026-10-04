@@ -140,7 +140,7 @@ Flag any rail whose type cannot represent "unset".
 | --- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | D1  | Clean-install gate walked end to end | the latest `clean-install-e2e.yml` run (or `scripts/clean-install-e2e.sh` log) and the checklist's _Automated_ section | a PASS summary table with a MERGED PR, plus the checklist recording it |
 | D2  | Publish path exercised               | `gh run list` for the release workflow                                                                                 | it has run at least once                                               |
-| D3  | Integration contract observed green  | the platform/staging smoke workflow                                                                                    | ≥1 success                                                             |
+| D3  | Integration contract observed green  | the `platform-smoke.yml` workflow                                                                                      | ≥1 success                                                             |
 | D4  | Dead-surface discovery has flattened | new-capability vs deletion ratio over recent PRs touching the surface                                                  | deletions no longer dominate                                           |
 
 **D4 is the honest maturity signal** and the one most often skipped because it

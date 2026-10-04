@@ -277,7 +277,7 @@ func openCodeConfigForStage(ctx context.Context, f openCodeConfigFlags) (*adapte
 // openCodeVerbStageTools resolves stage's AllowedTools and SkillPath the way
 // the Go pipeline resolves them for a real dispatch (internal/orchestrator/
 // scheduler.go: skillrender.Render against skillrender.DefaultRoots(workspaceRoot),
-// AllowedTools filtered through skillrender.FilterHeadlessTools) — the
+// with Headless set, so AllowedTools is what a headless run is granted) — the
 // permission map's every read/edit/bash key and its NIGHTGAUGE_SKILL_DIR
 // allow-list entry come from exactly these two fields (openCodePermissionMap,
 // #1638), so leaving them unset here, as this verb always did before this fix
@@ -315,6 +315,7 @@ func openCodeVerbStageTools(stage, skillsRoot string) (allowedTools []string, sk
 		Stage:       stage,
 		Adapter:     "opencode",
 		SkillsRoots: skillrender.DefaultRoots(root),
+		Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 	})
 	if err != nil {
 		if skillsRoot != "" {
@@ -323,7 +324,7 @@ func openCodeVerbStageTools(stage, skillsRoot string) (allowedTools []string, sk
 		fmt.Fprintf(os.Stderr, "[opencode] could not resolve %s's SKILL.md under %q (pass --skills-root, or run from the nightgauge checkout, to fix this): %v; printing the config with every permission key denied\n", stage, root, err)
 		return nil, "", nil
 	}
-	return skillrender.FilterHeadlessTools(skillData.AllowedTools), skillData.SkillPath, nil
+	return skillData.AllowedTools, skillData.SkillPath, nil
 }
 
 // opencodeCleanupCmd deletes one run's OpenCode per-run root, the SDK path's

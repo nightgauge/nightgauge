@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Regression tests for scripts/staging-platform-smoke.sh.
+# Regression tests for scripts/platform-smoke.sh.
 #
 # Runs the WORKING-TREE copy of the script against a small stdlib-only Python
-# mock server (no live network, no real staging credential — see the caution
+# mock server (no live network, no real credential — see the caution
 # in nightgauge/nightgauge#754: this suite proves the script's own logic, not
-# that staging itself is healthy; that only a real dispatch can prove).
+# that the platform itself is healthy; that only a real dispatch can prove).
 #
 # Covers:
 #   1. All-green run: every mocked endpoint returns 2xx -> exit 0.
@@ -15,12 +15,12 @@
 #   4. No credential value ever appears in the script's stdout, stderr, or
 #      $GITHUB_STEP_SUMMARY output, across a normal run.
 #
-# Run: bash scripts/test-staging-platform-smoke.sh
+# Run: bash scripts/test-platform-smoke.sh
 # Also run by scripts/ci-local.sh.
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-SCRIPT="$PWD/scripts/staging-platform-smoke.sh"
+SCRIPT="$PWD/scripts/platform-smoke.sh"
 PASS=0
 FAIL=0
 TMP=""
@@ -69,7 +69,7 @@ import json
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-config_path, port, log_path = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+config_path, port_path, log_path = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(config_path) as f:
     routes = json.load(f)
 
@@ -108,11 +108,20 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # silence default access logging on stderr
 
-HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+# Port 0: the kernel picks a free port, so concurrent gates never collide on
+# one. The chosen port is published through port_path once the socket listens.
+server = HTTPServer(("127.0.0.1", 0), Handler)
+with open(port_path + ".tmp", "w") as pf:
+    pf.write(str(server.server_address[1]))
+import os
+os.replace(port_path + ".tmp", port_path)
+server.serve_forever()
 PYEOF
 
-FAKE_TOKEN="sk-STAGING-TEST-TOKEN-DO-NOT-LEAK-7f3a9c21"
-PORT=18734
+FAKE_TOKEN="sk-SMOKE-TEST-TOKEN-DO-NOT-LEAK-7f3a9c21"
+# Set by start_server to the port the mock server bound. Before the first
+# start it names no server: the scenarios that use it then make no request.
+PORT=0
 
 all_green_routes() {
   cat <<EOF
@@ -137,15 +146,20 @@ start_server() {
   local routes_file="$TMP/routes.json"
   printf '%s' "$routes_json" > "$routes_file"
   : > "$TMP/server.log"
-  python3 "$MOCK_SERVER" "$routes_file" "$PORT" "$TMP/server.log" &
+  rm -f "$TMP/port"
+  python3 "$MOCK_SERVER" "$routes_file" "$TMP/port" "$TMP/server.log" &
   SERVER_PID=$!
-  for _ in $(seq 1 30); do
-    if curl -sf "http://127.0.0.1:${PORT}/v1/health" >/dev/null 2>&1; then
-      break
-    fi
-    # /v1/health is unmapped in routes -> mock returns 200 {} once serving.
+  for _ in $(seq 1 50); do
+    [ -s "$TMP/port" ] && break
     sleep 0.1
   done
+  if [ ! -s "$TMP/port" ]; then
+    # The arms below would assert against no server: say the suite could not
+    # run rather than report their failures as the script's.
+    echo "HARNESS ERROR: the mock server did not start" >&2
+    exit 2
+  fi
+  PORT="$(cat "$TMP/port")"
 }
 
 stop_server() {
@@ -165,8 +179,8 @@ start_server "$(all_green_routes)"
 OUT="$TMP/scenario1.out"
 SUMMARY="$TMP/scenario1.summary"
 : > "$SUMMARY"
-STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
-STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="$FAKE_TOKEN" \
 GITHUB_STEP_SUMMARY="$SUMMARY" \
   bash "$SCRIPT" > "$OUT" 2>&1
 RC=$?
@@ -192,8 +206,8 @@ start_server "$ROUTES_401"
 OUT="$TMP/scenario2.out"
 SUMMARY="$TMP/scenario2.summary"
 : > "$SUMMARY"
-STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
-STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="$FAKE_TOKEN" \
 GITHUB_STEP_SUMMARY="$SUMMARY" \
   bash "$SCRIPT" > "$OUT" 2>&1
 RC=$?
@@ -207,21 +221,26 @@ stop_server
 
 # --- Scenario 3: missing credential fails, does not skip, calls nothing ----
 OUT="$TMP/scenario3.out"
-STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
-STAGING_SESSION_TOKEN="" \
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="" \
   bash "$SCRIPT" > "$OUT" 2>&1
 RC=$?
-check "missing STAGING_SESSION_TOKEN exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "missing PLATFORM_SMOKE_SESSION_TOKEN exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
 check "missing-credential message says it must fail, not skip" "$(contains "$OUT" "MUST fail rather than skip" && echo 0 || echo 1)"
 check "missing-credential message does not use the word skip approvingly" "$(not_contains "$OUT" "skipping" && echo 0 || echo 1)"
 
+# No base URL means the public API the daemon uses, not a failure (#2401): the
+# token is still required, and its absence still fails before any request.
 OUT2="$TMP/scenario3b.out"
-STAGING_PLATFORM_BASE_URL="" \
-STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+env -u PLATFORM_SMOKE_BASE_URL PLATFORM_SMOKE_SESSION_TOKEN="" \
   bash "$SCRIPT" > "$OUT2" 2>&1
 RC2=$?
-check "missing STAGING_PLATFORM_BASE_URL exits non-zero" "$([ "$RC2" -ne 0 ] && echo 0 || echo 1)"
-check "missing-base-url message says it must fail, not skip" "$(contains "$OUT2" "MUST fail rather than skip" && echo 0 || echo 1)"
+check "no base URL and no token still exits non-zero" "$([ "$RC2" -ne 0 ] && echo 0 || echo 1)"
+check "the no-token message names only the token" \
+  "$(contains "$OUT2" "PLATFORM_SMOKE_SESSION_TOKEN is not set" && not_contains "$OUT2" "BASE_URL" && echo 0 || echo 1)"
+check "the default target is the public API the daemon uses" \
+  "$(grep -qF 'PLATFORM_SMOKE_BASE_URL:-https://api.nightgauge.dev}' "$SCRIPT" \
+    && grep -qF 'BaseURL:      "https://api.nightgauge.dev"' internal/platform/client.go && echo 0 || echo 1)"
 
 # --- Scenario 4: the credential never appears in any output ----------------
 start_server "$(all_green_routes)"
@@ -229,8 +248,8 @@ start_server "$(all_green_routes)"
 OUT="$TMP/scenario4.out"
 SUMMARY="$TMP/scenario4.summary"
 : > "$SUMMARY"
-STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
-STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="$FAKE_TOKEN" \
 GITHUB_STEP_SUMMARY="$SUMMARY" \
   bash "$SCRIPT" > "$OUT" 2>&1
 
@@ -267,8 +286,8 @@ start_server "$ROUTES_SHAPE"
 OUT="$TMP/scenario5.out"
 SUMMARY="$TMP/scenario5.summary"
 : > "$SUMMARY"
-STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
-STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="$FAKE_TOKEN" \
 GITHUB_STEP_SUMMARY="$SUMMARY" \
   bash "$SCRIPT" > "$OUT" 2>&1
 RC=$?
@@ -305,8 +324,8 @@ start_server "$ROUTES_RUNS_SPEC"
 OUT="$TMP/scenario6.out"
 SUMMARY="$TMP/scenario6.summary"
 : > "$SUMMARY"
-STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
-STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="$FAKE_TOKEN" \
 GITHUB_STEP_SUMMARY="$SUMMARY" \
   bash "$SCRIPT" > "$OUT" 2>&1
 RC=$?
@@ -333,8 +352,8 @@ start_server "$ROUTES_TRENDS_BAD"
 OUT="$TMP/scenario7.out"
 SUMMARY="$TMP/scenario7.summary"
 : > "$SUMMARY"
-STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
-STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="$FAKE_TOKEN" \
 GITHUB_STEP_SUMMARY="$SUMMARY" \
   bash "$SCRIPT" > "$OUT" 2>&1
 RC=$?
@@ -365,8 +384,8 @@ start_server "$ROUTES_REPORTS_BAD"
 OUT="$TMP/scenario8.out"
 SUMMARY="$TMP/scenario8.summary"
 : > "$SUMMARY"
-STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
-STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="$FAKE_TOKEN" \
 GITHUB_STEP_SUMMARY="$SUMMARY" \
   bash "$SCRIPT" > "$OUT" 2>&1
 RC=$?
@@ -400,8 +419,8 @@ start_server "$ROUTES_INTEGRITY_BAD"
 OUT="$TMP/scenario9.out"
 SUMMARY="$TMP/scenario9.summary"
 : > "$SUMMARY"
-STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
-STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="$FAKE_TOKEN" \
 GITHUB_STEP_SUMMARY="$SUMMARY" \
   bash "$SCRIPT" > "$OUT" 2>&1
 RC=$?
@@ -429,8 +448,8 @@ start_server "$ROUTES_NO_VERIFY_ALIAS"
 OUT="$TMP/scenario10.out"
 SUMMARY="$TMP/scenario10.summary"
 : > "$SUMMARY"
-STAGING_PLATFORM_BASE_URL="http://127.0.0.1:${PORT}" \
-STAGING_SESSION_TOKEN="$FAKE_TOKEN" \
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="$FAKE_TOKEN" \
 GITHUB_STEP_SUMMARY="$SUMMARY" \
   bash "$SCRIPT" > "$OUT" 2>&1
 RC=$?
@@ -439,21 +458,17 @@ check "the integrity row names every key the empty body is missing" "$(contains 
 
 stop_server
 
-# --- Scenario 11: the workflow has no `schedule:` trigger (#1087) -----------
+# --- Scenario 11: the workflow is dispatch-only and targets production -----
 # The daily cron failed 9/9 scheduled runs (08-20..08-28) at the credential
-# guard, because neither vars.STAGING_PLATFORM_BASE_URL nor
-# secrets.STAGING_SESSION_TOKEN is provisioned on this repository. A scheduled
-# run attaches its check-run to `main`'s HEAD, so it also made the post-merge
-# `check-runs` query AGENTS.md mandates report a failure against unrelated
-# merges.
+# guard while no credential was provisioned, and a scheduled run attaches its
+# check-run to `main`'s HEAD, so it also made the post-merge `check-runs` query
+# AGENTS.md mandates report a failure against unrelated merges (#1087). The
+# canary is dispatched after each production deploy instead (#2401).
 #
 # This asserts the trigger set directly, on the parsed YAML rather than on a
-# grep of the file (the re-enable instructions live in a COMMENT that contains
-# the word `schedule`, and a grep cannot tell a comment from a trigger). It is
-# deliberately NOT an assertion about the guard: scenario 3 above still proves
-# the job fails rather than skips on a missing credential, and that behaviour is
-# unchanged. Re-adding the cron makes this go red.
-WF=".github/workflows/staging-platform-smoke.yml"
+# grep of the file, which cannot tell a comment from a trigger. Scenario 3
+# above proves the job fails rather than skips on a missing credential.
+WF=".github/workflows/platform-smoke.yml"
 TRIGGERS="$(python3 - "$WF" <<'PYEOF'
 import sys, json
 
@@ -480,8 +495,11 @@ check "the smoke workflow still has a workflow_dispatch trigger" \
   "$(grep -qw workflow_dispatch <<<"$TRIGGERS" && echo 0 || echo 1)"
 check "the smoke workflow has NO schedule trigger (#1087)" \
   "$(grep -qw schedule <<<"$TRIGGERS" && echo 1 || echo 0)"
-check "the removed schedule says what re-enables it" \
-  "$(contains "$WF" "RE-ENABLE by restoring the block below" && echo 0 || echo 1)"
+# shellcheck disable=SC2016 # a literal GitHub expression, not a shell one
+check "the workflow passes the production test account's token" \
+  "$(contains "$WF" 'PLATFORM_SMOKE_SESSION_TOKEN: ${{ secrets.PLATFORM_SMOKE_SESSION_TOKEN }}' && echo 0 || echo 1)"
+check "the workflow targets no other deployment (#2401)" \
+  "$(grep -qi 'staging' "$WF" && echo 1 || echo 0)"
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="
