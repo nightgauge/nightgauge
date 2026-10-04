@@ -19,6 +19,10 @@ import type { Logger } from "../utils/logger";
  *
  * Stops a single concurrent pipeline slot. Called from the inline action
  * on ConcurrentSlotTreeItem (contextValue = concurrentSlot.running).
+ *
+ * The slot is named by repository and number (`item.repo`, `owner/name`):
+ * two repositories' issues with one number can run at once, and only the
+ * named one stops (#2403).
  */
 export function registerStopSlotCommand(
   logger: Logger,
@@ -26,7 +30,7 @@ export function registerStopSlotCommand(
 ): vscode.Disposable {
   return vscode.commands.registerCommand(
     "nightgauge.stopSlot",
-    async (item?: { issueNumber?: number }) => {
+    async (item?: { issueNumber?: number; repo?: string }) => {
       if (!concurrentPipelineManager) {
         vscode.window.showErrorMessage("Concurrent pipeline manager not initialized.");
         return;
@@ -39,14 +43,16 @@ export function registerStopSlotCommand(
         );
         return;
       }
+      const repo = item?.repo || undefined;
+      const name = `${repo ?? ""}#${issueNumber}`;
 
-      if (!concurrentPipelineManager.isRunning(issueNumber)) {
-        vscode.window.showInformationMessage(`Issue #${issueNumber} is not currently running.`);
+      if (!concurrentPipelineManager.isRunning(issueNumber, repo)) {
+        vscode.window.showInformationMessage(`Issue ${name} is not currently running.`);
         return;
       }
 
       const confirm = await vscode.window.showWarningMessage(
-        `Stop the pipeline for issue #${issueNumber}? State will be preserved — use Abort for full rollback.`,
+        `Stop the pipeline for issue ${name}? State will be preserved — use Abort for full rollback.`,
         { modal: true },
         "Stop Issue"
       );
@@ -57,14 +63,16 @@ export function registerStopSlotCommand(
 
       logger.info("Stopping individual pipeline slot (state preserved)", {
         issueNumber,
+        repo: repo ?? "",
       });
 
       try {
-        const stopped = concurrentPipelineManager.abortSlot(issueNumber);
+        const stopped = concurrentPipelineManager.abortSlot(issueNumber, repo);
 
         if (!stopped) {
           vscode.window.showWarningMessage(
-            `Could not stop issue #${issueNumber} — slot may have already completed.`
+            `Could not stop issue ${name} — the slot may have already completed, or ` +
+              `the number names a running issue in more than one repository.`
           );
           return;
         }
@@ -75,10 +83,11 @@ export function registerStopSlotCommand(
         // Use abortPipeline for full rollback (reopen + board reset).
 
         vscode.window.showInformationMessage(
-          `Pipeline stopped for issue #${issueNumber}. State preserved.`
+          `Pipeline stopped for issue ${name}. State preserved.`
         );
         logger.info("Individual pipeline slot stopped by user (state preserved)", {
           issueNumber,
+          repo: repo ?? "",
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error occurred";
@@ -86,7 +95,7 @@ export function registerStopSlotCommand(
           issueNumber,
           error: message,
         });
-        vscode.window.showErrorMessage(`Failed to stop issue #${issueNumber}: ${message}`);
+        vscode.window.showErrorMessage(`Failed to stop issue ${name}: ${message}`);
       }
     }
   );

@@ -35,14 +35,22 @@ import type { SlotRegistrationOptions } from "../views/outputWindow/OutputWindow
 
 /** The `PipelineTreeProvider` surface these callbacks touch. */
 export interface CliSlotTreeView {
-  getConcurrentSlot(issueNumber: number): unknown;
+  // Slots are named by repository and number (#2403).
+  getConcurrentSlot(issueNumber: number, repo?: string): unknown;
   addConcurrentSlot(
     slotIndex: number,
     issueNumber: number,
     title: string,
-    stateService: PipelineStateService
+    stateService: PipelineStateService,
+    epicNumber?: number,
+    epicRepo?: string,
+    repo?: string
   ): void;
-  removeConcurrentSlotIfOwned(issueNumber: number, stateService: PipelineStateService): void;
+  removeConcurrentSlotIfOwned(
+    issueNumber: number,
+    stateService: PipelineStateService,
+    repo?: string
+  ): void;
 }
 
 /** The `OutputWindow` surface these callbacks touch. */
@@ -81,6 +89,8 @@ export interface CliPipelineSlotDeps {
 /** A discovered CLI run, and the UI state created for it. */
 interface TrackedCliRun {
   issueNumber: number;
+  /** The run's repository, `owner/name`: the tree names its slot by it (#2403). */
+  repo?: string;
   slotIndex: number;
   runId: string;
   service: PipelineStateService;
@@ -116,7 +126,7 @@ export function createCliPipelineSlotCallbacks(deps: CliPipelineSlotDeps): CliPi
         // An IPC-managed slot with the same issue is already authoritative:
         // that run is streamed, so its Output-window slot has real content and
         // must not be replaced by a disk-reconciled one.
-        if (deps.tree().getConcurrentSlot(run.snapshot.issueNumber)) return;
+        if (deps.tree().getConcurrentSlot(run.snapshot.issueNumber, run.snapshot.repo)) return;
 
         const stateService = deps.createStateService(run.root, run.snapshot.issueNumber);
         stateService.applyRuntimeSnapshot(run.snapshot);
@@ -124,6 +134,7 @@ export function createCliPipelineSlotCallbacks(deps: CliPipelineSlotDeps): CliPi
         const slotIndex = deps.nextSlotIndex();
         tracked.set(run.key, {
           issueNumber: run.snapshot.issueNumber,
+          repo: run.snapshot.repo,
           slotIndex,
           runId: run.snapshot.runId,
           service: stateService,
@@ -131,7 +142,15 @@ export function createCliPipelineSlotCallbacks(deps: CliPipelineSlotDeps): CliPi
 
         deps
           .tree()
-          .addConcurrentSlot(slotIndex, run.snapshot.issueNumber, slotTitle(run), stateService);
+          .addConcurrentSlot(
+            slotIndex,
+            run.snapshot.issueNumber,
+            slotTitle(run),
+            stateService,
+            undefined,
+            undefined,
+            run.snapshot.repo
+          );
 
         // The Output-window half. `setSlotLogRoot` points the slot's log
         // reads at the root the run is actually executing in (#191
@@ -164,7 +183,7 @@ export function createCliPipelineSlotCallbacks(deps: CliPipelineSlotDeps): CliPi
       onSettled: (run) => {
         const entry = tracked.get(run.key);
         if (!entry) return;
-        deps.tree().removeConcurrentSlotIfOwned(entry.issueNumber, entry.service);
+        deps.tree().removeConcurrentSlotIfOwned(entry.issueNumber, entry.service, entry.repo);
         deps.output().removeSlotInfoIfOwned(entry.slotIndex, entry.runId);
         deps.output().setSlotLogRoot(entry.slotIndex, null);
         entry.service.dispose();

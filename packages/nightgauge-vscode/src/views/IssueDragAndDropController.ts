@@ -470,7 +470,10 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
 
     for (const issue of issues) {
       // Check if issue is already in pipeline
-      const inPipeline = await this.isIssueInPipeline(issue.issueNumber);
+      const inPipeline = await this.isIssueInPipeline(
+        issue.issueNumber,
+        issue.repoOwner && issue.repoName ? `${issue.repoOwner}/${issue.repoName}` : undefined
+      );
       if (inPipeline) {
         invalidReasons.push(`Issue #${issue.issueNumber} is already in the pipeline`);
         continue;
@@ -874,7 +877,7 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
    * 1. It's the currently active issue in PipelineStateService, OR
    * 2. It's being processed in ConcurrentPipelineManager slots
    */
-  private async isIssueInPipeline(issueNumber: number): Promise<boolean> {
+  private async isIssueInPipeline(issueNumber: number, repo?: string): Promise<boolean> {
     if (!this.stateService) {
       return false;
     }
@@ -886,7 +889,9 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
     }
 
     // Check concurrent slots
-    if (this.concurrentPipelineManager?.isIssueInSlots(issueNumber)) {
+    // By repository too: another repository's issue with the number may be
+    // the one running (#2403).
+    if (this.concurrentPipelineManager?.isIssueInSlots(issueNumber, repo)) {
       return true;
     }
 

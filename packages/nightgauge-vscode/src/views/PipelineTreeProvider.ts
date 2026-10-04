@@ -64,6 +64,7 @@ function logPipelineTreeWarning(message: string): void {
 import type { CompletedIssuesService } from "../services/CompletedIssuesService";
 import type { CompletedIssuesState } from "../types/completedIssues";
 import { IpcClient } from "../services/IpcClient";
+import { slotKey } from "../utils/epicRef";
 
 /**
  * Default stage order for display
@@ -164,8 +165,13 @@ export class PipelineTreeProvider
   private stages: Map<PipelineStage, StageTreeItem> = new Map();
   private queueSection: QueueSectionTreeItem = new QueueSectionTreeItem();
   private completedIssuesState: CompletedIssuesState | null = null;
-  private concurrentSlots: Map<number, ConcurrentSlotTreeItem> = new Map();
-  private preparingSlots: Map<number, ActionTreeItem> = new Map();
+  /**
+   * Running and preparing slots, keyed by {@link slotKey}: repository and
+   * issue number. Two repositories' issues with one number are two slots
+   * (#2403); every method below takes the repository beside the number.
+   */
+  private concurrentSlots: Map<string, ConcurrentSlotTreeItem> = new Map();
+  private preparingSlots: Map<string, ActionTreeItem> = new Map();
   private disposables: vscode.Disposable[] = [];
   private teamSection: TeamSectionTreeItem = new TeamSectionTreeItem();
   private subscriptionSection: SubscriptionSectionTreeItem = new SubscriptionSectionTreeItem();
@@ -1115,14 +1121,15 @@ export class PipelineTreeProvider
    * Gives instant visual feedback so the user knows the pipeline is starting.
    * Replaced by the full ConcurrentSlotTreeItem once onSlotStarted fires.
    */
-  addPreparingSlot(issueNumber: number, title: string, epicNumber?: number): void {
+  addPreparingSlot(issueNumber: number, title: string, epicNumber?: number, repo?: string): void {
+    const key = slotKey(repo, issueNumber);
     // Don't add if a real slot already exists for this issue
-    if (this.concurrentSlots.has(issueNumber)) return;
+    if (this.concurrentSlots.has(key)) return;
 
     const maxLen = 32;
     const truncTitle = title.length > maxLen ? title.slice(0, maxLen - 1) + "…" : title;
     const item = ActionTreeItem.createLoading(`#${issueNumber} — ${truncTitle}`);
-    item.id = `preparing-slot-${issueNumber}`;
+    item.id = `preparing-slot-${key}`;
     item.tooltip = `#${issueNumber} — ${title}`;
     if (epicNumber) {
       item.description = `Epic #${epicNumber} · Creating worktree…`;
@@ -1130,7 +1137,7 @@ export class PipelineTreeProvider
       item.description = "Creating worktree…";
     }
     item.contextValue = "concurrentSlot.preparing";
-    this.preparingSlots.set(issueNumber, item);
+    this.preparingSlots.set(key, item);
     this.refreshAll();
   }
 
@@ -1138,8 +1145,8 @@ export class PipelineTreeProvider
    * Remove a preparing slot placeholder.
    * Called when onSlotStarted replaces it with the full slot, or on failure.
    */
-  removePreparingSlot(issueNumber: number): void {
-    if (this.preparingSlots.delete(issueNumber)) {
+  removePreparingSlot(issueNumber: number, repo?: string): void {
+    if (this.preparingSlots.delete(slotKey(repo, issueNumber))) {
       this.refreshAll();
     }
   }
@@ -1154,10 +1161,12 @@ export class PipelineTreeProvider
     title: string,
     stateService: PipelineStateService,
     epicNumber?: number,
-    epicRepo?: string
+    epicRepo?: string,
+    repo?: string
   ): void {
+    const key = slotKey(repo, issueNumber);
     // Remove preparing placeholder if present
-    this.preparingSlots.delete(issueNumber);
+    this.preparingSlots.delete(key);
 
     const slot = new ConcurrentSlotTreeItem(
       slotIndex,
@@ -1166,9 +1175,10 @@ export class PipelineTreeProvider
       stateService,
       epicNumber,
       () => this.refreshAll(),
-      epicRepo
+      epicRepo,
+      repo
     );
-    this.concurrentSlots.set(issueNumber, slot);
+    this.concurrentSlots.set(key, slot);
     console.log(
       `[PipelineTree] addConcurrentSlot #${issueNumber} slot=${slotIndex} (total=${this.concurrentSlots.size})`
     );
@@ -1179,8 +1189,8 @@ export class PipelineTreeProvider
    * Return the ConcurrentSlotTreeItem for a given issue number, or undefined.
    * Used to look up a slot by issue number.
    */
-  getConcurrentSlot(issueNumber: number): ConcurrentSlotTreeItem | undefined {
-    return this.concurrentSlots.get(issueNumber);
+  getConcurrentSlot(issueNumber: number, repo?: string): ConcurrentSlotTreeItem | undefined {
+    return this.concurrentSlots.get(slotKey(repo, issueNumber));
   }
 
   /**
@@ -1199,8 +1209,12 @@ export class PipelineTreeProvider
   /**
    * Mark a concurrent slot as completed or failed.
    */
-  updateConcurrentSlotStatus(issueNumber: number, status: "completed" | "failed"): void {
-    const slot = this.concurrentSlots.get(issueNumber);
+  updateConcurrentSlotStatus(
+    issueNumber: number,
+    status: "completed" | "failed",
+    repo?: string
+  ): void {
+    const slot = this.concurrentSlots.get(slotKey(repo, issueNumber));
     if (slot) {
       slot.setSlotStatus(status);
       this.refreshAll();
@@ -1210,11 +1224,12 @@ export class PipelineTreeProvider
   /**
    * Remove a concurrent slot from the tree.
    */
-  removeConcurrentSlot(issueNumber: number): void {
-    const slot = this.concurrentSlots.get(issueNumber);
+  removeConcurrentSlot(issueNumber: number, repo?: string): void {
+    const key = slotKey(repo, issueNumber);
+    const slot = this.concurrentSlots.get(key);
     if (slot) {
       slot.dispose();
-      this.concurrentSlots.delete(issueNumber);
+      this.concurrentSlots.delete(key);
       console.log(
         `[PipelineTree] removeConcurrentSlot #${issueNumber} (remaining=${this.concurrentSlots.size})`
       );
@@ -1223,10 +1238,14 @@ export class PipelineTreeProvider
   }
 
   /** Remove a slot only when it is still owned by the expected state relay. */
-  removeConcurrentSlotIfOwned(issueNumber: number, stateService: PipelineStateService): void {
-    const slot = this.concurrentSlots.get(issueNumber);
+  removeConcurrentSlotIfOwned(
+    issueNumber: number,
+    stateService: PipelineStateService,
+    repo?: string
+  ): void {
+    const slot = this.concurrentSlots.get(slotKey(repo, issueNumber));
     if (slot?.usesStateService(stateService)) {
-      this.removeConcurrentSlot(issueNumber);
+      this.removeConcurrentSlot(issueNumber, repo);
     }
   }
 

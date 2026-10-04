@@ -20,6 +20,7 @@ import type { PipelineStateService } from "../services/PipelineStateService";
 import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
 import { IpcClient } from "../services/IpcClient";
 import { getRepoIdentity } from "../utils/configPathResolver";
+import { repoFromIssueUrl } from "../utils/epicRef";
 
 /**
  * Issue info fetched from GitHub
@@ -123,9 +124,12 @@ export function registerPickupIssueCommand(
     "nightgauge.pickupIssue",
     async (item?: ReadyIssueTreeItem) => {
       let issueNumber: number | undefined;
+      // The issue's repository when the tree item names it (#2403).
+      let issueRepo: string | undefined;
 
       if (item instanceof ReadyIssueTreeItem) {
         issueNumber = item.issueNumber;
+        issueRepo = repoFromIssueUrl(item.issueUrl);
       } else {
         // Prompt for issue number if not provided
         const input = await vscode.window.showInputBox({
@@ -159,7 +163,7 @@ export function registerPickupIssueCommand(
         async () => {
           try {
             // Check if already running in a concurrent slot
-            if (concurrentPipelineManager?.isRunning(issueNumber!)) {
+            if (concurrentPipelineManager?.isRunning(issueNumber!, issueRepo)) {
               vscode.window.showInformationMessage(
                 `Issue #${issueNumber} is already running in a pipeline.`
               );

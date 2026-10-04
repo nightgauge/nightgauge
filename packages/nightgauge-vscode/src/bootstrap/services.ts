@@ -26,6 +26,7 @@ import { handleInteractivePipelineComplete } from "./pipelineFinish";
 import { Logger, createMainLogger, installLogDiskSink } from "../utils/logger";
 import { setRunningWorktreePathsProvider } from "../utils/skillRunner";
 import { StatusBarManager } from "../utils/statusBar";
+import { slotKey } from "../utils/epicRef";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
 import {
   getNextStage,
@@ -1562,32 +1563,34 @@ export async function initializeServices(
     slotOutputManager = new SlotOutputManager();
     context.subscriptions.push(slotOutputManager);
 
-    // Per-slot phase trackers for concurrent pipeline progress (keyed by issueNumber)
-    const slotPhaseTrackers = new Map<number, ReturnType<typeof createPhaseTracker>>();
+    // Per-slot state below is keyed by slotKey(repo, issueNumber): two
+    // repositories' issues with one number run in two slots (#2403).
+    // Per-slot phase trackers for concurrent pipeline progress
+    const slotPhaseTrackers = new Map<string, ReturnType<typeof createPhaseTracker>>();
 
-    // Per-slot OutputWindow state subscriptions (keyed by issueNumber).
+    // Per-slot OutputWindow state subscriptions.
     // Each concurrent slot runs on its own PipelineStateService; without these
     // subscriptions the Overview cards never see stage transitions or token
     // updates after the slot starts. Disposed when the slot completes, fails,
     // or is cleaned. Issue #2979.
-    const slotStateSubscriptions = new Map<number, vscode.Disposable>();
-    const disposeSlotStateSubscription = (issueNumber: number) => {
-      const sub = slotStateSubscriptions.get(issueNumber);
+    const slotStateSubscriptions = new Map<string, vscode.Disposable>();
+    const disposeSlotStateSubscription = (key: string) => {
+      const sub = slotStateSubscriptions.get(key);
       if (sub) {
         sub.dispose();
-        slotStateSubscriptions.delete(issueNumber);
+        slotStateSubscriptions.delete(key);
       }
     };
-    // Per-slot Dashboard state subscriptions (keyed by issueNumber). Mirrors
+    // Per-slot Dashboard state subscriptions. Mirrors
     // the OutputWindow wiring above — the Dashboard's Pipeline tab also reads
     // off PipelineStateService events, but its singleton subscription never
     // fires for concurrent slots, leaving the progress bar pinned at 0%.
-    const dashboardSlotStateSubscriptions = new Map<number, vscode.Disposable>();
-    const disposeDashboardSlotStateSubscription = (issueNumber: number) => {
-      const sub = dashboardSlotStateSubscriptions.get(issueNumber);
+    const dashboardSlotStateSubscriptions = new Map<string, vscode.Disposable>();
+    const disposeDashboardSlotStateSubscription = (key: string) => {
+      const sub = dashboardSlotStateSubscriptions.get(key);
       if (sub) {
         sub.dispose();
-        dashboardSlotStateSubscriptions.delete(issueNumber);
+        dashboardSlotStateSubscriptions.delete(key);
       }
     };
 
@@ -1607,9 +1610,9 @@ export async function initializeServices(
     concurrentPipelineManager.setCallbacks({
       // The queue section says when the workspace throttle holds dispatch (#2337).
       onWorkspaceThrottleChanged: (throttle) => treeProvider?.setWorkspaceThrottle(throttle),
-      onSlotPreparing: (issueNumber, title, epicNumber) => {
+      onSlotPreparing: (issueNumber, title, epicNumber, repo) => {
         // Show immediate feedback in the tree view while worktree is created
-        treeProvider.addPreparingSlot(issueNumber, title, epicNumber);
+        treeProvider.addPreparingSlot(issueNumber, title, epicNumber, repo);
         updateConcurrentStatusBar();
         logger.info("Concurrent slot preparing (creating worktree)", {
           issueNumber,
@@ -1624,6 +1627,7 @@ export async function initializeServices(
         repoSlug,
         epicRepo
       ) => {
+        const key = slotKey(repoSlug, issueNumber);
         // #191: scope this slot's disk session log to the run's TARGET repo.
         // The bootstrap log root is workspaceFolders[0]'s git root — for a
         // cross-repo run that is a different repository, and forensics
@@ -1651,18 +1655,18 @@ export async function initializeServices(
           : null;
         outputWindow.setSlotLogRoot(slotIndex, slotRepoPath);
         outputWindow.registerSlotInfo(slotIndex, issueNumber, title, repoSlug);
-        slotOutputManager!.createSlotChannel(slotIndex, issueNumber, title);
-        slotOutputManager!.updateStage(issueNumber, "issue-pickup");
+        slotOutputManager!.createSlotChannel(slotIndex, issueNumber, title, repoSlug);
+        slotOutputManager!.updateStage(issueNumber, "issue-pickup", repoSlug);
 
         // Wire this slot's PipelineStateService to the OutputWindow so the
         // Overview card reflects live stage transitions, token totals, and
         // derived status. The global singleton OutputWindow subscribes to
         // (via setStateService) never sees per-slot state emissions, so
         // without this the card froze at its initial state. Issue #2979.
-        disposeSlotStateSubscription(issueNumber);
-        disposeDashboardSlotStateSubscription(issueNumber);
+        disposeSlotStateSubscription(key);
+        disposeDashboardSlotStateSubscription(key);
         slotStateSubscriptions.set(
-          issueNumber,
+          key,
           outputWindow.subscribeSlotToStateService(slotIndex, slotStateService)
         );
 
@@ -1671,12 +1675,12 @@ export async function initializeServices(
         // never reaches its Pipeline tab. Wire it here so the progress bar /
         // current run / phase indicator advance live during concurrent runs.
         dashboardSlotStateSubscriptions.set(
-          issueNumber,
+          key,
           dashboard.subscribeSlotToStateService(slotStateService)
         );
 
         // Create per-slot phase tracker for progress display (2/16 - [phase])
-        slotPhaseTrackers.set(issueNumber, createPhaseTracker(slotStateService));
+        slotPhaseTrackers.set(key, createPhaseTracker(slotStateService));
         // Single-slot: show stage name; multi-slot: show aggregated count
         if (concurrentPipelineManager!.maxConcurrentSlots === 1) {
           statusBar.showRunning("issue-pickup" as PipelineStage);
@@ -1694,7 +1698,8 @@ export async function initializeServices(
           title,
           slotStateService,
           epicNumber,
-          epicRepo
+          epicRepo,
+          repoSlug
         );
 
         // Invalidate ready + in-progress so the Repositories view doesn't keep
@@ -1720,8 +1725,8 @@ export async function initializeServices(
       // activePhase entries accumulated and were only drained at teardown,
       // after the run was terminal-latched — producing a burst of refused
       // notifyPhaseTransition calls, one per stage.
-      onSlotStageChanged: (_slotIndex, issueNumber, stage) => {
-        slotOutputManager!.updateStage(issueNumber, stage);
+      onSlotStageChanged: (_slotIndex, issueNumber, stage, repo) => {
+        slotOutputManager!.updateStage(issueNumber, stage, repo);
         // In single-slot mode, show per-stage status bar (mirrors pre-#1831 UX).
         // In multi-slot mode, show aggregated "Pipelines: N/M" display.
         if (concurrentPipelineManager!.maxConcurrentSlots === 1) {
@@ -1734,10 +1739,10 @@ export async function initializeServices(
       // sequential path's onStageComplete wiring. Without this the last phase
       // of every stage (e.g. self-assessment, index 13 of 14) never received a
       // complete transition and sat "running" long after its stage had ended.
-      onSlotStageCompleted: (_slotIndex, issueNumber, stage) => {
-        slotPhaseTrackers.get(issueNumber)?.completeStagePhases(stage);
+      onSlotStageCompleted: (_slotIndex, issueNumber, stage, repo) => {
+        slotPhaseTrackers.get(slotKey(repo, issueNumber))?.completeStagePhases(stage);
       },
-      onSlotOutput: (_slotIndex, issueNumber, rawData, stage) => {
+      onSlotOutput: (_slotIndex, issueNumber, rawData, stage, repo) => {
         // The SDK CLI's liveness lines (#1657) move the idle clock and are
         // never shown.
         const data = stripAdapterActivityLines(rawData);
@@ -1746,17 +1751,17 @@ export async function initializeServices(
         if (stage) {
           const marker = parsePhaseMarker(data);
           if (marker) {
-            slotPhaseTrackers.get(issueNumber)?.onPhaseDetected(stage, marker);
+            slotPhaseTrackers.get(slotKey(repo, issueNumber))?.onPhaseDetected(stage, marker);
             return; // Phase markers are metadata, not user-visible output
           }
         }
-        slotOutputManager!.appendOutput(issueNumber, data, stage);
+        slotOutputManager!.appendOutput(issueNumber, data, stage, repo);
       },
-      onSlotError: (_slotIndex, issueNumber, data, stage) => {
-        slotOutputManager!.appendError(issueNumber, data, stage);
+      onSlotError: (_slotIndex, issueNumber, data, stage, repo) => {
+        slotOutputManager!.appendError(issueNumber, data, stage, repo);
       },
-      onSlotPhaseStart: (_slotIndex, issueNumber, stage, name, index, total) => {
-        slotPhaseTrackers.get(issueNumber)?.onPhaseDetected(stage, {
+      onSlotPhaseStart: (_slotIndex, issueNumber, stage, name, index, total, repo) => {
+        slotPhaseTrackers.get(slotKey(repo, issueNumber))?.onPhaseDetected(stage, {
           name,
           index,
           total,
@@ -1765,17 +1770,18 @@ export async function initializeServices(
       },
       onSlotCompleted: (slotIndex, issueNumber, result, tokens, repoSlug) => {
         const costUsd = tokens.estimated_cost_usd;
-        slotPhaseTrackers.get(issueNumber)?.completeAllStages();
-        slotPhaseTrackers.delete(issueNumber);
-        disposeSlotStateSubscription(issueNumber);
-        disposeDashboardSlotStateSubscription(issueNumber);
-        slotOutputManager!.markCompleted(issueNumber, true);
+        const key = slotKey(repoSlug, issueNumber);
+        slotPhaseTrackers.get(key)?.completeAllStages();
+        slotPhaseTrackers.delete(key);
+        disposeSlotStateSubscription(key);
+        disposeDashboardSlotStateSubscription(key);
+        slotOutputManager!.markCompleted(issueNumber, true, repoSlug);
         // Flip the Output Window tab badge from the running spinner to the
         // terminal "complete" state with the final cost. Without this, the
         // badge stays stuck on the mid-run spinner because neither the
         // token-delta path nor the state-sync path fires again post-completion.
         outputWindow.notifySlotCompleted(slotIndex, "complete", costUsd);
-        treeProvider.updateConcurrentSlotStatus(issueNumber, "completed");
+        treeProvider.updateConcurrentSlotStatus(issueNumber, "completed", repoSlug);
         notifier!.unsubscribeFromSlot(issueNumber); // Issue #1750
         logger.info("Concurrent slot completed", {
           slotIndex,
@@ -1860,17 +1866,18 @@ export async function initializeServices(
         }
       },
       onSlotFailed: (slotIndex, issueNumber, error, costUsd, repoSlug) => {
-        slotPhaseTrackers.get(issueNumber)?.completeAllStages();
-        slotPhaseTrackers.delete(issueNumber);
-        disposeSlotStateSubscription(issueNumber);
-        disposeDashboardSlotStateSubscription(issueNumber);
+        const key = slotKey(repoSlug, issueNumber);
+        slotPhaseTrackers.get(key)?.completeAllStages();
+        slotPhaseTrackers.delete(key);
+        disposeSlotStateSubscription(key);
+        disposeDashboardSlotStateSubscription(key);
         // Remove preparing placeholder if worktree creation failed
-        treeProvider.removePreparingSlot(issueNumber);
-        slotOutputManager!.markCompleted(issueNumber, false);
+        treeProvider.removePreparingSlot(issueNumber, repoSlug);
+        slotOutputManager!.markCompleted(issueNumber, false, repoSlug);
         // Flip the Output Window tab badge to the terminal "error" state
         // with the final cost. Mirror of the onSlotCompleted wiring above.
         outputWindow.notifySlotCompleted(slotIndex, "error", costUsd);
-        treeProvider.updateConcurrentSlotStatus(issueNumber, "failed");
+        treeProvider.updateConcurrentSlotStatus(issueNumber, "failed", repoSlug);
         notifier!.unsubscribeFromSlot(issueNumber); // Issue #1750
         logger.warn("Concurrent slot failed", {
           slotIndex,
@@ -1989,17 +1996,18 @@ export async function initializeServices(
         // Ready/eligible, and signal the Go scheduler that this was a
         // non-failure deferral so it neither pauses nor bumps the
         // lifetime-failure cap.
-        slotPhaseTrackers.get(issueNumber)?.completeAllStages();
-        slotPhaseTrackers.delete(issueNumber);
-        disposeSlotStateSubscription(issueNumber);
-        disposeDashboardSlotStateSubscription(issueNumber);
-        treeProvider.removePreparingSlot(issueNumber);
-        slotOutputManager!.markCompleted(issueNumber, true);
+        const key = slotKey(repoSlug, issueNumber);
+        slotPhaseTrackers.get(key)?.completeAllStages();
+        slotPhaseTrackers.delete(key);
+        disposeSlotStateSubscription(key);
+        disposeDashboardSlotStateSubscription(key);
+        treeProvider.removePreparingSlot(issueNumber, repoSlug);
+        slotOutputManager!.markCompleted(issueNumber, true, repoSlug);
         // Neutral terminal badge — a deferral is neither an error nor a
         // success. Use the non-error "complete" badge so the tab settles; the
         // issue itself stays Ready on the board.
         outputWindow.notifySlotCompleted(slotIndex, "complete", costUsd);
-        treeProvider.removeConcurrentSlot(issueNumber);
+        treeProvider.removeConcurrentSlot(issueNumber, repoSlug);
         notifier!.unsubscribeFromSlot(issueNumber); // Issue #1750
         logger.info("Concurrent slot deferred — issue blocked by open dependencies", {
           slotIndex,
@@ -2043,13 +2051,13 @@ export async function initializeServices(
             });
         }
       },
-      onSlotCleaned: (_slotIndex, issueNumber) => {
+      onSlotCleaned: (_slotIndex, issueNumber, repo) => {
         // Defensive: in case the slot was cleaned without a prior
         // completion/failure callback, ensure the state subscription is
         // released so listeners don't leak across re-enqueued runs.
-        disposeSlotStateSubscription(issueNumber);
-        disposeDashboardSlotStateSubscription(issueNumber);
-        treeProvider.removeConcurrentSlot(issueNumber);
+        disposeSlotStateSubscription(slotKey(repo, issueNumber));
+        disposeDashboardSlotStateSubscription(slotKey(repo, issueNumber));
+        treeProvider.removeConcurrentSlot(issueNumber, repo);
       },
       onReEnqueueFailed: (issueNumber, error) => {
         // A re-enqueue failure after a slot-start failure means we almost

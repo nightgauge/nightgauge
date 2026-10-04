@@ -15,6 +15,7 @@ import { CLONE_LOGS_DISPLAY } from "../utils/cloneLayout";
 import * as vscode from "vscode";
 import { redactSecrets } from "../utils/redaction";
 import type { PipelineStage } from "@nightgauge/sdk";
+import { slotKey } from "../utils/epicRef";
 
 /**
  * Slot output channel info
@@ -63,7 +64,13 @@ export interface SlotOutputCallbacks {
 }
 
 export class SlotOutputManager implements vscode.Disposable {
-  private channels: Map<number, SlotChannel> = new Map(); // keyed by issueNumber
+  /**
+   * Keyed by {@link slotKey}: repository and issue number. Two repositories'
+   * issues with one number run in two slots, each with its own channel
+   * (#2403); every method takes the repository (`owner/name`) beside the
+   * number.
+   */
+  private channels: Map<string, SlotChannel> = new Map();
   private callbacks: SlotOutputCallbacks = {};
   private disposables: vscode.Disposable[] = [];
 
@@ -81,11 +88,16 @@ export class SlotOutputManager implements vscode.Disposable {
    * @param issueNumber - Issue number being processed
    * @param title - Issue title for the channel name
    */
-  createSlotChannel(slotIndex: number, issueNumber: number, title: string): vscode.OutputChannel {
+  createSlotChannel(
+    slotIndex: number,
+    issueNumber: number,
+    title: string,
+    repo?: string
+  ): vscode.OutputChannel {
     // Remove existing channel for this issue if any
-    this.removeSlotChannel(issueNumber);
+    this.removeSlotChannel(issueNumber, repo);
 
-    const channelName = `Nightgauge Slot ${slotIndex + 1} (#${issueNumber})`;
+    const channelName = `Nightgauge Slot ${slotIndex + 1} (${repo ?? ""}#${issueNumber})`;
     const channel = vscode.window.createOutputChannel(channelName);
 
     const slotChannel: SlotChannel = {
@@ -95,11 +107,11 @@ export class SlotOutputManager implements vscode.Disposable {
       title,
     };
 
-    this.channels.set(issueNumber, slotChannel);
+    this.channels.set(slotKey(repo, issueNumber), slotChannel);
 
     // Write header
     channel.appendLine(`=== Pipeline Slot ${slotIndex + 1} ===`);
-    channel.appendLine(`Issue: #${issueNumber} - ${title}`);
+    channel.appendLine(`Issue: ${repo ?? ""}#${issueNumber} - ${title}`);
     channel.appendLine(`Started: ${new Date().toISOString()}`);
     channel.appendLine("=".repeat(50));
     channel.appendLine("");
@@ -129,8 +141,8 @@ export class SlotOutputManager implements vscode.Disposable {
    * The callback gets the redacted text too, not just the channel — the
    * evidence artifact reads the callback, and it was the artifact that leaked.
    */
-  appendOutput(issueNumber: number, text: string, stage?: PipelineStage): void {
-    const slot = this.channels.get(issueNumber);
+  appendOutput(issueNumber: number, text: string, stage?: PipelineStage, repo?: string): void {
+    const slot = this.channels.get(slotKey(repo, issueNumber));
     if (slot) {
       const safe = redactSecrets(text);
       slot.channel.appendLine(safe);
@@ -141,8 +153,8 @@ export class SlotOutputManager implements vscode.Disposable {
   /**
    * Write error output to a slot's channel. See appendOutput for `stage`.
    */
-  appendError(issueNumber: number, text: string, stage?: PipelineStage): void {
-    const slot = this.channels.get(issueNumber);
+  appendError(issueNumber: number, text: string, stage?: PipelineStage, repo?: string): void {
+    const slot = this.channels.get(slotKey(repo, issueNumber));
     if (slot) {
       const safe = redactSecrets(text);
       slot.channel.appendLine(`[ERROR] ${safe}`);
@@ -153,8 +165,8 @@ export class SlotOutputManager implements vscode.Disposable {
   /**
    * Update stage display for a slot
    */
-  updateStage(issueNumber: number, stage: PipelineStage): void {
-    const slot = this.channels.get(issueNumber);
+  updateStage(issueNumber: number, stage: PipelineStage, repo?: string): void {
+    const slot = this.channels.get(slotKey(repo, issueNumber));
     if (slot) {
       // Idempotent per stage (#230): the slot-started seed and the first
       // stage-changed event both fire for issue-pickup; without this guard the
@@ -173,8 +185,8 @@ export class SlotOutputManager implements vscode.Disposable {
   /**
    * Show a slot's output channel by issue number
    */
-  showSlot(issueNumber: number): void {
-    const slot = this.channels.get(issueNumber);
+  showSlot(issueNumber: number, repo?: string): void {
+    const slot = this.channels.get(slotKey(repo, issueNumber));
     if (slot) {
       slot.channel.show(true); // true = preserveFocus
     }
@@ -200,8 +212,8 @@ export class SlotOutputManager implements vscode.Disposable {
   /**
    * Mark a slot as completed
    */
-  markCompleted(issueNumber: number, success: boolean): void {
-    const slot = this.channels.get(issueNumber);
+  markCompleted(issueNumber: number, success: boolean, repo?: string): void {
+    const slot = this.channels.get(slotKey(repo, issueNumber));
     if (slot) {
       slot.channel.appendLine("");
       slot.channel.appendLine("=".repeat(50));
@@ -214,11 +226,12 @@ export class SlotOutputManager implements vscode.Disposable {
   /**
    * Remove and dispose a slot's output channel
    */
-  removeSlotChannel(issueNumber: number): void {
-    const slot = this.channels.get(issueNumber);
+  removeSlotChannel(issueNumber: number, repo?: string): void {
+    const key = slotKey(repo, issueNumber);
+    const slot = this.channels.get(key);
     if (slot) {
       slot.channel.dispose();
-      this.channels.delete(issueNumber);
+      this.channels.delete(key);
     }
   }
 
@@ -226,14 +239,17 @@ export class SlotOutputManager implements vscode.Disposable {
    * Get all active slot issue numbers
    */
   getActiveIssues(): number[] {
-    return Array.from(this.channels.keys());
+    return Array.from(this.channels.values(), (c) => c.issueNumber);
   }
 
   /**
    * Get slot info for an issue
    */
-  getSlotInfo(issueNumber: number): { slotIndex: number; title: string } | undefined {
-    const slot = this.channels.get(issueNumber);
+  getSlotInfo(
+    issueNumber: number,
+    repo?: string
+  ): { slotIndex: number; title: string } | undefined {
+    const slot = this.channels.get(slotKey(repo, issueNumber));
     if (slot) {
       return { slotIndex: slot.slotIndex, title: slot.title };
     }

@@ -145,7 +145,7 @@ import { requeueOptionsFor, type ActiveSlot, type QueueItem } from "../types/que
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
 import { postFailureComment } from "../utils/failureComment";
 import { epicBranchParent } from "../utils/epicBranchParent";
-import { formatEpicRef, isEpic, sameRepo, type EpicRef } from "../utils/epicRef";
+import { formatEpicRef, isEpic, sameRepo, slotKey, type EpicRef } from "../utils/epicRef";
 import { getConcurrentPipelineConfig } from "../utils/nightgaugeConfig";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import { throttleInForce, type WorkspaceThrottle } from "./WorkspaceThrottle";
@@ -190,6 +190,8 @@ type StartSlotOutcome = "started" | "failed" | "abandoned" | "cancelled";
 interface SlotReservation {
   /** Slot index this dispatch reserved. */
   index: number;
+  /** The issue this dispatch is for; `repo` names its repository. */
+  issueNumber: number;
   /** "owner/repo" for cross-repo dispatches; "" when unknown. */
   repo: string;
   /** Per-dispatch run identity — see {@link PipelineSlot.runId}. */
@@ -390,8 +392,18 @@ interface PipelineSlot {
  * Callbacks for ConcurrentPipelineManager events
  */
 export interface ConcurrentPipelineCallbacks {
+  // Every slot callback names its issue by number AND repository (`repo`,
+  // `repoSlug`: the queue item's `owner/name`, "" or absent when unknown).
+  // Two repositories' issues can share a number and run at once (#2403), so a
+  // consumer keys per-slot state by both, as `slotKey` does.
+
   /** Called immediately when an issue is dequeued, before worktree creation */
-  onSlotPreparing?: (issueNumber: number, title: string, epicNumber?: number) => void;
+  onSlotPreparing?: (
+    issueNumber: number,
+    title: string,
+    epicNumber?: number,
+    repo?: string
+  ) => void;
   /** Called when a slot starts processing an issue (after worktree is ready) */
   onSlotStarted?: (
     slotIndex: number,
@@ -403,7 +415,12 @@ export interface ConcurrentPipelineCallbacks {
     epicRepo?: string
   ) => void;
   /** Called when a slot's pipeline stage changes */
-  onSlotStageChanged?: (slotIndex: number, issueNumber: number, stage: PipelineStage) => void;
+  onSlotStageChanged?: (
+    slotIndex: number,
+    issueNumber: number,
+    stage: PipelineStage,
+    repo?: string
+  ) => void;
   /**
    * Called when a slot FINISHES a stage (#1055).
    *
@@ -412,7 +429,12 @@ export interface ConcurrentPipelineCallbacks {
    * the last stage of a run is never closed at all, and the terminal close is
    * looked up by a stage that has no active phase yet, so it no-ops.
    */
-  onSlotStageCompleted?: (slotIndex: number, issueNumber: number, stage: PipelineStage) => void;
+  onSlotStageCompleted?: (
+    slotIndex: number,
+    issueNumber: number,
+    stage: PipelineStage,
+    repo?: string
+  ) => void;
   /** Called when a slot completes successfully */
   onSlotCompleted?: (
     slotIndex: number,
@@ -450,7 +472,7 @@ export interface ConcurrentPipelineCallbacks {
     repoSlug?: string
   ) => void;
   /** Called when a slot is cleaned up (worktree removed) */
-  onSlotCleaned?: (slotIndex: number, issueNumber: number) => void;
+  onSlotCleaned?: (slotIndex: number, issueNumber: number, repo?: string) => void;
   /**
    * Called when a re-enqueue attempt after a slot-start failure itself
    * throws — e.g., because the queue's stop-control guard is active or the
@@ -472,7 +494,8 @@ export interface ConcurrentPipelineCallbacks {
     slotIndex: number,
     issueNumber: number,
     data: string,
-    stage?: PipelineStage
+    stage?: PipelineStage,
+    repo?: string
   ) => void;
   /** Called when stderr output arrives for a slot. `stage` is the emitting
    * stage when known (#283) — consumers must prefer it over the slot's
@@ -481,7 +504,8 @@ export interface ConcurrentPipelineCallbacks {
     slotIndex: number,
     issueNumber: number,
     data: string,
-    stage?: PipelineStage
+    stage?: PipelineStage,
+    repo?: string
   ) => void;
   /** Called when a phase starts within a slot's stage (for live phase progress) */
   onSlotPhaseStart?: (
@@ -490,7 +514,8 @@ export interface ConcurrentPipelineCallbacks {
     stage: PipelineStage,
     phaseName: string,
     phaseIndex: number,
-    totalPhases: number
+    totalPhases: number,
+    repo?: string
   ) => void;
 }
 
@@ -529,9 +554,14 @@ export class BranchCollisionError extends Error {
  * until you do.
  */
 export class ConcurrentPipelineManager implements vscode.Disposable {
-  private slots: Map<number, PipelineSlot> = new Map(); // keyed by issueNumber
   /**
-   * In-flight slot reservations, keyed by issueNumber. A reservation is taken
+   * Live slots, keyed by {@link slotKey}: repository and issue number. An
+   * issue number names an issue only within one repository, so two
+   * repositories' issues with one number are two slots (#2403).
+   */
+  private slots: Map<string, PipelineSlot> = new Map();
+  /**
+   * In-flight slot reservations, keyed by {@link slotKey} like `slots`. A reservation is taken
    * synchronously in `startSlot` BEFORE the async `worktreeManager.create()`
    * and released either when the real {@link PipelineSlot} lands in `slots`
    * (success) or when the start fails. Without it, a slot's repo is invisible
@@ -542,7 +572,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * exceeded across passes. Reserving here makes both the workspace ceiling
    * and the per-repo running set reflect intent-to-run immediately. #3874.
    */
-  private reservedSlots: Map<number, SlotReservation> = new Map();
+  private reservedSlots: Map<string, SlotReservation> = new Map();
   /**
    * The remote runs whose trigger this window accepted and is placing, keyed
    * by the platform run id (#2340, #2344): from the ack on, while
@@ -660,7 +690,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * instead of a fixed `setTimeout` that races the async chain under CPU load
    * (the #100 / #243 flake class).
    */
-  private readonly lifecyclePromises = new Map<number, Promise<PipelineRunResult>>();
+  private readonly lifecyclePromises = new Map<string, Promise<PipelineRunResult>>();
   private worktreeManager: WorktreeManager;
   private maxConcurrent: number;
   /**
@@ -914,6 +944,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       currentStage: slot.currentStage,
       epicNumber: slot.epicNumber,
       epicRepo: slot.epicRepo,
+      repo: slot.repo,
     }));
   }
 
@@ -932,10 +963,44 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
-   * Check if an issue is currently in an active pipeline slot
+   * Check if an issue is currently in an active pipeline slot. `repo`
+   * (`owner/name`) names the issue's repository; without it any repository's
+   * issue with the number counts. A slot whose repository is unknown matches
+   * by number (#2403).
    */
-  isIssueInSlots(issueNumber: number): boolean {
-    return this.slots.has(issueNumber);
+  isIssueInSlots(issueNumber: number, repo?: string): boolean {
+    return this.slotsFor(issueNumber, repo).length > 0;
+  }
+
+  /**
+   * The live slots that may be `repo`'s issue `issueNumber`: the one keyed by
+   * exactly that repository and number, else every slot with the number whose
+   * repository is unknown or, when `repo` is not given, any (#2403).
+   */
+  private slotsFor(issueNumber: number, repo?: string): PipelineSlot[] {
+    if (repo) {
+      const exact = this.slots.get(slotKey(repo, issueNumber));
+      if (exact) return [exact];
+    }
+    return [...this.slots.values()].filter(
+      (s) => s.issueNumber === issueNumber && (!repo || !s.repo || sameRepo(s.repo, repo))
+    );
+  }
+
+  /**
+   * Whether a live slot or a reservation already holds `repo`'s issue
+   * `issueNumber` — the #188 in-flight guard. Another repository's issue with
+   * the same number is a different issue and is not held (#2403); an unknown
+   * repository on either side matches by number, as before.
+   */
+  private holdsIssue(issueNumber: number, repo: string | undefined): boolean {
+    if (this.slotsFor(issueNumber, repo).length > 0) return true;
+    for (const r of this.reservedSlots.values()) {
+      if (r.issueNumber === issueNumber && (!repo || !r.repo || sameRepo(r.repo, repo))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -1039,9 +1104,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             repo: s.repo ?? "",
             number: s.issueNumber,
           })),
-          ...Array.from(this.reservedSlots.entries()).map(([number, r]) => ({
+          ...Array.from(this.reservedSlots.values()).map((r) => ({
             repo: r.repo,
-            number,
+            number: r.issueNumber,
           })),
         ];
         this.logger.debug("fillSlots: dequeuing", {
@@ -1102,11 +1167,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             // double-ran runPipeline within 3s (two pre-flights, overlapping stage
             // starts, races on the same context files and worktree). Skip
             // WITHOUT re-enqueueing: the issue is already being worked.
-            if (this.slots.has(item.issueNumber) || this.reservedSlots.has(item.issueNumber)) {
+            // By repository and number: another repository's issue with the
+            // same number is different work and gets its own slot (#2403).
+            if (this.holdsIssue(item.issueNumber, item.repoName)) {
               this.logger.warn("Skipping duplicate dispatch — issue already in flight (#188)", {
                 issueNumber: item.issueNumber,
-                hasLiveSlot: this.slots.has(item.issueNumber),
-                hasReservation: this.reservedSlots.has(item.issueNumber),
+                repo: item.repoName ?? "",
+                hasLiveSlot: this.slotsFor(item.issueNumber, item.repoName).length > 0,
+                hasReservation: this.reservedSlots.has(slotKey(item.repoName, item.issueNumber)),
               });
               // The live slot's own completion clears ITS mark; this duplicate
               // dequeue put a second one on and no run will ever clear it (#254).
@@ -1361,7 +1429,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     if (!item.remoteRunAttached) return false;
     const remoteRunId = item.remoteRunId;
     if (remoteRunId !== undefined) this.tombstoneActedRemoteRunIds.add(remoteRunId);
-    this.detachRemoteRun(item, reservation ?? this.reservedSlots.get(item.issueNumber));
+    this.detachRemoteRun(
+      item,
+      reservation ?? this.reservedSlots.get(slotKey(item.repoName, item.issueNumber))
+    );
     this.logger.info("Detached a cancelled remote run from the operator's queued item", {
       issueNumber: item.issueNumber,
       repo: item.repoName ?? "",
@@ -1466,11 +1537,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // slot entry on success (see `finally` below) and removed on failure.
     const reservation: SlotReservation = {
       index: slotIndex,
+      issueNumber: item.issueNumber,
       repo: item.repoName ?? "",
       runId,
       ...(item.remoteRunId ? { remoteRunId: item.remoteRunId } : {}),
     };
-    this.reservedSlots.set(item.issueNumber, reservation);
+    const key = slotKey(item.repoName, item.issueNumber);
+    this.reservedSlots.set(key, reservation);
     this.noteHeldRemoteRuns();
     let reservationReleased = false;
     const releaseReservation = () => {
@@ -1481,8 +1554,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       // it and the operator re-queued the issue; deleting by issue number alone
       // would strip the successor's reservation, which is what makes the #188
       // duplicate-dispatch guard and the per-repo concurrency cap correct.
-      if (this.reservedSlots.get(item.issueNumber)?.runId === runId) {
-        this.reservedSlots.delete(item.issueNumber);
+      if (this.reservedSlots.get(key)?.runId === runId) {
+        this.reservedSlots.delete(key);
         this.noteHeldRemoteRuns();
       }
     };
@@ -1598,9 +1671,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * is being created in.
    */
   private stillOwnsIssue(slot: PipelineSlot): boolean {
-    const liveSlot = this.slots.get(slot.issueNumber);
+    const key = slotKey(slot.repo, slot.issueNumber);
+    const liveSlot = this.slots.get(key);
     if (liveSlot) return liveSlot.runId === slot.runId;
-    const reservation = this.reservedSlots.get(slot.issueNumber);
+    const reservation = this.reservedSlots.get(key);
     if (reservation) return reservation.runId === slot.runId;
     // Nobody holds the issue: this slot was already torn out of the map by its
     // own cleanup (or by the abort deadline). Nothing to protect.
@@ -1712,7 +1786,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     });
 
     // Notify UI immediately so the user sees feedback before worktree creation
-    this.callbacks.onSlotPreparing?.(item.issueNumber, item.title, item.epicNumber);
+    this.callbacks.onSlotPreparing?.(item.issueNumber, item.title, item.epicNumber, item.repoName);
 
     // Check for a conflict-restart signal left by pr-merge when it failed due
     // to unresolvable merge conflicts. If present, we force-delete the remote
@@ -1946,7 +2020,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         : undefined,
     };
 
-    this.slots.set(item.issueNumber, slot);
+    this.slots.set(slotKey(item.repoName, item.issueNumber), slot);
     this.emitSlotsChanged();
 
     // Enrich pipeline state with epic context for Discord/UI
@@ -1990,7 +2064,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // Track the full lifecycle by issue so `settleForTest` (tests) can await the
     // real completion signal. The slot is deleted from `this.slots` mid-flight
     // (cleanupSlot), so it can no longer be observed there once cleanup begins.
-    this.lifecyclePromises.set(item.issueNumber, runPromise);
+    const lifecycleKey = slotKey(item.repoName, item.issueNumber);
+    this.lifecyclePromises.set(lifecycleKey, runPromise);
     // The rejection (if any) is already fully handled inside runSlotPipeline
     // (logged, onSlotFailed fired, cleanup run) and rethrown so slot.runPromise
     // consumers still observe it. .finally() adopts that rejection into a new
@@ -1998,8 +2073,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // surfacing as an unhandled rejection.
     void runPromise
       .finally(() => {
-        if (this.lifecyclePromises.get(item.issueNumber) === runPromise) {
-          this.lifecyclePromises.delete(item.issueNumber);
+        if (this.lifecyclePromises.get(lifecycleKey) === runPromise) {
+          this.lifecyclePromises.delete(lifecycleKey);
         }
       })
       .catch(() => undefined);
@@ -2060,17 +2135,17 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           onStageStart: (stage) => {
             slot.currentStage = stage;
             this.emitSlotsChanged();
-            this.callbacks.onSlotStageChanged?.(slot.index, slot.issueNumber, stage);
+            this.callbacks.onSlotStageChanged?.(slot.index, slot.issueNumber, stage, slot.repo);
           },
           // #1055: the slot never wired onStageComplete, so nothing closed a
           // stage's phases on the concurrent path. onStageComplete is already
           // declared on PipelineCallbacks and already fires on every success and
           // failure path, so no orchestrator change is needed.
           onStageComplete: (stage) => {
-            this.callbacks.onSlotStageCompleted?.(slot.index, slot.issueNumber, stage);
+            this.callbacks.onSlotStageCompleted?.(slot.index, slot.issueNumber, stage, slot.repo);
           },
           onStdout: (stage, data) => {
-            this.callbacks.onSlotOutput?.(slot.index, slot.issueNumber, data, stage);
+            this.callbacks.onSlotOutput?.(slot.index, slot.issueNumber, data, stage, slot.repo);
           },
           onPhaseStart: (stage, name, index, total) => {
             this.callbacks.onSlotPhaseStart?.(
@@ -2079,7 +2154,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
               stage,
               name,
               index,
-              total
+              total,
+              slot.repo
             );
           },
           onStderr: (stage, data) => {
@@ -2091,9 +2167,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
               const lower = line.toLowerCase();
               const isError = lower.includes("error") || lower.includes("failed");
               if (isError) {
-                this.callbacks.onSlotError?.(slot.index, slot.issueNumber, line, stage);
+                this.callbacks.onSlotError?.(slot.index, slot.issueNumber, line, stage, slot.repo);
               } else {
-                this.callbacks.onSlotOutput?.(slot.index, slot.issueNumber, line, stage);
+                this.callbacks.onSlotOutput?.(slot.index, slot.issueNumber, line, stage, slot.repo);
               }
             }
           },
@@ -2636,8 +2712,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         issueNumber: slot.issueNumber,
         runId: slot.runId,
         successorRunId:
-          this.slots.get(slot.issueNumber)?.runId ??
-          this.reservedSlots.get(slot.issueNumber)?.runId,
+          this.slots.get(slotKey(slot.repo, slot.issueNumber))?.runId ??
+          this.reservedSlots.get(slotKey(slot.repo, slot.issueNumber))?.runId,
       });
       try {
         slot.stateService.dispose();
@@ -2665,7 +2741,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     }
     slot.cleanupDone = true;
 
-    this.slots.delete(slot.issueNumber);
+    this.slots.delete(slotKey(slot.repo, slot.issueNumber));
     this.emitSlotsChanged();
 
     // Dispose the per-slot state service to release its EventEmitter resources
@@ -2682,7 +2758,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // managers implement only the cleanup surface.
         worktreePath: slot.worktreeManager.getWorktreePath?.(slot.issueNumber),
       });
-      this.callbacks.onSlotCleaned?.(slot.index, slot.issueNumber);
+      this.callbacks.onSlotCleaned?.(slot.index, slot.issueNumber, slot.repo);
     } else {
       try {
         // #3969: on a SUCCESSFUL pipeline (PR merged) tear down the local branch
@@ -2695,7 +2771,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         // Use the slot's own worktreeManager (not this.worktreeManager) so
         // cleanup targets the correct repo even after updateRepoRoot().
         await slot.worktreeManager.cleanup(slot.issueNumber, deleteBranch);
-        this.callbacks.onSlotCleaned?.(slot.index, slot.issueNumber);
+        this.callbacks.onSlotCleaned?.(slot.index, slot.issueNumber, slot.repo);
       } catch (error) {
         this.logger.warn("Failed to clean up worktree after pipeline", {
           issueNumber: slot.issueNumber,
@@ -3587,8 +3663,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       if (result === TIMEOUT_SENTINEL) {
         this.logger.warn("abortAll exceeded deadline — force-clearing slots", {
           timeoutMs: ABORT_ALL_TIMEOUT_MS,
-          stuckIssues: Array.from(this.slots.keys()),
-          strandedReservations: Array.from(this.reservedSlots.keys()),
+          stuckIssues: Array.from(this.slots.values(), (slot) => slot.issueNumber),
+          strandedReservations: Array.from(this.reservedSlots.values(), (r) => r.issueNumber),
           isFilling: this.isFilling,
         });
         // Best-effort second sweep before giving up — covers processes spawned
@@ -3698,8 +3774,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // through the fix for it.
     await Promise.allSettled([
       ...stuckSlots.map((slot) => this.bookForceClearedSlot(slot)),
-      ...strandedReservations.map(([issueNumber, reservation]) =>
-        this.bookForceClearedReservation(issueNumber, reservation)
+      ...strandedReservations.map(([, reservation]) =>
+        this.bookForceClearedReservation(reservation.issueNumber, reservation)
       ),
     ]);
     return stuckSlots.length + strandedReservations.length;
@@ -4041,15 +4117,30 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
-   * Abort a specific slot by issue number
+   * Abort the slot running `repo`'s issue `issueNumber` (#2403). Without
+   * `repo` the number must name exactly one running slot: when two
+   * repositories' issues with the number both run, nothing is stopped.
    */
-  abortSlot(issueNumber: number): boolean {
-    const slot = this.slots.get(issueNumber);
-    if (!slot) return false;
+  abortSlot(issueNumber: number, repo?: string): boolean {
+    const matches = this.slotsFor(issueNumber, repo);
+    if (matches.length !== 1) {
+      if (matches.length > 1) {
+        this.logger.warn(
+          "abortSlot: the issue number names several running slots — name the repository",
+          {
+            issueNumber,
+            repos: matches.map((m) => m.repo ?? ""),
+          }
+        );
+      }
+      return false;
+    }
+    const slot = matches[0];
 
     this.logger.info("Aborting concurrent pipeline slot", {
       slotIndex: slot.index,
       issueNumber,
+      repo: slot.repo ?? "",
     });
     // Mark BEFORE issuing the stop so the slot's runSlot completion handler
     // (which fires asynchronously when orchestrator.stop() unwinds) can route
@@ -4146,8 +4237,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   /**
    * Check if an issue is currently running in a slot
    */
-  isRunning(issueNumber: number): boolean {
-    return this.slots.has(issueNumber);
+  isRunning(issueNumber: number, repo?: string): boolean {
+    return this.slotsFor(issueNumber, repo).length > 0;
   }
 
   /**
@@ -4256,7 +4347,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           if (run.pinned) return "pinned";
           local.remoteRunId = run.remoteRunId;
           local.remoteRunAttached = true;
-          const reservation = this.reservedSlots.get(local.issueNumber);
+          const reservation = this.reservedSlots.get(slotKey(local.repoName, local.issueNumber));
           if (reservation && sameRepo(reservation.repo, run.repo) && !reservation.remoteRunId) {
             reservation.remoteRunId = run.remoteRunId;
           }
@@ -4337,7 +4428,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   private dispatchesNotStarted(): QueueHandBackRef[] {
     const handBack: QueueHandBackRef[] = [];
     for (const item of this.dispatchingItems) {
-      if (this.slots.has(item.issueNumber) || this.reservedSlots.has(item.issueNumber)) continue;
+      const key = slotKey(item.repoName, item.issueNumber);
+      if (this.slots.has(key) || this.reservedSlots.has(key)) continue;
       const cancelled = this.isCancelledRemoteRun(item);
       if (cancelled && !item.remoteRunAttached) continue;
       const serves = item.remoteRunId !== undefined && !cancelled;
@@ -4374,10 +4466,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * @see Issue #3552 — cancel command handler
    */
   findSlotByRemoteRunId(remoteRunId: string): number | null {
-    for (const [issueNumber, slot] of this.slots) {
-      if (slot.remoteRunId === remoteRunId) return issueNumber;
-    }
-    return null;
+    return this.slotByRemoteRunId(remoteRunId)?.issueNumber ?? null;
   }
 
   /**
@@ -4677,8 +4766,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   private slotByRemoteRunId(remoteRunId: string): PipelineSlot | undefined {
-    const issueNumber = this.findSlotByRemoteRunId(remoteRunId);
-    return issueNumber === null ? undefined : this.slots.get(issueNumber);
+    for (const slot of this.slots.values()) {
+      if (slot.remoteRunId === remoteRunId) return slot;
+    }
+    return undefined;
   }
 
   /**
@@ -4706,9 +4797,11 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   async settleForTest(...issueNumbers: number[]): Promise<void> {
     const promises =
       issueNumbers.length > 0
-        ? issueNumbers
-            .map((n) => this.lifecyclePromises.get(n))
-            .filter((p): p is Promise<PipelineRunResult> => p !== undefined)
+        ? issueNumbers.flatMap((n) =>
+            [...this.lifecyclePromises.entries()]
+              .filter(([key]) => key.endsWith(`#${n}`))
+              .map(([, p]) => p)
+          )
         : [...this.lifecyclePromises.values()];
     await Promise.allSettled(promises);
   }

@@ -32,6 +32,11 @@ and this project adheres to
 
 ### Fixed
 
+- **Two repositories' issues with the same number can run at once** (#2403).
+  While one ran, the other was dropped from the queue as if it were a second
+  copy of the first. Each now gets its own slot, its own row in the pipeline
+  view and its own output channel, and Stop Slot stops only the one you
+  picked, named `owner/repo#N`.
 - **A stage on Codex, OpenCode, Grok, Gemini or Copilot runs the skill composed
   for it.** It used to be prompted with the base skill, so the adaptations for
   its host and model, and a skill the platform resolved, never reached it, and
