@@ -7,13 +7,16 @@
  * needs a snapshot of every active issue at once.
  *
  * This tracker subscribes directly to the IPC `pipeline.stateChanged` event
- * stream and builds a `Map<issueNumber, SlotRuntimeSnapshot>` keyed by the
- * issueNumber that travels on each event. The Overview renderer joins this
- * with `IssueQueueService.getQueue()` to produce slot cards.
+ * stream and builds a map of `SlotRuntimeSnapshot`s keyed by the repository
+ * and issue number that travel on each event (`slotKey`, #2412): two
+ * repositories' issues with one number run in two slots. The Overview
+ * renderer joins this with `IssueQueueService.getQueue()` to produce slot
+ * cards.
  */
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import { IpcClient } from "../../services/IpcClient";
+import { slotKey } from "../../utils/epicRef";
 import type { SlotPhaseSummary, SlotStageStatus } from "./SlotCardTypes";
 
 /**
@@ -119,6 +122,7 @@ interface RawStageCompleteEvent {
 interface RawStageStartEvent {
   issueNumber: number;
   stage: string;
+  repo?: string;
   runId?: string;
 }
 
@@ -160,13 +164,14 @@ export interface SlotRuntimeSnapshot {
  * rendered as cards on the dashboard.
  */
 export class PipelineSlotsTracker implements vscode.Disposable {
-  private snapshots: Map<number, SlotRuntimeSnapshot> = new Map();
+  /** Keyed by {@link slotKey}: repository and issue number (#2412). */
+  private snapshots: Map<string, SlotRuntimeSnapshot> = new Map();
   private disposables: vscode.Disposable[] = [];
   private readonly _onChanged = new vscode.EventEmitter<void>();
   readonly onChanged = this._onChanged.event;
   private readonly ipc: IpcClient;
-  /** Issues whose cumulative token/cost state has been hydrated from Go. */
-  private readonly hydratedIssues = new Set<number>();
+  /** Runs (by {@link slotKey}) whose cumulative token/cost state has been hydrated from Go. */
+  private readonly hydratedIssues = new Set<string>();
 
   constructor(ipc: IpcClient = IpcClient.getInstance()) {
     this.ipc = ipc;
@@ -183,7 +188,8 @@ export class PipelineSlotsTracker implements vscode.Disposable {
       ipc.on("phase.start", (data) => {
         const event = data as RawPhaseEvent;
         if (typeof event?.issueNumber !== "number") return;
-        const snap = this.ensureSnapshot(event.issueNumber);
+        const snap = this.ensureSnapshot(event.issueNumber, event.repo);
+        if (!snap) return;
         if (event.runId) snap.runId = event.runId;
         snap.currentStage = event.stage as PipelineStage;
         snap.currentPhase = {
@@ -194,12 +200,12 @@ export class PipelineSlotsTracker implements vscode.Disposable {
         // If this snapshot has no cost data yet (dashboard opened mid-pipeline),
         // fetch current accumulated state from Go so cost/tokens reflect prior stages.
         if (
-          !this.hydratedIssues.has(event.issueNumber) &&
+          event.repo &&
+          !this.hydratedIssues.has(slotKey(event.repo, event.issueNumber)) &&
           snap.costUsd === 0 &&
-          snap.inputTokens === 0 &&
-          event.repo
+          snap.inputTokens === 0
         ) {
-          this.hydratedIssues.add(event.issueNumber);
+          this.hydratedIssues.add(slotKey(event.repo, event.issueNumber));
           this.fetchAndApplyState(event.issueNumber, event.repo).catch(() => {});
         }
         this._onChanged.fire();
@@ -210,7 +216,7 @@ export class PipelineSlotsTracker implements vscode.Disposable {
       ipc.on("phase.complete", (data) => {
         const event = data as RawPhaseEvent;
         if (typeof event?.issueNumber !== "number") return;
-        const snap = this.snapshots.get(event.issueNumber);
+        const snap = this.getSnapshot(event.issueNumber, event.repo);
         if (!snap) return;
         if (event.runId) snap.runId = event.runId;
         // Clear the active phase only if it's the one that just completed —
@@ -229,7 +235,8 @@ export class PipelineSlotsTracker implements vscode.Disposable {
       ipc.on("stage.start", (data) => {
         const event = data as RawStageStartEvent;
         if (typeof event?.issueNumber !== "number") return;
-        const snap = this.ensureSnapshot(event.issueNumber);
+        const snap = this.ensureSnapshot(event.issueNumber, event.repo);
+        if (!snap) return;
         if (event.runId) snap.runId = event.runId;
         const nextStage = event.stage as PipelineStage;
         // Clear any lingering phase from the previous stage so a stale
@@ -264,7 +271,8 @@ export class PipelineSlotsTracker implements vscode.Disposable {
       ipc.on("stage.complete", (data) => {
         const event = data as RawStageCompleteEvent;
         if (typeof event?.issueNumber !== "number") return;
-        const snap = this.ensureSnapshot(event.issueNumber);
+        const snap = this.ensureSnapshot(event.issueNumber, event.repo);
+        if (!snap) return;
         if (event.runId) snap.runId = event.runId;
         const stageEntry: SlotRuntimeStageEntry = {
           status: event.error ? "failed" : "complete",
@@ -300,7 +308,8 @@ export class PipelineSlotsTracker implements vscode.Disposable {
    * Called by Dashboard when a per-slot PipelineStateService fires
    * onTokenUsageUpdated during an active stage. This keeps the slot card's
    * cost/token display live (matching the treeview) rather than waiting for
-   * the end-of-stage stage.complete event.
+   * the end-of-stage stage.complete event. `repo` (`owner/name`) names the
+   * run's repository (#2412).
    *
    * Does NOT fire _onChanged — the Dashboard caller drives the UI update
    * via updatePanel("slot:onTokenUsageUpdated"). The next pipeline.stateChanged
@@ -313,9 +322,10 @@ export class PipelineSlotsTracker implements vscode.Disposable {
       outputTokens?: number;
       cacheReadTokens?: number;
       costUsd?: number;
-    }
+    },
+    repo?: string
   ): void {
-    const snap = this.snapshots.get(issueNumber);
+    const snap = this.getSnapshot(issueNumber, repo);
     if (!snap) return;
     if (delta.inputTokens) snap.inputTokens += delta.inputTokens;
     if (delta.outputTokens) snap.outputTokens += delta.outputTokens;
@@ -327,21 +337,49 @@ export class PipelineSlotsTracker implements vscode.Disposable {
    * Drop a slot — called when Go reports the pipeline has finished and the
    * slot is no longer in `activeSlots`.
    */
-  forget(issueNumber: number): void {
-    if (this.snapshots.delete(issueNumber)) {
+  forget(issueNumber: number, repo?: string): void {
+    // Without a repository, the snapshot recorded without one goes first.
+    const unknownRepo = slotKey(undefined, issueNumber);
+    const key =
+      !repo && this.snapshots.has(unknownRepo) ? unknownRepo : this.findKey(issueNumber, repo);
+    if (key !== undefined && this.snapshots.delete(key)) {
       this._onChanged.fire();
     }
   }
 
   /**
-   * Return a defensive copy of all current per-issue snapshots.
+   * Return a defensive copy of all current snapshots, keyed by
+   * {@link slotKey} (repository and issue number).
    */
-  getSnapshots(): Map<number, SlotRuntimeSnapshot> {
+  getSnapshots(): Map<string, SlotRuntimeSnapshot> {
     return new Map(this.snapshots);
   }
 
-  getSnapshot(issueNumber: number): SlotRuntimeSnapshot | undefined {
-    return this.snapshots.get(issueNumber);
+  /**
+   * The snapshot for an issue, by repository (`owner/name`) and number
+   * (#2412). Without a repository, or for a snapshot recorded without one,
+   * the number alone resolves it only when it names exactly one snapshot.
+   */
+  getSnapshot(issueNumber: number, repo?: string): SlotRuntimeSnapshot | undefined {
+    const key = this.findKey(issueNumber, repo);
+    return key === undefined ? undefined : this.snapshots.get(key);
+  }
+
+  /** The map key {@link getSnapshot} resolves, or undefined. */
+  private findKey(issueNumber: number, repo?: string): string | undefined {
+    if (repo) {
+      const exact = slotKey(repo, issueNumber);
+      if (this.snapshots.has(exact)) return exact;
+      const unknownRepo = slotKey(undefined, issueNumber);
+      return this.snapshots.has(unknownRepo) ? unknownRepo : undefined;
+    }
+    let found: string | undefined;
+    for (const [key, snap] of this.snapshots) {
+      if (snap.issueNumber !== issueNumber) continue;
+      if (found !== undefined) return undefined;
+      found = key;
+    }
+    return found;
   }
 
   /**
@@ -380,24 +418,44 @@ export class PipelineSlotsTracker implements vscode.Disposable {
     this._onChanged.dispose();
   }
 
-  private ensureSnapshot(issueNumber: number): SlotRuntimeSnapshot {
-    let snap = this.snapshots.get(issueNumber);
+  /**
+   * The snapshot for an event's run, created when absent. An event naming a
+   * repository adopts a snapshot recorded for the number without one, and
+   * re-keys it under its repository (#2412). An event without a repository
+   * whose number names several snapshots cannot say which run it is about:
+   * undefined, and the event is dropped.
+   */
+  private ensureSnapshot(issueNumber: number, repo?: string): SlotRuntimeSnapshot | undefined {
+    const key = this.findKey(issueNumber, repo);
+    if (key === undefined && !repo) {
+      for (const snap of this.snapshots.values()) {
+        if (snap.issueNumber === issueNumber) return undefined;
+      }
+    }
+    let snap = key === undefined ? undefined : this.snapshots.get(key);
+    if (snap && repo && key !== slotKey(repo, issueNumber)) {
+      this.snapshots.delete(key!);
+      snap.repo = repo;
+      this.snapshots.set(slotKey(repo, issueNumber), snap);
+    }
     if (!snap) {
       snap = {
         issueNumber,
+        ...(repo ? { repo } : {}),
         stages: {},
         inputTokens: 0,
         outputTokens: 0,
         cacheReadTokens: 0,
         costUsd: 0,
       };
-      this.snapshots.set(issueNumber, snap);
+      this.snapshots.set(slotKey(repo, issueNumber), snap);
     }
     return snap;
   }
 
   private applyStateChanged(event: RawStateChanged): void {
-    const snap = this.ensureSnapshot(event.issueNumber);
+    const snap = this.ensureSnapshot(event.issueNumber, event.repo);
+    if (!snap) return;
     const go = event.state ?? {};
 
     // Record the run this snapshot is about, from the ENVELOPE only (ADR-017

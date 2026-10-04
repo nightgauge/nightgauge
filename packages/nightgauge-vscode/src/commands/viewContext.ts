@@ -13,6 +13,7 @@ import type { ContextFileViewer, PipelineTreeProvider, StageTreeItem } from "../
 import type { Logger } from "../utils/logger";
 import { openContextFile } from "../views";
 import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
+import { findActiveSlot } from "../utils/slotIdentity";
 
 /**
  * Map stage to context file type
@@ -50,8 +51,13 @@ export function registerViewContextCommand(
         issueNumber = parentSlot.issueNumber;
         // Resolve worktree path for this slot's context files
         if (concurrentPipelineManager) {
-          const activeSlots = concurrentPipelineManager.getActiveSlots();
-          const slot = activeSlots.find((s) => s.issueNumber === issueNumber);
+          // The slot by repository and number: another repository's issue
+          // with the same number runs in another worktree (#2412).
+          const slot = findActiveSlot(
+            concurrentPipelineManager.getActiveSlots(),
+            parentSlot.issueNumber,
+            parentSlot.repo
+          );
           if (slot) {
             worktreePath = slot.worktreePath;
           }

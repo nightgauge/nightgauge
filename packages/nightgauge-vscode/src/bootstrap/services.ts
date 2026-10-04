@@ -27,6 +27,7 @@ import { Logger, createMainLogger, installLogDiskSink } from "../utils/logger";
 import { setRunningWorktreePathsProvider } from "../utils/skillRunner";
 import { StatusBarManager } from "../utils/statusBar";
 import { slotKey } from "../utils/epicRef";
+import { ActiveRunSet } from "../utils/slotIdentity";
 import { resolveActiveRepository } from "../utils/resolveActiveRepository";
 import {
   getNextStage,
@@ -3039,11 +3040,13 @@ export async function initializeServices(
   // Wire concurrent slot output to OutputWindow so automated-mode output
   // is visible in the Output view (not just per-slot OutputChannel tabs).
   if (slotOutputManager) {
-    // Track current stage per issue so onOutput can tag lines correctly
-    const slotCurrentStage = new Map<number, PipelineStage>();
+    // Track current stage per slot run, keyed by slotKey(repo, issueNumber),
+    // so onOutput can tag lines correctly: two repositories' issues with one
+    // number run in two slots (#2412).
+    const slotCurrentStage = new Map<string, PipelineStage>();
 
     slotOutputManager.setCallbacks({
-      onOutput: (slotIndex, issueNumber, text, level, emittingStage) => {
+      onOutput: (slotIndex, issueNumber, text, level, emittingStage, repo) => {
         // #283 defect 2: prefer the EMITTING stage carried by the event over
         // the slot's current-stage pointer — the early spinner (#981)
         // advances the pointer before the previous stage's gate runs, so
@@ -3051,11 +3054,11 @@ export async function initializeServices(
         // gate-not-invoked audit about issue-pickup) under the NEXT stage,
         // manufacturing the false "[feature-validate] detected it" story in
         // #127's forensics. Fall back only when the producer had no stage.
-        const stage = emittingStage ?? slotCurrentStage.get(issueNumber);
+        const stage = emittingStage ?? slotCurrentStage.get(slotKey(repo, issueNumber));
         // Route output to per-slot buffer in the OutputWindow (Issue #2705)
         outputWindow.appendLine(text, level === "error" ? "error" : "info", stage, { slotIndex });
       },
-      onStageChanged: (slotIndex, issueNumber, stage) => {
+      onStageChanged: (slotIndex, issueNumber, stage, repo) => {
         // #307 follow-up: the dispatch-seed call (onSlotStarted's direct
         // updateStage("issue-pickup")) and the real stage-start event
         // (relayed from the per-slot orchestrator's onStageStart, once the
@@ -3068,8 +3071,9 @@ export async function initializeServices(
         // independently so the dispatch banner — and the disk-log line and
         // webview entry it produces — can never be written twice for a
         // stage this slot already reported.
-        const isRepeatStage = slotCurrentStage.get(issueNumber) === stage;
-        slotCurrentStage.set(issueNumber, stage);
+        const runKey = slotKey(repo, issueNumber);
+        const isRepeatStage = slotCurrentStage.get(runKey) === stage;
+        slotCurrentStage.set(runKey, stage);
         // Automated per-stage update — ensure the panel exists without
         // stealing the user's active tab (no reveal).
         outputWindow.show();
@@ -4204,12 +4208,13 @@ export async function initializeServices(
     // redundant, idempotent flush — that path deliberately does NOT touch
     // activeRunCount, so there is no double-decrement.
     const uploader = telemetryUploaderService;
-    const activeRunIssues = new Set<number>();
+    // The set is keyed by slotKey(repo, issueNumber): two repositories'
+    // issues with one number are two runs (#2412).
+    const activeRuns = new ActiveRunSet();
     const uploaderLifecycleDisposers = [
       ipcClient.on("stage.start", (data: unknown) => {
-        const issueNumber = (data as { issueNumber?: number }).issueNumber;
-        if (typeof issueNumber === "number" && !activeRunIssues.has(issueNumber)) {
-          activeRunIssues.add(issueNumber);
+        const { issueNumber, repo } = data as { issueNumber?: number; repo?: string };
+        if (typeof issueNumber === "number" && activeRuns.start(issueNumber, repo)) {
           uploader.onRunStarted();
         } else {
           uploader.onRunProgress();
@@ -4219,14 +4224,14 @@ export async function initializeServices(
         uploader.onRunProgress();
       }),
       ipcClient.on("pipeline.complete", (data: unknown) => {
-        const issueNumber = (data as { issueNumber?: number }).issueNumber;
-        if (typeof issueNumber === "number" && activeRunIssues.delete(issueNumber)) {
+        const { issueNumber, repo } = data as { issueNumber?: number; repo?: string };
+        if (typeof issueNumber === "number" && activeRuns.end(issueNumber, repo)) {
           uploader.onRunCompleted();
         }
       }),
       ipcClient.on("pipeline.error", (data: unknown) => {
-        const issueNumber = (data as { issueNumber?: number }).issueNumber;
-        if (typeof issueNumber === "number" && activeRunIssues.delete(issueNumber)) {
+        const { issueNumber, repo } = data as { issueNumber?: number; repo?: string };
+        if (typeof issueNumber === "number" && activeRuns.end(issueNumber, repo)) {
           uploader.onRunCompleted();
         }
       }),

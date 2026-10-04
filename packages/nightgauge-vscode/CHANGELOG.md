@@ -32,6 +32,11 @@ and this project adheres to
 
 ### Fixed
 
+- **Two repositories' issues with the same number keep their own Output
+  window tab and dashboard card** (#2411, #2412). Before, one run's stages,
+  tokens and cost could show on the other's tab or card, View Context could
+  open the other run's worktree, and an archived tab could be skipped while a
+  same-numbered issue from another repository ran.
 - **Slack, Discord and Mattermost post one card per run** when two
   repositories' issues with the same number run at once (#2408). Before, the
   second run took over the first's card and the first stopped updating.

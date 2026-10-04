@@ -142,6 +142,7 @@ function buildMockStateService(tokenHandler: { current: TokenUsageHandler | null
       return { dispose: vi.fn() };
     }),
     getState: vi.fn().mockResolvedValue(null),
+    getRunRepo: vi.fn(() => ""),
     // PipelineStateService interface stubs not needed for these tests
     onIssueNumberChanged: vi.fn(() => ({ dispose: vi.fn() })),
     onStageStatusChanged: vi.fn(() => ({ dispose: vi.fn() })),
@@ -260,6 +261,68 @@ describe("OutputWindow cost display — fix #2885", () => {
         slotIndex: 0,
         costUsd: 0.0075,
       });
+    });
+
+    it("routes a token update to the run's repository when two slots share the number (#2411)", () => {
+      ow.registerSlotInfo(0, 21, "Platform 21", "example-org/platform");
+      ow.registerSlotInfo(1, 21, "App 21", "example-org/app");
+
+      const tokenHandler: { current: TokenUsageHandler | null } = { current: null };
+      const stateService = {
+        ...buildMockStateService(tokenHandler),
+        getRunRepo: vi.fn(() => "example-org/app"),
+      };
+      ow.setStateService(stateService as any);
+      mockPostMessage.mockClear();
+
+      tokenHandler.current!({
+        stage: "feature-dev",
+        inputTokens: 500,
+        outputTokens: 300,
+        costUsd: 0.0075,
+        issueNumber: 21,
+      });
+
+      const badgeCalls = mockPostMessage.mock.calls.filter(
+        (args) => args[0]?.type === "slot-badge-update"
+      );
+      expect(badgeCalls.map((args) => args[0].slotIndex)).toEqual([1]);
+    });
+  });
+
+  describe("state routing by repository (#2411)", () => {
+    it("syncs a state update onto the run's repository's slot, not the same-numbered sibling", async () => {
+      ow.registerSlotInfo(0, 21, "Platform 21", "example-org/platform");
+      ow.registerSlotInfo(1, 21, "App 21", "example-org/app");
+
+      let stateHandler: ((state: unknown) => void) | null = null;
+      const tokenHandler: { current: TokenUsageHandler | null } = { current: null };
+      const stateService = {
+        ...buildMockStateService(tokenHandler),
+        onStateChanged: vi.fn((cb: (state: unknown) => void) => {
+          stateHandler = cb;
+          return { dispose: vi.fn() };
+        }),
+        getRunRepo: vi.fn(() => "example-org/app"),
+      };
+      ow.setStateService(stateService as any);
+
+      stateHandler!({
+        issue_number: 21,
+        title: "App 21",
+        branch: "feat/21",
+        started_at: new Date().toISOString(),
+        stages: { "feature-dev": { status: "running" } },
+        tokens: { input: 1000, output: 400, cacheRead: 0, cacheCreation: 0, costUsd: 0.5 },
+      });
+
+      const state = (ow as any).state;
+      expect(
+        state.getSlotByIssueNumber(21, "example-org/app").stages.get("feature-dev").status
+      ).toBe("running");
+      expect(
+        state.getSlotByIssueNumber(21, "example-org/platform").stages.get("feature-dev").status
+      ).toBe("pending");
     });
   });
 });

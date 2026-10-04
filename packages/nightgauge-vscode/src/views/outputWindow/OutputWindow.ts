@@ -375,7 +375,7 @@ export class OutputWindow implements vscode.Disposable {
     // Subscribe to state changes
     const stateDisposable = stateService.onStateChanged((state) => {
       if (state) {
-        this.syncFromState(state);
+        this.syncFromState(state, stateService.getRunRepo());
 
         // Track pipeline running state and send to WebView (Issue #431)
         // Determine running state by checking if any stage has status === 'running'
@@ -419,7 +419,10 @@ export class OutputWindow implements vscode.Disposable {
 
       // Route token delta to owning slot for badge display (Issue #2815)
       if (tokenUpdate.issueNumber != null) {
-        const slot = this.state.getSlotByIssueNumber(tokenUpdate.issueNumber);
+        const slot = this.state.getSlotByIssueNumber(
+          tokenUpdate.issueNumber,
+          stateService.getRunRepo() || undefined
+        );
         if (slot !== undefined) {
           this.state.updateSlotTokenUsage(slot.slotIndex, {
             inputTokens: tokenUpdate.inputTokens,
@@ -437,7 +440,7 @@ export class OutputWindow implements vscode.Disposable {
     // Initial sync
     stateService.getState().then((state) => {
       if (state) {
-        this.syncFromState(state);
+        this.syncFromState(state, stateService.getRunRepo());
         // Send initial pipeline state to WebView (Issue #431)
         const runningStage = this.findRunningStage(state);
         const isRunning = runningStage !== null;
@@ -508,8 +511,10 @@ export class OutputWindow implements vscode.Disposable {
    *
    * Called whenever PipelineStateService emits a state change.
    * Updates token usage and stage statuses from the authoritative state.
+   * `repo` is the run's repository (`owner/name`, "" when unknown): the slot
+   * is found by repository and number (#2411).
    */
-  private syncFromState(state: PipelineState): void {
+  private syncFromState(state: PipelineState, repo: string): void {
     // Update issue number if changed
     const currentIssue = this.state.getIssueNumber();
     if (currentIssue !== state.issue_number) {
@@ -535,7 +540,7 @@ export class OutputWindow implements vscode.Disposable {
     }
 
     // Route slot-specific fields to the slot owning this issue (Issue #2814/#2815).
-    const slotIndex = this.state.findSlotIndexByIssue(state.issue_number);
+    const slotIndex = this.state.findSlotIndexByIssue(state.issue_number, repo || undefined);
     if (slotIndex !== undefined) {
       this.syncSlotFromState(slotIndex, state);
     }
@@ -1461,13 +1466,11 @@ export class OutputWindow implements vscode.Disposable {
 
     let rehydratedAny = false;
     for (const descriptor of descriptors) {
-      // Dedup: skip if a running slot already covers this issue
-      const existingSlot = this.state.findSlotIndexByIssue(descriptor.issueNumber);
-      if (existingSlot !== undefined && this.state.isSlotRunning(existingSlot)) {
+      // Dedup: skip if a running or archived slot already holds this log's
+      // issue in this log's repository (#2411)
+      if (this.state.hasSlotLoggingIssue(descriptor.issueNumber, this.replayWorkspaceRoot!)) {
         continue;
       }
-      // Dedup: skip if any archived slot already exists for this issue
-      if (existingSlot !== undefined) continue;
 
       const entries = await LogFileWriter.readLog(descriptor.filePath);
       if (entries.length === 0) continue;
@@ -1475,6 +1478,8 @@ export class OutputWindow implements vscode.Disposable {
       const slotIndex = this.state.getNextSlotIndex();
       const title = `Issue #${descriptor.issueNumber}`;
       this.state.registerArchivedSlot(slotIndex, descriptor.issueNumber, title);
+      // The archived tab's log lives under the replay root (#2411).
+      this.state.setSlotLogRoot(slotIndex, this.replayWorkspaceRoot);
 
       // Rehydrate token totals from execution history (Issue #3708)
       try {
