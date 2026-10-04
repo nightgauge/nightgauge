@@ -13,13 +13,12 @@ import (
 
 // The platform's workspace throttle outside the extension (#2352).
 //
-// The daemon follows the throttle of the workspace it serves while it has a
-// signed-in session (runDaemonPlatformAgent). A headless scheduler
-// (`autonomous run`, `pipeline run --auto`) holds only a license key, and the
-// platform answers the workspace list only to a signed-in user, so it asks
-// the workspace's daemon instead. With no daemon, or a daemon that follows no
-// throttle, nothing is applied: the same rule the extension keeps, which
-// follows the throttle only while a session exists.
+// The daemon follows the throttle of the workspace it serves, read from the
+// platform's agent throttle endpoint under its registered agent
+// (runDaemonPlatformAgent). A headless scheduler (`autonomous run`,
+// `pipeline run --auto`) registers no agent of its own, so it asks the
+// workspace's daemon instead. With no daemon, or a daemon that follows no
+// throttle (one not connected to the platform), nothing is applied.
 
 // throttleCommandType is the platform's workspace throttle command (#2337).
 const throttleCommandType = "throttle"
@@ -28,18 +27,6 @@ const throttleCommandType = "throttle"
 // workspace's daemon for the throttle: one local socket round-trip, at the
 // autonomous scheduler's default scan interval.
 const daemonThrottleInterval = 30 * time.Second
-
-// daemonSessionDecisionGrace bounds how long a daemon with no session reports
-// the throttle unread while it waits for the extension to push the session it
-// holds, or to say it holds none (#2352). A daemon no extension attaches to
-// then reports that it follows no throttle.
-const daemonSessionDecisionGrace = 2 * time.Minute
-
-// afterSessionDecisionGrace runs decide once daemonSessionDecisionGrace has
-// passed: time.AfterFunc, but a test ends the grace itself.
-var afterSessionDecisionGrace = func(decide func()) interface{ Stop() bool } {
-	return time.AfterFunc(daemonSessionDecisionGrace, decide)
-}
 
 // refreshThrottleOnCommand wraps relay so a `throttle` command the daemon's
 // agent receives makes the daemon read its workspace throttle again (#2352),
@@ -80,7 +67,7 @@ type daemonThrottleFollower struct {
 // step asks the daemon once and applies its answer. Only an answer that names
 // the throttle, or says the daemon follows none, changes what is applied. A
 // daemon that cannot be reached, or that follows the throttle but has not
-// read it yet (just started, or its reads failing), changes nothing: a
+// read it yet (not registered yet, or its reads failing), changes nothing: a
 // throttle it reported before is kept, until its resumeAt or until a daemon
 // reports the workspace's throttle again, and the log says so; with none
 // learned, nothing is capped. Each change of state is logged once.
@@ -93,7 +80,7 @@ func (f *daemonThrottleFollower) step(ctx context.Context) {
 				"the workspace's daemon cannot be reached, so the last throttle it reported is kept: %s (%v)",
 				describeWorkspaceThrottle(kept), err)
 		} else {
-			f.report("unreachable", "no daemon serves this workspace with a signed-in session, so the platform's throttle is not followed (%v)", err)
+			f.report("unreachable", "no daemon serves this workspace, so the platform's throttle is not followed (%v)", err)
 		}
 	case result.Known && result.Throttle == nil:
 		f.throttle.Set(nil, true)
@@ -111,7 +98,7 @@ func (f *daemonThrottleFollower) step(ctx context.Context) {
 		}
 	default:
 		f.throttle.Set(nil, false)
-		f.report("unknown", "the workspace's daemon follows no throttle (it has no signed-in session), so the platform's throttle is not followed")
+		f.report("unknown", "the workspace's daemon follows no throttle (it is not connected to the platform), so the platform's throttle is not followed")
 	}
 }
 

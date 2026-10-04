@@ -209,8 +209,12 @@ fi
 if [ -n "$AGENT_ID" ]; then
   ENCODED_AGENT_ID="$(jq -nr --arg id "$AGENT_ID" '$id|@uri')"
   call PUT "/v1/agents/${ENCODED_AGENT_ID}/heartbeat" "Agent heartbeat"
+  # The daemon's workspace throttle read (#2352), with the license key.
+  call GET "/v1/agents/${ENCODED_AGENT_ID}/throttles" "Agent workspace throttles"
+  assert_object_keys "Agent workspace throttles" workspaces
 else
   record_skipped "Agent heartbeat" "PUT /v1/agents/:id/heartbeat" "no agent id returned by registration"
+  record_skipped "Agent workspace throttles" "GET /v1/agents/:id/throttles" "no agent id returned by registration"
 fi
 
 # --- Analytics ---------------------------------------------------------------

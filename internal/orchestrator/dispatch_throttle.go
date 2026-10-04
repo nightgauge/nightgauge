@@ -25,8 +25,8 @@ type DispatchThrottle struct {
 	mu       sync.Mutex
 	throttle *platform.WorkspaceThrottle
 	known    bool
-	// unread is true while the throttle is followed (a signed-in session
-	// exists) but not known: no read has succeeded since the session came.
+	// unread is true while the throttle is followed but not known: the
+	// agent is not registered yet, or no read has succeeded.
 	unread bool
 	now    func() time.Time
 	// afterFunc arms the lift at resumeAt: time.AfterFunc, but in tests.
@@ -49,7 +49,7 @@ func NewDispatchThrottle() *DispatchThrottle {
 }
 
 // Set applies a throttle, or clears it with nil. known is false when the
-// throttle cannot be followed (no signed-in session), which also caps nothing.
+// throttle is not followed, which also caps nothing.
 func (d *DispatchThrottle) Set(throttle *platform.WorkspaceThrottle, known bool) {
 	d.mu.Lock()
 	if !known {
@@ -80,14 +80,12 @@ func (d *DispatchThrottle) Set(throttle *platform.WorkspaceThrottle, known bool)
 	}
 }
 
-// MarkUnread records that the throttle is followed, since a signed-in
-// session exists, but not known yet: its first read is in flight, or every
-// read so far failed (#2352). A daemon also marks it while it has not yet
-// learned whether a session exists, from its start until the extension
-// pushes its session or says it has none. Like an unknown throttle it caps nothing, but a
-// headless scheduler asking the daemon keeps the throttle it learned before,
-// where a daemon that follows none lifts it. A known throttle is left as it
-// is: a read that fails changes nothing.
+// MarkUnread records that the throttle is followed but not known yet: the
+// daemon's agent is not registered yet, its first read is in flight, or
+// every read so far failed (#2352). Like an unknown throttle it caps nothing,
+// but a headless scheduler asking the daemon keeps the throttle it learned
+// before, where a daemon that follows none lifts it. A known throttle is left
+// as it is: a read that fails changes nothing.
 func (d *DispatchThrottle) MarkUnread() {
 	d.mu.Lock()
 	defer d.mu.Unlock()

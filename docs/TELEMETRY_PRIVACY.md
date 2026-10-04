@@ -183,7 +183,11 @@ features themselves. The telemetry switches do not stop these;
   The daemon registers only with a license key.
 - **Remote commands.** Each agent keeps a connection open for the commands the
   dashboard or the app sends it (start a run, cancel, change the throttle), and
-  reads the throttle your workspace sets.
+  reads the throttle your workspace sets. The daemon reads it when it
+  registers, when a throttle command arrives and when its command stream
+  reconnects, retrying a failed read on its heartbeat; when the extension has
+  handed it your session, it also reads your team list once, to tell which
+  team's workspace it serves.
 - **The Action Center.** The daemon mirrors the decisions a run is waiting on,
   so the dashboard and the app can show them: for each, its title and the text
   the pipeline wrote, the repository, the issue and the branch.

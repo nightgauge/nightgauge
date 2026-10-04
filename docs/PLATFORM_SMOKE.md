@@ -39,6 +39,7 @@ client) — not guessed:
 | ----------------------------------- | ------------------------------ | ---------------------------------------------------- |
 | Agent registration                  | `POST /v1/agents/register`     | `internal/platform/agent_registration.go`            |
 | Agent heartbeat                     | `PUT /v1/agents/:id/heartbeat` | `internal/platform/agent_registration.go`            |
+| Agent workspace throttles           | `GET /v1/agents/:id/throttles` | `internal/platform/workspace_throttle.go`            |
 | Analytics dashboard / usage summary | `GET /v1/analytics/dashboard`  | `internal/platform/analytics.go` (`GetUsageSummary`) |
 | Analytics health                    | `GET /v1/analytics/health`     | `internal/platform/analytics.go`                     |
 | Analytics runs                      | `GET /v1/analytics/runs`       | `internal/platform/analytics.go`                     |

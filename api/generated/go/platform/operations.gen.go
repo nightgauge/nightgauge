@@ -87,6 +87,15 @@ var OpAgentsHeartbeat = Operation{
 	Upstream: UpstreamDeclared,
 }
 
+// OpAgentsListWorkspaceThrottles is GET /v1/agents/{agentId}/throttles.
+var OpAgentsListWorkspaceThrottles = Operation{
+	ID:       "agents.listWorkspaceThrottles",
+	Method:   "GET",
+	Path:     "/v1/agents/{agentId}/throttles",
+	Security: SecurityPipeline,
+	Upstream: UpstreamDeclared,
+}
+
 // OpAgentsRegister is POST /v1/agents/register.
 var OpAgentsRegister = Operation{
 	ID:       "agents.register",
@@ -240,6 +249,15 @@ var OpQueueSync = Operation{
 	Upstream: UpstreamDeclared,
 }
 
+// OpTeamsListMine is GET /v1/teams.
+var OpTeamsListMine = Operation{
+	ID:       "teams.listMine",
+	Method:   "GET",
+	Path:     "/v1/teams",
+	Security: SecurityUserJWT,
+	Upstream: UpstreamDeclared,
+}
+
 // OpTelemetryIngestPipelineRun is POST /v1/telemetry/pipeline-run.
 var OpTelemetryIngestPipelineRun = Operation{
 	ID:       "telemetry.ingestPipelineRun",
@@ -249,21 +267,13 @@ var OpTelemetryIngestPipelineRun = Operation{
 	Upstream: UpstreamDeclared,
 }
 
-// OpWorkspacesList is GET /v1/workspaces.
-var OpWorkspacesList = Operation{
-	ID:       "workspaces.list",
-	Method:   "GET",
-	Path:     "/v1/workspaces",
-	Security: SecurityUserJWT,
-	Upstream: UpstreamDeclared,
-}
-
 // Operations is every declared platform operation, ordered by Go name.
 // The contract conformance test in internal/platform iterates this slice, so
 // an operation added to the manifest cannot escape the credential check.
 var Operations = []Operation{
 	OpAgentsAckCommand,
 	OpAgentsHeartbeat,
+	OpAgentsListWorkspaceThrottles,
 	OpAgentsRegister,
 	OpAgentsStreamCommands,
 	OpAnalyticsCost,
@@ -281,8 +291,8 @@ var Operations = []Operation{
 	OpBillingPortalSession,
 	OpPipelineIngestEvent,
 	OpQueueSync,
+	OpTeamsListMine,
 	OpTelemetryIngestPipelineRun,
-	OpWorkspacesList,
 }
 
 // OperationByID looks an operation up by its contract id.

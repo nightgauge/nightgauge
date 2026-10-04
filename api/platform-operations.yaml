@@ -83,6 +83,15 @@ operations:
     security: pipeline
     upstream: declared
 
+  # The throttle of each workspace the agent covers, each its own (#2352):
+  # the daemon applies its own workspace's, read with its license key.
+  - id: agents.listWorkspaceThrottles
+    go_name: OpAgentsListWorkspaceThrottles
+    method: GET
+    path: /v1/agents/{agentId}/throttles
+    security: pipeline
+    upstream: declared
+
   - id: agents.streamCommands
     go_name: OpAgentsStreamCommands
     method: GET
@@ -200,18 +209,19 @@ operations:
     security: pipeline
     upstream: declared
 
+  # The signed-in user's teams; the default one is the team the core's
+  # registration writes its workspace to, which the daemon matches its
+  # workspace's throttle by (#2352).
+  - id: teams.listMine
+    go_name: OpTeamsListMine
+    method: GET
+    path: /v1/teams
+    security: user_jwt
+    upstream: declared
+
   - id: telemetry.ingestPipelineRun
     go_name: OpTelemetryIngestPipelineRun
     method: POST
     path: /v1/telemetry/pipeline-run
     security: pipeline
-    upstream: declared
-
-  # The workspace list carries each workspace's concurrency throttle. The
-  # daemon reads its own workspace's by slug (#2352), as the extension does.
-  - id: workspaces.list
-    go_name: OpWorkspacesList
-    method: GET
-    path: /v1/workspaces
-    security: user_jwt
     upstream: declared

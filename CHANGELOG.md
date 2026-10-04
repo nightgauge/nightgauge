@@ -32,35 +32,39 @@ changelog, and the release workflow refuses a tag that does not.
   A beat with nothing else to report now carries a body with only this field.
   A platform that predates the field ignores it.
 - **The daemon and the headless schedulers follow the platform's workspace
-  throttle** (#2352). Only the extension applied it (#2337), so work the Go
-  side started itself ran at its configured concurrency while the platform
-  held the workspace throttled. The daemon now reads its own workspace's
-  throttle by slug from the platform's workspace list while it has a
-  signed-in session: when its agent starts, after every agent registration,
-  on every `throttle` command (still relayed to the extension), each time its
-  command stream opens, and when the session changes; never the command's
-  payload or the registration's agent-wide value. The autonomous scheduler holds the runs it
+  throttle** (#2352, #1882). Only the extension applied it (#2337), so work
+  the Go side started itself ran at its configured concurrency while the
+  platform held the workspace throttled. The daemon now reads its own
+  workspace's throttle from the platform's agent throttle endpoint
+  (`GET /v1/agents/{agentId}/throttles`) with only its license key, so it
+  follows the throttle with or without the extension attached. It finds its
+  workspace by slug and team (the team from the session's default team when
+  the extension has handed it a session; by slug alone otherwise, applying
+  none when several teams share the slug) and applies that workspace's own
+  throttle, never the strictest of several, nor the `throttle` command's
+  payload or the registration's agent-wide value. It reads after every agent
+  registration, on every `throttle` command (still relayed to the
+  extension), each time its command stream opens and when the session
+  changes; a failed read is logged, changes nothing, and is retried on the
+  next heartbeat, no sooner than the platform's `Retry-After`, so nothing
+  new polls the platform. Each read is bounded, so one that never answers
+  holds back no later read. The autonomous scheduler holds the runs it
   dispatches without the extension, and `nightgauge pipeline run --auto` its
-  loop, to the lower of the configured concurrency and the cap, until the
-  throttle is cleared or reaches `resumeAt`; a running pipeline is never
-  stopped, and work handed to the extension is not capped twice. Each read is
-  bounded, so one that never answers holds back no later read. `pipeline run
---auto` checks the throttle again after reading the board, and an epic's
-  waves start no more sub-issues at once than the cap leaves room for. A
-  headless `nightgauge autonomous run` or `pipeline run --auto`, which holds
-  only a license key, follows the throttle through the workspace's daemon
-  (`platform.workspaceThrottle` on the socket), asking it once before its
-  first dispatch; when the daemon stops answering, or follows the throttle
-  but has not read it yet (it has just started, or its reads fail), the last
-  throttle it reported is kept, and the log says so and until when. A daemon
-  that has just started, as after a window reload, has no session until the
-  extension pushes it, and reports the throttle unread meanwhile, so a
-  headless scheduler no longer lifts the cap it learned and dispatches above
-  it until the next read. A daemon without a signed-in session, which is any
-  daemon the extension is not attached to (two minutes after it starts),
-  still follows no throttle: the license key cannot read the
-  workspace's own throttle yet, and the read, like the extension's, is by
-  slug in one team's workspace list (#2352 stays open for both).
+  loop, to the lower of the configured concurrency and the cap
+  (`maxConcurrent: 0` starts nothing), until the throttle is cleared or
+  reaches `resumeAt`; a running pipeline is never stopped, and work handed
+  to the extension is not capped twice. `pipeline run --auto` checks the
+  throttle again after reading the board, and an epic's waves start no more
+  sub-issues at once than the cap leaves room for. A headless
+  `nightgauge autonomous run` or `pipeline run --auto` follows the throttle
+  through the workspace's daemon (`platform.workspaceThrottle` on the
+  socket), asking it once before its first dispatch and every 30 seconds
+  after; when the daemon stops answering, or has not read the throttle yet
+  (its agent is not registered yet, or its reads fail), the last throttle it
+  reported is kept, and the log says so and until when. The daemon no
+  longer reads the session-only workspace list, and the two-minute wait for
+  a session after it starts is gone. `scripts/platform-smoke.sh` probes the
+  new read.
 - **The daemon says which workspace writes its registration was refused**
   (#2372). The platform's `POST /v1/agents/register` reply lists
   `refused_workspace_writes`: the workspace writes skipped because the
