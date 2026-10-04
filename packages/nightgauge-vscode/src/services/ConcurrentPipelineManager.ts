@@ -136,14 +136,6 @@ function isTransientNetworkFailureText(errMsg: string): boolean {
   return kind === "api_connection_lost" || kind === "github_network_outage";
 }
 
-/**
- * Whether two "owner/repo" names are the same repository (#2344). GitHub
- * names are case-insensitive; an absent name is the empty one.
- */
-function sameRepo(a: string | undefined, b: string | undefined): boolean {
-  return (a ?? "").toLowerCase() === (b ?? "").toLowerCase();
-}
-
 import type { IssueQueueService } from "./IssueQueueService";
 import type { HeadlessOrchestrator } from "./HeadlessOrchestrator";
 import type { PipelineRunResult, RequestedPin } from "./HeadlessOrchestrator";
@@ -153,6 +145,7 @@ import { requeueOptionsFor, type ActiveSlot, type QueueItem } from "../types/que
 import { updateProjectItemStatus } from "../utils/projectFieldWriter";
 import { postFailureComment } from "../utils/failureComment";
 import { epicBranchParent } from "../utils/epicBranchParent";
+import { formatEpicRef, isEpic, sameRepo, type EpicRef } from "../utils/epicRef";
 import { getConcurrentPipelineConfig } from "../utils/nightgaugeConfig";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import { throttleInForce, type WorkspaceThrottle } from "./WorkspaceThrottle";
@@ -289,6 +282,11 @@ interface PipelineSlot {
   title: string;
   /** Parent epic number (if this is a sub-issue of an epic) */
   epicNumber?: number;
+  /**
+   * The parent epic's repository, `owner/name`: `epicNumber` names an issue
+   * only within it (#2382).
+   */
+  epicRepo?: string;
   /** Full repo identity "owner/repo" for cross-repo pipelines */
   repo?: string;
   /** Worktree info */
@@ -401,7 +399,8 @@ export interface ConcurrentPipelineCallbacks {
     title: string,
     stateService: PipelineStateService,
     epicNumber?: number,
-    repoSlug?: string
+    repoSlug?: string,
+    epicRepo?: string
   ) => void;
   /** Called when a slot's pipeline stage changes */
   onSlotStageChanged?: (slotIndex: number, issueNumber: number, stage: PipelineStage) => void;
@@ -914,6 +913,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       startedAt: slot.startedAt,
       currentStage: slot.currentStage,
       epicNumber: slot.epicNumber,
+      epicRepo: slot.epicRepo,
     }));
   }
 
@@ -1932,6 +1932,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       issueNumber: item.issueNumber,
       title: item.title,
       epicNumber: item.epicNumber,
+      epicRepo: item.epicRepo,
       repo: item.repoName,
       worktree,
       worktreeManager: slotWorktreeManager,
@@ -1955,15 +1956,15 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         epic_position: (item.epicOrder ?? 0) + 1, // 1-indexed
       });
 
-      // Best-effort: fetch queue to count total epic sub-issues
-      const epicNum = item.epicNumber;
+      // Best-effort: fetch queue to count total epic sub-issues. Only this
+      // repository's epic counts: another repository's epic can share the
+      // number (#2382).
+      const epic: EpicRef = { repo: item.epicRepo, number: item.epicNumber };
       this.queueService
         .getQueue()
         .then((queueState) => {
           if (!queueState) return;
-          const queuedCount = queueState.items.filter((q) => q.epicNumber === epicNum).length;
-          const runningCount = this.getSlotsByEpic(epicNum).length;
-          const total = queuedCount + runningCount;
+          const total = this.epicTotal(queueState.items, epic);
           if (total > 0) {
             stateService.setMeta({ epic_total: total });
           }
@@ -1979,7 +1980,8 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       item.title,
       stateService,
       item.epicNumber,
-      item.repoName
+      item.repoName,
+      item.epicRepo
     );
 
     // Run pipeline asynchronously — don't await, let it complete in background
@@ -2491,7 +2493,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           try {
             const drained = await this.queueService.drainBlockedSuccessors(
               slot.issueNumber,
-              slot.epicOrder
+              slot.repo
             );
             if (drained.length > 0) {
               this.logger.info("Drained blocked successor issues after slot failure", {
@@ -3200,7 +3202,9 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
             // truncation and would delete the other repositories' pending work
             // that this halt has no evidence about.
             for (const item of doomed) {
-              await this.queueService.remove(item.issueNumber);
+              // By repository too: another repository's item can share the
+              // number (#2382).
+              await this.queueService.remove(item.issueNumber, item.repoName);
             }
           } else {
             await this.queueService.clear();
@@ -4059,15 +4063,16 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   /**
    * Get all running slots that belong to a specific epic.
    *
-   * @param epicNumber - The parent epic issue number
+   * @param epic - The parent epic, by repository and number: another
+   *   repository's epic can share the number (#2382)
    * @returns Array of { issueNumber, title } for running slots in this epic
    *
    * @see Issue #2261 - Per-slot / per-epic pipeline controls
    */
-  getSlotsByEpic(epicNumber: number): { issueNumber: number; title: string }[] {
+  getSlotsByEpic(epic: EpicRef): { issueNumber: number; title: string }[] {
     const result: { issueNumber: number; title: string }[] = [];
     for (const slot of this.slots.values()) {
-      if (slot.epicNumber === epicNumber) {
+      if (isEpic(epic, slot.epicRepo, slot.epicNumber)) {
         result.push({ issueNumber: slot.issueNumber, title: slot.title });
       }
     }
@@ -4075,25 +4080,36 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
   }
 
   /**
+   * How many of an epic's sub-issues are queued or running: the slot's
+   * `epic_total`. Only that repository's epic counts; another repository's
+   * epic can share the number (#2382).
+   */
+  epicTotal(queueItems: QueueItem[], epic: EpicRef): number {
+    const queued = queueItems.filter((q) => isEpic(epic, q.epicRepo, q.epicNumber)).length;
+    return queued + this.getSlotsByEpic(epic).length;
+  }
+
+  /**
    * Abort all running slots that belong to a specific epic and drain
    * queued successor issues from that epic.
    *
-   * Other running slots and non-epic queue items are unaffected.
+   * Other running slots, other epics (including another repository's epic
+   * with the same number, #2382) and non-epic queue items are unaffected.
    *
-   * @param epicNumber - The parent epic issue number
+   * @param epic - The parent epic, by repository and number
    * @returns Number of slots that were stopped
    *
    * @see Issue #2261 - Per-slot / per-epic pipeline controls
    */
-  async abortEpic(epicNumber: number): Promise<number> {
-    const epicSlots = this.getSlotsByEpic(epicNumber);
+  async abortEpic(epic: EpicRef): Promise<number> {
+    const epicSlots = this.getSlotsByEpic(epic);
     if (epicSlots.length === 0) {
-      this.logger.info("No running slots found for epic", { epicNumber });
+      this.logger.info("No running slots found for epic", { epic: formatEpicRef(epic) });
       return 0;
     }
 
     this.logger.info("Aborting all slots for epic", {
-      epicNumber,
+      epic: formatEpicRef(epic),
       slotCount: epicSlots.length,
       issues: epicSlots.map((s) => s.issueNumber),
     });
@@ -4109,17 +4125,17 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     // Drain queued items that belong to this epic so they don't
     // get dequeued by fillSlots() after the running slots die.
     try {
-      const drained = await this.queueService.drainEpicItems(epicNumber);
+      const drained = await this.queueService.drainEpicItems(epic);
       if (drained.length > 0) {
         this.logger.info("Drained queued epic items after abortEpic", {
-          epicNumber,
+          epic: formatEpicRef(epic),
           drainedIssues: drained,
           drainedCount: drained.length,
         });
       }
     } catch (error) {
       this.logger.warn("Failed to drain queued epic items", {
-        epicNumber,
+        epic: formatEpicRef(epic),
         error: error instanceof Error ? error.message : "Unknown error",
       });
     }

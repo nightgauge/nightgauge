@@ -57,7 +57,7 @@ export function registerRemoveQueueItemCommand(
 
       try {
         // Call queue service to remove
-        const success = await queueService.remove(issueNumber);
+        const success = await queueService.remove(issueNumber, queueItem.repoName);
 
         if (!success) {
           throw new Error("Issue not found in queue");

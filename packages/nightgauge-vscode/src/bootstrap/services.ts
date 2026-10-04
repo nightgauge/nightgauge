@@ -1615,7 +1615,15 @@ export async function initializeServices(
           issueNumber,
         });
       },
-      onSlotStarted: (slotIndex, issueNumber, title, slotStateService, epicNumber, repoSlug) => {
+      onSlotStarted: (
+        slotIndex,
+        issueNumber,
+        title,
+        slotStateService,
+        epicNumber,
+        repoSlug,
+        epicRepo
+      ) => {
         // #191: scope this slot's disk session log to the run's TARGET repo.
         // The bootstrap log root is workspaceFolders[0]'s git root — for a
         // cross-repo run that is a different repository, and forensics
@@ -1680,7 +1688,14 @@ export async function initializeServices(
         notifier!.subscribeToSlot(issueNumber, slotStateService, repoSlug);
 
         // Replace preparing placeholder with full concurrent slot
-        treeProvider.addConcurrentSlot(slotIndex, issueNumber, title, slotStateService, epicNumber);
+        treeProvider.addConcurrentSlot(
+          slotIndex,
+          issueNumber,
+          title,
+          slotStateService,
+          epicNumber,
+          epicRepo
+        );
 
         // Invalidate ready + in-progress so the Repositories view doesn't keep
         // showing the dispatched issue under Ready for the full duration of

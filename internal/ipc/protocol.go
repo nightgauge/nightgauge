@@ -540,9 +540,13 @@ type PlatformWorkspaceThrottleResult struct {
 	Throttle *platform.WorkspaceThrottle `json:"throttle"`
 }
 
-// QueueRemoveParams are parameters for queue.remove.
+// QueueRemoveParams are parameters for queue.remove. An issue number names an
+// issue only within one repository, so Repo ("owner/name") scopes the removal
+// to that repository's item (#2382). An empty Repo removes every item with the
+// number: the form the CLI's `queue remove N` uses.
 type QueueRemoveParams struct {
-	IssueNumber int `json:"issueNumber"`
+	IssueNumber int    `json:"issueNumber"`
+	Repo        string `json:"repo,omitempty"`
 }
 
 // QueueRemoveRemoteRunParams are parameters for queue.removeRemoteRun
@@ -631,13 +635,21 @@ type QueueEnqueueEpicParams struct {
 	EpicNumber int      `json:"epicNumber"`
 	Title      string   `json:"title,omitempty"`
 	Labels     []string `json:"labels,omitempty"`
-	// EligibleSubIssues is an optional whitelist of sub-issue numbers the
-	// caller has already filtered by project-board status / open-PR presence.
-	// When non-empty, EnqueueEpic only enqueues sub-issues whose number is
-	// in the set. When nil or empty, the full set of open sub-issues is
-	// enqueued (autonomous path, backward-compatible).
+	// EligibleSubIssues is an optional whitelist of sub-issues the caller has
+	// already filtered by project-board status / open-PR presence, each named
+	// by repository and number: an epic's sub-issues can share a number across
+	// repositories (#2382). When non-empty, EnqueueEpic only enqueues the
+	// sub-issues it names. When nil or empty, the full set of open sub-issues
+	// is enqueued (autonomous path).
 	// @see Issue #2992 — epic drag filter
-	EligibleSubIssues []int `json:"eligibleSubIssues,omitempty"`
+	EligibleSubIssues []QueueIssueRef `json:"eligibleSubIssues,omitempty"`
+}
+
+// QueueIssueRef names one issue by repository ("owner/name") and number. An
+// empty Repo means the epic's own repository.
+type QueueIssueRef struct {
+	Repo   string `json:"repo"`
+	Number int    `json:"number"`
 }
 
 // --- Git methods ---

@@ -30,6 +30,7 @@ import { getEpicQueueFilterConfig } from "../utils/nightgaugeConfig";
 import { updateProjectItemStatus, type ProjectStatusValue } from "../utils/projectFieldWriter";
 import { Logger } from "../utils/logger";
 import { IpcClient } from "../services/IpcClient";
+import type { RepoIssueRef } from "../utils/epicRef";
 
 /**
  * MIME type for issue drag operations
@@ -50,8 +51,12 @@ export interface SerializedIssue {
   sourceTabStatus?: string;
   /** True when dragging an epic — triggers sub-issue cascade on drop */
   isEpic?: boolean;
-  /** Sub-issue numbers for epic cascade (populated when isEpic=true) */
-  subIssueNumbers?: number[];
+  /**
+   * Sub-issues for epic cascade (populated when isEpic=true), each by
+   * repository and number: an epic's sub-issues can share a number across
+   * repositories (#2382).
+   */
+  subIssues?: RepoIssueRef[];
   /** Repository owner (e.g. 'nightgauge') — for cross-repo drag-and-drop */
   repoOwner?: string;
   /** Repository name (e.g. 'nightgauge') — for cross-repo drag-and-drop */
@@ -489,7 +494,7 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
       // branch already exists on the remote. See Issue #2992.
       if (
         issue.isEpic &&
-        (issue.subIssueNumbers?.length ?? 0) > 0 &&
+        (issue.subIssues?.length ?? 0) > 0 &&
         this.queueService &&
         this.boardService
       ) {
@@ -534,8 +539,8 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
     if (!this.queueService || !this.boardService || !this.workspaceRoot) {
       return false;
     }
-    const subIssueNumbers = issue.subIssueNumbers ?? [];
-    if (subIssueNumbers.length === 0) {
+    const subIssues = issue.subIssues ?? [];
+    if (subIssues.length === 0) {
       return false;
     }
 
@@ -544,7 +549,7 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
     let result: Awaited<ReturnType<typeof filterEligibleSubIssues>>;
     try {
       result = await filterEligibleSubIssues({
-        subIssueNumbers,
+        subIssues,
         workspaceRoot: this.workspaceRoot,
         projectBoardService: this.boardService,
         eligibleStatuses: config.eligibleStatuses,
@@ -623,7 +628,7 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
         blockedBy: issue.blockedBy,
         sourceTabStatus: sourceStatus,
         isEpic: issue.isEpic ?? false,
-        subIssueNumbers: issue.subIssueNumbers,
+        subIssues: issue.subIssues,
         repoOwner,
         repoName,
       };
@@ -645,7 +650,7 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
         url: item.epic!.url,
         sourceTabStatus: sourceStatus,
         isEpic: true,
-        subIssueNumbers: item.getChildIssueNumbers(),
+        subIssues: item.getChildIssueRefs(),
         repoOwner: item.repoOwner,
         repoName: item.repoName,
       }));
@@ -714,7 +719,7 @@ export class IssueDragAndDropController implements vscode.TreeDragAndDropControl
         const repo = repoMatch?.[1];
 
         if (owner && projectNumber && repo) {
-          const subCount = issue.subIssueNumbers?.length ?? 0;
+          const subCount = issue.subIssues?.length ?? 0;
           await vscode.window.withProgress(
             {
               location: vscode.ProgressLocation.Notification,

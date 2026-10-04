@@ -627,13 +627,22 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 		}
 	}
 
-	// pipeline.complete is emitted from the scheduler's terminal defer before
-	// SealAndRemove runs, with worktree and branch cleanup (git processes)
-	// between them, and no event follows the seal. Poll for that defer to
-	// finish, then assert the durable terminal contract rather than racing the
-	// transient snapshot. The poll ends the moment the snapshot is gone; its
-	// limit bounds a failure only (a snapshot never removed), at the stall
-	// bound's 2 minutes, so no load can fail a run that removes it (#2368).
+	awaitTerminalDefer(t, workDir, issueNumber)
+}
+
+// awaitTerminalDefer waits for the scheduler's terminal defer of
+// issueNumber's run to finish. pipeline.complete is emitted from that defer
+// before SealAndRemove runs, with worktree and branch cleanup (git processes)
+// between them, and no event follows the seal. A test that ends on
+// pipeline.complete interrupts the daemon while its `git worktree remove` may
+// still be running; the daemon exits, the git child does not, and it races
+// t.TempDir's removal of .git/worktrees ("directory not empty"). So poll for
+// the snapshot's removal, the defer's last step. The poll ends the moment the
+// snapshot is gone; its limit bounds a failure only (a snapshot never
+// removed), at the stall bound's 2 minutes, so no load can fail a run that
+// removes it (#2368).
+func awaitTerminalDefer(t *testing.T, workDir string, issueNumber int) {
+	t.Helper()
 	stateDir := layouttest.PipelineDir(t, workDir)
 	deadline := time.Now().Add(2 * time.Minute)
 	for {
@@ -642,7 +651,7 @@ func TestE2E_FullPipelineLifecycle(t *testing.T) {
 			t.Fatalf("FindPersistedStatesForIssue: %v", err)
 		}
 		if len(snapshots) == 0 {
-			break
+			return
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("terminal runtime snapshot for #%d was not removed from %s", issueNumber, stateDir)
@@ -1106,6 +1115,13 @@ func TestE2E_ConcurrentPipelines(t *testing.T) {
 		mu.Unlock()
 		t.Fatalf("3 concurrent pipelines did not complete: %s."+
 			"\nPer-pipeline state:%s", stopReason, diag)
+	}
+
+	// Each run's terminal defer (worktree and branch cleanup) outlives its
+	// pipeline.complete; let it finish before the test ends and interrupts the
+	// daemon, or its git child races the temp directory's removal (#2407).
+	for _, p := range pipelines {
+		awaitTerminalDefer(t, workDir, p.issueNumber)
 	}
 
 	mu.Lock()

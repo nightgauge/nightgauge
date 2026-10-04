@@ -26,6 +26,17 @@ function mkIssue(number: number, status: string, opts?: Partial<ReadyIssue>): Re
   };
 }
 
+const R = "test/repo";
+
+/** Sub-issues of the board's repository, by number. */
+function refs(...numbers: number[]) {
+  return numbers.map((number) => ({ repo: R, number }));
+}
+
+function nums(list: { number: number }[]): number[] {
+  return list.map((r) => r.number);
+}
+
 function mkBoardService(issues: ReadyIssue[]) {
   return {
     getAllItems: vi.fn().mockResolvedValue(issues),
@@ -42,16 +53,18 @@ describe("filterEligibleSubIssues", () => {
     const prLookup = vi.fn().mockResolvedValue(null);
 
     const result = await filterEligibleSubIssues({
-      subIssueNumbers: [10, 11, 12],
+      subIssues: refs(10, 11, 12),
       workspaceRoot: "/ws",
       projectBoardService: board as any,
       prLookup,
     });
 
-    expect(result.eligible.sort()).toEqual([10, 11, 12]);
+    expect(nums(result.eligible).sort()).toEqual([10, 11, 12]);
     expect(result.skipped).toEqual([]);
     // PR lookup runs for every candidate that passes the status filter.
     expect(prLookup).toHaveBeenCalledTimes(3);
+    // Each lookup runs in the sub-issue's own repository (#2382).
+    expect(prLookup).toHaveBeenCalledWith(10, "/ws", R);
   });
 
   it("skips Backlog and in-review items with the right reason", async () => {
@@ -62,16 +75,16 @@ describe("filterEligibleSubIssues", () => {
     ]);
 
     const result = await filterEligibleSubIssues({
-      subIssueNumbers: [10, 11, 12],
+      subIssues: refs(10, 11, 12),
       workspaceRoot: "/ws",
       projectBoardService: board as any,
       prLookup: vi.fn().mockResolvedValue(null),
     });
 
-    expect(result.eligible).toEqual([10]);
+    expect(nums(result.eligible)).toEqual([10]);
     expect(result.skipped).toEqual([
-      { number: 11, reason: "status", detail: "Backlog" },
-      { number: 12, reason: "status", detail: "In review" },
+      { number: 11, repo: R, reason: "status", detail: "Backlog" },
+      { number: 12, repo: R, reason: "status", detail: "In review" },
     ]);
   });
 
@@ -82,15 +95,15 @@ describe("filterEligibleSubIssues", () => {
     });
 
     const result = await filterEligibleSubIssues({
-      subIssueNumbers: [10, 11],
+      subIssues: refs(10, 11),
       workspaceRoot: "/ws",
       projectBoardService: board as any,
       prLookup,
     });
 
-    expect(result.eligible).toEqual([10]);
+    expect(nums(result.eligible)).toEqual([10]);
     expect(result.skipped).toEqual([
-      { number: 11, reason: "open-pr", detail: "https://github.com/test/repo/pull/42" },
+      { number: 11, repo: R, reason: "open-pr", detail: "https://github.com/test/repo/pull/42" },
     ]);
   });
 
@@ -99,14 +112,14 @@ describe("filterEligibleSubIssues", () => {
     const prLookup = vi.fn().mockResolvedValue({ number: 99, url: "https://example.com/pr/99" });
 
     const result = await filterEligibleSubIssues({
-      subIssueNumbers: [10],
+      subIssues: refs(10),
       workspaceRoot: "/ws",
       projectBoardService: board as any,
       skipIfOpenPR: false,
       prLookup,
     });
 
-    expect(result.eligible).toEqual([10]);
+    expect(nums(result.eligible)).toEqual([10]);
     expect(result.skipped).toEqual([]);
     // PR lookup is bypassed entirely when the caller opts out.
     expect(prLookup).not.toHaveBeenCalled();
@@ -116,28 +129,28 @@ describe("filterEligibleSubIssues", () => {
     const board = mkBoardService([mkIssue(10, "Ready")]);
 
     const result = await filterEligibleSubIssues({
-      subIssueNumbers: [10, 404],
+      subIssues: refs(10, 404),
       workspaceRoot: "/ws",
       projectBoardService: board as any,
       prLookup: vi.fn().mockResolvedValue(null),
     });
 
-    expect(result.eligible).toEqual([10]);
-    expect(result.skipped).toEqual([{ number: 404, reason: "missing" }]);
+    expect(nums(result.eligible)).toEqual([10]);
+    expect(result.skipped).toEqual([{ number: 404, repo: R, reason: "missing" }]);
   });
 
-  it("returns empty sets when subIssueNumbers is empty and does not touch the board", async () => {
+  it("returns empty sets when subIssues is empty and does not touch the board", async () => {
     const board = mkBoardService([]);
     const prLookup = vi.fn();
 
     const result = await filterEligibleSubIssues({
-      subIssueNumbers: [],
+      subIssues: refs(),
       workspaceRoot: "/ws",
       projectBoardService: board as any,
       prLookup,
     });
 
-    expect(result.eligible).toEqual([]);
+    expect(nums(result.eligible)).toEqual([]);
     expect(result.skipped).toEqual([]);
     expect(board.getAllItems).not.toHaveBeenCalled();
     expect(prLookup).not.toHaveBeenCalled();
@@ -147,14 +160,14 @@ describe("filterEligibleSubIssues", () => {
     const board = mkBoardService([mkIssue(10, "ready"), mkIssue(11, "READY")]);
 
     const result = await filterEligibleSubIssues({
-      subIssueNumbers: [10, 11],
+      subIssues: refs(10, 11),
       workspaceRoot: "/ws",
       projectBoardService: board as any,
       eligibleStatuses: ["Ready"],
       prLookup: vi.fn().mockResolvedValue(null),
     });
 
-    expect(result.eligible.sort()).toEqual([10, 11]);
+    expect(nums(result.eligible).sort()).toEqual([10, 11]);
   });
 
   it("tolerates prLookup throwing (gh offline) by treating the issue as PR-free", async () => {
@@ -162,14 +175,67 @@ describe("filterEligibleSubIssues", () => {
     const prLookup = vi.fn().mockRejectedValue(new Error("gh offline"));
 
     const result = await filterEligibleSubIssues({
-      subIssueNumbers: [10],
+      subIssues: refs(10),
       workspaceRoot: "/ws",
       projectBoardService: board as any,
       prLookup,
     });
 
-    expect(result.eligible).toEqual([10]);
+    expect(nums(result.eligible)).toEqual([10]);
     expect(result.skipped).toEqual([]);
+  });
+});
+
+describe("filterEligibleSubIssues across repositories (#2382)", () => {
+  // The board holds test/repo#21 (Ready). The epic's sub-issues are
+  // test/repo#21 and test/app#21: the same number in two repositories.
+  it("matches a sub-issue to the board item of its own repository only", async () => {
+    const board = mkBoardService([mkIssue(21, "Ready")]);
+    const prLookup = vi.fn().mockResolvedValue(null);
+
+    const result = await filterEligibleSubIssues({
+      subIssues: [
+        { repo: R, number: 21 },
+        { repo: "test/app", number: 21 },
+      ],
+      workspaceRoot: "/ws",
+      projectBoardService: board as any,
+      prLookup,
+    });
+
+    expect(result.eligible).toEqual([{ repo: R, number: 21 }]);
+    expect(result.skipped).toEqual([{ number: 21, repo: "test/app", reason: "missing" }]);
+    expect(prLookup).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let another repository's Ready #21 admit this one", async () => {
+    const board = mkBoardService([
+      mkIssue(21, "Ready", { repo: "test/app", url: "https://github.com/test/app/issues/21" }),
+      mkIssue(21, "Backlog"),
+    ]);
+
+    const result = await filterEligibleSubIssues({
+      subIssues: [{ repo: R, number: 21 }],
+      workspaceRoot: "/ws",
+      projectBoardService: board as any,
+      prLookup: vi.fn().mockResolvedValue(null),
+    });
+
+    expect(result.eligible).toEqual([]);
+    expect(result.skipped).toEqual([{ number: 21, repo: R, reason: "status", detail: "Backlog" }]);
+  });
+
+  it("compares repositories case-insensitively", async () => {
+    const board = mkBoardService([mkIssue(21, "Ready")]);
+
+    const result = await filterEligibleSubIssues({
+      subIssues: [{ repo: "Test/Repo", number: 21 }],
+      workspaceRoot: "/ws",
+      projectBoardService: board as any,
+      prLookup: vi.fn().mockResolvedValue(null),
+    });
+
+    expect(nums(result.eligible)).toEqual([21]);
   });
 });
 
@@ -180,11 +246,11 @@ describe("summarizeSkipped", () => {
 
   it("counts skipped reasons by their human label", () => {
     const out = summarizeSkipped([
-      { number: 1, reason: "status", detail: "Backlog" },
-      { number: 2, reason: "status", detail: "Backlog" },
-      { number: 3, reason: "status", detail: "In review" },
-      { number: 4, reason: "open-pr", detail: "https://x.test/pr/1" },
-      { number: 5, reason: "missing" },
+      { number: 1, repo: R, reason: "status", detail: "Backlog" },
+      { number: 2, repo: R, reason: "status", detail: "Backlog" },
+      { number: 3, repo: R, reason: "status", detail: "In review" },
+      { number: 4, repo: R, reason: "open-pr", detail: "https://x.test/pr/1" },
+      { number: 5, repo: R, reason: "missing" },
     ]);
 
     expect(out).toContain("Backlog: 2");

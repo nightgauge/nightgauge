@@ -5007,7 +5007,7 @@ func queueRemoveCmd() *cobra.Command {
 				return err
 			}
 
-			sched.QueueRemove(num)
+			sched.QueueRemove("", num)
 			fmt.Printf("Removed #%d from queue.\n", num)
 			return nil
 		},

@@ -31,17 +31,27 @@ export interface PRInfo {
  *
  * @param issueNumber - Issue number to search for
  * @param workspaceRoot - Workspace root directory for git operations
+ * @param repo - The issue's repository, `owner/name`. An issue number names an
+ *   issue only within one repository, so when given the search runs there
+ *   rather than in the checkout's own repository (#2382).
  * @returns PR info if found, null otherwise
  */
 export async function getPRForIssue(
   issueNumber: number,
-  workspaceRoot: string
+  workspaceRoot: string,
+  repo?: string
 ): Promise<PRInfo | null> {
   try {
+    if (!Number.isInteger(issueNumber)) return null;
+    let repoFlag = "";
+    if (repo) {
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) return null;
+      repoFlag = ` --repo ${repo}`;
+    }
     // Use gh CLI to search for PRs linked to this issue
     // Search by issue number in PR body/title
     const { stdout } = await execAsync(
-      `gh pr list --json number,url,title --search "${issueNumber} in:body,title"`,
+      `gh pr list${repoFlag} --json number,url,title --search "${issueNumber} in:body,title"`,
       {
         cwd: workspaceRoot,
         timeout: 5000, // 5 second timeout

@@ -576,7 +576,7 @@
       "file": "packages/nightgauge-vscode/src/services/ConcurrentPipelineManager.ts",
       "begin": "terminal-parity:begin runSlotPipeline-finally",
       "end": "terminal-parity:end runSlotPipeline-finally",
-      "sha256": "3e0d98c8de2431e028809fcec5f406774bac7812eb7a5aea8c0fcc531270015c"
+      "sha256": "7f2bd1c179cb4c2d5d83e688f66cf37511c4ab6eee11bd5645998f68cb1a4986"
     },
     {
       "id": "extension-force-clear-funnel",

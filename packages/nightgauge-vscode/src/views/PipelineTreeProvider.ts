@@ -1153,7 +1153,8 @@ export class PipelineTreeProvider
     issueNumber: number,
     title: string,
     stateService: PipelineStateService,
-    epicNumber?: number
+    epicNumber?: number,
+    epicRepo?: string
   ): void {
     // Remove preparing placeholder if present
     this.preparingSlots.delete(issueNumber);
@@ -1164,7 +1165,8 @@ export class PipelineTreeProvider
       title,
       stateService,
       epicNumber,
-      () => this.refreshAll()
+      () => this.refreshAll(),
+      epicRepo
     );
     this.concurrentSlots.set(issueNumber, slot);
     console.log(

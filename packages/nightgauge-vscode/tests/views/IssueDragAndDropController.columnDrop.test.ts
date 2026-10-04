@@ -65,7 +65,7 @@ function makePayload(overrides: Partial<any> = {}): any {
     url: "https://github.com/test/repo/issues/42",
     sourceTabStatus: "Backlog",
     isEpic: false,
-    subIssueNumbers: undefined,
+    subIssues: undefined,
     ...overrides,
   };
 }
@@ -237,7 +237,11 @@ describe("ColumnDragAndDropController", () => {
       const epicPayload = makePayload({
         issueNumber: 100,
         isEpic: true,
-        subIssueNumbers: [101, 102, 103],
+        subIssues: [
+          { repo: "nightgauge/nightgauge", number: 101 },
+          { repo: "nightgauge/nightgauge", number: 102 },
+          { repo: "nightgauge/nightgauge", number: 103 },
+        ],
         sourceTabStatus: "Backlog",
         url: "https://github.com/nightgauge/nightgauge/issues/100",
       });
@@ -278,7 +282,10 @@ describe("ColumnDragAndDropController", () => {
           makePayload({
             issueNumber: 100,
             isEpic: true,
-            subIssueNumbers: [101, 102],
+            subIssues: [
+              { repo: "nightgauge/nightgauge", number: 101 },
+              { repo: "nightgauge/nightgauge", number: 102 },
+            ],
             sourceTabStatus: "Backlog",
             url: "https://github.com/nightgauge/nightgauge/issues/100",
           }),
@@ -311,7 +318,7 @@ describe("ColumnDragAndDropController", () => {
           makePayload({
             issueNumber: 200,
             isEpic: true,
-            subIssueNumbers: [],
+            subIssues: [],
             sourceTabStatus: "Backlog",
             url: "https://github.com/nightgauge/nightgauge/issues/200",
           }),
@@ -342,7 +349,7 @@ describe("ColumnDragAndDropController", () => {
           makePayload({
             issueNumber: 200,
             isEpic: true,
-            subIssueNumbers: [],
+            subIssues: [],
             sourceTabStatus: "Backlog",
           }),
         ]),

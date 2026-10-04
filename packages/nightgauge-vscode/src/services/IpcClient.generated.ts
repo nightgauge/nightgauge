@@ -295,8 +295,8 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<IpcQueueState>('queue.list');
   }
 
-  async queueRemove(issueNumber: number): Promise<void> {
-    await this.call<void>('queue.remove', { issueNumber });
+  async queueRemove(issueNumber: number, repo?: string): Promise<void> {
+    await this.call<void>('queue.remove', { issueNumber, repo });
   }
 
   async queueRemoveRemoteRun(remoteRunId: string): Promise<QueueRemoveRemoteRunResult> {
@@ -319,7 +319,7 @@ export class IpcClientGenerated extends IpcClientBase {
     await this.call<void>('queue.complete', { repo, issueNumber });
   }
 
-  async queueEnqueueEpic(owner: string, repo: string, epicNumber: number, title?: string, labels?: string[], eligibleSubIssues?: number[]): Promise<void> {
+  async queueEnqueueEpic(owner: string, repo: string, epicNumber: number, title?: string, labels?: string[], eligibleSubIssues?: unknown[]): Promise<void> {
     await this.call<void>('queue.enqueueEpic', { owner, repo, epicNumber, title, labels, eligibleSubIssues });
   }
 

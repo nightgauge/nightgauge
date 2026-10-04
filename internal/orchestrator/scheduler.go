@@ -2846,13 +2846,17 @@ func (s *Scheduler) QueueRemoveRemoteRun(remoteRunID string) bool {
 	return false
 }
 
-// QueueRemove removes an issue from the queue by number.
-func (s *Scheduler) QueueRemove(issueNumber int) {
+// QueueRemove removes repo's issue issueNumber from the queue. An issue number
+// names an issue only within one repository, so a non-empty repo ("owner/name",
+// compared case-insensitively) leaves another repository's item with the same
+// number in place (#2382). An empty repo removes every item with the number,
+// the form the CLI's `queue remove N` uses.
+func (s *Scheduler) QueueRemove(repo string, issueNumber int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	filtered := s.queue[:0]
 	for _, e := range s.queue {
-		if e.IssueNumber != issueNumber {
+		if e.IssueNumber != issueNumber || (repo != "" && !strings.EqualFold(e.Repo, repo)) {
 			filtered = append(filtered, e)
 		}
 	}
@@ -3286,13 +3290,14 @@ func (s *Scheduler) ExcludeLabels() []string {
 
 // EnqueueEpic fetches sub-issues from GitHub and enqueues them with epicOrder.
 //
-// When eligibleSubIssues is non-empty, only sub-issues whose number is in the
-// whitelist are enqueued. This is the drag-to-queue path where TypeScript has
+// When eligibleSubIssues is non-empty, only the sub-issues it names, by
+// repository and number, are enqueued (an empty IssueRef.Repo names the epic's
+// own repository). This is the drag-to-queue path where TypeScript has
 // already filtered out Backlog/in-review sub-issues and ones with an open PR.
 // Pass nil or an empty slice for the unfiltered autonomous path (the set of
 // open sub-issues that isn't CLOSED is enqueued as before).
 // @see Issue #2992 — epic drag filter.
-func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNumber int, title string, labels []string, eligibleSubIssues []int) error {
+func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNumber int, title string, labels []string, eligibleSubIssues []IssueRef) error {
 	fullRepo := owner + "/" + repo
 	log.Printf("EnqueueEpic: fetching epic #%d from %s", epicNumber, fullRepo)
 	// Resolve a client scoped to the epic's repo so private cross-repo epics use
@@ -3309,15 +3314,18 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 	}
 	log.Printf("EnqueueEpic: epic #%d has %d sub-issues, title=%q", epicNumber, len(issue.SubIssues), issue.Title)
 
-	// Build the eligible-sub-issue set when a whitelist was supplied. The
-	// whitelist names sub-issues by number alone (queue.enqueueEpic's
-	// eligibleSubIssues, from the extension's drag filter), so a number admits
-	// every sub-issue of this epic that has it, in any repository.
-	var eligibleSet map[int]struct{}
+	// Build the eligible-sub-issue set when a whitelist was supplied. It is
+	// keyed by repository and number: an epic's sub-issues can share a number
+	// across repositories, and a bare number admitted both (#2382).
+	var eligibleSet map[string]struct{}
 	if len(eligibleSubIssues) > 0 {
-		eligibleSet = make(map[int]struct{}, len(eligibleSubIssues))
-		for _, n := range eligibleSubIssues {
-			eligibleSet[n] = struct{}{}
+		eligibleSet = make(map[string]struct{}, len(eligibleSubIssues))
+		for _, ref := range eligibleSubIssues {
+			refRepo := ref.Repo
+			if refRepo == "" {
+				refRepo = fullRepo
+			}
+			eligibleSet[repoIssueKey(refRepo, ref.Number)] = struct{}{}
 		}
 		log.Printf("EnqueueEpic: filter active — eligible=%d, total=%d", len(eligibleSet), len(issue.SubIssues))
 	}
@@ -3371,8 +3379,12 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 		// Apply the caller-provided whitelist (drag path). A nil/empty set
 		// means no filter — autonomous path keeps its existing behaviour.
 		if eligibleSet != nil {
-			if _, ok := eligibleSet[si.Number]; !ok {
-				log.Printf("EnqueueEpic: skipping sub-issue #%d — not in eligible set", si.Number)
+			siRepo := fullRepo
+			if si.Repo != "" {
+				siRepo = si.Repo
+			}
+			if _, ok := eligibleSet[repoIssueKey(siRepo, si.Number)]; !ok {
+				log.Printf("EnqueueEpic: skipping sub-issue %s#%d — not in eligible set", siRepo, si.Number)
 				continue
 			}
 		}
@@ -8696,6 +8708,12 @@ func splitOwnerRepo(fullRepo string) (string, string) {
 func isOwnerRepo(repo string) bool {
 	owner, name, ok := strings.Cut(repo, "/")
 	return ok && owner != "" && name != ""
+}
+
+// IssueRef names one issue by repository ("owner/name") and number.
+type IssueRef struct {
+	Repo   string
+	Number int
 }
 
 // repoIssueKey keys an issue by repository and number ("owner/repo#N"), with

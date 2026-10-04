@@ -11,6 +11,7 @@
 import * as vscode from "vscode";
 import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
 import type { Logger } from "../utils/logger";
+import { epicRefKey, formatEpicRef, isEpic, type EpicRef } from "../utils/epicRef";
 
 interface QuickActionItem extends vscode.QuickPickItem {
   action: () => Promise<void> | void;
@@ -38,7 +39,9 @@ export function registerPipelineQuickActionsCommand(
 
     // Section: Per-slot stop options
     for (const slot of activeSlots) {
-      const epicSuffix = slot.epicNumber ? ` (Epic #${slot.epicNumber})` : "";
+      const epicSuffix = slot.epicNumber
+        ? ` (Epic ${formatEpicRef({ repo: slot.epicRepo, number: slot.epicNumber })})`
+        : "";
       items.push({
         label: `$(debug-stop) Stop #${slot.issueNumber}${epicSuffix}`,
         description: slot.currentStage ? `Currently: ${slot.currentStage}` : "Running",
@@ -50,27 +53,31 @@ export function registerPipelineQuickActionsCommand(
       });
     }
 
-    // Section: Per-epic stop (if any epics are running)
-    const epicNumbers = new Set<number>();
+    // Section: Per-epic stop (if any epics are running). An epic is named by
+    // repository and number: another repository's epic can share the number
+    // (#2382).
+    const epics = new Map<string, EpicRef>();
     for (const slot of activeSlots) {
       if (slot.epicNumber) {
-        epicNumbers.add(slot.epicNumber);
+        const ref: EpicRef = { repo: slot.epicRepo, number: slot.epicNumber };
+        epics.set(epicRefKey(ref), ref);
       }
     }
-    if (epicNumbers.size > 0) {
+    if (epics.size > 0) {
       items.push({
         label: "",
         kind: vscode.QuickPickItemKind.Separator,
         action: async () => {},
       });
-      for (const epicNumber of epicNumbers) {
-        const epicSlots = activeSlots.filter((s) => s.epicNumber === epicNumber);
+      for (const epic of epics.values()) {
+        const epicSlots = activeSlots.filter((s) => isEpic(epic, s.epicRepo, s.epicNumber));
         items.push({
-          label: `$(close-all) Stop Epic #${epicNumber}`,
+          label: `$(close-all) Stop Epic ${formatEpicRef(epic)}`,
           description: `${epicSlots.length} running issue(s)`,
           action: async () => {
             await vscode.commands.executeCommand("nightgauge.stopEpic", {
-              epicNumber,
+              epicNumber: epic.number,
+              epicRepo: epic.repo,
             });
           },
         });

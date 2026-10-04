@@ -38,7 +38,7 @@ export function registerRemoveIssueFromPipelineCommand(
         logger.info("Removing issue from pipeline queue", { issueNumber });
 
         // Remove from queue
-        const removed = await queueService.remove(issueNumber);
+        const removed = await queueService.remove(issueNumber, item.getQueueItem().repoName);
 
         if (!removed) {
           logger.warn("Issue not found in queue", { issueNumber });

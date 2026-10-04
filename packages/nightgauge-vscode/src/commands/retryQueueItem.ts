@@ -46,7 +46,7 @@ export function registerRetryQueueItemCommand(
 
       try {
         // Remove from queue and re-add at the front (position 1)
-        const removed = await queueService.remove(issueNumber);
+        const removed = await queueService.remove(issueNumber, queueItem.repoName);
 
         if (!removed) {
           throw new Error("Failed to remove item from queue");

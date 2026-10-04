@@ -65,7 +65,7 @@ describe("removeIssueFromPipeline", () => {
     await handler(treeItem);
 
     // Verify queue service was called
-    expect(mockQueueService.remove).toHaveBeenCalledWith(304);
+    expect(mockQueueService.remove).toHaveBeenCalledWith(304, undefined);
 
     // Verify success message shown
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(

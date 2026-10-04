@@ -559,3 +559,28 @@ describe("inferSizeFromLabels (fallback for repo-only issues)", () => {
     expect(inferSizeFromLabels(["size:xl", "size:xs"])).toBe("XL");
   });
 });
+
+// #2382: an epic's sub-issues can share a number across repositories, so the
+// board read keeps each one's repository beside its number.
+describe("ProjectBoardService - sub-issue identity (#2382)", () => {
+  it("names each sub-issue by repository, defaulting to the epic's own", () => {
+    const service = new ProjectBoardService("/test/workspace");
+    const [epic] = (service as any).boardItemsToReadyIssues([
+      createMockBoardItem({
+        number: 20,
+        repo: "example-org/platform",
+        isEpic: true,
+        subIssues: [
+          { number: 21, title: "a", state: "OPEN", repo: "example-org/app" },
+          { number: 21, title: "b", state: "OPEN" },
+        ],
+      }),
+    ]) as ReadyIssue[];
+
+    expect(epic.repo).toBe("example-org/platform");
+    expect(epic.subIssues).toEqual([
+      { repo: "example-org/app", number: 21 },
+      { repo: "example-org/platform", number: 21 },
+    ]);
+  });
+});

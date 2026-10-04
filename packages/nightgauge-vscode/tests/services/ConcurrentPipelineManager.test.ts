@@ -361,6 +361,7 @@ describe("ConcurrentPipelineManager", () => {
         "Test Issue",
         expect.anything(),
         undefined,
+        undefined,
         undefined
       );
     });
@@ -575,7 +576,8 @@ describe("ConcurrentPipelineManager", () => {
       });
       await manager.waitForAll();
 
-      expect(drainMock).toHaveBeenCalledWith(100, 1);
+      // The slot names no repository here; behavior.test covers one that does.
+      expect(drainMock).toHaveBeenCalledWith(100, undefined);
     });
   });
 

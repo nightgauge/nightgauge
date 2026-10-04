@@ -1282,7 +1282,7 @@ func TestQueueItemPositions(t *testing.T) {
 	}
 
 	// Remove middle item and verify positions recalculate
-	s.QueueRemove(2)
+	s.QueueRemove("", 2)
 	state = s.GetState()
 	if len(state.Items) != 2 {
 		t.Fatalf("len(Items) = %d, want 2", len(state.Items))

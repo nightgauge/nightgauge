@@ -204,6 +204,8 @@ export interface ActiveSlot {
   currentStage?: string;
   /** Parent epic number (if this is a sub-issue of an epic) */
   epicNumber?: number;
+  /** The parent epic's repository, `owner/name` (#2382) */
+  epicRepo?: string;
 }
 
 /**

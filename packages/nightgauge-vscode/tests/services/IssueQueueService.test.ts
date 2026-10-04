@@ -216,6 +216,24 @@ describe("IssueQueueService (IPC delegation)", () => {
       expect(mockQueueAdd).not.toHaveBeenCalled();
     });
 
+    it("names each eligible sub-issue by repository and number (#2382)", async () => {
+      const eligible = [
+        { repo: "example-org/platform", number: 21 },
+        { repo: "example-org/app", number: 21 },
+      ];
+
+      await service.enqueueEpicFiltered(20, "Epic", ["type:epic"], eligible);
+
+      expect(mockQueueEnqueueEpic).toHaveBeenCalledWith(
+        "test-owner",
+        "test-repo",
+        20,
+        "Epic",
+        ["type:epic"],
+        eligible
+      );
+    });
+
     it("refuses enqueue when shutdownGuard returns true", async () => {
       service.setShutdownGuard(() => true);
 
@@ -473,8 +491,14 @@ describe("IssueQueueService (IPC delegation)", () => {
     it("delegates to IPC queueRemove", async () => {
       const result = await service.remove(42);
 
-      expect(mockQueueRemove).toHaveBeenCalledWith(42);
+      expect(mockQueueRemove).toHaveBeenCalledWith(42, undefined);
       expect(result).toBe(true);
+    });
+
+    it("scopes the removal to a repository when given one (#2382)", async () => {
+      await service.remove(21, "example-org/platform");
+
+      expect(mockQueueRemove).toHaveBeenCalledWith(21, "example-org/platform");
     });
 
     it("fires onItemRemoved callback", async () => {
@@ -484,6 +508,96 @@ describe("IssueQueueService (IPC delegation)", () => {
       await service.remove(42);
 
       expect(onItemRemoved).toHaveBeenCalledWith(42);
+    });
+  });
+
+  // #2382: example-org/platform#20 and example-org/app#20 are different
+  // epics, and each has a queued sub-issue #21.
+  describe("drainEpicItems()", () => {
+    const queued = (repo: string, epicRepo: string) => ({
+      repo,
+      issueNumber: 21,
+      title: `${repo}#21`,
+      position: 1,
+      status: "pending",
+      addedAt: new Date().toISOString(),
+      epicNumber: 20,
+      epicRepo,
+    });
+
+    it("drains only the named repository's epic, removing each item by repository", async () => {
+      mockQueueList.mockResolvedValueOnce({
+        schema_version: "2.0",
+        status: "idle",
+        items: [
+          queued("example-org/platform", "example-org/platform"),
+          queued("example-org/app", "example-org/app"),
+        ],
+        updated_at: new Date().toISOString(),
+      });
+
+      const drained = await service.drainEpicItems({
+        repo: "Example-Org/Platform",
+        number: 20,
+      });
+
+      expect(drained.map((d) => d.repoName)).toEqual(["example-org/platform"]);
+      expect(mockQueueRemove).toHaveBeenCalledTimes(1);
+      expect(mockQueueRemove).toHaveBeenCalledWith(21, "example-org/platform");
+    });
+
+    it("drains a single-repository epic as before", async () => {
+      mockQueueList.mockResolvedValueOnce({
+        schema_version: "2.0",
+        status: "idle",
+        items: [queued("example-org/app", "example-org/app")],
+        updated_at: new Date().toISOString(),
+      });
+
+      const drained = await service.drainEpicItems({ repo: "example-org/app", number: 20 });
+
+      expect(drained).toHaveLength(1);
+      expect(mockQueueRemove).toHaveBeenCalledWith(21, "example-org/app");
+    });
+  });
+
+  // #2382: a failure of example-org/platform#21 blocks only what
+  // platform#21 blocks, not what example-org/app#21 blocks.
+  describe("drainBlockedSuccessors()", () => {
+    const blockedItem = (n: number, repo: string, blocker: { number: number; repo?: string }) => ({
+      repo,
+      issueNumber: n,
+      title: `${repo}#${n}`,
+      position: 1,
+      status: "pending",
+      addedAt: new Date().toISOString(),
+      blockedBy: [{ ...blocker, title: "blocker", state: "OPEN" }],
+    });
+
+    it("drains only the items the failed repository's issue blocks", async () => {
+      mockQueueList.mockResolvedValueOnce({
+        schema_version: "2.0",
+        status: "idle",
+        items: [
+          // Blocked by platform#21 (no repository: the item's own).
+          blockedItem(22, "example-org/platform", { number: 21 }),
+          // Blocked by platform#21, named across repositories.
+          blockedItem(40, "example-org/app", { number: 21, repo: "example-org/platform" }),
+          // Blocked by app#21: a different issue.
+          blockedItem(23, "example-org/app", { number: 21 }),
+        ],
+        updated_at: new Date().toISOString(),
+      });
+
+      const drained = await service.drainBlockedSuccessors(21, "example-org/platform");
+
+      expect(drained.map((d) => `${d.repoName}#${d.issueNumber}`)).toEqual([
+        "example-org/platform#22",
+        "example-org/app#40",
+      ]);
+      expect(mockQueueRemove).toHaveBeenCalledWith(22, "example-org/platform");
+      expect(mockQueueRemove).toHaveBeenCalledWith(40, "example-org/app");
+      expect(mockQueueRemove).toHaveBeenCalledTimes(2);
     });
   });
 
