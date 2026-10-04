@@ -32,6 +32,9 @@ and this project adheres to
 
 ### Fixed
 
+- **Slack, Discord and Mattermost post one card per run** when two
+  repositories' issues with the same number run at once (#2408). Before, the
+  second run took over the first's card and the first stopped updating.
 - **Two repositories' issues with the same number can run at once** (#2403).
   While one ran, the other was dropped from the queue as if it were a second
   copy of the first. Each now gets its own slot, its own row in the pipeline

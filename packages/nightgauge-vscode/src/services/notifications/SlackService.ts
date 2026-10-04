@@ -45,6 +45,7 @@ import type { PipelineStage } from "@nightgauge/sdk";
 import { PipelineStateService } from "../PipelineStateService";
 import { ConfigBridge } from "../ConfigBridge";
 import { Logger } from "../../utils/logger";
+import { slotKey } from "../../utils/epicRef";
 import { SecretStorageService, SECRET_KEYS } from "../SecretStorageService";
 import { CREDENTIAL_ENV_VAR, warnOnLegacyEnvKey } from "./credentials";
 import type { Notifier, PipelineEventContext } from "./types";
@@ -124,6 +125,8 @@ interface SlackApiResponse {
 type EditMode = "edit" | "post-only";
 
 interface ActiveRun {
+  /** The `slotKey(repoSlug, issueNumber)` this run is stored under (#2408). */
+  key: string;
   issueNumber: number;
   issueTitle: string;
   branch: string;
@@ -220,10 +223,14 @@ function toSlackAttachment(att: RunAttachment): RunAttachment & { mrkdwn_in: str
 // ─── SlackService ───────────────────────────────────────────────────────────
 
 export class SlackService implements Notifier, vscode.Disposable {
-  private readonly runs = new Map<number, ActiveRun>();
+  // Every per-run map is keyed by slotKey(repoSlug, issueNumber), not the bare
+  // issue number: two repositories' issues with the same number run
+  // concurrently in two slots and must not share a message, a subscription,
+  // a pending slug or a debounce timer (#2408).
+  private readonly runs = new Map<string, ActiveRun>();
   private readonly patcher = new DebouncedPatcher();
-  private readonly slotDisposables = new Map<number, vscode.Disposable[]>();
-  private readonly pendingRepoSlugs = new Map<number, string>();
+  private readonly slotDisposables = new Map<string, vscode.Disposable[]>();
+  private readonly pendingRepoSlugs = new Map<string, string>();
 
   private disposables: vscode.Disposable[] = [];
 
@@ -241,7 +248,7 @@ export class SlackService implements Notifier, vscode.Disposable {
       }),
       this.pipelineStateService.onStageError(({ issueNumber }) => {
         if (this.slotDisposables.size > 0) return;
-        this.scheduleUpdate(issueNumber);
+        this.scheduleUpdate(slotKey(undefined, issueNumber));
       }),
       this.pipelineStateService.onStateChanged((state) => {
         if (this.slotDisposables.size > 0) return;
@@ -259,20 +266,20 @@ export class SlackService implements Notifier, vscode.Disposable {
   // ─── Notifier interface ───────────────────────────────────────────────────
 
   onPipelineStart(ctx: PipelineEventContext): void {
-    void this.handleStageStart(ctx.stage as PipelineStage, ctx.issueNumber);
+    void this.handleStageStart(ctx.stage as PipelineStage, ctx.issueNumber, undefined, ctx.repo);
   }
 
   onPipelineUpdate(ctx: PipelineEventContext): void {
     if (ctx.state) {
-      void this.handleStateChanged(ctx.state as unknown as PipelineStateSnapshot);
+      void this.handleStateChanged(ctx.state as unknown as PipelineStateSnapshot, ctx.repo);
     } else {
-      this.scheduleUpdate(ctx.issueNumber);
+      this.scheduleUpdate(slotKey(ctx.repo, ctx.issueNumber));
     }
   }
 
   onPipelineFinal(ctx: PipelineEventContext): void {
     if (!ctx.state) return;
-    void this.handleRunFinalized(ctx.state as unknown as PipelineStateSnapshot);
+    void this.handleRunFinalized(ctx.state as unknown as PipelineStateSnapshot, ctx.repo);
   }
 
   // ─── Concurrent worktree slot subscription ────────────────────────────────
@@ -282,47 +289,51 @@ export class SlackService implements Notifier, vscode.Disposable {
     slotStateService: PipelineStateService,
     repoSlug?: string
   ): void {
-    if (repoSlug) this.pendingRepoSlugs.set(issueNumber, repoSlug);
-    this.unsubscribeFromSlot(issueNumber);
+    const key = slotKey(repoSlug, issueNumber);
+    if (repoSlug) this.pendingRepoSlugs.set(key, repoSlug);
+    // Only this slot's own previous subscription — never another repository's
+    // slot that happens to share the issue number (#2408).
+    this.unsubscribeFromSlot(issueNumber, repoSlug);
 
     const subs: vscode.Disposable[] = [
       slotStateService.onStageStart(({ stage, issueNumber: num }) => {
         if (num !== issueNumber) return;
-        void this.handleStageStart(stage as PipelineStage, num, slotStateService);
+        void this.handleStageStart(stage as PipelineStage, num, slotStateService, repoSlug);
       }),
       slotStateService.onStageError(({ issueNumber: num }) => {
         if (num !== issueNumber) return;
-        this.scheduleUpdate(num);
+        this.scheduleUpdate(key);
       }),
       slotStateService.onStateChanged((state) => {
         if (!state) return;
         const snap = state as unknown as PipelineStateSnapshot;
         if (snap.issue_number !== issueNumber) return;
-        void this.handleStateChanged(snap);
+        void this.handleStateChanged(snap, repoSlug);
       }),
       slotStateService.onRunFinalized((state) => {
         if (!state) return;
         const snap = state as unknown as PipelineStateSnapshot;
         if (snap.issue_number !== issueNumber) return;
-        void this.handleRunFinalized(snap);
+        void this.handleRunFinalized(snap, repoSlug);
       }),
     ];
 
-    this.slotDisposables.set(issueNumber, subs);
-    this.logger.info("SlackService: subscribed to worktree slot", { issueNumber });
+    this.slotDisposables.set(key, subs);
+    this.logger.info("SlackService: subscribed to worktree slot", { issueNumber, repoSlug });
   }
 
-  unsubscribeFromSlot(issueNumber: number): void {
-    const subs = this.slotDisposables.get(issueNumber);
+  unsubscribeFromSlot(issueNumber: number, repoSlug?: string): void {
+    const key = slotKey(repoSlug, issueNumber);
+    const subs = this.slotDisposables.get(key);
     if (subs) {
       for (const s of subs) s.dispose();
-      this.slotDisposables.delete(issueNumber);
+      this.slotDisposables.delete(key);
     }
     // No further event can reach this run once the slot is gone — flush it
     // rather than strand a terminal card mid-state (#1127).
-    const run = this.runs.get(issueNumber);
+    const run = this.runs.get(key);
     if (run?.isFinal && !run.finalFlushed && run.finalSnapshot) {
-      void this.handleRunFinalized(run.finalSnapshot);
+      void this.handleRunFinalized(run.finalSnapshot, repoSlug);
     }
   }
 
@@ -343,23 +354,27 @@ export class SlackService implements Notifier, vscode.Disposable {
   private async handleStageStart(
     stage: PipelineStage,
     issueNumber: number,
-    stateService?: PipelineStateService
+    stateService?: PipelineStateService,
+    repoSlug?: string
   ): Promise<void> {
-    const existing = this.runs.get(issueNumber);
+    const key = slotKey(repoSlug, issueNumber);
+    const existing = this.runs.get(key);
     if (existing) {
       existing.stageStartTimes.set(stage, Date.now());
       if (stateService) existing.stateService = stateService;
-      this.scheduleUpdate(issueNumber);
+      this.scheduleUpdate(key);
       return;
     }
-    await this.startRun(issueNumber, stateService ?? this.pipelineStateService, stage);
+    await this.startRun(issueNumber, stateService ?? this.pipelineStateService, stage, repoSlug);
   }
 
   private async startRun(
     issueNumber: number,
     stateService: PipelineStateService,
-    stage: PipelineStage
+    stage: PipelineStage,
+    ctxRepo?: string
   ): Promise<void> {
+    const key = slotKey(ctxRepo, issueNumber);
     const config = this.getSlackConfig();
     if (!config?.enabled) {
       // Not an error, but it is the state an operator who just switched Slack
@@ -378,8 +393,9 @@ export class SlackService implements Notifier, vscode.Disposable {
     }
 
     const state = (await stateService.getState()) as unknown as PipelineStateSnapshot | null;
-    const repoSlug = this.pendingRepoSlugs.get(issueNumber);
+    const repoSlug = this.pendingRepoSlugs.get(key) ?? ctxRepo;
     const run: ActiveRun = {
+      key,
       issueNumber,
       issueTitle: state?.title ?? `Issue #${issueNumber}`,
       branch: state?.branch ?? "",
@@ -397,7 +413,7 @@ export class SlackService implements Notifier, vscode.Disposable {
       stateService,
       fallbackWarned: false,
     };
-    this.runs.set(issueNumber, run);
+    this.runs.set(key, run);
 
     if (!state) return;
     const attachment = toSlackAttachment(buildRunAttachment(run, state, this.renderContext()));
@@ -408,7 +424,7 @@ export class SlackService implements Notifier, vscode.Disposable {
     });
 
     if (!res?.ok) {
-      this.runs.delete(issueNumber);
+      this.runs.delete(key);
       return;
     }
     if (res.ts) {
@@ -437,8 +453,9 @@ export class SlackService implements Notifier, vscode.Disposable {
     NotifierStatusTracker.getInstance()?.recordSuccess("slack");
   }
 
-  private async handleStateChanged(state: PipelineStateSnapshot): Promise<void> {
-    const run = this.runs.get(state.issue_number);
+  private async handleStateChanged(state: PipelineStateSnapshot, repoSlug?: string): Promise<void> {
+    const key = slotKey(repoSlug, state.issue_number);
+    const run = this.runs.get(key);
     if (!run) return;
 
     if (state.title) run.issueTitle = state.title;
@@ -454,14 +471,14 @@ export class SlackService implements Notifier, vscode.Disposable {
         run.isFinal = true;
         // Terminal state must not sit behind the debounce — cancel any pending
         // edit and edit now, or the run's last word can be lost to dispose().
-        this.patcher.cancel(state.issue_number);
-        await this.patchMessage(state.issue_number, state);
+        this.patcher.cancel(key);
+        await this.patchMessage(key, state);
       }
       // Later terminal writes do not each earn a chat.update — the run's
       // last render is the terminal flush below (#1127).
       return;
     }
-    this.scheduleUpdate(state.issue_number);
+    this.scheduleUpdate(key);
   }
 
   /**
@@ -473,23 +490,24 @@ export class SlackService implements Notifier, vscode.Disposable {
    * Idempotent, and a no-op in post-only mode: with no editable message a
    * second render would append a duplicate card rather than correct the first.
    */
-  private async handleRunFinalized(state: PipelineStateSnapshot): Promise<void> {
-    const run = this.runs.get(state.issue_number);
+  private async handleRunFinalized(state: PipelineStateSnapshot, repoSlug?: string): Promise<void> {
+    const key = slotKey(repoSlug, state.issue_number);
+    const run = this.runs.get(key);
     if (!run || run.finalFlushed) return;
     if (run.editMode === "post-only") return;
 
     run.isFinal = true;
     run.finalFlushed = true;
     run.finalSnapshot = state;
-    this.patcher.cancel(state.issue_number);
-    await this.patchMessage(state.issue_number, state);
+    this.patcher.cancel(key);
+    await this.patchMessage(key, state);
   }
 
   /** Coalesce bursts of stage events into one edit per DEBOUNCE_MS. */
-  private scheduleUpdate(issueNumber: number): void {
-    const run = this.runs.get(issueNumber);
+  private scheduleUpdate(key: string): void {
+    const run = this.runs.get(key);
     if (!run || run.editMode === "post-only") return;
-    this.patcher.schedule(issueNumber, () => this.patchMessage(issueNumber), DEBOUNCE_MS);
+    this.patcher.schedule(key, () => this.patchMessage(key), DEBOUNCE_MS);
   }
 
   // ─── Delivery ─────────────────────────────────────────────────────────────
@@ -498,11 +516,8 @@ export class SlackService implements Notifier, vscode.Disposable {
    * Edit the run's message in place (or, in post-only mode, post the terminal
    * summary once). Never throws — a notifier must not be able to fail a run.
    */
-  private async patchMessage(
-    issueNumber: number,
-    finalState?: PipelineStateSnapshot
-  ): Promise<void> {
-    const run = this.runs.get(issueNumber);
+  private async patchMessage(key: string, finalState?: PipelineStateSnapshot): Promise<void> {
+    const run = this.runs.get(key);
     if (!run) return;
 
     let snapshot = finalState;
@@ -514,7 +529,7 @@ export class SlackService implements Notifier, vscode.Disposable {
     }
 
     const attachment = toSlackAttachment(buildRunAttachment(run, snapshot, this.renderContext()));
-    const text = attachment.fallback ?? `Pipeline #${issueNumber}`;
+    const text = attachment.fallback ?? `Pipeline #${run.issueNumber}`;
 
     // post-only: nothing to edit, so only the terminal summary is worth sending.
     if (run.editMode === "post-only") {
@@ -524,7 +539,7 @@ export class SlackService implements Notifier, vscode.Disposable {
         text,
         attachments: [attachment],
       });
-      this.runs.delete(issueNumber);
+      this.runs.delete(key);
       return;
     }
 
@@ -537,7 +552,7 @@ export class SlackService implements Notifier, vscode.Disposable {
     });
     if (res?.ok) NotifierStatusTracker.getInstance()?.recordSuccess("slack");
     // Released only after the terminal flush — see handleRunFinalized (#1127).
-    if (run.isFinal && run.finalFlushed) this.runs.delete(issueNumber);
+    if (run.isFinal && run.finalFlushed) this.runs.delete(key);
   }
 
   /**

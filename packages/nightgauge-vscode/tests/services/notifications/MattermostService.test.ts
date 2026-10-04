@@ -473,3 +473,102 @@ describe("MattermostService dispatcher integration", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 });
+
+// ─── Same issue number across repositories (#2408) ─────────────────────────
+
+describe("MattermostService slot keying (#2408)", () => {
+  let service: InstanceType<typeof MattermostService>;
+  let fetchMock: Mock;
+  const originalEnv = process.env.MATTERMOST_WEBHOOK_URL;
+
+  function slotPss(repoRoot: string, issueNumber: number) {
+    const disposers = Array.from({ length: 4 }, () => vi.fn());
+    let i = 0;
+    const sub = () => ({ dispose: disposers[i++] });
+    return {
+      disposers,
+      stageStart: null as null | ((e: { stage: string; issueNumber: number }) => void),
+      onStageStart: vi.fn(function (this: { stageStart: unknown }, cb: never) {
+        this.stageStart = cb;
+        return sub();
+      }),
+      onStageError: vi.fn(() => sub()),
+      onStateChanged: vi.fn(() => sub()),
+      onRunFinalized: vi.fn(() => sub()),
+      getState: vi.fn().mockResolvedValue(makeState(issueNumber)),
+      getRepoRoot: vi.fn(() => repoRoot),
+    };
+  }
+
+  function postResponse(id: string): Response {
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: async () => ({ id }),
+    } as unknown as Response;
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    service = new MattermostService(
+      makePipelineStateService() as never,
+      makeConfigBridge() as never,
+      makeLogger() as never
+    );
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    process.env.MATTERMOST_WEBHOOK_URL = WEBHOOK_URL;
+  });
+
+  afterEach(() => {
+    service.dispose();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    if (originalEnv !== undefined) process.env.MATTERMOST_WEBHOOK_URL = originalEnv;
+    else delete process.env.MATTERMOST_WEBHOOK_URL;
+  });
+
+  it("keeps separate subscriptions and posts for the same issue number in two repos", async () => {
+    const a = slotPss("/repos/platform", 21);
+    const b = slotPss("/repos/app", 21);
+    service.subscribeToSlot(21, a as never, "example-org/platform");
+    service.subscribeToSlot(21, b as never, "example-org/app");
+
+    // Subscribing the second slot must not dispose the first one's handlers.
+    for (const d of a.disposers) expect(d).not.toHaveBeenCalled();
+
+    fetchMock.mockResolvedValueOnce(postResponse("post-a"));
+    fetchMock.mockResolvedValueOnce(postResponse("post-b"));
+    a.stageStart!({ stage: "issue-pickup", issueNumber: 21 });
+    await vi.advanceTimersByTimeAsync(0);
+    b.stageStart!({ stage: "issue-pickup", issueNumber: 21 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Two separate runs, hence two separate posts.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const runs = (service as unknown as { runs: Map<string, { postId: string }> }).runs;
+    expect(runs.size).toBe(2);
+    expect(runs.get("example-org/platform#21")?.postId).toBe("post-a");
+    expect(runs.get("example-org/app#21")?.postId).toBe("post-b");
+
+    // Unsubscribing one slot leaves the other's subscription intact.
+    service.unsubscribeFromSlot(21, "example-org/platform");
+    for (const d of a.disposers) expect(d).toHaveBeenCalledTimes(1);
+    for (const d of b.disposers) expect(d).not.toHaveBeenCalled();
+  });
+
+  it("still supports the single-repository case without a repo slug", async () => {
+    const a = slotPss("/repos/platform", 21);
+    service.subscribeToSlot(21, a as never);
+    fetchMock.mockResolvedValueOnce(postResponse("post-1"));
+    a.stageStart!({ stage: "issue-pickup", issueNumber: 21 });
+    await vi.advanceTimersByTimeAsync(0);
+
+    const runs = (service as unknown as { runs: Map<string, { postId: string }> }).runs;
+    expect([...runs.keys()]).toEqual(["#21"]);
+
+    service.unsubscribeFromSlot(21);
+    for (const d of a.disposers) expect(d).toHaveBeenCalledTimes(1);
+  });
+});

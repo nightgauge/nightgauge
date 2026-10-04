@@ -239,19 +239,20 @@ export async function retryWithBackoff(
 /**
  * Per-key debounce / retry timer manager.
  *
- * One timer per key. Scheduling overwrites any existing timer for that key
+ * One timer per key: a notifier's run key, `slotKey(repo, issueNumber)`
+ * (#2408), or a number. Scheduling overwrites any existing timer for that key
  * — used for both debounced updates and final-PATCH retries (a debounce
  * scheduled while a retry is pending replaces the retry, and vice versa,
  * matching the original `DiscordService.updateTimers` semantics).
  */
 export class DebouncedPatcher {
-  private readonly timers = new Map<number, ReturnType<typeof setTimeout>>();
+  private readonly timers = new Map<string | number, ReturnType<typeof setTimeout>>();
 
   /**
    * Schedule `fn` to run after `delayMs`. Cancels any existing timer for
    * `key` first.
    */
-  schedule(key: number, fn: () => void | Promise<void>, delayMs: number): void {
+  schedule(key: string | number, fn: () => void | Promise<void>, delayMs: number): void {
     this.cancel(key);
     const timer = setTimeout(() => {
       this.timers.delete(key);
@@ -261,7 +262,7 @@ export class DebouncedPatcher {
   }
 
   /** Cancel any pending timer for `key`. No-op if none scheduled. */
-  cancel(key: number): void {
+  cancel(key: string | number): void {
     const existing = this.timers.get(key);
     if (existing) {
       clearTimeout(existing);
@@ -270,7 +271,7 @@ export class DebouncedPatcher {
   }
 
   /** True if a timer is currently scheduled for `key`. */
-  has(key: number): boolean {
+  has(key: string | number): boolean {
     return this.timers.has(key);
   }
 

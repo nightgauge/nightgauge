@@ -18,6 +18,7 @@
 import * as vscode from "vscode";
 import type { PipelineStateService } from "../PipelineStateService";
 import type { Logger } from "../../utils/logger";
+import { slotKey } from "../../utils/epicRef";
 import type { Notifier, PipelineEventContext } from "./types";
 import { DEFAULT_ROUTER, type NotificationRouter } from "./NotificationRouter";
 import type { EventKey } from "../../config/schema";
@@ -38,7 +39,8 @@ function isNotifierEntry(n: NotifierInput): n is NotifierEntry {
 export class NotificationDispatcher implements Notifier, vscode.Disposable {
   private readonly entries: NotifierEntry[];
   private readonly router: NotificationRouter;
-  private readonly subscribedSlots = new Map<number, Notifier[]>();
+  /** Keyed by `slotKey(repoSlug, issueNumber)` (#2408). */
+  private readonly subscribedSlots = new Map<string, Notifier[]>();
 
   constructor(
     notifiers: NotifierInput[],
@@ -117,20 +119,21 @@ export class NotificationDispatcher implements Notifier, vscode.Disposable {
         this.logger.warn("Notifier subscribeToSlot() threw", { error, issueNumber });
       }
     }
-    this.subscribedSlots.set(issueNumber, subscribed);
+    this.subscribedSlots.set(slotKey(repoSlug, issueNumber), subscribed);
   }
 
-  unsubscribeFromSlot(issueNumber: number): void {
-    const subscribed = this.subscribedSlots.get(issueNumber);
+  unsubscribeFromSlot(issueNumber: number, repoSlug?: string): void {
+    const key = slotKey(repoSlug, issueNumber);
+    const subscribed = this.subscribedSlots.get(key);
     if (!subscribed) return;
     for (const notifier of subscribed) {
       try {
-        notifier.unsubscribeFromSlot(issueNumber);
+        notifier.unsubscribeFromSlot(issueNumber, repoSlug);
       } catch (error) {
         this.logger.warn("Notifier unsubscribeFromSlot() threw", { error, issueNumber });
       }
     }
-    this.subscribedSlots.delete(issueNumber);
+    this.subscribedSlots.delete(key);
   }
 
   dispose(): void {
