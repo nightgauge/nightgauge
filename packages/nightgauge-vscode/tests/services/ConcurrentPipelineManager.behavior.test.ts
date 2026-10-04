@@ -110,6 +110,7 @@ vi.mock("../../src/services/IpcClient", () => ({
 
 import { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipelineManager";
 import { fakeCloneLayout } from "../helpers/cloneLayout";
+import type { QueueItem as QueueItemType } from "../../src/types/queue";
 
 // Per-clone data resolves under the git directory (ADR-024 § 7); map the
 // fake roots (and their worktrees) to a clone without running git.
@@ -128,6 +129,9 @@ interface QueueItem {
   status: string;
   addedAt: string;
   epicOrder?: number;
+  repoName?: string;
+  epicNumber?: number;
+  epicRepo?: string;
 }
 
 function makeQueueItem(issueNumber: number, title = `Issue #${issueNumber}`): QueueItem {
@@ -227,6 +231,7 @@ function createMockQueueService() {
     dequeueIndependent: vi.fn().mockResolvedValue([]),
     updateActiveSlots: vi.fn().mockResolvedValue(undefined),
     drainBlockedSuccessors: vi.fn().mockResolvedValue([]),
+    drainEpicItems: vi.fn().mockResolvedValue([]),
     enqueue: vi.fn().mockResolvedValue(null),
     clear: vi.fn().mockResolvedValue(undefined),
     getQueue: vi.fn().mockResolvedValue({ items: [], status: "idle" }),
@@ -420,9 +425,8 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
 
       // epic_total: a queued sub-issue of each epic, plus the running one.
       const queued = [sub(22, "example-org/platform"), sub(32, "example-org/app")];
-      expect(manager.epicTotal(queued, platform)).toBe(2);
+      expect(manager.epicTotal(queued as QueueItemType[], platform)).toBe(2);
 
-      mockQueue.drainEpicItems = vi.fn().mockResolvedValue([]);
       const stopped = await manager.abortEpic(platform);
       expect(stopped).toBe(1);
       expect(mockQueue.drainEpicItems).toHaveBeenCalledWith(platform);
