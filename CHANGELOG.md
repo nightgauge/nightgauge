@@ -14,6 +14,8 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-04
+
 ### Added
 
 - **The extension's listing explains its optional cloud features.** A new
@@ -6266,7 +6268,10 @@ with GitHub Project board integration, dashboard, context file viewer, and
 the first set of commands and settings. Recorded so the extension's changelog
 and this one name the same versions.
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.4.8...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/nightgauge/nightgauge/compare/v0.5.1...v0.6.0
+[0.5.1]: https://github.com/nightgauge/nightgauge/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/nightgauge/nightgauge/compare/v0.4.8...v0.5.0
 [0.4.8]: https://github.com/nightgauge/nightgauge/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/nightgauge/nightgauge/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/nightgauge/nightgauge/compare/v0.4.5...v0.4.6
