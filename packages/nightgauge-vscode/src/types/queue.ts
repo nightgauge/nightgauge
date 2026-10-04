@@ -206,6 +206,11 @@ export interface ActiveSlot {
   epicNumber?: number;
   /** The parent epic's repository, `owner/name` (#2382) */
   epicRepo?: string;
+  /**
+   * The issue's repository, `owner/name` (absent when unknown). Another
+   * repository's issue with the same number can run in another slot (#2403).
+   */
+  repo?: string;
 }
 
 /**

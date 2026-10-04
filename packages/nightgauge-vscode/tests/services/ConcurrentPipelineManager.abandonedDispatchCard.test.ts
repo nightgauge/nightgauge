@@ -429,7 +429,7 @@ describe("ConcurrentPipelineManager force-clear raises the abandoned-dispatch ca
 
     expect(mockQueue.complete).toHaveBeenCalledWith("octocat/acme", 282);
     expect(callbacks.onSlotFailed).toHaveBeenCalledTimes(1);
-    expect(callbacks.onSlotCleaned).toHaveBeenCalledWith(expect.any(Number), 282);
+    expect(callbacks.onSlotCleaned).toHaveBeenCalledWith(expect.any(Number), 282, "octocat/acme");
     expect(manager.isShutdownInProgress).toBe(false);
     expect(mockLogger.warn).toHaveBeenCalledWith(
       "Force-clear: attention.raise failed (fail-open) — no card for this wedge",

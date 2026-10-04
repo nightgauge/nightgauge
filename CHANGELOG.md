@@ -189,6 +189,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The extension holds a concurrent slot by repository and issue number**
+  (#2403). Its slots and reservations were keyed by number alone, so with
+  `example-org/platform#21` running, the scheduler's dispatch of
+  `example-org/app#21` (a different issue, which Go already told apart) was
+  skipped as a duplicate dispatch and released from the queue, and nothing
+  re-queued it. Slots, reservations and the in-flight guard are now keyed by
+  `slotKey(repo, number)`, so the second issue gets its own slot; the same
+  repository's issue is still skipped. `isRunning`, `isIssueInSlots` and
+  `abortSlot` take the repository; without it `abortSlot` stops a slot only
+  when the number names exactly one. Every slot callback names the
+  repository, and the pipeline tree, the slot output channels, the per-slot
+  phase trackers and state subscriptions and the Output window's phase
+  routing key by both. Stop Slot, its quick action and the slot tree item
+  name the slot `owner/repo#N`. The chat notifiers still key a run by number
+  (#2408).
 - **A headless run refuses a skill whose only tool is `AskUserQuestion`**
   (#2390). Headless runs drop `AskUserQuestion`, and a skill left with no tool
   then reached the adapter as one that declares none, which Codex runs with

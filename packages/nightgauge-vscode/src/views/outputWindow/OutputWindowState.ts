@@ -18,6 +18,7 @@ import {
 import type { PipelineLogsConfig } from "../settings/types";
 import type { ContentType } from "./contentFormatter";
 import { redactSecrets } from "../../utils/redaction";
+import { sameRepo } from "../../utils/epicRef";
 
 /**
  * Execution mode for the output window
@@ -973,10 +974,14 @@ export class OutputWindowState {
    * Find a slot by its issue number (Issue #2815).
    *
    * Used to route token updates to the correct slot when only issueNumber is known.
+   * `repo` (`owner/name`) names the issue's repository: two repositories'
+   * issues with one number can run in two slots (#2403). A slot or an event
+   * without a repository matches by number.
    */
-  getSlotByIssueNumber(issueNumber: number): SlotInfo | undefined {
+  getSlotByIssueNumber(issueNumber: number, repo?: string): SlotInfo | undefined {
     for (const info of this.slotInfos.values()) {
-      if (info.issueNumber === issueNumber) return info;
+      if (info.issueNumber !== issueNumber) continue;
+      if (!repo || !info.repoSlug || sameRepo(info.repoSlug, repo)) return info;
     }
     return undefined;
   }

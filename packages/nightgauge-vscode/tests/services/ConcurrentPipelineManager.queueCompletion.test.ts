@@ -275,7 +275,12 @@ describe("ConcurrentPipelineManager — queue completion on the extension path (
     const { manager, queueService } = makeManager([[makeQueueItem(243)]], 2);
 
     // Simulate the live slot a prior dispatch created.
-    (manager as any).slots.set(243, { index: 0, issueNumber: 243, title: "dup" });
+    (manager as any).slots.set(`${REPO}#243`, {
+      index: 0,
+      issueNumber: 243,
+      title: "dup",
+      repo: REPO,
+    });
 
     const started = await manager.fillSlots();
 

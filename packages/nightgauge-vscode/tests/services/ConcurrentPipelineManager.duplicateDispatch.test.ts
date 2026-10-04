@@ -99,7 +99,7 @@ describe("ConcurrentPipelineManager.fillSlots — duplicate dispatch guard (#188
     ]);
 
     // Simulate the live slot the first dispatch created.
-    (manager as any).slots.set(233, { index: 0, issueNumber: 233, title: "dup" });
+    (manager as any).slots.set("#233", { index: 0, issueNumber: 233, title: "dup" });
 
     const started = await manager.fillSlots();
 
@@ -118,7 +118,7 @@ describe("ConcurrentPipelineManager.fillSlots — duplicate dispatch guard (#188
       [{ issueNumber: 233, title: "dup", labels: [] }],
     ]);
 
-    (manager as any).reservedSlots.set(233, { index: 0, repo: "" });
+    (manager as any).reservedSlots.set("#233", { index: 0, issueNumber: 233, repo: "" });
 
     const started = await manager.fillSlots();
 

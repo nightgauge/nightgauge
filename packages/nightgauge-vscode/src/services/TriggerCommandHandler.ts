@@ -151,7 +151,7 @@ export class TriggerCommandHandler implements CommandHandler {
     }
 
     // Concurrent guard — reject if issueNumber already has an active slot.
-    if (this.concurrentManager.isRunning(issueNumber)) {
+    if (this.concurrentManager.isRunning(issueNumber, `${owner}/${repo}`)) {
       this.logger.warn(
         "TriggerCommandHandler: concurrent trigger rejected — issue already running",
         { issueNumber, commandId: cmd.id }

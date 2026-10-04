@@ -53,3 +53,12 @@ export function repoFromIssueUrl(url: string | undefined): string | undefined {
   const m = url?.match(/github\.com\/([^/]+)\/([^/]+)\/(?:issues|pull)\//);
   return m ? `${m[1]}/${m[2]}` : undefined;
 }
+
+/**
+ * The key a running issue's per-slot state is held under: repository
+ * (`owner/name`, "" when unknown) and issue number, case-insensitive (#2403).
+ * Two repositories' issues with one number run in two slots.
+ */
+export function slotKey(repo: string | undefined, issueNumber: number): string {
+  return repoIssueKey(repo ?? "", issueNumber);
+}

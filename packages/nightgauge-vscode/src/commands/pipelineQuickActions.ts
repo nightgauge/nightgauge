@@ -43,11 +43,14 @@ export function registerPipelineQuickActionsCommand(
         ? ` (Epic ${formatEpicRef({ repo: slot.epicRepo, number: slot.epicNumber })})`
         : "";
       items.push({
-        label: `$(debug-stop) Stop #${slot.issueNumber}${epicSuffix}`,
+        label: `$(debug-stop) Stop ${slot.repo ?? ""}#${slot.issueNumber}${epicSuffix}`,
         description: slot.currentStage ? `Currently: ${slot.currentStage}` : "Running",
         action: async () => {
+          // By repository too: another repository's issue with the number
+          // can be running in another slot (#2403).
           await vscode.commands.executeCommand("nightgauge.stopSlot", {
             issueNumber: slot.issueNumber,
+            repo: slot.repo,
           });
         },
       });

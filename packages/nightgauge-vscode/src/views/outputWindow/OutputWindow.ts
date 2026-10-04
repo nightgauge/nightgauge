@@ -229,7 +229,14 @@ export class OutputWindow implements vscode.Disposable {
 
     const phaseStartDisposable = ipc.on("phase.start", (data) => {
       const event = data as
-        | { issueNumber?: number; stage?: string; name?: string; index?: number; total?: number }
+        | {
+            issueNumber?: number;
+            repo?: string;
+            stage?: string;
+            name?: string;
+            index?: number;
+            total?: number;
+          }
         | undefined;
       if (
         !event ||
@@ -240,7 +247,7 @@ export class OutputWindow implements vscode.Disposable {
       ) {
         return;
       }
-      const slot = this.state.getSlotByIssueNumber(event.issueNumber);
+      const slot = this.state.getSlotByIssueNumber(event.issueNumber, event.repo);
       if (!slot) return;
       this.state.updateSlotPhase(slot.slotIndex, {
         name: event.name,
@@ -252,7 +259,8 @@ export class OutputWindow implements vscode.Disposable {
     this.disposables.push(phaseStartDisposable);
 
     const phaseCompleteDisposable = ipc.on("phase.complete", (data) => {
-      const event = data as { issueNumber?: number; stage?: string; name?: string } | undefined;
+      const event = data as
+        { issueNumber?: number; repo?: string; stage?: string; name?: string } | undefined;
       if (
         !event ||
         typeof event.issueNumber !== "number" ||
@@ -261,7 +269,7 @@ export class OutputWindow implements vscode.Disposable {
       ) {
         return;
       }
-      const slot = this.state.getSlotByIssueNumber(event.issueNumber);
+      const slot = this.state.getSlotByIssueNumber(event.issueNumber, event.repo);
       if (!slot) return;
       this.state.clearSlotPhase(slot.slotIndex, event.name, event.stage as PipelineStage);
       this.sendSlotBadgeUpdate(slot.slotIndex);

@@ -395,7 +395,7 @@ describe("ConcurrentPipelineManager.abortAll — deadline (#3111) and force-clea
     expect((callbacks.onSlotFailed.mock.calls[0][2] as Error).message).toBe("Cancelled by user");
     // 3. slot teardown — tree item + subscriptions released, worktree PRESERVED
     //    (a killed process may still hold it, and #66 keeps failed-run context).
-    expect(callbacks.onSlotCleaned).toHaveBeenCalledWith(expect.any(Number), 282);
+    expect(callbacks.onSlotCleaned).toHaveBeenCalledWith(expect.any(Number), 282, undefined);
     expect(worktreeCleanupCalls).toEqual([]);
   });
 

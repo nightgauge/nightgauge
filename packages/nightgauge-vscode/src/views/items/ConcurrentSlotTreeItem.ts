@@ -15,7 +15,7 @@ import type { PipelineStage } from "@nightgauge/sdk";
 import { PHASE_REGISTRY, type ExecutionStage } from "@nightgauge/sdk";
 import type { PipelineStateService, PipelineState } from "../../services/PipelineStateService";
 import type { StagePhase } from "../../schemas/pipelineState";
-import { formatEpicRef } from "../../utils/epicRef";
+import { formatEpicRef, slotKey } from "../../utils/epicRef";
 
 /**
  * Order phases by their registry index — the stage's real execution order —
@@ -114,6 +114,12 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
   readonly epicNumber?: number;
   /** The parent epic's repository, `owner/name`: Stop Epic names it (#2382). */
   readonly epicRepo?: string;
+  /**
+   * The issue's repository, `owner/name` (absent when unknown). Stop Slot
+   * names the slot by it and the number: two repositories' issues with one
+   * number run in two slots (#2403).
+   */
+  readonly repo?: string;
   private status: SlotStatus = "running";
   private stages: Map<PipelineStage, StageTreeItem> = new Map();
   private disposables: vscode.Disposable[] = [];
@@ -141,7 +147,8 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
     private readonly stateService: PipelineStateService,
     epicNumber?: number,
     onChange?: () => void,
-    epicRepo?: string
+    epicRepo?: string,
+    repo?: string
   ) {
     const { label, fullTitle } = ConcurrentSlotTreeItem.formatLabel(issueNumber, title);
     super(label, vscode.TreeItemCollapsibleState.Expanded);
@@ -150,11 +157,12 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
     this.slotIndex = slotIndex;
     this.epicNumber = epicNumber;
     this.epicRepo = epicRepo;
-    this.id = `concurrent-slot-${issueNumber}`;
+    this.repo = repo || undefined;
+    this.id = `concurrent-slot-${slotKey(repo, issueNumber)}`;
     this.iconPath = getStatusIcon("running");
     this.contextValue = "concurrentSlot.running";
     this.description = this.idleDescription();
-    this.tooltip = fullTitle;
+    this.tooltip = this.repo ? `${this.repo}${fullTitle}` : fullTitle;
     this.onChange = onChange ?? null;
 
     // Create own set of stage items
@@ -309,7 +317,7 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
         issueTokens && issueTokens.cost_usd > 0
           ? `\nCumulative cost and tokens across all completed stages: $${issueTokens.cost_usd.toFixed(4)}`
           : "";
-      this.tooltip = fullTitle + metricsSummary;
+      this.tooltip = (this.repo ? `${this.repo}${fullTitle}` : fullTitle) + metricsSummary;
     }
 
     // Update description with cumulative metrics and current stage context

@@ -215,9 +215,27 @@ describe("stopSlot Command", () => {
 
     await handler({ issueNumber: 42 });
 
-    expect(mockManager.abortSlot).toHaveBeenCalledWith(42);
+    expect(mockManager.abortSlot).toHaveBeenCalledWith(42, undefined);
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
       "Pipeline stopped for issue #42. State preserved."
+    );
+  });
+
+  // #2403: the slot tree item names its repository; only that slot stops.
+  it("names the slot by repository and number", async () => {
+    mockManager = createMockConcurrentManager({
+      isRunning: vi.fn(() => true),
+      abortSlot: vi.fn(() => true),
+    });
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Stop Issue" as any);
+
+    registerStopSlotCommand(mockLogger, mockManager);
+    await getLastHandler()({ issueNumber: 21, repo: "example-org/app" });
+
+    expect(mockManager.isRunning).toHaveBeenCalledWith(21, "example-org/app");
+    expect(mockManager.abortSlot).toHaveBeenCalledWith(21, "example-org/app");
+    expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+      "Pipeline stopped for issue example-org/app#21. State preserved."
     );
   });
 
