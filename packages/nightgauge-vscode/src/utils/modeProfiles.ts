@@ -16,15 +16,15 @@
  *   - elevated:   no overrides — represents today's default routing. Adaptive
  *     policy + AutoModelSelector continue to operate unchanged. The new
  *     default for migrated and first-time users.
- *   - maximum:    raises the floor to Opus + effort=high, raises stall
- *     multiplier 10×, disables the pipeline budget ceiling. Replicates the
- *     legacy Supercharge envelope.
+ *   - maximum:    raises the floor to Opus + effort=high. The Go scheduler
+ *     also makes the pipeline budget ceiling observe-only under this mode,
+ *     from its own constant (scheduler.go); nothing here carries that.
  *   - frontier:   premium opt-in tier above maximum. Routes the reasoning
  *     stages (feature-planning, feature-dev, feature-validate) to Fable 5 —
  *     the frontier model at ~2× Opus cost — and keeps mechanical stages on
- *     Haiku so frontier rates are never paid for git plumbing. Keeps the
- *     budget ceiling ENABLED (unlike maximum) precisely because Fable is the
- *     most expensive tier — the guardrail matters most here. Fable is never
+ *     Haiku so frontier rates are never paid for git plumbing. The budget
+ *     ceiling stays enforced (unlike maximum) because Fable is the most
+ *     expensive tier — the guardrail matters most here. Fable is never
  *     reached by automatic routing; selecting frontier is the deliberate
  *     opt-in.
  *
@@ -100,20 +100,6 @@ export interface ModeEnvelope {
   thinkingPolicy?: "on" | "off";
 }
 
-/** Pipeline-level (mode-wide, non-stage) overrides. */
-export interface PipelineProfile {
-  /**
-   * Multiplier applied to the configured stall threshold before
-   * the watchdog kills a stalled stage. `undefined` → use config default.
-   */
-  stallKillMultiplier?: number;
-  /**
-   * When true, the pre-flight pipeline-cost ceiling is bypassed for this run.
-   * `undefined` → enforcement follows config default.
-   */
-  disableBudgetCeiling?: boolean;
-}
-
 export interface ModeProfile {
   stages: Partial<Record<PipelineStage, StageProfile>>;
   /**
@@ -122,7 +108,6 @@ export interface ModeProfile {
    * band. `undefined` falls back to `DEFAULT_MODE_ENVELOPE`.
    */
   envelope?: ModeEnvelope;
-  pipeline: PipelineProfile;
   /** One-line description shown in the QuickPick + status bar tooltip. */
   description: string;
   /** Cost direction hint shown alongside the description. */
@@ -137,9 +122,10 @@ export interface ModeProfile {
  * Elevated supplies no overrides — its routing is identical to today's
  * default. Calibration baselines see Elevated runs unchanged.
  *
- * Maximum stage profiles replicate the legacy Supercharge envelope:
- * Opus + effort=high across every stage, 10× stall multiplier, disabled
- * budget ceiling.
+ * Maximum stage profiles pin Opus + effort=high across every stage. A mode
+ * carries no pipeline-wide settings: the stall window is the same in every
+ * mode (#2378), and only the Go scheduler's own constant makes the budget
+ * ceiling observe-only under Maximum.
  *
  * Efficiency targets cost reduction: Haiku where it suffices, Sonnet for
  * heavier reasoning stages, effort lowered to low/medium. Adaptive policy
@@ -154,7 +140,6 @@ export const MODE_PROFILES: Record<PerformanceMode, ModeProfile> = {
     // capped at medium to keep reasoning cost down.
     stages: {},
     envelope: { floor: "haiku", ceiling: "sonnet", effortCeiling: "medium" },
-    pipeline: {},
   },
   elevated: {
     label: "Elevated",
@@ -164,7 +149,6 @@ export const MODE_PROFILES: Record<PerformanceMode, ModeProfile> = {
     // Fable unreachable by automatic routing).
     stages: {},
     envelope: { floor: "haiku", ceiling: "opus" },
-    pipeline: {},
   },
   maximum: {
     label: "Maximum",
@@ -181,10 +165,6 @@ export const MODE_PROFILES: Record<PerformanceMode, ModeProfile> = {
       "pr-merge": { model: "opus", effort: "high" },
     },
     envelope: { floor: "opus", ceiling: "opus", effortFloor: "high" },
-    pipeline: {
-      stallKillMultiplier: 10,
-      disableBudgetCeiling: true,
-    },
   },
   frontier: {
     label: "Frontier",
@@ -198,12 +178,6 @@ export const MODE_PROFILES: Record<PerformanceMode, ModeProfile> = {
     // for trivial work and empirically failed validation in dogfooding.
     stages: {},
     envelope: { floor: "haiku", ceiling: "fable" },
-    // Budget ceiling deliberately left ENABLED (no disableBudgetCeiling) — Fable
-    // is the most expensive tier, so the guardrail stays on. The stall window is
-    // widened because frontier reasoning runs longer.
-    pipeline: {
-      stallKillMultiplier: 10,
-    },
   },
 };
 

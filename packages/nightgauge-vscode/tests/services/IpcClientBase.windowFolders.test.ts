@@ -51,7 +51,12 @@ vi.mock("../../src/utils/nightgaugeConfig", () => ({
 
 import * as vscode from "vscode";
 import { spawn } from "child_process";
-import { IpcClientBase, WINDOW_FOLDERS_ENV_VAR } from "../../src/services/IpcClientBase";
+import {
+  AGENT_INSTANCE_ID_ENV_VAR,
+  IpcClientBase,
+  WINDOW_FOLDERS_ENV_VAR,
+} from "../../src/services/IpcClientBase";
+import { agentInstanceId, beginAgentInstance } from "../../src/services/agentInstance";
 
 class TestableIpcClient extends IpcClientBase {
   constructor() {
@@ -87,6 +92,7 @@ describe("IpcClientBase.spawnProcess window folders (#2335)", () => {
     setWorkspaceFolders(undefined);
     delete process.env.NIGHTGAUGE_GO_BINARY_PATH;
     delete process.env[WINDOW_FOLDERS_ENV_VAR];
+    delete process.env[AGENT_INSTANCE_ID_ENV_VAR];
   });
 
   it("hands the daemon every window folder, in window order", async () => {
@@ -109,5 +115,18 @@ describe("IpcClientBase.spawnProcess window folders (#2335)", () => {
     await client.start();
 
     expect(WINDOW_FOLDERS_ENV_VAR in spawnedEnv()).toBe(false);
+  });
+
+  // #2418: the extension and its daemon register on two agent rows; one
+  // instance id on both lets the platform count the window once.
+  it("hands the daemon this activation's agent instance id, not an inherited one", async () => {
+    process.env[AGENT_INSTANCE_ID_ENV_VAR] = "inherited-from-the-host";
+    beginAgentInstance();
+
+    await client.start();
+
+    expect(AGENT_INSTANCE_ID_ENV_VAR).toBe("NIGHTGAUGE_AGENT_INSTANCE_ID");
+    expect(spawnedEnv()[AGENT_INSTANCE_ID_ENV_VAR]).toBe(agentInstanceId());
+    expect(spawnedEnv()[AGENT_INSTANCE_ID_ENV_VAR]).not.toBe("inherited-from-the-host");
   });
 });

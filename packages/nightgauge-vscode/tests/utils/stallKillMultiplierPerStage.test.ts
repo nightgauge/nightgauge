@@ -187,4 +187,25 @@ pipeline:
 `);
     expect(getStallKillMultiplier("/test/workspace", "feature-dev")).toBe(6);
   });
+
+  it("leaves the stage map at a sibling key in a four-space file", () => {
+    config(`
+pipeline:
+    stall_kill_multipliers:
+        feature-validate: 3
+    stall_kill_multiplier: 6
+`);
+    expect(getStallKillMultiplier("/test/workspace", "feature-validate")).toBe(3);
+    expect(getStallKillMultiplier("/test/workspace", "feature-dev")).toBe(6);
+  });
+
+  it("ignores a stall_kill_multipliers map nested below a pipeline child", () => {
+    config(`
+pipeline:
+  supercharge:
+    stall_kill_multipliers:
+      feature-dev: 2
+`);
+    expect(getStallKillMultiplier("/test/workspace", "feature-dev")).toBe(8);
+  });
 });

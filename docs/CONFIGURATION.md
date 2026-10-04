@@ -1782,7 +1782,6 @@ Pipeline execution settings.
 | `failure_mode`            | enum    | `halt`       | Behavior on terminal pipeline failure (Issue #3001)                                                                                                                           |
 | `adaptive_stall_recovery` | boolean | `false`      | Rewind to feature-planning once on first stall-kill (Issue #3005)                                                                                                             |
 | `adaptive_budget`         | boolean | `true`       | Derive per-stage token budgets from this repo's own exit records once ≥5 successful samples exist for the (repo, stage, size) group; falls back to the static table otherwise |
-| `performance_mode`        | object  | -            | Accepted, but no key under it is read yet (#2378); the active mode is not set here                                                                                            |
 
 **Skip object:**
 
@@ -1823,16 +1822,13 @@ the epic branch was created manually.
 advances after the epic branch was created. Users are responsible for manually
 rebasing long-lived epic branches.
 
-#### `pipeline.performance_mode` (Issue #3009)
+#### Performance mode (Issue #3009)
 
 No key in this file selects the mode. The four modes, their envelopes and
 pins, and the order in which the active mode is resolved are in
-[PERFORMANCE_MODES.md](PERFORMANCE_MODES.md).
-
-The schema accepts `pipeline.performance_mode.overrides.maximum` (`model`,
-`codex_model`, `stall_kill_multiplier`, `disable_budget_ceiling`), but nothing
-reads it: the `maximum` profile keeps its own values whatever the block holds.
-Whether these overrides are wired up or removed is tracked in #2378.
+[PERFORMANCE_MODES.md](PERFORMANCE_MODES.md). There is no
+`pipeline.performance_mode` block: its `default` key (#2343) and its
+`overrides.maximum` keys (#2378) were never read, and both were removed.
 
 ### Capping automatic routing with `max_model`
 
@@ -1911,15 +1907,16 @@ operator's own model stands).
 The active mode is set with the status-bar QuickPick, which writes the
 checkout's `performance-mode.yaml`
 (`nightgauge layout path checkout performance-mode.yaml`), or per shell with
-`NIGHTGAUGE_PERFORMANCE_MODE=<mode>`. With neither, it is `elevated`. A
-`pipeline.performance_mode.default` key was documented here but never read
-(#2343); the schema now rejects it.
+`NIGHTGAUGE_PERFORMANCE_MODE=<mode>`. With neither, it is `elevated`.
 
 The legacy `pipeline.supercharge` block is still parsed for one release, by
 the extension only. Of its keys only `codex_model` changes what is dispatched:
 it is the Codex model a stage runs on under `maximum`. `model` only labels the
 run's notifications with a model name; `maximum` dispatches Opus whatever it
-says. `stall_kill_multiplier` and `disable_budget_ceiling` are not read. See
+says. It has no other keys: the unread `stall_kill_multiplier` and
+`disable_budget_ceiling` were removed (#2378), and the stall window is
+`pipeline.stall_kill_multiplier` and `pipeline.stall_kill_multipliers` in every
+mode. See
 [DEPRECATIONS.md](DEPRECATIONS.md#supercharge-toggle--performance_mode-selector).
 
 #### `pipeline.recovery.conflict_recovery` (#4072)

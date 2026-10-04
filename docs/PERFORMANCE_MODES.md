@@ -34,8 +34,11 @@ the extension. The two tables mirror each other.
 - **Thinking policy.** Envelopes carry a thinking-policy axis, but no mode sets
   one. The dispatched model's declared thinking default applies, and
   `CLAUDE_CODE_DISABLE_THINKING` overrides any policy.
-- **Budget ceiling.** Under `maximum`, the scheduler's pipeline token ceiling
-  is observe-only: it is logged and does not stop the run.
+- **Pipeline-wide settings.** The budget ceiling is the only one a mode
+  changes: under `maximum`, the scheduler's pipeline token ceiling is
+  observe-only, logged without stopping the run. No configuration key changes
+  that. The stall window (`pipeline.stall_kill_multiplier` and
+  `pipeline.stall_kill_multipliers`) is the same in every mode.
 - **Routing advice.** Unless `model_routing.use_eval_recommendations` is
   `false` (it defaults to `true`), evaluation evidence for an issue's job class
   can re-pick a routed stage's model inside the band. The mode sets the posture

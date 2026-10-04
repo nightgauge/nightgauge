@@ -74,7 +74,6 @@ describe("modeProfiles", () => {
 
   it("elevated is the open envelope: haiku..opus", () => {
     expect(getModeEnvelope("elevated")).toMatchObject({ floor: "haiku", ceiling: "opus" });
-    expect(MODE_PROFILES.elevated.pipeline).toEqual({});
   });
 
   it("efficiency envelope caps at Sonnet with an effort ceiling", () => {
@@ -107,10 +106,13 @@ describe("modeProfiles", () => {
     expect(getModeEnvelope("frontier").ceiling).toBe("fable");
   });
 
-  it("frontier keeps the budget ceiling ENABLED (Fable is the most expensive tier)", () => {
-    // Unlike maximum, frontier must NOT disable the budget ceiling.
-    expect(MODE_PROFILES.frontier.pipeline.disableBudgetCeiling).toBeUndefined();
-    expect(MODE_PROFILES.frontier.pipeline.stallKillMultiplier).toBe(10);
+  it("no mode carries pipeline-wide settings (#2378)", () => {
+    // MODE_PROFILES[mode].pipeline had no reader: the stall window is the same
+    // in every mode, and the Go scheduler alone makes the budget ceiling
+    // observe-only under maximum. The table must not claim otherwise.
+    for (const mode of PERFORMANCE_MODES) {
+      expect(Object.keys(MODE_PROFILES[mode])).not.toContain("pipeline");
+    }
   });
 
   // ---- Maximum still pins (deliberate "cost no object" mode) ----
@@ -122,11 +124,6 @@ describe("modeProfiles", () => {
       expect(profile?.model).toBe("opus");
       expect(profile?.effort).toBe("high");
     }
-  });
-
-  it("maximum sets stallKillMultiplier=10 and disables the budget ceiling", () => {
-    expect(MODE_PROFILES.maximum.pipeline.stallKillMultiplier).toBe(10);
-    expect(MODE_PROFILES.maximum.pipeline.disableBudgetCeiling).toBe(true);
   });
 
   it("every PerformanceMode is reachable via PERFORMANCE_MODES", () => {

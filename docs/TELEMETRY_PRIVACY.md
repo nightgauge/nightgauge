@@ -267,7 +267,8 @@ model or prompt detail, and nothing from the
 [What is never sent](#what-is-never-sent) list above.
 
 **Every heartbeat carries an instance id** (#2395), whatever the tier: a
-random UUID made when the window activates (the daemon makes one per process),
+random UUID made when the window activates (a daemon the window spawned
+carries the window's; a daemon started on its own makes one per process),
 held in memory only, and never derived from a path, host, user or workspace.
 The windows of a machine share one platform agent, so the platform uses it to
 keep each window's execution profile apart. A reload makes a new one.

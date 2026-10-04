@@ -102,11 +102,6 @@ import {
 } from "../utils/streamJsonFilter";
 import { ensureGitignore, ensureWorkspaceGitignores } from "../utils/ensureGitignore";
 import {
-  ANY_RUNTIME_FILE,
-  classifyRuntimeStub,
-  runtimeSweepVerdict,
-} from "../utils/runtimeStubSweep";
-import {
   isRepoInitialized,
   refreshRepoInitializedContext,
   registerQuickstartCommands,
@@ -129,11 +124,13 @@ import {
   followRefusedWorkspaceWrites,
 } from "../platform/refusedWorkspaceWrites";
 import { resolveStateHome } from "../utils/machineStateDir";
+import { ReloadInterruptedRunHolds } from "../utils/reloadInterruptedRun";
 import {
-  ReloadInterruptedRunHolds,
-  reloadInterruptedRemoteRun,
-} from "../utils/reloadInterruptedRun";
-import { type PausedSnapshot, restorePausedRuns } from "./pausedRunRestore";
+  type PausedScanTarget,
+  type PausedSnapshot,
+  restorePausedRuns,
+  scanPausedSnapshots,
+} from "./pausedRunRestore";
 import { ThrottleCommandHandler } from "../services/ThrottleCommandHandler";
 import { WorkspaceThrottleState } from "../services/WorkspaceThrottle";
 import {
@@ -1341,76 +1338,58 @@ export async function initializeServices(
   // not match the repo that contains it, is cross-contamination from a
   // concurrent multi-repo run — ignore it AND delete it so it can never be
   // resurrected as a zombie run in a repo that never ran the issue.
-  if (isUsableWorkspaceRoot(nightgaugeRoot)) {
-    const pipelineDir = pipelineStateDir(nightgaugeRoot);
-    // Best-effort: the "owner/repo" (or short name) of the repo that owns this
-    // pipeline dir, for the repo-mismatch check. Undefined → mismatch check is
-    // skipped (empty-identity check still applies).
-    const containingRepo = workspaceManager
-      ?.getAllRepositories()
-      .find((r) => r.path === nightgaugeRoot);
-    const gh = containingRepo?.github;
-    const containingRepoSlug = gh ? `${gh.owner}/${gh.repo}` : containingRepo?.name;
+  // Every repository of the window, primary first, one scan per clone (two
+  // worktrees of one clone share its pipeline directory). A platform run of a
+  // linked repository pauses in that repository's clone, so scanning only the
+  // primary one left such a run unheld after a reload (#2339).
+  const pausedScanTargets: PausedScanTarget[] = [];
+  {
+    const seenDirs = new Set<string>();
+    const repositories = workspaceManager?.getAllRepositories() ?? [];
+    const addTarget = (root: string, primary: boolean): void => {
+      if (!isUsableWorkspaceRoot(root)) return;
+      let pipelineDir: string;
+      try {
+        pipelineDir = pipelineStateDir(root);
+      } catch {
+        return;
+      }
+      if (seenDirs.has(pipelineDir)) return;
+      seenDirs.add(pipelineDir);
+      // Best-effort: the "owner/repo" (or short name) of the repo that owns
+      // this pipeline dir, for the stub sweep's repo-mismatch check.
+      // Undefined → mismatch check is skipped (empty-identity check still
+      // applies).
+      const containing = repositories.find((r) => r.path === root);
+      const gh = containing?.github;
+      pausedScanTargets.push({
+        pipelineDir,
+        containingRepoSlug: gh ? `${gh.owner}/${gh.repo}` : containing?.name,
+        ...(primary ? {} : { repo: gh ? { owner: gh.owner, repo: gh.repo } : null }),
+      });
+    };
+    if (nightgaugeRoot) addTarget(nightgaugeRoot, true);
+    for (const repository of repositories) addTarget(repository.path, false);
+  }
+
+  // Restore paused pipeline state from runtime-*.json files (Issue #2008)
+  // The existing getState() call above returns null on startup since Go hasn't
+  // emitted pipeline.stateChanged yet. Scanning runtime files directly gives us
+  // the persisted pause flag without requiring the Go binary to be running.
+  //
+  // #307 stale-stub sweep: BEFORE trusting a runtime file, classify it. A stub
+  // with empty repo/stage (the never-cleaned "initialized" snapshot the Go IPC
+  // server used to strand in the launch repo), or one whose `repo` field does
+  // not match the repo that contains it, is cross-contamination from a
+  // concurrent multi-repo run — ignore it AND delete it so it can never be
+  // resurrected as a zombie run in a repo that never ran the issue
+  // (scanPausedSnapshots).
+  if (pausedScanTargets.length > 0) {
     (async () => {
       try {
-        const files = await fs.readdir(pipelineDir).catch(() => [] as string[]);
-        // TWO name patterns, deliberately, and they are NOT interchangeable
-        // (ADR-017 #370 step 1): the sweep may only DELETE legacy names, while
-        // the pause-restore prompt READS both. Both patterns and the gating
-        // between them live in utils/runtimeStubSweep, where
-        // `runtimeSweepVerdict` is unit-tested — this branch guards an
-        // `fs.unlink`, and an inline regex here could be widened back to one
-        // with the whole suite green.
-        const runtimeFiles = files.filter((f) => ANY_RUNTIME_FILE.test(f));
         const paused: PausedSnapshot[] = [];
-        for (const file of runtimeFiles) {
-          const filePath = path.join(pipelineDir, file);
-          try {
-            const content = await fs.readFile(filePath, "utf-8");
-            const runtime = JSON.parse(content) as {
-              paused?: boolean;
-              issueNumber?: number;
-              repo?: string | null;
-              stage?: string | null;
-              remoteRunId?: unknown;
-              ownerPid?: unknown;
-            };
-            // The sweep fails SAFE on the new scheme: a run-identity-keyed
-            // snapshot is never classified and never deleted here.
-            const verdict = runtimeSweepVerdict(file, () =>
-              classifyRuntimeStub(runtime, containingRepoSlug)
-            );
-            if (verdict.action === "delete") {
-              logger.warn("Sweeping stale/cross-contaminated runtime stub (#307)", {
-                file,
-                reason: verdict.reason,
-                repo: runtime.repo ?? null,
-                stage: runtime.stage ?? null,
-                issueNumber: runtime.issueNumber,
-                containingRepoSlug,
-              });
-              await fs.unlink(filePath).catch(() => {});
-              continue;
-            }
-            if (runtime.paused && typeof runtime.issueNumber === "number") {
-              logger.info("Paused pipeline detected on activation", {
-                issueNumber: runtime.issueNumber,
-                file,
-              });
-              paused.push({
-                filePath,
-                issueNumber: runtime.issueNumber,
-                // A paused run that a platform trigger started, whose owning
-                // daemon is gone: a reload ended it, and this window holds
-                // it for the platform's verbs until its Resume runs (#2339).
-                // A live owner is another window's daemon, which answers
-                // itself.
-                interrupted: reloadInterruptedRemoteRun(runtime),
-              });
-            }
-          } catch {
-            // Ignore malformed runtime files
-          }
+        for (const target of pausedScanTargets) {
+          paused.push(...(await scanPausedSnapshots(target, logger)));
         }
         if (paused.length === 0) return;
         vscode.commands.executeCommand("setContext", "nightgauge.pipelinePaused", true);
@@ -1427,7 +1406,25 @@ export async function initializeServices(
               "Resume",
               "Cancel"
             ),
-          resume: async (issueNumber) => {
+          resume: async (issueNumber, repo) => {
+            if (repo) {
+              // A run of another repository of the window: the single-run
+              // path below only runs the primary repository, so the issue is
+              // queued, routed to its own repository (as a platform trigger
+              // is). The queue resolves its title and labels as it runs.
+              const queued = issueQueueService
+                ? await issueQueueService.enqueue(issueNumber, `#${issueNumber}`, [], undefined, {
+                    repoOverride: repo,
+                  })
+                : null;
+              if (!queued) {
+                logger.error("Failed to resume paused pipeline — the queue did not take it", {
+                  issueNumber,
+                  repo: `${repo.owner}/${repo.repo}`,
+                });
+              }
+              return;
+            }
             if (pipelineStateService) {
               // Say it out loud when nothing was cleared on the Go side.
               // The resume runs BEFORE `runPipeline` installs an identity,

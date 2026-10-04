@@ -17,6 +17,7 @@ import * as path from "node:path";
 import { createInterface, Interface as ReadlineInterface } from "readline";
 import * as vscode from "vscode";
 import { BinaryResolver } from "./BinaryResolver";
+import { agentInstanceId, isValidAgentInstanceId } from "./agentInstance";
 import { getActiveCallSource, setActiveCallSource } from "./callSource";
 import { getGitHubAuthToken, getGitHubAuthTokens } from "../utils/nightgaugeConfig";
 import { whenLicenseReconciled } from "./licenseKeychainBridge";
@@ -78,6 +79,17 @@ export type EventHandler = (data: unknown) => void;
  * as agentworkspace.WindowFoldersEnv; an older daemon ignores it.
  */
 export const WINDOW_FOLDERS_ENV_VAR = "NIGHTGAUGE_WINDOW_FOLDERS";
+
+/**
+ * The environment variable that hands the daemon this activation's platform
+ * agent instance id (#2418). The extension and the daemon it spawns register
+ * on two agent rows, and each advertises the window's execution profile on
+ * its own heartbeat; with one instance id on both rows the platform can tell
+ * that both are the same window. The Go side reads it as
+ * platform.AgentInstanceIDEnv and mints its own id when it is absent or
+ * invalid.
+ */
+export const AGENT_INSTANCE_ID_ENV_VAR = "NIGHTGAUGE_AGENT_INSTANCE_ID";
 
 /**
  * The environment variable that hands the daemon the editor's telemetry
@@ -2101,6 +2113,16 @@ export abstract class IpcClientBase implements vscode.Disposable {
       env[WINDOW_FOLDERS_ENV_VAR] = JSON.stringify(windowFolders);
     } else {
       delete env[WINDOW_FOLDERS_ENV_VAR];
+    }
+
+    // This activation's instance id, so the daemon's agent row speaks for the
+    // same window as the extension's (#2418). Never an inherited value: a
+    // daemon spawned without a valid id mints its own.
+    const instanceId = agentInstanceId();
+    if (isValidAgentInstanceId(instanceId)) {
+      env[AGENT_INSTANCE_ID_ENV_VAR] = instanceId;
+    } else {
+      delete env[AGENT_INSTANCE_ID_ENV_VAR];
     }
 
     // Start the daemon IN the workspace it was told to serve (#1913).

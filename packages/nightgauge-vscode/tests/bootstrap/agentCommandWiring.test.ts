@@ -96,9 +96,15 @@ describe("platform agent command wiring in bootstrap/services.ts", () => {
   // run a reload ended, to restorePausedRuns over the window's holds, which
   // claim it in the ledger, so one window of the clone holds it. The
   // behaviour is tested in reloadInterruptedHolds.test.ts and
-  // pausedRunRestore.test.ts.
+  // pausedRunRestore.test.ts. Every repository of the window is scanned, not
+  // only the primary one (review finding A4).
   it("hands the paused runs a reload ended to the window's exclusive holds", () => {
-    expect(servicesSource).toContain("interrupted: reloadInterruptedRemoteRun(runtime),");
+    expect(servicesSource).toContain(
+      "paused.push(...(await scanPausedSnapshots(target, logger)));"
+    );
+    expect(servicesSource).toContain(
+      "for (const repository of repositories) addTarget(repository.path, false);"
+    );
     expect(servicesSource).toContain(
       "const reloadInterruptedHolds = new ReloadInterruptedRunHolds(remoteRunLedger);"
     );

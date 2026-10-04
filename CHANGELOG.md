@@ -189,6 +189,26 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A window's two platform agent rows carry one instance id** (#2418). The
+  extension and the `serve` daemon it spawns register on two agent rows and
+  advertise the window's execution profile on unsynchronised 30-second beats,
+  so after a profile switch the service read the window as a `conflict` until
+  both had beaten. The extension now hands the daemon its activation's
+  instance id in `NIGHTGAUGE_AGENT_INSTANCE_ID`, and the daemon sends that id
+  instead of its own when it is valid, so the service can count the window
+  once. A daemon started on its own still makes its own id.
+- **A window holds the paused platform runs of every repository it has open**
+  (#2339). After a reload only the primary repository's paused snapshots were
+  scanned, so a platform run of a linked repository went unheld: a `resume`
+  or `cancel` from the platform was refused `no-active-run`, and no Resume
+  prompt was offered for it. Every repository's clone is scanned now, its
+  runs are held for the platform's verbs like the primary one's, and a Resume
+  of such a run queues the issue for its own repository.
+- **The per-stage `pipeline.stall_kill_multipliers` map is read only where it
+  belongs** (#2419). The map was matched at any depth below `pipeline:`, and
+  in a four-space config it never ended, so a `pipeline.stall_kill_multiplier`
+  after it was ignored.
+
 - **The Go scheduler names a run by repository and issue number** (#2414,
   #2415, #2416). With `example-org/app#21` and `example-org/platform#21`
   running at once, three Go lookups still used the number alone. The `runId`
@@ -1070,6 +1090,16 @@ changelog, and the release workflow refuses a tag that does not.
   per run.
 
 ### Changed
+
+- **Unread Maximum-profile settings are removed** (#2378).
+  `pipeline.performance_mode` (its only key, `overrides.maximum`, had no
+  reader), the `stall_kill_multiplier` and `disable_budget_ceiling` keys of the
+  legacy `pipeline.supercharge` block, and the mode profiles' unread pipeline
+  settings (a 10x stall window for `maximum` and `frontier`, and a budget
+  switch for `maximum`) are gone from the schema, the code and the docs. The
+  stall window is the same in every mode; the scheduler alone makes the budget
+  ceiling observe-only under `maximum`, as before.
+  [PERFORMANCE_MODES.md](docs/PERFORMANCE_MODES.md) says so.
 
 - **The signed-in platform canary targets production** (#2401). The project
   keeps no hosted staging deployment, so `staging-platform-smoke.yml` had

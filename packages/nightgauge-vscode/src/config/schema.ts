@@ -1394,60 +1394,15 @@ export const PipelineConfigSchema = z.object({
     })
     .optional(),
   /**
-   * Performance mode — the cost/quality envelope every stage routes within
-   * (Issue #3009, replaces the legacy `supercharge` toggle from #2433). The
-   * four modes (`efficiency`, `elevated`, `maximum`, `frontier`) and their
-   * envelopes are MODE_PROFILES in utils/modeProfiles.ts.
-   *
-   * The active mode is NOT configured here. It is `NIGHTGAUGE_PERFORMANCE_MODE`,
-   * else the checkout's `performance-mode.yaml` (`.git/nightgauge-worktree/`,
-   * ADR-024 § 7, written by the status-bar picker), else `elevated`. A
-   * `default` key was documented here but neither resolver ever read it
-   * (#2343); the object is strict, so a config that still sets it is rejected
-   * rather than silently ignored.
-   *
-   * @see docs/PERFORMANCE_MODES.md
-   * @see Issue #3009 - Replace Supercharge toggle with explicit performance mode selector
-   */
-  performance_mode: z
-    .object({
-      /**
-       * Maximum-profile overrides. Accepted, but nothing reads them: the
-       * profile keeps its own values (#2378 decides between wiring them up
-       * and removing them). Each field below names the profile value it was
-       * meant to override.
-       */
-      overrides: z
-        .object({
-          maximum: z
-            .object({
-              /**
-               * The profile's Claude model (it pins 'opus'). The standard
-               * band and the one rung below it, positionally derived from
-               * the `TIER_BANDS` authority (#582) like `soft_route_model`.
-               */
-              model: z.enum([TIER_BANDS[2], TIER_BANDS[1]]).optional(),
-              /** The profile's Codex model (default: dynamic catalog). */
-              codex_model: z.string().optional(),
-              /** The stall kill multiplier (default: 10). */
-              stall_kill_multiplier: z.number().int().min(1).optional(),
-              /** Whether the pipeline token ceiling only observes (default: true). */
-              disable_budget_ceiling: z.boolean().optional(),
-            })
-            .optional(),
-        })
-        .optional(),
-    })
-    .strict()
-    .optional(),
-  /**
-   * @deprecated Issue #3009 — replaced by `performance_mode`. Retained for one
-   * release so existing config files keep parsing. The extension's legacy
-   * parser reads two keys: `codex_model` (`getSuperchargeCodexModel`) is the
-   * Codex model a stage runs on under Maximum, and `model`
-   * (`getSuperchargeModel`) only labels the run's notifications. Maximum
-   * dispatches Opus whatever `model` says, and `stall_kill_multiplier` and
-   * `disable_budget_ceiling` are not read.
+   * @deprecated Issue #3009 — the Supercharge toggle became the `maximum`
+   * performance mode, which is selected by `NIGHTGAUGE_PERFORMANCE_MODE` or
+   * the status-bar picker, never in this file (docs/PERFORMANCE_MODES.md).
+   * This block keeps the two Maximum-profile keys the extension reads:
+   * `codex_model` (`getSuperchargeCodexModel`) is the Codex model a stage runs
+   * on under Maximum, and `model` (`getSuperchargeModel`) only labels the
+   * run's notifications; Maximum dispatches Opus whatever `model` says. The
+   * unread `stall_kill_multiplier` and `disable_budget_ceiling` were removed
+   * (#2378), as was `pipeline.performance_mode.overrides.maximum`.
    *
    * @see Issue #2433 - Supercharge pipeline mode (deprecated)
    */
@@ -1461,10 +1416,6 @@ export const PipelineConfigSchema = z.object({
       model: z.enum([TIER_BANDS[2], TIER_BANDS[1]]).optional(),
       /** The Codex model a stage runs on under Maximum (default: dynamic catalog). */
       codex_model: z.string().optional(),
-      /** Not read. */
-      stall_kill_multiplier: z.number().int().min(1).optional(),
-      /** Not read. */
-      disable_budget_ceiling: z.boolean().optional(),
     })
     .optional(),
   /**

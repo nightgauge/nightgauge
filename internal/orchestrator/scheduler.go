@@ -5034,9 +5034,9 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 
 	// Issue #3217: push the active performance mode into the BudgetEnforcer
 	// so its decisions / log lines carry mode context and the maximum-mode
-	// observe-only path can fire. `disableCeiling` mirrors
-	// `MODE_PROFILES.maximum.pipeline.disableBudgetCeiling` from the TS side
-	// — deliberately duplicated to avoid threading TS config into Go.
+	// observe-only path can fire. The ceiling is observe-only under maximum
+	// by this constant alone: no config key and no TS mode profile changes it
+	// (#2378).
 	pipelineMode := string(routing.ResolvePerformanceMode(workspaceRoot))
 	disableBudgetCeiling := pipelineMode == string(routing.ModeMaximum)
 	s.budgetEngine.SetPerformanceMode(pipelineMode, disableBudgetCeiling)
