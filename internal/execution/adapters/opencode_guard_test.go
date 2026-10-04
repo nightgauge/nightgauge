@@ -36,7 +36,7 @@ func repoRootForTest(t *testing.T) string {
 
 // stageSkillAllowedTools is the tool list a headless dispatch of the stage
 // skill in skillsRoot/name grants, read the way `nightgauge opencode` reads it
-// (skillrender.Render, then FilterHeadlessTools), so this test exercises the
+// (skillrender.Render with Headless set), so this test exercises the
 // real committed skill files through the real grammar. It used to re-parse the
 // frontmatter itself, splitting on whitespace alone, so a skill written with
 // commas, a Tool(pattern) entry or a YAML list would have fed it a wrong list
@@ -47,11 +47,11 @@ func stageSkillAllowedTools(t *testing.T, skillsRoot, name string) []string {
 	if !ok || skillrender.StageSkillDirs[stage] != name {
 		t.Fatalf("%s is not a pipeline stage's skill directory", name)
 	}
-	res, err := skillrender.Render(skillrender.Options{Stage: stage, SkillsRoots: []string{skillsRoot}})
+	res, err := skillrender.Render(skillrender.Options{Stage: stage, SkillsRoots: []string{skillsRoot}, Headless: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	tools := skillrender.FilterHeadlessTools(res.AllowedTools)
+	tools := res.AllowedTools
 	if len(tools) == 0 {
 		t.Fatalf("%s/SKILL.md grants a headless run no tool", name)
 	}

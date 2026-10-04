@@ -1250,7 +1250,7 @@ func TestAnalyticsService_GetAnalyticsHealth_LicenseKeyRefused(t *testing.T) {
 // The extension asks for whole days, and the bare "2026-07-23" it used to send
 // failed that validation with 422 — reported to the user as a transient error
 // worth retrying, which it never was. These tests assert on what actually
-// reaches the wire, because the staging smoke only ever called this endpoint
+// reaches the wire, because the platform smoke only ever called this endpoint
 // with no query string at all and so could not see the defect.
 
 func newCostTestServer(t *testing.T, capture *url.Values) (*AnalyticsService, func()) {

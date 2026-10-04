@@ -377,3 +377,35 @@ func TestRenderProfileRejectsUnknownValue(t *testing.T) {
 		t.Fatal("expected an error for an unrecognized --profile value, got success")
 	}
 }
+
+// TestRenderHeadlessGrantsAndRefuses pins `--headless`, the flag the
+// extension's headless dispatcher renders with (#2390): allowed_tools is what
+// a non-interactive run is granted, and a skill that declares tools but none
+// such a run can use fails the command, naming its file.
+func TestRenderHeadlessGrantsAndRefuses(t *testing.T) {
+	root := t.TempDir()
+	writeStageSkill(t, root, "feature-dev", "---\nname: s\nallowed-tools: Read AskUserQuestion\n---\n\n# Body\n")
+	out, err := runRender(t, "--stage", "feature-dev", "--skills-root", root, "--json", "--headless")
+	if err != nil {
+		t.Fatalf("execute: %v\n%s", err, out)
+	}
+	var env struct {
+		AllowedTools []string `json:"allowed_tools"`
+	}
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("envelope: %v\n%s", err, out)
+	}
+	if len(env.AllowedTools) != 1 || env.AllowedTools[0] != "Read" {
+		t.Errorf("allowed_tools = %v, want [Read]", env.AllowedTools)
+	}
+
+	askOnly := t.TempDir()
+	writeStageSkill(t, askOnly, "feature-dev", "---\nname: s\nallowed-tools: AskUserQuestion\n---\n\n# Body\n")
+	skillPath := filepath.Join(askOnly, "nightgauge-feature-dev", "SKILL.md")
+	if out, err := runRender(t, "--stage", "feature-dev", "--skills-root", askOnly, "--json", "--headless"); err == nil || !strings.Contains(err.Error(), skillPath) {
+		t.Errorf("--headless err = %v, want a refusal naming %s\n%s", err, skillPath, out)
+	}
+	if out, err := runRender(t, "--stage", "feature-dev", "--skills-root", askOnly, "--json"); err != nil {
+		t.Errorf("interactive render err = %v, want the skill read\n%s", err, out)
+	}
+}

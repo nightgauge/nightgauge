@@ -333,10 +333,32 @@ export function skillFileAllowedTools(skillContent: string, skillPath: string): 
 }
 
 /**
+ * Why a headless run refuses a skill whose allowed-tools lists tools but none
+ * a non-interactive run can use, Go's ErrNoHeadlessTools (#2390).
+ */
+export const NO_HEADLESS_TOOLS =
+  "allowed-tools lists no tool a headless run can use " +
+  "(AskUserQuestion needs a user present): add the tools the skill needs, or run it interactively";
+
+/**
  * The tools a non-interactive run is granted (Go's FilterHeadlessTools):
  * everything but AskUserQuestion, which the Claude CLI treats as a permission
  * denial under `-p`, so the agent retries it in a loop (#118, #171, #205).
+ *
+ * A list that declares tools and keeps none fails closed (#2390): a caller
+ * hands the adapter an empty list exactly as it hands a skill that declares
+ * none, and Codex maps that to full access, so the skill that asked for the
+ * least would run with the sandbox bypassed. An empty input is a skill that
+ * declares none, and keeps each runner's default.
+ *
+ * @param skillPath - the file the tools came from, named by a refusal
+ * @throws Error ({@link NO_HEADLESS_TOOLS}) when tools are declared but none
+ * survives.
  */
-export function filterHeadlessTools(tools: readonly string[]): string[] {
-  return tools.filter((tool) => tool !== "AskUserQuestion");
+export function filterHeadlessTools(tools: readonly string[], skillPath: string): string[] {
+  const granted = tools.filter((tool) => tool !== "AskUserQuestion");
+  if (tools.length > 0 && granted.length === 0) {
+    throw new Error(`${skillPath}: ${NO_HEADLESS_TOOLS}`);
+  }
+  return granted;
 }

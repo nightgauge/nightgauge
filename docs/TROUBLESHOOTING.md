@@ -1647,7 +1647,7 @@ RFC 3339, widening to whole days so the requested window stays inclusive at
 both ends.
 
 **Why nothing caught it.** `GetCostAnalytics` had no unit test, and
-`scripts/staging-platform-smoke.sh` called `/v1/analytics/cost` with **no query
+`scripts/platform-smoke.sh` (then the staging canary) called `/v1/analytics/cost` with **no query
 string at all** — so the live canary exercised a request the extension never
 makes, and stayed green while every real Cost tab load failed.
 

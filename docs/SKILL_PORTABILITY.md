@@ -127,7 +127,13 @@ mirrored into the plugin tree by `scripts/install-agent-skills.sh` but are never
 resolved there. This is tolerable exactly because base-only is correct: the
 skill is unadapted, never wrong. It is closed for one class of caller —
 anything rendering through `nightgauge skill render`, which is every path the
-pipeline dispatches.
+pipeline dispatches. The Go scheduler renders each stage itself. The VS Code
+extension renders each headless stage and pipes the render to the Claude CLI;
+every other adapter runs as `nightgauge-sdk stage`, and the extension hands it the
+same render (or the platform-injected skill) in the file
+`NIGHTGAUGE_STAGE_SKILL_RENDER` names, which the SDK prompts with and takes the
+tools from instead of the base SKILL.md (#2381). Only `nightgauge-sdk stage` run by
+hand, with no such file, prompts from the base document.
 
 ## 3. Phase markers are no-op-safe
 
@@ -152,8 +158,9 @@ authoring care.
 **Degrade safely** (present in shipped skills; harmless off-Claude):
 
 - **`AskUserQuestion`** — stripped from the tool list in headless mode
-  (`splitTools` in `internal/execution/skill.go`); headless stages fail fast on
-  an undecidable instead.
+  (`FilterHeadlessTools` in `internal/skillrender/render.go`, `filterHeadlessTools`
+  in the SDK); headless stages fail fast on an undecidable instead. A skill whose
+  only tool is `AskUserQuestion` is refused headless, naming its file (#2390).
 - **`agent:` / `context: fork`** — frontmatter directives consumed only by the
   Claude-Code SDK forking layer; never parsed by the Go/SDK pipeline executors,
   so under Codex/Gemini the skill simply runs inline.

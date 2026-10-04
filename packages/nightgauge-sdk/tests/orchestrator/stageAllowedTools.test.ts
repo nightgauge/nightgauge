@@ -28,7 +28,8 @@ import { ClaudeHeadlessAdapter } from "../../src/cli/adapters/ClaudeHeadlessAdap
 import { ClaudeSdkAdapter } from "../../src/cli/adapters/ClaudeSdkAdapter.js";
 import { CodexAdapter } from "../../src/cli/adapters/CodexAdapter.js";
 import { withClaudeAllowedTools } from "../../src/cli/adapters/cliQueryHelper.js";
-import { NO_ALLOWED_TOOLS } from "../../src/orchestrator/skillAllowedTools.js";
+import { NO_ALLOWED_TOOLS, NO_HEADLESS_TOOLS } from "../../src/orchestrator/skillAllowedTools.js";
+import { STAGE_SKILL_RENDER_ENV } from "../../src/orchestrator/StageExecutor.js";
 import { createMockResult } from "../mocks/agent-sdk.js";
 
 // The CLI adapters' queries spawn their CLI; record the argv instead. The rest
@@ -150,6 +151,21 @@ describe("a stage's query carries its skill's allowed-tools (#2358)", () => {
     expect(seen).toHaveLength(0);
   });
 
+  it("fails a stage whose only tool is AskUserQuestion, naming the file (#2390)", async () => {
+    // Filtered to nothing, it read as a skill that declares no tools: full
+    // access under Codex for the skill that asked for the least.
+    stageSkill("AskUserQuestion");
+    const seen: SDKQueryOptions[] = [];
+    const result = await new PipelineOrchestrator(recordingQuery(seen)).runStage(
+      "feature-planning",
+      7
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toBe(`${path.join(skillDir, "SKILL.md")}: ${NO_HEADLESS_TOOLS}`);
+    expect(seen).toHaveLength(0);
+  });
+
   it("leaves the option unset for a skill that declares none, as the Go path does", async () => {
     stageSkill(undefined);
     const seen: SDKQueryOptions[] = [];
@@ -256,6 +272,37 @@ describe("Codex runs a read-only stage read-only (#2358)", () => {
     expect(args).not.toContain("--sandbox");
   });
 
+  it("never spawns Codex for a skill whose only tool is AskUserQuestion (#2390)", async () => {
+    stageSkill("AskUserQuestion");
+    const queryFn = await new CodexAdapter().createQueryFunction({ stage: "feature-planning" });
+    const result = await new PipelineOrchestrator(queryFn).runStage("feature-planning", 7);
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain(NO_HEADLESS_TOOLS);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("scopes to the dispatcher's render, not the base SKILL.md (#2381)", async () => {
+    // The base grants Bash; a whole-file override the render took its tools
+    // from narrows them to a read-only set, and that is the sandbox Codex gets.
+    stageSkill(PIPELINE_SET.join(" "));
+    const renderFile = path.join(skillDir, "render.json");
+    writeFileSync(
+      renderFile,
+      JSON.stringify({
+        stage: "feature-planning",
+        skill_path: path.join(skillDir, "_overlays", "codex.SKILL.md"),
+        content: "# Override body\n",
+        allowed_tools: READ_ONLY,
+      })
+    );
+    vi.stubEnv(STAGE_SKILL_RENDER_ENV, renderFile);
+    const args = await runCodexStage();
+
+    expect(args.slice(3, 5)).toEqual(["--sandbox", "read-only"]);
+    expect(args).not.toContain(BYPASS);
+  });
+
   it("keeps full access for a skill that grants Bash, so the mode follows the skill", async () => {
     stageSkill(PIPELINE_SET.join(" "));
     const args = await runCodexStage();
@@ -355,5 +402,80 @@ describe("claude-headless takes the skill's tools as --allowedTools (#2358)", ()
     expect(withClaudeAllowedTools(["--allowed-tools=Read"], ["Bash"])).toEqual([
       "--allowed-tools=Read",
     ]);
+  });
+});
+
+describe("a dispatcher's render is the stage's prompt and grant (#2381)", () => {
+  /** Write a render handoff for feature-planning and point the SDK at it. */
+  function handOver(render: Record<string, unknown>): void {
+    const file = path.join(skillDir, "render.json");
+    writeFileSync(file, JSON.stringify({ stage: "feature-planning", ...render }));
+    vi.stubEnv(STAGE_SKILL_RENDER_ENV, file);
+  }
+
+  it("prompts with the render's body verbatim and grants the render's tools", async () => {
+    stageSkill(PIPELINE_SET.join(" "));
+    // An absolute path in the render must not be rewritten a second time.
+    const body = `# Rendered\n\n## Host adaptation: OpenCode\n\nRead ${skillDir}/skills/_shared/x.md\n`;
+    handOver({
+      skill_path: path.join(skillDir, "SKILL.md"),
+      content: body,
+      allowed_tools: READ_ONLY,
+    });
+    const seen: SDKQueryOptions[] = [];
+    const result = await new PipelineOrchestrator(recordingQuery(seen)).runStage(
+      "feature-planning",
+      7
+    );
+
+    expect(result.success).toBe(true);
+    expect(seen[0].prompt).toContain(body);
+    expect(seen[0].prompt).not.toContain("# Plan the feature");
+    expect(seen[0].options?.allowedTools).toEqual(READ_ONLY);
+  });
+
+  it("leaves the option unset when the rendered skill declares no tools", async () => {
+    stageSkill(PIPELINE_SET.join(" "));
+    handOver({
+      skill_path: path.join(skillDir, "SKILL.md"),
+      content: "# Injected\n",
+      allowed_tools: [],
+    });
+    const seen: SDKQueryOptions[] = [];
+    await new PipelineOrchestrator(recordingQuery(seen)).runStage("feature-planning", 7);
+
+    expect(seen[0].prompt).toContain("# Injected");
+    expect(seen[0].options?.allowedTools).toBeUndefined();
+  });
+
+  it("refuses a render for another stage", async () => {
+    stageSkill("Read");
+    handOver({ stage: "feature-dev", skill_path: "/x/SKILL.md", content: "# Dev\n" });
+    const seen: SDKQueryOptions[] = [];
+    const result = await new PipelineOrchestrator(recordingQuery(seen)).runStage(
+      "feature-planning",
+      7
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error?.message).toContain("not feature-planning");
+    expect(seen).toHaveLength(0);
+  });
+
+  it("refuses a rendered skill whose only tool is AskUserQuestion, naming its file", async () => {
+    stageSkill("Read");
+    handOver({
+      skill_path: "/x/override.SKILL.md",
+      content: "# Ask\n",
+      allowed_tools: ["AskUserQuestion"],
+    });
+    const seen: SDKQueryOptions[] = [];
+    const result = await new PipelineOrchestrator(recordingQuery(seen)).runStage(
+      "feature-planning",
+      7
+    );
+
+    expect(result.error?.message).toBe(`/x/override.SKILL.md: ${NO_HEADLESS_TOOLS}`);
+    expect(seen).toHaveLength(0);
   });
 });

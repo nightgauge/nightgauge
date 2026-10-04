@@ -67,6 +67,9 @@ import {
   pickAdvice,
   skillAllowedTools,
   skillFrontmatterTools,
+  filterHeadlessTools,
+  STAGE_SKILL_RENDER_ENV,
+  type StageSkillRender,
   type JobClass,
   type ModelSelectionResult,
   type IssueMetadata,
@@ -2973,6 +2976,12 @@ export interface RenderedSkill {
    *  injected, skill-relative paths rewritten to absolute. Ready to prompt. */
   content: string;
   allowedTools: string[];
+  /**
+   * The allowed-tools the skill declares, as the render reports them: empty
+   * when it declares none, where `allowedTools` holds the default set. A
+   * headless render's list is the one a non-interactive run is granted.
+   */
+  declaredAllowedTools: string[];
   mcpTools: string[];
   programmaticTools?: string[];
   /** Absolute path of the SKILL.md the binary resolved. */
@@ -3012,7 +3021,12 @@ interface SkillRenderEnvelope {
  * a hard dependency of every stage run (the Go scheduler drives them over IPC),
  * so a missing binary is an install defect that should say so out loud.
  */
-export function renderSkill(stage: PipelineStage, model?: string, adapter?: string): RenderedSkill {
+export function renderSkill(
+  stage: PipelineStage,
+  model?: string,
+  adapter?: string,
+  headless = false
+): RenderedSkill {
   const roots = resolveSkillRoots();
   if (roots.length === 0) {
     throw new Error(`No skills root available for stage ${stage} (no workspace folder, no bundle)`);
@@ -3032,6 +3046,9 @@ export function renderSkill(stage: PipelineStage, model?: string, adapter?: stri
   const args = ["skill", "render", "--stage", stage, "--json", "--include-content"];
   if (model) args.push("--model", model);
   if (adapter) args.push("--adapter", adapter);
+  // A headless dispatch gets the tools a non-interactive run is granted, and
+  // the binary refuses a skill left with none (#2390).
+  if (headless) args.push("--headless");
   for (const root of roots) {
     args.push("--skills-root", root);
   }
@@ -3065,6 +3082,7 @@ export function renderSkill(stage: PipelineStage, model?: string, adapter?: stri
     // so absence means "frontmatter declared none" — which is the case the
     // historical default exists for.
     allowedTools: envelope.allowed_tools?.length ? envelope.allowed_tools : DEFAULT_ALLOWED_TOOLS,
+    declaredAllowedTools: envelope.allowed_tools ?? [],
     mcpTools: envelope.mcp_tools ?? [],
     programmaticTools: envelope.programmatic_tools,
     skillPath,
@@ -3134,6 +3152,7 @@ function resolveMcpTools(mcpTools: string[], workspaceRoot: string): string[] {
 function parseSkillContent(raw: string): {
   content: string;
   allowedTools: string[];
+  declaredAllowedTools: string[];
   mcpTools: string[];
   programmaticTools?: string[];
 } | null {
@@ -3160,9 +3179,35 @@ function parseSkillContent(raw: string): {
     // prompt omits the phase markers, breaking phase tracking in the sidebar.
     const contentBody = frontmatterMatch ? raw.slice(frontmatterMatch[0].length).trimStart() : raw;
 
-    return { content: contentBody, allowedTools, mcpTools, programmaticTools };
+    return {
+      content: contentBody,
+      allowedTools,
+      declaredAllowedTools: declaredTools,
+      mcpTools,
+      programmaticTools,
+    };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Write the render a non-Claude stage is handed (#2381) to a new file only
+ * this user can read, and return its path. `wx` refuses an existing file, so
+ * a planted name is never followed.
+ */
+export function writeStageSkillRender(render: StageSkillRender): string {
+  const file = path.join(os.tmpdir(), `nightgauge-stage-skill-${randomUUID()}.json`);
+  fs.writeFileSync(file, JSON.stringify(render), { encoding: "utf-8", mode: 0o600, flag: "wx" });
+  return file;
+}
+
+/** Delete a {@link writeStageSkillRender} file once its stage has ended. */
+function removeStageSkillRender(file: string): void {
+  try {
+    fs.rmSync(file, { force: true });
+  } catch {
+    // Best effort: a leftover file in the temp directory holds no secret.
   }
 }
 
@@ -4388,14 +4433,23 @@ function runStageSkillHeadlessImpl(
   let skillData: {
     content: string;
     allowedTools: string[];
+    declaredAllowedTools: string[];
     mcpTools: string[];
     programmaticTools?: string[];
   };
+  // The file the stage's tools come from, named by a refusal and handed to
+  // `nightgauge-sdk stage` with the render (#2381).
+  let skillSource: string;
+  // The tools a non-interactive run is granted out of the skill's own
+  // allowed-tools: empty when it declares none.
+  let headlessDeclaredTools: string[];
   try {
-    const rendered = renderSkill(stage, modelDecision.model, adapter);
+    const rendered = renderSkill(stage, modelDecision.model, adapter, true);
     skillDir = rendered.skillDir;
+    skillSource = rendered.skillPath;
     if (injectedSkillContent) {
       const parsed = parseSkillContent(injectedSkillContent);
+      if (parsed) skillSource = `platform-injected SKILL.md for ${stage}`;
       skillData = parsed
         ? {
             ...parsed,
@@ -4409,6 +4463,9 @@ function runStageSkillHeadlessImpl(
     } else {
       skillData = rendered;
     }
+    // The render above is headless, so the binary already refused a disk
+    // skill left with no tool; an injected skill is refused here (#2390).
+    headlessDeclaredTools = filterHeadlessTools(skillData.declaredAllowedTools, skillSource);
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     callbacks?.onError?.(error);
@@ -4457,8 +4514,9 @@ function runStageSkillHeadlessImpl(
 
   // Filter out AskUserQuestion - it doesn't work in headless mode (-p)
   // Claude CLI treats it as a permission denial, causing the agent to retry
-  // repeatedly and flood the output. See Issue #118, #171, #205.
-  const filteredTools = skillData.allowedTools.filter((tool) => tool !== "AskUserQuestion");
+  // repeatedly and flood the output. See Issue #118, #171, #205. A skill left
+  // with no tool was refused above (#2390), so this list is never emptied.
+  const filteredTools = filterHeadlessTools(skillData.allowedTools, skillSource);
 
   const allAllowedTools = [...filteredTools, ...resolvedMcpTools];
 
@@ -5356,12 +5414,52 @@ function runStageSkillHeadlessImpl(
     }
   }
 
+  // Every adapter but Claude runs as `nightgauge-sdk stage`, which builds the
+  // stage's prompt itself. Hand it the skill composed above, so the overlays,
+  // a whole-file override and a platform-injected skill reach the stage, and
+  // their tools are the ones granted (#2381). Only this dispatch's own render
+  // may reach the child, never one inherited from an outer run.
+  delete spawnEnv[STAGE_SKILL_RENDER_ENV];
+  let stageSkillRenderFile: string | undefined;
+  if (adapter !== "claude") {
+    try {
+      stageSkillRenderFile = writeStageSkillRender({
+        stage,
+        skill_path: skillSource,
+        content: skillData.content,
+        allowed_tools: headlessDeclaredTools,
+      });
+      spawnEnv[STAGE_SKILL_RENDER_ENV] = stageSkillRenderFile;
+    } catch (err) {
+      // Without the handoff the stage would prompt from the base SKILL.md and
+      // be granted its tools: refuse rather than run another skill.
+      const error = new Error(
+        `could not hand ${stage}'s rendered skill to the SDK stage: ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+      callbacks?.onError?.(error);
+      callbacks?.onComplete?.({ success: false, exitCode: null, error });
+      return {
+        process: null as unknown as ChildProcess,
+        stage,
+        issueNumber,
+        kill: () => {},
+      };
+    }
+  }
+
   const proc = spawn(cmd, args, {
     cwd: workspaceRoot,
     shell: false,
     stdio: ["pipe", "pipe", "pipe"], // Enable stdin pipe
     env: spawnEnv,
   });
+  if (stageSkillRenderFile) {
+    const renderFile = stageSkillRenderFile;
+    proc.on("close", () => removeStageSkillRender(renderFile));
+    proc.on("error", () => removeStageSkillRender(renderFile));
+  }
 
   // Served-thinking attribution (#606): the ONE thinking signal the extension
   // has first-hand evidence of is the CLAUDE_CODE_DISABLE_THINKING interlock

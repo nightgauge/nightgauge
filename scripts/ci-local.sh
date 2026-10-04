@@ -320,6 +320,8 @@ REQUIRED_FILES=(
   scripts/capture-cli-help.sh
   scripts/test-adapter-canary.sh
   scripts/adapter-canary.sh
+  scripts/test-platform-smoke.sh
+  scripts/platform-smoke.sh
   scripts/test-ci-change-class.sh
   scripts/npm-audit-check.js
   scripts/validate-skill-metadata.sh
@@ -1327,6 +1329,14 @@ run_group "capture-cli-help.sh regression suite" \
 #      dedupe, and the stub-provider's own bounded start/stop.
 run_group "adapter-canary.sh regression suite" \
   bash scripts/test-adapter-canary.sh
+
+# 1b6. platform-smoke.sh regression suite (#754, #2401) — the production
+#      canary's own logic against a local mock server: a 401 fails loudly, a
+#      wrong response shape fails, a missing token fails before any request,
+#      and the token never reaches the output. Its header always said this
+#      gate ran it; until #2404 nothing did.
+run_group "platform-smoke.sh regression suite" \
+  bash scripts/test-platform-smoke.sh
 
 # 1c. CI change-class gate (#647) — drives scripts/ci-change-class.sh against
 #     real git fixtures AND asserts .github/workflows/ci.yml still consumes its

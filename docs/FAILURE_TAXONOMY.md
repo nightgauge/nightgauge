@@ -1885,7 +1885,7 @@ response are the same gesture.
 | `ci-local.sh` step guards (#983)       | the script it runs is missing  | **step passed** (skip) |
 | pre-push Node validation (#1159)       | `npm run build` has no script  | **build failed**       |
 | SKILL.md metadata validation (#856)    | frontmatter block never closed | **missing field**      |
-| staging platform smoke (#1087)         | no credential is provisioned   | **`main` is red**      |
+| platform smoke canary (#1087)          | no credential is provisioned   | **`main` is red**      |
 
 **Why the direction does not matter.** Collapsing toward pass is a Silent No-Op:
 coverage disappears with no observable difference from success. Collapsing

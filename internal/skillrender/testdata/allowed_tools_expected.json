@@ -1,5 +1,5 @@
 {
-  "about": "A SKILL.md per case and the tool lists a reader must take from it: `declared` is its allowed-tools read verbatim, `headless` what a non-interactive run is granted, and `mcp` / `programmatic`, where a case has them, its mcp-tools and programmatic-tools. A case with `refused` is a skill whose allowed-tools field is there but lists no tool, or is written only in a form neither reader can read; both readers refuse it. internal/skillrender (splitFrontmatter, splitTools, FilterHeadlessTools) and the SDK (skillAllowedTools.ts) both read this file (#2358, #2385).",
+  "about": "A SKILL.md per case and the tool lists a reader must take from it: `declared` is its allowed-tools read verbatim, `headless` what a non-interactive run is granted, and `mcp` / `programmatic`, where a case has them, its mcp-tools and programmatic-tools. A case with `refused` is a skill whose allowed-tools field is there but lists no tool, or is written only in a form neither reader can read; both readers refuse it. A case with `headless_refused` declares tools but none a non-interactive run can use; both readers refuse it headless (#2390). internal/skillrender (splitFrontmatter, splitTools, FilterHeadlessTools) and the SDK (skillAllowedTools.ts) both read this file (#2358, #2385).",
   "cases": [
     {
       "name": "a pipeline stage's space-separated set",
@@ -120,6 +120,12 @@
       "skill": "---\nname: s\nallowed-tools: Read AskUserQuestion Bash\n---\nBody\n",
       "declared": ["Read", "AskUserQuestion", "Bash"],
       "headless": ["Read", "Bash"]
+    },
+    {
+      "name": "a skill that declares only AskUserQuestion is refused headless",
+      "skill": "---\nname: s\nallowed-tools: AskUserQuestion\n---\nBody\n",
+      "declared": ["AskUserQuestion"],
+      "headless_refused": true
     },
     {
       "name": "every tool field reads the same way",

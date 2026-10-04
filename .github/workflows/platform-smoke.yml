@@ -1,0 +1,61 @@
+# Platform smoke — signed-in canary against the REAL production platform API.
+#
+# nightgauge/nightgauge#754, part of epic #741. Every other tier that exercises
+# the platform integration (unit tests, the vitest/go mocks) runs against a
+# stub — something WE built to encode what WE believe the API does. The epic's
+# root cause was exactly that belief being wrong: user-scoped routes
+# (/v1/analytics/health, /trends, /cost, /v1/audit/reports) were called with an
+# account-scoped license key and answered 401, while the extension told the
+# user to upgrade their plan. A suite built entirely on our own assumptions
+# cannot catch the next one of those. This workflow talks to the real API.
+#
+# Where it runs (#2401): the project keeps no hosted pre-production deployment.
+# Pre-release verification is the Docker E2E stack plus smoke tests against
+# production after each deploy, and this canary is one of those: dispatch it
+# once a platform deploy is live. It targets the public API the daemon itself
+# uses (the default in scripts/platform-smoke.sh), as a dedicated test account.
+#
+# What it exercises (sourced from internal/platform/*.go — the Go daemon's own
+# platform client, not a guess): agent registration + heartbeat, the analytics
+# dashboard/usage-summary, health, runs, trends and cost endpoints, the audit
+# reports list, the audit retention config + integrity verification, and the
+# Action Center attention sync. See scripts/platform-smoke.sh for the exact
+# endpoint list and scripts/test-platform-smoke.sh for its mock-server
+# regression suite.
+#
+# Deliberately OFF the PR path and unscheduled: a signed-in credential has no
+# business being reachable from a fork's PR run, and a scheduled run attaches
+# its check-run to `main`'s HEAD, so a red one reads as a red merge (#1087).
+#
+# Required repository configuration — see docs/PLATFORM_SMOKE.md for what to
+# provision and how to rotate it:
+#   secrets.PLATFORM_SMOKE_SESSION_TOKEN  signed-in JWT for a DEDICATED
+#                                          production test account (never a
+#                                          personal one).
+#
+# A missing token FAILS this job — it does not skip. A silently skipped canary
+# reads as green, which is worse than none (see #732, #744).
+name: Platform Smoke
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-smoke
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Probe every platform-backed surface
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run platform smoke
+        env:
+          PLATFORM_SMOKE_SESSION_TOKEN: ${{ secrets.PLATFORM_SMOKE_SESSION_TOKEN }}
+        run: bash scripts/platform-smoke.sh

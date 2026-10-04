@@ -402,6 +402,7 @@ func TestIPCPlatform_DockerCompose_SkipIfNotSet(t *testing.T) {
 
 	// Verify platform is online
 	t.Run("status/online", func(t *testing.T) {
+		h.bind(t)
 		id := h.sendRequest("platform.status", nil)
 		resp := h.readResponseFor(id, nil)
 		if resp.Error != nil {
@@ -417,6 +418,7 @@ func TestIPCPlatform_DockerCompose_SkipIfNotSet(t *testing.T) {
 
 	// Verify health check
 	t.Run("healthCheck", func(t *testing.T) {
+		h.bind(t)
 		id := h.sendRequest("platform.healthCheck", nil)
 		resp := h.readResponseFor(id, nil)
 		if resp.Error != nil {

@@ -64,6 +64,7 @@ func TestIdentity_WorkspaceRegisterRepo_MissingFields(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			h.bind(t)
 			id := h.sendRequest("workspace.registerRepo", tt.params)
 			resp := h.readResponseFor(id, nil)
 

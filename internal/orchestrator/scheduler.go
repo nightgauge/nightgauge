@@ -5983,6 +5983,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			Model:       model,
 			Adapter:     adapterName,
 			SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+			Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 			Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 		})
 		if err != nil {
@@ -6068,6 +6069,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					Model:       model,
 					Adapter:     adapterName,
 					SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+					Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 					Profile:     skillrender.ProfileCompact,
 					Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 				})
@@ -6086,6 +6088,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Model:          model,
 						Adapter:        adapterName,
 						SkillsRoots:    skillrender.DefaultRoots(workspaceRoot),
+						Headless:       true, // every stage this dispatches runs non-interactively (#2390)
 						Profile:        skillrender.ProfileCompact,
 						SupplyIncludes: true,
 						Warn:           func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
@@ -6131,6 +6134,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						Model:       alt.ID,
 						Adapter:     adapterName,
 						SkillsRoots: skillrender.DefaultRoots(workspaceRoot),
+						Headless:    true, // every stage this dispatches runs non-interactively (#2390)
 						Warn:        func(msg string) { log.Printf("#%d: %s", item.Number, msg) },
 					})
 					if altErr == nil {
@@ -6563,9 +6567,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// backstop, not a live branch.
 			RunID: runtime.RunID,
 			// Every stage the scheduler dispatches runs non-interactively, so
-			// strip the tools that cannot work there (#79 moved this out of the
-			// composer, which serves interactive callers too).
-			AllowedTools:      skillrender.FilterHeadlessTools(skillData.AllowedTools),
+			// each render above is Headless: the tools that cannot work there
+			// are already stripped, and a skill left with none was refused
+			// (#79, #2390).
+			AllowedTools:      skillData.AllowedTools,
 			Prompt:            prompt,
 			PhaseEventFn:      phaseEventFn,
 			PhasePassedFn:     phasePassedFn,

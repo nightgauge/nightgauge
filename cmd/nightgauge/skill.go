@@ -59,6 +59,7 @@ func skillRenderCmd() *cobra.Command {
 		contextWindow  int
 		profile        string
 		supplyIncludes bool
+		headless       bool
 		issue          int
 		contextType    string
 		contextFile    string
@@ -136,6 +137,10 @@ and the frontmatter tool lists renders once rather than twice.`,
 				// The scheduler sets this for a compact render on a local
 				// endpoint when the supplied render still fits (#2234).
 				SupplyIncludes: supplyIncludes,
+				// A headless dispatcher (the extension's) asks for the tools a
+				// non-interactive run is granted, and for the refusal of a
+				// skill left with none (#2390).
+				Headless: headless,
 				// Warnings go to stderr so they never corrupt piped stdout,
 				// which is the composed prompt a caller feeds to an agent.
 				Warn: func(msg string) { fmt.Fprintln(os.Stderr, "warning:", msg) },
@@ -202,6 +207,7 @@ and the frontmatter tool lists renders once rather than twice.`,
 	cmd.Flags().BoolVar(&includeContent, "include-content", false, "With --json, carry the composed text in the envelope's \"content\" field (one spawn instead of two)")
 	cmd.Flags().IntVar(&contextWindow, "context-window", 0, "Model context window in tokens; when > 0, checks the render fits the stage's ADR-023 share and exits non-zero when it does not (0: no check, byte-identical to today)")
 	cmd.Flags().BoolVar(&supplyIncludes, "supply-includes", false, "Supply a compact render's phase includes inline, as the scheduler does for a local endpoint when the result still fits (full renders always supply them)")
+	cmd.Flags().BoolVar(&headless, "headless", false, "Render for a non-interactive run: allowed_tools drops the tools such a run cannot use (AskUserQuestion), and a skill that declares tools but none a headless run can use is refused")
 	cmd.Flags().IntVar(&issue, "issue", 0, "Wrap the render in the scheduler's invocation context for this issue (execution.BuildPrompt): stdout is then the exact stage prompt")
 	cmd.Flags().StringVar(&contextType, "context-type", "", "With --issue, the stage's input context type (e.g. planning, dev)")
 	cmd.Flags().StringVar(&contextFile, "context-file", "", "With --issue, the stage's input context file path")

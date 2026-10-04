@@ -45,6 +45,9 @@ vi.mock("vscode", () => ({
 vi.mock("fs", () => ({
   existsSync: vi.fn(),
   readFileSync: vi.fn(),
+  // A non-Claude stage is handed its rendered skill in a file (#2381).
+  writeFileSync: vi.fn(),
+  rmSync: vi.fn(),
 }));
 
 // Mock child_process module
@@ -4526,5 +4529,128 @@ describe("onModelResolved reports the decision the run actually made (#1016)", (
     expect(onModelResolved.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(spawn).mock.invocationCallOrder[0]
     );
+  });
+});
+
+describe("skillRunner - a non-Claude stage is handed its render (#2381, #2390)", () => {
+  let mockProcess: ChildProcess;
+  let originalEnv: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    originalEnv = { ...process.env };
+    mockProcess = createMockChildProcess();
+    vi.mocked(spawn).mockReturnValue(mockProcess);
+    vi.mocked(fs.existsSync).mockReturnValue(true);
+    vi.mocked(fs.readFileSync).mockReturnValue(`---\nallowed-tools: Read\n---\n# Skill`);
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "codex";
+    // The composer applies the host overlay of the adapter it is told about.
+    vi.mocked(execFileSync).mockImplementation(((_cmd: string, args: string[]) => {
+      if (!isSkillRenderCall(args)) return "";
+      const adapter = args[args.indexOf("--adapter") + 1];
+      return skillRenderStdout(args, {
+        content: `# feature-dev\n\n## Host adaptation: ${adapter}\n`,
+        allowedTools: ["Read", "Grep"],
+      });
+    }) as unknown as typeof execFileSync);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.env = originalEnv;
+    killAllActiveProcesses();
+  });
+
+  /** The render file the stage was spawned with, and what was written to it. */
+  function handedRender(): { file: string; render: Record<string, unknown> } {
+    const env = (vi.mocked(spawn).mock.calls[0][2] as { env: Record<string, string> }).env;
+    const file = env.NIGHTGAUGE_STAGE_SKILL_RENDER;
+    expect(file, "no render handed to the SDK stage").toBeTruthy();
+    const write = vi.mocked(fs.writeFileSync).mock.calls.find((call) => call[0] === file);
+    expect(write, "the render file was not written").toBeDefined();
+    return { file, render: JSON.parse(String(write![1])) as Record<string, unknown> };
+  }
+
+  it("hands the SDK stage the adapter's headless render: its body and its tools", () => {
+    runStageSkillHeadless("feature-dev", 42, {});
+
+    const renderArgs = vi
+      .mocked(execFileSync)
+      .mock.calls.map((call) => call[1] as string[])
+      .find((args) => isSkillRenderCall(args))!;
+    expect(renderArgs).toEqual(expect.arrayContaining(["--adapter", "codex", "--headless"]));
+    const { render } = handedRender();
+    expect(render.stage).toBe("feature-dev");
+    expect(render.content).toContain("## Host adaptation: codex");
+    expect(render.allowed_tools).toEqual(["Read", "Grep"]);
+    expect(render.skill_path).toMatch(/nightgauge-feature-dev\/SKILL\.md$/);
+  });
+
+  it("deletes the render file when the stage ends", () => {
+    runStageSkillHeadless("feature-dev", 42, {});
+    const { file } = handedRender();
+
+    mockProcess.emit("close", 0);
+
+    expect(fs.rmSync).toHaveBeenCalledWith(file, { force: true });
+  });
+
+  it("hands over a platform-injected skill and its tools, not the disk render", () => {
+    const injected = `---\nname: injected\nallowed-tools: Read Glob AskUserQuestion\n---\n# Injected body\n`;
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      {},
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      injected
+    );
+
+    const { render } = handedRender();
+    expect(render.content).toContain("# Injected body");
+    expect(render.content).not.toContain("Host adaptation");
+    expect(render.allowed_tools).toEqual(["Read", "Glob"]);
+  });
+
+  it("refuses an injected skill whose only tool is AskUserQuestion (#2390)", () => {
+    const onComplete = vi.fn();
+    runStageSkillHeadless(
+      "feature-dev",
+      42,
+      { onComplete },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      `---\nname: injected\nallowed-tools: AskUserQuestion\n---\n# Ask\n`
+    );
+
+    expect(spawn).not.toHaveBeenCalled();
+    expect(onComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        error: expect.objectContaining({
+          message: expect.stringContaining("platform-injected SKILL.md for feature-dev"),
+        }),
+      })
+    );
+  });
+
+  it("hands nothing to a Claude stage, which takes its prompt on stdin", () => {
+    process.env.NIGHTGAUGE_UI_CORE_ADAPTER = "claude";
+    process.env.NIGHTGAUGE_STAGE_SKILL_RENDER = "/outer/run/render.json";
+    runStageSkillHeadless("feature-dev", 42, {});
+
+    const env = (vi.mocked(spawn).mock.calls[0][2] as { env: Record<string, string> }).env;
+    expect(env.NIGHTGAUGE_STAGE_SKILL_RENDER).toBeUndefined();
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
   });
 });
