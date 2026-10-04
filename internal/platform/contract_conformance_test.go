@@ -105,6 +105,10 @@ var contractCallSites = []callSite{
 	{api.OpAgentsHeartbeat, func(ctx context.Context, c *Client) error {
 		return NewAgentRegistrationService(c, "test").Heartbeat(ctx, "agent-1")
 	}},
+	{api.OpAgentsListWorkspaceThrottles, func(ctx context.Context, c *Client) error {
+		_, err := c.ReadAgentWorkspaceThrottles(ctx, "agent-1")
+		return err
+	}},
 	{api.OpAgentsRegister, func(ctx context.Context, c *Client) error {
 		_, err := NewAgentRegistrationService(c, "test").RegisterAgent(ctx)
 		return err
@@ -178,8 +182,8 @@ var contractCallSites = []callSite{
 	{api.OpTelemetryIngestPipelineRun, func(ctx context.Context, c *Client) error {
 		return NewAnalyticsService(c).pushPipelineRunSync(ctx, ExecutionHistoryRunRecord{})
 	}},
-	{api.OpWorkspacesList, func(ctx context.Context, c *Client) error {
-		_, err := c.ReadWorkspaceThrottle(ctx, "acme-platform")
+	{api.OpTeamsListMine, func(ctx context.Context, c *Client) error {
+		_, _, err := c.ReadDefaultTeam(ctx)
 		return err
 	}},
 }

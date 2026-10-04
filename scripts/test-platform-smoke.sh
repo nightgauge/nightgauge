@@ -128,6 +128,7 @@ all_green_routes() {
 [
   {"method":"POST","path":"/v1/agents/register","status":201,"body":{"agentId":"agent-123","commandsUrl":"/v1/agents/agent-123/commands","ttl_seconds":90}},
   {"method":"PUT","path":"/v1/agents/agent-123/heartbeat","status":204,"body":{}},
+  {"method":"GET","path":"/v1/agents/agent-123/throttles","status":200,"body":{"workspaces":[]}},
   {"method":"GET","path":"/v1/analytics/dashboard","status":200,"body":{}},
   {"method":"GET","path":"/v1/analytics/health","status":200,"body":{"compositeScore":87.5,"compositeGrade":"B","computedAt":"2026-04-16T12:00:00Z","periodDays":30,"totalRunsAnalyzed":24}},
   {"method":"GET","path":"/v1/analytics/runs","status":200,"body":{"runs":[],"nextCursor":null}},

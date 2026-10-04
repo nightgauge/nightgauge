@@ -2812,8 +2812,9 @@ dispatch: no new slot opens above the lower of `max_concurrent` and the cap, a
 run already going is never stopped, and queued issues start as soon as the cap
 is raised, cleared or reaches its end. Each window applies its own
 workspace's cap, holds it across a reload, and drops it on sign-out; the
-Queued Issues header shows it while it is in force. The daemon does not apply
-it yet (#2352). See
+Queued Issues header shows it while it is in force. The daemon applies its
+workspace's cap to the runs it dispatches itself, with only its license key,
+and a headless scheduler follows it through the daemon (#2352). See
 [GO_BINARY.md § The daemon's platform agent](GO_BINARY.md#the-daemons-platform-agent).
 
 **See also:**

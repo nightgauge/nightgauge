@@ -571,32 +571,38 @@ undoes a newer change; a read that fails changes nothing.
 
 The Go side follows the same throttle for the work it starts itself (#2352):
 
-- The daemon follows the throttle of the workspace it serves, read by the
-  workspace's slug from the same workspace list, while it has a signed-in
-  session (the extension hands it the session). It reads it when its agent
-  starts, after every agent registration, on every `throttle` command its
-  agent receives (which
-  it still relays to the extension, whose window acknowledges it), each time
-  its command stream opens, and whenever the session is installed or
-  cleared. Reads run one at a time, each bounded to 30 seconds so one that
-  never answers holds back no later read, a read asked for during another
-  runs again after it, and a read that fails changes nothing. Neither the
-  command's payload nor the registration response's agent-wide `throttle` is
-  applied. The read is by slug in the list the platform returns for the
-  account, which is one team's (without a team named, the account's default
-  team), so for an account on several teams the daemon, like the extension,
-  can follow another team's workspace of the same slug, or find none when
-  its workspace belongs to another team; scoping the read to the team the
-  registration used stays open in #2352. Without a session nothing is
-  followed and the cap is lifted, as in the extension. With one, the throttle
-  is followed but unread until a read succeeds. A daemon has no session when
-  it starts, until the extension pushes the one it holds or says it holds
-  none, so until then, or for two minutes when no extension says anything,
-  the throttle is unread too: a window reload's new daemon does not tell a
-  headless scheduler that it follows no throttle.
-  Only the extension hands the daemon a session, so a daemon the extension is
-  not attached to follows no throttle: the license key it holds cannot read
-  the workspace's own throttle yet, and that stays open in #2352.
+- The daemon follows the throttle of the workspace it serves, with or
+  without the extension. It reads it from the platform's agent throttle
+  endpoint (`GET /v1/agents/{agentId}/throttles`) under the agent it
+  registered, with its license key, or with the session when the extension
+  has handed it one. The endpoint lists every workspace the agent covers,
+  each with its own throttle: a workspace of a team the account is on that
+  links a repository the agent declared at its last registration, so the
+  daemon's registration declares its workspace's repositories (`repos`). The
+  daemon finds its workspace by the slug its manifest names and by team, and
+  applies that workspace's throttle alone, never the strictest of several; a
+  workspace the endpoint does not list has none, and a manifest that names
+  no workspace has none. The registration names no team, so the platform
+  writes the workspace to the account's default team; with a session the
+  daemon reads which team that is (`GET /v1/teams`, once per session) and
+  matches slug and team. Without one it matches the slug alone, and when
+  workspaces of several teams share the slug it applies none of them, keeps
+  the last throttle it read, and logs that it cannot tell them apart.
+- It reads after every agent registration, on every `throttle` command its
+  agent receives (which it still relays to the extension, whose window
+  acknowledges it), each time its command stream opens, so a throttle set
+  or cleared while it was disconnected is learned, and whenever the session
+  is installed or cleared. Neither the command's payload nor the
+  registration response's agent-wide `throttle` is applied. Reads run one
+  at a time, each bounded to 30 seconds so one that never answers holds back
+  no later read, and a read asked for during another runs again after it.
+  Nothing polls: a read that fails is logged, changes nothing, and is tried
+  again on the next heartbeat (every 30 seconds), no sooner than the
+  platform's `Retry-After` when it answered 503. Until a read succeeds
+  nothing is capped; a throttle read before is kept until its `resumeAt` or
+  the next read that succeeds. Until its agent is registered, and while its
+  reads fail, the daemon reports the throttle unread, so a headless
+  scheduler asking it keeps the throttle it learned before.
 - The autonomous scheduler holds the runs it dispatches without the extension
   (the Go queue, or the cloud dispatcher) below the lower of its configured
   concurrency (`pipeline.max_concurrent`) and the throttle's cap, and the
@@ -609,17 +615,18 @@ The Go side follows the same throttle for the work it starts itself (#2352):
   the running count starts nothing until enough of them finish. A change, or
   the throttle reaching `resumeAt`, wakes the scheduler at once.
 - A headless scheduler (`nightgauge autonomous run` or
-  `nightgauge pipeline run --auto`) holds only a license key, which the
-  workspace list refuses, so it asks the daemon serving the same workspace
-  (`platform.workspaceThrottle` on the workspace socket) before it starts,
-  so its first dispatch already follows the answer, then every 30 seconds. A
-  daemon that cannot be reached changes nothing, and neither does one that
-  follows the throttle but has not read it yet (it has just started, or its
-  reads fail; `platform.workspaceThrottle` answers `unread`): a throttle the
-  daemon reported before is kept, until its `resumeAt` or until a daemon
-  reports the workspace's throttle again, and the log says so. A daemon that
-  follows no throttle, with no signed-in session, lifts it. With no daemon
-  serving the workspace, the throttle is not followed.
+  `nightgauge pipeline run --auto`) registers no agent of its own, so it asks
+  the daemon serving the same workspace (`platform.workspaceThrottle` on the
+  workspace socket) before it starts, so its first dispatch already follows
+  the answer, then every 30 seconds; that is a local socket call, not a
+  platform request. A daemon that cannot be reached changes nothing, and
+  neither does one that follows the throttle but has not read it yet
+  (`platform.workspaceThrottle` answers `unread`): a throttle the daemon
+  reported before is kept, until its `resumeAt` or until a daemon reports the
+  workspace's throttle again, and the log says so. A daemon that follows no
+  throttle, because it is not connected to the platform (no license key),
+  lifts it. With no daemon serving the workspace, the throttle is not
+  followed.
 
 ## CLI Command Reference
 

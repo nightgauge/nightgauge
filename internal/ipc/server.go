@@ -2682,9 +2682,8 @@ func (s *Server) registerMethods() {
 	}
 
 	// platform.workspaceThrottle reports the workspace throttle this daemon
-	// follows (#2352). A headless scheduler with only a license key cannot
-	// read the platform's workspace list, so it asks the workspace's daemon
-	// over the socket.
+	// follows (#2352). A headless scheduler registers no agent of its own,
+	// so it asks the workspace's daemon over the socket.
 	//ipc:method platformWorkspaceThrottle params:none result:PlatformWorkspaceThrottleResult skip
 	s.methods["platform.workspaceThrottle"] = func(_ context.Context, _ json.RawMessage) (interface{}, error) {
 		s.throttleMu.RLock()

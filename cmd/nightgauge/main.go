@@ -149,7 +149,8 @@ const (
 // Both the heartbeat 404 (TTL eviction) and the command stream 404 (agent gone)
 // funnel into a single re-register path that swaps the id and restarts the
 // stream against the new id. onRegistered sees every successful registration's
-// reply, the first and each re-registration. Returns when ctx is cancelled.
+// reply, the first and each re-registration; onHeartbeat, when set, runs on
+// each heartbeat tick. Returns when ctx is cancelled.
 func runAttentionAgentRegistration(
 	ctx context.Context,
 	reg *platform.AgentRegistrationService,
@@ -159,6 +160,7 @@ func runAttentionAgentRegistration(
 	relay platform.AgentCommandRelay,
 	onRegistered func(platform.AgentRegistration),
 	onConnected func(),
+	onHeartbeat func(),
 ) {
 	agentID := registerAttentionAgentWithRetry(ctx, reg, onRegistered)
 	if agentID == "" {
@@ -224,6 +226,9 @@ func runAttentionAgentRegistration(
 				return
 			}
 		case <-ticker.C:
+			if onHeartbeat != nil {
+				onHeartbeat()
+			}
 			err := reg.Heartbeat(ctx, agentID)
 			if err == nil {
 				continue
@@ -309,7 +314,8 @@ type daemonAgentIPC interface {
 	eventEmitter
 	SetRefusedWorkspaceWrites([]platform.RefusedWorkspaceWrite)
 	// OnSessionToken learns that the extension installed or cleared the
-	// signed-in session, which the workspace throttle read needs (#2352).
+	// signed-in session, which tells the workspace throttle read the served
+	// workspace's team (#2352).
 	OnSessionToken(fn func())
 }
 
@@ -342,10 +348,11 @@ func reportRefusedWorkspaceWrites(status daemonAgentIPC, info platform.AgentRegi
 // execute is relayed to the extension over ext.
 //
 // throttle, when set, follows the platform throttle of the workspace the
-// daemon serves (#2352), read by its slug while a signed-in session exists:
-// at start, after every registration, on every `throttle` command (which is
-// still relayed), each time the command stream opens, and when the session
-// changes.
+// daemon serves (#2352), read from the platform's agent throttle endpoint
+// with the daemon's license key and matched by slug and team: after every
+// registration, on every `throttle` command (which is still relayed), each
+// time the command stream opens, and when the session changes; a read that
+// failed is retried on the heartbeat.
 func runDaemonPlatformAgent(
 	ctx context.Context,
 	platformClient *platform.Client,
@@ -369,17 +376,13 @@ func runDaemonPlatformAgent(
 		WithWorkspace(served)
 	relay := relayAgentCommandToExtension(ext)
 	refreshThrottle := func() {}
+	retryThrottle := func() {}
+	var agentID atomic.Value // string: the agent the latest registration returned
+	agentID.Store("")
 	if throttle != nil {
-		// The extension pushes its session, or says it has none, once the
-		// daemon is up (PlatformCredentialBridge.sync). Until then a daemon
-		// without a session has not decided that it follows no throttle, so
-		// it reports the throttle unread, and a headless scheduler keeps
-		// the throttle it learned from the daemon before this one started
-		// (#2352). A daemon no extension attaches to decides after
-		// daemonSessionDecisionGrace.
-		var sessionDecided atomic.Bool
 		follower := platform.NewWorkspaceThrottleFollower(
-			platformClient.ReadWorkspaceThrottle,
+			platformClient.ReadAgentWorkspaceThrottles,
+			func() string { return agentID.Load().(string) },
 			func() (string, bool, error) {
 				decl, err := served()
 				if err != nil {
@@ -390,30 +393,32 @@ func runDaemonPlatformAgent(
 				}
 				return decl.Workspace.Slug, true, nil
 			},
-			platformClient.HasSessionToken,
 			throttle,
-		).WithSessionDecision(sessionDecided.Load)
+		).WithTeam(func(ctx context.Context) (string, bool, error) {
+			// The registration names no team, so the platform writes the
+			// workspace to the account's default team; only a signed-in
+			// session can read which team that is.
+			if !platformClient.HasSessionToken() {
+				return "", false, nil
+			}
+			return platformClient.ReadDefaultTeam(ctx)
+		})
 		refreshThrottle = func() { follower.Refresh(ctx) }
-		decide := func() {
-			sessionDecided.Store(true)
+		retryThrottle = func() { follower.RetryIfStale(ctx) }
+		ext.OnSessionToken(func() {
+			follower.ForgetTeam()
 			refreshThrottle()
-		}
-		ext.OnSessionToken(decide)
-		decideAnyway := afterSessionDecisionGrace(decide)
-		defer decideAnyway.Stop()
+		})
 		relay = refreshThrottleOnCommand(relay, refreshThrottle)
-		// Read now, not only after the first registration: a session the
-		// extension installed before this listener existed, or a platform
-		// that refuses registration for a while, would otherwise leave the
-		// throttle reported as not followed (#2352).
-		go refreshThrottle()
 	}
 	runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, ext, relay,
 		func(info platform.AgentRegistration) {
 			reportRefusedWorkspaceWrites(ext, info)
+			agentID.Store(info.AgentID)
 			go refreshThrottle()
 		},
-		refreshThrottle)
+		refreshThrottle,
+		func() { go retryThrottle() })
 }
 
 func main() {
@@ -5763,9 +5768,9 @@ func serveCmd() *cobra.Command {
 					// heartbeat. Runs in a goroutine so an offline start self-heals
 					// without blocking IPC startup.
 					//
-					// The agent follows the workspace throttle, and until it has
-					// learned whether a session exists the throttle is unread, not
-					// unknown, from before the socket serves (#2352).
+					// The agent follows the workspace throttle, which is unread,
+					// not unknown, from before the socket serves until a read
+					// under the registered agent succeeds (#2352).
 					dispatchThrottle.MarkUnread()
 					go runDaemonPlatformAgent(ctx, platformClient, attnSync, server, version, workspaceRoot,
 						agentworkspace.WindowFolders(os.Getenv), dispatchThrottle)
