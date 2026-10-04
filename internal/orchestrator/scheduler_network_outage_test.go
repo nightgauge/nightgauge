@@ -11,6 +11,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -43,9 +44,9 @@ func TestCancelAllForNetworkOutage_CancelsAndReturnsSorted(t *testing.T) {
 	c10 := mkCancel()
 	c30 := mkCancel()
 	c20 := mkCancel()
-	s.registerActiveStage(30, c30)
-	s.registerActiveStage(10, c10)
-	s.registerActiveStage(20, c20)
+	s.registerActiveStage(testStageRunID(30), "example-org/app", 30, c30)
+	s.registerActiveStage(testStageRunID(10), "example-org/app", 10, c10)
+	s.registerActiveStage(testStageRunID(20), "example-org/app", 20, c20)
 
 	got := s.CancelAllForNetworkOutage()
 
@@ -64,8 +65,8 @@ func TestCancelAllForNetworkOutage_CauseIsErrNetworkUnavailable(t *testing.T) {
 	s := &Scheduler{}
 
 	stageCtx, cancel := context.WithCancelCause(context.Background())
-	s.registerActiveStage(7, cancel)
-	defer s.unregisterActiveStage(7)
+	s.registerActiveStage(testStageRunID(7), "example-org/app", 7, cancel)
+	defer s.unregisterActiveStage(testStageRunID(7))
 
 	got := s.CancelAllForNetworkOutage()
 	if len(got) != 1 || got[0] != 7 {
@@ -89,15 +90,15 @@ func TestRegisterUnregisterActiveStage_BalancedLifecycle(t *testing.T) {
 	s := &Scheduler{}
 	_, cancel := context.WithCancelCause(context.Background())
 
-	s.registerActiveStage(42, cancel)
+	s.registerActiveStage(testStageRunID(42), "example-org/app", 42, cancel)
 	if got := s.CancelAllForNetworkOutage(); len(got) != 1 {
 		t.Errorf("after register: cancelled = %v, want [42]", got)
 	}
 
-	s.unregisterActiveStage(42)
+	s.unregisterActiveStage(testStageRunID(42))
 	// Re-register to confirm map is healthy after unregister.
 	_, cancel2 := context.WithCancelCause(context.Background())
-	s.registerActiveStage(42, cancel2)
+	s.registerActiveStage(testStageRunID(42), "example-org/app", 42, cancel2)
 	if got := s.CancelAllForNetworkOutage(); len(got) != 1 {
 		t.Errorf("after re-register: cancelled = %v, want [42]", got)
 	}
@@ -107,9 +108,11 @@ func TestRegisterActiveStage_GuardsAgainstZeroAndNil(t *testing.T) {
 	s := &Scheduler{}
 	_, cancel := context.WithCancelCause(context.Background())
 
-	s.registerActiveStage(0, cancel)
-	s.registerActiveStage(-1, cancel)
-	s.registerActiveStage(1, nil)
+	s.registerActiveStage(testStageRunID(0), "example-org/app", 0, cancel)
+	s.registerActiveStage(testStageRunID(-1), "example-org/app", -1, cancel)
+	s.registerActiveStage(testStageRunID(1), "example-org/app", 1, nil)
+
+	s.registerActiveStage("", "example-org/app", 2, cancel)
 
 	if got := s.CancelAllForNetworkOutage(); got != nil {
 		t.Errorf("invalid registrations should be ignored, got %v", got)
@@ -125,7 +128,7 @@ func TestRegisterActiveStage_ConcurrentAccessDoesNotRace(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			_, cancel := context.WithCancelCause(context.Background())
-			s.registerActiveStage(n, cancel)
+			s.registerActiveStage(testStageRunID(n), "example-org/app", n, cancel)
 		}(i)
 	}
 	wg.Wait()
@@ -133,6 +136,46 @@ func TestRegisterActiveStage_ConcurrentAccessDoesNotRace(t *testing.T) {
 	got := s.CancelAllForNetworkOutage()
 	if len(got) != 50 {
 		t.Errorf("len(cancelled) = %d, want 50", len(got))
+	}
+}
+
+// testStageRunID names a test stage's run; registerActiveStage keys by it.
+func testStageRunID(issue int) string { return fmt.Sprintf("run-%d", issue) }
+
+// TestCancelAllForNetworkOutage_SameNumberInTwoRepos pins #2415: two
+// concurrent runs of #21 in two repositories are two active stages. Under the
+// issue-number key the second registration overwrote the first's cancel
+// function, so the outage cancel left one LLM subprocess running, and either
+// stage's end deleted the other's entry.
+func TestCancelAllForNetworkOutage_SameNumberInTwoRepos(t *testing.T) {
+	s := &Scheduler{}
+	appCtx, appCancel := context.WithCancelCause(context.Background())
+	platformCtx, platformCancel := context.WithCancelCause(context.Background())
+	s.registerActiveStage("run-app", "example-org/app", 21, appCancel)
+	s.registerActiveStage("run-platform", "example-org/platform", 21, platformCancel)
+
+	// One run's stage ending leaves the other's registered.
+	s.unregisterActiveStage("run-app")
+	_, appCancel2 := context.WithCancelCause(context.Background())
+	if got := s.CancelAllForNetworkOutage(); len(got) != 1 || got[0] != 21 {
+		t.Fatalf("after app#21's stage ended: cancelled = %v, want [21]", got)
+	}
+	if !errors.Is(context.Cause(platformCtx), ErrNetworkUnavailable) {
+		t.Error("platform#21's stage was not cancelled after app#21's stage ended")
+	}
+	if appCtx.Err() != nil {
+		t.Error("app#21's unregistered stage was cancelled")
+	}
+
+	// Both live: both are cancelled, one entry per run.
+	s.unregisterActiveStage("run-platform")
+	s.registerActiveStage("run-app", "example-org/app", 21, appCancel)
+	s.registerActiveStage("run-platform", "example-org/platform", 21, appCancel2)
+	if got := s.CancelAllForNetworkOutage(); len(got) != 2 || got[0] != 21 || got[1] != 21 {
+		t.Fatalf("cancelled = %v, want [21 21]", got)
+	}
+	if !errors.Is(context.Cause(appCtx), ErrNetworkUnavailable) {
+		t.Error("app#21's stage was not cancelled while platform#21 ran")
 	}
 }
 
@@ -197,8 +240,8 @@ func TestStageContext_CancelCausePreservedAfterRun(t *testing.T) {
 	parentCtx := context.Background()
 
 	stageCtx, cancelStage := context.WithCancelCause(parentCtx)
-	s.registerActiveStage(99, cancelStage)
-	defer s.unregisterActiveStage(99)
+	s.registerActiveStage(testStageRunID(99), "example-org/app", 99, cancelStage)
+	defer s.unregisterActiveStage(testStageRunID(99))
 
 	go func() {
 		// Simulate the watchdog firing the cancel.

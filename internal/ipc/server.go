@@ -330,7 +330,7 @@ type schedulerRunRegistry interface {
 	IsRunLive(runID string) bool
 	RecordPhaseStartForRun(runID string, issueNumber int, stage, name string, index, total int)
 	RecordPhaseCompleteForRun(runID string, issueNumber int, stage, name string)
-	RunIDForIssue(issueNumber int) string
+	RunIDForIssue(repo string, issueNumber int) string
 }
 
 // Handler processes an IPC request and returns a result or error.
@@ -973,12 +973,14 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 		// Resolved from the scheduler's OWN registry, never fabricated: the
 		// callback fires from inside runPipeline for this issue, so the
 		// registered runtime IS the run this event is about (ADR-017 Decision
-		// 6). An empty id (the run already unregistered) falls back to the
-		// consumer's issue-number pre-filter rather than being dropped.
+		// 6). The lookup names the repository: an issue number names an issue
+		// only within one, so a same-numbered run elsewhere is never this one
+		// (#2414). An empty id (the run already unregistered) falls back to the
+		// consumer's repository-and-number pre-filter rather than being dropped.
 		s.Emit("phase.start", map[string]interface{}{
 			"repo":        cbRepo,
 			"issueNumber": issue,
-			"runId":       sched.RunIDForIssue(issue),
+			"runId":       sched.RunIDForIssue(cbRepo, issue),
 			"stage":       pStage,
 			"name":        pName,
 			"index":       pIndex,
@@ -1001,7 +1003,7 @@ func (s *Server) initSchedulerCallbacks(sched *orchestrator.Scheduler) {
 		s.Emit(event, map[string]interface{}{
 			"repo":        cbRepo,
 			"issueNumber": issue,
-			"runId":       sched.RunIDForIssue(issue),
+			"runId":       sched.RunIDForIssue(cbRepo, issue),
 			"stage":       pStage,
 			"name":        pName,
 			"index":       pIndex,

@@ -50,8 +50,8 @@ func TestPauseDeferred_BlockedDependency_RoundTrip(t *testing.T) {
 	}
 
 	// Resume clears the pause.
-	if !s.ResumeByIssueNumber(42) {
-		t.Fatal("expected ResumeByIssueNumber(42) to return true")
+	if !s.ResumePaused("nightgauge/nightgauge", 42) {
+		t.Fatal("expected ResumePaused(42) to return true")
 	}
 	if s.queue[0].Status != "pending" {
 		t.Errorf("Status = %q, want pending after resume", s.queue[0].Status)

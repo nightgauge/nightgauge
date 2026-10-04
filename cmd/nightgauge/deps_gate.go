@@ -278,7 +278,7 @@ func depsGatePromoteSweep(ctx context.Context, sched *orchestrator.Scheduler, fe
 			summary.StillPaused = append(summary.StillPaused, entry)
 			continue
 		}
-		if sched.ResumeByIssueNumber(item.IssueNumber) {
+		if sched.ResumePaused(item.Repo, item.IssueNumber) {
 			summary.Promoted = append(summary.Promoted, entry)
 		} else {
 			entry.Error = "resume failed: queue entry not found or already resumed"

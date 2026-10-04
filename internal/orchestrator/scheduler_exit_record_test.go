@@ -674,11 +674,11 @@ func TestSnapshotConcurrentPipelines_ExcludesSelf(t *testing.T) {
 	_, c1 := context.WithCancel(context.Background())
 	_, c2 := context.WithCancel(context.Background())
 	_, c3 := context.WithCancel(context.Background())
-	s.registerActiveStage(3591,
+	s.registerActiveStage(testStageRunID(3591), "nightgauge/nightgauge", 3591,
 		func(error) { c1() })
-	s.registerActiveStage(3604,
+	s.registerActiveStage(testStageRunID(3604), "nightgauge/nightgauge", 3604,
 		func(error) { c2() })
-	s.registerActiveStage(3605,
+	s.registerActiveStage(testStageRunID(3605), "nightgauge/nightgauge", 3605,
 		func(error) { c3() })
 
 	got := s.snapshotConcurrentPipelines("nightgauge/nightgauge", 3605)
@@ -686,12 +686,28 @@ func TestSnapshotConcurrentPipelines_ExcludesSelf(t *testing.T) {
 		t.Fatalf("expected 2 siblings, got %d (%v)", len(got), got)
 	}
 	for _, key := range got {
-		if !strings.HasPrefix(key, "?#") {
-			t.Errorf("sibling key %q missing ?# prefix", key)
+		if !strings.HasPrefix(key, "nightgauge/nightgauge#") {
+			t.Errorf("sibling key %q does not name its repository", key)
 		}
-		if key == fmt.Sprintf("?#%d", 3605) {
+		if key == fmt.Sprintf("nightgauge/nightgauge#%d", 3605) {
 			t.Errorf("self leaked into sibling list: %q", key)
 		}
+	}
+}
+
+// TestSnapshotConcurrentPipelines_SameNumberInAnotherRepo pins #2415: a run of
+// the caller's number in another repository is a sibling, not the caller, and
+// the fallback snapshot names it by repository.
+func TestSnapshotConcurrentPipelines_SameNumberInAnotherRepo(t *testing.T) {
+	s := newSchedulerForDeterministicTest()
+	_, c1 := context.WithCancel(context.Background())
+	_, c2 := context.WithCancel(context.Background())
+	s.registerActiveStage("run-app", "example-org/app", 21, func(error) { c1() })
+	s.registerActiveStage("run-platform", "example-org/platform", 21, func(error) { c2() })
+
+	got := s.snapshotConcurrentPipelines("example-org/app", 21)
+	if len(got) != 1 || got[0] != "example-org/platform#21" {
+		t.Fatalf("siblings = %v, want [example-org/platform#21]", got)
 	}
 }
 
@@ -702,7 +718,7 @@ func TestSnapshotConcurrentPipelines_ExcludesSelf(t *testing.T) {
 func TestSnapshotConcurrentPipelines_EmptyWhenAlone(t *testing.T) {
 	s := newSchedulerForDeterministicTest()
 	_, c1 := context.WithCancel(context.Background())
-	s.registerActiveStage(3605, func(error) { c1() })
+	s.registerActiveStage(testStageRunID(3605), "repo", 3605, func(error) { c1() })
 
 	got := s.snapshotConcurrentPipelines("repo", 3605)
 	if got != nil {

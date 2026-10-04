@@ -189,6 +189,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The Go scheduler names a run by repository and issue number** (#2414,
+  #2415, #2416). With `example-org/app#21` and `example-org/platform#21`
+  running at once, three Go lookups still used the number alone. The `runId`
+  on the scheduler's `phase.*` events was empty while both ran, and once one
+  ended a late event for it carried the other run's id; it now resolves by
+  the event's `repo`. The stage cancel functions were keyed by number, so the
+  second run overwrote the first's and the network-outage cancel left one LLM
+  session running; they are now keyed by run id, and the stage exit record's
+  fallback sibling list names `owner/repo#N`. The baseline-CI and dependency
+  gates' queue pause and resume found the first queued `#21` of either
+  repository; they now match the repository too (`ResumeByIssueNumber` is now
+  `ResumePaused(repo, n)`). A caller or record without a repository still
+  matches by number, and the run-id lookup answers then only when the number
+  names exactly one run.
 - **The Output window, the dashboard's slot cards, View Context and the trace
   uploader name a running slot by repository and issue number** (#2411,
   #2412). With `example-org/platform#21` and `example-org/app#21` running at

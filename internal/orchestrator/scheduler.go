@@ -1038,7 +1038,12 @@ type Scheduler struct {
 	// map and cancels each ctx with cause ErrNetworkUnavailable so the LLM
 	// subprocess exits immediately instead of burning tokens until Anthropic's
 	// stream-idle-timeout fires (the failure mode behind #3216 / $20.87 lost).
-	activeStages   map[int]context.CancelCauseFunc
+	//
+	// Keyed by RUN ID, not issue number (#2415): an issue number names an
+	// issue only within one repository, so under the number key a concurrent
+	// run of the same number in another repository overwrote this run's
+	// cancel function, and either run's stage end deleted the other's.
+	activeStages   map[string]activeStage
 	activeStagesMu sync.Mutex
 
 	// activeRuntimes tracks the live RuntimeState for each currently-running
@@ -1792,27 +1797,36 @@ func (s *Scheduler) WithRecoveryRegistry(r *recovery.Registry) {
 	s.recoveryRegistry = r
 }
 
-// registerActiveStage stores the cancel function for a per-issue stage context.
-// Used by CancelAllForNetworkOutage to abort live LLM subprocesses when the
-// TS-side watchdog detects an extended connectivity outage (#3296).
-func (s *Scheduler) registerActiveStage(issueNumber int, cancel context.CancelCauseFunc) {
-	if issueNumber <= 0 || cancel == nil {
+// activeStage is one running stage's cancel function and the run it belongs
+// to, held in Scheduler.activeStages under the run's identity.
+type activeStage struct {
+	repo   string
+	issue  int
+	cancel context.CancelCauseFunc
+}
+
+// registerActiveStage stores the cancel function for a run's stage context,
+// under the run's identity. Used by CancelAllForNetworkOutage to abort live
+// LLM subprocesses when the TS-side watchdog detects an extended connectivity
+// outage (#3296).
+func (s *Scheduler) registerActiveStage(runID, repo string, issueNumber int, cancel context.CancelCauseFunc) {
+	if runID == "" || issueNumber <= 0 || cancel == nil {
 		return
 	}
 	s.activeStagesMu.Lock()
 	defer s.activeStagesMu.Unlock()
 	if s.activeStages == nil {
-		s.activeStages = make(map[int]context.CancelCauseFunc)
+		s.activeStages = make(map[string]activeStage)
 	}
-	s.activeStages[issueNumber] = cancel
+	s.activeStages[runID] = activeStage{repo: repo, issue: issueNumber, cancel: cancel}
 }
 
-// unregisterActiveStage removes the cancel function for a per-issue stage.
-// Called via defer at the end of each stage's execution.
-func (s *Scheduler) unregisterActiveStage(issueNumber int) {
+// unregisterActiveStage removes the cancel function for a run's stage. Called
+// at the end of each stage's execution.
+func (s *Scheduler) unregisterActiveStage(runID string) {
 	s.activeStagesMu.Lock()
 	defer s.activeStagesMu.Unlock()
-	delete(s.activeStages, issueNumber)
+	delete(s.activeStages, runID)
 }
 
 // registerRuntime stores the live RuntimeState for an active pipeline under
@@ -1912,8 +1926,8 @@ func (s *Scheduler) RecordPhaseCompleteForRun(runID string, _ int, stage, name s
 	rt.CompletePhase(state.PipelineStage(stage), name)
 }
 
-// RunIDForIssue returns the identity of the scheduler-owned run for an issue,
-// or "" when the scheduler is not running that issue. It is how the IPC
+// RunIDForIssue returns the identity of the scheduler-owned run for repo's
+// issue, or "" when the scheduler is not running it. It is how the IPC
 // server's scheduler-sourced emitters stamp a real `runId` on their envelopes
 // (ADR-017 Decision 6) instead of fabricating one.
 //
@@ -1921,35 +1935,55 @@ func (s *Scheduler) RecordPhaseCompleteForRun(runID string, _ int, stage, name s
 // "THERE IS NO SECOND MAP" rule: the registry holds at most the concurrency
 // limit's worth of entries, and a derived index cannot drift from its source.
 //
-// Issue number is not an identity, so this can only answer for a single live
-// run per issue. When more than one is somehow live it returns the empty
+// An issue number names an issue only within one repository (#2414), so a run
+// in another repository is never this one: with app#21 and platform#21 both
+// live, each resolves to its own run, and once one has unregistered a late
+// event for it does not borrow the other's id. A caller or a runtime that
+// names no repository ("owner/name", compared case-insensitively) matches by
+// number, and only when that names exactly one run — the rule the extension's
+// slot lookup follows. When more than one run matches it returns the empty
 // string rather than picking one, because an arbitrary choice here would be
 // stamped onto an event envelope as though it were resolved — exactly the
 // confidently-wrong answer the re-key exists to stop.
-func (s *Scheduler) RunIDForIssue(issueNumber int) string {
+func (s *Scheduler) RunIDForIssue(repo string, issueNumber int) string {
 	if issueNumber <= 0 {
 		return ""
 	}
 	s.activeRuntimesMu.Lock()
 	defer s.activeRuntimesMu.Unlock()
-	found := ""
+	var exact, byNumber []string
 	for runID, rt := range s.activeRuntimes {
 		if rt == nil || rt.IssueNumber != issueNumber {
 			continue
 		}
-		if found != "" {
-			log.Printf("scheduler: issue #%d has more than one live run (%q, %q) — refusing to guess which one an envelope means (ADR-017 R-5)",
-				issueNumber, found, runID)
-			return ""
+		if repo != "" && rt.Repo != "" {
+			if strings.EqualFold(rt.Repo, repo) {
+				exact = append(exact, runID)
+			}
+			continue
 		}
-		found = runID
+		byNumber = append(byNumber, runID)
 	}
-	return found
+	matches := exact
+	if len(matches) == 0 {
+		matches = byNumber
+	}
+	if len(matches) > 1 {
+		sort.Strings(matches)
+		log.Printf("scheduler: %s#%d has more than one live run %v — refusing to guess which one an envelope means (ADR-017 R-5)",
+			repo, issueNumber, matches)
+		return ""
+	}
+	if len(matches) == 1 {
+		return matches[0]
+	}
+	return ""
 }
 
 // CancelAllForNetworkOutage cancels every actively-running stage context with
 // cause ErrNetworkUnavailable. Returns the issue numbers whose stages were
-// signalled. Safe to call when no stages are active (returns nil).
+// signalled, one entry per run, so two repositories' runs of one number list
+// it twice (#2415). Safe to call when no stages are active (returns nil).
 //
 // Invoked by the IPC handler `pipeline.cancelActiveForNetworkOutage` after
 // the TS-side stall watchdog observes the threshold of consecutive
@@ -1964,9 +1998,9 @@ func (s *Scheduler) CancelAllForNetworkOutage() []int {
 		return nil
 	}
 	cancelled := make([]int, 0, len(s.activeStages))
-	for n, cancel := range s.activeStages {
-		cancel(ErrNetworkUnavailable)
-		cancelled = append(cancelled, n)
+	for _, st := range s.activeStages {
+		st.cancel(ErrNetworkUnavailable)
+		cancelled = append(cancelled, st.issue)
 	}
 	sort.Ints(cancelled)
 	log.Printf("CancelAllForNetworkOutage: cancelled %d active stage(s): %v", len(cancelled), cancelled)
@@ -2846,6 +2880,14 @@ func (s *Scheduler) QueueRemoveRemoteRun(remoteRunID string) bool {
 	return false
 }
 
+// queueItemMatches reports whether a queue item is repo's issue issueNumber.
+// An issue number names an issue only within one repository, so a non-empty
+// repo ("owner/name", compared case-insensitively) does not match another
+// repository's item with the number; an empty repo matches by number alone.
+func queueItemMatches(item QueueItem, repo string, issueNumber int) bool {
+	return item.IssueNumber == issueNumber && (repo == "" || strings.EqualFold(item.Repo, repo))
+}
+
 // QueueRemove removes repo's issue issueNumber from the queue. An issue number
 // names an issue only within one repository, so a non-empty repo ("owner/name",
 // compared case-insensitively) leaves another repository's item with the same
@@ -2856,7 +2898,7 @@ func (s *Scheduler) QueueRemove(repo string, issueNumber int) {
 	defer s.mu.Unlock()
 	filtered := s.queue[:0]
 	for _, e := range s.queue {
-		if e.IssueNumber != issueNumber || (repo != "" && !strings.EqualFold(e.Repo, repo)) {
+		if !queueItemMatches(e, repo, issueNumber) {
 			filtered = append(filtered, e)
 		}
 	}
@@ -2871,14 +2913,17 @@ func (s *Scheduler) QueueRemove(repo string, issueNumber int) {
 // Used by the baseline-CI gate (Issue #3004) to defer dispatch when the
 // referenced workflow is currently red on `main`.
 //
-// Idempotent: calling twice with the same issue number updates the
-// PausedReason without duplicating the queue entry.
+// Idempotent: calling twice for the same issue updates the PausedReason
+// without duplicating the queue entry. The entry is matched by repository and
+// number (queueItemMatches): an issue number names an issue only within one
+// repository, so another repository's queued item with the number is left
+// alone (#2416).
 func (s *Scheduler) PauseDeferred(item QueueItem, reason QueuePausedReason) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r := reason
 	for i := range s.queue {
-		if s.queue[i].IssueNumber == item.IssueNumber {
+		if queueItemMatches(s.queue[i], item.Repo, item.IssueNumber) {
 			s.queue[i].Status = "paused"
 			s.queue[i].PausedReason = &r
 			s.persistQueue()
@@ -2918,15 +2963,15 @@ func (s *Scheduler) ListPausedByKind(kind string) []QueueItem {
 	return out
 }
 
-// ResumeByIssueNumber clears the paused status from the queue entry whose
-// IssueNumber matches. Returns true when an item was resumed. Used by the
-// promote command (Issue #3004) to lift a baseline-CI deferral when the
-// last green-threshold runs are all success.
-func (s *Scheduler) ResumeByIssueNumber(issueNumber int) bool {
+// ResumePaused clears the paused status from repo's queue entry for
+// issueNumber (matched by queueItemMatches, #2416). Returns true when an item
+// was resumed. Used by the promote command (Issue #3004) to lift a baseline-CI
+// deferral when the last green-threshold runs are all success.
+func (s *Scheduler) ResumePaused(repo string, issueNumber int) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.queue {
-		if s.queue[i].IssueNumber != issueNumber {
+		if !queueItemMatches(s.queue[i], repo, issueNumber) {
 			continue
 		}
 		if s.queue[i].Status != "paused" {
@@ -6650,14 +6695,14 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			// this LLM subprocess directly when the TS watchdog detects an
 			// extended connectivity outage (Issue #3296).
 			stageCtx, cancelStage := context.WithCancelCause(ctx)
-			s.registerActiveStage(item.Number, cancelStage)
+			s.registerActiveStage(runtime.RunID, item.Repo, item.Number, cancelStage)
 			if stage == state.StageFeatureDev {
 				// Bounded sub-sessions when ADR-023 Q7 enables them (#1651).
 				result, stageRunErr = s.runFeatureDevStage(stageCtx, stageParams, skillData.ContextWindow, ws)
 			} else {
 				result, stageRunErr = s.stageRunner.RunStage(stageCtx, stageParams)
 			}
-			s.unregisterActiveStage(item.Number)
+			s.unregisterActiveStage(runtime.RunID)
 			// If the cancellation cause was ErrNetworkUnavailable, surface a
 			// typed error to the failure handler so it can classify the
 			// terminal kind correctly (skip retro/calibration, reset to Ready).

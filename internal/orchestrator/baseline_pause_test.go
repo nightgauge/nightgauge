@@ -84,7 +84,7 @@ func TestListPausedByKind_FiltersByKind(t *testing.T) {
 	}
 }
 
-func TestResumeByIssueNumber_ResumesPaused(t *testing.T) {
+func TestResumePaused_ResumesPaused(t *testing.T) {
 	s := &Scheduler{
 		workspaceRoot: t.TempDir(),
 		repoRunning:   make(map[string]int),
@@ -93,8 +93,8 @@ func TestResumeByIssueNumber_ResumesPaused(t *testing.T) {
 	reason := QueuePausedReason{Kind: "baseline_ci_red", Workflow: "ci.yml"}
 	s.queue = []QueueItem{{IssueNumber: 99, Status: "paused", PausedReason: &reason}}
 
-	if !s.ResumeByIssueNumber(99) {
-		t.Fatal("expected ResumeByIssueNumber to return true")
+	if !s.ResumePaused("", 99) {
+		t.Fatal("expected ResumePaused to return true")
 	}
 	if s.queue[0].Status != "pending" {
 		t.Errorf("Status = %q, want pending", s.queue[0].Status)
@@ -104,17 +104,58 @@ func TestResumeByIssueNumber_ResumesPaused(t *testing.T) {
 	}
 }
 
-func TestResumeByIssueNumber_NotPausedReturnsFalse(t *testing.T) {
+func TestResumePaused_NotPausedReturnsFalse(t *testing.T) {
 	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
 	s.queue = []QueueItem{{IssueNumber: 5, Status: "pending"}}
-	if s.ResumeByIssueNumber(5) {
+	if s.ResumePaused("", 5) {
 		t.Error("expected false when item is not paused")
 	}
 }
 
-func TestResumeByIssueNumber_MissingReturnsFalse(t *testing.T) {
+func TestResumePaused_MissingReturnsFalse(t *testing.T) {
 	s := &Scheduler{repoRunning: make(map[string]int), mergeLocks: make(map[string]*sync.Mutex)}
-	if s.ResumeByIssueNumber(404) {
+	if s.ResumePaused("", 404) {
 		t.Error("expected false for missing issue")
+	}
+}
+
+// TestPauseAndResume_SameNumberInTwoRepos pins #2416: with app#21 and
+// platform#21 both queued, pausing and resuming one never touches the other.
+func TestPauseAndResume_SameNumberInTwoRepos(t *testing.T) {
+	s := &Scheduler{
+		workspaceRoot: t.TempDir(),
+		repoRunning:   make(map[string]int),
+		mergeLocks:    make(map[string]*sync.Mutex),
+	}
+	s.queue = []QueueItem{
+		{Repo: "example-org/app", IssueNumber: 21, Status: "pending"},
+		{Repo: "example-org/platform", IssueNumber: 21, Status: "pending"},
+	}
+
+	s.PauseDeferred(QueueItem{Repo: "example-org/platform", IssueNumber: 21},
+		QueuePausedReason{Kind: "baseline_ci_red", Workflow: "ci.yml"})
+	if len(s.queue) != 2 {
+		t.Fatalf("queue has %d items, want 2", len(s.queue))
+	}
+	if s.queue[0].Status != "pending" || s.queue[0].PausedReason != nil {
+		t.Errorf("pausing platform#21 paused app#21: %+v", s.queue[0])
+	}
+	if s.queue[1].Status != "paused" {
+		t.Errorf("platform#21 Status = %q, want paused", s.queue[1].Status)
+	}
+
+	s.queue[0].Status = "paused"
+	s.queue[0].PausedReason = &QueuePausedReason{Kind: "blocked_dependency"}
+	if !s.ResumePaused("Example-Org/Platform", 21) {
+		t.Fatal("ResumePaused(platform#21) = false, want true")
+	}
+	if s.queue[1].Status != "pending" {
+		t.Errorf("platform#21 Status = %q, want pending", s.queue[1].Status)
+	}
+	if s.queue[0].Status != "paused" {
+		t.Errorf("resuming platform#21 resumed app#21: %+v", s.queue[0])
+	}
+	if s.ResumePaused("example-org/other", 21) {
+		t.Error("ResumePaused resumed an item for a repository with no queued #21")
 	}
 }
