@@ -23,6 +23,12 @@ import type { EventKey } from "../../config/schema";
  */
 export interface PipelineEventContext {
   issueNumber: number;
+  /**
+   * The issue's repository, `owner/name`, when known. A notifier keys a run by
+   * repository and number (`slotKey`): two repositories' issues with one
+   * number are two runs (#2408).
+   */
+  repo?: string;
   stage?: string;
   state?: unknown;
   /** Routing key for per-channel filter evaluation. Absent = deliver to all. */
@@ -51,11 +57,17 @@ export interface Notifier {
    * run ignores a second call.
    */
   onPipelineFinal(ctx: PipelineEventContext): void;
+  /**
+   * Follow one concurrent slot's state service. The slot is named by
+   * repository and number: a notifier keys the run's subscription, card and
+   * thread by `slotKey(repoSlug, issueNumber)`, so another repository's issue
+   * with the same number running at once is a separate run (#2408).
+   */
   subscribeToSlot(
     issueNumber: number,
     slotStateService: PipelineStateService,
     repoSlug?: string
   ): void;
-  unsubscribeFromSlot(issueNumber: number): void;
+  unsubscribeFromSlot(issueNumber: number, repoSlug?: string): void;
   dispose(): void;
 }

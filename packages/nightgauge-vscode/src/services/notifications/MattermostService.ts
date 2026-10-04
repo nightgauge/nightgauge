@@ -47,6 +47,7 @@ import {
   type RunAttachment,
 } from "./runAttachment";
 import { resolveMainRepoRoot } from "../../utils/adaptiveBudgetLoader";
+import { slotKey } from "../../utils/epicRef";
 
 // ─── Mattermost attachment limits ───────────────────────────────────────────
 
@@ -75,6 +76,8 @@ interface MattermostNotificationsConfig {
 type EditMode = "edit" | "post-only";
 
 interface ActiveRun {
+  /** Per-run map key — slotKey(repoSlug, issueNumber) (#2408). */
+  key: string;
   issueNumber: number;
   issueTitle: string;
   branch: string;
@@ -136,12 +139,15 @@ export function parseWebhookUrl(url: string): { baseUrl: string; token: string }
 // ─── MattermostService ──────────────────────────────────────────────────────
 
 export class MattermostService implements Notifier, vscode.Disposable {
-  private readonly runs = new Map<number, ActiveRun>();
+  // Every per-run map is keyed by slotKey(repoSlug, issueNumber), not the bare
+  // issue number: two repositories can run the same issue number concurrently
+  // and must not share a run, subscription, post or debounce timer (#2408).
+  private readonly runs = new Map<string, ActiveRun>();
   private readonly patcher = new DebouncedPatcher();
-  private readonly slotDisposables = new Map<number, vscode.Disposable[]>();
-  private readonly pendingRepoSlugs = new Map<number, string>();
-  /** Per-issue ephemeral toggle exposed via setEphemeral(). MVP no-op. */
-  private readonly ephemeralFlags = new Map<number, boolean>();
+  private readonly slotDisposables = new Map<string, vscode.Disposable[]>();
+  private readonly pendingRepoSlugs = new Map<string, string>();
+  /** Per-run ephemeral toggle exposed via setEphemeral(). MVP no-op. */
+  private readonly ephemeralFlags = new Map<string, boolean>();
 
   private disposables: vscode.Disposable[] = [];
 
@@ -159,7 +165,7 @@ export class MattermostService implements Notifier, vscode.Disposable {
       }),
       this.pipelineStateService.onStageError(({ issueNumber }) => {
         if (this.slotDisposables.size > 0) return;
-        this.scheduleUpdate(issueNumber);
+        this.scheduleUpdate(slotKey(undefined, issueNumber));
       }),
       this.pipelineStateService.onStateChanged((state) => {
         if (this.slotDisposables.size > 0) return;
@@ -177,20 +183,20 @@ export class MattermostService implements Notifier, vscode.Disposable {
   // ─── Notifier interface delegations ───────────────────────────────────────
 
   onPipelineStart(ctx: PipelineEventContext): void {
-    void this.handleStageStart(ctx.stage as PipelineStage, ctx.issueNumber);
+    void this.handleStageStart(ctx.stage as PipelineStage, ctx.issueNumber, undefined, ctx.repo);
   }
 
   onPipelineUpdate(ctx: PipelineEventContext): void {
     if (ctx.state) {
-      void this.handleStateChanged(ctx.state as unknown as PipelineStateSnapshot);
+      void this.handleStateChanged(ctx.state as unknown as PipelineStateSnapshot, ctx.repo);
     } else {
-      this.scheduleUpdate(ctx.issueNumber);
+      this.scheduleUpdate(slotKey(ctx.repo, ctx.issueNumber));
     }
   }
 
   onPipelineFinal(ctx: PipelineEventContext): void {
     if (!ctx.state) return;
-    void this.handleRunFinalized(ctx.state as unknown as PipelineStateSnapshot);
+    void this.handleRunFinalized(ctx.state as unknown as PipelineStateSnapshot, ctx.repo);
   }
 
   // ─── Concurrent worktree slot subscription ────────────────────────────────
@@ -200,47 +206,49 @@ export class MattermostService implements Notifier, vscode.Disposable {
     slotStateService: PipelineStateService,
     repoSlug?: string
   ): void {
-    if (repoSlug) this.pendingRepoSlugs.set(issueNumber, repoSlug);
-    this.unsubscribeFromSlot(issueNumber);
+    if (repoSlug) this.pendingRepoSlugs.set(slotKey(repoSlug, issueNumber), repoSlug);
+    this.unsubscribeFromSlot(issueNumber, repoSlug);
+    const key = slotKey(repoSlug, issueNumber);
 
     const subs: vscode.Disposable[] = [
       slotStateService.onStageStart(({ stage, issueNumber: num }) => {
         if (num !== issueNumber) return;
-        void this.handleStageStart(stage as PipelineStage, num, slotStateService);
+        void this.handleStageStart(stage as PipelineStage, num, slotStateService, repoSlug);
       }),
       slotStateService.onStageError(({ issueNumber: num }) => {
         if (num !== issueNumber) return;
-        this.scheduleUpdate(num);
+        this.scheduleUpdate(key);
       }),
       slotStateService.onStateChanged((state) => {
         if (!state) return;
         const snap = state as unknown as PipelineStateSnapshot;
         if (snap.issue_number !== issueNumber) return;
-        void this.handleStateChanged(snap);
+        void this.handleStateChanged(snap, repoSlug);
       }),
       slotStateService.onRunFinalized((state) => {
         if (!state) return;
         const snap = state as unknown as PipelineStateSnapshot;
         if (snap.issue_number !== issueNumber) return;
-        void this.handleRunFinalized(snap);
+        void this.handleRunFinalized(snap, repoSlug);
       }),
     ];
 
-    this.slotDisposables.set(issueNumber, subs);
-    this.logger.info("MattermostService: subscribed to worktree slot", { issueNumber });
+    this.slotDisposables.set(key, subs);
+    this.logger.info("MattermostService: subscribed to worktree slot", { issueNumber, repoSlug });
   }
 
-  unsubscribeFromSlot(issueNumber: number): void {
-    const subs = this.slotDisposables.get(issueNumber);
+  unsubscribeFromSlot(issueNumber: number, repoSlug?: string): void {
+    const key = slotKey(repoSlug, issueNumber);
+    const subs = this.slotDisposables.get(key);
     if (subs) {
       for (const s of subs) s.dispose();
-      this.slotDisposables.delete(issueNumber);
+      this.slotDisposables.delete(key);
     }
     // No further event can reach this run once the slot is gone — flush it
     // rather than strand a terminal card mid-state (#1127).
-    const run = this.runs.get(issueNumber);
+    const run = this.runs.get(key);
     if (run?.isFinal && !run.finalFlushed && run.finalSnapshot) {
-      void this.handleRunFinalized(run.finalSnapshot);
+      void this.handleRunFinalized(run.finalSnapshot, repoSlug);
     }
   }
 
@@ -253,8 +261,8 @@ export class MattermostService implements Notifier, vscode.Disposable {
    *
    * @see ADR-002
    */
-  setEphemeral(issueNumber: number, ephemeral: boolean): void {
-    this.ephemeralFlags.set(issueNumber, ephemeral);
+  setEphemeral(issueNumber: number, ephemeral: boolean, repoSlug?: string): void {
+    this.ephemeralFlags.set(slotKey(repoSlug, issueNumber), ephemeral);
     this.logger.debug("MattermostService: ephemeral flag set (no-op for incoming webhooks)", {
       issueNumber,
       ephemeral,
@@ -266,16 +274,18 @@ export class MattermostService implements Notifier, vscode.Disposable {
   private async handleStageStart(
     stage: PipelineStage,
     issueNumber: number,
-    stateService?: PipelineStateService
+    stateService?: PipelineStateService,
+    slotRepo?: string
   ): Promise<void> {
     const effectiveStateService = stateService ?? this.pipelineStateService;
+    const key = slotKey(slotRepo, issueNumber);
 
     if (stage !== "issue-pickup") {
-      this.scheduleUpdate(issueNumber);
+      this.scheduleUpdate(key);
       return;
     }
 
-    this.flushStaleRuns(issueNumber);
+    this.flushStaleRuns(key);
 
     const config = this.getMattermostConfig();
     if (!config?.enabled) return;
@@ -297,10 +307,11 @@ export class MattermostService implements Notifier, vscode.Disposable {
     repoRoot = resolveMainRepoRoot(repoRoot); // worktree → its repo (#2038)
     const repoName = repoRoot.split("/").pop() ?? repoRoot;
 
-    const repoSlug = this.pendingRepoSlugs.get(issueNumber);
-    this.pendingRepoSlugs.delete(issueNumber);
+    const repoSlug = this.pendingRepoSlugs.get(key);
+    this.pendingRepoSlugs.delete(key);
 
     const run: ActiveRun = {
+      key,
       issueNumber,
       issueTitle: (state as unknown as PipelineStateSnapshot).title ?? `Issue #${issueNumber}`,
       branch: (state as unknown as PipelineStateSnapshot).branch ?? "",
@@ -353,7 +364,7 @@ export class MattermostService implements Notifier, vscode.Disposable {
           { issueNumber, sanitizedUrl }
         );
       }
-      this.runs.set(issueNumber, run);
+      this.runs.set(key, run);
       NotifierStatusTracker.getInstance()?.recordSuccess("mattermost");
       this.logger.info("MattermostService: pipeline post created", {
         issueNumber,
@@ -372,8 +383,9 @@ export class MattermostService implements Notifier, vscode.Disposable {
     }
   }
 
-  private async handleStateChanged(state: PipelineStateSnapshot): Promise<void> {
-    const run = this.runs.get(state.issue_number);
+  private async handleStateChanged(state: PipelineStateSnapshot, repo?: string): Promise<void> {
+    const key = slotKey(repo, state.issue_number);
+    const run = this.runs.get(key);
     if (!run) return;
 
     if (state.title) run.issueTitle = state.title;
@@ -394,8 +406,8 @@ export class MattermostService implements Notifier, vscode.Disposable {
       run.finalSnapshot = state;
       if (!run.isFinal) {
         run.isFinal = true;
-        this.patcher.cancel(state.issue_number);
-        await this.patchPost(state.issue_number);
+        this.patcher.cancel(key);
+        await this.patchPost(key);
       }
       return;
     }
@@ -403,7 +415,7 @@ export class MattermostService implements Notifier, vscode.Disposable {
     // Suppress intermediate updates in post-only mode — only post on terminal state.
     if (run.editMode === "post-only") return;
 
-    this.scheduleUpdate(state.issue_number);
+    this.scheduleUpdate(key);
   }
 
   /**
@@ -416,34 +428,36 @@ export class MattermostService implements Notifier, vscode.Disposable {
    * second render would append a duplicate card to the channel rather than
    * correct the first one.
    */
-  private async handleRunFinalized(state: PipelineStateSnapshot): Promise<void> {
-    const run = this.runs.get(state.issue_number);
+  private async handleRunFinalized(state: PipelineStateSnapshot, repo?: string): Promise<void> {
+    const key = slotKey(repo, state.issue_number);
+    const run = this.runs.get(key);
     if (!run || run.finalFlushed) return;
     if (run.editMode === "post-only") return;
 
     run.isFinal = true;
     run.finalFlushed = true;
     run.finalSnapshot = state;
-    this.patcher.cancel(state.issue_number);
-    await this.patchPost(state.issue_number);
+    this.patcher.cancel(key);
+    await this.patchPost(key);
   }
 
   // ─── Debounced update / retry ─────────────────────────────────────────────
 
-  private scheduleUpdate(issueNumber: number): void {
-    this.patcher.schedule(issueNumber, () => this.patchPost(issueNumber), DEBOUNCE_MS);
+  private scheduleUpdate(key: string): void {
+    this.patcher.schedule(key, () => this.patchPost(key), DEBOUNCE_MS);
   }
 
-  private scheduleRetry(issueNumber: number): void {
-    const run = this.runs.get(issueNumber);
+  private scheduleRetry(key: string): void {
+    const run = this.runs.get(key);
     if (!run) return;
+    const issueNumber = run.issueNumber;
 
     if (run.finalPatchRetries >= FINAL_PATCH_MAX_RETRIES) {
       this.logger.error(
         "MattermostService: final patch failed after all retries — post may be stuck",
         { issueNumber, retries: run.finalPatchRetries }
       );
-      this.runs.delete(issueNumber);
+      this.runs.delete(key);
       return;
     }
 
@@ -456,17 +470,17 @@ export class MattermostService implements Notifier, vscode.Disposable {
       delayMs: delay,
     });
 
-    this.patcher.schedule(issueNumber, () => this.patchPost(issueNumber), delay);
+    this.patcher.schedule(key, () => this.patchPost(key), delay);
   }
 
-  private flushStaleRuns(excludeIssue?: number): void {
-    for (const [issueNumber, run] of this.runs) {
-      if (issueNumber === excludeIssue) continue;
+  private flushStaleRuns(excludeKey?: string): void {
+    for (const [key, run] of this.runs) {
+      if (key === excludeKey) continue;
       if (run.isFinal && run.finalSnapshot) {
         // No terminal flush is coming for a run the queue has moved past.
         run.finalFlushed = true;
-        this.patcher.cancel(issueNumber);
-        void this.patchPost(issueNumber);
+        this.patcher.cancel(key);
+        void this.patchPost(key);
       }
     }
   }
@@ -475,9 +489,10 @@ export class MattermostService implements Notifier, vscode.Disposable {
    * Edit the in-flight post in place, or — in post-only mode — post a fresh
    * terminal-state attachment.
    */
-  private async patchPost(issueNumber: number): Promise<void> {
-    const run = this.runs.get(issueNumber);
+  private async patchPost(key: string): Promise<void> {
+    const run = this.runs.get(key);
     if (!run) return;
+    const issueNumber = run.issueNumber;
 
     let snapshot: PipelineStateSnapshot;
     if (run.isFinal && run.finalSnapshot) {
@@ -509,14 +524,14 @@ export class MattermostService implements Notifier, vscode.Disposable {
           body: JSON.stringify({ attachments: [attachment] } satisfies PostBody),
         });
         if (!res.ok) {
-          this.handlePatchFailure(run, issueNumber, sanitizedUrl, `HTTP ${res.status}`);
+          this.handlePatchFailure(run, sanitizedUrl, `HTTP ${res.status}`);
           return;
         }
       } catch (err) {
-        this.handlePatchFailure(run, issueNumber, sanitizedUrl, err);
+        this.handlePatchFailure(run, sanitizedUrl, err);
         return;
       }
-      this.runs.delete(issueNumber);
+      this.runs.delete(key);
       return;
     }
 
@@ -537,7 +552,7 @@ export class MattermostService implements Notifier, vscode.Disposable {
         body: JSON.stringify(editBody),
       });
     } catch (err) {
-      this.handlePatchFailure(run, issueNumber, sanitizedUrl, err);
+      this.handlePatchFailure(run, sanitizedUrl, err);
       return;
     }
 
@@ -553,27 +568,23 @@ export class MattermostService implements Notifier, vscode.Disposable {
       run.editMode = "post-only";
       // For final state, immediately retry in post-only mode.
       if (run.isFinal) {
-        await this.patchPost(issueNumber);
+        await this.patchPost(key);
       }
       return;
     }
 
     if (!res.ok) {
-      this.handlePatchFailure(run, issueNumber, sanitizedUrl, `HTTP ${res.status}`);
+      this.handlePatchFailure(run, sanitizedUrl, `HTTP ${res.status}`);
       return;
     }
 
     NotifierStatusTracker.getInstance()?.recordSuccess("mattermost");
     // Released only after the terminal flush — see handleRunFinalized (#1127).
-    if (run.isFinal && run.finalFlushed) this.runs.delete(issueNumber);
+    if (run.isFinal && run.finalFlushed) this.runs.delete(key);
   }
 
-  private handlePatchFailure(
-    run: ActiveRun,
-    issueNumber: number,
-    sanitizedUrl: string,
-    err: unknown
-  ): void {
+  private handlePatchFailure(run: ActiveRun, sanitizedUrl: string, err: unknown): void {
+    const issueNumber = run.issueNumber;
     const detail = err instanceof Error ? err.message : String(err);
     if (run.isFinal) {
       this.logger.warn("MattermostService: failed to patch post", {
@@ -585,9 +596,9 @@ export class MattermostService implements Notifier, vscode.Disposable {
           "MattermostService: final patch failed after all retries — post may be stuck",
           { issueNumber, retries: run.finalPatchRetries, sanitizedUrl }
         );
-        this.runs.delete(issueNumber);
+        this.runs.delete(run.key);
       } else {
-        this.scheduleRetry(issueNumber);
+        this.scheduleRetry(run.key);
       }
     } else {
       this.logger.warn("MattermostService: failed to patch post", { issueNumber, detail });

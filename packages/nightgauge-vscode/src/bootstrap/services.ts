@@ -1782,7 +1782,7 @@ export async function initializeServices(
         // token-delta path nor the state-sync path fires again post-completion.
         outputWindow.notifySlotCompleted(slotIndex, "complete", costUsd);
         treeProvider.updateConcurrentSlotStatus(issueNumber, "completed", repoSlug);
-        notifier!.unsubscribeFromSlot(issueNumber); // Issue #1750
+        notifier!.unsubscribeFromSlot(issueNumber, repoSlug); // Issue #1750, #2408
         logger.info("Concurrent slot completed", {
           slotIndex,
           issueNumber,
@@ -1878,7 +1878,7 @@ export async function initializeServices(
         // with the final cost. Mirror of the onSlotCompleted wiring above.
         outputWindow.notifySlotCompleted(slotIndex, "error", costUsd);
         treeProvider.updateConcurrentSlotStatus(issueNumber, "failed", repoSlug);
-        notifier!.unsubscribeFromSlot(issueNumber); // Issue #1750
+        notifier!.unsubscribeFromSlot(issueNumber, repoSlug); // Issue #1750, #2408
         logger.warn("Concurrent slot failed", {
           slotIndex,
           issueNumber,
@@ -2008,7 +2008,7 @@ export async function initializeServices(
         // issue itself stays Ready on the board.
         outputWindow.notifySlotCompleted(slotIndex, "complete", costUsd);
         treeProvider.removeConcurrentSlot(issueNumber, repoSlug);
-        notifier!.unsubscribeFromSlot(issueNumber); // Issue #1750
+        notifier!.unsubscribeFromSlot(issueNumber, repoSlug); // Issue #1750, #2408
         logger.info("Concurrent slot deferred — issue blocked by open dependencies", {
           slotIndex,
           issueNumber,

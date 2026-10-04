@@ -398,3 +398,89 @@ describe("SlackService — delivery", () => {
     svc.dispose();
   }, 10000);
 });
+
+// Two repositories' issues with the same number run concurrently in two slots.
+// Per-run state keyed by issue number alone made the second subscribe tear down
+// the first and both runs share one message (#2408).
+describe("SlackService — same issue number in two repositories (#2408)", () => {
+  let logger: ReturnType<typeof makeLogger>;
+
+  beforeEach(() => {
+    storedSecret = BOT_TOKEN;
+    logger = makeLogger();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete process.env.SLACK_BOT_TOKEN;
+  });
+
+  /** A slot state service that records handlers and per-subscription disposers. */
+  function slotService(state: unknown) {
+    const disposers: Array<ReturnType<typeof vi.fn>> = [];
+    const stageStart: Array<(e: { stage: string; issueNumber: number }) => void> = [];
+    const sub = () => {
+      const d = vi.fn();
+      disposers.push(d);
+      return { dispose: d };
+    };
+    return {
+      disposers,
+      stageStart,
+      svc: {
+        getState: vi.fn(async () => state),
+        onStageStart: vi.fn((h: (e: { stage: string; issueNumber: number }) => void) => {
+          stageStart.push(h);
+          return sub();
+        }),
+        onStageError: vi.fn(() => sub()),
+        onStateChanged: vi.fn(() => sub()),
+        onRunFinalized: vi.fn(() => sub()),
+      },
+    };
+  }
+
+  it("keeps separate subscriptions and separate messages per repository", async () => {
+    let n = 0;
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, ts: `1700000000.00010${n++}` }),
+    }));
+    const svc = newService(fetchMock, logger);
+    const a = slotService(makeState(21));
+    const b = slotService(makeState(21));
+
+    svc.subscribeToSlot(21, a.svc as never, "example-org/platform");
+    svc.subscribeToSlot(21, b.svc as never, "example-org/app");
+
+    // Subscribing the second slot did not dispose the first slot's handlers.
+    expect(a.disposers).toHaveLength(4);
+    for (const d of a.disposers) expect(d).not.toHaveBeenCalled();
+
+    a.stageStart[0]({ stage: "issue-pickup", issueNumber: 21 });
+    b.stageStart[0]({ stage: "issue-pickup", issueNumber: 21 });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(fetchMock.mock.calls.map(methodOf)).toEqual(["chat.postMessage", "chat.postMessage"]);
+
+    // Unsubscribing one slot leaves the other's subscriptions alive.
+    svc.unsubscribeFromSlot(21, "example-org/platform");
+    for (const d of a.disposers) expect(d).toHaveBeenCalledTimes(1);
+    for (const d of b.disposers) expect(d).not.toHaveBeenCalled();
+    svc.dispose();
+  });
+
+  it("still works in the single-repository case (no repo, key #N)", async () => {
+    const fetchMock = slackOk();
+    const svc = newService(fetchMock, logger);
+    const a = slotService(makeState(21));
+
+    svc.subscribeToSlot(21, a.svc as never);
+    a.stageStart[0]({ stage: "issue-pickup", issueNumber: 21 });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    svc.unsubscribeFromSlot(21);
+    for (const d of a.disposers) expect(d).toHaveBeenCalledTimes(1);
+    svc.dispose();
+  });
+});

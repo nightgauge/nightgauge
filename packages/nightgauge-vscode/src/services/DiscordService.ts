@@ -53,6 +53,7 @@ import {
   type WarnLogger,
 } from "./notifications/transport";
 import { formatCost } from "../utils/formatCost";
+import { slotKey } from "../utils/epicRef";
 import { resolveMainRepoRoot } from "../utils/adaptiveBudgetLoader";
 
 // Re-export so existing imports (tests/services/DiscordService.test.ts) still resolve.
@@ -177,6 +178,8 @@ interface PipelineStateSnapshot {
 
 interface ActiveRun {
   issueNumber: number;
+  /** Per-run map key, `slotKey(repoSlug, issueNumber)` (#2408) */
+  key: string;
   issueTitle: string;
   branch: string;
   repoName: string;
@@ -829,18 +832,24 @@ export function modeDisplay(meta: PipelineStateSnapshot["pipeline_meta"]): {
 // ─── DiscordService ───────────────────────────────────────────────────────────
 
 export class DiscordService implements Notifier, vscode.Disposable {
-  /** One entry per active pipeline run, keyed by issue number */
-  private readonly runs = new Map<number, ActiveRun>();
+  /**
+   * One entry per active pipeline run, keyed by `slotKey(repoSlug, issueNumber)`.
+   * Issue numbers repeat across repositories and slots from different repos run
+   * concurrently, so the number alone would collide (#2408). Every per-run map
+   * below (slotDisposables, pendingRepoSlugs, the debounce patcher) uses the
+   * same key.
+   */
+  private readonly runs = new Map<string, ActiveRun>();
 
   /** Debounce / final-PATCH retry timers (one per issue). Shared with
    *  Mattermost / future notifiers via `notifications/transport.ts`. */
   private readonly patcher = new DebouncedPatcher();
 
   /** Per-slot event subscriptions for concurrent worktree pipelines (Issue #1750) */
-  private readonly slotDisposables = new Map<number, vscode.Disposable[]>();
+  private readonly slotDisposables = new Map<string, vscode.Disposable[]>();
 
   /** Repo slugs queued before embed creation (set via subscribeToSlot) */
-  private readonly pendingRepoSlugs = new Map<number, string>();
+  private readonly pendingRepoSlugs = new Map<string, string>();
 
   private disposables: vscode.Disposable[] = [];
 
@@ -865,7 +874,7 @@ export class DiscordService implements Notifier, vscode.Disposable {
       // stage:error — schedule an immediate-ish update to show the failure
       this.pipelineStateService.onStageError(({ issueNumber }) => {
         if (this.slotDisposables.size > 0) return;
-        this.scheduleUpdate(issueNumber);
+        this.scheduleUpdate(slotKey(undefined, issueNumber));
       }),
 
       // state:changed — sync token cost + completion status, schedule update
@@ -894,20 +903,20 @@ export class DiscordService implements Notifier, vscode.Disposable {
   // initialize().
 
   onPipelineStart(ctx: PipelineEventContext): void {
-    void this.handleStageStart(ctx.stage as PipelineStage, ctx.issueNumber);
+    void this.handleStageStart(ctx.stage as PipelineStage, ctx.issueNumber, undefined, ctx.repo);
   }
 
   onPipelineUpdate(ctx: PipelineEventContext): void {
     if (ctx.state) {
-      void this.handleStateChanged(ctx.state as unknown as PipelineStateSnapshot);
+      void this.handleStateChanged(ctx.state as unknown as PipelineStateSnapshot, ctx.repo);
     } else {
-      this.scheduleUpdate(ctx.issueNumber);
+      this.scheduleUpdate(slotKey(ctx.repo, ctx.issueNumber));
     }
   }
 
   onPipelineFinal(ctx: PipelineEventContext): void {
     if (!ctx.state) return;
-    void this.handleRunFinalized(ctx.state as unknown as PipelineStateSnapshot);
+    void this.handleRunFinalized(ctx.state as unknown as PipelineStateSnapshot, ctx.repo);
   }
 
   // ─── Concurrent worktree slot subscription (Issue #1750) ────────────────────
@@ -924,12 +933,14 @@ export class DiscordService implements Notifier, vscode.Disposable {
     slotStateService: PipelineStateService,
     repoSlug?: string
   ): void {
+    const key = slotKey(repoSlug, issueNumber);
     // Store repo slug for GitHub issue links — set on embed creation
     if (repoSlug) {
-      this.pendingRepoSlugs.set(issueNumber, repoSlug);
+      this.pendingRepoSlugs.set(key, repoSlug);
     }
-    // Clean up any existing subscription for this issue
-    this.unsubscribeFromSlot(issueNumber);
+    // Clean up any existing subscription for this same repo+issue only; another
+    // repository's slot with the same issue number is left alone (#2408)
+    this.unsubscribeFromSlot(issueNumber, repoSlug);
 
     // IMPORTANT: IpcClient is a singleton — every PipelineStateService instance
     // receives ALL IPC events, not just events for its assigned issue.  Filter
@@ -938,29 +949,30 @@ export class DiscordService implements Notifier, vscode.Disposable {
     const subs: vscode.Disposable[] = [
       slotStateService.onStageStart(({ stage, issueNumber: num }) => {
         if (num !== issueNumber) return; // filter: only this slot's events
-        void this.handleStageStart(stage as PipelineStage, num, slotStateService);
+        void this.handleStageStart(stage as PipelineStage, num, slotStateService, repoSlug);
       }),
       slotStateService.onStageError(({ issueNumber: num }) => {
         if (num !== issueNumber) return;
-        this.scheduleUpdate(num);
+        this.scheduleUpdate(key);
       }),
       slotStateService.onStateChanged((state) => {
         if (!state) return;
         const snap = state as unknown as PipelineStateSnapshot;
         if (snap.issue_number !== issueNumber) return;
-        void this.handleStateChanged(snap);
+        void this.handleStateChanged(snap, repoSlug);
       }),
       slotStateService.onRunFinalized((state) => {
         if (!state) return;
         const snap = state as unknown as PipelineStateSnapshot;
         if (snap.issue_number !== issueNumber) return;
-        void this.handleRunFinalized(snap);
+        void this.handleRunFinalized(snap, repoSlug);
       }),
     ];
 
-    this.slotDisposables.set(issueNumber, subs);
+    this.slotDisposables.set(key, subs);
     this.logger.info("DiscordService: subscribed to worktree slot", {
       issueNumber,
+      repoSlug,
     });
   }
 
@@ -968,18 +980,19 @@ export class DiscordService implements Notifier, vscode.Disposable {
    * Unsubscribe from a worktree slot's events.
    * Called when a slot completes or fails.
    */
-  unsubscribeFromSlot(issueNumber: number): void {
-    const subs = this.slotDisposables.get(issueNumber);
+  unsubscribeFromSlot(issueNumber: number, repoSlug?: string): void {
+    const key = slotKey(repoSlug, issueNumber);
+    const subs = this.slotDisposables.get(key);
     if (subs) {
       for (const s of subs) s.dispose();
-      this.slotDisposables.delete(issueNumber);
+      this.slotDisposables.delete(key);
     }
     // Last chance: the slot is being torn down, so no further event can reach
     // this run. If it went terminal without ever being flushed (#1127), render
     // it from the snapshot we hold rather than leaving the entry stranded.
-    const run = this.runs.get(issueNumber);
+    const run = this.runs.get(key);
     if (run?.isFinal && !run.finalFlushed && run.finalSnapshot) {
-      void this.handleRunFinalized(run.finalSnapshot);
+      void this.handleRunFinalized(run.finalSnapshot, repoSlug);
     }
   }
 
@@ -995,20 +1008,22 @@ export class DiscordService implements Notifier, vscode.Disposable {
   private async handleStageStart(
     stage: PipelineStage,
     issueNumber: number,
-    stateService?: PipelineStateService
+    stateService?: PipelineStateService,
+    repoSlugForKey?: string
   ): Promise<void> {
     const effectiveStateService = stateService ?? this.pipelineStateService;
+    const key = slotKey(repoSlugForKey, issueNumber);
 
     if (stage !== "issue-pickup") {
       // Non-first stage: update the existing embed
-      this.scheduleUpdate(issueNumber);
+      this.scheduleUpdate(key);
       return;
     }
 
     // Flush any completed runs from previous queued issues so their embeds
     // transition from "Running…" to their final state before we create
     // the new embed for this issue.
-    this.flushStaleRuns(issueNumber);
+    this.flushStaleRuns(key);
 
     const config = this.getDiscordConfig();
     if (!config?.enabled) return;
@@ -1043,11 +1058,12 @@ export class DiscordService implements Notifier, vscode.Disposable {
     const repoName = repoRoot.split("/").pop() ?? repoRoot;
 
     // Consume pending repo slug (set via subscribeToSlot before embed creation)
-    const repoSlug = this.pendingRepoSlugs.get(issueNumber);
-    this.pendingRepoSlugs.delete(issueNumber);
+    const repoSlug = this.pendingRepoSlugs.get(key);
+    this.pendingRepoSlugs.delete(key);
 
     const run: ActiveRun = {
       issueNumber,
+      key,
       issueTitle: (state as unknown as PipelineStateSnapshot).title ?? `Issue #${issueNumber}`,
       branch: (state as unknown as PipelineStateSnapshot).branch ?? "",
       repoName,
@@ -1085,7 +1101,7 @@ export class DiscordService implements Notifier, vscode.Disposable {
 
       const data = (await res.json()) as { id: string };
       run.messageId = data.id;
-      this.runs.set(issueNumber, run);
+      this.runs.set(key, run);
 
       NotifierStatusTracker.getInstance()?.recordSuccess("discord");
       this.logger.info("DiscordService: pipeline embed created", {
@@ -1105,8 +1121,9 @@ export class DiscordService implements Notifier, vscode.Disposable {
     }
   }
 
-  private async handleStateChanged(state: PipelineStateSnapshot): Promise<void> {
-    const run = this.runs.get(state.issue_number);
+  private async handleStateChanged(state: PipelineStateSnapshot, repoSlug?: string): Promise<void> {
+    const key = slotKey(repoSlug, state.issue_number);
+    const run = this.runs.get(key);
     if (!run) return;
 
     // Sync metadata from latest state — title/branch arrive after issue-pickup
@@ -1145,8 +1162,8 @@ export class DiscordService implements Notifier, vscode.Disposable {
         // (queue advance, timer cleanup, rate-limit) prevents a debounced PATCH
         // from firing, the embed is stuck at "Running…" forever.
         run.isFinal = true;
-        this.patcher.cancel(state.issue_number);
-        await this.patchEmbed(state.issue_number);
+        this.patcher.cancel(key);
+        await this.patchEmbed(key);
       }
       // Subsequent state changes with outcome_type: don't re-dispatch.
       // The retry mechanism (scheduleRetry) handles failures from the
@@ -1156,7 +1173,7 @@ export class DiscordService implements Notifier, vscode.Disposable {
       return;
     }
 
-    this.scheduleUpdate(state.issue_number);
+    this.scheduleUpdate(key);
   }
 
   /**
@@ -1173,21 +1190,22 @@ export class DiscordService implements Notifier, vscode.Disposable {
    *
    * Idempotent: a second call for an already-flushed run is a no-op.
    */
-  private async handleRunFinalized(state: PipelineStateSnapshot): Promise<void> {
-    const run = this.runs.get(state.issue_number);
+  private async handleRunFinalized(state: PipelineStateSnapshot, repoSlug?: string): Promise<void> {
+    const key = slotKey(repoSlug, state.issue_number);
+    const run = this.runs.get(key);
     if (!run || run.finalFlushed) return;
 
     run.isFinal = true;
     run.finalFlushed = true;
     run.finalSnapshot = state;
-    this.patcher.cancel(state.issue_number);
-    await this.patchEmbed(state.issue_number);
+    this.patcher.cancel(key);
+    await this.patchEmbed(key);
   }
 
   // ─── Debounced update ────────────────────────────────────────────────────────
 
-  private scheduleUpdate(issueNumber: number): void {
-    this.patcher.schedule(issueNumber, () => this.patchEmbed(issueNumber), DEBOUNCE_MS);
+  private scheduleUpdate(key: string): void {
+    this.patcher.schedule(key, () => this.patchEmbed(key), DEBOUNCE_MS);
   }
 
   /**
@@ -1197,16 +1215,16 @@ export class DiscordService implements Notifier, vscode.Disposable {
    * Reuses the shared patcher timer slot so dispose() cleans up retry timers
    * automatically.
    */
-  private scheduleRetry(issueNumber: number): void {
-    const run = this.runs.get(issueNumber);
+  private scheduleRetry(key: string): void {
+    const run = this.runs.get(key);
     if (!run) return;
 
     if (run.finalPatchRetries >= FINAL_PATCH_MAX_RETRIES) {
       this.logger.error(
         "DiscordService: final patch failed after all retries — embed may be stuck",
-        { issueNumber, retries: run.finalPatchRetries }
+        { issueNumber: run.issueNumber, retries: run.finalPatchRetries }
       );
-      this.runs.delete(issueNumber);
+      this.runs.delete(key);
       return;
     }
 
@@ -1214,12 +1232,12 @@ export class DiscordService implements Notifier, vscode.Disposable {
     run.finalPatchRetries += 1;
 
     this.logger.info("DiscordService: scheduling final patch retry", {
-      issueNumber,
+      issueNumber: run.issueNumber,
       attempt: run.finalPatchRetries,
       delayMs: delay,
     });
 
-    this.patcher.schedule(issueNumber, () => this.patchEmbed(issueNumber), delay);
+    this.patcher.schedule(key, () => this.patchEmbed(key), delay);
   }
 
   /**
@@ -1228,21 +1246,21 @@ export class DiscordService implements Notifier, vscode.Disposable {
    * Called before creating a new embed so stale "Running…" embeds from
    * the previous queued pipeline run are updated to their final state.
    */
-  private flushStaleRuns(excludeIssue?: number): void {
-    for (const [issueNumber, run] of this.runs) {
-      if (issueNumber === excludeIssue) continue;
+  private flushStaleRuns(excludeKey?: string): void {
+    for (const [key, run] of this.runs) {
+      if (key === excludeKey) continue;
       if (run.isFinal && run.finalSnapshot) {
         // No terminal flush is coming for a run the queue has already moved
         // past, so this render is its last — release the entry after it.
         run.finalFlushed = true;
-        this.patcher.cancel(issueNumber);
-        void this.patchEmbed(issueNumber);
+        this.patcher.cancel(key);
+        void this.patchEmbed(key);
       }
     }
   }
 
-  private async patchEmbed(issueNumber: number): Promise<void> {
-    const run = this.runs.get(issueNumber);
+  private async patchEmbed(key: string): Promise<void> {
+    const run = this.runs.get(key);
     if (!run?.messageId) return;
 
     // Use the cached final snapshot when available — in batch mode, state.json
@@ -1287,18 +1305,24 @@ export class DiscordService implements Notifier, vscode.Disposable {
       );
     } catch (err) {
       if (run.isFinal) {
-        this.logger.warn("DiscordService: network error patching embed", { issueNumber, err });
+        this.logger.warn("DiscordService: network error patching embed", {
+          issueNumber: run.issueNumber,
+          err,
+        });
         if (run.finalPatchRetries >= FINAL_PATCH_MAX_RETRIES) {
           this.logger.error(
             "DiscordService: final patch failed after all retries — embed may be stuck",
-            { issueNumber, retries: run.finalPatchRetries, baseUrl }
+            { issueNumber: run.issueNumber, retries: run.finalPatchRetries, baseUrl }
           );
-          this.runs.delete(issueNumber);
+          this.runs.delete(key);
         } else {
-          this.scheduleRetry(issueNumber);
+          this.scheduleRetry(key);
         }
       } else {
-        this.logger.warn("DiscordService: network error patching embed", { issueNumber, err });
+        this.logger.warn("DiscordService: network error patching embed", {
+          issueNumber: run.issueNumber,
+          err,
+        });
       }
       return;
     }
@@ -1306,21 +1330,21 @@ export class DiscordService implements Notifier, vscode.Disposable {
     if (!res.ok) {
       if (run.isFinal) {
         this.logger.warn("DiscordService: failed to patch embed", {
-          issueNumber,
+          issueNumber: run.issueNumber,
           status: res.status,
         });
         if (run.finalPatchRetries >= FINAL_PATCH_MAX_RETRIES) {
           this.logger.error(
             "DiscordService: final patch failed after all retries — embed may be stuck",
-            { issueNumber, retries: run.finalPatchRetries, baseUrl }
+            { issueNumber: run.issueNumber, retries: run.finalPatchRetries, baseUrl }
           );
-          this.runs.delete(issueNumber);
+          this.runs.delete(key);
         } else {
-          this.scheduleRetry(issueNumber);
+          this.scheduleRetry(key);
         }
       } else {
         this.logger.warn("DiscordService: failed to patch embed", {
-          issueNumber,
+          issueNumber: run.issueNumber,
           status: res.status,
         });
       }
@@ -1334,7 +1358,7 @@ export class DiscordService implements Notifier, vscode.Disposable {
     // (#1127).
     NotifierStatusTracker.getInstance()?.recordSuccess("discord");
     if (run.isFinal && run.finalFlushed) {
-      this.runs.delete(issueNumber);
+      this.runs.delete(key);
     }
   }
 

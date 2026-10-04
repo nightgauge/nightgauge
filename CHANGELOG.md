@@ -189,6 +189,15 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The chat notifiers keep two repositories' same-numbered runs apart**
+  (#2408). Slack, Discord and Mattermost, and the dispatcher in front of them,
+  kept a run's subscription, card or thread and debounce timer by issue number
+  alone. With `example-org/platform#21` and `example-org/app#21` running at
+  once (#2403), subscribing the second tore down the first's subscription and
+  both runs updated one card. Per-run state is now keyed by
+  `slotKey(repo, number)`; `unsubscribeFromSlot` takes the repository, and the
+  extension's slot callbacks pass it. A run with no known repository keeps its
+  by-number key, so the single-repository case is unchanged.
 - **The extension holds a concurrent slot by repository and issue number**
   (#2403). Its slots and reservations were keyed by number alone, so with
   `example-org/platform#21` running, the scheduler's dispatch of
@@ -202,8 +211,7 @@ changelog, and the release workflow refuses a tag that does not.
   repository, and the pipeline tree, the slot output channels, the per-slot
   phase trackers and state subscriptions and the Output window's phase
   routing key by both. Stop Slot, its quick action and the slot tree item
-  name the slot `owner/repo#N`. The chat notifiers still key a run by number
-  (#2408).
+  name the slot `owner/repo#N`.
 - **A headless run refuses a skill whose only tool is `AskUserQuestion`**
   (#2390). Headless runs drop `AskUserQuestion`, and a skill left with no tool
   then reached the adapter as one that declares none, which Codex runs with

@@ -72,9 +72,13 @@ class FakeNotifier implements Notifier {
     this.calls.subscribeToSlot.push({ issueNumber, repoSlug });
   }
 
-  unsubscribeFromSlot(issueNumber: number): void {
+  unsubscribeFromSlot(issueNumber: number, repoSlug?: string): void {
     this.calls.unsubscribeFromSlot.push(issueNumber);
+    this.unsubscribedRepos.push(repoSlug);
   }
+
+  /** The repository each unsubscribe named, in call order (#2408). */
+  unsubscribedRepos: Array<string | undefined> = [];
 
   dispose(): void {
     this.calls.dispose += 1;
@@ -180,6 +184,26 @@ describe("NotificationDispatcher", () => {
 
     expect(a.calls.unsubscribeFromSlot).toEqual([]);
     expect(b.calls.unsubscribeFromSlot).toEqual([123]);
+  });
+
+  // #2408: two repositories' issues with one number are two subscriptions.
+  it("keeps same-numbered slots of different repositories apart", () => {
+    const a = new FakeNotifier();
+    const dispatcher = new NotificationDispatcher([a], logger);
+
+    dispatcher.subscribeToSlot(21, FAKE_STATE_SERVICE, "example-org/platform");
+    dispatcher.subscribeToSlot(21, FAKE_STATE_SERVICE, "example-org/app");
+    dispatcher.unsubscribeFromSlot(21, "Example-Org/App");
+
+    expect(a.calls.unsubscribeFromSlot).toEqual([21]);
+    expect(a.unsubscribedRepos).toEqual(["Example-Org/App"]);
+
+    // The platform slot's subscription is still recorded and still releases.
+    dispatcher.unsubscribeFromSlot(21, "example-org/platform");
+    expect(a.unsubscribedRepos).toEqual(["Example-Org/App", "example-org/platform"]);
+    // A second release of the app slot finds nothing.
+    dispatcher.unsubscribeFromSlot(21, "example-org/app");
+    expect(a.calls.unsubscribeFromSlot).toEqual([21, 21]);
   });
 
   it("unsubscribeFromSlot is a no-op when no prior subscribe was recorded", () => {
