@@ -218,6 +218,24 @@ changelog, and the release workflow refuses a tag that does not.
   "subtest may have called FailNow on a parent test". A test parses the
   package's test files and fails on a harness subtest that does not bind.
 
+- **The extension's epic controls and queue drains name an issue by repository
+  and number** (#2382). An issue number names an issue only within one
+  repository, so with `example-org/platform#20` and `example-org/app#20` both
+  running, **Stop Epic** stopped the running sub-issues of both and drained
+  both epics' queued items; a drain removed every queued item with a number,
+  in any repository; the drag-to-queue filter matched an epic's sub-issues to
+  board items by number; and `epic_total` counted both epics. A slot now
+  records its epic's repository. **Stop Epic**, its quick pick, the pipeline
+  quick actions and the slot tree item name the epic as `owner/repo#N` and
+  stop and drain only that repository's epic. `queue.remove` takes an
+  optional `repo` that scopes the removal to that repository's item, and the
+  epic drain, the blocked-successor drain, the repo-scoped halt drain and the
+  queue item commands use it. The drag filter and `queue.enqueueEpic`'s
+  `eligibleSubIssues` name each sub-issue as `{repo, number}`, and
+  `EnqueueEpic` admits only the ones named; the open-PR check runs in the
+  sub-issue's own repository. The blocked-successor drain matches the failed
+  issue's repository against each blocker's. The CLI's `queue remove N` still
+  removes by number.
 - **An issue the queue started automatically can be queued again once its run
   ends** (#2397). The main orchestrator's auto-start dequeues the next item,
   which marks it `processing` in the daemon's queue, and nothing released it:

@@ -40,6 +40,13 @@ and this project adheres to
 - **A stage whose skill only asks questions is refused with a message naming
   the skill**, instead of running with no tool restriction under Codex (#2390).
 
+- **Stop Epic stops only the epic you picked** (#2382). In a workspace with
+  several repositories, two epics can share a number; stopping one stopped
+  the other's running issues and removed its queued ones too. Stop Epic, its
+  quick pick and the running slot now name the epic as `owner/repo#N`.
+  Removing or draining a queued issue no longer takes another repository's
+  issue with the same number, and dragging an epic onto the queue checks and
+  queues each sub-issue in its own repository.
 - **An issue the queue started on its own can be queued again after its run.**
   It stayed marked as processing until the window reloaded, so adding it again,
   **Remove from Queue** and a remote trigger for it were all refused. Stopping

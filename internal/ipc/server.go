@@ -4537,7 +4537,7 @@ func (s *Server) registerMethods() {
 		if s.scheduler == nil {
 			return nil, errors.New(errSchedulerNotConfigured)
 		}
-		s.scheduler.QueueRemove(p.IssueNumber)
+		s.scheduler.QueueRemove(p.Repo, p.IssueNumber)
 		return map[string]string{"status": "ok"}, nil
 	}
 
@@ -4643,7 +4643,11 @@ func (s *Server) registerMethods() {
 		if s.scheduler == nil {
 			return nil, errors.New(errSchedulerNotConfigured)
 		}
-		if err := s.scheduler.EnqueueEpic(ctx, p.Owner, p.Repo, p.EpicNumber, p.Title, p.Labels, p.EligibleSubIssues); err != nil {
+		var eligible []orchestrator.IssueRef
+		for _, r := range p.EligibleSubIssues {
+			eligible = append(eligible, orchestrator.IssueRef{Repo: r.Repo, Number: r.Number})
+		}
+		if err := s.scheduler.EnqueueEpic(ctx, p.Owner, p.Repo, p.EpicNumber, p.Title, p.Labels, eligible); err != nil {
 			return nil, err
 		}
 		return map[string]string{"status": "ok"}, nil

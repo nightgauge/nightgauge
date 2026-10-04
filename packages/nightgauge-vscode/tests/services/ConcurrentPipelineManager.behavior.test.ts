@@ -160,6 +160,7 @@ function createControllableFactory() {
     const orchestrator = {
       setWorktreeOverride: vi.fn(),
       setRunRepoRoot: vi.fn(),
+      setRepoOverride: vi.fn(),
       setUnattended: vi.fn(),
       // ADR-017 step 3 (#370): the slot resolves its repo through the
       // orchestrator when the queue item and the workspace manifest cannot
@@ -372,12 +373,60 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         { maxConcurrent: 2 }
       );
 
-      mockQueue.dequeueIndependent.mockResolvedValueOnce([{ ...makeQueueItem(10), epicOrder: 0 }]);
+      mockQueue.dequeueIndependent.mockResolvedValueOnce([
+        { ...makeQueueItem(10), epicOrder: 0, repoName: "example-org/platform" },
+      ]);
       mockQueue.dequeueIndependent.mockResolvedValue([]);
       await manager.fillSlots();
 
       controllable.failIssue(10);
-      await vi.waitFor(() => expect(mockQueue.drainBlockedSuccessors).toHaveBeenCalledWith(10, 0));
+      // The failed issue is named by its repository too (#2382).
+      await vi.waitFor(() =>
+        expect(mockQueue.drainBlockedSuccessors).toHaveBeenCalledWith(10, "example-org/platform")
+      );
+    });
+
+    // #2382: example-org/platform#20 and example-org/app#20 are different
+    // epics, each with a running sub-issue.
+    it("stops and counts only the named repository's epic", async () => {
+      const manager = new ConcurrentPipelineManager(
+        "/test-repo",
+        mockQueue as any,
+        controllable.factory,
+        mockLogger as any,
+        { maxConcurrent: 2 }
+      );
+      const sub = (n: number, repo: string): QueueItem => ({
+        ...makeQueueItem(n),
+        repoName: repo,
+        epicNumber: 20,
+        epicRepo: repo,
+      });
+      mockQueue.dequeueIndependent.mockResolvedValueOnce([
+        sub(21, "example-org/platform"),
+        sub(31, "example-org/app"),
+      ]);
+      mockQueue.dequeueIndependent.mockResolvedValue([]);
+      await manager.fillSlots();
+
+      const platform = { repo: "Example-Org/Platform", number: 20 };
+      const app = { repo: "example-org/app", number: 20 };
+      expect(manager.getSlotsByEpic(platform).map((s) => s.issueNumber)).toEqual([21]);
+      expect(manager.getSlotsByEpic(app).map((s) => s.issueNumber)).toEqual([31]);
+      expect(manager.getActiveSlots().map((s) => s.epicRepo)).toEqual([
+        "example-org/platform",
+        "example-org/app",
+      ]);
+
+      // epic_total: a queued sub-issue of each epic, plus the running one.
+      const queued = [sub(22, "example-org/platform"), sub(32, "example-org/app")];
+      expect(manager.epicTotal(queued, platform)).toBe(2);
+
+      mockQueue.drainEpicItems = vi.fn().mockResolvedValue([]);
+      const stopped = await manager.abortEpic(platform);
+      expect(stopped).toBe(1);
+      expect(mockQueue.drainEpicItems).toHaveBeenCalledWith(platform);
+      expect(manager.isRunning(31)).toBe(true);
     });
 
     // @see Issue #2967 — Pipeline failures must not silently auto-continue the queue

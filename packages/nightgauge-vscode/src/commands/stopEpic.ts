@@ -13,6 +13,7 @@
 import * as vscode from "vscode";
 import type { ConcurrentPipelineManager } from "../services/ConcurrentPipelineManager";
 import type { Logger } from "../utils/logger";
+import { epicRefKey, formatEpicRef, type EpicRef } from "../utils/epicRef";
 
 /**
  * Register the Stop Epic command
@@ -20,6 +21,9 @@ import type { Logger } from "../utils/logger";
  * Stops all concurrent pipeline slots belonging to a specific epic.
  * Called from the inline action on ConcurrentSlotTreeItem (when it
  * has an epicNumber) or via command palette with epic selection.
+ *
+ * The epic is named by repository and number (`owner/repo#N`): another
+ * repository's epic can share the number, and is left running (#2382).
  */
 export function registerStopEpicCommand(
   logger: Logger,
@@ -27,24 +31,29 @@ export function registerStopEpicCommand(
 ): vscode.Disposable {
   return vscode.commands.registerCommand(
     "nightgauge.stopEpic",
-    async (item?: { epicNumber?: number }) => {
+    async (item?: { epicNumber?: number; epicRepo?: string }) => {
       if (!concurrentPipelineManager) {
         vscode.window.showErrorMessage("Concurrent pipeline manager not initialized.");
         return;
       }
 
-      let epicNumber = item?.epicNumber;
+      let epic: EpicRef | undefined = item?.epicNumber
+        ? { repo: item.epicRepo, number: item.epicNumber }
+        : undefined;
 
-      // If no epic number provided (e.g. command palette), discover
-      // running epics from active slots and show a quick pick.
-      if (!epicNumber) {
+      // If no epic provided (e.g. command palette), discover running epics
+      // from active slots and show a quick pick, one entry per repository's
+      // epic.
+      if (!epic) {
         const activeSlots = concurrentPipelineManager.getActiveSlots();
-        const epicMap = new Map<number, { issues: number[] }>();
+        const epicMap = new Map<string, { epic: EpicRef; issues: number[] }>();
         for (const slot of activeSlots) {
           if (slot.epicNumber) {
-            const entry = epicMap.get(slot.epicNumber) ?? { issues: [] };
+            const ref: EpicRef = { repo: slot.epicRepo, number: slot.epicNumber };
+            const key = epicRefKey(ref);
+            const entry = epicMap.get(key) ?? { epic: ref, issues: [] };
             entry.issues.push(slot.issueNumber);
-            epicMap.set(slot.epicNumber, entry);
+            epicMap.set(key, entry);
           }
         }
 
@@ -55,13 +64,13 @@ export function registerStopEpicCommand(
 
         if (epicMap.size === 1) {
           // Only one epic running — use it directly
-          epicNumber = epicMap.keys().next().value!;
+          epic = epicMap.values().next().value!.epic;
         } else {
           // Multiple epics running — let user choose
-          const picks = Array.from(epicMap.entries()).map(([num, { issues }]) => ({
-            label: `Epic #${num}`,
+          const picks = Array.from(epicMap.values()).map(({ epic: ref, issues }) => ({
+            label: `Epic ${formatEpicRef(ref)}`,
             description: `${issues.length} running issue(s): ${issues.map((n) => `#${n}`).join(", ")}`,
-            epicNumber: num,
+            epic: ref,
           }));
 
           const selected = await vscode.window.showQuickPick(picks, {
@@ -69,21 +78,22 @@ export function registerStopEpicCommand(
           });
 
           if (!selected) return; // User cancelled
-          epicNumber = selected.epicNumber;
+          epic = selected.epic;
         }
       }
 
-      const epicSlots = concurrentPipelineManager.getSlotsByEpic(epicNumber);
+      const epicName = formatEpicRef(epic);
+      const epicSlots = concurrentPipelineManager.getSlotsByEpic(epic);
 
       if (epicSlots.length === 0) {
-        vscode.window.showInformationMessage(`No running slots found for epic #${epicNumber}.`);
+        vscode.window.showInformationMessage(`No running slots found for epic ${epicName}.`);
         return;
       }
 
       const issueList = epicSlots.map((s) => `#${s.issueNumber}`).join(", ");
 
       const confirm = await vscode.window.showWarningMessage(
-        `Stop all pipelines for epic #${epicNumber}? This will stop ${epicSlots.length} running issue(s): ${issueList}, and remove queued epic items. State will be preserved — use Abort for full rollback.`,
+        `Stop all pipelines for epic ${epicName}? This will stop ${epicSlots.length} running issue(s): ${issueList}, and remove queued epic items. State will be preserved — use Abort for full rollback.`,
         { modal: true },
         "Stop Epic"
       );
@@ -93,13 +103,13 @@ export function registerStopEpicCommand(
       }
 
       logger.info("Stopping all pipeline slots for epic (state preserved)", {
-        epicNumber,
+        epic: epicName,
         slotCount: epicSlots.length,
         issues: epicSlots.map((s) => s.issueNumber),
       });
 
       try {
-        const stoppedCount = await concurrentPipelineManager.abortEpic(epicNumber);
+        const stoppedCount = await concurrentPipelineManager.abortEpic(epic);
 
         // NOTE: GitHub status is intentionally NOT reset here.
         // Stop = pause. Issues stay at their current board status so they
@@ -107,19 +117,19 @@ export function registerStopEpicCommand(
         // Use abortPipeline for full rollback (reopen + board reset).
 
         vscode.window.showInformationMessage(
-          `Stopped ${stoppedCount} pipeline(s) for epic #${epicNumber}. State preserved.`
+          `Stopped ${stoppedCount} pipeline(s) for epic ${epicName}. State preserved.`
         );
         logger.info("Epic pipeline stopped by user (state preserved)", {
-          epicNumber,
+          epic: epicName,
           stoppedCount,
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error occurred";
         logger.error("Failed to stop epic pipeline", {
-          epicNumber,
+          epic: epicName,
           error: message,
         });
-        vscode.window.showErrorMessage(`Failed to stop epic #${epicNumber}: ${message}`);
+        vscode.window.showErrorMessage(`Failed to stop epic ${epicName}: ${message}`);
       }
     }
   );

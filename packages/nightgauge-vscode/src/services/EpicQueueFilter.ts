@@ -16,12 +16,17 @@
 import type { ReadyIssue } from "./ProjectBoardService";
 import type { ProjectBoardService } from "./ProjectBoardService";
 import { getPRForIssue, type PRInfo } from "../utils/prDetection";
+import { repoFromIssueUrl, repoIssueKey, type RepoIssueRef } from "../utils/epicRef";
 
 /**
  * Pluggable PR lookup. Production uses `getPRForIssue`; tests inject a stub
  * so they do not shell out to `gh`.
  */
-export type PRLookup = (issueNumber: number, workspaceRoot: string) => Promise<PRInfo | null>;
+export type PRLookup = (
+  issueNumber: number,
+  workspaceRoot: string,
+  repo?: string
+) => Promise<PRInfo | null>;
 
 /**
  * A skipped sub-issue with its reason for rejection. Surfaced to the user
@@ -29,6 +34,8 @@ export type PRLookup = (issueNumber: number, workspaceRoot: string) => Promise<P
  */
 export interface SkippedSubIssue {
   number: number;
+  /** The sub-issue's repository, `owner/name` (#2382). */
+  repo: string;
   /** `status` = not in eligibleStatuses, `open-pr` = PR present, `missing` = not in board cache */
   reason: "status" | "open-pr" | "missing";
   /** Short human-readable detail: actual status for `status`, PR url for `open-pr`. */
@@ -37,13 +44,17 @@ export interface SkippedSubIssue {
 
 export interface EpicFilterResult {
   /** Sub-issues that passed both gates and should be enqueued. */
-  eligible: number[];
+  eligible: RepoIssueRef[];
   /** Sub-issues that were rejected, with the reason each was skipped. */
   skipped: SkippedSubIssue[];
 }
 
 export interface EpicFilterOptions {
-  subIssueNumbers: number[];
+  /**
+   * The epic's sub-issues, each by repository and number: an epic's
+   * sub-issues can share a number across repositories (#2382).
+   */
+  subIssues: RepoIssueRef[];
   workspaceRoot: string;
   projectBoardService: Pick<ProjectBoardService, "getAllItems">;
   /** Status names considered pickup-eligible. Case-insensitive. Default `["Ready"]`. */
@@ -56,18 +67,27 @@ export interface EpicFilterOptions {
   concurrency?: number;
 }
 
+/** A board item's repository: its own `repo`, else the one its URL names. */
+function boardItemRepo(item: ReadyIssue): string | undefined {
+  return item.repo ?? repoFromIssueUrl(item.url);
+}
+
 /**
  * Filter an epic's sub-issues down to the set that is pickup-eligible.
  *
  * The filter is conservative: a sub-issue that cannot be found in the
  * project-board cache is skipped with reason `missing`, not optimistically
  * enqueued. Guessing at eligibility is what produced the bug this fixes.
+ *
+ * A sub-issue is matched to a board item by repository and number, never by
+ * number alone: another repository's issue with the same number is a
+ * different issue, and its board status says nothing about this one (#2382).
  */
 export async function filterEligibleSubIssues(
   options: EpicFilterOptions
 ): Promise<EpicFilterResult> {
   const {
-    subIssueNumbers,
+    subIssues,
     workspaceRoot,
     projectBoardService,
     eligibleStatuses = ["Ready"],
@@ -76,7 +96,7 @@ export async function filterEligibleSubIssues(
     concurrency = 10,
   } = options;
 
-  if (subIssueNumbers.length === 0) {
+  if (subIssues.length === 0) {
     return { eligible: [], skipped: [] };
   }
 
@@ -86,51 +106,57 @@ export async function filterEligibleSubIssues(
   // On cold cache this self-populates with one GraphQL call — the same
   // lookup the board views do on first render.
   const allItems: ReadyIssue[] = await projectBoardService.getAllItems();
-  const byNumber = new Map<number, ReadyIssue>(allItems.map((it) => [it.number, it]));
+  const byKey = new Map<string, ReadyIssue>();
+  for (const it of allItems) {
+    const repo = boardItemRepo(it);
+    if (repo) byKey.set(repoIssueKey(repo, it.number), it);
+  }
 
   // First pass: status filter. We collect the candidates that passed so that
   // PR lookup only runs on items we might still enqueue.
-  const eligible: number[] = [];
+  const eligible: RepoIssueRef[] = [];
   const skipped: SkippedSubIssue[] = [];
-  const prCandidates: number[] = [];
+  const prCandidates: RepoIssueRef[] = [];
 
-  for (const n of subIssueNumbers) {
-    const item = byNumber.get(n);
+  for (const ref of subIssues) {
+    const item = byKey.get(repoIssueKey(ref.repo, ref.number));
     if (!item) {
-      skipped.push({ number: n, reason: "missing" });
+      skipped.push({ number: ref.number, repo: ref.repo, reason: "missing" });
       continue;
     }
     const rawStatus = (item.status ?? "").toLowerCase();
     if (!allowed.has(rawStatus)) {
       skipped.push({
-        number: n,
+        number: ref.number,
+        repo: ref.repo,
         reason: "status",
         detail: item.status ?? "unknown",
       });
       continue;
     }
     if (skipIfOpenPR) {
-      prCandidates.push(n);
+      prCandidates.push(ref);
     } else {
-      eligible.push(n);
+      eligible.push(ref);
     }
   }
 
-  // Second pass: PR lookup in parallel batches.
+  // Second pass: PR lookup in parallel batches, each in the sub-issue's own
+  // repository.
   if (skipIfOpenPR && prCandidates.length > 0) {
     for (let i = 0; i < prCandidates.length; i += concurrency) {
       const batch = prCandidates.slice(i, i + concurrency);
       const results = await Promise.all(
-        batch.map(async (n) => {
-          const pr = await prLookup(n, workspaceRoot).catch(() => null);
-          return { number: n, pr };
+        batch.map(async (ref) => {
+          const pr = await prLookup(ref.number, workspaceRoot, ref.repo).catch(() => null);
+          return { ref, pr };
         })
       );
-      for (const { number, pr } of results) {
+      for (const { ref, pr } of results) {
         if (pr) {
-          skipped.push({ number, reason: "open-pr", detail: pr.url });
+          skipped.push({ number: ref.number, repo: ref.repo, reason: "open-pr", detail: pr.url });
         } else {
-          eligible.push(number);
+          eligible.push(ref);
         }
       }
     }

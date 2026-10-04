@@ -15,6 +15,7 @@ import type { PipelineStage } from "@nightgauge/sdk";
 import { PHASE_REGISTRY, type ExecutionStage } from "@nightgauge/sdk";
 import type { PipelineStateService, PipelineState } from "../../services/PipelineStateService";
 import type { StagePhase } from "../../schemas/pipelineState";
+import { formatEpicRef } from "../../utils/epicRef";
 
 /**
  * Order phases by their registry index — the stage's real execution order —
@@ -111,6 +112,8 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
   readonly issueNumber: number;
   readonly slotIndex: number;
   readonly epicNumber?: number;
+  /** The parent epic's repository, `owner/name`: Stop Epic names it (#2382). */
+  readonly epicRepo?: string;
   private status: SlotStatus = "running";
   private stages: Map<PipelineStage, StageTreeItem> = new Map();
   private disposables: vscode.Disposable[] = [];
@@ -137,7 +140,8 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
     title: string,
     private readonly stateService: PipelineStateService,
     epicNumber?: number,
-    onChange?: () => void
+    onChange?: () => void,
+    epicRepo?: string
   ) {
     const { label, fullTitle } = ConcurrentSlotTreeItem.formatLabel(issueNumber, title);
     super(label, vscode.TreeItemCollapsibleState.Expanded);
@@ -145,12 +149,11 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
     this.issueNumber = issueNumber;
     this.slotIndex = slotIndex;
     this.epicNumber = epicNumber;
+    this.epicRepo = epicRepo;
     this.id = `concurrent-slot-${issueNumber}`;
     this.iconPath = getStatusIcon("running");
     this.contextValue = "concurrentSlot.running";
-    this.description = epicNumber
-      ? `Slot ${slotIndex + 1} · Epic #${epicNumber}`
-      : `Slot ${slotIndex + 1}`;
+    this.description = this.idleDescription();
     this.tooltip = fullTitle;
     this.onChange = onChange ?? null;
 
@@ -279,12 +282,17 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
     }
 
     if (parts.length === 0) {
-      return this.epicNumber
-        ? `Slot ${this.slotIndex + 1} · Epic #${this.epicNumber}`
-        : `Slot ${this.slotIndex + 1}`;
+      return this.idleDescription();
     }
 
     return parts.join(" | ");
+  }
+
+  /** `Slot N`, with its epic as `owner/repo#N` when it has one (#2382). */
+  private idleDescription(): string {
+    return this.epicNumber
+      ? `Slot ${this.slotIndex + 1} · Epic ${formatEpicRef({ repo: this.epicRepo, number: this.epicNumber })}`
+      : `Slot ${this.slotIndex + 1}`;
   }
 
   private syncFromState(state: PipelineState): void {

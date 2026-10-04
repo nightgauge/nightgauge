@@ -292,6 +292,43 @@ describe("EpicGroupTreeItem", () => {
     });
   });
 
+  // #2382: a child is named by repository and number, since an epic's
+  // sub-issues can share a number across repositories.
+  describe("getChildIssueRefs", () => {
+    it("names each child by its own repository, else its URL's, else the epic's", () => {
+      const epicInfo: EpicInfo = {
+        number: 20,
+        title: "Cross-repo epic",
+        url: "https://github.com/example-org/platform/issues/20",
+      };
+      const issues = [
+        createMockSubIssue(20, { number: 21, repo: "example-org/app", url: "" }),
+        createMockSubIssue(20, {
+          number: 21,
+          url: "https://github.com/example-org/platform/issues/21",
+        }),
+        createMockSubIssue(20, { number: 22, url: "" }),
+      ];
+
+      const item = new EpicGroupTreeItem(epicInfo, issues, {
+        repoOwner: "example-org",
+        repoName: "platform",
+      });
+
+      expect(item.getChildIssueRefs()).toEqual([
+        { repo: "example-org/app", number: 21 },
+        { repo: "example-org/platform", number: 21 },
+        { repo: "example-org/platform", number: 22 },
+      ]);
+    });
+
+    it("leaves out a child whose repository cannot be determined", () => {
+      const item = new EpicGroupTreeItem(null, [createMockReadyIssue({ number: 200, url: "" })]);
+
+      expect(item.getChildIssueRefs()).toEqual([]);
+    });
+  });
+
   // Issue #656 (Gap 1) — an epic with zero sub-issues must be visually
   // distinguished from a healthy one. The two possible causes ("mislabelled"
   // vs "unpopulated") are indistinguishable from available data (labels,

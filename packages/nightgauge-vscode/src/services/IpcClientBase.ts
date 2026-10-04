@@ -767,7 +767,8 @@ export interface IpcQueueItem {
   priority: number;
   status: string;
   labels?: string[];
-  blockedBy?: Array<{ number: number; title: string; state: string }>;
+  /** `repo` is the blocker's `owner/name`; absent means the item's own (#2377). */
+  blockedBy?: Array<{ number: number; title: string; state: string; repo?: string }>;
   epicOrder?: number;
   isBatch?: boolean;
   epicNumber?: number;

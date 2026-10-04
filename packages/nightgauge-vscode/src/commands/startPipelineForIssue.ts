@@ -190,12 +190,14 @@ export function registerQueueCommands(
   disposables.push(
     vscode.commands.registerCommand(
       "nightgauge.removeFromQueue",
-      async (item?: { issueNumber: number }) => {
+      async (item?: { issueNumber: number; getQueueItem?: () => { repoName?: string } }) => {
         if (!queueService || !item?.issueNumber) {
           return;
         }
 
-        const removed = await queueService.remove(item.issueNumber);
+        // The queued item's repository scopes the removal: another
+        // repository's queued issue can share the number (#2382).
+        const removed = await queueService.remove(item.issueNumber, item.getQueueItem?.().repoName);
         if (removed) {
           vscode.window.showInformationMessage(`Issue #${item.issueNumber} removed from queue.`);
           logger.info("Issue removed from queue", {

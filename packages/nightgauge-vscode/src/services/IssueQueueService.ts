@@ -16,6 +16,7 @@ import type { QueueDropProcessingResult, QueueHandBackRef } from "./IpcClientBas
 import { getRepoIdentity } from "../utils/configPathResolver";
 import type { QueueState, QueueItem, QueueConfig, QueueCallbacks } from "../types/queue";
 import { DEFAULT_QUEUE_CONFIG } from "../types/queue";
+import { isEpic, sameRepo, type EpicRef, type RepoIssueRef } from "../utils/epicRef";
 import { isBlocked, getBlockerTitles } from "../utils/dependencyUtils";
 import type { BlockingIssue, ReadyIssue } from "./ProjectBoardService";
 
@@ -259,7 +260,11 @@ export class IssueQueueService implements vscode.Disposable {
    * `queue.enqueueEpic` IPC as the `eligibleSubIssues` param, so Go's
    * existing ordering / blockedBy computation stays in one place.
    *
-   * When `eligibleSubIssueNumbers` is empty this method does nothing and
+   * Each eligible sub-issue is named by repository and number: an epic's
+   * sub-issues can share a number across repositories, and Go admits only
+   * the ones named (#2382).
+   *
+   * When `eligibleSubIssues` is empty this method does nothing and
    * returns null — the caller should surface a "nothing to queue" toast
    * rather than enqueuing the whole epic.
    *
@@ -269,7 +274,7 @@ export class IssueQueueService implements vscode.Disposable {
     epicNumber: number,
     title: string,
     labels: string[],
-    eligibleSubIssueNumbers: number[],
+    eligibleSubIssues: RepoIssueRef[],
     repoOverride?: { owner: string; repo: string }
   ): Promise<QueueItem | null> {
     if (this.shutdownGuard?.()) {
@@ -279,7 +284,7 @@ export class IssueQueueService implements vscode.Disposable {
       return null;
     }
 
-    if (eligibleSubIssueNumbers.length === 0) {
+    if (eligibleSubIssues.length === 0) {
       console.log(
         `[IssueQueueService] enqueueEpicFiltered #${epicNumber}: no eligible sub-issues — skipping IPC`
       );
@@ -295,7 +300,7 @@ export class IssueQueueService implements vscode.Disposable {
     }
 
     console.log(
-      `[IssueQueueService] enqueueEpicFiltered #${epicNumber} via IPC → ${identity.owner}/${identity.repo} (${eligibleSubIssueNumbers.length} eligible)`
+      `[IssueQueueService] enqueueEpicFiltered #${epicNumber} via IPC → ${identity.owner}/${identity.repo} (${eligibleSubIssues.length} eligible)`
     );
     const ipc = IpcClient.getInstance();
     await ipc.queueEnqueueEpic(
@@ -304,7 +309,7 @@ export class IssueQueueService implements vscode.Disposable {
       epicNumber,
       title,
       labels,
-      eligibleSubIssueNumbers
+      eligibleSubIssues
     );
 
     const item: QueueItem = {
@@ -379,9 +384,14 @@ export class IssueQueueService implements vscode.Disposable {
     await ipc.queueComplete(repo, issueNumber);
   }
 
-  async remove(issueNumber: number): Promise<boolean> {
+  /**
+   * Remove an issue from the queue. `repo` (`owner/name`) scopes the removal
+   * to that repository's item: an issue number names an issue only within
+   * one repository (#2382). Without it, every item with the number goes.
+   */
+  async remove(issueNumber: number, repo?: string): Promise<boolean> {
     const ipc = IpcClient.getInstance();
-    await ipc.queueRemove(issueNumber);
+    await ipc.queueRemove(issueNumber, repo);
     this.callbacks.onItemRemoved?.(issueNumber);
     return true;
   }
@@ -459,28 +469,38 @@ export class IssueQueueService implements vscode.Disposable {
    * Used by abortEpic() to prevent queued epic sub-issues from being
    * dequeued after the user stops an epic.
    *
-   * @param epicNumber - The parent epic issue number
+   * Both the epic and each item are named by repository and number (#2382):
+   * another repository's epic, or another repository's queued issue, can
+   * share the number, and neither is drained.
+   *
+   * @param epic - The parent epic, by repository and number
    * @returns Array of removed queue items
    *
    * @see Issue #2261 - Per-slot / per-epic pipeline controls
    */
-  async drainEpicItems(epicNumber: number): Promise<QueueItem[]> {
+  async drainEpicItems(epic: EpicRef): Promise<QueueItem[]> {
     const state = await this.getQueue();
     if (!state) return [];
 
     const drained: QueueItem[] = [];
     for (const item of state.items) {
-      if (item.epicNumber === epicNumber) {
-        await this.remove(item.issueNumber);
+      if (isEpic(epic, item.epicRepo, item.epicNumber)) {
+        await this.remove(item.issueNumber, item.repoName);
         drained.push(item);
       }
     }
     return drained;
   }
 
+  /**
+   * Remove the queued items the failed issue blocks. The failed issue is
+   * named by repository and number (#2382): a blocker with the same number in
+   * another repository is a different issue. A blocker with no repository is
+   * in its item's own; an unknown `failedRepo` matches by number alone.
+   */
   async drainBlockedSuccessors(
     failedIssueNumber: number,
-    _failedEpicOrder?: number
+    failedRepo?: string
   ): Promise<QueueItem[]> {
     // With Go owning the queue, blocked successor draining should eventually
     // move to Go. For now, remove items blocked by the failed issue.
@@ -489,8 +509,13 @@ export class IssueQueueService implements vscode.Disposable {
 
     const drained: QueueItem[] = [];
     for (const item of state.items) {
-      if (item.blockedBy?.some((b) => b.number === failedIssueNumber)) {
-        await this.remove(item.issueNumber);
+      const blocked = item.blockedBy?.some(
+        (b) =>
+          b.number === failedIssueNumber &&
+          (failedRepo === undefined || sameRepo(b.repo || item.repoName, failedRepo))
+      );
+      if (blocked) {
+        await this.remove(item.issueNumber, item.repoName);
         drained.push(item);
       }
     }
@@ -564,6 +589,7 @@ export class IssueQueueService implements vscode.Disposable {
         title: b.title,
         url: "",
         state: b.state as "OPEN" | "CLOSED",
+        repo: b.repo || undefined,
       })),
       epicOrder: item.epicOrder,
       epicNumber: item.epicNumber,

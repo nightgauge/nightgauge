@@ -10,6 +10,7 @@ import { BaseTreeItem } from "./BaseTreeItem";
 import { ReadyIssueTreeItem } from "./ReadyIssueTreeItem";
 import type { ReadyIssue, BlockingIssue } from "../../services/ProjectBoardService";
 import { isBlocked, getBlockerTitles } from "../../utils/dependencyUtils";
+import { repoFromIssueUrl, type RepoIssueRef } from "../../utils/epicRef";
 
 /**
  * Epic information for display
@@ -341,6 +342,24 @@ export class EpicGroupTreeItem extends BaseTreeItem {
     return children
       .filter((child): child is ReadyIssueTreeItem => child instanceof ReadyIssueTreeItem)
       .map((child) => child.issueNumber);
+  }
+
+  /**
+   * The child issues by repository and number (#2382): an epic's sub-issues
+   * can share a number across repositories. A child whose repository is not
+   * known is in the epic's own. A child with no determinable repository is
+   * left out rather than named by number alone.
+   */
+  getChildIssueRefs(): RepoIssueRef[] {
+    const epicRepo =
+      this.repoOwner && this.repoName ? `${this.repoOwner}/${this.repoName}` : undefined;
+    const refs: RepoIssueRef[] = [];
+    for (const child of this.getChildren()) {
+      if (!(child instanceof ReadyIssueTreeItem)) continue;
+      const repo = child.getIssue().repo ?? repoFromIssueUrl(child.issueUrl) ?? epicRepo;
+      if (repo) refs.push({ repo, number: child.issueNumber });
+    }
+    return refs;
   }
 }
 

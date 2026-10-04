@@ -106,12 +106,44 @@ describe("stopEpic Command", () => {
     registerStopEpicCommand(mockLogger, mockManager);
     const handler = getLastHandler();
 
-    await handler({ epicNumber: 5 });
+    await handler({ epicNumber: 5, epicRepo: "example-org/platform" });
 
-    expect(mockManager.abortEpic).toHaveBeenCalledWith(5);
+    expect(mockManager.abortEpic).toHaveBeenCalledWith({ repo: "example-org/platform", number: 5 });
     expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
-      "Stopped 2 pipeline(s) for epic #5. State preserved."
+      "Stopped 2 pipeline(s) for epic example-org/platform#5. State preserved."
     );
+  });
+
+  // #2382: two running epics share a number in different repositories.
+  it("offers each repository's epic separately and stops only the one picked", async () => {
+    const slots = [
+      { issueNumber: 21, epicNumber: 20, epicRepo: "example-org/platform" },
+      { issueNumber: 21, epicNumber: 20, epicRepo: "example-org/app" },
+    ];
+    mockManager = createMockConcurrentManager({
+      getActiveSlots: vi.fn(() => slots),
+      getSlotsByEpic: vi.fn(() => [slots[1]]),
+      abortEpic: vi.fn(() => Promise.resolve(1)),
+    });
+    const showQuickPick = vi.fn(async (picks: any[]) =>
+      picks.find((p) => p.label === "Epic example-org/app#20")
+    );
+    (vscode.window as any).showQuickPick = showQuickPick;
+    vi.mocked(vscode.window.showWarningMessage).mockResolvedValue("Stop Epic" as any);
+
+    registerStopEpicCommand(mockLogger, mockManager);
+    await getLastHandler()(undefined);
+
+    const picks = showQuickPick.mock.calls[0][0];
+    expect(picks.map((p) => p.label)).toEqual([
+      "Epic example-org/platform#20",
+      "Epic example-org/app#20",
+    ]);
+    expect(mockManager.getSlotsByEpic).toHaveBeenCalledWith({
+      repo: "example-org/app",
+      number: 20,
+    });
+    expect(mockManager.abortEpic).toHaveBeenCalledWith({ repo: "example-org/app", number: 20 });
   });
 
   it("should show info when no slots found for epic", async () => {

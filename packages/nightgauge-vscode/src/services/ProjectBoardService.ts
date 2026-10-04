@@ -28,6 +28,7 @@ import type { EpicInfo } from "../views/items/EpicGroupTreeItem";
 import { deriveComponentOptions } from "../types/FilterConfig";
 import { getPrefixedMainChannel } from "../utils/logger";
 import { isRepoInitialized } from "../utils/repoInitialized";
+import type { RepoIssueRef } from "../utils/epicRef";
 
 /** Board statuses an open read covers, lower-cased as the per-status cache keys them. */
 const OPEN_BOARD_STATUSES = ["ready", "in progress", "in review", "backlog"] as const;
@@ -90,10 +91,14 @@ export interface BlockingIssue {
   title: string;
   url: string;
   state: "OPEN" | "CLOSED";
+  /** The blocker's repository, `owner/name`, when the read carried it. */
+  repo?: string;
 }
 
 export interface ReadyIssue {
   number: number;
+  /** The issue's repository, `owner/name`, when the board read carried it. */
+  repo?: string;
   title: string;
   labels: string[];
   priority: Priority;
@@ -109,6 +114,11 @@ export interface ReadyIssue {
   isEpic?: boolean;
   /** Issue numbers of native sub-issues (populated for epics only) */
   subIssueNumbers?: number[];
+  /**
+   * The same native sub-issues, each by repository (`owner/name`) and number:
+   * an epic's sub-issues can share a number across repositories (#2382).
+   */
+  subIssues?: RepoIssueRef[];
   /**
    * How many OPEN issues block this one, when the board read carried the
    * relationship COUNTS rather than the lists (`board.listOpen`, the daemon's
@@ -795,6 +805,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
         blockedBy: prior.blockedBy,
         blocks: prior.blocks,
         subIssueNumbers: prior.subIssueNumbers,
+        subIssues: prior.subIssues,
       };
     });
     const byStatus = new Map<string, ReadyIssue[]>();
@@ -1287,6 +1298,7 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
 
     return items.map((item) => ({
       number: item.number,
+      repo: item.repo || undefined,
       title: item.title,
       labels: item.labels ?? [],
       priority: this.parsePriority(item.priority),
@@ -1297,6 +1309,8 @@ export class ProjectBoardService implements vscode.Disposable, IWorkItemProvider
       epicTitle: parentTitleMap.get(parentMap.get(item.number) ?? -1),
       isEpic: item.isEpic,
       subIssueNumbers: item.subIssues?.map((s) => s.number),
+      // A sub-issue without its own repository is in the epic's.
+      subIssues: item.subIssues?.map((s) => ({ repo: s.repo || item.repo, number: s.number })),
       blockedBy: item.blockedBy?.map((b) => ({
         number: b.number,
         title: b.title,

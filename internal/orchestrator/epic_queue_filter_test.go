@@ -98,7 +98,7 @@ func TestEnqueueEpic_UsesClientResolverPerRepo(t *testing.T) {
 func TestEnqueueEpic_EmptyEligibleSubIssues_QueuesAllOpen(t *testing.T) {
 	s := newEpicFilterFixture(t)
 
-	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []int{}); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{}); err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestEnqueueEpic_EmptyEligibleSubIssues_QueuesAllOpen(t *testing.T) {
 func TestEnqueueEpic_EligibleSubset_OnlyWhitelisted(t *testing.T) {
 	s := newEpicFilterFixture(t)
 
-	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []int{201, 203}); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{{Repo: "Org/repo", Number: 201}, {Number: 203}}); err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}
 
@@ -215,12 +215,13 @@ func TestEnqueueEpic_ExcludeLabelsConfigOverride(t *testing.T) {
 }
 
 // TestEnqueueEpic_EligibleUnknown_NoOp verifies that unknown numbers in the
-// whitelist are simply ignored — the epic enqueue succeeds with an empty
+// whitelist (an absent number, or a present number in another repository)
+// are simply ignored — the epic enqueue succeeds with an empty
 // queue rather than erroring. This is the "missing from cache" fallback path.
 func TestEnqueueEpic_EligibleUnknown_NoOp(t *testing.T) {
 	s := newEpicFilterFixture(t)
 
-	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []int{999, 1000}); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{{Number: 999}, {Repo: "Org/other", Number: 201}}); err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}
 
