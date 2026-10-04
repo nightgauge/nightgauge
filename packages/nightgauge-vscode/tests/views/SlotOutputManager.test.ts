@@ -87,8 +87,8 @@ describe("SlotOutputManager - updateStage idempotency (#230)", () => {
     manager.updateStage(244, "feature-planning");
 
     expect(onStageChanged).toHaveBeenCalledTimes(2);
-    expect(onStageChanged).toHaveBeenNthCalledWith(1, 0, 244, "issue-pickup");
-    expect(onStageChanged).toHaveBeenNthCalledWith(2, 0, 244, "feature-planning");
+    expect(onStageChanged).toHaveBeenNthCalledWith(1, 0, 244, "issue-pickup", undefined);
+    expect(onStageChanged).toHaveBeenNthCalledWith(2, 0, 244, "feature-planning", undefined);
   });
 });
 
@@ -119,7 +119,8 @@ describe("SlotOutputManager - stage threading (#283)", () => {
       127,
       "[gate-not-invoked] stage=issue-pickup …",
       "info",
-      "issue-pickup"
+      "issue-pickup",
+      undefined
     );
   });
 
@@ -128,7 +129,7 @@ describe("SlotOutputManager - stage threading (#283)", () => {
 
     manager.appendError(127, "gate failed", "feature-dev");
 
-    expect(onOutput).toHaveBeenCalledWith(1, 127, "gate failed", "error", "feature-dev");
+    expect(onOutput).toHaveBeenCalledWith(1, 127, "gate failed", "error", "feature-dev", undefined);
   });
 
   it("passes undefined stage through unchanged so consumers may fall back", () => {
@@ -136,6 +137,49 @@ describe("SlotOutputManager - stage threading (#283)", () => {
 
     manager.appendOutput(127, "no stage in scope");
 
-    expect(onOutput).toHaveBeenCalledWith(0, 127, "no stage in scope", "info", undefined);
+    expect(onOutput).toHaveBeenCalledWith(
+      0,
+      127,
+      "no stage in scope",
+      "info",
+      undefined,
+      undefined
+    );
+  });
+});
+
+// #2412: the callbacks name the slot's repository beside its number, so a
+// consumer keying per-run state (the slot stage pointer) tells two
+// repositories' same-numbered issues apart.
+describe("SlotOutputManager - repository threading (#2412)", () => {
+  it("names each same-numbered slot's repository in onOutput and onStageChanged", () => {
+    const manager = new SlotOutputManager();
+    const onOutput = vi.fn();
+    const onStageChanged = vi.fn();
+    manager.setCallbacks({ onOutput, onStageChanged });
+    manager.createSlotChannel(0, 21, "Platform 21", "example-org/platform");
+    manager.createSlotChannel(1, 21, "App 21", "example-org/app");
+
+    manager.updateStage(21, "feature-dev", "example-org/app");
+    manager.appendOutput(21, "app line", "feature-dev", "example-org/app");
+    manager.appendError(21, "platform error", "issue-pickup", "example-org/platform");
+
+    expect(onStageChanged).toHaveBeenCalledWith(1, 21, "feature-dev", "example-org/app");
+    expect(onOutput).toHaveBeenCalledWith(
+      1,
+      21,
+      "app line",
+      "info",
+      "feature-dev",
+      "example-org/app"
+    );
+    expect(onOutput).toHaveBeenCalledWith(
+      0,
+      21,
+      "platform error",
+      "error",
+      "issue-pickup",
+      "example-org/platform"
+    );
   });
 });

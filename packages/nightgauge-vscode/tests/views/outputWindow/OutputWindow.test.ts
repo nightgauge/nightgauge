@@ -43,6 +43,7 @@ const mockStateService = {
     return d;
   }),
   getState: vi.fn().mockResolvedValue(null),
+  getRunRepo: vi.fn(() => ""),
 };
 
 // ---------------------------------------------------------------------------

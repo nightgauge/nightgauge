@@ -7,6 +7,7 @@
  * @see docs/ARCHITECTURE.md for WebView patterns
  */
 
+import * as path from "path";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { ToolType, ToolCallSummary } from "./ToolCallIndicator";
@@ -975,25 +976,49 @@ export class OutputWindowState {
    *
    * Used to route token updates to the correct slot when only issueNumber is known.
    * `repo` (`owner/name`) names the issue's repository: two repositories'
-   * issues with one number can run in two slots (#2403). A slot or an event
-   * without a repository matches by number.
+   * issues with one number can run in two slots (#2403). A slot holding the
+   * same repository and number wins. Otherwise a slot or a caller without a
+   * repository matches by number, and only when that names exactly one slot
+   * (#2411), preferring the running one over archived tabs.
    */
   getSlotByIssueNumber(issueNumber: number, repo?: string): SlotInfo | undefined {
+    const candidates: SlotInfo[] = [];
     for (const info of this.slotInfos.values()) {
       if (info.issueNumber !== issueNumber) continue;
-      if (!repo || !info.repoSlug || sameRepo(info.repoSlug, repo)) return info;
+      if (repo && info.repoSlug) {
+        if (sameRepo(info.repoSlug, repo)) return info;
+        continue;
+      }
+      candidates.push(info);
     }
-    return undefined;
+    if (candidates.length === 1) return candidates[0];
+    const running = candidates.filter((info) => this.runningSlots.has(info.slotIndex));
+    return running.length === 1 ? running[0] : undefined;
   }
 
   /**
-   * Find the slot index registered for a given issue number (Issue #2814).
+   * Find the slot index registered for a given issue (Issue #2814), by
+   * repository and number with {@link getSlotByIssueNumber}'s fallback (#2411).
    */
-  findSlotIndexByIssue(issueNumber: number): number | undefined {
-    for (const [slotIndex, info] of this.slotInfos) {
-      if (info.issueNumber === issueNumber) return slotIndex;
+  findSlotIndexByIssue(issueNumber: number, repo?: string): number | undefined {
+    return this.getSlotByIssueNumber(issueNumber, repo)?.slotIndex;
+  }
+
+  /**
+   * Whether a slot holds `issueNumber` and writes its session log under
+   * `logRoot` (#2411). A session log names its issue by number and its
+   * repository by the root it lives under, so this is the repository-and-
+   * number test for a log: another repository's slot with the same number
+   * logs elsewhere and does not hold it.
+   */
+  hasSlotLoggingIssue(issueNumber: number, logRoot: string): boolean {
+    const want = path.resolve(logRoot);
+    for (const info of this.slotInfos.values()) {
+      if (info.issueNumber !== issueNumber) continue;
+      const root = this.resolveLogRoot(info.slotIndex);
+      if (root !== null && path.resolve(root) === want) return true;
     }
-    return undefined;
+    return false;
   }
 
   /**

@@ -189,6 +189,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The Output window, the dashboard's slot cards, View Context and the trace
+  uploader name a running slot by repository and issue number** (#2411,
+  #2412). With `example-org/platform#21` and `example-org/app#21` running at
+  once (#2403), they still found a slot by number alone: the Output window
+  routed one run's state and token updates onto the other's card and skipped
+  rehydrating one repository's log while the other's issue ran; the
+  dashboard's `PipelineSlotsTracker` merged both runs into one snapshot; View
+  Context opened the first slot's worktree; the slot stage pointer tagged one
+  run's output with the other's stage; and the trace uploader counted the two
+  runs as one. Each now matches repository and number (`slotKey`). A caller
+  or a slot without a repository matches by number only when the number names
+  exactly one slot, as `abortSlot` does, so the single-repository case is
+  unchanged. The IPC `pipeline.error` event now carries `repo`.
 - **The chat notifiers keep two repositories' same-numbered runs apart**
   (#2408). Slack, Discord and Mattermost, and the dispatcher in front of them,
   kept a run's subscription, card or thread and debounce timer by issue number

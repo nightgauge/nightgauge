@@ -3039,7 +3039,9 @@ func (s *Server) registerMethods() {
 		})
 		go func() {
 			if _, err := s.scheduler.RunQueue(ctx); err != nil {
+				// The repository names the issue with its number (#2412).
 				s.Emit("pipeline.error", map[string]interface{}{
+					"repo":        repo,
 					"issueNumber": p.IssueNumber,
 					"error":       err.Error(),
 				})

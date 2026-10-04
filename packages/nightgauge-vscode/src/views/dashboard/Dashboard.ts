@@ -65,6 +65,7 @@ import type { Container } from "../../bootstrap/Container";
 import type { TelemetryStore } from "../../services/TelemetryStore";
 import { ExecutionHistoryReader } from "../../utils/executionHistoryReader";
 import { getPerformanceMode } from "../../utils/nightgaugeConfig";
+import { slotKey } from "../../utils/epicRef";
 import { PERFORMANCE_MODES, type PerformanceMode as ModeProfile } from "../../utils/modeProfiles";
 import {
   getCalibratedStallData,
@@ -1027,12 +1028,17 @@ export class Dashboard implements vscode.Disposable {
         // Overview slot cards show live cost/token data. pipeline.stateChanged
         // (cumulative) corrects any drift at each stage boundary.
         if (tokenUpdate?.issueNumber && this.slotsTracker) {
-          this.slotsTracker.applyTokenDelta(tokenUpdate.issueNumber, {
-            inputTokens: tokenUpdate.inputTokens,
-            outputTokens: tokenUpdate.outputTokens,
-            cacheReadTokens: tokenUpdate.cacheReadTokens,
-            costUsd: tokenUpdate.costUsd,
-          });
+          this.slotsTracker.applyTokenDelta(
+            tokenUpdate.issueNumber,
+            {
+              inputTokens: tokenUpdate.inputTokens,
+              outputTokens: tokenUpdate.outputTokens,
+              cacheReadTokens: tokenUpdate.cacheReadTokens,
+              costUsd: tokenUpdate.costUsd,
+            },
+            // The slot's run names its repository (#2412).
+            stateService.getRunRepo() || undefined
+          );
         }
         this.updatePanel("slot:onTokenUsageUpdated");
       })
@@ -1083,7 +1089,7 @@ export class Dashboard implements vscode.Disposable {
 
     const activeSlots = this.latestActiveSlots;
     const slots: SlotCardData[] = activeSlots.map((active) => {
-      const snapshot = tracker?.getSnapshot(active.issueNumber);
+      const snapshot = tracker?.getSnapshot(active.issueNumber, active.repo);
       const stages = (
         [
           "pipeline-start",
@@ -4140,12 +4146,19 @@ export class Dashboard implements vscode.Disposable {
     this.latestActiveSlots = manager.getActiveSlots();
     const disposable = manager.onSlotsChanged((slots) => {
       this.latestActiveSlots = slots;
-      // Forget stale per-issue runtime for slots that finished.
+      // Forget stale per-issue runtime for slots that finished. A snapshot
+      // is live while a slot holds its repository and number; one recorded
+      // without a repository, while a slot holds its number (#2412).
       if (this.slotsTracker) {
+        const activeRuns = new Set(slots.map((s) => slotKey(s.repo, s.issueNumber)));
         const activeIssues = new Set(slots.map((s) => s.issueNumber));
-        for (const issueNumber of this.slotsTracker.getSnapshots().keys()) {
-          if (!activeIssues.has(issueNumber)) {
-            this.slotsTracker.forget(issueNumber);
+        for (const snap of this.slotsTracker.getSnapshots().values()) {
+          const live = snap.repo
+            ? activeRuns.has(slotKey(snap.repo, snap.issueNumber)) ||
+              slots.some((s) => s.issueNumber === snap.issueNumber && !s.repo)
+            : activeIssues.has(snap.issueNumber);
+          if (!live) {
+            this.slotsTracker.forget(snap.issueNumber, snap.repo);
           }
         }
       }

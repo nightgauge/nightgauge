@@ -29,6 +29,8 @@ interface SlotChannel {
   issueNumber: number;
   /** Issue title */
   title: string;
+  /** The issue's repository, `owner/name` (absent when unknown) (#2412) */
+  repo?: string;
   /**
    * The last stage `updateStage` emitted for this slot, so a repeated call for
    * the same stage is a no-op (#230). The slot-started seed and the first
@@ -57,10 +59,19 @@ export interface SlotOutputCallbacks {
     issueNumber: number,
     text: string,
     level: "info" | "error",
-    stage?: PipelineStage
+    stage?: PipelineStage,
+    repo?: string
   ) => void;
-  /** Called when a slot's stage changes */
-  onStageChanged?: (slotIndex: number, issueNumber: number, stage: PipelineStage) => void;
+  /**
+   * Called when a slot's stage changes. `repo` (`owner/name`) names the
+   * slot's repository with `issueNumber` (#2412).
+   */
+  onStageChanged?: (
+    slotIndex: number,
+    issueNumber: number,
+    stage: PipelineStage,
+    repo?: string
+  ) => void;
 }
 
 export class SlotOutputManager implements vscode.Disposable {
@@ -105,6 +116,7 @@ export class SlotOutputManager implements vscode.Disposable {
       slotIndex,
       issueNumber,
       title,
+      repo,
     };
 
     this.channels.set(slotKey(repo, issueNumber), slotChannel);
@@ -146,7 +158,7 @@ export class SlotOutputManager implements vscode.Disposable {
     if (slot) {
       const safe = redactSecrets(text);
       slot.channel.appendLine(safe);
-      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, safe, "info", stage);
+      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, safe, "info", stage, slot.repo);
     }
   }
 
@@ -158,7 +170,7 @@ export class SlotOutputManager implements vscode.Disposable {
     if (slot) {
       const safe = redactSecrets(text);
       slot.channel.appendLine(`[ERROR] ${safe}`);
-      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, safe, "error", stage);
+      this.callbacks.onOutput?.(slot.slotIndex, issueNumber, safe, "error", stage, slot.repo);
     }
   }
 
@@ -178,7 +190,7 @@ export class SlotOutputManager implements vscode.Disposable {
       slot.lastStage = stage;
       slot.channel.appendLine("");
       slot.channel.appendLine(`--- Stage: ${stage} ---`);
-      this.callbacks.onStageChanged?.(slot.slotIndex, issueNumber, stage);
+      this.callbacks.onStageChanged?.(slot.slotIndex, issueNumber, stage, slot.repo);
     }
   }
 
