@@ -109,7 +109,7 @@ func PromoteBaselineDeferrals(
 			summary.Errors = append(summary.Errors, entry)
 		case !green:
 			summary.StillPaused = append(summary.StillPaused, entry)
-		case sched.ResumeByIssueNumber(item.IssueNumber):
+		case sched.ResumePaused(item.Repo, item.IssueNumber):
 			summary.Promoted = append(summary.Promoted, entry)
 		default:
 			entry.Error = "resume failed: queue entry not found or already resumed"

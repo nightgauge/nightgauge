@@ -6595,7 +6595,7 @@ func (as *AutonomousScheduler) promoteUnblockedOnStartup(ctx context.Context) {
 
 		// A fully-unblocked node whose pickup was deferred with a
 		// blocked_dependency queue pause is now re-eligible (Issue #231).
-		as.resumeBlockedDependencyPause(node.Number)
+		as.resumeBlockedDependencyPause(node.Repo, node.Number)
 
 		owner, repoName := splitOwnerRepo(node.Repo)
 		var projectNum int
@@ -6721,7 +6721,7 @@ func (as *AutonomousScheduler) promoteUnblockedToReady(parent context.Context, c
 		// A fully-unblocked downstream node whose pickup was deferred with a
 		// blocked_dependency queue pause is now re-eligible — auto-requeue it
 		// without waiting for the deps-gate promote cron (Issue #231).
-		as.resumeBlockedDependencyPause(node.Number)
+		as.resumeBlockedDependencyPause(node.Repo, node.Number)
 
 		// Find the repo config to get the project number for MoveStatus.
 		owner, repoName := splitOwnerRepo(node.Repo)
@@ -6806,16 +6806,16 @@ func topRejectionReasons(rejections map[string]int) string {
 // paused blocked_dependency item exists for this issue number — baseline_ci_red
 // and upstream_failure pauses are untouched. No-op when the queue scheduler is
 // absent (e.g. delegated-dispatch mode).
-func (as *AutonomousScheduler) resumeBlockedDependencyPause(number int) {
+func (as *AutonomousScheduler) resumeBlockedDependencyPause(repo string, number int) {
 	if as.scheduler == nil {
 		return
 	}
 	for _, item := range as.scheduler.ListPausedByKind("blocked_dependency") {
-		if item.IssueNumber != number {
+		if !queueItemMatches(item, repo, number) {
 			continue
 		}
-		if as.scheduler.ResumeByIssueNumber(number) {
-			log.Printf("autonomous: resumed blocked_dependency pause for #%d — blockers now closed", number)
+		if as.scheduler.ResumePaused(repo, number) {
+			log.Printf("autonomous: resumed blocked_dependency pause for %s#%d — blockers now closed", repo, number)
 		}
 		return
 	}

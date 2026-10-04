@@ -525,14 +525,58 @@ func TestActiveRuntimes_SeparatesTwoRunsOfOneIssue(t *testing.T) {
 
 	// Issue number cannot name one of two live runs, and guessing would stamp
 	// an arbitrary id onto an event envelope as though it were resolved.
-	if got := s.RunIDForIssue(issue); got != "" {
+	if got := s.RunIDForIssue("nightgauge/nightgauge", issue); got != "" {
 		t.Errorf("RunIDForIssue picked %q from two live runs; want \"\"", got)
 	}
 
 	// With one left it answers again.
 	s.unregisterRuntime(second.RunID)
-	if got := s.RunIDForIssue(issue); got != first.RunID {
+	if got := s.RunIDForIssue("nightgauge/nightgauge", issue); got != first.RunID {
 		t.Errorf("RunIDForIssue = %q, want %q", got, first.RunID)
+	}
+}
+
+// TestRunIDForIssue_SameNumberInTwoRepos pins #2414: an issue number names an
+// issue only within one repository, so two concurrent runs of #21 in two
+// repositories each resolve to their own id, and once one has unregistered a
+// late event for it does not borrow the other repository's run.
+func TestRunIDForIssue_SameNumberInTwoRepos(t *testing.T) {
+	s := &Scheduler{}
+	const issue = 21
+	app := state.NewRuntimeState("example-org/app", issue, "item-a", testRunID())
+	platform := state.NewRuntimeState("example-org/platform", issue, "item-p", testRunID())
+	s.registerRuntime(app)
+	s.registerRuntime(platform)
+	defer s.unregisterRuntime(app.RunID)
+	defer s.unregisterRuntime(platform.RunID)
+
+	if got := s.RunIDForIssue("example-org/app", issue); got != app.RunID {
+		t.Errorf("app#21 resolved to %q, want %q", got, app.RunID)
+	}
+	if got := s.RunIDForIssue("Example-Org/Platform", issue); got != platform.RunID {
+		t.Errorf("platform#21 resolved to %q, want %q (repository compares case-insensitively)", got, platform.RunID)
+	}
+	// No repository named: the number names two runs, so no answer.
+	if got := s.RunIDForIssue("", issue); got != "" {
+		t.Errorf("an unnamed repository picked %q from two runs of #21; want \"\"", got)
+	}
+
+	// platform#21 ends; a late event for it must not borrow app#21's id.
+	s.unregisterRuntime(platform.RunID)
+	if got := s.RunIDForIssue("example-org/platform", issue); got != "" {
+		t.Errorf("platform#21 borrowed %q after its run ended; want \"\"", got)
+	}
+	// With one run left the number names exactly one, so the fallback answers.
+	if got := s.RunIDForIssue("", issue); got != app.RunID {
+		t.Errorf("an unnamed repository resolved to %q, want %q", got, app.RunID)
+	}
+
+	// A runtime that names no repository matches any caller by number.
+	legacy := state.NewRuntimeState("", 7, "item-l", testRunID())
+	s.registerRuntime(legacy)
+	defer s.unregisterRuntime(legacy.RunID)
+	if got := s.RunIDForIssue("example-org/app", 7); got != legacy.RunID {
+		t.Errorf("a runtime without a repository resolved to %q, want %q", got, legacy.RunID)
 	}
 }
 
@@ -2768,10 +2812,10 @@ func TestRunIdentity_SchedulerPhaseArmsAreIdentityGated(t *testing.T) {
 	if s.LookupRunByID(foreign) != nil || s.IsRunLive(foreign) {
 		t.Error("a run the scheduler never registered reported live")
 	}
-	if got := s.RunIDForIssue(370); got != rt.RunID {
+	if got := s.RunIDForIssue("nightgauge/nightgauge", 370); got != rt.RunID {
 		t.Errorf("RunIDForIssue = %q, want %q", got, rt.RunID)
 	}
-	if got := s.RunIDForIssue(9999); got != "" {
+	if got := s.RunIDForIssue("nightgauge/nightgauge", 9999); got != "" {
 		t.Errorf("RunIDForIssue for an unrun issue = %q, want empty", got)
 	}
 }

@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -289,10 +290,10 @@ func (s *Scheduler) rateLimitRemainingAtExit() int {
 // running-siblings fn (set by the IPC server via SetRunningSiblingsFn —
 // typically wired to the autonomous scheduler's RunningSiblings method,
 // which has full repo+number visibility across the workspace). Falls back
-// to the local activeStages map which only carries issue numbers (no repo),
-// so the sibling key is "?/?#NUM" in fallback mode — still strong evidence
-// for cross-pipeline interference (the signal operators care about is
-// "ran alongside another issue", not "which repo").
+// to the local activeStages map, which names each run by repository and
+// number: "owner/repo#NUM", or "?#NUM" for a run that names no repository.
+// Self is excluded by repository and number (#2415): a same-numbered run in
+// another repository is a sibling, not this pipeline.
 func (s *Scheduler) snapshotConcurrentPipelines(selfRepo string, selfNumber int) []string {
 	if s.runningSiblingsFn != nil {
 		return s.runningSiblingsFn(selfRepo, selfNumber)
@@ -303,15 +304,20 @@ func (s *Scheduler) snapshotConcurrentPipelines(selfRepo string, selfNumber int)
 		return nil
 	}
 	siblings := make([]string, 0, len(s.activeStages))
-	for issueNumber := range s.activeStages {
-		if issueNumber == selfNumber {
+	for _, st := range s.activeStages {
+		if st.issue == selfNumber && (st.repo == "" || selfRepo == "" || strings.EqualFold(st.repo, selfRepo)) {
 			continue
 		}
-		siblings = append(siblings, fmt.Sprintf("?#%d", issueNumber))
+		if st.repo == "" {
+			siblings = append(siblings, fmt.Sprintf("?#%d", st.issue))
+		} else {
+			siblings = append(siblings, fmt.Sprintf("%s#%d", st.repo, st.issue))
+		}
 	}
 	if len(siblings) == 0 {
 		return nil
 	}
+	sort.Strings(siblings)
 	return siblings
 }
 

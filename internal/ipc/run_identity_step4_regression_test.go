@@ -133,7 +133,7 @@ func (f *fakeSchedulerRuns) RecordPhaseCompleteForRun(runID string, issueNumber 
 	f.mu.Unlock()
 }
 
-func (f *fakeSchedulerRuns) RunIDForIssue(issueNumber int) string {
+func (f *fakeSchedulerRuns) RunIDForIssue(_ string, issueNumber int) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if rt := f.runs[issueNumber]; rt != nil {
