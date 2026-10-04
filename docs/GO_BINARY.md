@@ -322,6 +322,16 @@ keeps one record per client, so one window whose profile changed reads
 differently from two windows that disagree. A service that predates the field
 ignores it.
 
+A daemon the extension spawned carries the window's instance id instead of
+making one (#2418): the extension hands it over in
+`NIGHTGAUGE_AGENT_INSTANCE_ID`, and the daemon adopts it when it is within the
+service's bound (1–64 of `[A-Za-z0-9_-]`), else makes its own. The window's
+extension and its daemon register on two agent rows, one per machine id, and
+each advertises the window's execution profile on its own 30-second beat; with
+one instance id on both rows the service can count the window once instead of
+reading the two rows as a conflict until both have beaten after a profile
+switch.
+
 Creating the named workspace, updating its agent or display name, and
 linking the declared repositories need the owner or admin role on the
 workspace's team. For a developer or viewer the service skips those writes,
@@ -475,8 +485,11 @@ window on a worktree of the clone reads the same snapshots, so the window
 that finds such a snapshot when it activates, with the owner gone, holds the
 run for the platform's verbs only when it claims it first in the remote-run
 ledger (`claims/<run id>.json`; a claim whose window is gone is taken over),
-and lists it there. The window holds every such run before it shows the
-first Resume prompt, so a run waiting behind another prompt is answered too.
+and lists it there. The window scans the clone of every repository it has
+open, not only the primary one, since a run of a linked repository pauses in
+that repository's clone; a Resume of such a run queues the issue for its own
+repository. The window holds every such run before it shows the first Resume
+prompt, so a run waiting behind another prompt is answered too.
 A `resume` is refused `resume-in-window`: only the window's Resume prompt can
 continue the run, as a new run. A `pause` is `already_resolved`. A `cancel`
 ends the run: the window consumes the paused snapshot, so neither its Resume

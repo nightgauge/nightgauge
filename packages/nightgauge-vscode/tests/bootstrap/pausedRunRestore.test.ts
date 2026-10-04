@@ -21,6 +21,7 @@ vi.mock("vscode", () => ({}));
 import {
   consumePausedSnapshot,
   restorePausedRuns,
+  scanPausedSnapshots,
   type PausedSnapshot,
 } from "../../src/bootstrap/pausedRunRestore";
 import { RemoteRunLedger } from "../../src/services/RemoteRunLedger";
@@ -194,5 +195,107 @@ describe("restorePausedRuns (#2339)", () => {
     await restorePausedRuns([snapshot(7), snapshot(8)], deps);
     expect(asked).toEqual([7, 8]);
     expect(deps.resume).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Review finding A4: a platform run of a linked repository pauses in that
+// repository's clone, so a window must hold every repository's paused runs,
+// not only the primary one's, and route a Resume to the run's repository.
+describe("paused runs of every repository of the window (#2339)", () => {
+  function writeRuntime(pipelineDir: string, issueNumber: number, extra: object): string {
+    fs.mkdirSync(pipelineDir, { recursive: true });
+    const file = path.join(pipelineDir, `runtime-${issueNumber}.json`);
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        paused: true,
+        issueNumber,
+        repo: "acme/api",
+        stage: "feature-dev",
+        ...extra,
+      })
+    );
+    return file;
+  }
+  const logger = { info: vi.fn(), warn: vi.fn() };
+
+  it("finds a linked repository's paused platform run and marks its repository", async () => {
+    const pipelineDir = path.join(dir, "api-clone", "pipeline");
+    writeRuntime(pipelineDir, 7, { remoteRunId: "run-7", ownerPid: 999999 });
+
+    const found = await scanPausedSnapshots(
+      { pipelineDir, containingRepoSlug: "acme/api", repo: { owner: "acme", repo: "api" } },
+      logger,
+      () => false
+    );
+
+    expect(found).toEqual([
+      {
+        filePath: path.join(pipelineDir, "runtime-7.json"),
+        issueNumber: 7,
+        interrupted: { remoteRunId: "run-7", issueNumber: 7 },
+        repo: { owner: "acme", repo: "api" },
+      },
+    ]);
+  });
+
+  it("leaves the primary repository's snapshots unmarked, and a live owner's run unheld", async () => {
+    const pipelineDir = path.join(dir, "primary", "pipeline");
+    writeRuntime(pipelineDir, 8, { remoteRunId: "run-8", ownerPid: 4242 });
+
+    const found = await scanPausedSnapshots(
+      { pipelineDir, containingRepoSlug: "acme/api" },
+      logger,
+      (pid) => pid === 4242
+    );
+
+    expect(found).toHaveLength(1);
+    expect(found[0].interrupted).toBeNull();
+    expect("repo" in found[0]).toBe(false);
+  });
+
+  it("holds a linked repository's run and resumes it in that repository", async () => {
+    const window = makeWindow(101);
+    const { deps } = makeDeps(window.holds, [Promise.resolve("Resume")]);
+    const pipelineDir = path.join(dir, "api-clone", "pipeline");
+    writeRuntime(pipelineDir, 9, { remoteRunId: "run-9" });
+    const found = await scanPausedSnapshots(
+      { pipelineDir, containingRepoSlug: "acme/api", repo: { owner: "acme", repo: "api" } },
+      logger,
+      () => false
+    );
+
+    const done = restorePausedRuns(found, deps);
+    await done;
+
+    expect(deps.resume).toHaveBeenCalledWith(9, { owner: "acme", repo: "api" });
+    expect(fs.existsSync(path.join(pipelineDir, "runtime-9.json"))).toBe(false);
+  });
+
+  it("holds an unidentified repository's run for the platform but offers no Resume", async () => {
+    const window = makeWindow(101);
+    const { deps, asked } = makeDeps(window.holds, []);
+    const filePath = writeRuntime(path.join(dir, "unknown", "pipeline"), 10, {
+      remoteRunId: "run-10",
+    });
+
+    await restorePausedRuns(
+      [
+        {
+          filePath,
+          issueNumber: 10,
+          interrupted: { remoteRunId: "run-10", issueNumber: 10 },
+          repo: null,
+        },
+      ],
+      deps
+    );
+
+    expect(window.held.has("run-10")).toBe(true);
+    expect(asked).toEqual([]);
+    expect(deps.resume).not.toHaveBeenCalled();
+    // A platform cancel still ends it.
+    await window.cancel("run-10");
+    expect(fs.existsSync(filePath)).toBe(false);
   });
 });

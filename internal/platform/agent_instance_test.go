@@ -130,3 +130,32 @@ func TestInstanceID_OutOfBoundsIsNotSent(t *testing.T) {
 		t.Errorf("beat with nothing to carry sent a body: %s", *beatBody)
 	}
 }
+
+// A daemon an editor window spawned carries that window's instance id
+// (#2418), so the window's two agent rows speak with one voice; an absent
+// value, or one the platform would refuse, leaves the daemon minting its own.
+func TestResolveInstanceID_AdoptsAValidHandedID(t *testing.T) {
+	minted := 0
+	mint := func() string { minted++; return "minted-id" }
+	env := func(value string) func(string) string {
+		return func(key string) string {
+			if key != AgentInstanceIDEnv {
+				t.Fatalf("read %q, want %q", key, AgentInstanceIDEnv)
+			}
+			return value
+		}
+	}
+	window := "9b2d6c1e-4f0a-4c39-8e57-1d2f3a4b5c6d"
+	if got := resolveInstanceID(env(window), mint); got != window || minted != 0 {
+		t.Errorf("handed %q: got %q (minted %d), want the handed id", window, got, minted)
+	}
+	for _, bad := range []string{"", "/Users/someone/work", strings.Repeat("a", 65), "has space"} {
+		minted = 0
+		if got := resolveInstanceID(env(bad), mint); got != "minted-id" || minted != 1 {
+			t.Errorf("handed %q: got %q (minted %d), want a minted id", bad, got, minted)
+		}
+	}
+	if AgentInstanceIDEnv != "NIGHTGAUGE_AGENT_INSTANCE_ID" {
+		t.Errorf("AgentInstanceIDEnv = %q; the extension sets NIGHTGAUGE_AGENT_INSTANCE_ID", AgentInstanceIDEnv)
+	}
+}

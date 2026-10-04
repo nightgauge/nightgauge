@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -47,7 +48,29 @@ const AgentRegisterCapabilityResolve = "attention_resolve"
 // A random UUID v4, made once per process and kept in memory only: never
 // persisted, and never derived from a path, host, user or workspace. The
 // platform only compares it for equality and never returns it.
-var processInstanceID = sync.OnceValue(uuid.NewString)
+//
+// A daemon an editor window spawned is handed that window's own instance id
+// in AgentInstanceIDEnv (#2418) and carries it instead: the window's
+// extension and its daemon register on two agent rows, and one id on both
+// lets the platform count the window once.
+var processInstanceID = sync.OnceValue(func() string {
+	return resolveInstanceID(os.Getenv, uuid.NewString)
+})
+
+// AgentInstanceIDEnv names the environment variable through which the VS Code
+// extension hands the daemon it spawns its activation's instance id (#2418;
+// AGENT_INSTANCE_ID_ENV_VAR on the extension side).
+const AgentInstanceIDEnv = "NIGHTGAUGE_AGENT_INSTANCE_ID"
+
+// resolveInstanceID is the instance id AgentInstanceIDEnv hands this process
+// when the platform accepts it, else a freshly minted one: an id the wire
+// would drop is never adopted, so the process still has one.
+func resolveInstanceID(getenv func(string) string, mint func() string) string {
+	if handed := getenv(AgentInstanceIDEnv); wireInstanceID(handed) != "" {
+		return handed
+	}
+	return mint()
+}
 
 // instanceIDPattern is what the platform accepts as an instance id: 1–64 of
 // [A-Za-z0-9_-].

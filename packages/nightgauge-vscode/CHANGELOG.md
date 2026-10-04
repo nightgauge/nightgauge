@@ -32,6 +32,14 @@ and this project adheres to
 
 ### Fixed
 
+- **A paused platform run of any open repository survives a window reload**
+  (#2339). The platform's verbs for it are answered, and its Resume prompt
+  queues the run for its own repository; before, only the primary
+  repository's paused runs were found.
+- **A window no longer reads as two disagreeing agents after an execution
+  profile switch** (#2418): the daemon it starts reports the window's own
+  instance id.
+
 - **Two repositories' issues with the same number keep their own Output
   window tab and dashboard card** (#2411, #2412). Before, one run's stages,
   tokens and cost could show on the other's tab or card, View Context could
@@ -242,6 +250,9 @@ machine as a new device. Every location is listed in
 [Where Nightgauge keeps its data](https://github.com/nightgauge/nightgauge/blob/main/docs/CONFIGURATION.md#where-nightgauge-keeps-its-data).
 
 ### Changed
+
+- **`pipeline.performance_mode` and the unread `supercharge` keys are gone
+  from the config schema** (#2378); nothing read them.
 
 - **No preview channel.** Every version of the extension is published as a
   normal release (#2305).

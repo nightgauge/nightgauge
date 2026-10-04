@@ -26,9 +26,9 @@ type BudgetConfig struct {
 	// DisableBudgetCeiling, when true AND PerformanceMode == "maximum", flips
 	// CheckPipelineBudget / CheckStageBudget into observe-only mode: warnings
 	// continue to fire (deltas still log) but ShouldTerminate is forced false.
-	// This mirrors `MODE_PROFILES.maximum.pipeline.disableBudgetCeiling` from
-	// the TS side. Setting this without `maximum` mode is a no-op — the gate
-	// is mode-AND-flag.
+	// The scheduler sets it from the mode alone (no config key widens or
+	// narrows it, #2378). Setting this without `maximum` mode is a no-op — the
+	// gate is mode-AND-flag.
 	DisableBudgetCeiling bool
 }
 
