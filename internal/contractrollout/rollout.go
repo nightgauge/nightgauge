@@ -46,13 +46,13 @@ const (
 
 // TargetStatus is one row of the status table.
 type TargetStatus struct {
-	Repo   string       `json:"repo"`
-	Status string       `json:"status"`
+	Repo   string `json:"repo"`
+	Status string `json:"status"`
 	// Gate is the local gate's result this run: passed, failed, missing,
 	// skipped (nothing to change), or earlier-run (a PR an earlier run opened,
 	// which it opened only after the gate passed). rolled-out never rests on
 	// the local gate alone: it needs the PR's CI checks green, or a merge.
-	Gate string `json:"gate"`
+	Gate   string       `json:"gate"`
 	PR     *PR          `json:"pr,omitempty"`
 	Files  []FileResult `json:"files,omitempty"`
 	Labels LabelResult  `json:"labels"`

@@ -131,12 +131,12 @@ var (
 	// as it is used: no trimming or normalizing happens after validation,
 	// and no allowlist admits a leading '-', so no value can read as an
 	// option. Nothing here is ever interpolated into a shell string.
-	repoRe         = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
-	labelNameRe    = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9 _.:/()+-]{0,49}$`)
-	pathSegRe      = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.@+-]*$`)
-	jobIDRe        = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
-	labelColorRe   = regexp.MustCompile(`^[0-9a-fA-F]{6}$`)
-	branchRe       = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/-]*$`)
+	repoRe       = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
+	labelNameRe  = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9 _.:/()+-]{0,49}$`)
+	pathSegRe    = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.@+-]*$`)
+	jobIDRe      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
+	labelColorRe = regexp.MustCompile(`^[0-9a-fA-F]{6}$`)
+	branchRe     = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/-]*$`)
 )
 
 // Load reads and validates a contract manifest.

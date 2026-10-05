@@ -891,10 +891,10 @@ For each target repository, `rollout --apply`:
 
 Every run, applied or not, ends with one table:
 
-| Repository | Status    | Local gate | PR                                         | CI checks | Detail |
-| ---------- | --------- | ---------- | ------------------------------------------ | --------- | ------ |
-| acme/app   | pr-open   | passed     | [#12](https://github.com/acme/app/pull/12) | PENDING   |        |
-| acme/web   | compliant | skipped    | -                                          | -         |        |
+| Repository | Status    | Local gate | PR  | CI checks | Detail |
+| ---------- | --------- | ---------- | --- | --------- | ------ |
+| acme/app   | pr-open   | passed     | #12 | PENDING   |        |
+| acme/web   | compliant | skipped    | -   | -         |        |
 
 `contract status` re-reads each pull request from the forge. A target is
 `rolled-out` once its pull request merged, or is open with every check green;
