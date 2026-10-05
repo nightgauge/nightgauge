@@ -10,8 +10,10 @@
 #   1. All-green run: every mocked endpoint returns 2xx -> exit 0.
 #   2. A 401 on one endpoint fails the whole run loudly (::error::, non-zero
 #      exit, summary marks it FAIL (auth)) — the epic's core assertion.
-#   3. A missing credential FAILS the job before any HTTP call is made — it
-#      does not skip (the mock server sees zero requests).
+#   3. A missing credential SKIPS the signed-in tier with a ::notice:: and a
+#      summary line, and the anonymous tier still runs and decides the exit
+#      code (#2425): no request carries a bearer, an anonymous route that
+#      answers 2xx fails the run, and so does an API health that is down.
 #   4. No credential value ever appears in the script's stdout, stderr, or
 #      $GITHUB_STEP_SUMMARY output, across a normal run.
 #
@@ -93,6 +95,10 @@ class Handler(BaseHTTPRequestHandler):
                 "body": body.decode("utf-8", "replace"),
             }) + "\n")
         route = find(method, path_only)
+        # Like the platform, refuse a caller with no credential unless the
+        # route is marked anonymous ("anon": true).
+        if not auth and not (route and route.get("anon")):
+            route = {"status": 401, "body": {"error": "unauthorized"}}
         status = route["status"] if route else 200
         resp_body = json.dumps(route["body"]) if route and "body" in route else "{}"
         self.send_response(status)
@@ -126,6 +132,7 @@ PORT=0
 all_green_routes() {
   cat <<EOF
 [
+  {"method":"GET","path":"/v1/health","status":200,"anon":true,"body":{"status":"ok","version":"test"}},
   {"method":"POST","path":"/v1/agents/register","status":201,"body":{"agentId":"agent-123","commandsUrl":"/v1/agents/agent-123/commands","ttl_seconds":90}},
   {"method":"PUT","path":"/v1/agents/agent-123/heartbeat","status":204,"body":{}},
   {"method":"GET","path":"/v1/agents/agent-123/throttles","status":200,"body":{"workspaces":[]}},
@@ -186,7 +193,7 @@ GITHUB_STEP_SUMMARY="$SUMMARY" \
   bash "$SCRIPT" > "$OUT" 2>&1
 RC=$?
 check "all-green run exits 0" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
-check "all-green summary reports all-2xx" "$(contains "$SUMMARY" "All surfaces returned 2xx." && echo 0 || echo 1)"
+check "all-green summary reports all-2xx" "$(contains "$SUMMARY" "Every probe that ran passed." && echo 0 || echo 1)"
 check "all-green output has no FAIL rows" "$(not_contains "$OUT" $'\tFAIL' && echo 0 || echo 1)"
 check "all-green output shows agent heartbeat resolved the registered id" "$(contains "$OUT" "agent-123" && echo 0 || echo 1)"
 
@@ -216,29 +223,80 @@ check "a 401 makes the run exit non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1
 check "a 401 emits a loud ::error:: AUTH FAILURE annotation" "$(contains "$OUT" "::error::AUTH FAILURE" && echo 0 || echo 1)"
 check "a 401 names the offending status in the message" "$(contains "$OUT" "returned 401" && echo 0 || echo 1)"
 check "summary marks the 401 endpoint FAIL (auth)" "$(contains "$SUMMARY" "FAIL (auth)" && echo 0 || echo 1)"
-check "summary calls out that surfaces failed" "$(contains "$SUMMARY" "One or more surfaces failed" && echo 0 || echo 1)"
+check "summary calls out that surfaces failed" "$(contains "$SUMMARY" "One or more probes failed" && echo 0 || echo 1)"
 
 stop_server
 
-# --- Scenario 3: missing credential fails, does not skip, calls nothing ----
+# --- Scenario 3: a missing credential skips the signed-in tier only -------
+# Nobody provisions the token: production is smoke-tested with a license key
+# after every platform deploy, in the platform repository (#2425). An unset
+# token therefore skips the signed-in tier with a notice, and the anonymous
+# tier still runs and decides the exit code.
+start_server "$(all_green_routes)"
 OUT="$TMP/scenario3.out"
+SUMMARY="$TMP/scenario3.summary"
+: > "$SUMMARY"
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="" \
+GITHUB_STEP_SUMMARY="$SUMMARY" \
+  bash "$SCRIPT" > "$OUT" 2>&1
+RC=$?
+check "missing token with a healthy anonymous tier exits 0" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
+check "missing token prints a ::notice:: that the signed-in probes were skipped" \
+  "$(contains "$OUT" "::notice title=Platform smoke: signed-in probes skipped::PLATFORM_SMOKE_SESSION_TOKEN is not set" && echo 0 || echo 1)"
+check "missing token: the summary says the signed-in probes were skipped" \
+  "$(contains "$SUMMARY" "Signed-in probes skipped." && echo 0 || echo 1)"
+check "missing token: the anonymous API health probe ran" \
+  "$(contains "$TMP/server.log" '"path": "/v1/health"' && echo 0 || echo 1)"
+check "missing token: user-scoped routes were probed anonymously" \
+  "$(contains "$OUT" "Analytics health refuses anonymous" && echo 0 || echo 1)"
+check "missing token: no signed-in surface was called" \
+  "$(not_contains "$TMP/server.log" "/v1/agents/register" && not_contains "$TMP/server.log" "/v1/attention/sync" && echo 0 || echo 1)"
+check "missing token: no request carried a bearer" \
+  "$(not_contains "$TMP/server.log" "Bearer" && echo 0 || echo 1)"
+stop_server
+
+# A user-scoped route that answers an anonymous caller is open to the world.
+ROUTES_OPEN=$(all_green_routes | python3 -c '
+import json, sys
+routes = json.load(sys.stdin)
+for r in routes:
+    if r["method"] == "GET" and r["path"] == "/v1/analytics/health":
+        r["anon"] = True
+print(json.dumps(routes))
+')
+start_server "$ROUTES_OPEN"
+OUT="$TMP/scenario3b.out"
 PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
 PLATFORM_SMOKE_SESSION_TOKEN="" \
   bash "$SCRIPT" > "$OUT" 2>&1
 RC=$?
-check "missing PLATFORM_SMOKE_SESSION_TOKEN exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
-check "missing-credential message says it must fail, not skip" "$(contains "$OUT" "MUST fail rather than skip" && echo 0 || echo 1)"
-check "missing-credential message does not use the word skip approvingly" "$(not_contains "$OUT" "skipping" && echo 0 || echo 1)"
+check "an anonymous 2xx on a user-scoped route exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "an anonymous 2xx is reported as an open route" \
+  "$(contains "$OUT" "::error::OPEN ROUTE" && contains "$OUT" "FAIL (open)" && echo 0 || echo 1)"
+stop_server
 
-# No base URL means the public API the daemon uses, not a failure (#2401): the
-# token is still required, and its absence still fails before any request.
-OUT2="$TMP/scenario3b.out"
-env -u PLATFORM_SMOKE_BASE_URL PLATFORM_SMOKE_SESSION_TOKEN="" \
-  bash "$SCRIPT" > "$OUT2" 2>&1
-RC2=$?
-check "no base URL and no token still exits non-zero" "$([ "$RC2" -ne 0 ] && echo 0 || echo 1)"
-check "the no-token message names only the token" \
-  "$(contains "$OUT2" "PLATFORM_SMOKE_SESSION_TOKEN is not set" && not_contains "$OUT2" "BASE_URL" && echo 0 || echo 1)"
+# API health down: the anonymous tier fails the run even with no token.
+ROUTES_DOWN=$(all_green_routes | python3 -c '
+import json, sys
+routes = json.load(sys.stdin)
+for r in routes:
+    if r["path"] == "/v1/health":
+        r["status"] = 503
+        r["body"] = {"status": "degraded"}
+print(json.dumps(routes))
+')
+start_server "$ROUTES_DOWN"
+OUT="$TMP/scenario3c.out"
+PLATFORM_SMOKE_BASE_URL="http://127.0.0.1:${PORT}" \
+PLATFORM_SMOKE_SESSION_TOKEN="" \
+  bash "$SCRIPT" > "$OUT" 2>&1
+RC=$?
+check "API health 503 with no token exits non-zero" "$([ "$RC" -ne 0 ] && echo 0 || echo 1)"
+check "API health 503 names the expected status" "$(contains "$OUT" "returned 503; expected 200" && echo 0 || echo 1)"
+stop_server
+
+# No base URL means the public API the daemon uses (#2401).
 check "the default target is the public API the daemon uses" \
   "$(grep -qF 'PLATFORM_SMOKE_BASE_URL:-https://api.nightgauge.dev}' "$SCRIPT" \
     && grep -qF 'BaseURL:      "https://api.nightgauge.dev"' internal/platform/client.go && echo 0 || echo 1)"
@@ -468,7 +526,7 @@ stop_server
 #
 # This asserts the trigger set directly, on the parsed YAML rather than on a
 # grep of the file, which cannot tell a comment from a trigger. Scenario 3
-# above proves the job fails rather than skips on a missing credential.
+# above proves a missing credential skips only the signed-in tier.
 WF=".github/workflows/platform-smoke.yml"
 TRIGGERS="$(python3 - "$WF" <<'PYEOF'
 import sys, json

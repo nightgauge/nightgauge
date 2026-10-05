@@ -21,13 +21,22 @@
 # bearer()). This script sends that JWT directly as the bearer, the same
 # credential shape the daemon forwards.
 #
-# Required environment:
+# Two tiers (#2425):
+#   anonymous  Always run. GET /v1/health must answer 200 with status "ok", and
+#              user-scoped routes must refuse a caller with no credential (401).
+#              A 2xx there is a route open to the world and fails the run.
+#   signed-in  Run when PLATFORM_SMOKE_SESSION_TOKEN is set: every
+#              platform-backed surface the daemon calls, with that bearer.
+#
+# Optional credential:
 #   PLATFORM_SMOKE_SESSION_TOKEN  A signed-in session JWT for a DEDICATED test
 #                                  account. Never a personal credential.
 #
-# A missing token fails the job immediately (exit 1) — it does not skip. A
-# silently skipped canary reads as green, which is worse than none (see #732,
-# #744: tests that "passed" by never running).
+# An unset token SKIPS the signed-in tier: the script prints a ::notice:: and
+# a summary line that say so, and the exit code reflects the anonymous tier
+# only. Nobody provisions this token, because production is smoke-tested with
+# a license key after every platform deploy, in the platform repository. A set
+# token keeps the signed-in tier exactly as before: any 401/403 fails loudly.
 #
 # Optional environment:
 #   PLATFORM_SMOKE_BASE_URL    Base URL of the platform API. Default: the public
@@ -49,36 +58,37 @@
 # silently. If the test account is not on an enterprise plan, provision one
 # that is, or those two rows will legitimately and correctly fail every run.
 #
-# Exit code: 0 only if every endpoint returned a 2xx. Non-zero otherwise.
+# Exit code: 0 only if every probe that ran passed (anonymous: the expected
+# status; signed-in: a 2xx). Non-zero otherwise.
 set -uo pipefail
 
 BASE_URL="${PLATFORM_SMOKE_BASE_URL:-https://api.nightgauge.dev}"
 TOKEN="${PLATFORM_SMOKE_SESSION_TOKEN:-}"
 MACHINE_ID="${PLATFORM_SMOKE_MACHINE_ID:-ci-platform-smoke}"
 
-fail_missing() {
-  echo "::error::$1 is not set. This job MUST fail rather than skip when a required credential is missing." >&2
-  exit 1
-}
-
-[ -n "$TOKEN" ] || fail_missing "PLATFORM_SMOKE_SESSION_TOKEN"
-
-# Mask immediately, before the token is used anywhere, so GitHub Actions
-# redacts every subsequent occurrence of it in the log stream. This is
-# defense in depth on top of the Actions runner's automatic secret masking
-# (any string sourced from `secrets.*` in the workflow YAML is masked
-# already): the script is also written so the token is never echoed,
-# printed, or written into the summary by any other path (see the `call`
-# function — only the URL, method, label and status code are ever recorded).
-#
-# Guarded to GITHUB_ACTIONS=true (set automatically by the Actions runner,
-# never set for a local/test invocation): the `::add-mask::` line is a
-# workflow command the real runner intercepts and never renders as log text,
-# but outside the runner it is just `echo`, and printing it unconditionally
-# would put the raw token on stdout on every local run and in this script's
-# own test suite — the opposite of the goal.
-if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-  echo "::add-mask::${TOKEN}"
+SIGNED_IN=1
+SKIP_NOTICE="PLATFORM_SMOKE_SESSION_TOKEN is not set, so the signed-in probes were skipped and only the anonymous probes ran. See docs/PLATFORM_SMOKE.md."
+if [ -z "$TOKEN" ]; then
+  SIGNED_IN=0
+  echo "::notice title=Platform smoke: signed-in probes skipped::${SKIP_NOTICE}"
+else
+  # Mask immediately, before the token is used anywhere, so GitHub Actions
+  # redacts every subsequent occurrence of it in the log stream. This is
+  # defense in depth on top of the Actions runner's automatic secret masking
+  # (any string sourced from `secrets.*` in the workflow YAML is masked
+  # already): the script is also written so the token is never echoed,
+  # printed, or written into the summary by any other path (see the `call`
+  # function — only the URL, method, label and status code are ever recorded).
+  #
+  # Guarded to GITHUB_ACTIONS=true (set automatically by the Actions runner,
+  # never set for a local/test invocation): the `::add-mask::` line is a
+  # workflow command the real runner intercepts and never renders as log text,
+  # but outside the runner it is just `echo`, and printing it unconditionally
+  # would put the raw token on stdout on every local run and in this script's
+  # own test suite — the opposite of the goal.
+  if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+    echo "::add-mask::${TOKEN}"
+  fi
 fi
 
 command -v curl >/dev/null 2>&1 || { echo "::error::curl is required" >&2; exit 1; }
@@ -151,6 +161,49 @@ call() {
   LAST_BODY_FILE="$body_file"
 }
 
+# call_anon METHOD PATH LABEL EXPECTED_STATUS
+# Sends no Authorization header. PASS only on exactly EXPECTED_STATUS. A 2xx
+# where 401 is expected means a user-scoped route answers anyone: a security
+# defect, never a pass. Populates LAST_STATUS and LAST_BODY_FILE.
+call_anon() {
+  local method="$1" path="$2" label="$3" expected="$4"
+  local url="${BASE_URL%/}${path}"
+  CALL_INDEX=$((CALL_INDEX + 1))
+  local body_file="$WORKDIR/body_${CALL_INDEX}.json"
+  local status
+  if ! status="$(curl -sS -o "$body_file" -w '%{http_code}' -X "$method" \
+    -H "Accept: application/json" --max-time 20 --retry 0 "$url" \
+    2>"$WORKDIR/curl_err_${CALL_INDEX}")"; then
+    status="000"
+  fi
+
+  local result
+  if [ "$status" = "$expected" ]; then
+    result="PASS"
+  else
+    OVERALL_STATUS=1
+    case "$status" in
+      2??)
+        result="FAIL (open)"
+        echo "::error::OPEN ROUTE — ${label} (${method} ${path}) answered ${status} to a caller with no credential; expected ${expected}."
+        ;;
+      000)
+        result="FAIL (no response)"
+        echo "::error::${label} (${method} ${path}) — request failed (curl could not complete it; see job log)."
+        ;;
+      *)
+        result="FAIL"
+        echo "::error::${label} (${method} ${path}) returned ${status}; expected ${expected}."
+        ;;
+    esac
+  fi
+
+  printf '%s\t%s %s\t%s\t%s\n' "$label" "$method" "$path" "$status" "$result" >> "$RESULTS_FILE"
+
+  LAST_STATUS="$status"
+  LAST_BODY_FILE="$body_file"
+}
+
 # assert_object_keys LABEL KEY [KEY...]
 # After a 2xx, require the JSON object to carry these top-level keys. A 200
 # whose body is the wrong contract is the blank-dashboard-tab class of bug:
@@ -197,6 +250,19 @@ record_skipped() {
 echo "Platform smoke — target: ${BASE_URL}"
 echo ""
 
+# --- Anonymous tier (always) --------------------------------------------------
+# The API is up and reports itself healthy, with no credential at all.
+call_anon GET "/v1/health" "API health (anonymous)" 200
+if [ "$LAST_STATUS" = "200" ] && ! jq -e '.status == "ok"' "$LAST_BODY_FILE" >/dev/null 2>&1; then
+  OVERALL_STATUS=1
+  echo "::error::API health (anonymous) returned 200 but its body does not carry status \"ok\"."
+  printf '%s\t%s\t%s\t%s\n' "API health (anonymous) body shape" "-" "$LAST_STATUS" "FAIL (shape)" >> "$RESULTS_FILE"
+fi
+# User-scoped routes refuse a caller with no credential.
+call_anon GET "/v1/analytics/health" "Analytics health refuses anonymous" 401
+call_anon GET "/v1/audit/reports" "Audit reports refuse anonymous" 401
+
+if [ "$SIGNED_IN" -eq 1 ]; then
 # --- Agent registration + heartbeat -----------------------------------------
 call POST "/v1/agents/register" "Agent registration" \
   "$(jq -nc --arg mid "$MACHINE_ID" '{machine_id: $mid, capabilities: ["attention_resolve"]}')"
@@ -294,9 +360,12 @@ call PUT "/v1/attention/sync" "Attention sync" \
   "$(jq -nc --arg agent "$AGENT_ID" --arg mid "$MACHINE_ID" \
     '{machine_id: $mid, requests: []} + (if $agent != "" then {agent_id: $agent} else {} end)')"
 
+fi # SIGNED_IN
+
 # --- Report --------------------------------------------------------------------
 echo ""
 echo "=== Results ==="
+[ "$SIGNED_IN" -eq 1 ] || echo "Signed-in probes skipped: ${SKIP_NOTICE}"
 {
   printf '%-42s %-46s %-6s %s\n' "ENDPOINT" "METHOD PATH" "HTTP" "RESULT"
   while IFS=$'\t' read -r label endpoint status result; do
@@ -316,10 +385,14 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
       echo "| ${label} | \`${endpoint}\` | ${status} | ${result} |"
     done < "$RESULTS_FILE"
     echo ""
+    if [ "$SIGNED_IN" -eq 0 ]; then
+      echo "**Signed-in probes skipped.** ${SKIP_NOTICE}"
+      echo ""
+    fi
     if [ "$OVERALL_STATUS" -eq 0 ]; then
-      echo "All surfaces returned 2xx."
+      echo "Every probe that ran passed."
     else
-      echo "**One or more surfaces failed.** A 401/403 here means a signed-in credential was rejected — see epic nightgauge/nightgauge#741."
+      echo "**One or more probes failed.** A FAIL (auth) row means a signed-in credential was rejected — see epic nightgauge/nightgauge#741. A FAIL (open) row means a user-scoped route answered a caller with no credential."
     fi
   } >> "$GITHUB_STEP_SUMMARY"
 fi

@@ -1,12 +1,18 @@
 # Platform Smoke
 
 `.github/workflows/platform-smoke.yml` runs `scripts/platform-smoke.sh` on
-`workflow_dispatch`. It authenticates against the **real** production platform
-API as a dedicated test account and calls every platform-backed surface the Go
-daemon talks to, asserting on HTTP status codes and — for Health — that the 200
-body is a `PipelineHealthScore` (`compositeScore`, `compositeGrade`,
-`computedAt`, `periodDays`, `totalRunsAnalyzed`). A 200 whose body is some other
-contract still blanks the VSCode Health tab.
+`workflow_dispatch` against the **real** production platform API, in two tiers:
+
+- **Anonymous, always.** `GET /v1/health` must answer `200` with
+  `status: "ok"`, and the user-scoped routes `GET /v1/analytics/health` and
+  `GET /v1/audit/reports` must refuse a caller with no credential (`401`). A
+  `2xx` there is a route open to the world and fails the run as `FAIL (open)`.
+- **Signed-in, when `PLATFORM_SMOKE_SESSION_TOKEN` is set.** It authenticates
+  as a dedicated test account and calls every platform-backed surface the Go
+  daemon talks to, asserting on HTTP status codes and — for Health — that the 200
+  body is a `PipelineHealthScore` (`compositeScore`, `compositeGrade`,
+  `computedAt`, `periodDays`, `totalRunsAnalyzed`). A 200 whose body is some other
+  contract still blanks the VSCode Health tab.
 
 **When to run it.** The project keeps no hosted pre-production deployment of
 the platform. Pre-release verification is the Docker E2E stack plus smoke tests
@@ -19,8 +25,13 @@ staging deployment that no longer exists.
 scheduled runs (08-20..08-28) at the credential guard because no credential was
 provisioned, and because a scheduled run attaches its check-run to `main`'s HEAD
 commit, it made the post-merge verification `AGENTS.md` mandates report a
-failure against unrelated merges. A dispatch with no credential still fails
-loudly rather than skipping.
+failure against unrelated merges.
+
+**The token is optional and not provisioned (#2425).** Production is
+smoke-tested with a license key after every platform deploy, in the platform
+repository, so nobody keeps a session JWT for a dedicated production account
+here. A dispatch without it runs the anonymous tier and skips the signed-in
+one, saying so (see [below](#an-unset-token-skips-the-signed-in-tier)).
 
 This exists because every other test tier for the platform integration (unit
 tests, the Go/vitest mocks) runs against a stub, and the defect that epic
@@ -32,7 +43,7 @@ for the full rationale.
 
 ## What it exercises
 
-Sourced directly from `internal/platform/*.go` (the Go daemon's own platform
+The signed-in tier, sourced directly from `internal/platform/*.go` (the Go daemon's own platform
 client) — not guessed:
 
 | Surface                             | Method + path                  | Source                                               |
@@ -83,7 +94,7 @@ test, including those two**, or they will legitimately and correctly fail
 every run. If they start failing and nothing about auth or plan tier changed,
 that is real signal, not noise.
 
-## Required secret
+## Optional secret
 
 | Name                           | Kind                  | Purpose                                                                                                                                                                                                                                                                                                      |
 | ------------------------------ | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -101,14 +112,16 @@ Set the secret under **Settings → Secrets and variables → Actions**, or via
 gh secret set PLATFORM_SMOKE_SESSION_TOKEN --repo nightgauge/nightgauge
 ```
 
-### A missing token fails the job, not skips it
+### An unset token skips the signed-in tier
 
-`scripts/platform-smoke.sh` checks the token before making any network call and
-exits `1` with an `::error::` annotation if it is empty — it never falls through
-to a "skipped, nothing to do" green run. A silently skipped canary is worse than
-none, because it reads as green while proving nothing (see
-nightgauge/nightgauge#732 and #744 for the same failure shape in tests that
-"passed" by never running).
+`scripts/platform-smoke.sh` checks the token before making any network call.
+When it is empty, the script prints a `::notice::` titled "Platform smoke:
+signed-in probes skipped", adds a "Signed-in probes skipped." line to the job
+summary, runs only the anonymous tier, and exits on that tier's result. The
+skip is never silent: a canary that reads as green while proving nothing is
+worse than none (see nightgauge/nightgauge#732 and #744), so the notice says
+exactly what did not run. A set token runs both tiers, and any `401`/`403` on
+the signed-in tier still fails loudly.
 
 ### Rotating `PLATFORM_SMOKE_SESSION_TOKEN`
 
@@ -158,7 +171,7 @@ The regression suite (`scripts/test-platform-smoke.sh`, run by
 against a local mock server:
 
 - Every endpoint in the table above is called, with the right method.
-- An all-2xx run exits `0` and reports "All surfaces returned 2xx." in the
+- An all-green run exits `0` and reports "Every probe that ran passed." in the
   step summary.
 - A single `401` fails the whole run: non-zero exit, a loud `::error::`
   annotation, and a `FAIL (auth)` summary row.
@@ -203,10 +216,12 @@ dimensions}` the Health tab used to decode) fails the run as
   section); against the mock, an unmapped path answers an empty `200`, which a
   status-only probe called `PASS`. The shape assertion is what makes it red.
 
-- A missing `PLATFORM_SMOKE_SESSION_TOKEN` fails immediately, before any HTTP
-  call is attempted (the mock server sees zero requests in that case), with a
-  message that says "fail", not "skip". An unset base URL is not a failure: it
-  means the public API.
+- A missing `PLATFORM_SMOKE_SESSION_TOKEN` skips the signed-in tier: the run
+  prints the notice and the summary line, calls no signed-in surface, sends no
+  bearer, and exits `0` when the anonymous tier passes. With no token, a
+  user-scoped route that answers an anonymous caller with `2xx` fails the run
+  as `FAIL (open)`, and an API health that answers `503` fails it too. An
+  unset base URL is not a failure: it means the public API.
 - The workflow is dispatch-only, passes the production test account's token,
   and names no other deployment.
 - The credential is actually sent as the bearer (so masking isn't silently

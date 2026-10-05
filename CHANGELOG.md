@@ -14,6 +14,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Changed
+
+- **The platform smoke workflow runs without a session token** (#2425).
+  `platform-smoke.yml` always runs an anonymous tier: `GET /v1/health` must
+  answer `status: "ok"`, and user-scoped routes must refuse a caller with no
+  credential. An anonymous `2xx` there fails the run as an open route. The
+  signed-in tier runs only when `PLATFORM_SMOKE_SESSION_TOKEN` is set. When it
+  is unset, the run skips that tier with a notice and a summary line instead of
+  failing at the token check. Production is smoke-tested with a license key
+  after each platform deploy, in the platform repository.
+
 ### Fixed
 
 - **Run from `$HOME`, the CLI no longer loads the machine config as a project
