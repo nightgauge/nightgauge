@@ -53,21 +53,52 @@ repositories:
 		t.Errorf("checkout = %s, want %s", got, want)
 	}
 
-	c, resolve, err = loadContract(manifest, contractFlags{targets: []string{"acme/other=app"}})
-	if err != nil {
+	// --target names a registered repository, case-insensitively.
+	if c, _, err = loadContract(manifest, contractFlags{targets: []string{"ACME/app-repo"}}); err != nil || len(c.Targets) != 1 {
+		t.Fatalf("--target of a registered repository: %+v, %v", c, err)
+	}
+	// A repository the workspace does not register is refused, from a flag
+	// or from the manifest.
+	if _, _, err := loadContract(manifest, contractFlags{targets: []string{"acme/other"}}); err == nil || !strings.Contains(err.Error(), "not a repository of this workspace") {
+		t.Errorf("an unregistered --target was accepted: %v", err)
+	}
+	withTarget := filepath.Join(t.TempDir(), "t.yaml")
+	if err := os.WriteFile(withTarget, []byte(contractManifest+"targets:\n  - repo: evil/elsewhere\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if len(c.Targets) != 1 || c.Targets[0].Repo != "acme/other" {
-		t.Fatalf("--target targets = %+v", c.Targets)
-	}
-	if _, err := resolve(c.Targets[0]); err != nil {
-		t.Errorf("a relative --target path did not resolve against the workspace root: %v", err)
+	if _, _, err := loadContract(withTarget, contractFlags{}); err == nil {
+		t.Error("an unregistered manifest target was accepted")
 	}
 	if _, err := resolve(contractrollout.Target{Repo: "acme/unknown"}); err == nil {
-		t.Error("a target with no path and no workspace entry resolved")
+		t.Error("an unregistered target resolved to a checkout")
 	}
-	if _, _, err := loadContract(manifest, contractFlags{targets: []string{"not-a-repo"}}); err == nil {
-		t.Error("an invalid --target was accepted")
+	// A manifest cannot choose a checkout path or a gate command.
+	for _, extra := range []string{"    path: /tmp\n", "    gate: [sh, -c, id]\n"} {
+		p := filepath.Join(t.TempDir(), "x.yaml")
+		if err := os.WriteFile(p, []byte(contractManifest+"targets:\n  - repo: acme/app-repo\n"+extra), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := loadContract(p, contractFlags{}); err == nil {
+			t.Errorf("a manifest target with %q was accepted", extra)
+		}
+	}
+}
+
+// TestLoadContractNeedsAWorkspace: with no workspace manifest there is no
+// registered repository, so nothing can be targeted.
+func TestLoadContractNeedsAWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	prev, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prev) })
+	manifest := filepath.Join(dir, "demo.yaml")
+	if err := os.WriteFile(manifest, []byte(contractManifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := loadContract(manifest, contractFlags{targets: []string{"acme/app"}}); err == nil {
+		t.Fatal("a rollout outside a workspace was accepted")
 	}
 }
 

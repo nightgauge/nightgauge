@@ -108,22 +108,22 @@ type CIJob struct {
 	Job string `yaml:"job"`
 }
 
-// Target is one repository the contract rolls out to.
+// Target is one repository the contract rolls out to. A manifest names the
+// repository only: where its checkout is comes from the workspace manifest,
+// and its gate is the repository's own GateScript, so a contract can choose
+// neither a directory to write in nor a command to run.
 type Target struct {
 	// Repo is owner/name on the forge.
 	Repo string `yaml:"repo"`
-	// Path is the repository's local checkout. Relative paths resolve
-	// against the workspace root when the command finds one, else against
-	// the manifest's directory. Default: the workspace manifest entry whose
-	// name is Repo's name.
-	Path string `yaml:"path"`
 	// Base overrides the contract's Base for this target.
 	Base string `yaml:"base"`
-	// Gate is the repository's own pre-submission gate, as an argv run in
-	// the rollout's worktree. Default: bash scripts/ci-local.sh, when the
-	// repository has that file. A target with neither gets no pull request.
-	Gate []string `yaml:"gate"`
 }
+
+// GateScript is every target's pre-submission gate: the repository's own
+// local gate, run as `bash scripts/ci-local.sh` in the rollout's worktree.
+// No contract file may replace it, so what runs is the script the
+// repository's base branch already has.
+const GateScript = "scripts/ci-local.sh"
 
 var (
 	contractNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -237,6 +237,9 @@ func (c *Contract) validate() error {
 			if err := checkRelPath(p); err != nil {
 				add("files: %v", err)
 			}
+		}
+		if path.Clean(f.TargetPath()) == GateScript {
+			add("files: %s is the repository's own gate; a contract may not replace it", GateScript)
 		}
 		if seen[f.TargetPath()] {
 			add("files: %s is listed twice", f.TargetPath())

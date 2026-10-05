@@ -35,7 +35,10 @@ func CopyFiles(srcRoot, dstRoot string, files []File, write bool) ([]FileResult,
 		if err := checkRelPath(f.TargetPath()); err != nil {
 			return out, err
 		}
-		src := filepath.Join(srcRoot, filepath.FromSlash(f.Path))
+		src, err := resolveUnder(srcRoot, f.Path)
+		if err != nil {
+			return out, fmt.Errorf("source %s: %w", f.Path, err)
+		}
 		info, err := os.Stat(src)
 		if err != nil {
 			return out, fmt.Errorf("source %s: %w", f.Path, err)
@@ -54,10 +57,10 @@ func CopyFiles(srcRoot, dstRoot string, files []File, write bool) ([]FileResult,
 			mode = 0o755
 		}
 
-		dst := filepath.Join(dstRoot, filepath.FromSlash(f.TargetPath()))
 		if err := refuseSymlinkPath(dstRoot, f.TargetPath()); err != nil {
 			return out, err
 		}
+		dst := filepath.Join(dstRoot, filepath.FromSlash(f.TargetPath()))
 		cur, err := os.ReadFile(dst)
 		switch {
 		case err == nil:
@@ -89,9 +92,41 @@ func CopyFiles(srcRoot, dstRoot string, files []File, write bool) ([]FileResult,
 	return out, nil
 }
 
+// resolveUnder joins rel to root, resolves every symlink in the result, and
+// requires it to stay under root's own resolved path: a source file, or a
+// directory on its way, that is a symlink out of the contract's source root
+// is refused, so a manifest can never read outside it.
+func resolveUnder(root, rel string) (string, error) {
+	if err := checkRelPath(rel); err != nil {
+		return "", err
+	}
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", err
+	}
+	real, err := filepath.EvalSymlinks(filepath.Join(realRoot, filepath.FromSlash(rel)))
+	if err != nil {
+		return "", err
+	}
+	if !within(realRoot, real) {
+		return "", fmt.Errorf("resolves to %s, outside %s", real, realRoot)
+	}
+	return real, nil
+}
+
+// within reports whether p is root or below it; both are cleaned absolute
+// paths.
+func within(root, p string) bool {
+	r, err := filepath.Rel(root, p)
+	return err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator)) && !filepath.IsAbs(r)
+}
+
 // refuseSymlinkPath refuses a target path any of whose existing components
 // under root is a symlink, so a copy can never write outside the repository.
 func refuseSymlinkPath(root, rel string) error {
+	if err := checkRelPath(rel); err != nil {
+		return err
+	}
 	cur := root
 	for _, part := range splitPath(rel) {
 		cur = filepath.Join(cur, part)

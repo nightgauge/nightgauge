@@ -883,10 +883,10 @@ For each target repository, `rollout --apply`:
    last job under `jobs:` with every other byte of the file unchanged; an
    existing job with the same id and another body is refused);
 4. reports a repository with nothing to change as `compliant` and stops there;
-5. commits on the contract's branch and runs the repository's own local gate:
-   the target's `gate`, else `bash scripts/ci-local.sh`. A failed gate keeps
-   the worktree for inspection (`gate-failed`); a repository with no gate gets
-   no pull request (`gate-missing`);
+5. commits on the contract's branch and runs the repository's own local gate,
+   `bash scripts/ci-local.sh`. A failed gate keeps the worktree for inspection
+   (`gate-failed`); a repository with no such script gets no pull request
+   (`gate-missing`);
 6. pushes the branch and opens the pull request (`pr-open`).
 
 Every run, applied or not, ends with one table:
@@ -899,11 +899,15 @@ Every run, applied or not, ends with one table:
 `contract status` re-reads each pull request from the forge. A target is
 `rolled-out` once its pull request merged, or is open with every check green;
 `ci-failed` when the checks are red. Re-running `rollout` reuses an open pull
-request instead of opening a second one. Both commands exit non-zero while a
-target is `error`, `gate-failed`, `gate-missing` or `ci-failed`.
+request instead of opening a second one; its local gate then reads
+`earlier-run`, and only green CI checks or a merge make it `rolled-out`. Both
+commands exit non-zero while a target is `error`, `gate-failed`,
+`gate-missing` or `ci-failed`.
 
 **The manifest.** Unknown keys are refused. Paths are relative and stay inside
-the repository.
+the repository. A source path, or a directory on its way, that is a symlink
+out of `source_root` is refused, and nothing is written through a symlink in
+the target repository.
 
 | Key              | Meaning                                                                                                                  |
 | ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
@@ -915,13 +919,20 @@ the repository.
 | `files[]`        | `path` in the source, optional `target` path in the repository.                                                          |
 | `labels[]`       | `name`, `color` (six hex digits), `description`.                                                                         |
 | `ci_job`         | `workflow` (`.github/workflows/*.yml`), `id`, `job` (the job body as YAML), and for a new file `workflow_name` and `on`. |
-| `targets[]`      | `repo` (`owner/name`), optional `path`, `base` and `gate` (an argv).                                                     |
+| `targets[]`      | `repo` (`owner/name`) and an optional `base`.                                                                            |
 
 With no `targets`, the command takes every repository of the workspace
 manifest, each named `owner/name` from its own `.nightgauge/config.yaml`.
-`--target owner/name[=path]` (repeatable) replaces either. A target without a
-`path` is found in the workspace manifest; a relative `path` resolves against
-the workspace root.
+`--target owner/name` (repeatable) replaces either.
+
+**Trust model.** The workspace manifest is the boundary. Every target must be
+a repository it registers, and the rollout works only in the checkout it
+registers for that repository; a contract or a flag naming any other
+repository is refused before anything runs. The one command the rollout runs
+is each repository's own `scripts/ci-local.sh`, as its base branch has it: a
+contract cannot name a command or a directory, and no contract file may
+target that script. A contract's files and CI job are content the operator
+reviews before `--apply`, as for any change they push.
 
 `configs/contracts/changelog.yaml` is the changelog contract
 ([GIT_WORKFLOW.md § Changelog](GIT_WORKFLOW.md#changelog)): the core's

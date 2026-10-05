@@ -135,12 +135,12 @@ func TestRolloutOpensOnePRPerRepoAfterItsGate(t *testing.T) {
 			".github/workflows/check.yml": "name: check\non: [pull_request]\njobs:\n  check:\n    runs-on: ubuntu-latest\n" +
 				"    steps:\n      - run: bash scripts/check.sh\n",
 		}),
-		"o/failing": newTargetRepo(t, map[string]string{"README.md": "x\n"}),
+		"o/failing": newTargetRepo(t, map[string]string{"scripts/ci-local.sh": "#!/bin/sh\necho gate says no >&2\nexit 3\n"}),
 	}
 	c := demoContract(t, []Target{
 		{Repo: "o/needs"},
 		{Repo: "o/compliant"},
-		{Repo: "o/failing", Gate: []string{"sh", "-c", "echo gate says no >&2; exit 3"}},
+		{Repo: "o/failing"},
 	})
 	forge := newFakeForge()
 	work := t.TempDir()
@@ -213,7 +213,7 @@ func TestRolloutOpensOnePRPerRepoAfterItsGate(t *testing.T) {
 	// reports it rolled out once its checks are green.
 	forge.prs["o/needs@chore/demo-contract"].Checks = "SUCCESS"
 	again := Rollout(ctx, c, Options{Apply: true, WorkDir: t.TempDir(), ResolvePath: pathsFor(repos), Forge: forge})
-	if again[0].Status != StatusRolledOut || again[0].PR.Number != 101 || forge.next != 101 {
+	if again[0].Status != StatusRolledOut || again[0].Gate != "earlier-run" || again[0].PR.Number != 101 || forge.next != 101 {
 		t.Errorf("second rollout of o/needs = %+v (PRs opened: %d)", again[0], forge.next-100)
 	}
 

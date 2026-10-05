@@ -44,7 +44,7 @@ type contractFlags struct {
 }
 
 func (f *contractFlags) register(cmd *cobra.Command) {
-	cmd.Flags().StringArrayVar(&f.targets, "target", nil, "Target repository as owner/name or owner/name=path (repeatable; replaces the manifest's targets)")
+	cmd.Flags().StringArrayVar(&f.targets, "target", nil, "Target repository as owner/name, one of the workspace's (repeatable; replaces the manifest's targets)")
 	cmd.Flags().StringVar(&f.root, "root", "", "Workspace root (default: auto-detect from CWD)")
 	cmd.Flags().BoolVar(&f.jsonOut, "json", false, "Output the status rows as JSON")
 }
@@ -67,7 +67,14 @@ A repository already compliant gets nothing; one whose gate fails keeps its
 worktree for inspection and gets no pull request.
 
 Without --apply it plans: it reads each checkout's working tree and the
-forge's labels and pull requests, and changes nothing.`,
+forge's labels and pull requests, and changes nothing.
+
+Trust model: every target must be a repository the workspace manifest
+registers, and its checkout is the path registered there. The only command
+the rollout runs is each repository's own scripts/ci-local.sh, as its base
+branch has it; a contract cannot name a command, a directory, or a file that
+replaces that script. A contract's files and CI job are content the
+operator reviews before --apply, as for any change they push.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			c, resolve, err := loadContract(args[0], f)
@@ -153,52 +160,53 @@ func printContractRows(cmd *cobra.Command, rows []contractrollout.TargetStatus, 
 
 // loadContract loads the manifest, settles its targets (--target, else the
 // manifest's, else every workspace repository) and returns how each
-// target's checkout is found.
+// target's checkout is found. The workspace manifest is the trust boundary:
+// every target must be one of its registered repositories, and a target's
+// checkout is the path the workspace registers for it, so neither a
+// contract nor a flag can point the rollout at another directory.
 func loadContract(manifest string, f contractFlags) (*contractrollout.Contract, func(contractrollout.Target) (string, error), error) {
 	c, err := contractrollout.Load(manifest)
 	if err != nil {
 		return nil, nil, err
 	}
-	members, wsRoot := workspaceMembers(f.root)
+	members, _ := workspaceMembers(f.root)
+	if len(members) == 0 {
+		return nil, nil, fmt.Errorf("no workspace manifest with resolvable repositories was found from here (or --root): a contract rolls out only to the workspace's registered repositories")
+	}
+	byRepo := make(map[string]string, len(members))
+	for _, m := range members {
+		byRepo[strings.ToLower(m.repo)] = m.path
+	}
 
 	targets := c.Targets
 	if len(f.targets) > 0 {
 		targets = nil
-		for _, spec := range f.targets {
-			repo, path, _ := strings.Cut(spec, "=")
-			targets = append(targets, contractrollout.Target{Repo: repo, Path: path})
+		for _, repo := range f.targets {
+			targets = append(targets, contractrollout.Target{Repo: repo})
 		}
 	}
 	if len(targets) == 0 {
 		for _, m := range members {
-			targets = append(targets, contractrollout.Target{Repo: m.repo, Path: m.path})
+			targets = append(targets, contractrollout.Target{Repo: m.repo})
 		}
 	}
-	if len(targets) == 0 {
-		return nil, nil, fmt.Errorf("%s names no targets, no --target was given, and no workspace manifest was found from here", manifest)
+	var unknown []string
+	for _, t := range targets {
+		if _, ok := byRepo[strings.ToLower(t.Repo)]; !ok {
+			unknown = append(unknown, t.Repo)
+		}
+	}
+	if len(unknown) > 0 {
+		return nil, nil, fmt.Errorf("not a repository of this workspace: %s (add it with `nightgauge workspace repo add` first)", strings.Join(unknown, ", "))
 	}
 	if err := c.SetTargets(targets); err != nil {
 		return nil, nil, err
 	}
 
 	resolve := func(t contractrollout.Target) (string, error) {
-		p := t.Path
-		if p == "" {
-			for _, m := range members {
-				if strings.EqualFold(m.repo, t.Repo) {
-					p = m.path
-				}
-			}
-		}
-		if p == "" {
-			return "", fmt.Errorf("no checkout for %s: give the target a path, or add it to the workspace manifest", t.Repo)
-		}
-		if !filepath.IsAbs(p) {
-			base := c.Dir()
-			if wsRoot != "" {
-				base = wsRoot
-			}
-			p = filepath.Join(base, p)
+		p, ok := byRepo[strings.ToLower(t.Repo)]
+		if !ok {
+			return "", fmt.Errorf("%s is not a repository of this workspace", t.Repo)
 		}
 		if _, err := os.Stat(filepath.Join(p, ".git")); err != nil {
 			return "", fmt.Errorf("%s: %s is not a git checkout", t.Repo, p)

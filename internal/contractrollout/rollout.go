@@ -48,7 +48,11 @@ const (
 type TargetStatus struct {
 	Repo   string       `json:"repo"`
 	Status string       `json:"status"`
-	Gate   string       `json:"gate"` // passed | failed | missing | skipped | ""
+	// Gate is the local gate's result this run: passed, failed, missing,
+	// skipped (nothing to change), or earlier-run (a PR an earlier run opened,
+	// which it opened only after the gate passed). rolled-out never rests on
+	// the local gate alone: it needs the PR's CI checks green, or a merge.
+	Gate string `json:"gate"`
 	PR     *PR          `json:"pr,omitempty"`
 	Files  []FileResult `json:"files,omitempty"`
 	Labels LabelResult  `json:"labels"`
@@ -117,9 +121,9 @@ func rolloutTarget(ctx context.Context, c *Contract, t Target, opt Options) Targ
 		}
 		if pr != nil {
 			row.PR = pr
-			row.Gate = "passed"
+			row.Gate = "earlier-run"
 			row.Status = statusFromPR(pr)
-			row.Detail = "an earlier rollout opened this PR"
+			row.Detail = "an earlier rollout opened this PR after its local gate passed; CI checks decide rolled-out"
 			if lr, err := ProvisionLabels(ctx, opt.Forge.Labels(t.Repo), c.Labels, opt.Apply); err != nil {
 				return fail(err)
 			} else {
@@ -188,15 +192,13 @@ func rolloutTarget(ctx context.Context, c *Contract, t Target, opt Options) Targ
 		return fail(err)
 	}
 
-	gate := t.Gate
-	if len(gate) == 0 {
-		if _, err := os.Stat(filepath.Join(wt, "scripts", "ci-local.sh")); err == nil {
-			gate = []string{"bash", "scripts/ci-local.sh"}
-		}
+	var gate []string
+	if info, err := os.Lstat(filepath.Join(wt, filepath.FromSlash(GateScript))); err == nil && info.Mode().IsRegular() {
+		gate = []string{"bash", GateScript}
 	}
 	if len(gate) == 0 {
 		row.Status, row.Gate, row.Worktree = StatusGateMissing, "missing", wt
-		row.Detail = "no gate: declare the target's gate, or add scripts/ci-local.sh; the commit is on the worktree's branch"
+		row.Detail = "no gate: the repository has no " + GateScript + "; the commit is on the worktree's branch"
 		return row
 	}
 	fmt.Fprintf(opt.Log, "[contract %s] %s: running %s\n", c.Name, t.Repo, strings.Join(gate, " "))
@@ -268,7 +270,7 @@ func Refresh(ctx context.Context, c *Contract, f Forge) []TargetStatus {
 		case pr == nil:
 			row.Status, row.Detail = StatusPlanned, "no PR from "+c.Branch
 		default:
-			row.PR, row.Gate, row.Status = pr, "passed", statusFromPR(pr)
+			row.PR, row.Gate, row.Status = pr, "earlier-run", statusFromPR(pr)
 		}
 		rows = append(rows, row)
 	}
