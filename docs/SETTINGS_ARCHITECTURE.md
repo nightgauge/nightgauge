@@ -92,6 +92,11 @@ Per-tier justification:
 | 6   | env       | `NIGHTGAUGE_*` environment variables       | CI/CD and per-process pinning regardless of any file or cached UI state; below CLI so a one-shot flag still wins.                                                   |
 | 7   | CLI flags | `--config-*`                               | Highest priority — explicit, transient, scoped to a single command invocation.                                                                                      |
 
+The home directory is never a project: run there, the Go loader does not read
+`~/.nightgauge/config.yaml` (the macOS machine file) as the team tier, and the
+same holds for any directory whose `.nightgauge` is the machine tier's
+directory (`config.IsMachineConfigRoot`, #2423).
+
 The original sin this spike diagnosed still holds: the four offending writers
 (`sequentialRepoConfig.ts`, `enabledReposConfig.ts`, `NightgaugeYamlService.ts`,
 `SettingsPanel.ts`) defaulted to writing the team tier and dirtied the tree.
