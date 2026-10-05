@@ -436,7 +436,7 @@ jobs:
       # archive). GitHub-hosted runners do not ship syft, so install it — pinned
       # to a SHA — before goreleaser runs, or the SBOM pipe fails.
       - name: Install syft (SBOM generator)
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
 
       # THIRD_PARTY_NOTICES is listed in .goreleaser.yml archives.files, so it
       # must exist at repo root before goreleaser archives. `npm run build` above

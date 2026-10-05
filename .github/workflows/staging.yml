@@ -250,7 +250,7 @@ jobs:
       # exercise the exact same SBOM path as the real release, so install syft
       # (SHA-pinned) here too.
       - name: Install syft (SBOM generator)
-        uses: anchore/sbom-action/download-syft@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
 
       # THIRD_PARTY_NOTICES is listed in .goreleaser.yml archives.files; ensure it
       # exists at repo root before the snapshot archive step (idempotent).
