@@ -149,9 +149,51 @@ func readMachineConfigBytes() ([]byte, error) {
 	return data, nil
 }
 
+// IsMachineConfigRoot reports whether workspaceRoot's .nightgauge directory
+// holds machine-tier configuration rather than a project's, so its
+// config.yaml must never load as the project tier (#2423). That is the case
+// when <root>/.nightgauge/config.yaml is the machine-tier file itself (the
+// macOS default, or wherever NIGHTGAUGE_CONFIG_HOME points), or when root is
+// the home directory, whose ~/.nightgauge/config.yaml is the macOS machine
+// file and the machine file an older Linux build read. Run from $HOME, the
+// loader used to read the machine file twice, once as each tier, and warned
+// that every machine-owned key shadowed itself.
+func IsMachineConfigRoot(workspaceRoot string) bool {
+	root, err := filepath.Abs(workspaceRoot)
+	if err != nil {
+		return false
+	}
+	if home, herr := os.UserHomeDir(); herr == nil && home != "" && sameDir(root, home) {
+		return true
+	}
+	machine, merr := machineConfigPathFn()
+	if merr != nil || machine == "" {
+		return false
+	}
+	return sameDir(filepath.Join(root, ".nightgauge"), filepath.Dir(machine))
+}
+
+// sameDir reports whether a and b name one directory: the same file when
+// both exist (symlinks and case-insensitive file systems included), else
+// the same cleaned absolute path.
+func sameDir(a, b string) bool {
+	if ai, err := os.Stat(a); err == nil {
+		if bi, err := os.Stat(b); err == nil {
+			return os.SameFile(ai, bi)
+		}
+	}
+	aa, aerr := filepath.Abs(a)
+	ba, berr := filepath.Abs(b)
+	return aerr == nil && berr == nil && aa == ba
+}
+
 // readProjectConfigBytes returns the raw bytes of the project-tier YAML
-// file, or (nil, errConfigNotFound) if it does not exist.
+// file, or (nil, errConfigNotFound) if it does not exist or is the
+// machine tier's (IsMachineConfigRoot).
 func readProjectConfigBytes(workspaceRoot string) ([]byte, error) {
+	if IsMachineConfigRoot(workspaceRoot) {
+		return nil, errConfigNotFound
+	}
 	path := ProjectConfigPath(workspaceRoot)
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -164,8 +206,12 @@ func readProjectConfigBytes(workspaceRoot string) ([]byte, error) {
 }
 
 // readLocalConfigBytes returns the raw bytes of the local-tier YAML
-// file (.nightgauge/config.local.yaml), or (nil, errConfigNotFound).
+// file (.nightgauge/config.local.yaml), or (nil, errConfigNotFound). A
+// machine-config root (IsMachineConfigRoot) has no local tier either.
 func readLocalConfigBytes(workspaceRoot string) ([]byte, error) {
+	if IsMachineConfigRoot(workspaceRoot) {
+		return nil, errConfigNotFound
+	}
 	path := LocalConfigPath(workspaceRoot)
 	data, err := os.ReadFile(path)
 	if err != nil {

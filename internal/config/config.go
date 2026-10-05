@@ -2230,6 +2230,12 @@ func Load(workspaceRoot string) (*Config, error) {
 }
 
 func load(workspaceRoot string) (*Config, error) {
+	// The home directory, or any root whose .nightgauge directory is the
+	// machine tier's, is not a project: it loads like a directory with no
+	// project config (#2423).
+	if IsMachineConfigRoot(workspaceRoot) {
+		return DefaultConfig(), nil
+	}
 	projectPath := filepath.Join(workspaceRoot, ".nightgauge", "config.yaml")
 	if _, err := os.Stat(projectPath); err != nil {
 		if !os.IsNotExist(err) {

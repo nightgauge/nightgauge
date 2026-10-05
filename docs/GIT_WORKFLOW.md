@@ -1017,18 +1017,30 @@ gh attestation verify /tmp/rel/nightgauge-vscode-darwin-arm64-*.vsix --owner nig
 #     ClamAV step is one engine; a registry reviewer reads VirusTotal, where
 #     an archive has been flagged on some builds and not on near-identical
 #     others while every file inside it was clean. So it is checked per
-#     release, never assumed. Upload every VSIX (and the bare binaries) at
-#     https://www.virustotal.com/gui/home/upload and keep each report URL
-#     (https://www.virustotal.com/gui/file/<sha256>, the sha256 from
-#     checksums.txt).
-gh release download v0.4.0 -p '*.vsix' -p 'checksums.txt' -D /tmp/rel
+#     release, never assumed. Every report lives at
+#     https://www.virustotal.com/gui/file/<sha256>, the sha256 from
+#     checksums.txt.
+gh release download v0.4.0 -p '*.vsix' -p '*.tar.gz' -p 'checksums.txt' -D /tmp/rel
 (cd /tmp/rel && shasum -a 256 -c checksums.txt --ignore-missing)
 
-#     The two JS bundles are submitted as files of their own (#2322).
+#     Submit by URL, not by upload. Paste each release asset's public download
+#     URL (each VSIX, each tarball) at https://www.virustotal.com/gui/home/url;
+#     VirusTotal fetches the file and files its report under the file's
+#     sha256. A free account's web uploader stops at about 3 MB, below every
+#     release file, and a free account's API key cannot submit files, so the
+#     URL route is the default:
+gh release view v0.4.0 --json assets --jq '.assets[] | select(.name | test("\\.(vsix|tar\\.gz)$")) | .url'
+
+#     The bare binaries: once a tarball's report exists, look its binary up by
+#     sha256 at https://www.virustotal.com/gui/file/<sha256>. VirusTotal may
+#     or may not have extracted it; "Item not found" means it did not.
+for t in /tmp/rel/*.tar.gz; do tar -xOzf "$t" nightgauge | shasum -a 256; done
+
+#     The two JS bundles are scanned as files of their own (#2322).
 #     VirusTotal does not report every file it unpacks from a VSIX, so a
 #     clean VSIX report says nothing about dist/extension.cjs, the largest
 #     code file in the package, or dist/sdk-cli.cjs. Both are the same bytes
-#     in every target VSIX; assert that, then submit one copy of each:
+#     in every target VSIX; assert that, then look each up by sha256:
 for f in extension.cjs sdk-cli.cjs; do
   n=$(for v in /tmp/rel/*.vsix; do unzip -p "$v" "extension/dist/$f" | shasum -a 256; done | sort -u | wc -l)
   [ "$n" -eq 1 ] || { echo "dist/$f differs between the target VSIXs: submit each copy"; break; }
@@ -1036,13 +1048,18 @@ for f in extension.cjs sdk-cli.cjs; do
   shasum -a 256 "/tmp/rel/$f"     # its report: https://www.virustotal.com/gui/file/<sha256>
 done
 
-#     The bundles are about 10 MB and 3 MB. If the web uploader refuses a file
-#     for its size, submit it through the VirusTotal API (direct upload takes
-#     files up to 32 MB) with the release owner's API key, read from the
-#     release session's environment and never written to a file or a log.
-#     Using a key needs the owner's approval; without one, stop here and the
-#     owner submits the file.
+#     A bundle lookup that says "Item not found" needs the file hosted at a
+#     URL: the release owner puts both in a secret gist they create and
+#     submits each raw URL as above. The bundles are built from this open
+#     tree, so hosting them discloses nothing new. Direct submission through
+#     the API is only for an owner whose key is allowed to submit files; the
+#     key comes from the release session's environment, never a file or log:
 curl -s https://www.virustotal.com/api/v3/files -H "x-apikey: $VT_API_KEY" -F file=@/tmp/rel/extension.cjs
+
+#     The owner's part: opening a report can demand a reCAPTCHA, which only a
+#     human completes, and an automated session may be refused permission to
+#     submit to VirusTotal. Either way the release owner does that part; the
+#     session neither works around it nor skips the file.
 
 #     Record three things from EVERY report (each VSIX, each binary, each
 #     bundle) beside its URL: the engine detection count, the Code insights
@@ -1071,6 +1088,8 @@ gh run watch
 
 # 11. Confirm the listings serve the version, then run the post-merge hook for
 #     any issue the release closes (§ After Merge).
+#     Open VSX can take minutes to serve a new version after the publish
+#     workflow reports success, so wait and re-check; never re-publish.
 npx --yes @vscode/vsce@3.9.2 show nightgauge.nightgauge-vscode --json | jq '.versions[]|{version,targetPlatform}'
 curl -s https://open-vsx.org/api/nightgauge/nightgauge-vscode | jq '{version,preRelease}'
 

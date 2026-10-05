@@ -14,6 +14,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Run from `$HOME`, the CLI no longer loads the machine config as a project
+  config** (#2423). The project tier is `<cwd>/.nightgauge/config.yaml`, and in
+  the home directory that is `~/.nightgauge/config.yaml`, the machine tier, so
+  every machine-owned key was warned about as shadowing itself and
+  `nightgauge pr merge N --repo owner/name --owner owner` failed with `owner is
+required but missing`. The home directory, and any directory whose
+  `.nightgauge` is the machine tier's (`NIGHTGAUGE_CONFIG_HOME`), now loads like
+  a directory with no project config, and `pr merge` resolves its GitHub token
+  for the owner it was told to act on.
+
 ## [0.6.0] - 2026-10-04
 
 ### Added

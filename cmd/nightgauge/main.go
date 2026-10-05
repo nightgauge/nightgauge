@@ -511,9 +511,22 @@ func explicitWorkspaceRoot(cmd *cobra.Command) string {
 //  4. With no github_user configured: GITHUB_TOKEN env var, then
 //     gh auth token (default gh user)
 func clientFromConfig() (*gh.Client, error) {
+	return clientFromConfigForOwner("")
+}
+
+// newClientFromConfigFn is swapped in tests to serve the client from a fake
+// forge while the config load in front of it runs for real.
+var newClientFromConfigFn = gh.NewClientFromConfig
+
+// clientFromConfigForOwner is clientFromConfig for a command that names its
+// target owner: the token resolves for owner, an explicit --owner or the
+// owner half of an owner/name --repo, instead of the working directory's
+// config owner, which is empty outside a checkout (#2423). An empty owner
+// falls back to the config's.
+func clientFromConfigForOwner(owner string) (*gh.Client, error) {
 	workdir, err := os.Getwd()
 	if err != nil {
-		return gh.NewClientFromConfig(nil, "", "")
+		return newClientFromConfigFn(nil, owner, "")
 	}
 	cfg, err := config.Load(workdir)
 	if err != nil {
@@ -523,9 +536,12 @@ func clientFromConfig() (*gh.Client, error) {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 	if cfg == nil {
-		return gh.NewClientFromConfig(nil, "", "")
+		return newClientFromConfigFn(nil, owner, "")
 	}
-	return gh.NewClientFromConfig(cfg, cfg.Owner, "")
+	if owner == "" {
+		owner = cfg.Owner
+	}
+	return newClientFromConfigFn(cfg, owner, "")
 }
 
 // exportConfiguredGitHubToken resolves the pipeline's GitHub token via the same
@@ -7248,12 +7264,12 @@ func prViewCmd() *cobra.Command {
 				return fmt.Errorf("invalid PR number: %s", args[0])
 			}
 
-			client, err := clientFromConfig()
+			ownerPart, repoPart := splitRepo(owner, repo)
+			client, err := clientFromConfigForOwner(ownerPart)
 			if err != nil {
 				return err
 			}
 
-			ownerPart, repoPart := splitRepo(owner, repo)
 			svc := gh.NewPRService(client)
 			pr, err := svc.GetPR(cmd.Context(), ownerPart, repoPart, number)
 			if err != nil {
@@ -7355,12 +7371,12 @@ func prMergeCmd() *cobra.Command {
 				return fmt.Errorf("invalid strategy %q: must be squash, merge, or rebase", strings.ToLower(strategy))
 			}
 
-			client, err := clientFromConfig()
+			ownerPart, repoPart := splitRepo(owner, repo)
+			client, err := clientFromConfigForOwner(ownerPart)
 			if err != nil {
 				return err
 			}
 
-			ownerPart, repoPart := splitRepo(owner, repo)
 			svc := gh.NewPRService(client)
 			issueSvc := gh.NewIssueService(client)
 
