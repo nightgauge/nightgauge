@@ -255,6 +255,43 @@ func DecidingChecks(checks []CheckDetail) []CheckDetail {
 	return out
 }
 
+// DropSupersededCancelled removes a completed CANCELLED check when another
+// observation of the same check name (case-insensitive, trimmed) on the same
+// commit concluded SUCCESS (#2430). Two runs of one workflow can start for the
+// same SHA (a label added at PR open fires a second pull_request event) and
+// the concurrency group cancels one of them; the run that finished is the
+// evidence, the cancelled duplicate tested nothing.
+//
+// Deliberately narrow, so genuine red is never weakened:
+//   - only CANCELLED is superseded; a FAILURE or TIMED_OUT next to a success
+//     (a re-run that went green) stays red, because a failed run is a real
+//     failure signal and the contract is "never re-run hoping for a better
+//     answer";
+//   - only a SUCCESS supersedes; skipped or neutral siblings do not;
+//   - a cancelled check with no successful sibling is still red.
+//
+// scripts/post-merge-check.sh applies the same rule in its bash fallback.
+func DropSupersededCancelled(checks []CheckDetail) []CheckDetail {
+	key := func(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
+	succeeded := make(map[string]bool)
+	for _, c := range checks {
+		if isChecksCompleteConcluded(c) && strings.EqualFold(strings.TrimSpace(c.Conclusion), "SUCCESS") {
+			succeeded[key(c.Name)] = true
+		}
+	}
+	if len(succeeded) == 0 {
+		return checks
+	}
+	out := make([]CheckDetail, 0, len(checks))
+	for _, c := range checks {
+		if isChecksCompleteConcluded(c) && strings.EqualFold(strings.TrimSpace(c.Conclusion), "CANCELLED") && succeeded[key(c.Name)] {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 func decidingRuns(runs []WorkflowRunSummary) []WorkflowRunSummary {
 	if runs == nil {
 		return nil
@@ -278,7 +315,8 @@ const unknownRequiredReason = "the required-check set could not be read, so the 
 // checks-complete`, scripts/post-merge-check.sh (which applies the same rule
 // when no binary is available) and the post-merge hook. See the file comment.
 func EvaluateMergedCommit(e MergeEvidence) (ChecksCompleteVerdict, []string) {
-	e.MergeChecks = DecidingChecks(e.MergeChecks)
+	e.MergeChecks = DropSupersededCancelled(DecidingChecks(e.MergeChecks))
+	e.HeadChecks = DropSupersededCancelled(e.HeadChecks)
 	e.Runs = decidingRuns(e.Runs)
 	p := e.Provenance
 	if p == nil {

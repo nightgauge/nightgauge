@@ -88,6 +88,24 @@ func TestEvaluateMergedCommit(t *testing.T) {
 			MergeChecks: []CheckDetail{check("build", "COMPLETED", "SUCCESS"), check("lint", "COMPLETED", "SUCCESS")}, Now: late}, ChecksNotYet, "could not be read"},
 		{"no merged PR keeps the merge-commit rule", MergeEvidence{MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksNotYet, "required check(s) absent"},
 		{"no merged PR, no required set, all green", MergeEvidence{MergeChecks: pushGreen, RequiredKnown: true, Now: late}, ChecksComplete, ""},
+		// #2430: two runs of one workflow on the same SHA, one cancelled by
+		// the concurrency group, the other green. The cancelled duplicate is
+		// superseded; a cancelled run alone, or a FAILED run later re-run
+		// green, is still red.
+		{"head: a cancelled required check superseded by a green run of the same check: green", MergeEvidence{Provenance: prov("t1", "t1"),
+			HeadChecks: append([]CheckDetail{check("build", "COMPLETED", "CANCELLED")}, headGreen...), MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
+		{"head: a cancelled required check with no green sibling: red", MergeEvidence{Provenance: prov("t1", "t1"),
+			HeadChecks: []CheckDetail{check("build", "COMPLETED", "CANCELLED"), check("lint", "COMPLETED", "SUCCESS")}, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "build"},
+		{"head: a failed required check re-run green is still red", MergeEvidence{Provenance: prov("t1", "t1"),
+			HeadChecks: append([]CheckDetail{check("build", "COMPLETED", "FAILURE")}, headGreen...), MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "build"},
+		{"merge commit: a cancelled push job superseded by a green run: green", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen,
+			MergeChecks: []CheckDetail{check("publish", "COMPLETED", "CANCELLED"), check("Publish ", "COMPLETED", "SUCCESS")}, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
+		{"merge commit: a cancelled push job alone: red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen,
+			MergeChecks: []CheckDetail{check("publish", "COMPLETED", "CANCELLED")}, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "publish"},
+		{"merge commit: a cancelled job beside a skipped sibling: red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen,
+			MergeChecks: []CheckDetail{check("publish", "COMPLETED", "CANCELLED"), check("publish", "COMPLETED", "SKIPPED")}, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete, "publish"},
+		{"no merged PR: a cancelled check superseded by a green run: green", MergeEvidence{
+			MergeChecks: []CheckDetail{check("build", "COMPLETED", "CANCELLED"), check("build", "COMPLETED", "SUCCESS"), check("lint", "COMPLETED", "SUCCESS")}, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

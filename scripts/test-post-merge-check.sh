@@ -249,6 +249,38 @@ stub_gh '{"check_runs": [
 ]}'
 expect "a cancelled run is RED" 1 "cancelled"
 
+# (g2) #2430: two runs of one workflow on the same SHA (a label added at PR
+# open fires a second pull_request event) and the concurrency group cancels
+# one. The cancelled duplicate is superseded by the successful run of the same
+# check. Only cancelled is superseded and only by success: a failure re-run
+# green is still a real failure signal (never re-run hoping for a better
+# answer), so it stays RED, and so does a cancelled check with no green sibling.
+stub_gh '{"check_runs": [
+  {"name": "API breaking changes", "status": "completed", "conclusion": "cancelled", "html_url": "https://example.invalid/run/5"},
+  {"name": "api breaking changes ", "status": "completed", "conclusion": "success"}
+]}'
+expect "cancelled superseded by a success of the same check is GREEN" 0 "all 1 check(s)"
+stub_gh '{"check_runs": [
+  {"name": "API breaking changes", "status": "completed", "conclusion": "cancelled", "html_url": "https://example.invalid/run/5"},
+  {"name": "lint", "status": "completed", "conclusion": "success"}
+]}'
+expect "cancelled with no green sibling of the same check is RED" 1 "API breaking changes"
+stub_gh '{"check_runs": [
+  {"name": "e2e", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/6"},
+  {"name": "e2e", "status": "completed", "conclusion": "success"}
+]}'
+expect "a failure re-run green is still RED" 1 "e2e"
+stub_gh '{"check_runs": [
+  {"name": "e2e", "status": "completed", "conclusion": "cancelled", "html_url": "https://example.invalid/run/7"},
+  {"name": "e2e", "status": "completed", "conclusion": "skipped"}
+]}'
+expect "cancelled beside a skipped sibling is still RED" 1 "e2e"
+stub_gh '{"check_runs": [
+  {"name": "e2e", "status": "completed", "conclusion": "cancelled"},
+  {"name": "e2e", "status": "in_progress", "conclusion": null}
+]}'
+expect "cancelled beside a still-running sibling is NOT-YET" 2 "e2e"
+
 # (h0) #1681: every page is read. A failure or a running check on page 2 is
 # the same verdict it would be on page 1 — the old whole-document jq program
 # printed one count per page and fell through to GREEN.
@@ -437,6 +469,20 @@ stub_gh '{"check_runs": [
 ]}'
 stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
 expect "tree differs, CodeQL green but required checks absent after the grace: RED" 1 "never ran on"
+
+# #2430 on the PR-head gate: a required check with a cancelled duplicate and
+# a successful run is green; a cancelled one alone is red.
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a '{"check_runs": [
+  {"name": "build", "status": "completed", "conclusion": "cancelled"},
+  {"name": "build", "status": "completed", "conclusion": "success"}
+]}' "$CLA_OK"
+expect "tree equal, a required check's cancelled duplicate superseded: GREEN" 0 "same tree as PR #42 head"
+stub_gh "$PUSH_GREEN"
+stub_pr tree-a '{"check_runs": [
+  {"name": "build", "status": "completed", "conclusion": "cancelled"}
+]}' "$CLA_OK"
+expect "tree equal, a required check only cancelled: RED" 1 "build"
 
 # cache-warm tests nothing: its failure is never main being red.
 stub_gh '{"check_runs": [

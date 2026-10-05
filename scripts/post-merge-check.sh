@@ -41,6 +41,11 @@
 #      required CodeQL run, which passed in (b). They are reported as INFO,
 #      never RED or NOT-YET.
 #
+# Several observations of one check on one commit: a `cancelled` one is
+# superseded by a `success` of the same name (two runs of one workflow, one
+# cancelled by its concurrency group, #2430). Nothing else is: a cancelled
+# check alone, or a failure re-run green, is still RED.
+#
 # If the trees differ (a ruleset bypass, or a branch without the strict
 # policy) the PR run is not evidence about the landed tree, so the merge commit
 # must carry every required check itself, the pre-#2055 rule, and CodeQL there
@@ -225,12 +230,28 @@ def bad: .conclusion != "success" and .conclusion != "skipped" and .conclusion !
     failed: [ $scope[] | select(.status == "completed") | select(bad) | "           \(.conclusion // "?")  \(.name)  \(.url // "")" ],
     missing: (if $req == null then [] else ($scope | map(.name | key)) as $have | [ $req[] | select((key) as $k | $have | index($k) | not) ] end) }'
 
+# A cancelled check is superseded when another observation of the same check
+# name on the same commit concluded success (#2430): a label added at PR open
+# fires a second pull_request event, the concurrency group cancels one of the
+# two runs, and the run that finished is the evidence. Deliberately narrow:
+# only `cancelled` is dropped and only a `success` sibling drops it. A
+# cancelled check alone is still RED, and a `failure` next to a `success` (a
+# failed run re-run green) is still RED, because a failed run is a real
+# failure signal: never re-run hoping for a better answer. Same rule as
+# github.DropSupersededCancelled.
+# shellcheck disable=SC2016 # jq program, not shell
+SUPERSEDE='
+def key: ascii_downcase | gsub("^\\s+|\\s+$"; "");
+([ .[] | select(.status == "completed" and .conclusion == "success") | .name | key ] | unique) as $ok
+| [ .[] | select((.status == "completed" and .conclusion == "cancelled" and ((.name | key) as $k | $ok | index($k))) | not) ]'
+
 # read_checks <sha> — every check-run and commit status on <sha>, as one JSON
 # array. `gh api --paginate --jq` runs the jq program once PER PAGE, so a
 # whole-document program such as `.check_runs | length` prints one number per
 # page and every comparison would silently fail on a commit with more than one
 # page. Emit one JSON line per item instead and slurp them afterwards: that is
-# correct for any number of pages. Commit statuses are normalized into the
+# correct for any number of pages. A cancelled check superseded by a
+# successful run of the same name is dropped (SUPERSEDE). Commit statuses are normalized into the
 # check-run shape, pending ones as still running. cache-warm is dropped: it
 # tests nothing, so its failure is never main being red (#2055). An API
 # failure is not
@@ -249,7 +270,7 @@ read_checks() {
     echo "NOT-YET  could not read commit statuses for $REPO@${sha:0:8} (API error or unknown sha)"
     exit 2
   }
-  printf '%s\n%s\n' "$runs" "$statuses" | jq -s '.' || {
+  printf '%s\n%s\n' "$runs" "$statuses" | jq -s "$SUPERSEDE" || {
     echo "NOT-YET  could not parse the check-runs and statuses for $REPO@${sha:0:8}"
     exit 2
   }
