@@ -53,6 +53,12 @@ type CheckDetail struct {
 	// HeadSHA is the commit the check ran against — the commit that introduced
 	// the failure, when the branch has not moved since.
 	HeadSHA string `json:"headSha,omitempty"`
+	// App is the slug of the GitHub App that created a check run
+	// ("github-actions" for a workflow job), empty for a commit status.
+	App string `json:"app,omitempty"`
+	// CheckSuiteID is the check suite a check run belongs to; for GitHub
+	// Actions, one suite per workflow run. Zero for a commit status.
+	CheckSuiteID int64 `json:"checkSuiteId,omitempty"`
 }
 
 // WaitConfig configures CI wait polling.

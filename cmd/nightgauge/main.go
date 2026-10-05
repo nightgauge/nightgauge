@@ -7816,10 +7816,16 @@ func pollChecksComplete(ctx context.Context, reader checksCompleteReader, owner,
 		}
 
 		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: checks, RequiredNames: requiredNames, RequiredKnown: requiredKnown, Runs: runs, Now: checksCompleteNow(), NoPushWorkflows: noPush}
+		if prov != nil {
+			// #2430: check identity for a cancelled duplicate, read only
+			// when one exists; post-merge observation only.
+			ev.MergeSuites = gh.SuiteWorkflowsFor(ctx, reader, owner, repo, sha, checks)
+		}
 		if ev.PRHeadIsEvidence() {
 			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {
 				return res, err
 			}
+			ev.HeadSuites = gh.SuiteWorkflowsFor(ctx, reader, owner, repo, prov.HeadSHA, ev.HeadChecks)
 		}
 		verdict, reasons := gh.EvaluateMergedCommit(ev)
 		res.Verdict, res.Reasons = verdict, reasons

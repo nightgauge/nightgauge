@@ -244,6 +244,12 @@ func (s *CIService) GetIndividualCheckRuns(ctx context.Context, owner, repo, ref
 				DetailsURL  string `json:"details_url"`
 				HTMLURL     string `json:"html_url"`
 				HeadSHA     string `json:"head_sha"`
+				App         struct {
+					Slug string `json:"slug"`
+				} `json:"app"`
+				CheckSuite struct {
+					ID int64 `json:"id"`
+				} `json:"check_suite"`
 			} `json:"check_runs"`
 		}
 		if err := json.NewDecoder(body).Decode(&page); err != nil {
@@ -255,12 +261,14 @@ func (s *CIService) GetIndividualCheckRuns(ctx context.Context, owner, repo, ref
 				url = run.DetailsURL
 			}
 			checks = append(checks, CheckDetail{
-				Name:        run.Name,
-				Status:      strings.ToUpper(run.Status),
-				Conclusion:  strings.ToUpper(run.Conclusion),
-				CompletedAt: run.CompletedAt,
-				DetailsURL:  url,
-				HeadSHA:     run.HeadSHA,
+				Name:         run.Name,
+				Status:       strings.ToUpper(run.Status),
+				Conclusion:   strings.ToUpper(run.Conclusion),
+				CompletedAt:  run.CompletedAt,
+				DetailsURL:   url,
+				HeadSHA:      run.HeadSHA,
+				App:          run.App.Slug,
+				CheckSuiteID: run.CheckSuite.ID,
 			})
 		}
 		return nil

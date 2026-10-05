@@ -24,7 +24,8 @@ func TestGetIndividualCheckRuns_CarriesTimingURLAndCommit(t *testing.T) {
 			 "completed_at":"2026-07-25T10:00:00Z",
 			 "html_url":"https://github.com/o/r/runs/1",
 			 "details_url":"https://ci.example/1",
-			 "head_sha":"abcdef1234567890"},
+			 "head_sha":"abcdef1234567890",
+			 "app":{"slug":"github-actions"},"check_suite":{"id":42}},
 			{"name":"lint","status":"in_progress","conclusion":null}
 		]}`))
 	}))
@@ -44,6 +45,9 @@ func TestGetIndividualCheckRuns_CarriesTimingURLAndCommit(t *testing.T) {
 	// provider's API or an app-specific deep link, so it is only the fallback.
 	if runs[0].DetailsURL != "https://github.com/o/r/runs/1" {
 		t.Errorf("DetailsURL = %q, want the html_url", runs[0].DetailsURL)
+	}
+	if runs[0].App != "github-actions" || runs[0].CheckSuiteID != 42 {
+		t.Errorf("App, CheckSuiteID = %q, %d, want github-actions, 42 (#2430 check identity)", runs[0].App, runs[0].CheckSuiteID)
 	}
 	if runs[0].HeadSHA != "abcdef1234567890" {
 		t.Errorf("HeadSHA = %q, want the commit the check ran against", runs[0].HeadSHA)

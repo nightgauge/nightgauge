@@ -209,6 +209,10 @@ type WorkflowRunSummary struct {
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	HeadSHA    string `json:"headSha"`
+	// CheckSuiteID and WorkflowID tie a run's check runs to the workflow
+	// that created them (DropSupersededCancelled).
+	CheckSuiteID int64 `json:"checkSuiteId,omitempty"`
+	WorkflowID   int64 `json:"workflowId,omitempty"`
 }
 
 // GetWorkflowRunsForRef returns the workflow runs attached to sha via the
@@ -222,11 +226,13 @@ func (s *CIService) GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha 
 	err := s.getAllPages(ctx, url, checkRunsStatusError, func(body io.Reader) error {
 		var page struct {
 			WorkflowRuns []struct {
-				ID         int64  `json:"id"`
-				Name       string `json:"name"`
-				Status     string `json:"status"`
-				Conclusion string `json:"conclusion"`
-				HeadSHA    string `json:"head_sha"`
+				ID           int64  `json:"id"`
+				Name         string `json:"name"`
+				Status       string `json:"status"`
+				Conclusion   string `json:"conclusion"`
+				HeadSHA      string `json:"head_sha"`
+				CheckSuiteID int64  `json:"check_suite_id"`
+				WorkflowID   int64  `json:"workflow_id"`
 			} `json:"workflow_runs"`
 		}
 		if err := json.NewDecoder(body).Decode(&page); err != nil {
@@ -234,11 +240,13 @@ func (s *CIService) GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha 
 		}
 		for _, r := range page.WorkflowRuns {
 			runs = append(runs, WorkflowRunSummary{
-				ID:         r.ID,
-				Name:       r.Name,
-				Status:     strings.ToUpper(r.Status),
-				Conclusion: strings.ToUpper(r.Conclusion),
-				HeadSHA:    r.HeadSHA,
+				ID:           r.ID,
+				Name:         r.Name,
+				Status:       strings.ToUpper(r.Status),
+				Conclusion:   strings.ToUpper(r.Conclusion),
+				HeadSHA:      r.HeadSHA,
+				CheckSuiteID: r.CheckSuiteID,
+				WorkflowID:   r.WorkflowID,
 			})
 		}
 		return nil

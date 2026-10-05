@@ -88,6 +88,7 @@ while [ $# -gt 0 ]; do
   */check-runs*) endpoint=check-runs ;;
   */status*) endpoint=status ;;
   */pulls*) endpoint=pulls ;;
+  */actions/runs*) endpoint=runs ;;
   */rules/branches/*) endpoint=rules ;;
   */protection/*) endpoint=protection ;;
   */commits/*) endpoint=commit ;;
@@ -249,37 +250,14 @@ stub_gh '{"check_runs": [
 ]}'
 expect "a cancelled run is RED" 1 "cancelled"
 
-# (g2) #2430: two runs of one workflow on the same SHA (a label added at PR
-# open fires a second pull_request event) and the concurrency group cancels
-# one. The cancelled duplicate is superseded by the successful run of the same
-# check. Only cancelled is superseded and only by success: a failure re-run
-# green is still a real failure signal (never re-run hoping for a better
-# answer), so it stays RED, and so does a cancelled check with no green sibling.
+# (g2) #2430: a commit with no merged PR (a direct push, or a PR head polled
+# before its merge) is never relaxed: a cancelled check stays RED even beside
+# a success of the same name. The merged-PR cases are under (k).
 stub_gh '{"check_runs": [
   {"name": "API breaking changes", "status": "completed", "conclusion": "cancelled", "html_url": "https://example.invalid/run/5"},
-  {"name": "api breaking changes ", "status": "completed", "conclusion": "success"}
+  {"name": "API breaking changes", "status": "completed", "conclusion": "success"}
 ]}'
-expect "cancelled superseded by a success of the same check is GREEN" 0 "all 1 check(s)"
-stub_gh '{"check_runs": [
-  {"name": "API breaking changes", "status": "completed", "conclusion": "cancelled", "html_url": "https://example.invalid/run/5"},
-  {"name": "lint", "status": "completed", "conclusion": "success"}
-]}'
-expect "cancelled with no green sibling of the same check is RED" 1 "API breaking changes"
-stub_gh '{"check_runs": [
-  {"name": "e2e", "status": "completed", "conclusion": "failure", "html_url": "https://example.invalid/run/6"},
-  {"name": "e2e", "status": "completed", "conclusion": "success"}
-]}'
-expect "a failure re-run green is still RED" 1 "e2e"
-stub_gh '{"check_runs": [
-  {"name": "e2e", "status": "completed", "conclusion": "cancelled", "html_url": "https://example.invalid/run/7"},
-  {"name": "e2e", "status": "completed", "conclusion": "skipped"}
-]}'
-expect "cancelled beside a skipped sibling is still RED" 1 "e2e"
-stub_gh '{"check_runs": [
-  {"name": "e2e", "status": "completed", "conclusion": "cancelled"},
-  {"name": "e2e", "status": "in_progress", "conclusion": null}
-]}'
-expect "cancelled beside a still-running sibling is NOT-YET" 2 "e2e"
+expect "no merged PR: cancelled beside a success is still RED" 1 "API breaking changes"
 
 # (h0) #1681: every page is read. A failure or a running check on page 2 is
 # the same verdict it would be on page 1 — the old whole-document jq program
@@ -470,19 +448,69 @@ stub_gh '{"check_runs": [
 stub_pr tree-b "$HEAD_GREEN" "$CLA_OK"
 expect "tree differs, CodeQL green but required checks absent after the grace: RED" 1 "never ran on"
 
-# #2430 on the PR-head gate: a required check with a cancelled duplicate and
-# a successful run is green; a cancelled one alone is red.
+# #2430 on the PR-head gate. Two runs of one workflow on the head (a label
+# added at PR open fires a second pull_request event) and the concurrency
+# group cancels one. A cancelled check run is superseded only by a success of
+# the SAME check: same name, GitHub Actions, same workflow (check suites 1 and
+# 2 are both runs of workflow 100; suite 3 is workflow 200), same head SHA.
+# head_run <name> <conclusion> <suite> [app] [sha] — one check run.
+head_run() {
+  printf '{"name": "%s", "status": "completed", "conclusion": "%s", "app": {"slug": "%s"}, "check_suite": {"id": %s}, "head_sha": "%s"}' \
+    "$1" "$2" "${4:-github-actions}" "$3" "${5:-$HEAD_SHA}"
+}
+# expect_head <name> <want-rc> <want-sub> <run>... — the head carries the
+# given runs, its workflow runs map suites 1 and 2 to workflow 100 and suite 3
+# to workflow 200, and the merge commit's push jobs are green.
+expect_head() {
+  local name="$1" rc="$2" sub="$3" runs
+  shift 3
+  runs=$(
+    IFS=,
+    echo "$*"
+  )
+  stub_gh "$PUSH_GREEN"
+  stub_pr tree-a "{\"check_runs\": [$runs]}" "$CLA_OK"
+  echo '{"workflow_runs": [{"check_suite_id": 1, "workflow_id": 100}, {"check_suite_id": 2, "workflow_id": 100}, {"check_suite_id": 3, "workflow_id": 200}]}' \
+    >"$FAKE_BIN/pages/head-runs.1.json"
+  expect "$name" "$rc" "$sub"
+}
+expect_head "PR head: cancelled superseded by a success of the same check: GREEN" 0 "same tree as PR #42 head" \
+  "$(head_run build cancelled 1)" "$(head_run ' Build' success 2)"
+expect_head "PR head: a required check only cancelled: RED" 1 "build" \
+  "$(head_run build cancelled 1)"
+expect_head "PR head: a failure re-run green is still RED" 1 "build" \
+  "$(head_run build failure 1)" "$(head_run build success 2)"
+expect_head "PR head: cancelled beside a skipped sibling is still RED" 1 "build" \
+  "$(head_run build cancelled 1)" "$(head_run build skipped 2)"
+expect_head "PR head spoof: a same-name success from another app is not the same check: RED" 1 "build" \
+  "$(head_run build cancelled 1)" "$(head_run build success 2 some-other-app)"
+expect_head "PR head spoof: a same-name success from another workflow is not the same check: RED" 1 "build" \
+  "$(head_run build cancelled 1)" "$(head_run build success 3)"
+expect_head "PR head: a same-name success on another head SHA is not the same check: RED" 1 "build" \
+  "$(head_run build cancelled 1)" "$(head_run build success 2 github-actions 0000000000000000000000000000000000000000)"
+# A same-name commit status is another surface, never the same check.
 stub_gh "$PUSH_GREEN"
-stub_pr tree-a '{"check_runs": [
-  {"name": "build", "status": "completed", "conclusion": "cancelled"},
-  {"name": "build", "status": "completed", "conclusion": "success"}
-]}' "$CLA_OK"
-expect "tree equal, a required check's cancelled duplicate superseded: GREEN" 0 "same tree as PR #42 head"
+stub_pr tree-a "{\"check_runs\": [$(head_run build cancelled 1)]}" \
+  '{"statuses": [{"context": "build", "state": "success"}, {"context": "cla", "state": "success"}]}'
+echo '{"workflow_runs": [{"check_suite_id": 1, "workflow_id": 100}]}' >"$FAKE_BIN/pages/head-runs.1.json"
+expect "PR head spoof: a same-name commit status is not the same check: RED" 1 "build"
+# Unreadable workflow runs: identity unknown, nothing superseded.
 stub_gh "$PUSH_GREEN"
-stub_pr tree-a '{"check_runs": [
-  {"name": "build", "status": "completed", "conclusion": "cancelled"}
-]}' "$CLA_OK"
-expect "tree equal, a required check only cancelled: RED" 1 "build"
+stub_pr tree-a "{\"check_runs\": [$(head_run build cancelled 1), $(head_run build success 2)]}" "$CLA_OK"
+expect "PR head: workflow runs unreadable, nothing superseded: RED" 1 "build"
+
+# The same rule on the merge commit's push jobs.
+merge_run() {
+  printf '{"name": "publish", "status": "completed", "conclusion": "%s", "app": {"slug": "github-actions"}, "check_suite": {"id": %s}, "head_sha": "%s"}' "$1" "$2" "$MERGE_SHA"
+}
+stub_gh "{\"check_runs\": [$(merge_run cancelled 1), $(merge_run success 2)]}"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+echo '{"workflow_runs": [{"check_suite_id": 1, "workflow_id": 100}, {"check_suite_id": 2, "workflow_id": 100}]}' >"$FAKE_BIN/pages/runs.1.json"
+expect "merge commit: a cancelled push job superseded by the same job's success: GREEN" 0 "1 deciding check(s)"
+stub_gh "{\"check_runs\": [$(merge_run cancelled 1)]}"
+stub_pr tree-a "$HEAD_GREEN" "$CLA_OK"
+echo '{"workflow_runs": [{"check_suite_id": 1, "workflow_id": 100}]}' >"$FAKE_BIN/pages/runs.1.json"
+expect "merge commit: a cancelled push job alone: RED" 1 "publish"
 
 # cache-warm tests nothing: its failure is never main being red.
 stub_gh '{"check_runs": [
