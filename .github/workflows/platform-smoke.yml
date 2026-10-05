@@ -27,14 +27,18 @@
 # business being reachable from a fork's PR run, and a scheduled run attaches
 # its check-run to `main`'s HEAD, so a red one reads as a red merge (#1087).
 #
-# Required repository configuration — see docs/PLATFORM_SMOKE.md for what to
-# provision and how to rotate it:
+# Two tiers (#2425). The anonymous tier always runs: GET /v1/health must answer
+# 200 with status "ok", and user-scoped routes must refuse a caller with no
+# credential. The signed-in tier runs only when this optional secret is set —
+# see docs/PLATFORM_SMOKE.md:
 #   secrets.PLATFORM_SMOKE_SESSION_TOKEN  signed-in JWT for a DEDICATED
 #                                          production test account (never a
 #                                          personal one).
 #
-# A missing token FAILS this job — it does not skip. A silently skipped canary
-# reads as green, which is worse than none (see #732, #744).
+# An unset token SKIPS the signed-in tier with a ::notice:: and a summary line;
+# it is not provisioned, because production is smoke-tested with a license key
+# after every platform deploy, in the platform repository. The skip is never
+# silent, and the anonymous tier still fails the job on any wrong answer.
 name: Platform Smoke
 
 on:
