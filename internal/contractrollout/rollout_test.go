@@ -126,7 +126,7 @@ func TestRolloutOpensOnePRPerRepoAfterItsGate(t *testing.T) {
 	ctx := context.Background()
 	repos := map[string]targetRepo{
 		"o/needs": newTargetRepo(t, map[string]string{
-			"scripts/ci-local.sh":       passingGate,
+			"scripts/ci-local.sh":        passingGate,
 			".github/workflows/lint.yml": "name: Lint\non: [pull_request]\njobs:\n  lint:\n    runs-on: x\n    steps:\n      - run: make lint\n",
 		}),
 		"o/compliant": newTargetRepo(t, map[string]string{
@@ -271,7 +271,7 @@ func TestChangelogContractRollsOutEndToEnd(t *testing.T) {
 	repos := map[string]targetRepo{
 		"o/app": newTargetRepo(t, map[string]string{"scripts/ci-local.sh": gate, "CHANGELOG.md": "# Changelog\n"}),
 		"o/web": newTargetRepo(t, map[string]string{
-			"scripts/ci-local.sh":     gate,
+			"scripts/ci-local.sh":      gate,
 			".github/workflows/ci.yml": "name: CI\non: [pull_request]\njobs:\n  test:\n    runs-on: x\n    steps:\n      - run: make test\n",
 		}),
 	}
