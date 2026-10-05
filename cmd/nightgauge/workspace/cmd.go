@@ -29,6 +29,7 @@ func Cmd() *cobra.Command {
 	cmd.AddCommand(projectsForRepoCmd())
 	cmd.AddCommand(provisionBoardSyncCmd())
 	cmd.AddCommand(repoCmd())
+	cmd.AddCommand(contractCmd())
 	return cmd
 }
 

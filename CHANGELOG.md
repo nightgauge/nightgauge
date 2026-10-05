@@ -14,6 +14,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **`nightgauge workspace contract rollout|status` rolls one contract out to
+  every workspace repository** (#1480). A contract manifest names files to
+  copy byte for byte, labels to provision, a CI job to insert and a pull
+  request body. For each repository the rollout works in a fresh worktree,
+  runs that repository's own local gate, and opens a pull request only when
+  the gate passed. One table reports every repository's status, local gate,
+  pull request and CI checks. `configs/contracts/changelog.yaml` is the
+  changelog contract as a manifest. See `docs/MULTI_REPO_WORKSPACE.md`
+  § Contract Rollout.
+
 ### Changed
 
 - **The platform smoke workflow runs without a session token** (#2425).
@@ -26,6 +38,14 @@ changelog, and the release workflow refuses a tag that does not.
   after each platform deploy, in the platform repository.
 
 ### Fixed
+
+- **OpenCode subagent findings recorded; `task` stays denied** (#1805). Run
+  against the pinned opencode 1.18.30 with a scripted provider, the plugin's
+  `tool.execute.before` fires for a subagent's own tool calls. The denial
+  stays because a subagent's steps and tokens never reach the stage's turn,
+  token and cost budgets while it runs. ADR-022 records both, and two
+  integration tests pin the hook result and the denial against the real
+  binary. The stub provider gained a `task-then-subagent-bash` script.
 
 - **Run from `$HOME`, the CLI no longer loads the machine config as a project
   config** (#2423). The project tier is `<cwd>/.nightgauge/config.yaml`, and in
