@@ -26,8 +26,8 @@
 //                      permission map's secret (and, for edit/write,
 //                      project-config) deny patterns once letter case is
 //                      ignored (#1827; see caseFoldedDeny).
-//   - "task"        -> always denied (AC9 fallback below), independent of
-//                      every other gate.
+//   - "task"        -> always denied (see the subagent note below),
+//                      independent of every other gate.
 //   - every other tool id in TOOL_CLASSIFICATION -> passthrough (read-only,
 //                      or governed elsewhere, e.g. webfetch by #1638's
 //                      permission map) or, for a mutating tool this table
@@ -307,19 +307,19 @@ function gateCwd(ctx) {
   return (ctx && (ctx.directory || ctx.worktree)) || process.cwd();
 }
 
-// AC9's spike (ADR-022 amendment 2026-09-14) could not determine, within its
-// bound, whether opencode 1.18.30 calls tool.execute.before for a tool a
-// subagent (`task`) session runs — only that the top-level `task` call
-// itself always does, since it is this session's own tool call. Until that
-// question is settled, "task" is denied unconditionally, careful mode on or
-// off: a subagent session this plugin cannot verify it gates is worse than
-// no subagent at all. This is independent of, and checked before, every
-// other gate below — including sanitize-prompt: the issue that added the
-// gates below (#1640) reads its own AC3 ("task calls ... pass hook
-// sanitize-prompt") as superseded by this still-open fallback, since a
-// sanitize-prompt pass would let a `task` call proceed past this check. See
-// the #1640 PR description for that reading, recorded as a deviation rather
-// than a silent relaxation of TestNodeHarnessDeniesTask's contract.
+// Subagents. AC9's spike could not tell whether opencode 1.18.30 calls
+// tool.execute.before for a tool a subagent (`task`) session runs; #1805
+// settled it against the pinned binary with a scripted provider: it does, in
+// the child's own sessionID, in this same plugin instance
+// (TestToolExecuteBeforeFiresInSubagentAgainstRealOpenCode). The gates below
+// would therefore bound a subagent's tool calls. What nothing bounds yet is
+// its consumption: a subagent's steps and tokens never reach the stage's
+// stream, so the stage's turn and token ceilings, which every stage on a
+// model no USD cap binds always has, and its cost budget (#1748) are all
+// blind to it while it runs. Until a subagent counts against those caps,
+// "task" is denied unconditionally, careful mode on or off, and before every
+// other gate below, sanitize-prompt included (the ADR-022 amendment dated
+// 2026-10-05).
 // READ_MAX_LINES_ENV is opencodeplugin.EnvReadMaxLines (plugin.go): the
 // most lines one read returns (#2178), set per stage by the Go side.
 const READ_MAX_LINES_ENV = "NIGHTGAUGE_OPENCODE_READ_MAX_LINES";
@@ -514,7 +514,7 @@ export async function toolExecuteBefore(ctx, input, output) {
   if (!input) return;
   if (input.tool === "task") {
     throw new Error(
-      `${TASK_MARKER} subagent (task) sessions are denied: opencode 1.18.30's tool.execute.before coverage inside a task session is unverified (AC9, ADR-022 amendment 2026-09-14)`
+      `${TASK_MARKER} subagent (task) sessions are denied: a subagent's steps and tokens never reach the stage's turn, token and cost budgets while it runs (ADR-022 amendment 2026-10-05, #1805)`
     );
   }
 

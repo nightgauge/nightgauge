@@ -1,0 +1,40 @@
+# The workspace changelog contract (docs/GIT_WORKFLOW.md § Changelog), as a
+# contract manifest for `nightgauge workspace contract rollout` (#1480).
+#
+# Every repository gets the core's changelog checker and its self-test byte
+# for byte, and a `changelog` CI job that runs both. A repository with one
+# changelog is checked with `--extension none`. With no `targets:` here, the
+# command rolls the contract out to every repository of the workspace
+# manifest; pass --target to name them instead.
+name: changelog
+source_root: ../..
+branch: chore/changelog-contract
+commit_message: "ci: adopt the workspace changelog contract"
+pr:
+  title: "ci: adopt the workspace changelog contract"
+  body: |
+    Adopts the workspace changelog contract in {{.Repo}}: the core's
+    `scripts/check-changelog.sh` and its self-test, copied byte for byte, and
+    a `changelog` CI job that runs both.
+
+    Rolled out by `nightgauge workspace contract rollout` ({{.Contract}}). The
+    repository's own local gate passed on this branch before it was pushed.
+files:
+  - path: scripts/check-changelog.sh
+  - path: scripts/test-check-changelog.sh
+ci_job:
+  workflow: .github/workflows/changelog.yml
+  workflow_name: Changelog
+  id: changelog
+  job: |
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Changelog gate self-test
+        run: bash scripts/test-check-changelog.sh
+      - name: Changelog names every released tag
+        run: |
+          git fetch --tags --force --quiet origin
+          bash scripts/check-changelog.sh --extension none

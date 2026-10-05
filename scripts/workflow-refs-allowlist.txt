@@ -38,6 +38,14 @@ example claude-plugins/nightgauge/skills/product-audit/SKILL.md product-audit.ym
 # Teaching examples of a relative-link fix, plus their generated mirror.
 example skills/update-docs/SKILL.md file.yml
 example skills/update-docs/SKILL.md review.yml
+# Contract rollout (#1480): the workflow a contract inserts into each TARGET
+# repository, and the throwaway target repositories of its tests.
+example configs/contracts/changelog.yaml changelog.yml
+example internal/contractrollout/rollout_test.go changelog.yml
+example internal/contractrollout/rollout_test.go check.yml
+example internal/contractrollout/primitives_test.go a.yml
+example internal/contractrollout/primitives_test.go check.yml
+example internal/contractrollout/primitives_test.go x.yml
 example claude-plugins/nightgauge/skills/update-docs/SKILL.md file.yml
 example claude-plugins/nightgauge/skills/update-docs/SKILL.md review.yml
 # Test fixtures: an acceptance-criterion string and audit-dimension inputs.

@@ -2212,7 +2212,9 @@ of `NIGHTGAUGE_BIN` — a subagent session this plugin cannot verify it gates
 is worse than no subagent at all. `TestNodeHarnessDeniesTask` is the
 red/green coverage. Settling AC9 properly, and lifting the denial, needs
 either an upstream answer or a faster local model than the spike had time
-for; it remains open.
+for; it remains open. _The hook question is settled by the 2026-10-05
+amendment (#1805): it fires. The denial stays, for the budget reason given
+there._
 
 **Resolved:** [nightgauge/nightgauge#1787](https://github.com/nightgauge/nightgauge/issues/1787)
 gave a non-inheriting run its own per-run `HOME`, so `$HOME/.opencode` stops
@@ -3356,6 +3358,47 @@ language server, so it gets the read gates on `filePath`, without read's
 line cap. `list` left the table: on 1.18.x it is a permission key and no
 tool registers that id. The registry was read from the installed 1.18.32
 binary's bundled source; the pinned 1.18.30 capture lists none of the four.
+
+## Subagent tool calls reach the gates; the `task` denial stays (amendment 2026-10-05, #1805)
+
+AC9's spike (the 2026-09-15 plugin amendment) could not tell, within its
+time budget against a local model, whether opencode 1.18.30 calls
+`tool.execute.before` for a tool a `task` (subagent) session runs. #1805
+settled it deterministically. `internal/stubprovider` gained a script,
+`task-then-subagent-bash`, that serves two conversations from one stateless
+server: a request whose user messages carry a marker gets the subagent's
+turns, any other request the primary session's. The primary session calls
+`task` with the marker in its prompt; the subagent calls `bash` once.
+Against the pinned 1.18.30 binary, with no live model and no network, a
+plugin logging every `tool.execute.before` call recorded two calls: `task`
+in the primary session's `sessionID`, then `bash` in a different
+`sessionID`, the child the task tool's own metadata names
+(`parentSessionId` is the primary). **The hook fires inside a subagent
+session, in the same plugin instance**, so every gate in `gates.js` would
+apply to a subagent's tool calls. Two `opencode_integration` tests pin this
+against the real binary: `TestToolExecuteBeforeFiresInSubagentAgainstRealOpenCode`
+(the measurement itself, with the logging plugin) and
+`TestRealPluginDeniesTaskAgainstRealOpenCode` (the shipped plugin still
+refuses the `task` call, so no child session starts).
+
+The denial nevertheless stays, because the gates are not the only bound a
+stage runs under. A subagent's steps and tokens never reach the stage's
+stream, and every live stage budget is counted on that stream:
+
+- the turn ceiling (#1652), which every stage on a zero-cost or unpriced
+  model always has, and which is the only thing that ends a model that keeps
+  calling tools, since OpenCode's own steps cap is not a hard stop (#1811);
+- the token ceiling, likewise always set where no USD cap binds the stage;
+- the cost budget, which prices a subagent's usage only once the stage has
+  ended (§ 3, #1748).
+
+Lifting the denial on the strength of the hook alone would let a subagent
+run past all three while the stage's own counters stand still, and #1748
+already required that the denial not be relaxed without a subagent spend
+bound. Allowing `task` therefore waits on subagent accounting: a child
+session's steps, tokens and cost counted against the same ceilings as the
+stage's own, live. The hook result above is what makes that possible (the
+plugin sees every child tool call); the accounting itself is not built.
 
 ## Consequences
 

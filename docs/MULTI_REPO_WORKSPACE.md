@@ -857,6 +857,89 @@ member with the **same** `--project`.
 The generated files carry a "do not edit — regenerate" banner: re-run
 `provision-board-sync` after changing the manifest rather than hand-editing them.
 
+### Contract Rollout — `workspace contract` (#1480)
+
+A cross-repository contract is a change every workspace repository must
+carry the same way: a script copied byte for byte, a label, a CI job. Rolling
+one out by hand means one branch, one gate run and one pull request per
+repository, with nothing tracking the whole. `workspace contract` does it from
+one contract manifest:
+
+```bash
+nightgauge workspace contract rollout configs/contracts/changelog.yaml          # plan only
+nightgauge workspace contract rollout configs/contracts/changelog.yaml --apply  # one PR per repo
+nightgauge workspace contract status  configs/contracts/changelog.yaml          # PRs and CI checks
+```
+
+For each target repository, `rollout --apply`:
+
+1. provisions the contract's labels (a missing label is created; one that
+   exists with another color or description is reported as drift, never
+   repainted);
+2. fetches `origin/<base>` into a fresh worktree under `--work-dir`, so the
+   operator's own checkout is never touched;
+3. copies the contract's files byte for byte, keeping the executable bit, and
+   inserts its CI job into the named workflow (a new file, or spliced in as the
+   last job under `jobs:` with every other byte of the file unchanged; an
+   existing job with the same id and another body is refused);
+4. reports a repository with nothing to change as `compliant` and stops there;
+5. commits on the contract's branch and runs the repository's own local gate,
+   `bash scripts/ci-local.sh`. A failed gate keeps the worktree for inspection
+   (`gate-failed`); a repository with no such script gets no pull request
+   (`gate-missing`);
+6. pushes the branch and opens the pull request (`pr-open`).
+
+Every run, applied or not, ends with one table:
+
+| Repository | Status    | Local gate | PR  | CI checks | Detail |
+| ---------- | --------- | ---------- | --- | --------- | ------ |
+| acme/app   | pr-open   | passed     | #12 | PENDING   |        |
+| acme/web   | compliant | skipped    | -   | -         |        |
+
+`contract status` re-reads each pull request from the forge. A target is
+`rolled-out` once its pull request merged, or is open with every check green;
+`ci-failed` when the checks are red. Re-running `rollout` reuses an open pull
+request instead of opening a second one; its local gate then reads
+`earlier-run`, and only green CI checks or a merge make it `rolled-out`. Both
+commands exit non-zero while a target is `error`, `gate-failed`,
+`gate-missing` or `ci-failed`.
+
+**The manifest.** Unknown keys are refused. Paths are relative and stay inside
+the repository. A source path, or a directory on its way, that is a symlink
+out of `source_root` is refused, and nothing is written through a symlink in
+the target repository.
+
+| Key              | Meaning                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `name`           | The contract's id (lower case).                                                                                          |
+| `source_root`    | Where `files` are read from, relative to the manifest. Default: the manifest's directory.                                |
+| `branch`, `base` | Head and base branch of every pull request. Defaults: `contract/<name>`, `main`.                                         |
+| `commit_message` | The one commit's message; also the PR title unless `pr.title` is set.                                                    |
+| `pr.body`        | A Go template with `{{.Repo}}` and `{{.Contract}}`.                                                                      |
+| `files[]`        | `path` in the source, optional `target` path in the repository.                                                          |
+| `labels[]`       | `name`, `color` (six hex digits), `description`.                                                                         |
+| `ci_job`         | `workflow` (`.github/workflows/*.yml`), `id`, `job` (the job body as YAML), and for a new file `workflow_name` and `on`. |
+| `targets[]`      | `repo` (`owner/name`) and an optional `base`.                                                                            |
+
+With no `targets`, the command takes every repository of the workspace
+manifest, each named `owner/name` from its own `.nightgauge/config.yaml`.
+`--target owner/name` (repeatable) replaces either.
+
+**Trust model.** The workspace manifest is the boundary. Every target must be
+a repository it registers, and the rollout works only in the checkout it
+registers for that repository; a contract or a flag naming any other
+repository is refused before anything runs. The one command the rollout runs
+is each repository's own `scripts/ci-local.sh`, as its base branch has it: a
+contract cannot name a command or a directory, and no contract file may
+target that script. A contract's files and CI job are content the operator
+reviews before `--apply`, as for any change they push.
+
+`configs/contracts/changelog.yaml` is the changelog contract
+([GIT_WORKFLOW.md § Changelog](GIT_WORKFLOW.md#changelog)): the core's
+`scripts/check-changelog.sh` and its self-test, and a `changelog` CI job that
+runs both with `--extension none`. `TestChangelogContractRollsOutEndToEnd`
+rolls it out to two throwaway repositories.
+
 ---
 
 ## End-to-End Multi-Repo Routing Example

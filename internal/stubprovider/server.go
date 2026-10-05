@@ -68,6 +68,15 @@ type Script struct {
 	Kind              string   `json:"kind"`
 	Turns             []Turn   `json:"turns,omitempty"`
 	FirstTokenDelayMS int      `json:"first_token_delay_ms,omitempty"`
+	// SubagentMarker and SubagentTurns script a second, independent
+	// conversation (#1805): a request whose user messages contain
+	// SubagentMarker is served from SubagentTurns instead of Turns, still
+	// indexed by its own assistant-message count. A primary session that
+	// calls `task` with the marker in its prompt therefore gets one script
+	// and the subagent session that call starts gets the other, from one
+	// stateless server.
+	SubagentMarker string `json:"subagent_marker,omitempty"`
+	SubagentTurns  []Turn `json:"subagent_turns,omitempty"`
 }
 
 func loadScripts() (map[string]Script, error) {
@@ -134,11 +143,8 @@ func NewServer(cfg Config) (*Server, error) {
 		sort.Strings(names)
 		return nil, fmt.Errorf("stubprovider: unknown script %q (available: %s)", cfg.Script, strings.Join(names, ", "))
 	}
-	switch script.Kind {
-	case scriptKindTurns, scriptKindOverflow, scriptKindError:
-	default:
-		return nil, fmt.Errorf("stubprovider: script %q has unknown kind %q (want one of %q, %q, %q)",
-			cfg.Script, script.Kind, scriptKindTurns, scriptKindOverflow, scriptKindError)
+	if err := validateScript(cfg.Script, script); err != nil {
+		return nil, err
 	}
 
 	if cfg.MaxRequests <= 0 {
@@ -156,6 +162,20 @@ func NewServer(cfg Config) (*Server, error) {
 		script:     script,
 		maxReached: make(chan struct{}, 1),
 	}, nil
+}
+
+// validateScript refuses a script NewServer could not serve as written.
+func validateScript(name string, script Script) error {
+	switch script.Kind {
+	case scriptKindTurns, scriptKindOverflow, scriptKindError:
+	default:
+		return fmt.Errorf("stubprovider: script %q has unknown kind %q (want one of %q, %q, %q)",
+			name, script.Kind, scriptKindTurns, scriptKindOverflow, scriptKindError)
+	}
+	if (script.SubagentMarker == "") != (len(script.SubagentTurns) == 0) {
+		return fmt.Errorf("stubprovider: script %q must set subagent_marker and subagent_turns together", name)
+	}
+	return nil
 }
 
 // Listen binds addr, refusing anything that is not a loopback address
@@ -248,16 +268,35 @@ func (s *Server) delay() time.Duration {
 }
 
 func (s *Server) turnAt(i int) Turn {
-	if len(s.script.Turns) == 0 {
+	return turnFrom(s.script.Turns, i)
+}
+
+func turnFrom(turns []Turn, i int) Turn {
+	if len(turns) == 0 {
 		return Turn{}
 	}
-	if i >= len(s.script.Turns) {
-		i = len(s.script.Turns) - 1
+	if i >= len(turns) {
+		i = len(turns) - 1
 	}
 	if i < 0 {
 		i = 0
 	}
-	return s.script.Turns[i]
+	return turns[i]
+}
+
+// isSubagentRequest reports whether the script names a subagent marker and
+// one of the request's user messages carries it. The match is on the raw
+// content bytes, so a string content and an array of text parts both count.
+func (s *Server) isSubagentRequest(messages []chatMessage) bool {
+	if s.script.SubagentMarker == "" {
+		return false
+	}
+	for _, m := range messages {
+		if m.Role == "user" && strings.Contains(string(m.Content), s.script.SubagentMarker) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- wire types -----------------------------------------------------------
@@ -414,11 +453,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	turnIndex := countAssistantMessages(req.Messages)
+	subagent := s.isSubagentRequest(req.Messages)
 
 	// Only sizes and the derived turn index are ever logged — never the
 	// request body itself.
-	s.cfg.Log.Printf("stub-provider: served script=%q turn=%d bytes=%d stream=%v total=%d",
-		s.cfg.Script, turnIndex, len(body), req.Stream, count)
+	s.cfg.Log.Printf("stub-provider: served script=%q turn=%d subagent=%v bytes=%d stream=%v total=%d",
+		s.cfg.Script, turnIndex, subagent, len(body), req.Stream, count)
 
 	switch s.script.Kind {
 	case scriptKindTurns:
@@ -426,10 +466,17 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(d)
 		}
 		turn := s.turnAt(turnIndex)
+		idKey := s.cfg.Script
+		if subagent {
+			// Its own id namespace, so the subagent's turn 0 tool call never
+			// shares an id with the primary session's turn 0 call.
+			turn = turnFrom(s.script.SubagentTurns, turnIndex)
+			idKey += "-subagent"
+		}
 		if req.Stream {
-			s.writeStream(w, turnIndex, turn, req)
+			s.writeStream(w, idKey, turnIndex, turn, req)
 		} else {
-			s.writeComplete(w, turnIndex, turn, req)
+			s.writeComplete(w, idKey, turnIndex, turn, req)
 		}
 	case scriptKindOverflow:
 		writeOverflowError(w)
@@ -505,7 +552,7 @@ func toolCallID(script string, turnIndex int) string {
 	return fmt.Sprintf("call-stub-%s-%d", script, turnIndex)
 }
 
-func (s *Server) writeComplete(w http.ResponseWriter, turnIndex int, turn Turn, req chatRequest) {
+func (s *Server) writeComplete(w http.ResponseWriter, idKey string, turnIndex int, turn Turn, req chatRequest) {
 	model := s.modelFor(req)
 	promptTokens := countTokens(req.Messages)
 
@@ -516,7 +563,7 @@ func (s *Server) writeComplete(w http.ResponseWriter, turnIndex int, turn Turn, 
 	if turn.ToolCall != nil {
 		args, _ := json.Marshal(turn.ToolCall.Arguments)
 		msg.ToolCalls = []wireToolCall{{
-			ID:       toolCallID(s.cfg.Script, turnIndex),
+			ID:       toolCallID(idKey, turnIndex),
 			Type:     "function",
 			Function: wireFunctionCall{Name: turn.ToolCall.Name, Arguments: string(args)},
 		}}
@@ -532,7 +579,7 @@ func (s *Server) writeComplete(w http.ResponseWriter, turnIndex int, turn Turn, 
 	}
 
 	resp := chatCompletionResponse{
-		ID:      completionID(s.cfg.Script, turnIndex),
+		ID:      completionID(idKey, turnIndex),
 		Object:  "chat.completion",
 		Created: stubCreatedUnix,
 		Model:   model,
@@ -548,7 +595,7 @@ func (s *Server) writeComplete(w http.ResponseWriter, turnIndex int, turn Turn, 
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func (s *Server) writeStream(w http.ResponseWriter, turnIndex int, turn Turn, req chatRequest) {
+func (s *Server) writeStream(w http.ResponseWriter, idKey string, turnIndex int, turn Turn, req chatRequest) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -556,7 +603,7 @@ func (s *Server) writeStream(w http.ResponseWriter, turnIndex int, turn Turn, re
 	flusher, _ := w.(http.Flusher)
 
 	model := s.modelFor(req)
-	id := completionID(s.cfg.Script, turnIndex)
+	id := completionID(idKey, turnIndex)
 
 	writeSSEChunk(w, chatCompletionChunk{
 		ID: id, Object: "chat.completion.chunk", Created: stubCreatedUnix, Model: model,
@@ -578,7 +625,7 @@ func (s *Server) writeStream(w http.ResponseWriter, turnIndex int, turn Turn, re
 			Choices: []streamChoice{{Index: 0, Delta: streamDelta{
 				ToolCalls: []wireToolCall{{
 					Index:    &zero,
-					ID:       toolCallID(s.cfg.Script, turnIndex),
+					ID:       toolCallID(idKey, turnIndex),
 					Type:     "function",
 					Function: wireFunctionCall{Name: turn.ToolCall.Name, Arguments: string(args)},
 				}},
