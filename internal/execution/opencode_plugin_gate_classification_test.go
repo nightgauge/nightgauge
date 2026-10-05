@@ -21,7 +21,7 @@ func TestNightgaugeGateMarkerIsNeverAnAutoRejectNotice(t *testing.T) {
 		"[nightgauge-gate:careful] /careful is ON — blocked: docker compose down -v is a production-destructive Bash command (run `nightgauge careful off` to disable.)",
 		"[nightgauge-gate:careful] NIGHTGAUGE_BIN is not set to an absolute path; the careful gate cannot run, so the tool call is blocked closed",
 		"[nightgauge-gate:careful] the careful gate timed out or was killed (signal SIGTERM); the tool call is blocked closed",
-		"[nightgauge-gate:task-denied] subagent (task) sessions are denied: opencode 1.18.30's tool.execute.before coverage inside a task session is unverified (AC9, ADR-022 amendment 2026-09-14)",
+		"[nightgauge-gate:task-denied] subagent (task) sessions are denied: this stage's cost budget is enforced, and a subagent's spend is not visible until the stage ends (ADR-022 amendment 2026-10-05, #1805)",
 	}
 	for _, msg := range messages {
 		if strings.HasSuffix(msg, openCodeAutoRejectEnd) {

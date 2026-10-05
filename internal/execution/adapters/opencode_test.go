@@ -415,19 +415,20 @@ func TestOpenCodeUnenforcedControlsMatchADR(t *testing.T) {
 	}
 }
 
-// TestOpenCodeSubagentCostGapNotesAC9Denial guards #1748's finding: the
+// TestOpenCodeSubagentCostGapNotesTaskDenial guards #1748's finding: the
 // "subagent cost" row's gap text must keep saying the gap is currently
-// unreachable because gates.js denies every `task` tool call unconditionally
-// (AC9's fallback), not merely that the watchdog cannot stop a stage while
-// its subagents spend. Without this, a future edit could silently revert the
-// row to describing the gap as a live risk, drifting from ADR-022 § 3 again.
-func TestOpenCodeSubagentCostGapNotesAC9Denial(t *testing.T) {
+// unreachable because a stage with an enforced cost budget has its `task`
+// calls denied (#1805), not merely that the watchdog cannot stop a stage
+// while its subagents spend. Without this, a future edit could silently
+// revert the row to describing the gap as a live risk, drifting from
+// ADR-022 § 3 again.
+func TestOpenCodeSubagentCostGapNotesTaskDenial(t *testing.T) {
 	for _, c := range openCodeUnenforcedControls {
 		if c.name != "subagent cost" {
 			continue
 		}
-		if !strings.Contains(c.gap, "AC9") {
-			t.Errorf("subagent cost row's gap text no longer mentions AC9's `task` denial: %q", c.gap)
+		if !strings.Contains(c.gap, "deny every `task` call") {
+			t.Errorf("subagent cost row's gap text no longer mentions the `task` denial: %q", c.gap)
 		}
 		if !strings.Contains(c.gap, "unreachable") {
 			t.Errorf("subagent cost row's gap text no longer says the gap is currently unreachable: %q", c.gap)

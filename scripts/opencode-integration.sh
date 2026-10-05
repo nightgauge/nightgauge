@@ -20,5 +20,5 @@ pin="$(bash scripts/adapter-cli-pin.sh opencode)"
 
 npm install --prefix "$prefix" --no-fund --no-audit "$pin"
 PATH="$prefix/node_modules/.bin:$PATH" go test -tags opencode_integration -count=1 -v -timeout 10m \
-  -run '^Test(OpenCode(Integration.*|PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|CatalogEnvMatchesTheBinary|AnthropicModelsMatchTheBinary)|RealOpenCodePinRelaxedUnderCanary|PluginLoadsOnRealOpenCode|CompactionAutocontinueSuppressionAgainstRealOpenCode|PermissionAskEventAgainstRealOpenCode)$' \
+  -run '^Test(OpenCode(Integration.*|PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|CatalogEnvMatchesTheBinary|AnthropicModelsMatchTheBinary)|RealOpenCodePinRelaxedUnderCanary|PluginLoadsOnRealOpenCode|SubagentToolCallGatedAgainstRealOpenCode|CompactionAutocontinueSuppressionAgainstRealOpenCode|PermissionAskEventAgainstRealOpenCode)$' \
   ./internal/execution/ ./internal/execution/adapters/ ./internal/execution/opencodeplugin/

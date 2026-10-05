@@ -396,5 +396,35 @@
     "models": ["stub/stub-model"],
     "kind": "turns",
     "turns": [{ "tool_call": { "name": "read", "arguments": { "filePath": "calc.py" } } }]
+  },
+  "task-then-subagent-bash": {
+    "models": ["stub/stub-model"],
+    "kind": "turns",
+    "turns": [
+      {
+        "tool_call": {
+          "name": "task",
+          "arguments": {
+            "description": "subagent probe",
+            "prompt": "NIGHTGAUGE-SUBAGENT-PROBE: run one bash command and report.",
+            "subagent_type": "general"
+          }
+        }
+      },
+      { "content": "The subagent finished." }
+    ],
+    "subagent_marker": "NIGHTGAUGE-SUBAGENT-PROBE",
+    "subagent_turns": [
+      {
+        "tool_call": {
+          "name": "bash",
+          "arguments": {
+            "command": "git commit --allow-empty -m subagent-probe",
+            "description": "subagent bash probe"
+          }
+        }
+      },
+      { "content": "Ran the subagent bash command." }
+    ]
   }
 }

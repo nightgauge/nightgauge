@@ -158,6 +158,10 @@ const (
 	// EnvExplorationBudget is how many exploration tool calls the stage may
 	// make before gates.js refuses more (#2188); 0 or unset is no budget.
 	EnvExplorationBudget = "NIGHTGAUGE_OPENCODE_EXPLORATION_BUDGET"
+	// EnvSubagents is "allow" when the stage may start subagent (`task`)
+	// sessions (#1805, adapters.OpenCodeSubagentsAllowed); gates.js denies
+	// every task call for any other value, unset included.
+	EnvSubagents = "NIGHTGAUGE_OPENCODE_SUBAGENTS"
 	// EnvKnowledgeDir is the absolute knowledge-base directory (the
 	// workspace root's .nightgauge/knowledge), whose reads the exploration
 	// budget never counts (#2193) and the external-directory gate admits

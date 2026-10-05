@@ -70,6 +70,7 @@ import (
 	"sync/atomic"
 
 	"github.com/nightgauge/nightgauge/internal/gitworktree"
+	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
 	"github.com/nightgauge/nightgauge/internal/opencodeallow"
 )
 
@@ -921,6 +922,39 @@ func SwapOpenCodeBinDirForTest(dir string) (restore func()) {
 // openCodePermissionMap builds the ADR-022 § 9 / #1638 permission map for
 // opts. binDir is OpenCodeBinDir()'s result, threaded in by the caller so
 // this function stays pure (BuildOpenCodeConfig's own contract).
+// OpenCodeSubagentsAllowed reports whether a stage may start subagent
+// (`task`) sessions (#1805). opencode 1.18.30 runs every tool a subagent
+// calls through the plugin's tool.execute.before, so the gates bound a
+// subagent as they bound the stage; its spend is what nothing sees while the
+// stage runs, since a subagent's steps never reach the stage's stream and
+// the cost watchdog prices them only once the stage has ended (#1748). So a
+// stage whose cost budget is enforced, a budget on a model the registry
+// prices above zero, starts no subagents. With no budget, a model the
+// registry cannot price (whose budget is not enforced at all) or one it
+// prices at zero, a subagent can spend nothing the stage is held to.
+// PrepareOpenCodeRun hands the answer to the plugin in
+// opencodeplugin.EnvSubagents, and the permission map's task key follows it.
+func OpenCodeSubagentsAllowed(opts RunOptions) bool {
+	if opts.CostBudget <= 0 {
+		return true
+	}
+	model, err := OpenCodeModelArg(opts.Model)
+	if err != nil {
+		return false
+	}
+	rate, priced := tokens.CalculateCostFor("opencode", model, tokens.TokenCounts{Input: 1_000_000, Output: 1_000_000})
+	return !priced || rate <= 0
+}
+
+// openCodeTaskPermission is the permission map's task key: the stage's own
+// grant where subagents are allowed, a bare deny everywhere else.
+func openCodeTaskPermission(opts RunOptions, grant *openCodeToolGrant) string {
+	if !OpenCodeSubagentsAllowed(opts) {
+		return openCodeDeny
+	}
+	return openCodeScalarPermission(grant)
+}
+
 func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJSON {
 	grants := openCodeToolGrants(opts.AllowedTools)
 	if r, ok := grants["read"]; ok {
@@ -942,13 +976,13 @@ func openCodePermissionMap(opts RunOptions, binDir string) *openCodePermissionJS
 		Grep:     openCodeScalarPermission(grants["grep"]),
 		List:     openCodeScalarPermission(grants["list"]),
 		Bash:     openCodeBashPermission(grants["bash"]),
-		// task is denied whatever the stage grants: gates.js refuses every
-		// task call (ADR-022 AC9, #1748), and OpenCode drops a tool whose
-		// permission is a bare deny from the tool list it offers the model,
-		// so no step is spent on a guaranteed refusal. A granted task also
-		// made OpenCode's own truncation notice tell the model to delegate
-		// to the Task tool (#2178).
-		Task:              openCodeDeny,
+		// task follows the stage's grant only where subagents are allowed
+		// (OpenCodeSubagentsAllowed, #1805); elsewhere it is a bare deny,
+		// which OpenCode drops from the tool list it offers the model, so no
+		// step is spent on a refusal gates.js would make anyway. A granted
+		// task also makes OpenCode's own truncation notice tell the model to
+		// delegate to the Task tool (#2178).
+		Task:              openCodeTaskPermission(opts, grants["task"]),
 		WebFetch:          openCodeScalarPermission(grants["webfetch"]),
 		WebSearch:         openCodeScalarPermission(grants["websearch"]),
 		Skill:             openCodeScalarPermission(grants["skill"]),

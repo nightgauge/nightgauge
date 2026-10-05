@@ -83,11 +83,10 @@ const lastNotifyAt = new Map();
 // `session.updated` reducer and `experimental.session.list({roots: ...})`
 // call). Module-level for the same reason as eventsTruncated/lastNotifyAt: it
 // must survive across every hook call this one opencode process makes.
-// gates.js denies the `task` tool unconditionally (ADR-022, AC9), so no
-// child session is known to reach any hook this plugin registers today —
-// this set is expected to stay empty in production until that denial lifts,
-// and every appendEvent call below still reads it rather than hard-coding
-// false, so child reporting is correct the day it does.
+// gates.js allows the `task` tool only on a stage with no enforced cost
+// budget (#1805), so a child session reaches this plugin only there; every
+// appendEvent call below reads this set rather than hard-coding false, so
+// child reporting is correct wherever one does.
 const childSessionIDs = new Set();
 
 // SKILL_ID_RE bounds what toolExecuteBefore ever treats as a skill id: opaque

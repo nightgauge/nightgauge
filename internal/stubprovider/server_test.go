@@ -667,3 +667,52 @@ func TestSIGTERMStopsWithinTwoSeconds(t *testing.T) {
 	}
 	t.Fatalf("pid %d still alive 2s after SIGTERM", pid)
 }
+
+// TestTaskThenSubagentScript (#1805): one stateless server serves two
+// conversations. A request whose user messages carry the script's subagent
+// marker is served the subagent's turns, under their own tool-call ids; any
+// other request is served the primary session's, whose first turn calls
+// `task` with the marker in its prompt.
+func TestTaskThenSubagentScript(t *testing.T) {
+	baseURL := startServer(t, Config{Script: "task-then-subagent-bash"})
+
+	resp, body := postChatCompletion(t, baseURL, userTurnRequest("please do the task"))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+	}
+	primary := decodeChatCompletion(t, body).Choices[0].Message.ToolCalls
+	if len(primary) != 1 || primary[0].Function.Name != "task" {
+		t.Fatalf("primary tool_calls = %+v, want one call named task", primary)
+	}
+	var args struct {
+		Prompt string `json:"prompt"`
+	}
+	if err := json.Unmarshal([]byte(primary[0].Function.Arguments), &args); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, body = postChatCompletion(t, baseURL, userTurnRequest(args.Prompt))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+	}
+	sub := decodeChatCompletion(t, body).Choices[0].Message.ToolCalls
+	if len(sub) != 1 || sub[0].Function.Name != "bash" {
+		t.Fatalf("subagent tool_calls = %+v, want one call named bash", sub)
+	}
+	if sub[0].ID == primary[0].ID {
+		t.Errorf("the subagent's tool call reuses the primary's id %q", sub[0].ID)
+	}
+}
+
+// TestNewServerRejectsHalfASubagentScript: a script naming subagent turns
+// without a marker, or a marker without turns, is refused.
+func TestNewServerRejectsHalfASubagentScript(t *testing.T) {
+	for name, s := range map[string]Script{
+		"marker only": {Kind: scriptKindTurns, Turns: []Turn{{Content: "x"}}, SubagentMarker: "M"},
+		"turns only":  {Kind: scriptKindTurns, Turns: []Turn{{Content: "x"}}, SubagentTurns: []Turn{{Content: "y"}}},
+	} {
+		if err := validateScript("half", s); err == nil {
+			t.Errorf("%s: validateScript accepted a half subagent script", name)
+		}
+	}
+}

@@ -41,10 +41,10 @@ package opencodeplugin
 // that they reach it for child sessions too — are each confirmed for a
 // parent session by this same run (the "event session.compacted" line and
 // the "compaction" event this test asserts on); child-session propagation is
-// NOT verified here or anywhere else in this codebase yet, because AC9
-// (gates.js, AC9's own doc comment) denies every "task" tool call
-// unconditionally, so no child session can currently reach any hook this
-// plugin registers. That gap is inherited from AC9, not introduced here.
+// NOT verified here. TestSubagentToolCallGatedAgainstRealOpenCode (#1805)
+// shows a child session's tool calls reaching tool.execute.before; whether
+// its session events reach the event hook is a separate question this suite
+// does not answer.
 import (
 	"bytes"
 	"context"

@@ -646,7 +646,7 @@ disposition; see the ADR for the reasoning behind each:
 | -------------------------------- | --------------------------------------------- | -------------------------- |
 | Skills                           | supported                                     | #1666                      |
 | Commands                         | supported                                     | #1666                      |
-| Subagents (`task`)               | denied (AC9 fallback)                         | #1624                      |
+| Subagents (`task`)               | gated; denied on an enforced cost budget      | #1624, #1805               |
 | Plugins                          | supported, Nightgauge's only                  | #1635, #1640, #1641, #1642 |
 | MCP                              | config: supported; tool calls: blocked closed | #1626, #1640               |
 | Permissions                      | supported                                     | #1638                      |

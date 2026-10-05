@@ -229,14 +229,15 @@ func TestOpenCodePermissionMap(t *testing.T) {
 				t.Fatalf("%s/SKILL.md allowed-tools = %v, want exactly %v; this test's scalar-permission assertions below assume this set", name, tools, wantTools)
 			}
 
-			for _, allowedKey := range []string{"glob", "grep", "list"} {
+			// task follows the stage's grant: these options carry no cost
+			// budget, so subagents are allowed (#1805);
+			// TestOpenCodeSubagentsAllowed covers the budgeted denial.
+			for _, allowedKey := range []string{"glob", "grep", "list", "task"} {
 				if permission[allowedKey] != openCodeAllow {
 					t.Errorf("permission[%q] = %v, want %q", allowedKey, permission[allowedKey], openCodeAllow)
 				}
 			}
-			// task is denied though every stage grants it: gates.js refuses
-			// every task call, so it is not offered at all (#2178, #1748).
-			for _, deniedKey := range []string{"task", "webfetch", "websearch", "skill", "todowrite"} {
+			for _, deniedKey := range []string{"webfetch", "websearch", "skill", "todowrite"} {
 				if permission[deniedKey] != openCodeDeny {
 					t.Errorf("permission[%q] = %v, want %q", deniedKey, permission[deniedKey], openCodeDeny)
 				}
@@ -929,5 +930,42 @@ func TestOpenCodePermissionMapCoversTheSystemAliasOfAResolvedWorktree(t *testing
 	rel, _ := filepath.Rel(wt, filepath.Join(alias, "src", "main.go"))
 	if got := openCodePatternAction(perm.Edit, filepath.ToSlash(rel)); got != openCodeAllow {
 		t.Errorf("edit %q = %q, want allow (a deliverable file through the alias)", rel, got)
+	}
+}
+
+// TestOpenCodeSubagentsAllowed is #1805's policy: a stage may start subagents
+// unless its cost budget is enforced, a budget on a model the registry prices
+// above zero, since a subagent's spend reaches the cost watchdog only once
+// the stage has ended (#1748). The permission map's task key follows it: the
+// stage's own grant where subagents are allowed, a bare deny where not.
+func TestOpenCodeSubagentsAllowed(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		opts  RunOptions
+		allow bool
+	}{
+		{"no cost budget", RunOptions{Model: "anthropic/claude-sonnet-5"}, true},
+		{"budget on a model priced at zero", RunOptions{Model: "lmstudio/qwen/qwen3.8-27b", CostBudget: 1}, true},
+		{"budget on a model the registry cannot price", RunOptions{Model: "nosuch/model", CostBudget: 1}, true},
+		{"budget on a paid model", RunOptions{Model: "anthropic/claude-sonnet-5", CostBudget: 1}, false},
+		{"budget on an unparseable model", RunOptions{Model: "", CostBudget: 1}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := OpenCodeSubagentsAllowed(tc.opts); got != tc.allow {
+				t.Fatalf("OpenCodeSubagentsAllowed = %v, want %v", got, tc.allow)
+			}
+			granted := tc.opts
+			granted.AllowedTools = []string{"Task"}
+			want := openCodeDeny
+			if tc.allow {
+				want = openCodeAllow
+			}
+			if got := openCodePermissionMap(granted, "").Task; got != want {
+				t.Errorf("permission.task with Task granted = %q, want %q", got, want)
+			}
+			if got := openCodePermissionMap(tc.opts, "").Task; got != openCodeDeny {
+				t.Errorf("permission.task without a Task grant = %q, want %q", got, openCodeDeny)
+			}
+		})
 	}
 }
