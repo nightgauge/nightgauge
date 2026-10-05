@@ -86,6 +86,9 @@ func TestLoad_ConfigHomeRootIsNotAProject(t *testing.T) {
 // below $HOME keeps its project tier and the machine tier under it.
 func TestLoad_ProjectUnderHomeStillMerges(t *testing.T) {
 	home := tempHome(t)
+	// Pin the machine tier to the file tempHome wrote: the platform default
+	// is ~/.config/nightgauge on Linux, where it would be absent.
+	t.Setenv("NIGHTGAUGE_CONFIG_HOME", filepath.Join(home, ".nightgauge"))
 	repo := filepath.Join(home, "src", "widget")
 	if err := os.MkdirAll(filepath.Join(repo, ".nightgauge"), 0o755); err != nil {
 		t.Fatal(err)
