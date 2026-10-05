@@ -201,6 +201,12 @@ type MergeEvidence struct {
 	RequiredKnown bool
 	// Runs is the per-run cross-check for the merge commit; nil skips it.
 	Runs []WorkflowRunSummary
+	// MergeSuites and HeadSuites map each GitHub Actions check suite on the
+	// merge commit and the PR head to its workflow id (SuiteWorkflowsFor).
+	// They establish check identity for DropSupersededCancelled; nil
+	// supersedes nothing.
+	MergeSuites map[int64]int64
+	HeadSuites  map[int64]int64
 	// Now is the evaluation time, for MergeCommitCheckGrace.
 	Now time.Time
 	// NoPushWorkflows is true only when the workflows at the merge commit were
@@ -255,6 +261,130 @@ func DecidingChecks(checks []CheckDetail) []CheckDetail {
 	return out
 }
 
+// GitHubActionsApp is the app slug GitHub Actions check runs carry.
+const GitHubActionsApp = "github-actions"
+
+// SuiteWorkflows maps each workflow run's check-suite id to its workflow id.
+func SuiteWorkflows(runs []WorkflowRunSummary) map[int64]int64 {
+	out := make(map[int64]int64, len(runs))
+	for _, r := range runs {
+		if r.CheckSuiteID != 0 && r.WorkflowID != 0 {
+			out[r.CheckSuiteID] = r.WorkflowID
+		}
+	}
+	return out
+}
+
+// HasCancelled reports whether any check concluded CANCELLED: only then is
+// the per-run identity worth an API call (SuiteWorkflowsFor).
+func HasCancelled(checks []CheckDetail) bool {
+	for _, c := range checks {
+		if isChecksCompleteConcluded(c) && strings.EqualFold(strings.TrimSpace(c.Conclusion), "CANCELLED") {
+			return true
+		}
+	}
+	return false
+}
+
+// WorkflowRunsReader reads the workflow runs on a commit; *CIService
+// implements it.
+type WorkflowRunsReader interface {
+	GetWorkflowRunsForRef(ctx context.Context, owner, repo, sha string) ([]WorkflowRunSummary, error)
+}
+
+// SuiteWorkflowsFor returns SuiteWorkflows for sha, read only when checks
+// hold a cancelled observation. It is nil when nothing is cancelled, the
+// reader cannot list runs, or the read fails; nil supersedes nothing, so an
+// unread identity fails closed.
+func SuiteWorkflowsFor(ctx context.Context, reader any, owner, repo, sha string, checks []CheckDetail) map[int64]int64 {
+	if !HasCancelled(checks) {
+		return nil
+	}
+	rr, ok := reader.(WorkflowRunsReader)
+	if !ok {
+		return nil
+	}
+	runs, err := rr.GetWorkflowRunsForRef(ctx, owner, repo, sha)
+	if err != nil {
+		return nil
+	}
+	return SuiteWorkflows(runs)
+}
+
+// checkIdentity is what makes two observations the same check: the name
+// (case-insensitive, trimmed), the app that posted it (GitHub Actions only),
+// the workflow whose run created it, and the commit it ran on.
+type checkIdentity struct {
+	name     string
+	workflow int64
+	sha      string
+}
+
+func identityOf(c CheckDetail, suites map[int64]int64) (checkIdentity, bool) {
+	if !strings.EqualFold(strings.TrimSpace(c.App), GitHubActionsApp) || c.CheckSuiteID == 0 || c.HeadSHA == "" {
+		return checkIdentity{}, false
+	}
+	wf := suites[c.CheckSuiteID]
+	if wf == 0 {
+		return checkIdentity{}, false
+	}
+	return checkIdentity{name: strings.ToLower(strings.TrimSpace(c.Name)), workflow: wf, sha: strings.ToLower(c.HeadSHA)}, true
+}
+
+// DropSupersededCancelled removes a completed CANCELLED check run when the
+// same check concluded SUCCESS on the same commit (#2430). Two runs of one
+// workflow can start for the same SHA (a label added at PR open fires a
+// second pull_request event) and its concurrency group cancels one; the run
+// that finished is the evidence, the cancelled duplicate tested nothing.
+//
+// "The same check" is the full identity, never the name alone: same name,
+// both posted by GitHub Actions, both created by runs of the same workflow
+// (suites maps a check suite to its workflow id), and the same head SHA. A
+// success of the same name from another app, a commit status, or another
+// workflow with a colliding job name supersedes nothing. An observation whose
+// identity is unknown (no app, no suite, a suite with no known workflow)
+// supersedes nothing and is never superseded.
+//
+// Deliberately narrow, so genuine red is never weakened:
+//   - only CANCELLED is superseded; a FAILURE or TIMED_OUT next to a success
+//     (a re-run that went green) stays red, because a failed run is a real
+//     failure signal and the contract is "never re-run hoping for a better
+//     answer";
+//   - only a SUCCESS supersedes; skipped or neutral siblings do not;
+//   - a cancelled check with no successful sibling is still red.
+//
+// EvaluateMergedCommit applies it only to a merged PR's commits (post-merge
+// observation); a commit with no merged PR, which is how a PR head is polled
+// before its merge, keeps the unmodified rule, so no pre-merge gate becomes
+// more permissive. scripts/post-merge-check.sh applies the same rule in its
+// bash fallback.
+func DropSupersededCancelled(checks []CheckDetail, suites map[int64]int64) []CheckDetail {
+	if len(suites) == 0 {
+		return checks
+	}
+	succeeded := make(map[checkIdentity]bool)
+	for _, c := range checks {
+		if isChecksCompleteConcluded(c) && strings.EqualFold(strings.TrimSpace(c.Conclusion), "SUCCESS") {
+			if id, ok := identityOf(c, suites); ok {
+				succeeded[id] = true
+			}
+		}
+	}
+	if len(succeeded) == 0 {
+		return checks
+	}
+	out := make([]CheckDetail, 0, len(checks))
+	for _, c := range checks {
+		if isChecksCompleteConcluded(c) && strings.EqualFold(strings.TrimSpace(c.Conclusion), "CANCELLED") {
+			if id, ok := identityOf(c, suites); ok && succeeded[id] {
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 func decidingRuns(runs []WorkflowRunSummary) []WorkflowRunSummary {
 	if runs == nil {
 		return nil
@@ -285,6 +415,11 @@ func EvaluateMergedCommit(e MergeEvidence) (ChecksCompleteVerdict, []string) {
 		verdict, reasons := EvaluateCommitChecksCrossChecked(e.MergeChecks, e.RequiredNames, e.Runs)
 		return neverGreenIfUnknown(verdict, reasons, e.RequiredKnown)
 	}
+	// Post-merge observation only (#2430): a cancelled duplicate superseded
+	// by the same check's success is not red. Never on the p == nil path
+	// above, which is also how a PR head is polled before its merge.
+	e.MergeChecks = DropSupersededCancelled(e.MergeChecks, e.MergeSuites)
+	e.HeadChecks = DropSupersededCancelled(e.HeadChecks, e.HeadSuites)
 	if !p.TreesMatch() {
 		verdict, reasons := EvaluateCommitChecksCrossChecked(e.MergeChecks, e.RequiredNames, e.Runs)
 		lead := fmt.Sprintf("merge commit %s's tree %s differs from PR #%d head %s's tree %s: "+

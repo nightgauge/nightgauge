@@ -41,6 +41,13 @@
 #      required CodeQL run, which passed in (b). They are reported as INFO,
 #      never RED or NOT-YET.
 #
+# Several observations of one check on a merged PR's commit: a `cancelled`
+# check run is superseded by a `success` of the same check (same name, GitHub
+# Actions, same workflow, same head SHA): two runs of one workflow, one
+# cancelled by its concurrency group (#2430). Nothing else is: a cancelled
+# check alone, a failure re-run green, or a same-name success from another
+# app or workflow leaves it RED. A commit with no merged PR is never relaxed.
+#
 # If the trees differ (a ruleset bypass, or a branch without the strict
 # policy) the PR run is not evidence about the landed tree, so the merge commit
 # must carry every required check itself, the pre-#2055 rule, and CodeQL there
@@ -225,6 +232,46 @@ def bad: .conclusion != "success" and .conclusion != "skipped" and .conclusion !
     failed: [ $scope[] | select(.status == "completed") | select(bad) | "           \(.conclusion // "?")  \(.name)  \(.url // "")" ],
     missing: (if $req == null then [] else ($scope | map(.name | key)) as $have | [ $req[] | select((key) as $k | $have | index($k) | not) ] end) }'
 
+# A cancelled check run is superseded when the same check concluded success
+# on the same commit (#2430): a label added at PR open fires a second
+# pull_request event, the concurrency group cancels one of the two runs, and
+# the run that finished is the evidence. "The same check" is the full
+# identity, never the name alone: same name, both posted by GitHub Actions,
+# both created by runs of the same workflow ($wf maps a check suite to its
+# workflow id), and the same head SHA. A same-name success from another app,
+# a commit status, or another workflow with a colliding job name supersedes
+# nothing; neither does an observation whose identity is unknown.
+# Deliberately narrow: only `cancelled` is dropped and only a `success`
+# drops it. A cancelled check alone is still RED, and a `failure` next to a
+# `success` (a failed run re-run green) is still RED, because a failed run is
+# a real failure signal: never re-run hoping for a better answer. Applied to a
+# merged PR's commits only (post-merge observation), never to a commit with
+# no merged PR. Same rule as github.DropSupersededCancelled.
+# shellcheck disable=SC2016 # jq program, not shell
+SUPERSEDE='
+def key: ascii_downcase | gsub("^\\s+|\\s+$"; "");
+def ident: if .app == "github-actions" and .suite != null and (.sha // "") != "" and ($wf[.suite | tostring] // null) != null
+  then [(.name | key), $wf[.suite | tostring], (.sha | ascii_downcase)] else null end;
+([ .[] | select(.status == "completed" and .conclusion == "success") | ident | select(. != null) ]) as $ok
+| [ .[] | select((.status == "completed" and .conclusion == "cancelled" and (ident as $i | $i != null and any($ok[]; . == $i))) | not) ]'
+
+# supersede <sha> <checks> — <checks> with every superseded cancelled check run
+# dropped (SUPERSEDE). The workflow runs on <sha> are read only when a check
+# was cancelled; an unreadable list maps nothing, so nothing is superseded.
+supersede() {
+  local sha="$1" checks="$2" wf
+  if [[ $(jq '[ .[] | select(.status == "completed" and .conclusion == "cancelled") ] | length' <<<"$checks") -eq 0 ]]; then
+    printf '%s\n' "$checks"
+    return
+  fi
+  wf=$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$sha&per_page=100" \
+    --jq '.workflow_runs[] | select(.check_suite_id != null and .workflow_id != null) | {key: (.check_suite_id | tostring), value: .workflow_id} | tojson' 2>/dev/null |
+    jq -s -c 'from_entries' 2>/dev/null) || wf=""
+  [[ -n "$wf" ]] || wf='{}'
+  # A failed filter supersedes nothing: the checks are judged as read.
+  jq -c --argjson wf "$wf" "$SUPERSEDE" <<<"$checks" 2>/dev/null || printf '%s\n' "$checks"
+}
+
 # read_checks <sha> — every check-run and commit status on <sha>, as one JSON
 # array. `gh api --paginate --jq` runs the jq program once PER PAGE, so a
 # whole-document program such as `.check_runs | length` prints one number per
@@ -240,7 +287,7 @@ def bad: .conclusion != "success" and .conclusion != "skipped" and .conclusion !
 read_checks() {
   local sha="$1" runs statuses
   runs=$(gh api --paginate "repos/$REPO/commits/$sha/check-runs?per_page=100" \
-    --jq '.check_runs[] | select((.name | ascii_downcase) != "cache-warm") | {name, status, conclusion, url: .html_url} | tojson' 2>/dev/null) || {
+    --jq '.check_runs[] | select((.name | ascii_downcase) != "cache-warm") | {name, status, conclusion, url: .html_url, app: (.app.slug // null), suite: (.check_suite.id // null), sha: (.head_sha // null)} | tojson' 2>/dev/null) || {
     echo "NOT-YET  could not read check-runs for $REPO@${sha:0:8} (API error or unknown sha)"
     exit 2
   }
@@ -401,6 +448,7 @@ if [[ -z "$MERGE_TREE" || "$MERGE_TREE" != "$HEAD_TREE" ]]; then
   echo "NOTE     $REPO@${SHA:0:8}'s tree ${MERGE_TREE:0:8} differs from PR #$PR_NUMBER head ${HEAD_SHA:0:8}'s tree ${HEAD_TREE:0:8}:"
   echo "         the PR run did not test the landed tree, so the merge commit must carry every required check itself."
   merge_checks=$(read_checks "$SHA") || { printf '%s\n' "$merge_checks"; exit 2; }
+  merge_checks=$(supersede "$FULL_SHA" "$merge_checks")
   if [[ "$REQ_KNOWN" -eq 1 && "$REQ" != null ]]; then
     req_j=$(printf '%s' "$merge_checks" | jq -c --argjson req "$REQ" "$JUDGE")
     if [[ $(jq '.missing | length' <<<"$req_j") -gt 0 && $(jq '.pending | length' <<<"$req_j") -eq 0 &&
@@ -428,8 +476,10 @@ fi
 # shellcheck disable=SC2016 # jq program, not shell
 CODEQL='def codeql: (.name | ascii_downcase | gsub("^\\s+|\\s+$"; "")) as $k | $k == "codeql" or ($k | test("^analyze \\(.*\\)$"));'
 head_checks=$(read_checks "$HEAD_SHA") || { printf '%s\n' "$head_checks"; exit 2; }
+head_checks=$(supersede "$HEAD_SHA" "$head_checks")
 head_j=$(printf '%s' "$head_checks" | jq -c --argjson req "$REQ" "$JUDGE")
 merge_checks=$(read_checks "$SHA") || { printf '%s\n' "$merge_checks"; exit 2; }
+merge_checks=$(supersede "$FULL_SHA" "$merge_checks")
 merge_seen=$(jq 'length' <<<"$merge_checks")
 codeql_checks=$(jq -c "$CODEQL [ .[] | select(codeql) ]" <<<"$merge_checks")
 merge_checks=$(jq -c "$CODEQL [ .[] | select(codeql | not) ]" <<<"$merge_checks")

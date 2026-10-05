@@ -102,6 +102,94 @@ func TestEvaluateMergedCommit(t *testing.T) {
 	}
 }
 
+// actionsRun is a GitHub Actions check run in check suite suite on sha.
+func actionsRun(name, conclusion string, suite int64, sha string) CheckDetail {
+	return CheckDetail{Name: name, Status: "COMPLETED", Conclusion: conclusion, App: GitHubActionsApp, CheckSuiteID: suite, HeadSHA: sha}
+}
+
+// TestDropSupersededCancelled pins #2430: on a merged PR's commits a
+// cancelled check is superseded only by a success of the same check (name,
+// app, workflow, head SHA); every other shape stays red, and a commit with no
+// merged PR (how a PR head is polled before merge) is never relaxed.
+func TestDropSupersededCancelled(t *testing.T) {
+	required := []string{"build", "lint"}
+	const h = "h000000000"
+	const m = "m000000000"
+	// Suites 1 and 2 are two runs of workflow 100; suite 3 is workflow 200,
+	// another workflow with a job of the same name.
+	suites := map[int64]int64{1: 100, 2: 100, 3: 200}
+	lint := actionsRun("lint", "SUCCESS", 2, h)
+	pushGreen := []CheckDetail{check("CodeQL", "COMPLETED", "SUCCESS")}
+	late := mergedAt.Add(time.Hour)
+	head := func(checks ...CheckDetail) MergeEvidence {
+		return MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: append(checks, lint), HeadSuites: suites, MergeChecks: pushGreen, RequiredNames: required, RequiredKnown: true, Now: late}
+	}
+	otherApp := actionsRun("build", "SUCCESS", 2, h)
+	otherApp.App = "some-other-app"
+	noSuites := head(actionsRun("build", "CANCELLED", 1, h), actionsRun("build", "SUCCESS", 2, h))
+	noSuites.HeadSuites = nil
+	headGreen := []CheckDetail{actionsRun("build", "SUCCESS", 2, h), lint}
+
+	cases := []struct {
+		name string
+		ev   MergeEvidence
+		want ChecksCompleteVerdict
+	}{
+		{"cancelled + success of the same check: green", head(actionsRun("build", "CANCELLED", 1, h), actionsRun(" Build", "SUCCESS", 2, h)), ChecksComplete},
+		{"cancelled only: red", head(actionsRun("build", "CANCELLED", 1, h)), ChecksIncomplete},
+		{"failure re-run green: still red", head(actionsRun("build", "FAILURE", 1, h), actionsRun("build", "SUCCESS", 2, h)), ChecksIncomplete},
+		{"cancelled + skipped sibling: red", head(actionsRun("build", "CANCELLED", 1, h), actionsRun("build", "SKIPPED", 2, h)), ChecksIncomplete},
+		{"spoof: success of the same name from another app: red", head(actionsRun("build", "CANCELLED", 1, h), otherApp), ChecksIncomplete},
+		{"spoof: success of the same name from another workflow: red", head(actionsRun("build", "CANCELLED", 1, h), actionsRun("build", "SUCCESS", 3, h)), ChecksIncomplete},
+		{"spoof: a commit status of the same name: red", head(actionsRun("build", "CANCELLED", 1, h), check("build", "COMPLETED", "SUCCESS")), ChecksIncomplete},
+		{"success on another head SHA: red", head(actionsRun("build", "CANCELLED", 1, h), actionsRun("build", "SUCCESS", 2, "other00000")), ChecksIncomplete},
+		{"unknown suite identity: red", noSuites, ChecksIncomplete},
+		{"merge commit: cancelled push job + success of the same job: green", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen,
+			MergeChecks: []CheckDetail{actionsRun("publish", "CANCELLED", 1, m), actionsRun("publish", "SUCCESS", 2, m)}, MergeSuites: suites, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete},
+		{"merge commit: cancelled push job alone: red", MergeEvidence{Provenance: prov("t1", "t1"), HeadChecks: headGreen,
+			MergeChecks: []CheckDetail{actionsRun("publish", "CANCELLED", 1, m)}, MergeSuites: suites, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete},
+		{"tree differs: superseded on the merge commit: green", MergeEvidence{Provenance: prov("t1", "t2"),
+			MergeChecks: []CheckDetail{actionsRun("build", "CANCELLED", 1, m), actionsRun("build", "SUCCESS", 2, m), actionsRun("lint", "SUCCESS", 2, m)}, MergeSuites: suites, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksComplete},
+		// No merged PR is how a PR head is polled before its merge: that
+		// gate never becomes more permissive.
+		{"no merged PR: never relaxed", MergeEvidence{
+			MergeChecks: []CheckDetail{actionsRun("build", "CANCELLED", 1, h), actionsRun("build", "SUCCESS", 2, h), lint}, MergeSuites: suites, RequiredNames: required, RequiredKnown: true, Now: late}, ChecksIncomplete},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got, reasons := EvaluateMergedCommit(tc.ev); got != tc.want {
+				t.Fatalf("verdict = %q (%v), want %q", got, reasons, tc.want)
+			}
+		})
+	}
+}
+
+type fakeRunsReader struct {
+	calls int
+	runs  []WorkflowRunSummary
+}
+
+func (f *fakeRunsReader) GetWorkflowRunsForRef(context.Context, string, string, string) ([]WorkflowRunSummary, error) {
+	f.calls++
+	return f.runs, nil
+}
+
+// TestSuiteWorkflowsFor: the runs are read only when a cancelled check
+// exists, and map each check suite to its workflow.
+func TestSuiteWorkflowsFor(t *testing.T) {
+	r := &fakeRunsReader{runs: []WorkflowRunSummary{{CheckSuiteID: 1, WorkflowID: 100}, {CheckSuiteID: 2}}}
+	if got := SuiteWorkflowsFor(context.Background(), r, "o", "r", "s", []CheckDetail{check("a", "COMPLETED", "SUCCESS")}); got != nil || r.calls != 0 {
+		t.Fatalf("no cancelled check: got %v after %d calls, want nil and no call", got, r.calls)
+	}
+	got := SuiteWorkflowsFor(context.Background(), r, "o", "r", "s", []CheckDetail{check("a", "COMPLETED", "CANCELLED")})
+	if r.calls != 1 || len(got) != 1 || got[1] != 100 {
+		t.Fatalf("got %v after %d calls, want map[1:100] after 1", got, r.calls)
+	}
+	if got := SuiteWorkflowsFor(context.Background(), struct{}{}, "o", "r", "s", []CheckDetail{check("a", "COMPLETED", "CANCELLED")}); got != nil {
+		t.Fatalf("reader without runs: got %v, want nil", got)
+	}
+}
+
 func TestCodeQLCheck(t *testing.T) {
 	for name, want := range map[string]bool{
 		"CodeQL": true, " codeql ": true, "Analyze (go)": true, "Analyze (javascript-typescript)": true, "Analyze (actions)": true,

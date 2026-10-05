@@ -39,6 +39,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A cancelled check superseded by a successful run of the same check no
+  longer reads RED after a merge** (#2430). When a label added at PR open
+  started a second run of one workflow and its concurrency group cancelled
+  the first, `scripts/post-merge-check.sh` and `nightgauge ci
+checks-complete` counted the cancelled run as a failure. On a merged PR's
+  commits, a `cancelled` check run is now dropped when the same check
+  concluded `success`. It has to be the same check: same name, posted by
+  GitHub Actions, created by the same workflow, and on the same head SHA. A
+  same-name success from another app, another workflow or a commit status
+  does not count. A cancelled check alone is still RED, and so is a failed
+  run that was re-run green, since the failure was real. A commit with no
+  merged PR, which is how a PR head is polled before merging, is judged as
+  before.
+
 - **OpenCode subagent findings recorded; `task` stays denied** (#1805). Run
   against the pinned opencode 1.18.30 with a scripted provider, the plugin's
   `tool.execute.before` fires for a subagent's own tool calls. The denial

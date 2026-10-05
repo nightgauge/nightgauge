@@ -336,12 +336,18 @@ func VerifyMergeCommit(ctx context.Context, reader MainCheckReader, owner, repo,
 		res.Total, res.Pending, res.Bad = total, pending, bad
 
 		ev := gh.MergeEvidence{Provenance: prov, MergeChecks: runs, RequiredNames: requiredNames, RequiredKnown: requiredKnown, Now: wait.now(), NoPushWorkflows: noPush}
+		if prov != nil {
+			// #2430: check identity for a cancelled duplicate, read only
+			// when one exists.
+			ev.MergeSuites = gh.SuiteWorkflowsFor(ctx, reader, owner, repo, sha, runs)
+		}
 		if ev.PRHeadIsEvidence() {
 			if ev.HeadChecks, err = reader.GetCommitChecks(ctx, owner, repo, prov.HeadSHA); err != nil {
 				res.Verdict = MainChecksError
 				res.Error = err.Error()
 				return res
 			}
+			ev.HeadSuites = gh.SuiteWorkflowsFor(ctx, reader, owner, repo, prov.HeadSHA, ev.HeadChecks)
 		}
 
 		// The verdict is the same function `nightgauge ci checks-complete`
