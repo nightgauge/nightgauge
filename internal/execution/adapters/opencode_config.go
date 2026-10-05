@@ -1751,9 +1751,6 @@ func PrepareOpenCodeRun(req OpenCodeRunRequest) (*OpenCodeRun, error) {
 	env[openCodeConfigContentEnvVar] = built.Content
 	env[opencodeplugin.EnvReadMaxLines] = strconv.Itoa(built.ReadMaxLines)
 	env[opencodeplugin.EnvExplorationBudget] = strconv.Itoa(built.ExplorationBudget)
-	if OpenCodeSubagentsAllowed(req.Run) {
-		env[opencodeplugin.EnvSubagents] = "allow"
-	}
 	if req.KnowledgeDir != "" {
 		env[opencodeplugin.EnvKnowledgeDir] = req.KnowledgeDir
 	}

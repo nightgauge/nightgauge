@@ -533,12 +533,12 @@ bills it.
   cost it anything, and a stage that already failed keeps its own failure.
   The watchdog cannot stop a stage while its subagents spend, and the
   enabled-dispatch warning says so (the `subagent cost` row). That gap is
-  unreachable, not merely unenforced: a stage whose cost budget is enforced
-  starts no subagents, because `gates.js` and the permission map deny every
-  `task` call there (the 2026-10-05 amendment, #1805), so no subagent session
-  exists to spend past the budget while the stage runs. The row stays
-  because the gap is real and becomes live again the day a stage with an
-  enforced budget may start subagents (#1748).
+  currently unreachable, not merely unenforced: `gates.js` denies every
+  `task` tool call unconditionally as AC9's fallback (see the "Nightgauge
+  OpenCode plugin" amendment), so no subagent session exists to spend past
+  the budget while the stage runs. The row stays because the gap is real and
+  becomes live again the moment AC9 is settled and the denial is lifted
+  (#1748).
 - **OpenCode's own `cost` is never trusted.** It comes from OpenCode's catalog
   and not from the bill, and it read `0` for a provider it had no price for.
 - **Every other zero is unstamped.** A hosted or `other` model the registry
@@ -1309,29 +1309,29 @@ overlay.
 
 Every OpenCode capability has one disposition:
 
-| Capability                       | Disposition                                   | Owner or reason                                                                                                                                                                                                                                                                                                              |
-| -------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Skills                           | supported                                     | #1666 (install target), rendered per stage                                                                                                                                                                                                                                                                                   |
-| Commands                         | supported                                     | #1666 (`configs/opencode` templates)                                                                                                                                                                                                                                                                                         |
-| Subagents (`task`)               | gated; denied on an enforced cost budget      | #1624 rolls subagent usage into the stage; #1805 measured that a subagent's tool calls reach the plugin's gates and lifted the unconditional denial on every stage with no enforced cost budget, keeping it where one is enforced so the `subagent cost` gap (§ 3) stays closed (#1748) — see the amendment dated 2026-10-05 |
-| Plugins                          | supported, Nightgauge's only                  | #1635, #1640, #1641, #1642                                                                                                                                                                                                                                                                                                   |
-| MCP                              | config: supported; tool calls: blocked closed | #1626 wires the per-run `mcp` config; a repository's own MCP server tool call is blocked closed under `[nightgauge-gate:unknown-tool]` until a mapping exists — see the "OpenCode plugin gate parity" amendment dated 2026-09-15 (round 2, #1640)                                                                            |
-| Permissions                      | supported                                     | #1638                                                                                                                                                                                                                                                                                                                        |
-| Sandboxing                       | non-goal                                      | OpenCode has none upstream; containment is § 8 isolation, the permission map and the worktree                                                                                                                                                                                                                                |
-| Resume and fork                  | deferred                                      | #1643 (session resume within a run)                                                                                                                                                                                                                                                                                          |
-| Export                           | supported, sanitized only                     | § 22                                                                                                                                                                                                                                                                                                                         |
-| Import                           | non-goal                                      | a session file or URL is untrusted input with nothing to gain                                                                                                                                                                                                                                                                |
-| Usage (`opencode stats`)         | non-goal                                      | usage comes from the stream and the registry (§ 3), not OpenCode's catalog prices                                                                                                                                                                                                                                            |
-| `json_schema` output             | non-goal                                      | #1650: unusable on 1.18.31 — a `json_schema` prompt makes the session unreadable (see the amendment dated 2026-09-21)                                                                                                                                                                                                        |
-| Variants (`--variant`)           | supported                                     | #1643 maps effort to a variant                                                                                                                                                                                                                                                                                               |
-| Compaction                       | supported                                     | #1625 (settings), #1641 (events)                                                                                                                                                                                                                                                                                             |
-| Worktrees and workspaces         | non-goal                                      | Nightgauge owns worktrees; OpenCode's experimental workspaces stay off                                                                                                                                                                                                                                                       |
-| Snapshots                        | off by default                                | § 12                                                                                                                                                                                                                                                                                                                         |
-| LSP                              | supported, installed servers                  | § 12                                                                                                                                                                                                                                                                                                                         |
-| Share                            | non-goal                                      | disabled and locked (§ 10)                                                                                                                                                                                                                                                                                                   |
-| GitHub agent (`opencode github`) | non-goal                                      | #1650: an externally-driven agent that duplicates and races Nightgauge's own intake, branch, worktree, routing and PR lifecycle, under GitHub's credentials rather than § 17's                                                                                                                                               |
-| ACP                              | non-goal                                      | #1650: an editor-driven surface with a human in the loop — the inverse of the pipeline's direction of control. Its `--port`/`--mdns`/`--cors` flags carry § 18's listener hazard                                                                                                                                             |
-| `serve` and `run --attach`       | deferred                                      | #1650, under § 18's guardrails — and blocked on the isolation collision recorded in the amendment dated 2026-09-21: an attached run's config, permission map and XDG isolation are the **server's**, not the run's                                                                                                           |
+| Capability                       | Disposition                                   | Owner or reason                                                                                                                                                                                                                                                                                      |
+| -------------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Skills                           | supported                                     | #1666 (install target), rendered per stage                                                                                                                                                                                                                                                           |
+| Commands                         | supported                                     | #1666 (`configs/opencode` templates)                                                                                                                                                                                                                                                                 |
+| Subagents (`task`)               | denied (AC9 fallback)                         | #1624 rolls subagent usage into the stage, but the plugin denies `task` unconditionally until AC9 is settled — see the "Nightgauge OpenCode plugin" amendment dated 2026-09-15; #1748 verified the denial also closes the `subagent cost` gap (§ 3) as long as it stands, and left this row in place |
+| Plugins                          | supported, Nightgauge's only                  | #1635, #1640, #1641, #1642                                                                                                                                                                                                                                                                           |
+| MCP                              | config: supported; tool calls: blocked closed | #1626 wires the per-run `mcp` config; a repository's own MCP server tool call is blocked closed under `[nightgauge-gate:unknown-tool]` until a mapping exists — see the "OpenCode plugin gate parity" amendment dated 2026-09-15 (round 2, #1640)                                                    |
+| Permissions                      | supported                                     | #1638                                                                                                                                                                                                                                                                                                |
+| Sandboxing                       | non-goal                                      | OpenCode has none upstream; containment is § 8 isolation, the permission map and the worktree                                                                                                                                                                                                        |
+| Resume and fork                  | deferred                                      | #1643 (session resume within a run)                                                                                                                                                                                                                                                                  |
+| Export                           | supported, sanitized only                     | § 22                                                                                                                                                                                                                                                                                                 |
+| Import                           | non-goal                                      | a session file or URL is untrusted input with nothing to gain                                                                                                                                                                                                                                        |
+| Usage (`opencode stats`)         | non-goal                                      | usage comes from the stream and the registry (§ 3), not OpenCode's catalog prices                                                                                                                                                                                                                    |
+| `json_schema` output             | non-goal                                      | #1650: unusable on 1.18.31 — a `json_schema` prompt makes the session unreadable (see the amendment dated 2026-09-21)                                                                                                                                                                                |
+| Variants (`--variant`)           | supported                                     | #1643 maps effort to a variant                                                                                                                                                                                                                                                                       |
+| Compaction                       | supported                                     | #1625 (settings), #1641 (events)                                                                                                                                                                                                                                                                     |
+| Worktrees and workspaces         | non-goal                                      | Nightgauge owns worktrees; OpenCode's experimental workspaces stay off                                                                                                                                                                                                                               |
+| Snapshots                        | off by default                                | § 12                                                                                                                                                                                                                                                                                                 |
+| LSP                              | supported, installed servers                  | § 12                                                                                                                                                                                                                                                                                                 |
+| Share                            | non-goal                                      | disabled and locked (§ 10)                                                                                                                                                                                                                                                                           |
+| GitHub agent (`opencode github`) | non-goal                                      | #1650: an externally-driven agent that duplicates and races Nightgauge's own intake, branch, worktree, routing and PR lifecycle, under GitHub's credentials rather than § 17's                                                                                                                       |
+| ACP                              | non-goal                                      | #1650: an editor-driven surface with a human in the loop — the inverse of the pipeline's direction of control. Its `--port`/`--mdns`/`--cors` flags carry § 18's listener hazard                                                                                                                     |
+| `serve` and `run --attach`       | deferred                                      | #1650, under § 18's guardrails — and blocked on the isolation collision recorded in the amendment dated 2026-09-21: an attached run's config, permission map and XDG isolation are the **server's**, not the run's                                                                                   |
 
 ADR-020 allows an opt-out of a value-adding feature for footprint and cost, and
 already keeps destructive, money-spending and data-exporting features opt-in.
@@ -2212,8 +2212,9 @@ of `NIGHTGAUGE_BIN` — a subagent session this plugin cannot verify it gates
 is worse than no subagent at all. `TestNodeHarnessDeniesTask` is the
 red/green coverage. Settling AC9 properly, and lifting the denial, needs
 either an upstream answer or a faster local model than the spike had time
-for; it remains open. _Superseded by the 2026-10-05 amendment (#1805): a
-scripted provider settled the question, and the hook fires._
+for; it remains open. _The hook question is settled by the 2026-10-05
+amendment (#1805): it fires. The denial stays, for the budget reason given
+there._
 
 **Resolved:** [nightgauge/nightgauge#1787](https://github.com/nightgauge/nightgauge/issues/1787)
 gave a non-inheriting run its own per-run `HOME`, so `$HOME/.opencode` stops
@@ -3358,56 +3359,46 @@ line cap. `list` left the table: on 1.18.x it is a permission key and no
 tool registers that id. The registry was read from the installed 1.18.32
 binary's bundled source; the pinned 1.18.30 capture lists none of the four.
 
-## Subagents reach the gates (amendment 2026-10-05, #1805)
+## Subagent tool calls reach the gates; the `task` denial stays (amendment 2026-10-05, #1805)
 
 AC9's spike (the 2026-09-15 plugin amendment) could not tell, within its
 time budget against a local model, whether opencode 1.18.30 calls
-`tool.execute.before` for a tool a `task` (subagent) session runs, so
-`gates.js` denied `task` outright. #1805 settled it deterministically.
-`internal/stubprovider` gained a script, `task-then-subagent-bash`, that
-serves two conversations from one stateless server: a request whose user
-messages carry a marker gets the subagent's turns, any other request the
-primary session's. The primary session calls `task` with the marker in its
-prompt; the subagent calls `bash` once. Against the pinned 1.18.30 binary,
-no live model and no network, a plugin logging every `tool.execute.before`
-call recorded two calls: `task` in the primary session's `sessionID`, then
-`bash` in a different `sessionID`, the child the task tool's own metadata
-names (`parentSessionId` is the primary). The hook fires inside a subagent
-session, in the same plugin instance, so every gate in `gates.js` applies to
-a subagent's tool calls as it does to the stage's own.
+`tool.execute.before` for a tool a `task` (subagent) session runs. #1805
+settled it deterministically. `internal/stubprovider` gained a script,
+`task-then-subagent-bash`, that serves two conversations from one stateless
+server: a request whose user messages carry a marker gets the subagent's
+turns, any other request the primary session's. The primary session calls
+`task` with the marker in its prompt; the subagent calls `bash` once.
+Against the pinned 1.18.30 binary, with no live model and no network, a
+plugin logging every `tool.execute.before` call recorded two calls: `task`
+in the primary session's `sessionID`, then `bash` in a different
+`sessionID`, the child the task tool's own metadata names
+(`parentSessionId` is the primary). **The hook fires inside a subagent
+session, in the same plugin instance**, so every gate in `gates.js` would
+apply to a subagent's tool calls. Two `opencode_integration` tests pin this
+against the real binary: `TestToolExecuteBeforeFiresInSubagentAgainstRealOpenCode`
+(the measurement itself, with the logging plugin) and
+`TestRealPluginDeniesTaskAgainstRealOpenCode` (the shipped plugin still
+refuses the `task` call, so no child session starts).
 
-`TestSubagentToolCallGatedAgainstRealOpenCode` (build tag
-`opencode_integration`) pins this with the real Nightgauge plugin: in an
-analysis stage, the subagent's `git commit` is refused by the stage gate with
-the same `[nightgauge-gate:stage]` marker a top-level call gets.
+The denial nevertheless stays, because the gates are not the only bound a
+stage runs under. A subagent's steps and tokens never reach the stage's
+stream, and every live stage budget is counted on that stream:
 
-What the gates cannot see is a subagent's spend. Its steps never reach the
-stage's stream, so the cost watchdog prices them only after the stage ends
-(§ 3, #1748), and #1748 required that lifting the denial not reopen that
-hole. The policy is therefore narrower than "allow `task`":
+- the turn ceiling (#1652), which every stage on a zero-cost or unpriced
+  model always has, and which is the only thing that ends a model that keeps
+  calling tools, since OpenCode's own steps cap is not a hard stop (#1811);
+- the token ceiling, likewise always set where no USD cap binds the stage;
+- the cost budget, which prices a subagent's usage only once the stage has
+  ended (§ 3, #1748).
 
-- `adapters.OpenCodeSubagentsAllowed` allows subagents on a stage with no
-  cost budget, or whose model the registry prices at zero or cannot price.
-  On none of those does the watchdog enforce a budget a subagent could
-  overrun unseen.
-- On a stage whose budget is enforced, a paid model, `task` stays denied
-  twice: the permission map's `task` key is a bare deny, so OpenCode never
-  offers the tool, and `gates.js` refuses it with
-  `[nightgauge-gate:task-denied]`.
-- Where subagents are allowed, the permission map's `task` key follows the
-  stage's `Task` grant like every other tool, the Go side sets
-  `NIGHTGAUGE_OPENCODE_SUBAGENTS=allow` for the plugin, and `gates.js`
-  screens the call's `description` and `prompt` with `hook sanitize-prompt`,
-  the verb Claude Code's `PreToolUse:Task` runs. Any other value of that
-  variable, unset included, denies `task`, so the plugin fails closed
-  outside a Nightgauge dispatch.
-
-A subagent runs on the model the per-run config pins for the `general` and
-`explore` agents, the dispatched one. The project-config tamper gap (the
-"Control not yet enforced" table) still lets a repository's own config
-change those agents' models; that row already covers it. Restoring
-subagents on a paid, budgeted stage needs a live subagent spend bound, which
-nothing here provides.
+Lifting the denial on the strength of the hook alone would let a subagent
+run past all three while the stage's own counters stand still, and #1748
+already required that the denial not be relaxed without a subagent spend
+bound. Allowing `task` therefore waits on subagent accounting: a child
+session's steps, tokens and cost counted against the same ceilings as the
+stage's own, live. The hook result above is what makes that possible (the
+plugin sees every child tool call); the accounting itself is not built.
 
 ## Consequences
 

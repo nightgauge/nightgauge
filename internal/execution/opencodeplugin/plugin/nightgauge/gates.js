@@ -26,11 +26,8 @@
 //                      permission map's secret (and, for edit/write,
 //                      project-config) deny patterns once letter case is
 //                      ignored (#1827; see caseFoldedDeny).
-//   - "task"        -> sanitize-prompt on the subagent's prompt, the verb
-//                      Claude Code's PreToolUse:Task runs, when the stage
-//                      allows subagents (SUBAGENTS_ENV); denied otherwise.
-//                      The subagent's own tool calls reach this same hook
-//                      and every gate here (#1805).
+//   - "task"        -> always denied (see the subagent note below),
+//                      independent of every other gate.
 //   - every other tool id in TOOL_CLASSIFICATION -> passthrough (read-only,
 //                      or governed elsewhere, e.g. webfetch by #1638's
 //                      permission map) or, for a mutating tool this table
@@ -149,15 +146,10 @@ function enforceCaseFoldedDeny(tool, filePath, cwd, patterns) {
   }
 }
 
-// TASK_MARKER prefixes the subagent denial's own error, distinct from every
+// TASK_MARKER prefixes the AC9 fallback's own error, distinct from every
 // other marker, so a stage's remediation output can tell a careful-mode/
-// workflow/stage block apart from a stage that may not start subagents.
+// workflow/stage block apart from the unconditional subagent denial below.
 const TASK_MARKER = "[nightgauge-gate:task-denied]";
-
-// SUBAGENTS_ENV is opencodeplugin.EnvSubagents (plugin.go). The Go side sets
-// it to "allow" only for a stage whose cost budget no subagent can overrun
-// unseen (#1805); anything else, unset included, denies `task`.
-const SUBAGENTS_ENV = "NIGHTGAUGE_OPENCODE_SUBAGENTS";
 
 // TOOL_CLASSIFICATION is the pinned table of every tool id opencode 1.18.30
 // exposes (#1640 AC4), captured two ways and reconciled:
@@ -216,7 +208,7 @@ export const TOOL_CLASSIFICATION = Object.freeze(
     bash: "bash",
     edit: "file",
     write: "file",
-    task: "task", // SUBAGENTS_ENV, then sanitize-prompt; see toolExecuteBefore
+    task: "task", // intercepted unconditionally above; listed for completeness
     apply_patch: "blocked",
     read: "read",
     glob: "passthrough",
@@ -315,18 +307,19 @@ function gateCwd(ctx) {
   return (ctx && (ctx.directory || ctx.worktree)) || process.cwd();
 }
 
-// Subagents (#1805, ADR-022 amendment 2026-10-05). opencode 1.18.30 calls
-// tool.execute.before for every tool a subagent (`task`) session runs, in
-// the child's own sessionID, in this same plugin instance: measured against
-// the pinned binary with a scripted provider, and pinned by
-// TestSubagentToolCallGatedAgainstRealOpenCode. A subagent's bash, edit or
-// read therefore meets every gate below exactly as the primary session's
-// does, and the `task` call itself is screened like Claude Code's
-// PreToolUse:Task (sanitize-prompt). What no gate here can see is a
-// subagent's spend: its steps never reach the stage's stream, so the cost
-// watchdog prices them only once the stage has ended (#1748). The Go side
-// therefore sets SUBAGENTS_ENV to "allow" only when no cost budget is
-// enforced on the stage's model, and `task` is denied otherwise.
+// Subagents. AC9's spike could not tell whether opencode 1.18.30 calls
+// tool.execute.before for a tool a subagent (`task`) session runs; #1805
+// settled it against the pinned binary with a scripted provider: it does, in
+// the child's own sessionID, in this same plugin instance
+// (TestToolExecuteBeforeFiresInSubagentAgainstRealOpenCode). The gates below
+// would therefore bound a subagent's tool calls. What nothing bounds yet is
+// its consumption: a subagent's steps and tokens never reach the stage's
+// stream, so the stage's turn and token ceilings, which every stage on a
+// model no USD cap binds always has, and its cost budget (#1748) are all
+// blind to it while it runs. Until a subagent counts against those caps,
+// "task" is denied unconditionally, careful mode on or off, and before every
+// other gate below, sanitize-prompt included (the ADR-022 amendment dated
+// 2026-10-05).
 // READ_MAX_LINES_ENV is opencodeplugin.EnvReadMaxLines (plugin.go): the
 // most lines one read returns (#2178), set per stage by the Go side.
 const READ_MAX_LINES_ENV = "NIGHTGAUGE_OPENCODE_READ_MAX_LINES";
@@ -519,9 +512,9 @@ export function enforceExplorationBudget(ctx, input, output) {
 
 export async function toolExecuteBefore(ctx, input, output) {
   if (!input) return;
-  if (input.tool === "task" && process.env[SUBAGENTS_ENV] !== "allow") {
+  if (input.tool === "task") {
     throw new Error(
-      `${TASK_MARKER} subagent (task) sessions are denied: this stage's cost budget is enforced, and a subagent's spend is not visible until the stage ends (ADR-022 amendment 2026-10-05, #1805)`
+      `${TASK_MARKER} subagent (task) sessions are denied: a subagent's steps and tokens never reach the stage's turn, token and cost budgets while it runs (ADR-022 amendment 2026-10-05, #1805)`
     );
   }
 
@@ -536,20 +529,10 @@ export async function toolExecuteBefore(ctx, input, output) {
   }
   const kind = TOOL_CLASSIFICATION[input.tool];
   enforceExplorationBudget(ctx, input, output);
-  if (kind === "passthrough") return;
+  if (kind === "passthrough" || kind === "task") return;
 
   const cwd = gateCwd(ctx);
   const args = output && output.args ? output.args : {};
-
-  if (kind === "task") {
-    // The Task-shaped payload Claude Code's PreToolUse:Task hook screens.
-    const prompt = [args.description, args.prompt]
-      .filter((v) => typeof v === "string" && v !== "")
-      .join("\n");
-    const payload = { tool_name: "Task", cwd, tool_input: { prompt } };
-    runGateVerb(["hook", "sanitize-prompt"], payload, cwd, SANITIZE_MARKER);
-    return;
-  }
 
   if (kind === "blocked") {
     throw new Error(
