@@ -127,10 +127,16 @@ const GateScript = "scripts/ci-local.sh"
 
 var (
 	contractNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
-	repoRe         = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
+	// Every value that reaches a git argv or a forge call is matched whole,
+	// as it is used: no trimming or normalizing happens after validation,
+	// and no allowlist admits a leading '-', so no value can read as an
+	// option. Nothing here is ever interpolated into a shell string.
+	repoRe         = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$`)
+	labelNameRe    = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9 _.:/()+-]{0,49}$`)
+	pathSegRe      = regexp.MustCompile(`^[A-Za-z0-9_.][A-Za-z0-9_.@+-]*$`)
 	jobIDRe        = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]*$`)
 	labelColorRe   = regexp.MustCompile(`^[0-9a-fA-F]{6}$`)
-	branchRe       = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+	branchRe       = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9._/-]*$`)
 )
 
 // Load reads and validates a contract manifest.
@@ -224,7 +230,7 @@ func (c *Contract) validate() error {
 		add("name %q must be lower-case letters, digits, '.', '_' or '-'", c.Name)
 	}
 	for _, b := range []string{c.Branch, c.Base} {
-		if !branchRe.MatchString(b) || strings.Contains(b, "..") || strings.HasPrefix(b, "-") {
+		if !validBranch(b) {
 			add("branch %q is not a plain branch name", b)
 		}
 	}
@@ -247,8 +253,11 @@ func (c *Contract) validate() error {
 		seen[f.TargetPath()] = true
 	}
 	for _, l := range c.Labels {
-		if strings.TrimSpace(l.Name) == "" {
-			add("labels: a label has no name")
+		if !labelNameRe.MatchString(l.Name) {
+			add("labels: name %q must start with a letter, digit or '_' and hold only letters, digits, spaces and _.:/()+-", l.Name)
+		}
+		if strings.ContainsAny(l.Description, "\x00\r\n") {
+			add("labels: %q description holds a control character", l.Name)
 		}
 		if !labelColorRe.MatchString(l.Color) {
 			add("labels: %q has color %q, want six hex digits", l.Name, l.Color)
@@ -281,7 +290,7 @@ func (c *Contract) validate() error {
 			add("targets: %s is listed twice", t.Repo)
 		}
 		repos[strings.ToLower(t.Repo)] = true
-		if t.Base != "" && (!branchRe.MatchString(t.Base) || strings.Contains(t.Base, "..")) {
+		if t.Base != "" && !validBranch(t.Base) {
 			add("targets: %s base %q is not a plain branch name", t.Repo, t.Base)
 		}
 	}
@@ -310,5 +319,18 @@ func checkRelPath(p string) error {
 	if clean == ".git" || strings.HasPrefix(clean, ".git/") {
 		return fmt.Errorf("%q is inside .git", p)
 	}
+	for _, seg := range strings.Split(clean, "/") {
+		if !pathSegRe.MatchString(seg) {
+			return fmt.Errorf("%q has a segment %q outside [A-Za-z0-9_.@+-] or starting with '-'", p, seg)
+		}
+	}
 	return nil
+}
+
+// validBranch is a plain branch name: the allowlist, and none of the forms
+// git refuses or reads specially.
+func validBranch(b string) bool {
+	return branchRe.MatchString(b) && !strings.Contains(b, "..") && !strings.Contains(b, "//") &&
+		!strings.HasSuffix(b, "/") && !strings.HasSuffix(b, ".") && !strings.HasSuffix(b, ".lock") &&
+		!strings.Contains(b, "/.") && !strings.Contains(b, "/-")
 }

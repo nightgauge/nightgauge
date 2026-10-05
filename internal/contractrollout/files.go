@@ -123,16 +123,24 @@ func within(root, p string) bool {
 
 // refuseSymlinkPath refuses a target path any of whose existing components
 // under root is a symlink, so a copy can never write outside the repository.
+//
+// After that walk, the deepest existing ancestor of the target is resolved
+// through every symlink and must still lie under root's resolved path: the
+// containment check runs on the resolved path, not the joined one.
 func refuseSymlinkPath(root, rel string) error {
 	if err := checkRelPath(rel); err != nil {
 		return err
 	}
-	cur := root
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return err
+	}
+	cur, existing := realRoot, realRoot
 	for _, part := range splitPath(rel) {
 		cur = filepath.Join(cur, part)
 		info, err := os.Lstat(cur)
 		if os.IsNotExist(err) {
-			return nil
+			break
 		}
 		if err != nil {
 			return err
@@ -140,6 +148,14 @@ func refuseSymlinkPath(root, rel string) error {
 		if info.Mode()&os.ModeSymlink != 0 {
 			return fmt.Errorf("target %s passes through a symlink (%s)", rel, cur)
 		}
+		existing = cur
+	}
+	resolved, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return err
+	}
+	if !within(realRoot, resolved) {
+		return fmt.Errorf("target %s resolves to %s, outside %s", rel, resolved, realRoot)
 	}
 	return nil
 }

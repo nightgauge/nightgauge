@@ -47,26 +47,53 @@ func TestParseDefaultsAndValidation(t *testing.T) {
 	}
 
 	for name, src := range map[string]string{
-		"unknown key":       "name: demo\nfile:\n  - path: a\n",
-		"escaping path":     "name: demo\nfiles:\n  - path: ../secret\n",
-		"absolute path":     "name: demo\nfiles:\n  - path: /etc/passwd\n",
-		"path inside .git":  "name: demo\nfiles:\n  - path: .git/config\n",
-		"bad label color":   "name: demo\nlabels:\n  - name: x\n    color: red\n",
-		"workflow location": "name: demo\nci_job:\n  workflow: ci.yml\n  id: x\n  job: 'runs-on: x'\n",
-		"bad job id":        "name: demo\nci_job:\n  workflow: .github/workflows/a.yml\n  id: 'a b'\n  job: 'runs-on: x'\n",
-		"empty job":         "name: demo\nci_job:\n  workflow: .github/workflows/a.yml\n  id: a\n  job: ''\n",
-		"duplicate target":  "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: o/r\n  - repo: O/R\n",
-		"bad repo":          "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: r\n",
-		"changes nothing":   "name: demo\n",
-		"bad name":          "name: Demo Contract\nfiles:\n  - path: a\n",
-		"option branch":     "name: demo\nbranch: --force\nfiles:\n  - path: a\n",
-		"replaces the gate": "name: demo\nfiles:\n  - path: x.sh\n    target: scripts/ci-local.sh\n",
-		"manifest gate":     "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: o/r\n    gate: [sh, -c, id]\n",
-		"manifest path":     "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: o/r\n    path: /etc\n",
+		"unknown key":               "name: demo\nfile:\n  - path: a\n",
+		"escaping path":             "name: demo\nfiles:\n  - path: ../secret\n",
+		"absolute path":             "name: demo\nfiles:\n  - path: /etc/passwd\n",
+		"path inside .git":          "name: demo\nfiles:\n  - path: .git/config\n",
+		"bad label color":           "name: demo\nlabels:\n  - name: x\n    color: red\n",
+		"workflow location":         "name: demo\nci_job:\n  workflow: ci.yml\n  id: x\n  job: 'runs-on: x'\n",
+		"bad job id":                "name: demo\nci_job:\n  workflow: .github/workflows/a.yml\n  id: 'a b'\n  job: 'runs-on: x'\n",
+		"empty job":                 "name: demo\nci_job:\n  workflow: .github/workflows/a.yml\n  id: a\n  job: ''\n",
+		"duplicate target":          "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: o/r\n  - repo: O/R\n",
+		"bad repo":                  "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: r\n",
+		"changes nothing":           "name: demo\n",
+		"bad name":                  "name: Demo Contract\nfiles:\n  - path: a\n",
+		"option branch":             "name: demo\nbranch: --force\nfiles:\n  - path: a\n",
+		"option-like repo owner":    "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: -o/r\n",
+		"option-like repo name":     "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: o/-r\n",
+		"option-like base":          "name: demo\nbase: -main\nfiles:\n  - path: a\n",
+		"option-like target base":   "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: o/r\n    base: --upload-pack=x\n",
+		"branch segment dash":       "name: demo\nbranch: chore/-x\nfiles:\n  - path: a\n",
+		"branch with space":         "name: demo\nbranch: 'a b'\nfiles:\n  - path: a\n",
+		"branch lock suffix":        "name: demo\nbranch: a.lock\nfiles:\n  - path: a\n",
+		"branch shell chars":        "name: demo\nbranch: 'a;rm'\nfiles:\n  - path: a\n",
+		"option-like path":          "name: demo\nfiles:\n  - path: -rf\n",
+		"option-like segment":       "name: demo\nfiles:\n  - path: scripts/--exec\n",
+		"path with space":           "name: demo\nfiles:\n  - path: 'a b'\n",
+		"path with shell chars":     "name: demo\nfiles:\n  - path: 'a$(id)'\n",
+		"option-like label":         "name: demo\nlabels:\n  - name: -x\n    color: aabbcc\n",
+		"label newline":             "name: demo\nlabels:\n  - name: \"a\\nb\"\n    color: aabbcc\n",
+		"label description newline": "name: demo\nlabels:\n  - name: a\n    color: aabbcc\n    description: \"x\\ny\"\n",
+		"padded repo":               "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: ' o/r'\n",
+		"replaces the gate":         "name: demo\nfiles:\n  - path: x.sh\n    target: scripts/ci-local.sh\n",
+		"manifest gate":             "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: o/r\n    gate: [sh, -c, id]\n",
+		"manifest path":             "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: o/r\n    path: /etc\n",
 	} {
 		if _, err := Parse(t.TempDir(), []byte(src)); err == nil {
 			t.Errorf("%s: Parse accepted %q", name, src)
 		}
+	}
+}
+
+// TestValidValuesAreAccepted: the allowlists still admit ordinary names.
+func TestValidValuesAreAccepted(t *testing.T) {
+	src := "name: demo\nbranch: chore/changelog-contract\nbase: release/1.x\nfiles:\n" +
+		"  - path: scripts/check-changelog.sh\n  - path: .github/workflows/x.yml\n" +
+		"labels:\n  - name: 'type: chore (contract)'\n    color: aabbcc\n" +
+		"targets:\n  - repo: Edibu_LLC/my.repo-2\n    base: main\n"
+	if _, err := Parse(t.TempDir(), []byte(src)); err != nil {
+		t.Fatal(err)
 	}
 }
 
