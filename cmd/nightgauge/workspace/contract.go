@@ -27,9 +27,9 @@ func contractCmd() *cobra.Command {
 		Use:   "contract",
 		Short: "Roll a cross-repository contract out to every workspace repository",
 		Long: `contract rollout|status distributes one contract manifest (files copied
-byte for byte, labels, a CI job, a pull request body) to every target
-repository: one pull request per repository, opened only after that
-repository's own local gate passed, and one status table for all of them.
+byte for byte, labels, a CI job, a changelog entry, a pull request body) to
+every target repository: one pull request per repository, opened only after
+that repository's own local gate passed, and one status table for all of them.
 See docs/MULTI_REPO_WORKSPACE.md § Contract rollout.`,
 	}
 	cmd.AddCommand(contractRolloutCmd())
@@ -60,9 +60,11 @@ func contractRolloutCmd() *cobra.Command {
 		Short: "Plan, or with --apply open, one pull request per target repository",
 		Long: `rollout reads the contract manifest and, for each target repository:
 provisions the contract's labels, copies its files byte for byte and inserts
-its CI job in a fresh worktree off origin/<base>, commits, runs the
-repository's own local gate (the target's gate, else scripts/ci-local.sh),
-and only when the gate passes pushes the branch and opens a pull request.
+its CI job in a fresh worktree off origin/<base>, adds the contract's entry
+under ## [Unreleased] in its CHANGELOG.md, commits, runs the repository's own
+local gate (the local_gate its .nightgauge/config.yaml declares, else
+scripts/ci-local.sh), and only when the gate passes pushes the branch and
+opens a pull request.
 A repository already compliant gets nothing; one whose gate fails keeps its
 worktree for inspection and gets no pull request.
 
@@ -70,10 +72,11 @@ Without --apply it plans: it reads each checkout's working tree and the
 forge's labels and pull requests, and changes nothing.
 
 Trust model: every target must be a repository the workspace manifest
-registers, and its checkout is the path registered there. The only command
-the rollout runs is each repository's own scripts/ci-local.sh, as its base
-branch has it; a contract cannot name a command, a directory, or a file that
-replaces that script. A contract's files and CI job are content the
+registers, and its checkout is the path registered there. The only commands
+the rollout runs are each repository's own gate, as its base branch declares
+it: a list of commands from an allowlist, run without a shell, else
+scripts/ci-local.sh. A contract cannot name a command, a directory, or a file
+that replaces the gate's declaration or a script it runs. A contract's files and CI job are content the
 operator reviews before --apply, as for any change they push.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -2,7 +2,8 @@
 // repository a contract manifest names (#1480): files copied byte for byte,
 // labels provisioned, a CI job inserted, one pull request per repository
 // after that repository's own local gate passes, and one status table for
-// the whole rollout.
+// the whole rollout. Each pull request carries the contract's changelog
+// entry, and is opened only after the target's own declared gate passed.
 //
 // Each primitive (CopyFiles, ProvisionLabels, InsertCIJob) works on a single
 // repository and is tested on its own; Rollout composes them per target.
@@ -48,6 +49,10 @@ type Contract struct {
 	Labels []Label `yaml:"labels"`
 	// CIJob, when set, is inserted into a workflow of every target.
 	CIJob *CIJob `yaml:"ci_job"`
+	// Changelog is the entry every target's CHANGELOG.md gets under
+	// `## [Unreleased]`. Required when the contract has files or a CI job:
+	// every target's changelog contract wants an entry for the change.
+	Changelog *ChangelogEntry `yaml:"changelog"`
 	// Targets are the repositories the contract rolls out to. A manifest may
 	// leave them out and let the command take them from the workspace
 	// manifest, so one contract serves any workspace.
@@ -110,20 +115,14 @@ type CIJob struct {
 
 // Target is one repository the contract rolls out to. A manifest names the
 // repository only: where its checkout is comes from the workspace manifest,
-// and its gate is the repository's own GateScript, so a contract can choose
-// neither a directory to write in nor a command to run.
+// and its gate is the one the repository itself declares (ResolveGate), so a
+// contract can choose neither a directory to write in nor a command to run.
 type Target struct {
 	// Repo is owner/name on the forge.
 	Repo string `yaml:"repo"`
 	// Base overrides the contract's Base for this target.
 	Base string `yaml:"base"`
 }
-
-// GateScript is every target's pre-submission gate: the repository's own
-// local gate, run as `bash scripts/ci-local.sh` in the rollout's worktree.
-// No contract file may replace it, so what runs is the script the
-// repository's base branch already has.
-const GateScript = "scripts/ci-local.sh"
 
 var (
 	contractNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
@@ -244,8 +243,11 @@ func (c *Contract) validate() error {
 				add("files: %v", err)
 			}
 		}
-		if path.Clean(f.TargetPath()) == GateScript {
-			add("files: %s is the repository's own gate; a contract may not replace it", GateScript)
+		switch path.Clean(f.TargetPath()) {
+		case DefaultGateScript, GateConfigPath:
+			add("files: %s is part of the repository's own gate; a contract may not replace it", f.TargetPath())
+		case ChangelogPath:
+			add("files: %s is the repository's own changelog; give the contract a changelog entry instead", ChangelogPath)
 		}
 		if seen[f.TargetPath()] {
 			add("files: %s is listed twice", f.TargetPath())
@@ -280,6 +282,16 @@ func (c *Contract) validate() error {
 		if err := yaml.Unmarshal([]byte(j.On), &on); err != nil {
 			add("ci_job: on: %v", err)
 		}
+	}
+	if cl := c.Changelog; cl != nil {
+		if !validChangelogSection(cl.Section) {
+			add("changelog: section %q is not one of %s", cl.Section, strings.Join(changelogSections, ", "))
+		}
+		if _, err := c.RenderChangelogEntry("owner/name"); err != nil {
+			add("%v", err)
+		}
+	} else if len(c.Files) > 0 || c.CIJob != nil {
+		add("changelog: the contract changes files or CI, so every target's changelog needs an entry; give it changelog.section and changelog.entry")
 	}
 	repos := map[string]bool{}
 	for _, t := range c.Targets {
