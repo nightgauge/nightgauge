@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/template"
 )
@@ -235,11 +236,8 @@ func AddChangelogEntry(root, section string, entry []string, write bool) (Change
 	if !write {
 		return res, nil
 	}
-	out := make([]string, 0, len(lines)+len(insert))
-	out = append(out, lines[:at]...)
-	out = append(out, insert...)
-	out = append(out, lines[at:]...)
-	return res, writeFileAtomic(file, []byte(strings.Join(out, "\n")), info.Mode().Perm())
+	lines = slices.Insert(lines, at, insert...)
+	return res, writeFileAtomic(file, []byte(strings.Join(lines, "\n")), info.Mode().Perm())
 }
 
 // looseList reports whether the list that starts lines separates its items
