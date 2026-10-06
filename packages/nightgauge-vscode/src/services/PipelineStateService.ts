@@ -556,12 +556,17 @@ export class PipelineStateService implements vscode.Disposable {
    */
   private visibility: "private" | undefined;
   /**
-   * Whether the hosted service confirmed the active run private (#2400).
-   * Undefined until the confirmation finishes; only "confirmed" shows the
-   * private badge.
+   * The hosted service's answer about a private run (#2400), keyed by the
+   * run id it was asked for. It counts only while that run is the one
+   * installed here: a late answer for an earlier run of this service never
+   * applies to the run that followed it. Undefined until an answer arrives;
+   * only "confirmed" shows the private badge.
    */
-  private privateConfirmation: PrivateConfirmation | undefined;
-  private readonly _onPrivateConfirmation = new vscode.EventEmitter<PrivateConfirmation>();
+  private privateConfirmation: { runId: string; outcome: PrivateConfirmation } | undefined;
+  private readonly _onPrivateConfirmation = new vscode.EventEmitter<{
+    runId: string;
+    outcome: PrivateConfirmation;
+  }>();
   /** Fires when the hosted service's answer about a private run arrives. */
   readonly onPrivateConfirmation = this._onPrivateConfirmation.event;
   /**
@@ -980,6 +985,7 @@ export class PipelineStateService implements vscode.Disposable {
     this.runRepo = "";
     this.remoteRunId = undefined;
     this.visibility = undefined;
+    this.privateConfirmation = undefined;
   }
 
   /** "private" when the active run was started private (#2400). */
@@ -988,17 +994,33 @@ export class PipelineStateService implements vscode.Disposable {
   }
 
   /**
-   * Record the hosted service's answer about this service's private run
-   * (#2400). Only "confirmed" marks it private.
+   * Record the hosted service's answer about run `runId` (#2400). Applied
+   * only when `runId` is the run installed here and that run was started
+   * private; an answer for any other run (an earlier run of this service
+   * whose read finished late, or a run that has ended) is dropped, so it can
+   * never mark another run private. Returns whether it applied.
    */
-  setPrivateConfirmation(outcome: PrivateConfirmation): void {
-    this.privateConfirmation = outcome;
-    this._onPrivateConfirmation.fire(outcome);
+  setPrivateConfirmation(runId: string, outcome: PrivateConfirmation): boolean {
+    if (runId === "" || runId !== this.runId || this.visibility !== "private") return false;
+    this.privateConfirmation = { runId, outcome };
+    this._onPrivateConfirmation.fire({ runId, outcome });
+    return true;
   }
 
-  /** True once the hosted service confirmed the run private (#2400). */
+  /**
+   * True only when the hosted service confirmed THE INSTALLED run private
+   * (#2400). Fails closed: no run, a team run, no answer yet, an answer that
+   * was not "confirmed", or an answer for another run is false.
+   */
   isPrivateConfirmed(): boolean {
-    return this.privateConfirmation === "confirmed";
+    const c = this.privateConfirmation;
+    return (
+      c !== undefined &&
+      this.runId !== null &&
+      c.runId === this.runId &&
+      this.visibility === "private" &&
+      c.outcome === "confirmed"
+    );
   }
 
   /** The `visibility` every run-bearing notice carries: only private names one. */

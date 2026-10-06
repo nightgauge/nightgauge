@@ -116,7 +116,8 @@ import type { PipelineStateService } from "../../../src/services/PipelineStateSe
 import type { PrivateConfirmation } from "../../../src/services/RunVisibility";
 
 function makeStateService() {
-  const confirmationListeners: Array<(outcome: PrivateConfirmation) => void> = [];
+  const confirmationListeners: Array<(e: { runId: string; outcome: PrivateConfirmation }) => void> =
+    [];
   let confirmation: PrivateConfirmation | undefined;
   const subscribe = () => ({ dispose: vi.fn() });
   return {
@@ -125,14 +126,14 @@ function makeStateService() {
     onPhaseComplete: subscribe,
     onTokenUsageUpdated: subscribe,
     getState: vi.fn().mockResolvedValue(null),
-    onPrivateConfirmation: (cb: (outcome: PrivateConfirmation) => void) => {
+    onPrivateConfirmation: (cb: (e: { runId: string; outcome: PrivateConfirmation }) => void) => {
       confirmationListeners.push(cb);
       return { dispose: vi.fn() };
     },
     isPrivateConfirmed: () => confirmation === "confirmed",
     setPrivateConfirmation: (outcome: PrivateConfirmation) => {
       confirmation = outcome;
-      for (const l of confirmationListeners) l(outcome);
+      for (const l of confirmationListeners) l({ runId: "run-1", outcome });
     },
   };
 }

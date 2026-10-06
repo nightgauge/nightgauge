@@ -100,7 +100,12 @@ describe("confirmAndReportPrivateRun", () => {
 
   it("a service answer without private shows the notice and records no confirmation", async () => {
     const outcomes: PrivateConfirmation[] = [];
-    const target = { setPrivateConfirmation: (o: PrivateConfirmation) => outcomes.push(o) };
+    const target = {
+      setPrivateConfirmation: (runId: string, o: PrivateConfirmation) => {
+        expect(runId).toBe("run-1");
+        outcomes.push(o);
+      },
+    };
     const read = vi.fn().mockResolvedValue({ found: true, visibility: "team" });
 
     await confirmAndReportPrivateRun(target, 912, "run-1", "acme/app", read, noSleep);
@@ -114,7 +119,12 @@ describe("confirmAndReportPrivateRun", () => {
 
   it("a private answer confirms the run without a notice", async () => {
     const outcomes: PrivateConfirmation[] = [];
-    const target = { setPrivateConfirmation: (o: PrivateConfirmation) => outcomes.push(o) };
+    const target = {
+      setPrivateConfirmation: (runId: string, o: PrivateConfirmation) => {
+        expect(runId).toBe("run-1");
+        outcomes.push(o);
+      },
+    };
     const read = vi.fn().mockResolvedValue({ found: true, visibility: "private" });
 
     await confirmAndReportPrivateRun(target, 912, "run-1", "acme/app", read, noSleep);

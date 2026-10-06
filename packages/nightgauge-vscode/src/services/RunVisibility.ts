@@ -171,7 +171,7 @@ export function showPrivateNotConfirmedNotice(issueNumber: number, repo?: string
  * tell the member when the service did not confirm it.
  */
 export async function confirmAndReportPrivateRun(
-  target: { setPrivateConfirmation(outcome: PrivateConfirmation): void },
+  target: { setPrivateConfirmation(runId: string, outcome: PrivateConfirmation): unknown },
   issueNumber: number,
   runId: string,
   repo?: string,
@@ -180,7 +180,9 @@ export async function confirmAndReportPrivateRun(
   options?: Parameters<typeof confirmPrivateRun>[3]
 ): Promise<PrivateConfirmation> {
   const outcome = await confirmPrivateRun(read, issueNumber, runId, options);
-  target.setPrivateConfirmation(outcome);
+  // Keyed by the run the read asked about, so the answer reaches that run
+  // only (#2400); the target drops it if another run is installed by now.
+  target.setPrivateConfirmation(runId, outcome);
   if (outcome !== "confirmed") showPrivateNotConfirmedNotice(issueNumber, repo);
   return outcome;
 }

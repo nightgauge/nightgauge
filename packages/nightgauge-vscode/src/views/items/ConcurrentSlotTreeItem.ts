@@ -175,9 +175,11 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
 
     // The hosted service's answer about a run started private (#2400): the
     // badge appears only on its confirmation.
-    const privateDisposable = stateService.onPrivateConfirmation?.((outcome) => {
+    const privateDisposable = stateService.onPrivateConfirmation?.(() => {
+      // The badge reads the state service's own check, which holds only for
+      // the run installed there and only on the service's confirmation.
       this.description = this.withPrivateBadge(this.baseDescription);
-      if (outcome === "confirmed") {
+      if (this.stateService.isPrivateConfirmed?.()) {
         this.tooltip = `${String(this.tooltip ?? "")}\nPrivate: only you can read this run on the hosted service.`;
       }
       this.onChange?.();
