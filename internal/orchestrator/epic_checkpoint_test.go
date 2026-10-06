@@ -295,7 +295,12 @@ func TestCheckEpicCompletion_NamesACrossRepoEpicInItsOwnRepository(t *testing.T)
 // repository, which for an epic elsewhere is a different issue (#2350
 // review).
 func TestCheckEpicCompletion_ReadyToShipNamesTheEpicInItsOwnRepository(t *testing.T) {
-	posted := make(chan []byte, 1)
+	// Buffered and filtered below: the alert is sent from a detached
+	// goroutine that reads the webhook env var only when it runs, so an
+	// earlier test's alert (its epics are in example-org/...) can arrive here
+	// after this test's t.Setenv. Only alerts about this test's repositories
+	// (o/...) are judged.
+	posted := make(chan []byte, 16)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		select {
@@ -316,13 +321,20 @@ func TestCheckEpicCompletion_ReadyToShipNamesTheEpicInItsOwnRepository(t *testin
 
 	sched.checkEpicCompletion(context.Background(), types.BoardItem{Repo: "o/app", Number: 21}, 0)
 
-	select {
-	case body := <-posted:
-		if !strings.Contains(string(body), "epic o/platform#20 closed") {
-			t.Errorf("ready-to-ship alert = %s, want it to name o/platform#20", body)
+	deadline := time.After(60 * time.Second)
+	for {
+		select {
+		case body := <-posted:
+			if !strings.Contains(string(body), "epic o/") {
+				continue // another test's alert, delivered late
+			}
+			if !strings.Contains(string(body), "epic o/platform#20 closed") {
+				t.Errorf("ready-to-ship alert = %s, want it to name o/platform#20", body)
+			}
+			return
+		case <-deadline:
+			t.Fatal("no ready-to-ship alert was posted")
 		}
-	case <-time.After(60 * time.Second):
-		t.Fatal("no ready-to-ship alert was posted")
 	}
 }
 

@@ -53,6 +53,12 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`@modelcontextprotocol/sdk` is 1.32.1**, out of the range of
+  GHSA-6qxp-vccf-f47h (an MCP server could steer the OAuth client's
+  credentials to an authorization server it chose). It is a transitive
+  dependency of `@google/genai` and the Claude Agent SDK; only the lockfile
+  changes.
+
 - **`workspace contract rollout` writes the changelog entry and runs each
   repository's declared gate** (#2433, #2434). A contract that changes files
   or CI now declares a `changelog` entry (section and text), and the rollout
