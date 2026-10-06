@@ -167,7 +167,7 @@ func rolloutTarget(ctx context.Context, c *Contract, t Target, opt Options) Targ
 	// so it is the one the repository's base branch declares.
 	gate, err := ResolveGate(wt)
 	if err == nil {
-		err = checkGateUntouched(gate, c.Files)
+		err = checkGateUntouched(wt, gate, c.Files)
 	}
 	if err != nil {
 		removeWorktree()
@@ -277,7 +277,7 @@ func planTarget(c *Contract, checkout string, row TargetStatus) TargetStatus {
 	}
 	gate, err := ResolveGate(checkout)
 	if err == nil {
-		err = checkGateUntouched(gate, c.Files)
+		err = checkGateUntouched(checkout, gate, c.Files)
 	}
 	switch {
 	case err != nil:

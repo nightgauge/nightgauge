@@ -368,13 +368,19 @@ func TestRolloutRunsTheDeclaredGate(t *testing.T) {
 			"scripts/check.sh":        "#!/bin/sh\n",
 			".nightgauge/config.yaml": declare("[sh, scripts/check.sh]"),
 		}),
+		// The same script under another case: the contract's scripts/check.sh
+		// would overwrite it on a case-insensitive filesystem.
+		"o/cased": newTargetRepo(t, map[string]string{
+			"Scripts/Check.sh":        "#!/bin/sh\n",
+			".nightgauge/config.yaml": declare("[sh, Scripts/Check.sh]"),
+		}),
 	}
-	c := demoContract(t, []Target{{Repo: "o/declared"}, {Repo: "o/stops"}, {Repo: "o/shell"}, {Repo: "o/guarded"}})
+	c := demoContract(t, []Target{{Repo: "o/declared"}, {Repo: "o/stops"}, {Repo: "o/shell"}, {Repo: "o/guarded"}, {Repo: "o/cased"}})
 	forge := newFakeForge()
 	work := t.TempDir()
 	rows := Rollout(context.Background(), c, Options{Apply: true, WorkDir: work, ResolvePath: pathsFor(repos), Forge: forge})
 
-	declared, stops, shell, guarded := rows[0], rows[1], rows[2], rows[3]
+	declared, stops, shell, guarded, cased := rows[0], rows[1], rows[2], rows[3], rows[4]
 	if declared.Status != StatusPROpen || declared.Gate != "passed" || !strings.HasPrefix(declared.GateCommand, "sh scripts/log.sh ") {
 		t.Errorf("o/declared = %+v", declared)
 	}
@@ -388,10 +394,12 @@ func TestRolloutRunsTheDeclaredGate(t *testing.T) {
 	if shell.Status != StatusError || !strings.Contains(shell.Detail, "local_gate") || shell.PR != nil {
 		t.Errorf("o/shell = %+v", shell)
 	}
-	if guarded.Status != StatusError || !strings.Contains(guarded.Detail, "scripts/check.sh is part of the repository's own gate") {
-		t.Errorf("o/guarded = %+v", guarded)
+	for _, row := range []TargetStatus{guarded, cased} {
+		if row.Status != StatusError || !strings.Contains(row.Detail, "part of the repository's own gate") {
+			t.Errorf("%s = %+v", row.Repo, row)
+		}
 	}
-	for _, repo := range []string{"o__shell", "o__guarded"} {
+	for _, repo := range []string{"o__shell", "o__guarded", "o__cased"} {
 		if _, err := os.Stat(filepath.Join(work, repo)); !os.IsNotExist(err) {
 			t.Errorf("%s: the worktree of a refused target was left behind", repo)
 		}

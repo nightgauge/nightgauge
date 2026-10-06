@@ -85,6 +85,11 @@ func TestParseDefaultsAndValidation(t *testing.T) {
 		"manifest path":             "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: o/r\n    path: /etc\n",
 		"replaces the gate config":  "name: demo\nfiles:\n  - path: x.yaml\n    target: .nightgauge/config.yaml\n",
 		"replaces the changelog":    "name: demo\nfiles:\n  - path: CHANGELOG.md\n",
+		"gate, mixed case":          "name: demo\nfiles:\n  - path: x.sh\n    target: Scripts/CI-Local.sh\n",
+		"gate config, mixed case":   "name: demo\nfiles:\n  - path: x\n    target: .NightGauge/config.YAML\n",
+		"changelog, mixed case":     "name: demo\nfiles:\n  - path: x\n    target: Changelog.MD\n",
+		"inside .git, mixed case":   "name: demo\nfiles:\n  - path: x\n    target: .GIT/hooks/pre-commit\n",
+		"listed twice, by case":     "name: demo\nfiles:\n  - path: a.sh\n  - path: b.sh\n    target: A.sh\n",
 	} {
 		// Every case carries a valid changelog entry, so it fails for its
 		// own reason.
@@ -632,14 +637,41 @@ func TestResolveGate(t *testing.T) {
 	}
 }
 
+// TestCheckGateUntouched: a contract file may not replace the gate's
+// declaration, a script it runs, the default gate script or the changelog,
+// under any spelling the filesystem resolves to the same file: case-folded
+// (APFS, NTFS) or, when it exists, the same file by identity.
 func TestCheckGateUntouched(t *testing.T) {
 	g := Gate{Steps: [][]string{{"npm", "ci"}, {"bash", "scripts/gate.sh"}}, Declared: true}
-	if err := checkGateUntouched(g, []File{{Path: "scripts/other.sh"}}); err != nil {
+	if err := checkGateUntouched("", g, []File{{Path: "scripts/other.sh"}}); err != nil {
 		t.Error(err)
 	}
-	for _, f := range []File{{Path: "scripts/gate.sh"}, {Path: "x", Target: ".nightgauge/config.yaml"}} {
-		if err := checkGateUntouched(g, []File{f}); err == nil {
+	for _, f := range []File{
+		{Path: "scripts/gate.sh"},
+		{Path: "Scripts/Gate.SH"},
+		{Path: "x", Target: ".nightgauge/config.yaml"},
+		{Path: "x", Target: ".Nightgauge/Config.YAML"},
+		{Path: "x", Target: "SCRIPTS/CI-LOCAL.SH"},
+		{Path: "x", Target: "changelog.md"},
+	} {
+		if err := checkGateUntouched("", g, []File{f}); err == nil {
 			t.Errorf("%s: a contract file replacing the gate was accepted", f.TargetPath())
 		}
+	}
+
+	// Mixed case is caught by folding whatever the gate declares, too.
+	mixed := Gate{Steps: [][]string{{"bash", "Scripts/Verify.sh"}}, Declared: true}
+	if err := checkGateUntouched("", mixed, []File{{Path: "scripts/verify.sh"}}); err == nil {
+		t.Error("a lower-case contract file over a mixed-case gate script was accepted")
+	}
+
+	// Identity: another name for the gate's script is refused.
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "scripts", "gate.sh"), "#!/bin/sh\n", 0o755)
+	if err := os.Link(filepath.Join(root, "scripts", "gate.sh"), filepath.Join(root, "scripts", "alias.sh")); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGateUntouched(root, g, []File{{Path: "scripts/alias.sh"}}); err == nil {
+		t.Error("a second name for the gate's script was accepted")
 	}
 }

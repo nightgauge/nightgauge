@@ -227,18 +227,45 @@ func regularFileIn(root, rel string) bool {
 }
 
 // checkGateUntouched refuses a contract that writes the gate's own
-// declaration or a script the gate runs: the gate stays the repository's.
-func checkGateUntouched(g Gate, files []File) error {
-	guarded := map[string]bool{GateConfigPath: true}
-	for _, s := range g.Scripts() {
-		guarded[path.Clean(s)] = true
-	}
+// declaration, the default gate script, the changelog, or a script the gate
+// runs: the gate stays the repository's. Paths are compared as the
+// filesystem may resolve them, not as strings: case-insensitively (APFS and
+// NTFS resolve `Scripts/Gate.sh` to `scripts/gate.sh`), and, for a target
+// that already exists under root, by file identity, which also catches a
+// differently normalized spelling of the same file.
+func checkGateUntouched(root string, g Gate, files []File) error {
+	guarded := append([]string{GateConfigPath, DefaultGateScript, ChangelogPath}, g.Scripts()...)
 	for _, f := range files {
-		if guarded[path.Clean(f.TargetPath())] {
-			return fmt.Errorf("files: %s is part of the repository's own gate; a contract may not replace it", f.TargetPath())
+		for _, gp := range guarded {
+			if samePath(root, f.TargetPath(), gp) {
+				return fmt.Errorf("files: %s is %s, part of the repository's own gate or changelog; a contract may not replace it", f.TargetPath(), gp)
+			}
 		}
 	}
 	return nil
+}
+
+// samePath reports whether repository paths a and b may name one file:
+// equal under case folding, or, when both exist under root, the same file.
+func samePath(root, a, b string) bool {
+	if foldPath(a) == foldPath(b) {
+		return true
+	}
+	if root == "" {
+		return false
+	}
+	ai, err := os.Lstat(filepath.Join(root, filepath.FromSlash(a)))
+	if err != nil {
+		return false
+	}
+	bi, err := os.Lstat(filepath.Join(root, filepath.FromSlash(b)))
+	return err == nil && os.SameFile(ai, bi)
+}
+
+// foldPath is p's case-folded clean form, the key under which a
+// case-insensitive filesystem resolves it.
+func foldPath(p string) string {
+	return strings.ToLower(path.Clean(p))
 }
 
 // runGate runs every step in dir and stops at the first failure; the error

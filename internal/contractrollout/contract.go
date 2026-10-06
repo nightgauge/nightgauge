@@ -243,16 +243,18 @@ func (c *Contract) validate() error {
 				add("files: %v", err)
 			}
 		}
-		switch path.Clean(f.TargetPath()) {
-		case DefaultGateScript, GateConfigPath:
+		// Compared case-folded: on a case-insensitive filesystem
+		// `Scripts/CI-Local.sh` is scripts/ci-local.sh.
+		switch foldPath(f.TargetPath()) {
+		case foldPath(DefaultGateScript), foldPath(GateConfigPath):
 			add("files: %s is part of the repository's own gate; a contract may not replace it", f.TargetPath())
-		case ChangelogPath:
-			add("files: %s is the repository's own changelog; give the contract a changelog entry instead", ChangelogPath)
+		case foldPath(ChangelogPath):
+			add("files: %s is the repository's own changelog; give the contract a changelog entry instead", f.TargetPath())
 		}
-		if seen[f.TargetPath()] {
+		if seen[foldPath(f.TargetPath())] {
 			add("files: %s is listed twice", f.TargetPath())
 		}
-		seen[f.TargetPath()] = true
+		seen[foldPath(f.TargetPath())] = true
 	}
 	for _, l := range c.Labels {
 		if !labelNameRe.MatchString(l.Name) {
@@ -328,7 +330,8 @@ func checkRelPath(p string) error {
 	if clean != p || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
 		return fmt.Errorf("%q is not a clean path inside the repository", p)
 	}
-	if clean == ".git" || strings.HasPrefix(clean, ".git/") {
+	// Case-folded: a case-insensitive filesystem resolves .GIT to .git.
+	if folded := strings.ToLower(clean); folded == ".git" || strings.HasPrefix(folded, ".git/") {
 		return fmt.Errorf("%q is inside .git", p)
 	}
 	for _, seg := range strings.Split(clean, "/") {

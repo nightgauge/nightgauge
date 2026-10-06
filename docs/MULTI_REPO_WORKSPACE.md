@@ -951,7 +951,8 @@ runs are each repository's own gate, as its base branch declares it: a
 without a shell, else `scripts/ci-local.sh`. The gate is read before any
 contract file is written. A contract cannot name a command or a directory, and
 no contract file may target the gate's declaration, a script the gate runs,
-or `scripts/ci-local.sh`. A contract's files and CI job are content the
+`scripts/ci-local.sh` or `CHANGELOG.md`, in any letter case, since macOS and
+Windows filesystems resolve paths case-insensitively. A contract's files and CI job are content the
 operator reviews before `--apply`, as for any change they push.
 
 `configs/contracts/changelog.yaml` is the changelog contract
