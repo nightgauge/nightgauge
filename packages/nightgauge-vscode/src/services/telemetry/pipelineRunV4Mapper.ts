@@ -95,6 +95,13 @@ export interface ExecutionHistoryRunRecordV4 {
    * (schema rejection avoided) rather than sending `null`.
    */
   pipelineRunId?: string;
+  /**
+   * "private" for a run its creator chose to keep private (#2400), from the
+   * JSONL record's `visibility`. Omitted for team: the platform declares it
+   * optional, reads absent as team, and a private record raises the run and
+   * nothing lowers it.
+   */
+  visibility?: "private";
   startedAt: string;
   completedAt: string | null;
   outcome: V4Outcome;
@@ -314,6 +321,7 @@ export function mapHistoryRecordToV4(raw: unknown): MapResult {
       issueNumber: Math.floor(issueNumber),
       repo,
       pipelineRunId: validTelemetryRunID(r["run_id"]),
+      ...(r["visibility"] === "private" ? { visibility: "private" as const } : {}),
       startedAt,
       completedAt: toUtcIso(r["completed_at"]),
       outcome,

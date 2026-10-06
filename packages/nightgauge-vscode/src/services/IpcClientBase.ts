@@ -575,6 +575,16 @@ export interface RunsEntry {
  * from `next_cursor`. The `total_count` this interface used to declare was
  * never sent by the endpoint and was rendered as "0 runs" (#801).
  */
+/**
+ * Result from platform.getRunVisibility (#2400): whether the hosted service
+ * holds the asked run yet, and the visibility it recorded for it ("team" or
+ * "private"). The window marks a run private only on "private".
+ */
+export interface RunVisibilityResult {
+  found: boolean;
+  visibility?: string;
+}
+
 export interface AnalyticsRunsResult {
   entries: RunsEntry[];
   next_cursor?: string;
@@ -802,6 +812,8 @@ export interface IpcQueueItem {
   requestedAdapter?: string;
   /** A remote run request's model, the `-m` value (#1656). */
   requestedModel?: string;
+  /** "private" when the item's run is private on the hosted service (#2400). */
+  visibility?: string;
 }
 
 /** IPC-layer queue state (matches Go orchestrator.QueueState). */
@@ -1000,6 +1012,8 @@ export interface QueueHandBackRef {
   issueNumber: number;
   remoteRunId?: string;
   remoteRunAttached?: boolean;
+  /** "private" raises the item to private: a private remote run (#2400). */
+  visibility?: "private";
 }
 
 export interface QueueValidatePinResult {

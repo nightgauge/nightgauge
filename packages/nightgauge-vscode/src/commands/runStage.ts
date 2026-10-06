@@ -16,6 +16,7 @@
  */
 
 import * as vscode from "vscode";
+import { chooseRunVisibility, confirmAndReportPrivateRun } from "../services/RunVisibility";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { Logger } from "../utils/logger";
 import type { StatusBarManager } from "../utils/statusBar";
@@ -575,12 +576,25 @@ export function registerRunStageCommand(
        */
       let mintedId: string | null = null;
       if (pipelineStateService && pipelineStateService.getRunId() === null) {
+        // This stage starts a new run, so it asks who reads that run on the
+        // hosted service (#2400). Dismissing the choice cancels the stage.
+        const visibility = await chooseRunVisibility();
+        if (!visibility) return;
         const repo = await resolveCommandRepoSlug();
         if (pipelineStateService.getRunId() === null) {
           const candidate = uuidV7();
           try {
-            pipelineStateService.beginRun(candidate, repo, issueNumber);
+            pipelineStateService.beginRun(
+              candidate,
+              repo,
+              issueNumber,
+              undefined,
+              visibility === "private" ? "private" : undefined
+            );
             mintedId = candidate;
+            if (visibility === "private") {
+              void confirmAndReportPrivateRun(pipelineStateService, issueNumber, candidate, repo);
+            }
           } catch (error) {
             const message = error instanceof Error ? error.message : "Unknown error";
             logger.error("Refusing to run stage — the pipeline holds another run", {

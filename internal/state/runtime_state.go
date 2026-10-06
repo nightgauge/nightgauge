@@ -291,6 +291,13 @@ type RuntimeState struct {
 	// verbs for that run. Empty on every run no trigger started.
 	RemoteRunID string `json:"remoteRunId,omitempty"`
 
+	// Visibility is who reads this run on the hosted service (#2400):
+	// VisibilityPrivate when the member who started it chose private, empty
+	// for team. Raised by SetVisibility and never lowered, so a run that was
+	// private once carries private on every later upload, and a snapshot
+	// rehydrated after a restart keeps it.
+	Visibility string `json:"visibility,omitempty"`
+
 	// StageModels captures the model that ACTUALLY executed each stage
 	// (Issue #42) — after escalation overrides and model-unavailable tier
 	// downgrades, which can differ from the run-level predicted model.
@@ -2080,6 +2087,28 @@ func (rs *RuntimeState) SetRemoteRunID(remoteRunID string) {
 	rs.RemoteRunID = remoteRunID
 }
 
+// SetVisibility raises the run's visibility (#2400): private once any caller
+// says private, never lowered. Any other value changes nothing.
+func (rs *RuntimeState) SetVisibility(visibility string) {
+	if visibility != VisibilityPrivate {
+		return
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.Visibility = VisibilityPrivate
+}
+
+// RunVisibility returns the run's visibility: VisibilityPrivate or empty
+// (team). Safe on a nil runtime, which is team.
+func (rs *RuntimeState) RunVisibility() string {
+	if rs == nil {
+		return ""
+	}
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	return rs.Visibility
+}
+
 // RequestedPin returns the remote run request's adapter and model, or two
 // empty strings when the run was not requested with a pin.
 func (rs *RuntimeState) RequestedPin() (adapter, model string) {
@@ -3086,6 +3115,7 @@ func (rs *RuntimeState) snapshotLocked() *RuntimeState {
 		RequestedAdapter:         rs.RequestedAdapter,
 		RequestedModel:           rs.RequestedModel,
 		RemoteRunID:              rs.RemoteRunID,
+		Visibility:               rs.Visibility,
 		Stage:                    rs.Stage,
 		StartedAt:                rs.StartedAt,
 		StageStart:               rs.StageStart,

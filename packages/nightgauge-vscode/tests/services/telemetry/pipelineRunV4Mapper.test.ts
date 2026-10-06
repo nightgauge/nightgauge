@@ -140,3 +140,20 @@ describe("mapStages excludes model_selection's dispatch-envelope fields (#580)",
     );
   });
 });
+
+describe("mapHistoryRecordToV4 visibility (#2400)", () => {
+  it("carries a private run's visibility onto the completion record", () => {
+    const result = mapHistoryRecordToV4({ ...baseRecord({}), visibility: "private" });
+    if (!result.ok) throw new Error(result.reason);
+    expect(result.record.visibility).toBe("private");
+    expect(JSON.stringify(result.record)).toContain('"visibility":"private"');
+  });
+
+  it("omits visibility for a team run and for any other value", () => {
+    for (const visibility of [undefined, "team", "public"]) {
+      const result = mapHistoryRecordToV4({ ...baseRecord({}), visibility });
+      if (!result.ok) throw new Error(result.reason);
+      expect(JSON.stringify(result.record)).not.toContain('"visibility"');
+    }
+  });
+});

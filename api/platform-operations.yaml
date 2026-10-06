@@ -202,6 +202,13 @@ operations:
     security: pipeline
     upstream: declared
 
+  - id: pipelines.getStatusByIssue
+    go_name: OpPipelinesGetStatusByIssue
+    method: GET
+    path: /v1/pipelines/{issueNumber}/status
+    security: pipeline
+    upstream: declared
+
   - id: queue.sync
     go_name: OpQueueSync
     method: PUT

@@ -508,7 +508,7 @@ func buildOrphanDoneEvent(snap *state.RuntimeState, now time.Time) (platform.Pip
 	for _, sr := range snap.AllStageAttempts() {
 		totalDuration += sr.Duration
 	}
-	return buildPipelineDoneEvent(snap.RunID, PipelineNotifyCompleteParams{
+	event, ok := buildPipelineDoneEvent(snap.RunID, PipelineNotifyCompleteParams{
 		Repo:        snap.Repo,
 		IssueNumber: snap.IssueNumber,
 		Success:     false,
@@ -518,6 +518,10 @@ func buildOrphanDoneEvent(snap *state.RuntimeState, now time.Time) (platform.Pip
 		TotalDurationMs: int(totalDuration.Milliseconds()),
 		StagesRun:       stagesRun,
 	}, now)
+	// The interrupted run's snapshot keeps its visibility (#2400), so its
+	// terminal event is private when the run was.
+	event.Visibility = snap.Visibility
+	return event, ok
 }
 
 // pipelineStateScanRoots returns every workspace root whose

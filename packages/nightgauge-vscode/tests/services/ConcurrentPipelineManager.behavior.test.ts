@@ -808,7 +808,13 @@ describe("ConcurrentPipelineManager — behavioral tests", () => {
         expect(manager.isRunning(10)).toBe(true);
 
         // Enqueue should have been called to re-enqueue the failed item
-        expect(mockQueue.enqueue).toHaveBeenCalledWith(20, "Issue #20", undefined);
+        expect(mockQueue.enqueue).toHaveBeenCalledWith(
+          20,
+          "Issue #20",
+          undefined,
+          undefined,
+          undefined
+        );
 
         // dequeueIndependent should have been called at least twice:
         // once for initial batch, once for fillAgain after re-enqueue

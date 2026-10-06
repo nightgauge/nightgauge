@@ -1406,7 +1406,7 @@ export async function initializeServices(
               "Resume",
               "Cancel"
             ),
-          resume: async (issueNumber, repo) => {
+          resume: async (issueNumber, repo, visibility) => {
             if (repo) {
               // A run of another repository of the window: the single-run
               // path below only runs the primary repository, so the issue is
@@ -1415,6 +1415,7 @@ export async function initializeServices(
               const queued = issueQueueService
                 ? await issueQueueService.enqueue(issueNumber, `#${issueNumber}`, [], undefined, {
                     repoOverride: repo,
+                    ...(visibility === "private" ? { visibility } : {}),
                   })
                 : null;
               if (!queued) {
@@ -1442,9 +1443,11 @@ export async function initializeServices(
                 );
               }
             }
-            headlessOrchestrator.runPipeline(issueNumber).catch((err) => {
-              logger.error("Failed to resume paused pipeline", { err });
-            });
+            headlessOrchestrator
+              .runPipeline(issueNumber, undefined, undefined, undefined, visibility)
+              .catch((err) => {
+                logger.error("Failed to resume paused pipeline", { err });
+              });
           },
           gone: (issueNumber) => {
             void vscode.window.showInformationMessage(

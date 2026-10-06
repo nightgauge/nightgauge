@@ -16,6 +16,20 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **A run can be started private** (#2400). Signed in, every extension
+  command that starts a run asks _Team_ (selected) or _Private_, and
+  `nightgauge run <issue> --private` does the same from the CLI. A private run
+  is readable on the hosted service by its creator alone; owners and admins
+  still see that it exists and what it cost. The daemon sends
+  `visibility: private` on the run's first stage event and on every later
+  upload: each stage event, the completion record and its queue-snapshot
+  entry. A remote trigger asking for private starts a private run, a paused
+  private run resumes private, and runs the autonomous scheduler starts stay
+  team. The extension shows a _Private_ badge on the run's slot only once the
+  service confirms it, and says so when it does not. Work on GitHub follows
+  the repository's permissions either way. See `docs/TELEMETRY_PRIVACY.md`
+  § Private runs.
+
 - **`nightgauge workspace contract rollout|status` rolls one contract out to
   every workspace repository** (#1480). A contract manifest names files to
   copy byte for byte, labels to provision, a CI job to insert and a pull
@@ -38,6 +52,12 @@ changelog, and the release workflow refuses a tag that does not.
   after each platform deploy, in the platform repository.
 
 ### Fixed
+
+- **`@modelcontextprotocol/sdk` is 1.32.1**, out of the range of
+  GHSA-6qxp-vccf-f47h (an MCP server could steer the OAuth client's
+  credentials to an authorization server it chose). It is a transitive
+  dependency of `@google/genai` and the Claude Agent SDK; only the lockfile
+  changes.
 
 - **`workspace contract rollout` writes the changelog entry and runs each
   repository's declared gate** (#2433, #2434). A contract that changes files

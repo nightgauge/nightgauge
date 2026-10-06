@@ -78,6 +78,16 @@ func validTelemetryComplexity(score int) *int {
 	return &v
 }
 
+// telemetryVisibility returns "private" for a private run (#2400) and ""
+// (omitted, read as team) for anything else, so a malformed local value can
+// never fail the record's validation.
+func telemetryVisibility(v string) string {
+	if v == state.VisibilityPrivate {
+		return state.VisibilityPrivate
+	}
+	return ""
+}
+
 // validTelemetryRunID returns id unchanged when it is a well-formed UUID,
 // else "" (which json-omits the optional pipelineRunId key). The platform
 // schema is `z.string().uuid().optional()` — a malformed value would reject
@@ -450,6 +460,7 @@ func V2RunRecordToExecutionHistoryRunRecord(record state.V2RunRecord, input Exec
 		IssueNumber:         record.IssueNumber,
 		Repo:                input.Repo,
 		PipelineRunID:       validTelemetryRunID(record.RunID),
+		Visibility:          telemetryVisibility(record.Visibility),
 		StartedAt:           startedAt.UTC().Format(time.RFC3339Nano),
 		CompletedAt:         completedAt,
 		Outcome:             record.Outcome,

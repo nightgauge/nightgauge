@@ -90,6 +90,7 @@ import type {
   RateLimitInfo,
   RecordStageExitResult,
   RetentionConfig,
+  RunVisibilityResult,
   RunningPipelinesResult,
   StatusCounts,
   StatusOK,
@@ -283,8 +284,8 @@ export class IpcClientGenerated extends IpcClientBase {
   // Queue
   // -------------------------------------------------------------------------
 
-  async queueAdd(owner: string, repo: string, issueNumber: number, title?: string, labels?: string[], priority?: string, remoteRunId?: string, remoteRunAttached?: boolean, adapter?: string, model?: string): Promise<void> {
-    await this.call<void>('queue.add', { owner, repo, issueNumber, title, labels, priority, remoteRunId, remoteRunAttached, adapter, model });
+  async queueAdd(owner: string, repo: string, issueNumber: number, title?: string, labels?: string[], priority?: string, remoteRunId?: string, remoteRunAttached?: boolean, adapter?: string, model?: string, visibility?: string): Promise<void> {
+    await this.call<void>('queue.add', { owner, repo, issueNumber, title, labels, priority, remoteRunId, remoteRunAttached, adapter, model, visibility });
   }
 
   async queueValidatePin(adapter?: string, model?: string, owner?: string, repo?: string, issueNumber?: number): Promise<QueueValidatePinResult> {
@@ -319,8 +320,8 @@ export class IpcClientGenerated extends IpcClientBase {
     await this.call<void>('queue.complete', { repo, issueNumber });
   }
 
-  async queueEnqueueEpic(owner: string, repo: string, epicNumber: number, title?: string, labels?: string[], eligibleSubIssues?: unknown[]): Promise<void> {
-    await this.call<void>('queue.enqueueEpic', { owner, repo, epicNumber, title, labels, eligibleSubIssues });
+  async queueEnqueueEpic(owner: string, repo: string, epicNumber: number, title?: string, labels?: string[], eligibleSubIssues?: unknown[], visibility?: string): Promise<void> {
+    await this.call<void>('queue.enqueueEpic', { owner, repo, epicNumber, title, labels, eligibleSubIssues, visibility });
   }
 
 
@@ -379,6 +380,10 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async platformGetAnalyticsHealth(): Promise<AnalyticsHealthResult> {
     return this.call<AnalyticsHealthResult>('platform.getAnalyticsHealth');
+  }
+
+  async platformGetRunVisibility(issueNumber: number, runId: string): Promise<RunVisibilityResult> {
+    return this.call<RunVisibilityResult>('platform.getRunVisibility', { issueNumber, runId });
   }
 
   async platformGetAnalyticsRuns(cursor?: string, limit?: number): Promise<AnalyticsRunsResult> {

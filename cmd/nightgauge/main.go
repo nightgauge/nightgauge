@@ -68,6 +68,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/runstate"
 	"github.com/nightgauge/nightgauge/internal/scaffold"
 	"github.com/nightgauge/nightgauge/internal/scan"
+	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/internal/telemetrynotice"
 	"github.com/nightgauge/nightgauge/internal/validation"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -4563,6 +4564,7 @@ func runCmd() *cobra.Command {
 		issueNumber   int
 		adapterName   string
 		repoName      string
+		private       bool
 	)
 
 	cmd := &cobra.Command{
@@ -4571,6 +4573,7 @@ func runCmd() *cobra.Command {
 		Example: `  nightgauge run 1311                    # Run pipeline for specific issue in this checkout's repo
   nightgauge run 1311 --repo acme/other-repo  # Run it in another repo
   nightgauge run 1311 --adapter codex    # Run with Codex adapter
+  nightgauge run 1311 --private          # Keep the run private on the hosted service
   nightgauge run --project 5              # Pick next ready issue and run
   nightgauge run --auto --project 5       # Run continuously`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -4587,6 +4590,16 @@ func runCmd() *cobra.Command {
 					return fmt.Errorf("invalid issue number: %s", args[0])
 				}
 				issueNumber = num
+			}
+
+			// Runs the autonomous loop starts are team-visible (#2400): private
+			// is a choice a member makes for one run they start.
+			if private && auto {
+				return errors.New("--private applies to a run you start; runs --auto starts are team-visible")
+			}
+			visibility := ""
+			if private {
+				visibility = state.VisibilityPrivate
 			}
 
 			client, err := clientFromConfig()
@@ -4703,6 +4716,7 @@ func runCmd() *cobra.Command {
 				sched.QueueAdd(orchestrator.QueueEntry{
 					Repo:        repo,
 					IssueNumber: issueNumber,
+					Visibility:  visibility,
 				})
 				summary, runErr := sched.RunQueue(cmd.Context())
 				return finishQueueRun(cmd, summary, runErr)
@@ -4722,6 +4736,7 @@ func runCmd() *cobra.Command {
 			sched.QueueAdd(orchestrator.QueueEntry{
 				Repo:        item.Repo,
 				IssueNumber: item.Number,
+				Visibility:  visibility,
 			})
 			summary, runErr := sched.RunQueue(cmd.Context())
 			return finishQueueRun(cmd, summary, runErr)
@@ -4736,6 +4751,9 @@ func runCmd() *cobra.Command {
 	cmd.Flags().IntVar(&issueNumber, "issue", 0, "Specific issue number to run")
 	cmd.Flags().StringVar(&repoName, "repo", "", "Target repository for an explicit issue number (owner/repo, or a bare name resolved against --owner). Defaults to this checkout's configured repo.")
 	cmd.Flags().StringVar(&adapterName, "adapter", "", adapterFlagUsage("AI adapter", ""))
+	cmd.Flags().BoolVar(&private, "private", false, "Keep this run private on the hosted service: only you can read it there; "+
+		"owners and admins still see that it exists and what it cost. Work on GitHub (branches, pull requests, "+
+		"comments) follows the repository's permissions. Not with --auto")
 
 	// `nightgauge run state {get,set,resume,discard,detect}` —
 	// durable run-state.json (Issue #3238).
@@ -4913,7 +4931,7 @@ func queueAddCmd() *cobra.Command {
 
 				if ibqueue.IsEpic(issue.Labels) {
 					fmt.Printf("Epic detected: #%d — %s. Expanding sub-issues...\n", num, issue.Title)
-					if err := sched.EnqueueEpic(ctx, repoOwner, repoName, num, issue.Title, issue.Labels, nil); err != nil {
+					if err := sched.EnqueueEpic(ctx, repoOwner, repoName, num, issue.Title, issue.Labels, nil, ""); err != nil {
 						return fmt.Errorf("enqueue epic #%d: %w", num, err)
 					}
 					queued := sched.QueueList()

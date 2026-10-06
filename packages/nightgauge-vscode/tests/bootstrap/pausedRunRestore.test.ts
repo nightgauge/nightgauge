@@ -137,7 +137,7 @@ describe("restorePausedRuns (#2339)", () => {
     await restorePausedRuns([paused], deps);
     expect(fs.existsSync(paused.filePath)).toBe(false);
     expect(window.held.has("run-4")).toBe(false);
-    expect(deps.resume).toHaveBeenCalledWith(4);
+    expect(deps.resume).toHaveBeenCalledWith(4, undefined, undefined);
     expect(deps.gone).not.toHaveBeenCalled();
   });
 
@@ -164,7 +164,7 @@ describe("restorePausedRuns (#2339)", () => {
     const denied = Object.assign(new Error("permission denied"), { code: "EACCES" });
 
     await restorePausedRuns([snapshot(6)], { ...deps, consume: vi.fn().mockRejectedValue(denied) });
-    expect(deps.resume).toHaveBeenCalledWith(6);
+    expect(deps.resume).toHaveBeenCalledWith(6, undefined, undefined);
     expect(deps.logger.warn).toHaveBeenCalledWith(
       "Could not remove the paused snapshot after Resume",
       expect.objectContaining({ issueNumber: 6 })
@@ -268,7 +268,7 @@ describe("paused runs of every repository of the window (#2339)", () => {
     const done = restorePausedRuns(found, deps);
     await done;
 
-    expect(deps.resume).toHaveBeenCalledWith(9, { owner: "acme", repo: "api" });
+    expect(deps.resume).toHaveBeenCalledWith(9, { owner: "acme", repo: "api" }, undefined);
     expect(fs.existsSync(path.join(pipelineDir, "runtime-9.json"))).toBe(false);
   });
 

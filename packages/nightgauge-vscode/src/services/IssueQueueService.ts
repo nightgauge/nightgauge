@@ -139,6 +139,12 @@ export class IssueQueueService implements vscode.Disposable {
        */
       requestedAdapter?: string;
       requestedModel?: string;
+      /**
+       * "private" when the member chose a private run, or the remote trigger
+       * asked for one (#2400). Go stores it on the queue item; a private
+       * request for an issue already waiting raises that item.
+       */
+      visibility?: "private";
     }
   ): Promise<QueueItem | null> {
     // Stop-control guard — refuse new items while a stop is in progress.
@@ -176,7 +182,13 @@ export class IssueQueueService implements vscode.Disposable {
     // Epic routing — delegate to Go's queue.enqueueEpic
     const resolvedLabels = labels ?? [];
     if (resolvedLabels.some((l) => l === "type:epic")) {
-      return this.enqueueEpic(issueNumber, title, resolvedLabels, _options?.repoOverride);
+      return this.enqueueEpic(
+        issueNumber,
+        title,
+        resolvedLabels,
+        _options?.repoOverride,
+        _options?.visibility
+      );
     }
 
     const identity = _options?.repoOverride ?? (await getRepoIdentity(this.workspaceRoot));
@@ -193,7 +205,8 @@ export class IssueQueueService implements vscode.Disposable {
       _options?.remoteRunId,
       _options?.remoteRunId && _options.remoteRunAttached ? true : undefined,
       _options?.requestedAdapter,
-      _options?.requestedModel
+      _options?.requestedModel,
+      _options?.visibility === "private" ? "private" : undefined
     );
 
     const item: QueueItem = {
@@ -204,6 +217,7 @@ export class IssueQueueService implements vscode.Disposable {
       addedAt: new Date().toISOString(),
       labels: resolvedLabels,
       blockedBy,
+      ...(_options?.visibility === "private" ? { visibility: "private" as const } : {}),
     };
 
     this.callbacks.onItemAdded?.(item);
@@ -214,7 +228,8 @@ export class IssueQueueService implements vscode.Disposable {
     epicNumber: number,
     title: string,
     labels: string[],
-    repoOverride?: { owner: string; repo: string }
+    repoOverride?: { owner: string; repo: string },
+    visibility?: "private"
   ): Promise<QueueItem | null> {
     // Stop-control guard — mirror enqueue() so direct calls to enqueueEpic()
     // (not routed through enqueue's label detection) are also blocked.
@@ -235,7 +250,15 @@ export class IssueQueueService implements vscode.Disposable {
       `[IssueQueueService] enqueueEpic #${epicNumber} via IPC → ${identity.owner}/${identity.repo}`
     );
     const ipc = IpcClient.getInstance();
-    await ipc.queueEnqueueEpic(identity.owner, identity.repo, epicNumber, title, labels);
+    await ipc.queueEnqueueEpic(
+      identity.owner,
+      identity.repo,
+      epicNumber,
+      title,
+      labels,
+      undefined,
+      visibility === "private" ? "private" : undefined
+    );
     console.log(`[IssueQueueService] enqueueEpic #${epicNumber}: IPC call completed`);
 
     const item: QueueItem = {
@@ -245,6 +268,7 @@ export class IssueQueueService implements vscode.Disposable {
       status: "pending",
       addedAt: new Date().toISOString(),
       labels,
+      ...(visibility === "private" ? { visibility: "private" as const } : {}),
     };
 
     this.callbacks.onItemAdded?.(item);
@@ -599,6 +623,7 @@ export class IssueQueueService implements vscode.Disposable {
       ...(item.remoteRunId && item.remoteRunAttached ? { remoteRunAttached: true } : {}),
       requestedAdapter: item.requestedAdapter || undefined,
       requestedModel: item.requestedModel || undefined,
+      ...(item.visibility === "private" ? { visibility: "private" as const } : {}),
     };
   }
 

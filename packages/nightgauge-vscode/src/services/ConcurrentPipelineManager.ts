@@ -150,6 +150,7 @@ import { getConcurrentPipelineConfig } from "../utils/nightgaugeConfig";
 import type { WorkspaceManager } from "./WorkspaceManager";
 import { throttleInForce, type WorkspaceThrottle } from "./WorkspaceThrottle";
 import { IpcClient } from "./IpcClient";
+import { confirmAndReportPrivateRun, visibilityOption, withVisibility } from "./RunVisibility";
 import type { AbandonedDispatchSituation, QueueHandBackRef } from "./IpcClientBase";
 
 /**
@@ -278,6 +279,12 @@ interface PipelineSlot {
    * every stage of this slot's run dispatches on it.
    */
   requestedPin?: RequestedPin;
+  /**
+   * "private" when the run was started private (#2400), from the dequeued
+   * queue item. Every transition of the run carries it, and the slot is
+   * marked private once the hosted service confirms it.
+   */
+  visibility?: "private";
   /** Issue number being processed */
   issueNumber: number;
   /** Issue title for display */
@@ -1267,7 +1274,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
                     await this.unqueueCancelledRemoteRun(item.remoteRunId);
                   }
                 } else {
-                  await this.queueService.enqueue(item.issueNumber, item.title, item.labels);
+                  await this.queueService.enqueue(
+                    item.issueNumber,
+                    item.title,
+                    item.labels,
+                    undefined,
+                    withVisibility(undefined, item.visibility)
+                  );
                 }
                 this.fillAgain = true;
                 this.logger.info("Re-enqueued item after slot start failure", {
@@ -1413,6 +1426,25 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    */
   private requeueOptions(item: QueueItem): Parameters<IssueQueueService["enqueue"]>[4] {
     return requeueOptionsFor(item);
+  }
+
+  /**
+   * Confirm with the hosted service that a slot started private is private
+   * (#2400). The slot's run is marked private, and shows its badge, only on
+   * the service's confirmation; otherwise the member is told it is not.
+   */
+  private async confirmPrivateSlot(slot: PipelineSlot): Promise<void> {
+    const outcome = await confirmAndReportPrivateRun(
+      slot.stateService,
+      slot.issueNumber,
+      slot.runId,
+      slot.repo
+    );
+    this.logger.info("Private run confirmation", {
+      issueNumber: slot.issueNumber,
+      repo: slot.repo ?? "",
+      outcome,
+    });
   }
 
   /** Whether the platform cancelled the remote run this item serves (#2344). */
@@ -1966,7 +1998,13 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
     }
     // #1656: the trigger's platform run id rides on the run so Go records that
     // trigger's remote run request pin on this run and on no other.
-    stateService.beginRun(runId, slotRepoSlug, item.issueNumber, item.remoteRunId);
+    stateService.beginRun(
+      runId,
+      slotRepoSlug,
+      item.issueNumber,
+      item.remoteRunId,
+      item.visibility === "private" ? "private" : undefined
+    );
     // Issue #3704: seed _lastState so updateTokens() does not no-op before
     // any IPC pipeline.notifyStageTransition fires for this worktree slot.
     stateService.initEmpty();
@@ -2018,10 +2056,12 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
       requestedPin: item.requestedAdapter
         ? { adapter: item.requestedAdapter, model: item.requestedModel }
         : undefined,
+      ...(item.visibility === "private" ? { visibility: "private" as const } : {}),
     };
 
     this.slots.set(slotKey(item.repoName, item.issueNumber), slot);
     this.emitSlotsChanged();
+    if (slot.visibility === "private") void this.confirmPrivateSlot(slot);
 
     // Enrich pipeline state with epic context for Discord/UI
     if (item.epicNumber != null) {
@@ -3509,13 +3549,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
 
       // 3. Local queue re-entry (cross-repo aware).
       const [owner, repo] = (slot.repo ?? "").split("/");
-      await this.queueService.enqueue(
-        slot.issueNumber,
-        slot.title,
-        undefined,
-        undefined,
-        owner && repo ? { repoOverride: { owner, repo } } : undefined
-      );
+      await this.queueService.enqueue(slot.issueNumber, slot.title, undefined, undefined, {
+        ...(owner && repo ? { repoOverride: { owner, repo } } : {}),
+        ...visibilityOption(slot.visibility),
+      });
 
       this.logger.info("Architecture approved from GUI — issue re-queued", {
         issueNumber: slot.issueNumber,
@@ -4323,7 +4360,14 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
    * @see Issue #4118 — dashboard trigger enqueue path
    */
   async placeRemoteRun(
-    run: { remoteRunId: string; issueNumber: number; repo: string; pinned?: boolean },
+    run: {
+      remoteRunId: string;
+      issueNumber: number;
+      repo: string;
+      pinned?: boolean;
+      /** The trigger asked for a private run (#2400). */
+      visibility?: "private";
+    },
     enqueue: () => Promise<boolean>
   ): Promise<"attached" | "queued" | "running" | "busy" | "pinned" | "not-queued" | "cancelled"> {
     // No await before this: the window holds the run from the ack on.
@@ -4347,6 +4391,10 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
           if (run.pinned) return "pinned";
           local.remoteRunId = run.remoteRunId;
           local.remoteRunAttached = true;
+          // A private trigger served by the operator's dispatch makes the
+          // dispatch's run private (#2400): the platform holds the run
+          // private, and every upload of it says so.
+          if (run.visibility === "private") local.visibility = "private";
           const reservation = this.reservedSlots.get(slotKey(local.repoName, local.issueNumber));
           if (reservation && sameRepo(reservation.repo, run.repo) && !reservation.remoteRunId) {
             reservation.remoteRunId = run.remoteRunId;
@@ -4438,6 +4486,7 @@ export class ConcurrentPipelineManager implements vscode.Disposable {
         issueNumber: item.issueNumber,
         ...(serves ? { remoteRunId: item.remoteRunId } : {}),
         ...(serves && item.remoteRunAttached ? { remoteRunAttached: true } : {}),
+        ...visibilityOption(item.visibility),
       });
     }
     return handBack;

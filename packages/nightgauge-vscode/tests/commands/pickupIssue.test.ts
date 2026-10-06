@@ -22,6 +22,7 @@ import type { PipelineTreeProvider, OutputWindow } from "../../src/views";
 import type { PipelineStateService } from "../../src/services/PipelineStateService";
 import type { ConcurrentPipelineManager } from "../../src/services/ConcurrentPipelineManager";
 import { createMockReadyIssue } from "../mocks/github-api";
+import { TokenStorage } from "../../src/platform/TokenStorage";
 
 // Mock child_process before any imports
 vi.mock("child_process", () => ({
@@ -249,6 +250,7 @@ describe("pickupIssue Command", () => {
 
       expect(mockLogger.info).toHaveBeenCalledWith("Picking up issue", {
         issueNumber: 42,
+        visibility: "team",
       });
     });
 
@@ -572,6 +574,102 @@ describe("pickupIssue Command", () => {
       expect(mockLogger.error).toHaveBeenCalledWith(
         "Failed to pickup issue",
         expect.objectContaining({ issueNumber: 42 })
+      );
+    });
+  });
+
+  describe("Private run choice (#2400)", () => {
+    function signIn(signedIn: boolean) {
+      vi.spyOn(TokenStorage, "getInstance").mockReturnValue(
+        (signedIn
+          ? { retrieve: vi.fn().mockResolvedValue("session-token") }
+          : null) as unknown as TokenStorage
+      );
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function setPick(pick: "team" | "private" | undefined) {
+      (vscode.window as unknown as { showQuickPick: unknown }).showQuickPick = vi.fn(
+        async (items: Array<{ visibility: string }>) =>
+          pick === undefined ? undefined : items.find((i) => i.visibility === pick)
+      );
+    }
+
+    async function pickUp(queueService: ReturnType<typeof createMockQueueService>) {
+      vi.mocked(vscode.window.showInputBox).mockResolvedValue("42");
+      registerPickupIssueCommand(
+        mockLogger,
+        mockStatusBar,
+        mockTreeProvider,
+        mockOutputWindow,
+        mockStateService,
+        queueService,
+        mockConcurrentManager
+      );
+      await getLastRegisteredCallback()(undefined);
+    }
+
+    it("signed in, choosing private reaches the start request", async () => {
+      signIn(true);
+      setPick("private");
+      const queueService = createMockQueueService();
+
+      await pickUp(queueService);
+
+      expect(queueService.enqueue).toHaveBeenCalledWith(
+        42,
+        expect.any(String),
+        expect.any(Array),
+        undefined,
+        { visibility: "private" }
+      );
+    });
+
+    it("signed in, the default team choice names no visibility", async () => {
+      signIn(true);
+      setPick("team");
+      const queueService = createMockQueueService();
+
+      await pickUp(queueService);
+
+      expect(queueService.enqueue).toHaveBeenCalledWith(
+        42,
+        expect.any(String),
+        expect.any(Array),
+        undefined,
+        undefined
+      );
+    });
+
+    it("dismissing the choice starts nothing", async () => {
+      signIn(true);
+      setPick(undefined);
+      const queueService = createMockQueueService();
+
+      await pickUp(queueService);
+
+      expect(queueService.enqueue).not.toHaveBeenCalled();
+    });
+
+    it("signed out, no choice is offered", async () => {
+      signIn(false);
+      setPick("private");
+      const queueService = createMockQueueService();
+
+      await pickUp(queueService);
+
+      expect(
+        (vscode.window as unknown as { showQuickPick: ReturnType<typeof vi.fn> }).showQuickPick
+      ).not.toHaveBeenCalled();
+      expect(queueService.enqueue).toHaveBeenCalledWith(
+        42,
+        expect.any(String),
+        expect.any(Array),
+        undefined,
+        undefined
       );
     });
   });

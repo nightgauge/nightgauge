@@ -178,7 +178,9 @@ describe("startPipelineForIssue Command", () => {
       await callback(item);
 
       // Verify command executed directly
-      expect(vscode.commands.executeCommand).toHaveBeenCalledWith("nightgauge.pickupIssue", item);
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith("nightgauge.pickupIssue", item, {
+        visibility: "team",
+      });
     });
 
     // 'should log issue number when starting pipeline' test removed
@@ -210,7 +212,9 @@ describe("startPipelineForIssue Command", () => {
 
       // Should NOT show confirmation dialog
       expect(vscode.window.showInformationMessage).not.toHaveBeenCalled();
-      expect(vscode.commands.executeCommand).toHaveBeenCalledWith("nightgauge.pickupIssue", item);
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith("nightgauge.pickupIssue", item, {
+        visibility: "team",
+      });
     });
   });
 

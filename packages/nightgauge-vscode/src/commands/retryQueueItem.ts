@@ -9,6 +9,7 @@
  */
 
 import * as vscode from "vscode";
+import { chooseRunVisibility, visibilityOption } from "../services/RunVisibility";
 import type { IssueQueueService } from "../services/IssueQueueService";
 import type { QueuedIssueTreeItem } from "../views/items/QueuedIssueTreeItem";
 import type { Logger } from "../utils/logger";
@@ -42,6 +43,11 @@ export function registerRetryQueueItemCommand(
         return;
       }
 
+      // A retry starts a new run, so it asks again (#2400): the earlier
+      // run's choice never carries over. Dismissing cancels the retry.
+      const visibility = await chooseRunVisibility();
+      if (!visibility) return;
+
       logger.info("Retrying failed queue item", { issueNumber });
 
       try {
@@ -54,7 +60,13 @@ export function registerRetryQueueItemCommand(
 
         // Re-add to queue - it will be placed according to priority rules
         // and reset to 'pending' status
-        const added = await queueService.enqueue(issueNumber, title, queueItem.labels);
+        const added = await queueService.enqueue(
+          issueNumber,
+          title,
+          queueItem.labels,
+          undefined,
+          visibilityOption(visibility)
+        );
 
         if (!added) {
           // If re-add fails, item couldn't be queued

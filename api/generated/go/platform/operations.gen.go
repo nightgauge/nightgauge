@@ -240,6 +240,15 @@ var OpPipelineIngestEvent = Operation{
 	Upstream: UpstreamDeclared,
 }
 
+// OpPipelinesGetStatusByIssue is GET /v1/pipelines/{issueNumber}/status.
+var OpPipelinesGetStatusByIssue = Operation{
+	ID:       "pipelines.getStatusByIssue",
+	Method:   "GET",
+	Path:     "/v1/pipelines/{issueNumber}/status",
+	Security: SecurityPipeline,
+	Upstream: UpstreamDeclared,
+}
+
 // OpQueueSync is PUT /v1/queue/sync.
 var OpQueueSync = Operation{
 	ID:       "queue.sync",
@@ -290,6 +299,7 @@ var Operations = []Operation{
 	OpAuditRetentionUpdate,
 	OpBillingPortalSession,
 	OpPipelineIngestEvent,
+	OpPipelinesGetStatusByIssue,
 	OpQueueSync,
 	OpTeamsListMine,
 	OpTelemetryIngestPipelineRun,

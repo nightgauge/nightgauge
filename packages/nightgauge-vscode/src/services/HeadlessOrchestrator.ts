@@ -16,6 +16,7 @@
  */
 
 import * as vscode from "vscode";
+import { confirmAndReportPrivateRun } from "./RunVisibility";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -9865,7 +9866,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     issueNumber: number,
     callbacks?: PipelineCallbacks,
     modelOverride?: PipelineModelOverride,
-    requestedPin?: RequestedPin
+    requestedPin?: RequestedPin,
+    /**
+     * "private" when this direct dispatch's run is private on the hosted
+     * service (#2400): a resumed private run keeps it. Ignored when a slot
+     * already installed the identity, which carries its own.
+     */
+    visibility?: "private"
   ): Promise<PipelineRunResult> {
     // Per-issue in-flight registry, second line of defense behind the
     // dispatch-boundary guard in ConcurrentPipelineManager (#188). The
@@ -9892,7 +9899,13 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     }
     HeadlessOrchestrator.activePipelineIssues.add(issueNumber);
     try {
-      return await this.runPipelineInner(issueNumber, callbacks, modelOverride, requestedPin);
+      return await this.runPipelineInner(
+        issueNumber,
+        callbacks,
+        modelOverride,
+        requestedPin,
+        visibility
+      );
     } finally {
       HeadlessOrchestrator.activePipelineIssues.delete(issueNumber);
     }
@@ -9905,7 +9918,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     issueNumber: number,
     callbacks?: PipelineCallbacks,
     modelOverride?: PipelineModelOverride,
-    requestedPin?: RequestedPin
+    requestedPin?: RequestedPin,
+    visibility?: "private"
   ): Promise<PipelineRunResult> {
     if (this.isRunning) {
       throw new Error("Pipeline is already running");
@@ -10074,7 +10088,11 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     if (this.stateService && this.stateService.getRunId() === null) {
       const repo = await this.resolveRunRepoSlug();
       if (this.stateService.getRunId() === null) {
-        this.stateService.beginRun(uuidV7(), repo, issueNumber);
+        const mintedRunId = uuidV7();
+        this.stateService.beginRun(mintedRunId, repo, issueNumber, undefined, visibility);
+        if (visibility === "private") {
+          void confirmAndReportPrivateRun(this.stateService, issueNumber, mintedRunId, repo);
+        }
       }
     }
 
@@ -13327,6 +13345,8 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     title?: string;
     requestedAdapter?: string;
     requestedModel?: string;
+    /** "private" when the queued run is private on the hosted service (#2400). */
+    visibility?: "private";
   }): Promise<void> {
     // Initialize pipeline state for the queued issue
     if (this.stateService) {
@@ -13344,7 +13364,12 @@ export class HeadlessOrchestrator implements vscode.Disposable {
       // `clearPipeline` above released whatever identity the previous run
       // left installed, so this cannot land on a live one — and if it does,
       // `beginRun` refuses rather than stamping over a running issue.
-      this.stateService.beginRun(uuidV7(), repo, item.issueNumber);
+      // The queued item's visibility rides with its run (#2400).
+      const queuedRunId = uuidV7();
+      this.stateService.beginRun(queuedRunId, repo, item.issueNumber, undefined, item.visibility);
+      if (item.visibility === "private") {
+        void confirmAndReportPrivateRun(this.stateService, item.issueNumber, queuedRunId, repo);
+      }
       await this.stateService.initializePipeline(
         item.issueNumber,
         item.title || `Issue #${item.issueNumber}`,

@@ -81,6 +81,11 @@ export interface NotifyStageTransitionParams {
    */
   remoteRunId?: string;
   /**
+   * "private" for a run started private (#2400). Go raises the run's
+   * visibility on it and never lowers it, so it is sent on every transition.
+   */
+  visibility?: "private";
+  /**
    * Context-window telemetry (#1668), on `complete` only: the largest prompt
    * one model step sent (input + cache read + cache write, the max over
    * steps, never a sum), the window the stage ran with, and the compaction
@@ -124,6 +129,8 @@ export interface NotifyCompleteParams {
   failureDetail?: string;
   /** The run being claimed terminal. Accepted and ignored until step 4. */
   runId: string;
+  /** "private" for a run started private (#2400); raises it before its record. */
+  visibility?: "private";
 }
 
 /** Mirrors `PipelineNotifyPhaseTransitionParams` (internal/ipc/protocol.go). */

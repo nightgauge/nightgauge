@@ -2286,6 +2286,22 @@ func (s *Server) registerMethods() {
 		return s.getAnalyticsSvc().GetAnalyticsHealth(ctx)
 	}
 
+	// platform.getRunVisibility reads the visibility the hosted service
+	// recorded for one run (#2400), so a window that started the run private
+	// marks it private only when the service confirms it.
+	//
+	//ipc:method platformGetRunVisibility params:PlatformGetRunVisibilityParams result:RunVisibilityResult
+	s.methods["platform.getRunVisibility"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
+		if s.getAnalyticsSvc() == nil {
+			return nil, fmt.Errorf("analytics service unavailable")
+		}
+		var p PlatformGetRunVisibilityParams
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, fmt.Errorf("invalid params: %w", err)
+		}
+		return s.getAnalyticsSvc().GetRunVisibility(ctx, p.IssueNumber, p.RunID)
+	}
+
 	//ipc:method platformGetAnalyticsRuns params:PlatformAnalyticsRunsParams result:AnalyticsRunsResult
 	s.methods["platform.getAnalyticsRuns"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		if s.getAnalyticsSvc() == nil {
@@ -3003,6 +3019,10 @@ func (s *Server) registerMethods() {
 		if s.scheduler == nil {
 			return nil, errors.New(errSchedulerNotConfigured)
 		}
+		visibility, err := state.ParseVisibility(p.Visibility)
+		if err != nil {
+			return nil, err
+		}
 		// Queue the issue for execution and run it
 		parts := []string{p.Owner, p.Repo}
 		repo := strings.Join(parts, "/")
@@ -3037,6 +3057,7 @@ func (s *Server) registerMethods() {
 			Repo:        repo,
 			IssueNumber: p.IssueNumber,
 			Priority:    0,
+			Visibility:  visibility,
 		})
 		go func() {
 			if _, err := s.scheduler.RunQueue(ctx); err != nil {
@@ -3372,6 +3393,10 @@ func (s *Server) registerMethods() {
 			// window that finds the run paused after a reload knows which
 			// platform run it holds. Set-once, like the pin.
 			rt.SetRemoteRunID(p.RemoteRunID)
+			// Who reads the run on the hosted service (#2400). Raised before
+			// the platform event below is built, so the run's first
+			// stage_started already carries it; never lowered.
+			rt.SetVisibility(p.Visibility)
 			// The entry's index key follows the runtime's repo, so the derived
 			// issue index (Decision 6) can rank without ever taking rs.mu.
 			if res.entry != nil && repo != "" {
@@ -3695,7 +3720,7 @@ func (s *Server) registerMethods() {
 
 		// Emit the live in-stage token/cost estimate as a stage_progress event.
 		// Skipped internally (no runID / bookend stage) rather than erroring.
-		s.emitStageProgressTelemetry(runID, repo, p.IssueNumber, p.Stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd)
+		s.emitStageProgressTelemetry(runID, repo, p.IssueNumber, p.Stage, p.InputTokens, p.OutputTokens, p.CacheReadTokens, p.CostUsd, res.rs.RunVisibility())
 
 		return map[string]string{"status": "ok"}, nil
 	}
@@ -3819,6 +3844,9 @@ func (s *Server) registerMethods() {
 			return nil, s.rejectRun("pipeline.notifyComplete", codeRunWrongOwner, p.RunID, p.IssueNumber,
 				"terminal resolution produced no claimable registry entry")
 		}
+		// Raised before the claim snapshots the run, so the completion record
+		// and pipeline_done below carry a private run's visibility (#2400).
+		res.entry.rs.SetVisibility(p.Visibility)
 		// Unlocked by exemption: RunID is immutable after construction. The
 		// claim below takes rs.mu for every field that is not.
 		runID := res.entry.rs.RunID
@@ -3871,7 +3899,7 @@ func (s *Server) registerMethods() {
 		}
 
 		// STEP 2 — the work, UNLOCKED, against the snapshot.
-		s.emitPipelineDoneTelemetry(runID, p)
+		s.emitPipelineDoneTelemetry(runID, p, snap.Visibility)
 
 		// Write the authoritative interactive RunRecord (#232). notifyComplete
 		// is the interactive-only terminal funnel — the Go scheduler path emits
@@ -4443,6 +4471,11 @@ func (s *Server) registerMethods() {
 		if err := json.Unmarshal(params, &p); err != nil {
 			return nil, fmt.Errorf("invalid params: %w", err)
 		}
+		// Validated first: the socket is unauthenticated (#2400).
+		visibility, err := state.ParseVisibility(p.Visibility)
+		if err != nil {
+			return nil, fmt.Errorf("issue #%d was not queued: %w", p.IssueNumber, err)
+		}
 		if s.scheduler == nil {
 			return nil, errors.New(errSchedulerNotConfigured)
 		}
@@ -4475,6 +4508,7 @@ func (s *Server) registerMethods() {
 				RemoteRunID:      p.RemoteRunID,
 				RequestedAdapter: p.Adapter,
 				RequestedModel:   p.Model,
+				Visibility:       visibility,
 			}) {
 				return nil, fmt.Errorf("issue #%d is already queued, so the requested adapter and model cannot apply to it; it was not queued again", p.IssueNumber)
 			}
@@ -4490,6 +4524,7 @@ func (s *Server) registerMethods() {
 			// ack runId — keeping the dashboard's run deep-link resolvable (#4120).
 			RemoteRunID:       p.RemoteRunID,
 			RemoteRunAttached: p.RemoteRunAttached && p.RemoteRunID != "",
+			Visibility:        visibility,
 		})
 		return map[string]string{"status": "ok"}, nil
 	}
@@ -4598,6 +4633,7 @@ func (s *Server) registerMethods() {
 				IssueNumber:       h.IssueNumber,
 				RemoteRunID:       h.RemoteRunID,
 				RemoteRunAttached: h.RemoteRunAttached,
+				Visibility:        h.Visibility,
 			})
 		}
 		dropped, kept := s.scheduler.QueueDropProcessing(handBack, p.Unanswered)
@@ -4646,11 +4682,15 @@ func (s *Server) registerMethods() {
 		if s.scheduler == nil {
 			return nil, errors.New(errSchedulerNotConfigured)
 		}
+		visibility, err := state.ParseVisibility(p.Visibility)
+		if err != nil {
+			return nil, fmt.Errorf("epic #%d was not queued: %w", p.EpicNumber, err)
+		}
 		var eligible []orchestrator.IssueRef
 		for _, r := range p.EligibleSubIssues {
 			eligible = append(eligible, orchestrator.IssueRef{Repo: r.Repo, Number: r.Number})
 		}
-		if err := s.scheduler.EnqueueEpic(ctx, p.Owner, p.Repo, p.EpicNumber, p.Title, p.Labels, eligible); err != nil {
+		if err := s.scheduler.EnqueueEpic(ctx, p.Owner, p.Repo, p.EpicNumber, p.Title, p.Labels, eligible, visibility); err != nil {
 			return nil, err
 		}
 		return map[string]string{"status": "ok"}, nil

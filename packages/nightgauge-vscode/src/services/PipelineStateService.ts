@@ -23,6 +23,7 @@ import {
   type SetPausedParams,
 } from "./ipcNotifyParams";
 import { handleIpcRejection, type RejectionLogger } from "./ipcRejection";
+import type { PrivateConfirmation } from "./RunVisibility";
 
 // ---------------------------------------------------------------------------
 // Stage label mapping for display
@@ -548,6 +549,27 @@ export class PipelineStateService implements vscode.Disposable {
    */
   private remoteRunId: string | undefined;
   /**
+   * "private" when the active run was started private (#2400), installed by
+   * {@link beginRun}. Sent on every transition and on the completion notice,
+   * so Go marks the run private before its first platform event and keeps
+   * it private on every later upload.
+   */
+  private visibility: "private" | undefined;
+  /**
+   * The hosted service's answer about a private run (#2400), keyed by the
+   * run id it was asked for. It counts only while that run is the one
+   * installed here: a late answer for an earlier run of this service never
+   * applies to the run that followed it. Undefined until an answer arrives;
+   * only "confirmed" shows the private badge.
+   */
+  private privateConfirmation: { runId: string; outcome: PrivateConfirmation } | undefined;
+  private readonly _onPrivateConfirmation = new vscode.EventEmitter<{
+    runId: string;
+    outcome: PrivateConfirmation;
+  }>();
+  /** Fires when the hosted service's answer about a private run arrives. */
+  readonly onPrivateConfirmation = this._onPrivateConfirmation.event;
+  /**
    * THE ONE identity this service speaks for — ADR-017 Decision 10, #370.
    *
    * Installed by {@link beginRun}, released by {@link endRun}, and read by
@@ -713,6 +735,7 @@ export class PipelineStateService implements vscode.Disposable {
       d.dispose();
     }
     this._onStateChanged.dispose();
+    this._onPrivateConfirmation.dispose();
     this._onRunFinalized.dispose();
     this._onStageStart.dispose();
     this._onStageComplete.dispose();
@@ -903,7 +926,13 @@ export class PipelineStateService implements vscode.Disposable {
    *   that case: the running run keeps its identity, its repo and its issue,
    *   and the operator gets a message naming what is already running.
    */
-  beginRun(runId: string, repo: string, issueNumber: number, remoteRunId?: string): void {
+  beginRun(
+    runId: string,
+    repo: string,
+    issueNumber: number,
+    remoteRunId?: string,
+    visibility?: "private"
+  ): void {
     if (!isRunIdentity(runId)) {
       throw new Error(
         `Refusing to begin a run with a malformed identity: ${JSON.stringify(runId)}. ` +
@@ -922,6 +951,8 @@ export class PipelineStateService implements vscode.Disposable {
     this.runRepo = repo ?? "";
     this.issueNumber = issueNumber;
     this.remoteRunId = remoteRunId || undefined;
+    this.visibility = visibility === "private" ? "private" : undefined;
+    this.privateConfirmation = undefined;
     this.bookedStageUsage.clear();
   }
 
@@ -953,6 +984,48 @@ export class PipelineStateService implements vscode.Disposable {
     this.runId = null;
     this.runRepo = "";
     this.remoteRunId = undefined;
+    this.visibility = undefined;
+    this.privateConfirmation = undefined;
+  }
+
+  /** "private" when the active run was started private (#2400). */
+  getVisibility(): "private" | undefined {
+    return this.visibility;
+  }
+
+  /**
+   * Record the hosted service's answer about run `runId` (#2400). Applied
+   * only when `runId` is the run installed here and that run was started
+   * private; an answer for any other run (an earlier run of this service
+   * whose read finished late, or a run that has ended) is dropped, so it can
+   * never mark another run private. Returns whether it applied.
+   */
+  setPrivateConfirmation(runId: string, outcome: PrivateConfirmation): boolean {
+    if (runId === "" || runId !== this.runId || this.visibility !== "private") return false;
+    this.privateConfirmation = { runId, outcome };
+    this._onPrivateConfirmation.fire({ runId, outcome });
+    return true;
+  }
+
+  /**
+   * True only when the hosted service confirmed THE INSTALLED run private
+   * (#2400). Fails closed: no run, a team run, no answer yet, an answer that
+   * was not "confirmed", or an answer for another run is false.
+   */
+  isPrivateConfirmed(): boolean {
+    const c = this.privateConfirmation;
+    return (
+      c !== undefined &&
+      this.runId !== null &&
+      c.runId === this.runId &&
+      this.visibility === "private" &&
+      c.outcome === "confirmed"
+    );
+  }
+
+  /** The `visibility` every run-bearing notice carries: only private names one. */
+  private visibilityParam(): { visibility?: "private" } {
+    return this.visibility === "private" ? { visibility: "private" } : {};
   }
 
   /** The identity this service speaks for, or `null` when no run is installed. */
@@ -1062,6 +1135,7 @@ export class PipelineStateService implements vscode.Disposable {
         baseBranch: baseBranch ?? "",
         runId,
         ...(this.remoteRunId ? { remoteRunId: this.remoteRunId } : {}),
+        ...this.visibilityParam(),
       } satisfies NotifyStageTransitionParams);
     } catch (err) {
       handleIpcRejection({
@@ -1109,6 +1183,7 @@ export class PipelineStateService implements vscode.Disposable {
           ...(stagePid ? { stagePid } : {}),
           runId,
           ...(this.remoteRunId ? { remoteRunId: this.remoteRunId } : {}),
+          ...this.visibilityParam(),
         } satisfies NotifyStageTransitionParams);
         return;
       } catch (err) {
@@ -1237,6 +1312,7 @@ export class PipelineStateService implements vscode.Disposable {
           stagePid: 0,
           ...this.stageContextParams(stage),
           runId,
+          ...this.visibilityParam(),
         } satisfies NotifyStageTransitionParams);
         this.markStageUsageBooked(stage);
         return;
@@ -1305,6 +1381,7 @@ export class PipelineStateService implements vscode.Disposable {
           // Terminal transition — see completeStage (ADR-017 §7.2).
           stagePid: 0,
           runId,
+          ...this.visibilityParam(),
         } satisfies NotifyStageTransitionParams);
         this.markStageUsageBooked(stage);
         return;
@@ -1371,6 +1448,7 @@ export class PipelineStateService implements vscode.Disposable {
         // there is no pid to name and `0` would be a lie about a stage that
         // is about to have one (ADR-017 §7.2 — omitted, not zeroed).
         runId,
+        ...this.visibilityParam(),
       } satisfies NotifyStageTransitionParams);
     } catch (err) {
       // Telemetry only — no local-state fallback. The model is re-asserted on
@@ -1396,6 +1474,7 @@ export class PipelineStateService implements vscode.Disposable {
           status: "skipped",
           // No stagePid — a skipped stage spawns no child (ADR-017 §7.2).
           runId,
+          ...this.visibilityParam(),
         } satisfies NotifyStageTransitionParams);
         return;
       } catch (err) {
@@ -1429,6 +1508,7 @@ export class PipelineStateService implements vscode.Disposable {
           status: "deferred",
           // No stagePid — a deferred stage spawns no child (ADR-017 §7.2).
           runId,
+          ...this.visibilityParam(),
         } satisfies NotifyStageTransitionParams);
         return;
       } catch (err) {
@@ -1538,6 +1618,7 @@ export class PipelineStateService implements vscode.Disposable {
             }
           : {}),
         runId,
+        ...this.visibilityParam(),
       } satisfies NotifyCompleteParams);
     } catch (err) {
       // IPC not connected — telemetry is best-effort; the run's outcome is

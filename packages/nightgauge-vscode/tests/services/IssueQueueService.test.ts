@@ -101,15 +101,16 @@ describe("IssueQueueService (IPC delegation)", () => {
       const result = await service.enqueue(42, "Test issue", ["type:feature"]);
 
       // Trailing args are priority (unused here), remoteRunId (#4120), the
-      // attached flag (#2344) and the remote run request's adapter and model
-      // (#1656) — all undefined for a plain enqueue with no
-      // repoOverride/runId/pin.
+      // attached flag (#2344), the remote run request's adapter and model
+      // (#1656) and the visibility (#2400) — all undefined for a plain
+      // enqueue with no repoOverride/runId/pin, which is a team run.
       expect(mockQueueAdd).toHaveBeenCalledWith(
         "test-owner",
         "test-repo",
         42,
         "Test issue",
         ["type:feature"],
+        undefined,
         undefined,
         undefined,
         undefined,
@@ -137,6 +138,7 @@ describe("IssueQueueService (IPC delegation)", () => {
         "49b2019e-6ab7-4866-935e-235a32765bc7",
         undefined,
         undefined,
+        undefined,
         undefined
       );
     });
@@ -151,10 +153,12 @@ describe("IssueQueueService (IPC delegation)", () => {
         true,
         undefined,
         undefined,
+        undefined,
       ]);
 
       await service.enqueue(43, "Other issue", [], undefined, { remoteRunAttached: true });
       expect(mockQueueAdd.mock.calls[1].slice(6)).toEqual([
+        undefined,
         undefined,
         undefined,
         undefined,
@@ -179,8 +183,32 @@ describe("IssueQueueService (IPC delegation)", () => {
         "49b2019e-6ab7-4866-935e-235a32765bc7",
         undefined,
         "opencode",
-        "lmstudio/qwen/qwen3.8-27b"
+        "lmstudio/qwen/qwen3.8-27b",
+        undefined
       );
+    });
+
+    it("a private choice reaches the daemon's start request (#2400)", async () => {
+      const item = await service.enqueue(42, "Test issue", ["type:feature"], undefined, {
+        visibility: "private",
+      });
+
+      expect(mockQueueAdd).toHaveBeenCalledTimes(1);
+      expect(mockQueueAdd.mock.calls[0][10]).toBe("private");
+      expect(item?.visibility).toBe("private");
+    });
+
+    it("a team run names no visibility in the start request (#2400)", async () => {
+      await service.enqueue(42, "Test issue", ["type:feature"]);
+
+      expect(mockQueueAdd.mock.calls[0][10]).toBeUndefined();
+    });
+
+    it("a private epic reaches queue.enqueueEpic as private (#2400)", async () => {
+      await service.enqueue(7, "Epic", ["type:epic"], undefined, { visibility: "private" });
+
+      expect(mockQueueEnqueueEpic).toHaveBeenCalledTimes(1);
+      expect(mockQueueEnqueueEpic.mock.calls[0][6]).toBe("private");
     });
 
     it("returns null when getRepoIdentity fails", async () => {
@@ -211,7 +239,9 @@ describe("IssueQueueService (IPC delegation)", () => {
         "test-repo",
         100,
         "Epic issue",
-        ["type:epic"]
+        ["type:epic"],
+        undefined,
+        undefined
       );
       expect(mockQueueAdd).not.toHaveBeenCalled();
     });
@@ -803,9 +833,15 @@ describe("IssueQueueService (IPC delegation)", () => {
     it("delegates to IPC queueEnqueueEpic", async () => {
       const result = await service.enqueueEpic(100, "Epic", ["type:epic"]);
 
-      expect(mockQueueEnqueueEpic).toHaveBeenCalledWith("test-owner", "test-repo", 100, "Epic", [
-        "type:epic",
-      ]);
+      expect(mockQueueEnqueueEpic).toHaveBeenCalledWith(
+        "test-owner",
+        "test-repo",
+        100,
+        "Epic",
+        ["type:epic"],
+        undefined,
+        undefined
+      );
       expect(result).not.toBeNull();
       expect(result!.issueNumber).toBe(100);
     });
