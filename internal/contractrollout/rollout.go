@@ -52,11 +52,15 @@ type TargetStatus struct {
 	// skipped (nothing to change), or earlier-run (a PR an earlier run opened,
 	// which it opened only after the gate passed). rolled-out never rests on
 	// the local gate alone: it needs the PR's CI checks green, or a merge.
-	Gate   string       `json:"gate"`
-	PR     *PR          `json:"pr,omitempty"`
-	Files  []FileResult `json:"files,omitempty"`
-	Labels LabelResult  `json:"labels"`
-	CIJob  *CIJobResult `json:"ci_job,omitempty"`
+	Gate string `json:"gate"`
+	// GateCommand is the gate that ran (or, planning, would run), as the
+	// repository declares it; empty when it has none.
+	GateCommand string           `json:"gate_command,omitempty"`
+	PR          *PR              `json:"pr,omitempty"`
+	Files       []FileResult     `json:"files,omitempty"`
+	Labels      LabelResult      `json:"labels"`
+	CIJob       *CIJobResult     `json:"ci_job,omitempty"`
+	Changelog   *ChangelogResult `json:"changelog,omitempty"`
 	// Worktree is kept, and named here, when the gate failed, so the
 	// failure can be inspected where it happened.
 	Worktree string `json:"worktree,omitempty"`
@@ -159,6 +163,18 @@ func rolloutTarget(ctx context.Context, c *Contract, t Target, opt Options) Targ
 		}
 	}
 
+	// The gate is read from origin/<base> before any contract file lands,
+	// so it is the one the repository's base branch declares.
+	gate, err := ResolveGate(wt)
+	if err == nil {
+		err = checkGateUntouched(wt, gate, c.Files)
+	}
+	if err != nil {
+		removeWorktree()
+		return fail(err)
+	}
+	row.GateCommand = gate.String()
+
 	if row.Files, err = CopyFiles(c.SourceDir(), wt, c.Files, true); err != nil {
 		removeAfterDiscard(ctx, checkout, wt)
 		return fail(err)
@@ -180,6 +196,10 @@ func rolloutTarget(ctx context.Context, c *Contract, t Target, opt Options) Targ
 		removeWorktree()
 		return row
 	}
+	if row.Changelog, err = addChangelog(c, t.Repo, wt, true); err != nil {
+		removeAfterDiscard(ctx, checkout, wt)
+		return fail(err)
+	}
 
 	if _, err := git(ctx, wt, "switch", "--quiet", "-c", c.Branch); err != nil {
 		removeAfterDiscard(ctx, checkout, wt)
@@ -192,19 +212,15 @@ func rolloutTarget(ctx context.Context, c *Contract, t Target, opt Options) Targ
 		return fail(err)
 	}
 
-	var gate []string
-	if info, err := os.Lstat(filepath.Join(wt, filepath.FromSlash(GateScript))); err == nil && info.Mode().IsRegular() {
-		gate = []string{"bash", GateScript}
-	}
-	if len(gate) == 0 {
+	if gate.Missing() {
 		row.Status, row.Gate, row.Worktree = StatusGateMissing, "missing", wt
-		row.Detail = "no gate: the repository has no " + GateScript + "; the commit is on the worktree's branch"
+		row.Detail = noGateDetail + "; the commit is on the worktree's branch"
 		return row
 	}
-	fmt.Fprintf(opt.Log, "[contract %s] %s: running %s\n", c.Name, t.Repo, strings.Join(gate, " "))
-	if out, err := run(ctx, wt, gate[0], gate[1:]...); err != nil {
+	fmt.Fprintf(opt.Log, "[contract %s] %s: running %s\n", c.Name, t.Repo, gate)
+	if err := runGate(ctx, wt, gate); err != nil {
 		row.Status, row.Gate, row.Worktree = StatusGateFailed, "failed", wt
-		row.Detail = fmt.Sprintf("%s: %v: %s", strings.Join(gate, " "), err, tail(out, 400))
+		row.Detail = err.Error()
 		return row
 	}
 	row.Gate = "passed"
@@ -252,9 +268,47 @@ func planTarget(c *Contract, checkout string, row TargetStatus) TargetStatus {
 	row.Status = StatusPlanned
 	if !changed {
 		row.Status = StatusCompliant
+		row.Detail = "planned against the checkout's working tree"
+		return row
 	}
-	row.Detail = "planned against the checkout's working tree"
+	if row.Changelog, err = addChangelog(c, row.Repo, checkout, false); err != nil {
+		row.Status, row.Detail = StatusError, err.Error()
+		return row
+	}
+	gate, err := ResolveGate(checkout)
+	if err == nil {
+		err = checkGateUntouched(checkout, gate, c.Files)
+	}
+	switch {
+	case err != nil:
+		row.Status, row.Detail = StatusError, err.Error()
+	case gate.Missing():
+		row.Detail = "planned against the checkout's working tree; " + noGateDetail + ", so --apply will stop at gate-missing"
+	default:
+		row.GateCommand = gate.String()
+		row.Detail = "planned against the checkout's working tree; gate: " + row.GateCommand
+	}
 	return row
+}
+
+// noGateDetail is why a repository has no gate to run.
+const noGateDetail = "no gate: the repository declares no local_gate in " + GateConfigPath + " and has no " + DefaultGateScript
+
+// addChangelog adds the contract's changelog entry to the repository at
+// root, or with write false reports what adding it would do.
+func addChangelog(c *Contract, repo, root string, write bool) (*ChangelogResult, error) {
+	if c.Changelog == nil {
+		return nil, nil
+	}
+	entry, err := c.RenderChangelogEntry(repo)
+	if err != nil {
+		return nil, err
+	}
+	r, err := AddChangelogEntry(root, c.Changelog.Section, entry, write)
+	if err != nil {
+		return nil, err
+	}
+	return &r, nil
 }
 
 // Refresh re-reads every target's pull request from the forge and updates

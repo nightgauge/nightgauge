@@ -39,6 +39,17 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`workspace contract rollout` writes the changelog entry and runs each
+  repository's declared gate** (#2433, #2434). A contract that changes files
+  or CI now declares a `changelog` entry (section and text), and the rollout
+  adds it under `## [Unreleased]` in each target's `CHANGELOG.md` in the same
+  commit, so the pull request meets the target's changelog contract. A
+  repository whose gate is not `scripts/ci-local.sh` declares it as
+  `local_gate.steps` in its own `.nightgauge/config.yaml`: allowlisted
+  commands, run in order without a shell, read from the base branch. A
+  contract still cannot name a gate, and no contract file may replace the
+  declaration or a script it runs. See `docs/CONFIGURATION.md` § local_gate.
+
 - **A cancelled check superseded by a successful run of the same check no
   longer reads RED after a merge** (#2430). When a label added at PR open
   started a second run of one workflow and its concurrency group cancelled

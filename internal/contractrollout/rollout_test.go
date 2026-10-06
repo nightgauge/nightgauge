@@ -95,6 +95,11 @@ ci_job:
     runs-on: ubuntu-latest
     steps:
       - run: bash scripts/check.sh
+changelog:
+  section: Changed
+  entry: |
+    {{.Repo}} runs the demo check on every pull request
+    ({{.Contract}} contract).
 `
 	writeFile(t, filepath.Join(src, "demo.yaml"), manifest, 0o644)
 	c, err := Load(filepath.Join(src, "demo.yaml"))
@@ -242,12 +247,18 @@ func TestRolloutWithoutAGateOpensNoPR(t *testing.T) {
 // TestRolloutPlanChangesNothing: without Apply the rollout reads the
 // checkout and the forge and writes neither.
 func TestRolloutPlanChangesNothing(t *testing.T) {
-	repos := map[string]targetRepo{"o/needs": newTargetRepo(t, map[string]string{"scripts/ci-local.sh": passingGate})}
+	repos := map[string]targetRepo{"o/needs": newTargetRepo(t, map[string]string{
+		"scripts/ci-local.sh": passingGate,
+		"CHANGELOG.md":        "# Changelog\n\n## [Unreleased]\n",
+	})}
 	c := demoContract(t, []Target{{Repo: "o/needs"}})
 	forge := newFakeForge()
 	rows := Rollout(context.Background(), c, Options{ResolvePath: pathsFor(repos), Forge: forge})
 	if rows[0].Status != StatusPlanned || len(rows[0].Labels.Created) != 1 || rows[0].CIJob.Action != "created" || !rows[0].Files[0].Changed {
 		t.Fatalf("plan = %+v", rows[0])
+	}
+	if rows[0].Changelog == nil || rows[0].Changelog.Action != "added" || rows[0].GateCommand != "bash scripts/ci-local.sh" {
+		t.Errorf("plan changelog/gate = %+v / %q", rows[0].Changelog, rows[0].GateCommand)
 	}
 	if len(forge.prs) != 0 || len(forge.labels["o/needs"].created) != 0 {
 		t.Error("planning changed the forge")
@@ -267,11 +278,17 @@ func TestChangelogContractRollsOutEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gate := "#!/bin/sh\nset -e\ntest -x scripts/check-changelog.sh\ntest -x scripts/test-check-changelog.sh\n"
+	// o/app's gate runs the checker it is given against its own changelog,
+	// so the entry the rollout writes must satisfy the real contract. o/web
+	// has no ci-local.sh: it declares its gate in its own configuration.
+	gate := "#!/bin/sh\nset -e\ntest -x scripts/check-changelog.sh\ntest -x scripts/test-check-changelog.sh\n" +
+		"bash scripts/check-changelog.sh --extension none\n"
+	changelog := "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- An earlier fix (#1).\n\n## [0.1.0] - 2026-01-01\n\n### Added\n\n- The first release.\n"
 	repos := map[string]targetRepo{
-		"o/app": newTargetRepo(t, map[string]string{"scripts/ci-local.sh": gate, "CHANGELOG.md": "# Changelog\n"}),
+		"o/app": newTargetRepo(t, map[string]string{"scripts/ci-local.sh": gate, "CHANGELOG.md": changelog}),
 		"o/web": newTargetRepo(t, map[string]string{
-			"scripts/ci-local.sh":      gate,
+			"scripts/verify.sh":        "#!/bin/sh\nset -e\ntest -x scripts/check-changelog.sh\n",
+			".nightgauge/config.yaml":  "owner: o\nlocal_gate:\n  steps:\n    - [sh, scripts/verify.sh]\n",
 			".github/workflows/ci.yml": "name: CI\non: [pull_request]\njobs:\n  test:\n    runs-on: x\n    steps:\n      - run: make test\n",
 		}),
 	}
@@ -297,9 +314,97 @@ func TestChangelogContractRollsOutEndToEnd(t *testing.T) {
 			t.Errorf("%s: changelog job missing:\n%s", repo, wf)
 		}
 	}
+	// The entry lands in o/app's [Unreleased] section, in the same commit,
+	// as a new Added subsection ahead of Fixed; o/web has no changelog.
+	pushed := gittest.Run(t, repos["o/app"].origin, "show", "chore/changelog-contract:CHANGELOG.md")
+	want := "## [Unreleased]\n\n### Added\n\n- The workspace changelog contract: every pull request checks that this\n" +
+		"  changelog keeps one `## [Unreleased]` section and names every released\n" +
+		"  tag, with the core's `scripts/check-changelog.sh` and its self-test.\n\n### Fixed\n\n- An earlier fix (#1).\n\n## [0.1.0]"
+	if !strings.Contains(pushed, want) {
+		t.Errorf("o/app CHANGELOG.md:\n%s", pushed)
+	}
+	if n := gittest.Run(t, repos["o/app"].origin, "rev-list", "--count", "main..chore/changelog-contract"); n != "1" {
+		t.Errorf("o/app: %s commits on the branch, want 1", n)
+	}
+	if rows[0].Changelog == nil || rows[0].Changelog.Action != "added" || rows[0].GateCommand != "bash scripts/ci-local.sh" {
+		t.Errorf("o/app row = %+v", rows[0])
+	}
+	if rows[1].Changelog == nil || rows[1].Changelog.Action != "absent" || rows[1].GateCommand != "sh scripts/verify.sh" {
+		t.Errorf("o/web row = %+v", rows[1])
+	}
+
 	var table bytes.Buffer
 	WriteTable(&table, rows)
 	if strings.Count(table.String(), "| pr-open | passed |") != 2 {
 		t.Errorf("table:\n%s", table.String())
+	}
+}
+
+// TestRolloutRunsTheDeclaredGate: a repository's own local_gate replaces
+// scripts/ci-local.sh. Its steps run in order, without a shell, and the
+// first failure stops the gate and opens no PR (#2434).
+func TestRolloutRunsTheDeclaredGate(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "gate.log")
+	logScript := "#!/bin/sh\necho \"$2\" >> \"$1\"\n"
+	declare := func(steps ...string) string {
+		return "owner: o\nlocal_gate:\n  steps:\n    - " + strings.Join(steps, "\n    - ") + "\n"
+	}
+	repos := map[string]targetRepo{
+		// Its ci-local.sh would fail: the declaration wins.
+		"o/declared": newTargetRepo(t, map[string]string{
+			"scripts/ci-local.sh":     "#!/bin/sh\nexit 1\n",
+			"scripts/log.sh":          logScript,
+			".nightgauge/config.yaml": declare("[sh, scripts/log.sh, "+log+", one]", "[sh, scripts/log.sh, "+log+", two]"),
+		}),
+		"o/stops": newTargetRepo(t, map[string]string{
+			"scripts/log.sh":          logScript,
+			"scripts/no.sh":           "#!/bin/sh\necho declared gate says no >&2\nexit 4\n",
+			".nightgauge/config.yaml": declare("[bash, scripts/no.sh]", "[sh, scripts/log.sh, "+log+", never]"),
+		}),
+		"o/shell": newTargetRepo(t, map[string]string{
+			".nightgauge/config.yaml": declare("[sh, -c, 'touch pwned']"),
+		}),
+		"o/guarded": newTargetRepo(t, map[string]string{
+			"scripts/check.sh":        "#!/bin/sh\n",
+			".nightgauge/config.yaml": declare("[sh, scripts/check.sh]"),
+		}),
+		// The same script under another case: the contract's scripts/check.sh
+		// would overwrite it on a case-insensitive filesystem.
+		"o/cased": newTargetRepo(t, map[string]string{
+			"Scripts/Check.sh":        "#!/bin/sh\n",
+			".nightgauge/config.yaml": declare("[sh, Scripts/Check.sh]"),
+		}),
+	}
+	c := demoContract(t, []Target{{Repo: "o/declared"}, {Repo: "o/stops"}, {Repo: "o/shell"}, {Repo: "o/guarded"}, {Repo: "o/cased"}})
+	forge := newFakeForge()
+	work := t.TempDir()
+	rows := Rollout(context.Background(), c, Options{Apply: true, WorkDir: work, ResolvePath: pathsFor(repos), Forge: forge})
+
+	declared, stops, shell, guarded, cased := rows[0], rows[1], rows[2], rows[3], rows[4]
+	if declared.Status != StatusPROpen || declared.Gate != "passed" || !strings.HasPrefix(declared.GateCommand, "sh scripts/log.sh ") {
+		t.Errorf("o/declared = %+v", declared)
+	}
+	if got := readFile(t, log); got != "one\ntwo\n" {
+		t.Errorf("gate log = %q: the steps did not run once each, in order, or a later step ran after a failure", got)
+	}
+	if stops.Status != StatusGateFailed || stops.PR != nil || !strings.Contains(stops.Detail, "bash scripts/no.sh") ||
+		!strings.Contains(stops.Detail, "declared gate says no") {
+		t.Errorf("o/stops = %+v", stops)
+	}
+	if shell.Status != StatusError || !strings.Contains(shell.Detail, "local_gate") || shell.PR != nil {
+		t.Errorf("o/shell = %+v", shell)
+	}
+	for _, row := range []TargetStatus{guarded, cased} {
+		if row.Status != StatusError || !strings.Contains(row.Detail, "part of the repository's own gate") {
+			t.Errorf("%s = %+v", row.Repo, row)
+		}
+	}
+	for _, repo := range []string{"o__shell", "o__guarded", "o__cased"} {
+		if _, err := os.Stat(filepath.Join(work, repo)); !os.IsNotExist(err) {
+			t.Errorf("%s: the worktree of a refused target was left behind", repo)
+		}
+	}
+	if len(forge.prs) != 1 {
+		t.Errorf("PRs = %v, want only o/declared's", forge.prs)
 	}
 }

@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const contractManifest = "name: demo\nfiles:\n  - path: a.sh\n"
+const contractManifest = "name: demo\nfiles:\n  - path: a.sh\nchangelog:\n  section: Changed\n  entry: Adopts the demo contract.\n"
 
 // TestLoadContractTargets: --target replaces the manifest's targets, a
 // workspace manifest supplies them when neither names any, and a target's

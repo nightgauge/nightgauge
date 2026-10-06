@@ -883,11 +883,14 @@ For each target repository, `rollout --apply`:
    last job under `jobs:` with every other byte of the file unchanged; an
    existing job with the same id and another body is refused);
 4. reports a repository with nothing to change as `compliant` and stops there;
-5. commits on the contract's branch and runs the repository's own local gate,
-   `bash scripts/ci-local.sh`. A failed gate keeps the worktree for inspection
-   (`gate-failed`); a repository with no such script gets no pull request
-   (`gate-missing`);
-6. pushes the branch and opens the pull request (`pr-open`).
+5. adds the contract's `changelog` entry to the repository's `CHANGELOG.md`
+   (below);
+6. commits on the contract's branch and runs the repository's own local gate:
+   the [`local_gate`](CONFIGURATION.md#local_gate) its `.nightgauge/config.yaml`
+   declares on `origin/<base>`, else `bash scripts/ci-local.sh`. A failed gate
+   keeps the worktree for inspection (`gate-failed`); a repository with
+   neither gets no pull request (`gate-missing`);
+7. pushes the branch and opens the pull request (`pr-open`).
 
 Every run, applied or not, ends with one table:
 
@@ -919,7 +922,21 @@ the target repository.
 | `files[]`        | `path` in the source, optional `target` path in the repository.                                                          |
 | `labels[]`       | `name`, `color` (six hex digits), `description`.                                                                         |
 | `ci_job`         | `workflow` (`.github/workflows/*.yml`), `id`, `job` (the job body as YAML), and for a new file `workflow_name` and `on`. |
+| `changelog`      | `section` (`Added`, `Changed`, `Deprecated`, `Removed`, `Fixed` or `Security`) and `entry`, a template like `pr.body`.   |
 | `targets[]`      | `repo` (`owner/name`) and an optional `base`.                                                                            |
+
+**The changelog entry.** Every workspace repository's changelog contract
+([GIT_WORKFLOW.md § Changelog](GIT_WORKFLOW.md#changelog)) wants an entry
+for each change, so a contract with `files` or a `ci_job` must declare one.
+The rollout writes it as one list item under `## [Unreleased]` → `### <section>`
+in the root `CHANGELOG.md`, in the same commit, creating the subsection in Keep
+a Changelog order and following the list's tight or loose spacing. The entry is
+prose: a heading, a blank line or a list marker in it is refused when the
+manifest loads. A repository with no `CHANGELOG.md` takes no entry; one whose
+changelog does not have exactly one `## [Unreleased]` heading is an `error`.
+The core's extension changelog takes none, since no contract change is visible
+from VS Code. The repository's own gate then runs its changelog check over the
+result.
 
 With no `targets`, the command takes every repository of the workspace
 manifest, each named `owner/name` from its own `.nightgauge/config.yaml`.
@@ -928,17 +945,22 @@ manifest, each named `owner/name` from its own `.nightgauge/config.yaml`.
 **Trust model.** The workspace manifest is the boundary. Every target must be
 a repository it registers, and the rollout works only in the checkout it
 registers for that repository; a contract or a flag naming any other
-repository is refused before anything runs. The one command the rollout runs
-is each repository's own `scripts/ci-local.sh`, as its base branch has it: a
-contract cannot name a command or a directory, and no contract file may
-target that script. A contract's files and CI job are content the operator
-reviews before `--apply`, as for any change they push.
+repository is refused before anything runs. The only commands the rollout
+runs are each repository's own gate, as its base branch declares it: a
+[`local_gate`](CONFIGURATION.md#local_gate) of allowlisted commands run
+without a shell, else `scripts/ci-local.sh`. The gate is read before any
+contract file is written. A contract cannot name a command or a directory, and
+no contract file may target the gate's declaration, a script the gate runs,
+`scripts/ci-local.sh` or `CHANGELOG.md`, in any letter case, since macOS and
+Windows filesystems resolve paths case-insensitively. A contract's files and CI job are content the
+operator reviews before `--apply`, as for any change they push.
 
 `configs/contracts/changelog.yaml` is the changelog contract
 ([GIT_WORKFLOW.md § Changelog](GIT_WORKFLOW.md#changelog)): the core's
-`scripts/check-changelog.sh` and its self-test, and a `changelog` CI job that
-runs both with `--extension none`. `TestChangelogContractRollsOutEndToEnd`
-rolls it out to two throwaway repositories.
+`scripts/check-changelog.sh` and its self-test, a `changelog` CI job that
+runs both with `--extension none`, and the changelog entry that announces it.
+`TestChangelogContractRollsOutEndToEnd` rolls it out to two throwaway
+repositories.
 
 ---
 

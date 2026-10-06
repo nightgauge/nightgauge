@@ -19,6 +19,12 @@ pr:
 
     Rolled out by `nightgauge workspace contract rollout` ({{.Contract}}). The
     repository's own local gate passed on this branch before it was pushed.
+changelog:
+  section: Added
+  entry: |
+    The workspace changelog contract: every pull request checks that this
+    changelog keeps one `## [Unreleased]` section and names every released
+    tag, with the core's `scripts/check-changelog.sh` and its self-test.
 files:
   - path: scripts/check-changelog.sh
   - path: scripts/test-check-changelog.sh

@@ -5161,6 +5161,38 @@ are resolved before matching. `NIGHTGAUGE_SKIP_WORKFLOW_GATE=1` bypasses it.
 
 ---
 
+### local_gate
+
+The repository's complete local gate, as `nightgauge workspace contract
+rollout` runs it before opening a pull request in this repository (#2434).
+Declare it in the repository's committed `.nightgauge/config.yaml` when the
+gate is not `bash scripts/ci-local.sh`, the default. The rollout reads it from
+`origin/<base>`, so a change takes effect once merged.
+
+```yaml
+local_gate:
+  steps:
+    - [npm, ci]
+    - [npm, run, lint]
+    - [bash, scripts/check-changelog.sh, --extension, none]
+```
+
+Each step is one command as an argument list, run in order from the
+repository root without a shell; the first failure stops the gate. A step's
+program is one of `bash`, `sh`, `node`, `python3`, `npm`, `npx`, `pnpm`,
+`yarn`, `go`, `make`, `flutter` or `dart`. `bash`, `sh`, `node` and `python3`
+take a script in the repository as their first argument. Flags that run a
+command string (`-c`, `--call`, `--shell-mode`, make's `--eval`) or another
+makefile (`-f`) are refused. Anything that needs a pipe, a negation or an
+environment variable goes in a script that a `bash` step runs. A declaration
+that fails these rules stops the rollout for this repository; it never falls
+back to the default.
+
+**Used by:** `nightgauge workspace contract rollout`
+([MULTI_REPO_WORKSPACE.md § Contract Rollout](MULTI_REPO_WORKSPACE.md#contract-rollout--workspace-contract-1480))
+
+---
+
 ### ralph_loop
 
 Ralph Wiggum Loop self-healing configuration. Enables automatic error correction

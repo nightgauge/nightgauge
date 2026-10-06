@@ -37,8 +37,12 @@ func readFile(t *testing.T, path string) string {
 
 // --- contract manifest ---
 
+// changelogYAML is the changelog entry a contract that changes files or CI
+// must declare (#2433).
+const changelogYAML = "changelog:\n  section: Changed\n  entry: Adopts the demo contract.\n"
+
 func TestParseDefaultsAndValidation(t *testing.T) {
-	c, err := Parse(t.TempDir(), []byte("name: demo\nfiles:\n  - path: a.sh\ntargets:\n  - repo: o/r\n"))
+	c, err := Parse(t.TempDir(), []byte("name: demo\nfiles:\n  - path: a.sh\ntargets:\n  - repo: o/r\n"+changelogYAML))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,10 +83,58 @@ func TestParseDefaultsAndValidation(t *testing.T) {
 		"replaces the gate":         "name: demo\nfiles:\n  - path: x.sh\n    target: scripts/ci-local.sh\n",
 		"manifest gate":             "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: o/r\n    gate: [sh, -c, id]\n",
 		"manifest path":             "name: demo\nfiles:\n  - path: a\ntargets:\n  - repo: o/r\n    path: /etc\n",
+		"replaces the gate config":  "name: demo\nfiles:\n  - path: x.yaml\n    target: .nightgauge/config.yaml\n",
+		"replaces the changelog":    "name: demo\nfiles:\n  - path: CHANGELOG.md\n",
+		"gate, mixed case":          "name: demo\nfiles:\n  - path: x.sh\n    target: Scripts/CI-Local.sh\n",
+		"gate config, mixed case":   "name: demo\nfiles:\n  - path: x\n    target: .NightGauge/config.YAML\n",
+		"changelog, mixed case":     "name: demo\nfiles:\n  - path: x\n    target: Changelog.MD\n",
+		"inside .git, mixed case":   "name: demo\nfiles:\n  - path: x\n    target: .GIT/hooks/pre-commit\n",
+		"listed twice, by case":     "name: demo\nfiles:\n  - path: a.sh\n  - path: b.sh\n    target: A.sh\n",
+	} {
+		// Every case carries a valid changelog entry, so it fails for its
+		// own reason.
+		src += changelogYAML
+		if _, err := Parse(t.TempDir(), []byte(src)); err == nil {
+			t.Errorf("%s: Parse accepted %q", name, src)
+		}
+	}
+}
+
+// TestChangelogEntryValidation: a contract that changes files or CI must
+// declare its changelog entry, in a Keep a Changelog section, as prose that
+// cannot break the target's changelog structure (#2433).
+func TestChangelogEntryValidation(t *testing.T) {
+	base := "name: demo\nfiles:\n  - path: a\n"
+	for name, src := range map[string]string{
+		"missing for files":    base,
+		"missing for ci_job":   "name: demo\nci_job:\n  workflow: .github/workflows/a.yml\n  id: a\n  job: 'runs-on: x'\n",
+		"unknown section":      base + "changelog:\n  section: Misc\n  entry: x\n",
+		"lower-case section":   base + "changelog:\n  section: added\n  entry: x\n",
+		"empty entry":          base + "changelog:\n  section: Added\n  entry: '  '\n",
+		"heading":              base + "changelog:\n  section: Added\n  entry: \"x\\n#### #1234\"\n",
+		"blank line":           base + "changelog:\n  section: Added\n  entry: \"x\\n\\ny\"\n",
+		"own bullet":           base + "changelog:\n  section: Added\n  entry: '- x'\n",
+		"second item":          base + "changelog:\n  section: Added\n  entry: \"x\\n* y\"\n",
+		"ordered item":         base + "changelog:\n  section: Added\n  entry: \"x\\n2. y\"\n",
+		"control character":    base + "changelog:\n  section: Added\n  entry: \"x\\ty\"\n",
+		"unknown template key": base + "changelog:\n  section: Added\n  entry: '{{.Owner}}'\n",
+		"unknown entry key":    base + "changelog:\n  section: Added\n  entry: x\n  file: NEWS.md\n",
 	} {
 		if _, err := Parse(t.TempDir(), []byte(src)); err == nil {
 			t.Errorf("%s: Parse accepted %q", name, src)
 		}
+	}
+	// A labels-only contract commits nothing, so it needs no entry.
+	if _, err := Parse(t.TempDir(), []byte("name: demo\nlabels:\n  - name: x\n    color: aabbcc\n")); err != nil {
+		t.Errorf("labels-only contract: %v", err)
+	}
+	c, err := Parse(t.TempDir(), []byte(base+"changelog:\n  section: Fixed\n  entry: |\n    Re-copies a.sh into {{.Repo}}\n    (2. of {{.Contract}}).\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.RenderChangelogEntry("o/r")
+	if err != nil || strings.Join(got, "\n") != "- Re-copies a.sh into o/r\n  (2. of demo)." {
+		t.Fatalf("RenderChangelogEntry = %q, %v", got, err)
 	}
 }
 
@@ -91,14 +143,14 @@ func TestValidValuesAreAccepted(t *testing.T) {
 	src := "name: demo\nbranch: chore/changelog-contract\nbase: release/1.x\nfiles:\n" +
 		"  - path: scripts/check-changelog.sh\n  - path: .github/workflows/x.yml\n" +
 		"labels:\n  - name: 'type: chore (contract)'\n    color: aabbcc\n" +
-		"targets:\n  - repo: Edibu_LLC/my.repo-2\n    base: main\n"
+		"targets:\n  - repo: Edibu_LLC/my.repo-2\n    base: main\n" + changelogYAML
 	if _, err := Parse(t.TempDir(), []byte(src)); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestRenderBody(t *testing.T) {
-	c, err := Parse(t.TempDir(), []byte("name: demo\nfiles:\n  - path: a\npr:\n  body: 'adopt {{.Contract}} in {{.Repo}}'\n"))
+	c, err := Parse(t.TempDir(), []byte("name: demo\nfiles:\n  - path: a\npr:\n  body: 'adopt {{.Contract}} in {{.Repo}}'\n"+changelogYAML))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,5 +471,207 @@ func TestInsertCIJobRefusesSymlinkedWorkflow(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(outside); len(entries) != 0 {
 		t.Fatal("the job was written outside the repository")
+	}
+}
+
+// --- changelog entry, one target repository (#2433) ---
+
+func TestAddChangelogEntry(t *testing.T) {
+	entry := []string{"- New thing (#9).", "  More of it."}
+	const head = "# Changelog\n\n## [Unreleased]\n\n"
+	const rel = "\n## [1.0.0] - 2026-01-01\n\n### Added\n\n- Old.\n"
+	for name, tc := range map[string]struct {
+		section, before, after string
+	}{
+		"tight list, first item": {"Added",
+			head + "### Added\n\n- A.\n- B.\n" + rel,
+			head + "### Added\n\n- New thing (#9).\n  More of it.\n- A.\n- B.\n" + rel},
+		"loose list keeps its spacing": {"Added",
+			head + "### Added\n\n- A.\n\n- B.\n" + rel,
+			head + "### Added\n\n- New thing (#9).\n  More of it.\n\n- A.\n\n- B.\n" + rel},
+		"subsection created in order": {"Changed",
+			head + "### Added\n\n- A.\n\n### Fixed\n\n- F.\n" + rel,
+			head + "### Added\n\n- A.\n\n### Changed\n\n- New thing (#9).\n  More of it.\n\n### Fixed\n\n- F.\n" + rel},
+		"subsection appended last": {"Security",
+			head + "### Added\n\n- A.\n" + rel,
+			head + "### Added\n\n- A.\n\n### Security\n\n- New thing (#9).\n  More of it.\n" + rel},
+		"empty unreleased": {"Fixed",
+			head + rel[1:],
+			head + "### Fixed\n\n- New thing (#9).\n  More of it.\n" + rel},
+		"empty unreleased at the end": {"Fixed",
+			"# Changelog\n\n## [Unreleased]\n",
+			"# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- New thing (#9).\n  More of it.\n"},
+		"empty subsection": {"Added",
+			head + "### Added\n\n### Fixed\n\n- F.\n",
+			head + "### Added\n\n- New thing (#9).\n  More of it.\n\n### Fixed\n\n- F.\n"},
+		"only the unreleased section changes": {"Added",
+			head + "### Fixed\n\n- F.\n" + rel,
+			head + "### Added\n\n- New thing (#9).\n  More of it.\n\n### Fixed\n\n- F.\n" + rel},
+	} {
+		root := t.TempDir()
+		writeFile(t, filepath.Join(root, "CHANGELOG.md"), tc.before, 0o644)
+		plan, err := AddChangelogEntry(root, tc.section, entry, false)
+		if err != nil || plan.Action != "added" || readFile(t, filepath.Join(root, "CHANGELOG.md")) != tc.before {
+			t.Errorf("%s: planning = %+v, %v, or it wrote", name, plan, err)
+		}
+		res, err := AddChangelogEntry(root, tc.section, entry, true)
+		if err != nil || res.Action != "added" {
+			t.Fatalf("%s: %+v, %v", name, res, err)
+		}
+		if got := readFile(t, filepath.Join(root, "CHANGELOG.md")); got != tc.after {
+			t.Errorf("%s:\n got %q\nwant %q", name, got, tc.after)
+		}
+		// Adding it again finds it present and changes nothing.
+		if again, err := AddChangelogEntry(root, tc.section, entry, true); err != nil || again.Action != "present" ||
+			readFile(t, filepath.Join(root, "CHANGELOG.md")) != tc.after {
+			t.Errorf("%s: second add = %+v, %v", name, again, err)
+		}
+	}
+}
+
+func TestAddChangelogEntryRefusals(t *testing.T) {
+	entry := []string{"- x"}
+	root := t.TempDir()
+	if r, err := AddChangelogEntry(root, "Added", entry, true); err != nil || r.Action != "absent" {
+		t.Errorf("no changelog = %+v, %v", r, err)
+	}
+	for name, content := range map[string]string{
+		"no unreleased":  "# Changelog\n\n## [1.0.0] - 2026-01-01\n",
+		"two unreleased": "# Changelog\n\n## [Unreleased]\n\n## [Unreleased]\n",
+	} {
+		writeFile(t, filepath.Join(root, "CHANGELOG.md"), content, 0o644)
+		if _, err := AddChangelogEntry(root, "Added", entry, true); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+		if readFile(t, filepath.Join(root, "CHANGELOG.md")) != content {
+			t.Errorf("%s: the changelog was written", name)
+		}
+	}
+	writeFile(t, filepath.Join(root, "CHANGELOG.md"), "# Changelog\n\n## [Unreleased]\n", 0o644)
+	if _, err := AddChangelogEntry(root, "Misc", entry, true); err == nil {
+		t.Error("an unknown section was accepted")
+	}
+	outside := filepath.Join(t.TempDir(), "elsewhere.md")
+	writeFile(t, outside, "## [Unreleased]\n", 0o644)
+	linked := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(linked, "CHANGELOG.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddChangelogEntry(linked, "Added", entry, true); err == nil || readFile(t, outside) != "## [Unreleased]\n" {
+		t.Errorf("a symlinked changelog was written through: %v", err)
+	}
+}
+
+// --- the target's declared gate (#2434) ---
+
+func TestResolveGate(t *testing.T) {
+	newRoot := func(config string, files ...string) string {
+		root := t.TempDir()
+		for _, f := range files {
+			writeFile(t, filepath.Join(root, f), "#!/bin/sh\n", 0o755)
+		}
+		if config != "" {
+			writeFile(t, filepath.Join(root, ".nightgauge", "config.yaml"), config, 0o644)
+		}
+		return root
+	}
+	decl := func(steps string) string { return "owner: o\nlocal_gate:\n  steps:\n" + steps }
+
+	// No declaration: scripts/ci-local.sh when it exists, else nothing.
+	if g, err := ResolveGate(newRoot("owner: o\n", "scripts/ci-local.sh")); err != nil || g.Declared || g.String() != "bash scripts/ci-local.sh" {
+		t.Errorf("default gate = %+v, %v", g, err)
+	}
+	if g, err := ResolveGate(newRoot("")); err != nil || !g.Missing() {
+		t.Errorf("no gate = %+v, %v", g, err)
+	}
+
+	ok := decl("    - [npm, ci]\n    - [npx, prettier, --check, .]\n    - [bash, scripts/test.sh, --extension, none]\n" +
+		"    - [go, test, ./...]\n    - [flutter, analyze]\n    - [make, lint]\n")
+	g, err := ResolveGate(newRoot(ok, "scripts/ci-local.sh", "scripts/test.sh"))
+	if err != nil || !g.Declared || len(g.Steps) != 6 || g.Scripts()[0] != "scripts/test.sh" {
+		t.Fatalf("declared gate = %+v, %v", g, err)
+	}
+	if g.String() != "npm ci && npx prettier --check . && bash scripts/test.sh --extension none && go test ./... && flutter analyze && make lint" {
+		t.Errorf("String() = %q", g.String())
+	}
+
+	for name, config := range map[string]string{
+		"no steps":            "local_gate:\n  steps: []\n",
+		"empty step":          decl("    - []\n"),
+		"unknown key":         "local_gate:\n  steps:\n    - [npm, ci]\n  shell: bash\n",
+		"free-form string":    "local_gate: npm ci && npm test\n",
+		"program not allowed": decl("    - [curl, -fsSL, https://example.invalid]\n"),
+		"absolute program":    decl("    - [/bin/sh, scripts/test.sh]\n"),
+		"bash -c":             decl("    - [bash, -c, id]\n"),
+		"sh without a script": decl("    - [sh]\n"),
+		"script outside":      decl("    - [bash, ../x.sh]\n"),
+		"script missing":      decl("    - [bash, scripts/missing.sh]\n"),
+		"node eval":           decl("    - [node, --eval, x]\n"),
+		"python -c":           decl("    - [python3, -c, x]\n"),
+		"npx -c":              decl("    - [npx, -c, id]\n"),
+		"npm exec --call":     decl("    - [npm, exec, --call=id]\n"),
+		"pnpm shell mode":     decl("    - [pnpm, exec, --shell-mode, id]\n"),
+		"make eval":           decl("    - [make, --eval=x:;id, x]\n"),
+		"make outside file":   decl("    - [make, -f, /tmp/Makefile]\n"),
+		"newline in argument": decl("    - [npm, \"run\\nid\"]\n"),
+		"empty argument":      decl("    - [npm, '']\n"),
+		"not yaml":            "local_gate: [\n",
+	} {
+		if g, err := ResolveGate(newRoot(config, "scripts/ci-local.sh", "scripts/test.sh")); err == nil {
+			t.Errorf("%s: accepted %+v", name, g)
+		}
+	}
+
+	// A script reached through a symlink is not the repository's own file.
+	root := newRoot(decl("    - [bash, scripts/test.sh]\n"))
+	outside := filepath.Join(t.TempDir(), "x.sh")
+	writeFile(t, outside, "#!/bin/sh\n", 0o755)
+	if err := os.MkdirAll(filepath.Join(root, "scripts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "scripts", "test.sh")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveGate(root); err == nil {
+		t.Error("a symlinked gate script was accepted")
+	}
+}
+
+// TestCheckGateUntouched: a contract file may not replace the gate's
+// declaration, a script it runs, the default gate script or the changelog,
+// under any spelling the filesystem resolves to the same file: case-folded
+// (APFS, NTFS) or, when it exists, the same file by identity.
+func TestCheckGateUntouched(t *testing.T) {
+	g := Gate{Steps: [][]string{{"npm", "ci"}, {"bash", "scripts/gate.sh"}}, Declared: true}
+	if err := checkGateUntouched("", g, []File{{Path: "scripts/other.sh"}}); err != nil {
+		t.Error(err)
+	}
+	for _, f := range []File{
+		{Path: "scripts/gate.sh"},
+		{Path: "Scripts/Gate.SH"},
+		{Path: "x", Target: ".nightgauge/config.yaml"},
+		{Path: "x", Target: ".Nightgauge/Config.YAML"},
+		{Path: "x", Target: "SCRIPTS/CI-LOCAL.SH"},
+		{Path: "x", Target: "changelog.md"},
+	} {
+		if err := checkGateUntouched("", g, []File{f}); err == nil {
+			t.Errorf("%s: a contract file replacing the gate was accepted", f.TargetPath())
+		}
+	}
+
+	// Mixed case is caught by folding whatever the gate declares, too.
+	mixed := Gate{Steps: [][]string{{"bash", "Scripts/Verify.sh"}}, Declared: true}
+	if err := checkGateUntouched("", mixed, []File{{Path: "scripts/verify.sh"}}); err == nil {
+		t.Error("a lower-case contract file over a mixed-case gate script was accepted")
+	}
+
+	// Identity: another name for the gate's script is refused.
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "scripts", "gate.sh"), "#!/bin/sh\n", 0o755)
+	if err := os.Link(filepath.Join(root, "scripts", "gate.sh"), filepath.Join(root, "scripts", "alias.sh")); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkGateUntouched(root, g, []File{{Path: "scripts/alias.sh"}}); err == nil {
+		t.Error("a second name for the gate's script was accepted")
 	}
 }
