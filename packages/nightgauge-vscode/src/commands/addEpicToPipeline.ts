@@ -8,6 +8,7 @@
  */
 
 import * as vscode from "vscode";
+import { chooseRunVisibility, visibilityOption } from "../services/RunVisibility";
 import { EpicGroupTreeItem } from "../views/items/EpicGroupTreeItem";
 import type { IssueQueueService } from "../services/IssueQueueService";
 import type { TierGate } from "../platform/TierGate";
@@ -60,7 +61,18 @@ export function registerAddEpicToPipelineCommand(
           childCount,
         });
 
-        const result = await queueService.enqueue(epicNumber, title, ["type:epic"]);
+        // Who reads the sub-issues' runs on the hosted service (#2400);
+        // dismissing cancels.
+        const visibility = await chooseRunVisibility();
+        if (!visibility) return;
+
+        const result = await queueService.enqueue(
+          epicNumber,
+          title,
+          ["type:epic"],
+          undefined,
+          visibilityOption(visibility)
+        );
 
         // User cancelled from a dialog (e.g. blocked-issue warning)
         if (result === null) {

@@ -8,6 +8,7 @@
  */
 
 import * as vscode from "vscode";
+import { chooseRunVisibility, confirmAndReportPrivateRun } from "../services/RunVisibility";
 import * as fs from "node:fs/promises";
 import * as path from "path";
 import { pipelineStateDir } from "../utils/cloneLayout";
@@ -155,10 +156,25 @@ export function registerRetryFailedIssueCommand(
         // "already running" for a run that is not (MAX_RETRIES becomes
         // unreachable past attempt one), and every later `retryStage` /
         // `retryFromPhase` books its transitions under this dead run's id.
+        // A retry starts a new run, so it asks who reads it on the hosted
+        // service (#2400); the failed run's choice never carries over.
+        // Dismissing the choice cancels the retry.
+        const visibility = await chooseRunVisibility();
+        if (!visibility) return;
         const mintedId = stateService ? uuidV7() : null;
         try {
           if (stateService && mintedId) {
-            stateService.beginRun(mintedId, await resolveRetryRepoSlug(), issueNumber);
+            const retryRepo = await resolveRetryRepoSlug();
+            stateService.beginRun(
+              mintedId,
+              retryRepo,
+              issueNumber,
+              undefined,
+              visibility === "private" ? "private" : undefined
+            );
+            if (visibility === "private") {
+              void confirmAndReportPrivateRun(stateService, issueNumber, mintedId, retryRepo);
+            }
             await stateService.initializePipeline(
               issueNumber,
               failedIssue.title,

@@ -147,6 +147,13 @@ export interface QueueItem {
   requestedAdapter?: string;
   requestedModel?: string;
   /**
+   * "private" when the member who queued the item, or the remote trigger it
+   * serves, chose a private run (#2400): the slot that opens for it sends
+   * the visibility with the run, and the window marks the run private once
+   * the hosted service confirms it. Absent on a team item.
+   */
+  visibility?: "private";
+  /**
    * Reason this item is paused. Only present when `status === "paused"`.
    *
    * @see Issue #3001 — terminal failure preservation
@@ -362,6 +369,7 @@ export interface QueueRequeueOptions {
   remoteRunAttached?: boolean;
   requestedAdapter?: string;
   requestedModel?: string;
+  visibility?: "private";
 }
 
 /**
@@ -378,5 +386,7 @@ export function requeueOptionsFor(item: QueueItem): QueueRequeueOptions {
     ...(item.requestedAdapter
       ? { requestedAdapter: item.requestedAdapter, requestedModel: item.requestedModel }
       : {}),
+    // A private run goes back private (#2400).
+    ...(item.visibility === "private" ? { visibility: "private" as const } : {}),
   };
 }

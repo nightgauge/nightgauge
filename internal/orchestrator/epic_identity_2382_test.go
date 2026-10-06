@@ -47,7 +47,7 @@ func TestEnqueueEpic_EligibleNamesRepository_2382(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newCrossRepoEpicFixture(t)
-			if err := s.EnqueueEpic(context.Background(), "example-org", "platform", 20, "Platform Epic", nil, tc.eligible); err != nil {
+			if err := s.EnqueueEpic(context.Background(), "example-org", "platform", 20, "Platform Epic", nil, tc.eligible, ""); err != nil {
 				t.Fatalf("EnqueueEpic: %v", err)
 			}
 			if len(s.queue) != 1 {

@@ -253,7 +253,7 @@ func TestEnqueueEpic_RecordsTheEpicsRepository(t *testing.T) {
 	mock.addIssue("example-org", "app", 21, &types.Issue{NodeID: "I_a21", Number: 21, State: "OPEN", Repo: "example-org/app"})
 	s := &Scheduler{issueSvc: mock, repoRunning: map[string]int{}, mergeLocks: map[string]*sync.Mutex{}}
 
-	if err := s.EnqueueEpic(context.Background(), "example-org", "platform", 20, "Platform Epic", nil, nil); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "example-org", "platform", 20, "Platform Epic", nil, nil, ""); err != nil {
 		t.Fatalf("EnqueueEpic: %v", err)
 	}
 	if len(s.queue) != 2 {
@@ -571,7 +571,7 @@ func TestEnqueueEpic_SameNumberedSubIssuesKeepTheirOwnBlockers(t *testing.T) {
 	mock.addIssue("example-org", "app", 21, &types.Issue{NodeID: "I_a21", Number: 21, State: "OPEN", Repo: "example-org/app"})
 	s := &Scheduler{issueSvc: mock, repoRunning: map[string]int{}, mergeLocks: map[string]*sync.Mutex{}}
 
-	if err := s.EnqueueEpic(context.Background(), "example-org", "platform", 20, "Platform Epic", nil, nil); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "example-org", "platform", 20, "Platform Epic", nil, nil, ""); err != nil {
 		t.Fatalf("EnqueueEpic: %v", err)
 	}
 	if len(s.queue) != 2 {

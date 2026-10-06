@@ -75,6 +75,12 @@ type V2RunRecord struct {
 	// record only: the platform mapper does not send them.
 	RequestedAdapter string `json:"requested_adapter,omitempty"`
 	RequestedModel   string `json:"requested_model,omitempty"`
+	// Visibility is who reads the run on the hosted service (#2400):
+	// "private" when the member who started it chose private, omitted for
+	// team. Both telemetry mappers (Go and the extension's uploader) send it
+	// on the completion record, so a private run's record never reaches the
+	// service without it.
+	Visibility string `json:"visibility,omitempty"`
 	// Repo is the "owner/name" this run belongs to. Required by the platform's
 	// strict ExecutionHistoryRunRecordV4 telemetry contract — without it the
 	// VSCode uploader cannot map a run to a repo and the dashboard run list
@@ -1718,6 +1724,7 @@ func (hw *HistoryWriter) BuildV2Record(snap *RuntimeState, success bool, errMsg 
 		// The remote run request's pin (#1656), never rewritten by a hop.
 		RequestedAdapter: snap.RequestedAdapter,
 		RequestedModel:   snap.RequestedModel,
+		Visibility:       snap.Visibility,
 		Title:            input.Title,
 		Branch:           branch,
 		BaseBranch:       baseBranch,

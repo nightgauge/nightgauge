@@ -9,6 +9,7 @@
  */
 
 import * as vscode from "vscode";
+import { chooseRunVisibility, withVisibility } from "../services/RunVisibility";
 import { ReadyIssueTreeItem } from "../views/items/ReadyIssueTreeItem";
 import type { Logger } from "../utils/logger";
 import type { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
@@ -81,6 +82,11 @@ export function registerStartPipelineForIssueCommand(
         return;
       }
 
+      // Who reads the run on the hosted service (#2400): asked on every
+      // start, team by default, never remembered. Dismissing it cancels.
+      const visibility = await chooseRunVisibility();
+      if (!visibility) return;
+
       // Epic routing — always queue via enqueueEpic (expands sub-issues)
       // instead of sending to pickupIssue which hits the epic pre-check and fails
       if (labels.includes("type:epic") && queueService) {
@@ -99,7 +105,7 @@ export function registerStartPipelineForIssueCommand(
             title,
             labels,
             issue.blockedBy,
-            repoOverride ? { repoOverride } : undefined
+            withVisibility(repoOverride ? { repoOverride } : undefined, visibility)
           );
           if (queuedItem) {
             logger.info("Epic queued successfully", { issueNumber });
@@ -146,7 +152,7 @@ export function registerStartPipelineForIssueCommand(
             title,
             labels,
             issue.blockedBy,
-            repoOverride ? { repoOverride } : undefined
+            withVisibility(repoOverride ? { repoOverride } : undefined, visibility)
           );
           if (queuedItem) {
             logger.info("Issue enqueued for immediate pipeline start", {
@@ -163,7 +169,8 @@ export function registerStartPipelineForIssueCommand(
         logger.info("Starting pipeline for issue via click (no queue)", {
           issueNumber,
         });
-        await vscode.commands.executeCommand("nightgauge.pickupIssue", item);
+        // The answer rides along, so pickupIssue does not ask again.
+        await vscode.commands.executeCommand("nightgauge.pickupIssue", item, { visibility });
       }
     }
   );

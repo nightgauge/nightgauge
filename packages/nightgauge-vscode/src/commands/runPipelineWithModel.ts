@@ -10,6 +10,7 @@
  */
 
 import * as vscode from "vscode";
+import { chooseRunVisibility } from "../services/RunVisibility";
 import { ReadyIssueTreeItem } from "../views/items/ReadyIssueTreeItem";
 import type { Logger } from "../utils/logger";
 import type { HeadlessOrchestrator } from "../services/HeadlessOrchestrator";
@@ -190,6 +191,11 @@ export function registerRunPipelineWithModelCommand(
         return; // User cancelled
       }
 
+      // Who reads the run on the hosted service (#2400), asked before the
+      // override is stored so a dismissed choice leaves nothing behind.
+      const visibility = await chooseRunVisibility();
+      if (!visibility) return;
+
       logger.info("User selected model override for pipeline run", {
         model: selected.model,
         issueNumber: item instanceof ReadyIssueTreeItem ? item.issueNumber : undefined,
@@ -203,7 +209,8 @@ export function registerRunPipelineWithModelCommand(
 
       // Delegate to the existing pickupIssue command which routes through
       // HeadlessOrchestrator.runPipeline() for unified execution.
-      await vscode.commands.executeCommand("nightgauge.pickupIssue", item);
+      // The answer rides along, so pickupIssue does not ask again.
+      await vscode.commands.executeCommand("nightgauge.pickupIssue", item, { visibility });
     }
   );
 }

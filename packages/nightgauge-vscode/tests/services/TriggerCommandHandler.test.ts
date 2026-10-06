@@ -170,6 +170,48 @@ describe("TriggerCommandHandler", () => {
     );
   });
 
+  it("a private trigger queues and places a private run (#2400)", async () => {
+    const cmd = makeTriggerCmd(10);
+    (cmd.payload as Record<string, unknown>).visibility = "private";
+    handler.handle(cmd);
+
+    await vi.waitFor(() => expect(queueService.enqueue).toHaveBeenCalledTimes(1));
+    expect(queueService.enqueue).toHaveBeenCalledWith(
+      10,
+      "Real issue title",
+      ["type:feature"],
+      undefined,
+      {
+        repoOverride: { owner: "nightgauge", repo: "nightgauge" },
+        remoteRunId: "run-abc",
+        visibility: "private",
+      }
+    );
+    expect(concurrentManager.placeRemoteRun).toHaveBeenCalledWith(
+      {
+        remoteRunId: "run-abc",
+        issueNumber: 10,
+        repo: "nightgauge/nightgauge",
+        visibility: "private",
+      },
+      expect.any(Function)
+    );
+  });
+
+  it("a trigger naming team, or anything else, queues a team run (#2400)", async () => {
+    for (const visibility of ["team", "PRIVATE"]) {
+      queueService = makeQueueService();
+      concurrentManager = makeConcurrentManager();
+      ipcClient = makeIpcClient();
+      handler = build();
+      const cmd = makeTriggerCmd(10);
+      (cmd.payload as Record<string, unknown>).visibility = visibility;
+      handler.handle(cmd);
+      await vi.waitFor(() => expect(queueService.enqueue).toHaveBeenCalledTimes(1));
+      expect(queueService.enqueue.mock.calls[0][4]).not.toHaveProperty("visibility");
+    }
+  });
+
   it("uses a placeholder title when issueView fails but still enqueues", async () => {
     ipcClient.issueView.mockRejectedValue(new Error("gh rate limited"));
     const cmd = makeTriggerCmd(77);

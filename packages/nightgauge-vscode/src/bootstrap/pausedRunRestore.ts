@@ -65,6 +65,11 @@ export interface PausedSnapshot {
    * applies.
    */
   repo?: PausedRunRepo | null;
+  /**
+   * "private" when the paused run was private on the hosted service (#2400):
+   * the run a Resume starts keeps it.
+   */
+  visibility?: "private";
 }
 
 /** One clone's pipeline directory to scan. */
@@ -104,6 +109,7 @@ export async function scanPausedSnapshots(
         stage?: string | null;
         remoteRunId?: unknown;
         ownerPid?: unknown;
+        visibility?: unknown;
       };
       // The sweep fails SAFE on the new scheme: a run-identity-keyed snapshot
       // is never classified and never deleted here.
@@ -139,6 +145,7 @@ export async function scanPausedSnapshots(
             ? reloadInterruptedRemoteRun(runtime, isAlive)
             : reloadInterruptedRemoteRun(runtime),
           ...(target.repo === undefined ? {} : { repo: target.repo }),
+          ...(runtime.visibility === "private" ? { visibility: "private" as const } : {}),
         });
       }
     } catch {
@@ -156,7 +163,7 @@ export interface PausedRunRestoreDeps {
    * Start the new run a Resume asks for: in the primary repository when
    * `repo` is undefined, else in that repository.
    */
-  resume(issueNumber: number, repo?: PausedRunRepo): Promise<void>;
+  resume(issueNumber: number, repo?: PausedRunRepo, visibility?: "private"): Promise<void>;
   /** Tell the operator a Resume found the paused run ended or resumed elsewhere. */
   gone(issueNumber: number): void;
   logger: Pick<Logger, "info" | "warn">;
@@ -254,7 +261,8 @@ async function offer(
       err: err instanceof Error ? err.message : String(err),
     });
   }
+  // A private run resumes private (#2400).
   await (snapshot.repo
-    ? deps.resume(snapshot.issueNumber, snapshot.repo)
-    : deps.resume(snapshot.issueNumber));
+    ? deps.resume(snapshot.issueNumber, snapshot.repo, snapshot.visibility)
+    : deps.resume(snapshot.issueNumber, undefined, snapshot.visibility));
 }

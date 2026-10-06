@@ -1452,7 +1452,7 @@ func TestEnqueueEpic_PopulatesSubIssueBlockedBy(t *testing.T) {
 		mergeLocks:  make(map[string]*sync.Mutex),
 	}
 
-	err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil)
+	err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil, "")
 	if err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}
@@ -1540,7 +1540,7 @@ func TestEnqueueEpic_CombinesEpicAndSubIssueBlockers(t *testing.T) {
 		mergeLocks:  make(map[string]*sync.Mutex),
 	}
 
-	err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil)
+	err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil, "")
 	if err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}

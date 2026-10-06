@@ -67,6 +67,13 @@ interface TriggerPayload {
   adapter?: unknown;
   /** Remote run request (#1656): the `-m` value, provider-key form. */
   model?: unknown;
+  /**
+   * Who reads the run on the hosted service (#2400): "team" (the default
+   * when absent) or "private". A private run carries private on every
+   * upload. The platform sends a private trigger only to one of the
+   * requester's own agents.
+   */
+  visibility?: unknown;
 }
 
 export class TriggerCommandHandler implements CommandHandler {
@@ -129,6 +136,10 @@ export class TriggerCommandHandler implements CommandHandler {
     }
 
     const { owner, repo, issueNumber } = payload;
+    // Only an exact "private" asks for a private run (#2400); the platform
+    // validates the field, so anything else is the default, team.
+    const visibility: "private" | undefined =
+      payload.visibility === "private" ? "private" : undefined;
 
     // Resolve the target repo against the open workspace BEFORE ack/enqueue.
     // A trigger for a repo that isn't open in this workspace (multi-root
@@ -269,6 +280,8 @@ export class TriggerCommandHandler implements CommandHandler {
         ...(requested
           ? { requestedAdapter: requested.adapter, requestedModel: requested.model }
           : {}),
+        // A private trigger queues a private run (#2400).
+        ...(visibility ? { visibility } : {}),
       })) !== null;
     let placement: Awaited<ReturnType<ConcurrentPipelineManager["placeRemoteRun"]>>;
     try {
@@ -284,6 +297,7 @@ export class TriggerCommandHandler implements CommandHandler {
             issueNumber,
             repo: `${owner}/${repo}`,
             ...(requested ? { pinned: true } : {}),
+            ...(visibility ? { visibility } : {}),
           },
           enqueue
         );

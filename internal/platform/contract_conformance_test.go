@@ -176,6 +176,10 @@ var contractCallSites = []callSite{
 			Timestamp: time.Unix(0, 0).UTC(),
 		})
 	}},
+	{api.OpPipelinesGetStatusByIssue, func(ctx context.Context, c *Client) error {
+		_, err := NewAnalyticsService(c).GetRunVisibility(ctx, 42, "run-1")
+		return err
+	}},
 	{api.OpQueueSync, func(ctx context.Context, c *Client) error {
 		return NewAnalyticsService(c).syncQueueSync(ctx, QueueSyncPayload{MachineID: "machine-1"})
 	}},

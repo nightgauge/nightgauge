@@ -9,6 +9,16 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **Start a run private** (#2400). When the window is signed in, every
+  command that starts a run asks _Team_ (selected) or _Private_. A private run
+  is readable on the hosted service by you alone; owners and admins still see
+  that it exists and what it cost, and work on GitHub follows the repository's
+  permissions. The choice is never remembered. The run's slot shows a
+  _Private_ badge once the service confirms it; when it does not, the
+  extension says so and shows no badge.
+
 ## [0.6.0] - 2026-10-04
 
 ### Added

@@ -172,6 +172,9 @@ func (s *Server) emitStageTelemetry(runID, repo string, issueNumber int, stage, 
 	if !ok {
 		return
 	}
+	// A private run says so on every event (#2400), its first stage_started
+	// included: the transition handler raised rt before calling here.
+	event.Visibility = rt.RunVisibility()
 	s.analyticsSvc.EmitPipelineEvent(context.Background(), event)
 }
 
@@ -180,7 +183,7 @@ func (s *Server) emitStageTelemetry(runID, repo string, issueNumber int, stage, 
 // fire-and-forget through the same proven AnalyticsService, so it never blocks
 // the IPC handler. Best-effort — a missing runID or bookend stage is skipped by
 // buildStageProgressEvent rather than emitted.
-func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int, stage string, inputTokens, outputTokens, cacheReadTokens int, costUsd float64) {
+func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int, stage string, inputTokens, outputTokens, cacheReadTokens int, costUsd float64, visibility string) {
 	if s.analyticsSvc == nil || !s.TelemetryAllowed() {
 		return
 	}
@@ -188,12 +191,13 @@ func (s *Server) emitStageProgressTelemetry(runID, repo string, issueNumber int,
 	if !ok {
 		return
 	}
+	event.Visibility = visibility
 	s.analyticsSvc.EmitPipelineEvent(context.Background(), event)
 }
 
 // emitPipelineDoneTelemetry emits the terminal pipeline_done event so the live
 // Pipelines view transitions the run from 'running' to 'complete'/'failed'.
-func (s *Server) emitPipelineDoneTelemetry(runID string, p PipelineNotifyCompleteParams) {
+func (s *Server) emitPipelineDoneTelemetry(runID string, p PipelineNotifyCompleteParams, visibility string) {
 	if s.analyticsSvc == nil || !s.TelemetryAllowed() {
 		return
 	}
@@ -201,5 +205,6 @@ func (s *Server) emitPipelineDoneTelemetry(runID string, p PipelineNotifyComplet
 	if !ok {
 		return
 	}
+	event.Visibility = visibility
 	s.analyticsSvc.EmitPipelineEvent(context.Background(), event)
 }

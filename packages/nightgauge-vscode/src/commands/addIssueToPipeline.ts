@@ -8,6 +8,7 @@
  */
 
 import * as vscode from "vscode";
+import { chooseRunVisibility, withVisibility } from "../services/RunVisibility";
 import { ReadyIssueTreeItem } from "../views/items/ReadyIssueTreeItem";
 import type { IssueQueueService } from "../services/IssueQueueService";
 import type { Logger } from "../utils/logger";
@@ -37,6 +38,10 @@ export function registerAddIssueToPipelineCommand(
         const issueNumber = item.issueNumber;
         const issue = item.getIssue();
 
+        // Who reads the run on the hosted service (#2400); dismissing cancels.
+        const visibility = await chooseRunVisibility();
+        if (!visibility) return;
+
         logger.info("Adding issue to pipeline queue", { issueNumber });
 
         // Resolve repo context for cross-repo items (Issue #2188)
@@ -57,7 +62,7 @@ export function registerAddIssueToPipelineCommand(
           issue.title,
           issue.labels,
           issue.blockedBy,
-          repoOverride ? { repoOverride } : undefined
+          withVisibility(repoOverride ? { repoOverride } : undefined, visibility)
         );
 
         // User cancelled from blocked warning dialog

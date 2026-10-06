@@ -149,6 +149,7 @@ var contractTestedMethods = map[string]bool{
 	"platform.getCostAnalytics":    true,
 	"platform.getAnalyticsHealth":  true,
 	"platform.getAnalyticsRuns":    true,
+	"platform.getRunVisibility":    true,
 	"platform.getAnalyticsTrends":  true,
 	"platform.auditGenerateReport": true,
 	"platform.auditListReports":    true,

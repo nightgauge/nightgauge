@@ -422,6 +422,9 @@ type PipelineRunParams struct {
 	TargetBranch string `json:"targetBranch,omitempty"`
 	Model        string `json:"model,omitempty"`
 	Adapter      string `json:"adapter,omitempty"`
+	// Visibility is who reads the run on the hosted service (#2400): "team"
+	// (the default when empty) or "private". Anything else is refused.
+	Visibility string `json:"visibility,omitempty"`
 }
 
 // PipelineStopParams are parameters for pipeline.stop.
@@ -499,6 +502,11 @@ type QueueAddParams struct {
 	// under one lock.
 	Adapter string `json:"adapter,omitempty"`
 	Model   string `json:"model,omitempty"`
+	// Visibility is who reads the item's run on the hosted service (#2400):
+	// "team" (the default when empty) or "private", chosen by the member who
+	// queues it or carried by a remote trigger. Anything else is refused. A
+	// private request for an issue already waiting raises that item.
+	Visibility string `json:"visibility,omitempty"`
 }
 
 // QueueValidatePinParams are parameters for queue.validatePin: a remote run
@@ -584,6 +592,10 @@ type QueueHandBackRef struct {
 	IssueNumber       int    `json:"issueNumber"`
 	RemoteRunID       string `json:"remoteRunId,omitempty"`
 	RemoteRunAttached bool   `json:"remoteRunAttached,omitempty"`
+	// Visibility "private" raises the item to private (#2400): a private
+	// remote run the window attached to the dispatch. Any other value leaves
+	// the item as it is.
+	Visibility string `json:"visibility,omitempty"`
 }
 
 // QueueDropProcessingResult reports how many dispatched ("processing") items
@@ -643,6 +655,10 @@ type QueueEnqueueEpicParams struct {
 	// is enqueued (autonomous path).
 	// @see Issue #2992 — epic drag filter
 	EligibleSubIssues []QueueIssueRef `json:"eligibleSubIssues,omitempty"`
+	// Visibility is "private" when the member queuing the epic chose private
+	// (#2400): each sub-issue runs private. "team" or empty otherwise;
+	// anything else is refused.
+	Visibility string `json:"visibility,omitempty"`
 }
 
 // QueueIssueRef names one issue by repository ("owner/name") and number. An
@@ -945,6 +961,14 @@ type PlatformCostAnalyticsParams struct {
 // method, forwarded to the endpoint, and dropped by its query schema — the
 // Runs tab labelled an unfiltered page as filtered. They are removed rather
 // than emulated client-side, which would only filter the current page.
+// PlatformGetRunVisibilityParams are parameters for
+// platform.getRunVisibility (#2400): the run whose visibility the hosted
+// service recorded, by its issue number and the run id its events carry.
+type PlatformGetRunVisibilityParams struct {
+	IssueNumber int    `json:"issueNumber"`
+	RunID       string `json:"runId"`
+}
+
 type PlatformAnalyticsRunsParams struct {
 	// Cursor is the pagination cursor from the previous page response.
 	Cursor string `json:"cursor,omitempty"`
@@ -1163,6 +1187,12 @@ type PipelineNotifyStageTransitionParams struct {
 	// run request pin on this run (#1656). A run without it never inherits a
 	// pin, even for the same issue.
 	RemoteRunID string `json:"remoteRunId,omitempty"`
+	// Visibility "private" marks the run private on the hosted service
+	// (#2400); the slot sends it on every transition of a run its member
+	// started private. It raises the run's visibility and never lowers it, so
+	// a transition without it changes nothing. Read on the first transition,
+	// before the run's first platform event is built.
+	Visibility string `json:"visibility,omitempty"`
 	// PeakStepInputTokens, ContextWindowTokens and CompactionCount are an
 	// editor-launched stage's context-window telemetry (#1668), sent on
 	// "complete" only: the largest prompt one model step sent (input plus
@@ -1284,6 +1314,11 @@ type PipelineNotifyCompleteParams struct {
 	Success         bool     `json:"success"`
 	TotalDurationMs int      `json:"totalDurationMs"`
 	StagesRun       []string `json:"stagesRun,omitempty"`
+	// Visibility "private" raises the run to private before its completion
+	// record and terminal event are built (#2400), so a run whose runtime was
+	// rebuilt without it (a daemon restart) still uploads as private. Any
+	// other value changes nothing.
+	Visibility string `json:"visibility,omitempty"`
 	// PrMerged is the forge-confirmed merge ground truth for the run's PR
 	// (#266). When true, the recording boundary must NOT book the run as a
 	// failure just because a late per-stage kill (progress-runaway / stall /

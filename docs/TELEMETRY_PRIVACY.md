@@ -203,6 +203,45 @@ features themselves. The telemetry switches do not stop these;
   session, checks your license and plan, and the daemon checks every minute
   that the service is reachable.
 
+## Private runs
+
+When you are signed in, your runs are readable on the hosted service by the
+team that owns the workspace. A **private** run is readable there by you alone.
+You choose it when you start the run; it is off by default for every run and
+is never remembered, so each run starts as a team run unless you choose
+otherwise.
+
+- **Where you choose.** In the extension, every command that starts a run
+  (clicking an issue, **Pick Up Issue**, **Run Pipeline with Model**, **Add to
+  Pipeline**, an epic's **Add to Pipeline** or **Run All**, retrying a failed
+  issue or queue item, and running a single stage that starts a new run) asks
+  _Team_ or _Private_, with _Team_ selected. Dismissing the choice cancels the
+  start. When the window is not signed in, nothing reaches the hosted service,
+  so no choice is offered. From the CLI, `nightgauge run <issue> --private`.
+- **What owners and admins still see.** That the private run exists and what
+  it cost (who started it, when, the model, tokens and cost), for billing and
+  audit. Never its content.
+- **What private does not hide.** Work on GitHub. Branches, pull requests,
+  issues, comments and board moves follow the repository's own permissions.
+- **What carries it.** The daemon sends `visibility: private` on the run's
+  first stage event and on every later upload of the run: each live stage
+  event, the completion record, and the run's entry in the queue snapshot. A
+  team run omits the field. Once a run is private nothing lowers it.
+- **Runs that are always team.** Runs the autonomous scheduler picks from the
+  board itself, and `nightgauge run --auto`.
+- **Runs started from the hosted service.** A run triggered with
+  `visibility: private` runs only on one of your own machines, and the run it
+  starts carries private on every upload. If it is served by a run of the same
+  issue you had already queued, that run becomes private too.
+- **Confirmation.** The extension marks a run private, with a _Private_ badge
+  on its slot, only when the hosted service confirms it. When the service does
+  not confirm it, for example because cloud features or run telemetry are off,
+  the extension says so and shows no badge.
+- **Resume.** A private run paused by a window reload resumes as a private run.
+
+The hosted service enforces who can read a private run; the core only carries
+the choice with the run.
+
 ## What is never sent
 
 No field of any payload above carries:

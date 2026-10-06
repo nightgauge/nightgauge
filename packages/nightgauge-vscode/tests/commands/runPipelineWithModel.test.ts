@@ -209,7 +209,9 @@ describe("runPipelineWithModel command", () => {
 
     expect(orchestrator.setNextRunModelOverride).toHaveBeenCalledWith("gpt-5.4");
     expect(statusBar.setModelOverrideLabel).toHaveBeenCalledWith("gpt-5.4");
-    expect(executeCommandSpy).toHaveBeenCalledWith("nightgauge.pickupIssue", undefined);
+    expect(executeCommandSpy).toHaveBeenCalledWith("nightgauge.pickupIssue", undefined, {
+      visibility: "team",
+    });
 
     disposable.dispose();
   });

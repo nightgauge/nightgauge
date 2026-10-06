@@ -360,6 +360,6 @@ describe("ConcurrentPipelineManager — per-command cross-repo worktree resoluti
 
     // The unresolvable item is re-enqueued rather than silently dropped, so
     // it isn't lost — matching the existing slot-start-failure recovery path.
-    expect(queue.enqueue).toHaveBeenCalledWith(99, "Issue #99", undefined);
+    expect(queue.enqueue).toHaveBeenCalledWith(99, "Issue #99", undefined, undefined, undefined);
   });
 });

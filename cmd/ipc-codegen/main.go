@@ -392,6 +392,7 @@ func collectImportTypes(methods []MethodDef) []string {
 		"CostAnalyticsResult":                true, // Issue #3317
 		"AnalyticsHealthResult":              true, // Issue #3318
 		"AnalyticsRunsResult":                true, // Issue #3319
+		"RunVisibilityResult":                true, // Issue #2400 — platform.getRunVisibility
 		"AnalyticsTrendsResult":              true, // Issue #3320
 		"ComplianceReportResult":             true, // Issue #3322
 		"ComplianceReportsResult":            true, // Issue 3322, renamed in #803

@@ -108,7 +108,7 @@
       },
       "extension": {
         "file": "internal/ipc/server.go",
-        "anchor": "s.emitPipelineDoneTelemetry(runID, p)"
+        "anchor": "s.emitPipelineDoneTelemetry(runID, p, snap.Visibility)"
       }
     },
     {
@@ -569,7 +569,7 @@
       "file": "internal/orchestrator/scheduler.go",
       "begin": "terminal-parity:begin runPipeline-terminal-defer",
       "end": "terminal-parity:end runPipeline-terminal-defer",
-      "sha256": "f8a836e027804a4178094dc88197758596c88f78e31609d1d2d26923f2a6d101"
+      "sha256": "0c0dc73b0df9d5dbbd418ff7870da68d76aeda6c67fdddb54d2566e7b1f9d7da"
     },
     {
       "id": "extension-runSlotPipeline-finally",

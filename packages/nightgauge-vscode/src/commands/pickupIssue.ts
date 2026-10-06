@@ -10,6 +10,7 @@
  */
 
 import * as vscode from "vscode";
+import { chooseRunVisibility, withVisibility, type RunVisibility } from "../services/RunVisibility";
 import { ReadyIssueTreeItem } from "../views/items/ReadyIssueTreeItem";
 import { IssueTreeItem } from "../views/items/IssueTreeItem";
 import type { Logger } from "../utils/logger";
@@ -113,7 +114,7 @@ export function registerPickupIssueCommand(
       title: string,
       labels?: string[],
       blockedBy?: unknown,
-      options?: { repoOverride?: { owner: string; repo: string } }
+      options?: { repoOverride?: { owner: string; repo: string }; visibility?: "private" }
     ): Promise<{ position: number } | null>;
     isQueued(issueNumber: number): Promise<boolean>;
     getQueueLength(): Promise<number>;
@@ -122,7 +123,7 @@ export function registerPickupIssueCommand(
 ): vscode.Disposable {
   return vscode.commands.registerCommand(
     "nightgauge.pickupIssue",
-    async (item?: ReadyIssueTreeItem) => {
+    async (item?: ReadyIssueTreeItem, options?: { visibility?: RunVisibility }) => {
       let issueNumber: number | undefined;
       // The issue's repository when the tree item names it (#2403).
       let issueRepo: string | undefined;
@@ -151,7 +152,13 @@ export function registerPickupIssueCommand(
         issueNumber = parseInt(input, 10);
       }
 
-      logger.info("Picking up issue", { issueNumber });
+      // Who reads the run on the hosted service (#2400). A caller that has
+      // already asked (Run Pipeline with Model) passes the answer; otherwise
+      // ask now. Dismissing the choice cancels the start.
+      const visibility = options?.visibility ?? (await chooseRunVisibility());
+      if (!visibility) return;
+
+      logger.info("Picking up issue", { issueNumber, visibility });
 
       // Show progress while fetching issue info and enqueuing
       await vscode.window.withProgress(
@@ -220,7 +227,7 @@ export function registerPickupIssueCommand(
               title,
               labels,
               undefined,
-              repoOverride ? { repoOverride } : undefined
+              withVisibility(repoOverride ? { repoOverride } : undefined, visibility)
             );
             if (!queuedItem) {
               vscode.window.showErrorMessage(`Failed to queue issue #${issueNumber}.`);

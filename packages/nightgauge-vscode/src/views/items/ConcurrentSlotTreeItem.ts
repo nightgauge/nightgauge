@@ -121,6 +121,8 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
    */
   readonly repo?: string;
   private status: SlotStatus = "running";
+  /** The description without the private badge, re-badged on confirmation. */
+  private baseDescription = "";
   private stages: Map<PipelineStage, StageTreeItem> = new Map();
   private disposables: vscode.Disposable[] = [];
   private onChange: (() => void) | null = null;
@@ -161,7 +163,7 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
     this.id = `concurrent-slot-${slotKey(repo, issueNumber)}`;
     this.iconPath = getStatusIcon("running");
     this.contextValue = "concurrentSlot.running";
-    this.description = this.idleDescription();
+    this.description = this.withPrivateBadge(this.idleDescription());
     this.tooltip = this.repo ? `${this.repo}${fullTitle}` : fullTitle;
     this.onChange = onChange ?? null;
 
@@ -170,6 +172,17 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
       this.stages.set(stage, new StageTreeItem(stage));
     }
     this.rebuildChildren();
+
+    // The hosted service's answer about a run started private (#2400): the
+    // badge appears only on its confirmation.
+    const privateDisposable = stateService.onPrivateConfirmation?.((outcome) => {
+      this.description = this.withPrivateBadge(this.baseDescription);
+      if (outcome === "confirmed") {
+        this.tooltip = `${String(this.tooltip ?? "")}\nPrivate: only you can read this run on the hosted service.`;
+      }
+      this.onChange?.();
+    });
+    if (privateDisposable) this.disposables.push(privateDisposable);
 
     // Subscribe to state changes — filter by issue number since IpcClient
     // is a singleton and ALL PipelineStateService instances receive every
@@ -296,6 +309,21 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
     return parts.join(" | ");
   }
 
+  /**
+   * Prefix the private badge (#2400) when the hosted service confirmed the
+   * run private. A run started private that the service did not confirm
+   * shows no badge; the member was told so when the answer came.
+   */
+  private withPrivateBadge(description: string): string {
+    this.baseDescription = description;
+    return this.stateService.isPrivateConfirmed?.()
+      ? `${ConcurrentSlotTreeItem.PRIVATE_BADGE} · ${description}`
+      : description;
+  }
+
+  /** The badge a confirmed private run shows in its description (#2400). */
+  static readonly PRIVATE_BADGE = "Private";
+
   /** `Slot N`, with its epic as `owner/repo#N` when it has one (#2382). */
   private idleDescription(): string {
     return this.epicNumber
@@ -321,7 +349,7 @@ export class ConcurrentSlotTreeItem extends BaseTreeItem {
     }
 
     // Update description with cumulative metrics and current stage context
-    this.description = this.formatIssueDescription(state);
+    this.description = this.withPrivateBadge(this.formatIssueDescription(state));
 
     // Sync stage statuses
     for (const [stageName, stageState] of Object.entries(state.stages)) {

@@ -187,7 +187,7 @@ the discovery regex and the atomic-write contract. This section documents the
 
 | Group          | Fields                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Identity       | `repo`, `issueNumber`, `itemId`, `title`, `body`, `branch`, `runId`, `requestedAdapter`, `requestedModel`, `remoteRunId`                                                                                                                                                                                                                                                                                                        |
+| Identity       | `repo`, `issueNumber`, `itemId`, `title`, `body`, `branch`, `runId`, `requestedAdapter`, `requestedModel`, `remoteRunId`, `visibility`                                                                                                                                                                                                                                                                                          |
 | Lifecycle      | `terminal`, `terminalAt`, `terminalOutcome`, `abandoned`, `abandonedAt`, `abandonedReason`, `paused`                                                                                                                                                                                                                                                                                                                            |
 | Position       | `stage`, `startedAt`, `stageStart`                                                                                                                                                                                                                                                                                                                                                                                              |
 | Process        | `pid`, `ownerPid`, `worktreeDir`                                                                                                                                                                                                                                                                                                                                                                                                |
@@ -207,6 +207,12 @@ set once from the first stage transition that carries it and absent on every
 run no trigger started. It is correlation, not the run's identity (ADR-017
 Decision 2). A window that finds a paused snapshot after a reload reads it to
 know which platform run it holds.
+
+`visibility` is `private` when the member who started the run chose to keep it
+private on the hosted service (#2400), and absent for a team run. It is raised
+by the first transition, queue item or completion notice that says private and
+never lowered, so a run rehydrated after a restart still uploads as private.
+See [TELEMETRY_PRIVACY.md § Private runs](TELEMETRY_PRIVACY.md#private-runs).
 
 `mainCheckVerdict` / `mainCheckFailing` are the post-merge observation of the
 base branch (#1249): once the pipeline had merged, whether the merged PR head's

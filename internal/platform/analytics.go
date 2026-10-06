@@ -52,6 +52,12 @@ type PipelineEvent struct {
 	Repo   string `json:"-"`
 	Origin string `json:"-"`
 
+	// Visibility is state.VisibilityPrivate for a run its creator chose to
+	// keep private (#2400), sent on EVERY event type so the service never
+	// receives a record of a private run without it; empty (omitted, read as
+	// team) otherwise.
+	Visibility string `json:"-"`
+
 	// Branch + perf mode (stage_started) — surface the feature branch and the
 	// performance-mode badge on the in-flight 'running' row. Branch is empty on
 	// the first stage (issue-pickup hasn't resolved it yet); the platform
@@ -91,6 +97,9 @@ type QueueSyncItem struct {
 	Status       string `json:"status"`
 	RepoFullName string `json:"repoFullName,omitempty"`
 	Title        string `json:"title,omitempty"`
+	// Visibility is "private" for an item whose run its creator chose to keep
+	// private (#2400), omitted for team.
+	Visibility string `json:"visibility,omitempty"`
 }
 
 // QueueSyncPayload is the body for PUT /v1/queue/sync — a single machine's full
@@ -659,6 +668,12 @@ func buildEventWire(e PipelineEvent) map[string]interface{} {
 		// ingest endpoint 400s on "Invalid ISO datetime" and the run never
 		// appears in the live Pipelines view.
 		"timestamp": e.Timestamp.UTC().Format(time.RFC3339Nano),
+	}
+	// A private run's every event says so (#2400). The service raises the run
+	// to private on any record that asks and never lowers it, so the run's
+	// first event, and each one after, carries the field.
+	if e.Visibility == state.VisibilityPrivate {
+		w["visibility"] = state.VisibilityPrivate
 	}
 	switch e.EventType {
 	case "stage_started":

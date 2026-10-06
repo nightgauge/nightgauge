@@ -51,7 +51,7 @@ func TestEnqueueEpic_TruncatedBlockerListIsAnError(t *testing.T) {
 	})
 	s := forgeScheduler(forge)
 
-	err := s.EnqueueEpic(context.Background(), githubtest.Owner, githubtest.Repo, 100, "Epic", nil, nil)
+	err := s.EnqueueEpic(context.Background(), githubtest.Owner, githubtest.Repo, 100, "Epic", nil, nil, "")
 	if !errors.Is(err, gh.ErrConnectionTruncated) {
 		t.Fatalf("EnqueueEpic err = %v, want ErrConnectionTruncated", err)
 	}
@@ -79,7 +79,7 @@ func TestEnqueueEpic_LongListsItDoesNotUseCannotAbortIt(t *testing.T) {
 	})
 	s := forgeScheduler(forge)
 
-	if err := s.EnqueueEpic(context.Background(), githubtest.Owner, githubtest.Repo, 100, "Epic", nil, nil); err != nil {
+	if err := s.EnqueueEpic(context.Background(), githubtest.Owner, githubtest.Repo, 100, "Epic", nil, nil, ""); err != nil {
 		t.Fatalf("EnqueueEpic: %v", err)
 	}
 	if len(s.queue) != 2 || s.queue[0].IssueNumber != 201 || s.queue[1].IssueNumber != 202 {

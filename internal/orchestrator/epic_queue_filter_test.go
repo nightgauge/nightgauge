@@ -44,7 +44,7 @@ func newEpicFilterFixture(t *testing.T) *Scheduler {
 func TestEnqueueEpic_NilEligibleSubIssues_QueuesAllOpen(t *testing.T) {
 	s := newEpicFilterFixture(t)
 
-	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil, ""); err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}
 
@@ -76,7 +76,7 @@ func TestEnqueueEpic_UsesClientResolverPerRepo(t *testing.T) {
 		return nil, fmt.Errorf("resolver stub")
 	})
 
-	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil, ""); err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}
 
@@ -98,7 +98,7 @@ func TestEnqueueEpic_UsesClientResolverPerRepo(t *testing.T) {
 func TestEnqueueEpic_EmptyEligibleSubIssues_QueuesAllOpen(t *testing.T) {
 	s := newEpicFilterFixture(t)
 
-	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{}); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{}, ""); err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestEnqueueEpic_EmptyEligibleSubIssues_QueuesAllOpen(t *testing.T) {
 func TestEnqueueEpic_EligibleSubset_OnlyWhitelisted(t *testing.T) {
 	s := newEpicFilterFixture(t)
 
-	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{{Repo: "Org/repo", Number: 201}, {Number: 203}}); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{{Repo: "Org/repo", Number: 201}, {Number: 203}}, ""); err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}
 
@@ -161,7 +161,7 @@ func TestEnqueueEpic_SkipsOwnerActionSubIssue(t *testing.T) {
 		excludeLabels: []string{"owner-action"},
 	}
 
-	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil, ""); err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}
 
@@ -202,7 +202,7 @@ func TestEnqueueEpic_ExcludeLabelsConfigOverride(t *testing.T) {
 		excludeLabels: []string{"needs-human"},
 	}
 
-	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, nil, ""); err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}
 
@@ -221,7 +221,7 @@ func TestEnqueueEpic_ExcludeLabelsConfigOverride(t *testing.T) {
 func TestEnqueueEpic_EligibleUnknown_NoOp(t *testing.T) {
 	s := newEpicFilterFixture(t)
 
-	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{{Number: 999}, {Repo: "Org/other", Number: 201}}); err != nil {
+	if err := s.EnqueueEpic(context.Background(), "Org", "repo", 100, "Test Epic", nil, []IssueRef{{Number: 999}, {Repo: "Org/other", Number: 201}}, ""); err != nil {
 		t.Fatalf("EnqueueEpic failed: %v", err)
 	}
 

@@ -42,7 +42,12 @@ type ExecutionHistoryRunRecord struct {
 	// live event stream created, instead of minting a duplicate row under a
 	// derived ID (#261).
 	PipelineRunID string `json:"pipelineRunId,omitempty"`
-	StartedAt     string `json:"startedAt"`
+	// Visibility is "private" for a run its creator chose to keep private
+	// (#2400) and omitted for team: the platform declares it optional, reads
+	// absent as team, and lets a private record raise the run, never lower
+	// it. Taken from state.V2RunRecord.Visibility.
+	Visibility string `json:"visibility,omitempty"`
+	StartedAt  string `json:"startedAt"`
 	// CompletedAt is nil for a run that has not finished — should not occur on
 	// the telemetry-push path (only completed runs are pushed) but the field
 	// stays nullable to match the schema.

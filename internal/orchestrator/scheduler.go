@@ -1096,6 +1096,10 @@ type QueueEntry struct {
 	// RemoteRunID is the run_id from the platform command payload, when set
 	// by a remote-triggered pipeline.run command (#3557).
 	RemoteRunID string `json:"remoteRunId,omitempty"`
+	// Visibility is who reads the run on the hosted service (#2400):
+	// state.VisibilityPrivate when the member who started it chose private,
+	// empty for team.
+	Visibility string `json:"visibility,omitempty"`
 }
 
 // QueueItem represents a queued issue with full metadata (authoritative).
@@ -1146,6 +1150,12 @@ type QueueItem struct {
 	// to what served. Empty on every other item.
 	RequestedAdapter string `json:"requestedAdapter,omitempty"`
 	RequestedModel   string `json:"requestedModel,omitempty"`
+	// Visibility is who reads the item's run on the hosted service (#2400):
+	// state.VisibilityPrivate when the member who queued it chose private,
+	// empty for team. The run the item starts carries it on every upload, and
+	// the queue sync names it per item. Raised, never lowered: a private
+	// request for an issue already waiting here makes that item private.
+	Visibility string `json:"visibility,omitempty"`
 }
 
 // QueuePausedReason explains why a queue item is paused.
@@ -2646,7 +2656,8 @@ func (s *Scheduler) QueueAdd(entries ...QueueEntry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, e := range entries {
-		if s.queueContainsUnlocked(e.Repo, e.IssueNumber) {
+		if existing := s.queueItemUnlocked(e.Repo, e.IssueNumber); existing != nil {
+			existing.Visibility = state.RaiseVisibility(existing.Visibility, e.Visibility)
 			continue
 		}
 		item := QueueItem{
@@ -2657,6 +2668,7 @@ func (s *Scheduler) QueueAdd(entries ...QueueEntry) {
 			AddedAt:     time.Now().UTC(),
 			Position:    len(s.queue) + 1,
 			RemoteRunID: e.RemoteRunID,
+			Visibility:  state.RaiseVisibility("", e.Visibility),
 		}
 		s.queue = append(s.queue, item)
 	}
@@ -2674,11 +2686,16 @@ func (s *Scheduler) QueueAdd(entries ...QueueEntry) {
 // or one already serving another remote run, is left as it is: the
 // extension places a trigger for an issue it is dispatching on that
 // dispatch itself.
+//
+// A private request (#2400) raises the waiting item it duplicates to private,
+// so the run that serves it uploads as private. The raise is never undone.
 func (s *Scheduler) QueueAddItem(items ...QueueItem) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range items {
+		items[i].Visibility = state.RaiseVisibility("", items[i].Visibility)
 		if existing := s.queueItemUnlocked(items[i].Repo, items[i].IssueNumber); existing != nil {
+			existing.Visibility = state.RaiseVisibility(existing.Visibility, items[i].Visibility)
 			if items[i].RemoteRunID != "" && existing.RemoteRunID == "" && existing.Status != "processing" {
 				existing.RemoteRunID = items[i].RemoteRunID
 				existing.RemoteRunAttached = true
@@ -2747,6 +2764,17 @@ func (s *Scheduler) queueItemRemoteRunID(repo string, issueNumber int) string {
 		if item.Repo == repo && item.IssueNumber == issueNumber {
 			return item.RemoteRunID
 		}
+	}
+	return ""
+}
+
+// queueItemVisibility returns the visibility of a queued issue's item
+// (#2400), or "" (team) when the issue is not queued.
+func (s *Scheduler) queueItemVisibility(repo string, issueNumber int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if item := s.queueItemUnlocked(repo, issueNumber); item != nil {
+		return item.Visibility
 	}
 	return ""
 }
@@ -3004,6 +3032,9 @@ type QueueHandBack struct {
 	IssueNumber       int
 	RemoteRunID       string
 	RemoteRunAttached bool
+	// Visibility raises the item's visibility (#2400): a private remote run
+	// the window attached to the dispatch makes the item private.
+	Visibility string
 }
 
 // QueueDropProcessing is what a window reload or close does to the queue
@@ -3054,6 +3085,7 @@ func (s *Scheduler) QueueDropProcessing(handBack []QueueHandBack, unanswered []s
 			item.Status = "pending"
 			item.RemoteRunID = h.RemoteRunID
 			item.RemoteRunAttached = h.RemoteRunID != "" && h.RemoteRunAttached
+			item.Visibility = state.RaiseVisibility(item.Visibility, h.Visibility)
 			remaining = append(remaining, item)
 			kept++
 			continue
@@ -3342,7 +3374,11 @@ func (s *Scheduler) ExcludeLabels() []string {
 // Pass nil or an empty slice for the unfiltered autonomous path (the set of
 // open sub-issues that isn't CLOSED is enqueued as before).
 // @see Issue #2992 — epic drag filter.
-func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNumber int, title string, labels []string, eligibleSubIssues []IssueRef) error {
+//
+// visibility is state.VisibilityPrivate when the member queuing the epic
+// chose private (#2400): every sub-issue item is private, and one already
+// waiting is raised. "" (team) otherwise.
+func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNumber int, title string, labels []string, eligibleSubIssues []IssueRef, visibility string) error {
 	fullRepo := owner + "/" + repo
 	log.Printf("EnqueueEpic: fetching epic #%d from %s", epicNumber, fullRepo)
 	// Resolve a client scoped to the epic's repo so private cross-repo epics use
@@ -3460,6 +3496,8 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 			EpicRepo:    fullRepo,
 			IsBatch:     true,
 			AddedAt:     time.Now().UTC(),
+			// A private epic's sub-issues each run private (#2400).
+			Visibility: state.RaiseVisibility("", visibility),
 		}
 		// Epic-level blockers apply to all sub-issues. Each keeps its own
 		// repository: copied as a bare number onto a sub-issue in another
@@ -3475,7 +3513,8 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 		// Skip if already in queue (e.g., re-enqueued individually after a
 		// prior failure). Without this, the same issue can be dequeued into
 		// multiple concurrent slots — causing duplicate runs.
-		if s.queueContainsUnlocked(subIssueRepo, si.Number) {
+		if existing := s.queueItemUnlocked(subIssueRepo, si.Number); existing != nil {
+			existing.Visibility = state.RaiseVisibility(existing.Visibility, visibility)
 			log.Printf("EnqueueEpic: skipping sub-issue #%d — already in queue", si.Number)
 			epicOrder++
 			continue
@@ -3557,6 +3596,9 @@ func (s *Scheduler) syncQueueToCloudLocked() {
 			Status:       status,
 			RepoFullName: it.Repo,
 			Title:        it.Title,
+			// A private item's run is its creator's alone on the hosted
+			// service (#2400); a team item omits the field.
+			Visibility: state.RaiseVisibility("", it.Visibility),
 		})
 	}
 	s.telemetrySvc.SyncQueue(context.Background(), items)
@@ -5002,6 +5044,11 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	if reqAdapter, reqModel, _ := s.QueueItemRequestedPin(item.Repo, item.Number); reqAdapter != "" {
 		runtime.SetRequestedPin(reqAdapter, reqModel)
 	}
+	// Who reads the run on the hosted service (#2400) is a fact of the run
+	// from its start, read before the first event is emitted, so the run's
+	// first stage event already carries it. An issue the scheduler picked
+	// from the board on its own has no queue item and stays team.
+	runtime.SetVisibility(s.queueItemVisibility(item.Repo, item.Number))
 	// Capture the issue body at pickup (#183) so the run record + telemetry can
 	// show the issue context (title, labels, body) on the dashboard run-detail
 	// page without leaving the dashboard. Title/labels are already on the board
@@ -5225,6 +5272,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			}
 			s.telemetrySvc.EmitPipelineEvent(context.Background(), platform.PipelineEvent{
 				RunID:           snap.RunID,
+				Visibility:      snap.Visibility,
 				IssueNumber:     item.Number,
 				EventType:       "pipeline_done",
 				Stage:           "",
@@ -6527,6 +6575,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		if s.telemetrySvc != nil && s.telemetryEnabled {
 			s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 				RunID:       runtime.RunID,
+				Visibility:  runtime.RunVisibility(),
 				IssueNumber: item.Number,
 				EventType:   "stage_started",
 				Stage:       string(stage),
@@ -6814,6 +6863,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if s.telemetrySvc != nil && s.telemetryEnabled {
 				s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 					RunID:       runtime.RunID,
+					Visibility:  runtime.RunVisibility(),
 					IssueNumber: item.Number,
 					EventType:   "model_refusal_fallback",
 					Stage:       string(stage),
@@ -7058,6 +7108,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 						if s.telemetrySvc != nil && s.telemetryEnabled {
 							s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 								RunID:       runtime.RunID,
+								Visibility:  runtime.RunVisibility(),
 								IssueNumber: item.Number,
 								EventType:   "pipeline.anomaly",
 								Stage:       string(stage),
@@ -7112,6 +7163,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					if s.telemetrySvc != nil && s.telemetryEnabled {
 						s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 							RunID:         runtime.RunID,
+							Visibility:    runtime.RunVisibility(),
 							IssueNumber:   item.Number,
 							EventType:     "pipeline.failure_reconciled",
 							Stage:         string(stage),
@@ -7212,6 +7264,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				if s.telemetrySvc != nil && s.telemetryEnabled {
 					s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 						RunID:       runtime.RunID,
+						Visibility:  runtime.RunVisibility(),
 						IssueNumber: item.Number,
 						EventType:   "pipeline.failure_reconciled",
 						Stage:       string(stage),
@@ -7337,6 +7390,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				if s.telemetrySvc != nil && s.telemetryEnabled {
 					s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 						RunID:       runtime.RunID,
+						Visibility:  runtime.RunVisibility(),
 						IssueNumber: item.Number,
 						EventType:   "stage_error",
 						Stage:       string(stage),
@@ -7373,6 +7427,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				if s.telemetrySvc != nil && s.telemetryEnabled {
 					s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 						RunID:       runtime.RunID,
+						Visibility:  runtime.RunVisibility(),
 						IssueNumber: item.Number,
 						EventType:   "stage_error",
 						Stage:       string(stage),
@@ -7614,6 +7669,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 							if s.telemetrySvc != nil && s.telemetryEnabled {
 								s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 									RunID:       runtime.RunID,
+									Visibility:  runtime.RunVisibility(),
 									IssueNumber: item.Number,
 									EventType:   "stall_retried",
 									Stage:       string(stage),
@@ -7662,6 +7718,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					if s.telemetrySvc != nil && s.telemetryEnabled {
 						s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 							RunID:       runtime.RunID,
+							Visibility:  runtime.RunVisibility(),
 							IssueNumber: item.Number,
 							EventType:   "stage_error",
 							Stage:       string(stage),
@@ -7750,6 +7807,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 					if s.telemetrySvc != nil && s.telemetryEnabled {
 						s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 							RunID:       runtime.RunID,
+							Visibility:  runtime.RunVisibility(),
 							IssueNumber: item.Number,
 							EventType:   "pipeline.recovery_attempt",
 							Stage:       string(stage),
@@ -8077,6 +8135,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if s.telemetrySvc != nil && s.telemetryEnabled {
 				s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 					RunID:       runtime.RunID,
+					Visibility:  runtime.RunVisibility(),
 					IssueNumber: item.Number,
 					EventType:   "stage_error",
 					Stage:       string(stage),
@@ -8152,6 +8211,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 			if s.telemetrySvc != nil && s.telemetryEnabled {
 				s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 					RunID:       runtime.RunID,
+					Visibility:  runtime.RunVisibility(),
 					IssueNumber: item.Number,
 					EventType:   "stage_error",
 					Stage:       string(stage),
@@ -8233,6 +8293,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		if s.telemetrySvc != nil && s.telemetryEnabled {
 			s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 				RunID:       runtime.RunID,
+				Visibility:  runtime.RunVisibility(),
 				IssueNumber: item.Number,
 				EventType:   "stage_completed",
 				Stage:       string(stage),
@@ -8483,7 +8544,7 @@ func (s *Scheduler) dispatchItem(ctx context.Context, item types.BoardItem) {
 		// Wave orchestration declined (sequential strategy) — fall back to queue
 		log.Printf("#%d: wave orchestration declined — falling back to sequential queue", item.Number)
 		ownerPart, repoPart := splitOwnerRepo(item.Repo)
-		if err := s.EnqueueEpic(ctx, ownerPart, repoPart, item.Number, item.Title, item.Labels, nil); err != nil {
+		if err := s.EnqueueEpic(ctx, ownerPart, repoPart, item.Number, item.Title, item.Labels, nil, ""); err != nil {
 			log.Printf("#%d: failed to enqueue epic sub-issues: %v", item.Number, err)
 		}
 		return
@@ -9147,6 +9208,7 @@ func (s *Scheduler) gateRelaxContext(ctx context.Context, stage state.PipelineSt
 	if s.telemetrySvc != nil && s.telemetryEnabled {
 		s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 			RunID:       runtime.RunID,
+			Visibility:  runtime.RunVisibility(),
 			IssueNumber: item.Number,
 			EventType:   "gate.relaxation",
 			Stage:       gateName,
@@ -10698,6 +10760,7 @@ func (s *Scheduler) verifyPRMergeForStage(ctx context.Context, item types.BoardI
 		if s.telemetrySvc != nil && s.telemetryEnabled {
 			s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 				RunID:       runtime.RunID,
+				Visibility:  runtime.RunVisibility(),
 				IssueNumber: item.Number,
 				EventType:   "stage_error",
 				Stage:       string(state.StagePRMerge),
@@ -10895,6 +10958,7 @@ func (s *Scheduler) tryDeterministicPRMerge(
 		if s.telemetrySvc != nil && s.telemetryEnabled {
 			s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 				RunID:       runtime.RunID,
+				Visibility:  runtime.RunVisibility(),
 				IssueNumber: item.Number,
 				EventType:   "stage_deterministic",
 				Stage:       string(stage),
@@ -11040,6 +11104,7 @@ func (s *Scheduler) tryDeterministicPRCreate(
 		if s.telemetrySvc != nil && s.telemetryEnabled {
 			s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 				RunID:       runtime.RunID,
+				Visibility:  runtime.RunVisibility(),
 				IssueNumber: item.Number,
 				EventType:   "stage_deterministic",
 				Stage:       string(stage),
@@ -11101,6 +11166,7 @@ func (s *Scheduler) emitStagePunt(ctx context.Context, runtime *state.RuntimeSta
 	}
 	s.telemetrySvc.EmitPipelineEvent(ctx, platform.PipelineEvent{
 		RunID:       runtime.RunID,
+		Visibility:  runtime.RunVisibility(),
 		IssueNumber: issueNumber,
 		EventType:   "stage_punt",
 		Stage:       string(stage),
