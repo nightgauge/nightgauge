@@ -44,15 +44,15 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.131.0",
+    "@anthropic-ai/sdk": "^0.128.0",
     "@types/handlebars": "^4.1.0",
     "cac": "^7.0.0",
-    "handlebars": "^4.7.9",
-    "js-yaml": "^5.4.2",
+    "handlebars": "^4.7.10",
+    "js-yaml": "^5.4.3",
     "zod": "^4.6.5"
   },
   "peerDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.287",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.291",
     "@google/genai": ">=1.0.0"
   },
   "peerDependenciesMeta": {
@@ -64,7 +64,7 @@
     }
   },
   "devDependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.287",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.291",
     "@types/node": "^26.6.4",
     "@vitest/coverage-v8": "^5.0.3",
     "typescript": "^7.0.2",
