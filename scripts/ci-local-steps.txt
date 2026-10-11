@@ -27,6 +27,7 @@ SKILL.md metadata
 publication boundary
 publication boundary allowlist changes alone
 credential scan (tree + full history)
+Credential-scan rules regression suite
 Publication boundary regression suite
 Publication boundary rename carry-over
 Publication boundary derived ceiling

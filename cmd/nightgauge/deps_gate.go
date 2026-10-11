@@ -19,7 +19,8 @@ import (
 //   - check:   evaluate one issue's open `blockedBy` dependencies and decide
 //     allow/defer. On defer it pauses the queue item with kind=
 //     "blocked_dependency" and exits 1 so the pickup skill records a deferral
-//     instead of a misclassified pipeline failure.
+//     instead of a misclassified pipeline failure. An evaluation it could not
+//     complete exits 2, never 1 (#1700).
 //   - promote: re-evaluate every queue item paused with kind=
 //     "blocked_dependency" and resume those whose blockers have all closed.
 //
@@ -40,12 +41,26 @@ failure — the item is paused and automatically resumed when its blockers close
 	return cmd
 }
 
+// depsGateFetcher builds the issue reader `deps-gate check` evaluates with. It
+// is a variable so a test can inject a read error without a network.
+var depsGateFetcher = func() (hooks.IssueFetcher, error) {
+	client, err := clientFromConfig()
+	if err != nil {
+		return nil, fmt.Errorf("create GitHub client: %w", err)
+	}
+	return gh.NewIssueService(client), nil
+}
+
 // depsGateCheckCmd evaluates whether the issue at --issue should be dispatched
 // or deferred. Exit codes:
 //
 //	0 — allow dispatch (no open blockers)
 //	1 — defer dispatch (one or more open blockers)
-//	2 — config or IO error
+//	2 — could not run: a bad argument, or a config or read error (#1700)
+//
+// Exit 2 is not a deferral. Before #1700 every error left through cobra's
+// default exit 1, so issue-pickup read a failed read as "deferred" and posted
+// a comment saying the item was paused when nothing had paused it.
 func depsGateCheckCmd() *cobra.Command {
 	var (
 		owner      string
@@ -64,12 +79,11 @@ func depsGateCheckCmd() *cobra.Command {
 				return fmt.Errorf("--issue must be a positive integer")
 			}
 
-			client, err := clientFromConfig()
+			issueSvc, err := depsGateFetcher()
 			if err != nil {
-				return fmt.Errorf("create GitHub client: %w", err)
+				return err
 			}
 			ownerPart, repoPart := splitRepo(owner, repo)
-			issueSvc := gh.NewIssueService(client)
 
 			res, err := evaluateDepsGate(cmd.Context(), issueSvc, ownerPart, repoPart, issueNum,
 				launchRepoAliases(ownerPart+"/"+repoPart))
@@ -103,9 +117,11 @@ func depsGateCheckCmd() *cobra.Command {
 				}
 			}
 
-			return fmt.Errorf("blocked-dependency: %s", res.Reason)
+			// The deferral is the verdict, already rendered above.
+			return verdictExit{code: 1}
 		},
 	}
+	markCouldNotRunExit(cmd)
 
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (defaults to config)")
 	repoNameFlag(cmd, &repo, "", "GitHub repository name (defaults to config)")

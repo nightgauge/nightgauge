@@ -39,6 +39,18 @@
 #   alive-after-reprobe      any HTTP response other than 404/410 — a slow or
 #                            bot-walled host. NOT fatal.
 #
+# --- A throttled link is not a resolved one (#1768) ---------------------------
+#
+# `.markdown-link-check.json` lists 429 in `aliveStatusCodes`, so a rate-limited
+# link never fails the gate, and that stays true. But the checker used to run
+# with `--quiet`, which hides every link it accepted, so a link answering 429
+# looked exactly like one answering 200. It now runs with `--verbose`: every
+# external link is logged with the status it really answered, and a 429 is
+# counted in its own class:
+#
+#   throttled                the host answered 429 (rate limited). The link
+#                            was not verified. Reported by URL; NOT fatal.
+#
 # Internal and relative links never enter this path. The checker reports those
 # with a real status (a missing file is `Status: 400`), and any non-alive status
 # there stays fatal unconditionally — those are what this gate exists for, they
@@ -49,7 +61,7 @@
 set -u
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$REPO_ROOT"
+cd "$REPO_ROOT" || exit 1
 
 CONFIG="${MD_LINK_CHECK_CONFIG:-.markdown-link-check.json}"
 MLC_VERSION="3.14.2"
@@ -96,22 +108,37 @@ else
 fi
 
 # reprobe_url URL -> prints "<class> <detail>", where class is one of
-# dead | unreachable-from-runner | alive-after-reprobe.
+# dead | unreachable-from-runner | alive-after-reprobe | throttled.
 #
 # `--retry 3 --retry-all-errors` is what makes the verdict a property of the
 # host rather than of one unlucky packet: a transport failure has to reproduce
 # across four attempts before it is reported at all, and only NXDOMAIN — which
 # is deterministic — is allowed to be called dead from a transport failure.
+#
+# The body goes to a regular file, never /dev/null (#1768). curl truncates its
+# output before each retry, and where /dev/null cannot be truncated a retried
+# 5xx ended in curl exit 23 ("failed writing"), which was then reported as the
+# link's verdict. Exit 23 is a local write failure after the server answered:
+# when curl read a status, that status is the answer.
 reprobe_url() {
-  local url="$1" code rc
-  code="$(curl -sS -A "nightgauge-link-check" -o /dev/null \
+  local url="$1" code rc body
+  if ! body="$(mktemp)"; then
+    printf 'unreachable-from-runner could not create a temp file for the re-probe\n'
+    return
+  fi
+  code="$(curl -sS -A "nightgauge-link-check" -o "$body" \
     -w '%{http_code}' --max-time "${MD_LINK_CHECK_TIMEOUT:-20}" \
     --retry "${MD_LINK_CHECK_RETRIES:-3}" --retry-all-errors \
     -L "$url" 2>/dev/null)"
   rc=$?
+  rm -f "$body"
+  if [ "$rc" -eq 23 ] && [[ "$code" =~ ^[1-5][0-9][0-9]$ ]]; then
+    rc=0
+  fi
   if [ "$rc" -eq 0 ]; then
     case "$code" in
       404 | 410) printf 'dead HTTP %s\n' "$code" ;;
+      429) printf 'throttled HTTP %s\n' "$code" ;;
       *) printf 'alive-after-reprobe HTTP %s\n' "$code" ;;
     esac
     return
@@ -151,7 +178,16 @@ record_reprobe() {
       N_ALIVE=$((N_ALIVE + 1))
       ALIVE_LINES="${ALIVE_LINES}"$'\n'"    ${f}: ${url} (${detail})"
       ;;
+    throttled)
+      record_throttled "$f" "$url"
+      ;;
   esac
+}
+
+# record_throttled FILE URL — a link that answered 429: not fatal, not verified.
+record_throttled() {
+  N_THROTTLED=$((N_THROTTLED + 1))
+  THROTTLED_LINES="${THROTTLED_LINES}"$'\n'"    ${1}: ${2} (HTTP 429)"
 }
 
 FAIL=0
@@ -160,9 +196,13 @@ COUNT=0
 N_DEAD=0
 N_UNREACHABLE=0
 N_ALIVE=0
+N_THROTTLED=0
+N_EXTERNAL=0
 DEAD_LINES=""
 UNREACHABLE_LINES=""
 ALIVE_LINES=""
+THROTTLED_LINES=""
+EXTERNAL_LINES=""
 # Files the checker exited non-zero on WITHOUT reporting a single link: it
 # crashed, or could not read its config or the file (#2379). Nothing in them
 # was checked, so they are neither a pass nor a dead link — the step could not
@@ -175,16 +215,37 @@ while IFS= read -r f; do
   [ -z "$f" ] && continue
   COUNT=$((COUNT + 1))
   # stdin from /dev/null so the checker never consumes the piped file list.
-  OUT="$("$MLC" --config "$CONFIG" --quiet "$f" </dev/null 2>&1)"
+  # --verbose, not --quiet: it prints every link with the status it answered,
+  # so a link accepted by aliveStatusCodes still shows what it said (#1768).
+  OUT="$("$MLC" --config "$CONFIG" --verbose "$f" </dev/null 2>&1)"
   RC=$?
+
+  # The per-link listing comes before the checker's "ERROR:" summary. Each
+  # external link in it is logged with its real status; a 429 is throttled.
+  LISTING="$(printf '%s\n' "$OUT" | sed '/^ *ERROR: /,$d')"
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    url="${line% *}"
+    code="${line##* }"
+    N_EXTERNAL=$((N_EXTERNAL + 1))
+    EXTERNAL_LINES="${EXTERNAL_LINES}"$'\n'"    ${f}: ${url} → ${code}"
+    [ "$code" = 429 ] && record_throttled "$f" "$url"
+  done <<EOF
+$(printf '%s\n' "$LISTING" | sed -n 's/^ *\[✓\] \(https\{0,1\}:\/\/[^ ]*\) → Status: \([0-9]*\).*/\1 \2/p')
+$(printf '%s\n' "$LISTING" | sed -n 's/^ *\[✖\] \(https\{0,1\}:\/\/[^ ]*\) → Status: \([0-9]*\).*/\1 \2/p')
+EOF
+
   [ "$RC" -eq 0 ] && continue
 
   printf '%s\n' "$OUT"
 
   # Every reported failure for this file, split by whether the checker got an
-  # answer at all. `Status: 0` means it did not.
-  ERRORED="$(printf '%s\n' "$OUT" | sed -n 's/.*\[✖\] \(.*\) → Status: 0$/\1/p')"
-  ANSWERED="$(printf '%s\n' "$OUT" | sed -n 's/.*\[✖\] \(.*\) → Status: \([0-9]*\)$/\1 \2/p' | grep -v ' 0$')"
+  # answer at all. `Status: 0` means it did not. Read from the summary after
+  # "ERROR:", whose lines end at the status; the verbose listing repeats each
+  # failure with error detail appended.
+  SUMMARY="$(printf '%s\n' "$OUT" | sed -n '/^ *ERROR: /,$p')"
+  ERRORED="$(printf '%s\n' "$SUMMARY" | sed -n 's/.*\[✖\] \(.*\) → Status: 0$/\1/p')"
+  ANSWERED="$(printf '%s\n' "$SUMMARY" | sed -n 's/.*\[✖\] \(.*\) → Status: \([0-9]*\)$/\1 \2/p' | grep -v ' 0$')"
 
   FILE_FATAL=0
 
@@ -265,7 +326,11 @@ echo "-------------------------------------------------------------------------"
 # One line per class, always — a red run has to say WHICH class it found
 # without anyone opening the raw log, and a green run has to disclose what it
 # could not verify.
-echo "Link classes: ${N_DEAD} dead, ${N_UNREACHABLE} unreachable-from-runner, ${N_ALIVE} alive-after-reprobe"
+if [ -n "$EXTERNAL_LINES" ]; then
+  echo "External links: ${N_EXTERNAL}, each with the HTTP status it answered (0: no response):${EXTERNAL_LINES}"
+  echo ""
+fi
+echo "Link classes: ${N_DEAD} dead, ${N_UNREACHABLE} unreachable-from-runner, ${N_ALIVE} alive-after-reprobe, ${N_THROTTLED} throttled"
 if [ -n "$DEAD_LINES" ]; then
   echo "  dead (fatal — a missing document or an unresolvable host):${DEAD_LINES}"
 fi
@@ -274,6 +339,9 @@ if [ -n "$UNREACHABLE_LINES" ]; then
 fi
 if [ -n "$ALIVE_LINES" ]; then
   echo "  alive-after-reprobe (NOT fatal — the host answered on re-probe):${ALIVE_LINES}"
+fi
+if [ -n "$THROTTLED_LINES" ]; then
+  echo "  throttled: ${N_THROTTLED} link(s) (NOT fatal — HTTP 429, so not verified):${THROTTLED_LINES}"
 fi
 if [ "$N_UNCHECKED" -gt 0 ] && [ "$FAIL" -eq 0 ]; then
   echo "HARNESS ERROR: markdown-link-check could not check ${N_UNCHECKED} file(s) — its own output is above:${UNCHECKED_LINES}"

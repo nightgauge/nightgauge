@@ -53,6 +53,47 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A dependency check that could not run no longer reads as "no open
+  dependencies"** (#1700). Auto-selection used to fall back to
+  `{"has_open_dependencies":false}` when `nightgauge hook check-deps` failed,
+  so a rate limit could pick up an issue whose blockers were open. It now skips
+  that candidate and names it; the dependency-checking include stops instead of
+  proceeding; and the extension's deterministic issue-pickup falls through to
+  the skill rather than writing a context with no blockers. Auto-selection
+  also emits the selected issue as one JSON line, where `head -1` used to keep
+  only its opening brace.
+
+- **`deps-gate check` and `baseline-gate check` exit 2 when they cannot
+  evaluate** (#1700, #2442), with one `could not run:` line. Every error used
+  to exit 1, the deferral code, so issue-pickup posted a "paused, will resume"
+  comment for an item nothing had paused. On exit 2 issue-pickup now stops at
+  the dependency gate, with no comment and no deferral record, and continues
+  past the baseline gate as it was designed to.
+
+- **`install-agent-skills.sh` replaces only skill directories Nightgauge
+  installed** (#1694). Codex and Grok copies now carry the extension's
+  `.nightgauge-installed` marker and follow its rules: an operator's own
+  `update-docs`, another pack's `_shared`, or a symlink of the same name is left
+  alone with a warning; a source symlink out of `skills/` is never copied
+  (OpenCode copies included); and a destination that resolves into the
+  checkout is refused. A directory an earlier version installed has no marker,
+  so remove it once to let the installer manage it.
+
+- **The link check reports throttled links** (#1768). It logs every external
+  link with the HTTP status it answered and counts 429s as `throttled`, which
+  stay non-fatal. A re-probe whose body write failed locally (curl exit 23) is
+  classed by the status the server sent, not by the write error.
+
+- **The credential scan catches Azure DevOps PATs and literal `VSCE_PAT` /
+  `OVSX_PAT` values** (#1770), which the default gitleaks rules missed.
+  `scripts/test-credential-scan-rules.sh` proves both rules fire and stay
+  quiet on `${{ secrets.VSCE_PAT }}`-style references.
+
+- **The publication-boundary hermeticity harness stops when its outer layer is
+  killed** (#1705), instead of running on for minutes holding the gate's
+  output open. A sandbox claim no longer follows a symlink planted at its name
+  out of the sandbox root.
+
 - **`@modelcontextprotocol/sdk` is 1.32.1**, out of the range of
   GHSA-6qxp-vccf-f47h (an MCP server could steer the OAuth client's
   credentials to an authorization server it chose). It is a transitive

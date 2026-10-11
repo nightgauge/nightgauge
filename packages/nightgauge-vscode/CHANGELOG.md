@@ -19,6 +19,13 @@ and this project adheres to
   _Private_ badge once the service confirms it; when it does not, the
   extension says so and shows no badge.
 
+### Fixed
+
+- **Issue pickup no longer proceeds on a failed dependency check** (#1700).
+  When `nightgauge hook check-deps` fails, the deterministic pickup writes no
+  context and falls through to the issue-pickup skill, whose dependency gate
+  checks again, instead of treating the issue as unblocked.
+
 ## [0.6.0] - 2026-10-04
 
 ### Added
