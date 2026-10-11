@@ -167,6 +167,17 @@ required but missing`. The home directory, and any directory whose
   a directory with no project config, and `pr merge` resolves its GitHub token
   for the owner it was told to act on.
 
+### Security
+
+- **The Go toolchain is 1.26.9 and `golang.org/x/net` is v0.60.0** (#2441).
+  Both carry the fix for GO-2026-6617, an HTTP/2 server crash from an HPACK
+  encoder race in `net/http`, which govulncheck found reachable from the
+  GitHub client.
+
+- **`handlebars` is 4.7.10** (#2443). 4.7.9 carried three critical
+  JavaScript-injection advisories (GHSA-xw65-4hp5-5hc7, GHSA-8r5x-fm3f-whwj,
+  GHSA-p8wg-vrv2-v86f).
+
 ## [0.6.0] - 2026-10-04
 
 ### Added
