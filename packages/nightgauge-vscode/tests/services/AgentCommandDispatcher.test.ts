@@ -207,11 +207,19 @@ describe("AgentCommandDispatcher", () => {
       dispatcher.handle({ ...routedCommand(type, 0), payload: { turn_id: "turn-1" } });
       dispatcher.handleRelayed({
         agentId: "agent-daemon",
-        frame: { commandId: `relayed-${type}`, type, commandType: type, payload: { turn_id: "turn-1" } },
+        frame: {
+          commandId: `relayed-${type}`,
+          type,
+          commandType: type,
+          payload: { turn_id: "turn-1" },
+        },
       });
     }
     await settle();
-    expect(CONVERSATION_TURN_COMMAND_TYPES).toEqual(["conversation_turn", "conversation_turn_cancel"]);
+    expect(CONVERSATION_TURN_COMMAND_TYPES).toEqual([
+      "conversation_turn",
+      "conversation_turn_cancel",
+    ]);
     expect(ipc.agentAcknowledgeCommand).not.toHaveBeenCalled();
   });
 
