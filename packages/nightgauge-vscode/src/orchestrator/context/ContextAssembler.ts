@@ -1303,6 +1303,13 @@ export class ContextAssembler {
       // Run the same deterministic check the LLM path performs (`hook check-deps`)
       // and FAIL CLOSED when open dependencies exist.
       const deps = await this.checkIssueDependencies(issueNumber, execOptions);
+      if (deps === "failed") {
+        // A check that ran and failed is not "no open dependencies" (#1700).
+        // Write no context: the caller falls through to the LLM subagent,
+        // whose dependency gate checks again and stops the pickup if it
+        // still cannot tell.
+        return { generated: false };
+      }
       if (deps) {
         fallbackContext.dependencies.blockedBy = deps.open.map((d) => d.number);
         if (deps.hasOpen) {
@@ -1372,15 +1379,16 @@ export class ContextAssembler {
   /**
    * Run the deterministic dependency check (`nightgauge hook check-deps`,
    * which reads GitHub's native blockedBy edges) for the issue. Returns null
-   * when the check could not run (binary unresolved, command failed) — the
-   * caller keeps the empty-dependency default rather than blocking pickup on
-   * infrastructure hiccups; only a POSITIVE open-dependency answer fails
-   * closed (#189).
+   * when the binary is unresolved, so there is no check to run; the caller
+   * keeps the empty-dependency default (#189). Returns "failed" when the
+   * check ran and failed or printed no verdict: that is an unknown, never
+   * "no open dependencies", and the caller must not pick the issue up on it
+   * (#1700).
    */
   private async checkIssueDependencies(
     issueNumber: number,
     execOptions: { encoding: "utf-8"; cwd: string; timeout: number }
-  ): Promise<{ hasOpen: boolean; open: OpenDependencyRef[] } | null> {
+  ): Promise<{ hasOpen: boolean; open: OpenDependencyRef[] } | "failed" | null> {
     try {
       const resolver = BinaryResolver.fromVSCode();
       const binary = await resolver.resolve();
@@ -1427,13 +1435,19 @@ export class ContextAssembler {
         state: d.state ?? "OPEN",
         repo: d.repo,
       }));
-      return { hasOpen: parsed.has_open_dependencies === true, open };
+      if (typeof parsed.has_open_dependencies !== "boolean") {
+        throw new Error("check-deps printed no has_open_dependencies verdict");
+      }
+      return { hasOpen: parsed.has_open_dependencies, open };
     } catch (err) {
-      this.logger.warn("Deterministic issue-pickup: dependency check failed — continuing without", {
-        issueNumber,
-        err: err instanceof Error ? err.message : String(err),
-      });
-      return null;
+      this.logger.warn(
+        "Deterministic issue-pickup: dependency check failed — not picking up on an unknown (#1700)",
+        {
+          issueNumber,
+          err: err instanceof Error ? err.message : String(err),
+        }
+      );
+      return "failed";
     }
   }
 

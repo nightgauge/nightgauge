@@ -60,12 +60,21 @@ row. Then, and only then, check blockers on the survivors:
 # (blockedBy is not a --json field on any CLI; check-deps reads the native
 # relationship and the dependencies the issue body declares. It is one call
 # per issue, so it runs on the tier that matched, never on all seven.)
+# Only a check that ran and answered `false` admits a candidate. A check that
+# failed printed no verdict, and an unknown is never "no open dependencies"
+# (#1700): that candidate is skipped, and the next one is tried.
 ISSUE=$(printf '%s\n' "$TIER_CANDIDATES" | jq -r '.[].number' | while read -r n; do
-  RESULT=$("$BINARY" hook check-deps "$n" --check-only 2>/dev/null || echo '{"has_open_dependencies":false}')
-  if [ "$(printf '%s\n' "$RESULT" | jq -r '.has_open_dependencies')" = "false" ]; then
-    printf '%s\n' "$TIER_CANDIDATES" | jq ".[] | select(.number == $n)" | head -1
+  CHECK_EXIT=0
+  RESULT=$("$BINARY" hook check-deps "$n" --check-only 2>/dev/null) || CHECK_EXIT=$?
+  OPEN=$(printf '%s\n' "$RESULT" | jq -r '.has_open_dependencies' 2>/dev/null)
+  if [ "$CHECK_EXIT" -eq 0 ] && [ "$OPEN" = "false" ]; then
+    printf '%s\n' "$TIER_CANDIDATES" | jq -c ".[] | select(.number == $n)" | head -1
     break
   fi
+  case "$OPEN" in
+    true) ;;
+    *) echo "#$n skipped: its dependency check could not run (exit $CHECK_EXIT)" >&2 ;;
+  esac
 done)
 
 rm -f "$BOARD"
@@ -149,8 +158,12 @@ CANDIDATES=$(printf '%s\n' "$CANDIDATES" | jq -r '.[].number')
 BLOCKED_ISSUES="[]"
 for n in $CANDIDATES; do
   BINARY=$(command -v nightgauge 2>/dev/null || echo "nightgauge")
-  RESULT=$("$BINARY" hook check-deps "$n" 2>/dev/null || echo '{"has_open_dependencies":false}')
-  HAS_DEPS=$(printf '%s\n' "$RESULT" | jq -r '.has_open_dependencies')
+  # A failed check is an unknown, not an unblocked issue (#1700): leave it out.
+  if ! RESULT=$("$BINARY" hook check-deps "$n" 2>/dev/null); then
+    echo "#$n left out: its dependency check could not run" >&2
+    continue
+  fi
+  HAS_DEPS=$(printf '%s\n' "$RESULT" | jq -r '.has_open_dependencies' 2>/dev/null)
   if [ "$HAS_DEPS" = "true" ]; then
     ENTRY=$(printf '%s\n' "$RESULT" | jq '{
       number: .issue_number,

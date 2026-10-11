@@ -20,13 +20,19 @@
 # Run: bash scripts/test-install-agent-skills-targets.sh
 # Also run by .github/workflows/lint.yml and scripts/ci-local.sh.
 set -uo pipefail
-cd "$(git rev-parse --show-toplevel)"
+# `cd ""` succeeds in bash, so a failed rev-parse must stop the suite here or
+# it carries on in the caller's directory (#1694).
+if ! TOPLEVEL="$(git rev-parse --show-toplevel)" || ! cd "$TOPLEVEL"; then
+  echo "FAIL: not inside a git work tree; nothing was tested" >&2
+  exit 1
+fi
 
 REPO_ROOT="$(pwd)"
 PASS=0
 FAIL=0
 TMP=""
 
+# shellcheck disable=SC2329 # invoked by the trap below
 cleanup() {
   [ -n "$TMP" ] && rm -rf "$TMP"
   return 0
@@ -68,7 +74,7 @@ if ! git archive HEAD skills | tar -x -C "$SANDBOX"; then
   exit 1
 fi
 cp scripts/install-agent-skills.sh "$SANDBOX/scripts/"
-cp scripts/lib/mirror_links.py "$SANDBOX/scripts/lib/"
+cp scripts/lib/mirror_links.py scripts/lib/install_skill_tree.py "$SANDBOX/scripts/lib/"
 INSTALLER="$SANDBOX/scripts/install-agent-skills.sh"
 
 # PATH with the real claude/codex/grok CLIs stripped so the installer cannot
@@ -241,6 +247,134 @@ else
   # A disabled grok install must still exit 0 (best-effort skip).
   nope "(f) patched installer exited non-zero"
   sed 's/^/    /' "$TMP/f.err"
+fi
+
+# --- (h*) ownership and containment (#1694) --------------------------------
+# The Codex and Grok copies used to `rsync -a --delete` over any directory whose
+# name matched a Nightgauge skill, and to copy source symlinks as links, so a
+# link to ~/.ssh in skills/ landed in the agent's skill directory.
+MARKER=".nightgauge-installed"
+
+# (h1) an operator's own update-docs and another pack's _shared survive, named
+# in a warning; a directory carrying the marker is replaced.
+HOME_H1="$TMP/home-h1"
+for root in "$HOME_H1/.codex/skills" "$HOME_H1/.grok/skills"; do
+  mkdir -p "$root/update-docs" "$root/_shared" "$root/nightgauge-retro"
+  echo mine >"$root/update-docs/mine.md"
+  echo theirs >"$root/_shared/theirs.md"
+  : >"$root/nightgauge-retro/$MARKER"
+  echo stale >"$root/nightgauge-retro/stale.md"
+done
+if HOME="$HOME_H1" PATH="$SAFE_PATH" bash "$INSTALLER" >/dev/null 2>"$TMP/h1.err"; then
+  h1_ok=1
+  for root in "$HOME_H1/.codex/skills" "$HOME_H1/.grok/skills"; do
+    [ "$(cat "$root/update-docs/mine.md" 2>/dev/null)" = mine ] &&
+      [ ! -e "$root/update-docs/SKILL.md" ] && [ ! -e "$root/update-docs/$MARKER" ] &&
+      [ "$(cat "$root/_shared/theirs.md" 2>/dev/null)" = theirs ] &&
+      [ ! -e "$root/_shared/PREFLIGHT.md" ] || h1_ok=0
+    [ -f "$root/nightgauge-retro/SKILL.md" ] && [ -f "$root/nightgauge-retro/$MARKER" ] &&
+      [ ! -e "$root/nightgauge-retro/stale.md" ] &&
+      [ -f "$root/nightgauge-issue-create/$MARKER" ] || h1_ok=0
+  done
+  if [ "$h1_ok" = 1 ] && grep -q "skipped update-docs" "$TMP/h1.err" &&
+    grep -q "skipped _shared" "$TMP/h1.err"; then
+    ok "(h1) unowned update-docs and _shared survive with a warning; a marked dir is replaced"
+  else
+    nope "(h1) an unowned directory was replaced, a marked one was not, or no warning"
+    sed 's/^/    /' "$TMP/h1.err"
+  fi
+else
+  nope "(h1) install exited non-zero"
+  sed 's/^/    /' "$TMP/h1.err"
+fi
+
+# (h2) a symlink at a skill's destination is the operator's: left in place,
+# and nothing is written through it.
+HOME_H2="$TMP/home-h2"
+mkdir -p "$HOME_H2/.codex/skills" "$HOME_H2/linked-target"
+ln -s "$HOME_H2/linked-target" "$HOME_H2/.codex/skills/nightgauge-issue-create"
+if HOME="$HOME_H2" PATH="$SAFE_PATH" bash "$INSTALLER" --codex-only >/dev/null 2>"$TMP/h2.err" &&
+  [ -L "$HOME_H2/.codex/skills/nightgauge-issue-create" ] &&
+  [ -z "$(ls -A "$HOME_H2/linked-target")" ] &&
+  grep -q "skipped nightgauge-issue-create" "$TMP/h2.err"; then
+  ok "(h2) a symlinked skill destination is left alone and not written through"
+else
+  nope "(h2) the installer replaced or wrote through a symlinked skill destination"
+  sed 's/^/    /' "$TMP/h2.err"
+fi
+
+# (h3) source symlinks: a SKILL.md and a file linked out of the tree are not
+# installed; a link to a file inside the tree lands as a regular file.
+SBH="$TMP/sbh"
+mkdir -p "$SBH"
+cp -R "$SANDBOX/." "$SBH/"
+mkdir -p "$TMP/outside" "$SBH/skills/nightgauge-leaky"
+printf -- '---\nname: leaky\ndescription: Outside.\n---\n' >"$TMP/outside/SKILL.md"
+echo 'not for agents' >"$TMP/outside/secret"
+ln -s "$TMP/outside/SKILL.md" "$SBH/skills/nightgauge-leaky/SKILL.md"
+ln -s "$TMP/outside/secret" "$SBH/skills/nightgauge-issue-create/leak.md"
+ln -s ../_shared/PREFLIGHT.md "$SBH/skills/nightgauge-issue-create/preflight-alias.md"
+HOME_H3="$TMP/home-h3"
+mkdir -p "$HOME_H3/.codex"
+if HOME="$HOME_H3" PATH="$SAFE_PATH" bash "$SBH/scripts/install-agent-skills.sh" --codex-only \
+  >/dev/null 2>"$TMP/h3.err"; then
+  D3="$HOME_H3/.codex/skills"
+  if [ ! -e "$D3/nightgauge-leaky" ] && [ ! -e "$D3/nightgauge-issue-create/leak.md" ] &&
+    [ ! -L "$D3/nightgauge-issue-create/leak.md" ] &&
+    [ -f "$D3/nightgauge-issue-create/preflight-alias.md" ] &&
+    [ ! -L "$D3/nightgauge-issue-create/preflight-alias.md" ] &&
+    [ -z "$(find "$D3" -type l)" ] &&
+    grep -q "nightgauge-leaky/SKILL.md" "$TMP/h3.err" &&
+    grep -q "leak.md" "$TMP/h3.err"; then
+    ok "(h3) source links out of skills/ are skipped and named; an inside link lands as a file"
+  else
+    nope "(h3) a link out of skills/ was installed, or an inside link was not copied"
+    find "$D3" -name 'leak*' -o -name 'nightgauge-leaky' -o -type l | sed 's/^/    /'
+    sed 's/^/    /' "$TMP/h3.err"
+  fi
+else
+  nope "(h3) install exited non-zero"
+  sed 's/^/    /' "$TMP/h3.err"
+fi
+# OpenCode copies through the same helper.
+HOME_H3O="$TMP/home-h3o"
+mkdir -p "$HOME_H3O"
+if oc_bin="$TMP/h3o-bin" && mkdir -p "$oc_bin" && printf '#!/bin/sh\nexit 0\n' >"$oc_bin/opencode" &&
+  chmod +x "$oc_bin/opencode" &&
+  HOME="$HOME_H3O" XDG_CONFIG_HOME="$HOME_H3O/xdg" PATH="$oc_bin:$SAFE_PATH" \
+    bash "$SBH/scripts/install-agent-skills.sh" --opencode-only --yes >/dev/null 2>"$TMP/h3o.err"; then
+  if [ -f "$HOME_H3O/xdg/opencode/skills/nightgauge-issue-create/SKILL.md" ] &&
+    [ ! -e "$HOME_H3O/xdg/opencode/skills/nightgauge-issue-create/leak.md" ] &&
+    [ -z "$(find "$HOME_H3O/xdg/opencode/skills" -type l)" ]; then
+    ok "(h3o) the OpenCode copy skips a link out of skills/ too"
+  else
+    nope "(h3o) the OpenCode copy installed a link out of skills/"
+  fi
+else
+  nope "(h3o) --opencode-only exited non-zero on the linked sandbox"
+  sed 's/^/    /' "$TMP/h3o.err"
+fi
+
+# (h4) a destination root that resolves into the checkout is refused before
+# anything is written: ~/.codex/skills linked to the source skills/ itself
+# would otherwise get markers written into, and directories replaced in, the
+# canonical tree.
+SBH4="$TMP/sbh4"
+mkdir -p "$SBH4"
+cp -R "$SANDBOX/." "$SBH4/"
+HOME_H4="$TMP/home-h4"
+mkdir -p "$HOME_H4/.codex"
+ln -s "$SBH4/skills" "$HOME_H4/.codex/skills"
+SUM_H4="$(cd "$SBH4/skills" && find . -type f | sort | xargs shasum -a 256)"
+if HOME="$HOME_H4" PATH="$SAFE_PATH" bash "$SBH4/scripts/install-agent-skills.sh" --codex-only \
+  >/dev/null 2>"$TMP/h4.err"; then
+  nope "(h4) a destination root inside the checkout was accepted"
+elif [ "$(cd "$SBH4/skills" && find . -type f | sort | xargs shasum -a 256)" = "$SUM_H4" ] &&
+  grep -q "refusing to install" "$TMP/h4.err"; then
+  ok "(h4) a destination root resolving into the checkout is refused, nothing written"
+else
+  nope "(h4) refused, but the canonical skills/ changed first"
+  sed 's/^/    /' "$TMP/h4.err"
 fi
 
 # --- (o*) OpenCode target (#1666) -------------------------------------------

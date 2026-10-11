@@ -28,8 +28,9 @@ const UNPREFIXED = new Set(["_shared", "smart-setup", "update-docs", "pr-preflig
  * Written into every directory copySkillsTree installs. A name, generic
  * (`update-docs`, `_shared`) or namespaced (`nightgauge-*`), proves nothing
  * about who put a directory there; this marker is the only evidence that
- * Nightgauge did. scripts/install-agent-skills.sh writes no marker, so a
- * directory it installed is left untouched.
+ * Nightgauge did. scripts/install-agent-skills.sh writes the same marker under
+ * the same rules (scripts/lib/install_skill_tree.py, #1694), so each installer
+ * replaces what the other installed.
  */
 export const INSTALL_MARKER = ".nightgauge-installed";
 const INSTALL_MARKER_TEXT =

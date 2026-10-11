@@ -33,6 +33,11 @@ and this project adheres to
 
 ### Fixed
 
+- **Issue pickup no longer proceeds on a failed dependency check** (#1700).
+  When `nightgauge hook check-deps` fails, the deterministic pickup writes no
+  context and falls through to the issue-pickup skill, whose dependency gate
+  checks again, instead of treating the issue as unblocked.
+
 - **Every closed sub-issue moves to Done when an issue completes**, not only
   the first 50, and a sub-issue in another repository is updated there rather
   than the issue with the same number in this one (#1701). A sub-issue list

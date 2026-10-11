@@ -396,8 +396,12 @@ and will automatically resume dispatch when the blockers close
   if [ $GATE_EXIT -eq 0 ]; then
     echo "Dependency gate: PASSED"
   else
-    # Exit 2 = config/IO error — log and continue (best-effort, never over-defer).
-    echo "warning: deps-gate check failed with exit $GATE_EXIT, continuing"
+    # Exit 2: the gate could not evaluate the blockers (a read failed), so
+    # they may be open. Nothing was paused: post no deferral comment and
+    # record no deferral. Stop the pickup; a retry evaluates again (#1700).
+    echo "Dependency gate: could not evaluate #$ISSUE_NUMBER's blockers (exit $GATE_EXIT); not picking it up." >&2
+    printf '%s\n' "$GATE_OUTPUT" >&2
+    exit 1
   fi
 fi
 ```
@@ -414,6 +418,11 @@ When the gate decides to defer:
 - `deps-gate promote` (run on a sweep, and the autonomous cascade on blocker
   completion) re-evaluates every paused `blocked_dependency` item and resumes
   those whose blockers have all closed.
+
+When the gate cannot evaluate (exit 2, a failed read), nothing is paused and no
+deferral comment is posted. The pickup stops with a non-zero exit, so a retry
+evaluates again. Unlike the baseline-CI gate, this gate never treats exit 2 as
+a pass: its blockers may be open (#1700).
 
 `warn` and `ignore` dependency modes are unchanged — they stay interactive and
 are handled by the `DEPENDENCY_CHECKING` include in Phase 3.
