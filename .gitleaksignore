@@ -34,3 +34,7 @@ packages/nightgauge-vscode/tests/services/notifications/MattermostService.test.t
 packages/nightgauge-vscode/tests/services/notifications/transport.test.ts:jwt:132
 # Branch history of #1955 (PR #2073): a synthetic, truncated PEM fixture, since replaced.
 2f6213626d439136688c12eaf07705acd27e49cf:internal/config/github_app_test.go:private-key:10
+# Branch history of #1569/#2444: synthetic license-key test values in a table,
+# since assembled at run time.
+7e5157ae64d6093b5ed10cfba99de9b4a79f3194:internal/platform/contract_conformance_test.go:generic-api-key:538
+7e5157ae64d6093b5ed10cfba99de9b4a79f3194:internal/platform/contract_conformance_test.go:generic-api-key:540
