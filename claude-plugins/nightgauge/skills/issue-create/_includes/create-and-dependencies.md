@@ -97,8 +97,8 @@ For each sub-issue, two cases:
 **CRITICAL — Native Sub-Issues Required**: All parent/child relationships MUST
 use GitHub's native sub-issue feature (via `addSubIssue` GraphQL mutation). The
 pipeline's project board groups issues under epics using the GraphQL
-`subIssues(first: 50)` field on each issue — issues with sub-issues are marked
-as epics, and parent relationships are derived from the sub-issue list.
+`subIssues` connection on each issue, read to its end — issues with sub-issues
+are marked as epics, and parent relationships are derived from the sub-issue list.
 Body-based "Part of #X" text alone is NOT sufficient for pipeline display. After
 creating sub-issues, they MUST also be added to the project board via
 `addProjectV2ItemById` and have their Status field set, or they will be
