@@ -312,7 +312,10 @@ A part outside the service's bounds is dropped and logged rather than
 costing the registration, and an account that belongs to no team is
 registered again without the `workspace` block.
 
-The registration and every heartbeat carry `instance_id` (#2395), top-level
+The registration and every heartbeat carry the agent's capability list
+(#1569): `attention_resolve`, and `conversation` while the workspace's adapter
+can host a conversation turn, so the capability follows an adapter switch
+within one beat. They also carry `instance_id` (#2395), top-level
 beside `execution_profile`: a random UUID v4 the daemon makes once per process
 and keeps in memory only. Each editor window sends its own (one per
 activation), on its registration, every heartbeat, and its deregistration
@@ -358,8 +361,10 @@ a remote trigger for one is refused.
 
 The service places a trigger or a run verb on any agent that declares the
 run's repository, so the daemon's stream can receive one. The daemon executes
-only `attention_resolve` itself. It relays every other command to the
-extension over the `agent.command` IPC event, `{agentId, frame}`, and the
+`attention_resolve` itself, and answers the two conversation turn command
+types itself, never relaying either; see
+[CONVERSATION_TURNS.md](CONVERSATION_TURNS.md) (#1569). It relays every other
+command to the extension over the `agent.command` IPC event, `{agentId, frame}`, and the
 extension carries it out and acknowledges it under `agentId`, the agent the
 platform addressed. A daemon with no extension attached has nobody to relay
 to, and such a command expires on the platform.
@@ -369,8 +374,9 @@ trigger with the run it starts; a run verb (`cancel`, `pause`, `resume`) as
 `applied`, as `already_resolved` when the run was already in the state the
 verb asks for (a pause of a paused run, a resume of a run that is not paused,
 #2341), or as `rejected` with the reason it could not act; an `approve` or
-`reject` as `rejected` with `no-approval-gate` (see below); any other type as
-`rejected` with `unsupported-command`. The
+`reject` as `rejected` with `no-approval-gate` (see below); a conversation turn
+type not at all, since the first acknowledgement decides a turn (#1569); any
+other type as `rejected` with `unsupported-command`. The
 platform keeps the status a pause or resume set unless the ack is
 `rejected`, which makes it restore the run's earlier status. Delivery is
 at least once, so a copy of a verb or an unsupported command that arrives
@@ -9028,7 +9034,7 @@ the key on argv, where every local user can read it through `ps` (ADR-024 § 5).
 {"id":2,"method":"platform.license"}
 
 # Validate a license key and bind machine
-{"id":3,"method":"platform.validateLicense","params":{"licenseKey":"ib_live_...","machineId":"vscode-install-uuid","hostname":"build-box","platform":"darwin"}}
+{"id":3,"method":"platform.validateLicense","params":{"licenseKey":"ng_live_...","machineId":"vscode-install-uuid","hostname":"build-box","platform":"darwin"}}
 ```
 
 **`machineId` is the RAW per-installation fingerprint, not a hash.** The caller

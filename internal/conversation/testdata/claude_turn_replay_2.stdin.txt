@@ -1,0 +1,5 @@
+Earlier messages in this conversation, oldest first, as a JSON array:
+[{"role": "user", "text": "My favourite fruit is the plum. Reply with just the word: noted."}, {"role": "assistant", "text": "noted"}]
+
+New message:
+Which fruit did I say was my favourite? Answer in one word.

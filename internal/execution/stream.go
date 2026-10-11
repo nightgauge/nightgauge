@@ -77,6 +77,49 @@ type StreamEvent struct {
 	// "tool-calls" among them, means another step follows. The stage turn
 	// budget reads it (#1652). Empty when absent.
 	OpenCodeStepReason string `json:"-"`
+
+	// Event is the API stream event a "stream_event" line wraps. The CLI
+	// emits these only with --include-partial-messages, which a
+	// conversational turn passes (#1569) and a pipeline stage does not.
+	// Shape verified in internal/conversation/testdata.
+	Event *StreamAPIEvent `json:"event,omitempty"`
+
+	// PerTurnEffortActive is set on system/init: whether the CLI applied the
+	// --effort it was given. The CLI drops a rung the model has no axis for
+	// with no warning, so this is how a turn learns what effort ran (#1568).
+	PerTurnEffortActive *bool `json:"per_turn_effort_active,omitempty"`
+}
+
+// StreamAPIEvent is one API streaming event: message_start,
+// content_block_start, content_block_delta, content_block_stop,
+// message_delta or message_stop.
+type StreamAPIEvent struct {
+	Type string `json:"type"`
+	// Index is the content block a content_block_* event belongs to.
+	Index int `json:"index"`
+	// Delta is a content_block_delta's delta.
+	Delta *StreamAPIDelta `json:"delta,omitempty"`
+	// Message is message_start's message: its id and its usage so far.
+	Message *StreamMessage `json:"message,omitempty"`
+	// Usage is message_delta's usage: the message's running output count.
+	Usage *TokenUsage `json:"usage,omitempty"`
+}
+
+// StreamAPIDelta is a content_block_delta's delta. Only text_delta carries
+// reply text; thinking and signature deltas are never reply text.
+type StreamAPIDelta struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+// TextDelta returns the reply text a stream_event content_block_delta carries,
+// with the content block it belongs to. ok is false for every other event.
+func (e *StreamEvent) TextDelta() (block int, text string, ok bool) {
+	if e == nil || e.Type != "stream_event" || e.Event == nil || e.Event.Type != "content_block_delta" ||
+		e.Event.Delta == nil || e.Event.Delta.Type != "text_delta" {
+		return 0, "", false
+	}
+	return e.Event.Index, e.Event.Delta.Text, true
 }
 
 // StreamMessage contains message-level data.
@@ -193,6 +236,11 @@ type TokenAccumulator struct {
 
 	// openCode is the opencode parser's per-run state (OpenCode).
 	openCode *OpenCodeStream
+
+	// streamMessageID is the id of the message the latest stream_event
+	// message_start opened: the message a following message_delta's usage
+	// belongs to.
+	streamMessageID string
 }
 
 // ParseStreamLine parses a single NDJSON line from Claude's stream-json output.
@@ -233,6 +281,33 @@ func (acc *TokenAccumulator) ParseStreamLine(line string) (*StreamEvent, bool) {
 		if event.Message != nil && event.Message.Usage != nil {
 			acc.updateFromUsage(event.Message.Usage)
 			tokenUpdated = true
+		}
+
+	case "stream_event":
+		// Partial messages (--include-partial-messages, #1569): usage
+		// arrives before the message's assistant event does, so a token
+		// ceiling sees a long reply grow instead of only its last block.
+		// message_start carries the message id and its input; message_delta
+		// carries no id and belongs to the message message_start opened.
+		// Both fold into the same per-message bucket the assistant events
+		// use, keyed by that id, so nothing is counted twice.
+		if event.Event == nil {
+			break
+		}
+		switch event.Event.Type {
+		case "message_start":
+			if event.Event.Message != nil {
+				acc.streamMessageID = event.Event.Message.ID
+				if event.Event.Message.Usage != nil {
+					acc.addTurnUsage(acc.streamMessageID, event.Event.Message.Usage)
+					tokenUpdated = true
+				}
+			}
+		case "message_delta":
+			if event.Event.Usage != nil {
+				acc.addTurnUsage(acc.streamMessageID, event.Event.Usage)
+				tokenUpdated = true
+			}
 		}
 	}
 

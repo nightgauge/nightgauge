@@ -34,21 +34,22 @@ export const EXECUTION_PROFILE_FIELDS: ReadonlyArray<keyof ExecutionProfile> = [
   "effort_source",
 ];
 
-/** The capabilities every extension agent advertises. */
+/**
+ * The capabilities every extension agent advertises. Never `conversation`
+ * (#1569): the Go daemon hosts conversation turns on its own agent and
+ * advertises the capability there, and an extension agent that advertised it
+ * would be addressed turns nothing here answers.
+ */
 export const BASE_AGENT_CAPABILITIES: readonly string[] = ["headless", "interactive"];
 
-/** Advertised only when the workspace's adapter can host a conversational turn. */
-export const CONVERSATION_CAPABILITY = "conversation";
-
-/** The profile and conversation viability, as Go resolved them. */
+/** The profile, as Go resolved it. */
 export interface ResolvedExecutionProfile {
   profile: ExecutionProfile;
-  conversation: boolean;
 }
 
 /** The slice of IpcClient this module needs. */
 export interface ExecutionProfileSource {
-  agentExecutionProfile(): Promise<{ profile: unknown; conversation: unknown }>;
+  agentExecutionProfile(): Promise<{ profile: unknown }>;
 }
 
 /**
@@ -83,15 +84,13 @@ export async function resolveExecutionProfile(
     const result = await source.agentExecutionProfile();
     const profile = toWireProfile(result?.profile);
     if (!profile) return null;
-    return { profile, conversation: result.conversation === true };
+    return { profile };
   } catch {
     return null;
   }
 }
 
-/** The capability list for a registration, given the resolved profile. */
-export function agentCapabilities(resolved: ResolvedExecutionProfile | null): string[] {
-  const caps = [...BASE_AGENT_CAPABILITIES];
-  if (resolved?.conversation === true) caps.push(CONVERSATION_CAPABILITY);
-  return caps;
+/** The capability list for a registration. It never includes `conversation`. */
+export function agentCapabilities(): string[] {
+  return [...BASE_AGENT_CAPABILITIES];
 }

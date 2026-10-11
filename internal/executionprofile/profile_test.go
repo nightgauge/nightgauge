@@ -1,7 +1,11 @@
 package executionprofile
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -239,25 +243,73 @@ func TestResolve_SerializedProfileIsScopeBounded(t *testing.T) {
 	}
 }
 
-// Spike #1568 adopted claude-headless, but no code path serves a
-// conversational turn until the daemon's turn runner (#1569) lands, so none
-// may advertise the capability yet. When the runner registers an adapter's
-// turn builder, this test is where that decision becomes visible.
-func TestConversation_NotAdvertisedUntilARunnerServesTurns(t *testing.T) {
-	for _, name := range adapters.NewRegistry().Names() {
-		if ConversationViable(name) {
-			t.Errorf("%s is marked conversation-viable with no turn runner behind it", name)
+// Spike #1568 adopted claude-headless and deferred or skipped every other
+// adapter, and the daemon's turn host (#1569) registers a conversational
+// builder for claude-headless only. The advertised capability follows the
+// builder: an adapter is viable exactly when a turn can be dispatched to it.
+func TestConversation_AdvertisedExactlyForAdaptersWithATurnBuilder(t *testing.T) {
+	reg := adapters.NewRegistry()
+	for _, name := range reg.Names() {
+		_, hasBuilder := reg.ConversationBuilder(name)
+		if got := ConversationViable(name); got != hasBuilder {
+			t.Errorf("ConversationViable(%s) = %v, has a conversational builder = %v", name, got, hasBuilder)
+		}
+		want := []string{"headless"}
+		if hasBuilder {
+			want = append(want, platform.AgentCapabilityConversation)
 		}
 		caps := Capabilities([]string{"headless"}, platform.ExecutionProfile{Adapter: name})
-		if !reflect.DeepEqual(caps, []string{"headless"}) {
-			t.Errorf("%s capabilities = %v, want [headless]", name, caps)
+		if !reflect.DeepEqual(caps, want) {
+			t.Errorf("%s capabilities = %v, want %v", name, caps, want)
 		}
 	}
+	if got := reg.ConversationAdapters(); !reflect.DeepEqual(got, []string{"claude-headless"}) {
+		t.Errorf("conversation adapters = %v, want [claude-headless] (spike #1568 adopted it alone)", got)
+	}
+	if !ConversationViable("claude") {
+		t.Error("the claude alias of claude-headless is not viable")
+	}
+}
 
-	conversationViableAdapters["codex"] = true
-	t.Cleanup(func() { delete(conversationViableAdapters, "codex") })
-	caps := Capabilities([]string{"headless"}, platform.ExecutionProfile{Adapter: "codex"})
-	if !reflect.DeepEqual(caps, []string{"headless", platform.AgentCapabilityConversation}) {
-		t.Errorf("viable adapter capabilities = %v, want conversation appended", caps)
+// The capability travels on the heartbeat (#1569): the daemon's profile
+// source is read on every beat, so switching the workspace's adapter to one
+// outside the viable set drops `conversation` from the next beat.
+func TestAdvertised_HeartbeatDropsConversationOnAnAdapterSwitch(t *testing.T) {
+	hermetic(t)
+	root := workspace(t, "ui:\n  core:\n    adapter: claude-headless\n", "")
+	var bodies []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, string(raw))
+		_, _ = w.Write([]byte(`{"ttl_seconds":90}`))
+	}))
+	defer srv.Close()
+	client, err := platform.NewClient(platform.Config{BaseURL: srv.URL, APIKey: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg := platform.NewAgentRegistrationService(client, "test").WithExecutionProfile(Advertised(root))
+	capabilities := func() []string {
+		t.Helper()
+		if err := reg.Heartbeat(context.Background(), "agent-1"); err != nil {
+			t.Fatal(err)
+		}
+		var beat struct {
+			Capabilities []string `json:"capabilities"`
+		}
+		if err := json.Unmarshal([]byte(bodies[len(bodies)-1]), &beat); err != nil {
+			t.Fatal(err)
+		}
+		return beat.Capabilities
+	}
+	if got := capabilities(); !reflect.DeepEqual(got, []string{"attention_resolve", platform.AgentCapabilityConversation}) {
+		t.Errorf("claude-headless beat capabilities = %v", got)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".nightgauge", "config.yaml"),
+		[]byte("owner: acme\nproject:\n  number: 1\nui:\n  core:\n    adapter: codex\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := capabilities(); !reflect.DeepEqual(got, []string{"attention_resolve"}) {
+		t.Errorf("after switching to codex, beat capabilities = %v", got)
 	}
 }

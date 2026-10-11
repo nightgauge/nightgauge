@@ -25,9 +25,7 @@ const PROFILE: ExecutionProfile = {
 
 function source(answer: () => unknown): ExecutionProfileSource {
   return {
-    agentExecutionProfile: vi.fn(
-      async () => answer() as { profile: unknown; conversation: unknown }
-    ),
+    agentExecutionProfile: vi.fn(async () => answer() as { profile: unknown }),
   };
 }
 
@@ -47,10 +45,10 @@ describe("toWireProfile", () => {
 });
 
 describe("resolveExecutionProfile", () => {
-  it("returns Go's answer", async () => {
+  it("returns Go's profile", async () => {
     await expect(
-      resolveExecutionProfile(source(() => ({ profile: PROFILE, conversation: false })))
-    ).resolves.toEqual({ profile: PROFILE, conversation: false });
+      resolveExecutionProfile(source(() => ({ profile: PROFILE, conversation: true })))
+    ).resolves.toEqual({ profile: PROFILE });
   });
 
   it("is null — advertise nothing — without a daemon or when it fails", async () => {
@@ -66,17 +64,9 @@ describe("resolveExecutionProfile", () => {
 });
 
 describe("agentCapabilities", () => {
-  it("advertises conversation only when Go says the adapter is viable", () => {
-    expect(agentCapabilities(null)).toEqual(["headless", "interactive"]);
-    expect(agentCapabilities({ profile: PROFILE, conversation: false })).toEqual([
-      "headless",
-      "interactive",
-    ]);
-    expect(agentCapabilities({ profile: PROFILE, conversation: true })).toEqual([
-      "headless",
-      "interactive",
-      "conversation",
-    ]);
+  it("never advertises conversation: the daemon hosts turns on its own agent (#1569)", () => {
+    expect(agentCapabilities()).toEqual(["headless", "interactive"]);
+    expect(agentCapabilities()).not.toContain("conversation");
   });
 });
 

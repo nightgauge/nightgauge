@@ -18,6 +18,7 @@ vi.mock("vscode", () => ({}));
 import {
   AgentCommandDispatcher,
   AGENT_COMMAND_RELAY_EVENT,
+  CONVERSATION_TURN_COMMAND_TYPES,
   ROUTER_DELIVERED_COMMAND_TYPES,
   subscribeToDaemonRelay,
 } from "../../src/services/AgentCommandDispatcher";
@@ -195,6 +196,31 @@ describe("AgentCommandDispatcher", () => {
     expect(throttleSync.refresh).toHaveBeenCalledTimes(1);
     // The trigger's second copy is refused by the platform, so it starts nothing.
     expect(queue.enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  // #1569: the first acknowledgement decides a conversation turn, so the
+  // extension never acknowledges a turn type, not even to refuse it, whether
+  // it arrives on its own stream or (it never should) through the relay.
+  it("leaves both conversation turn types unacknowledged", async () => {
+    const { dispatcher, ipc } = build("applied");
+    for (const type of CONVERSATION_TURN_COMMAND_TYPES) {
+      dispatcher.handle({ ...routedCommand(type, 0), payload: { turn_id: "turn-1" } });
+      dispatcher.handleRelayed({
+        agentId: "agent-daemon",
+        frame: {
+          commandId: `relayed-${type}`,
+          type,
+          commandType: type,
+          payload: { turn_id: "turn-1" },
+        },
+      });
+    }
+    await settle();
+    expect(CONVERSATION_TURN_COMMAND_TYPES).toEqual([
+      "conversation_turn",
+      "conversation_turn_cancel",
+    ]);
+    expect(ipc.agentAcknowledgeCommand).not.toHaveBeenCalled();
   });
 
   it("acknowledges an unsupported command type once, as rejected", async () => {
