@@ -814,10 +814,13 @@ The graph builder detects dependencies from three sources:
 ### GitHub Native (intra-repo)
 
 Uses the `blockedBy` GraphQL field on issues. These are created via the GitHub
-UI or the `addBlockedBy` GraphQL mutation.
+UI or the `addBlockedBy` GraphQL mutation. The list is read page by page to
+its end, and a list that cannot be read whole fails the read (#1682): a
+blocker past the first page is still a blocker.
 
 ```graphql
-blockedBy(first: 10) {
+blockedBy(first: 5) {
+  pageInfo { hasNextPage, endCursor }
   nodes { number, state, repository { nameWithOwner } }
 }
 ```

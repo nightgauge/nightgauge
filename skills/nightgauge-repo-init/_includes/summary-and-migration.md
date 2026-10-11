@@ -107,7 +107,7 @@ fi
 **Why native sub-issues matter:**
 
 - The project board tree view groups issues under epics using the GraphQL
-  `subIssues(first: 50)` field — epics are detected by having sub-issues
+  `subIssues` connection — epics are detected by having sub-issues
 - Body-based "Part of #X" text is not queryable via the GitHub API
 - Native sub-issues are visible in the GitHub UI with proper hierarchy
 - The Go binary (`nightgauge issue create-sub` and `issue link-sub`)

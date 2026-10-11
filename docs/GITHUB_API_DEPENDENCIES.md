@@ -43,6 +43,11 @@ from task list checkboxes in the issue body).
 - `issueQuery` — fetching full issue detail with sub-issues
 - `projectItemContent` — board item display in the Ready Items tree view
 - `nodeQuery` — cross-repo epic progress (`GetEpicProgress`)
+- Outside Go: the extension's post-completion board sync and the skills read
+  sub-issues through `nightgauge issue list --epic --json`, which reads them
+  whole or exits non-zero; the SDK's `EpicEstimator`, which needs each
+  sub-issue's labels, pages the connection itself to the same 20-page cap
+  (#1701)
 
 **Pagination**: each query reads a first page (12 on the board scan, 25 in
 `issueQuery`, 50 in `nodeQuery`) and selects `pageInfo`; while a page reports
@@ -94,6 +99,9 @@ determine whether an issue is currently blocked (any open blocker = blocked).
 
 - `issueQuery` — fetching blocking state for a specific issue
 - `projectItemContent` — board item display (determines 🔒 lock icon)
+- Outside Go: the backlog-preflight skill's cycle check runs in
+  `nightgauge backlog preflight`, which exits 2 when a blocker list cannot be
+  read whole (#1701)
 
 **Pagination**: a first page of 5, then the same shared `pageInfo` follow-ups,
 20-page cap and per-caller selection as `subIssues`. The scheduler's blocker
