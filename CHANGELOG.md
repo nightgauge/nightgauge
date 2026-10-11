@@ -102,6 +102,13 @@ required but missing`. The home directory, and any directory whose
   a directory with no project config, and `pr merge` resolves its GitHub token
   for the owner it was told to act on.
 
+### Security
+
+- **The Go toolchain is 1.26.9 and `golang.org/x/net` is v0.60.0** (#2441).
+  Both carry the fix for GO-2026-6617, an HTTP/2 server crash from an HPACK
+  encoder race in `net/http`, which govulncheck found reachable from the
+  GitHub client.
+
 ## [0.6.0] - 2026-10-04
 
 ### Added

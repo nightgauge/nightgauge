@@ -1,6 +1,6 @@
 module github.com/nightgauge/nightgauge
 
-go 1.26.6
+go 1.26.9
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
@@ -45,7 +45,7 @@ require (
 	github.com/skeema/knownhosts v1.3.1 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xanzy/ssh-agent v0.3.3 // indirect
-	golang.org/x/net v0.58.0 // indirect
+	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
 	modernc.org/libc v1.77.1 // indirect
