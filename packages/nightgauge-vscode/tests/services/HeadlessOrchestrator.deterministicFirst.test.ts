@@ -57,6 +57,17 @@ vi.mock("fs", async () => {
 // #2884: HeadlessOrchestrator now uses promisify(exec)/promisify(execFile)
 // for hot-path subprocess calls; the mocks must implement
 // nodejs.util.promisify.custom so the awaited calls resolve.
+// `hook check-deps` for an issue with no open blockers. The binary always
+// prints a verdict; an empty answer is a failed check (#1700).
+const { CHECK_DEPS_CLEAR } = vi.hoisted(() => ({
+  CHECK_DEPS_CLEAR: JSON.stringify({
+    issue_number: 42,
+    has_open_dependencies: false,
+    open_dependencies: [],
+    open_count: 0,
+  }),
+}));
+
 vi.mock("child_process", async () => {
   const actual = await vi.importActual<typeof import("child_process")>("child_process");
   const kCustom = Symbol.for("nodejs.util.promisify.custom");
@@ -77,6 +88,9 @@ vi.mock("child_process", async () => {
     if (cmd === "git" && a[0] === "branch") return "feat/2614-test\n";
     if (cmd === "gh" && a[0] === "issue") return issuePayload;
     if (cmd === "gh" && a[0] === "repo") return "TestOrg/test-repo";
+    // `hook check-deps` always prints a verdict; an empty answer is a failed
+    // check, which the deterministic path no longer reads as "no blockers" (#1700).
+    if (String(cmd).includes("nightgauge") && a[0] === "hook") return CHECK_DEPS_CLEAR;
     return "";
   };
 
@@ -216,6 +230,7 @@ describe("HeadlessOrchestrator deterministic-first issue-pickup (Issue #2614)", 
           body: "## Summary\nTest summary\n## Acceptance Criteria\n- [ ] AC1",
         });
       if (cmd === "gh" && argsArr[0] === "repo") return "TestOrg/test-repo";
+      if (String(cmd).includes("nightgauge") && argsArr[0] === "hook") return CHECK_DEPS_CLEAR;
       return "";
     }) as unknown as typeof execFileSync);
   });
@@ -303,6 +318,7 @@ describe("HeadlessOrchestrator deterministic-first issue-pickup (Issue #2614)", 
           body: "## Summary\nTest summary\n## Acceptance Criteria\n- [ ] AC1",
         });
       if (cmd === "gh" && a[0] === "repo") return "TestOrg/test-repo";
+      if (String(cmd).includes("nightgauge") && a[0] === "hook") return CHECK_DEPS_CLEAR;
       return "";
     });
 
