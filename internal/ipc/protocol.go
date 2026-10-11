@@ -1455,6 +1455,23 @@ type AgentAcknowledgeCommandResult struct {
 	RunID string `json:"runId"`
 }
 
+// AgentQueueAddParams are parameters for agent.queueAdd (#2440): a
+// `queue_add` command the extension received on its own agent's command
+// stream, handed to this daemon, which adds the issue to its local queue and
+// acknowledges the command under AgentID. Payload is the command's payload as
+// the hosted service sent it.
+type AgentQueueAddParams struct {
+	AgentID   string          `json:"agentId"`
+	CommandID string          `json:"commandId"`
+	Payload   json.RawMessage `json:"payload"`
+}
+
+// AgentQueueAddResult is the result for agent.queueAdd. Accepted is true when
+// the daemon took the command; it answers the command itself.
+type AgentQueueAddResult struct {
+	Accepted bool `json:"accepted"`
+}
+
 // EventAgentCommand is the event carrying an AgentCommandEvent.
 const EventAgentCommand = "agent.command"
 

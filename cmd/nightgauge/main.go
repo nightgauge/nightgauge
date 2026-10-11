@@ -27,6 +27,7 @@ import (
 	"github.com/nightgauge/nightgauge/internal/agentworkspace"
 	apipkg "github.com/nightgauge/nightgauge/internal/audit"
 	cipkg "github.com/nightgauge/nightgauge/internal/ci"
+	"github.com/nightgauge/nightgauge/internal/cloudqueue"
 	"github.com/nightgauge/nightgauge/internal/cmd/aggregatefindings"
 	"github.com/nightgauge/nightgauge/internal/cmd/batchfailures"
 	healthpkg "github.com/nightgauge/nightgauge/internal/cmd/health"
@@ -153,7 +154,8 @@ const (
 // stream against the new id. onRegistered sees every successful registration's
 // reply, the first and each re-registration; onHeartbeat, when set, runs on
 // each heartbeat tick. turns, when set, takes the conversation turn commands
-// (#1569). Returns when ctx is cancelled.
+// (#1569), and queueAdds the `queue_add` commands (#2440). Returns when ctx is
+// cancelled.
 func runAttentionAgentRegistration(
 	ctx context.Context,
 	reg *platform.AgentRegistrationService,
@@ -162,6 +164,7 @@ func runAttentionAgentRegistration(
 	resolver platform.AttentionResolver,
 	relay platform.AgentCommandRelay,
 	turns platform.AgentCommandHandler,
+	queueAdds platform.AgentCommandHandler,
 	onRegistered func(platform.AgentRegistration),
 	onConnected func(),
 	onHeartbeat func(),
@@ -186,7 +189,7 @@ func runAttentionAgentRegistration(
 	startStream := func(id string) {
 		var streamCtx context.Context
 		streamCtx, pollCancel = context.WithCancel(ctx)
-		startAttentionCommandStream(streamCtx, platformClient, resolver, relay, turns, id, signalGone, onConnected)
+		startAttentionCommandStream(streamCtx, platformClient, resolver, relay, turns, queueAdds, id, signalGone, onConnected)
 	}
 
 	// Late-bind the real agent id: subsequent sync pushes carry it, and the
@@ -276,15 +279,16 @@ func registerAttentionAgentWithRetry(ctx context.Context, reg *platform.AgentReg
 // (used for the ack path) and opens the agent-command SSE stream against it. A
 // new consumer is built on every (re-)registration so the ack carries the
 // current id. onAgentGone is invoked if the stream sees a 404 (agent evicted).
-// The two conversation turn types go to turns and are never relayed (#1569);
-// every other command type but attention_resolve goes to relay (#2335).
-// onConnected, when set, runs each time the stream opens (#2352).
-func startAttentionCommandStream(ctx context.Context, platformClient *platform.Client, resolver platform.AttentionResolver, relay platform.AgentCommandRelay, turns platform.AgentCommandHandler, agentID string, onAgentGone func(), onConnected func()) {
+// The two conversation turn types go to turns (#1569) and `queue_add` to
+// queueAdds (#2440), and neither is ever relayed; every other command type but
+// attention_resolve goes to relay (#2335). onConnected, when set, runs each
+// time the stream opens (#2352).
+func startAttentionCommandStream(ctx context.Context, platformClient *platform.Client, resolver platform.AttentionResolver, relay platform.AgentCommandRelay, turns, queueAdds platform.AgentCommandHandler, agentID string, onAgentGone func(), onConnected func()) {
 	consumer := platform.NewAttentionCommandConsumer(
 		resolver, // *ipc.Server implements platform.AttentionResolver
 		platform.NewCommandService(platformClient).AcknowledgeAgentCommand,
 		agentID,
-	).WithRelay(relay).WithTurnHandler(turns).WithOnConnected(onConnected)
+	).WithRelay(relay).WithTurnHandler(turns).WithQueueAddHandler(queueAdds).WithOnConnected(onConnected)
 	platform.StartAttentionCommandStream(ctx, platformClient, consumer, agentID, onAgentGone)
 }
 
@@ -381,8 +385,9 @@ func reportRefusedWorkspaceWrites(status daemonAgentIPC, info platform.AgentRegi
 // window that started the daemon, from agentworkspace.WindowFoldersEnv, or
 // nil; the declaration is the extension's for that window when it is set,
 // and the one for workspaceRoot otherwise. The daemon answers the
-// conversation turns addressed to its workspace itself (#1569), and every
-// other command it does not execute is relayed to the extension over ext.
+// conversation turns addressed to its workspace itself (#1569), and the
+// `queue_add` commands through queueAdds (#2440); every other command it does
+// not execute is relayed to the extension over ext.
 //
 // throttle, when set, follows the platform throttle of the workspace the
 // daemon serves (#2352), read from the platform's agent throttle endpoint
@@ -398,6 +403,7 @@ func runDaemonPlatformAgent(
 	version, workspaceRoot string,
 	window []string,
 	throttle *orchestrator.DispatchThrottle,
+	queueAdds platform.AgentCommandHandler,
 ) {
 	served := func() (platform.WorkspaceDeclaration, error) {
 		return agentworkspace.ResolveServed(window, workspaceRoot)
@@ -456,7 +462,7 @@ func runDaemonPlatformAgent(
 		})
 		relay = refreshThrottleOnCommand(relay, refreshThrottle)
 	}
-	runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, ext, relay, turns.HandleCommand,
+	runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, ext, relay, turns.HandleCommand, queueAdds,
 		func(info platform.AgentRegistration) {
 			reportRefusedWorkspaceWrites(ext, info)
 			agentID.Store(info.AgentID)
@@ -5829,6 +5835,27 @@ func serveCmd() *cobra.Command {
 			//      state syncs back via the uploader's transition subscription, and
 			//      the store's existing attention.event push updates every surface
 			//      live — no second event emitter.
+			// Queue items added in the cloud (#2440, ADR-018). The hosted
+			// service carries one to an agent covering its repository as a
+			// `queue_add` command: on the daemon's own command stream, or on the
+			// extension's, which hands it over through agent.queueAdd. One
+			// handler serves both, so a command is acted on once; it adds the
+			// issue to this daemon's queue and acknowledges the command.
+			var queueAdds platform.AgentCommandHandler
+			if platformClient != nil {
+				window := agentworkspace.WindowFolders(os.Getenv)
+				h := cloudqueue.New(ctx, cloudqueue.Config{
+					Queue: server,
+					Acks:  platform.NewCommandService(platformClient),
+					Served: func() ([]platform.AgentRepo, error) {
+						decl, err := agentworkspace.ResolveServed(window, workspaceRoot)
+						return decl.Repos, err
+					},
+				})
+				queueAdds = h.HandleCommand
+				server.SetQueueAddHandler(queueAdds)
+			}
+
 			if autoSched != nil && platformClient != nil && licenseKey != "" {
 				if store := autoSched.Attention(); store != nil {
 					// Attach the sync uploader immediately in MIRROR-ONLY mode: the
@@ -5851,7 +5878,7 @@ func serveCmd() *cobra.Command {
 					// under the registered agent succeeds (#2352).
 					dispatchThrottle.MarkUnread()
 					go runDaemonPlatformAgent(ctx, platformClient, attnSync, server, version, workspaceRoot,
-						agentworkspace.WindowFolders(os.Getenv), dispatchThrottle)
+						agentworkspace.WindowFolders(os.Getenv), dispatchThrottle, queueAdds)
 				}
 			}
 

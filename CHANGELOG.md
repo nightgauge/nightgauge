@@ -16,6 +16,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **An issue added to the queue from the app now runs** (#2440). Added from
+  the app or the dashboard, it reaches an agent covering its repository as a
+  `queue_add` command, and `nightgauge serve` adds it to its own queue, where
+  it runs like any other item, then answers the command: `applied` once it is
+  queued, `already_resolved` when the issue is already queued or running
+  there, and `rejected` with the reason when the daemon does not serve the
+  repository or cannot queue the issue (it is closed, unreadable, or carries
+  a human-only label). An epic is queued as its open sub-issues, the item
+  keeps the priority it was added with, and the queue snapshot then lists it
+  as this machine's. A command delivered twice is queued once. When the
+  service places the command on a VS Code window's agent instead, the window
+  hands it to its daemon. See `docs/GO_BINARY.md`.
+
 - **The daemon answers conversation turns** (#1569). `nightgauge serve` takes
   a turn the hosted service addresses to its agent, on its own command
   stream, and answers it on the workspace's own adapter, performance mode and

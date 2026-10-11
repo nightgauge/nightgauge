@@ -15,9 +15,11 @@
  * and acknowledged by exactly one handler (#2334): `trigger` by
  * TriggerCommandHandler, and the run verbs by RunVerbCommandHandler. The
  * workspace `throttle`, which the platform publishes to the workspace's agent
- * directly, goes to ThrottleCommandHandler (#2337). A type none of them
- * handles is acknowledged `rejected` as unsupported, once however often it is
- * delivered, so it ends with an answer instead of expiring unacknowledged.
+ * directly, goes to ThrottleCommandHandler (#2337). A `queue_add` (#2440) is
+ * handed to the daemon, which adds the issue to its queue and acknowledges
+ * it. A type none of them handles is acknowledged `rejected` as unsupported,
+ * once however often it is delivered, so it ends with an answer instead of
+ * expiring unacknowledged.
  */
 
 import {
@@ -32,13 +34,24 @@ import { THROTTLE_COMMAND_TYPE } from "./ThrottleCommandHandler";
 import type { Logger } from "../utils/logger";
 
 /**
- * Every command type the platform's command router delivers to an agent: a
- * `trigger`, and the run verbs a client issues against an existing run.
+ * Every command type the platform's command router delivers to an agent that
+ * this window acknowledges itself: a `trigger`, and the run verbs a client
+ * issues against an existing run. The router also delivers `queue_add`
+ * (#2440), which the window hands to the daemon (QUEUE_ADD_COMMAND_TYPE).
  * (`attention_resolve` and `throttle` are published to a named agent
  * directly, never through the router; the daemon applies the first and this
- * dispatcher the second. The queue_* types are never created.)
+ * dispatcher the second.)
  */
 export const ROUTER_DELIVERED_COMMAND_TYPES = ["trigger", ...RUN_VERB_COMMAND_TYPES] as const;
+
+/**
+ * A queue item added in the cloud (#2440). The platform routes it to any
+ * agent covering the repository, this window's included, but the issue goes
+ * to the daemon's queue: the window hands its copy to the daemon
+ * (`agent.queueAdd`), which handles it exactly as one on its own agent's
+ * stream and acknowledges it under this window's agent id.
+ */
+export const QUEUE_ADD_COMMAND_TYPE = "queue_add";
 
 /**
  * The IPC event the daemon relays a command on (#2335). Its data is
@@ -79,7 +92,7 @@ export class AgentCommandDispatcher implements CommandHandler {
     private readonly trigger: AgentScopedHandler,
     private readonly verbs: AgentScopedHandler,
     private readonly throttle: AgentScopedHandler,
-    private readonly ipcClient: Pick<IpcClient, "agentAcknowledgeCommand">,
+    private readonly ipcClient: Pick<IpcClient, "agentAcknowledgeCommand" | "agentQueueAdd">,
     private readonly logger: Logger
   ) {}
 
@@ -106,6 +119,10 @@ export class AgentCommandDispatcher implements CommandHandler {
     }
     if (cmd.type === THROTTLE_COMMAND_TYPE) {
       this.throttle.handle(cmd);
+      return;
+    }
+    if (cmd.type === QUEUE_ADD_COMMAND_TYPE) {
+      void this.handToDaemon(cmd);
       return;
     }
     if (CONVERSATION_TURN_COMMAND_TYPES.includes(cmd.type)) {
@@ -137,6 +154,31 @@ export class AgentCommandDispatcher implements CommandHandler {
       return;
     }
     this.handle({ ...cmd, agentId });
+  }
+
+  /**
+   * Hand a `queue_add` to the daemon (#2440). It decides, claims and
+   * acknowledges the command itself, so a copy delivered again is safe to
+   * hand over again. When the daemon cannot take it (no platform configured
+   * there) the command is left unacknowledged: another connection of this
+   * agent may still take it, and otherwise it expires on the platform.
+   */
+  private async handToDaemon(cmd: ReceivedCommand): Promise<void> {
+    const agentId = cmd.agentId ?? this.agentId;
+    if (!agentId || !cmd.id) {
+      this.logger.warn("AgentCommandDispatcher: queue_add with no agent or command id, skipping", {
+        commandId: cmd.id,
+      });
+      return;
+    }
+    try {
+      await this.ipcClient.agentQueueAdd(agentId, cmd.id, cmd.payload);
+    } catch (err) {
+      this.logger.warn("AgentCommandDispatcher: the daemon did not take a queue_add", {
+        commandId: cmd.id,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   private refuseUnsupported(cmd: ReceivedCommand): Promise<void> {

@@ -361,13 +361,71 @@ a remote trigger for one is refused.
 
 The service places a trigger or a run verb on any agent that declares the
 run's repository, so the daemon's stream can receive one. The daemon executes
-`attention_resolve` itself, and answers the two conversation turn command
-types itself, never relaying either; see
-[CONVERSATION_TURNS.md](CONVERSATION_TURNS.md) (#1569). It relays every other
+`attention_resolve` itself, answers the two conversation turn command
+types itself, never relaying either (see
+[CONVERSATION_TURNS.md](CONVERSATION_TURNS.md), #1569), and adds a `queue_add`
+to its own queue (below, #2440). It relays every other
 command to the extension over the `agent.command` IPC event, `{agentId, frame}`, and the
 extension carries it out and acknowledges it under `agentId`, the agent the
 platform addressed. A daemon with no extension attached has nobody to relay
 to, and such a command expires on the platform.
+
+#### A queue item added in the cloud
+
+An issue added to the queue from the app or the dashboard
+(`POST /v1/queue/add`, which names the repository) reaches an agent covering
+that repository as a `queue_add` command, routed, held while no covering agent
+is online and expired after 24 hours exactly as a trigger is (ADR-018). Its
+payload is `{type, owner, repo, issueNumber, priority, queueItemId,
+workspaceId}`; `workspaceId` is the service's, for routing.
+`internal/cloudqueue` handles it, and the daemon never relays it:
+
+1. **It reads the payload.** An owner or repository outside
+   `[A-Za-z0-9_.-]{1,100}` (or `.`, `..`), an issue number below 1, or a
+   priority other than `critical`, `high`, `medium` or `low` is acknowledged
+   `rejected` with `invalid-command:`; an agent or command id outside
+   `[A-Za-z0-9_-]{1,100}` is left unacknowledged.
+2. **It checks it serves the repository**, against the repositories it
+   declares on its registration, case-insensitively. One it does not serve is
+   acknowledged `rejected` with `not-covered:`. Several daemons, and several
+   editor windows, share one agent id, so this is how the one that does not
+   serve the repository steps aside: an `applied` or `already_resolved` from
+   another connection of the agent replaces the earlier `rejected`.
+3. **It adds the issue to its queue**, under the spelling the workspace
+   declares, on the terms every other route has. An issue already in the
+   queue, or with a run in the daemon's run registry (a quiet run included),
+   is acknowledged `already_resolved` (`already-queued:`, `already-running:`)
+   and nothing is added. Otherwise the issue is read from GitHub for its
+   title, labels and state; one that cannot be read (`issue-unreadable:`),
+   is closed (`issue-closed:`), has more labels than one read returns
+   (`labels-unreadable:`) or carries a human-only label
+   (`autonomous.exclude_labels`, `human-only-label:`) is acknowledged
+   `rejected` and nothing is queued. An epic is queued as its open sub-issues.
+   The item keeps the priority it was added with (`requestedPriority` in
+   `queue-state.json`), which the queue sync reports in place of the issue's
+   priority label.
+4. **It acknowledges the command**, `applied` once the item is in the queue,
+   on `POST /v1/agents/{agentId}/commands/{commandId}/ack`. Adding the item
+   persists the queue, which sends the queue snapshot (`PUT /v1/queue/sync`,
+   when telemetry is on), so this machine's row replaces the cloud row the
+   acknowledgement removed. Every detail is passed through the shared
+   credential registry (`credshape.RedactEgress`), loses its control and
+   format characters, and is cut to 2,000 bytes; an unexpected error is
+   logged here and reported only as `cannot-queue:`.
+
+A command is acted on once per daemon. The first copy claims its id; a copy
+delivered while it is handled is dropped, and one delivered after it was
+answered re-sends that answer without queueing again. When the
+acknowledgement finds the command already taken (409 `ALREADY_ACKED`: another
+daemon of the agent applied it first, or it was cancelled), the item this
+command queued is taken back while it still waits for a slot.
+
+The extension's agent is a separate agent covering the same repositories, so
+the service may place a `queue_add` there instead. The window hands its copy
+to its daemon with the `agent.queueAdd` IPC method (`{agentId, commandId,
+payload}`), and the daemon handles it as above, acknowledging it under the
+window's agent id. A daemon with no platform configured refuses the hand-over,
+and the window leaves the command unacknowledged.
 
 The extension acknowledges every command it consumes exactly once (#2334): a
 trigger with the run it starts; a run verb (`cancel`, `pause`, `resume`) as
@@ -375,7 +433,8 @@ trigger with the run it starts; a run verb (`cancel`, `pause`, `resume`) as
 verb asks for (a pause of a paused run, a resume of a run that is not paused,
 #2341), or as `rejected` with the reason it could not act; an `approve` or
 `reject` as `rejected` with `no-approval-gate` (see below); a conversation turn
-type not at all, since the first acknowledgement decides a turn (#1569); any
+type not at all, since the first acknowledgement decides a turn (#1569); a
+`queue_add` not at all, since it hands it to its daemon (#2440); any
 other type as `rejected` with `unsupported-command`. The
 platform keeps the status a pause or resume set unless the ack is
 `rejected`, which makes it restore the run's earlier status. Delivery is

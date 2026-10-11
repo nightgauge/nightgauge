@@ -3,6 +3,7 @@ package platform
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,6 +25,12 @@ type PendingCommand struct {
 	// a command this daemon does not execute can be relayed whole (#2335).
 	Frame json.RawMessage `json:"-"`
 }
+
+// QueueAddCommandType carries an issue added to the queue in the cloud
+// (`POST /v1/queue/add`) to an agent covering its repository (#2440,
+// ADR-018). The daemon adds it to its local queue, then acknowledges it
+// `applied`, `already_resolved` or `rejected`; internal/cloudqueue handles it.
+const QueueAddCommandType = "queue_add"
 
 // CommandService acknowledges agent commands the hosted service delivers on
 // the SSE stream GET /v1/agents/{agentId}/commands.
@@ -98,6 +105,44 @@ func (s *CommandService) ackWithOutcome(ctx context.Context, agentId, commandId,
 	return err
 }
 
+// ErrAgentCommandAlreadyAcked is a 409 ALREADY_ACKED on the ack route: the
+// command was acknowledged already, by this connection or another one of the
+// same agent, or it was cancelled or expired before this ack. Nothing this
+// ack reported was recorded.
+var ErrAgentCommandAlreadyAcked = errors.New("the command was already acknowledged")
+
+// AgentCommandAckError is a non-200 answer on the ack route. It unwraps to
+// ErrAgentCommandAlreadyAcked for a 409 ALREADY_ACKED, and to nothing
+// otherwise.
+type AgentCommandAckError struct {
+	Status int
+	Code   string
+	body   string
+}
+
+func newAgentCommandAckError(status int, body []byte) *AgentCommandAckError {
+	e := &AgentCommandAckError{Status: status, body: string(body)}
+	var flat struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(body, &flat) == nil {
+		e.Code = flat.Code
+	}
+	return e
+}
+
+func (e *AgentCommandAckError) Error() string {
+	return fmt.Sprintf("acknowledge agent command: HTTP %d: %s", e.Status, e.body)
+}
+
+// Unwrap returns ErrAgentCommandAlreadyAcked for a 409 ALREADY_ACKED.
+func (e *AgentCommandAckError) Unwrap() error {
+	if e.Status == http.StatusConflict && e.Code == "ALREADY_ACKED" {
+		return ErrAgentCommandAlreadyAcked
+	}
+	return nil
+}
+
 func truncateAckDetail(detail string) string {
 	if len(detail) <= AgentCommandAckDetailMax {
 		return detail
@@ -150,7 +195,7 @@ func (s *CommandService) ackAgentCommand(ctx context.Context, agentId, commandId
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("acknowledge agent command: HTTP %d: %s", resp.StatusCode, string(respBody))
+		return "", newAgentCommandAckError(resp.StatusCode, respBody)
 	}
 	if !wantRunID {
 		return "", nil

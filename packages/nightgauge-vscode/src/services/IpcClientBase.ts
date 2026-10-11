@@ -967,6 +967,14 @@ export interface AgentAcknowledgeCommandResult {
 }
 
 /**
+ * Result from agent.queueAdd (#2440): the daemon took a `queue_add` command
+ * the extension received on its own agent's stream, and answers it itself.
+ */
+export interface AgentQueueAddResult {
+  accepted: boolean;
+}
+
+/**
  * Result from agent.executionProfile (#1567): the profile the agent
  * advertises, and whether its adapter can host a conversational turn (false
  * for every adapter until the daemon's turn runner, #1569, serves one that
