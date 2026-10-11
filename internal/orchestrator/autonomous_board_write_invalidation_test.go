@@ -52,9 +52,12 @@ func TestSchedulerStatusMovesInvalidateSharedBoardCache(t *testing.T) {
 	for name, move := range moves {
 		t.Run(name, func(t *testing.T) {
 			var requests atomic.Int32
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				requests.Add(1)
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
+				if answerNoOpenPRs(w, r) {
+					return
+				}
+				requests.Add(1)
 				_, _ = w.Write([]byte(`{"errors":[{"message":"forced failure"}]}`))
 			}))
 			defer srv.Close()
@@ -90,9 +93,12 @@ func TestSchedulerStatusMovesInvalidateSharedBoardCache(t *testing.T) {
 // cache set, and the board write still goes out, unwrapped.
 func TestSchedulerWithoutBoardCacheStillWrites(t *testing.T) {
 	var requests atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests.Add(1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if answerNoOpenPRs(w, r) {
+			return
+		}
+		requests.Add(1)
 		_, _ = w.Write([]byte(`{"errors":[{"message":"forced failure"}]}`))
 	}))
 	defer srv.Close()

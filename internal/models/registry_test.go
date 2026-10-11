@@ -251,6 +251,7 @@ type providerForCases struct {
 		ConfiguredModel string `json:"configured_model"`
 		Model           string `json:"model"`
 		Error           bool   `json:"error"`
+		ErrorMessage    string `json:"error_message"`
 	} `json:"dispatch_model_for"`
 	IsLocalProvider map[string]bool `json:"is_local_provider"`
 	IsLocalBaseURL  map[string]bool `json:"is_local_base_url"`
@@ -328,6 +329,10 @@ func TestDispatchModelForOpenCode(t *testing.T) {
 				if err == nil {
 					t.Fatalf("DispatchModelFor(%q, %q, %q) = %q, want an error",
 						tc.Adapter, tc.BandOrID, tc.ConfiguredModel, got)
+				}
+				if tc.ErrorMessage != "" && err.Error() != tc.ErrorMessage {
+					t.Errorf("DispatchModelFor(%q, %q, %q) error =\n  %s\nwant\n  %s",
+						tc.Adapter, tc.BandOrID, tc.ConfiguredModel, err, tc.ErrorMessage)
 				}
 				return
 			}

@@ -423,7 +423,8 @@ func blockedByOpen(refs []types.BlockingRef) bool {
 // completes relationships itself, so each is exercised: the scheduler picks
 // from ListItems("Ready"), autonomous mode, the dependency graph and the board
 // cache read ListOpenItems, `board list` reads ListItems(""), and RunQueue
-// and `project field-get` read GetItem.
+// reads GetItem. (`project field-get` reads GetItemWithoutRelations, which
+// completes nothing; relation_readers_test.go covers it.)
 type boardReader struct {
 	name string
 	read func(ctx context.Context, b *BoardService, number int) ([]types.BoardItem, error)

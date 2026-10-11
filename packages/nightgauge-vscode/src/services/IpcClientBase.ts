@@ -390,6 +390,15 @@ export interface IssueDetail {
   }>;
 }
 
+/**
+ * An issue without its relationship lists, as `issue.viewMany` returns it
+ * (#1707). The batch read selects no sub-issue, blocked-by or blocking list,
+ * so a long list on one issue can neither cost the request nor fail it, and
+ * `isEpic`, which only the sub-issue list could establish, is absent too.
+ * Read a single issue with `issueView` when its relationships are needed.
+ */
+export type IssueSummary = Omit<IssueDetail, "isEpic" | "subIssues" | "blockedBy" | "blocking">;
+
 export interface EpicProgress {
   number: number;
   title: string;

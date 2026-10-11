@@ -1986,7 +1986,12 @@ func (s *Server) registerMethods() {
 		return CancelActiveForNetworkOutageResult{CancelledIssues: cancelled}, nil
 	}
 
-	//ipc:method issueViewMany params:IssueViewManyParams result:IssueDetail[]
+	// The issues come back without their relationship lists (#1707): its one
+	// consumer, the epic dashboard's per-repository progress, reads number,
+	// title, labels and state, and a sub-issue or blocker list it would
+	// discard must not empty that repository's progress by failing a later
+	// page. The result type omits the lists so no caller can read them.
+	//ipc:method issueViewMany params:IssueViewManyParams result:IssueSummary[]
 	s.methods["issue.viewMany"] = func(ctx context.Context, params json.RawMessage) (interface{}, error) {
 		var p IssueViewManyParams
 		if err := json.Unmarshal(params, &p); err != nil {
@@ -1996,12 +2001,12 @@ func (s *Server) registerMethods() {
 		if err != nil {
 			return nil, err
 		}
-		issues, err := gh.NewIssueService(c).GetIssuesByNumbers(ctx, p.Owner, p.Repo, p.Numbers)
+		issues, err := gh.NewIssueService(c).GetIssuesByNumbersWithoutRelations(ctx, p.Owner, p.Repo, p.Numbers)
 		if err != nil {
 			return nil, err
 		}
 		// Return as a slice in input order; numbers absent from the response
-		// are skipped (deleted/inaccessible — same semantics as GetIssuesByNumbers).
+		// are skipped (deleted/inaccessible — same semantics as the batch read).
 		out := make([]*types.Issue, 0, len(p.Numbers))
 		for _, n := range p.Numbers {
 			if iss, ok := issues[n]; ok {

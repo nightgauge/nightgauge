@@ -428,12 +428,29 @@ func (b *BoardService) GetItemFields(ctx context.Context, itemID string) (*ItemF
 // the project item for this issue on that board.
 //
 // The item's sub-issue, blocked-by and blocking lists are read whole, as
-// ListItems reads them, so the read fails when one of them cannot be.
+// ListItems reads them, so the read fails when one of them cannot be. A caller
+// that uses only the item's own fields reads through GetItemWithoutRelations.
 //
 // GraphQL retained: this is the lookup in front of board writes (it yields the
 // project item id the field mutations take) and every write is GraphQL, so it
 // is not a polled read and gains nothing from a conditional request.
 func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNumber int) (*types.BoardItem, error) {
+	return b.getItem(ctx, owner, repo, issueNumber, AllRelations)
+}
+
+// GetItemWithoutRelations is GetItem for a caller that uses the item's own
+// fields (status, priority, size, pipeline stage, title, state) and none of
+// its relationship lists, such as `forge project field-get`. SubIssues,
+// BlockedBy and Blocking are empty, and none of their later pages is read, so
+// a list the caller would discard can neither cost it requests nor fail it.
+// IsEpic still reflects the first page of sub-issues and the type:epic label.
+func (b *BoardService) GetItemWithoutRelations(ctx context.Context, owner, repo string, issueNumber int) (*types.BoardItem, error) {
+	return b.getItem(ctx, owner, repo, issueNumber, NoRelations)
+}
+
+// getItem is the one-item read behind GetItem and GetItemWithoutRelations. It
+// reads the relationship lists rels names to their end, and returns only those.
+func (b *BoardService) getItem(ctx context.Context, owner, repo string, issueNumber int, rels IssueRelations) (*types.BoardItem, error) {
 	// Use a server-side query filter for the issue number, then walk the
 	// returned items looking for the matching repo + number. This keeps the
 	// implementation aligned with the existing list-items code path and
@@ -469,7 +486,7 @@ func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNum
 		}
 		if item.Number == issueNumber && item.Repo == wantRepo {
 			// Only the matched item pays for reading its relationships whole.
-			full, err := b.itemsFromNodes(ctx, nodes[i:i+1], AllRelations)
+			full, err := b.itemsFromNodes(ctx, nodes[i:i+1], rels)
 			if err != nil {
 				return nil, fmt.Errorf("get board item #%d: %w", issueNumber, err)
 			}

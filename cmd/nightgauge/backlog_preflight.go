@@ -87,7 +87,7 @@ Exit codes:
 			}
 
 			issueSvc := gh.NewIssueService(client)
-			v := backlogpreflight.New(boardSvc, issueSvc, ownerPart, repoPart)
+			v := backlogpreflight.New(issueSvc, ownerPart, repoPart)
 
 			var findings []backlogpreflight.BacklogFinding
 			normalizedFocus := strings.ToLower(focus)

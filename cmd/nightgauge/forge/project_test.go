@@ -9,6 +9,8 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/forge"
 	forgetypes "github.com/nightgauge/nightgauge/internal/forge/types"
+	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/github/githubtest"
 )
 
 func TestProjectFieldList_JSON(t *testing.T) {
@@ -141,5 +143,43 @@ func TestProjectFieldSet_RoutesByType(t *testing.T) {
 				t.Errorf("%s not called for type=%q: %v", tt.callName, tt.fieldType, project.calls)
 			}
 		})
+	}
+}
+
+// TestProjectFieldGet_ReadsNoRelationshipList runs `project field-get` through
+// the real GitHub adapter against a forge that fails every relationship page
+// after the first (#1707). #700 has more sub-issues, blockers and blocked
+// issues than any first page, so a read that completed those lists would fail
+// on a page the command never uses. The command reads only the item's own
+// fields, so it succeeds and asks for no later page.
+func TestProjectFieldGet_ReadsNoRelationshipList(t *testing.T) {
+	f := githubtest.New(t, map[int]githubtest.Issue{
+		700: {
+			Status:    "In review",
+			SubIssues: githubtest.Numbers(1001, 60),
+			BlockedBy: githubtest.Numbers(301, 11),
+			Blocking:  githubtest.Numbers(401, 7),
+		},
+	})
+	withFakeForge(t, gh.NewForgeAdapter(f.Client(), githubtest.Owner, 1, gh.OwnerTypeOrg))
+
+	root := Cmd()
+	stdout := &bytes.Buffer{}
+	root.SetOut(stdout)
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"project", "field-get", "--json",
+		"--repo", githubtest.Owner + "/" + githubtest.Repo, "--number", "700", "--field", "Status"})
+	if err := root.ExecuteContext(context.Background()); err != nil {
+		t.Fatalf("execute: %v (stdout %s)", err, stdout.String())
+	}
+	var got ProjectFieldValueJSON
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("decode %q: %v", stdout.String(), err)
+	}
+	if got.Name != "Status" || got.Value != "In review" {
+		t.Errorf("got %+v, want Status = In review", got)
+	}
+	if n := f.FollowUps(); n != 0 {
+		t.Errorf("relationship pages requested = %d, want 0", n)
 	}
 }

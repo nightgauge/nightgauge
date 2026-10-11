@@ -32,6 +32,9 @@ func (b staticBoard) ListOpenItems(context.Context) ([]types.BoardItem, int, err
 func (b staticBoard) GetItem(context.Context, string, string, int) (*types.BoardItem, error) {
 	return nil, forge.ErrNotFound
 }
+func (b staticBoard) GetItemWithoutRelations(context.Context, string, string, int) (*types.BoardItem, error) {
+	return nil, forge.ErrNotFound
+}
 
 // TestBuildGraphWithBoards_BodyFetchSkipsRelationships: the graph reads issue
 // bodies for prose dependencies, and its blockedBy edges come from the board.

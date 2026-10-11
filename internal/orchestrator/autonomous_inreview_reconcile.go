@@ -554,6 +554,29 @@ func (as *AutonomousScheduler) openPRMergeStateForIssue(ctx context.Context, rep
 	return pr.MergeState, found
 }
 
+// ownOpenPR reports the number of the OPEN PR whose head branch belongs to the
+// issue (the feat/<n>-… convention openPRMergeStatesForRepo keys on). Unlike
+// that sweep's `gh pr list`, capped at 100 PRs and run once per fresh graph
+// build, it is read per call through the scheduler's own forge client and
+// reads every page of the repository's open PRs (two scalars a PR), so "no
+// PR" is never read off part of the list. err is non-nil when the list could
+// not be read; a caller must not take that as "no PR".
+func (as *AutonomousScheduler) ownOpenPR(ctx context.Context, owner, repoName string, issue int) (pr int, found bool, err error) {
+	if as.ghClient == nil {
+		return 0, false, fmt.Errorf("no forge client")
+	}
+	heads, err := gh.NewPRService(as.ghClient).ListOpenPRHeads(ctx, owner, repoName)
+	if err != nil {
+		return 0, false, err
+	}
+	for _, h := range heads {
+		if n, ok := gitpkg.ParseIssueNumberFromBranch(h.HeadRefName); ok && n == issue {
+			return h.Number, true, nil
+		}
+	}
+	return 0, false, nil
+}
+
 // projectForRepo resolves the GitHub project number and owner type for a repo
 // from the scheduler's configured repos. Mirrors the lookup in
 // recoverOrphanedRunning. Returns (0, "") when the repo isn't configured.
