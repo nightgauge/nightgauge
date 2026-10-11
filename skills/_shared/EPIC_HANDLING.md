@@ -130,31 +130,23 @@ fi
    fi
    ```
 
-2. **Fetch sub-issues** using the GraphQL subIssues API (the `gh` CLI lacks
-   `--json subIssues`, so GraphQL is required):
+2. **Fetch sub-issues** with the binary, which reads the whole list, page by
+   page, or exits non-zero; it never returns part of it as the whole (#1701).
+   A fixed `subIssues(first: N)` read stops at its first page with no sign
+   that more exist.
 
    ```bash
-   # GraphQL query for sub-issue detection
-   # Exact template — do NOT modify field names or argument format
-   gh api graphql -f query='
-     query($owner: String!, $repo: String!, $number: Int!) {
-       repository(owner: $owner, name: $repo) {
-         issue(number: $number) {
-           subIssues(first: 50) {
-             nodes { number title state }
-           }
-         }
-       }
-     }
-   ' -f owner="OWNER" -f repo="REPO" -F number=ISSUE_NUMBER
-   ```
-
-   Replace `OWNER`, `REPO`, and `ISSUE_NUMBER` with actual values. Parse the
-   response with:
-
-   ```bash
-   printf '%s\n' "$RESULT" | jq -r '.data.repository.issue.subIssues.nodes[] |
-     "#\(.number) - \(.title) [\(.state)]"'
+   ISSUE_NUMBER="${NIGHTGAUGE_ISSUE_NUMBER:-$(git branch --show-current | sed -n 's#^[^/]*/\([0-9]*\)-.*#\1#p')}"
+   : "${ISSUE_NUMBER:?set NIGHTGAUGE_ISSUE_NUMBER or check out the issue branch}"
+   # stdout only: a warning on stderr must not land in the JSON.
+   if ! RESULT=$(nightgauge issue list --epic "$ISSUE_NUMBER" --json); then
+     echo "ERROR: could not read the sub-issues of epic #$ISSUE_NUMBER" >&2
+     exit 1
+   fi
+   # Each entry carries its own repo; the binary writes subIssues as null
+   # when there are none.
+   printf '%s\n' "$RESULT" | jq -r '.subIssues // [] | .[] |
+     "#\(.number) - \(.title) [\(.state)] (\(.repo))"'
    ```
 
 3. **Display Epic message**: Show that the issue is an Epic and list its

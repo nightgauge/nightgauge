@@ -9,7 +9,7 @@ description: Deterministic post-creation gate that verifies every issue created 
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.2.1"
+  version: "1.2.2"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
@@ -112,8 +112,11 @@ fi
 
 - **`--manifest`**: read JSON, parse via `jq`, fail-exit 2 on malformed JSON.
   Each entry's `repo` and `number` becomes a target.
-- **`--epic <N>`**: fetch the epic's `subIssues(first: 50)` via GraphQL; the
-  epic + every sub-issue are targets.
+- **`--epic <N>`**: read the epic's sub-issues with
+  `nightgauge issue list --epic <N> --repo <owner/repo> --json`; the epic +
+  every entry of `.subIssues` (each in its own `.repo`) are targets. The
+  binary reads the whole list or exits non-zero, which is a skill failure
+  (exit 2), never a shorter target list (#1701).
 - **`--issues N1,N2,N3`**: split on comma; each is a target in `--repo` (or
   current repo).
 - **`--all-recent <dur>`**: query
@@ -360,12 +363,12 @@ if printf '%s' "$BODY" | grep -qi "nightgauge:oversized-scope-accepted\|oversize
 fi
 
 # An epic with native sub-issues is the correct shape for large scope — exempt.
-# Labels come from ISSUE_JSON (Phase 2); sub-issue count via the same subIssues
-# query Phase 6 uses.
+# Labels come from ISSUE_JSON (Phase 2). totalCount counts the whole
+# subIssues connection, so no page of it needs reading.
 IS_DECOMPOSED_EPIC=false
 if printf '%s\n' "$ISSUE_JSON" | jq -e '.labels[]? | select(.name == "type:epic")' >/dev/null 2>&1; then
   SUB_ISSUE_COUNT=$(nightgauge forge graphql -f query='query($owner:String!,$name:String!,$num:Int!){
-    repository(owner:$owner,name:$name){issue(number:$num){subIssues(first:50){totalCount}}}
+    repository(owner:$owner,name:$name){issue(number:$num){subIssues{totalCount}}}
   }' -f owner="$OWNER" -f name="$NAME" -F num="$NUM" \
     -q '.data.repository.issue.subIssues.totalCount' 2>/dev/null || echo 0)
   if [ "${SUB_ISSUE_COUNT:-0}" -gt 0 ]; then
@@ -399,21 +402,24 @@ Finding:
 
 ### Phase 6: Sub-Issue & Parent Linking
 
-Use `nightgauge forge graphql` `subIssues(first: 50)`:
+Read every sub-issue through the binary, which pages the connection to its
+end or exits non-zero (#1701). A fixed first page reported each sub-issue
+past it as `MISSING_SUB_ISSUE_LINK`. Do not pipe the binary into `jq`: the
+pipe would take `jq`'s exit status and hide a failed read.
 
 ```bash
-SUB_ISSUES=$(nightgauge forge graphql -f query='query($owner:String!,$name:String!,$num:Int!){
-  repository(owner:$owner,name:$name){issue(number:$num){
-    subIssues(first:50){nodes{number repository{nameWithOwner}}}
-  }}
-}' -f owner="$OWNER" -f name="$NAME" -F num="$NUM" \
-  -q '.data.repository.issue.subIssues.nodes')
+SUB_ISSUES_JSON=$(nightgauge issue list --epic "$NUM" --repo "$OWNER/$NAME" --json) || {
+  echo "ERROR: could not read every sub-issue of $OWNER/$NAME#$NUM" >&2
+  exit 2
+}
+# [{number, repo}, ...]; the binary writes subIssues as null when there are none.
+SUB_ISSUES=$(printf '%s\n' "$SUB_ISSUES_JSON" | jq -c '.subIssues // [] | map({number, repo})')
 ```
 
 Findings:
 
 - `MISSING_SUB_ISSUE_LINK` (CRITICAL): manifest declares sub-issue #M but no
-  matching node in `subIssues`
+  entry in `SUB_ISSUES` matches its number and repo
 - `MISSING_PART_OF_ANNOTATION` (CRITICAL): cross-repo sub-issue body lacks
   `Part of <owner>/<repo>#<epic>`
 - `ORPHAN_SUB_ISSUE` (WARNING): body has `Part of #X` but parent `X` has no
@@ -644,6 +650,8 @@ itself cannot run:
 - Go binary not in `$PATH` and not at `bin/nightgauge`
 - `nightgauge forge` not authenticated
 - `--manifest <path>` does not exist or fails JSON parse
+- an epic's sub-issue list cannot be read whole (`nightgauge issue list --epic`
+  exits non-zero)
 - `.nightgauge/config.yaml` unreadable when project number must be
   derived
 

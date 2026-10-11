@@ -1321,6 +1321,11 @@ nightgauge issue view <number> [--owner ORG] [--repo REPO] [--json]
 # List issues, optionally filtered by epic or search query
 nightgauge issue list [--epic <number>] [--search "<keywords>"] [--limit N] \
   [--owner ORG] [--repo REPO] [--json]
+# --epic reads every sub-issue, the subIssues connection to its last page, or
+# exits non-zero; it never prints part of the list as the whole. Skills and
+# the extension read sub-issue lists through it (#1701). JSON: {epicNodeId,
+# number, title, repo, subIssues: [{nodeId, number, title, state, repo,
+# labels}] (null when there are none), total, closed, open, percentComplete}
 
 # Create issue.
 # --labels takes label NAMES, comma-separated. The command resolves them to

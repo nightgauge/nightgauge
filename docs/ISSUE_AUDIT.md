@@ -198,8 +198,9 @@ human/planning decision; `--fix` never auto-applies it. Even under `--fix`,
 
 ### Phase 6 — Sub-issue & parent linking
 
-Use `gh api graphql` `subIssues(first: 50)` and the body's `Part of #X` /
-`Part of <owner>/<repo>#X` annotations.
+Use `nightgauge issue list --epic <N> --json`, which reads every sub-issue or
+fails the audit (exit 2) rather than return part of the list (#1701), and the
+body's `Part of #X` / `Part of <owner>/<repo>#X` annotations.
 
 | Finding type                 | Severity | Trigger                                                                          |
 | ---------------------------- | -------- | -------------------------------------------------------------------------------- |

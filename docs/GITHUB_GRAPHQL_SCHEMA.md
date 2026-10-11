@@ -606,6 +606,14 @@ ISSUE | PULL_REQUEST | DRAFT_ISSUE | REDACTED
 
 ## Query Patterns
 
+A relationship connection (`subIssues`, `blockedBy`, `blocking`) is read a
+page at a time. Select `pageInfo { hasNextPage endCursor }` on it and, while
+`hasNextPage` is true, read the next page (`after: endCursor`) or fail: a
+first page alone is not the list, and nothing else in the response says more
+exist. The Go readers do this in `internal/github/connection_paging.go`
+(#1682); other code reads relationships through the `nightgauge` binary or
+pages the same way (#1701).
+
 ### Get issue with all relationships
 
 ```graphql
@@ -629,6 +637,10 @@ query ($owner: String!, $repo: String!, $number: Int!) {
         }
       }
       subIssues(first: 50) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         nodes {
           id
           number
@@ -638,6 +650,10 @@ query ($owner: String!, $repo: String!, $number: Int!) {
         }
       }
       blockedBy(first: 10) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         nodes {
           number
           title
@@ -645,6 +661,10 @@ query ($owner: String!, $repo: String!, $number: Int!) {
         }
       }
       blocking(first: 10) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         nodes {
           number
           title
@@ -685,6 +705,10 @@ query ($owner: String!, $projectNumber: Int!, $cursor: String) {
                 }
               }
               subIssues(first: 50) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
                 nodes {
                   number
                   title
@@ -692,6 +716,10 @@ query ($owner: String!, $projectNumber: Int!, $cursor: String) {
                 }
               }
               blockedBy(first: 10) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
                 nodes {
                   number
                   title
@@ -699,6 +727,10 @@ query ($owner: String!, $projectNumber: Int!, $cursor: String) {
                 }
               }
               blocking(first: 10) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
                 nodes {
                   number
                   title
@@ -860,6 +892,10 @@ query ($id: ID!) {
         nameWithOwner
       }
       subIssues(first: 50) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
         nodes {
           number
           title

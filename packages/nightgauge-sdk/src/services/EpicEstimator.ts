@@ -74,6 +74,54 @@ const DEFAULT_ESTIMATES: Record<NonNullable<SizeLabel>, number> = {
 };
 
 /**
+ * Sub-issues read per request: GitHub's maximum page size.
+ */
+const SUB_ISSUE_PAGE_SIZE = 100;
+
+/**
+ * Pages of an epic's subIssues connection read before the read fails, the
+ * first included. Room for 2,000 sub-issues, while bounding the requests one
+ * runaway connection can spend. The same cap the nightgauge binary puts on
+ * every relationship connection it reads.
+ */
+const MAX_SUB_ISSUE_PAGES = 20;
+
+/**
+ * One page of an epic's sub-issues. `$after` is absent on the first page.
+ */
+const EPIC_SUB_ISSUES_QUERY = `
+  query($owner: String!, $repo: String!, $epicNumber: Int!, $after: String) {
+    repository(owner: $owner, name: $repo) {
+      issue(number: $epicNumber) {
+        title
+        subIssues(first: ${SUB_ISSUE_PAGE_SIZE}, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          nodes {
+            number
+            title
+            state
+            labels(first: 10) { nodes { name } }
+          }
+        }
+      }
+    }
+  }
+`;
+
+/**
+ * One page of the subIssues connection, as EPIC_SUB_ISSUES_QUERY selects it.
+ */
+interface SubIssueConnectionPage {
+  pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+  nodes?: Array<{
+    number: number;
+    title: string;
+    state: string;
+    labels?: { nodes?: Array<{ name: string }> };
+  }>;
+}
+
+/**
  * EpicEstimator service
  */
 export class EpicEstimator {
@@ -150,11 +198,17 @@ export class EpicEstimator {
   }
 
   /**
-   * Fetch epic with native sub-issues in a single GraphQL call.
+   * Fetch an epic and every one of its native sub-issues.
    *
    * Uses the GitHub sub-issues API (parent/child links) instead of parsing
    * body text for "#123" references. Returns the epic title and all sub-issue
-   * data (number, title, state, labels) in one round-trip.
+   * data (number, title, state, labels).
+   *
+   * The subIssues connection is read page by page until GitHub reports no
+   * next page (#1701). A connection that still has more after
+   * MAX_SUB_ISSUE_PAGES pages, or that reports a next page with no cursor to
+   * continue from, is an error: an estimate from part of an epic would look
+   * like an estimate of the whole of it.
    */
   private async fetchEpicWithSubIssues(epicNumber: number): Promise<{
     title: string;
@@ -165,24 +219,6 @@ export class EpicEstimator {
       labels: string[];
     }>;
   }> {
-    const query = `
-      query($epicNumber: Int!) {
-        repository(owner: "{owner}", name: "{repo}") {
-          issue(number: $epicNumber) {
-            title
-            subIssues(first: 50) {
-              nodes {
-                number
-                title
-                state
-                labels(first: 10) { nodes { name } }
-              }
-            }
-          }
-        }
-      }
-    `;
-
     try {
       // Get owner/repo from current git context
       const { stdout: nwo } = await execAsync(
@@ -191,37 +227,67 @@ export class EpicEstimator {
       );
       const [owner, repo] = nwo.trim().split("/");
 
-      const filledQuery = query.replace("{owner}", owner).replace("{repo}", repo);
+      let title = "";
+      const subIssues: Array<{ number: number; title: string; state: string; labels: string[] }> =
+        [];
+      let after: string | undefined;
+      for (let page = 1; ; page++) {
+        const args = [
+          "api",
+          "graphql",
+          "-F",
+          `epicNumber=${epicNumber}`,
+          "-f",
+          `owner=${owner}`,
+          "-f",
+          `repo=${repo}`,
+          "-f",
+          `query=${EPIC_SUB_ISSUES_QUERY}`,
+        ];
+        if (after !== undefined) {
+          args.push("-f", `after=${after}`);
+        }
+        const { stdout: result } = await execFileAsync("gh", args, { cwd: this.workspaceRoot });
 
-      const { stdout: result } = await execFileAsync(
-        "gh",
-        ["api", "graphql", "-F", `epicNumber=${epicNumber}`, "-f", `query=${filledQuery}`],
-        { cwd: this.workspaceRoot }
-      );
+        const response = JSON.parse(result);
+        const issue = response.data?.repository?.issue;
 
-      const response = JSON.parse(result);
-      const issue = response.data?.repository?.issue;
+        if (!issue) {
+          throw new Error(`Epic #${epicNumber} not found`);
+        }
+        if (page === 1) {
+          title = issue.title;
+        }
 
-      if (!issue) {
-        throw new Error(`Epic #${epicNumber} not found`);
-      }
-
-      return {
-        title: issue.title,
-        subIssues: (issue.subIssues?.nodes || []).map(
-          (n: {
-            number: number;
-            title: string;
-            state: string;
-            labels?: { nodes?: Array<{ name: string }> };
-          }) => ({
+        const connection: SubIssueConnectionPage | undefined = issue.subIssues;
+        for (const n of connection?.nodes || []) {
+          subIssues.push({
             number: n.number,
             title: n.title,
             state: n.state,
             labels: (n.labels?.nodes || []).map((l) => l.name),
-          })
-        ),
-      };
+          });
+        }
+
+        const pageInfo = connection?.pageInfo;
+        if (!pageInfo?.hasNextPage) {
+          break;
+        }
+        if (page >= MAX_SUB_ISSUE_PAGES) {
+          throw new Error(
+            `sub-issue list truncated: ${subIssues.length} read and more remain ` +
+              `after the ${MAX_SUB_ISSUE_PAGES}-page cap`
+          );
+        }
+        if (!pageInfo.endCursor) {
+          throw new Error(
+            `sub-issue list truncated: page ${page} reports a next page but no cursor`
+          );
+        }
+        after = pageInfo.endCursor;
+      }
+
+      return { title, subIssues };
     } catch (error) {
       throw new Error(
         `Failed to fetch epic #${epicNumber}: ${error instanceof Error ? error.message : "Unknown error"}`,

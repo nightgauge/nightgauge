@@ -6,7 +6,7 @@ description: Analyze an epic's sub-issues and recommend batch vs sequential pipe
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.0.0"
+  version: "1.0.1"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Bash Glob Grep
@@ -120,13 +120,16 @@ EPIC_TITLE=$(printf '%s\n' "$EPIC_JSON" | jq -r '.title')
 echo "Epic #$EPIC_NUMBER: $EPIC_TITLE"
 ```
 
-#### Step 1.3: Fetch Sub-Issues via GraphQL
+#### Step 1.3: Fetch Sub-Issues
 
-Use the sub-issue fetch section of the shared epic-handling reference,
-`skills/_shared/EPIC_HANDLING.md` (read it directly — `assess-epic` is not a
-pipeline stage, so the composer does not expand the directive below).
+The shared epic-handling reference, `skills/_shared/EPIC_HANDLING.md`, covers
+sub-issue detection (read it directly — `assess-epic` is not a pipeline stage,
+so the composer does not expand the directive below).
 
 <!-- include: ../_shared/EPIC_HANDLING.md -->
+
+The binary reads every sub-issue, page by page, or exits non-zero; it never
+returns part of the list as the whole of it (#1701).
 
 ```bash
 # Detect owner/repo from git remote
@@ -134,42 +137,6 @@ REMOTE_URL=$(git remote get-url origin 2>/dev/null)
 OWNER=$(echo "$REMOTE_URL" | sed -E 's|.*[:/]([^/]+)/([^/.]+)(\.git)?$|\1|')
 REPO=$(echo "$REMOTE_URL" | sed -E 's|.*[:/]([^/]+)/([^/.]+)(\.git)?$|\2|')
 
-SUB_ISSUES_JSON=$(gh api graphql -f query='
-  query($owner: String!, $repo: String!, $number: Int!) {
-    repository(owner: $owner, name: $repo) {
-      issue(number: $number) {
-        subIssues(first: 50) {
-          nodes { number title state labels(first: 10) { nodes { name } } }
-        }
-      }
-    }
-  }
-' -f owner="$OWNER" -f repo="$REPO" -F number="$EPIC_NUMBER" 2>&1)
-
-if [ $? -ne 0 ]; then
-  echo "ERROR: Failed to fetch sub-issues for epic #$EPIC_NUMBER"
-  echo "$SUB_ISSUES_JSON"
-  exit 1
-fi
-
-SUB_COUNT=$(printf '%s\n' "$SUB_ISSUES_JSON" | jq '.data.repository.issue.subIssues.nodes | length')
-if [ "$SUB_COUNT" -eq 0 ]; then
-  echo "ERROR: Epic #$EPIC_NUMBER has no sub-issues linked via GitHub's sub-issue feature."
-  echo "  Sub-issues must be linked using the addSubIssue GraphQL mutation."
-  echo "  Body text references (e.g., '- [ ] #123') do NOT count."
-  exit 1
-fi
-
-echo "Found $SUB_COUNT sub-issues"
-printf '%s\n' "$SUB_ISSUES_JSON" | jq -r '.data.repository.issue.subIssues.nodes[] |
-  "  #\(.number) - \(.title) [\(.state)]"'
-```
-
----
-
-### Phase 2: Assess with Go Binary (Deterministic)
-
-```bash
 BINARY="${NIGHTGAUGE_BIN:-}"
 [ -n "$BINARY" ] && [ ! -x "$BINARY" ] && BINARY=""
 [ -z "$BINARY" ] && BINARY=$(command -v nightgauge 2>/dev/null || echo "")
@@ -192,6 +159,34 @@ if [ -z "$BINARY" ]; then
   exit 1
 fi
 
+# stdout only: a warning on stderr must not land in the JSON.
+if ! SUB_ISSUES_JSON=$("$BINARY" issue list --epic "$EPIC_NUMBER" \
+    --owner "$OWNER" --repo "$REPO" --json); then
+  echo "ERROR: Failed to fetch sub-issues for epic #$EPIC_NUMBER (the error is above)"
+  exit 1
+fi
+
+# The binary writes subIssues as null when there are none.
+SUB_COUNT=$(printf '%s\n' "$SUB_ISSUES_JSON" | jq '.subIssues // [] | length')
+if [ "$SUB_COUNT" -eq 0 ]; then
+  echo "ERROR: Epic #$EPIC_NUMBER has no sub-issues linked via GitHub's sub-issue feature."
+  echo "  Sub-issues must be linked using the addSubIssue GraphQL mutation."
+  echo "  Body text references (e.g., '- [ ] #123') do NOT count."
+  exit 1
+fi
+
+echo "Found $SUB_COUNT sub-issues"
+printf '%s\n' "$SUB_ISSUES_JSON" | jq -r '.subIssues[] |
+  "  #\(.number) - \(.title) [\(.state)]"'
+```
+
+---
+
+### Phase 2: Assess with Go Binary (Deterministic)
+
+`$BINARY` is the binary Step 1.3 resolved.
+
+```bash
 ASSESS_JSON=$("$BINARY" epic assess "$EPIC_NUMBER" \
   --owner "$OWNER" --repo "$REPO" --json 2>/dev/null)
 
