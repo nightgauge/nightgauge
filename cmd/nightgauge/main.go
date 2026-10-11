@@ -32,6 +32,7 @@ import (
 	healthpkg "github.com/nightgauge/nightgauge/internal/cmd/health"
 	runstatecmd "github.com/nightgauge/nightgauge/internal/cmd/runstate"
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/conversation"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	docspkg "github.com/nightgauge/nightgauge/internal/docs"
 	"github.com/nightgauge/nightgauge/internal/doctor"
@@ -151,7 +152,8 @@ const (
 // funnel into a single re-register path that swaps the id and restarts the
 // stream against the new id. onRegistered sees every successful registration's
 // reply, the first and each re-registration; onHeartbeat, when set, runs on
-// each heartbeat tick. Returns when ctx is cancelled.
+// each heartbeat tick. turns, when set, takes the conversation turn commands
+// (#1569). Returns when ctx is cancelled.
 func runAttentionAgentRegistration(
 	ctx context.Context,
 	reg *platform.AgentRegistrationService,
@@ -159,6 +161,7 @@ func runAttentionAgentRegistration(
 	platformClient *platform.Client,
 	resolver platform.AttentionResolver,
 	relay platform.AgentCommandRelay,
+	turns platform.AgentCommandHandler,
 	onRegistered func(platform.AgentRegistration),
 	onConnected func(),
 	onHeartbeat func(),
@@ -183,7 +186,7 @@ func runAttentionAgentRegistration(
 	startStream := func(id string) {
 		var streamCtx context.Context
 		streamCtx, pollCancel = context.WithCancel(ctx)
-		startAttentionCommandStream(streamCtx, platformClient, resolver, relay, id, signalGone, onConnected)
+		startAttentionCommandStream(streamCtx, platformClient, resolver, relay, turns, id, signalGone, onConnected)
 	}
 
 	// Late-bind the real agent id: subsequent sync pushes carry it, and the
@@ -273,14 +276,15 @@ func registerAttentionAgentWithRetry(ctx context.Context, reg *platform.AgentReg
 // (used for the ack path) and opens the agent-command SSE stream against it. A
 // new consumer is built on every (re-)registration so the ack carries the
 // current id. onAgentGone is invoked if the stream sees a 404 (agent evicted).
-// Every command type but attention_resolve goes to relay (#2335). onConnected,
-// when set, runs each time the stream opens (#2352).
-func startAttentionCommandStream(ctx context.Context, platformClient *platform.Client, resolver platform.AttentionResolver, relay platform.AgentCommandRelay, agentID string, onAgentGone func(), onConnected func()) {
+// The two conversation turn types go to turns and are never relayed (#1569);
+// every other command type but attention_resolve goes to relay (#2335).
+// onConnected, when set, runs each time the stream opens (#2352).
+func startAttentionCommandStream(ctx context.Context, platformClient *platform.Client, resolver platform.AttentionResolver, relay platform.AgentCommandRelay, turns platform.AgentCommandHandler, agentID string, onAgentGone func(), onConnected func()) {
 	consumer := platform.NewAttentionCommandConsumer(
 		resolver, // *ipc.Server implements platform.AttentionResolver
 		platform.NewCommandService(platformClient).AcknowledgeAgentCommand,
 		agentID,
-	).WithRelay(relay).WithOnConnected(onConnected)
+	).WithRelay(relay).WithTurnHandler(turns).WithOnConnected(onConnected)
 	platform.StartAttentionCommandStream(ctx, platformClient, consumer, agentID, onAgentGone)
 }
 
@@ -345,8 +349,9 @@ func reportRefusedWorkspaceWrites(status daemonAgentIPC, info platform.AgentRegi
 // (runAttentionAgentRegistration). window is the folders of the VS Code
 // window that started the daemon, from agentworkspace.WindowFoldersEnv, or
 // nil; the declaration is the extension's for that window when it is set,
-// and the one for workspaceRoot otherwise. Every command the daemon does not
-// execute is relayed to the extension over ext.
+// and the one for workspaceRoot otherwise. The daemon answers the
+// conversation turns addressed to its workspace itself (#1569), and every
+// other command it does not execute is relayed to the extension over ext.
 //
 // throttle, when set, follows the platform throttle of the workspace the
 // daemon serves (#2352), read from the platform's agent throttle endpoint
@@ -367,15 +372,23 @@ func runDaemonPlatformAgent(
 		return agentworkspace.ResolveServed(window, workspaceRoot)
 	}
 	reg := platform.NewAgentRegistrationService(platformClient, version).
-		WithExecutionProfile(func() (platform.ExecutionProfile, bool, error) {
-			p, err := executionprofile.Resolve(workspaceRoot)
-			return p, err == nil && executionprofile.ConversationViable(p.Adapter), err
-		}).
+		WithExecutionProfile(executionprofile.Advertised(workspaceRoot)).
 		// Declare the workspace this daemon serves, the same repos and
 		// workspace block the extension declares for it, so workspace
 		// presence counts the daemon (#2335).
 		WithWorkspace(served)
 	relay := relayAgentCommandToExtension(ext)
+	turns := conversation.NewHost(ctx, conversation.Config{
+		WorkspaceRoot: workspaceRoot,
+		Platform:      conversation.NewPlatform(platformClient),
+		Owner: conversation.ServedWorkspaceOwner(platformClient.ReadAgentWorkspaceThrottles, func() (string, error) {
+			decl, err := served()
+			if err != nil || decl.Workspace == nil {
+				return "", err
+			}
+			return decl.Workspace.Slug, nil
+		}),
+	})
 	refreshThrottle := func() {}
 	retryThrottle := func() {}
 	var agentID atomic.Value // string: the agent the latest registration returned
@@ -412,7 +425,7 @@ func runDaemonPlatformAgent(
 		})
 		relay = refreshThrottleOnCommand(relay, refreshThrottle)
 	}
-	runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, ext, relay,
+	runAttentionAgentRegistration(ctx, reg, attnSync, platformClient, ext, relay, turns.HandleCommand,
 		func(info platform.AgentRegistration) {
 			reportRefusedWorkspaceWrites(ext, info)
 			agentID.Store(info.AgentID)

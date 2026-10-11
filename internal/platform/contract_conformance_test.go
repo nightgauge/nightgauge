@@ -105,6 +105,15 @@ var contractCallSites = []callSite{
 	{api.OpAgentsHeartbeat, func(ctx context.Context, c *Client) error {
 		return NewAgentRegistrationService(c, "test").Heartbeat(ctx, "agent-1")
 	}},
+	{api.OpAgentsIngestTurnFrames, func(ctx context.Context, c *Client) error {
+		_, err := c.PostTurnFrames(ctx, TurnLease{agentID: "agent-1", turnID: "turn-1", secret: "lease-1"},
+			[]TurnFrame{TurnDelta{Seq: 1, Text: "hello"}})
+		return err
+	}},
+	{api.OpAgentsReadTurnContext, func(ctx context.Context, c *Client) error {
+		_, err := c.ReadTurnContext(ctx, TurnLease{agentID: "agent-1", turnID: "turn-1", secret: "lease-1"})
+		return err
+	}},
 	{api.OpAgentsListWorkspaceThrottles, func(ctx context.Context, c *Client) error {
 		_, err := c.ReadAgentWorkspaceThrottles(ctx, "agent-1")
 		return err

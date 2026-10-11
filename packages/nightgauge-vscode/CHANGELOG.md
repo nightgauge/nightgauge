@@ -19,6 +19,13 @@ and this project adheres to
   _Private_ badge once the service confirms it; when it does not, the
   extension says so and shows no badge.
 
+### Changed
+
+- **The window no longer advertises the `conversation` capability** (#1569).
+  The Nightgauge daemon hosts conversation turns and advertises the
+  capability on its own agent; the window's agent never claims or refuses a
+  turn.
+
 ## [0.6.0] - 2026-10-04
 
 ### Added

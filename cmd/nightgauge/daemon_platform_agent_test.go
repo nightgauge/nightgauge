@@ -778,3 +778,96 @@ func TestDaemonThrottleFollower_SaysTheLastThrottleIsKept(t *testing.T) {
 		t.Fatalf("the kept throttle with its resumeAt was logged %d times, want once: %q", n, logs.String())
 	}
 }
+
+// serve hands the conversation turn types to the daemon's own turn host
+// (#1569), never to the extension: a turn for the workspace this daemon
+// serves, whose adapter hosts no conversation, is refused by the daemon
+// itself, and only the other command is relayed.
+func TestRunDaemonPlatformAgent_HandlesConversationTurnsItself(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_AGENT_ID", "test-machine-uuid")
+	t.Setenv(agentworkspace.WindowFoldersEnv, "")
+	t.Setenv("NIGHTGAUGE_ADAPTER", "")
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".nightgauge", "config.yaml"),
+		"owner: acme\nrepo: api\nui:\n  core:\n    adapter: codex\n")
+
+	turn := `{"commandId":"cmd-turn-1","type":"conversation_turn","commandType":"conversation_turn","payload":{"conversation_id":"conv-1","turn_id":"turn-1","target_workspace_id":"ws-1","token_ceiling":200000},"owner":"","repo":"","issueNumber":0,"createdAt":"2026-10-11T00:00:00.000Z","expiresAt":"2026-10-11T00:00:30.000Z"}`
+	pause := `{"commandId":"cmd-pause-1","type":"pause","commandType":"pause","payload":{"runId":"run-9"},"owner":"acme","repo":"api","createdAt":"2026-10-11T00:00:00.000Z","expiresAt":"2026-10-11T00:05:00.000Z"}`
+	var mu sync.Mutex
+	slug := "default"
+	var acks []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/register":
+			var body struct {
+				Workspace *struct {
+					Slug string `json:"slug"`
+				} `json:"workspace"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			if body.Workspace != nil {
+				slug = body.Workspace.Slug
+			}
+			mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"agentId":"agent-daemon","ttl_seconds":90}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/agents/agent-daemon/throttles":
+			mu.Lock()
+			s := slug
+			mu.Unlock()
+			_, _ = fmt.Fprintf(w, `{"workspaces":[{"workspace_id":"ws-1","team_id":"team-1","slug":%q,"throttle":null}]}`, s)
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/agent-daemon/commands/cmd-turn-1/ack":
+			raw, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			acks = append(acks, string(raw))
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"runId":"turn-1","turn_id":"turn-1","state":"failed"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/agents/agent-daemon/commands":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "event: command\ndata: %s\n\nevent: command\ndata: %s\n\n", turn, pause)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client, err := platform.NewClient(platform.Config{BaseURL: srv.URL, APIKey: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ext := &extensionSide{}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test", root, nil, nil)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitUntil(t, "the daemon's refusal of the turn", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(acks) == 1
+	})
+	mu.Lock()
+	ack := acks[0]
+	mu.Unlock()
+	if !strings.Contains(ack, `"outcome":"rejected"`) || !strings.Contains(ack, "adapter-not-conversational") {
+		t.Errorf("turn ack = %s, want rejected adapter-not-conversational", ack)
+	}
+	waitUntil(t, "the relayed pause", func() bool { return len(ext.relayed()) >= 1 })
+	for _, e := range ext.relayed() {
+		if ev, ok := e.Data.(ipc.AgentCommandEvent); ok && strings.Contains(string(ev.Frame), "conversation_turn") {
+			t.Errorf("a turn command was relayed to the extension: %s", ev.Frame)
+		}
+	}
+}

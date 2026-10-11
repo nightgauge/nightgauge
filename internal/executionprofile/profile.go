@@ -72,21 +72,27 @@ func Resolve(workspaceRoot string) (platform.ExecutionProfile, error) {
 	return p, nil
 }
 
-// conversationViableAdapters is the set of adapters a workspace may host a
-// conversational turn on, and so advertise the `conversation` capability for.
-// Spike #1568 set the viability bar and adopted claude-headless
-// (docs/spikes/1568-conversational-agent-sessions-across-adapters.md,
-// § 13). The set is still EMPTY on purpose: no code path serves a turn until
-// the daemon's turn runner (#1569) lands, and an adapter enters the set
-// together with its conversational turn builder, so the advertised set and
-// the servable set are one set by construction. A workspace must never claim
-// a capability no code path serves.
-var conversationViableAdapters = map[string]bool{}
-
 // ConversationViable reports whether a workspace on this adapter can host a
 // conversational turn, and so may advertise the `conversation` capability.
+// It is true exactly when the adapter has a conversational turn builder
+// registered (adapters.Registry.ConversationBuilder), the one the daemon's
+// turn host dispatches through (#1569), so the advertised set and the set a
+// turn can run on are one set by construction. Spike #1568 § 13 is the bar an
+// adapter clears to be registered; it adopted claude-headless.
 func ConversationViable(adapter string) bool {
-	return conversationViableAdapters[adapter]
+	_, ok := adapters.NewRegistry().ConversationBuilder(adapter)
+	return ok
+}
+
+// Advertised is the profile source a daemon registers and heartbeats with
+// for workspaceRoot: the resolved profile, and whether its adapter can host a
+// conversation turn. It is read on every heartbeat, so a switch to an adapter
+// that cannot host one drops `conversation` within one beat (#1569).
+func Advertised(workspaceRoot string) platform.ProfileFunc {
+	return func() (platform.ExecutionProfile, bool, error) {
+		p, err := Resolve(workspaceRoot)
+		return p, err == nil && ConversationViable(p.Adapter), err
+	}
 }
 
 // Capabilities appends the conversation capability to base when the

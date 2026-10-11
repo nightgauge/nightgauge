@@ -58,6 +58,17 @@ export function subscribeToDaemonRelay(
   return ipcClient.on(AGENT_COMMAND_RELAY_EVENT, (event) => dispatcher.handleRelayed(event));
 }
 
+/**
+ * The conversation turn command types (#1569). The Go daemon handles both on
+ * its own agent command stream and never relays them; this dispatcher leaves
+ * one that reaches it unacknowledged, because whichever acknowledgement
+ * arrives first decides a turn.
+ */
+export const CONVERSATION_TURN_COMMAND_TYPES: readonly string[] = [
+  "conversation_turn",
+  "conversation_turn_cancel",
+];
+
 type AgentScopedHandler = Pick<CommandHandler, "handle"> & { setAgentId(agentId: string): void };
 
 export class AgentCommandDispatcher implements CommandHandler {
@@ -95,6 +106,15 @@ export class AgentCommandDispatcher implements CommandHandler {
     }
     if (cmd.type === THROTTLE_COMMAND_TYPE) {
       this.throttle.handle(cmd);
+      return;
+    }
+    if (CONVERSATION_TURN_COMMAND_TYPES.includes(cmd.type)) {
+      // Never acknowledged here, not even to refuse it (#1569): the first
+      // acknowledgement decides a turn, and the Go daemon hosts turns.
+      this.logger.warn("AgentCommandDispatcher: conversation turn command left to the daemon", {
+        type: cmd.type,
+        commandId: cmd.id,
+      });
       return;
     }
     void this.refuseUnsupported(cmd);

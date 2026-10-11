@@ -16,6 +16,22 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The daemon answers conversation turns** (#1569). `nightgauge serve` takes
+  a turn the hosted service addresses to its agent, on its own command
+  stream, and answers it on the workspace's own adapter, performance mode and
+  effort; a turn names none of them. It claims the turn before anything runs,
+  reads the conversation so far on the turn's lease, runs the adapter in a
+  new process group with session persistence off and no tools, and streams
+  the reply back as it is written, with every credential-shaped string,
+  private-key blocks included, replaced by `[REDACTED]` first. The turn is
+  bounded by its timeout and token ceiling, and a cancel kills its whole
+  process group and is reported only once the group is verified dead. The
+  last report states the adapter, mode, effort and tokens the turn used.
+  `claude-headless` is the one adapter that hosts turns, as spike #1568
+  found; on any other a turn is refused. The `conversation` capability is
+  advertised on every heartbeat, so it follows an adapter switch within
+  30 seconds. See `docs/CONVERSATION_TURNS.md`.
+
 - **A run can be started private** (#2400). Signed in, every extension
   command that starts a run asks _Team_ (selected) or _Private_, and
   `nightgauge run <issue> --private` does the same from the CLI. A private run

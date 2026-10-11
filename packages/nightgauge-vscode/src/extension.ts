@@ -732,7 +732,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const executionProfile = await resolveExecutionProfile(IpcClient.getInstance());
         const agentId = await services!.agentRegistrationService!.register({
           agent_version: agentVersion,
-          capabilities: agentCapabilities(executionProfile),
+          capabilities: agentCapabilities(),
           repos,
           machine_id: machineId,
           vscode_version: vsCodeVersion,
@@ -887,7 +887,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             const executionProfile = await resolveExecutionProfile(IpcClient.getInstance());
             const agentId = await services!.agentRegistrationService!.register({
               agent_version: agentVersion,
-              capabilities: agentCapabilities(executionProfile),
+              capabilities: agentCapabilities(),
               repos: workspaceRepos,
               machine_id: services!.machineFingerprint?.getMachineId() ?? "",
               vscode_version: vscode.version,
