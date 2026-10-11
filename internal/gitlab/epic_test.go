@@ -3,10 +3,13 @@ package gitlab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/nightgauge/nightgauge/internal/forge"
 )
 
 // epicStubServer wires a programmable GET /issues/:iid handler that
@@ -124,5 +127,38 @@ func TestEpicService_PlanWaves_IsolatedIssuesCollapseToSingleWave(t *testing.T) 
 	}
 	if len(res.Waves[0].Issues) != 3 {
 		t.Errorf("wave 0 size = %d, want 3", len(res.Waves[0].Issues))
+	}
+}
+
+// TestEpicService_PlanWaves_UnreadableIssueFailsThePlan: #2 blocks #3, and
+// #2 cannot be read, either the issue itself or its link list. PlanWaves
+// skipped it with a warning and planned #3 into the first wave, beside the
+// issue that blocks it. Any read failure now fails the plan.
+func TestEpicService_PlanWaves_UnreadableIssueFailsThePlan(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		truncated  bool
+	}{
+		{"issue", "/api/v4/projects/o%2Fr/issues/2", false},
+		{"link list", "/api/v4/projects/o%2Fr/issues/2/links", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			es := newEpicStubServer(t, map[int][]int{1: {}, 2: {1}, 3: {2}})
+			es.srv.mux.HandleFunc(tc.path, func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, `{"message":"internal error"}`, http.StatusInternalServerError)
+			})
+			svc := NewEpicService(NewClient(es.srv.srv.URL, "tok"))
+
+			res, err := svc.PlanWaves(context.Background(), "o", "r", []int{1, 2, 3})
+			if err == nil || !strings.Contains(err.Error(), "#2") {
+				t.Fatalf("PlanWaves err = %v (plan %+v), want an error naming #2", err, res)
+			}
+			if got := errors.Is(err, forge.ErrConnectionTruncated); got != tc.truncated {
+				t.Errorf("errors.Is(err, forge.ErrConnectionTruncated) = %v, want %v (err %v)", got, tc.truncated, err)
+			}
+			if res != nil {
+				t.Fatalf("PlanWaves returned a plan alongside a failed read: %+v", res)
+			}
+		})
 	}
 }

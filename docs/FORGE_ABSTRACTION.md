@@ -278,6 +278,7 @@ with `errors.Is`.
 | `ErrUnauthorized`         | Token missing, expired, or revoked (HTTP 401).                                       |
 | `ErrUnsupported`          | Forge kind recognised but no adapter registered, OR adapter method not implemented.  |
 | `ErrUnsupportedOnEdition` | Feature exists in the forge family but not in the licensed edition (e.g. GitLab CE). |
+| `ErrConnectionTruncated`  | An issue's relationship list could not be read whole: a page failed or hit the cap.  |
 
 Two design rules govern the vocabulary:
 

@@ -1546,13 +1546,21 @@ nightgauge epic check-completion <epic-number> [--json]
 # Validate epic structure: circular blockers and stale blockers
 nightgauge epic validate <epic-number> [--owner ORG] [--repo REPO] [--json]
 # JSON output schema: { "epicNumber": N, "title": "...", "repo": "...",
-#   "totalSubIssues": N, "valid": true|false,
+#   "totalSubIssues": N, "checkedSubIssues": N, "failedSubIssues": N, "valid": true|false,
 #   "gaps": [{ "subIssueNumber": N, "subIssueRepo": "owner/name", "subIssueTitle": "...",
 #              "gapType": "circular_blocker"|"stale_blocker",
-#              "blockerNumber": N, "blockerRepo": "owner/name", "detail": "..." }] }
+#              "blockerNumber": N, "blockerRepo": "owner/name", "detail": "..." }],
+#   "failures": [{ "subIssueNumber": N, "subIssueRepo": "owner/name", "subIssueTitle": "...",
+#                  "error": "..." }] }
 # subIssueRepo / blockerRepo: where each number lives; a cross-repo epic's
 # sub-issues and their blockers can be in several repositories.
-# Exit codes: 0 = success (gaps reported in JSON/stdout); non-zero = error fetching epic
+# totalSubIssues: sub-issues the epic lists; checkedSubIssues: those read and
+# checked; failedSubIssues: those that could not be read (or whose blocker list
+# could not be read whole), each named in failures. valid is true only when
+# every sub-issue was checked and none has a gap.
+# Exit codes: 0 = every sub-issue checked (gaps reported in JSON/stdout);
+# non-zero = a sub-issue could not be checked (the result is still printed), or
+# the epic could not be read
 
 # Assess epic sub-issues for batch vs sequential strategy
 nightgauge epic assess <epic-number> [--owner ORG] [--repo REPO] [--json]
@@ -1560,7 +1568,8 @@ nightgauge epic assess <epic-number> [--owner ORG] [--repo REPO] [--json]
 #   "estimatedCostUsd": 0.0, "estimatedMinutes": 0.0,
 #   "issues": [{ "issueNumber": N, "complexityScore": N, "recommendedModel": "...",
 #                "estimatedCostUsd": 0.0, "hasDependencies": false }] }
-# Fetches each open sub-issue individually for body+labels; closed sub-issues are skipped.
+# Fetches each open sub-issue individually, in its own repository, for body+labels;
+# closed sub-issues are skipped. A sub-issue that cannot be read fails the command.
 
 # Detect lifecycle issues: stale epics, board status drift, orphaned issues, stale blockers
 nightgauge epic check-lifecycle <epic-number> [--owner ORG] [--repo REPO] [--project N] [--json]
@@ -1601,6 +1610,8 @@ nightgauge epic plan-waves --sub-issues <N,M,...> [--owner ORG] [--repo REPO] [-
 # Fetches each listed issue, reads native blockedBy relationships, and runs topological
 # sort (Kahn's algorithm) to assign wave numbers. Issues with no internal dependencies
 # land in wave 0; issues blocked by wave-0 work land in wave 1, etc.
+# An issue that cannot be read, or whose blockedBy list cannot be read whole, fails the
+# command: no plan is printed without it.
 #
 # Deterministic file-overlap serialization (always-on): each issue's predicted
 # target files are extracted from its body, and any two SAME-WAVE issues that share

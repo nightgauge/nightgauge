@@ -258,11 +258,11 @@ func (b *BoardService) listItems(ctx context.Context, owner, repo, state, status
 }
 
 // GetItem fetches a single board item identified by issue number and
-// enriches it with sub-issue + blocking link arrays via a single
-// /issues/:iid/links call. Returns forge.ErrNotFound when the issue does
-// not exist on the project. Link fetch failures are non-fatal — the item
-// is returned with empty link slices so consumers behave the same way as
-// they do for GitHub-backed projects with no sub-issues.
+// enriches it with sub-issue + blocking link arrays read from
+// /issues/:iid/links. Returns forge.ErrNotFound when the issue does not
+// exist on the project, and forge.ErrConnectionTruncated when its link list
+// cannot be read: an item returned with empty link slices would read as
+// having no sub-issues and no blockers.
 func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNumber int) (*forgetypes.BoardItem, error) {
 	o, r, projPath, err := b.projectPathForBoard(owner, repo)
 	if err != nil {
@@ -282,14 +282,16 @@ func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNum
 	if item == nil {
 		return nil, nil
 	}
-	if links, err := listIssueLinks(ctx, b.client, o, r, issueNumber); err == nil {
-		subIssues, blockedBy, blocking := classifyLinks(o, r, links)
-		item.SubIssues = subIssues
-		item.BlockedBy = blockedBy
-		item.Blocking = blocking
-		if len(subIssues) > 0 {
-			item.IsEpic = true
-		}
+	links, err := listIssueLinks(ctx, b.client, o, r, issueNumber)
+	if err != nil {
+		return nil, fmt.Errorf("get board item #%d: links: %w: %w", issueNumber, forge.ErrConnectionTruncated, err)
+	}
+	subIssues, blockedBy, blocking := classifyLinks(o, r, links)
+	item.SubIssues = subIssues
+	item.BlockedBy = blockedBy
+	item.Blocking = blocking
+	if len(subIssues) > 0 {
+		item.IsEpic = true
 	}
 	return item, nil
 }

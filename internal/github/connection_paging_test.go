@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/pkg/types"
 	"golang.org/x/time/rate"
 )
@@ -506,8 +507,8 @@ func TestSubIssuesPaginatesPast25(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Validate: %v", err)
 		}
-		if res.TotalSubIssues != 42 {
-			t.Fatalf("epic validate checked %d sub-issues, want 42", res.TotalSubIssues)
+		if res.TotalSubIssues != 42 || res.CheckedSubIssues != 42 {
+			t.Fatalf("epic validate listed %d sub-issues and checked %d, want 42 and 42", res.TotalSubIssues, res.CheckedSubIssues)
 		}
 	})
 
@@ -649,7 +650,7 @@ func TestConnectionPageCapIsError(t *testing.T) {
 		if err == nil {
 			t.Fatalf("read of an endless %s connection returned no error", conn)
 		}
-		if !errors.Is(err, ErrConnectionTruncated) {
+		if !errors.Is(err, forge.ErrConnectionTruncated) {
 			t.Fatalf("err = %v, want ErrConnectionTruncated", err)
 		}
 		if !strings.Contains(err.Error(), fmt.Sprintf("%d-page cap", maxRelationPages)) {
@@ -708,14 +709,20 @@ func TestConnectionPageCapIsError(t *testing.T) {
 
 	t.Run("epic validate", func(t *testing.T) {
 		f, c := setup(t, "blockedBy", false)
-		_, err := NewEpicService(c).Validate(ctx, "acme", "widgets", 800)
-		requireCapped(t, f, "blockedBy", err)
+		res, err := NewEpicService(c).Validate(ctx, "acme", "widgets", 800)
+		requireTruncatedSubIssue(t, res, err, 700)
+		if !strings.Contains(res.Failures[0].Error, fmt.Sprintf("%d-page cap", maxRelationPages)) {
+			t.Fatalf("failure = %+v, want it to name the %d-page cap", res.Failures[0], maxRelationPages)
+		}
+		if got := f.followUpCount("blockedBy"); got != maxRelationPages-1 {
+			t.Fatalf("blockedBy follow-up pages read = %d, want %d", got, maxRelationPages-1)
+		}
 	})
 
 	t.Run("next page without a cursor", func(t *testing.T) {
 		f, c := setup(t, "blockedBy", true)
 		_, err := NewIssueService(c).GetIssue(ctx, "acme", "widgets", 700)
-		if !errors.Is(err, ErrConnectionTruncated) {
+		if !errors.Is(err, forge.ErrConnectionTruncated) {
 			t.Fatalf("err = %v, want ErrConnectionTruncated", err)
 		}
 		if got := f.followUpCount("blockedBy"); got != 0 {
@@ -773,9 +780,6 @@ func TestRelationFollowUpFailureIsError(t *testing.T) {
 		{"wave planning", func(ctx context.Context, c *Client) (any, error) {
 			return NewEpicService(c).PlanWaves(ctx, "acme", "widgets", []int{700})
 		}},
-		{"epic validate", func(ctx context.Context, c *Client) (any, error) {
-			return NewEpicService(c).Validate(ctx, "acme", "widgets", 800)
-		}},
 	}
 	for _, br := range boardReaders {
 		reads = append(reads, read{"board scan/" + br.name, func(ctx context.Context, c *Client) (any, error) {
@@ -785,10 +789,16 @@ func TestRelationFollowUpFailureIsError(t *testing.T) {
 
 	modes := []followUpFailure{followUpHTTP502, followUpGraphQLErr, followUpNullNode, followUpNotAnIssue, followUpNoPage}
 	for _, mode := range modes {
+		// Validate reports the sub-issue it could not read whole in its
+		// result, and checks nothing from part of its blocker list.
+		t.Run(string(mode)+"/epic validate", func(t *testing.T) {
+			res, err := NewEpicService(setup(t, mode)).Validate(ctx, "acme", "widgets", 800)
+			requireTruncatedSubIssue(t, res, err, 700)
+		})
 		for _, r := range reads {
 			t.Run(string(mode)+"/"+r.name, func(t *testing.T) {
 				res, err := r.run(ctx, setup(t, mode))
-				if !errors.Is(err, ErrConnectionTruncated) {
+				if !errors.Is(err, forge.ErrConnectionTruncated) {
 					t.Fatalf("err = %v, want ErrConnectionTruncated", err)
 				}
 				if v := reflect.ValueOf(res); v.IsValid() && !v.IsNil() {
@@ -850,7 +860,7 @@ func TestRelationFollowUpsArePacedLikeFirstPages(t *testing.T) {
 			tr := NewSharedRateLimitTracker(filepath.Join(t.TempDir(), "rate-limit.json"))
 			c := f.client().WithRateLimitTracker(tr, "alice")
 			res, err := r.run(context.Background(), c)
-			if !errors.Is(err, ErrRateLimitGated) || !errors.Is(err, ErrConnectionTruncated) {
+			if !errors.Is(err, ErrRateLimitGated) || !errors.Is(err, forge.ErrConnectionTruncated) {
 				t.Fatalf("err = %v, want ErrRateLimitGated and ErrConnectionTruncated", err)
 			}
 			if v := reflect.ValueOf(res); v.IsValid() && !v.IsNil() {
@@ -884,7 +894,7 @@ func TestRelationFollowUpsArePacedLikeFirstPages(t *testing.T) {
 		f := setup(t)
 		f.rateLimitedFollowUps = maxRetries + 1
 		got, err := NewIssueService(f.client()).GetIssue(context.Background(), "acme", "widgets", 700)
-		if !errors.Is(err, ErrConnectionTruncated) || !strings.Contains(fmt.Sprint(err), "rate limit") {
+		if !errors.Is(err, forge.ErrConnectionTruncated) || !strings.Contains(fmt.Sprint(err), "rate limit") {
 			t.Fatalf("err = %v, want ErrConnectionTruncated naming the rate limit", err)
 		}
 		if got != nil {
@@ -907,7 +917,7 @@ func TestRelationFollowUpsArePacedLikeFirstPages(t *testing.T) {
 			}
 		}
 		_, err := NewIssueService(f.client()).GetIssue(ctx, "acme", "widgets", 700)
-		if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrConnectionTruncated) {
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, forge.ErrConnectionTruncated) {
 			t.Fatalf("err = %v, want context.Canceled and ErrConnectionTruncated", err)
 		}
 	})
@@ -1056,7 +1066,7 @@ func TestGetIssuesByNumbersWithoutRelations(t *testing.T) {
 	}
 
 	// The same issue through the relationship read cannot be completed here.
-	if _, err := svc.GetIssuesByNumbers(ctx, "acme", "widgets", []int{700}); !errors.Is(err, ErrConnectionTruncated) {
+	if _, err := svc.GetIssuesByNumbers(ctx, "acme", "widgets", []int{700}); !errors.Is(err, forge.ErrConnectionTruncated) {
 		t.Fatalf("GetIssuesByNumbers err = %v, want ErrConnectionTruncated", err)
 	}
 }
@@ -1122,7 +1132,7 @@ func TestGetIssueWithRelations(t *testing.T) {
 	t.Run("a named connection that cannot be read whole is an error", func(t *testing.T) {
 		_, _, svc := setup(t, followUpHTTP502)
 		got, err := svc.GetIssueWithRelations(ctx, "acme", "widgets", 700, RelationBlockedBy)
-		if !errors.Is(err, ErrConnectionTruncated) {
+		if !errors.Is(err, forge.ErrConnectionTruncated) {
 			t.Fatalf("err = %v, want ErrConnectionTruncated", err)
 		}
 		if got != nil {
@@ -1218,7 +1228,7 @@ func TestBoardReadsWithRelations(t *testing.T) {
 			t.Run("a named list that cannot be read whole is an error", func(t *testing.T) {
 				_, _, b := setup(t, followUpHTTP502)
 				items, err := r.read(ctx, b, RelationSubIssues)
-				if !errors.Is(err, ErrConnectionTruncated) {
+				if !errors.Is(err, forge.ErrConnectionTruncated) {
 					t.Fatalf("err = %v, want ErrConnectionTruncated", err)
 				}
 				if items != nil {

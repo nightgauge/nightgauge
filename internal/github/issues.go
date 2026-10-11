@@ -108,7 +108,7 @@ func NewIssueService(client *Client) *IssueService {
 // returns: one issue (GetIssueWithRelations) or every issue on a board
 // (BoardService.ListItemsWithRelations, ListOpenItemsWithRelations). Each
 // named connection is read to its end, and one that cannot be is
-// ErrConnectionTruncated. A connection that is not named is returned empty
+// forge.ErrConnectionTruncated. A connection that is not named is returned empty
 // and none of its later pages is read, so a long list the caller would
 // discard can neither cost it requests nor fail it.
 type IssueRelations uint8
@@ -258,7 +258,7 @@ func (s *IssueService) GetIssueWithRelations(ctx context.Context, owner, repo st
 // SubIssues, BlockedBy, Blocking, Parent. Numbers are deduplicated. Every
 // relationship connection larger than the fragment's first page is read to
 // its end by follow-up queries shared across the batch; one that cannot be is
-// an ErrConnectionTruncated error for the whole call, never a short list.
+// a forge.ErrConnectionTruncated error for the whole call, never a short list.
 func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
 	return s.getIssuesByNumbers(ctx, owner, repo, numbers, AllRelations)
 }

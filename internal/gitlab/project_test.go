@@ -332,6 +332,10 @@ func TestGenericSingleSelect_RoundTripReadsBack(t *testing.T) {
 	})
 	// PUT response echoes the new label set back; subsequent GET sees it.
 	currentLabels := []string{}
+	srv.mux.HandleFunc("/api/v4/projects/o%2Fr/issues/42/links", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	})
 	srv.mux.HandleFunc("/api/v4/projects/o%2Fr/issues/42",
 		func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "GET" {
@@ -416,6 +420,10 @@ func TestSyncFieldRoundTrip_Status(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	})
 	currentLabels := []string{}
+	srv.mux.HandleFunc("/api/v4/projects/o%2Fr/issues/42/links", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	})
 	srv.mux.HandleFunc("/api/v4/projects/o%2Fr/issues/42",
 		func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == "GET" {

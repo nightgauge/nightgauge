@@ -51,7 +51,7 @@ func NewBoardService(client *Client, owner string, projectNumber int, ownerType 
 // for efficient single-page fetches instead of paginating all items locally.
 //
 // Every item's sub-issue, blocked-by and blocking lists are read whole, so
-// the read fails (ErrConnectionTruncated) when any one of them, on any item,
+// the read fails (forge.ErrConnectionTruncated) when any one of them, on any item,
 // cannot be. It is the read for callers that return whole items or decide
 // from all three lists; a caller that uses fewer names them to
 // ListItemsWithRelations.
@@ -247,7 +247,7 @@ func (b *BoardService) listItemsAll(ctx context.Context, rels IssueRelations) ([
 // that reports a next page is read to its end first, all of them together,
 // because the scheduler's blocker check and the epic views decide from these
 // lists. A named connection that cannot be read whole fails the read
-// (ErrConnectionTruncated) instead of yielding a short list; one rels does not
+// (forge.ErrConnectionTruncated) instead of yielding a short list; one rels does not
 // name is left empty and never read on. Nodes that are not issues or pull
 // requests are dropped, as nodeToItem drops them.
 func (b *BoardService) itemsFromNodes(ctx context.Context, nodes []projectItemNode, rels IssueRelations) ([]types.BoardItem, error) {
