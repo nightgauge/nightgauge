@@ -82,10 +82,10 @@ func (r *rawGitLabIssue) toForgeIssue(owner, repo string) *forgetypes.Issue {
 }
 
 // GetIssue fetches a single issue by iid and enriches it with sub-issue and
-// blocking link arrays via a single /issues/:iid/links call. Link fetch
-// failures are non-fatal — the issue is returned with empty link slices and
-// the underlying error is discarded so consumers behave the same way as the
-// GitHub adapter when GraphQL link queries return no rows.
+// blocking link arrays read from /issues/:iid/links. A link list that cannot
+// be read is forge.ErrConnectionTruncated, as the GitHub adapter reports a
+// relationship list it cannot read whole: an issue returned with empty link
+// slices would read as having no sub-issues and no blockers.
 func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number int) (*forgetypes.Issue, error) {
 	path := fmt.Sprintf("/projects/%s/issues/%d", projectPath(owner, repo), number)
 	full := s.client.buildURL(path, nil)
@@ -98,14 +98,16 @@ func (s *IssueService) GetIssue(ctx context.Context, owner, repo string, number 
 	if issue == nil {
 		return nil, nil
 	}
-	if links, err := listIssueLinks(ctx, s.client, owner, repo, number); err == nil {
-		subIssues, blockedBy, blocking := classifyLinks(owner, repo, links)
-		issue.SubIssues = subIssues
-		issue.BlockedBy = blockedBy
-		issue.Blocking = blocking
-		if len(subIssues) > 0 {
-			issue.IsEpic = true
-		}
+	links, err := listIssueLinks(ctx, s.client, owner, repo, number)
+	if err != nil {
+		return nil, fmt.Errorf("gitlab get issue #%d: links: %w: %w", number, forge.ErrConnectionTruncated, err)
+	}
+	subIssues, blockedBy, blocking := classifyLinks(owner, repo, links)
+	issue.SubIssues = subIssues
+	issue.BlockedBy = blockedBy
+	issue.Blocking = blocking
+	if len(subIssues) > 0 {
+		issue.IsEpic = true
 	}
 	return issue, nil
 }
@@ -261,7 +263,9 @@ func (s *IssueService) getIssuesByNumbersFallback(ctx context.Context, owner, re
 	for _, n := range iids {
 		issue, err := s.GetIssue(ctx, owner, repo, n)
 		if err != nil {
-			if errors.Is(err, forge.ErrNotFound) {
+			// A missing issue is left out of the map. An issue whose link
+			// list answered 404 is not missing, so it fails the read.
+			if errors.Is(err, forge.ErrNotFound) && !errors.Is(err, forge.ErrConnectionTruncated) {
 				continue
 			}
 			return nil, err

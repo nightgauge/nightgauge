@@ -9,10 +9,13 @@
 // follows only the lists its caller uses does not, which is how a test tells
 // the two apart.
 //
+// An issue listed in Forge.Unreadable cannot be read at all, which is how a
+// test fails a first page rather than a later one.
+//
 // Beyond issue reads it answers what the readers under test go on to do:
-// mutations succeed and are recorded, the project-fields read and the
-// repository label list are served, and nothing else is. A request the fake
-// does not model fails the test.
+// mutations succeed and are recorded, the project-fields read, the project
+// item read and the repository label list are served, and nothing else is. A
+// request the fake does not model fails the test.
 package githubtest
 
 import (
@@ -51,6 +54,9 @@ type Issue struct {
 	// connection, by issue number. A member is served with the state the fake
 	// holds for it, and as OPEN when the fake does not hold it.
 	SubIssues, BlockedBy, Blocking []int
+	// Status is the issue's Status on the organization's project board. An
+	// issue with no Status is not on the board.
+	Status string
 }
 
 // Numbers returns n consecutive issue numbers starting at from, for building a
@@ -64,12 +70,17 @@ func Numbers(from, n int) []int {
 }
 
 // Forge is the fake endpoint. Build it with New, add any repository labels to
-// RepoLabels, then call Client.
+// RepoLabels and any unreadable issues to Unreadable, then call Client.
 type Forge struct {
 	t      testing.TB
 	issues map[int]Issue
 	// RepoLabels are repository labels served beyond those the issues carry.
 	RepoLabels []string
+	// Unreadable are issues every read of which fails, first page and all,
+	// as GitHub fails an issue it cannot serve: a read of the issue alone is
+	// a GraphQL error, and a batch read returns it null beside an error while
+	// the rest of the batch reads.
+	Unreadable []int
 
 	mu        sync.Mutex
 	followUps int
@@ -111,6 +122,7 @@ func (f *Forge) Mutations() []string {
 
 var (
 	reFirstPage = regexp.MustCompile(`(subIssues|blockedBy|blocking)\(first: (\d+)\)`)
+	reItemQuery = regexp.MustCompile(`#(\d+)$`)
 	reBatchItem = regexp.MustCompile(`i(\d+): issue\(number: (\d+)\)`)
 	reMutation  = regexp.MustCompile(`^mutation\b[^{]*\{\s*(\w+)\(`)
 )
@@ -131,7 +143,21 @@ func (f *Forge) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	q := req.Query
 	var data map[string]interface{}
+	var gqlErrors []interface{}
 	switch {
+	case strings.Contains(q, "projectV2(number: $projectNumber)") && strings.Contains(q, "items("):
+		// The project item read, before the follow-up case: its items
+		// connection pages with an $after variable of its own.
+		data = map[string]interface{}{"organization": map[string]interface{}{
+			"projectV2": map[string]interface{}{
+				"id":    "PVT_1",
+				"title": "Board",
+				"items": map[string]interface{}{
+					"pageInfo": map[string]interface{}{"hasNextPage": false, "endCursor": ""},
+					"nodes":    f.boardItems(q, fmt.Sprint(req.Variables["query"])),
+				},
+			},
+		}}
 	case strings.Contains(q, "after: $after"):
 		// A follow-up page of a relationship connection.
 		f.mu.Lock()
@@ -159,19 +185,96 @@ func (f *Forge) serve(w http.ResponseWriter, r *http.Request) {
 		repo := map[string]interface{}{}
 		for _, m := range reBatchItem.FindAllStringSubmatch(q, -1) {
 			n, _ := strconv.Atoi(m[2])
+			if f.unreadable(n) {
+				repo["i"+m[1]] = nil
+				gqlErrors = append(gqlErrors, unreadableError(n, "i"+m[1]))
+				continue
+			}
 			repo["i"+m[1]] = f.issueFields(q, n)
 		}
 		data = map[string]interface{}{"repository": repo}
 	case strings.Contains(q, "issue(number: $number)") && !strings.Contains(q, "projectItems("):
 		n, _ := req.Variables["number"].(float64)
+		if f.unreadable(int(n)) {
+			data = map[string]interface{}{"repository": map[string]interface{}{"issue": nil}}
+			gqlErrors = append(gqlErrors, unreadableError(int(n), "issue"))
+			break
+		}
 		data = map[string]interface{}{"repository": map[string]interface{}{"issue": f.issueFields(q, int(n))}}
 	default:
 		f.t.Errorf("githubtest: unmodelled request %q", q)
 		http.Error(w, "unmodelled request", http.StatusBadRequest)
 		return
 	}
+	body := map[string]interface{}{"data": data}
+	if len(gqlErrors) > 0 {
+		body["errors"] = gqlErrors
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+// unreadable reports whether n is one of f.Unreadable.
+func (f *Forge) unreadable(n int) bool {
+	for _, u := range f.Unreadable {
+		if u == n {
+			return true
+		}
+	}
+	return false
+}
+
+// unreadableError is the GraphQL error GitHub returns beside a null issue n
+// at field: a server-side failure, not a rate limit, so it is not retried.
+func unreadableError(n int, field string) map[string]interface{} {
+	return map[string]interface{}{
+		"path":    []interface{}{"repository", field},
+		"message": fmt.Sprintf("Something went wrong while executing your query (issue #%d).", n),
+	}
+}
+
+// boardItems renders the board's items that the items(query:) filter selects:
+// the issue its "#<n>" names, or every issue with a Status when it names none.
+// Each carries the first page of each relationship connection q selects, and
+// its Status as a single-select field value.
+func (f *Forge) boardItems(q, filter string) []interface{} {
+	var numbers []int
+	if m := reItemQuery.FindStringSubmatch(filter); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		numbers = []int{n}
+	} else {
+		for n := range f.issues {
+			numbers = append(numbers, n)
+		}
+		sort.Ints(numbers)
+	}
+	nodes := []interface{}{}
+	for _, n := range numbers {
+		iss, ok := f.issues[n]
+		if !ok || iss.Status == "" {
+			continue
+		}
+		content, _ := f.issueFields(q, n).(map[string]interface{})
+		// The item's content selects neither the body nor the parent's id,
+		// and the client refuses a field it did not select.
+		delete(content, "body")
+		if parent, ok := content["parent"].(map[string]interface{}); ok {
+			delete(parent, "id")
+		}
+		content["__typename"] = "Issue"
+		content["url"] = fmt.Sprintf("https://github.com/%s/%s/issues/%d", Owner, Repo, n)
+		content["repository"] = map[string]interface{}{"nameWithOwner": Owner + "/" + Repo}
+		nodes = append(nodes, map[string]interface{}{
+			"id":      fmt.Sprintf("PVTI_%d", n),
+			"content": content,
+			"fieldValues": map[string]interface{}{"nodes": []interface{}{map[string]interface{}{
+				"__typename": "ProjectV2ItemFieldSingleSelectValue",
+				"name":       iss.Status,
+				"field":      map[string]interface{}{"name": "Status"},
+			}}},
+		})
+	}
+	return nodes
 }
 
 // issueFields renders issue n with the first page of each relationship

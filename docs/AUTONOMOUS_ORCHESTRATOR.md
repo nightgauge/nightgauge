@@ -148,6 +148,16 @@ dispatched during the 30-second window between creation and dependency setup.
 all `blockedBy` relationships → promote to "Ready". The scheduler cannot
 dispatch issues until they reach "Ready" status.
 
+**After a failed run** the scheduler returns the issue to Ready so it is
+dispatched again once its backoff expires, unless an open PR of its own backs
+it (#1707). A run that failed in a stage after `pr-create` (a stall-kill, an
+operator stop or an API outage during `pr-merge`) already has a PR, and Ready
+would run the pipeline again on top of it, so that issue moves to In review
+instead; the in-review reconcile re-runs `pr-merge` if its branch goes stale or
+conflicts. The open PRs are read through the scheduler's own forge client,
+every page. When they cannot be read, the status is left unchanged rather than
+set to Ready, and the log says so.
+
 ### 3. Priority Ordering
 
 Candidates passing the board status gate are sorted using a 6-factor priority:
@@ -814,10 +824,13 @@ The graph builder detects dependencies from three sources:
 ### GitHub Native (intra-repo)
 
 Uses the `blockedBy` GraphQL field on issues. These are created via the GitHub
-UI or the `addBlockedBy` GraphQL mutation.
+UI or the `addBlockedBy` GraphQL mutation. The list is read page by page to
+its end, and a list that cannot be read whole fails the read (#1682): a
+blocker past the first page is still a blocker.
 
 ```graphql
-blockedBy(first: 10) {
+blockedBy(first: 5) {
+  pageInfo { hasNextPage, endCursor }
   nodes { number, state, repository { nameWithOwner } }
 }
 ```

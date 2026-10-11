@@ -338,4 +338,11 @@ in ADR-008 where no typed forge surface exists yet — project view-create
 among them. Sub-issue linking and blocked-by are NO LONGER carve-outs:
 they have a typed surface on the forge issue service and moved to REST,
 so reach for that rather than a hand-written GraphQL document.
+
+Rate limits: the request pays the machine-wide GraphQL rate-limit floor
+like every other nightgauge call. When the budget is below the floor the
+command waits for the reset window before sending (at most 75 minutes);
+set NIGHTGAUGE_GITHUB_RATELIMIT_NO_WAIT=1 to fail fast instead. A
+rate-limited answer is retried; when the retries run out the command
+fails with "forge: rate limited" rather than printing the error envelope.
 `

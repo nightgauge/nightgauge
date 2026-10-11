@@ -6103,6 +6103,19 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 // parent is the lifecycle generation context this op derives its
 // boardRecoveryTimeout deadline from — the ctx goTracked handed the calling
 // closure, or as.backgroundContext() for a synchronous caller.
+//
+// Never on top of the issue's own open PR (#1707). Every terminal kind that
+// reaches this revert can end a run in a stage after pr-create — a stall-kill,
+// an operator stop or an API outage during pr-merge — and Ready is the only
+// dispatchable status, so the revert would dispatch the issue again on top of
+// the PR it already has. Open-PR evidence decides, as for sidelineHalt (see
+// ownOpenPR): an issue an OPEN PR backs moves to "In review", the truthful
+// status, where the in-review reconcile re-runs pr-merge once the branch goes
+// stale or conflicts. The board status alone cannot answer this: the
+// extension parks every failed run in "In review", PR or not, and this revert
+// is what returns a PR-less one to Ready. An unanswered PR query reverts
+// nothing: the issue is left where it is, which a human can see and recover,
+// rather than in Ready.
 func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, repo string, issue int) {
 	owner, repoName := splitOwnerRepo(repo)
 	var projectNum int
@@ -6123,6 +6136,19 @@ func (as *AutonomousScheduler) revertFailedIssueStatus(parent context.Context, r
 
 	ctx, cancel := context.WithTimeout(parent, boardRecoveryTimeout)
 	defer cancel()
+	pr, found, err := as.ownOpenPR(ctx, owner, repoName, issue)
+	if err != nil {
+		log.Printf("autonomous: revert-status: NOT moving %s#%d to Ready after pipeline failure — could not list the repository's open PRs (%v), "+
+			"so an open PR of its own may back it; status left unchanged (move it to Ready by hand once no PR backs it)",
+			repo, issue, err)
+		return
+	}
+	if found {
+		log.Printf("autonomous: revert-status: NOT moving %s#%d to Ready after pipeline failure — its PR #%d is open; moving it to In review instead",
+			repo, issue, pr)
+		as.moveIssueToInReview(parent, repo, issue)
+		return
+	}
 	projSvc := as.projectService(owner, projectNum, ownerType)
 	if err := projSvc.MoveStatus(ctx, owner, repoName, issue, "Ready"); err != nil {
 		log.Printf("autonomous: revert-status: failed to move %s#%d back to Ready after pipeline failure: %v",
@@ -6437,6 +6463,24 @@ func (as *AutonomousScheduler) recoverOrphanedRunningItems(ctx context.Context, 
 			continue
 		}
 
+		// Never Ready on top of the issue's own open PR, for the reason
+		// revertFailedIssueStatus gives: a session can crash in pr-merge,
+		// after pr-create opened the PR (#1707).
+		pr, found, err := as.ownOpenPR(opCtx, owner, repoName, item.Number)
+		if err != nil {
+			log.Printf("autonomous: recovery: NOT moving %s#%d to Ready — could not list the repository's open PRs (%v), "+
+				"so an open PR of its own may back it; status left unchanged (move it to Ready by hand once no PR backs it)",
+				item.Repo, item.Number, err)
+			recovered++
+			continue
+		}
+		if found {
+			log.Printf("autonomous: recovery: NOT moving %s#%d to Ready — its PR #%d is open; moving it to In review instead",
+				item.Repo, item.Number, pr)
+			as.moveIssueToInReview(context.WithoutCancel(ctx), item.Repo, item.Number)
+			recovered++
+			continue
+		}
 		projSvc := as.projectService(owner, projectNum, ownerType)
 		if err := projSvc.MoveStatus(opCtx, owner, repoName, item.Number, "Ready"); err != nil {
 			log.Printf("autonomous: recovery: failed to move %s#%d back to Ready: %v",

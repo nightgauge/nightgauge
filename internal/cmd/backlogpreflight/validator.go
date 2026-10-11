@@ -13,11 +13,6 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
-// boardLister is satisfied by *github.BoardService.
-type boardLister interface {
-	ListItems(ctx context.Context, statusFilter string) ([]types.BoardItem, error)
-}
-
 // issueGetter is satisfied by *github.IssueService. The validator reads an
 // issue's body and none of its relationship lists.
 type issueGetter interface {
@@ -26,15 +21,15 @@ type issueGetter interface {
 
 // Validator runs deterministic preflight checks on board items.
 type Validator struct {
-	board  boardLister
 	issues issueGetter
 	owner  string
 	repo   string
 }
 
-// New creates a Validator with the given board and issue services.
-func New(board boardLister, issues issueGetter, owner, repo string) *Validator {
-	return &Validator{board: board, issues: issues, owner: owner, repo: repo}
+// New creates a Validator that reads issue bodies through issues. The board
+// items it checks are passed to each check by the caller.
+func New(issues issueGetter, owner, repo string) *Validator {
+	return &Validator{issues: issues, owner: owner, repo: repo}
 }
 
 // validTypeLabels is the set of accepted type:* label prefixes.

@@ -99,6 +99,71 @@ changelog, and the release workflow refuses a tag that does not.
   service's: `ng_live_`, `ng_test_`, `ng_ci_`, `ib_live_`, `ib_test_`,
   `ib_ci_`.
 
+- **Raw GraphQL reads pay the rate-limit floor, and an exhausted budget reads
+  as a rate limit** (#1695). The raw GraphQL path behind batch issue reads,
+  relationship follow-up pages, default-branch file reads, owner project lists
+  and `nightgauge forge graphql` now waits on the machine-wide floor gate
+  before sending, retries a 200 answer whose GraphQL errors are
+  `RATE_LIMITED`, and honours `Retry-After`. When the retries run out, the
+  error wraps `forge.ErrRateLimited`; a 403 with no rate-limit signal is no
+  longer retried and is not reported as one. The GitHub forge adapter's client
+  now carries the machine-wide rate-limit tracker, so every `nightgauge forge`
+  subcommand pays the floor and records what it sees. Below the floor it
+  waits for the reset (at most 75 minutes), as other CLI commands do. See
+  `docs/FORGE_ABSTRACTION.md` § GraphQLService.
+
+- **Sub-issue and blocker lists read outside the Go binary no longer stop at a
+  fixed first page** (#1701). The extension's sync of closed sub-issues to
+  Done, the SDK's `EpicEstimator`, the `assess-epic`, `issue-audit` and
+  `backlog-preflight` skills, and the shared epic-handling steps read every
+  sub-issue and blocker, or fail, instead of silently stopping after the
+  first 10 or 50. `backlog-preflight` no longer has a shell fallback and
+  requires the `nightgauge` binary. `nightgauge backlog preflight` exits 2
+  when it cannot run, as documented, not 1 ("findings found").
+
+- **An autonomous issue whose run fails after its PR opened is no longer sent
+  back to Ready** (#1707). A stall, an operator stop or an API outage during
+  pr-merge, or a session that crashed there, returned the issue to Ready, the
+  only dispatchable status, where it was dispatched again on top of its own
+  PR. The failed-run revert and startup orphan recovery now read the
+  repository's open PRs (every page): an issue its own open PR backs moves to
+  In review, and when the list cannot be read the status is left unchanged
+  and the log says why. A pull request from a fork never counts as an issue's
+  own, whatever its branch is called, here or in the in-review reconcile, the
+  blocked-PR sweep and the dependency evidence gate: anyone who can open a
+  pull request could otherwise keep an issue out of Ready, block it, or have
+  pr-merge run on their branch.
+
+- **`forge project field-get`, `issue route` and the epic dashboard's
+  per-repository progress read no relationship list they do not use**
+  (#1707). An issue whose sub-issue or blocker list GitHub could not return
+  whole failed the first two and emptied the third. `issue.viewMany` now
+  returns issue summaries without relationship lists.
+
+- **Adapter aliases resolve to their adapter's provider** (#1707).
+  `gemini-headless`, `xai`, `github` and `gh` read as provider `other`, with
+  no model bands and an unstamped cost; Go and the SDK now resolve them. The
+  OpenCode provider-key and model-id rules have one definition in each
+  language, and the SDK's opencode dispatch errors quote the model as the Go
+  binary does, so a quote, newline or escape in a configured model cannot
+  break the message.
+
+- **Epic enqueue, wave planning, `epic assess` and `epic validate` no longer
+  act on part of an epic when a sub-issue cannot be read** (#1702). A
+  sub-issue read that failed outright, not part-way through a blocker list,
+  used to enqueue the sub-issue without its blockers, drop it from the wave
+  plan or assessment, or let `epic validate` call the epic valid over
+  sub-issues it never read. Epic enqueue, wave planning (GitHub and GitLab) and
+  `epic assess` now fail. `epic validate` lists each sub-issue it could not
+  check, reports `checkedSubIssues` and `failedSubIssues` in text and JSON,
+  and exits non-zero when any failed; the `issue-audit` skill reports each as
+  `UNCHECKED_SUB_ISSUE`. `epic assess` and wave planning read a cross-repo
+  sub-issue in its own repository, with that repository's client. The GitLab
+  adapter reports an unreadable issue-link list as
+  `forge.ErrConnectionTruncated` instead of returning the issue with no
+  sub-issues or blockers; the sentinel moved from `internal/github` to
+  `internal/forge`.
+
 - **Nightgauge license keys are recognised by their issued `ng_live_`,
   `ng_ci_` and `ng_test_` prefixes** (#2444). The core matched only the
   pre-rebrand `ib_live_` and `ib_ci_` prefixes, so `nightgauge doctor`'s

@@ -9,7 +9,8 @@
     "A malformed model is provider other with an empty bare_id.",
     "dispatch_model_for: dispatchModelFor(adapter, band_or_id, configured_model),",
     "where configured_model is the opencode.model default. A row has either",
-    "model (the -m value) or error: true.",
+    "model (the -m value) or error: true; an error row may pin error_message, the",
+    "exact text, whose interpolated values both twins quote as Go's %q does (#1707).",
     "is_local_base_url: isLocalBaseURL(url), no DNS lookup: localhost, a loopback or a private-network IP literal (#2128).",
     "is_local_model: isLocalModel(adapter, model, endpoints). A declared endpoint whose id is the model's provider key is local when its kind is lm-studio/ollama or its base URL is local; an undeclared key is local only by the brand table (#2128)."
   ],
@@ -275,6 +276,42 @@
       "provider": "copilot"
     },
     {
+      "name": "gemini-headless, an alias of gemini",
+      "adapter": "gemini-headless",
+      "model": "sonnet",
+      "provider": "google"
+    },
+    {
+      "name": "grok-headless, an alias of grok",
+      "adapter": "grok-headless",
+      "model": "",
+      "provider": "xai"
+    },
+    {
+      "name": "xai, an alias of grok",
+      "adapter": "xai",
+      "model": "openai/gpt-5.6-terra",
+      "provider": "xai"
+    },
+    {
+      "name": "github, the SDK's alias of copilot",
+      "adapter": "github",
+      "model": "gpt-4o",
+      "provider": "copilot"
+    },
+    {
+      "name": "gh, the SDK's alias of copilot",
+      "adapter": "gh",
+      "model": "gpt-4o",
+      "provider": "copilot"
+    },
+    {
+      "name": "lmstudio is a retired adapter (#2128), not a provider",
+      "adapter": "lmstudio",
+      "model": "lmstudio/qwen/qwen3.8-27b",
+      "provider": "other"
+    },
+    {
       "name": "the lm-studio bridge",
       "adapter": "lm-studio",
       "model": "anthropic/claude-sonnet-5",
@@ -447,6 +484,46 @@
       "band_or_id": "openai/",
       "configured_model": "lmstudio/qwen/qwen3.8-27b",
       "error": true
+    },
+    {
+      "name": "a quote and a newline in a malformed qualified stage model are escaped",
+      "adapter": "opencode",
+      "band_or_id": "x\"/a\nb",
+      "configured_model": "lmstudio/qwen/qwen3.8-27b",
+      "error": true,
+      "error_message": "model \"x\\\"/a\\nb\" is not a valid <provider>/<model> for the opencode adapter"
+    },
+    {
+      "name": "non-printable runes in a malformed stage model are escaped as Go escapes them",
+      "adapter": "opencode",
+      "band_or_id": "k/\u00a0\u007f\udb40\udc01",
+      "configured_model": "lmstudio/qwen/qwen3.8-27b",
+      "error": true,
+      "error_message": "model \"k/\\u00a0\\x7f\\U000e0001\" is not a valid <provider>/<model> for the opencode adapter"
+    },
+    {
+      "name": "a quote, a newline and a terminal escape in a bare stage model are escaped",
+      "adapter": "opencode",
+      "band_or_id": "Sonnet\"\n\u001b[31m",
+      "configured_model": "anthropic/claude-opus-5",
+      "error": true,
+      "error_message": "model \"Sonnet\\\"\\n\\x1b[31m\" names no provider, and the opencode adapter never infers one: name it as <provider>/<model>"
+    },
+    {
+      "name": "the no-configured-provider error quotes the stage model",
+      "adapter": "opencode",
+      "band_or_id": "opus",
+      "configured_model": "",
+      "error": true,
+      "error_message": "the opencode adapter has no provider to resolve stage model \"opus\" against: name the stage model as <provider>/<model>, or configure a <provider>/<model> default (opencode.model)"
+    },
+    {
+      "name": "a quote and a backslash in the configured model are escaped",
+      "adapter": "opencode",
+      "band_or_id": "sonnet",
+      "configured_model": "openrouter/a\"b\\\u00e9",
+      "error": true,
+      "error_message": "provider \"other\" of the configured model \"openrouter/a\\\"b\\\\\u00e9\" has no registry model in band \"sonnet\": name the stage model as <provider>/<model>"
     },
     {
       "name": "a single-provider adapter resolves bands itself",

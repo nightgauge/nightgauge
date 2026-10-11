@@ -130,7 +130,10 @@ func projectFieldGetCmd() *cobra.Command {
 			if err != nil {
 				return emitError(cmd, err)
 			}
-			item, err := client.Board().GetItem(cmd.Context(), owner, repo, number)
+			// Every field readFieldValue serves is the item's own, so the
+			// read selects none of its relationship lists (#1707): a sub-issue
+			// or blocker list that cannot be completed cannot fail it.
+			item, err := client.Board().GetItemWithoutRelations(cmd.Context(), owner, repo, number)
 			if err != nil {
 				return emitError(cmd, fmt.Errorf("get board item: %w", err))
 			}

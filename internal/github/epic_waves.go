@@ -2,9 +2,7 @@ package github
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"os"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
 	"github.com/nightgauge/nightgauge/pkg/types"
@@ -21,20 +19,17 @@ type EpicWaveResult = teams.EpicWaveResult
 // GitLab adapters share a single source of truth for the algorithm. The plan
 // is built from each issue's body and blocker list, so each issue is read with
 // its blocker list whole and no other list.
+//
+// An issue that cannot be read fails the plan: left out, it would be in no
+// wave, and the issues it blocks would be planned as if it did not exist.
 func (e *EpicService) PlanWaves(ctx context.Context, owner, repo string, issueNumbers []int) (*EpicWaveResult, error) {
 	issueSvc := NewIssueService(e.client)
 
 	issues := make([]types.Issue, 0, len(issueNumbers))
 	for _, num := range issueNumbers {
 		issue, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, num, RelationBlockedBy)
-		if errors.Is(err, ErrConnectionTruncated) {
-			// A blocker list read only in part would plan the issue into an
-			// earlier wave than its unseen blockers allow.
-			return nil, fmt.Errorf("plan waves: fetch issue #%d: %w", num, err)
-		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: fetch issue #%d: %v\n", num, err)
-			continue
+			return nil, fmt.Errorf("plan waves: fetch issue #%d: %w", num, err)
 		}
 		issues = append(issues, *issue)
 	}

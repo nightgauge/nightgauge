@@ -2180,10 +2180,12 @@ issue number 0 — useful for tests.`,
 				//     takes owner and repo and checks both.
 				//
 				// A miss is still silent: an issue that is not on the board
-				// routes from its labels alone, as before.
+				// routes from its labels alone, as before. Size and Priority
+				// are the item's own fields, so none of its relationship lists
+				// is read (#1707).
 				if sizeFlag == "" || priorityFlag == "" {
 					boardSvc := gh.NewBoardService(client, ownerPart, projectNumber, getOwnerType(cmd))
-					if item, ferr := boardSvc.GetItem(cmd.Context(), ownerPart, repoPart, number); ferr == nil && item != nil {
+					if item, ferr := boardSvc.GetItemWithoutRelations(cmd.Context(), ownerPart, repoPart, number); ferr == nil && item != nil {
 						if input.BoardSize == "" {
 							input.BoardSize = string(item.Size)
 						}
@@ -2742,22 +2744,7 @@ func epicValidateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-
-			if outputJSON {
-				return printJSON(result)
-			}
-
-			if result.Valid {
-				fmt.Printf("Epic #%d: valid — no structural gaps found (%d sub-issues checked)\n",
-					result.EpicNumber, result.TotalSubIssues)
-			} else {
-				fmt.Printf("Epic #%d: %d gap(s) found (%d sub-issues checked)\n",
-					result.EpicNumber, len(result.Gaps), result.TotalSubIssues)
-				for _, g := range result.Gaps {
-					fmt.Printf("  [%s] #%d %s — %s\n", g.GapType, g.SubIssueNumber, g.SubIssueTitle, g.Detail)
-				}
-			}
-			return nil
+			return writeEpicValidation(cmd.OutOrStdout(), result, outputJSON)
 		},
 	}
 
@@ -2765,6 +2752,44 @@ func epicValidateCmd() *cobra.Command {
 	requiredRepoNameFlag(cmd, &repo, "Repository (owner/name or name)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output as JSON")
 	return cmd
+}
+
+// writeEpicValidation writes an `epic validate` result to w, as JSON or as
+// text, and returns an error when any sub-issue could not be checked, so the
+// command exits non-zero. Gaps alone are findings, not an error. A sub-issue
+// that was never read can hide a gap, so the text says how many were checked
+// and does not call an epic valid unless every one was.
+func writeEpicValidation(w io.Writer, result *gh.EpicValidationResult, asJSON bool) error {
+	if asJSON {
+		data, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(w, string(data))
+	} else {
+		switch {
+		case result.Valid:
+			fmt.Fprintf(w, "Epic #%d: valid — no structural gaps found (%d sub-issues checked)\n",
+				result.EpicNumber, result.CheckedSubIssues)
+		case result.FailedSubIssues == 0:
+			fmt.Fprintf(w, "Epic #%d: %d gap(s) found (%d sub-issues checked)\n",
+				result.EpicNumber, len(result.Gaps), result.CheckedSubIssues)
+		default:
+			fmt.Fprintf(w, "Epic #%d: not validated — %d of %d sub-issues could not be checked; %d gap(s) found in the %d checked\n",
+				result.EpicNumber, result.FailedSubIssues, result.TotalSubIssues, len(result.Gaps), result.CheckedSubIssues)
+		}
+		for _, g := range result.Gaps {
+			fmt.Fprintf(w, "  [%s] #%d %s — %s\n", g.GapType, g.SubIssueNumber, g.SubIssueTitle, g.Detail)
+		}
+		for _, f := range result.Failures {
+			fmt.Fprintf(w, "  [unchecked] %s#%d %s — %s\n", f.SubIssueRepo, f.SubIssueNumber, f.SubIssueTitle, f.Error)
+		}
+	}
+	if result.FailedSubIssues > 0 {
+		return fmt.Errorf("epic #%d: %d of %d sub-issues could not be checked",
+			result.EpicNumber, result.FailedSubIssues, result.TotalSubIssues)
+	}
+	return nil
 }
 
 func epicAssessCmd() *cobra.Command {
@@ -2795,7 +2820,7 @@ func epicAssessCmd() *cobra.Command {
 			ownerPart, repoPart := splitRepo(owner, repo)
 			issueSvc := gh.NewIssueService(client)
 
-			inputs, err := epicAssessInputs(cmd.Context(), issueSvc, ownerPart, repoPart, epicNumber, cmd.ErrOrStderr())
+			inputs, err := epicAssessInputs(cmd.Context(), issueSvc, ownerPart, repoPart, epicNumber)
 			if err != nil {
 				return err
 			}
@@ -2838,15 +2863,14 @@ type issueReader interface {
 
 // epicAssessInputs reads the open sub-issues of an epic as assessor inputs.
 // The strategy is computed from the epic's sub-issue list and each sub-issue's
-// blockers, so those two lists are read whole and no others are.
+// blockers, so those two lists are read whole and no others are. Each
+// sub-issue is read in its own repository.
 //
-// A sub-issue that cannot be read is skipped with a warning on warn, except
-// one whose blocker list could not be read to its end
-// (github.ErrConnectionTruncated). Skipping that one would compute the
-// strategy without it and without the blockers that order it, and the
-// assess-epic skill discards stderr, where the warning goes, so it is an
-// error.
-func epicAssessInputs(ctx context.Context, issues issueReader, owner, repo string, epicNumber int, warn io.Writer) ([]batch.IssueInput, error) {
+// A sub-issue that cannot be read, or whose blocker list cannot be read to its
+// end, is an error. Skipping it would compute the strategy without it and
+// without the blockers that order it, and the assess-epic skill discards
+// stderr, where a warning would go.
+func epicAssessInputs(ctx context.Context, issues issueReader, owner, repo string, epicNumber int) ([]batch.IssueInput, error) {
 	epic, err := issues.GetIssueWithRelations(ctx, owner, repo, epicNumber, gh.RelationSubIssues)
 	if err != nil {
 		return nil, fmt.Errorf("fetch epic #%d: %w", epicNumber, err)
@@ -2857,13 +2881,13 @@ func epicAssessInputs(ctx context.Context, issues issueReader, owner, repo strin
 		if ref.State != "OPEN" {
 			continue
 		}
-		si, err := issues.GetIssueWithRelations(ctx, owner, repo, ref.Number, gh.RelationBlockedBy)
-		if errors.Is(err, gh.ErrConnectionTruncated) {
-			return nil, fmt.Errorf("fetch sub-issue #%d of epic #%d: %w", ref.Number, epicNumber, err)
+		siOwner, siRepo := owner, repo
+		if o, r, ok := strings.Cut(ref.Repo, "/"); ok && o != "" && r != "" {
+			siOwner, siRepo = o, r
 		}
+		si, err := issues.GetIssueWithRelations(ctx, siOwner, siRepo, ref.Number, gh.RelationBlockedBy)
 		if err != nil {
-			fmt.Fprintf(warn, "warning: skip #%d: %v\n", ref.Number, err)
-			continue
+			return nil, fmt.Errorf("fetch sub-issue %s/%s#%d of epic #%d: %w", siOwner, siRepo, ref.Number, epicNumber, err)
 		}
 		blockedBy := make([]int, 0, len(si.BlockedBy))
 		for _, b := range si.BlockedBy {

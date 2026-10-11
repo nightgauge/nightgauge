@@ -79,7 +79,7 @@ type OpenDependency struct {
 //
 // The gate uses one relationship list, the issue's own blockedBy, and reads it
 // whole: a blockedBy list that cannot be read to its end fails the evaluation
-// (github.ErrConnectionTruncated). It reads no other list. The issue's
+// (forge.ErrConnectionTruncated). It reads no other list. The issue's
 // sub-issues and the issues it blocks are not its dependencies, and a
 // body-declared dependency is judged by its state alone, so however long any
 // of those lists is, it cannot fail the gate.

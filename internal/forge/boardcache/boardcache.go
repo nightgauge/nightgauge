@@ -635,6 +635,11 @@ func (b *cachedBoard) GetItem(ctx context.Context, owner, repo string, issueNumb
 	return b.inner.GetItem(ctx, owner, repo, issueNumber)
 }
 
+// GetItemWithoutRelations passes straight through, as GetItem does.
+func (b *cachedBoard) GetItemWithoutRelations(ctx context.Context, owner, repo string, issueNumber int) (*forgetypes.BoardItem, error) {
+	return b.inner.GetItemWithoutRelations(ctx, owner, repo, issueNumber)
+}
+
 // CountsByStatus reports how many of the board's OPEN items sit in each
 // status, derived from ListOpenItems — which, on a board this package wraps, is
 // the cached snapshot: zero requests inside the TTL, one 1-point probe after

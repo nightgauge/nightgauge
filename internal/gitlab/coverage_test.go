@@ -481,6 +481,7 @@ func TestIssueService_SearchIssues_ReturnsErrUnsupported(t *testing.T) {
 func TestIssueService_HasLabel_ReturnsTrueWhenLabelMatches(t *testing.T) {
 	srv := newStubServer(t)
 	srv.handle("GET", "/api/v4/projects/o%2Fr/issues/42", 200, sampleIssueJSON)
+	srv.handle("GET", "/api/v4/projects/o%2Fr/issues/42/links", 200, `[]`)
 
 	c := NewClient(srv.srv.URL, "tok")
 	svc := NewIssueService(c)

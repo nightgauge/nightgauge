@@ -3428,6 +3428,10 @@ func (s *Scheduler) ExcludeLabels() []string {
 // open sub-issues that isn't CLOSED is enqueued as before).
 // @see Issue #2992 — epic drag filter.
 //
+// Each sub-issue it would enqueue is read for its blocker list first, and a
+// read that fails, at all or part way through the list, fails the call with
+// nothing enqueued.
+//
 // visibility is state.VisibilityPrivate when the member queuing the epic
 // chose private (#2400): every sub-issue item is private, and one already
 // waiting is raised. "" (team) otherwise.
@@ -3464,47 +3468,10 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 		log.Printf("EnqueueEpic: filter active — eligible=%d, total=%d", len(eligibleSet), len(issue.SubIssues))
 	}
 
-	// Fetch per-sub-issue blockedBy relationships before taking the lock.
-	// The epic query only returns lightweight SubIssueRef (no blocking data),
-	// so each sub-issue is read for its own blocker list, and only that list.
-	//
-	// Keyed by the sub-issue's repository and number: an epic's sub-issues can
-	// share a number across repositories, and keyed by number the second one
-	// read replaced the first one's blockers (#2377).
-	subIssueBlockedBy := make(map[string][]types.BlockingRef, len(issue.SubIssues))
-	for _, si := range issue.SubIssues {
-		if strings.EqualFold(si.State, "CLOSED") {
-			continue
-		}
-		// Determine owner/repo for this sub-issue (may differ in cross-repo epics)
-		siOwner, siRepo := owner, repo
-		if si.Repo != "" && si.Repo != fullRepo {
-			parts := strings.SplitN(si.Repo, "/", 2)
-			if len(parts) == 2 {
-				siOwner, siRepo = parts[0], parts[1]
-			}
-		}
-		// Resolve per sub-issue repo — a cross-repo sub-issue may need a
-		// different configured identity than the epic's repo (#3700). The
-		// resolver caches clients, so same-repo sub-issues reuse one client.
-		siIssue, err := s.issueServiceFor(ctx, siOwner, siRepo).GetIssueWithRelations(ctx, siOwner, siRepo, si.Number, gh.RelationBlockedBy)
-		if errors.Is(err, gh.ErrConnectionTruncated) {
-			// The sub-issue's blocker list could not be read whole.
-			// Enqueuing it without the blockers past the part that was read
-			// would let DequeueIndependent dispatch it while one is still open.
-			return fmt.Errorf("enqueue epic #%d: blockers of sub-issue %s/%s#%d: %w", epicNumber, siOwner, siRepo, si.Number, err)
-		}
-		if err != nil {
-			log.Printf("WARN: failed to fetch blockedBy for sub-issue %s/%s#%d: %v", siOwner, siRepo, si.Number, err)
-			continue
-		}
-		subIssueBlockedBy[repoIssueKey(siOwner+"/"+siRepo, si.Number)] = siIssue.BlockedBy
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	epicOrder := 0
+	// Choose the sub-issues to enqueue before reading any of them. One that
+	// is closed, outside the caller's whitelist, or human-only is never
+	// enqueued, so a failed read of it must not fail the rest.
+	var toEnqueue []types.SubIssueRef
 	for _, si := range issue.SubIssues {
 		// Skip closed sub-issues — no point queuing work that's already done.
 		if strings.EqualFold(si.State, "CLOSED") {
@@ -3530,6 +3497,44 @@ func (s *Scheduler) EnqueueEpic(ctx context.Context, owner, repo string, epicNum
 			log.Printf("EnqueueEpic: skipping sub-issue #%d — carries human-only label %q (autonomous.exclude_labels)", si.Number, label)
 			continue
 		}
+		toEnqueue = append(toEnqueue, si)
+	}
+
+	// Fetch per-sub-issue blockedBy relationships before taking the lock.
+	// The epic query only returns lightweight SubIssueRef (no blocking data),
+	// so each sub-issue is read for its own blocker list, and only that list.
+	//
+	// Keyed by the sub-issue's repository and number: an epic's sub-issues can
+	// share a number across repositories, and keyed by number the second one
+	// read replaced the first one's blockers (#2377).
+	subIssueBlockedBy := make(map[string][]types.BlockingRef, len(toEnqueue))
+	for _, si := range toEnqueue {
+		// Determine owner/repo for this sub-issue (may differ in cross-repo epics)
+		siOwner, siRepo := owner, repo
+		if si.Repo != "" && si.Repo != fullRepo {
+			parts := strings.SplitN(si.Repo, "/", 2)
+			if len(parts) == 2 {
+				siOwner, siRepo = parts[0], parts[1]
+			}
+		}
+		// Resolve per sub-issue repo — a cross-repo sub-issue may need a
+		// different configured identity than the epic's repo (#3700). The
+		// resolver caches clients, so same-repo sub-issues reuse one client.
+		siIssue, err := s.issueServiceFor(ctx, siOwner, siRepo).GetIssueWithRelations(ctx, siOwner, siRepo, si.Number, gh.RelationBlockedBy)
+		if err != nil {
+			// Enqueued without its blockers, or without the ones past the
+			// part of the list that was read, the sub-issue would be
+			// dispatched by DequeueIndependent while one is still open.
+			return fmt.Errorf("enqueue epic #%d: blockers of sub-issue %s/%s#%d: %w", epicNumber, siOwner, siRepo, si.Number, err)
+		}
+		subIssueBlockedBy[repoIssueKey(siOwner+"/"+siRepo, si.Number)] = siIssue.BlockedBy
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	epicOrder := 0
+	for _, si := range toEnqueue {
 		// Use the sub-issue's own repo if it differs from the epic's repo
 		// (cross-repo epics). Without this, all sub-issues are routed to the
 		// epic's repo, causing pipeline runs in the wrong repository.
@@ -8598,8 +8603,8 @@ func (s *Scheduler) dispatchItem(ctx context.Context, item types.BoardItem) {
 		if s.RunEpicWaves(ctx, item) {
 			return // Wave orchestration handled the epic
 		}
-		// Wave orchestration declined (sequential strategy) — fall back to queue
-		log.Printf("#%d: wave orchestration declined — falling back to sequential queue", item.Number)
+		// No wave plan: a sequential strategy, or a plan that could not be built
+		log.Printf("#%d: no wave plan (sequential strategy, or the plan failed; see above) — falling back to sequential queue", item.Number)
 		ownerPart, repoPart := splitOwnerRepo(item.Repo)
 		if err := s.EnqueueEpic(ctx, ownerPart, repoPart, item.Number, item.Title, item.Labels, nil, ""); err != nil {
 			log.Printf("#%d: failed to enqueue epic sub-issues: %v", item.Number, err)

@@ -61,8 +61,15 @@ type BoardService interface {
 	ListItems(ctx context.Context, statusFilter string) ([]forgetypes.BoardItem, error)
 	ListOpenItems(ctx context.Context) ([]forgetypes.BoardItem, int, error)
 
-	// GetItem fetches a single board item by issue number. Adapters return
+	// GetItem fetches a single board item by issue number, with its
+	// sub-issue, blocked-by and blocking lists read whole. Adapters return
 	// ErrNotFound when the issue exists but is not on the bound board (or
 	// the issue itself does not exist).
 	GetItem(ctx context.Context, owner, repo string, issueNumber int) (*forgetypes.BoardItem, error)
+
+	// GetItemWithoutRelations is GetItem for a caller that uses only the
+	// item's own fields. SubIssues, BlockedBy and Blocking are empty, and an
+	// adapter reads none of them, so a relationship list the caller would
+	// discard cannot fail the read. ErrNotFound as GetItem.
+	GetItemWithoutRelations(ctx context.Context, owner, repo string, issueNumber int) (*forgetypes.BoardItem, error)
 }

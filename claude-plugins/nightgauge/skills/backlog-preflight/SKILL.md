@@ -6,7 +6,7 @@ description: Validate backlog issues are pipeline-ready before processing. Check
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.1.1"
+  version: "1.2.0"
   source: https://github.com/nightgauge/nightgauge
 allowed-tools: Read Write Edit Glob Grep Bash Task
 context: fork
@@ -197,13 +197,13 @@ echo "Found $ISSUE_COUNT issues with status: $STATUS_FILTER"
 
 ### Phase 2: Validation Checks (Checks 2.1–2.5)
 
-Checks 2.1–2.5 are implemented in the Go binary for correctness, testability,
-and speed. The binary path is preferred; the legacy shell fallback runs when
-the binary is unavailable (e.g., first install, CI without binary).
+Checks 2.1–2.5 run in the Go binary (audit row B26, #3084). The binary reads
+each board item's whole `blockedBy` list, page by page, and fails rather than
+check cycles on part of it (#1701). There is no shell fallback: a fixed-size
+`blockedBy` read stops at its first page with no sign that more exist, so a
+cycle through a later blocker would go unreported.
 
 ```bash
-# Binary path: preferred. (Audit row B26 — landed in #3084)
-PREFLIGHT_JSON=""
 MISSING_TYPE=()
 MISSING_SIZE=()
 MISSING_PRIORITY=()
@@ -227,151 +227,36 @@ if [ -z "$BINARY" ]; then
 fi
 [ -z "$BINARY" ] && [ -x "$HOME/go/bin/nightgauge" ] && BINARY="$HOME/go/bin/nightgauge"
 [ -n "$BINARY" ] && export PATH="$(dirname "$BINARY"):$PATH"
+if [ -z "$BINARY" ]; then
+  echo "ERROR: nightgauge binary not found in PATH or bin/nightgauge"
+  echo "Install via: go install github.com/nightgauge/nightgauge/cmd/nightgauge@latest"
+  exit 1
+fi
 
-if [ -n "$BINARY" ]; then
-  PREFLIGHT_JSON=$("$BINARY" backlog preflight \
-    --owner "$OWNER" --status "$STATUS_FILTER" --focus "$FOCUS" --json 2>&1)
-  PREFLIGHT_EXIT=$?
+# Exit 0 = no findings, 1 = findings, 2 = could not run (the reason is on
+# stderr). Only stdout is the report, so stderr is never merged into it.
+PREFLIGHT_JSON=$("$BINARY" backlog preflight \
+  --owner "$OWNER" --status "$STATUS_FILTER" --focus "$FOCUS" --json)
+PREFLIGHT_EXIT=$?
 
-  if [ $PREFLIGHT_EXIT -eq 2 ]; then
-    echo "ERROR: backlog preflight failed — $PREFLIGHT_JSON"
-    exit 1
-  fi
+if [ $PREFLIGHT_EXIT -gt 1 ] || ! printf '%s\n' "$PREFLIGHT_JSON" \
+     | jq -e 'type == "object" and has("findings") and has("summary")' >/dev/null 2>&1; then
+  echo "ERROR: backlog preflight could not run (exit $PREFLIGHT_EXIT) — see the error above"
+  exit 1
+fi
 
-  # Extract per-category finding arrays for downstream reporting.
-  MISSING_TYPE_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "missing_type_label")]' 2>/dev/null || echo "[]")
-  MISSING_SIZE_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "missing_size_field")]' 2>/dev/null || echo "[]")
-  MISSING_PRIORITY_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "missing_priority_field")]' 2>/dev/null || echo "[]")
-  WEAK_AC_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "weak_acceptance_criteria")]' 2>/dev/null || echo "[]")
-  CYCLES_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "dependency_cycle")]' 2>/dev/null || echo "[]")
-  GREENFIELD_JSON=$(printf '%s\n' "$PREFLIGHT_JSON" | jq -c '[.findings[] | select(.finding_type == "greenfield_warning")]' 2>/dev/null || echo "[]")
-
-  # Populate bash arrays for the Phase 3 reporter (backward-compatible interface).
-  while IFS= read -r line; do [ -n "$line" ] && MISSING_TYPE+=("$line"); done < <(printf '%s\n' "$MISSING_TYPE_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title)"' 2>/dev/null)
-  while IFS= read -r line; do [ -n "$line" ] && MISSING_SIZE+=("$line"); done < <(printf '%s\n' "$MISSING_SIZE_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title)"' 2>/dev/null)
-  while IFS= read -r line; do [ -n "$line" ] && MISSING_PRIORITY+=("$line"); done < <(printf '%s\n' "$MISSING_PRIORITY_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title)"' 2>/dev/null)
-  while IFS= read -r line; do [ -n "$line" ] && WEAK_AC+=("$line"); done < <(printf '%s\n' "$WEAK_AC_JSON" | jq -r '.[] | "#\(.issue_number): \(.issue_title) (\(.detail))"' 2>/dev/null)
-  while IFS= read -r line; do [ -n "$line" ] && CYCLES+=("$line"); done < <(printf '%s\n' "$CYCLES_JSON" | jq -r '.[] | .detail' 2>/dev/null)
-  while IFS= read -r line; do [ -n "$line" ] && GREENFIELD_WARNINGS+=("$line"); done < <(printf '%s\n' "$GREENFIELD_JSON" | jq -r '.[] | .detail' 2>/dev/null)
-
-else
-  # Legacy shell fallback — runs when binary is not installed.
-
-  #### Check 2.1: Required Labels
-
-  if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "labels" ]; then
-    for i in $(seq 0 $((ISSUE_COUNT - 1))); do
-      NUMBER=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.number")
-      TITLE=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.title")
-      LABELS=$(printf '%s\n' "$ISSUES" | jq -r "[.data.organization.projectV2.items.nodes[$i].content.labels.nodes[].name] | join(\",\")")
-
-      HAS_TYPE=$(printf '%s\n' "$LABELS" | grep -cE "type:(feature|bug|docs|refactor|chore|epic|spike)" || true)
-      if [ "$HAS_TYPE" -eq 0 ]; then
-        MISSING_TYPE+=("#$NUMBER: $TITLE")
-      fi
-    done
-  fi
-
-  #### Check 2.2: Board Field Validation
-
-  if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "labels" ]; then
-    for i in $(seq 0 $((ISSUE_COUNT - 1))); do
-      NUMBER=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.number")
-      TITLE=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.title")
-
-      SIZE=$(printf '%s\n' "$ISSUES" | jq -r "[.data.organization.projectV2.items.nodes[$i].fieldValues.nodes[] | select(.field.name==\"Size\") | .name] | first // empty")
-      PRIORITY=$(printf '%s\n' "$ISSUES" | jq -r "[.data.organization.projectV2.items.nodes[$i].fieldValues.nodes[] | select(.field.name==\"Priority\") | .name] | first // empty")
-
-      if [ -z "$SIZE" ]; then MISSING_SIZE+=("#$NUMBER: $TITLE"); fi
-      if [ -z "$PRIORITY" ]; then MISSING_PRIORITY+=("#$NUMBER: $TITLE"); fi
-    done
-  fi
-
-  #### Check 2.3: Acceptance Criteria Quality
-
-  if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "criteria" ]; then
-    for i in $(seq 0 $((ISSUE_COUNT - 1))); do
-      NUMBER=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.number")
-      TITLE=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.title")
-      BODY=$(printf '%s\n' "$ISSUES" | jq -r ".data.organization.projectV2.items.nodes[$i].content.body // \"\"")
-      BODY_LEN=${#BODY}
-      AC_COUNT=$(printf '%s\n' "$BODY" | grep -c "\- \[ \]" 2>/dev/null || echo "0")
-
-      if [ "$BODY_LEN" -lt 100 ] || [ "$AC_COUNT" -lt 2 ]; then
-        REASON=""
-        if [ "$BODY_LEN" -lt 100 ]; then REASON="body < 100 chars"; fi
-        if [ "$AC_COUNT" -lt 2 ]; then
-          [ -n "$REASON" ] && REASON="$REASON + "
-          REASON="${REASON}fewer than 2 checkbox ACs (found: $AC_COUNT)"
-        fi
-        WEAK_AC+=("#$NUMBER: $TITLE ($REASON)")
-      fi
-    done
-  fi
-
-  #### Check 2.4: Dependency Cycle Detection
-
-  if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "dependencies" ]; then
-    BLOCKING_DATA=$(gh api graphql -f query='
-    {
-      repository(owner: "'"${OWNER}"'", name: "'"${REPO#*/}"'") {
-        issues(first: 100, states: OPEN) {
-          nodes {
-            number
-            blockedBy(first: 10) { nodes { number state } }
-            blocking(first: 10) { nodes { number state } }
-          }
-        }
-      }
-    }')
-
-    CYCLE_OUTPUT=$(echo "$BLOCKING_DATA" | python3 << 'PYEOF'
-import json, sys
-data = json.loads(sys.stdin.read())
-issues = data["data"]["repository"]["issues"]["nodes"]
-graph = {}
-for issue in issues:
-    num = issue["number"]
-    blocked_by = [b["number"] for b in issue.get("blockedBy", {}).get("nodes", []) if b["state"] == "OPEN"]
-    if blocked_by:
-        graph[num] = blocked_by
-def find_cycles(graph):
-    visited, path, cycles = set(), set(), []
-    def dfs(node, current_path):
-        if node in path:
-            idx = list(current_path).index(node)
-            cycles.append(list(current_path)[idx:] + [node])
-            return
-        if node in visited: return
-        visited.add(node); path.add(node); current_path.append(node)
-        for neighbor in graph.get(node, []): dfs(neighbor, current_path)
-        path.remove(node); current_path.pop()
-    for node in graph:
-        if node not in visited: dfs(node, [])
-    return cycles
-cycles = find_cycles(graph)
-if cycles:
-    for cycle in cycles: print("CYCLE: " + " → ".join(f"#{n}" for n in cycle))
-else: print("NO_CYCLES")
-PYEOF
-    )
-    while IFS= read -r line; do
-      if [[ "$line" == CYCLE:* ]]; then CYCLES+=("${line#CYCLE: }"); fi
-    done <<< "$CYCLE_OUTPUT"
-  fi
-
-  #### Check 2.5: Greenfield Readiness
-
-  if [ "$FOCUS" = "all" ] || [ "$FOCUS" = "greenfield" ]; then
-    [ ! -f "$(nightgauge layout path checkout complexity-model.yaml)" ] && GREENFIELD_WARNINGS+=("Missing complexity-model.yaml — run nightgauge outcome init")
-    [ ! -d "docs" ] && GREENFIELD_WARNINGS+=("Missing docs/ directory — feature-dev will use AGENTS.md fallback for standards")
-    [ ! -f "docs/CODE_STANDARDS.md" ] && GREENFIELD_WARNINGS+=("Missing docs/CODE_STANDARDS.md — feature-dev will fall back to AGENTS.md or language defaults")
-    if [ ! -f "docs/SECURITY_AND_ERROR_HANDLING.md" ] && [ ! -f "docs/SECURITY.md" ]; then
-      GREENFIELD_WARNINGS+=("Missing docs/SECURITY*.md — feature-dev will use security defaults")
-    fi
-  fi
-
-fi  # end binary/legacy branch
+# Extract per-category finding arrays for downstream reporting. The binary
+# writes findings as null when there are none.
+finding_lines() {
+  printf '%s\n' "$PREFLIGHT_JSON" | jq -r --arg t "$1" \
+    "(.findings // [])[] | select(.finding_type == \$t) | $2"
+}
+while IFS= read -r line; do [ -n "$line" ] && MISSING_TYPE+=("$line"); done < <(finding_lines missing_type_label '"#\(.issue_number): \(.issue_title)"')
+while IFS= read -r line; do [ -n "$line" ] && MISSING_SIZE+=("$line"); done < <(finding_lines missing_size_field '"#\(.issue_number): \(.issue_title)"')
+while IFS= read -r line; do [ -n "$line" ] && MISSING_PRIORITY+=("$line"); done < <(finding_lines missing_priority_field '"#\(.issue_number): \(.issue_title)"')
+while IFS= read -r line; do [ -n "$line" ] && WEAK_AC+=("$line"); done < <(finding_lines weak_acceptance_criteria '"#\(.issue_number): \(.issue_title) (\(.detail))"')
+while IFS= read -r line; do [ -n "$line" ] && CYCLES+=("$line"); done < <(finding_lines dependency_cycle '.detail')
+while IFS= read -r line; do [ -n "$line" ] && GREENFIELD_WARNINGS+=("$line"); done < <(finding_lines greenfield_warning '.detail')
 ```
 
 #### Check 2.6: Documentation Drift Detection
@@ -618,12 +503,14 @@ fi
 
 ## Error Handling
 
-| Error                   | Cause                        | Resolution                          |
-| ----------------------- | ---------------------------- | ----------------------------------- |
-| `gh: command not found` | GitHub CLI not installed     | Install from https://cli.github.com |
-| `No project number`     | Missing .nightgauge/         | Run /nightgauge:repo-init first     |
-| `403 rate limit`        | Too many API requests        | Wait or use authenticated token     |
-| `No issues found`       | No issues with target status | Try different --status value        |
+| Error                             | Cause                                          | Resolution                          |
+| --------------------------------- | ---------------------------------------------- | ----------------------------------- |
+| `gh: command not found`           | GitHub CLI not installed                       | Install from https://cli.github.com |
+| `No project number`               | Missing .nightgauge/                           | Run /nightgauge:repo-init first     |
+| `403 rate limit`                  | Too many API requests                          | Wait or use authenticated token     |
+| `No issues found`                 | No issues with target status                   | Try different --status value        |
+| `nightgauge binary not found`     | Binary not installed                           | Install it (see the error message)  |
+| `backlog preflight could not run` | A board read failed, e.g. a whole blocker list | Read the error above, then re-run   |
 
 ## Integration
 

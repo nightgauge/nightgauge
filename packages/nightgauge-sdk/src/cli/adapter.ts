@@ -16,7 +16,12 @@ export type { NightgaugeAdapter } from "./adapters/ICliAdapter.js";
 import type { NightgaugeAdapter } from "./adapters/ICliAdapter.js";
 import { retiredAdapterMessage } from "./adapters/retiredAdapters.js";
 
-const ADAPTER_ALIASES: Record<string, NightgaugeAdapter> = {
+/**
+ * Every name `resolveAdapter` accepts, and the adapter each one resolves to.
+ * Exported so the provider of each alias can be checked against the provider
+ * of the adapter it names (`providerForAdapter`, #1707).
+ */
+export const ADAPTER_ALIASES: Readonly<Record<string, NightgaugeAdapter>> = {
   claude: "claude-sdk",
   "claude-sdk": "claude-sdk",
   "claude-headless": "claude-headless",

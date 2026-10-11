@@ -87,7 +87,7 @@ Exit codes:
 			}
 
 			issueSvc := gh.NewIssueService(client)
-			v := backlogpreflight.New(boardSvc, issueSvc, ownerPart, repoPart)
+			v := backlogpreflight.New(issueSvc, ownerPart, repoPart)
 
 			var findings []backlogpreflight.BacklogFinding
 			normalizedFocus := strings.ToLower(focus)
@@ -137,6 +137,10 @@ Exit codes:
 	cmd.Flags().IntVar(&issueNum, "issue", 0, "Single issue number to validate (0 = all issues in --status)")
 	cmd.Flags().IntVar(&projectNumber, "project", 0, "Project board number (defaults to config)")
 	cmd.Flags().BoolVar(&outputJSON, "json", false, "Output results as JSON")
+	// Exit 1 means "findings found", so an error must not exit 1 too: a board
+	// read that fails (a blocker list that cannot be read whole, #1701) would
+	// read as a verdict with no cycles in it.
+	markCouldNotRunExit(cmd)
 	return cmd
 }
 

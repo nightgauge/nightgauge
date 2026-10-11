@@ -353,7 +353,7 @@ func collectImportTypes(methods []MethodDef) []string {
 	typeSet := make(map[string]bool)
 	knownImports := map[string]bool{
 		"AuthTokenResponse": true, "AuthDeviceCodeResult": true, "AuthDeviceFlowPollResult": true,
-		"BoardItem": true, "IssueDetail": true, "EpicProgress": true,
+		"BoardItem": true, "IssueDetail": true, "IssueSummary": true, "EpicProgress": true,
 		"PipelineStatus": true, "ExecutionInfo": true, "ComplexityResult": true,
 		"RunningPipelinesResult": true, // #1511 — reload-safety summary
 		"ModelRouteResult":       true, "FailureClassification": true, "CostEstimate": true,
