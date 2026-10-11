@@ -11,6 +11,10 @@ import (
 type OpenPRHead struct {
 	Number      int
 	HeadRefName string
+	// CrossRepository is true when the branch is in another repository (a
+	// fork). Anyone who can open a pull request can name a fork's branch, so
+	// a caller deciding which issue a PR belongs to must not trust its name.
+	CrossRepository bool
 }
 
 // maxOpenPRPages bounds ListOpenPRHeads' walk: 20 pages of 100 open pull
@@ -25,8 +29,9 @@ type openPRHeadsQuery struct {
 				EndCursor   graphql.String
 			}
 			Nodes []struct {
-				Number      graphql.Int
-				HeadRefName graphql.String
+				Number            graphql.Int
+				HeadRefName       graphql.String
+				IsCrossRepository graphql.Boolean
 			}
 		} `graphql:"pullRequests(first: 100, after: $after, states: OPEN)"`
 	} `graphql:"repository(owner: $owner, name: $name)"`
@@ -35,11 +40,12 @@ type openPRHeadsQuery struct {
 // ListOpenPRHeads returns every open pull request of owner/repo with the
 // branch it merges from, for a caller that decides whether an open PR backs an
 // issue, such as the failed-run revert, which must not return an issue to
-// Ready on top of its own open PR (#1707). It reads every page, two scalars a
-// pull request, so a page costs one GraphQL point. A walk that cannot be
-// finished, whether a page fails or the repository has more than
-// maxOpenPRPages pages, is an error rather than a short list: "no open PR
-// backs this issue" must never be read off part of the list.
+// Ready on top of its own open PR (#1707). It reads every page, three scalars
+// a pull request (number, head branch and whether that branch is in a fork),
+// so a page costs one GraphQL point. A walk that cannot be finished, whether a
+// page fails or the repository has more than maxOpenPRPages pages, is an
+// error rather than a short list: "no open PR backs this issue" must never be
+// read off part of the list.
 func (s *PRService) ListOpenPRHeads(ctx context.Context, owner, repo string) ([]OpenPRHead, error) {
 	var heads []OpenPRHead
 	var after *graphql.String
@@ -55,7 +61,11 @@ func (s *PRService) ListOpenPRHeads(ctx context.Context, owner, repo string) ([]
 		}
 		prs := q.Repository.PullRequests
 		for _, n := range prs.Nodes {
-			heads = append(heads, OpenPRHead{Number: int(n.Number), HeadRefName: string(n.HeadRefName)})
+			heads = append(heads, OpenPRHead{
+				Number:          int(n.Number),
+				HeadRefName:     string(n.HeadRefName),
+				CrossRepository: bool(n.IsCrossRepository),
+			})
 		}
 		if !prs.PageInfo.HasNextPage {
 			return heads, nil

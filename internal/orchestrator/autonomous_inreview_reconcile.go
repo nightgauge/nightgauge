@@ -275,18 +275,26 @@ type openPR struct {
 // baseRefName and statusCheckRollup are selected in that same list call. They
 // are extra FIELDS on a GraphQL query already being paid for, not extra
 // round-trips, so the per-repo call budget is unchanged (#159).
+//
+// A PR from a fork is never an issue's own: the pipeline pushes its branches
+// to the repository itself, while anyone who can open a pull request can name
+// a fork's branch feat/<n>-… (#1707). Counted, it would let an outsider mark a
+// Ready issue blocked, satisfy a dependent's blocker with an issue that has no
+// PR, or have the in-review reconcile run pr-merge on their branch, so it is
+// left out.
 func (as *AutonomousScheduler) openPRMergeStatesForRepo(ctx context.Context, repo string) (map[int]openPR, bool) {
 	if !isWellFormedRepo(repo) {
 		return nil, false
 	}
 	out, err := reconcileExecGh(ctx, "pr", "list", "--repo", repo, "--state", "open",
-		"--json", "number,headRefName,baseRefName,mergeStateStatus,statusCheckRollup", "--limit", "100")
+		"--json", "number,headRefName,isCrossRepository,baseRefName,mergeStateStatus,statusCheckRollup", "--limit", "100")
 	if err != nil {
 		return nil, false
 	}
 	var prs []struct {
 		Number            int              `json:"number"`
 		HeadRefName       string           `json:"headRefName"`
+		IsCrossRepository bool             `json:"isCrossRepository"`
 		BaseRefName       string           `json:"baseRefName"`
 		MergeStateStatus  string           `json:"mergeStateStatus"`
 		StatusCheckRollup []checkRollupRow `json:"statusCheckRollup"`
@@ -296,6 +304,9 @@ func (as *AutonomousScheduler) openPRMergeStatesForRepo(ctx context.Context, rep
 	}
 	states := make(map[int]openPR, len(prs))
 	for _, pr := range prs {
+		if pr.IsCrossRepository {
+			continue
+		}
 		n, ok := gitpkg.ParseIssueNumberFromBranch(pr.HeadRefName)
 		if !ok {
 			continue
@@ -555,7 +566,10 @@ func (as *AutonomousScheduler) openPRMergeStateForIssue(ctx context.Context, rep
 }
 
 // ownOpenPR reports the number of the OPEN PR whose head branch belongs to the
-// issue (the feat/<n>-… convention openPRMergeStatesForRepo keys on). Unlike
+// issue (the feat/<n>-… convention openPRMergeStatesForRepo keys on), counting
+// only a branch in the repository itself: a fork's PR is never the issue's own
+// (see openPRMergeStatesForRepo), and counting one would let anyone who can
+// open a pull request keep a failed issue out of Ready. Unlike
 // that sweep's `gh pr list`, capped at 100 PRs and run once per fresh graph
 // build, it is read per call through the scheduler's own forge client and
 // reads every page of the repository's open PRs (two scalars a PR), so "no
@@ -570,6 +584,9 @@ func (as *AutonomousScheduler) ownOpenPR(ctx context.Context, owner, repoName st
 		return 0, false, err
 	}
 	for _, h := range heads {
+		if h.CrossRepository {
+			continue
+		}
 		if n, ok := gitpkg.ParseIssueNumberFromBranch(h.HeadRefName); ok && n == issue {
 			return h.Number, true, nil
 		}

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,11 +27,13 @@ import (
 // writes counts board requests, so zero proves no write was attempted at all.
 
 // openPRPageJSON renders one page of a repository's open PRs, each "number
-// head-branch" pair, as the open-PR list reads it.
+// head-branch" pair, as the open-PR list reads it. A head written
+// "fork:<branch>" is a branch in another repository (isCrossRepository).
 func openPRPageJSON(prs map[int]string, hasNext bool, cursor string) string {
 	nodes := make([]map[string]interface{}, 0, len(prs))
 	for n, head := range prs {
-		nodes = append(nodes, map[string]interface{}{"number": n, "headRefName": head})
+		branch, fork := strings.CutPrefix(head, "fork:")
+		nodes = append(nodes, map[string]interface{}{"number": n, "headRefName": branch, "isCrossRepository": fork})
 	}
 	b, _ := json.Marshal(map[string]interface{}{"data": map[string]interface{}{
 		"repository": map[string]interface{}{"pullRequests": map[string]interface{}{
@@ -123,6 +126,60 @@ func TestRevertFailedIssueStatus_NoOwnPRStillRevertsToReady(t *testing.T) {
 	}
 	if writes.Load() == 0 {
 		t.Error("no board write was attempted")
+	}
+}
+
+// A fork's PR is not the issue's own, whatever its branch is called: anyone
+// who can open a pull request can name a branch feat/<n>-…, and counting it
+// would let them keep a failed issue out of Ready (#1707).
+func TestRevertFailedIssueStatus_ForkPRDoesNotBackTheIssue(t *testing.T) {
+	buf := withCapturedLog(t)
+	as, writes, _ := revertFixture(t, map[int]string{42: "fork:feat/1-x"})
+
+	as.revertFailedIssueStatus(as.backgroundContext(), "O/a", 1)
+
+	got := buf.String()
+	if strings.Contains(got, "move-to-in-review:") || strings.Contains(got, "PR #42") {
+		t.Errorf("a fork's PR named after the issue kept it out of Ready: %q", got)
+	}
+	if !strings.Contains(got, "back to Ready") {
+		t.Errorf("want the Ready revert; got log: %q", got)
+	}
+	if writes.Load() == 0 {
+		t.Error("no board write was attempted")
+	}
+}
+
+// The in-review reconcile, the blocked-PR sweep, the dependency evidence gate
+// and sidelineHalt all read their open PRs from openPRMergeStatesForRepo, so a
+// fork's PR must not reach any of them either (#1707).
+func TestOpenPRMergeStatesForRepo_IgnoresForkPRs(t *testing.T) {
+	var jsonFields string
+	stubReconcileGh(t, func(_ context.Context, args ...string) ([]byte, error) {
+		for i, a := range args {
+			if a == "--json" && i+1 < len(args) {
+				jsonFields = args[i+1]
+			}
+		}
+		return []byte(`[
+			{"number":10,"headRefName":"feat/1-own","isCrossRepository":false,"mergeStateStatus":"BLOCKED"},
+			{"number":11,"headRefName":"feat/2-forked","isCrossRepository":true,"mergeStateStatus":"BLOCKED"}
+		]`), nil
+	})
+	as := &AutonomousScheduler{config: AutonomousConfig{}, state: &AutonomousState{}}
+
+	states, ok := as.openPRMergeStatesForRepo(context.Background(), "O/app")
+	if !ok {
+		t.Fatal("openPRMergeStatesForRepo failed")
+	}
+	if !strings.Contains(jsonFields, "isCrossRepository") {
+		t.Errorf("gh pr list --json %q does not ask whether a PR comes from a fork", jsonFields)
+	}
+	if pr, found := states[1]; !found || pr.Number != 10 {
+		t.Errorf("issue 1's own PR = %+v (found %v), want PR #10", pr, found)
+	}
+	if pr, found := states[2]; found {
+		t.Errorf("a fork's PR #%d was taken as issue 2's own", pr.Number)
 	}
 }
 

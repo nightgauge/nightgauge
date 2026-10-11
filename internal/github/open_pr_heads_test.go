@@ -68,6 +68,29 @@ func TestListOpenPRHeads(t *testing.T) {
 		}
 	})
 
+	t.Run("a fork's branch says so", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequests":{
+				"pageInfo":{"hasNextPage":false,"endCursor":""},
+				"nodes":[{"number":7,"headRefName":"feat/1-x","isCrossRepository":true},
+				         {"number":8,"headRefName":"feat/2-y","isCrossRepository":false}]}}}}`))
+		}))
+		t.Cleanup(srv.Close)
+		c := NewClientWithURL("test-token", srv.URL)
+		heads, err := NewPRService(c).ListOpenPRHeads(ctx, "acme", "widgets")
+		if err != nil {
+			t.Fatalf("ListOpenPRHeads: %v", err)
+		}
+		want := []OpenPRHead{
+			{Number: 7, HeadRefName: "feat/1-x", CrossRepository: true},
+			{Number: 8, HeadRefName: "feat/2-y"},
+		}
+		if len(heads) != 2 || heads[0] != want[0] || heads[1] != want[1] {
+			t.Fatalf("heads = %+v, want %+v", heads, want)
+		}
+	})
+
 	t.Run("a later page fails", func(t *testing.T) {
 		c, _ := openPRForge(t, 3, 2)
 		if heads, err := NewPRService(c).ListOpenPRHeads(ctx, "acme", "widgets"); err == nil {
