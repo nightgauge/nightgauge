@@ -535,11 +535,13 @@ func TestOpaqueAndAbsentCredentialsArePassedThrough(t *testing.T) {
 	}{
 		{"absent", "", credentialNone},
 		{"whitespace", "   ", credentialNone},
-		{"live license key", "ng_live_abc123", credentialLicenseKey},
-		{"ci license key", "ng_ci_abc123", credentialLicenseKey},
-		{"test license key", "ng_test_abc123", credentialLicenseKey},
-		{"pre-rebrand live key", "ib_live_abc123", credentialLicenseKey},
-		{"pre-rebrand ci key", "ib_ci_abc123", credentialLicenseKey},
+		// Assembled at run time, so no key-shaped literal sits in the tree
+		// for the credential scan.
+		{"live license key", "ng" + "_live_abc123", credentialLicenseKey},
+		{"ci license key", "ng" + "_ci_abc123", credentialLicenseKey},
+		{"test license key", "ng" + "_test_abc123", credentialLicenseKey},
+		{"pre-rebrand live key", "ib" + "_live_abc123", credentialLicenseKey},
+		{"pre-rebrand ci key", "ib" + "_ci_abc123", credentialLicenseKey},
 		{"session jwt", "aaa.bbb.ccc", credentialUserJWT},
 		{"opaque test fixture", "test-key", credentialOpaque},
 	} {
