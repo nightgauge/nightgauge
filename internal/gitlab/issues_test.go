@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -77,6 +78,7 @@ const sampleIssueJSON = `{
 func TestGetIssue_HappyPath(t *testing.T) {
 	srv := newStubServer(t)
 	srv.handle("GET", "/api/v4/projects/o%2Fr/issues/42", 200, sampleIssueJSON)
+	srv.handle("GET", "/api/v4/projects/o%2Fr/issues/42/links", 200, `[]`)
 	c := NewClient(srv.srv.URL, "tok")
 	svc := NewIssueService(c)
 
@@ -107,6 +109,38 @@ func TestGetIssue_HappyPath(t *testing.T) {
 	}
 	if got.Milestone != "v1.0" {
 		t.Errorf("Milestone = %q", got.Milestone)
+	}
+}
+
+// TestGetIssue_LinkFetchFailureIsTruncation: the issue reads but its link
+// list does not. GetIssue discarded that error and returned the issue with no
+// sub-issues and no blockers, so wave planning and the dependency gate judged
+// it from lists they never saw. It is now forge.ErrConnectionTruncated.
+//
+// A link list that answers 404 for an issue that exists is not a missing
+// issue: the batch read's serial fallback, which leaves missing issues out,
+// must fail on it rather than drop the issue.
+func TestGetIssue_LinkFetchFailureIsTruncation(t *testing.T) {
+	for _, status := range []int{500, 404} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			srv := newStubServer(t)
+			srv.handle("GET", "/api/v4/projects/o%2Fr/issues/42", 200, sampleIssueJSON)
+			srv.handle("GET", "/api/v4/projects/o%2Fr/issues/42/links", status, `{"message":"links unavailable"}`)
+			svc := NewIssueService(NewClient(srv.srv.URL, "tok"))
+
+			got, err := svc.GetIssue(context.Background(), "o", "r", 42)
+			if !errors.Is(err, forge.ErrConnectionTruncated) {
+				t.Fatalf("GetIssue err = %v, want forge.ErrConnectionTruncated", err)
+			}
+			if got != nil {
+				t.Fatalf("GetIssue returned %+v alongside an unread link list", got)
+			}
+
+			batch, err := svc.getIssuesByNumbersFallback(context.Background(), "o", "r", []int{42})
+			if !errors.Is(err, forge.ErrConnectionTruncated) {
+				t.Fatalf("serial batch err = %v (issues %v), want forge.ErrConnectionTruncated", err, batch)
+			}
+		})
 	}
 }
 
@@ -313,9 +347,14 @@ func TestIterateIssues_YieldsThenEOF(t *testing.T) {
 func TestGetIssuesByNumbers_DedupesAndSkips404(t *testing.T) {
 	srv := newStubServer(t)
 	srv.mux.HandleFunc("/api/v4/projects/o%2Fr/issues/", func(w http.ResponseWriter, r *http.Request) {
-		// Number 99 → 404, others → ok with sample
+		// Number 99 → 404, others → ok with sample and no links
 		if strings.HasSuffix(r.URL.Path, "/99") {
 			w.WriteHeader(404)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/links") {
+			w.WriteHeader(200)
+			_, _ = w.Write([]byte(`[]`))
 			return
 		}
 		w.WriteHeader(200)

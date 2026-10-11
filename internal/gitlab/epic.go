@@ -3,7 +3,6 @@ package gitlab
 import (
 	"context"
 	"fmt"
-	"os"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/teams"
 	pkgtypes "github.com/nightgauge/nightgauge/pkg/types"
@@ -27,12 +26,15 @@ func NewEpicService(client *Client) *EpicService {
 // downstream callers can use a single result type across forges.
 type EpicWaveResult = teams.EpicWaveResult
 
-// PlanWaves fetches each issue in issueNumbers (skipping fetch failures
-// non-fatally, matching the GitHub adapter's behaviour) and delegates the
+// PlanWaves fetches each issue in issueNumbers and delegates the
 // wave-planning computation to the shared teams.PlanWavesFromIssues
 // helper. The result is byte-identical to the GitHub adapter's output for
 // equivalent dependency graphs — pinned by the parity contract tests in
 // internal/forge/parity_test.go.
+//
+// As in the GitHub adapter, an issue that cannot be read fails the plan:
+// left out, it would be in no wave, and the issues it blocks would be
+// planned as if it did not exist.
 func (e *EpicService) PlanWaves(ctx context.Context, owner, repo string, issueNumbers []int) (*EpicWaveResult, error) {
 	issueSvc := NewIssueService(e.client)
 
@@ -40,8 +42,7 @@ func (e *EpicService) PlanWaves(ctx context.Context, owner, repo string, issueNu
 	for _, num := range issueNumbers {
 		issue, err := issueSvc.GetIssue(ctx, owner, repo, num)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: fetch issue #%d: %v\n", num, err)
-			continue
+			return nil, fmt.Errorf("plan waves: fetch issue #%d: %w", num, err)
 		}
 		issues = append(issues, *issue)
 	}

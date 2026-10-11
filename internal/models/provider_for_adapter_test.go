@@ -23,10 +23,15 @@ func TestProviderForAdapter(t *testing.T) {
 		"gemini":          "google",
 		"gemini-sdk":      "google",
 		"copilot":         "copilot",
+		"github":          "copilot",
+		"gh":              "copilot",
 		"grok":            "xai",
 		"grok-headless":   "xai",
+		"xai":             "xai",
+		"gemini-headless": "google",
 		"ollama":          "ollama",
 		"lm-studio":       "lm-studio",
+		"lmstudio":        "other",
 		"opencode":        "other",
 		"mystery":         "other",
 	}
@@ -36,9 +41,24 @@ func TestProviderForAdapter(t *testing.T) {
 		}
 	}
 
-	registered := adapters.NewRegistry().Names()
+	registry := adapters.NewRegistry()
+	registered := registry.Names()
 	if len(registered) == 0 {
 		t.Fatal("the adapter registry lists no adapters")
+	}
+	// An alias names the provider of the adapter it resolves to (#1707): before,
+	// gemini-headless and xai were "other" while gemini and grok had providers.
+	aliases := registry.Aliases()
+	if len(aliases) == 0 {
+		t.Fatal("the adapter registry lists no aliases")
+	}
+	for alias, canonical := range aliases {
+		if got, want := models.ProviderForAdapter(alias), models.ProviderForAdapter(canonical); got != want {
+			t.Errorf("ProviderForAdapter(%q) = %q, want %q, the provider of the adapter it names (%s)", alias, got, want, canonical)
+		}
+		if _, ok := cases[alias]; !ok {
+			t.Errorf("registered alias %q has no row here: pin its provider", alias)
+		}
 	}
 	names := make([]string, 0, len(registered)+len(cases))
 	for _, name := range registered {

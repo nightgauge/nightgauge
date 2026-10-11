@@ -287,7 +287,8 @@ type CancelActiveForNetworkOutageResult struct {
 }
 
 // IssueViewManyParams are parameters for issue.viewMany — fetches multiple
-// issues from one repo in a single batched GraphQL request.
+// issues from one repo in a single batched GraphQL request, without their
+// relationship lists (IssueSummary on the TypeScript side).
 type IssueViewManyParams struct {
 	Owner      string `json:"owner"`
 	Repo       string `json:"repo"`

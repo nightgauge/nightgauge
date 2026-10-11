@@ -408,25 +408,31 @@ func Resolve(provider, idOrTier string) (ModelDescriptor, bool) {
 	return ModelDescriptor{}, false
 }
 
-// ProviderForAdapter maps an execution adapter name (claude, claude-sdk,
-// claude-headless, codex, gemini, gemini-sdk, grok, grok-headless, copilot,
-// ollama, lm-studio) to its registry provider. Unknown adapters map to
-// "other", which has no tier bands. Mirrors providerForAdapter in the SDK
-// modelRegistry.ts.
+// ProviderForAdapter maps an execution adapter name to its registry
+// provider: a registered adapter (claude-headless, claude-sdk, codex, gemini,
+// gemini-sdk, grok, copilot) or an alias either layer accepts for one (claude,
+// gemini-headless, grok-headless and xai in the Go adapter registry; github
+// and gh for copilot in the SDK's), so an alias is never "other" while the
+// adapter it names has a provider. Unknown adapters map to "other", which has
+// no tier bands. opencode is "other" here: its model decides its provider
+// (ProviderFor). Mirrors providerForAdapter in the SDK modelRegistry.ts.
 func ProviderForAdapter(adapter string) string {
 	switch {
 	case adapter == "claude" || strings.HasPrefix(adapter, "claude-"):
 		return "anthropic"
 	case adapter == "codex":
 		return "openai"
-	case adapter == "gemini" || adapter == "gemini-sdk":
+	case adapter == "gemini" || adapter == "gemini-sdk" || adapter == "gemini-headless":
 		return "google"
-	case adapter == "grok" || strings.HasPrefix(adapter, "grok-"):
+	case adapter == "grok" || adapter == "xai" || strings.HasPrefix(adapter, "grok-"):
 		return "xai"
+	case adapter == "copilot" || adapter == "github" || adapter == "gh":
+		return "copilot"
 	// lm-studio and ollama are no longer adapters (#2128), but serving
 	// providers flow through here too (a RunResult's ModelProvider), so each
-	// stays its own provider.
-	case adapter == "copilot", adapter == "ollama", adapter == "lm-studio":
+	// stays its own provider. lmstudio, the retired adapter alias, is no
+	// provider name and stays "other".
+	case adapter == "ollama", adapter == "lm-studio":
 		return adapter
 	default:
 		return "other"
@@ -473,11 +479,29 @@ var openCodeProviders = map[string]string{
 	"google":    "google",
 }
 
-// openCodeProviderKeyRE is the shape of an OpenCode provider key: lowercase
-// letters, digits and '-', never starting with '-'. It matches the opencode
-// adapter's pre-spawn model check, so the parser and the adapter agree on
-// what a well-formed model is.
+// openCodeProviderKeyRE is the shape of an OpenCode provider key, and of an
+// operator endpoint id, which becomes one (ADR-022 § Multiple local
+// endpoints): lowercase letters, digits and '-'. No leading dash, so the value
+// can never read as a flag; no dot, so a host name or an address can never be
+// used as a key.
 var openCodeProviderKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// ValidOpenCodeProviderKey reports whether key, the part of an OpenCode model
+// before its first slash, is a well-formed provider key. It is the one rule
+// for a key: the parser here and the opencode adapter's pre-spawn model check
+// both use it, so they cannot disagree on what a well-formed model is.
+func ValidOpenCodeProviderKey(key string) bool {
+	return openCodeProviderKeyRE.MatchString(key)
+}
+
+// ValidOpenCodeModelID reports whether id, the part of an OpenCode model after
+// its first slash, is a well-formed model id: non-empty, not starting with '-'
+// (so it can never read as a flag), and free of whitespace and control
+// characters. Like ValidOpenCodeProviderKey, the one rule both the parser and
+// the opencode adapter use.
+func ValidOpenCodeModelID(id string) bool {
+	return id != "" && !strings.HasPrefix(id, "-") && strings.IndexFunc(id, isSpaceOrControl) < 0
+}
 
 // splitOpenCodeModel splits a model the way OpenCode reads -m: on the FIRST
 // slash, so "lmstudio/qwen/qwen3.8-27b" is key "lmstudio" and model id
@@ -487,10 +511,7 @@ var openCodeProviderKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // whitespace or a control character. The input is never trimmed.
 func splitOpenCodeModel(raw string) (key, id string, ok bool) {
 	key, id, qualified := strings.Cut(raw, "/")
-	if !qualified || !openCodeProviderKeyRE.MatchString(key) {
-		return "", "", false
-	}
-	if id == "" || strings.HasPrefix(id, "-") || strings.IndexFunc(id, isSpaceOrControl) >= 0 {
+	if !qualified || !ValidOpenCodeProviderKey(key) || !ValidOpenCodeModelID(id) {
 		return "", "", false
 	}
 	return key, id, true

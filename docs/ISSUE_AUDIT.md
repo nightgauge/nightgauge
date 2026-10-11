@@ -198,8 +198,9 @@ human/planning decision; `--fix` never auto-applies it. Even under `--fix`,
 
 ### Phase 6 — Sub-issue & parent linking
 
-Use `gh api graphql` `subIssues(first: 50)` and the body's `Part of #X` /
-`Part of <owner>/<repo>#X` annotations.
+Use `nightgauge issue list --epic <N> --json`, which reads every sub-issue or
+fails the audit (exit 2) rather than return part of the list (#1701), and the
+body's `Part of #X` / `Part of <owner>/<repo>#X` annotations.
 
 | Finding type                 | Severity | Trigger                                                                          |
 | ---------------------------- | -------- | -------------------------------------------------------------------------------- |
@@ -220,6 +221,7 @@ verified via `gh issue view --repo`.
 | `STALE_BLOCKED_BY`             | WARNING  | `blockedBy` points to an issue that is `closed-as-completed`                   |
 | `STALE_BLOCKED_BY_NOT_PLANNED` | WARNING  | `blockedBy` points to an issue that is `closed-as-not-planned`                 |
 | `CIRCULAR_BLOCKER`             | CRITICAL | Sub-issue → parent-epic blocking edge detected (per `epic validate`)           |
+| `UNCHECKED_SUB_ISSUE`          | CRITICAL | `epic validate` could not read the sub-issue, so its blockers are unchecked    |
 | `CROSS_REPO_BLOCKER_MISSING`   | CRITICAL | Body cites a cross-repo blocker that does not exist or is in a different state |
 
 ### Phase 8 — Cross-repo consistency

@@ -112,6 +112,7 @@ func TestBoardService_GetItem_HappyPath(t *testing.T) {
 	srv := newStubServer(t)
 	srv.handle("GET", "/api/v4/projects/o%2Fr/issues/42", 200,
 		MarshalRawIssue(42, "answer", []string{"Status::In progress", "type:epic"}))
+	srv.handle("GET", "/api/v4/projects/o%2Fr/issues/42/links", 200, `[]`)
 	c := NewClient(srv.srv.URL, "tok")
 	b := NewBoardServiceFor(c, "o", "r")
 
@@ -219,9 +220,11 @@ func TestBoardService_GetItem_PopulatesLinkArrays(t *testing.T) {
 	}
 }
 
-// GetItem must remain functional when the links endpoint returns an error
-// — link arrays are simply empty.
-func TestBoardService_GetItem_LinkFetchFailureIsNonFatal(t *testing.T) {
+// TestBoardService_GetItem_LinkFetchFailureIsTruncation: an item whose
+// links endpoint fails is forge.ErrConnectionTruncated, never an item with
+// empty link arrays. Returned empty, it read as an item with no sub-issues
+// and no blockers, and the scheduler would dispatch it as unblocked.
+func TestBoardService_GetItem_LinkFetchFailureIsTruncation(t *testing.T) {
 	srv := newStubServer(t)
 	srv.handle("GET", "/api/v4/projects/o%2Fr/issues/42", 200,
 		MarshalRawIssue(42, "Issue 42", nil))
@@ -230,14 +233,10 @@ func TestBoardService_GetItem_LinkFetchFailureIsNonFatal(t *testing.T) {
 	b := NewBoardServiceFor(c, "o", "r")
 
 	item, err := b.GetItem(context.Background(), "o", "r", 42)
-	if err != nil {
-		t.Fatalf("GetItem: %v (link fetch failure should be non-fatal)", err)
+	if !errors.Is(err, forge.ErrConnectionTruncated) {
+		t.Fatalf("GetItem err = %v (item %+v), want forge.ErrConnectionTruncated", err, item)
 	}
-	if item == nil || item.Number != 42 {
-		t.Fatalf("item = %+v", item)
-	}
-	if len(item.SubIssues) != 0 || len(item.BlockedBy) != 0 {
-		t.Errorf("expected empty link arrays on link fetch failure, got SubIssues=%v BlockedBy=%v",
-			item.SubIssues, item.BlockedBy)
+	if item != nil {
+		t.Fatalf("item = %+v, want none alongside an unread link list", item)
 	}
 }

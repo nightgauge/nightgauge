@@ -317,12 +317,6 @@ func (a *OpenCodeAdapter) ValidateModel(model string) error {
 	return err
 }
 
-// openCodeProviderKeyRE is the shape of an OpenCode provider key, and of an
-// operator endpoint id, which becomes one (ADR-022 § Multiple local
-// endpoints). No leading dash, so the value can never read as a flag; no dot,
-// so a host name or an address can never be used as a key.
-var openCodeProviderKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
-
 // OpenCodeModelArg returns the value for OpenCode's -m flag. Only an explicit
 // "<provider>/<model>" is accepted, and it passes through with only its
 // surrounding space trimmed; the manager records that value as the stage's
@@ -334,7 +328,8 @@ var openCodeProviderKeyRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // ("sonnet") alike. The adapter never infers a provider: the provider decides
 // where the repository's code goes and what the stage costs, so the operator
 // names it (ADR-022, The command). Also refused: an empty model, and a value
-// whose provider key or model id could read as a flag.
+// whose provider key or model id could read as a flag. The key and id rules
+// are internal/models', the ones ParseOpenCodeModel applies (#1707).
 func OpenCodeModelArg(model string) (string, error) {
 	m := strings.TrimSpace(model)
 	if m == "" {
@@ -347,10 +342,10 @@ func OpenCodeModelArg(model string) (string, error) {
 				"a bare registry id and a tier (%s) are refused alike",
 			m, models.BandAlternation())
 	}
-	if !openCodeProviderKeyRE.MatchString(provider) {
+	if !models.ValidOpenCodeProviderKey(provider) {
 		return "", fmt.Errorf("model %q is not valid for the opencode adapter: the provider key %q must be lowercase letters, digits and '-', starting with a letter or digit", m, provider)
 	}
-	if id == "" || strings.HasPrefix(id, "-") || strings.IndexFunc(id, isSpaceOrControl) >= 0 {
+	if !models.ValidOpenCodeModelID(id) {
 		return "", fmt.Errorf("model %q is not valid for the opencode adapter: the model id after %q/ must be non-empty, must not start with '-', and must not contain whitespace", m, provider)
 	}
 	return m, nil

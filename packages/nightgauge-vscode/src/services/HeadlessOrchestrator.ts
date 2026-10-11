@@ -64,6 +64,7 @@ import { OrchestratorEventDispatcher } from "../orchestrator/events/Orchestrator
 import { WorktreeManager } from "../utils/WorktreeManager";
 import { isValidBranchName } from "../utils/branchUtils";
 import { epicBranchParent } from "../utils/epicBranchParent";
+import { readEpicSubIssues } from "../utils/epicSubIssues";
 import { getRoutedTierEnvelope } from "../utils/modeProfiles";
 
 const execAsync = promisify(exec);
@@ -8538,46 +8539,51 @@ export class HeadlessOrchestrator implements vscode.Disposable {
     // When an epic->main PR merges, GitHub auto-closes sub-issues but their
     // project board Status field is never updated (the sub-issue pipeline
     // returns early at the epicDeferred guard above). This fills that gap.
+    // The binary reads the whole sub-issue list or fails (#1701); a fixed
+    // first page left every sub-issue past it off the Done column.
     try {
-      const { stdout: nwoRaw } = await execFileAsync(
-        "gh",
-        ["repo", "view", "--json", "owner,name", "-q", '.owner.login + "/" + .name'],
-        { ...ghExecOptions, timeout: 10000 }
-      );
-      const nwo = nwoRaw.trim();
-      const [owner, repo] = nwo.split("/");
-      if (owner && repo) {
-        const { stdout: subIssuesRaw } = await execFileAsync(
+      const binary = await BinaryResolver.fromVSCode().resolve();
+      if (!binary) {
+        this.logger.debug("Sub-issue board sync skipped — binary not found");
+      } else {
+        const { stdout: nwoRaw } = await execFileAsync(
           "gh",
-          [
-            "api",
-            "graphql",
-            "-f",
-            `query={ repository(owner: "${owner}", name: "${repo}") { issue(number: ${issueNumber}) { subIssues(first: 50) { nodes { number state } } } } }`,
-          ],
-          { ...ghExecOptions, timeout: 15000 }
+          ["repo", "view", "--json", "owner,name", "-q", '.owner.login + "/" + .name'],
+          { ...ghExecOptions, timeout: 10000 }
         );
-        const parsed = JSON.parse(subIssuesRaw.trim());
-        const subIssues: { number: number; state: string }[] =
-          parsed?.data?.repository?.issue?.subIssues?.nodes ?? [];
-        const closedSubIssues = subIssues.filter((si) => si.state === "CLOSED");
-        for (const si of closedSubIssues) {
-          try {
-            await updateProjectItemStatus(si.number, "Done", workspaceRoot, this.logger);
-          } catch {
-            // Best-effort per sub-issue
+        const nwo = nwoRaw.trim();
+        const [owner, repo] = nwo.split("/");
+        if (owner && repo) {
+          const subIssues = await readEpicSubIssues(binary, nwo, issueNumber, {
+            ...ghExecOptions,
+            timeout: 60000,
+          });
+          const closedSubIssues = subIssues.filter((si) => si.state === "CLOSED");
+          for (const si of closedSubIssues) {
+            try {
+              // The sub-issue's own repository: a cross-repo sub-issue's
+              // number names a different issue in this one.
+              await updateProjectItemStatus(si.number, "Done", workspaceRoot, this.logger, si.repo);
+            } catch {
+              // Best-effort per sub-issue
+            }
+          }
+          if (closedSubIssues.length > 0) {
+            this.logger.info("Synced closed sub-issues to Done on project board", {
+              issueNumber,
+              subIssueCount: closedSubIssues.length,
+              subIssues: closedSubIssues.map((si) => `${si.repo}#${si.number}`),
+            });
           }
         }
-        if (closedSubIssues.length > 0) {
-          this.logger.info("Synced closed sub-issues to Done on project board", {
-            issueNumber,
-            subIssueCount: closedSubIssues.length,
-            subIssues: closedSubIssues.map((si) => si.number),
-          });
-        }
       }
-    } catch {
-      // Non-blocking: sub-issue board sync is best-effort
+    } catch (err) {
+      // Non-blocking: sub-issue board sync is best-effort, but an unreadable
+      // sub-issue list is reported rather than treated as an empty one.
+      this.logger.warn("Sub-issue board sync after completion failed", {
+        issueNumber,
+        err: err instanceof Error ? err.message : String(err),
+      });
     }
 
     const refreshScript = path.join(

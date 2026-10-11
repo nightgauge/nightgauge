@@ -43,6 +43,11 @@ from task list checkboxes in the issue body).
 - `issueQuery` — fetching full issue detail with sub-issues
 - `projectItemContent` — board item display in the Ready Items tree view
 - `nodeQuery` — cross-repo epic progress (`GetEpicProgress`)
+- Outside Go: the extension's post-completion board sync and the skills read
+  sub-issues through `nightgauge issue list --epic --json`, which reads them
+  whole or exits non-zero; the SDK's `EpicEstimator`, which needs each
+  sub-issue's labels, pages the connection itself to the same 20-page cap
+  (#1701)
 
 **Pagination**: each query reads a first page (12 on the board scan, 25 in
 `issueQuery`, 50 in `nodeQuery`) and selects `pageInfo`; while a page reports
@@ -51,17 +56,17 @@ from task list checkboxes in the issue body).
 requests: every long connection in a board scan or a batch of issues gets its
 next page from one aliased request, up to 50 connections a request. The walk
 stops at 20 pages. A connection still reporting more, or whose next page
-fails, is `ErrConnectionTruncated`, never a short list: epic rollup, wave
-planning, epic enqueue and `epic validate` fail rather than decide from part
-of an epic.
+fails, is `forge.ErrConnectionTruncated`, never a short list: epic rollup,
+wave planning and epic enqueue fail rather than decide from part of an epic,
+and `epic validate` reports the sub-issue unchecked and exits non-zero. A
+sub-issue that cannot be read at all fails them the same way.
 
 A read that returns whole issues or board items follows every connection of
 every issue in it, and fails when any one of them cannot be read whole:
-`GetIssue` (`issue view`, `forge issue view`, IPC `issue.view`),
-`GetIssuesByNumbers` (IPC `issue.viewMany`), and the board reads
-`ListItems`, `ListOpenItems` and `GetItem` (the scheduler's pick and queue,
-`board list`, `forge project item-list` and `field-get`, the dependency graph,
-the attention sweeps, and IPC `board.list` with the board cache behind it).
+`GetIssue` (`issue view`, `forge issue view`, IPC `issue.view`), and the
+board reads `ListItems`, `ListOpenItems` and `GetItem` (the scheduler's pick
+and queue, `board list`, `forge project item-list`, the dependency graph, the
+attention sweeps, and IPC `board.list` with the board cache behind it).
 Every other caller names the connections it uses, so a long list it would
 discard can neither cost it requests nor fail it. A single-issue caller names
 them to `GetIssueWithRelations`: the dependency gate and the per-sub-issue
@@ -71,12 +76,15 @@ name `subIssues`, and the post-merge hook, the label writes and the baseline
 gate name none. A board caller names them to `ListItemsWithRelations` or
 `ListOpenItemsWithRelations`: board reconcile names `subIssues`, the lifecycle
 audit and `backlog preflight` name `blockedBy`, and the epic backstop sweep,
-the drift check, `issue route` and `doctor` name none. The failed-run status
-guard and the pipeline-stage read use `GetItemFields`, which reads one board
-item's fields and no issue at all. Batch readers that need only an issue's
-state or body (`GetIssuesByNumbersWithoutRelations`, the only batch read the
-scheduler's issue reader offers) select no relationship connection, and
-`epic validate` selects only its sub-issues' `blockedBy`.
+the drift check and `doctor` name none. `GetItemWithoutRelations` reads one
+board item with none of its lists, for `forge project field-get` and the
+Size and Priority lookup of `issue route`. The failed-run status guard and the
+pipeline-stage read use `GetItemFields`, which reads one board item's fields
+and no issue at all. Batch readers that need only an issue's state, body,
+title or labels (`GetIssuesByNumbersWithoutRelations`: the scheduler's issue
+reader, the dependency graph's body fetch and IPC `issue.viewMany`) select no
+relationship connection, and `epic validate` selects only its sub-issues'
+`blockedBy`.
 
 **Risk**: Critical. Removing `subIssues` breaks epic tracking entirely. The
 board would show epics with no sub-issues and 0% progress.
@@ -94,6 +102,9 @@ determine whether an issue is currently blocked (any open blocker = blocked).
 
 - `issueQuery` — fetching blocking state for a specific issue
 - `projectItemContent` — board item display (determines 🔒 lock icon)
+- Outside Go: the backlog-preflight skill's cycle check runs in
+  `nightgauge backlog preflight`, which exits 2 when a blocker list cannot be
+  read whole (#1701)
 
 **Pagination**: a first page of 5, then the same shared `pageInfo` follow-ups,
 20-page cap and per-caller selection as `subIssues`. The scheduler's blocker

@@ -49,6 +49,9 @@ func (b *countingBoard) ListItems(context.Context, string) ([]forgetypes.BoardIt
 func (b *countingBoard) GetItem(context.Context, string, string, int) (*forgetypes.BoardItem, error) {
 	return nil, nil
 }
+func (b *countingBoard) GetItemWithoutRelations(context.Context, string, string, int) (*forgetypes.BoardItem, error) {
+	return nil, nil
+}
 
 func (b *countingBoard) calls() int {
 	b.mu.Lock()

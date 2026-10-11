@@ -187,7 +187,12 @@ func (c *Client) Forge(owner string, projectNumber int, ownerType OwnerType) for
 // package is the only wiring the caller needs.
 func init() {
 	forge.RegisterAdapter(forge.KindGitHub, func(cfg forge.Config) (forge.ForgeClient, error) {
-		client := NewClientWithToken(cfg.Token)
+		// The machine-wide rate-limit tracker, as every other CLI client
+		// carries it (withMachineTracker). Without it the floor gate is inert
+		// and nothing is recorded: every `forge` subcommand, which is how
+		// skills reach GitHub, and `forge graphql` among them, spent into a
+		// budget already known to be exhausted (#1695).
+		client := withMachineTracker(NewClientWithToken(cfg.Token))
 		ot := OwnerTypeOrg
 		if cfg.OwnerType == string(OwnerTypeUser) {
 			ot = OwnerTypeUser

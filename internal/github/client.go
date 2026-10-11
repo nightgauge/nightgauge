@@ -25,6 +25,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/nightgauge/nightgauge/internal/configpath"
+	"github.com/nightgauge/nightgauge/internal/forge"
 )
 
 // ErrRateLimitGated is returned by query/mutate/REST helpers when the
@@ -1554,66 +1555,108 @@ func (c *Client) mutate(ctx context.Context, m interface{}, input map[string]int
 
 // queryRaw executes a raw GraphQL query string (for aliases and other features
 // not supported by the shurcooL struct-based API). Returns the raw JSON body.
+//
+// It is paced and retried the way Client.query is. It waits on the rate-limit
+// floor gate before the first request, so below the floor a fail-fast client
+// sends nothing and returns ErrRateLimitGated. It retries a rate-limited
+// answer after computeRateLimitBackoff: a 429, a 403 that carries a rate-limit
+// signal, or a 200 whose GraphQL errors are rate-limited (GitHub's
+// RATE_LIMITED, which the struct client sees as an error and retries). A 403
+// without that signal is a permission failure and is returned at once. When
+// the retries run out, the error wraps forge.ErrRateLimited, so a caller can
+// tell an exhausted budget from a genuine 403 with errors.Is.
+//
+// Any other GraphQL error in a 200 body is left in the body for the caller to
+// judge: partial data alongside errors is a normal answer.
 func (c *Client) queryRaw(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	if err := c.waitRateLimitGate(ctx, ResourceGraphQL); err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(map[string]interface{}{
+		"query":     query,
+		"variables": variables,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal query: %w", err)
+	}
+	for attempt := 0; ; attempt++ {
 		if err := c.limiter.Wait(ctx); err != nil {
 			return nil, fmt.Errorf("rate limiter: %w", err)
 		}
-
-		payload := map[string]interface{}{
-			"query":     query,
-			"variables": variables,
-		}
-		body, err := json.Marshal(payload)
-		if err != nil {
-			return nil, fmt.Errorf("marshal query: %w", err)
-		}
-
-		req, err := http.NewRequestWithContext(ctx, "POST", c.graphqlURL, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.graphqlURL, bytes.NewReader(body))
 		if err != nil {
 			return nil, fmt.Errorf("create request: %w", err)
 		}
 		req.Header.Set("Content-Type", "application/json")
 
+		// limited says why this attempt was rate limited; nil means it was not.
+		var limited error
 		resp, err := c.http.Do(req)
 		if err != nil {
-			if !isRateLimited(err) || attempt == maxRetries {
+			if !isRateLimited(err) {
 				return nil, err
 			}
-			backoff := c.computeRateLimitBackoff(ctx, err, attempt)
-			select {
-			case <-time.After(backoff):
-				continue
-			case <-ctx.Done():
-				return nil, ctx.Err()
+			limited = err
+		} else {
+			respBody, readErr := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if readErr != nil {
+				return nil, fmt.Errorf("read response: %w", readErr)
 			}
-		}
-		defer resp.Body.Close()
-
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("read response: %w", err)
-		}
-
-		if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-			if attempt < maxRetries {
-				backoff := c.computeRateLimitBackoff(ctx, fmt.Errorf("status %d", resp.StatusCode), attempt)
-				select {
-				case <-time.After(backoff):
-					continue
-				case <-ctx.Done():
-					return nil, ctx.Err()
+			limited = rawRateLimitSignal(resp, respBody)
+			if limited == nil {
+				if resp.StatusCode != http.StatusOK {
+					return nil, fmt.Errorf("graphql request failed with status %d: %s", resp.StatusCode, string(respBody))
 				}
+				return respBody, nil
 			}
 		}
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("graphql request failed with status %d: %s", resp.StatusCode, string(respBody))
+		if attempt == maxRetries {
+			return nil, fmt.Errorf("graphql request: %w after %d attempts: %w", forge.ErrRateLimited, attempt+1, limited)
 		}
-
-		return respBody, nil
+		select {
+		case <-time.After(c.computeRateLimitBackoff(ctx, limited, attempt)):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
-	return nil, fmt.Errorf("exhausted retries")
+}
+
+// rawRateLimitSignal reports why a raw GraphQL response is a rate-limit answer,
+// or nil when it is not one. A 429 always is. A 403 is when its body names a
+// rate limit or its headers carry Retry-After or an empty primary budget;
+// otherwise it is a permission failure. A 200 is when one of its GraphQL errors
+// is RATE_LIMITED or names a rate limit. A Retry-After header is folded into
+// the error in the "retry after N seconds" form computeRateLimitBackoff honours.
+func rawRateLimitSignal(resp *http.Response, body []byte) error {
+	hint := ""
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		hint = "retry after " + ra + " seconds: "
+	}
+	switch resp.StatusCode {
+	case http.StatusTooManyRequests:
+		return fmt.Errorf("status %d: %s%s", resp.StatusCode, hint, body)
+	case http.StatusForbidden:
+		if restBodyLooksRateLimited(body) || hint != "" || resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			return fmt.Errorf("status %d: %s%s", resp.StatusCode, hint, body)
+		}
+	case http.StatusOK:
+		var env struct {
+			Errors []struct {
+				Type    string `json:"type"`
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+		if json.Unmarshal(body, &env) != nil {
+			return nil
+		}
+		for _, e := range env.Errors {
+			if e.Type == "RATE_LIMITED" || isRateLimited(errors.New(e.Message)) {
+				return fmt.Errorf("graphql error %s: %s%s", e.Type, hint, e.Message)
+			}
+		}
+	}
+	return nil
 }
 
 // restPost makes an authenticated REST POST request to the GitHub API.

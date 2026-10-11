@@ -1,13 +1,13 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -22,12 +22,15 @@ type assessFetcher struct {
 	truncated map[int]gh.IssueRelations
 	// failed makes every read of the issue fail with the given error.
 	failed map[int]error
+	// reads records the repository and number of every read, "owner/repo#N".
+	reads []string
 }
 
-func (f *assessFetcher) GetIssueWithRelations(_ context.Context, _, _ string, number int, rels gh.IssueRelations) (*types.Issue, error) {
+func (f *assessFetcher) GetIssueWithRelations(_ context.Context, owner, repo string, number int, rels gh.IssueRelations) (*types.Issue, error) {
+	f.reads = append(f.reads, fmt.Sprintf("%s/%s#%d", owner, repo, number))
 	if f.truncated[number]&rels != 0 {
 		return nil, fmt.Errorf("fetch issue #%d: relationship of acme/widgets#%d: %w: read page 2: status 502",
-			number, number, gh.ErrConnectionTruncated)
+			number, number, forge.ErrConnectionTruncated)
 	}
 	if err := f.failed[number]; err != nil {
 		return nil, err
@@ -70,11 +73,10 @@ func assessEpic() *assessFetcher {
 func TestEpicAssessInputs_TruncatedBlockerListIsAnError(t *testing.T) {
 	f := assessEpic()
 	f.truncated = map[int]gh.IssueRelations{102: gh.RelationBlockedBy}
-	var warn bytes.Buffer
 
-	inputs, err := epicAssessInputs(context.Background(), f, "acme", "widgets", 100, &warn)
-	if !errors.Is(err, gh.ErrConnectionTruncated) {
-		t.Fatalf("err = %v (inputs %+v, warnings %q), want ErrConnectionTruncated", err, inputs, warn.String())
+	inputs, err := epicAssessInputs(context.Background(), f, "acme", "widgets", 100)
+	if !errors.Is(err, forge.ErrConnectionTruncated) {
+		t.Fatalf("err = %v (inputs %+v), want ErrConnectionTruncated", err, inputs)
 	}
 	if inputs != nil {
 		t.Errorf("inputs = %+v, want none alongside a truncated read", inputs)
@@ -91,9 +93,8 @@ func TestEpicAssessInputs_ReadsOnlyTheListsItUses(t *testing.T) {
 		101: gh.RelationSubIssues | gh.RelationBlocking,
 		102: gh.RelationSubIssues | gh.RelationBlocking,
 	}
-	var warn bytes.Buffer
 
-	inputs, err := epicAssessInputs(context.Background(), f, "acme", "widgets", 100, &warn)
+	inputs, err := epicAssessInputs(context.Background(), f, "acme", "widgets", 100)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -103,26 +104,39 @@ func TestEpicAssessInputs_ReadsOnlyTheListsItUses(t *testing.T) {
 	if got := inputs[1].BlockedBy; len(got) != 1 || got[0] != 101 {
 		t.Errorf("#102 BlockedBy = %v, want [101]", got)
 	}
-	if warn.Len() != 0 {
-		t.Errorf("warnings = %q, want none", warn.String())
+}
+
+// TestEpicAssessInputs_UnreadableSubIssueIsAnError: #101 cannot be read at
+// all. It was skipped with a warning the assess-epic skill discards, and the
+// strategy was computed without it and without the edge that orders #102
+// after it. A failed first read is now an error, as a truncated blocker list
+// already was.
+func TestEpicAssessInputs_UnreadableSubIssueIsAnError(t *testing.T) {
+	f := assessEpic()
+	readFailure := errors.New("status 502")
+	f.failed = map[int]error{101: readFailure}
+
+	inputs, err := epicAssessInputs(context.Background(), f, "acme", "widgets", 100)
+	if !errors.Is(err, readFailure) || !strings.Contains(err.Error(), "acme/widgets#101") {
+		t.Fatalf("err = %v (inputs %+v), want the read failure of acme/widgets#101", err, inputs)
+	}
+	if inputs != nil {
+		t.Errorf("inputs = %+v, want none alongside a failed read", inputs)
 	}
 }
 
-// TestEpicAssessInputs_UnreadableSubIssueIsSkipped: any other failed read of a
-// sub-issue is still skipped with a warning, as before.
-func TestEpicAssessInputs_UnreadableSubIssueIsSkipped(t *testing.T) {
+// TestEpicAssessInputs_ReadsEachSubIssueInItsOwnRepository: a sub-issue of a
+// cross-repo epic was read by number in the epic's repository, which holds a
+// different issue with that number, or none.
+func TestEpicAssessInputs_ReadsEachSubIssueInItsOwnRepository(t *testing.T) {
 	f := assessEpic()
-	f.failed = map[int]error{101: errors.New("status 502")}
-	var warn bytes.Buffer
+	f.issues[100].SubIssues[1].Repo = "acme/gadgets"
 
-	inputs, err := epicAssessInputs(context.Background(), f, "acme", "widgets", 100, &warn)
-	if err != nil {
+	if _, err := epicAssessInputs(context.Background(), f, "acme", "widgets", 100); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(inputs) != 1 || inputs[0].Number != 102 {
-		t.Fatalf("inputs = %+v, want only #102", inputs)
-	}
-	if !strings.Contains(warn.String(), "warning: skip #101") {
-		t.Errorf("warnings = %q, want a skip warning for #101", warn.String())
+	want := "[acme/widgets#100 acme/widgets#101 acme/gadgets#102]"
+	if got := fmt.Sprint(f.reads); got != want {
+		t.Errorf("reads = %s, want %s", got, want)
 	}
 }

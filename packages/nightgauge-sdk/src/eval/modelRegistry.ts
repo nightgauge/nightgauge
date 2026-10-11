@@ -258,17 +258,26 @@ export function activeModels(): ModelDescriptor[] {
 }
 
 /**
- * Map an execution adapter name (any layer's vocabulary: `claude`,
- * `claude-sdk`, `claude-headless`, `codex`, `gemini`, `gemini-sdk`,
- * `grok`, `grok-headless`, `copilot`, `ollama`, `lm-studio`) to its
- * registry provider. Unknown adapters map to `other`, which has no tier bands.
+ * Map an execution adapter name to its registry provider: a registered
+ * adapter (`claude-headless`, `claude-sdk`, `codex`, `gemini`, `gemini-sdk`,
+ * `grok`, `copilot`) or an alias either layer accepts for one (`claude`,
+ * `gemini-headless`, `grok-headless` and `xai` in the Go adapter registry;
+ * `github` and `gh` for copilot here), so an alias is never `other` while the
+ * adapter it names has a provider. `ollama` and `lm-studio` are retired
+ * adapters (#2128) that stay their own providers, because serving providers
+ * flow through here too; `lmstudio` is no provider name and stays `other`.
+ * Unknown adapters map to `other`, which has no tier bands. `opencode` is
+ * `other` here: its model decides its provider ({@link providerFor}). Mirrors
+ * the Go `models.ProviderForAdapter`.
  */
 export function providerForAdapter(adapter: string): Provider {
   if (adapter === "claude" || adapter.startsWith("claude-")) return "anthropic";
   if (adapter === "codex") return "openai";
-  if (adapter === "gemini" || adapter === "gemini-sdk") return "google";
-  if (adapter === "grok" || adapter.startsWith("grok-")) return "xai";
-  if (adapter === "copilot") return "copilot";
+  if (adapter === "gemini" || adapter === "gemini-sdk" || adapter === "gemini-headless") {
+    return "google";
+  }
+  if (adapter === "grok" || adapter === "xai" || adapter.startsWith("grok-")) return "xai";
+  if (adapter === "copilot" || adapter === "github" || adapter === "gh") return "copilot";
   if (adapter === "ollama") return "ollama";
   if (adapter === "lm-studio") return "lm-studio";
   return "other";
@@ -449,6 +458,18 @@ function splitOpenCodeModel(raw: string): { key: string; id: string } | undefine
   return { key, id };
 }
 
+/**
+ * Whether `raw` is a well-formed OpenCode model: `<provider>/<model>` with a
+ * provider-key-shaped key and a model id that is non-empty, does not start
+ * with `-` and holds no whitespace or control character. The single SDK
+ * authority for that rule, so the adapter's pre-spawn check and the parser
+ * cannot drift (#1707). Mirrors the Go `models.ValidOpenCodeProviderKey` and
+ * `models.ValidOpenCodeModelID`.
+ */
+export function isValidOpenCodeModel(raw: string): boolean {
+  return splitOpenCodeModel(raw) !== undefined;
+}
+
 /** The result of {@link parseOpenCodeModel}. */
 export interface OpenCodeModel {
   /** The normalized registry provider; `other` for an unrecognized key or a malformed model. */
@@ -475,6 +496,51 @@ export function parseOpenCodeModel(raw: string): OpenCodeModel {
     ? OPENCODE_PROVIDERS[split.key]
     : "other";
   return { provider, bareId: split.id, upstream: raw };
+}
+
+/** A rune Go's `strconv.IsPrint` accepts: a letter, mark, number, punctuation, symbol or ASCII space. */
+const GO_PRINTABLE_RE = /^[\p{L}\p{M}\p{N}\p{P}\p{S} ]$/u;
+
+/** The one-letter escapes Go's `strconv.Quote` writes for these control characters. */
+const GO_SHORT_ESCAPES: Readonly<Record<string, string>> = Object.freeze({
+  "\x07": "\\a",
+  "\b": "\\b",
+  "\f": "\\f",
+  "\n": "\\n",
+  "\r": "\\r",
+  "\t": "\\t",
+  "\v": "\\v",
+});
+
+/**
+ * Quote `s` as Go's `%q` verb (`strconv.Quote`) does, so the errors below read
+ * the same as their Go twin's, and a quote, newline or terminal escape in an
+ * operator-supplied model cannot break or forge the message: `"` and `\` are
+ * backslash-escaped, a printable rune is kept, and any other rune is written
+ * as `\a`…`\v`, `\xHH`, `\uHHHH` or `\UHHHHHHHH`.
+ */
+function goQuote(s: string): string {
+  let out = '"';
+  for (const ch of s) {
+    if (ch === '"' || ch === "\\") {
+      out += `\\${ch}`;
+      continue;
+    }
+    if (GO_PRINTABLE_RE.test(ch)) {
+      out += ch;
+      continue;
+    }
+    const short = GO_SHORT_ESCAPES[ch];
+    if (short) {
+      out += short;
+      continue;
+    }
+    const cp = ch.codePointAt(0) ?? 0;
+    if (cp < 0x20 || cp === 0x7f) out += `\\x${cp.toString(16).padStart(2, "0")}`;
+    else if (cp < 0x10000) out += `\\u${cp.toString(16).padStart(4, "0")}`;
+    else out += `\\U${cp.toString(16).padStart(8, "0")}`;
+  }
+  return `${out}"`;
 }
 
 /** The result of {@link dispatchModelFor}: the `-m` value, or why there is none. */
@@ -509,7 +575,7 @@ export function dispatchModelFor(
     if (!splitOpenCodeModel(bandOrId)) {
       return {
         ok: false,
-        error: `model "${bandOrId}" is not a valid <provider>/<model> for the ${adapter} adapter`,
+        error: `model ${goQuote(bandOrId)} is not a valid <provider>/<model> for the ${adapter} adapter`,
       };
     }
     return { ok: true, model: bandOrId };
@@ -518,7 +584,7 @@ export function dispatchModelFor(
     return {
       ok: false,
       error:
-        `model "${bandOrId}" names no provider, and the ${adapter} adapter never infers one: ` +
+        `model ${goQuote(bandOrId)} names no provider, and the ${adapter} adapter never infers one: ` +
         `name it as <provider>/<model>`,
     };
   }
@@ -527,7 +593,7 @@ export function dispatchModelFor(
     return {
       ok: false,
       error:
-        `the ${adapter} adapter has no provider to resolve stage model "${bandOrId}" against: ` +
+        `the ${adapter} adapter has no provider to resolve stage model ${goQuote(bandOrId)} against: ` +
         `name the stage model as <provider>/<model>, or configure a <provider>/<model> default (opencode.model)`,
     };
   }
@@ -539,8 +605,8 @@ export function dispatchModelFor(
   return {
     ok: false,
     error:
-      `provider "${provider}" of the configured model "${configuredModel}" has no registry model ` +
-      `in band "${bandOrId}": name the stage model as <provider>/<model>`,
+      `provider ${goQuote(provider)} of the configured model ${goQuote(configuredModel)} has no ` +
+      `registry model in band ${goQuote(bandOrId)}: name the stage model as <provider>/<model>`,
   };
 }
 

@@ -63,7 +63,7 @@ func withBlockedBy(numbers ...int) func(*types.BoardItem) {
 }
 
 func newValidator() *Validator {
-	return New(nil, &stubIssueGetter{issues: map[int]*types.Issue{}}, "owner", "repo")
+	return New(&stubIssueGetter{issues: map[int]*types.Issue{}}, "owner", "repo")
 }
 
 // --- CheckLabels ---
@@ -172,7 +172,7 @@ func TestCheckAcceptanceCriteria_GoodBody(t *testing.T) {
 	getter := makeIssueGetter(map[int]*types.Issue{
 		1: {Number: 1, Title: "good issue", Body: body},
 	})
-	v := New(nil, getter, "owner", "repo")
+	v := New(getter, "owner", "repo")
 	items := []types.BoardItem{item(1, "good issue")}
 	findings := v.CheckAcceptanceCriteria(context.Background(), items)
 	if len(findings) != 0 {
@@ -187,7 +187,7 @@ func TestCheckAcceptanceCriteria_GoodBody(t *testing.T) {
 }
 
 func TestCheckAcceptanceCriteria_ShortBody(t *testing.T) {
-	v := New(nil, makeIssueGetter(map[int]*types.Issue{
+	v := New(makeIssueGetter(map[int]*types.Issue{
 		1: {Number: 1, Title: "short", Body: "too short"},
 	}), "owner", "repo")
 	items := []types.BoardItem{item(1, "short")}
@@ -202,7 +202,7 @@ func TestCheckAcceptanceCriteria_ShortBody(t *testing.T) {
 
 func TestCheckAcceptanceCriteria_NoCheckboxes(t *testing.T) {
 	body := strings.Repeat("This is a description that is definitely more than one hundred characters long for testing purposes.", 2)
-	v := New(nil, makeIssueGetter(map[int]*types.Issue{
+	v := New(makeIssueGetter(map[int]*types.Issue{
 		1: {Number: 1, Title: "no boxes", Body: body},
 	}), "owner", "repo")
 	items := []types.BoardItem{item(1, "no boxes")}
@@ -214,7 +214,7 @@ func TestCheckAcceptanceCriteria_NoCheckboxes(t *testing.T) {
 
 func TestCheckAcceptanceCriteria_OneCheckbox(t *testing.T) {
 	body := strings.Repeat("x", 100) + "\n- [ ] only one checkbox\n"
-	v := New(nil, makeIssueGetter(map[int]*types.Issue{
+	v := New(makeIssueGetter(map[int]*types.Issue{
 		1: {Number: 1, Title: "one box", Body: body},
 	}), "owner", "repo")
 	items := []types.BoardItem{item(1, "one box")}
@@ -225,7 +225,7 @@ func TestCheckAcceptanceCriteria_OneCheckbox(t *testing.T) {
 }
 
 func TestCheckAcceptanceCriteria_FetchError(t *testing.T) {
-	v := New(nil, &stubIssueGetter{err: fmt.Errorf("api error")}, "owner", "repo")
+	v := New(&stubIssueGetter{err: fmt.Errorf("api error")}, "owner", "repo")
 	items := []types.BoardItem{item(1, "fetch fail")}
 	findings := v.CheckAcceptanceCriteria(context.Background(), items)
 	if len(findings) != 1 {

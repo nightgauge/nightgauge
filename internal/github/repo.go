@@ -277,9 +277,17 @@ func missingFileAlias(errType string, path []interface{}) (string, bool) {
 
 // ExecuteGraphQL satisfies forge.GraphQLService — the github adapter
 // exposes its raw GraphQL transport so the `forge graphql` pass-through
-// subcommand can route ad-hoc queries (e.g. addSubIssue, addBlockedBy)
-// through the same authenticated, rate-limited client used by every
-// other operation. Returns the raw JSON envelope verbatim.
+// subcommand can route ad-hoc queries through the same authenticated,
+// rate-limited client used by every other operation. Returns the raw JSON
+// envelope verbatim.
+//
+// It pays the rate-limit floor gate and retries rate-limited answers as every
+// other read does (queryRaw). Below the floor, the client decides between
+// waiting and failing fast: the forge adapter's client, like every CLI and
+// daemon client, waits for the reset window, bounded by the caller's context;
+// a fail-fast client, or NIGHTGAUGE_GITHUB_RATELIMIT_NO_WAIT, returns
+// ErrRateLimitGated without sending. A budget still exhausted after the
+// retries is forge.ErrRateLimited.
 func (c *Client) ExecuteGraphQL(ctx context.Context, query string, variables map[string]interface{}) ([]byte, error) {
 	return c.queryRaw(ctx, query, variables)
 }
