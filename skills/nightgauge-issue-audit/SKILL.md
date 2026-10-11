@@ -9,7 +9,7 @@ description: Deterministic post-creation gate that verifies every issue created 
 license: Apache-2.0
 metadata:
   author: nightgauge
-  version: "1.2.2"
+  version: "1.2.3"
   source: https://github.com/nightgauge/nightgauge
   chainable: true
 allowed-tools: Read Write Edit Glob Grep Bash Task AskUserQuestion
@@ -433,7 +433,21 @@ Delegate the structural check to the Go binary:
 
 ```bash
 if [ "$MODE" = "epic" ] && [ -n "$EPIC_NUMBER" ]; then
-  EPIC_VALIDATE=$("$BINARY" epic validate "$EPIC_NUMBER" --json 2>/dev/null)
+  # Exit 0: every sub-issue was checked. Non-zero WITH the result on stdout:
+  # some sub-issues could not be checked (.failures). Non-zero with no result:
+  # the epic itself could not be read, and the audit cannot run.
+  EPIC_VALIDATE_RC=0
+  EPIC_VALIDATE=$("$BINARY" epic validate "$EPIC_NUMBER" --json) || EPIC_VALIDATE_RC=$?
+  if ! printf '%s\n' "$EPIC_VALIDATE" | jq -e 'type == "object" and has("failedSubIssues")' >/dev/null 2>&1; then
+    echo "ERROR: epic validate #$EPIC_NUMBER could not run (exit $EPIC_VALIDATE_RC)" >&2
+    exit 2
+  fi
+  printf '%s\n' "$EPIC_VALIDATE" | jq -c '.failures // [] | .[]' | while read -r failure; do
+    SUB=$(printf '%s\n' "$failure" | jq -r '.subIssueNumber')
+    SUB_REPO=$(printf '%s\n' "$failure" | jq -r '.subIssueRepo')
+    REASON=$(printf '%s\n' "$failure" | jq -r '.error')
+    /* emit UNCHECKED_SUB_ISSUE (CRITICAL) against $SUB_REPO#$SUB with $REASON */
+  done
   GAPS=$(printf '%s\n' "$EPIC_VALIDATE" | jq -c '.gaps // []')
   printf '%s\n' "$GAPS" | jq -c '.[]' | while read -r gap; do
     GAP_TYPE=$(printf '%s\n' "$gap" | jq -r '.gapType')
@@ -449,6 +463,11 @@ if [ "$MODE" = "epic" ] && [ -n "$EPIC_NUMBER" ]; then
   done
 fi
 ```
+
+A sub-issue `epic validate` could not read is `UNCHECKED_SUB_ISSUE`
+(CRITICAL): its blockers were never checked, so the epic's alignment is
+unknown, not clean (#1702). It has no auto-fix; re-run the audit once the
+sub-issue can be read.
 
 Issue numbers are per repository and an epic's sub-issues can live in several.
 Each gap names the sub-issue's repository (`subIssueRepo`) and the blocker's
@@ -652,6 +671,8 @@ itself cannot run:
 - `--manifest <path>` does not exist or fails JSON parse
 - an epic's sub-issue list cannot be read whole (`nightgauge issue list --epic`
   exits non-zero)
+- `epic validate` cannot read the epic itself (non-zero exit with no result
+  on stdout)
 - `.nightgauge/config.yaml` unreadable when project number must be
   derived
 

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -302,6 +303,39 @@ func TestWaveOrchestrator_RunsASubIssueInItsOwnRepository(t *testing.T) {
 		if item.ParentNumber != 20 || item.ParentRepo != "example-org/platform" {
 			t.Errorf("#%d parent = %s#%d, want example-org/platform#20", si.Number, item.ParentRepo, item.ParentNumber)
 		}
+	}
+}
+
+// A wave reads each sub-issue with its own repository's client, as EnqueueEpic
+// does (#3700): a private cross-repo sub-issue may need another identity than
+// the epic's, and an unreadable sub-issue now fails the whole plan (#1702).
+func TestWaveOrchestrator_ReadsEachSubIssueWithItsRepositorysClient(t *testing.T) {
+	issueSvc := newMockEpicIssueSvc()
+	issueSvc.addEpic("example-org", "platform", 20, &types.EpicProgress{
+		Number: 20, Title: "Platform Epic", Repo: "example-org/platform", Total: 2, Open: 2,
+		SubIssues: []types.SubIssueRef{
+			{Number: 21, Title: "App task", State: "OPEN", Repo: "example-org/app"},
+			{Number: 22, Title: "Platform task", State: "OPEN", Repo: "example-org/platform"},
+		},
+	})
+	issueSvc.addIssue("example-org", "app", 21, &types.Issue{Number: 21, Title: "App task"})
+	issueSvc.addIssue("example-org", "platform", 22, &types.Issue{Number: 22, Title: "Platform task"})
+	s := &Scheduler{issueSvc: issueSvc}
+	var resolved []string
+	s.WithClientResolver(func(_ context.Context, owner, repo string) (*gh.Client, error) {
+		resolved = append(resolved, owner+"/"+repo)
+		// An error falls back to the mock, keeping the test hermetic.
+		return nil, fmt.Errorf("resolver stub")
+	})
+	wo := newWaveOrchestrator(s, 20, "example-org/platform", 2, 0)
+
+	if _, _, _, err := wo.fetchSubIssueDetails(context.Background(), "example-org", "platform",
+		types.BoardItem{Number: 20, Repo: "example-org/platform"}); err != nil {
+		t.Fatalf("fetchSubIssueDetails: %v", err)
+	}
+	want := []string{"example-org/platform", "example-org/app", "example-org/platform"}
+	if !reflect.DeepEqual(resolved, want) {
+		t.Fatalf("clients resolved for %v, want %v (the epic, then each sub-issue's own repository)", resolved, want)
 	}
 }
 
