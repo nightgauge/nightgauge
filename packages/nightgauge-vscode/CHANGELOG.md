@@ -19,6 +19,14 @@ and this project adheres to
   _Private_ badge once the service confirms it; when it does not, the
   extension says so and shows no badge.
 
+### Fixed
+
+- **Every closed sub-issue moves to Done when an issue completes**, not only
+  the first 50, and a sub-issue in another repository is updated there rather
+  than the issue with the same number in this one (#1701). A sub-issue list
+  that cannot be read is logged as a warning instead of being skipped
+  silently.
+
 ## [0.6.0] - 2026-10-04
 
 ### Added

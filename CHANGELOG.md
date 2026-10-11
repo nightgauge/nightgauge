@@ -53,6 +53,44 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **Raw GraphQL reads pay the rate-limit floor, and an exhausted budget reads
+  as a rate limit** (#1695). The raw GraphQL path behind batch issue reads,
+  relationship follow-up pages, default-branch file reads, owner project lists
+  and `nightgauge forge graphql` now waits on the machine-wide floor gate
+  before sending, retries a 200 answer whose GraphQL errors are
+  `RATE_LIMITED`, and honours `Retry-After`. When the retries run out, the
+  error wraps `forge.ErrRateLimited`; a 403 with no rate-limit signal is no
+  longer retried and is not reported as one. The GitHub forge adapter's client
+  now carries the machine-wide rate-limit tracker, so every `nightgauge forge`
+  subcommand pays the floor and records what it sees. Below the floor it
+  waits for the reset (at most 75 minutes), as other CLI commands do. See
+  `docs/FORGE_ABSTRACTION.md` § GraphQLService.
+
+- **Sub-issue and blocker lists read outside the Go binary no longer stop at a
+  fixed first page** (#1701). The extension's sync of closed sub-issues to
+  Done, the SDK's `EpicEstimator`, the `assess-epic`, `issue-audit` and
+  `backlog-preflight` skills, and the shared epic-handling steps read every
+  sub-issue and blocker, or fail, instead of silently stopping after the
+  first 10 or 50. `backlog-preflight` no longer has a shell fallback and
+  requires the `nightgauge` binary. `nightgauge backlog preflight` exits 2
+  when it cannot run, as documented, not 1 ("findings found").
+
+- **Epic enqueue, wave planning, `epic assess` and `epic validate` no longer
+  act on part of an epic when a sub-issue cannot be read** (#1702). A
+  sub-issue read that failed outright, not part-way through a blocker list,
+  used to enqueue the sub-issue without its blockers, drop it from the wave
+  plan or assessment, or let `epic validate` call the epic valid over
+  sub-issues it never read. Epic enqueue, wave planning (GitHub and GitLab) and
+  `epic assess` now fail. `epic validate` lists each sub-issue it could not
+  check, reports `checkedSubIssues` and `failedSubIssues` in text and JSON,
+  and exits non-zero when any failed; the `issue-audit` skill reports each as
+  `UNCHECKED_SUB_ISSUE`. `epic assess` and wave planning read a cross-repo
+  sub-issue in its own repository, with that repository's client. The GitLab
+  adapter reports an unreadable issue-link list as
+  `forge.ErrConnectionTruncated` instead of returning the issue with no
+  sub-issues or blockers; the sentinel moved from `internal/github` to
+  `internal/forge`.
+
 - **`@modelcontextprotocol/sdk` is 1.32.1**, out of the range of
   GHSA-6qxp-vccf-f47h (an MCP server could steer the OAuth client's
   credentials to an authorization server it chose). It is a transitive
