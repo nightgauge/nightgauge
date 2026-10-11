@@ -131,10 +131,14 @@ size label, the number of stages, backtracks and model escalations, and whether
 it succeeded, for the analytics that tune the pipeline.
 
 **The queue snapshot**, sent by the daemon whenever its queue changes,
-including issues you queue from VS Code, so the dashboard shows what this
-machine has queued and is working on: for each queued issue its number,
-position, priority, status, repository and title, keyed by this machine's id.
-Each snapshot replaces the previous one.
+including issues you queue from VS Code and issues added to the queue from the
+app or the dashboard, which reach this machine as a `queue_add` command, so the
+dashboard shows what this machine has queued and is working on: for each queued
+issue its number, position, priority, status, repository and title, keyed by
+this machine's id. Each snapshot replaces the previous one. An issue added from
+the app or the dashboard is listed with the priority it was added with, and
+its snapshot entry replaces the entry the service kept while it was on its way
+to this machine.
 
 **The extension's uploads.** In VS Code the extension also uploads the local
 history in these streams:

@@ -142,13 +142,14 @@ daemon stops the turn's process and sends nothing more.
 
 ## States and reasons
 
-| Terminal report           | When                                                                                                                                          |
-| ------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `completed`               | The adapter exited cleanly with a successful result                                                                                           |
-| `failed`, `timeout`       | The daemon's timeout fired: five seconds before `deadline_at`                                                                                 |
-| `failed`, `token_ceiling` | The turn's tokens, as above, passed `token_ceiling`                                                                                           |
-| `failed`, `refused`       | The turn was acknowledged `rejected`; or, once claimed, the context read failed, the adapter did not start or failed, or the daemon shut down |
-| `cancelled`               | A teammate cancelled the turn and its process group was verified dead                                                                         |
+| Terminal report           | When                                                                                                                                   |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `completed`               | The adapter exited cleanly with a successful result                                                                                    |
+| `failed`, `timeout`       | The daemon's timeout fired: five seconds before `deadline_at`                                                                          |
+| `failed`, `token_ceiling` | The turn's tokens, as above, passed `token_ceiling`                                                                                    |
+| `failed`, `refused`       | The turn was acknowledged `rejected`: the daemon declined it before the claim and sends no terminal report; the hosted service ends it |
+| `failed`, `host_error`    | Once claimed, the context read failed, the adapter did not start or failed, its stream broke, or the daemon shut down (#2449)          |
+| `cancelled`               | A teammate cancelled the turn and its process group was verified dead                                                                  |
 
 Every other reason (`chunk_limit`, `secret_detected`, `agent_lost`,
 `target_unavailable`, `poster_unauthorized`, `cancel_unconfirmed`) is the

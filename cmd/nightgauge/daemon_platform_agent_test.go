@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/agentworkspace"
+	"github.com/nightgauge/nightgauge/internal/cloudqueue"
 	"github.com/nightgauge/nightgauge/internal/ipc"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/nightgauge/nightgauge/internal/platform"
@@ -157,7 +158,7 @@ func TestRunDaemonPlatformAgent_DeclaresTheWindowsWorkspaceAndRelays(t *testing.
 		defer close(done)
 		// Exactly as serve calls it.
 		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test",
-			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), nil)
+			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), nil, nil)
 	}()
 	defer func() {
 		cancel()
@@ -232,7 +233,7 @@ func TestRunDaemonPlatformAgent_ReportsRefusedWorkspaceWrites(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test", t.TempDir(), nil, nil)
+		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test", t.TempDir(), nil, nil, nil)
 	}()
 	defer func() {
 		cancel()
@@ -365,7 +366,7 @@ func TestRunDaemonPlatformAgent_FollowsItsWorkspaceThrottle(t *testing.T) {
 	go func() {
 		defer close(done)
 		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test",
-			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), throttle)
+			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), throttle, nil)
 	}()
 	defer func() {
 		cancel()
@@ -453,7 +454,7 @@ func TestRunDaemonPlatformAgent_ThrottleUnreadUntilRegistered(t *testing.T) {
 	go func() {
 		defer close(done)
 		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), &extensionSide{}, "test",
-			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), daemon)
+			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), daemon, nil)
 	}()
 	defer func() {
 		cancel()
@@ -658,7 +659,7 @@ func TestRunDaemonPlatformAgent_ReadsTheThrottleAgainWhenTheStreamReopens(t *tes
 	go func() {
 		defer close(done)
 		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), &extensionSide{}, "test",
-			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), throttle)
+			filepath.Join(ws, "api"), agentworkspace.WindowFolders(os.Getenv), throttle, nil)
 	}()
 	defer func() {
 		cancel()
@@ -846,7 +847,7 @@ func TestRunDaemonPlatformAgent_HandlesConversationTurnsItself(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test", root, nil, nil)
+		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test", root, nil, nil, nil)
 	}()
 	defer func() {
 		cancel()
@@ -868,6 +869,114 @@ func TestRunDaemonPlatformAgent_HandlesConversationTurnsItself(t *testing.T) {
 	for _, e := range ext.relayed() {
 		if ev, ok := e.Data.(ipc.AgentCommandEvent); ok && strings.Contains(string(ev.Frame), "conversation_turn") {
 			t.Errorf("a turn command was relayed to the extension: %s", ev.Frame)
+		}
+	}
+}
+
+// cloudQueueFake is the daemon's local queue in TestRunDaemonPlatformAgent_QueuesACloudItemItself.
+type cloudQueueFake struct {
+	mu    sync.Mutex
+	items []cloudqueue.Item
+}
+
+func (q *cloudQueueFake) AddCloudItem(_ context.Context, item cloudqueue.Item) (cloudqueue.Outcome, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.items = append(q.items, item)
+	return cloudqueue.Queued, nil
+}
+
+func (q *cloudQueueFake) WithdrawCloudItem(cloudqueue.Item) bool { return false }
+
+func (q *cloudQueueFake) added() []cloudqueue.Item {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return append([]cloudqueue.Item(nil), q.items...)
+}
+
+// serve hands a `queue_add` on the daemon's own stream to its queue-add
+// handler (#2440), never to the extension: the issue goes to the daemon's
+// queue under the repository as the workspace declares it, the command is
+// acknowledged `applied`, and only the other command is relayed.
+func TestRunDaemonPlatformAgent_QueuesACloudItemItself(t *testing.T) {
+	t.Setenv("NIGHTGAUGE_AGENT_ID", "test-machine-uuid")
+	t.Setenv(agentworkspace.WindowFoldersEnv, "")
+	root := t.TempDir()
+	writeTestFile(t, filepath.Join(root, ".nightgauge", "config.yaml"), "owner: acme\nrepo: api\n")
+
+	add := `{"commandId":"cmd-add-1","type":"queue_add","commandType":"queue_add","payload":{"type":"queue_add","owner":"Acme","repo":"API","issueNumber":637,"priority":"high","queueItemId":"qi-1","workspaceId":"ws-1"},"owner":"Acme","repo":"API","issueNumber":637,"stage":null,"createdAt":"2026-10-11T00:00:00.000Z","expiresAt":"2026-10-12T00:00:00.000Z"}`
+	pause := `{"commandId":"cmd-pause-1","type":"pause","commandType":"pause","payload":{"runId":"run-9"},"owner":"acme","repo":"api","createdAt":"2026-10-11T00:00:00.000Z","expiresAt":"2026-10-11T00:05:00.000Z"}`
+	var mu sync.Mutex
+	var acks []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/register":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"agentId":"agent-daemon","ttl_seconds":90}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/agents/agent-daemon/commands/cmd-add-1/ack":
+			raw, _ := io.ReadAll(r.Body)
+			mu.Lock()
+			acks = append(acks, string(raw))
+			mu.Unlock()
+			_, _ = w.Write([]byte(`{"runId":null}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/agents/agent-daemon/commands":
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintf(w, "event: command\ndata: %s\n\nevent: command\ndata: %s\n\n", add, pause)
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			<-r.Context().Done()
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	client, err := platform.NewClient(platform.Config{BaseURL: srv.URL, APIKey: "test-key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := &cloudQueueFake{}
+	ext := &extensionSide{}
+	ctx, cancel := context.WithCancel(context.Background())
+	// Built as serve builds it.
+	h := cloudqueue.New(ctx, cloudqueue.Config{
+		Queue: queue,
+		Acks:  platform.NewCommandService(client),
+		Served: func() ([]platform.AgentRepo, error) {
+			decl, err := agentworkspace.ResolveServed(nil, root)
+			return decl.Repos, err
+		},
+	})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runDaemonPlatformAgent(ctx, client, platform.NewAttentionSyncService(client), ext, "test", root, nil, nil, h.HandleCommand)
+	}()
+	defer func() {
+		cancel()
+		<-done
+	}()
+
+	waitUntil(t, "the daemon's ack of the queue_add", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(acks) == 1
+	})
+	mu.Lock()
+	ack := acks[0]
+	mu.Unlock()
+	if ack != `{"outcome":"applied"}` {
+		t.Errorf("queue_add ack = %s, want {\"outcome\":\"applied\"}", ack)
+	}
+	if got := queue.added(); len(got) != 1 || got[0] != (cloudqueue.Item{Owner: "acme", Repo: "api", IssueNumber: 637, Priority: "high"}) {
+		t.Errorf("queued %+v, want acme/api#637 at high", got)
+	}
+	waitUntil(t, "the relayed pause", func() bool { return len(ext.relayed()) >= 1 })
+	for _, e := range ext.relayed() {
+		if ev, ok := e.Data.(ipc.AgentCommandEvent); ok && strings.Contains(string(ev.Frame), "queue_add") {
+			t.Errorf("a queue_add was relayed to the extension: %s", ev.Frame)
 		}
 	}
 }

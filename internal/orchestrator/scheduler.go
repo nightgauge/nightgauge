@@ -1156,6 +1156,12 @@ type QueueItem struct {
 	// the queue sync names it per item. Raised, never lowered: a private
 	// request for an issue already waiting here makes that item private.
 	Visibility string `json:"visibility,omitempty"`
+	// RequestedPriority is the priority an item added in the cloud was given
+	// (#2440): critical, high, medium or low. The queue sync reports it in
+	// place of the issue's priority label, so the item keeps the priority it
+	// was added with once this machine's row replaces the cloud row. Empty on
+	// every other item.
+	RequestedPriority string `json:"requestedPriority,omitempty"`
 }
 
 // QueuePausedReason explains why a queue item is paused.
@@ -2816,6 +2822,14 @@ func (s *Scheduler) QueueItemRequestedPinForRemoteRun(repo string, issueNumber i
 // QueueAddItem skips a duplicate silently, which for a pinned item would
 // run the issue without the pin the requester asked for; this reports it.
 func (s *Scheduler) QueueAddPinnedItem(item QueueItem) (added bool) {
+	return s.QueueAddIfAbsent(item)
+}
+
+// QueueAddIfAbsent queues item only when its repository and issue are not
+// already queued, deciding and inserting under one lock, and reports whether
+// it did. A remote run request's pin (#1656) and an item added in the cloud
+// (#2440) are queued through it.
+func (s *Scheduler) QueueAddIfAbsent(item QueueItem) (added bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.queueContainsUnlocked(item.Repo, item.IssueNumber) {
@@ -2914,6 +2928,45 @@ func (s *Scheduler) QueueRemoveRemoteRun(remoteRunID string) bool {
 // repository's item with the number; an empty repo matches by number alone.
 func queueItemMatches(item QueueItem, repo string, issueNumber int) bool {
 	return item.IssueNumber == issueNumber && (repo == "" || strings.EqualFold(item.Repo, repo))
+}
+
+// QueueHas reports whether repo's issue issueNumber is queued, in any
+// status: an item stays queued, marked processing, for the whole of its run.
+// The repository is compared case-insensitively (queueItemMatches).
+func (s *Scheduler) QueueHas(repo string, issueNumber int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, item := range s.queue {
+		if queueItemMatches(item, repo, issueNumber) {
+			return true
+		}
+	}
+	return false
+}
+
+// QueueWithdrawWaiting removes the item for repo and issueNumber only while
+// it still waits for a slot (pending or ready), and reports whether it did.
+// An item a dispatch has taken, or one held paused, stays. It undoes an item
+// added in the cloud whose acknowledgement was refused because another
+// connection of the agent already took the command (#2440).
+func (s *Scheduler) QueueWithdrawWaiting(repo string, issueNumber int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.queue {
+		item := s.queue[i]
+		if item.Repo != repo || item.IssueNumber != issueNumber {
+			continue
+		}
+		if item.Status != "pending" && item.Status != "ready" {
+			return false
+		}
+		s.queue = append(s.queue[:i], s.queue[i+1:]...)
+		s.recalculatePositions()
+		s.persistQueue()
+		s.emitQueueChangedUnlocked()
+		return true
+	}
+	return false
 }
 
 // QueueRemove removes repo's issue issueNumber from the queue. An issue number
@@ -3594,10 +3647,14 @@ func (s *Scheduler) syncQueueToCloudLocked() {
 		if status == "" {
 			continue // terminal/unsyncable — keep it out of the live snapshot
 		}
+		priority := it.RequestedPriority
+		if priority == "" {
+			priority = queuePriorityFromLabels(it.Labels)
+		}
 		items = append(items, platform.QueueSyncItem{
 			IssueNumber:  it.IssueNumber,
 			Position:     it.Position,
-			Priority:     queuePriorityFromLabels(it.Labels),
+			Priority:     priority,
 			Status:       status,
 			RepoFullName: it.Repo,
 			Title:        it.Title,

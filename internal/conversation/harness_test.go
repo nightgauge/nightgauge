@@ -151,6 +151,12 @@ func TestFakeAdapterProcess(t *testing.T) {
 				[]byte(fmt.Sprint(grandchild.Process.Pid)), 0o644)
 		}
 		time.Sleep(time.Hour)
+	case "crash":
+		// Part of a reply, then the process dies: a failure after the claim.
+		for _, line := range fakeTextTurn([]string{"half an answ"}, 100, 5)[:4] {
+			emit(line)
+		}
+		os.Exit(2)
 	case "usage":
 		// A prompt larger than the ceiling, reported before any text.
 		emit(`{"type":"system","subtype":"init","model":"claude-sonnet-5-5","per_turn_effort_active":true}`)
@@ -236,6 +242,8 @@ type fakePlatform struct {
 	posts    []framePost
 	reads    int
 	position int
+	// contextStatus, when set, answers every context read with it (#2449).
+	contextStatus int
 	// onReport runs, under no lock, when a terminal report or a cancel
 	// acknowledgement arrives, so a test can look at the process right then.
 	onReport func(kind string, turnID string)
@@ -365,6 +373,10 @@ func (fp *fakePlatform) context(w http.ResponseWriter, r *http.Request, turnID s
 		return
 	}
 	fp.reads++
+	if fp.contextStatus != 0 {
+		writeJSON(w, fp.contextStatus, map[string]any{"error": map[string]string{"code": "INTERNAL", "message": "x"}})
+		return
+	}
 	writeJSON(w, http.StatusOK, platform.TurnContext{
 		ConversationID: t.conversation, TurnID: t.id,
 		Messages: append([]platform.TurnContextMessage(nil), fp.history[t.conversation]...),

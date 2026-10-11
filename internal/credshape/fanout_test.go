@@ -13,7 +13,8 @@ import (
 // everyLicenseKeyPrefix is every prefix a Nightgauge license key has been
 // issued under. The registry may only widen: a key issued under a prefix can
 // sit in a config file or a log long after the prefix stops being issued.
-var everyLicenseKeyPrefix = []string{"ng_live_", "ng_ci_", "ng_test_", "ib_live_", "ib_ci_"}
+// ib_test_ was issued before the rebrand too and was missing until #2451.
+var everyLicenseKeyPrefix = []string{"ng_live_", "ng_ci_", "ng_test_", "ib_live_", "ib_test_", "ib_ci_"}
 
 // TestLicenseKeyShapesOnlyWiden pins the registry: no prefix is ever dropped
 // from it. #2444 first replaced the ib_ prefixes with the ng_ ones, and every

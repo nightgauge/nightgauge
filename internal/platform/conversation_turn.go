@@ -361,7 +361,14 @@ const (
 
 	TurnFailureTimeout      = "timeout"
 	TurnFailureTokenCeiling = "token_ceiling"
-	TurnFailureRefused      = "refused"
+	// TurnFailureRefused is a turn the host declined. The daemon declines a
+	// turn by acknowledging its command `rejected`, before the claim, so it
+	// never reports this reason in a terminal report.
+	TurnFailureRefused = "refused"
+	// TurnFailureHostError is a turn that failed after the host claimed it:
+	// the context read failed, the adapter did not start or failed, the
+	// stream broke, or the daemon shut down (#2449).
+	TurnFailureHostError = "host_error"
 )
 
 // Retention classes (ADR-017 Decision 11).
@@ -388,8 +395,8 @@ type TurnUsage struct {
 // TurnEnd is the turn's one terminal report.
 type TurnEnd struct {
 	State string
-	// FailureReason is required with TurnStateFailed: timeout, token_ceiling
-	// or refused. Every other reason is the hosted service's.
+	// FailureReason is required with TurnStateFailed: timeout, token_ceiling,
+	// refused or host_error. Every other reason is the hosted service's.
 	FailureReason  string
 	Profile        *TurnExecutionProfile
 	Usage          *TurnUsage

@@ -224,6 +224,15 @@ type Server struct {
 	// autonomousScheduler is the cross-repo autonomous scheduler (optional).
 	autonomousScheduler *orchestrator.AutonomousScheduler
 
+	// queueAddHandler handles a `queue_add` command the extension hands over
+	// from its own agent's stream (agent.queueAdd, #2440). Set by serve when
+	// a platform is configured; nil leaves agent.queueAdd refusing the hand-over.
+	queueAddHandler atomic.Pointer[platform.AgentCommandHandler]
+
+	// readCloudIssue reads an issue added to the queue in the cloud (#2440).
+	// nil reads it from GitHub; tests replace it.
+	readCloudIssue func(ctx context.Context, owner, repo string, number int) (*types.Issue, error)
+
 	// autonomousWaitTimeout bounds how long the autonomous.* lifecycle
 	// handlers wait for the scheduler goroutine to reach the state their
 	// caller asked for before answering with the state it is actually in
@@ -5891,6 +5900,11 @@ func (s *Server) registerMethods() {
 
 	//ipc:method agentAcknowledgeCommand params:AgentAcknowledgeCommandParams result:AgentAcknowledgeCommandResult
 	s.methods["agent.acknowledgeCommand"] = s.handleAgentAcknowledgeCommand
+
+	// A `queue_add` the extension received on its own agent's stream (#2440).
+	// The daemon handles it as it handles one on its own stream.
+	//ipc:method agentQueueAdd params:AgentQueueAddParams result:AgentQueueAddResult
+	s.methods["agent.queueAdd"] = s.handleAgentQueueAdd
 
 	// The execution profile the extension advertises on agent registration and
 	// every heartbeat (#1567). Resolved fresh on each call through the Go

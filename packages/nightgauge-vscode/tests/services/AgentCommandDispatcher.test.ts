@@ -19,6 +19,7 @@ import {
   AgentCommandDispatcher,
   AGENT_COMMAND_RELAY_EVENT,
   CONVERSATION_TURN_COMMAND_TYPES,
+  QUEUE_ADD_COMMAND_TYPE,
   ROUTER_DELIVERED_COMMAND_TYPES,
   subscribeToDaemonRelay,
 } from "../../src/services/AgentCommandDispatcher";
@@ -35,6 +36,7 @@ function makeLogger() {
 function makeIpc() {
   return {
     agentAcknowledgeCommand: vi.fn().mockResolvedValue({ runId: "platform-run-1" }),
+    agentQueueAdd: vi.fn().mockResolvedValue({ accepted: true }),
     issueView: vi.fn().mockResolvedValue({ title: "An issue", labels: [] }),
     queueValidatePin: vi.fn().mockResolvedValue({ ok: true }),
   };
@@ -225,13 +227,38 @@ describe("AgentCommandDispatcher", () => {
 
   it("acknowledges an unsupported command type once, as rejected", async () => {
     const { dispatcher, ipc } = build("applied");
-    dispatcher.handle({ ...routedCommand("queue_add", 0), payload: { issueNumber: 7 } });
+    dispatcher.handle({ ...routedCommand("queue_reorder", 0), payload: { issueNumber: 7 } });
     await settle();
 
     expect(ipc.agentAcknowledgeCommand).toHaveBeenCalledTimes(1);
     const [agentId, id, outcome, detail] = ipc.agentAcknowledgeCommand.mock.calls[0];
-    expect([agentId, id, outcome]).toEqual(["agent-ext", "cmd-queue_add-0", "rejected"]);
+    expect([agentId, id, outcome]).toEqual(["agent-ext", "cmd-queue_reorder-0", "rejected"]);
     expect(detail).toMatch(/^unsupported-command: /);
+  });
+
+  // #2440: the platform routes a queue item added in the cloud to any agent
+  // covering its repository, this window's own included. The window hands
+  // its copy to the daemon, which queues and acknowledges it, and never
+  // acknowledges it itself, not even when the daemon cannot take it.
+  it("hands a queue_add to the daemon and never acknowledges it itself", async () => {
+    const { dispatcher, ipc } = build("applied");
+    const payload = {
+      type: "queue_add",
+      owner: "acme",
+      repo: "api",
+      issueNumber: 637,
+      priority: "high",
+    };
+    dispatcher.handle({ ...routedCommand(QUEUE_ADD_COMMAND_TYPE, 0), payload });
+    ipc.agentQueueAdd.mockRejectedValueOnce(new Error("this daemon takes no queue items"));
+    dispatcher.handle({ ...routedCommand(QUEUE_ADD_COMMAND_TYPE, 1), payload });
+    await settle();
+
+    expect(ipc.agentQueueAdd.mock.calls).toEqual([
+      ["agent-ext", "cmd-queue_add-0", payload],
+      ["agent-ext", "cmd-queue_add-1", payload],
+    ]);
+    expect(ipc.agentAcknowledgeCommand).not.toHaveBeenCalled();
   });
 
   // #2337: the platform publishes the workspace throttle to the workspace's

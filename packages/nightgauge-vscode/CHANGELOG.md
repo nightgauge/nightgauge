@@ -21,6 +21,11 @@ and this project adheres to
 
 ### Changed
 
+- **A queue item added from the app reaches the daemon** (#2440). The hosted
+  service may place an issue added to the queue from the app or the dashboard
+  on the window's agent; the window hands it to its Nightgauge daemon, which
+  queues it and answers it, instead of refusing it as an unsupported command.
+
 - **The window no longer advertises the `conversation` capability** (#1569).
   The Nightgauge daemon hosts conversation turns and advertises the
   capability on its own agent; the window's agent never claims or refuses a

@@ -16,6 +16,19 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **An issue added to the queue from the app now runs** (#2440). Added from
+  the app or the dashboard, it reaches an agent covering its repository as a
+  `queue_add` command, and `nightgauge serve` adds it to its own queue, where
+  it runs like any other item, then answers the command: `applied` once it is
+  queued, `already_resolved` when the issue is already queued or running
+  there, and `rejected` with the reason when the daemon does not serve the
+  repository or cannot queue the issue (it is closed, unreadable, or carries
+  a human-only label). An epic is queued as its open sub-issues, the item
+  keeps the priority it was added with, and the queue snapshot then lists it
+  as this machine's. A command delivered twice is queued once. When the
+  service places the command on a VS Code window's agent instead, the window
+  hands it to its daemon. See `docs/GO_BINARY.md`.
+
 - **The daemon answers conversation turns** (#1569). `nightgauge serve` takes
   a turn the hosted service addresses to its agent, on its own command
   stream, and answers it on the workspace's own adapter, performance mode and
@@ -70,6 +83,21 @@ changelog, and the release workflow refuses a tag that does not.
   after each platform deploy, in the platform repository.
 
 ### Fixed
+
+- **A conversation turn that fails after the daemon claimed it ends
+  `host_error`, not `refused`** (#2449). A crashed adapter, a failed context
+  read, a broken stream or a daemon shutting down mid-turn read as the host
+  declining the turn, to the poster and in the record. `refused` is now only
+  a turn the daemon declines, by acknowledging its command `rejected` before
+  the claim.
+
+- **License keys issued as `ib_test_` are recognised and redacted** (#2451).
+  The shared credential registry listed the pre-rebrand `ib_live_` and `ib_ci_`
+  shapes but not `ib_test_`, which the hosted service also issued, so such a
+  key was neither redacted from findings, evidence and conversation replies
+  nor refused where a variable name belongs. The list now matches the
+  service's: `ng_live_`, `ng_test_`, `ng_ci_`, `ib_live_`, `ib_test_`,
+  `ib_ci_`.
 
 - **A dependency check that could not run no longer reads as "no open
   dependencies"** (#1700). Auto-selection used to fall back to

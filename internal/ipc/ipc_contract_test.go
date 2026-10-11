@@ -228,6 +228,7 @@ var contractTestedMethods = map[string]bool{
 	"notifications.checkAuthorization": true,
 	// Agent
 	"agent.acknowledgeCommand": true, // Issue #3551
+	"agent.queueAdd":           true, // Issue #2440
 	"agent.executionProfile":   true, // Issue #1567
 	// Workflow
 	"workflow.quotaState": true, // Issue #3909
@@ -1840,5 +1841,14 @@ func TestContract_Agent(t *testing.T) {
 		payload := json.RawMessage(`{"agentId":"test-agent","commandId":"test-cmd"}`)
 		id := h.sendRequest("agent.acknowledgeCommand", payload)
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "agent.acknowledgeCommand")
+	})
+
+	t.Run("agent.queueAdd/registered", func(t *testing.T) {
+		h.bind(t)
+		// No queue-add handler is set in the harness, so the hand-over is
+		// refused; what matters is that the method exists (#2440).
+		payload := json.RawMessage(`{"agentId":"test-agent","commandId":"test-cmd","payload":{}}`)
+		id := h.sendRequest("agent.queueAdd", payload)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "agent.queueAdd")
 	})
 }

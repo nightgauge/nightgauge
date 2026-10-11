@@ -100,6 +100,7 @@ type AttentionCommandConsumer struct {
 	agentID     string
 	relay       AgentCommandRelay
 	turns       AgentCommandHandler
+	queueAdds   AgentCommandHandler
 	onConnected func()
 }
 
@@ -110,8 +111,8 @@ type AttentionCommandConsumer struct {
 type AgentCommandHandler func(ctx context.Context, agentID string, cmd PendingCommand)
 
 // AgentCommandRelay hands on a command addressed to this daemon's agent that
-// the daemon does not execute itself: every type but attention_resolve
-// (#2335). The pipeline verbs and triggers the platform's router places by
+// the daemon does not execute itself: every type but attention_resolve, the
+// conversation turn types and queue_add (#2335). The pipeline verbs and triggers the platform's router places by
 // repo are carried out by the VS Code extension attached to this daemon, which
 // runs the workspace's pipelines and acknowledges them under agentID, the
 // agent the platform addressed. Once the daemon declares the workspace's
@@ -141,6 +142,16 @@ func (c *AttentionCommandConsumer) WithRelay(relay AgentCommandRelay) *Attention
 // passes.
 func (c *AttentionCommandConsumer) WithTurnHandler(h AgentCommandHandler) *AttentionCommandConsumer {
 	c.turns = h
+	return c
+}
+
+// WithQueueAddHandler sets where a `queue_add` command goes (#2440, ADR-018).
+// The daemon adds the issue to its own local queue and acknowledges the
+// command itself, before any relay; it never reaches the extension. Without a
+// handler a `queue_add` is left unacknowledged, and the hosted service
+// expires it.
+func (c *AttentionCommandConsumer) WithQueueAddHandler(h AgentCommandHandler) *AttentionCommandConsumer {
+	c.queueAdds = h
 	return c
 }
 
@@ -208,12 +219,19 @@ func (c *AttentionCommandConsumer) Consume(ctx context.Context, cmd PendingComma
 
 // Execute drives Consume from the agent-command stream loop. Consume already
 // acknowledges and logs, so Execute always returns nil. A conversation turn
-// command goes to the turn handler and is never relayed (#1569). Any other
-// command type goes to the relay, whose receiver acknowledges it.
+// command goes to the turn handler (#1569), and a `queue_add` to the queue-add
+// handler (#2440); neither is ever relayed. Any other command type goes to the
+// relay, whose receiver acknowledges it.
 func (c *AttentionCommandConsumer) Execute(ctx context.Context, cmd PendingCommand) error {
 	if IsConversationTurnCommand(cmd.Type) {
 		if c.turns != nil {
 			c.turns(ctx, c.agentID, cmd)
+		}
+		return nil
+	}
+	if cmd.Type == QueueAddCommandType {
+		if c.queueAdds != nil {
+			c.queueAdds(ctx, c.agentID, cmd)
 		}
 		return nil
 	}
