@@ -8546,8 +8546,8 @@ func (s *Scheduler) dispatchItem(ctx context.Context, item types.BoardItem) {
 		if s.RunEpicWaves(ctx, item) {
 			return // Wave orchestration handled the epic
 		}
-		// Wave orchestration declined (sequential strategy) — fall back to queue
-		log.Printf("#%d: wave orchestration declined — falling back to sequential queue", item.Number)
+		// No wave plan: a sequential strategy, or a plan that could not be built
+		log.Printf("#%d: no wave plan (sequential strategy, or the plan failed; see above) — falling back to sequential queue", item.Number)
 		ownerPart, repoPart := splitOwnerRepo(item.Repo)
 		if err := s.EnqueueEpic(ctx, ownerPart, repoPart, item.Number, item.Title, item.Labels, nil, ""); err != nil {
 			log.Printf("#%d: failed to enqueue epic sub-issues: %v", item.Number, err)
