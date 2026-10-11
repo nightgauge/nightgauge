@@ -323,6 +323,9 @@ func (f *fakeBoardService) GetItem(_ context.Context, _, _ string, _ int) (*forg
 	}
 	return &forgetypes.BoardItem{}, nil
 }
+func (f *fakeBoardService) GetItemWithoutRelations(ctx context.Context, owner, repo string, number int) (*forgetypes.BoardItem, error) {
+	return f.GetItem(ctx, owner, repo, number)
+}
 
 // --- CIService fake ---
 

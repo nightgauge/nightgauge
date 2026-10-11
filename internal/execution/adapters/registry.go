@@ -64,6 +64,16 @@ func (r *Registry) Get(name string) (SkillRunner, error) {
 	return factory(), nil
 }
 
+// Aliases returns a copy of the alias table: each alias and the registered
+// adapter name it resolves to.
+func (r *Registry) Aliases() map[string]string {
+	out := make(map[string]string, len(r.aliases))
+	for alias, canonical := range r.aliases {
+		out[alias] = canonical
+	}
+	return out
+}
+
 // Names returns sorted adapter names (excluding aliases).
 func (r *Registry) Names() []string {
 	names := make([]string, 0, len(r.factories))

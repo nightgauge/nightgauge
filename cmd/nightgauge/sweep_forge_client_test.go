@@ -218,6 +218,9 @@ func (b *countingSweepBoard) ListItems(context.Context, string) ([]forgetypes.Bo
 func (b *countingSweepBoard) GetItem(context.Context, string, string, int) (*forgetypes.BoardItem, error) {
 	return nil, nil
 }
+func (b *countingSweepBoard) GetItemWithoutRelations(context.Context, string, string, int) (*forgetypes.BoardItem, error) {
+	return nil, nil
+}
 
 // countingSweepClient is a ForgeClient whose only live service is the board.
 // Project() must return a typed nil rather than fall through to the embedded

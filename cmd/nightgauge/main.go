@@ -2130,10 +2130,12 @@ issue number 0 — useful for tests.`,
 				//     takes owner and repo and checks both.
 				//
 				// A miss is still silent: an issue that is not on the board
-				// routes from its labels alone, as before.
+				// routes from its labels alone, as before. Size and Priority
+				// are the item's own fields, so none of its relationship lists
+				// is read (#1707).
 				if sizeFlag == "" || priorityFlag == "" {
 					boardSvc := gh.NewBoardService(client, ownerPart, projectNumber, getOwnerType(cmd))
-					if item, ferr := boardSvc.GetItem(cmd.Context(), ownerPart, repoPart, number); ferr == nil && item != nil {
+					if item, ferr := boardSvc.GetItemWithoutRelations(cmd.Context(), ownerPart, repoPart, number); ferr == nil && item != nil {
 						if input.BoardSize == "" {
 							input.BoardSize = string(item.Size)
 						}

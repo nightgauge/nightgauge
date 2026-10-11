@@ -264,23 +264,9 @@ func (b *BoardService) listItems(ctx context.Context, owner, repo, state, status
 // cannot be read: an item returned with empty link slices would read as
 // having no sub-issues and no blockers.
 func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNumber int) (*forgetypes.BoardItem, error) {
-	o, r, projPath, err := b.projectPathForBoard(owner, repo)
-	if err != nil {
-		return nil, err
-	}
-	full := b.client.buildURL(
-		fmt.Sprintf("/projects/%s/issues/%d", projPath, issueNumber), nil,
-	)
-	var raw rawIssueList
-	if _, err := b.client.do(ctx, "GET", full, nil, &raw, fmt.Sprintf("get board item #%d", issueNumber)); err != nil {
-		return nil, err
-	}
-	if raw.IID == 0 {
-		return nil, fmt.Errorf("get board item #%d: %w", issueNumber, forge.ErrNotFound)
-	}
-	item := rawIssueToBoardItem(raw, o, r)
-	if item == nil {
-		return nil, nil
+	item, o, r, err := b.getItem(ctx, owner, repo, issueNumber)
+	if err != nil || item == nil {
+		return item, err
 	}
 	links, err := listIssueLinks(ctx, b.client, o, r, issueNumber)
 	if err != nil {
@@ -294,6 +280,33 @@ func (b *BoardService) GetItem(ctx context.Context, owner, repo string, issueNum
 		item.IsEpic = true
 	}
 	return item, nil
+}
+
+// GetItemWithoutRelations is GetItem without the /links call: one request for
+// the issue's own fields, and empty SubIssues, BlockedBy and Blocking.
+func (b *BoardService) GetItemWithoutRelations(ctx context.Context, owner, repo string, issueNumber int) (*forgetypes.BoardItem, error) {
+	item, _, _, err := b.getItem(ctx, owner, repo, issueNumber)
+	return item, err
+}
+
+// getItem reads one issue as a board item, without its links, and returns the
+// owner and repository the board resolved it in.
+func (b *BoardService) getItem(ctx context.Context, owner, repo string, issueNumber int) (*forgetypes.BoardItem, string, string, error) {
+	o, r, projPath, err := b.projectPathForBoard(owner, repo)
+	if err != nil {
+		return nil, "", "", err
+	}
+	full := b.client.buildURL(
+		fmt.Sprintf("/projects/%s/issues/%d", projPath, issueNumber), nil,
+	)
+	var raw rawIssueList
+	if _, err := b.client.do(ctx, "GET", full, nil, &raw, fmt.Sprintf("get board item #%d", issueNumber)); err != nil {
+		return nil, "", "", err
+	}
+	if raw.IID == 0 {
+		return nil, "", "", fmt.Errorf("get board item #%d: %w", issueNumber, forge.ErrNotFound)
+	}
+	return rawIssueToBoardItem(raw, o, r), o, r, nil
 }
 
 // MarshalRawIssue is exposed for tests in sibling files (project_test.go,

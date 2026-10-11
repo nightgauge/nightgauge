@@ -45,6 +45,9 @@ func (b *strandedBoard) ListOpenItems(context.Context) ([]forgetypes.BoardItem, 
 func (b *strandedBoard) GetItem(context.Context, string, string, int) (*forgetypes.BoardItem, error) {
 	return nil, forge.ErrUnsupported
 }
+func (b *strandedBoard) GetItemWithoutRelations(context.Context, string, string, int) (*forgetypes.BoardItem, error) {
+	return nil, forge.ErrUnsupported
+}
 
 // strandedInput is the sweep Input. It carries no forge: the producer reads
 // only the stale board, through StaleClient.

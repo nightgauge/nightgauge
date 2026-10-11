@@ -250,9 +250,8 @@ func (s *IssueService) GetIssueWithRelations(ctx context.Context, owner, repo st
 // silently omitted from the result.
 //
 // This avoids the per-issue round-trip pattern (N GetIssue calls). It is the
-// batch read for callers that return whole issues, such as the IPC
-// issue.viewMany method; a caller that needs only bodies or states uses
-// GetIssuesByNumbersWithoutRelations.
+// batch read for callers that return whole issues; a caller that needs only
+// bodies, states, titles or labels uses GetIssuesByNumbersWithoutRelations.
 //
 // The returned issues populate the same fields as GetIssue: Labels, Assignees,
 // SubIssues, BlockedBy, Blocking, Parent. Numbers are deduplicated. Every
@@ -265,12 +264,12 @@ func (s *IssueService) GetIssuesByNumbers(ctx context.Context, owner, repo strin
 
 // GetIssuesByNumbersWithoutRelations is GetIssuesByNumbers for callers that
 // read an issue's body, state, labels, assignees or parent and never its
-// relationships, such as the scheduler's blocker-state refresh and the
-// dependency graph's body fetch. It does not select the subIssues, blockedBy
-// or blocking connections, so SubIssues, BlockedBy and Blocking are empty and
-// IsEpic is false. Selecting none, it reads no follow-up pages: it neither
-// spends requests on relationships it would discard nor fails because one of
-// them could not be read.
+// relationships, such as the scheduler's blocker-state refresh, the
+// dependency graph's body fetch and the IPC issue.viewMany method. It does
+// not select the subIssues, blockedBy or blocking connections, so SubIssues,
+// BlockedBy and Blocking are empty and IsEpic is false. Selecting none, it
+// reads no follow-up pages: it neither spends requests on relationships it
+// would discard nor fails because one of them could not be read.
 func (s *IssueService) GetIssuesByNumbersWithoutRelations(ctx context.Context, owner, repo string, numbers []int) (map[int]*types.Issue, error) {
 	return s.getIssuesByNumbers(ctx, owner, repo, numbers, NoRelations)
 }

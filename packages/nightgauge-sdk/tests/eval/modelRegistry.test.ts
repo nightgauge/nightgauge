@@ -10,6 +10,7 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { ADAPTER_ALIASES } from "../../src/cli/adapter.js";
 import {
   MODEL_REGISTRY,
   activeModels,
@@ -190,10 +191,26 @@ describe("model registry — adapter resolution (#56)", () => {
     expect(providerForAdapter("gemini-sdk")).toBe("google");
     expect(providerForAdapter("grok")).toBe("xai");
     expect(providerForAdapter("grok-headless")).toBe("xai");
+    expect(providerForAdapter("xai")).toBe("xai");
+    expect(providerForAdapter("gemini-headless")).toBe("google");
     expect(providerForAdapter("copilot")).toBe("copilot");
+    expect(providerForAdapter("github")).toBe("copilot");
+    expect(providerForAdapter("gh")).toBe("copilot");
     expect(providerForAdapter("ollama")).toBe("ollama");
     expect(providerForAdapter("lm-studio")).toBe("lm-studio");
+    expect(providerForAdapter("lmstudio")).toBe("other");
     expect(providerForAdapter("mystery")).toBe("other");
+  });
+
+  // An alias names the provider of the adapter it resolves to (#1707): before,
+  // gemini-headless, xai, github and gh were `other` while the adapters they
+  // name had providers.
+  it("maps every adapter alias to the provider of the adapter it names", () => {
+    const aliases = Object.entries(ADAPTER_ALIASES);
+    expect(aliases.length).toBeGreaterThan(0);
+    for (const [alias, adapter] of aliases) {
+      expect(providerForAdapter(alias), alias).toBe(providerForAdapter(adapter));
+    }
   });
 
   it("resolves tiers per adapter through the registry", () => {
@@ -237,6 +254,7 @@ interface ProviderForCases {
     configured_model: string;
     model?: string;
     error?: boolean;
+    error_message?: string;
   }[];
   is_local_provider: Record<string, boolean>;
   is_local_base_url: Record<string, boolean>;
@@ -281,6 +299,10 @@ describe("model registry — provider for a multi-provider adapter (ADR-022, #16
     const got = dispatchModelFor(tc.adapter, tc.band_or_id, tc.configured_model);
     if (tc.error) {
       expect(got.ok).toBe(false);
+      // The exact text, quoted as Go's %q quotes it (#1707): a quote, newline
+      // or terminal escape in the model cannot break or forge the message.
+      if (tc.error_message !== undefined)
+        expect(got).toEqual({ ok: false, error: tc.error_message });
       return;
     }
     expect(got).toEqual({ ok: true, model: tc.model });
