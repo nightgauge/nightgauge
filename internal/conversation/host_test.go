@@ -475,6 +475,44 @@ func TestTurn_TimeoutEndsTheTurn(t *testing.T) {
 	}
 }
 
+// A turn that fails after the host claimed it ends failed/host_error, never
+// refused: refused means the host declined the turn (#2449). Both a crash of
+// the adapter after part of the reply and a failed context read are host
+// errors; a turn the workspace cannot serve is declined at the claim instead,
+// acknowledged rejected with no terminal report.
+func TestTurn_AFailureAfterTheClaimIsAHostError(t *testing.T) {
+	hermetic(t)
+	installFakeAdapters(t)
+	t.Setenv("FAKE_ADAPTER_MODE", "crash")
+	fp := newFakePlatform(t)
+	startDaemon(t, fp, workspace(t, claudeWorkspace), nil)
+	fp.deliver(fp.postTurn("conv-1", "turn-1", "cmd-1", "hello", nil))
+	waitFor(t, "the crash report", 20*time.Second, func() bool { return fp.endFrame("turn-1") != nil })
+	if end := fp.endFrame("turn-1"); end["state"] != "failed" || end["failure_reason"] != "host_error" {
+		t.Errorf("after a crash: terminal report = %v, want failed/host_error", end)
+	}
+
+	fp.mu.Lock()
+	fp.contextStatus = http.StatusInternalServerError
+	fp.mu.Unlock()
+	fp.deliver(fp.postTurn("conv-2", "turn-2", "cmd-2", "hello", nil))
+	waitFor(t, "the context-read report", 20*time.Second, func() bool { return fp.endFrame("turn-2") != nil })
+	if end := fp.endFrame("turn-2"); end["state"] != "failed" || end["failure_reason"] != "host_error" {
+		t.Errorf("after a failed context read: terminal report = %v, want failed/host_error", end)
+	}
+
+	declining := newFakePlatform(t)
+	startDaemon(t, declining, workspace(t, "ui:\n  core:\n    adapter: codex\n"), nil)
+	declining.deliver(declining.postTurn("conv-3", "turn-3", "cmd-3", "hello", nil))
+	waitFor(t, "the refusal", 5*time.Second, func() bool { return len(declining.ackRecords()) == 1 })
+	if ack := declining.ackRecords()[0]; ack.outcome != "rejected" {
+		t.Errorf("declined turn: ack = %+v, want rejected", ack)
+	}
+	if end := declining.endFrame("turn-3"); end != nil {
+		t.Errorf("declined turn: terminal report %v, want none (the platform ends it refused)", end)
+	}
+}
+
 // The token ceiling the command carries is enforced here, from the stream:
 // a prompt over it ends the turn failed/token_ceiling.
 func TestTurn_TokenCeilingEndsTheTurn(t *testing.T) {

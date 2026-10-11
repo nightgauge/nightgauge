@@ -84,6 +84,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A conversation turn that fails after the daemon claimed it ends
+  `host_error`, not `refused`** (#2449). A crashed adapter, a failed context
+  read, a broken stream or a daemon shutting down mid-turn read as the host
+  declining the turn, to the poster and in the record. `refused` is now only
+  a turn the daemon declines, by acknowledging its command `rejected` before
+  the claim.
+
+- **License keys issued as `ib_test_` are recognised and redacted** (#2451).
+  The shared credential registry listed the pre-rebrand `ib_live_` and `ib_ci_`
+  shapes but not `ib_test_`, which the hosted service also issued, so such a
+  key was neither redacted from findings, evidence and conversation replies
+  nor refused where a variable name belongs. The list now matches the
+  service's: `ng_live_`, `ng_test_`, `ng_ci_`, `ib_live_`, `ib_test_`,
+  `ib_ci_`.
+
 - **Nightgauge license keys are recognised by their issued `ng_live_`,
   `ng_ci_` and `ng_test_` prefixes** (#2444). The core matched only the
   pre-rebrand `ib_live_` and `ib_ci_` prefixes, so `nightgauge doctor`'s

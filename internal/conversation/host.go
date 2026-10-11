@@ -526,7 +526,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 			return
 		}
 		log.Printf("conversation: turn %s: %v", t.cmd.TurnID, err)
-		report(failed(platform.TurnFailureRefused))
+		report(failed(platform.TurnFailureHostError))
 		return
 	}
 
@@ -543,7 +543,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	dir, err := os.MkdirTemp("", "nightgauge-turn-")
 	if err != nil {
 		t.markGone(true)
-		report(failed(platform.TurnFailureRefused))
+		report(failed(platform.TurnFailureHostError))
 		return
 	}
 	defer os.RemoveAll(dir)
@@ -551,7 +551,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	if err != nil {
 		log.Printf("conversation: turn %s: the adapter did not start: %v", t.cmd.TurnID, err)
 		t.markGone(true)
-		report(failed(platform.TurnFailureRefused))
+		report(failed(platform.TurnFailureHostError))
 		return
 	}
 	if h.onSpawn != nil {
@@ -627,7 +627,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	}
 	if waitErr != nil || !success {
 		log.Printf("conversation: turn %s: the adapter failed (exit: %v, result success: %v)", t.cmd.TurnID, waitErr, success)
-		end := failed(platform.TurnFailureRefused)
+		end := failed(platform.TurnFailureHostError)
 		end.Usage = usage
 		report(end)
 		return
@@ -656,7 +656,9 @@ func (h *Host) reportStopped(t *turn, report func(*platform.TurnEnd), profile *p
 	case stopTokenCeiling:
 		end.State, end.FailureReason = platform.TurnStateFailed, platform.TurnFailureTokenCeiling
 	case stopShutdown, stopHostError:
-		end.State, end.FailureReason = platform.TurnStateFailed, platform.TurnFailureRefused
+		// Failed after the claim: never `refused`, which means the host
+		// declined the turn (#2449).
+		end.State, end.FailureReason = platform.TurnStateFailed, platform.TurnFailureHostError
 	default:
 		report(nil)
 		return
