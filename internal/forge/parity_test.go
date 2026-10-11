@@ -97,6 +97,12 @@ func (s *gitlabStubServer) installHandlers() {
 		_, _ = w.Write([]byte(`[]`))
 	})
 
+	// The issue has no links.
+	s.mux.HandleFunc("/api/v4/projects/o%2Fr/issues/42/links", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`[]`))
+	})
+
 	// Issue endpoint: GET returns current state, PUT updates labels /
 	// weight / health_status / milestone_id.
 	s.mux.HandleFunc("/api/v4/projects/o%2Fr/issues/42", func(w http.ResponseWriter, r *http.Request) {

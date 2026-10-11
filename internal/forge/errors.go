@@ -41,4 +41,12 @@ var (
 	// ErrUnsupportedOnEdition so callers can choose to treat it as a
 	// soft warning rather than a hard failure.
 	ErrUnsupportedOnEdition = errors.New("forge: unsupported on this edition")
+
+	// ErrConnectionTruncated indicates an issue was read but one of its
+	// relationship lists (sub-issues, blockers, issues it blocks) could not
+	// be read whole: a page of the list failed, or the adapter's page cap
+	// was reached. The adapter returns no part of the list as if it were the
+	// whole, so callers that plan, gate or roll up from relationships must
+	// treat it as a hard error.
+	ErrConnectionTruncated = errors.New("forge: relationship connection truncated")
 )

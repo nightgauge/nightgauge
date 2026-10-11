@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/depgraph"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -32,7 +33,7 @@ func (m *mockFetcher) GetIssueWithRelations(_ context.Context, owner, repo strin
 	m.reads[key] = append(m.reads[key], rels)
 	if m.truncated[key]&rels != 0 {
 		return nil, fmt.Errorf("fetch issue #%d: relationship of %s: %w: read page 2: status 502",
-			number, key, gh.ErrConnectionTruncated)
+			number, key, forge.ErrConnectionTruncated)
 	}
 	issue, ok := m.issues[key]
 	if !ok {
@@ -425,7 +426,7 @@ func TestEvaluateIssueDeps_TruncatedBlockedByIsAnError(t *testing.T) {
 	}
 
 	result, err := EvaluateIssueDeps(context.Background(), mock, "nightgauge", "nightgauge", 10, nil)
-	if !errors.Is(err, gh.ErrConnectionTruncated) {
+	if !errors.Is(err, forge.ErrConnectionTruncated) {
 		t.Fatalf("err = %v (result %+v), want ErrConnectionTruncated", err, result)
 	}
 }

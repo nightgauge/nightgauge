@@ -9,6 +9,9 @@
 // follows only the lists its caller uses does not, which is how a test tells
 // the two apart.
 //
+// An issue listed in Forge.Unreadable cannot be read at all, which is how a
+// test fails a first page rather than a later one.
+//
 // Beyond issue reads it answers what the readers under test go on to do:
 // mutations succeed and are recorded, the project-fields read and the
 // repository label list are served, and nothing else is. A request the fake
@@ -64,12 +67,17 @@ func Numbers(from, n int) []int {
 }
 
 // Forge is the fake endpoint. Build it with New, add any repository labels to
-// RepoLabels, then call Client.
+// RepoLabels and any unreadable issues to Unreadable, then call Client.
 type Forge struct {
 	t      testing.TB
 	issues map[int]Issue
 	// RepoLabels are repository labels served beyond those the issues carry.
 	RepoLabels []string
+	// Unreadable are issues every read of which fails, first page and all,
+	// as GitHub fails an issue it cannot serve: a read of the issue alone is
+	// a GraphQL error, and a batch read returns it null beside an error while
+	// the rest of the batch reads.
+	Unreadable []int
 
 	mu        sync.Mutex
 	followUps int
@@ -131,6 +139,7 @@ func (f *Forge) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	q := req.Query
 	var data map[string]interface{}
+	var gqlErrors []interface{}
 	switch {
 	case strings.Contains(q, "after: $after"):
 		// A follow-up page of a relationship connection.
@@ -159,19 +168,52 @@ func (f *Forge) serve(w http.ResponseWriter, r *http.Request) {
 		repo := map[string]interface{}{}
 		for _, m := range reBatchItem.FindAllStringSubmatch(q, -1) {
 			n, _ := strconv.Atoi(m[2])
+			if f.unreadable(n) {
+				repo["i"+m[1]] = nil
+				gqlErrors = append(gqlErrors, unreadableError(n, "i"+m[1]))
+				continue
+			}
 			repo["i"+m[1]] = f.issueFields(q, n)
 		}
 		data = map[string]interface{}{"repository": repo}
 	case strings.Contains(q, "issue(number: $number)") && !strings.Contains(q, "projectItems("):
 		n, _ := req.Variables["number"].(float64)
+		if f.unreadable(int(n)) {
+			data = map[string]interface{}{"repository": map[string]interface{}{"issue": nil}}
+			gqlErrors = append(gqlErrors, unreadableError(int(n), "issue"))
+			break
+		}
 		data = map[string]interface{}{"repository": map[string]interface{}{"issue": f.issueFields(q, int(n))}}
 	default:
 		f.t.Errorf("githubtest: unmodelled request %q", q)
 		http.Error(w, "unmodelled request", http.StatusBadRequest)
 		return
 	}
+	body := map[string]interface{}{"data": data}
+	if len(gqlErrors) > 0 {
+		body["errors"] = gqlErrors
+	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+// unreadable reports whether n is one of f.Unreadable.
+func (f *Forge) unreadable(n int) bool {
+	for _, u := range f.Unreadable {
+		if u == n {
+			return true
+		}
+	}
+	return false
+}
+
+// unreadableError is the GraphQL error GitHub returns beside a null issue n
+// at field: a server-side failure, not a rate limit, so it is not retried.
+func unreadableError(n int, field string) map[string]interface{} {
+	return map[string]interface{}{
+		"path":    []interface{}{"repository", field},
+		"message": fmt.Sprintf("Something went wrong while executing your query (issue #%d).", n),
+	}
 }
 
 // issueFields renders issue n with the first page of each relationship

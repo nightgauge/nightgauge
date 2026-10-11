@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/github/githubtest"
 )
@@ -45,15 +46,15 @@ func TestEvaluateIssueDeps_LongListsItDoesNotUseCannotFailIt(t *testing.T) {
 // read past the first page, and a later page it cannot read fails the gate
 // rather than leaving it to judge #10 from 5 of its 11 blockers.
 func TestEvaluateIssueDeps_LongBlockedByIsStillReadWhole(t *testing.T) {
-	forge := githubtest.New(t, map[int]githubtest.Issue{
+	fake := githubtest.New(t, map[int]githubtest.Issue{
 		10: {BlockedBy: githubtest.Numbers(1000, 11)},
 	})
 
-	result, err := EvaluateIssueDeps(context.Background(), gh.NewIssueService(forge.Client()), githubtest.Owner, githubtest.Repo, 10, nil)
-	if !errors.Is(err, gh.ErrConnectionTruncated) {
+	result, err := EvaluateIssueDeps(context.Background(), gh.NewIssueService(fake.Client()), githubtest.Owner, githubtest.Repo, 10, nil)
+	if !errors.Is(err, forge.ErrConnectionTruncated) {
 		t.Fatalf("err = %v (result %+v), want ErrConnectionTruncated", err, result)
 	}
-	if n := forge.FollowUps(); n != 1 {
+	if n := fake.FollowUps(); n != 1 {
 		t.Errorf("later-page reads = %d, want 1: the blockedBy list must be read past its first page", n)
 	}
 }

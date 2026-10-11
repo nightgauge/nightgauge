@@ -105,8 +105,8 @@ func TestReadersFollowOnlyTheListsTheyUse(t *testing.T) {
 		}, nil},
 		{"EpicService.Validate", func(ctx context.Context, c *gh.Client) error {
 			res, err := gh.NewEpicService(c).Validate(ctx, owner, repo, 500)
-			if err == nil && res.TotalSubIssues != 3 {
-				err = fmt.Errorf("validated %d sub-issues, want 3", res.TotalSubIssues)
+			if err == nil && (res.TotalSubIssues != 3 || res.CheckedSubIssues != 3) {
+				err = fmt.Errorf("listed %d sub-issues and checked %d, want 3 and 3: %+v", res.TotalSubIssues, res.CheckedSubIssues, res.Failures)
 			}
 			return err
 		}, nil},

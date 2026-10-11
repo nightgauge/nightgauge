@@ -51,9 +51,10 @@ from task list checkboxes in the issue body).
 requests: every long connection in a board scan or a batch of issues gets its
 next page from one aliased request, up to 50 connections a request. The walk
 stops at 20 pages. A connection still reporting more, or whose next page
-fails, is `ErrConnectionTruncated`, never a short list: epic rollup, wave
-planning, epic enqueue and `epic validate` fail rather than decide from part
-of an epic.
+fails, is `forge.ErrConnectionTruncated`, never a short list: epic rollup,
+wave planning and epic enqueue fail rather than decide from part of an epic,
+and `epic validate` reports the sub-issue unchecked and exits non-zero. A
+sub-issue that cannot be read at all fails them the same way.
 
 A read that returns whole issues or board items follows every connection of
 every issue in it, and fails when any one of them cannot be read whole:
