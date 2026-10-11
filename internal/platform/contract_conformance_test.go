@@ -538,7 +538,8 @@ func TestOpaqueAndAbsentCredentialsArePassedThrough(t *testing.T) {
 		{"live license key", "ng_live_abc123", credentialLicenseKey},
 		{"ci license key", "ng_ci_abc123", credentialLicenseKey},
 		{"test license key", "ng_test_abc123", credentialLicenseKey},
-		{"retired pre-rebrand prefix", "ib_live_abc123", credentialOpaque},
+		{"pre-rebrand live key", "ib_live_abc123", credentialLicenseKey},
+		{"pre-rebrand ci key", "ib_ci_abc123", credentialLicenseKey},
 		{"session jwt", "aaa.bbb.ccc", credentialUserJWT},
 		{"opaque test fixture", "test-key", credentialOpaque},
 	} {

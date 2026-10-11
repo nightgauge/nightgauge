@@ -73,9 +73,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 - **Nightgauge license keys are recognised by their issued `ng_live_`,
   `ng_ci_` and `ng_test_` prefixes** (#2444). The core matched only the
-  retired `ib_` prefixes, so `nightgauge doctor`'s tracked-file scan, the
-  config check for a credential where a variable name belongs, and
-  conversation redaction all missed a real key.
+  pre-rebrand `ib_live_` and `ib_ci_` prefixes, so `nightgauge doctor`'s
+  tracked-file scan, the redaction of its findings, the config check for a
+  credential where a variable name belongs, and conversation redaction all
+  missed a current key. The `ib_` prefixes are still recognised: the list
+  only widens.
 
 - **`@modelcontextprotocol/sdk` is 1.32.1**, out of the range of
   GHSA-6qxp-vccf-f47h (an MCP server could steer the OAuth client's

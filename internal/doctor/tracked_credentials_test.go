@@ -138,9 +138,10 @@ func TestTrackedSecretsCheckPatterns(t *testing.T) {
 		"f: ng_live_" + strings.Repeat("f", 32),
 		"g: ng_ci_" + strings.Repeat("g", 32),
 		"h: ng_test_" + strings.Repeat("h", 32),
-		"i: ghp_example",
-		"j: env:GITHUB_TOKEN",
-		"k: ib_live_" + strings.Repeat("k", 32), // a retired prefix the platform no longer issues
+		"i: ib_live_" + strings.Repeat("i", 32), // pre-rebrand keys are still credentials
+		"j: ib_ci_" + strings.Repeat("j", 32),
+		"k: ghp_example",
+		"l: env:GITHUB_TOKEN",
 	}
 	writeFixture(t, dir, ".nightgauge/notes.md", strings.Join(lines, "\n")+"\n")
 	gitIn(t, dir, "add", ".")
@@ -148,10 +149,10 @@ func TestTrackedSecretsCheckPatterns(t *testing.T) {
 
 	fs, _ := trackedCredentialFindings(dir)
 	text := findingsText(fs)
-	if len(fs) != 8 {
-		t.Fatalf("findings = %d (%s), want 8", len(fs), text)
+	if len(fs) != 10 {
+		t.Fatalf("findings = %d (%s), want 10", len(fs), text)
 	}
-	wantRedacted := []string{"gho_…", "ghu_…", "ghs_…", "ghr_…", "github_pat_…", "ng_live_…", "ng_ci_…", "ng_test_…"}
+	wantRedacted := []string{"gho_…", "ghu_…", "ghs_…", "ghr_…", "github_pat_…", "ng_live_…", "ng_ci_…", "ng_test_…", "ib_live_…", "ib_ci_…"}
 	for i, f := range fs {
 		if f.Evidence["line"] != strconv.Itoa(i+1) || f.Evidence["redacted"] != wantRedacted[i] {
 			t.Errorf("finding %d evidence = %+v, want line %d %s", i, f.Evidence, i+1, wantRedacted[i])
