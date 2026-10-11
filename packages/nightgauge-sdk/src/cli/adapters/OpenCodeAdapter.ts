@@ -24,7 +24,7 @@ import type { spawn as nodeSpawn } from "node:child_process";
 import { basename, isAbsolute, relative, resolve } from "node:path";
 
 import type { SDKQueryFunction } from "../../orchestrator/StageExecutor.js";
-import { isLocalProvider, providerFor } from "../../eval/modelRegistry.js";
+import { isLocalProvider, isValidOpenCodeModel, providerFor } from "../../eval/modelRegistry.js";
 import type {
   ICliAdapter,
   OrchestrationCapability,
@@ -80,24 +80,6 @@ const ADR = "docs/decisions/022-opencode-multi-provider-adapter.md";
 export const OPENCODE_MIN_KNOWN_VERSION = ADAPTER_COMPAT.opencode.minVersion;
 
 /**
- * The shape a model must have before it reaches argv: `<provider>/<model>`,
- * with no whitespace or control character anywhere. The adapter also holds it
- * to the Go adapter's rule ({@link validateOpenCodeModel}).
- */
-// eslint-disable-next-line no-control-regex -- the control range is what the check refuses
-export const OPENCODE_MODEL_ID_RE = /^[a-z0-9][a-z0-9._-]*\/[^\s\x00-\x1f]+$/;
-
-/**
- * The shape of an OpenCode provider key, and of an operator endpoint id: no
- * leading dash, so it never reads as a flag, and no dot, so a host name or an
- * address never becomes one (ADR-022 § 1; `openCodeProviderKeyRE` in Go).
- */
-const OPENCODE_PROVIDER_KEY_RE = /^[a-z0-9][a-z0-9-]*$/;
-
-/** Go's `unicode.IsSpace || unicode.IsControl`. */
-const SPACE_OR_CONTROL_RE = /[\p{White_Space}\p{Cc}]/u;
-
-/**
  * Flags the adapter never emits (ADR-022 § The command, § 9, § 18): each one
  * approves tool calls without the permission map, publishes or resumes a
  * session, or opens a listener.
@@ -136,21 +118,15 @@ export function buildOpenCodeArgv(model: string, worktree: string): string[] {
 
 /**
  * Refuse a model that cannot safely reach `-m`, with `CONFIG_INVALID`: it must
- * match {@link OPENCODE_MODEL_ID_RE}, its provider key must be a provider-key
- * shape, and its model id must not start with `-` or hold whitespace or a
+ * be `<provider>/<model>`, its provider key a provider-key shape (no leading
+ * dash, so it never reads as a flag, and no dot, so a host name never becomes
+ * one), and its model id must not start with `-` or hold whitespace or a
  * control character (`OpenCodeModelArg` in Go). A bare id or a tier band is
- * refused too: the adapter never infers a provider.
+ * refused too: the adapter never infers a provider. The rule is the model
+ * registry's ({@link isValidOpenCodeModel}), so the two cannot drift (#1707).
  */
 export function validateOpenCodeModel(model: string): void {
-  const slash = model.indexOf("/");
-  const key = slash < 0 ? "" : model.slice(0, slash);
-  const id = slash < 0 ? "" : model.slice(slash + 1);
-  if (
-    !OPENCODE_MODEL_ID_RE.test(model) ||
-    !OPENCODE_PROVIDER_KEY_RE.test(key) ||
-    id.startsWith("-") ||
-    SPACE_OR_CONTROL_RE.test(id)
-  ) {
+  if (!isValidOpenCodeModel(model)) {
     throw new AdapterError(
       `model ${JSON.stringify(model)} is not valid for the opencode adapter: set the stage model to ` +
         `<provider>/<model>, such as lmstudio/<model-id> or anthropic/<model-id>. The provider key is ` +

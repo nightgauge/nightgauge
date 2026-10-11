@@ -231,3 +231,63 @@ func TestOnPipelineComplete_FailureAfterPRCreate_DoesNotRevertToReady(t *testing
 		})
 	}
 }
+
+// Startup orphan recovery returns a crashed session's running items to Ready,
+// and a session can crash in pr-merge, after pr-create opened the PR: it takes
+// the same open-PR evidence as the failed-run revert (#1707).
+func TestRecoverOrphanedRunningItems_RespectsTheIssuesOwnOpenPR(t *testing.T) {
+	cases := []struct {
+		name      string
+		pages     []map[int]string
+		wantLog   []string
+		denyLog   []string
+		wantWrite bool
+	}{
+		{
+			name:      "own open PR moves to In review",
+			pages:     []map[int]string{{42: "feat/1-x"}},
+			wantLog:   []string{"its PR #42 is open", "move-to-in-review:"},
+			denyLog:   []string{"back to Ready", "→ Ready"},
+			wantWrite: true,
+		},
+		{
+			name:      "a fork's PR does not back the issue",
+			pages:     []map[int]string{{42: "fork:feat/1-x"}},
+			wantLog:   []string{"back to Ready"},
+			denyLog:   []string{"move-to-in-review:"},
+			wantWrite: true,
+		},
+		{
+			name:    "unread PR list leaves the status unchanged",
+			pages:   []map[int]string{nil},
+			wantLog: []string{"NOT moving O/a#1 to Ready", "could not list"},
+			denyLog: []string{"back to Ready", "move-to-in-review:"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf := withCapturedLog(t)
+			as, writes, _ := revertFixture(t, tc.pages...)
+
+			as.recoverOrphanedRunningItems(context.Background(), []RunningItem{{Repo: "O/a", Number: 1}})
+
+			got := buf.String()
+			for _, want := range tc.wantLog {
+				if !strings.Contains(got, want) {
+					t.Errorf("log lacks %q: %q", want, got)
+				}
+			}
+			for _, deny := range tc.denyLog {
+				if strings.Contains(got, deny) {
+					t.Errorf("log has %q: %q", deny, got)
+				}
+			}
+			if wrote := writes.Load() > 0; wrote != tc.wantWrite {
+				t.Errorf("board write attempted = %v, want %v", wrote, tc.wantWrite)
+			}
+			if n := len(as.state.Running); n != 0 {
+				t.Errorf("state.Running has %d items after recovery, want 0", n)
+			}
+		})
+	}
+}

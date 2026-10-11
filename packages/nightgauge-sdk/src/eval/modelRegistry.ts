@@ -458,6 +458,18 @@ function splitOpenCodeModel(raw: string): { key: string; id: string } | undefine
   return { key, id };
 }
 
+/**
+ * Whether `raw` is a well-formed OpenCode model: `<provider>/<model>` with a
+ * provider-key-shaped key and a model id that is non-empty, does not start
+ * with `-` and holds no whitespace or control character. The single SDK
+ * authority for that rule, so the adapter's pre-spawn check and the parser
+ * cannot drift (#1707). Mirrors the Go `models.ValidOpenCodeProviderKey` and
+ * `models.ValidOpenCodeModelID`.
+ */
+export function isValidOpenCodeModel(raw: string): boolean {
+  return splitOpenCodeModel(raw) !== undefined;
+}
+
 /** The result of {@link parseOpenCodeModel}. */
 export interface OpenCodeModel {
   /** The normalized registry provider; `other` for an unrecognized key or a malformed model. */
