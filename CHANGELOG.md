@@ -16,6 +16,24 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **The daemon answers conversation turns** (#1569). `nightgauge serve` takes
+  a turn the hosted service addresses to its agent, on its own command
+  stream, and answers it on the workspace's own adapter, performance mode and
+  effort; a turn names none of them. It claims the turn before anything runs,
+  reads the conversation so far on the turn's lease, runs the adapter in a
+  new process group with session persistence off and no tools, and streams
+  the reply back as it is written, with every credential-shaped string,
+  private-key blocks included, replaced by `[REDACTED]` first; neither
+  padding nor an invisible character can split one past the redaction. The
+  turn is
+  bounded by its timeout and token ceiling, and a cancel kills its whole
+  process group and is reported only once the group is verified dead. The
+  last report states the adapter, mode, effort and tokens the turn used.
+  `claude-headless` is the one adapter that hosts turns, as spike #1568
+  found; on any other a turn is refused. The `conversation` capability is
+  advertised on every heartbeat, so it follows an adapter switch within
+  30 seconds. See `docs/CONVERSATION_TURNS.md`.
+
 - **A run can be started private** (#2400). Signed in, every extension
   command that starts a run asks _Team_ (selected) or _Private_, and
   `nightgauge run <issue> --private` does the same from the CLI. A private run
@@ -117,6 +135,14 @@ changelog, and the release workflow refuses a tag that does not.
   `forge.ErrConnectionTruncated` instead of returning the issue with no
   sub-issues or blockers; the sentinel moved from `internal/github` to
   `internal/forge`.
+
+- **Nightgauge license keys are recognised by their issued `ng_live_`,
+  `ng_ci_` and `ng_test_` prefixes** (#2444). The core matched only the
+  pre-rebrand `ib_live_` and `ib_ci_` prefixes, so `nightgauge doctor`'s
+  tracked-file scan, the redaction of its findings, the config check for a
+  credential where a variable name belongs, and conversation redaction all
+  missed a current key. The `ib_` prefixes are still recognised: the list
+  only widens.
 
 - **`@modelcontextprotocol/sdk` is 1.32.1**, out of the range of
   GHSA-6qxp-vccf-f47h (an MCP server could steer the OAuth client's

@@ -101,13 +101,13 @@ func TestHeartbeat_CarriesTheInstanceIDOnEveryBeat(t *testing.T) {
 	if err := bare.Heartbeat(context.Background(), "agent-1"); err != nil {
 		t.Fatal(err)
 	}
-	if want := `{"instance_id":"` + processInstanceID() + `"}`; string(*body) != want {
+	if want := `{"instance_id":"` + processInstanceID() + `","capabilities":["attention_resolve"]}`; string(*body) != want {
 		t.Errorf("beat without a profile = %s, want %s", *body, want)
 	}
 }
 
 // An instance id outside the bound is never sent: the registration leaves the
-// field out, and a beat with nothing else to carry stays bodiless.
+// field out, and a beat carries only its capability list (#1569).
 func TestInstanceID_OutOfBoundsIsNotSent(t *testing.T) {
 	t.Setenv(machineIDEnv, "test-machine-uuid")
 	srv, body, _ := captureServer(t, http.StatusCreated, registered)
@@ -126,8 +126,8 @@ func TestInstanceID_OutOfBoundsIsNotSent(t *testing.T) {
 	if err := beat.Heartbeat(context.Background(), "agent-1"); err != nil {
 		t.Fatalf("Heartbeat: %v", err)
 	}
-	if len(*beatBody) != 0 {
-		t.Errorf("beat with nothing to carry sent a body: %s", *beatBody)
+	if want := `{"capabilities":["attention_resolve"]}`; string(*beatBody) != want {
+		t.Errorf("beat with no instance id or profile = %s, want %s", *beatBody, want)
 	}
 }
 
