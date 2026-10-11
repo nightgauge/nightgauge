@@ -256,3 +256,30 @@ func TestAttentionConsumer_TurnCommandsAreNeverRelayed(t *testing.T) {
 		t.Errorf("with no turn handler: relayed %v, acks %d; want neither", relayed, acks)
 	}
 }
+
+// A turn-bound request never follows a redirect: Go strips Authorization on a
+// cross-host redirect but not the lease header or the frames in the body.
+func TestTurnRequests_FollowNoRedirect(t *testing.T) {
+	var leaked bool
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get(TurnLeaseHeader) != "" {
+			leaked = true
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer elsewhere.Close()
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer redirect.Close()
+	c := onlineClient(t, redirect.URL)
+	if _, err := c.ReadTurnContext(context.Background(), testLease()); err == nil {
+		t.Error("a redirected context read succeeded")
+	}
+	if _, err := c.PostTurnFrames(context.Background(), testLease(), []TurnFrame{TurnDelta{Seq: 1, Text: "x"}}); err == nil {
+		t.Error("a redirected frame post succeeded")
+	}
+	if leaked {
+		t.Error("the lease followed a redirect to another host")
+	}
+}

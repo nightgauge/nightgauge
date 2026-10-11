@@ -586,3 +586,78 @@ func TestServedWorkspaceOwner(t *testing.T) {
 		t.Error("a turn with no target was owned")
 	}
 }
+
+// A turn command no daemon can read is left unacknowledged, not refused:
+// without a readable target this daemon cannot tell it is its own, and the
+// first acknowledgement decides a turn.
+func TestTurn_AnUnreadableCommandIsLeftAlone(t *testing.T) {
+	hermetic(t)
+	rec := installFakeAdapters(t)
+	fp := newFakePlatform(t)
+	startDaemon(t, fp, workspace(t, claudeWorkspace), nil)
+	fp.deliver(commandFrame("cmd-bad", platform.ConversationTurnCommandType, map[string]any{"turn_id": "../x"}))
+	fp.deliver(commandFrame("cmd-bad-2", platform.ConversationTurnCommandType, "not an object"))
+	time.Sleep(300 * time.Millisecond)
+	if acks := fp.ackRecords(); len(acks) != 0 {
+		t.Errorf("an unreadable turn command was acknowledged: %+v", acks)
+	}
+	if runs := invocations(t, rec); len(runs) != 0 {
+		t.Errorf("an unreadable turn command ran: %+v", runs)
+	}
+}
+
+// Ids from the hosted service reach URL paths and log lines, so only
+// [A-Za-z0-9_-] gets through.
+func TestParseTurnCommand_RefusesIdsThatCouldChangeAPathOrALogLine(t *testing.T) {
+	for _, id := range []string{"..", "a/b", "turn\nforged log line", "t\x1b[31m", strings.Repeat("a", 101), ""} {
+		raw, _ := json.Marshal(map[string]any{"conversation_id": "conv-1", "turn_id": id})
+		if _, err := ParseTurnCommand(raw, time.Now()); err == nil {
+			t.Errorf("turn_id %q accepted", id)
+		}
+		raw, _ = json.Marshal(map[string]any{"conversation_id": "conv-1", "turn_id": "t1", "turn_command_id": id})
+		if _, err := ParseCancelCommand(raw); err == nil {
+			t.Errorf("turn_command_id %q accepted", id)
+		}
+	}
+	got, err := ParseTurnCommand(json.RawMessage(`{"conversation_id":"c-1","turn_id":"3f2a_9C-1"}`), time.Now())
+	if err != nil || got.TokenCeiling != defaultTokenCeiling || got.Limits.MaxDeltaBytes != maxDeltaBytes ||
+		got.Limits.CancelConfirmSeconds != defaultCancelConfirmSeconds {
+		t.Errorf("defaults = %+v, %v", got, err)
+	}
+}
+
+// A second command for a turn id that is still running never displaces it:
+// the running turn stays findable by cancel, shutdown and the concurrency
+// bound.
+func TestHost_ARunningTurnIdIsNotDisplaced(t *testing.T) {
+	h := NewHost(context.Background(), Config{})
+	first := newTurn(TurnCommand{TurnID: "turn-1"}, "cmd-1", "agent")
+	if !h.register(first) {
+		t.Fatal("the first turn was not registered")
+	}
+	if h.register(newTurn(TurnCommand{TurnID: "turn-1"}, "cmd-2", "agent")) {
+		t.Error("a second command displaced the running turn")
+	}
+	if h.turns["turn-1"] != first {
+		t.Error("the running turn is no longer findable")
+	}
+	h.finish(first)
+	if !h.register(newTurn(TurnCommand{TurnID: "turn-1"}, "cmd-3", "agent")) {
+		t.Error("a finished turn's id could not be reused")
+	}
+}
+
+// Once a turn's process is gone, nothing holds its process-group id: a late
+// stop (a cancel, the timeout, shutdown) cannot signal a group the system may
+// have handed to another process.
+func TestTurn_AGoneProcessIsNeverSignalled(t *testing.T) {
+	tr := newTurn(TurnCommand{TurnID: "turn-1"}, "cmd-1", "agent")
+	// A pgid no process has, and no command: a signal reaching it would fall
+	// back to the nil command and panic.
+	tr.attach(&turnProcess{pgid: 1 << 30})
+	tr.markGone(true)
+	tr.stop(stopTeammate)
+	if tr.proc != nil || !tr.verifiedDead() {
+		t.Errorf("proc = %v, verified dead = %v", tr.proc, tr.verifiedDead())
+	}
+}

@@ -73,7 +73,7 @@ import (
 // conformanceLicenseKey is shaped like a real account-scoped key, which is what
 // credentialKindOf classifies on. A key of any other shape is deliberately
 // treated as opaque and passed through.
-const conformanceLicenseKey = "ib_live_conformance0000000000"
+const conformanceLicenseKey = "ng_live_conformance0000000000"
 
 // conformanceSessionJWT is shaped like a user-scoped session token: three
 // dot-separated segments.
@@ -535,8 +535,10 @@ func TestOpaqueAndAbsentCredentialsArePassedThrough(t *testing.T) {
 	}{
 		{"absent", "", credentialNone},
 		{"whitespace", "   ", credentialNone},
-		{"live license key", "ib_live_abc123", credentialLicenseKey},
-		{"ci license key", "ib_ci_abc123", credentialLicenseKey},
+		{"live license key", "ng_live_abc123", credentialLicenseKey},
+		{"ci license key", "ng_ci_abc123", credentialLicenseKey},
+		{"test license key", "ng_test_abc123", credentialLicenseKey},
+		{"retired pre-rebrand prefix", "ib_live_abc123", credentialOpaque},
 		{"session jwt", "aaa.bbb.ccc", credentialUserJWT},
 		{"opaque test fixture", "test-key", credentialOpaque},
 	} {

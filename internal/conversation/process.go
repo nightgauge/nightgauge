@@ -68,6 +68,9 @@ func startTurnProcess(p plan, dir, stdin string) (*turnProcess, error) {
 	cmd.Stdin = strings.NewReader(stdin)
 	cmd.Stderr = io.Discard
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Wait waits for the stdin copy too; a child that never reads its stdin
+	// must not hold Wait past its own exit.
+	cmd.WaitDelay = stopGrace
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err

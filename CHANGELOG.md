@@ -23,7 +23,9 @@ changelog, and the release workflow refuses a tag that does not.
   reads the conversation so far on the turn's lease, runs the adapter in a
   new process group with session persistence off and no tools, and streams
   the reply back as it is written, with every credential-shaped string,
-  private-key blocks included, replaced by `[REDACTED]` first. The turn is
+  private-key blocks included, replaced by `[REDACTED]` first; neither
+  padding nor an invisible character can split one past the redaction. The
+  turn is
   bounded by its timeout and token ceiling, and a cancel kills its whole
   process group and is reported only once the group is verified dead. The
   last report states the adapter, mode, effort and tokens the turn used.
@@ -68,6 +70,12 @@ changelog, and the release workflow refuses a tag that does not.
   after each platform deploy, in the platform repository.
 
 ### Fixed
+
+- **Nightgauge license keys are recognised by their issued `ng_live_`,
+  `ng_ci_` and `ng_test_` prefixes** (#2444). The core matched only the
+  retired `ib_` prefixes, so `nightgauge doctor`'s tracked-file scan, the
+  config check for a credential where a variable name belongs, and
+  conversation redaction all missed a real key.
 
 - **`@modelcontextprotocol/sdk` is 1.32.1**, out of the range of
   GHSA-6qxp-vccf-f47h (an MCP server could steer the OAuth client's

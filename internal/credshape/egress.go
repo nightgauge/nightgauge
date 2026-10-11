@@ -3,6 +3,7 @@ package credshape
 import (
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -62,8 +63,16 @@ func EgressPatterns() []Pattern {
 }
 
 // RedactEgress returns s with every PEM private-key block and every
-// credential-shaped string replaced by Marker.
+// credential-shaped string replaced by Marker. Invisible characters inside
+// ASCII text are removed first (see stripInvisible), so none can split a
+// credential out of its shape.
 func RedactEgress(s string) string {
+	s, _ = stripInvisible(s, 0)
+	return redactNormalized(s)
+}
+
+// redactNormalized is RedactEgress for text stripInvisible already ran over.
+func redactNormalized(s string) string {
 	s = pemBlock.ReplaceAllLiteralString(s, Marker)
 	for _, p := range egressPatterns {
 		s = p.re.ReplaceAllLiteralString(s, Marker)
@@ -73,6 +82,7 @@ func RedactEgress(s string) string {
 
 // ContainsEgress reports whether s holds anything RedactEgress would replace.
 func ContainsEgress(s string) bool {
+	s, _ = stripInvisible(s, 0)
 	if pemBegin.MatchString(s) {
 		return true
 	}
@@ -95,16 +105,29 @@ func ContainsEgress(s string) bool {
 // trailing run is held until a delimiter arrives. A PEM header contains
 // spaces, so a line that has begun one is held whole; once a header is
 // complete, everything up to the matching footer is dropped and one Marker is
-// released in its place. A run longer than streamHoldMax with no delimiter is
-// released in part, keeping streamHoldKeep bytes back.
+// released in its place.
+//
+// Two ways around that are closed. An invisible character (a zero-width
+// space, a joiner, a bidirectional control, a variation selector) inside a
+// credential would break its shape while the credential still displays
+// whole, so invisible characters inside ASCII text are removed on arrival. A
+// run of token characters is never released in part, because a credential
+// padded past any hold window would then leave in two halves that each match
+// nothing: a run that grows past streamHoldMax with no delimiter is replaced
+// by one Marker, and the rest of it is dropped as it arrives.
 type Stream struct {
 	pending string
 	inKey   bool
+	// dropRun is set while the rest of an over-long run is being dropped.
+	dropRun bool
+	// last is the last visible rune received, for stripInvisible.
+	last rune
 }
 
 const (
-	streamHoldMax  = 8 << 10
-	streamHoldKeep = 1 << 10
+	// streamHoldMax bounds a held run of token characters. No credential
+	// shape is near it; a run past it is not prose.
+	streamHoldMax = 8 << 10
 	// pemFooterHold is what is kept of a key block's body while its footer
 	// has not arrived: enough to hold a footer split across pieces.
 	pemFooterHold = 128
@@ -116,6 +139,7 @@ func NewStream() *Stream { return &Stream{} }
 // Write takes the next piece and returns the text now safe to send, already
 // redacted. It may return "" while text is held.
 func (s *Stream) Write(piece string) string {
+	piece, s.last = stripInvisible(piece, s.last)
 	s.pending += piece
 	var out strings.Builder
 	for {
@@ -131,16 +155,35 @@ func (s *Stream) Write(piece string) string {
 			s.inKey = false
 			continue
 		}
+		if s.dropRun {
+			// Drop the rest of the over-long run. Only a PEM header's
+			// opening can survive it, so a key block after the run is
+			// still found.
+			end := leadingRunEnd(s.pending)
+			done := end < len(s.pending)
+			keep := headerOpening(s.pending[:end], done)
+			s.pending = s.pending[end-keep:]
+			if !done {
+				return out.String() // the run goes on
+			}
+			s.dropRun = false
+			continue
+		}
 		if loc := pemBegin.FindStringIndex(s.pending); loc != nil {
-			out.WriteString(RedactEgress(s.pending[:loc[0]]))
+			out.WriteString(redactNormalized(s.pending[:loc[0]]))
 			out.WriteString(Marker)
 			s.pending = s.pending[loc[1]:]
 			s.inKey = true
 			continue
 		}
 		cut := releasable(s.pending)
-		out.WriteString(RedactEgress(s.pending[:cut]))
+		out.WriteString(redactNormalized(s.pending[:cut]))
 		s.pending = s.pending[cut:]
+		if len(s.pending) > streamHoldMax && trailingRunStart(s.pending) == 0 {
+			out.WriteString(Marker)
+			s.pending = ""
+			s.dropRun = true
+		}
 		return out.String()
 	}
 }
@@ -150,26 +193,20 @@ func (s *Stream) Write(piece string) string {
 func (s *Stream) Flush() string {
 	held := s.pending
 	s.pending = ""
+	s.dropRun = false
 	if s.inKey {
 		s.inKey = false
 		return ""
 	}
-	return RedactEgress(held)
+	return redactNormalized(held)
 }
 
 // releasable is how much of pending can be released: through its last
 // non-token rune, and never past the start of a line that has begun a PEM
-// header. A trailing run past streamHoldMax is released but for its last
-// streamHoldKeep bytes.
+// header.
 func releasable(pending string) int {
 	cut := trailingRunStart(pending)
-	if len(pending)-cut > streamHoldMax {
-		cut = len(pending) - streamHoldKeep
-		for cut > 0 && !utf8.RuneStart(pending[cut]) {
-			cut--
-		}
-	}
-	if i := strings.LastIndex(pending, "-----BEGIN"); i >= 0 && i < cut && !strings.Contains(pending[i:], "\n") {
+	if i := strings.LastIndex(pending, pemOpening); i >= 0 && i < cut && !strings.Contains(pending[i:], "\n") {
 		cut = i
 	}
 	return cut
@@ -187,6 +224,75 @@ func trailingRunStart(pending string) int {
 		i -= size
 	}
 	return i
+}
+
+// pemOpening is how every PEM header begins; all of it is token runes.
+const pemOpening = "-----BEGIN"
+
+// headerOpening is how many trailing bytes of run may begin a PEM header: all
+// of pemOpening when the run ended with it (done), or, while the run goes on,
+// its longest suffix that is a prefix of pemOpening.
+func headerOpening(run string, done bool) int {
+	if done {
+		if strings.HasSuffix(run, pemOpening) {
+			return len(pemOpening)
+		}
+		return 0
+	}
+	for n := min(len(run), len(pemOpening)); n > 0; n-- {
+		if strings.HasPrefix(pemOpening, run[len(run)-n:]) {
+			return n
+		}
+	}
+	return 0
+}
+
+// leadingRunEnd is the index where pending's leading run of token runes ends.
+func leadingRunEnd(pending string) int {
+	for i, r := range pending {
+		if !isTokenRune(r) {
+			return i
+		}
+	}
+	return len(pending)
+}
+
+// invisible reports whether r renders as nothing: a format character (zero
+// width space and joiners, bidirectional controls, the soft hyphen, the byte
+// order mark), a variation selector, or another default-ignorable code point.
+func invisible(r rune) bool {
+	return unicode.In(r, unicode.Cf, unicode.Variation_Selector, unicode.Other_Default_Ignorable_Code_Point)
+}
+
+// stripInvisible removes every invisible rune whose nearest visible
+// predecessor is ASCII, the start of the text included (prev 0), and returns
+// the last visible rune. Every credential shape and PEM header is ASCII, so
+// nothing invisible is left inside one; an invisible rune after other
+// script, such as the joiner inside an emoji sequence, is kept.
+func stripInvisible(s string, prev rune) (string, rune) {
+	var b strings.Builder
+	stripped := false
+	for i, r := range s {
+		if invisible(r) {
+			if prev < utf8.RuneSelf {
+				if !stripped {
+					b.Grow(len(s))
+					b.WriteString(s[:i])
+					stripped = true
+				}
+				continue
+			}
+		} else {
+			prev = r
+		}
+		if stripped {
+			b.WriteRune(r)
+		}
+	}
+	if !stripped {
+		return s, prev
+	}
+	return b.String(), prev
 }
 
 // isTokenRune reports whether r can be part of a credential shape.

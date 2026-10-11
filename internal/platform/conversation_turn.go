@@ -150,8 +150,15 @@ func (e *TurnRequestError) Terminal() bool {
 
 // turnHTTPClient bounds every turn-bound request. A claim is answered within
 // the ack deadline or not at all, and a hung frame post must not hold a turn
-// past its own timeout.
-var turnHTTPClient = &http.Client{Timeout: 30 * time.Second}
+// past its own timeout. It follows no redirect: Go strips Authorization on a
+// cross-host redirect but not the lease header or the reply in the body, so a
+// redirect is taken as the answer, never followed.
+var turnHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 // turnRefusal reads a refused turn-bound response into a *TurnRequestError.
 // Both error shapes the hosted service uses are read: `{code}` on the ack

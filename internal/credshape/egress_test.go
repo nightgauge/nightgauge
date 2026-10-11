@@ -28,7 +28,7 @@ func egressExamples() map[string]string {
 		"stripe":             "sk" + "_live_" + rep("Ab12", 6),
 		"npm":                "np" + "m_" + rep("Ab12", 9),
 		"jwt":                "ey" + "J" + rep("hbGc", 4) + ".ey" + "J" + rep("zdWI", 4) + "." + rep("SflK", 6),
-		"license":            "ib" + "_live_" + rep("Ab12", 6),
+		"license":            "ng" + "_live_" + rep("Ab12", 6),
 	}
 }
 
@@ -162,14 +162,81 @@ func TestStream_PassesOrdinaryTextThrough(t *testing.T) {
 	}
 }
 
-// A token run with no delimiter is not held forever.
-func TestStream_ReleasesALongUndelimitedRun(t *testing.T) {
-	s := NewStream()
-	got := s.Write(rep("a", streamHoldMax+100))
-	if len(got) == 0 || len(got) > streamHoldMax+100-streamHoldKeep {
-		t.Errorf("released %d bytes of an undelimited run", len(got))
+// A credential padded past the hold window is never released in parts: an
+// over-long run of token characters leaves as one Marker and nothing of it,
+// before or after the credential, is released. Before the fix the run was
+// cut 1 KiB from its end, and `…ghp_ZZZ` and `ZZZ…` each matched nothing.
+func TestStream_ACredentialPaddedPastTheHoldIsNeverSplit(t *testing.T) {
+	secret := "gh" + "p_" + rep("Z", 1030)
+	reply := rep("a", 8000) + secret + " — done."
+	for _, size := range []int{1, 7, 512, 4096, len(reply)} {
+		released := streamAll(chop(reply, size))
+		// A run that arrives whole with its delimiter is released whole and
+		// redacted; one held past the window leaves as one Marker. Either
+		// way the credential leaves as the Marker and in no part.
+		joined := strings.Join(released, "")
+		if !strings.HasSuffix(joined, Marker+" — done.") || ContainsEgress(joined) {
+			t.Errorf("%d-byte pieces: released %d bytes ending %q", size, len(joined), joined[max(0, len(joined)-40):])
+		}
+		for _, r := range released {
+			if strings.Contains(r, "ZZZZ") || strings.Contains(r, "gh"+"p_") {
+				t.Fatalf("%d-byte pieces: a part of the credential left: %q", size, r[:min(len(r), 60)])
+			}
+		}
 	}
-	if rest := s.Flush(); len(got)+len(rest) != streamHoldMax+100 {
-		t.Errorf("released %d + %d bytes, want %d", len(got), len(rest), streamHoldMax+100)
+	// A run that is merely long, with no credential, is dropped the same way;
+	// the text around it is untouched.
+	if got := strings.Join(streamAll(chop("before "+rep("f", streamHoldMax+10)+" after", 100)), ""); got != "before "+Marker+" after" {
+		t.Errorf("long run: %q", got)
+	}
+}
+
+// A private-key block right after an over-long run is still found: the run's
+// end may be a PEM header's opening, which survives the drop.
+func TestStream_AKeyBlockAfterAnOverLongRunIsStillDropped(t *testing.T) {
+	reply := rep("a", streamHoldMax+100) + pemBlockExample("RSA PRIVATE KEY") + "\nok"
+	for _, size := range []int{1, 3, 64, 4096} {
+		joined := strings.Join(streamAll(chop(reply, size)), "")
+		if strings.Contains(joined, "MIIE") || strings.Contains(joined, "PRIVATE KEY") {
+			t.Errorf("%d-byte pieces: the key block leaked: %q", size, joined)
+		}
+		if !strings.HasSuffix(joined, "\nok") {
+			t.Errorf("%d-byte pieces: released %q", size, joined)
+		}
+	}
+}
+
+// An invisible character inside a credential breaks its shape while it still
+// displays whole. Every one inside ASCII text is removed before matching, so
+// the credential leaves as the Marker; one inside an emoji sequence stays.
+func TestStream_InvisibleCharactersCannotSplitACredential(t *testing.T) {
+	token := "gh" + "p_" + rep("Q7w8", 9)
+	for _, cp := range []rune{0x200b, 0x200c, 0x200d, 0x2060, 0xfeff, 0x00ad, 0x202e, 0xfe0f, 0x034f} {
+		zw := string(cp)
+		split := token[:2] + zw + token[2:10] + zw + zw + token[10:]
+		reply := "token: " + split + " end"
+		for _, size := range []int{1, 5, 4096} {
+			joined := strings.Join(streamAll(chop(reply, size)), "")
+			if joined != "token: "+Marker+" end" {
+				t.Errorf("%U, %d-byte pieces: released %q", []rune(zw)[0], size, joined)
+			}
+		}
+		if got := RedactEgress(reply); got != "token: "+Marker+" end" {
+			t.Errorf("%U: RedactEgress = %q", []rune(zw)[0], got)
+		}
+		if !ContainsEgress(reply) {
+			t.Errorf("%U: ContainsEgress missed it", []rune(zw)[0])
+		}
+	}
+	// A PEM header with an invisible character in it is still a header.
+	header := "-----BEGIN RSA" + string(rune(0x200b)) + " PRIVATE KEY-----"
+	block := "k: " + header + "\nMIIBOgIBAAJBAKj34\n-----END RSA PRIVATE KEY-----\nx"
+	if got := strings.Join(streamAll(chop(block, 4)), ""); got != "k: "+Marker+"\nx" {
+		t.Errorf("header with an invisible character: %q", got)
+	}
+	// Emoji joiner sequences are not ASCII text and are left alone.
+	emoji := "Pair: " + string([]rune{0x1F469, 0x200d, 0x1F4BB}) + " and " + string([]rune{0x2764, 0xfe0f}) + " done"
+	if got := strings.Join(streamAll(chop(emoji, 3)), ""); got != emoji {
+		t.Errorf("emoji sequence changed: %q", got)
 	}
 }

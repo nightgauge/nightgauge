@@ -46,7 +46,8 @@ const (
 	// credentialUserJWT: a user-scoped session JWT. Satisfies everything.
 	credentialUserJWT credentialKind = "user_jwt"
 
-	// credentialLicenseKey: an account-scoped license key (ib_live_*, ib_ci_*).
+	// credentialLicenseKey: an account-scoped license key (ng_live_*, ng_ci_*,
+	// ng_test_*).
 	// Satisfies pipelineAuth routes only.
 	credentialLicenseKey credentialKind = "license_key"
 
@@ -55,10 +56,11 @@ const (
 	credentialOpaque credentialKind = "opaque"
 )
 
-// licenseKeyPrefixes are the account-scoped key shapes the platform issues.
-// The security scheme description in the platform's OpenAPI document names
-// exactly these two ("License key (ib_live_*, ib_ci_*) or JWT session token").
-var licenseKeyPrefixes = []string{"ib_live_", "ib_ci_"}
+// licenseKeyPrefixes are the account-scoped key shapes the platform issues:
+// its OpenAPI document's licenseKey scheme names `ng_live_*` and `ng_ci_*`, and
+// its key parser accepts `ng_test_*` too. The pre-rebrand `ib_` prefixes are
+// no longer issued or accepted (#2444).
+var licenseKeyPrefixes = []string{"ng_live_", "ng_ci_", "ng_test_"}
 
 // LicenseKeyPrefixes returns the license-key prefixes the platform issues, for
 // callers that recognise a key by shape without classifying a bearer (the

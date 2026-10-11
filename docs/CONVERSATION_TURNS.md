@@ -64,10 +64,12 @@ returned `200` with an execution lease for that turn.
 1. **Refuse what it cannot serve.** Before claiming, the daemon resolves the
    profile and builds the argv. When it cannot, it acknowledges the command
    `rejected` with a detail, and the turn ends `failed` with `refused`. The
-   detail's category is one of `invalid-payload`, `profile-unresolved`,
+   detail's category is one of `profile-unresolved`,
    `adapter-not-conversational`, `effort-unsupported`, `adapter-unavailable`
    (the adapter's binary is not installed) or `host-busy` (four turns are
-   already running).
+   already running). A command whose payload cannot be read, or whose ids are
+   not 1 to 100 of `[A-Za-z0-9_-]`, is left unacknowledged: without a target
+   the daemon cannot tell the turn is its own.
 2. **Claim.** The claim is an acknowledgement with an empty body. A failed
    request runs nothing, and a redelivery of the command may claim it later.
    `409 ALREADY_ACKED` (another daemon, or this one, already claimed it),
@@ -185,5 +187,15 @@ the reply before it, so a credential split across two CLI deltas must not
 leave in parts either: the redacting stream releases text only up to a point
 no credential can straddle, holding the trailing run of token characters, a
 line that has begun a PEM header, and everything from a private-key header
-to its footer. A frame that still matches a credential shape is refused by
-the hosted service, and the turn ends `secret_detected`.
+to its footer.
+
+- A run of token characters is never released in part. One that grows past
+  8 KiB with no delimiter is replaced by one `[REDACTED]` and the rest of it
+  is dropped, so padding cannot push a credential across a frame boundary.
+- Invisible characters (zero-width spaces and joiners, bidirectional
+  controls, the soft hyphen, variation selectors) are removed from ASCII text
+  before matching, so none can break a credential's shape while it still
+  displays whole. One inside an emoji sequence is kept.
+
+A frame that still matches a credential shape is refused by the hosted
+service, and the turn ends `secret_detected`.

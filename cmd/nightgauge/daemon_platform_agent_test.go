@@ -285,7 +285,7 @@ func throttleTestWorkspace(t *testing.T) string {
 	return ws
 }
 
-const throttleTestLicenseKey = "ib_live_daemonthrottle000000000"
+const throttleTestLicenseKey = "ng_live_daemonthrottle000000000"
 
 // The daemon follows the platform throttle of the workspace it serves (#2352)
 // with only its license key, read from the agent throttle endpoint under its

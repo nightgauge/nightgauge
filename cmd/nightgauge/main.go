@@ -288,6 +288,37 @@ func startAttentionCommandStream(ctx context.Context, platformClient *platform.C
 	platform.StartAttentionCommandStream(ctx, platformClient, consumer, agentID, onAgentGone)
 }
 
+// daemonTurnHosts are the conversation turn hosts this daemon started
+// (#1569). serve waits for them when it shuts down, so no turn's process
+// group outlives the daemon unkilled and unreported.
+var daemonTurnHosts struct {
+	mu    sync.Mutex
+	hosts []*conversation.Host
+}
+
+func newDaemonTurnHost(ctx context.Context, cfg conversation.Config) *conversation.Host {
+	h := conversation.NewHost(ctx, cfg)
+	daemonTurnHosts.mu.Lock()
+	daemonTurnHosts.hosts = append(daemonTurnHosts.hosts, h)
+	daemonTurnHosts.mu.Unlock()
+	return h
+}
+
+// waitForDaemonTurnHosts waits, at most d in all, for every turn host's turns
+// to stop, which their context ending started.
+func waitForDaemonTurnHosts(d time.Duration) {
+	daemonTurnHosts.mu.Lock()
+	hosts := append([]*conversation.Host(nil), daemonTurnHosts.hosts...)
+	daemonTurnHosts.mu.Unlock()
+	deadline := time.Now().Add(d)
+	for _, h := range hosts {
+		if !h.WaitFor(time.Until(deadline)) {
+			log.Printf("[nightgauge] conversation turns still stopping at shutdown after %s", d)
+			return
+		}
+	}
+}
+
 // relayAgentCommandToExtension hands a command the daemon's agent received,
 // and the daemon does not execute, to the extension attached over IPC (#2335).
 // The extension runs this workspace's pipelines, so it carries out the
@@ -378,7 +409,7 @@ func runDaemonPlatformAgent(
 		// presence counts the daemon (#2335).
 		WithWorkspace(served)
 	relay := relayAgentCommandToExtension(ext)
-	turns := conversation.NewHost(ctx, conversation.Config{
+	turns := newDaemonTurnHost(ctx, conversation.Config{
 		WorkspaceRoot: workspaceRoot,
 		Platform:      conversation.NewPlatform(platformClient),
 		Owner: conversation.ServedWorkspaceOwner(platformClient.ReadAgentWorkspaceThrottles, func() (string, error) {
@@ -5850,6 +5881,7 @@ func serveCmd() *cobra.Command {
 			} else {
 				log.Printf("IPC server exited cleanly")
 			}
+			waitForDaemonTurnHosts(conversation.ShutdownWait)
 			return err
 		},
 	}

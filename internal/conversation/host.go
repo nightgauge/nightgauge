@@ -188,7 +188,7 @@ func NewHost(ctx context.Context, cfg Config) *Host {
 // each happen on their own goroutine. Its signature is
 // platform.AgentCommandHandler.
 func (h *Host) HandleCommand(_ context.Context, agentID string, cmd platform.PendingCommand) {
-	if agentID == "" || cmd.ID == "" {
+	if agentID == "" || !validID(cmd.ID) {
 		return
 	}
 	switch cmd.Type {
@@ -209,6 +209,26 @@ func (h *Host) HandleCommand(_ context.Context, agentID string, cmd platform.Pen
 
 // Wait returns once every turn and cancel the host started has finished.
 func (h *Host) Wait() { h.wg.Wait() }
+
+// ShutdownWait bounds how long a daemon waits for its turns after its context
+// ended: each is stopped, its group killed and verified gone, and its report
+// sent.
+const ShutdownWait = stopGrace + verifyWindow + endPostTimeout + 3*time.Second
+
+// WaitFor is Wait bounded by d. It reports whether every turn finished.
+func (h *Host) WaitFor(d time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		h.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
 
 // turn is one turn this host claimed or is claiming.
 type turn struct {
@@ -251,17 +271,25 @@ func (t *turn) stop(reason string) {
 
 func (t *turn) signalLocked() {
 	if t.proc == nil {
-		return
+		return // not spawned yet, or reaped: its pgid may belong to another group now
 	}
 	proc := t.proc
 	proc.signal(syscall.SIGTERM)
 	time.AfterFunc(stopGrace, func() {
-		select {
-		case <-t.gone:
-		default:
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		if t.proc == proc {
 			proc.signal(syscall.SIGKILL)
 		}
 	})
+}
+
+// detach forgets the process once its leader is reaped: from then on only
+// verifyGone, which signals the group only while it exists, may signal it.
+func (t *turn) detach() {
+	t.mu.Lock()
+	t.proc = nil
+	t.mu.Unlock()
 }
 
 // attach records the spawned process. A stop that came first reaches it now.
@@ -292,9 +320,13 @@ func (t *turn) wasClaimed() bool {
 	return t.claimed
 }
 
+// markGone records that the turn's process is gone (or never existed) and
+// forgets it, so no later stop can signal a process-group id the system may
+// have handed to another group.
 func (t *turn) markGone(dead bool) {
 	t.mu.Lock()
 	t.dead = dead
+	t.proc = nil
 	t.mu.Unlock()
 	close(t.gone)
 }
@@ -319,8 +351,10 @@ func (h *Host) handleTurn(agentID string, pc platform.PendingCommand) {
 	}
 	tc, err := ParseTurnCommand(pc.Payload, h.now())
 	if err != nil {
-		log.Printf("conversation: turn command %s is malformed — refused: %v", pc.ID, err)
-		h.reject(agentID, pc.ID, "invalid-payload: the turn command could not be read")
+		// Left unacknowledged, not refused: without a readable target this
+		// daemon cannot tell the turn is its own, and another daemon on the
+		// agent may serve it. The hosted service ends it at its ack deadline.
+		log.Printf("conversation: turn command %s is unreadable — left alone: %v", pc.ID, err)
 		return
 	}
 	if h.cfg.Owner != nil {
@@ -346,7 +380,7 @@ func (h *Host) handleTurn(agentID string, pc platform.PendingCommand) {
 	}
 	t := newTurn(tc, pc.ID, agentID)
 	if !h.register(t) {
-		log.Printf("conversation: turn %s refused: %d turns already running", tc.TurnID, h.cfg.MaxConcurrent)
+		log.Printf("conversation: turn %s refused: %d turns already running, or this turn is", tc.TurnID, h.cfg.MaxConcurrent)
 		h.reject(agentID, pc.ID, "host-busy: this host is running as many turns as it takes")
 		return
 	}
@@ -413,6 +447,9 @@ func (h *Host) register(t *turn) bool {
 	}
 	if running >= h.cfg.MaxConcurrent {
 		return false
+	}
+	if held := h.turns[t.cmd.TurnID]; held != nil && held.finishedAt.IsZero() {
+		return false // a running turn already has this id
 	}
 	h.turns[t.cmd.TurnID] = t
 	return true
@@ -523,6 +560,20 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	t.attach(proc)
 	timer := time.AfterFunc(turnBudget(deadline, h.now()), func() { t.stop(stopTimeout) })
 	defer timer.Stop()
+	go func() {
+		// A descendant that left the group can hold stdout open after the
+		// group is dead; closing the read end ends the reader so the turn
+		// cannot hang on it.
+		select {
+		case <-t.stopped:
+			select {
+			case <-time.After(stopGrace + time.Second):
+				_ = proc.stdout.Close()
+			case <-t.gone:
+			}
+		case <-t.gone:
+		}
+	}()
 
 	acc := &execution.TokenAccumulator{}
 	var effortActive *bool
@@ -554,6 +605,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		t.stop(stopHostError)
 	}
 	waitErr := proc.cmd.Wait()
+	t.detach()
 	dead := proc.verifyGone(time.Now().Add(verifyWindow))
 	t.markGone(dead)
 	if !dead {

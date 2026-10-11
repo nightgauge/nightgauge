@@ -9023,7 +9023,7 @@ the key on argv, where every local user can read it through `ps` (ADR-024 § 5).
 {"id":2,"method":"platform.license"}
 
 # Validate a license key and bind machine
-{"id":3,"method":"platform.validateLicense","params":{"licenseKey":"ib_live_...","machineId":"vscode-install-uuid","hostname":"build-box","platform":"darwin"}}
+{"id":3,"method":"platform.validateLicense","params":{"licenseKey":"ng_live_...","machineId":"vscode-install-uuid","hostname":"build-box","platform":"darwin"}}
 ```
 
 **`machineId` is the RAW per-installation fingerprint, not a hash.** The caller

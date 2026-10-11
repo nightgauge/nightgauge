@@ -11,6 +11,7 @@ package conversation
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"time"
 )
 
@@ -85,10 +86,10 @@ func ParseTurnCommand(raw json.RawMessage, now time.Time) (TurnCommand, error) {
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return TurnCommand{}, fmt.Errorf("conversation_turn payload: %w", err)
 	}
-	if err := validID("conversation_id", c.ConversationID); err != nil {
+	if err := checkID("conversation_id", c.ConversationID); err != nil {
 		return TurnCommand{}, err
 	}
-	if err := validID("turn_id", c.TurnID); err != nil {
+	if err := checkID("turn_id", c.TurnID); err != nil {
 		return TurnCommand{}, err
 	}
 	if c.TokenCeiling <= 0 {
@@ -112,18 +113,25 @@ func ParseCancelCommand(raw json.RawMessage) (CancelCommand, error) {
 	if err := json.Unmarshal(raw, &c); err != nil {
 		return CancelCommand{}, fmt.Errorf("conversation_turn_cancel payload: %w", err)
 	}
-	if err := validID("turn_id", c.TurnID); err != nil {
+	if err := checkID("turn_id", c.TurnID); err != nil {
 		return CancelCommand{}, err
 	}
-	if err := validID("turn_command_id", c.TurnCommandID); err != nil {
+	if err := checkID("turn_command_id", c.TurnCommandID); err != nil {
 		return CancelCommand{}, err
 	}
 	return c, nil
 }
 
-func validID(field, v string) error {
-	if v == "" || len(v) > maxIDLen {
-		return fmt.Errorf("turn payload: %s must be 1 to %d characters", field, maxIDLen)
+// idPattern is what an id from the hosted service may be: it reaches URL
+// paths and log lines, so nothing that could change either (a slash, a dot
+// segment, a line break, an escape) gets through.
+var idPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
+
+func validID(v string) bool { return idPattern.MatchString(v) }
+
+func checkID(field, v string) error {
+	if !validID(v) {
+		return fmt.Errorf("turn payload: %s must be 1 to %d of [A-Za-z0-9_-]", field, maxIDLen)
 	}
 	return nil
 }
