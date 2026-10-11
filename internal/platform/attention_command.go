@@ -99,8 +99,15 @@ type AttentionCommandConsumer struct {
 	ack         AgentCommandAcker
 	agentID     string
 	relay       AgentCommandRelay
+	turns       AgentCommandHandler
 	onConnected func()
 }
+
+// AgentCommandHandler executes a command addressed to this daemon's agent in
+// the daemon itself. It must not block the command stream: the conversation
+// turn host (#1569) claims and runs each turn on its own goroutine, so a
+// cancel can arrive on the same stream while the turn runs.
+type AgentCommandHandler func(ctx context.Context, agentID string, cmd PendingCommand)
 
 // AgentCommandRelay hands on a command addressed to this daemon's agent that
 // the daemon does not execute itself: every type but attention_resolve
@@ -123,6 +130,17 @@ func NewAttentionCommandConsumer(resolver AttentionResolver, ack AgentCommandAck
 // was before #2335.
 func (c *AttentionCommandConsumer) WithRelay(relay AgentCommandRelay) *AttentionCommandConsumer {
 	c.relay = relay
+	return c
+}
+
+// WithTurnHandler sets where the two conversation turn command types go
+// (#1569). They are handled here, before any relay, and never reach the
+// extension: whichever acknowledgement arrives first decides a turn, so a
+// receiver that refused one would decide it. Without a handler a turn command
+// is left unacknowledged, and the hosted service ends it when its ack deadline
+// passes.
+func (c *AttentionCommandConsumer) WithTurnHandler(h AgentCommandHandler) *AttentionCommandConsumer {
+	c.turns = h
 	return c
 }
 
@@ -189,9 +207,16 @@ func (c *AttentionCommandConsumer) Consume(ctx context.Context, cmd PendingComma
 }
 
 // Execute drives Consume from the agent-command stream loop. Consume already
-// acknowledges and logs, so Execute always returns nil. Any other command type
-// goes to the relay, whose receiver acknowledges it.
+// acknowledges and logs, so Execute always returns nil. A conversation turn
+// command goes to the turn handler and is never relayed (#1569). Any other
+// command type goes to the relay, whose receiver acknowledges it.
 func (c *AttentionCommandConsumer) Execute(ctx context.Context, cmd PendingCommand) error {
+	if IsConversationTurnCommand(cmd.Type) {
+		if c.turns != nil {
+			c.turns(ctx, c.agentID, cmd)
+		}
+		return nil
+	}
 	if cmd.Type != AttentionResolveCommandType {
 		if c.relay != nil {
 			c.relay(c.agentID, cmd)

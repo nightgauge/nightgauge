@@ -185,14 +185,11 @@ func useEvalRecommendations(workspaceRoot string) bool {
 // because services/SkillRunner.ts passed no issue metadata, so Step 2
 // (AutoModelSelector) never fired and Step 3 always won.
 func workspaceDefaultModel(workspaceRoot string) string {
-	if env := validStageModel(strings.TrimSpace(os.Getenv("NIGHTGAUGE_UI_CORE_DEFAULT_MODEL"))); env != "" {
-		return env
-	}
 	cfg, err := config.Load(workspaceRoot)
-	if err != nil || cfg == nil || cfg.UI == nil || cfg.UI.Core == nil {
-		return ""
+	if err != nil {
+		cfg = nil
 	}
-	return validStageModel(strings.TrimSpace(cfg.UI.Core.DefaultModel))
+	return config.ResolveDefaultModel(cfg, os.Getenv)
 }
 
 // stageBaseModel resolves the tier a stage STARTS from, before escalation, the

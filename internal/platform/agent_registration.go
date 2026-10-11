@@ -215,11 +215,15 @@ type agentRegisterBody struct {
 const errNoTeamMembershipCode = "NO_TEAM_MEMBERSHIP"
 
 // agentHeartbeatBody is the PUT /v1/agents/:agentId/heartbeat body: the
-// instance id on every beat (#2395), and the profile when one resolved. A beat
-// with neither stays the bodiless PUT the platform has always accepted.
+// instance id on every beat (#2395), the profile when one resolved, and the
+// capability list the agent advertises now (#1569). The list replaces the one
+// stored at registration, so a switch to an adapter that cannot host a
+// conversation turn drops `conversation` within one beat rather than at the
+// next registration.
 type agentHeartbeatBody struct {
 	ExecutionProfile *ExecutionProfile `json:"execution_profile,omitempty"`
 	InstanceID       string            `json:"instance_id,omitempty"`
+	Capabilities     []string          `json:"capabilities,omitempty"`
 }
 
 // ProfileFunc resolves the execution profile to advertise and whether the
@@ -292,6 +296,18 @@ func (s *AgentRegistrationService) resolveWorkspace() ([]AgentRepo, *AgentWorksp
 	return repos, block
 }
 
+// agentCapabilities is the capability list the daemon advertises on
+// registration and on every heartbeat: attention_resolve always, and
+// `conversation` only while the resolved profile's adapter can host a turn.
+// A profile that did not resolve advertises no conversation.
+func agentCapabilities(conversation bool) []string {
+	caps := []string{AgentRegisterCapabilityResolve}
+	if conversation {
+		caps = append(caps, AgentCapabilityConversation)
+	}
+	return caps
+}
+
 // resolveProfile runs the profile source and re-validates what it returned:
 // the bound on what leaves the machine is enforced here, at the wire, not
 // trusted to the source.
@@ -327,15 +343,11 @@ func (s *AgentRegistrationService) RegisterAgent(ctx context.Context) (AgentRegi
 	body := agentRegisterBody{
 		MachineID:    machineID,
 		AgentVersion: s.agentVersion,
-		Capabilities: []string{AgentRegisterCapabilityResolve},
 		InstanceID:   s.instanceID,
 	}
-	if p, conversation := s.resolveProfile(); p != nil {
-		body.ExecutionProfile = p
-		if conversation {
-			body.Capabilities = append(body.Capabilities, AgentCapabilityConversation)
-		}
-	}
+	p, conversation := s.resolveProfile()
+	body.ExecutionProfile = p
+	body.Capabilities = agentCapabilities(conversation)
 	body.Repos, body.Workspace = s.resolveWorkspace()
 
 	info, status, code, err := s.postRegister(ctx, body)
@@ -409,18 +421,18 @@ func (s *AgentRegistrationService) Heartbeat(ctx context.Context, agentID string
 		PathArgs: []string{agentID},
 		Headers:  map[string]string{"Accept": "application/json"},
 	}
-	body := agentHeartbeatBody{InstanceID: s.instanceID}
-	if p, _ := s.resolveProfile(); p != nil {
-		body.ExecutionProfile = p
+	p, conversation := s.resolveProfile()
+	body := agentHeartbeatBody{
+		InstanceID:       s.instanceID,
+		ExecutionProfile: p,
+		Capabilities:     agentCapabilities(conversation),
 	}
-	if body != (agentHeartbeatBody{}) {
-		data, err := json.Marshal(body)
-		if err != nil {
-			return fmt.Errorf("agent heartbeat: marshal: %w", err)
-		}
-		spec.Body = data
-		spec.Headers["Content-Type"] = "application/json"
+	data, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("agent heartbeat: marshal: %w", err)
 	}
+	spec.Body = data
+	spec.Headers["Content-Type"] = "application/json"
 	req, err := s.client.newRequest(ctx, spec)
 	if err != nil {
 		return fmt.Errorf("agent heartbeat: request: %w", err)

@@ -1228,7 +1228,7 @@ func TestAnalyticsService_GetAnalyticsHealth_LicenseKeyRefused(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c, err := NewClient(Config{BaseURL: srv.URL, LicenseKey: "ib_live_conformance0000000000"})
+	c, err := NewClient(Config{BaseURL: srv.URL, LicenseKey: "ng_live_conformance0000000000"})
 	if err != nil {
 		t.Fatal(err)
 	}

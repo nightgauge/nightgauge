@@ -87,11 +87,29 @@ var OpAgentsHeartbeat = Operation{
 	Upstream: UpstreamDeclared,
 }
 
+// OpAgentsIngestTurnFrames is POST /v1/agents/{agentId}/turns/{turnId}/frames.
+var OpAgentsIngestTurnFrames = Operation{
+	ID:       "agents.ingestTurnFrames",
+	Method:   "POST",
+	Path:     "/v1/agents/{agentId}/turns/{turnId}/frames",
+	Security: SecurityPipeline,
+	Upstream: UpstreamDeclared,
+}
+
 // OpAgentsListWorkspaceThrottles is GET /v1/agents/{agentId}/throttles.
 var OpAgentsListWorkspaceThrottles = Operation{
 	ID:       "agents.listWorkspaceThrottles",
 	Method:   "GET",
 	Path:     "/v1/agents/{agentId}/throttles",
+	Security: SecurityPipeline,
+	Upstream: UpstreamDeclared,
+}
+
+// OpAgentsReadTurnContext is GET /v1/agents/{agentId}/turns/{turnId}/context.
+var OpAgentsReadTurnContext = Operation{
+	ID:       "agents.readTurnContext",
+	Method:   "GET",
+	Path:     "/v1/agents/{agentId}/turns/{turnId}/context",
 	Security: SecurityPipeline,
 	Upstream: UpstreamDeclared,
 }
@@ -282,7 +300,9 @@ var OpTelemetryIngestPipelineRun = Operation{
 var Operations = []Operation{
 	OpAgentsAckCommand,
 	OpAgentsHeartbeat,
+	OpAgentsIngestTurnFrames,
 	OpAgentsListWorkspaceThrottles,
+	OpAgentsReadTurnContext,
 	OpAgentsRegister,
 	OpAgentsStreamCommands,
 	OpAnalyticsCost,

@@ -73,7 +73,7 @@ import (
 // conformanceLicenseKey is shaped like a real account-scoped key, which is what
 // credentialKindOf classifies on. A key of any other shape is deliberately
 // treated as opaque and passed through.
-const conformanceLicenseKey = "ib_live_conformance0000000000"
+const conformanceLicenseKey = "ng_live_conformance0000000000"
 
 // conformanceSessionJWT is shaped like a user-scoped session token: three
 // dot-separated segments.
@@ -104,6 +104,15 @@ var contractCallSites = []callSite{
 	}},
 	{api.OpAgentsHeartbeat, func(ctx context.Context, c *Client) error {
 		return NewAgentRegistrationService(c, "test").Heartbeat(ctx, "agent-1")
+	}},
+	{api.OpAgentsIngestTurnFrames, func(ctx context.Context, c *Client) error {
+		_, err := c.PostTurnFrames(ctx, TurnLease{agentID: "agent-1", turnID: "turn-1", secret: "lease-1"},
+			[]TurnFrame{TurnDelta{Seq: 1, Text: "hello"}})
+		return err
+	}},
+	{api.OpAgentsReadTurnContext, func(ctx context.Context, c *Client) error {
+		_, err := c.ReadTurnContext(ctx, TurnLease{agentID: "agent-1", turnID: "turn-1", secret: "lease-1"})
+		return err
 	}},
 	{api.OpAgentsListWorkspaceThrottles, func(ctx context.Context, c *Client) error {
 		_, err := c.ReadAgentWorkspaceThrottles(ctx, "agent-1")
@@ -526,8 +535,13 @@ func TestOpaqueAndAbsentCredentialsArePassedThrough(t *testing.T) {
 	}{
 		{"absent", "", credentialNone},
 		{"whitespace", "   ", credentialNone},
-		{"live license key", "ib_live_abc123", credentialLicenseKey},
-		{"ci license key", "ib_ci_abc123", credentialLicenseKey},
+		// Assembled at run time, so no key-shaped literal sits in the tree
+		// for the credential scan.
+		{"live license key", "ng" + "_live_abc123", credentialLicenseKey},
+		{"ci license key", "ng" + "_ci_abc123", credentialLicenseKey},
+		{"test license key", "ng" + "_test_abc123", credentialLicenseKey},
+		{"pre-rebrand live key", "ib" + "_live_abc123", credentialLicenseKey},
+		{"pre-rebrand ci key", "ib" + "_ci_abc123", credentialLicenseKey},
 		{"session jwt", "aaa.bbb.ccc", credentialUserJWT},
 		{"opaque test fixture", "test-key", credentialOpaque},
 	} {
