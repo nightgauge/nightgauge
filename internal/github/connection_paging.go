@@ -6,8 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/pkg/types"
 	"github.com/shurcooL/graphql"
 )
@@ -27,7 +27,7 @@ import (
 // make a board scan pay a second for every oversized item on the board.
 //
 // The walk is bounded. A connection that still reports hasNextPage after
-// maxRelationPages pages is ErrConnectionTruncated, and so is one whose later
+// maxRelationPages pages is forge.ErrConnectionTruncated, and so is one whose later
 // page cannot be read. A caller never receives part of a connection as if it
 // were the whole: epic rollup would call an epic complete, and the blocker
 // check would call an issue unblocked, from the children and blockers it
@@ -61,11 +61,6 @@ const (
 	// relationFollowUpsPerRequest × relationFollowUpPageSize.
 	relationFollowUpsPerRequest = 50
 )
-
-// ErrConnectionTruncated reports a relationship connection that could not be
-// read to its end: the page cap was reached, or a later page failed. Callers
-// that plan or roll up from relationships must treat it as a hard error.
-var ErrConnectionTruncated = errors.New("relationship connection truncated")
 
 // relationPage is one page of an issue relationship connection. PageInfo is
 // selected before Nodes so the struct reads the same in every query.
@@ -146,18 +141,18 @@ func watchRelation[N any](w *relationWalk, field, selection, issueID, issue stri
 
 // completeRelations reads every connection in w to its end, in place. On
 // success each page w was given holds its whole connection. Any connection
-// that cannot be read whole fails the call with ErrConnectionTruncated.
+// that cannot be read whole fails the call with forge.ErrConnectionTruncated.
 func (c *Client) completeRelations(ctx context.Context, w *relationWalk) error {
 	open := w.open
 	for len(open) > 0 {
 		for _, r := range open {
 			if r.pages >= maxRelationPages {
 				return fmt.Errorf("%s: %w: more remain after the %d-page cap",
-					r, ErrConnectionTruncated, maxRelationPages)
+					r, forge.ErrConnectionTruncated, maxRelationPages)
 			}
 			if r.issueID == "" || r.cursor().EndCursor == "" {
 				return fmt.Errorf("%s: %w: page %d has a next page but no issue id or cursor to continue from",
-					r, ErrConnectionTruncated, r.pages)
+					r, forge.ErrConnectionTruncated, r.pages)
 			}
 		}
 		for start := 0; start < len(open); start += relationFollowUpsPerRequest {
@@ -188,12 +183,12 @@ func (c *Client) completeIssueRelations(ctx context.Context, issueID, issue stri
 // one aliased query, and appends it. A failed request, a GraphQL error, or an
 // alias that is not an Issue with the connection fails the whole batch.
 //
-// The request is raw GraphQL, for the aliases, but it is paced like a
-// Client.query first page: it waits on the rate-limit floor gate first, and a
-// rate-limit error in the response body is retried after the same backoff
-// rather than reported as a truncated connection. The error it returns keeps
-// its cause, so a gated or cancelled read is still ErrRateLimitGated or
-// context.Canceled to the caller as well as ErrConnectionTruncated.
+// The request is raw GraphQL, for the aliases. queryRaw paces it like a
+// Client.query first page: it waits on the rate-limit floor gate, and retries
+// a rate-limited answer, so only an exhausted budget is reported as a
+// truncated connection. The error it returns keeps its cause, so a gated,
+// exhausted or cancelled read is still ErrRateLimitGated, forge.ErrRateLimited
+// or context.Canceled to the caller as well as forge.ErrConnectionTruncated.
 func (c *Client) readNextRelationPages(ctx context.Context, batch []*openRelation) error {
 	var sb strings.Builder
 	vars := make(map[string]interface{}, 2*len(batch))
@@ -219,10 +214,11 @@ func (c *Client) readNextRelationPages(ctx context.Context, batch []*openRelatio
 			what = fmt.Sprintf("%s and %d more", what, len(batch)-1)
 		}
 		return fmt.Errorf("%s: %w: read page %d: %w",
-			what, ErrConnectionTruncated, batch[0].pages+1, cause)
+			what, forge.ErrConnectionTruncated, batch[0].pages+1, cause)
 	}
 
-	if err := c.waitRateLimitGate(ctx, ResourceGraphQL); err != nil {
+	raw, err := c.queryRaw(ctx, sb.String(), vars)
+	if err != nil {
 		return failed(err)
 	}
 	var env struct {
@@ -231,31 +227,15 @@ func (c *Client) readNextRelationPages(ctx context.Context, batch []*openRelatio
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	for attempt := 0; ; attempt++ {
-		raw, err := c.queryRaw(ctx, sb.String(), vars)
-		if err != nil {
-			return failed(err)
-		}
-		env.Data, env.Errors = nil, nil
-		if err := json.Unmarshal(raw, &env); err != nil {
-			return failed(fmt.Errorf("decode response: %w", err))
-		}
-		if len(env.Errors) == 0 {
-			break
-		}
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return failed(fmt.Errorf("decode response: %w", err))
+	}
+	if len(env.Errors) > 0 {
 		msgs := make([]string, len(env.Errors))
 		for i, e := range env.Errors {
 			msgs[i] = e.Message
 		}
-		gqlErr := errors.New(strings.Join(msgs, "; "))
-		if !isRateLimited(gqlErr) || attempt == maxRetries {
-			return failed(gqlErr)
-		}
-		select {
-		case <-time.After(c.computeRateLimitBackoff(ctx, gqlErr, attempt)):
-		case <-ctx.Done():
-			return failed(ctx.Err())
-		}
+		return failed(errors.New(strings.Join(msgs, "; ")))
 	}
 	for i, r := range batch {
 		node := env.Data[fmt.Sprintf("r%d", i)]
@@ -265,16 +245,16 @@ func (c *Client) readNextRelationPages(ctx context.Context, batch []*openRelatio
 		}
 		if typeName != "Issue" {
 			return fmt.Errorf("%s: %w: page %d: node %s resolved to %q, not an Issue",
-				r, ErrConnectionTruncated, r.pages+1, r.issueID, typeName)
+				r, forge.ErrConnectionTruncated, r.pages+1, r.issueID, typeName)
 		}
 		page, ok := node[r.field]
 		if !ok || string(page) == "null" {
 			return fmt.Errorf("%s: %w: page %d: response has no %s page",
-				r, ErrConnectionTruncated, r.pages+1, r.field)
+				r, forge.ErrConnectionTruncated, r.pages+1, r.field)
 		}
 		if err := r.absorb(page); err != nil {
 			return fmt.Errorf("%s: %w: page %d: decode: %w",
-				r, ErrConnectionTruncated, r.pages+1, err)
+				r, forge.ErrConnectionTruncated, r.pages+1, err)
 		}
 		r.pages++
 	}

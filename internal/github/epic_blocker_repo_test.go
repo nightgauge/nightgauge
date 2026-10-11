@@ -10,9 +10,28 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	"github.com/nightgauge/nightgauge/pkg/types"
 	"golang.org/x/time/rate"
 )
+
+// requireTruncatedSubIssue fails t unless res reports that epic validate
+// could not check its one sub-issue, acme/widgets#number, because that
+// sub-issue's blocker list could not be read whole: nothing is checked and
+// the epic is not valid.
+func requireTruncatedSubIssue(t *testing.T, res *EpicValidationResult, err error, number int) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if res.Valid || res.TotalSubIssues != 1 || res.CheckedSubIssues != 0 || res.FailedSubIssues != 1 || len(res.Failures) != 1 {
+		t.Fatalf("result = %+v, want sub-issue #%d unchecked and the epic not valid", res, number)
+	}
+	if f := res.Failures[0]; f.SubIssueNumber != number || f.SubIssueRepo != "acme/widgets" ||
+		!strings.Contains(f.Error, forge.ErrConnectionTruncated.Error()) {
+		t.Fatalf("failure = %+v, want acme/widgets#%d with its blocker list truncated", f, number)
+	}
+}
 
 // #2369: `epic validate` reported any blocker carrying the epic's number as a
 // circular blocker. For a sub-issue in another repository that is an

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/github/githubtest"
 	"github.com/nightgauge/nightgauge/internal/gittest"
@@ -16,7 +17,7 @@ import (
 )
 
 // These tests pin how the scheduler treats an issue whose relationship
-// connections could not be read whole (github.ErrConnectionTruncated). Where
+// connections could not be read whole (forge.ErrConnectionTruncated). Where
 // blockers decide dispatch the blocker list is read whole and a truncated one
 // is a hard error; a list the scheduler does not use is never read, so it can
 // never fail the read.
@@ -25,7 +26,7 @@ import (
 // one of the issue's connections could not be read.
 func truncatedRead(number int) error {
 	return fmt.Errorf("fetch issue #%d: a relationship list of Org/repo#%d: %w: read page 2: status 502",
-		number, number, gh.ErrConnectionTruncated)
+		number, number, forge.ErrConnectionTruncated)
 }
 
 // forgeScheduler returns a scheduler whose issue reads go through the real
@@ -44,15 +45,15 @@ func forgeScheduler(forge *githubtest.Forge) *Scheduler {
 // first page would let DequeueIndependent dispatch it beside one that is still
 // open.
 func TestEnqueueEpic_TruncatedBlockerListIsAnError(t *testing.T) {
-	forge := githubtest.New(t, map[int]githubtest.Issue{
+	fake := githubtest.New(t, map[int]githubtest.Issue{
 		100: {SubIssues: []int{201, 202}},
 		201: {},
 		202: {BlockedBy: githubtest.Numbers(300, 11)},
 	})
-	s := forgeScheduler(forge)
+	s := forgeScheduler(fake)
 
 	err := s.EnqueueEpic(context.Background(), githubtest.Owner, githubtest.Repo, 100, "Epic", nil, nil, "")
-	if !errors.Is(err, gh.ErrConnectionTruncated) {
+	if !errors.Is(err, forge.ErrConnectionTruncated) {
 		t.Fatalf("EnqueueEpic err = %v, want ErrConnectionTruncated", err)
 	}
 	if !strings.Contains(err.Error(), "blockedBy of acme/widgets#202") {
@@ -102,16 +103,16 @@ func TestEnqueueEpic_LongListsItDoesNotUseCannotAbortIt(t *testing.T) {
 // unseen blockers allow, and leaving the sub-issue out of the plan would drop
 // its siblings' edges to it as well.
 func TestFetchSubIssueDetails_TruncatedBlockerListIsAnError(t *testing.T) {
-	forge := githubtest.New(t, map[int]githubtest.Issue{
+	fake := githubtest.New(t, map[int]githubtest.Issue{
 		100: {SubIssues: []int{101, 102}},
 		101: {BlockedBy: []int{102}},
 		102: {BlockedBy: githubtest.Numbers(300, 11)},
 	})
-	wo := newWaveOrchestrator(forgeScheduler(forge), 100, "acme/widgets", 4, 0)
+	wo := newWaveOrchestrator(forgeScheduler(fake), 100, "acme/widgets", 4, 0)
 
 	subIssues, details, blockedBy, err := wo.fetchSubIssueDetails(context.Background(), githubtest.Owner, githubtest.Repo,
 		types.BoardItem{Number: 100, Repo: "acme/widgets"})
-	if !errors.Is(err, gh.ErrConnectionTruncated) {
+	if !errors.Is(err, forge.ErrConnectionTruncated) {
 		t.Fatalf("fetchSubIssueDetails err = %v, want ErrConnectionTruncated", err)
 	}
 	if subIssues != nil || details != nil || blockedBy != nil {

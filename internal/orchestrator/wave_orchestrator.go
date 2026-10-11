@@ -12,7 +12,6 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -366,7 +365,7 @@ func (s *Scheduler) RunEpicWaves(ctx context.Context, item types.BoardItem) bool
 // blocker's number names an issue in the blocker's own repository, and the
 // epic's sub-issues can share a number across repositories (#2377).
 func (wo *WaveOrchestrator) fetchSubIssueDetails(ctx context.Context, owner, repo string, item types.BoardItem) ([]teams.SubIssue, []batch.IssueInput, map[string][]string, error) {
-	epic, err := wo.scheduler.issueSvc.GetEpicProgressByNumber(ctx, owner, repo, item.Number)
+	epic, err := wo.scheduler.issueServiceFor(ctx, owner, repo).GetEpicProgressByNumber(ctx, owner, repo, item.Number)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("fetch epic progress: %w", err)
 	}
@@ -390,17 +389,13 @@ func (wo *WaveOrchestrator) fetchSubIssueDetails(ctx context.Context, owner, rep
 		}
 
 		// The plan uses the sub-issue's body, labels and blocker list, so only
-		// the blocker list is read whole.
-		issue, err := wo.scheduler.issueSvc.GetIssueWithRelations(ctx, siOwner, siRepo, si.Number, gh.RelationBlockedBy)
-		if errors.Is(err, gh.ErrConnectionTruncated) {
-			// A blocker list read only in part would plan the sub-issue into
-			// an earlier wave than its unseen blockers allow, and leaving it
-			// out would drop its siblings' edges to it as well.
-			return nil, nil, nil, fmt.Errorf("fetch sub-issue %s/%s#%d: %w", siOwner, siRepo, si.Number, err)
-		}
+		// the blocker list is read whole. A sub-issue that cannot be read
+		// fails the plan: a blocker list read only in part would plan it into
+		// an earlier wave than its unseen blockers allow, and leaving it out
+		// would drop it and its siblings' edges to it from every wave.
+		issue, err := wo.scheduler.issueServiceFor(ctx, siOwner, siRepo).GetIssueWithRelations(ctx, siOwner, siRepo, si.Number, gh.RelationBlockedBy)
 		if err != nil {
-			log.Printf("epic #%d: warn — failed to fetch sub-issue #%d: %v", wo.epicNumber, si.Number, err)
-			continue
+			return nil, nil, nil, fmt.Errorf("fetch sub-issue %s/%s#%d: %w", siOwner, siRepo, si.Number, err)
 		}
 
 		// Extract file references from body for dependency detection

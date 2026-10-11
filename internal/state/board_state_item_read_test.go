@@ -12,6 +12,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 )
 
@@ -178,7 +179,7 @@ func TestBoardStateReadsTheItemAlone(t *testing.T) {
 	t.Run("a board-wide read of the board fails", func(t *testing.T) {
 		b := &truncatingBoard{status: "In review"}
 		board := gh.NewBoardService(gh.NewClientWithURL("test", b.server(t).URL), "testorg", 1)
-		if _, err := board.ListItems(ctx, ""); !errors.Is(err, gh.ErrConnectionTruncated) {
+		if _, err := board.ListItems(ctx, ""); !errors.Is(err, forge.ErrConnectionTruncated) {
 			t.Fatalf("ListItems err = %v, want ErrConnectionTruncated", err)
 		}
 	})

@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -43,14 +42,32 @@ type EpicValidationGap struct {
 	Detail         string `json:"detail"`
 }
 
+// EpicValidationFailure is a sub-issue EpicService.Validate could not check,
+// because the sub-issue or its blocker list could not be read.
+type EpicValidationFailure struct {
+	SubIssueNumber int    `json:"subIssueNumber"`
+	SubIssueRepo   string `json:"subIssueRepo"`
+	SubIssueTitle  string `json:"subIssueTitle"`
+	Error          string `json:"error"`
+}
+
 // EpicValidationResult is returned by EpicService.Validate.
+//
+// TotalSubIssues counts the sub-issues the epic lists; CheckedSubIssues the
+// ones read and checked, and FailedSubIssues the ones that could not be, each
+// named in Failures. The two add up to TotalSubIssues. Valid holds only when
+// every sub-issue was checked and none has a gap: a gap on a sub-issue that
+// was never read is not absent, only unseen.
 type EpicValidationResult struct {
-	EpicNumber     int                 `json:"epicNumber"`
-	Title          string              `json:"title"`
-	Repo           string              `json:"repo"`
-	TotalSubIssues int                 `json:"totalSubIssues"`
-	Valid          bool                `json:"valid"`
-	Gaps           []EpicValidationGap `json:"gaps"`
+	EpicNumber       int                     `json:"epicNumber"`
+	Title            string                  `json:"title"`
+	Repo             string                  `json:"repo"`
+	TotalSubIssues   int                     `json:"totalSubIssues"`
+	CheckedSubIssues int                     `json:"checkedSubIssues"`
+	FailedSubIssues  int                     `json:"failedSubIssues"`
+	Valid            bool                    `json:"valid"`
+	Gaps             []EpicValidationGap     `json:"gaps"`
+	Failures         []EpicValidationFailure `json:"failures"`
 }
 
 // blockerIsEpic reports whether blocker, on a sub-issue living in subRepo, is
@@ -77,6 +94,11 @@ func blockerIsEpic(blocker types.BlockingRef, subRepo, epicRepo string, epicNumb
 // The check uses the epic's sub-issue list and each sub-issue's blocker list,
 // so it reads those whole and no other list: a sub-issue that blocks many
 // siblings, or has sub-issues of its own, cannot fail the validation.
+//
+// An epic whose sub-issue list cannot be read is an error. A sub-issue that
+// cannot be read, or whose blocker list cannot be read whole, is not checked:
+// it is recorded in Failures, the rest are still checked, and the result is
+// not Valid.
 func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumber int) (*EpicValidationResult, error) {
 	issueSvc := NewIssueService(e.client)
 	epic, err := issueSvc.GetIssueWithRelations(ctx, owner, repo, epicNumber, RelationSubIssues)
@@ -89,8 +111,8 @@ func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumb
 		Title:          epic.Title,
 		Repo:           epic.Repo,
 		TotalSubIssues: len(epic.SubIssues),
-		Valid:          true,
 		Gaps:           []EpicValidationGap{},
+		Failures:       []EpicValidationFailure{},
 	}
 
 	// Group sub-issue numbers by the repo they live in. Cross-repo epics fan
@@ -115,20 +137,21 @@ func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumb
 	// repository and number: two sub-issues in different repositories can
 	// share a number, and keyed by number alone one would be judged by the
 	// other's blockers (#2369 review).
+	//
+	// A batch that fails leaves every sub-issue in it unchecked, and so does
+	// one the batch does not return; readErrs keeps each repository's error
+	// to name in their failures. A batch fails whole when any one of its
+	// sub-issues has a blocker list that cannot be read whole.
 	fetched := make(map[string]*types.Issue, len(epic.SubIssues))
+	readErrs := make(map[string]error)
 	subKey := func(repo string, number int) string {
 		return strings.ToLower(repo) + "#" + strconv.Itoa(number)
 	}
 	for repoKey, numbers := range byRepo {
 		on := repoOwnerName[repoKey]
 		issues, err := issueSvc.getIssuesByNumbers(ctx, on[0], on[1], numbers, RelationBlockedBy)
-		if errors.Is(err, ErrConnectionTruncated) {
-			// Validating from a blocker list read only in part would report
-			// the epic valid over gaps it never saw.
-			return nil, fmt.Errorf("validate epic #%d: sub-issues from %s: %w", epicNumber, repoKey, err)
-		}
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "warning: batch fetch sub-issues from %s: %v\n", repoKey, err)
+			readErrs[strings.ToLower(repoKey)] = err
 			continue
 		}
 		for n, iss := range issues {
@@ -152,16 +175,25 @@ func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumb
 		}
 		subIssue, ok := fetched[subKey(subRepo, si.Number)]
 		if !ok {
-			fmt.Fprintf(os.Stderr, "warning: sub-issue %s missing from batch response\n", ref(subRepo, si.Number))
+			reason := fmt.Sprintf("the read of %s returned no issue %s", subRepo, ref(subRepo, si.Number))
+			if err := readErrs[strings.ToLower(subRepo)]; err != nil {
+				reason = fmt.Sprintf("read sub-issues of %s: %v", subRepo, err)
+			}
+			result.Failures = append(result.Failures, EpicValidationFailure{
+				SubIssueNumber: si.Number,
+				SubIssueRepo:   subRepo,
+				SubIssueTitle:  si.Title,
+				Error:          reason,
+			})
 			continue
 		}
+		result.CheckedSubIssues++
 		for _, blocker := range subIssue.BlockedBy {
 			blockerRepo := blocker.Repo
 			if blockerRepo == "" {
 				blockerRepo = subRepo
 			}
 			if blockerIsEpic(blocker, subRepo, epicRepo, epicNumber) {
-				result.Valid = false
 				result.Gaps = append(result.Gaps, EpicValidationGap{
 					SubIssueNumber: si.Number,
 					SubIssueRepo:   subRepo,
@@ -173,7 +205,6 @@ func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumb
 						ref(subRepo, si.Number), ref(epicRepo, epicNumber)),
 				})
 			} else if strings.EqualFold(blocker.State, "CLOSED") {
-				result.Valid = false
 				result.Gaps = append(result.Gaps, EpicValidationGap{
 					SubIssueNumber: si.Number,
 					SubIssueRepo:   subRepo,
@@ -188,6 +219,8 @@ func (e *EpicService) Validate(ctx context.Context, owner, repo string, epicNumb
 		}
 	}
 
+	result.FailedSubIssues = len(result.Failures)
+	result.Valid = len(result.Gaps) == 0 && len(result.Failures) == 0
 	return result, nil
 }
 

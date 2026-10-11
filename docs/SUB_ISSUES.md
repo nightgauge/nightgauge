@@ -217,8 +217,8 @@ resolve epic metadata (title, URL).
 ## Native Sub-Issues Requirement
 
 **The Nightgauge pipeline requires GitHub's native sub-issue feature for
-epic grouping.** The project board tree view queries the GraphQL
-`subIssues(first: 50)` field on each issue to detect epics and build
+epic grouping.** The project board tree view reads the GraphQL `subIssues`
+connection of each issue, to its last page, to detect epics and build
 parent-child groupings. Issues with sub-issues are marked `isEpic: true`. The
 parent relationship is derived from the epic's sub-issue list — there is no
 `parentIssue` field in the GitHub GraphQL API.

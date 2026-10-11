@@ -278,6 +278,7 @@ with `errors.Is`.
 | `ErrUnauthorized`         | Token missing, expired, or revoked (HTTP 401).                                       |
 | `ErrUnsupported`          | Forge kind recognised but no adapter registered, OR adapter method not implemented.  |
 | `ErrUnsupportedOnEdition` | Feature exists in the forge family but not in the licensed edition (e.g. GitLab CE). |
+| `ErrConnectionTruncated`  | An issue's relationship list could not be read whole: a page failed or hit the cap.  |
 
 Two design rules govern the vocabulary:
 
@@ -331,6 +332,15 @@ type assertion on the concrete adapter and exists to support the
 `nightgauge forge graphql` pass-through subcommand. The GitLab adapter
 intentionally does not implement it — ad-hoc GraphQL against GitLab routes
 through `forge graphql --forge <id>` and the GitHub adapter only.
+
+The pass-through is rate-limited like every typed read. It pays the
+machine-wide GraphQL floor gate before sending, and the GitHub adapter's
+client waits out the reset window (at most 75 minutes, bounded by the
+caller's context) rather than failing fast, as every CLI client does;
+`NIGHTGAUGE_GITHUB_RATELIMIT_NO_WAIT=1` makes it fail fast with
+`ErrRateLimitGated`. A rate-limited answer (a 429, a rate-limit 403, or a
+200 carrying a `RATE_LIMITED` error) is retried, and when the retries run out
+the error wraps `forge.ErrRateLimited` instead of returning the envelope.
 
 ### Method counts per service
 

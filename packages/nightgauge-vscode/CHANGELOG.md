@@ -33,6 +33,14 @@ and this project adheres to
   context and falls through to the issue-pickup skill, whose dependency gate
   checks again, instead of treating the issue as unblocked.
 
+- **Every closed sub-issue moves to Done when an issue completes**, not only
+  the first 50, and a sub-issue in another repository is updated there rather
+  than the issue with the same number in this one (#1701). A sub-issue list
+  that cannot be read is logged as a warning instead of being skipped
+  silently.
+- **The Epic Dashboard's per-repository progress is no longer emptied** when
+  one sub-issue has a relationship list GitHub cannot return in full (#1707).
+
 ## [0.6.0] - 2026-10-04
 
 ### Added

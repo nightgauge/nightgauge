@@ -33,7 +33,6 @@ export { mapGrokEffortToNightgauge, grokCliEffortFlag, GROK_CLI_EFFORTS } from "
 export {
   OpenCodeAdapter,
   OPENCODE_MIN_KNOWN_VERSION,
-  OPENCODE_MODEL_ID_RE,
   OPENCODE_FORBIDDEN_FLAGS,
   buildOpenCodeArgv,
   validateOpenCodeModel,

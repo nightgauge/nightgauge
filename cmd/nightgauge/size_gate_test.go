@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/forge"
 	gh "github.com/nightgauge/nightgauge/internal/github"
 	"github.com/nightgauge/nightgauge/internal/github/githubtest"
 	"github.com/nightgauge/nightgauge/internal/intelligence/sizeGate"
@@ -461,16 +462,16 @@ func TestEvaluateSizeGate_LongListsItDoesNotUseCannotFailIt(t *testing.T) {
 // whole sub-issue count, so a list longer than its first page is read past it,
 // and one whose later page cannot be read is an error, never a count of 25.
 func TestEvaluateSizeGate_LongSubIssueListIsStillReadWhole(t *testing.T) {
-	forge := githubtest.New(t, map[int]githubtest.Issue{
+	fake := githubtest.New(t, map[int]githubtest.Issue{
 		10: {SubIssues: githubtest.Numbers(100, 30)},
 	})
 
-	_, _, err := evaluateSizeGate(context.Background(), gh.NewIssueService(forge.Client()),
+	_, _, err := evaluateSizeGate(context.Background(), gh.NewIssueService(fake.Client()),
 		githubtest.Owner, githubtest.Repo, 10, sizeGate.DefaultGateConfig(), nil)
-	if !errors.Is(err, gh.ErrConnectionTruncated) {
+	if !errors.Is(err, forge.ErrConnectionTruncated) {
 		t.Fatalf("err = %v, want ErrConnectionTruncated", err)
 	}
-	if n := forge.FollowUps(); n != 1 {
+	if n := fake.FollowUps(); n != 1 {
 		t.Errorf("later-page reads = %d, want 1: the sub-issue list must be read past its first page", n)
 	}
 }

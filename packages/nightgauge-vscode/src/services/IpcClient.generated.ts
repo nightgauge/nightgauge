@@ -70,6 +70,7 @@ import type {
   IpcQueueItem,
   IpcQueueState,
   IssueDetail,
+  IssueSummary,
   KnowledgeBacklinksResult,
   KnowledgeMetricsResult,
   KnowledgeRelatedToIssueResult,
@@ -163,8 +164,8 @@ export class IpcClientGenerated extends IpcClientBase {
     return this.call<IssueDetail>('issue.view', { owner, repo, number, githubUser });
   }
 
-  async issueViewMany(owner: string, repo: string, numbers: number[], githubUser?: string): Promise<IssueDetail[]> {
-    return this.call<IssueDetail[]>('issue.viewMany', { owner, repo, numbers, githubUser });
+  async issueViewMany(owner: string, repo: string, numbers: number[], githubUser?: string): Promise<IssueSummary[]> {
+    return this.call<IssueSummary[]>('issue.viewMany', { owner, repo, numbers, githubUser });
   }
 
   async issueCreateSubIssue(owner: string, repo: string, epicNumber: number, title: string, body: string, githubUser?: string): Promise<IssueDetail> {

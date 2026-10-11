@@ -387,7 +387,10 @@ export class EpicDashboard {
     const ipc = IpcClient.getInstance();
 
     // Single batched IPC call instead of one issueView per number. The Go
-    // side uses GetIssuesByNumbers, which sends one aliased GraphQL query.
+    // side uses GetIssuesByNumbersWithoutRelations, which sends one aliased
+    // GraphQL query and reads no relationship list: this uses only number,
+    // title, labels and state, so a sub-issue or blocker list it would discard
+    // cannot fail the batch and empty the repository's progress (#1707).
     let issues: Awaited<ReturnType<typeof ipc.issueViewMany>>;
     try {
       issues = await ipc.issueViewMany(identity.owner, identity.repo, issueNumbers);
