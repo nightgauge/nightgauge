@@ -75,6 +75,33 @@ changelog, and the release workflow refuses a tag that does not.
   requires the `nightgauge` binary. `nightgauge backlog preflight` exits 2
   when it cannot run, as documented, not 1 ("findings found").
 
+- **An autonomous issue whose run fails after its PR opened is no longer sent
+  back to Ready** (#1707). A stall, an operator stop or an API outage during
+  pr-merge, or a session that crashed there, returned the issue to Ready, the
+  only dispatchable status, where it was dispatched again on top of its own
+  PR. The failed-run revert and startup orphan recovery now read the
+  repository's open PRs (every page): an issue its own open PR backs moves to
+  In review, and when the list cannot be read the status is left unchanged
+  and the log says why. A pull request from a fork never counts as an issue's
+  own, whatever its branch is called, here or in the in-review reconcile, the
+  blocked-PR sweep and the dependency evidence gate: anyone who can open a
+  pull request could otherwise keep an issue out of Ready, block it, or have
+  pr-merge run on their branch.
+
+- **`forge project field-get`, `issue route` and the epic dashboard's
+  per-repository progress read no relationship list they do not use**
+  (#1707). An issue whose sub-issue or blocker list GitHub could not return
+  whole failed the first two and emptied the third. `issue.viewMany` now
+  returns issue summaries without relationship lists.
+
+- **Adapter aliases resolve to their adapter's provider** (#1707).
+  `gemini-headless`, `xai`, `github` and `gh` read as provider `other`, with
+  no model bands and an unstamped cost; Go and the SDK now resolve them. The
+  OpenCode provider-key and model-id rules have one definition in each
+  language, and the SDK's opencode dispatch errors quote the model as the Go
+  binary does, so a quote, newline or escape in a configured model cannot
+  break the message.
+
 - **Epic enqueue, wave planning, `epic assess` and `epic validate` no longer
   act on part of an epic when a sub-issue cannot be read** (#1702). A
   sub-issue read that failed outright, not part-way through a blocker list,

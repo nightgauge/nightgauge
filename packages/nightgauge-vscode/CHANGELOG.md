@@ -26,6 +26,8 @@ and this project adheres to
   than the issue with the same number in this one (#1701). A sub-issue list
   that cannot be read is logged as a warning instead of being skipped
   silently.
+- **The Epic Dashboard's per-repository progress is no longer emptied** when
+  one sub-issue has a relationship list GitHub cannot return in full (#1707).
 
 ## [0.6.0] - 2026-10-04
 
