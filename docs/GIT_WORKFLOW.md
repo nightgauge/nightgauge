@@ -1452,7 +1452,11 @@ Four things about it are deliberate:
   checks, the changelog contract, the publication boundary and the credential
   scan always run, and so do `go build ./...` and `gofmt`. The credential scan
   needs `gitleaks` on `PATH` (`brew install gitleaks`, the version CI pins);
-  without it the step reports INFRASTRUCTURE rather than passing.
+  without it the step reports INFRASTRUCTURE rather than passing. It runs the
+  default rules plus two in `.gitleaks.toml` that the defaults miss: Azure
+  DevOps PATs, and literal `VSCE_PAT`/`OVSX_PAT` values (#1770).
+  `scripts/test-credential-scan-rules.sh` proves both still fire. Another
+  repository adopts them by copying both `[[rules]]` blocks.
 
 **The OpenCode integration tests are not part of the local gate, by
 decision.** PR CI runs them (`-tags opencode_integration`, against an exact

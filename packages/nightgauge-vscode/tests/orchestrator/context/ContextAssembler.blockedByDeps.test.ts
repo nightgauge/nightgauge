@@ -139,10 +139,23 @@ describe("ContextAssembler deterministic issue-pickup — blockedBy enforcement 
     expect(ctx.dependencies.blockedBy).toEqual([]);
   });
 
-  it("fails open when the check-deps command errors", async () => {
+  // #1700: an error is an unknown, not "no open dependencies". No context is
+  // written, so the caller falls through to the LLM subagent, whose
+  // dependency gate checks again.
+  it("does not pick up when the check-deps command errors", async () => {
     execFileResponses.checkDeps = "ERROR";
 
     const result = await assembler.generateDeterministicContext("issue-pickup", 233);
-    expect(result.generated).toBe(true);
+    expect(result.generated).toBe(false);
+    expect(result.blockedBy).toBeUndefined();
+    expect(fs.existsSync(contextPath())).toBe(false);
+  });
+
+  it("does not pick up when check-deps prints no verdict", async () => {
+    execFileResponses.checkDeps = JSON.stringify({ issue_number: 233 });
+
+    const result = await assembler.generateDeterministicContext("issue-pickup", 233);
+    expect(result.generated).toBe(false);
+    expect(fs.existsSync(contextPath())).toBe(false);
   });
 });

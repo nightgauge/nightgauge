@@ -144,7 +144,7 @@ if [ -z "${NG_HERMETICITY_TALLY:-}" ]; then
 
   # In the background, so a TERM to this shell reaches outer_cleanup now and
   # not when the child finishes.
-  NG_HERMETICITY_TALLY="$TALLY" bash "$SELF" &
+  NG_HERMETICITY_TALLY="$TALLY" NG_HERMETICITY_OUTER_PID="$$" bash "$SELF" &
   CHILD_PID=$!
   wait "$CHILD_PID"
   CHILD_EXIT=$?
@@ -222,7 +222,13 @@ kill_suite_group() {
   return 1
 }
 
+WATCHDOG_PID=""
 cleanup() {
+  if [ -n "$WATCHDOG_PID" ]; then
+    kill "$WATCHDOG_PID" 2>/dev/null
+    wait "$WATCHDOG_PID" 2>/dev/null
+    WATCHDOG_PID=""
+  fi
   if [ -n "$SUITE_PID" ]; then
     kill_suite_group "$SUITE_PID" >/dev/null 2>&1
     SUITE_PID=""
@@ -237,6 +243,47 @@ cleanup() {
 trap cleanup EXIT
 trap 'trap - EXIT; cleanup; exit 130' INT
 trap 'trap - EXIT; cleanup; exit 143' TERM
+
+# ── The outer layer is gone: stop (#1705) ────────────────────────────────────
+# This shell writes to the outer layer's stdout, which ci-local.sh reads until
+# every writer has closed it. SIGKILL the outer layer alone and this shell used
+# to run on to the end of the harness, minutes, holding that pipe open. A
+# watchdog notices the outer layer is gone and TERMs this shell, whose trap
+# runs cleanup() and exits. The watchdog holds none of the harness's output,
+# so it cannot keep the pipe open itself.
+#
+# "Gone" is read from this shell's parent, never from `kill -0` on the outer
+# PID: a killed process stays a zombie until its own parent reaps it, and a
+# reader waiting for the pipe to close reaps only after that, so `kill -0`
+# would answer "alive" exactly as long as this shell kept the pipe open. An
+# orphan is reparented the moment its parent dies.
+watch_outer_layer() {
+  local child="$1" outer="$2" ppid
+  while :; do
+    ppid="$(ps -o ppid= -p "$child" 2>/dev/null)" || exit 0
+    ppid="${ppid//[[:space:]]/}"
+    [ -n "$ppid" ] || exit 0
+    [ "$ppid" = "$outer" ] || break
+    sleep 0.5
+  done
+  kill -TERM "$child" 2>/dev/null
+}
+watch_outer_layer "$$" "${NG_HERMETICITY_OUTER_PID:-$PPID}" </dev/null >/dev/null 2>&1 &
+WATCHDOG_PID=$!
+
+# run_suite_and_wait <command...>: run a suite in the background and wait for
+# it. A trapped signal interrupts `wait` at once, where a foreground suite run
+# holds the trap until it finishes, so the watchdog's TERM takes effect within
+# its poll interval and cleanup() kills the suite's group (#1705).
+run_suite_and_wait() {
+  local rc
+  "$@" >/dev/null 2>&1 &
+  SUITE_PID=$!
+  wait "$SUITE_PID"
+  rc=$?
+  SUITE_PID=""
+  return "$rc"
+}
 
 # Job control: each background job becomes its own process group leader.
 set -m
@@ -363,6 +410,99 @@ else
 fi
 rm -rf "$LINK_ROOT"
 
+# ── 0d. #1705 — a claim never lands outside its root ──────────────────────
+# The claim renamed its staging directory into place with `mv`, after checking
+# the final name was free. A symlink to a directory planted at that name in
+# between made `mv` move the staging directory INTO the link's target, and the
+# claim reported the target's path. Land the plant exactly there: shims for the
+# rename (python3, and mv should anyone go back to it) that create the symlink
+# at the destination and then run the real tool. The claim must fail, and the
+# directory the symlink points at must stay empty.
+CLAIM_ROOT="$RUN_ROOT/claim-symlink"
+mkdir -p "$CLAIM_ROOT/bin" "$CLAIM_ROOT/sandboxes" "$CLAIM_ROOT/outside" || exit 2
+for tool in python3 mv; do
+  cat >"$CLAIM_ROOT/bin/$tool" <<'SHIM'
+#!/usr/bin/env bash
+for last; do :; done
+case "$last" in
+"$CLAIM_SANDBOXES"/*)
+  if [ ! -e "$last" ] && [ ! -L "$last" ]; then
+    ln -s "$CLAIM_OUTSIDE" "$last" && printf '%s\n' "$last" >>"$CLAIM_PLANTED"
+  fi
+  ;;
+esac
+PATH="$CLAIM_REAL_PATH" exec "${0##*/}" "$@"
+SHIM
+  chmod +x "$CLAIM_ROOT/bin/$tool" || exit 2
+done
+claim_rc=0
+CLAIM_SANDBOXES="$(cd "$CLAIM_ROOT/sandboxes" && pwd -P)" || exit 2
+claimed="$(
+  export CLAIM_REAL_PATH="$PATH" CLAIM_OUTSIDE="$CLAIM_ROOT/outside" \
+    CLAIM_PLANTED="$CLAIM_ROOT/planted" CLAIM_SANDBOXES
+  PATH="$CLAIM_ROOT/bin:$PATH"
+  claim_sandbox_dir "$CLAIM_ROOT/sandboxes" "$SANDBOX_PREFIX" 2>/dev/null
+)" || claim_rc=$?
+planted="$(cat "$CLAIM_ROOT/planted" 2>/dev/null)"
+if [ -z "$planted" ] || [ ! -L "$planted" ]; then
+  bad "setup: no symlink was planted inside the claim; the race arm measured nothing"
+elif [ "$claim_rc" -ne 0 ] && [ -z "$claimed" ] && [ -z "$(ls -A "$CLAIM_ROOT/outside")" ] &&
+  [ -z "$(find "$CLAIM_ROOT/sandboxes" -mindepth 1 -maxdepth 1 -name "${CLAIM_PREFIX}*")" ]; then
+  ok "a claim whose name is swapped for a symlink fails, and writes nothing outside its root (#1705)"
+else
+  bad "a claim followed a planted symlink out of its root (#1705): rc=$claim_rc claimed=$claimed"
+  find "$CLAIM_ROOT/outside" | sed 's/^/    /'
+fi
+rm -rf "$CLAIM_ROOT"
+
+# ── 0e. #1705 — a harness whose outer layer is SIGKILLed stops ──────────────
+# The harness proper runs as a child of the outer layer and writes to its
+# stdout. Kill the outer layer outright and the child must notice and stop
+# within a step, or ci-local.sh waits on its output pipe for the rest of the
+# run. Start a whole harness in a root of its own, wait until its child is
+# running, SIGKILL its outer layer only, and require that nothing in its
+# process group is left a few seconds later. Before #1705 the child ran on for
+# minutes. The probe harness skips this arm itself (NG_HERMETICITY_ORPHAN_PROBE),
+# so a broken watchdog cannot make each probe start another.
+if [ -z "${NG_HERMETICITY_ORPHAN_PROBE:-}" ]; then
+  ORPHAN_TMP="$RUN_ROOT/orphan-probe"
+  mkdir -p "$ORPHAN_TMP" || exit 2
+  env -u NG_HERMETICITY_TALLY -u NG_HERMETICITY_OUTER_PID NG_HERMETICITY_ORPHAN_PROBE=1 \
+    TMPDIR="$ORPHAN_TMP" bash "$SELF" >"$ORPHAN_TMP/out.log" 2>&1 &
+  ORPHAN_OUTER=$!
+  orphan_started=""
+  for _ in $(seq 1 120); do
+    if grep -q "hermeticity tests (#713" "$ORPHAN_TMP/out.log" 2>/dev/null; then
+      orphan_started=1
+      break
+    fi
+    sleep 0.25
+  done
+  kill -9 "$ORPHAN_OUTER" 2>/dev/null
+  wait "$ORPHAN_OUTER" 2>/dev/null
+  orphan_left="unchecked"
+  for _ in $(seq 1 100); do
+    orphan_left="$(pgrep -g "$ORPHAN_OUTER" 2>/dev/null)"
+    [ -z "$orphan_left" ] && break
+    sleep 0.2
+  done
+  if [ -z "$orphan_started" ]; then
+    bad "setup: the probe harness never started its child; the orphan arm measured nothing"
+  elif [ -z "$orphan_left" ]; then
+    ok "a harness whose outer layer is SIGKILLed stops within a step (#1705)"
+  else
+    bad "a harness child outlived its SIGKILLed outer layer by 20s (#1705)"
+    ps -o pid=,ppid=,command= -p "$(printf '%s\n' "$orphan_left" | paste -sd, -)" 2>/dev/null |
+      sed 's/^/    /'
+    for pid in $orphan_left; do kill -9 "$pid" 2>/dev/null; done
+  fi
+  # The killed outer layer leaked its live probes, worktree included.
+  while IFS= read -r d; do
+    remove_run_root "$d"
+  done < <(find "$ORPHAN_TMP/nightgauge-pubboundary-sandboxes" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+  rm -rf "$ORPHAN_TMP"
+fi
+
 # Registrations whose directory is already gone go before the baseline is
 # taken. Every suite run prunes, so a stale entry left by some other session
 # would otherwise vanish mid-run and read as a worktree the sweep removed.
@@ -438,7 +578,7 @@ fi
 # nothing. It must also leave the outer layer's live sandbox alone, which the
 # outer layer asserts once this run is over.
 # Minimal mode (#850): only the startup sweep is observed.
-TMPDIR="$SHARED_TMPDIR" NG_BOUNDARY_SUITE_MINIMAL=1 bash "$SUITE" >/dev/null 2>&1
+run_suite_and_wait env TMPDIR="$SHARED_TMPDIR" NG_BOUNDARY_SUITE_MINIMAL=1 bash "$SUITE"
 if [ -d "$KILLED_SANDBOX" ] && grep -qF -- "$KILLED_SANDBOX/tree" <<<"$(git worktree list --porcelain)"; then
   ok "a concurrent gate's suite sweep leaves this run's killed sandbox alone (#1697)"
 else
@@ -461,7 +601,7 @@ fi
 # exits 0. That needs a completed run, not 41 re-validated rules; CI runs those
 # once in the standalone step. Set per-invocation, never exported: the two
 # SIGKILL/SIGTERM arms must stay full-length so the signal lands mid-run.
-NG_BOUNDARY_SUITE_MINIMAL=1 bash "$SUITE" >/dev/null 2>&1
+run_suite_and_wait env NG_BOUNDARY_SUITE_MINIMAL=1 bash "$SUITE"
 SUITE_EXIT=$?
 
 if [ "$SUITE_EXIT" -eq 0 ]; then
@@ -613,7 +753,7 @@ if git worktree add --detach --quiet "$LOCKED_SANDBOX/tree" HEAD >/dev/null 2>&1
 
   # Minimal mode (#850): only the startup sweep is observed here — this run's
   # exit code is deliberately not captured at all.
-  NG_BOUNDARY_SUITE_MINIMAL=1 bash "$SUITE" >/dev/null 2>&1
+  run_suite_and_wait env NG_BOUNDARY_SUITE_MINIMAL=1 bash "$SUITE"
 
   if ! grep -qF -- "$LOCKED_SANDBOX/tree" <<<"$(git worktree list --porcelain)"; then
     ok "the next suite run reclaims a LOCKED leaked registration too"

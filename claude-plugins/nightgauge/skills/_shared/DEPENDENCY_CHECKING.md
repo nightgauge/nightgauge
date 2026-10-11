@@ -51,8 +51,16 @@ if [ "$DEP_ENABLED" = "true" ] && [ "$DEP_MODE" != "ignore" ]; then
     echo "This binary is required for dependency enforcement." >&2
     exit 1
   fi
-  DEP_RESULT=$("$BINARY" hook check-deps "$ISSUE_NUMBER" 2>/dev/null || echo '{"has_open_dependencies":false}')
-  HAS_OPEN_DEPS=$(printf '%s\n' "$DEP_RESULT" | jq -r '.has_open_dependencies')
+  # A check that could not run is not "no open dependencies" (#1700). Stop,
+  # rather than pick up an issue whose blockers may be open.
+  DEP_EXIT=0
+  DEP_RESULT=$("$BINARY" hook check-deps "$ISSUE_NUMBER") || DEP_EXIT=$?
+  HAS_OPEN_DEPS=$(printf '%s\n' "$DEP_RESULT" | jq -r '.has_open_dependencies' 2>/dev/null)
+  if [ "$DEP_EXIT" -ne 0 ] || { [ "$HAS_OPEN_DEPS" != "true" ] && [ "$HAS_OPEN_DEPS" != "false" ]; }; then
+    echo "ERROR: could not check #$ISSUE_NUMBER's dependencies (exit $DEP_EXIT); not proceeding." >&2
+    echo "Re-run once 'nightgauge hook check-deps $ISSUE_NUMBER' succeeds." >&2
+    exit 1
+  fi
   SHOULD_BLOCK=$(printf '%s\n' "$DEP_RESULT" | jq -r '.should_block')
   OPEN_DEPS=$(printf '%s\n' "$DEP_RESULT" | jq -r '.open_dependencies')
   OPEN_COUNT=$(printf '%s\n' "$DEP_RESULT" | jq -r '.open_count')
@@ -113,10 +121,21 @@ operator action required."
   echo "signal=deferred"
   exit 0
 fi
+
+if [ $GATE_EXIT -ne 0 ]; then
+  # Exit 2: the gate could not evaluate the blockers (a read failed). Nothing
+  # was paused, so post no deferral comment and record no deferral. Stop the
+  # pickup; a retry evaluates again (#1700).
+  echo "Dependency gate: could not evaluate #$ISSUE_NUMBER's blockers (exit $GATE_EXIT); not picking it up." >&2
+  printf '%s\n' "$GATE_OUTPUT" >&2
+  exit 1
+fi
 ```
 
-Exit the skill without creating a branch. Do **not** emit a failure report —
-this is a deferral, and the run must exit 0.
+Exit the skill without creating a branch. On a deferral (exit 1) do **not**
+emit a failure report: the run must exit 0. Exit 2 means the gate could not
+run, which is neither a pass nor a deferral: the stage stops, and a retry
+checks again.
 
 ##### Warn Mode (Default)
 

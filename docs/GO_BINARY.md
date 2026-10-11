@@ -5151,12 +5151,23 @@ nightgauge size-gate capacity [--adapter <a> --model <m> | --context-window <tok
 nightgauge baseline-gate check --issue <N> [--branch main] [--config <path>] [--json] [--pause-queue=true]
 nightgauge baseline-gate promote [--branch main] [--config <path>] [--json]
 
+# Native blockedBy dependency gate — invoked by issue-pickup (Issue #231)
+nightgauge deps-gate check --issue <N> [--json] [--pause-queue=true]
+nightgauge deps-gate promote [--json]
+
 # Scope-drift gate — invoked by pr-create Phase 2.6 for type:docs / type:chore (Issue #3040)
 nightgauge scope-drift check --issue <N> [--config <path>] [--workdir <path>] [--issue-type docs|chore] [--json]
 
 # Version-downgrade gate — invoked by feature-validate Phase 2.6 (Issue #3042)
 nightgauge version-downgrade check [--issue <N>] [--baseline main] [--config <path>] [--workdir <path>] [--allow-override] [--json]
 ```
+
+**`baseline-gate check` and `deps-gate check` exit codes**: `0` allow, `1`
+deferred (the queue item is paused and issue-pickup posts the deferral
+comment), `2` could not run, with one `could not run:` line on stderr (#1700,
+#2442). Exit 2 is never a deferral. issue-pickup continues past the baseline
+gate on it, and stops the pickup at the dependency gate, whose blockers may
+be open.
 
 **`size-gate` capacity (#1655)**: `--context-window`, or `--adapter`/`--model`
 (given together; either alone is an error; resolved to the window the

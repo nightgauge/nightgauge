@@ -53,21 +53,33 @@ sandbox_owner_alive() {
 # into place. A rename within one directory is atomic, so the directory
 # appears already claimed.
 #
+# The rename is rename(2) itself, not `mv` (#1705). `mv` onto a directory, or
+# onto a symlink to one, moves the source INTO it, so a symlink planted at the
+# final name between a check and the `mv` carried the claim out of the root and
+# the claim reported the target's path as its own. rename(2) never follows the
+# destination: onto a symlink or a non-empty directory it fails. Afterwards the
+# claim still checks what it got: a real directory, directly under the
+# physical root, holding this shell's owner.pid. Anything else is a failure.
+#
 # Fails, leaving nothing behind, when any step fails, including the owner.pid
 # write: a directory this run cannot claim is one any reclaimer may take.
 claim_sandbox_dir() {
-  local root="$1" prefix="$2" staging dir
+  local root="$1" prefix="$2" staging dir root_p dir_p
   mkdir -p "$root" || return 1
-  staging="$(mktemp -d "$root/${CLAIM_PREFIX}XXXXXXXX")" || return 1
-  dir="$root/$prefix${staging##*/"$CLAIM_PREFIX"}"
-  # `mv` onto an existing directory nests inside it instead of failing.
-  if printf '%s\n' "$$" >"$staging/owner.pid" && [ ! -e "$dir" ] &&
-    mv "$staging" "$dir"; then
-    (cd "$dir" && pwd -P)
-    return
+  root_p="$(cd "$root" && pwd -P)" || return 1
+  staging="$(mktemp -d "$root_p/${CLAIM_PREFIX}XXXXXXXX")" || return 1
+  dir="$root_p/$prefix${staging##*/"$CLAIM_PREFIX"}"
+  if ! printf '%s\n' "$$" >"$staging/owner.pid" ||
+    ! python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$staging" "$dir" \
+      2>/dev/null; then
+    rm -rf "$staging"
+    return 1
   fi
-  rm -rf "$staging"
-  return 1
+  # Whatever is at $dir now is not touched on failure: it is not this claim's.
+  [ ! -L "$dir" ] && [ -d "$dir" ] &&
+    [ "$(cat "$dir/owner.pid" 2>/dev/null)" = "$$" ] &&
+    dir_p="$(cd "$dir" && pwd -P)" && [ "${dir_p%/*}" = "$root_p" ] || return 1
+  printf '%s\n' "$dir_p"
 }
 
 # reap_stale_claims <root>

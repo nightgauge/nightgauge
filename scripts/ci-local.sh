@@ -359,6 +359,7 @@ REQUIRED_FILES=(
   packages/nightgauge-vscode/scripts/check-engine-types.mjs
   scripts/check-md-links.sh
   scripts/test-check-md-links.sh
+  scripts/test-credential-scan-rules.sh
   scripts/check-decisions-index.sh
   scripts/test-check-decisions-index.sh
   scripts/check-agent-guidance.sh
@@ -1409,6 +1410,9 @@ run_step "publication boundary allowlist changes alone" \
 #     PR #2073 passed this gate and failed CI's scan. A missing gitleaks is
 #     INFRASTRUCTURE, never a pass.
 run_step "credential scan (tree + full history)" bash scripts/credential-scan.sh
+# 5a-ii. The custom .gitleaks.toml rules fire on what they exist for and stay
+#     quiet on secret references (#1770). Fixtures are built at run time.
+run_step "Credential-scan rules regression suite" bash scripts/test-credential-scan-rules.sh
 
 # 5b. Publication boundary self-test — proves the guard still fails closed
 #     (mirrors .github/workflows/publication-boundary.yml's second step).

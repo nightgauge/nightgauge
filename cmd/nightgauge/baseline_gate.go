@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	gh "github.com/nightgauge/nightgauge/internal/github"
+	"github.com/nightgauge/nightgauge/internal/hooks"
 	"github.com/nightgauge/nightgauge/internal/intelligence/baselineGate"
 	"github.com/nightgauge/nightgauge/internal/orchestrator"
 	"github.com/spf13/cobra"
@@ -32,12 +33,27 @@ deferred items back to the queue when the baseline goes green.`,
 	return cmd
 }
 
+// baselineGateServices builds the issue reader and the workflow-runs lister
+// `baseline-gate check` evaluates with. It is a variable so a test can inject
+// a read error without a network.
+var baselineGateServices = func() (hooks.IssueFetcher, baselineGate.WorkflowRunsLister, error) {
+	client, err := clientFromConfig()
+	if err != nil {
+		return nil, nil, fmt.Errorf("create GitHub client: %w", err)
+	}
+	return gh.NewIssueService(client), gh.NewCIService(client), nil
+}
+
 // baselineGateCheckCmd evaluates whether the issue at --issue should be
 // dispatched or deferred. Exit codes:
 //
 //	0 — allow dispatch (or unparseable; treated as allow)
 //	1 — defer dispatch
-//	2 — config or IO error
+//	2 — could not run: a bad argument, or a config or read error (#2442)
+//
+// Exit 2 is not a deferral. Every error used to leave through cobra's default
+// exit 1, so issue-pickup posted a "paused" comment for an item nothing had
+// paused, and its own exit-2 branch never ran.
 func baselineGateCheckCmd() *cobra.Command {
 	var (
 		owner      string
@@ -70,20 +86,18 @@ func baselineGateCheckCmd() *cobra.Command {
 				return nil
 			}
 
-			client, err := clientFromConfig()
+			issueSvc, runner, err := baselineGateServices()
 			if err != nil {
-				return fmt.Errorf("create GitHub client: %w", err)
+				return err
 			}
 			ownerPart, repoPart := splitRepo(owner, repo)
 			// The gate reads the issue's body and title and none of its
 			// relationship lists, so a long list cannot fail it into a DEFER.
-			issueSvc := gh.NewIssueService(client)
 			issue, err := issueSvc.GetIssueWithRelations(cmd.Context(), ownerPart, repoPart, issueNum, gh.NoRelations)
 			if err != nil {
 				return fmt.Errorf("fetch issue #%d: %w", issueNum, enrichError(err))
 			}
 
-			runner := gh.NewCIService(client)
 			eval := baselineGate.NewEvaluator(cfg, runner)
 			res, err := eval.EvaluateForBody(cmd.Context(), issue.Body, ownerPart, repoPart, branch)
 			if err != nil {
@@ -120,9 +134,11 @@ func baselineGateCheckCmd() *cobra.Command {
 				}
 			}
 
-			return fmt.Errorf("baseline-ci red: %s", res.Reason)
+			// The deferral is the verdict, already rendered above.
+			return verdictExit{code: 1}
 		},
 	}
+	markCouldNotRunExit(cmd)
 
 	cmd.Flags().StringVar(&owner, "owner", "", "GitHub repository owner (defaults to config)")
 	repoNameFlag(cmd, &repo, "", "GitHub repository name (defaults to config)")

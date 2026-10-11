@@ -24,6 +24,10 @@
 #   4. A closed local port            -> exit 0, counted
 #      `unreachable-from-runner`.
 #
+# Cases 5-12 cover answered statuses (#1404, #2317), the Marketplace ignore
+# (#1767), an unchecked file (#2379), and a throttled link and a re-probe's
+# local write error (#1768).
+#
 # Prove it can go red by removing the re-probe: cases 3 and 4 then exit 1.
 #
 # Run: bash scripts/test-check-md-links.sh
@@ -101,6 +105,17 @@ class Handler(BaseHTTPRequestHandler):
         # /status/NNN answers NNN to EVERY user agent, so markdown-link-check
         # gets a real status and the link lands on the ANSWERED path rather
         # than on the Status: 0 path the other cases exercise (#1404).
+        # /status-body/NNN answers NNN with a body, which a re-probe has to
+        # write somewhere (#1768).
+        if self.path.startswith("/status-body/"):
+            code = int(self.path.rsplit("/", 1)[1])
+            body = b"x" * 2048
+            self.send_response(code)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path.startswith("/status/"):
             try:
                 code = int(self.path.rsplit("/", 1)[1])
@@ -222,11 +237,8 @@ check "the unreachable report names the curl exit code" \
 # The 404 case is the other half: the exemption must be narrow, or this becomes
 # a blanket exemption rather than a classification fix.
 #
-# There is deliberately NO 429 case. A first draft added one, and mutating the
-# 429 arm out of the gate left it passing — `.markdown-link-check.json` already
-# lists 401/403/429 in `aliveStatusCodes`, so they never reach the gate's
-# classification at all. The arm was unreachable and the test was vacuous; both
-# were removed rather than kept as decoration.
+# 429 is case 11: it never reaches this classification (it is in
+# `aliveStatusCodes`), and is read from the checker's verbose listing instead.
 
 run_gate server-error.md
 RC=$?
@@ -352,6 +364,61 @@ check "as an assertion failure, not an infrastructure one" \
   "$([ "$(classify_failure "$TMP/out" "$RC")" = assert ] && echo 0 || echo 1)"
 check "and the unchecked file is still named" \
   "$(grep -qF 'never-written.md: markdown-link-check exited' "$TMP/out" && echo 0 || echo 1)"
+
+# --- Case 11: a throttled link is reported, and is not fatal (#1768) --------
+#
+# 429 is in `aliveStatusCodes`, so it never failed the gate, and must not now.
+# But `--quiet` hid every accepted link, so a rate-limited link read exactly
+# like one that resolved. Mutating the throttled class out of the gate turns
+# the second and third checks red.
+printf '# case 11\n\n[a rate-limited host](http://127.0.0.1:%s/status/429)\n' "$PORT" \
+  > "$FIX/throttled.md"
+run_gate throttled.md
+RC=$?
+check "a 429 does not fail the gate" "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
+check "a 429 is counted as throttled, apart from the other classes" \
+  "$(grep -qF 'Link classes: 0 dead, 0 unreachable-from-runner, 0 alive-after-reprobe, 1 throttled' "$TMP/out" && grep -qF 'throttled: 1 link(s)' "$TMP/out" && echo 0 || echo 1)"
+check "the external link is logged with the status it really answered" \
+  "$(grep -qF "http://127.0.0.1:${PORT}/status/429 → 429" "$TMP/out" && echo 0 || echo 1)"
+
+run_gate dead-relative.md
+check "a 200-only run counts nothing as throttled" \
+  "$(grep -qE 'Link classes: .*, 0 throttled' "$TMP/out" && echo 0 || echo 1)"
+
+# --- Case 12: a local write error is not the link's verdict (#1768) ---------
+#
+# A re-probe of a 5xx retries, and curl truncates its output before each retry;
+# where that output was /dev/null it could not, so the re-probe ended in curl
+# exit 23 and the link was classed by that local failure. Reproduced here with
+# a curl shim that points every `-o` at a directory that does not exist, so
+# writing the body fails exactly as it did. The server's answer (504) must
+# decide the class.
+SHIM_BIN="$TMP/curl-shim"
+mkdir -p "$SHIM_BIN"
+REAL_CURL="$(command -v curl)"
+cat > "$SHIM_BIN/curl" <<SHIM
+#!/usr/bin/env bash
+args=()
+while [ "\$#" -gt 0 ]; do
+  if [ "\$1" = "-o" ]; then
+    args+=(-o "$TMP/no-such-dir/body")
+    shift 2
+    continue
+  fi
+  args+=("\$1")
+  shift
+done
+exec "$REAL_CURL" "\${args[@]}"
+SHIM
+chmod +x "$SHIM_BIN/curl"
+printf '# case 12\n\n[a gateway timing out](http://127.0.0.1:%s/status-body/504)\n' "$PORT" \
+  > "$FIX/write-error.md"
+PATH="$SHIM_BIN:$PATH" MD_LINK_CHECK_FILES="$FIX/write-error.md" bash "$GATE" > "$TMP/out" 2>&1
+RC=$?
+check "a re-probe that hits a local write error does not fail the gate" \
+  "$([ "$RC" -eq 0 ] && echo 0 || echo 1)"
+check "the link is classed by the server's 504, not by curl exit 23" \
+  "$(grep -qF 'Link classes: 0 dead, 0 unreachable-from-runner, 1 alive-after-reprobe' "$TMP/out" && grep -qF '(HTTP 504)' "$TMP/out" && ! grep -qF 'curl exit 23' "$TMP/out" && echo 0 || echo 1)"
 
 echo ""
 echo "=== $PASS passed, $FAIL failed ==="

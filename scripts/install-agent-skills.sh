@@ -236,11 +236,36 @@ PY
 }
 
 # ---------------------------------------------------------------------------
+# Codex and Grok home skills: what may be replaced, and what may be copied
+# (#1694). scripts/lib/install_skill_tree.py applies the VS Code extension's
+# rules (copySkillsTree), so either installer replaces what the other
+# installed and neither touches anything else:
+#   - each installed directory carries a `.nightgauge-installed` marker, and a
+#     destination directory is replaced only when it holds one. An operator's
+#     own `update-docs`, another skill pack's `_shared`, a symlink or a file of
+#     the same name is left alone and named in a warning. A directory an older
+#     version of this script installed has no marker either: remove it once.
+#   - a source symlink is installed only when it resolves to a file inside
+#     skills/, and lands as a regular file. A link out of the tree (to ~/.ssh,
+#     say), a dangling link and a linked directory are skipped with a warning;
+#     `rsync -a` used to copy them into the agent's skill directory as links.
+#   - a destination root that resolves into this checkout, or contains it, is
+#     refused before anything is written.
+# Replacing a whole directory also drops files a skill no longer has, which is
+# what `rsync --delete` did here before.
+# ---------------------------------------------------------------------------
+install_home_skills() {
+  local label="$1" dest_root="$2" count
+  count="$(python3 "$REPO_ROOT/scripts/lib/install_skill_tree.py" install \
+    --source "$SKILLS_SRC" --dest "$dest_root" --checkout "$REPO_ROOT" --label "$label")"
+  echo "    Installed $count skill directories (with _shared) to $label."
+}
+
+# ---------------------------------------------------------------------------
 # Codex: copy every skill (a dir containing SKILL.md) into ~/.codex/skills/.
 # Codex reads skill instructions straight from these SKILL.md files and exposes
-# them as `$<skill-name>`. We mirror per-skill with --delete so renamed/removed
-# files inside a skill don't linger, and we ship _shared/ so the pipeline
-# skills' `<!-- include: ../_shared/... -->` directives resolve.
+# them as `$<skill-name>`. _shared/ ships too, so the pipeline skills'
+# `<!-- include: ../_shared/... -->` directives resolve.
 # ---------------------------------------------------------------------------
 install_codex() {
   local dest_root="$HOME/.codex/skills"
@@ -249,24 +274,7 @@ install_codex() {
     return 0
   fi
   echo "==> Codex: syncing skills into $dest_root ..."
-  mkdir -p "$dest_root"
-
-  local count=0
-  for src in "$SKILLS_SRC"/*/; do
-    local name
-    name="$(basename "$src")"
-    # Only real skills (have SKILL.md). _shared is copied separately below.
-    [ -f "$src/SKILL.md" ] || continue
-    rsync -a --delete "$src" "$dest_root/$name/"
-    count=$((count + 1))
-  done
-
-  # Shared includes referenced by pipeline skills.
-  if [ -d "$SKILLS_SRC/_shared" ]; then
-    rsync -a --delete "$SKILLS_SRC/_shared/" "$dest_root/_shared/"
-  fi
-
-  echo "    Synced $count skills to Codex."
+  install_home_skills Codex "$dest_root"
 }
 
 # ---------------------------------------------------------------------------
@@ -293,22 +301,7 @@ install_grok() {
 
   local dest_root="$HOME/.grok/skills"
   echo "==> Grok: syncing skills into $dest_root ..."
-  mkdir -p "$dest_root"
-
-  local count=0
-  for src in "$SKILLS_SRC"/*/; do
-    local name
-    name="$(basename "$src")"
-    [ -f "$src/SKILL.md" ] || continue
-    rsync -a --delete "$src" "$dest_root/$name/"
-    count=$((count + 1))
-  done
-
-  if [ -d "$SKILLS_SRC/_shared" ]; then
-    rsync -a --delete "$SKILLS_SRC/_shared/" "$dest_root/_shared/"
-  fi
-
-  echo "    Synced $count skills to Grok."
+  install_home_skills Grok "$dest_root"
 
   # Plugin install is the Claude analog: point Grok at this checkout's
   # marketplace (it accepts .claude-plugin/marketplace.json) and install the
@@ -375,7 +368,9 @@ install_grok() {
 #     written or pruned; everything else in those directories is left alone;
 #   - a destination that is a symlink resolving outside the target root is
 #     refused, and so is a skill without `description` frontmatter (OpenCode
-#     never surfaces such a skill to the model).
+#     never surfaces such a skill to the model);
+#   - a source symlink out of skills/ is never installed (#1694; see
+#     install_home_skills).
 # The plugin is opt-in because OpenCode npm-installs @opencode-ai/plugin into
 # any config root holding a plugin on its next start, and blocks there when
 # the registry is unreachable (ADR-022 amendment 2026-09-24).
@@ -417,9 +412,9 @@ PY
 }
 
 # opencode_refuse_escape <path> <root>: exit 1 when path is a symlink. Every
-# path checked is one this script writes, creates or rsync --deletes through;
-# a symlink there, even one resolving to root itself or inside it, would let
-# rsync --delete wipe the directory it points at (opencode.json included).
+# path checked is one this script writes, creates or replaces wholesale; a
+# symlink there, even one resolving to root itself or inside it, would let the
+# replacement wipe the directory it points at (opencode.json included).
 opencode_refuse_escape() {
   [ -L "$1" ] || return 0
   echo "==> OpenCode: refusing $1: it is a symlink; the installer writes under $2 only through real paths." >&2
@@ -508,7 +503,9 @@ install_opencode() {
   for name in "${names[@]}"; do
     short="nightgauge-${name#nightgauge-}"
     dest="$skills_dir/$short"
-    rsync -a --delete "$SKILLS_SRC/$name/" "$dest/"
+    # Contained copy: a source symlink out of skills/ is never installed (#1694).
+    python3 "$REPO_ROOT/scripts/lib/install_skill_tree.py" copy \
+      --source "$SKILLS_SRC" --from "$SKILLS_SRC/$name" --to "$dest"
     # OpenCode wants the skill `name` to match its folder, so a skill whose
     # canonical directory has no nightgauge- prefix is renamed in the copy.
     if [ "$short" != "$name" ]; then
@@ -536,7 +533,8 @@ PY
     count=$((count + 1))
   done
   if [ -d "$SKILLS_SRC/_shared" ]; then
-    rsync -a --delete "$SKILLS_SRC/_shared/" "$skills_dir/_shared/"
+    python3 "$REPO_ROOT/scripts/lib/install_skill_tree.py" copy \
+      --source "$SKILLS_SRC" --from "$SKILLS_SRC/_shared" --to "$skills_dir/_shared"
   fi
 
   # Prune Nightgauge entries whose skill no longer exists in this checkout.

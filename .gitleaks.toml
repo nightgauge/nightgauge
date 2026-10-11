@@ -1,6 +1,31 @@
 [extend]
 useDefault = true
 
+# Publishing credentials the default ruleset misses (#1770). Other workspace
+# repositories adopt these by copying both [[rules]] blocks into their own
+# .gitleaks.toml; scripts/test-credential-scan-rules.sh is the proof they fire.
+
+# Azure DevOps personal access tokens in the current format: 84 characters
+# with the fixed JQQJ99 signature at offset 52. No default rule matches one,
+# and VSCE_PAT (the Marketplace publishing token) is one.
+[[rules]]
+id = "azure-devops-pat"
+description = "Azure DevOps personal access token (84 characters, JQQJ99 signature)"
+regex = '''\b[A-Za-z0-9]{52}JQQJ99[A-Za-z0-9]{26}\b'''
+keywords = ["jqqj99"]
+
+# A literal value assigned to VSCE_PAT or OVSX_PAT, the release workflows'
+# Marketplace and Open VSX publishing tokens. The default generic-api-key rule
+# fires only when the name contains key, token, secret, pass and the like, and
+# "PAT" is none of them. A `${{ secrets.VSCE_PAT }}` or `"$VSCE_PAT"`
+# reference is not a literal and does not match.
+[[rules]]
+id = "vsce-ovsx-pat-assignment"
+description = "Literal VS Code Marketplace (VSCE_PAT) or Open VSX (OVSX_PAT) publishing token"
+regex = '''(?i)\b(?:VSCE|OVSX)_PAT\b["']?\s*(?::=|=>|[:=])\s*["']?([A-Za-z0-9._~+/=-]{20,})'''
+secretGroup = 1
+keywords = ["vsce_pat", "ovsx_pat"]
+
 [[allowlists]]
 description = "Synthetic credential-shaped regression fixtures"
 regexTarget = "match"
