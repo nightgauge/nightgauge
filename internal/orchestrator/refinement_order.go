@@ -136,7 +136,7 @@ func (as *AutonomousScheduler) refinementView() refinementDispatchView {
 		v.nodes = snapshotRefinementNodes(as.graphCache.Nodes)
 	}
 	for _, f := range as.state.Failed {
-		if hold := HoldForTerminalKind(f.Kind); hold != HoldNone {
+		if hold := f.hold(); hold != HoldNone {
 			v.holds[fmt.Sprintf("%s#%d", f.Repo, f.Number)] = hold
 		}
 	}

@@ -1295,11 +1295,11 @@ resolved from the adapter alone. It applies even when the model resolves to no
 `ModelDescriptor`, which is every local model today:
 
 ```text
-_shared/_overlays/host/<adapter>.md → _shared/_overlays/<provider>.md → _shared/_overlays/<id>.md
-  → <skill>/_overlays/host/<adapter>.md → <skill>/_overlays/<provider>.md → <skill>/_overlays/<id>.md
+_shared/_overlays/hosts/<adapter>.md → _shared/_overlays/<provider>.md → _shared/_overlays/<id>.md
+  → <skill>/_overlays/hosts/<adapter>.md → <skill>/_overlays/<provider>.md → <skill>/_overlays/<id>.md
 ```
 
-Host fragments live in a `host/` subdirectory because an adapter name and a
+Host fragments live in a `hosts/` subdirectory because an adapter name and a
 provider name can be the same string (`copilot` is both). The host segment is
 the most general and is composed first. #1636 records the amendment in ADR-016,
 implements it in `nightgauge skill render`, and ships the `opencode` host

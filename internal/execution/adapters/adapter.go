@@ -61,8 +61,11 @@ type RunOptions struct {
 	// provider-global NIGHTGAUGE_GROK_EFFORT env var is demoted to operator
 	// override: it wins when set, this value dispatches otherwise. Every
 	// other adapter ignores the field — their effort stays env/TS-owned.
-	Effort       string
-	MaxTokens    int      // Optional token budget
+	Effort string
+	// MaxTokens is an optional output-token cap. Only opencode maps it (it
+	// lowers the endpoint's output limit). The claude-spawning adapters do not:
+	// Claude Code has no --max-tokens option and refuses one (#1716).
+	MaxTokens    int
 	AllowedTools []string // Tools allowed for this skill (from SKILL.md frontmatter)
 	Prompt       string   // Built prompt to pass via stdin (for Claude adapter)
 	MaxTurns     int      // Max conversation turns

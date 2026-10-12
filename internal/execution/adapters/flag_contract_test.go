@@ -80,10 +80,10 @@ var helpNotCaptured = map[string]string{
 // contract while the fix is pending, and it fails the test as soon as it is
 // not needed, when the flag appears in the help or BuildCommand stops
 // emitting it. Probes: testdata/cli-help/README.md.
-var knownBroken = map[string]map[string]int{
-	// claude 2.1.258: `error: unknown option '--max-tokens'`.
-	"claude-headless": {"--max-tokens": 1716},
-}
+//
+// Empty since #1716 stopped the claude adapters emitting --max-tokens.
+// TestFlagContractTablesFailWhenNotNeeded plants an entry of its own.
+var knownBroken = map[string]map[string]int{}
 
 // hiddenSidecarSuffix names a capture's hidden-flag sidecar,
 // <capture>.hidden: the flags that CLI version accepts without listing them
@@ -913,6 +913,18 @@ func definesFlag(list, flag string) bool {
 	return false
 }
 
+// setKnownBroken replaces knownBroken for the rest of t. No test that reads
+// the table runs in parallel, so swapping it is safe.
+func setKnownBroken(t *testing.T, table map[string]map[string]int) {
+	t.Helper()
+	if table == nil {
+		table = map[string]map[string]int{}
+	}
+	saved := knownBroken
+	knownBroken = table
+	t.Cleanup(func() { knownBroken = saved })
+}
+
 // TestFlagContractTablesFailWhenNotNeeded checks that a knownBroken entry or a
 // sidecar line fails the contract once it is not needed: when the flag
 // appears in the help, and when BuildCommand stops emitting it. A sidecar
@@ -964,22 +976,37 @@ func TestFlagContractTablesFailWhenNotNeeded(t *testing.T) {
 		return out
 	}
 
+	// The knownBroken cases plant an entry of their own: --max-tokens, which
+	// claude-headless emitted until #1716 and Claude Code 2.1.258 refuses.
+	// withBroken is the emitted set with the flag added back.
+	planted := map[string]map[string]int{"claude-headless": {"--max-tokens": 1716}}
+	withBroken := map[string]map[string]string{}
+	for a, flags := range emitted {
+		withBroken[a] = map[string]string{}
+		for f, o := range flags {
+			withBroken[a][f] = o
+		}
+	}
+	withBroken["claude-headless"]["--max-tokens"] = "planted by the test"
+
 	cases := []struct {
 		name    string
 		dir     string
 		emitted map[string]map[string]string
+		broken  map[string]map[string]int
 		want    []string
 	}{
-		{"known broken flag now in help", withDefinition(t, "claude-headless", "  --max-tokens <tokens>                 Maximum output tokens"), emitted, []string{"claude-headless:", "--max-tokens", "#1716", "remove it"}},
-		{"known broken flag no longer emitted", committed, without("claude-headless", "--max-tokens"), []string{"claude-headless:", "--max-tokens", "#1716", "remove the entry"}},
-		{"hidden flag now in help", withDefinition(t, "claude-headless", "  --max-turns <turns>                   Maximum agentic turns"), emitted, []string{"claude-headless:", "--max-turns", sidecarName("claude-headless"), "remove the line"}},
-		{"hidden flag no longer emitted", committed, without("grok", "--no-auto-update"), []string{"grok:", "--no-auto-update", sidecarName("grok"), "remove the line"}},
-		{"sidecar of another version", appended(t, "grok-0.0.1.txt"+hiddenSidecarSuffix, "--no-auto-update"), emitted, []string{"grok-0.0.1.txt" + hiddenSidecarSuffix, "no capture grok-0.0.1.txt", "probe its flags on the version captured"}},
-		{"sidecar line that is not a flag", appended(t, sidecarName("claude-headless"), "max-turns"), emitted, []string{"claude-headless:", sidecarName("claude-headless"), `"max-turns" is not a flag`}},
-		{"sidecar accepts a known broken flag", appended(t, sidecarName("claude-headless"), "--max-tokens"), emitted, []string{"claude-headless:", sidecarName("claude-headless"), "--max-tokens", "#1716", "knownBroken"}},
+		{"known broken flag now in help", withDefinition(t, "claude-headless", "  --max-tokens <tokens>                 Maximum output tokens"), withBroken, planted, []string{"claude-headless:", "--max-tokens", "#1716", "remove it"}},
+		{"known broken flag no longer emitted", committed, emitted, planted, []string{"claude-headless:", "--max-tokens", "#1716", "remove the entry"}},
+		{"hidden flag now in help", withDefinition(t, "claude-headless", "  --max-turns <turns>                   Maximum agentic turns"), emitted, nil, []string{"claude-headless:", "--max-turns", sidecarName("claude-headless"), "remove the line"}},
+		{"hidden flag no longer emitted", committed, without("grok", "--no-auto-update"), nil, []string{"grok:", "--no-auto-update", sidecarName("grok"), "remove the line"}},
+		{"sidecar of another version", appended(t, "grok-0.0.1.txt"+hiddenSidecarSuffix, "--no-auto-update"), emitted, nil, []string{"grok-0.0.1.txt" + hiddenSidecarSuffix, "no capture grok-0.0.1.txt", "probe its flags on the version captured"}},
+		{"sidecar line that is not a flag", appended(t, sidecarName("claude-headless"), "max-turns"), emitted, nil, []string{"claude-headless:", sidecarName("claude-headless"), `"max-turns" is not a flag`}},
+		{"sidecar accepts a known broken flag", appended(t, sidecarName("claude-headless"), "--max-tokens"), withBroken, planted, []string{"claude-headless:", sidecarName("claude-headless"), "--max-tokens", "#1716", "knownBroken"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			setKnownBroken(t, c.broken)
 			problems, _ := flagContractProblems(c.dir, true, c.emitted)
 			if len(problems) != 1 {
 				t.Fatalf("want exactly one violation, got %d:\n%s", len(problems), strings.Join(problems, "\n"))

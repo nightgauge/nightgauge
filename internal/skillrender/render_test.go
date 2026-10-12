@@ -372,6 +372,61 @@ func TestOverlayKeysHostSegment(t *testing.T) {
 	})
 }
 
+// TestOverlayHostDoesNotShadowASameNamedProvider pins #1773: the host and
+// provider positions are independent even when they are the same string.
+// copilot is both an adapter and a provider, and an adapter alias can equal
+// the provider it serves (xai for grok). Before the fix the cascade
+// de-duplicated the provider into the host, so _overlays/<provider>.md (and
+// its whole-file form) was never read.
+func TestOverlayHostDoesNotShadowASameNamedProvider(t *testing.T) {
+	for _, tt := range []struct{ name, adapter, model string }{
+		{"copilot is an adapter and a provider", "copilot", "sonnet"},
+		{"a non-canonical adapter equal to the resolved provider", "xai", "grok-4.6"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			keys, descriptor, ok := OverlayKeys(tt.model, tt.adapter)
+			if !ok {
+				t.Fatalf("OverlayKeys(%q, %q) did not resolve", tt.model, tt.adapter)
+			}
+			if descriptor.Provider != tt.adapter {
+				t.Fatalf("descriptor provider = %q, want %q: the case needs a provider named like the adapter", descriptor.Provider, tt.adapter)
+			}
+			want := []string{tt.adapter, tt.adapter, descriptor.ID}
+			if strings.Join(keys, ",") != strings.Join(want, ",") {
+				t.Fatalf("keys = %v, want %v (host, provider, id)", keys, want)
+			}
+
+			root := overlayFixture(t, map[string]string{
+				"hosts/" + tt.adapter: "HOST FRAGMENT",
+				tt.adapter:            "PROVIDER FRAGMENT",
+			}, nil, "")
+			res := mustRender(t, Options{Stage: "feature-dev", Model: tt.model, Adapter: tt.adapter, SkillsRoots: []string{root}})
+			var paths []string
+			for _, f := range res.Fragments {
+				paths = append(paths, filepath.ToSlash(f.Path))
+			}
+			if len(paths) != 2 ||
+				!strings.HasSuffix(paths[0], "_shared/_overlays/hosts/"+tt.adapter+".md") ||
+				!strings.HasSuffix(paths[1], "_shared/_overlays/"+tt.adapter+".md") {
+				t.Fatalf("fragments = %v, want the host then the provider fragment", paths)
+			}
+			host, provider := strings.Index(res.Content, "HOST FRAGMENT"), strings.Index(res.Content, "PROVIDER FRAGMENT")
+			if host < 0 || provider < 0 || host > provider {
+				t.Errorf("content must carry the host fragment before the provider fragment:\n%s", res.Content)
+			}
+		})
+	}
+
+	t.Run("a provider whole-file override is reachable", func(t *testing.T) {
+		root := overlayFixture(t, nil, nil, "")
+		write(t, filepath.Join(root, "nightgauge-feature-dev", "_overlays", "copilot.SKILL.md"), "# Provider whole file\n")
+		res := mustRender(t, Options{Stage: "feature-dev", Model: "sonnet", Adapter: "copilot", SkillsRoots: []string{root}})
+		if res.InjectionSite != SiteWholeFile || !strings.HasSuffix(filepath.ToSlash(res.WholeFile), "nightgauge-feature-dev/_overlays/copilot.SKILL.md") {
+			t.Errorf("whole-file override = %q (site %q), want the provider's _overlays/copilot.SKILL.md", res.WholeFile, res.InjectionSite)
+		}
+	})
+}
+
 // ─── Composition ─────────────────────────────────────────────────────────────
 
 const bodyWithContextIncludes = `---

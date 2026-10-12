@@ -54,10 +54,9 @@ func (a *ClaudeAdapter) BuildCommand(opts RunOptions) (string, []string, map[str
 		args = append(args, "--model", opts.Model)
 	}
 
-	if opts.MaxTokens > 0 {
-		args = append(args, "--max-tokens", fmt.Sprintf("%d", opts.MaxTokens))
-	}
-
+	// opts.MaxTokens is not mapped: Claude Code has no --max-tokens option and
+	// exits 1 on one (#1716). The run's bounds are --max-turns and
+	// --max-budget-usd below.
 	if opts.MaxTurns > 0 {
 		args = append(args, "--max-turns", fmt.Sprintf("%d", opts.MaxTurns))
 	} else {

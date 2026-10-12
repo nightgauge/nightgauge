@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -376,5 +377,73 @@ func TestDedupeFailedItems_KindFollowsLatest(t *testing.T) {
 	}
 	if out[0].Kind != TerminalKindArchitectureApprovalRequired {
 		t.Errorf("merged Kind = %q, want the latest attempt's kind", out[0].Kind)
+	}
+}
+
+// TestPermissionDeniedCap_IsTerminalAcrossReconcile pins #1756. The cap on
+// consecutive permission_denied retries used to delete the issue's backoff
+// entry and record a Failed entry the reconcile re-admitted, because
+// permission_denied is not a held kind. The issue was dispatched again with
+// its attempt count read back as 0, so the cap cycled 1, 2, 3, 0, 1, ...
+// forever. Drive cap+2 denials through the real completion path, the
+// reconcile and the candidate filter: below the cap the issue retries, from
+// the cap on it is held for an operator and its count is kept.
+func TestPermissionDeniedCap_IsTerminalAcrossReconcile(t *testing.T) {
+	as := heldTestScheduler(t)
+	const repo, n = "acme/app", 1756
+	key := fmt.Sprintf("%s#%d", repo, n)
+	g := holdTestGraph(&depgraph.Node{Repo: repo, Number: n, State: "OPEN", BoardStatus: "Ready"})
+
+	deny := func() {
+		t.Helper()
+		addRunning(as, repo, n, "a stage that keeps reaching for a foreground sleep loop")
+		as.onPipelineComplete(repo, n, false, false, TerminalKindPermissionDenied,
+			"[permission-denied] harness denied a foreground sleep wait loop tool call", false)
+		as.drainBackground()
+		// Let any backoff elapse, as a running scheduler would.
+		if plan, ok := as.retryBackoff[key]; ok {
+			plan.Until = time.Now().Add(-time.Second)
+			as.retryBackoff[key] = plan
+		}
+		as.reconcileStateAgainstGraph(g)
+	}
+
+	for attempt := 1; attempt <= permissionDeniedMaxAttempts+2; attempt++ {
+		deny()
+		candidate := isCandidate(as.prioritize(context.Background(), g), repo, n)
+		if attempt <= permissionDeniedMaxAttempts {
+			if !candidate {
+				t.Fatalf("denial %d (below the cap of %d) left the issue out of dispatch; it must retry", attempt, permissionDeniedMaxAttempts)
+			}
+			continue
+		}
+		if candidate {
+			t.Fatalf("denial %d (past the cap of %d) left the issue a dispatch candidate; the cap must be terminal", attempt, permissionDeniedMaxAttempts)
+		}
+		if len(as.state.Failed) != 1 || !as.state.Failed[0].RetryCapped {
+			t.Fatalf("denial %d: state.Failed = %+v, want the one entry, kept by the reconcile and marked RetryCapped", attempt, as.state.Failed)
+		}
+		if got := as.humanHoldFor(repo, n); got != HoldOperatorResume {
+			t.Errorf("denial %d: hold = %q, want %q", attempt, got, HoldOperatorResume)
+		}
+		if got := as.retryBackoff[key].Attempts; got != permissionDeniedMaxAttempts {
+			t.Errorf("denial %d: retryBackoff Attempts = %d, want %d kept; a reset count restarts the cap", attempt, got, permissionDeniedMaxAttempts)
+		}
+	}
+	if got := as.state.LifetimeIssueFailures[key]; got != 0 {
+		t.Errorf("LifetimeIssueFailures = %d, want 0: a harness denial is never charged to the issue", got)
+	}
+
+	// Release: clear-failures re-admits the issue, and its count still
+	// reflects the prior denials, so the next one holds it again at once.
+	if cleared, _ := as.ClearIssueFailures(key); cleared != 1 {
+		t.Fatalf("ClearIssueFailures cleared %d, want 1", cleared)
+	}
+	if !isCandidate(as.prioritize(context.Background(), g), repo, n) {
+		t.Fatalf("the released issue is not a dispatch candidate")
+	}
+	deny()
+	if isCandidate(as.prioritize(context.Background(), g), repo, n) {
+		t.Fatalf("a denial after release started a fresh count; the issue must resume from its prior attempts")
 	}
 }

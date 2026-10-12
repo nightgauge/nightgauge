@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"unicode"
@@ -258,22 +259,26 @@ const opencodeHostAdapter = "opencode"
 // which is the documented fail-open behavior and exactly what happened before
 // the host segment; ok reports whether a ModelDescriptor resolved, which the
 // host key alone never does.
+//
+// When adapter is non-empty, keys[0] is the host position . The
+// host is never de-duplicated against the provider or id below it: `copilot`
+// is both an adapter and a provider, and its host and provider overlays are
+// different files (hosts/copilot.md and copilot.md), so dropping either
+// position would silently skip a fragment (#1773).
 func OverlayKeys(model, adapter string) (keys []string, descriptor models.ModelDescriptor, ok bool) {
-	var seen map[string]bool
+	if adapter != "" {
+		// host: most general, survives everything below it failing.
+		keys = append(keys, adapter)
+	}
+	hostLen := len(keys)
 	add := func(k string) {
-		if k == "" {
+		// Provider and id share one directory, so a repeat there is the same
+		// file and is read once. The host position is not compared.
+		if k == "" || slices.Contains(keys[hostLen:], k) {
 			return
 		}
-		if seen == nil {
-			seen = make(map[string]bool, 3)
-		}
-		if seen[k] {
-			return
-		}
-		seen[k] = true
 		keys = append(keys, k)
 	}
-	add(adapter) // host: most general, survives everything below it failing.
 
 	if strings.TrimSpace(model) == "" {
 		return keys, models.ModelDescriptor{}, false
@@ -299,16 +304,20 @@ func OverlayKeys(model, adapter string) (keys []string, descriptor models.ModelD
 	return keys, m, true
 }
 
-// overlaySubdir returns the directory an overlay key's fragments live under,
-// relative to a skill's or _shared's own _overlays/ directory. The host
-// segment gets its own hosts/ subdirectory (ADR-016 amendment, ADR-022 §14)
-// because an adapter name and a provider name can be the same string
-// (lm-studio is both an adapter and, for every other adapter, a provider) —
-// nesting the host position under its own directory means the two never
-// contend for the same file, and applying one never means applying the
-// other's namesake by accident.
-func overlaySubdir(key, hostKey string) string {
-	if hostKey != "" && key == hostKey {
+// overlaySubdir returns the directory the cascade position at index i reads
+// from, relative to a skill's or _shared's own _overlays/ directory. The host
+// position (index 0 when the render has an adapter) gets its own hosts/
+// subdirectory (ADR-016 amendment, ADR-022 §14) because an adapter name and a
+// provider name can be the same string (copilot is both) — nesting the host
+// position under its own directory means the two never contend for the same
+// file, and applying one never means applying the other's namesake by
+// accident.
+//
+// The choice is by POSITION, not by comparing the key with the adapter: a
+// provider or id that happens to equal the adapter's name stays in
+// _overlays/ (#1773).
+func overlaySubdir(i int, hasHost bool) string {
+	if hasHost && i == 0 {
 		return filepath.Join("_overlays", "hosts")
 	}
 	return "_overlays"
@@ -409,7 +418,7 @@ func render(opts Options) (*Result, error) {
 		res.ContextWindow = descriptor.ContextWindow
 	}
 	res.Keys = append(res.Keys, keys...)
-	hostKey := opts.Adapter
+	hasHost := opts.Adapter != ""
 
 	// The whole-file escape hatch replaces the base entirely (ADR 016 §8).
 	// Most specific match wins, so walk the cascade backwards.
@@ -418,7 +427,7 @@ func render(opts Options) (*Result, error) {
 		if !ok {
 			continue
 		}
-		override := filepath.Join(skillDir, overlaySubdir(keys[i], hostKey), safe+".SKILL.md")
+		override := filepath.Join(skillDir, overlaySubdir(i, hasHost), safe+".SKILL.md")
 		raw, err := os.ReadFile(override)
 		if err != nil {
 			continue
@@ -466,12 +475,13 @@ func render(opts Options) (*Result, error) {
 	// check and the read would otherwise be reported in --json as applied while
 	// contributing nothing to the output.
 	var texts []string
-	collect := func(dir, key, scope string) {
+	collect := func(dir string, i int, scope string) {
+		key := keys[i]
 		safe, ok := overlayKeySafe(key, warn)
 		if !ok {
 			return
 		}
-		p := filepath.Join(dir, overlaySubdir(key, hostKey), safe+".md")
+		p := filepath.Join(dir, overlaySubdir(i, hasHost), safe+".md")
 		text, ok := readFragment(p, warn)
 		if !ok {
 			return
@@ -480,11 +490,11 @@ func render(opts Options) (*Result, error) {
 		texts = append(texts, text)
 	}
 	sharedDir := filepath.Join(filepath.Dir(skillDir), "_shared")
-	for _, key := range keys {
-		collect(sharedDir, key, ScopeShared)
+	for i := range keys {
+		collect(sharedDir, i, ScopeShared)
 	}
-	for _, key := range keys {
-		collect(skillDir, key, ScopeSkill)
+	for i := range keys {
+		collect(skillDir, i, ScopeSkill)
 	}
 
 	if len(texts) > 0 {

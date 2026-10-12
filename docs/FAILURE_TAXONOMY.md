@@ -269,8 +269,12 @@ tripped `haltQueueOnSlotFailure` — turning one rejected tool call into a
 fleet-wide pause. Routed like `adapter_auth_failed`: short backoff, board →
 Ready, **no `LifetimeIssueFailures` increment, no cascade-breaker feed, no
 pause** — bounded by a small consecutive-attempt cap so a stage that keeps
-reaching for the same denied pattern eventually stops re-dispatching rather
-than looping forever. Emitted with the `[permission-denied]` marker /
+reaching for the same denied pattern stops re-dispatching rather than looping
+forever. The cap is terminal (Issue #1756): the issue is held for an operator
+(`autonomous resume`, or `nightgauge autonomous clear-failures <owner/repo#N>`)
+and the reconcile does not re-admit it. Clearing the issue's failures keeps
+its consecutive count, so one more denial holds it again; `autonomous resume`
+resets every retry count, as it does for every other kind. Emitted with the `[permission-denied]` marker /
 `user rejected tool use` text, matched BEFORE the generic subagent-crash
 fallback so the "exit " substring in the rejection text doesn't misclassify it
 as a process death.

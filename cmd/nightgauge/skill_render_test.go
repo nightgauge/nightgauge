@@ -409,3 +409,62 @@ func TestRenderHeadlessGrantsAndRefuses(t *testing.T) {
 		t.Errorf("interactive render err = %v, want the skill read\n%s", err, out)
 	}
 }
+
+// TestRenderAliasResolvesAdapterBeforeKeyingTheHostOverlay pins #1773's CLI
+// half. The scheduler keys the host overlay off the running adapter's own
+// Name(), so `--adapter xai` (an alias of grok) must read hosts/grok.md, as a
+// grok dispatch does. xai is also grok-4.6's provider: the provider position
+// must still read _overlays/xai.md, and hosts/xai.md must never be read.
+func TestRenderAliasResolvesAdapterBeforeKeyingTheHostOverlay(t *testing.T) {
+	for _, tt := range []struct {
+		adapter, model, wantHost string
+		wantProvider             string
+	}{
+		{"xai", "grok-4.6", "grok", "xai"},
+		{"grok-headless", "grok-4.6", "grok", "xai"},
+		{"claude-headless", "claude-sonnet-5", "claude", "anthropic"},
+	} {
+		t.Run(tt.adapter, func(t *testing.T) {
+			root := t.TempDir()
+			writeStageSkill(t, root, "feature-dev", toolSkill)
+			overlays := filepath.Join(root, "_shared", "_overlays")
+			for rel, text := range map[string]string{
+				filepath.Join("hosts", tt.wantHost+".md"): "CANONICAL HOST",
+				filepath.Join("hosts", tt.adapter+".md"):  "RAW ALIAS HOST",
+				tt.wantProvider + ".md":                   "PROVIDER",
+			} {
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(overlays, rel)), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(overlays, rel), []byte(text+"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			out, err := runRender(t, "--stage", "feature-dev", "--skills-root", root,
+				"--adapter", tt.adapter, "--model", tt.model, "--json", "--include-content")
+			if err != nil {
+				t.Fatalf("execute: %v\n%s", err, out)
+			}
+			var env struct {
+				Keys      []string `json:"resolved_keys"`
+				Content   string   `json:"content"`
+				Fragments []struct {
+					Path string `json:"path"`
+				} `json:"fragments"`
+			}
+			if err := json.Unmarshal([]byte(out), &env); err != nil {
+				t.Fatalf("envelope is not JSON: %v\n%s", err, out)
+			}
+			if len(env.Keys) < 2 || env.Keys[0] != tt.wantHost || env.Keys[1] != tt.wantProvider {
+				t.Fatalf("resolved_keys = %v, want [%s %s ...]: the host is the alias-resolved adapter and the provider keeps its own position", env.Keys, tt.wantHost, tt.wantProvider)
+			}
+			if !strings.Contains(env.Content, "CANONICAL HOST") || !strings.Contains(env.Content, "PROVIDER") {
+				t.Errorf("content lacks the canonical host or the provider overlay; fragments = %+v", env.Fragments)
+			}
+			if strings.Contains(env.Content, "RAW ALIAS HOST") {
+				t.Errorf("content applied hosts/%s.md, keyed off the raw --adapter value", tt.adapter)
+			}
+		})
+	}
+}

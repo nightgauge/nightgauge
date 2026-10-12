@@ -46,8 +46,11 @@ a caller typed. Tier bands are still valid `--model` inputs — they resolve
 through the registry to a concrete id — but no band-keyed file is ever consulted
 (the band segment was retired with the band vocabulary in #582).
 
-The `hosts/` segment is the exception: it is keyed by the **adapter** argument
-itself, unchanged, so it resolves even when the model below it does not — see
+The `hosts/` segment is the exception: it is keyed by the **adapter** itself,
+the running adapter's own name, so it resolves even when the model below it
+does not. `skill render --adapter` resolves an alias first (`xai` renders as
+`grok`). When the adapter and the provider are the same string (`copilot`),
+both positions apply: `hosts/copilot.md` and then `copilot.md`. See
 [ADR 016's amendment](decisions/016-model-aware-skill-overlays.md#amendment-2026-09-14-1636--host-overlay-segment)
 (ADR-022 §14) for why, and why `hosts/` has its own subdirectory rather than
 sharing `_overlays/` with provider and model keys.
