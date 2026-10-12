@@ -201,21 +201,26 @@ shell string or a path the daemon builds.
 runs before the forge is reached:
 
 1. **The poster's own request.** It runs only when the poster's message in
-   this turn asks for the issue, or confirms one proposed earlier. The model
-   must quote the poster's words (`request_quote`), but the quote only
-   locates them: it must occur in the poster's message on word boundaries,
-   both folded the same way (case, whitespace, invisible characters), and
-   the decision is made on the message itself. Either a request for an
-   issue ("file an issue for ...", "create a ticket", "file it") lies inside
-   the quoted words, with no negation in its sentence ("do not", "no need
-   to") and no later sentence taking it back ("No, wait."); or the whole
-   message is a confirmation ("yes", "go ahead", "yes, file it"). Words from
-   an earlier message, a file or an issue body are never in the poster's
-   message, so they never satisfy it, whatever they say. The check
-   understands English and refuses what it does not recognize, a negation
-   anywhere in the request's sentence included, so a missed request costs
-   the poster a confirmation, never an unrequested write. Refused:
-   `not_requested_by_poster`.
+   this turn asks for the issue, or confirms one the reply just before
+   proposed. The message the gate reads is the turn's own message as the
+   hosted service's record attributes it: when the record does not name the
+   turn's poster as its author, or the turn holds more than one message,
+   nothing can be filed. The model must quote the poster's words
+   (`request_quote`), but the quote only locates them; the decision is made
+   on the message. Either a request that names an issue ("file an issue for
+   ...", "create a ticket") lies inside the quoted words, on word
+   boundaries, with no negation in its sentence ("do not", "no need to") and
+   no later sentence taking it back ("No, wait."); or, only when the reply
+   just before this turn proposed an issue, a request that names none ("file
+   it") or a message that is wholly a confirmation ("yes", "go ahead", "yes,
+   file it"). A courtesy alone ("thanks", "please") is not a confirmation.
+   The gate is also held to the first version's: it never accepts a quote
+   and message that version refused, and a test checks that over a corpus.
+   Words from an earlier message, a file or an issue body are never in the
+   poster's message, so they never satisfy it, whatever they say. The check
+   understands English and refuses what it does not recognize, so a missed
+   request costs the poster a confirmation, never an unrequested write.
+   Refused: `not_requested_by_poster`.
 2. **A repository the poster may read**, from `readable_repos`
    (`repo_not_readable`), and a posting account to file for
    (`poster_unknown`): an issue is never filed anonymously.

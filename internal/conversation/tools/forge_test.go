@@ -154,8 +154,16 @@ func TestThreadInjection_OnlyThePostersOwnRequestFiles(t *testing.T) {
 		t.Fatalf("an issue was filed on a turn that asked only for status")
 	}
 
-	bobAsks := toolset(t, root, forge, Turn{ConversationID: "conv-1", TurnID: "turn-3", PosterAccountID: "acct-bob",
+	// "Yes, file it." names no issue: it counts only after a reply that
+	// proposed one.
+	unproposed := toolset(t, root, forge, Turn{ConversationID: "conv-1", TurnID: "turn-3", PosterAccountID: "acct-bob",
 		PosterLogin: "bob", ReadableRepos: []Repo{{"acme", "api"}}, Message: "Yes, file it."})
+	if _, err := call(t, unproposed, ToolCreateIssue, map[string]any{"owner": "acme", "repo": "api", "title": "X",
+		"body": "login timeout", "request_quote": "Yes, file it."}); code(err) != CodeNotRequested {
+		t.Fatalf("a confirmation with no proposal before it: %v, want %s", err, CodeNotRequested)
+	}
+	bobAsks := toolset(t, root, forge, Turn{ConversationID: "conv-1", TurnID: "turn-3", PosterAccountID: "acct-bob",
+		PosterLogin: "bob", ReadableRepos: []Repo{{"acme", "api"}}, Message: "Yes, file it.", IssueProposed: true})
 	if _, err := call(t, bobAsks, ToolCreateIssue, map[string]any{"owner": "acme", "repo": "api", "title": "X",
 		"body": "login timeout", "request_quote": "Yes, file it."}); err != nil {
 		t.Fatalf("Bob's own request was refused: %v", err)
@@ -333,31 +341,34 @@ func TestCreateIssue_Bounds(t *testing.T) {
 }
 
 // The request gate: the quote must be the poster's own words in this turn,
-// and ask for an issue or open the message by confirming one.
+// and ask for an issue by name, or, after a reply that proposed one, confirm
+// it.
 func TestRequested(t *testing.T) {
 	cases := []struct {
 		message, quote string
-		want           bool
+		proposed, want bool
 	}{
-		{"Please file an issue for the flaky login test.", "file an issue for the flaky login test", true},
-		{"can you   create a ticket for this", "create a ticket", true},
-		{"Write up a bug report for the crash", "Write up a bug report", true},
-		{"Yes, file it.", "Yes, file it.", true},
-		{"yes", "yes", true},
-		{"OK go ahead", "OK", true},
-		{"Sounds good, thanks", "Sounds good", true},
-		{"Open issue #12 and tell me what it says", "Open issue #12", false},
-		{"open issue 12 please", "open issue 12", false},
-		{"What's the status?", "status", false},
-		{"What's the status?", "file an issue", false},
-		{"Summarize issue 12", "issue 12", false},
-		{"Tell me about it. Yes it is urgent.", "Yes it is urgent", false},
-		{"Please file an issue", "", false},
-		{"", "file an issue", false},
+		{"Please file an issue for the flaky login test.", "file an issue for the flaky login test", false, true},
+		{"can you   create a ticket for this", "create a ticket", false, true},
+		{"Write up a bug report for the crash", "Write up a bug report", false, true},
+		{"Yes, file it.", "Yes, file it.", true, true},
+		{"Yes, file it.", "Yes, file it.", false, false},
+		{"yes", "yes", true, true},
+		{"yes", "yes", false, false},
+		{"OK go ahead", "OK", true, true},
+		{"Sounds good, thanks", "Sounds good", true, true},
+		{"Open issue #12 and tell me what it says", "Open issue #12", true, false},
+		{"open issue 12 please", "open issue 12", true, false},
+		{"What's the status?", "status", true, false},
+		{"What's the status?", "file an issue", true, false},
+		{"Summarize issue 12", "issue 12", true, false},
+		{"Tell me about it. Yes it is urgent.", "Yes it is urgent", true, false},
+		{"Please file an issue", "", true, false},
+		{"", "file an issue", true, false},
 	}
 	for _, c := range cases {
-		if got := Requested(c.message, c.quote); got != c.want {
-			t.Errorf("Requested(%q, %q) = %v, want %v", c.message, c.quote, got, c.want)
+		if got := Requested(c.message, c.quote, c.proposed); got != c.want {
+			t.Errorf("Requested(%q, %q, proposed %v) = %v, want %v", c.message, c.quote, c.proposed, got, c.want)
 		}
 	}
 }
@@ -401,7 +412,7 @@ func TestRequested_SecurityReviewBypasses(t *testing.T) {
 		{"Please do not­ file an issue", "file an issue"},
 	}
 	for _, c := range cases {
-		if Requested(c.message, c.quote) {
+		if Requested(c.message, c.quote, true) {
 			t.Errorf("Requested(%q, %q) = true, want false", c.message, c.quote)
 		}
 	}
@@ -409,13 +420,12 @@ func TestRequested_SecurityReviewBypasses(t *testing.T) {
 	// model spaced, cased or decorated the quote.
 	for _, c := range []struct{ message, quote string }{
 		{"Please file an issue for the flaky login test.", "FILE  AN ISSUE for the flaky login test"},
-		{"Please file an​ issue for it", "file an issue for it"},
 		{"Yes, file it.", "Yes, file it."},
 		{"yes please", "yes"},
-		{"OK, go ahead!", "go ahead"},
+		{"OK, go ahead!", "OK, go ahead!"},
 		{"The tests pass now. Can you open a ticket to track the flaky one?", "open a ticket to track the flaky one"},
 	} {
-		if !Requested(c.message, c.quote) {
+		if !Requested(c.message, c.quote, true) {
 			t.Errorf("Requested(%q, %q) = false, want true", c.message, c.quote)
 		}
 	}

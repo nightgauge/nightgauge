@@ -36,8 +36,14 @@ type Turn struct {
 	// read. The forge tools, and the file tools for anyone but the operator,
 	// refuse every other.
 	ReadableRepos []Repo
-	// Message is the poster's own message in this turn, verbatim.
+	// Message is the poster's own message in this turn, verbatim, from the
+	// hosted service's record of the turn and bound to the poster's account.
+	// It is the only text that can ask for a mutation; empty refuses every
+	// one.
 	Message string
+	// IssueProposed reports that the reply just before this turn proposed an
+	// issue, so a bare confirmation, or "file it", may file it.
+	IssueProposed bool
 }
 
 // Env is the workspace a toolset reads and the forge it reaches.

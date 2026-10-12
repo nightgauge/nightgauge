@@ -54,7 +54,8 @@ func (h *Host) startTools(t *turn, p plan, dir string, in turnInput) (plan, *tur
 		PosterLogin:      login,
 		PosterIsOperator: t.cmd.PosterIsOperator,
 		ReadableRepos:    readable,
-		Message:          in.current,
+		Message:          in.gate,
+		IssueProposed:    in.proposed,
 	})
 	server, err := tools.Start(set)
 	if err != nil {

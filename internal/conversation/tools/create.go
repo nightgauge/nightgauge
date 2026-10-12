@@ -40,7 +40,7 @@ func (s *Toolset) createIssue(ctx context.Context, raw json.RawMessage) (string,
 	if err := s.checkRepo(a.repoArgs); err != nil {
 		return "", "", err
 	}
-	if !Requested(s.turn.Message, a.RequestQuote) {
+	if !Requested(s.turn.Message, a.RequestQuote, s.turn.IssueProposed) {
 		return "", "", fail(CodeNotRequested,
 			"the poster's own message in this turn does not ask for an issue or confirm one, so none is filed; "+
 				"propose it and ask the poster to confirm")
@@ -91,21 +91,58 @@ func (s *Toolset) createIssue(ctx context.Context, raw json.RawMessage) (string,
 	return string(out), detail, nil
 }
 
-// issueRequest matches words that ask for an issue: a filing verb followed,
-// within a few words, by "issue", "ticket" or "bug report" that is not an
-// existing issue's number ("open issue #12" reads one); or a filing verb
-// aimed at something already proposed ("file it", "create that"). It runs
-// over the poster's message, never over the model's quote.
-var issueRequest = regexp.MustCompile(`\b(?:file|create|open|raise|log|submit|make|write|add)\s+` +
-	`(?:(?:[\w'-]+\s+){0,4}(?:issues?|tickets?|bug\s+reports?)\b(?:\s*#?\d)?|(?:it|that|this|them|those|one)\b)`)
+// The request gate. Requested is the conjunction of two gates, and accepts
+// only what both accept:
+//
+//   - requestedV1 is the gate as #1570 first shipped it, kept verbatim as a
+//     floor, so no later change to the gate can accept anything it refused;
+//   - requestedOnMessage decides on the poster's message itself, closing the
+//     differentials a security review found in requestedV1 (#1570).
 
-// issueNumber is the tail issueRequest leaves when the noun was followed by
-// a number.
+// issueRequestV1 and confirmationV1 are requestedV1's patterns, unchanged.
+var (
+	issueRequestV1 = regexp.MustCompile(`(?i)\b(?:file|create|open|raise|log|submit|make|write|add)\s+` +
+		`(?:(?:[\w'-]+\s+){0,4}(?:issues?|tickets?|bug\s+reports?)\b(?:\s*#?\d)?|(?:it|that|this|them|those|one)\b)`)
+	confirmationV1 = regexp.MustCompile(`(?i)^\W*(?:yes|yeah|yep|yup|ok|okay|sure|confirm(?:ed)?|approved?|go ahead|do it|please do|ship it|lgtm|sounds good)\b`)
+)
+
+// requestedV1 is #1570's first gate: the quote, whitespace-collapsed, must
+// occur in the message ignoring case, and either carry request words or be
+// a confirmation the message opens with.
+func requestedV1(message, quote string) bool {
+	m, q := normalize(message), normalize(quote)
+	if q == "" || !strings.Contains(strings.ToLower(m), strings.ToLower(q)) {
+		return false
+	}
+	for _, loc := range issueRequestV1.FindAllStringIndex(q, -1) {
+		if !issueNumber.MatchString(q[loc[0]:loc[1]]) {
+			return true
+		}
+	}
+	return confirmationV1.MatchString(q) && strings.HasPrefix(strings.ToLower(m), strings.ToLower(q))
+}
+
+// normalize collapses runs of whitespace and trims.
+func normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// nounRequest asks for an issue by name: a filing verb followed, within a
+// few words, by "issue", "ticket" or "bug report" that is not an existing
+// issue's number ("open issue #12" reads one).
+var nounRequest = regexp.MustCompile(`\b(?:file|create|open|raise|log|submit|make|write|add)\s+` +
+	`(?:[\w'-]+\s+){0,4}(?:issues?|tickets?|bug\s+reports?)\b(?:\s*#?\d)?`)
+
+// pronounRequest asks for something already proposed: "file it", "create
+// that". It names no issue, so it counts only when the reply just before
+// this turn proposed one.
+var pronounRequest = regexp.MustCompile(`\b(?:file|create|open|raise|log|submit|make|write|add)\s+` +
+	`(?:it|that|this|them|those|one)\b`)
+
+// issueNumber is the tail a request leaves when the noun was followed by a
+// number.
 var issueNumber = regexp.MustCompile(`\s*#?\d$`)
 
 // negation is a word that turns a request around: "do not file an issue",
-// "no need to open a ticket", "file it? no". Any one in the request's
-// sentence refuses it.
+// "no need to open a ticket". Any one in the request's sentence refuses it.
 var negation = regexp.MustCompile(`\b(?:not|no|nope|never|don't|dont|doesn't|didn't|won't|wouldn't|shouldn't|` +
 	`can't|cannot|isn't|aren't|without|stop|avoid|instead|rather|nor|neither|hold off|cancel|wait|unless|later)\b|n't\b`)
 
@@ -118,28 +155,43 @@ var retraction = regexp.MustCompile(`^[\s\p{P}]*(?:no|nope|not|never|don't|do no
 // sentenceEnd separates the sentences a negation is looked for in.
 var sentenceEnd = regexp.MustCompile(`[.!?;:\n]|\bbut\b`)
 
-// confirmationOnly is a message that is nothing but a confirmation: one or
-// more confirming phrases and punctuation. "Yes, file it" is one; "Yes. What
-// is the status?" and "Yes, but don't" are not.
-var confirmationOnly = regexp.MustCompile(`^[\s\p{P}]*(?:(?:yes|yeah|yep|yup|ok|okay|sure|confirm|confirmed|approve|` +
-	`approved|go ahead|go for it|do it|please do|please|ship it|lgtm|sounds good|thanks|thank you|` +
-	`file it|create it|open it|file that|create that)[\s\p{P}]*)+$`)
+// confirmationOnly is a message that is nothing but a confirmation: it opens
+// with one of requestedV1's confirming phrases, and every word after is
+// another, or a courtesy ("please", "thanks") or a pronoun request ("file
+// it"). "Yes, file it" and "Yes, thanks" are confirmations; "Thanks",
+// "Please", "Yes. What is the status?" and "Yes, but don't" are not.
+var confirmationOnly = regexp.MustCompile(`^[\s\p{P}]*(?:` + confirmPhrases + `)(?:[\s\p{P}]+(?:` + confirmPhrases +
+	`|please|thanks|thank you|go for it|(?:file|create|open) (?:it|that)))*[\s\p{P}]*$`)
+
+// confirmPhrases are requestedV1's confirming phrases.
+const confirmPhrases = `yes|yeah|yep|yup|ok|okay|sure|confirm|confirmed|approve|approved|go ahead|do it|please do|ship it|lgtm|sounds good`
 
 // Requested reports whether the poster's message in this turn asks for the
-// mutation the model wants to make. The model's quote only points at the
-// words: it must occur in the poster's message, on word boundaries, after
-// both are folded the same way (gateFold). Everything else is decided on the
-// poster's message itself: a request for an issue that lies inside the
-// quoted words and whose sentence carries no negation, or a message that is
-// nothing but a confirmation of an earlier proposal. Text from anyone else
-// (an earlier message, a file, an issue body, any tool result) is never in
-// the poster's message, so it can never satisfy this, whatever it says.
+// mutation the model wants to make. message is the poster's own message in
+// this turn, taken from the hosted service's record and bound to the
+// poster's account (an empty message refuses everything). quote is the
+// model's pointer to the words. proposed reports that the reply just before
+// this turn proposed an issue, which a bare confirmation, or a request that
+// names no issue ("file it"), needs.
 //
-// It is a gate behind the system prompt's instruction, not a reading of
-// intent: it understands English requests only and refuses whatever it does
+// It is the conjunction of requestedV1, the first gate, and
+// requestedOnMessage, so it never accepts what requestedV1 refused. Text from
+// anyone else (an earlier message, a file, an issue body, any tool result)
+// is never in the poster's message, so it can never satisfy it, whatever it
+// says. It understands English requests only and refuses whatever it does
 // not recognize, so a missed request costs a confirmation, never an
 // unrequested write.
-func Requested(message, quote string) bool {
+func Requested(message, quote string, proposed bool) bool {
+	return requestedV1(message, quote) && requestedOnMessage(message, quote, proposed)
+}
+
+// requestedOnMessage decides on the poster's message: the model's quote must
+// occur in it on word boundaries, both folded the same way (gateFold); then
+// either a request that names an issue lies inside the quoted words, with no
+// negation in its sentence and no later sentence taking it back, or, when
+// the reply before proposed an issue, the request names none ("file it") or
+// the whole message is a confirmation.
+func requestedOnMessage(message, quote string, proposed bool) bool {
 	m, q := gateFold(message), gateFold(quote)
 	if q == "" || m == "" {
 		return false
@@ -154,15 +206,21 @@ func Requested(message, quote string) bool {
 		if !wordBoundary(m, start) || !wordBoundary(m, end) {
 			continue // a fragment of a word: "profile an issue" holds "file an issue"
 		}
-		for _, loc := range issueRequest.FindAllStringIndex(m, -1) {
-			if loc[0] < start || loc[1] > end || issueNumber.MatchString(m[loc[0]:loc[1]]) {
-				continue
-			}
-			if !negation.MatchString(sentenceAround(m, loc[0], loc[1])) && !retractedAfter(m, loc[1]) {
-				return true
+		patterns := []*regexp.Regexp{nounRequest}
+		if proposed {
+			patterns = append(patterns, pronounRequest)
+		}
+		for _, re := range patterns {
+			for _, loc := range re.FindAllStringIndex(m, -1) {
+				if loc[0] < start || loc[1] > end || issueNumber.MatchString(m[loc[0]:loc[1]]) {
+					continue
+				}
+				if !negation.MatchString(sentenceAround(m, loc[0], loc[1])) && !retractedAfter(m, loc[1]) {
+					return true
+				}
 			}
 		}
-		if confirmationOnly.MatchString(m) {
+		if proposed && start == 0 && confirmationOnly.MatchString(m) {
 			return true
 		}
 	}

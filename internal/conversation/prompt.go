@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -35,13 +36,29 @@ const (
 	authorUnknown   = "unknown"
 )
 
-// turnInput is what the context read gives a turn: the stdin message, and
-// the poster's own message verbatim, which is the only text that can ask for
-// a mutation.
+// turnInput is what the context read gives a turn.
 type turnInput struct {
-	stdin   string
+	// stdin is the adapter's input: the earlier messages, then the new one.
+	stdin string
+	// current is the turn's own message.
 	current string
+	// gate is the text the request gate reads (#1570): the turn's message
+	// when the hosted service's record attributes it to the turn's poster
+	// and it is the turn's only message, and "" otherwise, which refuses
+	// every mutation. Never text the model chose, and never an earlier
+	// message.
+	gate string
+	// proposed reports that the message just before this turn is a
+	// completed reply that proposed an issue.
+	proposed bool
 }
+
+// proposesIssue matches a reply that speaks of filing an issue.
+var proposesIssue = regexp.MustCompile(`(?i)\b(?:issues?|tickets?|bug reports?)\b`)
+
+// receiptLine is a line the daemon appended to a reply (host_tools.go), not
+// the model's words: it never counts as a proposal.
+var receiptLine = regexp.MustCompile(`(?m)^\[nightgauge\] .*$`)
 
 // errNoMessage is a context read that does not hold the turn's own message,
 // or holds it redacted: there is nothing to answer.
@@ -63,15 +80,22 @@ func renderMessage(read platform.TurnContext, turnID, posterAccountID string) (t
 	msgs := append([]platform.TurnContextMessage(nil), read.Messages...)
 	sort.SliceStable(msgs, func(i, j int) bool { return msgs[i].Position < msgs[j].Position })
 
-	var current *platform.TurnContextMessage
+	var current, last *platform.TurnContextMessage
+	turnMessages := 0
 	prior := make([]priorMessage, 0, len(msgs))
 	for i := range msgs {
 		m := msgs[i]
 		if m.TurnID == turnID {
-			if m.Role == "user" && current == nil {
-				current = &msgs[i]
+			if m.Role == "user" {
+				turnMessages++
+				if current == nil {
+					current = &msgs[i]
+				}
 			}
 			continue
+		}
+		if current == nil {
+			last = &msgs[i]
 		}
 		if m.Role != "user" && m.Role != "assistant" {
 			continue
@@ -102,6 +126,12 @@ func renderMessage(read platform.TurnContext, turnID, posterAccountID string) (t
 		return turnInput{}, errNotPosters
 	}
 	in := turnInput{stdin: *current.Content, current: *current.Content}
+	if posterAccountID != "" && current.ActorAccountID == posterAccountID && turnMessages == 1 {
+		in.gate = *current.Content
+	}
+	if last != nil && last.Role == "assistant" && !last.Redacted && last.Content != nil && last.UnfinishedTurnState == nil {
+		in.proposed = proposesIssue.MatchString(receiptLine.ReplaceAllString(*last.Content, ""))
+	}
 	if len(prior) == 0 {
 		return in, nil
 	}

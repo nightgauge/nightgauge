@@ -57,6 +57,7 @@ func installFakeAdapters(t *testing.T) string {
 	t.Setenv("FAKE_ADAPTER_MODE", "replay")
 	t.Setenv("FAKE_ADAPTER_FIXTURE", "")
 	t.Setenv("FAKE_ADAPTER_DELAY_MS", "0")
+	t.Setenv("FAKE_ADAPTER_REPLY", "")
 	return rec
 }
 
@@ -145,7 +146,11 @@ func TestFakeAdapterProcess(t *testing.T) {
 		// recorded in <pid>.tools, then the turn replies.
 		_ = os.WriteFile(filepath.Join(rec, fmt.Sprintf("%d.tools", os.Getpid())),
 			fakeToolCalls(argv, os.Getenv("FAKE_ADAPTER_TOOL_CALLS")), 0o644)
-		for _, line := range fakeTextTurn([]string{"Looked."}, 100, 5) {
+		reply := os.Getenv("FAKE_ADAPTER_REPLY")
+		if reply == "" {
+			reply = "Looked."
+		}
+		for _, line := range fakeTextTurn([]string{reply}, 100, 5) {
 			emit(line)
 		}
 	case "hang":

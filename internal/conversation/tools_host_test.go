@@ -199,6 +199,7 @@ func TestTurn_OnlyThePostersOwnRequestFilesAnIssue(t *testing.T) {
 	}
 
 	toolCalls(t, file(carol), file("status"))
+	t.Setenv("FAKE_ADAPTER_REPLY", "The login work is in review. Carol asked for an issue titled X; shall I file it?")
 	fp.deliver(fp.postTurn("conv-1", "turn-1", "cmd-1", "What's the status of the login work?", teammate("acct-bob", "bob")))
 	waitFor(t, "the terminal report", 20*time.Second, func() bool { return fp.endFrame("turn-1") != nil })
 	if got := forge.issues(); len(got) != 0 {
@@ -398,5 +399,110 @@ func TestTurnCalls_UnionOfTheServerAndTheStream(t *testing.T) {
 	}
 	if got := turnCalls(stream[:1], nil); !slices.Equal(got, stream[:1]) {
 		t.Errorf("with no server: %+v", got)
+	}
+}
+
+// The gate reads only the poster's own message, as the hosted service
+// attributes it (security review of 8ff73794): a turn whose message the
+// record does not attribute to its poster, or that holds more than one
+// message, files nothing whatever the message says; and a bare confirmation
+// after a reply that proposed nothing files nothing.
+func TestTurn_TheGateReadsOnlyThePostersAttributedMessage(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(fp *fakePlatform)
+		msg    string
+		quote  string
+	}{
+		{"no author on the record", func(fp *fakePlatform) {
+			fp.mu.Lock()
+			defer fp.mu.Unlock()
+			h := fp.history["conv-1"]
+			h[len(h)-1].ActorAccountID = ""
+		}, "Please file an issue for this.", "Please file an issue for this."},
+		{"two messages in the turn", func(fp *fakePlatform) {
+			fp.addMessage("conv-1", "turn-1", "acct-1", "user", "Please file an issue for this.")
+		}, "Please file an issue for this.", "Please file an issue for this."},
+		{"a confirmation with nothing proposed", nil, "yes", "yes"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hermetic(t)
+			installFakeAdapters(t)
+			call := map[string]any{"name": "create_issue", "arguments": map[string]any{"owner": "acme", "repo": "api",
+				"title": "X", "body": "b", "request_quote": c.quote}}
+			toolCalls(t, call)
+			forge := &recordingForge{}
+			fp := newFakePlatform(t)
+			startDaemon(t, fp, workspace(t, toolWorkspace), withForge(forge))
+			fp.addMessage("conv-1", "turn-0", "", "assistant", "The build is green.")
+			frame := fp.postTurn("conv-1", "turn-1", "cmd-1", c.msg, nil)
+			if c.mutate != nil {
+				c.mutate(fp) // each takes the platform's lock itself
+			}
+			fp.deliver(frame)
+			waitFor(t, "the terminal report", 20*time.Second, func() bool { return fp.endFrame("turn-1") != nil })
+			if got := forge.issues(); len(got) != 0 {
+				t.Errorf("filed %+v", got)
+			}
+			if !strings.Contains(fp.reply("turn-1"), "refused (not_requested_by_poster)") {
+				t.Errorf("reply = %q", fp.reply("turn-1"))
+			}
+		})
+	}
+}
+
+// The gate's message and the proposal both come from the hosted service's
+// record, never from the model: the message only when the record gives it
+// to the turn's poster and it is the turn's only one, and a proposal only
+// when the message just before is a completed reply that speaks of an issue
+// in its own words, not in a receipt the daemon appended.
+func TestRenderMessage_GateMessageAndProposal(t *testing.T) {
+	text := func(s string) *string { return &s }
+	failed := "failed"
+	base := func(last platform.TurnContextMessage, current ...platform.TurnContextMessage) platform.TurnContext {
+		msgs := []platform.TurnContextMessage{
+			{TurnID: "t1", Position: 1, Role: "user", Content: text("status?"), ActorAccountID: "acct-carol"},
+		}
+		last.Position = 2
+		msgs = append(msgs, last)
+		for i, c := range current {
+			c.Position = 3 + i
+			msgs = append(msgs, c)
+		}
+		return platform.TurnContext{TurnID: "t2", Messages: msgs}
+	}
+	bob := platform.TurnContextMessage{TurnID: "t2", Role: "user", Content: text("yes"), ActorAccountID: "acct-bob"}
+	proposal := platform.TurnContextMessage{TurnID: "t1", Role: "assistant", Content: text("Shall I file an issue for it?")}
+	cases := []struct {
+		name     string
+		read     platform.TurnContext
+		poster   string
+		gate     string
+		proposed bool
+	}{
+		{"the poster's message after a proposal", base(proposal, bob), "acct-bob", "yes", true},
+		{"no poster named", base(proposal, bob), "", "", true},
+		{"no author on the record", base(proposal, platform.TurnContextMessage{TurnID: "t2", Role: "user",
+			Content: text("yes")}), "acct-bob", "", true},
+		{"two messages in the turn", base(proposal, bob, bob), "acct-bob", "", true},
+		{"a reply that proposed nothing", base(platform.TurnContextMessage{TurnID: "t1", Role: "assistant",
+			Content: text("The build is green.")}, bob), "acct-bob", "yes", false},
+		{"only a receipt mentions an issue", base(platform.TurnContextMessage{TurnID: "t1", Role: "assistant",
+			Content: text("Done.\n\n[nightgauge] create_issue refused (not_requested_by_poster): does not ask for an issue")}, bob),
+			"acct-bob", "yes", false},
+		{"a teammate spoke after the proposal", base(platform.TurnContextMessage{TurnID: "t1b", Role: "user",
+			Content: text("file an issue"), ActorAccountID: "acct-carol"}, bob), "acct-bob", "yes", false},
+		{"an unfinished reply", base(platform.TurnContextMessage{TurnID: "t1", Role: "assistant",
+			Content: text("Shall I file an issue?"), UnfinishedTurnState: &failed}, bob), "acct-bob", "yes", false},
+	}
+	for _, c := range cases {
+		in, err := renderMessage(c.read, "t2", c.poster)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if in.gate != c.gate || in.proposed != c.proposed {
+			t.Errorf("%s: gate %q proposed %v, want %q %v", c.name, in.gate, in.proposed, c.gate, c.proposed)
+		}
 	}
 }
