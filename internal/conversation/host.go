@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/conversation/tools"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/platform"
 )
@@ -66,20 +67,6 @@ func (p clientPlatform) PostTurnFrames(ctx context.Context, lease platform.TurnL
 // never acknowledged, not even to refuse it.
 type Owner func(ctx context.Context, agentID, targetWorkspaceID string) (bool, error)
 
-// Classifier gives a finished turn its retention class (ADR-017 Decision 11).
-type Classifier func(TurnOutcome) string
-
-// TurnOutcome is what a classifier sees of a finished turn.
-type TurnOutcome struct {
-	State string
-}
-
-// classifyDurable is the classification until the classifier lands
-// (nightgauge/nightgauge#1893): every turn durable. Durable keeps a turn in
-// later turns' context; ephemeral would drop it, which is the direction a
-// classifier must earn.
-func classifyDurable(TurnOutcome) string { return platform.TurnRetentionDurable }
-
 // Config configures a Host.
 type Config struct {
 	// WorkspaceRoot is the workspace the daemon serves: its config resolves
@@ -89,12 +76,19 @@ type Config struct {
 	// Owner decides which turns are this daemon's. Nil claims every turn
 	// addressed to the agent.
 	Owner Owner
-	// Classify gives a finished turn its retention class. Nil classifies
-	// every turn durable.
+	// Classify gives a finished turn its retention class; the mutation
+	// floor applies over its answer. Nil is the documented rule table.
 	Classify Classifier
+	// IsMutating reports whether a tool changes state, for the mutation
+	// floor. Nil is the tool boundary's answer (tools.IsMutating), which
+	// counts a tool it does not know as mutating.
+	IsMutating func(tool string) bool
 	// MaxConcurrent bounds the turns running at once; a turn past it is
 	// refused. Zero means defaultMaxConcurrent.
 	MaxConcurrent int
+	// Forge is the forge the conversation tools reach (#1570). Nil is
+	// GitHub, through the workspace's own config.
+	Forge tools.Forge
 }
 
 const (
@@ -159,7 +153,10 @@ func NewHost(ctx context.Context, cfg Config) *Host {
 		cfg.MaxConcurrent = defaultMaxConcurrent
 	}
 	if cfg.Classify == nil {
-		cfg.Classify = classifyDurable
+		cfg.Classify = classifyByRules
+	}
+	if cfg.IsMutating == nil {
+		cfg.IsMutating = tools.IsMutating
 	}
 	h := &Host{
 		ctx:      ctx,
@@ -513,12 +510,17 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		AdapterDisplayName: p.profile.AdapterDisplayName,
 		PerformanceMode:    p.profile.PerformanceMode,
 	}
+	record := newToolRecord(h.cfg.IsMutating)
+	// toolServer is the turn's tool server once it runs; its record of the
+	// calls it served joins the stream's for the retention class.
+	var toolServer *turnTools
+	calls := func() []ToolCall { return turnCalls(record.calls, toolServer) }
 	failed := func(reason string) *platform.TurnEnd {
 		return &platform.TurnEnd{State: platform.TurnStateFailed, FailureReason: reason, Profile: profile,
-			RetentionClass: h.cfg.Classify(TurnOutcome{State: platform.TurnStateFailed})}
+			RetentionClass: h.classify(t, platform.TurnStateFailed, calls())}
 	}
 
-	message, err := h.readMessage(lease, t.cmd.TurnID)
+	input, err := h.readMessage(lease, t.cmd.TurnID, t.cmd.PosterAccountID)
 	if err != nil {
 		t.markGone(true)
 		if errors.Is(err, errTurnGone) {
@@ -535,7 +537,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		// Stopped while claiming or reading: nothing was spawned, so
 		// nothing can still run.
 		t.markGone(true)
-		h.reportStopped(t, report, profile, nil)
+		h.reportStopped(t, report, profile, nil, nil)
 		return
 	default:
 	}
@@ -547,7 +549,15 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		return
 	}
 	defer os.RemoveAll(dir)
-	proc, err := startTurnProcess(p, dir, message)
+	p, toolServer, err = h.startTools(t, p, dir, input)
+	if err != nil {
+		log.Printf("conversation: turn %s: its tool server did not start: %v", t.cmd.TurnID, err)
+		t.markGone(true)
+		report(failed(platform.TurnFailureHostError))
+		return
+	}
+	defer toolServer.close()
+	proc, err := startTurnProcess(p, dir, input.stdin)
 	if err != nil {
 		log.Printf("conversation: turn %s: the adapter did not start: %v", t.cmd.TurnID, err)
 		t.markGone(true)
@@ -578,17 +588,29 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	acc := &execution.TokenAccumulator{}
 	var effortActive *bool
 	success := false
+	// A reply that calls a tool comes as several messages; their text is
+	// kept apart in the transcript.
+	wroteText, newMessage := false, false
 	scanner := bufio.NewScanner(proc.stdout)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
 	for scanner.Scan() {
-		event, _ := acc.ParseStreamLine(scanner.Text())
+		line := scanner.Text()
+		record.observe(line)
+		event, _ := acc.ParseStreamLine(line)
 		if event == nil {
 			continue
 		}
 		if event.Type == "system" && event.Subtype == "init" && event.PerTurnEffortActive != nil {
 			effortActive = event.PerTurnEffortActive
 		}
+		if event.Type == "stream_event" && event.Event != nil && event.Event.Type == "message_start" {
+			newMessage = true
+		}
 		if _, text, ok := event.TextDelta(); ok && text != "" {
+			if newMessage && wroteText {
+				out.write("\n\n")
+			}
+			newMessage, wroteText = false, true
 			out.write(text)
 		}
 		if event.Type == "result" {
@@ -611,6 +633,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	if !dead {
 		log.Printf("conversation: turn %s: its process group %d is still alive after the turn ended", t.cmd.TurnID, proc.pgid)
 	}
+	toolServer.writeReceipts(out)
 
 	profile.Effort = p.effort
 	if p.effort != "" && effortActive != nil && !*effortActive {
@@ -622,7 +645,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		OutputTokens: acc.OutputTokens,
 	}
 	if t.reason() != "" {
-		h.reportStopped(t, report, profile, usage)
+		h.reportStopped(t, report, profile, usage, calls())
 		return
 	}
 	if waitErr != nil || !success {
@@ -634,15 +657,23 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	}
 	report(&platform.TurnEnd{
 		State: platform.TurnStateCompleted, Profile: profile, Usage: usage,
-		RetentionClass: h.cfg.Classify(TurnOutcome{State: platform.TurnStateCompleted}),
+		RetentionClass: h.classify(t, platform.TurnStateCompleted, calls()),
 	})
+}
+
+// classify is the retention class a finished turn reports, logged with the
+// rule that decided it.
+func (h *Host) classify(t *turn, state string, calls []ToolCall) string {
+	c := retain(h.cfg.Classify, TurnOutcome{State: state, ToolCalls: calls})
+	log.Printf("conversation: turn %s is %s by rule %s (%d tool calls)", t.cmd.TurnID, c.Class, c.Rule, len(calls))
+	return c.Class
 }
 
 // reportStopped sends the terminal report of a stopped turn. A turn the
 // hosted service ended gets none; a teammate's cancel is reported cancelled
 // only when the process group was verified gone, and otherwise not at all,
 // so the hosted service ends it cancel_unconfirmed.
-func (h *Host) reportStopped(t *turn, report func(*platform.TurnEnd), profile *platform.TurnExecutionProfile, usage *platform.TurnUsage) {
+func (h *Host) reportStopped(t *turn, report func(*platform.TurnEnd), profile *platform.TurnExecutionProfile, usage *platform.TurnUsage, calls []ToolCall) {
 	end := &platform.TurnEnd{Profile: profile, Usage: usage}
 	switch t.reason() {
 	case stopTeammate:
@@ -663,7 +694,7 @@ func (h *Host) reportStopped(t *turn, report func(*platform.TurnEnd), profile *p
 		report(nil)
 		return
 	}
-	end.RetentionClass = h.cfg.Classify(TurnOutcome{State: end.State})
+	end.RetentionClass = h.classify(t, end.State, calls)
 	report(end)
 }
 
@@ -673,14 +704,14 @@ var errTurnGone = errors.New("the turn is not running on the hosted service")
 
 // readMessage reads the turn's context on its lease and renders the stdin
 // message, retrying a read that failed in transit.
-func (h *Host) readMessage(lease platform.TurnLease, turnID string) (string, error) {
+func (h *Host) readMessage(lease platform.TurnLease, turnID, posterAccountID string) (turnInput, error) {
 	var read platform.TurnContext
 	var err error
 	for attempt := 0; attempt < contextReadAttempts; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-h.ctx.Done():
-				return "", h.ctx.Err()
+				return turnInput{}, h.ctx.Err()
 			case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
 			}
 		}
@@ -690,13 +721,13 @@ func (h *Host) readMessage(lease platform.TurnLease, turnID string) (string, err
 		}
 		var refused *platform.TurnRequestError
 		if errors.As(err, &refused) && refused.Terminal() {
-			return "", errTurnGone
+			return turnInput{}, errTurnGone
 		}
 	}
 	if err != nil {
-		return "", err
+		return turnInput{}, err
 	}
-	return renderMessage(read, turnID)
+	return renderMessage(read, turnID, posterAccountID)
 }
 
 // turnBudget is how long a turn may run: until timeoutMargin before its

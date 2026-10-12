@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -1049,17 +1050,28 @@ func (s *IssueService) GetRepoLabels(ctx context.Context, owner, repo string) (m
 	return labels, nil
 }
 
-// SearchIssues searches issues by keyword using GitHub's top-level search query.
-// The query is scoped to the given owner/repo and open issues. Results are capped
-// by limit (max 100, GitHub API enforced). The query string is treated as keywords —
-// GitHub search qualifiers in the query may override the built-in repo/state scope.
+// SearchIssues searches a repository's open issues by keyword using GitHub's
+// top-level search query. Results are capped by limit (max 100, GitHub API
+// enforced).
+//
+// The search reaches owner/repo's open issues and nothing else, whatever
+// query holds. GitHub ORs repeated scope qualifiers, so a `repo:`, `org:`,
+// `user:`, `owner:`, `is:`, `type:`, `state:` or `archived:` term in the
+// caller's text would widen the search past the repository and state pinned
+// here rather than narrow it; every such term is removed (confineSearchQuery),
+// and a result from another repository, or one that is not open, is dropped.
+// Narrowing qualifiers (`label:`, `in:`, `author:` …) are kept. An owner or
+// repo that is not a valid name is refused: it is part of the query too.
 func (s *IssueService) SearchIssues(ctx context.Context, owner, repo, query string, limit int) ([]types.Issue, error) {
+	if !searchOwnerPattern.MatchString(owner) || !searchRepoPattern.MatchString(repo) || repo == "." || repo == ".." {
+		return nil, fmt.Errorf("search issues: %q/%q is not a repository name", owner, repo)
+	}
 	if limit <= 0 {
 		limit = 10
 	} else if limit > 100 {
 		limit = 100
 	}
-	fullQuery := fmt.Sprintf("type:issue repo:%s/%s is:open %s", owner, repo, query)
+	fullQuery := fmt.Sprintf("type:issue repo:%s/%s is:open %s", owner, repo, confineSearchQuery(query))
 
 	var q searchIssuesQuery
 	vars := map[string]interface{}{
@@ -1072,11 +1084,15 @@ func (s *IssueService) SearchIssues(ctx context.Context, owner, repo, query stri
 	}
 
 	var issues []types.Issue
+	want := owner + "/" + repo
 	for _, n := range q.Search.Nodes {
 		if n.TypeName != "Issue" {
 			continue
 		}
 		f := n.IssueFields
+		if !strings.EqualFold(string(f.Repository.NameWithOwner), want) || !strings.EqualFold(string(f.State), "OPEN") {
+			continue // outside the scope pinned above, however it was reached
+		}
 		issue := types.Issue{
 			NodeID: fmt.Sprintf("%v", f.ID),
 			Number: int(f.Number),
@@ -1092,6 +1108,28 @@ func (s *IssueService) SearchIssues(ctx context.Context, owner, repo, query stri
 	}
 
 	return issues, nil
+}
+
+// searchScopeQualifier matches a search term that sets which repositories,
+// owners, item types or states a search reaches, also when it is negated,
+// quoted or glued to other text.
+var searchScopeQualifier = regexp.MustCompile(`(?i)(?:^|[^a-z0-9_])(?:repo|repository|org|user|owner|is|type|state|archived)\s*:`)
+
+var (
+	searchOwnerPattern = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$`)
+	searchRepoPattern  = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
+)
+
+// confineSearchQuery removes every scope-setting term from caller-supplied
+// search text, so it can only narrow the search SearchIssues pins.
+func confineSearchQuery(query string) string {
+	var kept []string
+	for _, term := range strings.Fields(query) {
+		if !searchScopeQualifier.MatchString(term) {
+			kept = append(kept, term)
+		}
+	}
+	return strings.Join(kept, " ")
 }
 
 // EditIssue updates an issue's body by node ID (GraphQL node ID from GetIssue,

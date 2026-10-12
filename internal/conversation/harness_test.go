@@ -57,6 +57,7 @@ func installFakeAdapters(t *testing.T) string {
 	t.Setenv("FAKE_ADAPTER_MODE", "replay")
 	t.Setenv("FAKE_ADAPTER_FIXTURE", "")
 	t.Setenv("FAKE_ADAPTER_DELAY_MS", "0")
+	t.Setenv("FAKE_ADAPTER_REPLY", "")
 	return rec
 }
 
@@ -138,6 +139,20 @@ func TestFakeAdapterProcess(t *testing.T) {
 			emit(line)
 			time.Sleep(delay)
 		}
+	case "tools":
+		// A model that calls the turn's tools: FAKE_ADAPTER_TOOL_CALLS is
+		// a JSON array of {"name", "arguments"}, made through the tool
+		// server the --mcp-config file on argv names. The answers are
+		// recorded in <pid>.tools, then the turn replies.
+		_ = os.WriteFile(filepath.Join(rec, fmt.Sprintf("%d.tools", os.Getpid())),
+			fakeToolCalls(argv, os.Getenv("FAKE_ADAPTER_TOOL_CALLS")), 0o644)
+		reply := os.Getenv("FAKE_ADAPTER_REPLY")
+		if reply == "" {
+			reply = "Looked."
+		}
+		for _, line := range fakeTextTurn([]string{reply}, 100, 5) {
+			emit(line)
+		}
 	case "hang":
 		// One delta, then a grandchild that ignores SIGTERM, then wait
 		// forever: only a group SIGKILL ends this turn.
@@ -164,6 +179,101 @@ func TestFakeAdapterProcess(t *testing.T) {
 		time.Sleep(time.Hour)
 	}
 	os.Exit(0)
+}
+
+// fakeToolResult is one tool call's answer, as the fake adapter recorded it.
+type fakeToolResult struct {
+	Name       string `json:"name"`
+	ConfigMode string `json:"config_mode"`
+	HTTPStatus int    `json:"http_status"`
+	IsError    bool   `json:"is_error"`
+	Text       string `json:"text"`
+	RPCError   string `json:"rpc_error"`
+}
+
+// fakeToolCalls makes the calls through the tool server named on argv.
+func fakeToolCalls(argv []string, calls string) []byte {
+	var out []fakeToolResult
+	cfgPath := ""
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == "--mcp-config" {
+			cfgPath = argv[i+1]
+		}
+	}
+	info, err := os.Stat(cfgPath)
+	if err != nil {
+		b, _ := json.Marshal([]fakeToolResult{{RPCError: "no --mcp-config file: " + cfgPath}})
+		return b
+	}
+	raw, _ := os.ReadFile(cfgPath)
+	var cfg struct {
+		MCPServers map[string]struct {
+			URL     string            `json:"url"`
+			Headers map[string]string `json:"headers"`
+		} `json:"mcpServers"`
+	}
+	_ = json.Unmarshal(raw, &cfg)
+	server := cfg.MCPServers["nightgauge"]
+	post := func(method string, params any) (int, map[string]any) {
+		body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+		req, _ := http.NewRequest(http.MethodPost, server.URL, strings.NewReader(string(body)))
+		for k, v := range server.Headers {
+			req.Header.Set(k, v)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, nil
+		}
+		defer resp.Body.Close()
+		var r map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&r)
+		return resp.StatusCode, r
+	}
+	post("initialize", map[string]any{"protocolVersion": "2025-06-18"})
+	var plan []struct {
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
+	}
+	_ = json.Unmarshal([]byte(calls), &plan)
+	for _, c := range plan {
+		status, r := post("tools/call", map[string]any{"name": c.Name, "arguments": c.Arguments})
+		res := fakeToolResult{Name: c.Name, ConfigMode: info.Mode().Perm().String(), HTTPStatus: status}
+		if e, ok := r["error"].(map[string]any); ok {
+			res.RPCError, _ = e["message"].(string)
+		}
+		if result, ok := r["result"].(map[string]any); ok {
+			res.IsError, _ = result["isError"].(bool)
+			if content, ok := result["content"].([]any); ok && len(content) > 0 {
+				res.Text, _ = content[0].(map[string]any)["text"].(string)
+			}
+		}
+		out = append(out, res)
+	}
+	b, _ := json.Marshal(out)
+	return b
+}
+
+// toolResults reads what the fake adapter's tool calls were answered.
+func toolResults(t *testing.T, rec string) []fakeToolResult {
+	t.Helper()
+	entries, _ := os.ReadDir(rec)
+	var out []fakeToolResult
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".tools") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(rec, e.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var rs []fakeToolResult
+		if err := json.Unmarshal(raw, &rs); err != nil {
+			t.Fatalf("tool results %s: %v", raw, err)
+		}
+		out = append(out, rs...)
+	}
+	return out
 }
 
 func atoiOr(s string, def int) int {
@@ -441,9 +551,13 @@ func (fp *fakePlatform) postTurn(conversation, turnID, commandID, message string
 	fp.mu.Lock()
 	defer fp.mu.Unlock()
 	fp.position++
+	actor := "acct-1"
+	if a, ok := extra["poster_account_id"].(string); ok {
+		actor = a
+	}
 	fp.history[conversation] = append(fp.history[conversation], platform.TurnContextMessage{
 		ID: "m-u-" + turnID, TurnID: turnID, Position: fp.position, Role: "user", Content: &message,
-		RetentionClass: "durable",
+		ActorAccountID: actor, RetentionClass: "durable",
 	})
 	t := &fakeTurn{id: turnID, conversation: conversation, commandID: commandID, state: "dispatched"}
 	fp.turns[turnID], fp.byCmd[commandID] = t, t

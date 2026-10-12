@@ -14,7 +14,51 @@ changelog, and the release workflow refuses a tag that does not.
 
 ## [Unreleased]
 
+### Added
+
+- **A conversation turn can read the workspace and file an issue, and
+  nothing more** (#1570). A turn's model gets the conversation's own tools,
+  served to it for that turn alone: it reads files under the workspace root,
+  and the issues and pull requests of the repositories the poster may read,
+  and it can file an issue. It has no tool that edits a file, runs a command,
+  creates a branch, commits, pushes or opens a pull request, and no workspace
+  setting, auto-accept included, adds one. Reads refuse a path that leaves
+  the workspace root, through `..` or a symlink, and secret-bearing files
+  (`.env*`, `*.pem`, `*.key`, `.git` internals); the credential fields of
+  `.nightgauge` config files are shown redacted. An issue is filed only when
+  the poster's own message in that turn asks for it or confirms it, never
+  because an earlier message, a file or an issue body says so, and it records
+  the poster and the conversation it came from. A teammate's issue is filed
+  through the workspace's GitHub App and nothing else: without one it is
+  refused, and no personal or CI token is tried. Every filing, and every
+  refusal, is noted in the reply. Earlier messages now reach the model
+  attributed to their authors, and everything a tool returns is marked as
+  data, not instructions. See `docs/CONVERSATION_TURNS.md`.
+
+- **A conversation turn that only read live state no longer stays in every
+  later turn's context** (#1893). The daemon classifies each turn when it
+  ends, from its terminal state and the tool calls it made, never from the
+  model's reply, and reports the class in the turn's terminal report: a turn
+  that answered from tools reading live state is `ephemeral`, and the hosted
+  service keeps only a window of recent ones in a later turn's context.
+  Every other turn is `durable`. A turn that called any mutating tool is
+  durable whatever a classifier says; that floor runs after the rules and
+  overrides them, and a tool the tool boundary (#1570) does not know counts
+  as mutating. The calls it reads are the turn's tool server's own record,
+  joined with any the stream shows that the server did not serve. The
+  daemon logs each turn's class with the rule that gave it. See
+  `docs/CONVERSATION_TURNS.md` § Retention class.
+
 ### Fixed
+
+- **`nightgauge issue list --search` stays in the repository it names.**
+  GitHub combines repeated scope qualifiers with OR, so a `repo:`, `org:`,
+  `user:`, `owner:`, `is:`, `type:`, `state:` or `archived:` term in the
+  search text widened the search to other repositories and to closed issues
+  instead of narrowing it. Those terms are now removed from the search text,
+  results from any other repository or that are not open are dropped, and a
+  repository name that is not one is refused. Narrowing qualifiers such as
+  `label:`, `in:` and `author:` still work.
 
 - **A card resolved from the app or the dashboard now reaches the daemon
   that raised it** (#1421). Every `nightgauge serve` on one machine used to
@@ -27,6 +71,14 @@ changelog, and the release workflow refuses a tag that does not.
   re-registrations included. The hosted service gives each key its own agent
   and command stream. A daemon with no workspace root, or a service that
   predates the key, registers as before. See `docs/GO_BINARY.md` and ADR-019.
+
+- **The OpenCode integration suite no longer stalls a call past its cap under
+  load** (#2454). OpenCode leaves its npm-install lock behind when it exits
+  before a background install finishes, and frees it only a minute later, so
+  the next call whose config names a plugin waited silently past the
+  harness's 60-second cap. The harness now frees a lock whose owner it has
+  already reaped, and a call that reaches the cap prints its process group,
+  open files, OpenCode's locks, the registry requests and OpenCode's log tail.
 
 ## [0.7.0] - 2026-10-12
 
