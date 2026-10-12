@@ -2,6 +2,9 @@ package platform
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -31,9 +35,11 @@ import (
 //
 // This rides the same bearer auth and raw-HTTP shape the sync uses
 // (see attention_sync.go): the platform's pipelineAuth accepts whatever
-// client.bearer() resolves to. POST /v1/agents/register upserts by machine_id
-// per account, so calling it on every daemon start is idempotent (re-register =
-// revival).
+// client.bearer() resolves to. POST /v1/agents/register upserts by
+// (account, machine_id, workspace_key) when the body carries a workspace key
+// (#1421), and by (account, machine_id) when it does not, so calling it on
+// every daemon start is idempotent (re-register = revival), and each
+// workspace the machine serves keeps its own agent.
 
 // AgentRegisterCapabilityResolve is the capability the daemon advertises so the
 // platform relays `attention_resolve` commands to it (the Action Center bridge).
@@ -83,6 +89,74 @@ func wireInstanceID(id string) string {
 		return ""
 	}
 	return id
+}
+
+// The workspace key (#1421). A machine runs one daemon per workspace it
+// serves, and the attention store each daemon resolves a card against is the
+// workspace's own (<root>/.nightgauge/attention), so the agent a relayed
+// resolve is addressed to has to be the workspace's too. A registration that
+// carries `workspace_key` is its own agent row on the hosted service, keyed on
+// (account, machine_id, workspace_key), and a command addressed to it reaches
+// only that workspace's command stream. One without it keeps the machine's
+// unkeyed row, as every daemon did before, and every daemon on the machine
+// then shares one agent and one command channel.
+//
+// The key is the HMAC-SHA256 of the workspace root in canonical form
+// (absolute, symlinks resolved, cleaned), keyed by the machine id, in hex:
+// 64 characters of [0-9a-f], inside the service's bound as it stands, so
+// nothing is cut. It is never the path. Keying it by the machine id makes the
+// same path on two machines two unrelated keys, so no precomputed table of
+// digests of likely paths applies to it. The service compares it for
+// equality only and never returns it.
+//
+// It is the same on every registration of one workspace: the root is put in
+// canonical form once, when the daemon starts, and the machine id is stable,
+// so a re-registration after an eviction keeps the workspace's own agent.
+// Two spellings of one directory, a symlink and its target, give one key.
+
+// workspaceKeyDomain separates this digest from any other the machine id
+// keys.
+const workspaceKeyDomain = "nightgauge/agent-workspace-key/v1"
+
+// canonicalWorkspaceRoot is root absolute, with its symlinks resolved, and
+// cleaned; "" when root is empty or cannot be made absolute. A root that
+// cannot be resolved (it is gone) is kept absolute and cleaned as it is.
+func canonicalWorkspaceRoot(root string) string {
+	if root == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return ""
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
+	return filepath.Clean(abs)
+}
+
+// workspaceKey is the key of the workspace at canonicalRoot on the machine
+// machineID, as the wire carries it: "" when there is no root, and "" (the
+// field left out) when the key would fail the service's bound.
+func workspaceKey(machineID, canonicalRoot string) string {
+	if canonicalRoot == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(machineID))
+	mac.Write([]byte(workspaceKeyDomain))
+	mac.Write([]byte{0})
+	mac.Write([]byte(canonicalRoot))
+	return wireWorkspaceKey(hex.EncodeToString(mac.Sum(nil)))
+}
+
+// wireWorkspaceKey is key when the platform accepts it (1–64 of
+// [A-Za-z0-9_-], the instance id's bound), else "", which leaves the field
+// out: a malformed key would cost the whole registration a 422.
+func wireWorkspaceKey(key string) string {
+	if !instanceIDPattern.MatchString(key) {
+		return ""
+	}
+	return key
 }
 
 // ErrAgentNotFound is returned by Heartbeat when the platform reports the agent
@@ -198,9 +272,12 @@ func printableField(s string) string {
 // `repos` and `workspace` declare the workspace this daemon serves (#2335);
 // the service reads an absent `repos` as none. `instance_id` (#2395) rides
 // top-level beside `execution_profile`, never inside it; a platform that
-// predates it strips the unknown key.
+// predates it strips the unknown key. `workspace_key` (#1421) is the opaque
+// key of the workspace root this agent serves (see workspaceKey), and makes
+// the agent the workspace's own rather than the machine's.
 type agentRegisterBody struct {
 	MachineID        string            `json:"machine_id"`
+	WorkspaceKey     string            `json:"workspace_key,omitempty"`
 	AgentVersion     string            `json:"agent_version,omitempty"`
 	Capabilities     []string          `json:"capabilities"`
 	Repos            []AgentRepo       `json:"repos,omitempty"`
@@ -243,6 +320,10 @@ type AgentRegistrationService struct {
 	// instanceID is the process's instance id as the wire carries it ("" when
 	// it fails the platform's bound, and is then left out).
 	instanceID string
+	// workspaceRoot is the canonical root of the workspace this agent serves
+	// (#1421), the source of its workspace key; "" registers on the machine's
+	// unkeyed agent.
+	workspaceRoot string
 }
 
 // NewAgentRegistrationService builds a registration service bound to the platform
@@ -268,6 +349,21 @@ func (s *AgentRegistrationService) WithExecutionProfile(fn ProfileFunc) *AgentRe
 // workspace, and covers no workspace on the hosted service.
 func (s *AgentRegistrationService) WithWorkspace(fn WorkspaceFunc) *AgentRegistrationService {
 	s.workspace = fn
+	return s
+}
+
+// WithWorkspaceRoot sets the root of the workspace this agent serves, the one
+// whose attention store it resolves cards against (#1421). Every registration
+// then carries the workspace's key, so the hosted service gives this
+// workspace its own agent and command stream. The root is put in canonical
+// form here, once, so every registration of this daemon carries one key.
+// Without it, or with a root that cannot be made absolute, the registration
+// carries no key and shares the machine's agent.
+func (s *AgentRegistrationService) WithWorkspaceRoot(root string) *AgentRegistrationService {
+	s.workspaceRoot = canonicalWorkspaceRoot(root)
+	if s.workspaceRoot == "" {
+		log.Printf("agent registration: no workspace root, so the agent is the machine's own and a relayed resolve can reach another workspace's daemon (#1421)")
+	}
 	return s
 }
 
@@ -322,11 +418,13 @@ func (s *AgentRegistrationService) resolveProfile() (*ExecutionProfile, bool) {
 	return &p, conversation
 }
 
-// RegisterAgent POSTs the daemon's machine id, capabilities and the workspace
-// it serves to POST /v1/agents/register and returns the platform-assigned
-// agent id + TTL. Idempotent server-side (upsert by machine_id per account). A
-// non-201 response or a missing agentId is an error the caller retries with
-// backoff.
+// RegisterAgent POSTs the daemon's machine id, workspace key, capabilities
+// and the workspace it serves to POST /v1/agents/register and returns the
+// platform-assigned agent id + TTL. Idempotent server-side: the platform
+// upserts on (account, machine_id, workspace_key), or on (account,
+// machine_id) when no key is sent. A re-registration carries the same key, so
+// it revives this workspace's agent and never another's. A non-201 response
+// or a missing agentId is an error the caller retries with backoff.
 //
 // A `workspace` block needs the account to belong to a team. When the service
 // answers NO_TEAM_MEMBERSHIP, the registration is sent once more without the
@@ -342,6 +440,7 @@ func (s *AgentRegistrationService) RegisterAgent(ctx context.Context) (AgentRegi
 	}
 	body := agentRegisterBody{
 		MachineID:    machineID,
+		WorkspaceKey: workspaceKey(machineID, s.workspaceRoot),
 		AgentVersion: s.agentVersion,
 		InstanceID:   s.instanceID,
 	}

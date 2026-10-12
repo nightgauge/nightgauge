@@ -69,8 +69,9 @@ table should stay a mirror of that script, not drift from it.
 The probe deliberately does **not** call `PUT /v1/audit/retention` (changes
 real retention configuration) or `POST /v1/audit/reports` (creates a new
 report on every run). It calls only read paths and idempotent-upsert paths
-(agent registration upserts by `machine_id`; attention sync with an empty
-`requests` array pushes nothing).
+(agent registration upserts by `machine_id`, and by `workspace_key` beside it
+when one is sent; attention sync with an empty `requests` array pushes
+nothing).
 
 ## The one assertion that matters
 

@@ -60,6 +60,18 @@ changelog, and the release workflow refuses a tag that does not.
   repository name that is not one is refused. Narrowing qualifiers such as
   `label:`, `in:` and `author:` still work.
 
+- **A card resolved from the app or the dashboard now reaches the daemon
+  that raised it** (#1421). Every `nightgauge serve` on one machine used to
+  register as the same agent, so with daemons running for two workspaces a
+  resolve could be handed to the daemon of the other workspace, which could
+  not find the card and dropped it while the card stayed open. Each daemon
+  now registers as its own workspace's agent: the registration carries a
+  `workspace_key`, an HMAC-SHA256 of the workspace root keyed by the machine
+  id, never the path, and the same on every registration of that workspace,
+  re-registrations included. The hosted service gives each key its own agent
+  and command stream. A daemon with no workspace root, or a service that
+  predates the key, registers as before. See `docs/GO_BINARY.md` and ADR-019.
+
 ## [0.7.0] - 2026-10-12
 
 ### Added
