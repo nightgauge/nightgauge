@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"slices"
 	"strings"
 	"sync"
@@ -12,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/conversation/tools"
+	"github.com/nightgauge/nightgauge/internal/gittest"
 	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -147,7 +147,7 @@ func TestTurn_AMessageAskingForEditsChangesNothing(t *testing.T) {
 		var b strings.Builder
 		for _, args := range [][]string{{"status", "--porcelain", "--ignored"}, {"rev-parse", "--verify", "-q", "HEAD"},
 			{"branch", "--list", "--all"}, {"stash", "list"}} {
-			out, _ := exec.Command("git", append([]string{"-C", root}, args...)...).CombinedOutput()
+			out, _ := gittest.Command(root, args...).CombinedOutput()
 			b.Write(out)
 		}
 		return b.String()
