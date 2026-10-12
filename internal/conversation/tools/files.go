@@ -38,14 +38,14 @@ var skippedDirs = map[string]bool{".git": true, "node_modules": true}
 // regular file, too large or binary; a Nightgauge config file comes back with
 // its credential fields redacted.
 func (s *Toolset) readText(rel string) (string, *Error) {
-	f, err := s.fs.root.Open(rel)
-	if err != nil {
-		return "", openErr(err)
+	f, oerr := s.fs.open(rel)
+	if oerr != nil {
+		return "", oerr
 	}
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return "", openErr(err)
+		return "", errMissing
 	}
 	if !info.Mode().IsRegular() {
 		return "", fail(CodeNotText, "the path is not a regular file")
@@ -55,7 +55,7 @@ func (s *Toolset) readText(rel string) (string, *Error) {
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, maxFileBytes+1))
 	if err != nil {
-		return "", openErr(err)
+		return "", fail(CodeNotText, "the file could not be read")
 	}
 	if bytes.IndexByte(raw[:min(len(raw), 8000)], 0) >= 0 || !utf8.Valid(raw) {
 		return "", fail(CodeNotText, "the file is not UTF-8 text")
@@ -138,9 +138,9 @@ func (s *Toolset) listDirectory(raw json.RawMessage) (string, *Error) {
 	if !s.canReadPath(w.abs(rel)) {
 		return "", errRepoNotReadable
 	}
-	f, oerr := w.root.Open(rel)
+	f, oerr := w.open(rel)
 	if oerr != nil {
-		return "", openErr(oerr)
+		return "", oerr
 	}
 	defer f.Close()
 	entries, rerr := f.ReadDir(-1)

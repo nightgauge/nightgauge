@@ -320,3 +320,83 @@ func TestRenderMessage_AttributesEveryMessage(t *testing.T) {
 		t.Errorf("a message attributed to another account: %v, want errNotPosters", err)
 	}
 }
+
+// The retention class reads the tool server's own record (#1893, #1570). The
+// fake adapter calls its tools over HTTP and its stream shows no tool block,
+// so the server's record is the only evidence: a turn that only read is
+// ephemeral, and a turn that called create_issue is durable even when the
+// classifier says ephemeral, filed or refused. Deleting the mutation floor
+// turns the create_issue cases red.
+func TestTurn_RetentionReadsTheToolServersRecord(t *testing.T) {
+	alwaysEphemeral := func(TurnOutcome) Classification {
+		return Classification{Class: platform.TurnRetentionEphemeral, Rule: "model-said-so"}
+	}
+	file := func(quote string) map[string]any {
+		return map[string]any{"name": "create_issue", "arguments": map[string]any{"owner": "acme", "repo": "api",
+			"title": "X", "body": "b", "request_quote": quote}}
+	}
+	cases := []struct {
+		name     string
+		classify Classifier
+		message  string
+		calls    []map[string]any
+		class    string
+	}{
+		{"only a read", nil, "What does the README say?",
+			[]map[string]any{{"name": "list_directory", "arguments": map[string]any{"path": "."}}}, "ephemeral"},
+		{"an issue filed", alwaysEphemeral, "Please file an issue for this.",
+			[]map[string]any{file("file an issue for this")}, "durable"},
+		{"an issue refused", alwaysEphemeral, "What's the status?",
+			[]map[string]any{file("status")}, "durable"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hermetic(t)
+			installFakeAdapters(t)
+			toolCalls(t, c.calls...)
+			fp := newFakePlatform(t)
+			startDaemon(t, fp, workspace(t, toolWorkspace), func(cfg *Config) {
+				cfg.Forge = &recordingForge{}
+				cfg.Classify = c.classify
+			})
+			fp.deliver(fp.postTurn("conv-1", "turn-1", "cmd-1", c.message, nil))
+			waitFor(t, "the terminal report", 20*time.Second, func() bool { return fp.endFrame("turn-1") != nil })
+			end := fp.endFrame("turn-1")
+			if end["state"] != "completed" || end["retention_class"] != c.class {
+				t.Errorf("terminal report = %v, want completed and %s", end, c.class)
+			}
+		})
+	}
+}
+
+// turnCalls joins the two records without counting a call twice, and keeps a
+// mutating call only the stream saw.
+func TestTurnCalls_UnionOfTheServerAndTheStream(t *testing.T) {
+	stream := []ToolCall{
+		{Name: "mcp__nightgauge__read_file"},
+		{Name: "mcp__nightgauge__create_issue", Mutating: true}, // never reached the server
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(root+"/notes.txt", []byte("hi\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	set := tools.NewToolset(tools.Env{Root: root}, tools.Turn{Message: "hi", PosterIsOperator: true})
+	server, err := tools.Start(set)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, terr := set.Call(t.Context(), tools.ToolReadFile, []byte(`{"path":"notes.txt"}`)); terr != nil {
+		t.Fatal(terr)
+	}
+	got := turnCalls(stream, &turnTools{set: set, server: server})
+	want := []ToolCall{{Name: "mcp__nightgauge__read_file"}, {Name: "mcp__nightgauge__create_issue", Mutating: true}}
+	if !slices.Equal(got, want) {
+		t.Errorf("calls = %+v, want %+v", got, want)
+	}
+	if !(TurnOutcome{ToolCalls: got}).Mutated() {
+		t.Error("a mutating call the stream saw did not count")
+	}
+	if got := turnCalls(stream[:1], nil); !slices.Equal(got, stream[:1]) {
+		t.Errorf("with no server: %+v", got)
+	}
+}

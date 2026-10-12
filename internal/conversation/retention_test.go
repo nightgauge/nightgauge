@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/conversation/tools"
 	"github.com/nightgauge/nightgauge/internal/platform"
 )
 
@@ -140,10 +141,13 @@ func TestToolRecord_RecordsEachCallOnce(t *testing.T) {
 		t.Errorf("calls = %+v, want %+v", rec.calls, want)
 	}
 
-	unplaced := newToolRecord(everyToolMutates)
-	unplaced.observe(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"queue_status"}]}}`)
-	if len(unplaced.calls) != 1 || !unplaced.calls[0].Mutating {
-		t.Errorf("with no tool registry: calls = %+v, want queue_status counted as mutating", unplaced.calls)
+	// The host's check is the tool boundary's: a tool it does not know
+	// counts as mutating, and a conversation read tool does not.
+	unplaced := newToolRecord(tools.IsMutating)
+	unplaced.observe(`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"queue_status"},` +
+		`{"type":"tool_use","id":"toolu_2","name":"mcp__nightgauge__read_file"}]}}`)
+	if len(unplaced.calls) != 2 || !unplaced.calls[0].Mutating || unplaced.calls[1].Mutating {
+		t.Errorf("calls = %+v, want queue_status mutating and read_file not", unplaced.calls)
 	}
 }
 
@@ -210,7 +214,8 @@ func TestTurn_RetentionClassFollowsTheToolCalls(t *testing.T) {
 	}{
 		{"a read-only status turn", onlyFileIssueMutates, "success", []string{"queue_status"}, "completed", "ephemeral"},
 		{"a turn that filed an issue", onlyFileIssueMutates, "success", []string{"queue_status", "file_issue"}, "completed", "durable"},
-		{"a tool with no registry", nil, "success", []string{"queue_status"}, "completed", "durable"},
+		{"a tool the boundary does not know", nil, "success", []string{"queue_status"}, "completed", "durable"},
+		{"a conversation read tool", nil, "success", []string{"mcp__nightgauge__read_file"}, "completed", "ephemeral"},
 		{"a read that then failed", onlyFileIssueMutates, "error_during_execution", []string{"queue_status"}, "failed", "durable"},
 		{"no tools", onlyFileIssueMutates, "success", nil, "completed", "durable"},
 	}
@@ -251,12 +256,12 @@ func TestRenderMessage_KeepsEveryMessageTheContextReadReturns(t *testing.T) {
 	next := "what now?"
 	msgs = append(msgs, platform.TurnContextMessage{ID: "last", TurnID: "t-new", Position: pos + 1, Role: "user", Content: &next})
 
-	got, err := renderMessage(platform.TurnContext{TurnID: "t-new", Messages: msgs}, "t-new")
+	got, err := renderMessage(platform.TurnContext{TurnID: "t-new", Messages: msgs}, "t-new", "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var prior []priorMessage
-	if err := json.Unmarshal([]byte(jsonLine(t, got)), &prior); err != nil {
+	if err := json.Unmarshal([]byte(jsonLine(t, got.stdin)), &prior); err != nil {
 		t.Fatal(err)
 	}
 	var texts []string

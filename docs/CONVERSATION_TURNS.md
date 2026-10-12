@@ -5,9 +5,10 @@ service addresses to its platform agent. It runs each turn on the workspace's
 own execution adapter, performance mode and effort, streams the reply back,
 and reports how the turn ended (#1569). This document states the daemon's
 side of the conversation contract (ADR-017); the hosted service's OpenAPI
-document is the authority on the wire. Later issues add their parts: the tool
-boundary (#1570), the conversation tools (#1587), retention classification
-(#1893), and the acts a turn may take (#1894, #1895).
+document is the authority on the wire. It covers the turn host (#1569), the
+tool and permission boundary (#1570) and retention classification (#1893).
+Later issues add the named status, jobs and attention tools (#1587) and the
+acts a turn may take (#1894, #1895).
 
 Code: `internal/conversation` (the turn host), `internal/conversation/tools`
 (the tool boundary), `internal/platform/conversation_turn.go` (the wire),
@@ -162,11 +163,16 @@ without a prompt.
 
 - Paths are relative to the workspace root. An absolute path, a `..` that
   leaves the root, and a symlink that resolves outside it are refused
-  (`path_outside_workspace`). The path is checked lexically, then again with
-  every symlink resolved, and every open goes through an `os.Root` on the
-  workspace, which the kernel holds to the root as well.
-- Secret-bearing paths are refused anywhere in the root, case-insensitively,
-  whether named or reached through a symlink (`path_secret`): `.env*`,
+  (`path_outside_workspace`). A path is resolved once, lexically and then
+  through its symlinks, and checked; the file opened is that exact resolved
+  path, one component at a time with `O_NOFOLLOW` from a descriptor on the
+  root, so a symlink swapped in after the check fails the open instead of
+  leading somewhere unchecked. A FIFO never blocks a read.
+- Secret-bearing paths are refused anywhere in the root, in every component,
+  whether named or reached through a symlink (`path_secret`). Names are
+  compared as a case-insensitive filesystem may compare them: Unicode case
+  folding (so `ſ` is `s` and the Kelvin sign is `k`), invisible format
+  characters ignored, and trailing dots and spaces trimmed. The list: `.env*`,
   `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, anything inside
   `.git`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials` and SSH private
   keys (`id_rsa` and the like). A listing omits them, and a search skips
@@ -196,14 +202,20 @@ runs before the forge is reached:
 
 1. **The poster's own request.** It runs only when the poster's message in
    this turn asks for the issue, or confirms one proposed earlier. The model
-   must quote the poster's words (`request_quote`); the quote must appear in
-   the poster's message and either ask for an issue ("file an issue for
-   ...", "create a ticket") or open the message by confirming ("yes", "go
-   ahead"). Words from an earlier message, a file or an issue body are never
-   in the poster's message, so they never satisfy it, whatever they say. The
-   check understands English and refuses what it does not recognize, so a
-   missed request costs the poster a confirmation, never an unrequested
-   write. Refused: `not_requested_by_poster`.
+   must quote the poster's words (`request_quote`), but the quote only
+   locates them: it must occur in the poster's message on word boundaries,
+   both folded the same way (case, whitespace, invisible characters), and
+   the decision is made on the message itself. Either a request for an
+   issue ("file an issue for ...", "create a ticket", "file it") lies inside
+   the quoted words, with no negation in its sentence ("do not", "no need
+   to") and no later sentence taking it back ("No, wait."); or the whole
+   message is a confirmation ("yes", "go ahead", "yes, file it"). Words from
+   an earlier message, a file or an issue body are never in the poster's
+   message, so they never satisfy it, whatever they say. The check
+   understands English and refuses what it does not recognize, a negation
+   anywhere in the request's sentence included, so a missed request costs
+   the poster a confirmation, never an unrequested write. Refused:
+   `not_requested_by_poster`.
 2. **A repository the poster may read**, from `readable_repos`
    (`repo_not_readable`), and a posting account to file for
    (`poster_unknown`): an issue is never filed anonymously.
@@ -232,7 +244,8 @@ A marker the model writes into the body is defused, so the only record is
 the daemon's. After the turn's process ends, the daemon closes the tool
 server and appends one line to the reply for each `create_issue` call, from
 the server's own record: `[nightgauge] create_issue: filed owner/repo#N ...`,
-or `[nightgauge] create_issue refused (<code>): ...`. A refusal is in the
+`[nightgauge] create_issue refused (<code>): ...`, or `failed (forge_error)`
+when the forge request itself failed. A refusal is in the
 transcript whatever the model said about it.
 
 ## Frames
@@ -286,11 +299,14 @@ called any mutating tool is `durable` (rule `mutation-floor`), whatever the
 rules or any other classifier answered, and every answer other than
 `ephemeral` is `durable`. The floor is code that runs after classification,
 not an instruction to a model, so no model output can drop a state change
-from later turns' context. The tool boundary (#1570) says which tools mutate;
-a tool the daemon cannot place counts as mutating. A call counts once the
-stream records it, whether or not it then succeeded, and a subagent's calls
-count as the turn's own. Until the tool boundary lands a turn has no tools,
-so every turn is `durable`, by `no-live-read` or `unfinished`.
+from later turns' context. The tool boundary (#1570) says which tools mutate
+(`tools.IsMutating`); a tool it does not know counts as mutating. The calls
+classified are the tool server's own record of every call it served, which
+no model output can change, joined with every call the stream shows that the
+server has no record of, matched by name, so a mutating call either saw
+forces the floor. A call counts once it is made, whether or not it then
+succeeded (a refused `create_issue` keeps the turn durable), and a
+subagent's calls count as the turn's own.
 
 The hosted service applies the floor again from its own records: a turn it
 recorded an act or a dispatch for is durable whatever the daemon reported,

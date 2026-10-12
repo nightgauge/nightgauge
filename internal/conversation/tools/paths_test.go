@@ -5,7 +5,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
+
+func unixMkfifo(path string) error { return unix.Mkfifo(path, 0o644) }
 
 // File reads are contained to the workspace root (#1570): a path that climbs
 // out with "..", an absolute path, and a symlink planted in the workspace
@@ -138,5 +143,143 @@ func TestSecretPaths_AreRefusedAndConfigCredentialsRedacted(t *testing.T) {
 func TestRedactConfig_RefusesWhatItCannotParse(t *testing.T) {
 	if _, err := redactConfig([]byte("github_auth: [unclosed\n  token: ghp_x")); code(err) != CodeSecretPath {
 		t.Errorf("unparseable config: %v, want %s", err, CodeSecretPath)
+	}
+}
+
+// Security review, finding 1 (validator differential): the deny list
+// compared spellings with strings.ToLower, but a case-insensitive filesystem
+// compares by Unicode case folding, and some ignore invisible characters, so
+// a spelling the list did not match could open the secret. ToLower leaves
+// the long s (ſ) alone, which APFS folds to s, so .git-credentialſ opened
+// .git-credentials; a zero-width character inside .env or .git went
+// unmatched; a trailing space or dot was not trimmed. Every spelling a
+// filesystem may treat as the secret's is now refused before anything is
+// opened, whether or not that filesystem would open it.
+func TestSecretPaths_FoldedSpellingsAreRefused(t *testing.T) {
+	root := gitRepo(t)
+	write(t, root, ".git-credentials", "https://user:credential-secret@example.com\n")
+	write(t, root, "id_rsa", "ssh-secret\n")
+	write(t, root, ".env", "API_KEY=env-secret\n")
+	write(t, root, "deploy/server.key", "key-secret\n")
+	s := toolset(t, root, newFakeForge(), operatorTurn("read"))
+	for _, p := range []string{
+		".git-credentialſ", // long s: APFS folds it to s
+		"id_rſa",
+		"ID_RSA",
+		"deploy/server.Key", // Kelvin sign
+		".e​nv",             // zero-width space
+		".⁠env",             // word joiner
+		".gi‍t/config",      // zero-width joiner in a directory component
+		"id_rsa ",           // trailing space
+		"id_rsa.",           // trailing dot
+		"deploy/server.key.",
+		".GIT️/HEAD", // variation selector
+	} {
+		out, err := call(t, s, ToolReadFile, map[string]any{"path": p})
+		if code(err) != CodeSecretPath {
+			t.Errorf("read_file %q: %v %s, want %s", p, err, out, CodeSecretPath)
+		}
+		for _, secret := range []string{"credential-secret", "ssh-secret", "env-secret", "key-secret"} {
+			if strings.Contains(out, secret) {
+				t.Errorf("read_file %q returned %s", p, secret)
+			}
+		}
+	}
+	// A listing never names them, under any spelling the directory holds.
+	write(t, root, "keys/ID_RSA", "x\n")
+	write(t, root, "keys/.Git-Credentials", "x\n")
+	out, err := call(t, s, ToolListDirectory, map[string]any{"path": "keys"})
+	if err != nil || strings.Contains(out, "ID_RSA") || strings.Contains(out, "Credentials") {
+		t.Errorf("listing named a secret: %v %s", err, out)
+	}
+}
+
+// Security review, finding 1 (validator differential): the path was checked
+// once, resolved through its symlinks, and then opened again by name with an
+// os.Root, which follows any symlink inside the root. A component swapped for
+// a symlink between the check and the open was followed to a file the check
+// never saw. The open now walks the checked path one component at a time
+// with O_NOFOLLOW, so a symlink that appears anywhere on it fails the open.
+func TestOpen_NeverFollowsASymlinkTheCheckDidNotSee(t *testing.T) {
+	root := gitRepo(t)
+	write(t, root, "sub/notes.txt", "benign\n")
+	write(t, root, ".git/notes.txt", "GIT-INTERNAL-SECRET\n")
+	write(t, root, "other/notes.txt", "benign\n")
+	write(t, root, ".env", "ENV-SECRET\n")
+	write(t, root, "dir/a.txt", "benign\n")
+	s := toolset(t, root, newFakeForge(), operatorTurn("read"))
+
+	// A directory on the path becomes a symlink to .git.
+	rel, rerr := s.fs.resolve("sub/notes.txt")
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if err := os.Rename(filepath.Join(root, "sub"), filepath.Join(root, "sub-was")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(".git", filepath.Join(root, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if text, err := s.readText(rel); err == nil || strings.Contains(text, "GIT-INTERNAL-SECRET") {
+		t.Errorf("a directory swapped for a symlink was followed: %v %q", err, text)
+	}
+
+	// The file itself becomes a symlink to .env.
+	rel, rerr = s.fs.resolve("other/notes.txt")
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if err := os.Remove(filepath.Join(root, "other", "notes.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", ".env"), filepath.Join(root, "other", "notes.txt")); err != nil {
+		t.Fatal(err)
+	}
+	if text, err := s.readText(rel); err == nil || strings.Contains(text, "ENV-SECRET") {
+		t.Errorf("a file swapped for a symlink was followed: %v %q", err, text)
+	}
+
+	// A directory to list becomes a symlink to .git.
+	rel, rerr = s.fs.resolve("dir")
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+	if err := os.Rename(filepath.Join(root, "dir"), filepath.Join(root, "dir-was")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(".git", filepath.Join(root, "dir")); err != nil {
+		t.Fatal(err)
+	}
+	if f, err := s.fs.open(rel); err == nil {
+		f.Close()
+		t.Error("a directory swapped for a symlink was opened")
+	}
+
+	// The open refuses a path that was never checked.
+	if f, err := s.fs.open(".git/notes.txt"); err == nil {
+		f.Close()
+		t.Error("open accepted a secret path it was handed directly")
+	}
+}
+
+// A FIFO in the workspace does not hang a read.
+func TestReadFile_AFIFODoesNotBlock(t *testing.T) {
+	root := gitRepo(t)
+	if err := unixMkfifo(filepath.Join(root, "pipe")); err != nil {
+		t.Skip("mkfifo:", err)
+	}
+	s := toolset(t, root, newFakeForge(), operatorTurn("read"))
+	done := make(chan *Error, 1)
+	go func() {
+		_, err := call(t, s, ToolReadFile, map[string]any{"path": "pipe"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if code(err) != CodeNotText {
+			t.Errorf("read_file on a FIFO: %v, want %s", err, CodeNotText)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("read_file blocked on a FIFO")
 	}
 }

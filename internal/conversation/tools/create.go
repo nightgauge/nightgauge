@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -93,41 +94,134 @@ func (s *Toolset) createIssue(ctx context.Context, raw json.RawMessage) (string,
 // issueRequest matches words that ask for an issue: a filing verb followed,
 // within a few words, by "issue", "ticket" or "bug report" that is not an
 // existing issue's number ("open issue #12" reads one); or a filing verb
-// aimed at something already proposed ("file it", "create that").
-var issueRequest = regexp.MustCompile(`(?i)\b(?:file|create|open|raise|log|submit|make|write|add)\s+` +
+// aimed at something already proposed ("file it", "create that"). It runs
+// over the poster's message, never over the model's quote.
+var issueRequest = regexp.MustCompile(`\b(?:file|create|open|raise|log|submit|make|write|add)\s+` +
 	`(?:(?:[\w'-]+\s+){0,4}(?:issues?|tickets?|bug\s+reports?)\b(?:\s*#?\d)?|(?:it|that|this|them|those|one)\b)`)
 
 // issueNumber is the tail issueRequest leaves when the noun was followed by
 // a number.
 var issueNumber = regexp.MustCompile(`\s*#?\d$`)
 
-// confirmation matches a message that opens by confirming a proposal.
-var confirmation = regexp.MustCompile(`(?i)^\W*(?:yes|yeah|yep|yup|ok|okay|sure|confirm(?:ed)?|approved?|go ahead|do it|please do|ship it|lgtm|sounds good)\b`)
+// negation is a word that turns a request around: "do not file an issue",
+// "no need to open a ticket", "file it? no". Any one in the request's
+// sentence refuses it.
+var negation = regexp.MustCompile(`\b(?:not|no|nope|never|don't|dont|doesn't|didn't|won't|wouldn't|shouldn't|` +
+	`can't|cannot|isn't|aren't|without|stop|avoid|instead|rather|nor|neither|hold off|cancel|wait|unless|later)\b|n't\b`)
+
+// retraction opens a later sentence that takes a request back: "File an
+// issue? No, wait." Any later sentence of the message that opens with one
+// refuses every request before it.
+var retraction = regexp.MustCompile(`^[\s\p{P}]*(?:no|nope|not|never|don't|do not|wait|hold on|cancel|actually|` +
+	`never ?mind|scratch that|forget (?:it|that)|ignore (?:it|that))\b`)
+
+// sentenceEnd separates the sentences a negation is looked for in.
+var sentenceEnd = regexp.MustCompile(`[.!?;:\n]|\bbut\b`)
+
+// confirmationOnly is a message that is nothing but a confirmation: one or
+// more confirming phrases and punctuation. "Yes, file it" is one; "Yes. What
+// is the status?" and "Yes, but don't" are not.
+var confirmationOnly = regexp.MustCompile(`^[\s\p{P}]*(?:(?:yes|yeah|yep|yup|ok|okay|sure|confirm|confirmed|approve|` +
+	`approved|go ahead|go for it|do it|please do|please|ship it|lgtm|sounds good|thanks|thank you|` +
+	`file it|create it|open it|file that|create that)[\s\p{P}]*)+$`)
 
 // Requested reports whether the poster's message in this turn asks for the
-// mutation the model wants to make: quote must be the poster's own words,
-// found verbatim in message, and either ask for an issue or open the message
-// by confirming a proposal. Text from anyone else — an earlier message, a
-// file, an issue body, any tool result — is never in message, so it can
-// never satisfy this, whatever it says.
+// mutation the model wants to make. The model's quote only points at the
+// words: it must occur in the poster's message, on word boundaries, after
+// both are folded the same way (gateFold). Everything else is decided on the
+// poster's message itself: a request for an issue that lies inside the
+// quoted words and whose sentence carries no negation, or a message that is
+// nothing but a confirmation of an earlier proposal. Text from anyone else
+// (an earlier message, a file, an issue body, any tool result) is never in
+// the poster's message, so it can never satisfy this, whatever it says.
 //
 // It is a gate behind the system prompt's instruction, not a reading of
 // intent: it understands English requests only and refuses whatever it does
 // not recognize, so a missed request costs a confirmation, never an
 // unrequested write.
 func Requested(message, quote string) bool {
-	m, q := normalize(message), normalize(quote)
-	if q == "" || !strings.Contains(strings.ToLower(m), strings.ToLower(q)) {
+	m, q := gateFold(message), gateFold(quote)
+	if q == "" || m == "" {
 		return false
 	}
-	for _, loc := range issueRequest.FindAllStringIndex(q, -1) {
-		if !issueNumber.MatchString(q[loc[0]:loc[1]]) {
+	for from := 0; from <= len(m)-len(q); {
+		i := strings.Index(m[from:], q)
+		if i < 0 {
+			break
+		}
+		start, end := from+i, from+i+len(q)
+		from = start + 1
+		if !wordBoundary(m, start) || !wordBoundary(m, end) {
+			continue // a fragment of a word: "profile an issue" holds "file an issue"
+		}
+		for _, loc := range issueRequest.FindAllStringIndex(m, -1) {
+			if loc[0] < start || loc[1] > end || issueNumber.MatchString(m[loc[0]:loc[1]]) {
+				continue
+			}
+			if !negation.MatchString(sentenceAround(m, loc[0], loc[1])) && !retractedAfter(m, loc[1]) {
+				return true
+			}
+		}
+		if confirmationOnly.MatchString(m) {
 			return true
 		}
 	}
-	return confirmation.MatchString(q) && strings.HasPrefix(strings.ToLower(m), strings.ToLower(q))
+	return false
 }
 
-// normalize collapses runs of whitespace and trims, so a quote matches the
-// message however the model re-spaced it.
-func normalize(s string) string { return strings.Join(strings.Fields(s), " ") }
+// gateFold is the one form the gate compares and reads both texts in:
+// invisible format characters dropped, typographic apostrophes made plain,
+// lower case, and whitespace collapsed. Applying it to both sides keeps a
+// character the model or the poster added from making the quote match where
+// the words do not, or not match where they do.
+func gateFold(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case unicode.Is(unicode.Cf, r) || unicode.Is(unicode.Variation_Selector, r):
+			continue
+		case r == '\u2019' || r == '\u2018' || r == '\u02bc' || r == '`':
+			r = '\''
+		}
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+// wordBoundary reports whether i in s is not inside a word.
+func wordBoundary(s string, i int) bool {
+	if i <= 0 || i >= len(s) {
+		return true
+	}
+	before, _ := utf8.DecodeLastRuneInString(s[:i])
+	after, _ := utf8.DecodeRuneInString(s[i:])
+	return !(isWordRune(before) && isWordRune(after))
+}
+
+func isWordRune(r rune) bool {
+	return r == '_' || r == '\'' || unicode.IsLetter(r) || unicode.IsDigit(r)
+}
+
+// retractedAfter reports whether a sentence after i opens by taking a
+// request back.
+func retractedAfter(s string, i int) bool {
+	for _, loc := range sentenceEnd.FindAllStringIndex(s[i:], -1) {
+		if retraction.MatchString(s[i+loc[1]:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// sentenceAround is the sentence of s that holds [start, end).
+func sentenceAround(s string, start, end int) string {
+	from := 0
+	for _, loc := range sentenceEnd.FindAllStringIndex(s[:start], -1) {
+		from = loc[1]
+	}
+	to := len(s)
+	if loc := sentenceEnd.FindStringIndex(s[end:]); loc != nil {
+		to = end + loc[0]
+	}
+	return s[from:to]
+}

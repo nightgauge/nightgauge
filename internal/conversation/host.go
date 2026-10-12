@@ -80,7 +80,8 @@ type Config struct {
 	// floor applies over its answer. Nil is the documented rule table.
 	Classify Classifier
 	// IsMutating reports whether a tool changes state, for the mutation
-	// floor. Nil counts every tool as mutating.
+	// floor. Nil is the tool boundary's answer (tools.IsMutating), which
+	// counts a tool it does not know as mutating.
 	IsMutating func(tool string) bool
 	// MaxConcurrent bounds the turns running at once; a turn past it is
 	// refused. Zero means defaultMaxConcurrent.
@@ -155,7 +156,7 @@ func NewHost(ctx context.Context, cfg Config) *Host {
 		cfg.Classify = classifyByRules
 	}
 	if cfg.IsMutating == nil {
-		cfg.IsMutating = everyToolMutates
+		cfg.IsMutating = tools.IsMutating
 	}
 	h := &Host{
 		ctx:      ctx,
@@ -510,9 +511,13 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		PerformanceMode:    p.profile.PerformanceMode,
 	}
 	record := newToolRecord(h.cfg.IsMutating)
+	// toolServer is the turn's tool server once it runs; its record of the
+	// calls it served joins the stream's for the retention class.
+	var toolServer *turnTools
+	calls := func() []ToolCall { return turnCalls(record.calls, toolServer) }
 	failed := func(reason string) *platform.TurnEnd {
 		return &platform.TurnEnd{State: platform.TurnStateFailed, FailureReason: reason, Profile: profile,
-			RetentionClass: h.classify(t, platform.TurnStateFailed, record.calls)}
+			RetentionClass: h.classify(t, platform.TurnStateFailed, calls())}
 	}
 
 	input, err := h.readMessage(lease, t.cmd.TurnID, t.cmd.PosterAccountID)
@@ -544,7 +549,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		return
 	}
 	defer os.RemoveAll(dir)
-	p, toolServer, err := h.startTools(t, p, dir, input)
+	p, toolServer, err = h.startTools(t, p, dir, input)
 	if err != nil {
 		log.Printf("conversation: turn %s: its tool server did not start: %v", t.cmd.TurnID, err)
 		t.markGone(true)
@@ -640,7 +645,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		OutputTokens: acc.OutputTokens,
 	}
 	if t.reason() != "" {
-		h.reportStopped(t, report, profile, usage, record.calls)
+		h.reportStopped(t, report, profile, usage, calls())
 		return
 	}
 	if waitErr != nil || !success {
@@ -652,7 +657,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	}
 	report(&platform.TurnEnd{
 		State: platform.TurnStateCompleted, Profile: profile, Usage: usage,
-		RetentionClass: h.classify(t, platform.TurnStateCompleted, record.calls),
+		RetentionClass: h.classify(t, platform.TurnStateCompleted, calls()),
 	})
 }
 

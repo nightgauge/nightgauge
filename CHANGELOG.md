@@ -74,10 +74,11 @@ changelog, and the release workflow refuses a tag that does not.
   service keeps only a window of recent ones in a later turn's context.
   Every other turn is `durable`. A turn that called any mutating tool is
   durable whatever a classifier says; that floor runs after the rules and
-  overrides them, and a tool the daemon cannot place counts as mutating. The
-  daemon logs each turn's class with the rule that gave it. Until turns have
-  tools (#1570), every turn stays durable. See `docs/CONVERSATION_TURNS.md`
-  § Retention class.
+  overrides them, and a tool the tool boundary (#1570) does not know counts
+  as mutating. The calls it reads are the turn's tool server's own record,
+  joined with any the stream shows that the server did not serve. The
+  daemon logs each turn's class with the rule that gave it. See
+  `docs/CONVERSATION_TURNS.md` § Retention class.
 
 - **A run can be started private** (#2400). Signed in, every extension
   command that starts a run asks _Team_ (selected) or _Private_, and
@@ -115,6 +116,15 @@ changelog, and the release workflow refuses a tag that does not.
   after each platform deploy, in the platform repository.
 
 ### Fixed
+
+- **`nightgauge issue list --search` stays in the repository it names.**
+  GitHub combines repeated scope qualifiers with OR, so a `repo:`, `org:`,
+  `user:`, `owner:`, `is:`, `type:`, `state:` or `archived:` term in the
+  search text widened the search to other repositories and to closed issues
+  instead of narrowing it. Those terms are now removed from the search text,
+  results from any other repository or that are not open are dropped, and a
+  repository name that is not one is refused. Narrowing qualifiers such as
+  `label:`, `in:` and `author:` still work.
 
 - **A conversation turn that fails after the daemon claimed it ends
   `host_error`, not `refused`** (#2449). A crashed adapter, a failed context

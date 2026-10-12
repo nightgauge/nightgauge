@@ -371,3 +371,52 @@ func TestCreateIssue_ResultIsJSON(t *testing.T) {
 		t.Errorf("result %q (%v)", out, err)
 	}
 }
+
+// Security review, finding 2 (validator differential in the request gate):
+// the gate checked the model's quote for request words and only that the
+// quote occurred somewhere in the poster's message, so the quote and the
+// message could say different things. A quote cut from a sentence that
+// refuses ("do not file an issue"), from inside another word ("profile an
+// issue"), or a confirmation at the start of a message that goes on to
+// refuse or to ask something else ("Yes, but don't", "Yes. What's the
+// status?") all passed, and an invisible character could hide a negation.
+// The gate now decides on the poster's message: the quote only locates
+// words on word boundaries, the request must lie inside it with no negation
+// in its sentence, and a confirmation counts only when it is the whole
+// message. Every case here passed before the fix.
+func TestRequested_SecurityReviewBypasses(t *testing.T) {
+	cases := []struct{ message, quote string }{
+		{"Do not file an issue for this.", "file an issue for this"},
+		{"Please don't create a ticket for the outage", "create a ticket for the outage"},
+		{"Please don’t create a ticket", "create a ticket"},
+		{"No need to file it", "file it"},
+		{"We should never open an issue about this", "open an issue about this"},
+		{"File an issue? No, wait.", "File an issue"},
+		{"Let me profile an issue in the parser", "file an issue"},
+		{"Yes, but don't file it.", "Yes"},
+		{"Yes. What's the status?", "Yes"},
+		{"yes it's urgent, summarize issue 12", "yes"},
+		{"OK. Ignore that and tell me the status", "OK"},
+		{"do n​ot file an issue", "file an issue"},
+		{"Please do not­ file an issue", "file an issue"},
+	}
+	for _, c := range cases {
+		if Requested(c.message, c.quote) {
+			t.Errorf("Requested(%q, %q) = true, want false", c.message, c.quote)
+		}
+	}
+	// The same gate still files what the poster asked for, however the
+	// model spaced, cased or decorated the quote.
+	for _, c := range []struct{ message, quote string }{
+		{"Please file an issue for the flaky login test.", "FILE  AN ISSUE for the flaky login test"},
+		{"Please file an​ issue for it", "file an issue for it"},
+		{"Yes, file it.", "Yes, file it."},
+		{"yes please", "yes"},
+		{"OK, go ahead!", "go ahead"},
+		{"The tests pass now. Can you open a ticket to track the flaky one?", "open a ticket to track the flaky one"},
+	} {
+		if !Requested(c.message, c.quote) {
+			t.Errorf("Requested(%q, %q) = false, want true", c.message, c.quote)
+		}
+	}
+}

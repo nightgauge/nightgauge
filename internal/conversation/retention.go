@@ -126,10 +126,6 @@ func retain(classify Classifier, o TurnOutcome) Classification {
 	return c
 }
 
-// everyToolMutates is the mutation check with no tool registry: a tool the
-// host cannot place counts as mutating, so it never makes a turn ephemeral.
-func everyToolMutates(string) bool { return true }
-
 // toolRecord collects the tool calls a turn's stream records, each once.
 type toolRecord struct {
 	isMutating func(name string) bool

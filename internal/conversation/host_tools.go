@@ -107,3 +107,31 @@ func (tt *turnTools) writeReceipts(out *poster) {
 		}
 	}
 }
+
+// turnCalls is the record the retention class reads (#1893): the tool
+// server's own record of every call it served, which no model output can
+// change, and every call the stream shows that the server has no record of
+// (one the adapter denied, one cut off before it reached the server, or a
+// tool outside the boundary), matched by name. A mutating call either saw
+// forces the mutation floor. The server is closed first, so a call still
+// running is in its record.
+func turnCalls(stream []ToolCall, tt *turnTools) []ToolCall {
+	var out []ToolCall
+	served := map[string]int{}
+	if tt != nil {
+		tt.close()
+		for _, inv := range tt.invocations() {
+			name := tools.QualifiedName(inv.Name)
+			out = append(out, ToolCall{Name: name, Mutating: inv.Mutating})
+			served[name]++
+		}
+	}
+	for _, c := range stream {
+		if served[c.Name] > 0 {
+			served[c.Name]--
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
