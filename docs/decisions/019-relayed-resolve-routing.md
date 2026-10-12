@@ -2,11 +2,61 @@
 
 **Date:** 2026-09-04
 **Author:** nightgauge
-**Status:** Decided (partially deferred — see § Deferred)
+**Status:** Decided; the deferred routing half landed 2026-10-12 (see § Amendment)
 **Issue:** #1421
 **Amends:** [ADR-015 § E](015-decision-requests.md) (the Surface contract's relay half)
 
 ---
+
+## Amendment (2026-10-12, #1421) — per-workspace agent identity
+
+The routing half deferred below has landed as option (a) of #1421: the
+workspace joins the agent's registration identity, so one machine registers one
+agent per workspace it serves. The decision was taken in the cross-repository
+conversation contract; this amendment records the core's implementation.
+
+- **The registration carries `workspace_key`.** `AgentRegistrationService`
+  sends the key of the workspace root the daemon serves, the root whose
+  `.nightgauge/attention` store it resolves relayed cards against
+  (`WithWorkspaceRoot`, wired in `runDaemonPlatformAgent`). The hosted service
+  keys the agent row on (account, `machine_id`, `workspace_key`), so daemons for
+  workspaces A and B on one machine get two agent ids and two command channels.
+  Each daemon's attention sync mirrors its cards under its own agent id, so the
+  relay addresses a card's resolve to the daemon that raised it, and no other
+  daemon receives it.
+- **The key is never the path.** It is the HMAC-SHA256 of the root in canonical
+  form (absolute, symlinks resolved, cleaned), keyed by the machine id, in hex:
+  64 characters, inside the service's bound of 1–64 of `[A-Za-z0-9_-]`, which
+  is checked before anything is sent. Keying it by the machine id makes one
+  path on two machines two unrelated keys. The service compares it for
+  equality only and never returns it.
+- **One workspace, one key.** The root is put in canonical form once, when the
+  daemon starts, so every registration of that daemon, including the
+  re-registration after a heartbeat or command-stream 404, carries the same key
+  and revives the same agent. A restarted daemon for the same root, or one
+  started through a symlink to it, computes the same key.
+- **Compatibility.** A registration without the key (an older daemon, or one
+  with no workspace root) keeps the machine's own unkeyed row, and the service
+  never merges it with a keyed one. After an upgrade, the first registration
+  under the key clears the attention sync's watermark (`SetAgentID`), so the
+  next sweep re-mirrors every open card under the workspace's agent; until it
+  does, a resolve of a card mirrored earlier is still addressed to the
+  machine's old agent. A service that predates the field ignores it.
+- **Tests.** `cmd/nightgauge`'s
+  `TestRunDaemonPlatformAgent_TwoWorkspacesOneMachine_EachResolveReachesItsOwner`
+  runs two daemons as `serve` runs them against a service keyed as the hosted
+  one is: A and B register distinct agents, A's re-registration after an
+  eviction comes back as A's agent, and a resolve of each card is applied by
+  its owner and delivered to no other daemon. Without the key the same test
+  reproduces the defect: both daemons share one agent and each applies the
+  other's resolve. `internal/platform`'s `TestWorkspaceKey_*` pin the key: two
+  workspaces give two keys, one workspace always gives one, and no part of the
+  root reaches the wire.
+
+Decisions 1 to 5 stand. A daemon that does receive a card it does not hold,
+now only through an agent registered without a key, still classifies,
+contains and acknowledges it. Not acknowledging a misroute so that it is
+redelivered is a safety property to layer on this, and remains open.
 
 ## Executive Summary
 
@@ -133,7 +183,8 @@ assertions would pass for a card that was never resolvable at all.
 ## Deferred
 
 None of the following is required for the containment above to be correct, and
-none of it can be done from this repository.
+none of it can be done from this repository. The first two have since landed
+together, as § Amendment records; they are kept as written for the record.
 
 - **Per-workspace agent identity** — the registration upsert key and the
   platform's agent-eviction semantics. `NIGHTGAUGE_AGENT_ID`
@@ -161,7 +212,9 @@ none of it can be done from this repository.
 - Acceptance criteria 1 and 2 of #1421 ("applied by the owning daemon",
   "not consumed by a non-owner") are **not** met by this ADR and cannot be met
   from this repository. #1421 stays open against the platform-side change.
-  Criteria 3 (this document) and 4 (the two-daemon test) are met.
+  Criteria 3 (this document) and 4 (the two-daemon test) are met. The
+  amendment of 2026-10-12 meets 1 and 2 with the platform's keyed
+  registration.
 - The store gains a public sentinel. `ErrRequestNotFound` is now part of the
   package's contract; the message text is unchanged, so no caller had to move.
 
