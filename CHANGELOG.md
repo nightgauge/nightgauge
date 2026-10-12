@@ -29,6 +29,25 @@ changelog, and the release workflow refuses a tag that does not.
   service places the command on a VS Code window's agent instead, the window
   hands it to its daemon. See `docs/GO_BINARY.md`.
 
+- **A conversation turn can read the workspace and file an issue, and
+  nothing more** (#1570). A turn's model gets the conversation's own tools,
+  served to it for that turn alone: it reads files under the workspace root,
+  and the issues and pull requests of the repositories the poster may read,
+  and it can file an issue. It has no tool that edits a file, runs a command,
+  creates a branch, commits, pushes or opens a pull request, and no workspace
+  setting, auto-accept included, adds one. Reads refuse a path that leaves
+  the workspace root, through `..` or a symlink, and secret-bearing files
+  (`.env*`, `*.pem`, `*.key`, `.git` internals); the credential fields of
+  `.nightgauge` config files are shown redacted. An issue is filed only when
+  the poster's own message in that turn asks for it or confirms it, never
+  because an earlier message, a file or an issue body says so, and it records
+  the poster and the conversation it came from. A teammate's issue is filed
+  through the workspace's GitHub App and nothing else: without one it is
+  refused, and no personal or CI token is tried. Every filing, and every
+  refusal, is noted in the reply. Earlier messages now reach the model
+  attributed to their authors, and everything a tool returns is marked as
+  data, not instructions. See `docs/CONVERSATION_TURNS.md`.
+
 - **The daemon answers conversation turns** (#1569). `nightgauge serve` takes
   a turn the hosted service addresses to its agent, on its own command
   stream, and answers it on the workspace's own adapter, performance mode and

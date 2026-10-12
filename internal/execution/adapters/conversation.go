@@ -29,8 +29,21 @@ type ConversationTurnOptions struct {
 	// ThinkingOff disables extended thinking for the turn.
 	ThinkingOff bool
 	// Tools is the explicit list of built-in tools the turn may use. Empty
-	// means none.
+	// means none, which is what a conversation turn passes: its tools are
+	// the conversation tool server's (#1570).
 	Tools []string
+	// MCPConfig is the path of an MCP config file naming the turn's own tool
+	// server, or "" for none. It is a file the host wrote, never text from a
+	// message.
+	MCPConfig string
+	// AllowedTools are the permission rules of the tools the turn may call
+	// without being asked. Under the turn's permission mode every other
+	// tool is denied.
+	AllowedTools []string
+	// AppendSystemPrompt is fixed text the host appends to the system
+	// prompt: the conversation's tool and injection boundary. Never message
+	// text, which reaches the turn only on stdin.
+	AppendSystemPrompt string
 }
 
 // Stream formats a ConversationBuilder's output can be read with.
@@ -107,9 +120,9 @@ func ConversationForbiddenFlags() (flags []string, permissionModes []string) {
 // BuildConversationTurn builds one Claude turn (spike #1568 § 3.1): a new
 // process with session persistence off, restricted mode, a permission mode
 // that denies anything not explicitly allowed without prompting, an explicit
-// tool list, no MCP server but the ones named here (none), and partial
-// messages so the reply streams. The message and the replayed context arrive
-// on stdin.
+// built-in tool list, no MCP server but the turn's own tool server, only the
+// tools allowed by name, and partial messages so the reply streams. The
+// message and the replayed context arrive on stdin.
 func (a *ClaudeAdapter) BuildConversationTurn(opts ConversationTurnOptions) (string, []string, map[string]string) {
 	args := []string{
 		"-p",
@@ -130,6 +143,15 @@ func (a *ClaudeAdapter) BuildConversationTurn(opts ConversationTurnOptions) (str
 	}
 	if opts.Effort != "" {
 		args = append(args, "--effort", opts.Effort)
+	}
+	if opts.MCPConfig != "" {
+		args = append(args, "--mcp-config", opts.MCPConfig)
+	}
+	if len(opts.AllowedTools) > 0 {
+		args = append(args, "--allowedTools", strings.Join(opts.AllowedTools, ","))
+	}
+	if opts.AppendSystemPrompt != "" {
+		args = append(args, "--append-system-prompt", opts.AppendSystemPrompt)
 	}
 	env := map[string]string{}
 	if opts.ThinkingOff {

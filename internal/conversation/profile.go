@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/nightgauge/nightgauge/internal/config"
+	"github.com/nightgauge/nightgauge/internal/conversation/tools"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/executionprofile"
 	"github.com/nightgauge/nightgauge/internal/intelligence/routing"
@@ -31,9 +32,13 @@ type plan struct {
 	// effortNote says why no effort was applied, when none was.
 	effortNote string
 	builder    adapters.ConversationBuilder
-	cmd        string
-	args       []string
-	env        map[string]string
+	// opts are the options the argv was built from. The host rebuilds the
+	// argv from them once the turn's tool server is up, adding only its
+	// config file (startTools).
+	opts adapters.ConversationTurnOptions
+	cmd  string
+	args []string
+	env  map[string]string
 }
 
 // refusal is a turn this workspace cannot serve: the detail the turn's
@@ -123,16 +128,23 @@ func (p planner) plan(workspaceRoot string) (plan, error) {
 		return plan{}, refuse("effort-unsupported", "%s does not declare effort %s", desc.ID, effort)
 	}
 
-	cmd, args, env := builder.BuildConversationTurn(adapters.ConversationTurnOptions{
-		Model:       model,
-		Effort:      effort,
-		ThinkingOff: envelope.ThinkingPolicy == "off",
-	})
+	// The tools are the conversation's own and nothing else (#1570): no
+	// built-in tool, the conversation tools allowed by name, and the
+	// boundary stated in the system prompt. No workspace setting reaches
+	// any of the three.
+	opts := adapters.ConversationTurnOptions{
+		Model:              model,
+		Effort:             effort,
+		ThinkingOff:        envelope.ThinkingPolicy == "off",
+		AllowedTools:       tools.AllowedToolRules(),
+		AppendSystemPrompt: boundaryPrompt,
+	}
+	cmd, args, env := builder.BuildConversationTurn(opts)
 	if _, err := p.lookPath(cmd); err != nil {
 		return plan{}, refuse("adapter-unavailable", "%s is not installed on this host", cmd)
 	}
 	return plan{
 		profile: profile, model: model, effort: effort, effortNote: note,
-		builder: builder, cmd: cmd, args: args, env: env,
+		builder: builder, opts: opts, cmd: cmd, args: args, env: env,
 	}, nil
 }

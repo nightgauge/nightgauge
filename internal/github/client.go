@@ -641,10 +641,20 @@ func appClient(cfg TokenResolver, owner string) *Client {
 	if creds == nil {
 		return nil
 	}
-	first, err := appInstallationToken(context.Background(), creds, time.Now)
+	c, err := newAppClient(context.Background(), creds)
 	if err != nil {
 		warnAppFallback(creds, err)
 		return nil
+	}
+	return c
+}
+
+// newAppClient mints the installation's first token and returns the client
+// that authenticates as it, or the minting error.
+func newAppClient(ctx context.Context, creds *AppCredentials) (*Client, error) {
+	first, err := appInstallationToken(ctx, creds, time.Now)
+	if err != nil {
+		return nil, err
 	}
 	slot := "app:" + strconv.FormatInt(creds.InstallationID, 10)
 	src := newAppReuseSource(first, creds)
@@ -655,7 +665,7 @@ func appClient(cfg TokenResolver, owner string) *Client {
 	if path, err := DefaultSharedTrackerPath(); err == nil {
 		c = c.WithRateLimitTracker(NewSharedRateLimitTracker(path), slot).WithRateLimitWait()
 	}
-	return c
+	return c, nil
 }
 
 // usableApp is resolveApp with a configuration error reported and treated as

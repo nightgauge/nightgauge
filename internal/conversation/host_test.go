@@ -197,9 +197,11 @@ func TestTurn_RunsOnTheWorkspacesProfileNotTheClients(t *testing.T) {
 	if !containsPair(runs[0].Args, "--model", "claude-opus-5-5") || !containsPair(runs[0].Args, "--effort", "high") {
 		t.Errorf("argv %v does not carry the workspace's opus/high", runs[0].Args)
 	}
+	// Flag values only: --allowedTools is a flag, and the boundary prompt's
+	// prose (which says "follow") is not a profile value.
 	for _, client := range []string{"haiku", "low", "codex", "efficiency"} {
 		for _, a := range runs[0].Args {
-			if strings.Contains(a, client) {
+			if !strings.HasPrefix(a, "-") && !strings.Contains(a, " ") && strings.Contains(a, client) {
 				t.Errorf("argv carries the client's %q: %v", client, runs[0].Args)
 			}
 		}
@@ -296,30 +298,46 @@ func TestTurn_SecondTurnHasTheFirstTurnsContext(t *testing.T) {
 	}
 }
 
-// The real CLI answered the second turn from exactly the message this host
-// renders: the recorded stdin is what renderMessage produces for the
-// recorded first exchange, and the recorded reply names the plum.
+// The real CLI answered the second turn from the message this host renders:
+// the recorded stdin carried the same messages, in the same order, with the
+// same roles and text, ahead of the same new message, and the recorded reply
+// names the plum. The capture predates the authorship and data framing #1570
+// added (author, by_poster, and the framing lines), which add to each
+// message and change none of what the turn answered from.
 func TestRenderMessage_MatchesTheRecordedReplay(t *testing.T) {
 	user, assistant, next := "My favourite fruit is the plum. Reply with just the word: noted.", "noted",
 		"Which fruit did I say was my favourite? Answer in one word."
 	msgs := []platform.TurnContextMessage{
-		{ID: "m1", TurnID: "t1", Position: 1, Role: "user", Content: &user},
+		{ID: "m1", TurnID: "t1", Position: 1, Role: "user", Content: &user, ActorAccountID: "acct-1"},
 		{ID: "m2", TurnID: "t1", Position: 2, Role: "assistant", Content: &assistant},
-		{ID: "m3", TurnID: "t2", Position: 3, Role: "user", Content: &next},
+		{ID: "m3", TurnID: "t2", Position: 3, Role: "user", Content: &next, ActorAccountID: "acct-1"},
 	}
-	got, err := renderMessage(platform.TurnContext{TurnID: "t2", Messages: msgs}, "t2")
+	got, err := renderMessage(platform.TurnContext{TurnID: "t2", Messages: msgs}, "t2", "acct-1")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got.current != next {
+		t.Errorf("the poster's message = %q, want %q", got.current, next)
 	}
 	want, err := os.ReadFile(fixture("claude_turn_replay_2.stdin.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The recorded message spaced its JSON as Python does; compare the
-	// structure, then the framing.
-	gotPrior, wantPrior := jsonLine(t, got), jsonLine(t, string(want))
-	if !jsonEqual(gotPrior, wantPrior) || stripJSON(got) != stripJSON(string(want)) {
-		t.Errorf("rendered message =\n%s\nrecorded =\n%s", got, want)
+	var gotPrior, wantPrior []struct{ Role, Text string }
+	if err := json.Unmarshal([]byte(jsonLine(t, got.stdin)), &gotPrior); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(jsonLine(t, string(want))), &wantPrior); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(gotPrior, wantPrior) {
+		t.Errorf("rendered messages %+v, recorded %+v", gotPrior, wantPrior)
+	}
+	for _, s := range []string{got.stdin, string(want)} {
+		if !strings.HasPrefix(s, "Earlier messages in this conversation, oldest first, as a JSON array") ||
+			!strings.HasSuffix(s, "\n"+next) {
+			t.Errorf("framing differs from the recording's: %q", s)
+		}
 	}
 	if reply := fixtureText(t, "claude_turn_replay_2.jsonl"); !strings.Contains(strings.ToLower(reply), "plum") {
 		t.Errorf("the recorded second turn answered %q", reply)
@@ -335,26 +353,6 @@ func jsonLine(t *testing.T, s string) string {
 	}
 	t.Fatalf("no JSON line in %q", s)
 	return ""
-}
-
-func jsonEqual(a, b string) bool {
-	var x, y any
-	if json.Unmarshal([]byte(a), &x) != nil || json.Unmarshal([]byte(b), &y) != nil {
-		return false
-	}
-	xa, _ := json.Marshal(x)
-	ya, _ := json.Marshal(y)
-	return string(xa) == string(ya)
-}
-
-func stripJSON(s string) string {
-	var out []string
-	for _, line := range strings.Split(s, "\n") {
-		if !strings.HasPrefix(line, "[") {
-			out = append(out, line)
-		}
-	}
-	return strings.Join(out, "\n")
 }
 
 // A teammate's cancel terminates the turn's whole process group, a grandchild

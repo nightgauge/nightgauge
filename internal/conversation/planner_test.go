@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nightgauge/nightgauge/internal/conversation/tools"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
@@ -85,6 +86,12 @@ func TestPlan_NoConfigurationReachesABypassFlag(t *testing.T) {
 					}
 					if !containsPair(args, "--permission-mode", "dontAsk") || !containsPair(args, "--tools", "") {
 						t.Errorf("argv lacks dontAsk or the empty tool list: %v", args)
+					}
+					// The tool ceiling (#1570): exactly the conversation
+					// tools, and the boundary, whatever auto-accept says.
+					if !containsPair(args, "--allowedTools", strings.Join(tools.AllowedToolRules(), ",")) ||
+						!containsPair(args, "--append-system-prompt", boundaryPrompt) {
+						t.Errorf("argv lacks the conversation's tool ceiling: %v", args)
 					}
 				}
 			}
