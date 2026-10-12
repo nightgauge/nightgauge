@@ -240,7 +240,7 @@ will either.
   adapter adds it unless `NIGHTGAUGE_CLAUDE_CLI_ARGS` already names allowed tools (#2358).
   Without it a `--print` run refuses any tool that needs permission unless the user's
   settings allow it.
-- Go adapter supports `--max-tokens`, `--max-turns`, `--max-budget-usd`
+- Go adapter supports `--max-turns` and `--max-budget-usd`. A token budget is not mapped: Claude Code has no `--max-tokens` option (#1716)
 - TypeScript adapter supports none of these
 - Go adapter has stream-json output (token tracking capable); TypeScript does not
 
@@ -683,14 +683,14 @@ disposition; see the ADR for the reasoning behind each:
 | ---------------- | ------------------------------------------------------------------- |
 | Adapter          | `claude-headless`                                                   |
 | Capability       | Budget limits (tool calling resolved by #2358)                      |
-| TypeScript claim | Does not support `--max-tokens`, `--max-turns`, `--max-budget-usd`  |
+| TypeScript claim | Does not support `--max-turns`, `--max-budget-usd`                  |
 | Go adapter       | Supports all of the above                                           |
 | Severity         | MEDIUM                                                              |
 | Decision         | **DEFER** (the budget flags); `--allowedTools` **RESOLVED** (#2358) |
 
 **Evidence:**
 
-- Go `ClaudeAdapter.BuildCommand()` appends `--allowedTools`, `--model`, `--max-tokens`, `--max-turns`, `--max-budget-usd` when set in `RunOptions`
+- Go `ClaudeAdapter.BuildCommand()` appends `--allowedTools`, `--model`, `--max-turns`, `--max-budget-usd` when set in `RunOptions`
 - TypeScript `ClaudeHeadlessAdapter.createQueryFunction()` reads only `NIGHTGAUGE_CLAUDE_CLI_COMMAND` and `NIGHTGAUGE_CLAUDE_CLI_ARGS` env vars — no structured options
 - The stage's allowed-tools reach the query's own options from the stage SKILL.md (#2358), and
   `createCliQueryFn` passes them as `--allowedTools`. The budget flags still need

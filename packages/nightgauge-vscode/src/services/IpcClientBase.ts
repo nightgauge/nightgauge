@@ -1156,6 +1156,13 @@ export interface AutonomousStatusResult {
      * existed, which read as retryable.
      */
     kind?: string;
+    /**
+     * Set when the entry was recorded at its kind's consecutive retry cap
+     * (`permission_denied`, #1756). Such an entry is HELD for an operator like
+     * a held kind: the rescan does not re-admit it, and only an explicit
+     * resume or clear-failures releases it.
+     */
+    retryCapped?: boolean;
   }[];
   remaining: number;
   tokensSpent: number;

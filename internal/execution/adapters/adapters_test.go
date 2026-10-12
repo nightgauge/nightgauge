@@ -445,6 +445,30 @@ func TestClaudeSdkAdapter(t *testing.T) {
 	}
 }
 
+// TestClaudeSpawningAdaptersDoNotPassMaxTokens pins #1716: Claude Code has no
+// --max-tokens option (2.1.258 exits 1 with "unknown option"), so a dispatch
+// that sets a token budget must not put one on the claude argv.
+func TestClaudeSpawningAdaptersDoNotPassMaxTokens(t *testing.T) {
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-key")
+	for _, adapter := range []SkillRunner{NewClaudeAdapter(), NewClaudeSdkAdapter()} {
+		t.Run(adapter.Name(), func(t *testing.T) {
+			cmd, args, _ := adapter.BuildCommand(RunOptions{
+				SkillPath:   "/skills/feature-dev/SKILL.md",
+				WorktreeDir: "/tmp/worktree",
+				Stage:       "feature-dev",
+				Model:       "claude-sonnet-4-6",
+				MaxTokens:   4096,
+			})
+			if cmd != "claude" {
+				t.Fatalf("cmd = %q, want claude", cmd)
+			}
+			if containsArg(args, "--max-tokens") || containsArg(args, "4096") {
+				t.Errorf("args = %v, want no --max-tokens: Claude Code refuses the option", args)
+			}
+		})
+	}
+}
+
 func TestGeminiSdkAdapter(t *testing.T) {
 	adapter := NewGeminiSdkAdapter()
 	if adapter.Name() != "gemini-sdk" {

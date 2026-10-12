@@ -269,6 +269,26 @@ type FailedItem struct {
 	// for every entry before #1486, so old state files keep their behaviour
 	// without a migration.
 	Kind string `json:"kind,omitempty"`
+
+	// RetryCapped marks an entry recorded when Kind reached its consecutive
+	// retry cap (permissionDeniedMaxAttempts). Kind alone cannot hold it:
+	// permission_denied retries below the cap, so it is not a held kind. The
+	// flag holds the entry for an operator (HoldOperatorResume) instead of
+	// letting the reconcile re-admit it into the same denial (#1756).
+	RetryCapped bool `json:"retryCapped,omitempty"`
+}
+
+// hold returns the human act this entry waits for: the hold its Kind names
+// (HoldForTerminalKind), else HoldOperatorResume for an entry recorded at its
+// retry cap, else HoldNone.
+func (f FailedItem) hold() string {
+	if h := HoldForTerminalKind(f.Kind); h != HoldNone {
+		return h
+	}
+	if f.RetryCapped {
+		return HoldOperatorResume
+	}
+	return HoldNone
 }
 
 // RefinementItem tracks an in-flight or completed refinement operation.
@@ -602,9 +622,10 @@ const permissionDeniedBackoff = 2 * time.Minute
 // the same issue before the scheduler stops re-dispatching it. A single
 // denial is almost always cleared by the stage's next turn; repeated denials
 // on the same issue mean the stage keeps reaching for the same forbidden
-// pattern and needs a human or a skill-guidance fix, not more retries. Does
-// NOT increment LifetimeIssueFailures either way — a harness denial is never
-// the issue's fault. Issue #289.
+// pattern and needs a human or a skill-guidance fix, not more retries. The
+// cap is terminal: the issue is held for an operator (FailedItem.RetryCapped,
+// #1756). Does NOT increment LifetimeIssueFailures either way — a harness
+// denial is never the issue's fault. Issue #289.
 const permissionDeniedMaxAttempts = 3
 
 // apiOverloadedBackoffFor computes the escalating backoff for the given
@@ -3147,8 +3168,9 @@ func (as *AutonomousScheduler) QuotaCooldownSnapshot() (until, reason string, ac
 	return until, reason, time.Now().Before(deadline)
 }
 
-// releaseOperatorHoldsLocked drops the Failed entries whose terminal kind is
-// held for an explicit operator act (HoldOperatorResume), so the next graph
+// releaseOperatorHoldsLocked drops the Failed entries held for an explicit
+// operator act (HoldOperatorResume: by terminal kind, or recorded at a retry
+// cap — FailedItem.hold), so the next graph
 // reconcile re-admits them and the candidate filter stops excluding them.
 // `scope` is "" for the whole fleet, a "owner/repo" prefix for one repo, or an
 // exact "owner/repo#number" key for one issue. Returns the keys released.
@@ -3170,7 +3192,7 @@ func (as *AutonomousScheduler) releaseOperatorHoldsLocked(scope string) []string
 	for _, f := range as.state.Failed {
 		key := fmt.Sprintf("%s#%d", f.Repo, f.Number)
 		inScope := scope == "" || key == scope || f.Repo == scope
-		if inScope && HoldForTerminalKind(f.Kind) == HoldOperatorResume {
+		if inScope && f.hold() == HoldOperatorResume {
 			released = append(released, key)
 			log.Printf("autonomous: released %s — operator resume clears the %q hold", key, f.Kind)
 			continue
@@ -4412,7 +4434,7 @@ func (as *AutonomousScheduler) prioritize(ctx context.Context, g *depgraph.Graph
 	// dispatch before it completed.
 	humanHeldSet := make(map[string]string)
 	for _, f := range as.state.Failed {
-		if hold := HoldForTerminalKind(f.Kind); hold != HoldNone {
+		if hold := f.hold(); hold != HoldNone {
 			humanHeldSet[fmt.Sprintf("%s#%d", f.Repo, f.Number)] = hold
 		}
 	}
@@ -5476,13 +5498,17 @@ func (as *AutonomousScheduler) onPipelineComplete(repo string, issue int, succes
 			}
 			priorAttempts := as.retryBackoff[key].Attempts
 			if priorAttempts >= permissionDeniedMaxAttempts {
+				// Terminal until an operator releases it (#1756). The entry is
+				// marked RetryCapped, which holds it (FailedItem.hold): the
+				// reconcile keeps it instead of re-admitting it and prioritize
+				// skips it. The retryBackoff entry is KEPT, so its Attempts
+				// count survives: deleting it read back as 0 on the next
+				// lookup, and the cap restarted from scratch every lap.
 				as.recordFailureLocked(repo, issue, title, now,
-					fmt.Sprintf("permission-denied (retryable, harness fault) — exceeded %d consecutive denials, pausing re-dispatch (no lifetime-cap increment) — %s", permissionDeniedMaxAttempts, detail), terminalFailureKind)
-				log.Printf("autonomous: permission_denied for %s exceeded %d consecutive denials — pausing re-dispatch, no lifetime-cap increment",
+					fmt.Sprintf("permission-denied (harness fault) — exceeded %d consecutive denials, held for an operator (no lifetime-cap increment); fix the stage's denied pattern, then release with `nightgauge autonomous clear-failures %s` — %s", permissionDeniedMaxAttempts, key, detail), terminalFailureKind)
+				as.markRetryCappedLocked(repo, issue)
+				log.Printf("autonomous: permission_denied for %s exceeded %d consecutive denials — held for an operator, no lifetime-cap increment",
 					key, permissionDeniedMaxAttempts)
-				if as.retryBackoff != nil {
-					delete(as.retryBackoff, key)
-				}
 				as.persistStateLocked()
 				as.goTrackedBoardOp(func(genCtx context.Context) { as.revertFailedIssueStatus(genCtx, repo, issue) })
 				select {
@@ -6289,7 +6315,7 @@ func (as *AutonomousScheduler) humanHoldFor(repo string, issue int) string {
 	}
 	for _, f := range as.state.Failed {
 		if f.Repo == repo && f.Number == issue {
-			return HoldForTerminalKind(f.Kind)
+			return f.hold()
 		}
 	}
 	return HoldNone
@@ -7385,6 +7411,9 @@ func (as *AutonomousScheduler) recordFailureLocked(repo string, number int, titl
 			// even when an earlier attempt was a plain crash, and equally a
 			// retryable crash after an approval landed must not keep it held.
 			f.Kind = kind
+			// The cap branch sets it again after this write; any other
+			// attempt is not at a cap.
+			f.RetryCapped = false
 			if f.AttemptCount < 1 {
 				// Legacy entry without count — treat as one prior attempt.
 				f.AttemptCount = 1
@@ -7409,6 +7438,19 @@ func (as *AutonomousScheduler) recordFailureLocked(repo string, number int, titl
 		AttemptCount:  1,
 		FirstFailedAt: failedAt,
 	})
+}
+
+// markRetryCappedLocked flags the issue's Failed entry as recorded at its
+// retry cap, which holds it for an operator (FailedItem.hold). Call it right
+// after the recordFailureLocked that wrote the capped attempt. Caller must
+// hold as.mu.
+func (as *AutonomousScheduler) markRetryCappedLocked(repo string, number int) {
+	for i := range as.state.Failed {
+		if f := &as.state.Failed[i]; f.Repo == repo && f.Number == number {
+			f.RetryCapped = true
+			return
+		}
+	}
 }
 
 // dedupeFailedItems collapses legacy duplicate FailedItem entries (one per
@@ -7453,6 +7495,7 @@ func dedupeFailedItems(items []FailedItem) []FailedItem {
 			// latest attempt, or a legacy duplicate pair could collapse a
 			// human-decision hold into a retryable one (#1486).
 			existing.Kind = f.Kind
+			existing.RetryCapped = f.RetryCapped
 		}
 		// FirstFailedAt = earliest non-empty timestamp.
 		candidateFirst := f.FirstFailedAt
@@ -7516,7 +7559,7 @@ func (as *AutonomousScheduler) architectureApprovalLabel() string {
 //
 // Caller MUST hold as.mu.
 func (as *AutonomousScheduler) holdReleased(f FailedItem, node *depgraph.Node, approvalLabel string) (bool, string) {
-	switch HoldForTerminalKind(f.Kind) {
+	switch f.hold() {
 	case HoldArchitectureApproval:
 		for _, l := range node.Labels {
 			if strings.EqualFold(l, approvalLabel) {
@@ -7629,7 +7672,7 @@ func (as *AutonomousScheduler) reconcileStateAgainstGraph(g *depgraph.Graph) {
 			continue
 		}
 		if strings.EqualFold(node.State, "OPEN") {
-			if hold := HoldForTerminalKind(f.Kind); hold != HoldNone {
+			if hold := f.hold(); hold != HoldNone {
 				released, why := as.holdReleased(f, node, approvalLabel)
 				if !released {
 					// Kept, not re-admitted: the entry IS the hold, and the

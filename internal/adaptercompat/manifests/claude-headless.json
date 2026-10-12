@@ -17,7 +17,6 @@
     "--add-dir",
     "--allowedTools",
     "--max-budget-usd",
-    "--max-tokens",
     "--max-turns",
     "--model",
     "--no-session-persistence",

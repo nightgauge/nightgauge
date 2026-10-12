@@ -44,6 +44,8 @@ Marketplace channel regression suite
 VSIX host-target regression suite
 Release channel verification regression suite
 nonexistent-workflow-reference gate
+Action-pin gate regression suite
+workflow action pins resolve
 Proposal-artifact validator regression suite
 CLA gate regression suite
 Cache-boundary measurement smoke

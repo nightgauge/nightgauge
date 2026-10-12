@@ -498,6 +498,22 @@ Plugin-manifest validation is **not** wired into CI. These checks —
 and must be run by hand. `.github/workflows/lint.yml` covers Prettier, ESLint,
 SKILL.md metadata and the plugin-mirror drift gate.
 
+### Workflow action SHA-pin gate
+
+`scripts/check-action-pins.py` (#1782) asks the GitHub API whether every
+`uses: owner/repo@<sha>` in `.github/workflows/` and `.github/actions/`
+resolves, and fails on a pin that does not, naming the file and line. A ref
+that is not a 40-hex commit SHA fails too. `lint.yml` and `ci-local.sh` run
+it after its self-test, `scripts/test-check-action-pins.sh`, which uses a
+local stub API.
+
+It sends one request per distinct pin and caches each pin that resolves,
+keyed by `owner/repo@sha`, in the clone's git directory
+(`NIGHTGAUGE_ACTION_PIN_CACHE` overrides the path). A warm cache therefore
+checks offline. A pin it cannot ask about (no network, rate limited, a
+refused token) prints `HARNESS ERROR` and exits 2: the local gate reports
+that step as INFRASTRUCTURE, and it is never a pass.
+
 ### Nonexistent-workflow-reference gate
 
 `scripts/check-workflow-refs.py` fails when a tracked file names a

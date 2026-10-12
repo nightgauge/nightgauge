@@ -129,6 +129,21 @@ jobs:
         run: bash scripts/test-doctor-app-permission-walkthrough.sh
       - name: Nonexistent-workflow-reference gate
         run: python3 scripts/check-workflow-refs.py
+      # Workflow action SHA-pin gate (#1782): adapter-canary.yml merged pinned
+      # to an actions/setup-node commit that does not exist, and nothing
+      # noticed until it ran on main. Every `uses:` pin in .github/ must
+      # resolve on GitHub. One request per distinct owner/repo@sha (10s
+      # timeout, one retry), authenticated with this job's token. A pin the
+      # API cannot be asked about fails the step as a HARNESS ERROR (exit 2),
+      # never a pass. Self-test first, against a local stub API.
+      - name: Action-pin gate self-test
+        run: bash scripts/test-check-action-pins.sh
+      - name: Workflow action pins resolve
+        timeout-minutes: 3
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NIGHTGAUGE_ACTION_PIN_CACHE: ${{ runner.temp }}/action-pins.json
+        run: python3 scripts/check-action-pins.py
       # Proves the gate below still FAILS CLOSED rather than passing vacuously
       # — the defect #539 exists to fix — and that it fails only on the
       # invariant it names (#546). Without this step, reverting the gate to

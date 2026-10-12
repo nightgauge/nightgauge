@@ -349,6 +349,8 @@ REQUIRED_FILES=(
   scripts/test-verify-release-channels.sh
   scripts/verify-release-channels.sh
   scripts/check-workflow-refs.py
+  scripts/check-action-pins.py
+  scripts/test-check-action-pins.sh
   scripts/validate-proposal-artifact.mjs
   scripts/apply-proposal-artifact.sh
   scripts/test-validate-proposal-artifact.sh
@@ -1494,6 +1496,16 @@ run_group "Marketplace channel regression suite" bash scripts/test-marketplace-c
 run_group "VSIX host-target regression suite" bash scripts/test-vsix-host-target.sh
 run_group "Release channel verification regression suite" bash scripts/test-verify-release-channels.sh
 run_step "nonexistent-workflow-reference gate" python3 scripts/check-workflow-refs.py
+
+# 5f1. Workflow action SHA-pin gate (#1782) — every `uses: owner/repo@sha` in
+#     .github/ must resolve on GitHub, and every ref must be a commit SHA.
+#     Self-test first, against a local stub API. The gate asks GitHub only
+#     about pins its per-SHA cache (in the clone's git dir) has not seen, so a
+#     warm run makes no request; a pin it cannot ask about (offline, rate
+#     limited) prints HARNESS ERROR and is reported as INFRASTRUCTURE, never
+#     as a pass. Mirrors .github/workflows/lint.yml.
+run_step "Action-pin gate regression suite" bash scripts/test-check-action-pins.sh
+run_step "workflow action pins resolve" python3 scripts/check-action-pins.py
 
 # 5f2. Proposal-artifact validator regression suite (#1304) — the schema gate
 # between the read-only model job and the write job in release-watchdog.yml

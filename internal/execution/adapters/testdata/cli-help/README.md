@@ -127,9 +127,10 @@ grok's `--effort` is not hidden: 1.0.4 lists it as `[aliases: --effort]` of
 
 ### Emitted but refused (`knownBroken`)
 
-| Adapter and version     | Flag           | Probe                                                                          | Bug   |
-| ----------------------- | -------------- | ------------------------------------------------------------------------------ | ----- |
-| claude-headless 2.1.258 | `--max-tokens` | `claude -p --max-tokens 5` exits 1 with `error: unknown option '--max-tokens'` | #1716 |
+None today. The last entry was claude-headless 2.1.258's `--max-tokens`:
+`claude -p --max-tokens 5` exits 1 with `error: unknown option '--max-tokens'`.
+#1716 stopped the claude adapters emitting it, and a dispatch's token budget is
+not mapped for them.
 
 ### codex 0.145.0 `--ask-for-approval` (#1715)
 

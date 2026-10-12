@@ -432,14 +432,15 @@ func TestRunStage_NonZeroExit_ReturnsNilErrorWithStderr(t *testing.T) {
 	}
 
 	m := NewManager(root, adapters.NewGrokAdapter())
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	bound := stubWaitBound(t)
+	ctx, cancel := context.WithTimeout(context.Background(), bound)
 	defer cancel()
 
 	result, err := m.RunStage(ctx, StageOptions{
 		Repo:        "nightgauge/nightgauge",
 		IssueNumber: 533,
 		Stage:       "pr-create",
-		Timeout:     30 * time.Second,
+		Timeout:     bound,
 	})
 
 	if err != nil {
@@ -463,6 +464,41 @@ func TestRunStage_NonZeroExit_ReturnsNilErrorWithStderr(t *testing.T) {
 
 // --- #555: the stage child must be observable on disk while it runs ---------
 
+// stubWaitBound is how long a test waits on a stub CLI child, and the stage
+// timeout it gives one: the time left before the test binary's own -timeout,
+// less a minute to report the failure by name (10m when -timeout is off).
+//
+// How soon a spawned child runs is the host's scheduling, not this package's
+// code, and has no bound of its own. A fixed 30s did not hold under two
+// concurrent full gates (#1776): the plain and the race binaries each failed
+// one of these tests at its 30s bound (31.80s, 32.38s) in the same run, while
+// CPU load alone (load 236) never reproduced it. The -timeout is the bound the
+// gate already sizes for concurrent load (scripts/ci-local.sh, #2269).
+func stubWaitBound(t *testing.T) time.Duration {
+	t.Helper()
+	dl, ok := t.Deadline()
+	if !ok {
+		return 10 * time.Minute
+	}
+	left := time.Until(dl)
+	return max(left-time.Minute, left/2)
+}
+
+// firstStdoutLine is a Streamer that closes seen on the stage's first stdout
+// line.
+type firstStdoutLine struct {
+	once sync.Once
+	seen chan struct{}
+}
+
+func (s *firstStdoutLine) OnOutput(stream string, _ []byte) {
+	if stream == "stdout" {
+		s.once.Do(func() { close(s.seen) })
+	}
+}
+
+func (*firstStdoutLine) OnComplete(adapters.RunResult) {}
+
 // pollUntil spins on cond until it holds or the deadline expires. Polling
 // rather than a fixed sleep because the fact under test — "the snapshot on disk
 // now names a live child" — becomes true at an instant this process does not
@@ -482,10 +518,11 @@ func pollUntil(t *testing.T, why string, timeout time.Duration, cond func() bool
 	}
 }
 
-// blockingStageStub writes a stub CLI that reports its own pid and then blocks
-// until `release` appears — a stage that is HEALTHY and SILENT, which is the
-// shape #555 is about. The pid is published through a temp-file rename so a
-// reader can never see a half-written value.
+// blockingStageStub writes a stub CLI that reports its own pid, prints one
+// stdout line, and then blocks until `release` appears — a stage that is
+// HEALTHY and then SILENT, which is the shape #555 is about. The pid is
+// published through a temp-file rename so a reader can never see a
+// half-written value, and before the line, so the line proves it is there.
 //
 // $$ inside the script is the pid of the process Go started: the stub is the
 // command exec.Command spawns, so the shell running it IS cmd.Process.
@@ -495,7 +532,7 @@ func blockingStageStub(t *testing.T, dir string) (stub, pidFile, release string)
 	release = filepath.Join(dir, "release")
 	stub = filepath.Join(dir, "stub-blocking-stage.sh")
 	script := fmt.Sprintf(
-		"#!/bin/sh\nprintf '%%s' \"$$\" > %[1]s.tmp\nmv %[1]s.tmp %[1]s\nwhile [ ! -f %[2]s ]; do sleep 0.02; done\nexit 0\n",
+		"#!/bin/sh\nprintf '%%s' \"$$\" > %[1]s.tmp\nmv %[1]s.tmp %[1]s\necho started\nwhile [ ! -f %[2]s ]; do sleep 0.02; done\nexit 0\n",
 		pidFile, release)
 	if err := os.WriteFile(stub, []byte(script), 0755); err != nil {
 		t.Fatal(err)
@@ -539,7 +576,7 @@ func snapshotPID(t *testing.T, stateDir string, issue int, runID string) (int, b
 // The snapshot's pid was the ZERO the stage-start persist wrote (#534), forever.
 //
 // RED-FIRST: delete the publishStageChild call after SetProcess in
-// manager.go and the first poll below times out — the on-disk pid never leaves
+// manager.go and the snapshot read below finds 0 — the on-disk pid never leaves
 // 0, which is precisely the state in which a healthy 30-minute stage is emitted
 // as pipeline_done(success=false) and has its snapshot deleted mid-flight.
 // Delete the retraction after Wait() instead and the final assertion fails: the
@@ -575,6 +612,8 @@ func TestRunStage_PublishesTheLiveStageChildPidAndRetractsItOnExit(t *testing.T)
 	}
 
 	m := NewManager(root, adapters.NewGrokAdapter())
+	bound := stubWaitBound(t)
+	started := &firstStdoutLine{seen: make(chan struct{})}
 	done := make(chan error, 1)
 	go func() {
 		_, runErr := m.RunStage(context.Background(), StageOptions{
@@ -582,7 +621,8 @@ func TestRunStage_PublishesTheLiveStageChildPidAndRetractsItOnExit(t *testing.T)
 			IssueNumber: 555,
 			Stage:       "feature-dev",
 			Runtime:     rt,
-			Timeout:     60 * time.Second,
+			Streamer:    started,
+			Timeout:     bound,
 		})
 		done <- runErr
 		// CLOSED, not merely sent to: the cleanup below receives from this
@@ -601,16 +641,20 @@ func TestRunStage_PublishesTheLiveStageChildPidAndRetractsItOnExit(t *testing.T)
 		}
 	})
 
-	var onDisk int
-	pollUntil(t, "the manager to publish a live stage-child pid into the run's snapshot", 30*time.Second, func() bool {
-		pid, ok := snapshotPID(t, stateDir, 555, runID)
-		onDisk = pid
-		return ok && pid != 0
-	})
-	pollUntil(t, "the stub stage to report its own pid", 30*time.Second, func() bool {
-		_, err := os.Stat(pidFile)
-		return err == nil
-	})
+	// The synchronization point (#1776): RunStage starts its stdout reader only
+	// after publishStageChild has returned, and the stub prints only once its
+	// pid file is in place, so its first line proves both. Nothing is polled.
+	select {
+	case <-started.seen:
+	case runErr := <-done:
+		t.Fatalf("RunStage returned before the stage printed anything: %v", runErr)
+	case <-time.After(bound):
+		t.Fatalf("the stub stage printed nothing within %s", bound)
+	}
+	onDisk, ok := snapshotPID(t, stateDir, 555, runID)
+	if !ok || onDisk == 0 {
+		t.Fatalf("on-disk pid while the stage runs = %d (loaded=%v), want the stage child's pid — the manager did not publish it", onDisk, ok)
+	}
 
 	if child := readPidFile(t, pidFile); onDisk != child {
 		t.Errorf("snapshot pid = %d, want the stage child's own pid %d — arm 3 must name the process doing the work", onDisk, child)
@@ -629,8 +673,8 @@ func TestRunStage_PublishesTheLiveStageChildPidAndRetractsItOnExit(t *testing.T)
 		if runErr != nil {
 			t.Fatalf("RunStage: %v", runErr)
 		}
-	case <-time.After(30 * time.Second):
-		t.Fatal("RunStage did not return after the stub was released")
+	case <-time.After(bound):
+		t.Fatalf("RunStage did not return within %s after the stub was released", bound)
 	}
 
 	if pid, ok := snapshotPID(t, stateDir, 555, runID); !ok || pid != 0 {
@@ -759,6 +803,9 @@ func TestRunStage_GracefulStopExitZeroIsReportedCancelled(t *testing.T) {
 	ready := filepath.Join(root, "trap-ready")
 	m := NewManager(root, sigtermTrapAdapter{ready: ready})
 	key := "nightgauge/nightgauge#564"
+	// How soon the spawned fake CLI runs is the host's scheduling, so its
+	// waits use the stub bound, not a fixed 30s (#1776).
+	bound := stubWaitBound(t)
 
 	resultCh := make(chan *adapters.RunResult, 1)
 	errCh := make(chan error, 1)
@@ -767,7 +814,7 @@ func TestRunStage_GracefulStopExitZeroIsReportedCancelled(t *testing.T) {
 			Repo:        "nightgauge/nightgauge",
 			IssueNumber: 564,
 			Stage:       "feature-dev",
-			Timeout:     30 * time.Second,
+			Timeout:     bound,
 		})
 		resultCh <- result
 		errCh <- err
@@ -776,10 +823,8 @@ func TestRunStage_GracefulStopExitZeroIsReportedCancelled(t *testing.T) {
 	// Wait for RunStage to register the execution before requesting the stop —
 	// CancelWithGrace is a no-op (graceful=false, no error) against a key that
 	// isn't in m.running yet, which would make this test race the spawn
-	// instead of exercising the cancel path. Same helper and budget as the
-	// #555 waits above, for the same class of fact: a just-spawned
-	// subprocess publishing something this process does not observe directly.
-	pollUntil(t, "RunStage to register its execution", 30*time.Second, func() bool {
+	// instead of exercising the cancel path.
+	pollUntil(t, "RunStage to register its execution", bound, func() bool {
 		m.mu.Lock()
 		_, ok := m.running[key]
 		m.mu.Unlock()
@@ -790,7 +835,7 @@ func TestRunStage_GracefulStopExitZeroIsReportedCancelled(t *testing.T) {
 	// SIGTERM that lands before then kills it by signal (ExitCode -1). A fixed
 	// 50ms sleep lost that race under -race load (#2171); wait for the file
 	// the helper writes after installing the handler instead.
-	pollUntil(t, "the fake CLI to install its SIGTERM handler", 30*time.Second, func() bool {
+	pollUntil(t, "the fake CLI to install its SIGTERM handler", bound, func() bool {
 		_, err := os.Stat(ready)
 		return err == nil
 	})

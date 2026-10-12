@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/nightgauge/nightgauge/internal/execution"
+	"github.com/nightgauge/nightgauge/internal/execution/adapters"
 	"github.com/nightgauge/nightgauge/internal/skillrender"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/spf13/cobra"
@@ -25,6 +26,24 @@ resolution, and absolute-path rewriting (ADR 016).`,
 	}
 	cmd.AddCommand(skillRenderCmd())
 	return cmd
+}
+
+// overlayHostAdapter returns the name the scheduler passes to skillrender for
+// adapter: the registered runner's own Name(), which an alias resolves to
+// (xai and grok-headless are grok; claude-headless is claude). Without it an
+// alias and its canonical name key different host overlays, and an alias that
+// is also a provider name (xai) lands on the provider's file name (#1773). A
+// name the registry does not know passes through, so the debug CLI can still
+// render for any host.
+func overlayHostAdapter(adapter string) string {
+	if strings.TrimSpace(adapter) == "" {
+		return adapter
+	}
+	runner, err := adapters.NewRegistry().Get(adapter)
+	if err != nil {
+		return adapter
+	}
+	return runner.Name()
 }
 
 // renderEnvelope is the `--json --include-content` shape: the provenance
@@ -128,10 +147,12 @@ and the frontmatter tool lists renders once rather than twice.`,
 			if profile != "" && profile != "full" && profile != skillrender.ProfileCompact {
 				return fmt.Errorf("--profile must be \"full\" or %q (or omitted), got %q", skillrender.ProfileCompact, profile)
 			}
+			// The scheduler keys the host overlay off the running adapter's
+			// own name, so an alias must resolve to it first (#1773).
 			res, err := skillrender.Render(skillrender.Options{
 				Stage:       stage,
 				Model:       model,
-				Adapter:     adapter,
+				Adapter:     overlayHostAdapter(adapter),
 				SkillsRoots: roots,
 				Profile:     profile,
 				// The scheduler sets this for a compact render on a local

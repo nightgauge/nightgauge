@@ -80,6 +80,29 @@ changelog, and the release workflow refuses a tag that does not.
   already reaped, and a call that reaches the cap prints its process group,
   open files, OpenCode's locks, the registry requests and OpenCode's log tail.
 
+- **An issue that keeps hitting a harness tool-call denial now stops at the
+  retry cap** (#1756). After three consecutive `permission_denied` retries the
+  scheduler recorded the issue as paused, but the next rescan re-admitted it
+  with its count reset, so it was retried forever. It is now held for an
+  operator, `autonomous resume` or `nightgauge autonomous clear-failures`,
+  and keeps its count.
+
+- **The Claude adapters no longer pass `--max-tokens`** (#1716). Claude Code
+  has no such option and exits on it, so any dispatch that set a token budget
+  would have failed at spawn. The budget is not mapped for `claude-headless`
+  and `claude-sdk`; `--max-turns` and `--max-budget-usd` still bound the run.
+
+- **Host overlays no longer hide a provider overlay of the same name**
+  (#1773). With the `copilot` adapter, `_overlays/hosts/copilot.md` replaced
+  `_overlays/copilot.md` instead of preceding it; both now apply.
+  `nightgauge skill render --adapter` resolves an alias first, so `xai` and
+  `claude-headless` render the overlays a `grok` or `claude` dispatch gets.
+
+- **A workflow pinned to an action commit that does not exist now fails
+  lint** (#1782). Every `uses:` pin in `.github/` must resolve on GitHub and
+  be a commit SHA. The check caches each resolved pin, and reports one it
+  cannot reach GitHub to check as an infrastructure error, not a pass.
+
 ## [0.7.0] - 2026-10-12
 
 ### Added
