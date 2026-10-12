@@ -9,6 +9,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-12
+
 ### Added
 
 - **Start a run private** (#2400). When the window is signed in, every
@@ -1135,7 +1137,8 @@ shipped as [0.2.1].
 - Settings for authentication provider, model selection, and paths
 - Settings for notification sounds, volume, and Do Not Disturb respect
 
-[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/nightgauge/nightgauge/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/nightgauge/nightgauge/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/nightgauge/nightgauge/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/nightgauge/nightgauge/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/nightgauge/nightgauge/compare/v0.4.8...v0.5.0
