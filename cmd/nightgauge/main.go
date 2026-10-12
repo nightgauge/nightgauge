@@ -413,7 +413,12 @@ func runDaemonPlatformAgent(
 		// Declare the workspace this daemon serves, the same repos and
 		// workspace block the extension declares for it, so workspace
 		// presence counts the daemon (#2335).
-		WithWorkspace(served)
+		WithWorkspace(served).
+		// Register as this workspace's own agent, not the machine's: the
+		// key derives from workspaceRoot, whose attention store this daemon
+		// resolves relayed cards against, so a resolve for a card raised
+		// here reaches this daemon and no other on the machine (#1421).
+		WithWorkspaceRoot(workspaceRoot)
 	relay := relayAgentCommandToExtension(ext)
 	turns := newDaemonTurnHost(ctx, conversation.Config{
 		WorkspaceRoot: workspaceRoot,

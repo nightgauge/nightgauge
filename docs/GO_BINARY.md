@@ -325,11 +325,25 @@ keeps one record per client, so one window whose profile changed reads
 differently from two windows that disagree. A service that predates the field
 ignores it.
 
+The registration also carries `workspace_key` (#1421): the key of the
+workspace root the daemon serves, whose `.nightgauge/attention` store it
+resolves relayed cards against. The service keys the agent row on the machine
+id and this key, so one machine running daemons for two workspaces registers
+two agents with two command streams, and a resolve of a card raised in one
+workspace reaches that workspace's daemon and no other (ADR-019). The key is
+the HMAC-SHA256 of the root in canonical form (absolute, symlinks resolved,
+cleaned), keyed by the machine id, in hex: never the path. It is computed once
+when the daemon starts, so a re-registration after an eviction carries the
+same key and revives the same agent. A daemon with no root sends no key and
+registers on the machine's own agent, as every daemon did before; so does a
+service that predates the field, which ignores it.
+
 A daemon the extension spawned carries the window's instance id instead of
 making one (#2418): the extension hands it over in
 `NIGHTGAUGE_AGENT_INSTANCE_ID`, and the daemon adopts it when it is within the
 service's bound (1–64 of `[A-Za-z0-9_-]`), else makes its own. The window's
-extension and its daemon register on two agent rows, one per machine id, and
+extension and its daemon register on two agent rows, the extension's keyed on
+its machine id and the daemon's on its machine id and workspace key, and
 each advertises the window's execution profile on its own 30-second beat; with
 one instance id on both rows the service can count the window once instead of
 reading the two rows as a conflict until both have beaten after a profile

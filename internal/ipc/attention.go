@@ -210,12 +210,14 @@ func (s *Server) ApplyRelayedResolve(ctx context.Context, requestID, optionID, a
 	res, err := store.Resolve(ctx, requestID, optionID, ipcAttentionActor(actor, actorSurfacePlatform), steerText, "", s)
 	if err != nil {
 		if errors.Is(err, attention.ErrRequestNotFound) {
-			// #1421: the command was addressed correctly and delivered to the
-			// wrong daemon. The platform upserts an agent row per MACHINE, so
-			// every workspace daemon on this machine shares one agent id and
-			// one command channel; the store it resolves against is per
-			// WORKSPACE. Whichever daemon holds the stream consumes the frame,
-			// and if the card was raised elsewhere this one cannot apply it.
+			// #1421: the command was delivered to a daemon that does not hold
+			// the card. A daemon registers under its workspace's key, so the
+			// platform gives each workspace its own agent and command channel,
+			// and a resolve reaches the daemon that raised the card. It still
+			// lands here when the card was mirrored under an agent registered
+			// without a key (a daemon or platform that predates the key): that
+			// agent is the machine's, every such daemon on this machine shares
+			// it, and whichever holds the stream consumes the frame.
 			//
 			// This daemon deliberately does NOT reach into the owning
 			// workspace's store: the verb executor is this server — its
@@ -231,7 +233,7 @@ func (s *Server) ApplyRelayedResolve(ctx context.Context, requestID, optionID, a
 			// cannot tell which of several daemons answered.
 			log.Printf("attention_resolve: request %s is not in this daemon's attention store "+
 				"(workspace root %s, store dir %s) — the card was raised under a different workspace "+
-				"on this machine; routing it needs a platform-side change (#1421, ADR-019)",
+				"on this machine, and reached this daemon's agent (#1421, ADR-019)",
 				requestID, s.workspaceRoot, store.Dir())
 			return platform.AttentionResolveOutcome{NotInThisWorkspace: true},
 				fmt.Errorf("%w: %w", platform.ErrRelayedRequestNotHere, err)

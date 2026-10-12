@@ -14,10 +14,14 @@ package ipc
 // misrouted rather than rejected, writes nothing — not the resolution, not the
 // verb's side effect — under either workspace, and still acknowledges it.
 //
-// WHAT THEY DO NOT PROVE: that the resolve reaches the owner. It does not.
-// Routing needs a platform-side change and is deferred (ADR-019 § Deferred).
-// These tests pin the containment and the diagnosis, which are the whole of
-// what this repository can decide on its own.
+// WHAT THEY DO NOT PROVE: that the resolve reaches the owner. That is the
+// routing half, landed as per-workspace agent identity (ADR-019 § Amendment):
+// each daemon registers under its workspace's key, so the hosted service
+// addresses a card's resolve to the agent of the workspace that raised it.
+// Its two-daemon test is cmd/nightgauge's
+// TestRunDaemonPlatformAgent_TwoWorkspacesOneMachine_EachResolveReachesItsOwner.
+// These tests pin the containment and the diagnosis for a resolve that is
+// misrouted all the same: one addressed to an agent registered without a key.
 
 import (
 	"context"
@@ -121,10 +125,10 @@ func TestRelayedResolveIsNotAppliedByADaemonThatDoesNotOwnTheCard(t *testing.T) 
 
 // TestMisroutedRelayedResolveIsStillAcknowledgedOnce pins the ack decision
 // deliberately rather than by accident. Declining the ack would redeliver onto
-// the SAME per-machine agent channel that just misrouted the command, which is
-// an unbounded retry and not a fix; the platform-side routing change is the fix
-// (ADR-019 § Deferred). If a future change makes the ack conditional, this test
-// is the one that must be argued with.
+// the SAME agent channel that just misrouted the command, which is an
+// unbounded retry and not a fix; per-workspace agent identity is the fix
+// (ADR-019 § Amendment). If a future change makes the ack conditional, this
+// test is the one that must be argued with.
 func TestMisroutedRelayedResolveIsStillAcknowledgedOnce(t *testing.T) {
 	ctx := context.Background()
 	daemonA, daemonB := twoDaemons(t)

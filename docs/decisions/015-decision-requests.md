@@ -986,6 +986,10 @@ across roots or declining the ack, and per-workspace agent identity is deferred
 to a platform-side change. Decision E's "the originating agent" should be read
 as "the originating **machine**" until that lands.
 
+It landed on 2026-10-12 (ADR-019 § Amendment): a daemon registers under its
+workspace's key, so the originating agent is the originating **workspace's**
+daemon, and a relayed resolve reaches the daemon that raised the card.
+
 ## Alternatives considered
 
 - **Reuse the ADR-013 trace as the store** (raise/resolve as trace events).
