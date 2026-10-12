@@ -9,7 +9,7 @@ package adapters
 // turns this suite red instead of silently opening a hole:
 //
 //	go test -tags opencode_integration ./internal/execution/adapters/ -count=1 -v \
-//	  -run 'TestOpenCode(PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess)$'
+//	  -run 'TestOpenCode(PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|MergeHarnessReclaimsOrphanedLocks)$'
 //
 // The fixtures and the observed answers are in testdata/opencode-adversarial/.
 // Every opencode process runs with a throwaway HOME, TMPDIR and per-run root
@@ -22,7 +22,9 @@ package adapters
 // dependencies with npm, so every spawn is pointed at a loopback npm registry
 // stub as well. Each process runs in its own process group under a 60-second
 // cap, and cleanup fails the test if any of them, or anything in its group,
-// is still alive.
+// is still alive. A process that reaches the cap is described before it is
+// killed, and before every spawn the harness frees any OpenCode lock an
+// earlier, reaped process left behind (#2454).
 
 import (
 	"archive/tar"
@@ -222,16 +224,20 @@ type mcResult struct {
 // mcProc is a started opencode process.
 type mcProc struct {
 	cmd      *exec.Cmd
+	started  time.Time
 	stdout   *bytes.Buffer
 	stderr   *bytes.Buffer
 	finished chan struct{}
 	result   mcResult
+	// diagnosis is what the harness saw at the cap, taken before the kill.
+	diagnosis string
 }
 
 // start spawns opencode in dir, in its own process group, under the
 // harness's cap, and records its PID with the ledger before anything else.
 func (h *mcHarness) start(dir string, extra map[string]string, stdin string, args ...string) *mcProc {
 	h.t.Helper()
+	h.reclaimOrphanedLocks()
 	ctx, cancel := context.WithTimeout(context.Background(), h.timeout)
 	cmd := exec.CommandContext(ctx, h.bin, args...)
 	cmd.Dir = dir
@@ -239,11 +245,16 @@ func (h *mcHarness) start(dir string, extra map[string]string, stdin string, arg
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)
 	}
-	p := &mcProc{cmd: cmd, stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}, finished: make(chan struct{})}
+	p := &mcProc{cmd: cmd, started: time.Now(), stdout: &bytes.Buffer{}, stderr: &bytes.Buffer{}, finished: make(chan struct{})}
 	cmd.Stdout, cmd.Stderr = p.stdout, p.stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// On the cap, the whole group goes, not only the leader.
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	// On the cap, the whole group goes, not only the leader. What the group
+	// was doing is recorded first, while it is still there to look at: Wait
+	// returns only after Cancel does, so run reads it race-free.
+	cmd.Cancel = func() error {
+		p.diagnosis = h.diagnose(cmd.Process.Pid, p.started)
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 	cmd.WaitDelay = 5 * time.Second
 	if err := cmd.Start(); err != nil {
 		cancel()
@@ -282,11 +293,269 @@ func (p *mcProc) wait() mcResult {
 // the test: every command here finishes in seconds.
 func (h *mcHarness) run(dir string, extra map[string]string, stdin string, args ...string) mcResult {
 	h.t.Helper()
-	res := h.start(dir, extra, stdin, args...).wait()
+	p := h.start(dir, extra, stdin, args...)
+	res := p.wait()
 	if res.timedOut {
-		h.t.Fatalf("opencode %s ran past the %s cap and its process group was killed\nstdout:\n%s\nstderr:\n%s", strings.Join(args, " "), h.timeout, res.stdout, res.stderr)
+		h.t.Fatalf("opencode %s ran past the %s cap and its process group was killed\nstdout:\n%s\nstderr:\n%s\n%s", strings.Join(args, " "), h.timeout, res.stdout, res.stderr, p.diagnosis)
 	}
 	return res
+}
+
+// locksDir is where OpenCode keeps its cross-process locks, under the run's
+// XDG_STATE_HOME.
+func (h *mcHarness) locksDir() string {
+	return filepath.Join(h.root, "state", "opencode", "locks")
+}
+
+// reclaimOrphanedLocks removes every OpenCode lock directory in the harness
+// whose owner has exited (#2454). It runs before every spawn, when no process
+// of this harness is running, and the state directory is the harness's own,
+// so a dead owner can only be an opencode this harness started and reaped.
+//
+// OpenCode 1.18.30 serialises npm installs across processes with a lock
+// directory, XDG_STATE_HOME/opencode/locks/<sha1 of "npm-install:<dir>">.lock,
+// whose meta.json names the owning pid and whose heartbeat file the owner
+// touches every 20 seconds. Every config load starts a detached background
+// install of @opencode-ai/plugin into each config directory under that lock,
+// and a process that exits before the install finishes never releases it:
+// under load that is routine, for a `debug` command that has printed its
+// answer as much as for a run that ended on the model error. OpenCode breaks
+// such a lock only once its heartbeat is a minute old. A later process in the
+// same harness whose config names a plugin waits for that install, so it
+// waits out the rest of that minute first, silently: a `debug config` that
+// takes three seconds took 64 against an orphaned lock, past the cap with
+// empty stdout and stderr. The harness knows the owner is dead, because it
+// reaped it, so it frees the lock at once instead of making every later call
+// race OpenCode's minute against its own cap. A lock whose owner is alive is
+// left alone.
+func (h *mcHarness) reclaimOrphanedLocks() {
+	h.t.Helper()
+	dir := h.locksDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	var keys map[string]string
+	for _, e := range entries {
+		name, ok := strings.CutSuffix(e.Name(), ".lock")
+		if !ok || !e.IsDir() {
+			continue
+		}
+		lock := filepath.Join(dir, e.Name())
+		var meta struct {
+			PID int `json:"pid"`
+		}
+		// No readable meta.json is a lock still being taken, or one OpenCode's
+		// own breaker is replacing: not the harness's to touch.
+		raw, err := os.ReadFile(filepath.Join(lock, "meta.json"))
+		if err != nil || json.Unmarshal(raw, &meta) != nil || meta.PID <= 0 || mcSignalable(meta.PID) {
+			continue
+		}
+		if err := os.RemoveAll(lock); err != nil {
+			h.t.Fatalf("reclaim the lock opencode pid %d left behind: %v", meta.PID, err)
+		}
+		if keys == nil {
+			keys = h.lockKeys()
+		}
+		key, known := keys[name]
+		if !known {
+			key = e.Name()
+		}
+		h.t.Logf("reclaimed OpenCode lock %s, which opencode pid %d left behind when it exited (#2454)", key, meta.PID)
+	}
+}
+
+// diagnose describes a process group that reached the cap, before the kill:
+// its processes, their sockets and open files, OpenCode's cross-process lock
+// directories in the harness's state directory, the npm registry stub's
+// requests since the process started, and the tail of OpenCode's own log, so
+// a stall is diagnosable from the test output alone (#2454).
+func (h *mcHarness) diagnose(pid int, started time.Time) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "At the cap, %s after start (pid %d):\n", time.Since(started).Round(time.Millisecond), pid)
+	group := mcProcessTree(pid)
+	b.WriteString("process group and descendants (pid ppid pgid stat elapsed cpu command):\n")
+	pids := make([]string, 0, len(group))
+	for _, row := range group {
+		fmt.Fprintf(&b, "  %s\n", mcClip(row.line, 300))
+		if row.pid != "" {
+			pids = append(pids, row.pid)
+		}
+	}
+	if len(pids) > 0 {
+		b.WriteString("open sockets and files (lsof, mapped files omitted):\n")
+		for _, line := range mcLsof(strings.Join(pids, ",")) {
+			fmt.Fprintf(&b, "  %s\n", mcClip(line, 300))
+		}
+	}
+	b.WriteString("OpenCode locks (XDG_STATE_HOME/opencode/locks):\n")
+	for _, line := range h.locks() {
+		fmt.Fprintf(&b, "  %s\n", line)
+	}
+	b.WriteString("npm registry stub requests since start:\n")
+	for _, line := range h.registry.requestsSince(started) {
+		fmt.Fprintf(&b, "  %s\n", line)
+	}
+	b.WriteString(h.logTail(40))
+	return b.String()
+}
+
+// mcProcessRow is one line of ps output.
+type mcProcessRow struct{ pid, line string }
+
+// mcProcessTree lists every process in the process group leader leads, and
+// every descendant of the leader that has left that group.
+func mcProcessTree(leader int) []mcProcessRow {
+	out, err := mcCommand("ps", "-A", "-ww", "-o", "pid=,ppid=,pgid=,stat=,etime=,time=,command=")
+	if err != nil {
+		return []mcProcessRow{{line: "ps failed: " + err.Error()}}
+	}
+	type proc struct{ pid, ppid, pgid, line string }
+	var procs []proc
+	parent := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		if f := strings.Fields(line); len(f) >= 3 {
+			procs = append(procs, proc{f[0], f[1], f[2], strings.TrimSpace(line)})
+			parent[f[0]] = f[1]
+		}
+	}
+	id := fmt.Sprint(leader)
+	descends := func(pid string) bool {
+		for depth := 0; pid != "" && depth < 64; depth++ {
+			if pid == id {
+				return true
+			}
+			pid = parent[pid]
+		}
+		return false
+	}
+	var rows []mcProcessRow
+	for _, p := range procs {
+		if p.pgid == id || descends(p.pid) {
+			rows = append(rows, mcProcessRow{pid: p.pid, line: p.line})
+		}
+	}
+	return rows
+}
+
+// mcLsof lists pids' open descriptors, without the memory-mapped files and
+// the binary itself, which every bun process has and which say nothing.
+func mcLsof(pids string) []string {
+	out, err := mcCommand("lsof", "-n", "-P", "-w", "-p", pids)
+	if err != nil && out == "" {
+		return []string{"lsof failed: " + err.Error()}
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 4 || f[3] == "txt" || f[3] == "mem" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) > 80 {
+		lines = append(lines[:80], fmt.Sprintf("... %d more", len(lines)-80))
+	}
+	return lines
+}
+
+// mcCommand runs a diagnostic command under a short cap of its own: a
+// diagnosis must never be what holds a failing test up.
+func mcCommand(name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, name, args...).Output()
+	return string(out), err
+}
+
+func mcClip(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
+}
+
+// locks describes every lock directory OpenCode's cross-process lock
+// (EffectFlock, under XDG_STATE_HOME/opencode/locks) holds in this harness:
+// the key it guards when that is a key the harness can name, the owner pid
+// from its meta.json and whether that pid is still alive, and how long ago
+// the owner last touched its heartbeat. OpenCode treats a lock as stale only
+// once its heartbeat is a minute old.
+func (h *mcHarness) locks() []string {
+	dir := h.locksDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return []string{err.Error()}
+	}
+	keys := h.lockKeys()
+	var out []string
+	for _, e := range entries {
+		line := e.Name()
+		if key, ok := keys[strings.TrimSuffix(e.Name(), ".lock")]; ok {
+			line += " key=" + key
+		}
+		var meta struct {
+			PID       int    `json:"pid"`
+			CreatedAt string `json:"createdAt"`
+		}
+		if raw, err := os.ReadFile(filepath.Join(dir, e.Name(), "meta.json")); err == nil && json.Unmarshal(raw, &meta) == nil {
+			line += fmt.Sprintf(" owner=%d alive=%v created=%s", meta.PID, mcSignalable(meta.PID), meta.CreatedAt)
+		}
+		if info, err := os.Stat(filepath.Join(dir, e.Name(), "heartbeat")); err == nil {
+			if age := time.Since(info.ModTime()).Round(time.Millisecond); age >= 0 {
+				line += fmt.Sprintf(" heartbeat=%s ago", age)
+			} else {
+				line += fmt.Sprintf(" heartbeat=%s ahead", -age)
+			}
+		}
+		out = append(out, line)
+	}
+	if len(out) == 0 {
+		out = append(out, "(none)")
+	}
+	return out
+}
+
+// lockKeys maps the lock directory name of every npm-install lock the harness
+// can predict, OpenCode's sha1 of "npm-install:<dir>", back to its key.
+func (h *mcHarness) lockKeys() map[string]string {
+	dirs := []string{filepath.Join(h.root, "config", "opencode")}
+	pkgs, _ := filepath.Glob(filepath.Join(h.root, "cache", "opencode", "packages", "*"))
+	dirs = append(dirs, pkgs...)
+	nested, _ := filepath.Glob(filepath.Join(h.scratch, "*", ".opencode"))
+	dirs = append(dirs, nested...)
+	keys := map[string]string{}
+	for _, d := range dirs {
+		key := "npm-install:" + d
+		sum := sha1.Sum([]byte(key))
+		keys[hex.EncodeToString(sum[:])] = key
+	}
+	return keys
+}
+
+// logTail returns the last n lines of every OpenCode log file in the harness.
+func (h *mcHarness) logTail(n int) string {
+	files, _ := filepath.Glob(filepath.Join(h.root, "data", "opencode", "log", "*"))
+	if len(files) == 0 {
+		return "OpenCode log: none written\n"
+	}
+	var b strings.Builder
+	for _, f := range files {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			fmt.Fprintf(&b, "OpenCode log %s: %v\n", f, err)
+			continue
+		}
+		lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+		if len(lines) > n {
+			lines = lines[len(lines)-n:]
+		}
+		fmt.Fprintf(&b, "OpenCode log %s, last %d lines:\n", f, len(lines))
+		for _, line := range lines {
+			fmt.Fprintf(&b, "  %s\n", mcClip(line, 400))
+		}
+	}
+	return b.String()
 }
 
 // mcPIDLedger records every opencode PID a test starts. At cleanup it kills
@@ -391,6 +660,7 @@ type mcRegistryStub struct {
 	*httptest.Server
 	mu    sync.Mutex
 	paths []string
+	times []time.Time
 }
 
 func newMCRegistryStub(t *testing.T, packages map[string]string) *mcRegistryStub {
@@ -402,6 +672,7 @@ func newMCRegistryStub(t *testing.T, packages map[string]string) *mcRegistryStub
 		path := r.URL.EscapedPath()
 		s.mu.Lock()
 		s.paths = append(s.paths, path)
+		s.times = append(s.times, time.Now())
 		s.mu.Unlock()
 		for name, p := range served {
 			switch path {
@@ -450,6 +721,20 @@ func (s *mcRegistryStub) requests() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return slices.Clone(s.paths)
+}
+
+// requestsSince returns the requests the stub has seen since start, each with
+// its offset from start.
+func (s *mcRegistryStub) requestsSince(start time.Time) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for i, at := range s.times {
+		if !at.Before(start) {
+			out = append(out, fmt.Sprintf("+%s %s", at.Sub(start).Round(time.Millisecond), s.paths[i]))
+		}
+	}
+	return out
 }
 
 // mcPackTarball packs dir the way npm publishes a package: every file under
@@ -1224,5 +1509,62 @@ func TestOpenCodeMergeHarnessReapsEveryProcess(t *testing.T) {
 	}
 	if mcSignalable(pid) || mcSignalable(-pid) {
 		t.Fatalf("kill -0 still reaches pid %d or its group after the cap", pid)
+	}
+	// The cap recorded what the group was doing before it killed it (#2454).
+	for _, want := range []string{
+		fmt.Sprintf("after start (pid %d):\n", pid),
+		fmt.Sprintf("process group and descendants (pid ppid pgid stat elapsed cpu command):\n  %d ", pid),
+		"debug wait",
+		"open sockets and files",
+		"OpenCode locks",
+		"npm registry stub requests since start",
+		"OpenCode log",
+	} {
+		if !strings.Contains(p.diagnosis, want) {
+			t.Errorf("the diagnosis taken at the cap does not contain %q:\n%s", want, p.diagnosis)
+		}
+	}
+}
+
+// TestOpenCodeMergeHarnessReclaimsOrphanedLocks pins #2454 with the real
+// binary: a lock a finished opencode left on its npm install must not hold
+// up the next call. The lock is planted the way OpenCode writes one, owned by
+// the harness's own `opencode --version`, which has exited, with its
+// heartbeat dated ahead so that OpenCode's own minute-old staleness rule
+// cannot free it while the test runs. q3's project config names a plugin, so
+// `debug config` there waits on that install: without the harness's reclaim
+// it reaches the cap; with it, it answers in seconds and the planted lock is
+// gone.
+func TestOpenCodeMergeHarnessReclaimsOrphanedLocks(t *testing.T) {
+	t.Parallel()
+	h := newMCHarness(t, nil)
+	proj := h.project("q3-array-merge/project")
+	owner := h.pids.recorded()[0]
+	if mcSignalable(owner) {
+		t.Fatalf("the harness's opencode --version (pid %d) is still alive", owner)
+	}
+	key := "npm-install:" + filepath.Join(h.root, "config", "opencode")
+	sum := sha1.Sum([]byte(key))
+	lock := filepath.Join(h.locksDir(), hex.EncodeToString(sum[:])+".lock")
+	mcMkdir(t, lock)
+	const token = "2454-orphaned-lock"
+	meta := fmt.Sprintf(`{"token":%q,"pid":%d,"hostname":"fixture","createdAt":%q}`, token, owner, time.Now().UTC().Format(time.RFC3339Nano))
+	heartbeat := filepath.Join(lock, "heartbeat")
+	for path, body := range map[string]string{filepath.Join(lock, "meta.json"): meta, heartbeat: ""} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ahead := time.Now().Add(time.Hour)
+	if err := os.Chtimes(heartbeat, ahead, ahead); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := h.debugConfig(proj, "", nil)
+	if got := mcStrings(cfg["plugin"]); len(got) == 0 {
+		t.Fatalf("control: q3's project config names no plugin, so nothing waited on the install: %v", cfg["plugin"])
+	}
+	if raw, err := os.ReadFile(filepath.Join(lock, "meta.json")); err == nil && strings.Contains(string(raw), token) {
+		t.Errorf("the planted lock is still in place after debug config: %s", raw)
 	}
 }
