@@ -9,7 +9,7 @@ answers turns the suite red; the answers are also recorded in ADR-022 § 8.
 
 ```bash
 go test -tags opencode_integration ./internal/execution/adapters/ -count=1 -v \
-  -run 'TestOpenCode(PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess)$'
+  -run 'TestOpenCode(PurePluginLoading|InlineDenyBeatsProjectAllow|ArrayMerge|ProviderBaseURLPrecedence|ConfigDiscoveryAboveWorktree|DisableProjectConfig|MergeHarnessReapsEveryProcess|MergeHarnessReclaimsOrphanedLocks)$'
 ```
 
 The tests skip when `opencode` is not on `PATH`, except on CI (`CI=true`), where
@@ -35,7 +35,19 @@ they fail. A binary other than 1.18.30 fails them.
   60-second cap that kills the whole group. Its PID is recorded when it starts,
   and cleanup kills every recorded group and fails the test if a PID or group
   still answers `kill -0`. `TestOpenCodeMergeHarnessReapsEveryProcess` checks
-  that path against `opencode debug wait`, which never exits by itself.
+  that path against `opencode debug wait`, which never exits by itself. At the
+  cap, before the kill, the harness records the group's processes, their open
+  sockets and files, OpenCode's lock directories, the registry stub's requests
+  and the tail of OpenCode's log, and the failure prints them (#2454).
+- **Orphaned locks.** OpenCode serialises each npm install across processes
+  with a lock directory under `XDG_STATE_HOME/opencode/locks/`, and a process
+  that exits before its background install finishes never releases it. OpenCode
+  breaks such a lock only once its heartbeat is a minute old, and a later call
+  whose config names a plugin waits on that install, silently, past the cap.
+  Before every spawn the harness removes a lock whose owner is an `opencode`
+  it started and has reaped (#2454);
+  `TestOpenCodeMergeHarnessReclaimsOrphanedLocks` checks that with a planted
+  lock.
 - **Plugins.** The fixture plugins append their own name to the file
   `ADVERSARIAL_FIXTURE_SENTINEL` names, always inside `t.TempDir()`, and do
   nothing else.
@@ -93,3 +105,6 @@ committed:
   anything and leave `opencode debug wait` running:
   `TestOpenCodeMergeHarnessReapsEveryProcess` fails, the second time from the
   cleanup check naming the surviving PID.
+- Stop the harness reclaiming orphaned locks:
+  `TestOpenCodeMergeHarnessReclaimsOrphanedLocks` reaches the cap on
+  `debug config`, and the diagnosis names the planted lock and its dead owner.

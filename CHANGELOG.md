@@ -72,6 +72,14 @@ changelog, and the release workflow refuses a tag that does not.
   and command stream. A daemon with no workspace root, or a service that
   predates the key, registers as before. See `docs/GO_BINARY.md` and ADR-019.
 
+- **The OpenCode integration suite no longer stalls a call past its cap under
+  load** (#2454). OpenCode leaves its npm-install lock behind when it exits
+  before a background install finishes, and frees it only a minute later, so
+  the next call whose config names a plugin waited silently past the
+  harness's 60-second cap. The harness now frees a lock whose owner it has
+  already reaped, and a call that reaches the cap prints its process group,
+  open files, OpenCode's locks, the registry requests and OpenCode's log tail.
+
 ## [0.7.0] - 2026-10-12
 
 ### Added
