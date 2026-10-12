@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nightgauge/nightgauge/internal/conversation/tools"
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/platform"
 )
@@ -95,6 +96,9 @@ type Config struct {
 	// MaxConcurrent bounds the turns running at once; a turn past it is
 	// refused. Zero means defaultMaxConcurrent.
 	MaxConcurrent int
+	// Forge is the forge the conversation tools reach (#1570). Nil is
+	// GitHub, through the workspace's own config.
+	Forge tools.Forge
 }
 
 const (
@@ -518,7 +522,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 			RetentionClass: h.cfg.Classify(TurnOutcome{State: platform.TurnStateFailed})}
 	}
 
-	message, err := h.readMessage(lease, t.cmd.TurnID)
+	input, err := h.readMessage(lease, t.cmd.TurnID, t.cmd.PosterAccountID)
 	if err != nil {
 		t.markGone(true)
 		if errors.Is(err, errTurnGone) {
@@ -547,7 +551,15 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		return
 	}
 	defer os.RemoveAll(dir)
-	proc, err := startTurnProcess(p, dir, message)
+	p, toolServer, err := h.startTools(t, p, dir, input)
+	if err != nil {
+		log.Printf("conversation: turn %s: its tool server did not start: %v", t.cmd.TurnID, err)
+		t.markGone(true)
+		report(failed(platform.TurnFailureHostError))
+		return
+	}
+	defer toolServer.close()
+	proc, err := startTurnProcess(p, dir, input.stdin)
 	if err != nil {
 		log.Printf("conversation: turn %s: the adapter did not start: %v", t.cmd.TurnID, err)
 		t.markGone(true)
@@ -578,6 +590,9 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	acc := &execution.TokenAccumulator{}
 	var effortActive *bool
 	success := false
+	// A reply that calls a tool comes as several messages; their text is
+	// kept apart in the transcript.
+	wroteText, newMessage := false, false
 	scanner := bufio.NewScanner(proc.stdout)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
 	for scanner.Scan() {
@@ -588,7 +603,14 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		if event.Type == "system" && event.Subtype == "init" && event.PerTurnEffortActive != nil {
 			effortActive = event.PerTurnEffortActive
 		}
+		if event.Type == "stream_event" && event.Event != nil && event.Event.Type == "message_start" {
+			newMessage = true
+		}
 		if _, text, ok := event.TextDelta(); ok && text != "" {
+			if newMessage && wroteText {
+				out.write("\n\n")
+			}
+			newMessage, wroteText = false, true
 			out.write(text)
 		}
 		if event.Type == "result" {
@@ -611,6 +633,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	if !dead {
 		log.Printf("conversation: turn %s: its process group %d is still alive after the turn ended", t.cmd.TurnID, proc.pgid)
 	}
+	toolServer.writeReceipts(out)
 
 	profile.Effort = p.effort
 	if p.effort != "" && effortActive != nil && !*effortActive {
@@ -673,14 +696,14 @@ var errTurnGone = errors.New("the turn is not running on the hosted service")
 
 // readMessage reads the turn's context on its lease and renders the stdin
 // message, retrying a read that failed in transit.
-func (h *Host) readMessage(lease platform.TurnLease, turnID string) (string, error) {
+func (h *Host) readMessage(lease platform.TurnLease, turnID, posterAccountID string) (turnInput, error) {
 	var read platform.TurnContext
 	var err error
 	for attempt := 0; attempt < contextReadAttempts; attempt++ {
 		if attempt > 0 {
 			select {
 			case <-h.ctx.Done():
-				return "", h.ctx.Err()
+				return turnInput{}, h.ctx.Err()
 			case <-time.After(time.Duration(attempt) * 500 * time.Millisecond):
 			}
 		}
@@ -690,13 +713,13 @@ func (h *Host) readMessage(lease platform.TurnLease, turnID string) (string, err
 		}
 		var refused *platform.TurnRequestError
 		if errors.As(err, &refused) && refused.Terminal() {
-			return "", errTurnGone
+			return turnInput{}, errTurnGone
 		}
 	}
 	if err != nil {
-		return "", err
+		return turnInput{}, err
 	}
-	return renderMessage(read, turnID)
+	return renderMessage(read, turnID, posterAccountID)
 }
 
 // turnBudget is how long a turn may run: until timeoutMargin before its

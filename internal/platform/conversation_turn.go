@@ -263,6 +263,9 @@ type TurnContextMessage struct {
 	Role     string  `json:"role"`
 	Content  *string `json:"content"`
 	Redacted bool    `json:"redacted"`
+	// ActorAccountID is the account that posted a user message, the
+	// author a turn attributes it to; empty for an assistant reply.
+	ActorAccountID string `json:"actor_account_id"`
 	// RetentionClass is `durable` or `ephemeral`.
 	RetentionClass string `json:"retention_class"`
 	// UnfinishedTurnState is `failed` or `cancelled` for a message of a turn

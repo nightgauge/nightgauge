@@ -115,7 +115,8 @@ func TestReadTurnContext_PresentsTheLeaseOnItsOwnTurn(t *testing.T) {
 	if ts.method != http.MethodGet || ts.path != "/v1/agents/agent-1/turns/turn-1/context" || ts.lease != "s3cret-lease" {
 		t.Errorf("read sent %s %s lease=%q", ts.method, ts.path, ts.lease)
 	}
-	if len(got.Messages) != 1 || *got.Messages[0].Content != "hi" {
+	// The author is read, so a turn can attribute every message (#1570).
+	if len(got.Messages) != 1 || *got.Messages[0].Content != "hi" || got.Messages[0].ActorAccountID != "a" {
 		t.Errorf("context = %+v", got)
 	}
 

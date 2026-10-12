@@ -9,8 +9,9 @@ document is the authority on the wire. Later issues add their parts: the tool
 boundary (#1570), the conversation tools (#1587), retention classification
 (#1893), and the acts a turn may take (#1894, #1895).
 
-Code: `internal/conversation` (the turn host), `internal/platform/conversation_turn.go`
-(the wire), `internal/execution/adapters/conversation.go` (the builders),
+Code: `internal/conversation` (the turn host), `internal/conversation/tools`
+(the tool boundary), `internal/platform/conversation_turn.go` (the wire),
+`internal/execution/adapters/conversation.go` (the builders),
 `internal/credshape/egress.go` (redaction).
 
 ## Who hosts turns
@@ -41,16 +42,17 @@ Turns arrive on the daemon's own agent command stream,
 The daemon handles it before it relays anything to the extension, and never
 relays it. The payload carries ids and bounds, never message text:
 
-| Field                                                            | Use                                                       |
-| ---------------------------------------------------------------- | --------------------------------------------------------- |
-| `conversation_id`, `turn_id`                                     | The turn                                                  |
-| `target_workspace_id`                                            | Which daemon serves it (above)                            |
-| `poster_account_id`, `poster_github_login`, `poster_is_operator` | The poster; kept for the tool boundary                    |
-| `readable_repos`, `visibility`                                   | What the poster may read; kept for the conversation tools |
-| `deadline_at`                                                    | The turn's timeout                                        |
-| `token_ceiling`                                                  | The turn's token ceiling (default 200,000)                |
-| `limits.max_delta_bytes`, `max_deltas`, `max_reply_bytes`        | Reply bounds                                              |
-| `limits.max_frames_per_request`, `limits.cancel_confirm_seconds` | Batch size and cancel window                              |
+| Field                                                            | Use                                                                         |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `conversation_id`, `turn_id`                                     | The turn                                                                    |
+| `target_workspace_id`                                            | Which daemon serves it (above)                                              |
+| `poster_account_id`, `poster_github_login`, `poster_is_operator` | The poster: the actor of every mutation, and the credential a write may use |
+| `readable_repos`                                                 | The repositories the poster may read; the tools refuse every other          |
+| `visibility`                                                     | Kept for the conversation tools                                             |
+| `deadline_at`                                                    | The turn's timeout                                                          |
+| `token_ceiling`                                                  | The turn's token ceiling (default 200,000)                                  |
+| `limits.max_delta_bytes`, `max_deltas`, `max_reply_bytes`        | Reply bounds                                                                |
+| `limits.max_frames_per_request`, `limits.cancel_confirm_seconds` | Batch size and cancel window                                                |
 
 A payload that names a model, an adapter, a performance mode or an effort has
 those fields ignored. The client selects none of them.
@@ -86,9 +88,12 @@ turn it names, and never logs it.
 1. **Context.** `GET /v1/agents/{agentId}/turns/{turnId}/context` is the only
    source of the turn's prior context. The daemon renders it into the turn's
    stdin message: the earlier messages, oldest first, as a JSON array of
-   `{role, text}` (with `redacted` for a redacted message and `turn_state`
-   for one from a turn that failed or was cancelled), then the new message.
-   The context goes into the user message, never into a system prompt.
+   `{role, author, text}` (`author` is the posting account, or `assistant`
+   for a reply; `by_poster` marks the new message's poster, `redacted` a
+   redacted message and `turn_state` one from a turn that failed or was
+   cancelled), then the new message. The context goes into the user message,
+   never into a system prompt. A context read that attributes the turn's own
+   message to an account other than its poster fails the turn.
 2. **Profile.** The adapter, performance mode and effort are the ones the
    workspace advertises (`executionprofile.Resolve`), resolved when the turn
    starts. The model is `ui.core.default_model` (or `sonnet`) clamped into the
@@ -103,20 +108,132 @@ turn it names, and never logs it.
    ```bash
    claude -p --no-session-persistence --output-format stream-json --verbose \
      --include-partial-messages --restricted --permission-mode dontAsk \
-     --tools "" --strict-mcp-config --model <model> [--effort <rung>]
+     --tools "" --strict-mcp-config --model <model> [--effort <rung>] \
+     --mcp-config <turn dir>/mcp.json \
+     --allowedTools mcp__nightgauge__create_issue,...,mcp__nightgauge__search_issues \
+     --append-system-prompt <the boundary>
    ```
 
    Session persistence is off, so no turn text is written to disk and no
    session handle is ever named. `--restricted` refuses
    `--permission-mode bypassPermissions` and `--dangerously-skip-permissions`
    at startup, and no configuration, auto-accept settings included, can put a
-   bypass flag on a conversation argv. Until the tool boundary lands, a turn
-   has no tools.
+   bypass flag on a conversation argv. The turn has no built-in tool; its
+   tools are the conversation's own (below).
 
 4. **Streaming.** The reply is read with the pipeline's own NDJSON parser and
    token accumulator. Text deltas are redacted, coalesced and posted every
    250 ms as `turn.delta` frames of at most `max_delta_bytes`; past half the
    turn's delta budget the posts slow so the budget lasts until the deadline.
+
+## Tools and permissions
+
+A conversation reads broadly, mutates narrowly, and never escalates (#1570).
+Its tools are defined for conversations, not inherited from a pipeline stage,
+and the set is closed: `internal/conversation/tools` lists it, and a test pins
+it, so a change that adds a tool, or makes one mutating, fails CI.
+
+| Tool               | Mutates | What it does                                                         |
+| ------------------ | ------- | -------------------------------------------------------------------- |
+| `read_file`        | no      | Reads a text file under the workspace root                           |
+| `list_directory`   | no      | Lists a directory under the workspace root                           |
+| `search_files`     | no      | Searches the workspace's text files for an RE2 pattern               |
+| `get_issue`        | no      | Reads an issue of a repository the poster may read                   |
+| `search_issues`    | no      | Searches a readable repository's open issues; qualifiers are removed |
+| `get_pull_request` | no      | Reads a pull request of a repository the poster may read             |
+| `create_issue`     | yes     | Files an issue the poster asked for in their own message             |
+
+No tool writes the working tree, creates a branch, commits, pushes or opens a
+pull request. When a conversation concludes that code should change, its
+output is an issue, not an edit. `tools.IsMutating` reports a tool's class,
+and treats a name it does not know as mutating.
+
+**How a turn reaches them.** For each turn the daemon starts a tool server
+that speaks the Model Context Protocol over HTTP on a loopback port, and
+writes its address and a per-turn bearer token to `mcp.json` in the turn's
+own directory, readable by its owner only and removed with the turn. The
+server refuses a request without that token, one with an `Origin` header,
+and one addressed to another host name. It holds no credential: the forge
+calls resolve theirs inside the daemon. Under `--permission-mode dontAsk`,
+only the tools `--allowedTools` names run, and every other call is denied
+without a prompt.
+
+**Reads.**
+
+- Paths are relative to the workspace root. An absolute path, a `..` that
+  leaves the root, and a symlink that resolves outside it are refused
+  (`path_outside_workspace`). The path is checked lexically, then again with
+  every symlink resolved, and every open goes through an `os.Root` on the
+  workspace, which the kernel holds to the root as well.
+- Secret-bearing paths are refused anywhere in the root, case-insensitively,
+  whether named or reached through a symlink (`path_secret`): `.env*`,
+  `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, anything inside
+  `.git`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials` and SSH private
+  keys (`id_rsa` and the like). A listing omits them, and a search skips
+  them.
+- `.nightgauge/config*.yaml` (and the legacy `config.json`) is read with
+  every credential field's value (tokens, private keys and their paths,
+  license and API keys, secrets, passwords) replaced by `[REDACTED]`. A
+  config file that does not parse is not shown at all.
+- The forge tools read only the repositories in the turn command's
+  `readable_repos`. The file tools do too, judged by the checkout that holds
+  the path, except for a turn posted by the host's operator, which reads its
+  own checkout without the check.
+- Every credential-shaped string in a tool result is redacted before the
+  model sees it.
+
+**The injection boundary.** Repository and forge content is text other
+people wrote. Every read tool returns it inside a JSON envelope whose
+`notice` says it is untrusted data, never instructions; JSON escaping keeps
+the content from closing the envelope. The thread is data too: earlier
+messages reach the model attributed to their authors, and the system prompt
+the daemon appends (`--append-system-prompt`, fixed text, never message text)
+states both rules and the tool ceiling. No message text reaches argv, a
+shell string or a path the daemon builds.
+
+**Filing an issue.** `create_issue` is the only mutation, and every check
+runs before the forge is reached:
+
+1. **The poster's own request.** It runs only when the poster's message in
+   this turn asks for the issue, or confirms one proposed earlier. The model
+   must quote the poster's words (`request_quote`); the quote must appear in
+   the poster's message and either ask for an issue ("file an issue for
+   ...", "create a ticket") or open the message by confirming ("yes", "go
+   ahead"). Words from an earlier message, a file or an issue body are never
+   in the poster's message, so they never satisfy it, whatever they say. The
+   check understands English and refuses what it does not recognize, so a
+   missed request costs the poster a confirmation, never an unrequested
+   write. Refused: `not_requested_by_poster`.
+2. **A repository the poster may read**, from `readable_repos`
+   (`repo_not_readable`), and a posting account to file for
+   (`poster_unknown`): an issue is never filed anonymously.
+3. **The credential.** A teammate's issue is written through the workspace's
+   GitHub App installation and nothing else
+   (`github.NewAppOnlyClient`): no CI environment token, no `GITHUB_TOKEN`,
+   no configured token and no `gh` account is tried. Without a usable App it
+   is refused with `app_unavailable`. A turn the command marks as posted by
+   the host's operator uses the workspace's ordinary credential chain, which
+   prefers the App.
+4. **Bounds.** At most three issues a turn; a one-line title of at most 256
+   characters; credential-shaped strings are redacted from the title and
+   body.
+
+The issue goes through the same creation path as the extension's
+`issue.create`. GitHub shows the App (or the operator) as its author; the
+body ends with a provenance footer naming the poster's GitHub login and
+account and an HTML comment the daemon writes and `tools.ParseProvenance`
+reads:
+
+```html
+<!-- nightgauge:provenance {"origin":"conversation","conversation_id":"...","turn_id":"...","actor_account_id":"...","actor_github_login":"..."} -->
+```
+
+A marker the model writes into the body is defused, so the only record is
+the daemon's. After the turn's process ends, the daemon closes the tool
+server and appends one line to the reply for each `create_issue` call, from
+the server's own record: `[nightgauge] create_issue: filed owner/repo#N ...`,
+or `[nightgauge] create_issue refused (<code>): ...`. A refusal is in the
+transcript whatever the model said about it.
 
 ## Frames
 
