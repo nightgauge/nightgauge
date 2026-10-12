@@ -39,6 +39,21 @@ const (
 	CodeForgeError = "forge_error"
 	// CodeUnknownTool: no conversation tool has that name.
 	CodeUnknownTool = "unknown_tool"
+	// CodeRepoNotInWorkspace: the workspace has no checkout of the
+	// repository.
+	CodeRepoNotInWorkspace = "repo_not_in_workspace"
+	// CodeStateUnavailable: this machine's pipeline state cannot be read
+	// for the turn.
+	CodeStateUnavailable = "state_unavailable"
+	// CodeHostedUnavailable: the hosted service's turn-scoped routes are
+	// not reachable from this turn.
+	CodeHostedUnavailable = "hosted_unavailable"
+	// CodeHostedRefused: the hosted service refused the call; the message
+	// carries its code (act_not_permitted, card_outside_target, ...).
+	CodeHostedRefused = "hosted_refused"
+	// CodeDuplicateAct: the turn already made, or tried, this act on this
+	// card.
+	CodeDuplicateAct = "duplicate_act"
 )
 
 func fail(code, msg string) *Error { return &Error{Code: code, Message: msg} }

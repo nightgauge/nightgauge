@@ -78,6 +78,15 @@ var OpAgentsAckCommand = Operation{
 	Upstream: UpstreamDeclared,
 }
 
+// OpAgentsActOnTurnCard is POST /v1/agents/{agentId}/turns/{turnId}/attention/{requestId}.
+var OpAgentsActOnTurnCard = Operation{
+	ID:       "agents.actOnCardFromTurn",
+	Method:   "POST",
+	Path:     "/v1/agents/{agentId}/turns/{turnId}/attention/{requestId}",
+	Security: SecurityPipeline,
+	Upstream: UpstreamDeclared,
+}
+
 // OpAgentsHeartbeat is PUT /v1/agents/{agentId}/heartbeat.
 var OpAgentsHeartbeat = Operation{
 	ID:       "agents.heartbeat",
@@ -92,6 +101,15 @@ var OpAgentsIngestTurnFrames = Operation{
 	ID:       "agents.ingestTurnFrames",
 	Method:   "POST",
 	Path:     "/v1/agents/{agentId}/turns/{turnId}/frames",
+	Security: SecurityPipeline,
+	Upstream: UpstreamDeclared,
+}
+
+// OpAgentsListTurnCards is GET /v1/agents/{agentId}/turns/{turnId}/attention.
+var OpAgentsListTurnCards = Operation{
+	ID:       "agents.listCardsFromTurn",
+	Method:   "GET",
+	Path:     "/v1/agents/{agentId}/turns/{turnId}/attention",
 	Security: SecurityPipeline,
 	Upstream: UpstreamDeclared,
 }
@@ -299,8 +317,10 @@ var OpTelemetryIngestPipelineRun = Operation{
 // an operation added to the manifest cannot escape the credential check.
 var Operations = []Operation{
 	OpAgentsAckCommand,
+	OpAgentsActOnTurnCard,
 	OpAgentsHeartbeat,
 	OpAgentsIngestTurnFrames,
+	OpAgentsListTurnCards,
 	OpAgentsListWorkspaceThrottles,
 	OpAgentsReadTurnContext,
 	OpAgentsRegister,

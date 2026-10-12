@@ -5,19 +5,24 @@ import (
 	"testing"
 )
 
-// The conversation tool set is enumerable and pinned (#1570): adding a tool,
-// or making one mutating, turns this red, so the boundary only widens by a
-// reviewed edit to this list. create_issue is the only tool that changes
-// anything, and none writes the working tree (TestTools_NeverChangeTheWorkingTree).
+// The conversation tool set is enumerable and pinned (#1570, #1587): adding
+// a tool, removing one, or making one mutating, turns this red, so the
+// boundary only changes by a reviewed edit to this list. create_issue and
+// act_on_attention_card are the only tools that change anything, and none
+// writes the working tree (TestTools_NeverChangeTheWorkingTree).
 func TestRegistry_IsExactlyTheAdmittedSet(t *testing.T) {
 	want := map[string]bool{
-		"read_file":        false,
-		"list_directory":   false,
-		"search_files":     false,
-		"get_issue":        false,
-		"search_issues":    false,
-		"get_pull_request": false,
-		"create_issue":     true,
+		"read_file":             false,
+		"list_directory":        false,
+		"search_files":          false,
+		"get_issue":             false,
+		"search_issues":         false,
+		"get_pull_request":      false,
+		"create_issue":          true,
+		"pipeline_status":       false,
+		"list_running_jobs":     false,
+		"list_attention_cards":  false,
+		"act_on_attention_card": true,
 	}
 	names := Names()
 	if len(names) != len(want) {
@@ -33,8 +38,8 @@ func TestRegistry_IsExactlyTheAdmittedSet(t *testing.T) {
 			t.Errorf("%s: IsMutating = %v, want %v", n, IsMutating(n), mutating)
 		}
 	}
-	if got := MutatingNames(); !slices.Equal(got, []string{"create_issue"}) {
-		t.Errorf("mutating tools = %v, want [create_issue]", got)
+	if got := MutatingNames(); !slices.Equal(got, []string{"act_on_attention_card", "create_issue"}) {
+		t.Errorf("mutating tools = %v, want [act_on_attention_card create_issue]", got)
 	}
 	rules := AllowedToolRules()
 	if len(rules) != len(want) {

@@ -201,6 +201,11 @@ func (s *Server) dispatch(ctx context.Context, req rpcRequest) (any, *rpcError) 
 			Name      string          `json:"name"`
 			Arguments json.RawMessage `json:"arguments"`
 		}
+		// One name and one arguments object, each once and in its own case:
+		// the tool that runs is the one named, read one way (#1587).
+		if !exactKeys(req.Params, toolsCallKeys) {
+			return nil, &rpcError{Code: -32602, Message: "invalid tools/call params"}
+		}
 		if err := json.Unmarshal(req.Params, &p); err != nil {
 			return nil, &rpcError{Code: -32602, Message: "invalid tools/call params"}
 		}
@@ -217,6 +222,9 @@ func (s *Server) dispatch(ctx context.Context, req rpcRequest) (any, *rpcError) 
 	}
 	return nil, &rpcError{Code: -32601, Message: "method not found"}
 }
+
+// toolsCallKeys are the keys tools/call params may hold.
+var toolsCallKeys = map[string]bool{"name": true, "arguments": true, "_meta": true}
 
 func toolResult(text string, isError bool) map[string]any {
 	return map[string]any{"content": []map[string]any{{"type": "text", "text": text}}, "isError": isError}
@@ -235,7 +243,8 @@ func toolList() []map[string]any {
 			"annotations": map[string]any{
 				"readOnlyHint":    !sp.mutating,
 				"destructiveHint": false,
-				"openWorldHint":   sp.name == ToolGetIssue || sp.name == ToolSearchIssues || sp.name == ToolGetPullRequest || sp.mutating,
+				"openWorldHint": sp.name == ToolGetIssue || sp.name == ToolSearchIssues || sp.name == ToolGetPullRequest ||
+					sp.name == ToolListAttention || sp.mutating,
 			},
 		})
 	}

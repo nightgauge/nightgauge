@@ -6,12 +6,13 @@ own execution adapter, performance mode and effort, streams the reply back,
 and reports how the turn ended (#1569). This document states the daemon's
 side of the conversation contract (ADR-017); the hosted service's OpenAPI
 document is the authority on the wire. It covers the turn host (#1569), the
-tool and permission boundary (#1570) and retention classification (#1893).
-Later issues add the named status, jobs and attention tools (#1587) and the
-acts a turn may take (#1894, #1895).
+tool and permission boundary (#1570), retention classification (#1893) and
+the pipeline status, running-jobs and Needs Attention tools (#1587). Later
+issues add the acts a turn may take on runs (#1894, #1895).
 
 Code: `internal/conversation` (the turn host), `internal/conversation/tools`
-(the tool boundary), `internal/platform/conversation_turn.go` (the wire),
+(the tool boundary), `internal/platform/conversation_turn.go` and
+`internal/platform/conversation_attention.go` (the wire),
 `internal/execution/adapters/conversation.go` (the builders),
 `internal/credshape/egress.go` (redaction).
 
@@ -129,25 +130,38 @@ turn it names, and never logs it.
 
 ## Tools and permissions
 
-A conversation reads broadly, mutates narrowly, and never escalates (#1570).
-Its tools are defined for conversations, not inherited from a pipeline stage,
-and the set is closed: `internal/conversation/tools` lists it, and a test pins
-it, so a change that adds a tool, or makes one mutating, fails CI.
+A conversation reads broadly, mutates narrowly, and never escalates (#1570,
+#1587). Its tools are defined for conversations, not inherited from a
+pipeline stage, and the set is closed: `internal/conversation/tools` lists it,
+and a test pins it to exactly this list, so a change that adds a tool,
+removes one, or makes one mutating, fails CI.
 
-| Tool               | Mutates | What it does                                                         |
-| ------------------ | ------- | -------------------------------------------------------------------- |
-| `read_file`        | no      | Reads a text file under the workspace root                           |
-| `list_directory`   | no      | Lists a directory under the workspace root                           |
-| `search_files`     | no      | Searches the workspace's text files for an RE2 pattern               |
-| `get_issue`        | no      | Reads an issue of a repository the poster may read                   |
-| `search_issues`    | no      | Searches a readable repository's open issues; qualifiers are removed |
-| `get_pull_request` | no      | Reads a pull request of a repository the poster may read             |
-| `create_issue`     | yes     | Files an issue the poster asked for in their own message             |
+| Tool                    | Mutates | What it does                                                                              |
+| ----------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `read_file`             | no      | Reads a text file under the workspace root                                                |
+| `list_directory`        | no      | Lists a directory under the workspace root                                                |
+| `search_files`          | no      | Searches the workspace's text files for an RE2 pattern                                    |
+| `get_issue`             | no      | Reads an issue of a repository the poster may read                                        |
+| `search_issues`         | no      | Searches a readable repository's open issues; qualifiers are removed                      |
+| `get_pull_request`      | no      | Reads a pull request of a repository the poster may read                                  |
+| `pipeline_status`       | no      | Reports the runs in flight, paused and recently finished, from this machine's state       |
+| `list_running_jobs`     | no      | Lists the runs executing now, with the evidence that each is live                         |
+| `list_attention_cards`  | no      | Lists the Needs Attention cards of the turn's workspace, from the hosted service          |
+| `create_issue`          | yes     | Files an issue the poster asked for in their own message                                  |
+| `act_on_attention_card` | yes     | Resolves, comments on, acknowledges or mutes a card the poster asked about, as the poster |
 
 No tool writes the working tree, creates a branch, commits, pushes or opens a
-pull request. When a conversation concludes that code should change, its
-output is an issue, not an edit. `tools.IsMutating` reports a tool's class,
-and treats a name it does not know as mutating.
+pull request, and none starts, pauses, approves or cancels a run: those stay
+on the existing command bus. When a conversation concludes that code should
+change, its output is an issue, not an edit. `tools.IsMutating` reports a
+tool's class, and treats a name it does not know as mutating.
+
+**Mutating tools are gated by role, not by creator.** Who started the
+conversation gives nobody anything: every mutation acts for the account that
+posted the turn, under that account's role on the team and its own GitHub
+permission, and only for that account's own request in that turn. A `viewer`
+cannot post a turn, and an act the poster's role does not permit is refused
+by the hosted service and reported in the transcript.
 
 **How a turn reaches them.** For each turn the daemon starts a tool server
 that speaks the Model Context Protocol over HTTP on a loopback port, and
@@ -202,7 +216,8 @@ runs before the forge is reached:
 
 1. **The poster's own request.** It runs only when the poster's message in
    this turn asks for the issue, or confirms one the reply just before
-   proposed. The message the gate reads is the turn's own message as the
+   proposed in answer to the poster's own previous turn (a reply to a
+   teammate's turn proposes nothing to anyone else, #1587). The message the gate reads is the turn's own message as the
    hosted service's record attributes it: when the record does not name the
    turn's poster as its author, or the turn holds more than one message,
    nothing can be filed. The model must quote the poster's words
@@ -247,11 +262,108 @@ reads:
 
 A marker the model writes into the body is defused, so the only record is
 the daemon's. After the turn's process ends, the daemon closes the tool
-server and appends one line to the reply for each `create_issue` call, from
-the server's own record: `[nightgauge] create_issue: filed owner/repo#N ...`,
+server and appends one line to the reply for each call of a mutating tool,
+from the server's own record: `[nightgauge] create_issue: filed owner/repo#N ...`,
 `[nightgauge] create_issue refused (<code>): ...`, or `failed (forge_error)`
 when the forge request itself failed. A refusal is in the
 transcript whatever the model said about it.
+
+**Pipeline status and running jobs.** `pipeline_status` and
+`list_running_jobs` answer from this machine's own state and nothing else:
+the runtime snapshots and the execution-history index each checkout of the
+workspace keeps (`internal/state`). They reach no forge, no hosted service
+and no model provider, need no inference key, and write nothing. A run is
+`running` only when the snapshot scan has evidence that it executes now (its
+stage process, its orchestrator's sidecar, or a snapshot written within the
+liveness window), and the result names that evidence; otherwise it is
+`paused`, `abandoned`, `stalled` or its finished outcome. The host's
+operator sees every run of their own workspace, a private one marked
+`private`. A teammate sees only the runs of the repositories the turn
+command lists as readable, including when one checkout's state holds
+another repository's run, and never a private run: a private run is its
+creator's alone, and every private run on a machine is its operator's. A
+run the state names without its repository or visibility (an
+orchestrator's sidecar with no snapshot yet) is shown only to the operator.
+Nothing the tools return names a local path or a process id: an unreadable
+state file is counted, not described. Titles are returned as untrusted
+data.
+
+**Needs Attention cards.** A turn reaches the cards only through the hosted
+service's turn-scoped routes, on the turn's execution lease:
+`GET /v1/agents/{agentId}/turns/{turnId}/attention` to list and
+`POST /v1/agents/{agentId}/turns/{turnId}/attention/{requestId}` to act. It
+never calls the plain attention routes, which would record the host's
+operator as the actor, and never touches the local attention store. The
+hosted service lists only the cards of the turn's target workspace that the
+poster and the host's operator may both see, and takes the actor from the
+turn's posting account: the request has no actor field, and nothing the
+daemon sends can name one. It allows an act only when both the poster and
+the operator hold the permission, and only on a card in the turn's target
+workspace. Card text is returned as untrusted data.
+
+Every act of `act_on_attention_card` reaches the hosted service by one path: the MCP `tools/call`, the
+tool's dispatch, and one authorization (`authorizeCardAct`) at the only
+place the daemon sends an act. There is no fallback, retry or local-store
+path. The arguments are parsed once, strictly: an unknown key, a key given
+twice or in another case, and trailing data are refused (for every
+conversation tool), and the values the checks read are the values sent.
+Who acts is never an argument: it is the turn's poster, and the hosted
+service records that account and checks the roles on the lease. The checks,
+in order:
+
+1. **The arguments' shape.** A card id is one path segment of letters,
+   digits, `_` and `-`; the verb is `resolve`, `comment`, `acknowledge` or
+   `mute`, with exactly its own arguments: `option_id` (and optional
+   `steer_text`) for `resolve`, `body` for `comment`, nothing for the others.
+   Text is at most 2,000 characters, with no control or invisible format
+   character. Refused: `invalid_arguments`.
+2. **A posting account** to act for (`poster_unknown`).
+3. **The poster's own request, for this act on this card.** As for an
+   issue, the poster's message in this turn must ask for an act of that kind
+   ("approve", "comment on", "acknowledge", "mute") inside the words the
+   model quotes (`request_quote`), with no negation in its sentence and no
+   later sentence taking it back. The request is an imperative in the
+   verb's base form, opening its clause after at most a courtesy ("please",
+   "OK"): a report or description ("Alice muted dr_1", "Bob is approving
+   it"), another person's act ("Alice will approve"), a question ("should I
+   approve dr_1?") and someone else's words ("the card says: approve dr_1",
+   a quotation) ask for nothing. The request's own clause must name the
+   card by its exact id, and for `resolve` the option by its exact id:
+   "approve dr_... with wait". Case and the whole id count: `DR_1`, `dr_12`
+   and `dr_1-b` do not name `dr_1`, and in "approve dr_1 with wait and mute
+   dr_2" neither clause lends its card to the other. A card's own text,
+   such as an option's label, never names anything, and a function word
+   ("with", "it") is never taken as an option. Steer and comment text must
+   occur in the poster's message exactly as it is written to the card.
+   Otherwise the whole message must be a confirmation ("yes", "go ahead") of
+   the completed reply just before this turn, which must answer the
+   poster's own previous turn, so one teammate cannot have the model propose
+   an act that another's unrelated "yes" makes; and that reply must propose
+   exactly one act, this one, named the same way, with any text in its own
+   words. A reply that only mentions a card, or offers two acts, confirms
+   nothing. So a model that follows a card's text, or prefers another card
+   or option, cannot act under the poster's words on anything the poster did
+   not name. The gate is the conjunction of this decision and a plain floor
+   (a quote in the message; the exact card and option ids and a request word
+   in the message, or in the proposal it wholly confirms), and a property
+   test over 6,000 generated cases holds them to each other. Refused:
+   `not_requested_by_poster`.
+4. **Bounds.** Each act on a card at most once a turn, whatever became of
+   it, so a retry after a timeout cannot repeat one that landed
+   (`duplicate_act`); at most five acts a turn (`limit_reached`).
+
+The list keeps only cards of the workspace the hosted service names for
+the turn, and withholds any other.
+
+A refusal by the hosted service comes back with its own code, lower-cased:
+`act_not_permitted` (the poster's or the operator's role does not permit
+it, a `viewer`'s for one), `card_outside_target`, `attention_refused` (the
+card is already resolved, or the option is not its own), `turn_ended`. The
+receipt names what was done and the actor the hosted service recorded:
+`[nightgauge] act_on_attention_card: resolve card dr_... with option wait:
+resolved at the request of account ...; the hosted service recorded actor
+...`. A turn that calls `act_on_attention_card`, even one that is refused, is
+`durable` (below); a turn that only read is `ephemeral`.
 
 ## Frames
 
