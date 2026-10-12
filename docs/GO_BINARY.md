@@ -4206,6 +4206,18 @@ Deterministic readers over local pipeline session logs in the clone's logs
 directory (`nightgauge layout path logs`). Distinct from `nightgauge ci logs <run-id>`,
 which downloads CI workflow run logs from GitHub.
 
+Two writers produce these logs: the extension's `LogFileWriter`, and
+`nightgauge run` for a run started from a terminal (#1903, `internal/sessionlog`).
+Both write `YYYY-MM-DD_<issue>_session.log` (UTC day) with one
+`[ISO-8601] [LEVEL] [stage] message` entry per line, so the readers here, log
+retention and the extension's Output window read either one. A CLI run's log
+holds its stage and phase lines and the scheduler's `#N:` log lines, filed
+under the checkout the run executes in; every message is redacted of
+credential shapes first. The file is per issue per day and append-only: a
+retried dispatch adds to it rather than overwriting it, each run starting with
+a `run "<run-id>" started` line and ending with a `run <run-id> finished`
+entry. A run killed mid-stage leaves every complete line parseable.
+
 #### `logs scan-failures`
 
 Scans `*_session.log` in the clone's logs directory with the canonical 16-pattern

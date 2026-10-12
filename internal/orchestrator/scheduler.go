@@ -5102,6 +5102,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 
 	runtime := state.NewRuntimeState(item.Repo, item.Number, item.ID, runID)
 	runtime.Title = item.Title
+	// The run's first line names it: a session log appends every run of an
+	// issue on one day to one file (#1903), and this is where each one starts.
+	// An identity-less run is refused by the preflight below.
+	log.Printf("#%d: run %q started for %s", item.Number, runID, item.Repo)
 	// A remote run request's pin (#1656) is a fact of the run from its start.
 	if reqAdapter, reqModel, _ := s.QueueItemRequestedPin(item.Repo, item.Number); reqAdapter != "" {
 		runtime.SetRequestedPin(reqAdapter, reqModel)
@@ -5692,7 +5696,6 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		s.emitStateChanged(item.Repo, item.Number, runtime)
 		return // Pipeline blocked by run-identity check
 	}
-
 	// License preflight check (before any stage)
 	allowed, tier := s.preflightLicense(ctx, item, runtime)
 	if !allowed {
@@ -7384,8 +7387,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 		// kill before the run loop returns here). Success already flows
 		// through CompletedStages normally; recording it unconditionally would
 		// let a stale synthesized entry mask a real per-stage bug there.
+		// The booked figures, not the result's (#1899): a stage priced from
+		// tokens has no CLI-reported cost, so the result's would record $0.
 		if exitCode != 0 || err != nil {
-			recordTerminatingStageTokens(runtime, stage, inputTokens, outputTokens, cacheReadTokens, actualCostUsd)
+			recordTerminatingStageTokens(runtime, stage, stageCost.Input, stageCost.Output, stageCost.CacheRead, stageCost.CostUSD)
 		}
 
 		prStateAtExit := detMergePRState
@@ -7401,7 +7406,7 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				ExitCode:  exitCode,
 				ElapsedMs: time.Since(stageStartedAt).Milliseconds(),
 				Model:     servedModel,
-				CostUSD:   actualCostUsd,
+				CostUSD:   stageCost.CostUSD,
 			}
 			// stageFailureText, not err.Error(): a CLI-mode failure arrives with
 			// err == nil and the reason on the result, so gating on `err != nil`
@@ -8361,11 +8366,20 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 				Stage:       string(stage),
 				Timestamp:   time.Now(),
 				DurationMs:  int(result.ElapsedMs),
+				// The booked figures (#1899), as the live line reads them, on
+				// the top-level fields the platform's stage_completed wire
+				// reads (#233). Before, they were unset there and the cost in
+				// Metadata was the result's CostUsd, 0 whenever the stage was
+				// priced from tokens: every such stage reached analytics as $0.
+				InputTokens:     stageCost.Input,
+				OutputTokens:    stageCost.Output,
+				CacheReadTokens: stageCost.CacheRead,
+				CostUsd:         stageCost.CostUSD,
 				Metadata: map[string]interface{}{
-					"input_tokens":      inputTokens,
-					"output_tokens":     outputTokens,
-					"cache_read_tokens": cacheReadTokens,
-					"cost_usd":          actualCostUsd,
+					"input_tokens":      stageCost.Input,
+					"output_tokens":     stageCost.Output,
+					"cache_read_tokens": stageCost.CacheRead,
+					"cost_usd":          stageCost.CostUSD,
 					// Served model (#91): differs from the requested model when
 					// the CLI's refusal fallback swapped mid-stage.
 					"model": servedModel,
@@ -8525,10 +8539,10 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 	// Log pipeline cost summary
 	snap := runtime.Snapshot()
 	log.Printf("#%d: ═══ Pipeline Complete ═══", item.Number)
-	for _, sr := range snap.AllStageAttempts() {
-		c := stageCostOf(sr)
+	for _, row := range stageAttemptRows(snap.AllStageAttempts()) {
+		c := stageCostOf(row.Result)
 		log.Printf("#%d:   %-20s %s  %s",
-			item.Number, sr.Stage, c.TokenSummary(), c.CostSummary())
+			item.Number, row.Label, c.TokenSummary(), c.CostSummary())
 	}
 	log.Printf("#%d:   %-20s TOTAL  $%.4f", item.Number, "─────────────────", snap.TotalCostUSD)
 
