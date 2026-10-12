@@ -2,6 +2,8 @@ package conversation
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"path/filepath"
 	"sync"
 
@@ -13,6 +15,8 @@ import (
 type turnTools struct {
 	set    *tools.Toolset
 	server *tools.Server
+	// config is the MCP config file naming the server and its token.
+	config string
 	once   sync.Once
 }
 
@@ -22,7 +26,8 @@ const mcpConfigName = "mcp.json"
 // startTools starts the turn's tool server and returns the plan with its
 // argv rebuilt to reach it: the planned options, plus the config file naming
 // the server. The file holds the server's token and is written, readable by
-// its owner only, into the turn's directory, which is removed with the turn.
+// its owner only, into the turn's directory, and close removes it, so it is
+// gone before the turn's terminal report is sent.
 // The toolset is bound to this turn alone: its poster, the repositories they
 // may read, and their own message, the only text that can ask for a
 // mutation.
@@ -62,8 +67,8 @@ func (h *Host) startTools(t *turn, p plan, dir string, in turnInput) (plan, *tur
 		set.Close()
 		return p, nil, err
 	}
-	tt := &turnTools{set: set, server: server}
 	path := filepath.Join(dir, mcpConfigName)
+	tt := &turnTools{set: set, server: server, config: path}
 	if err := server.WriteConfig(path); err != nil {
 		tt.close()
 		return p, nil, err
@@ -74,13 +79,17 @@ func (h *Host) startTools(t *turn, p plan, dir string, in turnInput) (plan, *tur
 	return p, tt, nil
 }
 
-// close ends the calls in flight, waits for the server to stop, and
-// releases the workspace. Only once it returned is the record of calls
-// final.
+// close ends the calls in flight, waits for the server to stop, releases
+// the workspace and removes the config file. Only once it returned is the
+// record of calls final. Every terminal report reads that record first, so
+// the file holding the server's token never outlives the turn's report.
 func (tt *turnTools) close() {
 	tt.once.Do(func() {
 		tt.server.Close()
 		tt.set.Close()
+		if err := os.Remove(tt.config); err != nil && !os.IsNotExist(err) {
+			log.Printf("conversation: the tool server's config %s was not removed: %v", tt.config, err)
+		}
 	})
 }
 
