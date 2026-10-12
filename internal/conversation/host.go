@@ -66,20 +66,6 @@ func (p clientPlatform) PostTurnFrames(ctx context.Context, lease platform.TurnL
 // never acknowledged, not even to refuse it.
 type Owner func(ctx context.Context, agentID, targetWorkspaceID string) (bool, error)
 
-// Classifier gives a finished turn its retention class (ADR-017 Decision 11).
-type Classifier func(TurnOutcome) string
-
-// TurnOutcome is what a classifier sees of a finished turn.
-type TurnOutcome struct {
-	State string
-}
-
-// classifyDurable is the classification until the classifier lands
-// (nightgauge/nightgauge#1893): every turn durable. Durable keeps a turn in
-// later turns' context; ephemeral would drop it, which is the direction a
-// classifier must earn.
-func classifyDurable(TurnOutcome) string { return platform.TurnRetentionDurable }
-
 // Config configures a Host.
 type Config struct {
 	// WorkspaceRoot is the workspace the daemon serves: its config resolves
@@ -89,9 +75,12 @@ type Config struct {
 	// Owner decides which turns are this daemon's. Nil claims every turn
 	// addressed to the agent.
 	Owner Owner
-	// Classify gives a finished turn its retention class. Nil classifies
-	// every turn durable.
+	// Classify gives a finished turn its retention class; the mutation
+	// floor applies over its answer. Nil is the documented rule table.
 	Classify Classifier
+	// IsMutating reports whether a tool changes state, for the mutation
+	// floor. Nil counts every tool as mutating.
+	IsMutating func(tool string) bool
 	// MaxConcurrent bounds the turns running at once; a turn past it is
 	// refused. Zero means defaultMaxConcurrent.
 	MaxConcurrent int
@@ -159,7 +148,10 @@ func NewHost(ctx context.Context, cfg Config) *Host {
 		cfg.MaxConcurrent = defaultMaxConcurrent
 	}
 	if cfg.Classify == nil {
-		cfg.Classify = classifyDurable
+		cfg.Classify = classifyByRules
+	}
+	if cfg.IsMutating == nil {
+		cfg.IsMutating = everyToolMutates
 	}
 	h := &Host{
 		ctx:      ctx,
@@ -513,9 +505,10 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		AdapterDisplayName: p.profile.AdapterDisplayName,
 		PerformanceMode:    p.profile.PerformanceMode,
 	}
+	record := newToolRecord(h.cfg.IsMutating)
 	failed := func(reason string) *platform.TurnEnd {
 		return &platform.TurnEnd{State: platform.TurnStateFailed, FailureReason: reason, Profile: profile,
-			RetentionClass: h.cfg.Classify(TurnOutcome{State: platform.TurnStateFailed})}
+			RetentionClass: h.classify(t, platform.TurnStateFailed, record.calls)}
 	}
 
 	message, err := h.readMessage(lease, t.cmd.TurnID)
@@ -535,7 +528,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		// Stopped while claiming or reading: nothing was spawned, so
 		// nothing can still run.
 		t.markGone(true)
-		h.reportStopped(t, report, profile, nil)
+		h.reportStopped(t, report, profile, nil, nil)
 		return
 	default:
 	}
@@ -581,7 +574,9 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	scanner := bufio.NewScanner(proc.stdout)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
 	for scanner.Scan() {
-		event, _ := acc.ParseStreamLine(scanner.Text())
+		line := scanner.Text()
+		record.observe(line)
+		event, _ := acc.ParseStreamLine(line)
 		if event == nil {
 			continue
 		}
@@ -622,7 +617,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		OutputTokens: acc.OutputTokens,
 	}
 	if t.reason() != "" {
-		h.reportStopped(t, report, profile, usage)
+		h.reportStopped(t, report, profile, usage, record.calls)
 		return
 	}
 	if waitErr != nil || !success {
@@ -634,15 +629,23 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 	}
 	report(&platform.TurnEnd{
 		State: platform.TurnStateCompleted, Profile: profile, Usage: usage,
-		RetentionClass: h.cfg.Classify(TurnOutcome{State: platform.TurnStateCompleted}),
+		RetentionClass: h.classify(t, platform.TurnStateCompleted, record.calls),
 	})
+}
+
+// classify is the retention class a finished turn reports, logged with the
+// rule that decided it.
+func (h *Host) classify(t *turn, state string, calls []ToolCall) string {
+	c := retain(h.cfg.Classify, TurnOutcome{State: state, ToolCalls: calls})
+	log.Printf("conversation: turn %s is %s by rule %s (%d tool calls)", t.cmd.TurnID, c.Class, c.Rule, len(calls))
+	return c.Class
 }
 
 // reportStopped sends the terminal report of a stopped turn. A turn the
 // hosted service ended gets none; a teammate's cancel is reported cancelled
 // only when the process group was verified gone, and otherwise not at all,
 // so the hosted service ends it cancel_unconfirmed.
-func (h *Host) reportStopped(t *turn, report func(*platform.TurnEnd), profile *platform.TurnExecutionProfile, usage *platform.TurnUsage) {
+func (h *Host) reportStopped(t *turn, report func(*platform.TurnEnd), profile *platform.TurnExecutionProfile, usage *platform.TurnUsage, calls []ToolCall) {
 	end := &platform.TurnEnd{Profile: profile, Usage: usage}
 	switch t.reason() {
 	case stopTeammate:
@@ -663,7 +666,7 @@ func (h *Host) reportStopped(t *turn, report func(*platform.TurnEnd), profile *p
 		report(nil)
 		return
 	}
-	end.RetentionClass = h.cfg.Classify(TurnOutcome{State: end.State})
+	end.RetentionClass = h.classify(t, end.State, calls)
 	report(end)
 }
 

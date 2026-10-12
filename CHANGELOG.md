@@ -47,6 +47,19 @@ changelog, and the release workflow refuses a tag that does not.
   advertised on every heartbeat, so it follows an adapter switch within
   30 seconds. See `docs/CONVERSATION_TURNS.md`.
 
+- **A conversation turn that only read live state no longer stays in every
+  later turn's context** (#1893). The daemon classifies each turn when it
+  ends, from its terminal state and the tool calls it made, never from the
+  model's reply, and reports the class in the turn's terminal report: a turn
+  that answered from tools reading live state is `ephemeral`, and the hosted
+  service keeps only a window of recent ones in a later turn's context.
+  Every other turn is `durable`. A turn that called any mutating tool is
+  durable whatever a classifier says; that floor runs after the rules and
+  overrides them, and a tool the daemon cannot place counts as mutating. The
+  daemon logs each turn's class with the rule that gave it. Until turns have
+  tools (#1570), every turn stays durable. See `docs/CONVERSATION_TURNS.md`
+  § Retention class.
+
 - **A run can be started private** (#2400). Signed in, every extension
   command that starts a run asks _Team_ (selected) or _Private_, and
   `nightgauge run <issue> --private` does the same from the CLI. A private run

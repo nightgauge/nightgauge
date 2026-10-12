@@ -132,13 +132,56 @@ identifiers are never the daemon's to set.
 | `turn.end`       | `state`, `failure_reason`, `execution_profile` (adapter, mode, effort applied), `usage`, `retention_class` |
 
 `usage.input_tokens` counts every prompt token the model processed (fresh,
-cache-written and cache-read); `usage.output_tokens` its output. Until the
-retention classifier (#1893) lands, every turn reports `durable`, which keeps
-it in later turns' context.
+cache-written and cache-read); `usage.output_tokens` its output.
+`retention_class` is the turn's retention class (below).
 
 When an ingestion answers that the turn ended (`409 TURN_ENDED`, `422
 SECRET_DETECTED`, `403`, `404`, or a reply whose turn state is terminal), the
 daemon stops the turn's process and sends nothing more.
+
+## Retention class
+
+Every terminal report carries the turn's retention class (#1893). A `durable`
+turn stays in every later turn's context. An `ephemeral` turn is an answer
+read from live state that changed nothing: the hosted service's context read
+keeps only a window of the most recent ones. That window is a setting of the
+conversation, held and applied by the hosted service. The daemon renders
+exactly the messages the read returns and applies no window of its own, so a
+turn's context is the same whichever workspace answers it. The class governs
+context only: an ephemeral turn is still stored, its reply streams to the
+poster in full, and surfaces show it marked with its class.
+
+The daemon classifies a turn when it ends, from its terminal state and the
+tool calls its stream recorded, never from the model's reply. The rules are a
+table in `internal/conversation/retention.go`, held equal to this one by a
+test. The first rule that matches decides, and the daemon logs each turn's
+class with the id of the rule that gave it.
+
+| Rule           | Terminal state        | Tool calls   | Class       | Why                                                                                    |
+| -------------- | --------------------- | ------------ | ----------- | -------------------------------------------------------------------------------------- |
+| `unfinished`   | `failed`, `cancelled` | any          | `durable`   | The request was not completed, and later turns must see that it was left unfinished    |
+| `no-live-read` | `completed`           | none         | `durable`   | Nothing shows the answer came from live state, so it may hold a decision or commitment |
+| `live-read`    | `completed`           | at least one | `ephemeral` | The answer was read from live state                                                    |
+| `no-match`     | any other             | any          | `durable`   | No rule matched                                                                        |
+
+**The mutation floor** runs after the rules and overrides them. A turn that
+called any mutating tool is `durable` (rule `mutation-floor`), whatever the
+rules or any other classifier answered, and every answer other than
+`ephemeral` is `durable`. The floor is code that runs after classification,
+not an instruction to a model, so no model output can drop a state change
+from later turns' context. The tool boundary (#1570) says which tools mutate;
+a tool the daemon cannot place counts as mutating. A call counts once the
+stream records it, whether or not it then succeeded, and a subagent's calls
+count as the turn's own. Until the tool boundary lands a turn has no tools,
+so every turn is `durable`, by `no-live-read` or `unfinished`.
+
+The hosted service applies the floor again from its own records: a turn it
+recorded an act or a dispatch for is durable whatever the daemon reported,
+and a turn that ended with no class from the daemon (`agent_lost`,
+`cancel_unconfirmed`) is durable. A teammate may pin an ephemeral turn
+durable, or demote a durable one that changed nothing; demoting a turn that
+mutated is refused with a typed error. The hosted service records each change
+in its audit log with the acting account.
 
 ## States and reasons
 
