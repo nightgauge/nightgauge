@@ -32,7 +32,7 @@ type runProgress struct {
 // wireRunProgress registers the run's progress callbacks on src and tees the
 // standard logger, which carries the scheduler's narration, into the session
 // log. Stage lines go to stdout and phase lines to stderr, as before. The
-// returned restore puts the logger's output back.
+// returned restore puts the logger's output back and flushes the log.
 func wireRunProgress(src runProgressSource, root string, stdout, stderr io.Writer) (*runProgress, func()) {
 	p := &runProgress{log: sessionlog.New(root), src: src, root: root}
 
@@ -82,7 +82,11 @@ func wireRunProgress(src runProgressSource, root string, stdout, stderr io.Write
 
 	prev := log.Writer()
 	log.SetOutput(io.MultiWriter(prev, p.log))
-	return p, func() { log.SetOutput(prev) }
+	return p, func() {
+		log.SetOutput(prev)
+		// Flush a held partial line, redacted, now nothing else writes.
+		_ = p.log.Close()
+	}
 }
 
 // Track files issue's log under the root its run executes in: the target

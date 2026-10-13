@@ -4212,8 +4212,10 @@ Both write `YYYY-MM-DD_<issue>_session.log` (UTC day) with one
 `[ISO-8601] [LEVEL] [stage] message` entry per line, so the readers here, log
 retention and the extension's Output window read either one. A CLI run's log
 holds its stage and phase lines and the scheduler's `#N:` log lines, filed
-under the checkout the run executes in; every message is redacted of
-credential shapes first. The file is per issue per day and append-only: a
+under the checkout the run executes in. Before anything is written,
+terminal escapes and control characters are removed and the text passes the
+core's credential redactor (`credshape`), which also finds a credential or key
+block split across writes. The file is per issue per day and append-only: a
 retried dispatch adds to it rather than overwriting it, each run starting with
 a `run "<run-id>" started` line and ending with a `run <run-id> finished`
 entry. A run killed mid-stage leaves every complete line parseable.

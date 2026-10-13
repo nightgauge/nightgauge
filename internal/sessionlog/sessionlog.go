@@ -19,9 +19,23 @@
 // and each run's lines open with the scheduler's "run <id> started" line and
 // close with a "run <id> finished" entry, so the record names its run.
 //
-// Each entry is one append of whole lines, so a run killed mid-stage leaves a
-// log whose every complete line still parses. Every message is redacted with
-// credshape.RedactEgress before it reaches the file.
+// Redaction. A session log is a new place for a credential to land, so the
+// bytes written are the bytes the core's credential redactor produced, never a
+// form it did not see:
+//
+//  1. Input is normalised first: terminal escape sequences and other control
+//     characters are removed and a JSON \u escape of a token character is
+//     decoded. Each of those could split a credential into pieces that match
+//     no shape while a terminal, a JSON reader or the eye still joins them.
+//  2. The logger's output is held to line boundaries across writes, then
+//     passed through one credshape.Stream, which redacts text arriving in
+//     pieces: a credential or a PEM key block split across writes is still
+//     found. Close flushes the held tail through it.
+//  3. Every formatted buffer passes credshape.RedactEgress once more
+//     immediately before the write.
+//
+// Each append is one write of whole lines, so a run killed mid-stage leaves a
+// log whose every complete line still parses.
 package sessionlog
 
 import (
@@ -34,6 +48,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/nightgauge/nightgauge/internal/credshape"
 	"github.com/nightgauge/nightgauge/internal/layout"
@@ -45,6 +60,11 @@ const (
 	LevelWarn  = "WARNING"
 	LevelError = "ERROR"
 )
+
+// maxHeldLine bounds the logger output held while waiting for a newline. The
+// standard logger ends every entry with one, so only another writer reaches
+// it; past it the held text is passed on, still through the redacting stream.
+const maxHeldLine = 1 << 20
 
 // FileName is the session log's base name for issue on t's UTC day,
 // LogFileWriter.generateFilename's form.
@@ -64,8 +84,8 @@ func FormatLine(t time.Time, level, stage, message string) string {
 }
 
 // Writer appends run output to per-issue session logs. It is also an
-// io.Writer for the standard logger: a line the scheduler logs as "#N: …" is
-// filed under issue N. Safe for concurrent use.
+// io.Writer for the standard logger: an entry the scheduler logs as "#N: …"
+// is filed under issue N. Safe for concurrent use.
 type Writer struct {
 	mu          sync.Mutex
 	defaultRoot string
@@ -74,6 +94,15 @@ type Writer struct {
 	stages      map[int]string
 	active      map[int]bool
 	warned      bool
+
+	// held is logger output not yet ended by a newline; stream redacts the
+	// logger output across writes; released is redacted output not yet ended
+	// by a newline; entry is the issue of the logger entry being read, which
+	// its continuation lines belong to.
+	held     []byte
+	stream   *credshape.Stream
+	released string
+	entry    int
 }
 
 // New returns a Writer whose logs live under defaultRoot's clone logs
@@ -85,6 +114,7 @@ func New(defaultRoot string) *Writer {
 		roots:       map[int]string{},
 		stages:      map[int]string{},
 		active:      map[int]bool{},
+		stream:      credshape.NewStream(),
 	}
 }
 
@@ -129,13 +159,14 @@ func (w *Writer) RunFinished(issue int, runID string, success bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	// Untagged: the entry closes the run, not its last stage.
-	w.appendLocked(issue, level, "", fmt.Sprintf("run %s finished: %s", runID, outcome))
+	w.appendLocked(issue, level, "", credshape.RedactEgress(normalize(fmt.Sprintf("run %s finished: %s", runID, outcome))))
 	delete(w.active, issue)
 	delete(w.stages, issue)
 }
 
 // Append writes message as issue's entry, one line per line of message. An
-// empty stage tags it with the issue's current stage.
+// empty stage tags it with the issue's current stage. The message is redacted
+// whole, so a key block spanning its lines is found.
 func (w *Writer) Append(issue int, level, stage, message string) {
 	if issue <= 0 {
 		return
@@ -145,14 +176,17 @@ func (w *Writer) Append(issue int, level, stage, message string) {
 	if stage == "" {
 		stage = w.stages[issue]
 	}
-	w.appendLocked(issue, level, stage, message)
+	w.appendLocked(issue, level, stage, credshape.RedactEgress(normalize(message)))
 }
 
-func (w *Writer) appendLocked(issue int, level, stage, message string) {
+// appendLocked formats redacted, already-redacted text, as issue's entry and
+// writes it, redacting the formatted bytes once more on the way out.
+func (w *Writer) appendLocked(issue int, level, stage, redacted string) {
 	now := w.now()
+	stage = normalize(stage)
 	var buf bytes.Buffer
-	for _, line := range strings.Split(credshape.RedactEgress(message), "\n") {
-		line = strings.TrimRight(line, "\r \t")
+	for _, line := range strings.Split(redacted, "\n") {
+		line = strings.TrimRight(line, " \t")
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
@@ -166,7 +200,8 @@ func (w *Writer) appendLocked(issue int, level, stage, message string) {
 	if root == "" {
 		root = w.defaultRoot
 	}
-	if err := appendFile(root, FileName(issue, now), buf.Bytes()); err != nil && !w.warned {
+	out := []byte(credshape.RedactEgress(buf.String()))
+	if err := appendFile(root, FileName(issue, now), out); err != nil && !w.warned {
 		// Never log.Printf here: the standard logger calls Write with its
 		// own lock held, so a log line from inside it would deadlock.
 		w.warned = true
@@ -196,37 +231,85 @@ func appendFile(root, name string, data []byte) error {
 	return werr
 }
 
-// logPrefixRE is the standard logger's date and time prefix, any of its
-// precisions.
-var logPrefixRE = regexp.MustCompile(`^(?:\d{4}/\d{2}/\d{2} )?(?:\d{2}:\d{2}:\d{2}(?:\.\d+)? )?`)
-
-// issueLineRE is the scheduler's per-issue log line: "#N: message".
-var issueLineRE = regexp.MustCompile(`^#(\d+): ?(.*)$`)
-
-// Write files each line of p under the issue its "#N:" prefix names. A line
-// without one goes to the only active run, when exactly one is active, and is
-// dropped otherwise. It never fails, so it can sit behind io.MultiWriter
-// beside the terminal without ever cutting the terminal's copy short.
+// Write takes logger output. Complete lines are normalised and passed through
+// the redacting stream; a trailing partial line is held for the next write or
+// Close. It never fails, so it can sit behind io.MultiWriter beside the
+// terminal without cutting the terminal's copy short.
 func (w *Writer) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	for _, raw := range strings.Split(strings.TrimRight(string(p), "\n"), "\n") {
-		line := logPrefixRE.ReplaceAllString(raw, "")
-		issue := 0
-		if m := issueLineRE.FindStringSubmatch(line); m != nil {
-			issue, _ = strconv.Atoi(m[1])
-			line = m[2]
-		} else if len(w.active) == 1 {
-			for n := range w.active {
-				issue = n
-			}
-		}
-		if issue <= 0 {
-			continue
-		}
-		w.appendLocked(issue, levelOf(line), w.stages[issue], line)
+	w.held = append(w.held, p...)
+	cut := bytes.LastIndexByte(w.held, '\n') + 1
+	if cut == 0 && len(w.held) > maxHeldLine {
+		cut = len(w.held)
+	}
+	if cut > 0 {
+		w.releaseLocked(w.stream.Write(normalize(string(w.held[:cut]))))
+		w.held = append(w.held[:0], w.held[cut:]...)
 	}
 	return len(p), nil
+}
+
+// Close flushes the held tail of the logger output, redacted, as a final
+// line. The Writer stays usable.
+func (w *Writer) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	tail := ""
+	if len(w.held) > 0 {
+		tail = w.stream.Write(normalize(string(w.held)))
+		w.held = w.held[:0]
+	}
+	w.releaseLocked(tail + w.stream.Flush())
+	if w.released != "" {
+		w.routeLocked(w.released)
+		w.released = ""
+	}
+	return nil
+}
+
+// releaseLocked files each complete line of the stream's redacted output.
+func (w *Writer) releaseLocked(redacted string) {
+	w.released += redacted
+	for {
+		i := strings.IndexByte(w.released, '\n')
+		if i < 0 {
+			return
+		}
+		line := w.released[:i]
+		w.released = w.released[i+1:]
+		w.routeLocked(line)
+	}
+}
+
+// logPrefixRE is the standard logger's date and time prefix, which opens
+// every entry; a line without one continues the entry before it.
+var logPrefixRE = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? `)
+
+// issueLineRE is the scheduler's per-issue entry: "#N: message".
+var issueLineRE = regexp.MustCompile(`^#(\d+): ?(.*)$`)
+
+// routeLocked files one redacted line of logger output. An entry that names
+// no issue goes to the only active run, when exactly one is active, and is
+// dropped otherwise; its continuation lines follow it.
+func (w *Writer) routeLocked(line string) {
+	prefixed := logPrefixRE.MatchString(line)
+	line = logPrefixRE.ReplaceAllString(line, "")
+	if m := issueLineRE.FindStringSubmatch(line); m != nil {
+		w.entry, _ = strconv.Atoi(m[1])
+		line = m[2]
+	} else if prefixed || w.entry <= 0 {
+		w.entry = 0
+		if len(w.active) == 1 {
+			for n := range w.active {
+				w.entry = n
+			}
+		}
+	}
+	if w.entry <= 0 {
+		return
+	}
+	w.appendLocked(w.entry, levelOf(line), w.stages[w.entry], line)
 }
 
 // levelOf classifies a scheduler log line the way an operator reads it.
@@ -239,4 +322,36 @@ func levelOf(line string) string {
 		return LevelWarn
 	}
 	return LevelInfo
+}
+
+// escapeSeqRE matches terminal escape sequences: CSI (colours, cursor moves),
+// OSC (titles, hyperlinks) ended by BEL or ST, and two-byte escapes.
+var escapeSeqRE = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[@-Z\\-_]`)
+
+// jsonEscapeRE matches a JSON \u escape of an ASCII character.
+var jsonEscapeRE = regexp.MustCompile(`\\u00[0-7][0-9a-fA-F]`)
+
+// normalize removes what could split a credential out of its shape while a
+// reader still joins it: terminal escape sequences and every other control
+// character but tab and newline (a carriage return included), and a JSON \u
+// escape of a character a credential is made of, which is decoded.
+func normalize(s string) string {
+	s = escapeSeqRE.ReplaceAllString(s, "")
+	s = jsonEscapeRE.ReplaceAllStringFunc(s, func(esc string) string {
+		n, err := strconv.ParseUint(esc[2:], 16, 8)
+		if err != nil {
+			return esc
+		}
+		if r := rune(n); r == '_' || r == '-' || r == '.' || r == '/' || r == '+' || r == '=' ||
+			('a' <= r && r <= 'z') || ('A' <= r && r <= 'Z') || ('0' <= r && r <= '9') {
+			return string(r)
+		}
+		return esc
+	})
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
+			return r
+		}
+		return -1
+	}, s)
 }

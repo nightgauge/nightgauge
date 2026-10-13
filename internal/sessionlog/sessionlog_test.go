@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/cmd/scanfailures"
+	"github.com/nightgauge/nightgauge/internal/credshape"
 	"github.com/nightgauge/nightgauge/internal/layout/layouttest"
 	"github.com/nightgauge/nightgauge/internal/logretention"
 )
@@ -119,9 +120,9 @@ func TestRetriedDispatchAppendsADistinctRecord(t *testing.T) {
 func TestUnprefixedLinesGoToTheOnlyActiveRun(t *testing.T) {
 	w, root := newTestWriter(t)
 	w.Track(7, root)
-	_, _ = w.Write([]byte("[codex-provision] skipped user-defined MCP servers: x\n"))
+	_, _ = w.Write([]byte("2026/09/20 14:03:07 [codex-provision] skipped user-defined MCP servers: x\n"))
 	w.Track(8, root)
-	_, _ = w.Write([]byte("an unattributable line\n"))
+	_, _ = w.Write([]byte("2026/09/20 14:03:08 an unattributable line\n"))
 
 	got := strings.Join(readLog(t, root, 7), "\n")
 	if !strings.Contains(got, "[codex-provision] skipped") || strings.Contains(got, "unattributable") {
@@ -142,5 +143,104 @@ func TestSessionLogIsPrivate(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("mode = %o, want 0600", perm)
+	}
+}
+
+// A log entry's continuation lines belong to the entry's issue even with
+// several runs active.
+func TestContinuationLinesFollowTheirEntry(t *testing.T) {
+	w, root := newTestWriter(t)
+	w.Track(41, root)
+	w.Track(42, root)
+	_, _ = w.Write([]byte("2026/09/20 14:03:07 #42: stage tail:\nline two\n\tline three\n"))
+	got := strings.Join(readLog(t, root, 42), "\n")
+	for _, want := range []string{"stage tail:", "line two", "line three"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("issue 42's log lacks %q:\n%s", want, got)
+		}
+	}
+}
+
+func testToken() string { return "gh" + "p_" + strings.Repeat("A1b2", 9) }
+
+func pemKey() string {
+	label := "RSA " + "PRIVATE KEY"
+	return "-----BEGIN " + label + "-----\n" + strings.Repeat("MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n", 4) + "-----END " + label + "-----"
+}
+
+// assertRedacted fails when the log holds any piece of the token or the key
+// body, or any byte the redactor did not see (an escape character).
+func assertRedacted(t *testing.T, got string) {
+	t.Helper()
+	for _, leak := range []string{"A1b2A1b2", "p_A1b2", "MIIEvQIB", "\x1b"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("session log leaks %q:\n%s", leak, got)
+		}
+	}
+	if !strings.Contains(got, credshape.Marker) {
+		t.Errorf("session log shows no redaction marker:\n%s", got)
+	}
+}
+
+// The security review's cases (#1903): a credential the redactor would find in
+// one piece must be found however the text reaches the writer.
+func TestRedactionSeesTheBytesItWrites(t *testing.T) {
+	token := testToken()
+	cases := []struct {
+		name   string
+		writes []string
+		close  bool
+	}{
+		{"token split across two writes",
+			[]string{"2026/09/20 14:03:07 #42: push with " + token[:10], token[10:] + " failed\n"}, false},
+		{"token in the final unterminated line",
+			[]string{"2026/09/20 14:03:07 #42: done\n", "2026/09/20 14:03:08 #42: token " + token}, true},
+		{"token inside an escaped JSON string",
+			[]string{`2026/09/20 14:03:07 #42: event {"content":"export GH_TOKEN=\"` +
+				strings.Replace(token, "A", `\u0041`, -1) + `\"\n"}` + "\n"}, false},
+		{"key block inside an escaped JSON string",
+			[]string{`2026/09/20 14:03:07 #42: event {"content":"` + strings.ReplaceAll(pemKey(), "\n", `\n`) + `"}` + "\n"}, false},
+		{"token wrapped in and split by terminal escapes",
+			[]string{"2026/09/20 14:03:07 #42: \x1b[31m" + token[:12] + "\x1b[0m" + token[12:] + "\x1b[0m\n"}, false},
+		{"token split by a carriage return",
+			[]string{"2026/09/20 14:03:07 #42: " + token[:12] + "\r" + token[12:] + "\n"}, false},
+		{"key block split across two writes",
+			[]string{"2026/09/20 14:03:07 #42: key " + pemKey()[:60], pemKey()[60:] + "\n"}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			w, root := newTestWriter(t)
+			w.Track(42, root)
+			for _, piece := range tc.writes {
+				_, _ = w.Write([]byte(piece))
+			}
+			if tc.close {
+				_ = w.Close()
+			}
+			assertRedacted(t, strings.Join(readLog(t, root, 42), "\n"))
+		})
+	}
+}
+
+// A message handed to Append is redacted whole: a key block spanning its
+// lines is found, and terminal escapes cannot split a token.
+func TestAppendRedactsTheWholeMessage(t *testing.T) {
+	w, root := newTestWriter(t)
+	tok := testToken()
+	w.Append(42, LevelError, "feature-dev", "stage failed:\n"+pemKey()+"\nwith \x1b[1m"+tok[:8]+"\x1b[0m"+tok[8:])
+	assertRedacted(t, strings.Join(readLog(t, root, 42), "\n"))
+}
+
+// Close writes the held tail even when it holds no secret.
+func TestCloseFlushesTheHeldTail(t *testing.T) {
+	w, root := newTestWriter(t)
+	w.Track(42, root)
+	_, _ = w.Write([]byte("2026/09/20 14:03:07 #42: the last words"))
+	if _, err := os.Stat(filepath.Join(layouttest.LogsDir(t, root), FileName(42, fixedNow))); !os.IsNotExist(err) {
+		t.Fatalf("a partial line was written before its newline (err %v)", err)
+	}
+	_ = w.Close()
+	if got := readLog(t, root, 42); len(got) != 1 || !strings.HasSuffix(got[0], "the last words") {
+		t.Errorf("tail = %q", got)
 	}
 }
