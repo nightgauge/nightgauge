@@ -51,6 +51,36 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **A run started with `nightgauge run` now leaves a session log** (#1903).
+  Its output used to exist only in the launching terminal. The run now
+  appends its stage and phase lines and the scheduler's log lines to
+  `YYYY-MM-DD_<issue>_session.log` in the clone's logs directory, in the
+  extension's format, so `nightgauge logs scan-failures`, log retention and
+  the extension's Output window read it unchanged. Everything written first
+  passes the core's credential redactor, after terminal escapes and control
+  characters are removed, so a credential split across writes, wrapped in
+  colour codes or escaped in JSON is still found. A run's output cannot forge
+  the writer's records, reach another issue's log or hide text, a cut line
+  and any record that could not be written are reported in the log, and the
+  file is opened append-only without following a symlink. A retried dispatch
+  appends, and each run's records open with `run <run-id> started`.
+
+- **Hosted analytics, the trace and a failed stage's record now carry the
+  stage's real cost** (#1899). The live per-stage line was fixed by #1934, but
+  the `stage_completed` telemetry event, the trace's stage-exit cost and the
+  terminating-stage record still read the executor's own cost, which is $0
+  for every stage priced from tokens, and the event left the token and cost
+  fields the platform reads unset. All three now report the booked figure the
+  live line and the run record show. The run summary also labels a stage that
+  ran more than once, `pr-merge (attempt 1/2)`, instead of printing two
+  unlabelled rows.
+
+- **The credential scan retries the gitleaks download** (#1762). One
+  transient 5xx from github.com failed the required check before any scan
+  ran. The download now retries five times with backoff; if it still fails,
+  the step fails and names the download. The pinned SHA-256 check is
+  unchanged.
+
 - **`nightgauge issue list --search` stays in the repository it names.**
   GitHub combines repeated scope qualifiers with OR, so a `repo:`, `org:`,
   `user:`, `owner:`, `is:`, `type:`, `state:` or `archived:` term in the

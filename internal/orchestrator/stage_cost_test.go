@@ -9,6 +9,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/execution"
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
+	"github.com/nightgauge/nightgauge/internal/platform"
 	"github.com/nightgauge/nightgauge/internal/state"
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
@@ -209,5 +210,126 @@ func TestRunPipeline_StageCompleteReportsTheBookedCost(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no dispatched stage booked cache reads — the runner never reached the runtime")
+	}
+}
+
+// #1899: the live line was fixed by #1934, but three other readers of the same
+// stage still priced it from the executor's result, whose CostUsd is 0 for any
+// stage priced from tokens: the stage_completed telemetry event (every such
+// stage reached analytics as $0), the trace stage-exit cost, and the failing
+// stage's terminating record. Each must report the booked figure.
+func TestRunPipeline_TelemetryStageCompletedReportsTheBookedCost(t *testing.T) {
+	isolateRoutingEnv(t)
+	root := gitWorkspace(t)
+	runner := &cachePoolsOffResultRunner{cacheRead: 1_611_497, cacheCreation: 60_774}
+	s := newRunIdentityTestScheduler(t, root, runner)
+	mock := &mockTelemetry{}
+	s.telemetrySvc, s.telemetryEnabled = mock, true
+	var snap *state.RuntimeState
+	s.OnPipelineComplete(func(_ string, _ int, rt *state.RuntimeState, _ bool) { snap = rt })
+
+	s.runPipeline(context.Background(), types.BoardItem{Number: 991899, Repo: "nightgauge/nightgauge",
+		ID: "item-991899", Title: "t", Labels: []string{"type:feature", "component:go-binary"}})
+	if snap == nil {
+		t.Fatal("the pipeline never completed; the fixture is wrong, not the assertion")
+	}
+
+	mock.mu.Lock()
+	events := append([]platform.PipelineEvent(nil), mock.events...)
+	mock.mu.Unlock()
+	checked := 0
+	for _, evt := range events {
+		if evt.EventType != "stage_completed" {
+			continue
+		}
+		booked, ok := stageCostFromBooking(snap, state.PipelineStage(evt.Stage))
+		if !ok || booked.CacheRead == 0 {
+			continue
+		}
+		checked++
+		if got := evt.Metadata["cost_usd"]; got != booked.CostUSD || booked.CostUSD <= 0 {
+			t.Errorf("%s: telemetry cost_usd = %v, want the booked $%.4f (non-zero)", evt.Stage, got, booked.CostUSD)
+		}
+		if got := evt.Metadata["cache_read_tokens"]; got != runner.cacheRead {
+			t.Errorf("%s: telemetry cache_read_tokens = %v, want the %d the executor observed", evt.Stage, got, runner.cacheRead)
+		}
+		if got := evt.Metadata["input_tokens"]; got != booked.Input {
+			t.Errorf("%s: telemetry input_tokens = %v, want the booked non-cached %d", evt.Stage, got, booked.Input)
+		}
+		// The platform's stage_completed wire reads these, not Metadata (#233).
+		if evt.CostUsd != booked.CostUSD || evt.CacheReadTokens != booked.CacheRead ||
+			evt.InputTokens != booked.Input || evt.OutputTokens != booked.Output {
+			t.Errorf("%s: wire fields in=%d out=%d cr=%d $%.4f, want the booked %+v",
+				evt.Stage, evt.InputTokens, evt.OutputTokens, evt.CacheReadTokens, evt.CostUsd, booked)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no stage_completed event for a stage that booked cache reads")
+	}
+}
+
+// failingCachePoolsRunner fails every stage after reporting cache pools the
+// way the execution manager does, beside a result that carries no cost.
+type failingCachePoolsRunner struct{ cacheRead int }
+
+func (r *failingCachePoolsRunner) RunStage(_ context.Context, params StageRunParams) (*StageRunResult, error) {
+	if params.Runtime != nil {
+		params.Runtime.RecordStageTokenCounts(params.Stage, tokens.TokenCounts{CacheRead: r.cacheRead})
+	}
+	return &StageRunResult{ExitCode: 1, InputTokens: 217, OutputTokens: 12_485, CacheReadTokens: r.cacheRead}, nil
+}
+
+func TestRunPipeline_TerminatingStageRecordCarriesTheBookedCost(t *testing.T) {
+	isolateRoutingEnv(t)
+	root := gitWorkspace(t)
+	stubReconcileGhUnreachable(t) // the failure stands; the forge is not the subject
+	s := newRunIdentityTestScheduler(t, root, &failingCachePoolsRunner{cacheRead: 1_611_497})
+	var snap *state.RuntimeState
+	s.OnPipelineComplete(func(_ string, _ int, rt *state.RuntimeState, _ bool) { snap = rt })
+
+	s.runPipeline(context.Background(), types.BoardItem{Number: 991898, Repo: "nightgauge/nightgauge",
+		ID: "item-991898", Title: "t", Labels: []string{"type:feature", "component:go-binary"}})
+	if snap == nil {
+		t.Fatal("the pipeline never completed")
+	}
+	if len(snap.TerminatingStageTokens) == 0 {
+		t.Fatal("a failing stage recorded no terminating tokens")
+	}
+	for stage, term := range snap.TerminatingStageTokens {
+		booked, ok := stageCostFromBooking(snap, state.PipelineStage(stage))
+		if !ok {
+			t.Fatalf("%s: terminating record without a booking", stage)
+		}
+		if term.CostUSD != booked.CostUSD || booked.CostUSD <= 0 {
+			t.Errorf("%s: terminating cost $%.4f, want the booked $%.4f (non-zero)", stage, term.CostUSD, booked.CostUSD)
+		}
+		if term.CacheRead != booked.CacheRead || term.InputTokens != booked.Input+booked.CacheRead {
+			t.Errorf("%s: terminating tokens in=%d cr=%d, want combined %d and cr %d",
+				stage, term.InputTokens, term.CacheRead, booked.Input+booked.CacheRead, booked.CacheRead)
+		}
+	}
+}
+
+func TestStageAttemptRowsLabelsRepeatedStages(t *testing.T) {
+	t0 := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
+	// AllStageAttempts lists superseded attempts before completed ones, so the
+	// opus retry of pr-merge can precede the stage that ran before it.
+	rows := stageAttemptRows([]state.StageResult{
+		{Stage: state.StagePRMerge, StartedAt: t0.Add(3 * time.Minute), CostUSD: 6.83},
+		{Stage: state.StageIssuePickup, StartedAt: t0},
+		{Stage: state.StagePRMerge, StartedAt: t0.Add(9 * time.Minute), CostUSD: 12.68},
+		{Stage: state.StageFeatureDev, StartedAt: t0.Add(time.Minute)},
+	})
+	want := []string{"issue-pickup", "feature-dev", "pr-merge (attempt 1/2)", "pr-merge (attempt 2/2)"}
+	if len(rows) != len(want) {
+		t.Fatalf("got %d rows, want %d", len(rows), len(want))
+	}
+	for i, row := range rows {
+		if row.Label != want[i] {
+			t.Errorf("row %d label = %q, want %q", i, row.Label, want[i])
+		}
+	}
+	if rows[2].Result.CostUSD != 6.83 || rows[3].Result.CostUSD != 12.68 {
+		t.Errorf("attempts out of start order: %+v", rows[2:])
 	}
 }

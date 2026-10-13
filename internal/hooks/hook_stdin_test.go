@@ -161,3 +161,35 @@ func TestEvaluateSanitizePrompt_WarnModeDoesNotBlock(t *testing.T) {
 		t.Fatal("block mode must still enforce")
 	}
 }
+
+// #1305: the PostToolUse payload Claude Code sends today carries fields added
+// after the core's decoders were written — tool_use_id (2.0.43) and
+// duration_ms (2.1.119), beside tool_response and the common session fields.
+// Claude Code 2.1.0 itself added no PostToolUse payload or output field. Both
+// PostToolUse decoders must read such a payload exactly as the minimal one.
+func TestPostToolUseDecodersReadTheCurrentPayloadShape(t *testing.T) {
+	payload := func(toolName, filePath, content string) []byte {
+		return []byte(`{"session_id":"s","transcript_path":"/tmp/t.jsonl","cwd":"/tmp",` +
+			`"permission_mode":"default","hook_event_name":"PostToolUse","tool_name":` + strconv.Quote(toolName) +
+			`,"tool_input":{"file_path":` + strconv.Quote(filePath) + `,"content":` + strconv.Quote(content) + `},` +
+			`"tool_response":{"filePath":` + strconv.Quote(filePath) + `,"success":true},` +
+			`"tool_use_id":"toolu_01ABC","duration_ms":42}`)
+	}
+
+	got := EvaluateTestQuality(payload("Write", "/repo/a.test.ts", "it('x', () => { expect(true).toBe(true) })"))
+	if got.FilePath != "/repo/a.test.ts" || len(got.Warnings) == 0 {
+		t.Errorf("test-quality did not read the current payload: %+v", got)
+	}
+
+	if _, err := exec.LookPath("gofmt"); err != nil {
+		t.Skip("gofmt not available")
+	}
+	workdir := t.TempDir()
+	target := filepath.Join(workdir, "messy.go")
+	if err := os.WriteFile(target, []byte("package main\nfunc  main( ){}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if res := evaluateFormatFromHook(payload("Edit", target, ""), workdir); !res.Formatted {
+		t.Errorf("format did not read the current payload: %+v", res)
+	}
+}

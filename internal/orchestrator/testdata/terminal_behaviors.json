@@ -263,7 +263,7 @@
       "note": "A failing stage's spend must be booked, not dropped \u2014 a run's cost picture is wrong exactly where it matters (the retry decision) otherwise (#293, #146).",
       "go": {
         "file": "internal/orchestrator/scheduler.go",
-        "anchor": "recordTerminatingStageTokens(runtime, stage, inputTokens, outputTokens, cacheReadTokens, actualCostUsd)"
+        "anchor": "recordTerminatingStageTokens(runtime, stage, stageCost.Input, stageCost.Output, stageCost.CacheRead, stageCost.CostUSD)"
       },
       "extension": {
         "file": "internal/ipc/server.go",

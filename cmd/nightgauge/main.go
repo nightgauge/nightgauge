@@ -4734,42 +4734,11 @@ func runCmd() *cobra.Command {
 			// configured (nil checker = gate disabled).
 			wireIdentityChecker(sched, cwd)
 
-			// Log stage progress to stdout
-			sched.OnStageStart(func(repo string, issue int, stage string, title string) {
-				fmt.Printf("[#%d] stage %s started\n", issue, stage)
-			})
-			sched.OnStageComplete(func(repo string, issue int, stage string, err error, cost orchestrator.StageCost, model string) {
-				if err != nil {
-					fmt.Printf("[#%d] stage %s FAILED: %v\n", issue, stage, err)
-				} else {
-					fmt.Printf("[#%d] stage %s complete — tokens: %s, cost: %s\n",
-						issue, stage, cost.TokenSummary(), cost.CostSummary())
-				}
-			})
-			// Phase progress (#1924). Until this existed the CLI showed stage
-			// transitions only, so a forty-minute feature-dev looked identical
-			// to a hung one — the phases were in the run's PhaseHistory the
-			// whole time with nothing to render them, because only the IPC
-			// server registered these callbacks.
-			//
-			// This goes to STDERR deliberately. stdout carries the run's own
-			// machine-readable output, a contract predating this; phase
-			// progress is operator-facing narration and must not contaminate
-			// it. See orchestrator.PhaseStreamPrefix for the same split on the
-			// pr-stage route.
-			sched.OnPhaseDetected(func(repo string, issue int, pStage, pName string, pIndex, pTotal int) {
-				fmt.Fprintf(os.Stderr, "[#%d]   %s %d/%d %s\n", issue, pStage, pIndex+1, pTotal, pName)
-			})
-			sched.OnPhaseSettled(func(repo string, issue int, pStage, pName string, pIndex, pTotal int, status string) {
-				// "passed" is the ordering-derived arm: the run moved beyond a
-				// phase it never announced. Marked so an operator can tell it
-				// from a phase that was actually observed to run.
-				mark := status
-				if status == "passed" {
-					mark = "passed (not reported)"
-				}
-				fmt.Fprintf(os.Stderr, "[#%d]   %s %d/%d %s — %s\n", issue, pStage, pIndex+1, pTotal, pName, mark)
-			})
+			// Stage progress to stdout, phase progress to stderr, and both,
+			// with the scheduler's own log lines, to the run's session log
+			// (#1903) so a terminal-started run's output outlives the terminal.
+			progress, restoreLog := wireRunProgress(sched, cwd, os.Stdout, os.Stderr)
+			defer restoreLog()
 
 			if auto {
 				interval := time.Duration(pollSeconds) * time.Second
@@ -4792,6 +4761,7 @@ func runCmd() *cobra.Command {
 					return repoErr
 				}
 				fmt.Printf("Running #%d in %s\n", issueNumber, repo)
+				progress.Track(repo, issueNumber)
 				sched.QueueAdd(orchestrator.QueueEntry{
 					Repo:        repo,
 					IssueNumber: issueNumber,
@@ -4812,6 +4782,7 @@ func runCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Running #%d: %s (%s, %s)\n", item.Number, item.Title, item.Priority, item.Repo)
+			progress.Track(item.Repo, item.Number)
 			sched.QueueAdd(orchestrator.QueueEntry{
 				Repo:        item.Repo,
 				IssueNumber: item.Number,

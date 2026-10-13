@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/intelligence/tokens"
@@ -52,6 +53,37 @@ func stageCostOf(sr state.StageResult) StageCost {
 		CostUSD:       sr.CostUSD,
 		Source:        sr.CostSource,
 	}
+}
+
+// stageAttemptRow is one line of the run summary: a booked attempt and the
+// label it prints under.
+type stageAttemptRow struct {
+	Label  string
+	Result state.StageResult
+}
+
+// stageAttemptRows orders a run's booked attempts by start time and labels a
+// stage that ran more than once "(attempt i/n)" (#1899). Unlabelled, a
+// pr-merge escalated from sonnet to opus printed as two pr-merge rows with
+// different figures, which read as a duplicated row rather than two attempts.
+func stageAttemptRows(attempts []state.StageResult) []stageAttemptRow {
+	ordered := append([]state.StageResult(nil), attempts...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].StartedAt.Before(ordered[j].StartedAt) })
+	total := map[state.PipelineStage]int{}
+	for _, sr := range ordered {
+		total[sr.Stage]++
+	}
+	seen := map[state.PipelineStage]int{}
+	rows := make([]stageAttemptRow, 0, len(ordered))
+	for _, sr := range ordered {
+		seen[sr.Stage]++
+		label := string(sr.Stage)
+		if n := total[sr.Stage]; n > 1 {
+			label = fmt.Sprintf("%s (attempt %d/%d)", sr.Stage, seen[sr.Stage], n)
+		}
+		rows = append(rows, stageAttemptRow{Label: label, Result: sr})
+	}
+	return rows
 }
 
 // TokenSummary renders the four token pools. The live line and the run

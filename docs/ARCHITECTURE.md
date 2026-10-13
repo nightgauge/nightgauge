@@ -1233,8 +1233,9 @@ layers, each with a distinct lifetime and purpose (Issues #1352, #2814, #2818):
    disk-free.
 3. **On-disk session logs** (`{YYYY-MM-DD}_{issue}_session.log` in the clone's
    logs directory, `nightgauge layout path logs`)
-   written by `LogFileWriter` — survive extension-host crashes and VSCode
-   reloads that wipe both memory and memento.
+   written by `LogFileWriter`, or by `nightgauge run` for a run started from a
+   terminal (#1903) — survive extension-host crashes and VSCode reloads that
+   wipe both memory and memento.
 
 ### Rehydration Flow (Issue #2818)
 
