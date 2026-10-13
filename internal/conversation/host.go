@@ -28,6 +28,10 @@ type Platform interface {
 	ApplyCommand(ctx context.Context, agentID, commandID string) error
 	ReadTurnContext(ctx context.Context, lease platform.TurnLease) (platform.TurnContext, error)
 	PostTurnFrames(ctx context.Context, lease platform.TurnLease, frames []platform.TurnFrame) (platform.TurnFramesResult, error)
+	// ListTurnCards and ActOnTurnCard are the turn-scoped attention routes
+	// (#1587): a turn reads and acts on cards only through them.
+	ListTurnCards(ctx context.Context, lease platform.TurnLease, q platform.TurnCardQuery) (platform.TurnCardList, error)
+	ActOnTurnCard(ctx context.Context, lease platform.TurnLease, cardID string, act platform.TurnCardAct) (platform.TurnCardActResult, error)
 }
 
 type clientPlatform struct {
@@ -60,6 +64,14 @@ func (p clientPlatform) PostTurnFrames(ctx context.Context, lease platform.TurnL
 	return p.client.PostTurnFrames(ctx, lease, frames)
 }
 
+func (p clientPlatform) ListTurnCards(ctx context.Context, lease platform.TurnLease, q platform.TurnCardQuery) (platform.TurnCardList, error) {
+	return p.client.ListTurnCards(ctx, lease, q)
+}
+
+func (p clientPlatform) ActOnTurnCard(ctx context.Context, lease platform.TurnLease, cardID string, act platform.TurnCardAct) (platform.TurnCardActResult, error) {
+	return p.client.ActOnTurnCard(ctx, lease, cardID, act)
+}
+
 // Owner reports whether a turn for targetWorkspaceID is this daemon's to
 // serve. Several daemons on one machine share one agent, so every one of them
 // receives each turn; only the daemon serving the target workspace may claim
@@ -89,6 +101,9 @@ type Config struct {
 	// Forge is the forge the conversation tools reach (#1570). Nil is
 	// GitHub, through the workspace's own config.
 	Forge tools.Forge
+	// Runs reads the workspace's pipeline runs for the run tools (#1587).
+	// Nil is this machine's own state (tools.LocalRuns).
+	Runs tools.RunSource
 }
 
 const (
@@ -549,7 +564,7 @@ func (h *Host) run(t *turn, p plan, claim platform.TurnClaim) {
 		return
 	}
 	defer os.RemoveAll(dir)
-	p, toolServer, err = h.startTools(t, p, dir, input)
+	p, toolServer, err = h.startTools(t, lease, p, dir, input)
 	if err != nil {
 		log.Printf("conversation: turn %s: its tool server did not start: %v", t.cmd.TurnID, err)
 		t.markGone(true)

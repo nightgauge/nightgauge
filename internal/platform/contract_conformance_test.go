@@ -114,6 +114,15 @@ var contractCallSites = []callSite{
 		_, err := c.ReadTurnContext(ctx, TurnLease{agentID: "agent-1", turnID: "turn-1", secret: "lease-1"})
 		return err
 	}},
+	{api.OpAgentsListTurnCards, func(ctx context.Context, c *Client) error {
+		_, err := c.ListTurnCards(ctx, TurnLease{agentID: "agent-1", turnID: "turn-1", secret: "lease-1"}, TurnCardQuery{})
+		return err
+	}},
+	{api.OpAgentsActOnTurnCard, func(ctx context.Context, c *Client) error {
+		_, err := c.ActOnTurnCard(ctx, TurnLease{agentID: "agent-1", turnID: "turn-1", secret: "lease-1"}, "dr_1",
+			TurnCardAct{Verb: TurnCardAcknowledge})
+		return err
+	}},
 	{api.OpAgentsListWorkspaceThrottles, func(ctx context.Context, c *Client) error {
 		_, err := c.ReadAgentWorkspaceThrottles(ctx, "agent-1")
 		return err

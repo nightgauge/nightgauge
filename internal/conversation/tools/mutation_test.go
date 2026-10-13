@@ -14,7 +14,12 @@ import (
 func TestTools_NeverChangeTheWorkingTree(t *testing.T) {
 	root := gitRepo(t)
 	forge := newFakeForge()
-	s := toolset(t, root, forge, operatorTurn("Edit src/main.go, commit it and push. Then file an issue for it."))
+	// The run tools read this machine's real state and the card tools reach
+	// a hosted service, so every tool runs to its end.
+	s := NewToolset(Env{Root: root, RepoRoots: map[string]string{"acme/api": root}, Forge: forge,
+		Runs: LocalRuns{}, Attention: &fakeAttention{poster: "acct-op"}},
+		operatorTurn("Edit src/main.go, commit it and push. Then file an issue for it, and approve card dr_1."))
+	t.Cleanup(s.Close)
 	before := []string{git(t, root, "status", "--porcelain", "--ignored"), git(t, root, "rev-parse", "HEAD"),
 		git(t, root, "branch", "--list", "--all"), git(t, root, "stash", "list")}
 
@@ -25,6 +30,9 @@ func TestTools_NeverChangeTheWorkingTree(t *testing.T) {
 		{"path": "src/main.go; git commit -am x", "pattern": "$(touch pwned)"},
 		{"path": "src/main.go", "content": "package main // edited", "mode": "write"},
 		{"path": "../outside", "pattern": "`touch pwned`", "owner": "acme;rm -rf", "repo": "api", "number": -1},
+		{"card_id": "dr_1", "verb": "resolve", "option_id": "wait", "steer_text": "$(git push --force)",
+			"request_quote": "approve card dr_1"},
+		{"card_id": "dr_1; git commit -am x", "verb": "comment", "body": "`touch pwned`", "status": "open"},
 	}
 	for _, name := range Names() {
 		for _, args := range hostile {

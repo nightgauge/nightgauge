@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/conversation/tools"
+	"github.com/nightgauge/nightgauge/internal/platform"
 )
 
 // turnTools is one turn's tool server and the toolset behind it (#1570).
@@ -31,7 +33,7 @@ const mcpConfigName = "mcp.json"
 // The toolset is bound to this turn alone: its poster, the repositories they
 // may read, and their own message, the only text that can ask for a
 // mutation.
-func (h *Host) startTools(t *turn, p plan, dir string, in turnInput) (plan, *turnTools, error) {
+func (h *Host) startTools(t *turn, lease platform.TurnLease, p plan, dir string, in turnInput) (plan, *turnTools, error) {
 	forge := h.cfg.Forge
 	if forge == nil {
 		cfg, err := config.Load(h.cfg.WorkspaceRoot)
@@ -48,10 +50,16 @@ func (h *Host) startTools(t *turn, p plan, dir string, in turnInput) (plan, *tur
 	for _, r := range t.cmd.ReadableRepos {
 		readable = append(readable, tools.Repo{Owner: r.Owner, Repo: r.Repo})
 	}
+	runs := h.cfg.Runs
+	if runs == nil {
+		runs = tools.LocalRuns{}
+	}
 	set := tools.NewToolset(tools.Env{
 		Root:      h.cfg.WorkspaceRoot,
 		RepoRoots: config.WorkspaceRepoPaths(h.cfg.WorkspaceRoot),
 		Forge:     forge,
+		Runs:      runs,
+		Attention: turnAttention{platform: h.cfg.Platform, lease: lease},
 	}, tools.Turn{
 		ConversationID:   t.cmd.ConversationID,
 		TurnID:           t.cmd.TurnID,
@@ -61,6 +69,7 @@ func (h *Host) startTools(t *turn, p plan, dir string, in turnInput) (plan, *tur
 		ReadableRepos:    readable,
 		Message:          in.gate,
 		IssueProposed:    in.proposed,
+		Proposal:         in.proposal,
 	})
 	server, err := tools.Start(set)
 	if err != nil {
@@ -77,6 +86,22 @@ func (h *Host) startTools(t *turn, p plan, dir string, in turnInput) (plan, *tur
 	opts.MCPConfig = path
 	p.cmd, p.args, p.env = p.builder.BuildConversationTurn(opts)
 	return p, tt, nil
+}
+
+// turnAttention is the hosted service's turn-scoped attention routes bound
+// to one turn's lease (#1587): the only way a turn reaches the cards. The
+// lease never leaves the daemon; the tool server holds no credential.
+type turnAttention struct {
+	platform Platform
+	lease    platform.TurnLease
+}
+
+func (a turnAttention) ListCards(ctx context.Context, q platform.TurnCardQuery) (platform.TurnCardList, error) {
+	return a.platform.ListTurnCards(ctx, a.lease, q)
+}
+
+func (a turnAttention) ActOnCard(ctx context.Context, cardID string, act platform.TurnCardAct) (platform.TurnCardActResult, error) {
+	return a.platform.ActOnTurnCard(ctx, a.lease, cardID, act)
 }
 
 // close ends the calls in flight, waits for the server to stop, releases

@@ -182,3 +182,35 @@ func TestServer_RefusesAnyoneButItsTurn(t *testing.T) {
 		t.Error("the server still answers after Close")
 	}
 }
+
+// tools/call names one tool, once: params with two names, or a name in
+// another case, are refused, so the tool that runs is never read one way by
+// the adapter and another by the server (#1587, security review).
+func TestServer_RefusesAmbiguousToolsCallParams(t *testing.T) {
+	att := &fakeAttention{poster: "acct-op"}
+	root := gitRepo(t)
+	s := NewToolset(Env{Root: root, RepoRoots: map[string]string{"acme/api": root}, Forge: newFakeForge(), Attention: att},
+		operatorTurn("Mute dr_1."))
+	t.Cleanup(s.Close)
+	_, c := startServer(t, s)
+	args := `"arguments":{"card_id":"dr_1","verb":"mute","request_quote":"Mute dr_1"}`
+	for _, params := range []string{
+		`{"name":"read_file","name":"act_on_attention_card",` + args + `}`,
+		`{"Name":"act_on_attention_card","name":"read_file",` + args + `}`,
+		`{"name":"act_on_attention_card",` + args + `,"arguments":{}}`,
+		`{"name":"act_on_attention_card",` + args + `,"extra":1}`,
+	} {
+		_, body := c.post([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":`+params+`}`), nil)
+		if !strings.Contains(string(body), "-32602") {
+			t.Errorf("%s: %s, want invalid params", params, body)
+		}
+	}
+	if got := att.made(); len(got) != 0 {
+		t.Errorf("an ambiguous call acted: %+v", got)
+	}
+	_, body := c.post([]byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"act_on_attention_card",`+
+		args+`,"_meta":{"progressToken":1}}}`), nil)
+	if strings.Contains(string(body), "-32602") || len(att.made()) != 1 {
+		t.Errorf("a well-formed call: %s, acts %+v", body, att.made())
+	}
+}

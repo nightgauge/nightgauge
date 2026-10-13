@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"sync"
@@ -44,6 +46,12 @@ type Turn struct {
 	// IssueProposed reports that the reply just before this turn proposed an
 	// issue, so a bare confirmation, or "file it", may file it.
 	IssueProposed bool
+	// Proposal is the reply just before this turn, when it is a completed
+	// reply, without the daemon's receipt lines: the only text a bare
+	// confirmation can confirm an act on a card from. It is the model's
+	// text, so it never grants an act alone: the poster must confirm it in
+	// their own message, and it must name the act's verb, card and option.
+	Proposal string
 }
 
 // Env is the workspace a toolset reads and the forge it reaches.
@@ -55,6 +63,12 @@ type Env struct {
 	// poster's readable repositories.
 	RepoRoots map[string]string
 	Forge     Forge
+	// Runs reads the workspace's pipeline runs from this machine's state.
+	// Nil leaves the run tools refusing.
+	Runs RunSource
+	// Attention is the hosted service's turn-scoped attention routes, on
+	// this turn's lease. Nil leaves the card tools refusing.
+	Attention Attention
 }
 
 // Invocation is one tool call the turn made, as the server saw it: the
@@ -85,6 +99,11 @@ type Toolset struct {
 	mu     sync.Mutex
 	calls  []Invocation
 	issues int
+	acts   int
+	// actsMade are the card acts this turn already made or attempted, by
+	// card and verb: each is made at most once, so a retry after a timeout
+	// cannot repeat one that landed.
+	actsMade map[string]bool
 }
 
 // NewToolset returns the tools of one turn. A root that cannot be opened
@@ -145,6 +164,14 @@ func (s *Toolset) Call(ctx context.Context, name string, args json.RawMessage) (
 		text, err = s.getPullRequest(ctx, args)
 	case ToolCreateIssue:
 		text, detail, err = s.createIssue(ctx, args)
+	case ToolPipelineStatus:
+		text, err = s.pipelineStatus(args)
+	case ToolListRunningJobs:
+		text, err = s.listRunningJobs(args)
+	case ToolListAttention:
+		text, err = s.listAttentionCards(ctx, args)
+	case ToolActOnAttention:
+		text, detail, err = s.actOnAttentionCard(ctx, args)
 	default:
 		err = fail(CodeUnknownTool, "no conversation tool is named "+quoteName(name))
 	}
@@ -169,16 +196,84 @@ func quoteName(name string) string {
 }
 
 // decode parses a tool's arguments, refusing unknown fields.
+//
+// The arguments must be one JSON object whose every key is, exactly (case
+// included) and once, a field of v: encoding/json would take the last of two
+// equal keys and match a key in any case, so a check could read one value
+// while another is used (#1587).
 func decode(raw json.RawMessage, v any) *Error {
 	if len(raw) == 0 {
 		raw = json.RawMessage("{}")
 	}
+	bad := fail(CodeInvalidArguments, "the arguments do not match the tool's schema")
+	if !exactKeys(raw, fieldNames(reflect.TypeOf(v))) {
+		return bad
+	}
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
-		return fail(CodeInvalidArguments, "the arguments do not match the tool's schema")
+		return bad
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return bad
 	}
 	return nil
+}
+
+// exactKeys reports whether raw is one JSON object whose keys are each one of
+// allowed, exactly, and none twice.
+func exactKeys(raw []byte, allowed map[string]bool) bool {
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return false
+	}
+	seen := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		key, ok := tok.(string)
+		if err != nil || !ok || !allowed[key] || seen[key] {
+			return false
+		}
+		seen[key] = true
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return false
+		}
+	}
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('}') {
+		return false
+	}
+	_, err := dec.Token()
+	return err == io.EOF
+}
+
+// fieldNames are the JSON keys of the struct t points to, embedded structs'
+// included.
+func fieldNames(t reflect.Type) map[string]bool {
+	out := map[string]bool{}
+	for t != nil && t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if t == nil || t.Kind() != reflect.Struct {
+		return out
+	}
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		tag := f.Tag.Get("json")
+		name, _, _ := strings.Cut(tag, ",")
+		switch {
+		case name == "-":
+		case f.Anonymous && tag == "":
+			for k := range fieldNames(f.Type) {
+				out[k] = true
+			}
+		case name != "":
+			out[name] = true
+		case f.IsExported():
+			out[f.Name] = true
+		}
+	}
+	return out
 }
 
 // canReadRepo reports whether the poster may read owner/repo through the

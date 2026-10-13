@@ -69,6 +69,17 @@ operations:
     security: pipeline
     upstream: declared
 
+  # A conversation turn's Needs Attention acts (#1587, ADR-017).
+  # Turn-bound like the frame and context routes: the turn's execution lease
+  # rides in X-Nightgauge-Turn-Lease, and the hosted service takes the actor
+  # from the turn's poster, never from the request.
+  - id: agents.actOnCardFromTurn
+    go_name: OpAgentsActOnTurnCard
+    method: POST
+    path: /v1/agents/{agentId}/turns/{turnId}/attention/{requestId}
+    security: pipeline
+    upstream: declared
+
   - id: agents.register
     go_name: OpAgentsRegister
     method: POST
@@ -90,6 +101,15 @@ operations:
     go_name: OpAgentsIngestTurnFrames
     method: POST
     path: /v1/agents/{agentId}/turns/{turnId}/frames
+    security: pipeline
+    upstream: declared
+
+  # The Needs Attention cards of a turn's target workspace that its poster
+  # and the host's operator may both read (#1587), on the turn's lease.
+  - id: agents.listCardsFromTurn
+    go_name: OpAgentsListTurnCards
+    method: GET
+    path: /v1/agents/{agentId}/turns/{turnId}/attention
     security: pipeline
     upstream: declared
 

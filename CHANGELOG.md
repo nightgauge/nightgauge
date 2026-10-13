@@ -49,6 +49,31 @@ changelog, and the release workflow refuses a tag that does not.
   daemon logs each turn's class with the rule that gave it. See
   `docs/CONVERSATION_TURNS.md` § Retention class.
 
+- **A conversation can say what the pipeline is doing and act on Needs
+  Attention cards** (#1587). Four tools join the conversation's closed tool
+  set, which a test still pins to an exact list: `pipeline_status` and
+  `list_running_jobs` report the runs in flight, paused and recently
+  finished, and the jobs executing now with the evidence that each is live,
+  read from this machine's own run state with no forge, hosted or model
+  provider call; `list_attention_cards` lists the cards of the turn's
+  workspace; and `act_on_attention_card` resolves, comments on,
+  acknowledges or mutes one. Both card tools go only through the hosted
+  service's turn-scoped routes on the turn's lease, so the card records the
+  account that posted the turn as its actor, never the workspace owner or
+  the host's operator, and the hosted service refuses an act the poster's
+  role does not permit (a viewer's, say), which the transcript reports. An
+  act runs only when the poster's own message in that turn asks for it,
+  naming the exact card and, to resolve it, the option in the same clause,
+  with any steer or comment text in the poster's own words, or confirms a
+  reply to the poster's own previous turn that proposed exactly that one
+  act; a report, a question or someone else's words never count as asking.
+  Each act at most once and at most five a turn. An issue, too, is filed on
+  a bare confirmation only of a proposal answering the poster's own turn. Every conversation tool now refuses arguments with an
+  unknown, repeated or differently-cased key. A teammate sees only the
+  runs of repositories they may read, never the operator's private runs,
+  and no tool names a local path or process id. See
+  `docs/CONVERSATION_TURNS.md` § Tools and permissions.
+
 ### Fixed
 
 - **A run started with `nightgauge run` now leaves a session log** (#1903).
