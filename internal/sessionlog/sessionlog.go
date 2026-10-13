@@ -10,36 +10,45 @@
 //
 //   - Location: the clone's logs directory, layout.CloneLogsDir.
 //   - Name: YYYY-MM-DD_<issue>_session.log, the UTC day.
-//   - Line: [ISO-8601 UTC] [LEVEL] [stage] message, one entry per line.
+//   - Line: [ISO-8601 UTC] [LEVEL] [tag] message, one record per line.
 //
 // One file per issue per day, not one per run: the extension finds an issue's
 // log by the exact suffix _<issue>_session.log and lists logs by
-// ^date_issue_session.log$, so a per-run name would be invisible to it. Every
-// write appends, so a retried dispatch never overwrites an earlier attempt,
-// and each run's lines open with the scheduler's "run <id> started" line and
-// close with a "run <id> finished" entry, so the record names its run.
+// ^date_issue_session.log$, so a per-run name would be invisible to it. The
+// file is only ever appended to (no O_TRUNC), so a retried dispatch never
+// overwrites an earlier attempt, and each run's records open and close with
+// "session" records naming the run id the scheduler assigned.
 //
-// Redaction. A session log is a new place for a credential to land, so the
-// bytes written are the bytes the core's credential redactor produced, never a
-// form it did not see:
+// Integrity. Run output reaches this log through the scheduler's log lines,
+// so it must not be able to forge, hide or misfile a record:
 //
-//  1. Input is normalised first: terminal escape sequences and other control
-//     characters are removed and a JSON \u escape of a token character is
-//     decoded. Each of those could split a credential into pieces that match
-//     no shape while a terminal, a JSON reader or the eye still joins them.
-//  2. The logger's output is held to line boundaries across writes, then
-//     passed through one credshape.Stream, which redacts text arriving in
-//     pieces: a credential or a PEM key block split across writes is still
-//     found. Close flushes the held tail through it.
-//  3. Every formatted buffer passes credshape.RedactEgress once more
-//     immediately before the write.
+//   - The tag slot is always filled by the writer: the stage, "pipeline"
+//     before the first stage, or "session" for the writer's own records,
+//     which no stage or output can take. Output only ever fills the message.
+//   - Terminal escapes and every control character but tab and newline (a
+//     carriage return included) are removed, so nothing can overwrite or
+//     hide a line. A logger entry's embedded newlines continue that entry
+//     ("| "), in that entry's log, and can never start a new one.
+//   - The file is chosen only from issues this process is running (Track):
+//     a "#N:" naming any other issue cannot create or reach N's log.
+//   - A line over maxRecordBytes is cut with an explicit marker, and records
+//     that could not be written are counted and reported by a "session"
+//     record once writing works again (and on stderr when it first fails).
+//   - The file is opened O_APPEND|O_CREATE with O_NOFOLLOW, refused unless it
+//     is a regular file, and kept at mode 0600.
 //
-// Each append is one write of whole lines, so a run killed mid-stage leaves a
-// log whose every complete line still parses.
+// Redaction. The bytes written are the bytes the core's credential redactor
+// produced: normalised input (escapes and controls removed, a JSON \u escape
+// of a token character decoded) is held to line boundaries across writes and
+// passed through one credshape.Stream, so a credential or key block split
+// across writes is still found, and every formatted buffer passes
+// credshape.RedactEgress again immediately before the write. Close flushes
+// the held tail through the stream.
 package sessionlog
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -49,6 +58,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/nightgauge/nightgauge/internal/credshape"
 	"github.com/nightgauge/nightgauge/internal/layout"
@@ -61,10 +71,27 @@ const (
 	LevelError = "ERROR"
 )
 
-// maxHeldLine bounds the logger output held while waiting for a newline. The
-// standard logger ends every entry with one, so only another writer reaches
-// it; past it the held text is passed on, still through the redacting stream.
-const maxHeldLine = 1 << 20
+const (
+	// SessionTag tags the writer's own records: a run's start and end, and a
+	// report of records that could not be written.
+	SessionTag = "session"
+	// PipelineTag tags a run's lines before its first stage.
+	PipelineTag = "pipeline"
+	// ContinuationPrefix opens each line after the first of one entry.
+	ContinuationPrefix = "| "
+	// maxRecordBytes bounds one record's message; past it the message is cut
+	// and says how much was cut. Readers scan lines of up to 1 MiB.
+	maxRecordBytes = 16 << 10
+	// maxHeldLine bounds the logger output held while waiting for a newline.
+	// The standard logger ends every entry with one, so only another writer
+	// reaches it; past it the held text is passed on, still through the
+	// redacting stream.
+	maxHeldLine = 1 << 20
+	// entryMark marks where a logger entry begins in the text passed through
+	// the redacting stream. normalize removes every NUL from input, so only
+	// the writer can put one there.
+	entryMark = "\x00"
+)
 
 // FileName is the session log's base name for issue on t's UTC day,
 // LogFileWriter.generateFilename's form.
@@ -72,20 +99,27 @@ func FileName(issue int, t time.Time) string {
 	return fmt.Sprintf("%s_%d_session.log", t.UTC().Format("2006-01-02"), issue)
 }
 
-// FormatLine renders one entry without its newline, LogFileWriter.formatEntry's
-// form. An empty stage omits the tag.
-func FormatLine(t time.Time, level, stage, message string) string {
-	tag := ""
-	if stage != "" {
-		tag = "[" + stage + "] "
+// FormatLine renders one record without its newline, LogFileWriter.formatEntry's
+// form. An empty tag omits it; the writer itself always passes one.
+func FormatLine(t time.Time, level, tag, message string) string {
+	if tag != "" {
+		tag = "[" + tag + "] "
 	}
 	return fmt.Sprintf("[%s] [%s] %s%s", t.UTC().Format("2006-01-02T15:04:05.000Z"),
 		strings.ToUpper(level), tag, message)
 }
 
+// lostRecords counts the records of an issue that could not be written since
+// the last successful write, and why.
+type lostRecords struct {
+	records int
+	err     error
+}
+
 // Writer appends run output to per-issue session logs. It is also an
 // io.Writer for the standard logger: an entry the scheduler logs as "#N: …"
-// is filed under issue N. Safe for concurrent use.
+// for an issue this process is running is filed under issue N. Safe for
+// concurrent use.
 type Writer struct {
 	mu          sync.Mutex
 	defaultRoot string
@@ -93,16 +127,22 @@ type Writer struct {
 	roots       map[int]string
 	stages      map[int]string
 	active      map[int]bool
-	warned      bool
+	runs        map[int]string
+	lost        map[int]lostRecords
 
-	// held is logger output not yet ended by a newline; stream redacts the
-	// logger output across writes; released is redacted output not yet ended
-	// by a newline; entry is the issue of the logger entry being read, which
-	// its continuation lines belong to.
-	held     []byte
-	stream   *credshape.Stream
-	released string
-	entry    int
+	// held is logger output not yet ended by a newline. stream redacts the
+	// logger output across writes, and released is its output not yet ended
+	// by a newline. atStart is true when the next logger write begins an
+	// entry, nextStart when the next released line does. entry and
+	// entryLevel are the issue and level of the entry being read, which its
+	// continuation lines take.
+	held       []byte
+	stream     *credshape.Stream
+	released   string
+	atStart    bool
+	nextStart  bool
+	entry      int
+	entryLevel string
 }
 
 // New returns a Writer whose logs live under defaultRoot's clone logs
@@ -114,22 +154,30 @@ func New(defaultRoot string) *Writer {
 		roots:       map[int]string{},
 		stages:      map[int]string{},
 		active:      map[int]bool{},
+		runs:        map[int]string{},
+		lost:        map[int]lostRecords{},
 		stream:      credshape.NewStream(),
+		atStart:     true,
 	}
 }
 
-// Track records the root an issue's run executes in, whose logs directory
-// takes its log, and marks the run active. An empty root keeps the default.
+// Track records that this process runs issue, in root, whose logs directory
+// takes the log, and marks the run active. An empty root keeps the default.
 func (w *Writer) Track(issue int, root string) {
+	if issue <= 0 {
+		return
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if root != "" {
 		w.roots[issue] = root
+	} else if _, ok := w.roots[issue]; !ok {
+		w.roots[issue] = w.defaultRoot
 	}
 	w.active[issue] = true
 }
 
-// Tracked reports whether Track has named a root for issue.
+// Tracked reports whether Track has recorded issue.
 func (w *Writer) Tracked(issue int) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -140,78 +188,142 @@ func (w *Writer) Tracked(issue int) bool {
 // StageStarted makes stage the tag of issue's following lines.
 func (w *Writer) StageStarted(issue int, stage string) {
 	w.mu.Lock()
-	w.stages[issue] = stage
+	w.stages[issue] = normalize(stage)
 	w.active[issue] = true
 	w.mu.Unlock()
 	w.Append(issue, LevelInfo, stage, "stage "+stage+" started")
 }
 
-// RunFinished writes the run's closing entry and marks it inactive.
+// RunStarted writes the run's opening record the first time runID, the run
+// identity the scheduler assigned, is seen for issue.
+func (w *Writer) RunStarted(issue int, runID, repo string) {
+	if issue <= 0 || runID == "" {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.runs[issue] == runID {
+		return
+	}
+	w.runs[issue] = runID
+	w.active[issue] = true
+	w.messageLocked(issue, LevelInfo, SessionTag, fmt.Sprintf("run %s started for %s", runID, repo))
+}
+
+// RunFinished writes the run's closing record and marks it inactive.
 func (w *Writer) RunFinished(issue int, runID string, success bool) {
 	if issue <= 0 {
 		return
 	}
-	outcome := "failed"
-	level := LevelError
+	outcome, level := "failed", LevelError
 	if success {
 		outcome, level = "succeeded", LevelInfo
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	// Untagged: the entry closes the run, not its last stage.
-	w.appendLocked(issue, level, "", credshape.RedactEgress(normalize(fmt.Sprintf("run %s finished: %s", runID, outcome))))
+	w.messageLocked(issue, level, SessionTag, fmt.Sprintf("run %s finished: %s", runID, outcome))
 	delete(w.active, issue)
 	delete(w.stages, issue)
+	delete(w.runs, issue)
 }
 
-// Append writes message as issue's entry, one line per line of message. An
-// empty stage tags it with the issue's current stage. The message is redacted
-// whole, so a key block spanning its lines is found.
+// Append writes message as one entry of issue's log, tagged stage, or the
+// issue's current stage when stage is empty.
 func (w *Writer) Append(issue int, level, stage, message string) {
 	if issue <= 0 {
 		return
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if stage == "" {
-		stage = w.stages[issue]
+	tag := normalize(stage)
+	if tag == "" || tag == SessionTag {
+		tag = w.tagLocked(issue)
 	}
-	w.appendLocked(issue, level, stage, credshape.RedactEgress(normalize(message)))
+	w.messageLocked(issue, level, tag, message)
 }
 
-// appendLocked formats redacted, already-redacted text, as issue's entry and
-// writes it, redacting the formatted bytes once more on the way out.
-func (w *Writer) appendLocked(issue int, level, stage, redacted string) {
-	now := w.now()
-	stage = normalize(stage)
-	var buf bytes.Buffer
-	for _, line := range strings.Split(redacted, "\n") {
-		line = strings.TrimRight(line, " \t")
+// messageLocked normalises and redacts message whole, so a key block spanning
+// its lines is found, and records it as one entry: its first line, then each
+// further line as a continuation.
+func (w *Writer) messageLocked(issue int, level, tag, message string) {
+	var lines []string
+	for _, line := range strings.Split(credshape.RedactEgress(normalize(message)), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		buf.WriteString(FormatLine(now, level, stage, line))
+		if len(lines) > 0 {
+			line = ContinuationPrefix + line
+		}
+		lines = append(lines, line)
+	}
+	w.recordLocked(issue, level, tag, lines)
+}
+
+// tagLocked is the tag of issue's next logged line: its stage, or
+// PipelineTag before its first.
+func (w *Writer) tagLocked(issue int) string {
+	if s := w.stages[issue]; s != "" && s != SessionTag {
+		return s
+	}
+	return PipelineTag
+}
+
+// recordLocked writes lines, already redacted, as issue's records. A report
+// of records lost to an earlier failure goes first; the formatted bytes are
+// redacted once more on the way out.
+func (w *Writer) recordLocked(issue int, level, tag string, lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	now := w.now()
+	var buf bytes.Buffer
+	lost := w.lost[issue]
+	if lost.records > 0 {
+		buf.WriteString(FormatLine(now, LevelWarn, SessionTag, cutRecord(normalize(fmt.Sprintf(
+			"%d record(s) of this log could not be written and are missing above this line: %v",
+			lost.records, lost.err)))))
 		buf.WriteByte('\n')
 	}
-	if buf.Len() == 0 {
-		return
+	for _, line := range lines {
+		buf.WriteString(FormatLine(now, level, tag, cutRecord(strings.TrimRight(line, " \t"))))
+		buf.WriteByte('\n')
 	}
 	root := w.roots[issue]
 	if root == "" {
 		root = w.defaultRoot
 	}
-	out := []byte(credshape.RedactEgress(buf.String()))
-	if err := appendFile(root, FileName(issue, now), out); err != nil && !w.warned {
-		// Never log.Printf here: the standard logger calls Write with its
-		// own lock held, so a log line from inside it would deadlock.
-		w.warned = true
-		fmt.Fprintf(os.Stderr, "warning: the session log for #%d is not being written: %v\n", issue, err)
+	if err := appendFile(root, FileName(issue, now), []byte(credshape.RedactEgress(buf.String()))); err != nil {
+		if lost.records == 0 {
+			// Never log.Printf here: the standard logger calls Write with
+			// its own lock held, so a log line from inside it would deadlock.
+			fmt.Fprintf(os.Stderr, "warning: the session log for #%d is not being written: %v\n", issue, err)
+		}
+		w.lost[issue] = lostRecords{records: lost.records + len(lines), err: err}
+		return
 	}
+	delete(w.lost, issue)
 }
+
+// cutRecord bounds a record's message to maxRecordBytes, on a rune boundary,
+// and says how much it cut.
+func cutRecord(msg string) string {
+	if len(msg) <= maxRecordBytes {
+		return msg
+	}
+	cut := maxRecordBytes
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s [truncated: %d more bytes not written]", msg[:cut], len(msg)-cut)
+}
+
+// errNotRegular reports a log path that is not a regular file.
+var errNotRegular = errors.New("session log path is not a regular file")
 
 // appendFile appends data to name in root's clone logs directory: one write
 // on an O_APPEND descriptor, so concurrent writers never interleave inside a
-// line. Mode 0600, as every log there (ADR-024 § 11).
+// line. A symlink, FIFO or anything else at the path is refused, and the
+// file is kept at mode 0600, as every log there (ADR-024 § 11).
 func appendFile(root, name string, data []byte) error {
 	dir, err := layout.CloneLogsDir(root)
 	if err != nil {
@@ -220,10 +332,22 @@ func appendFile(root, name string, data []byte) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(dir, name), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	path := filepath.Join(dir, name)
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: %s", errNotRegular, path)
+	}
+	f, err := os.OpenFile(path, appendOpenFlags, 0o600)
 	if err != nil {
 		return err
 	}
+	if info, err := f.Stat(); err != nil || !info.Mode().IsRegular() {
+		_ = f.Close()
+		if err == nil {
+			err = fmt.Errorf("%w: %s", errNotRegular, path)
+		}
+		return err
+	}
+	_ = f.Chmod(0o600)
 	_, werr := f.Write(data)
 	if cerr := f.Close(); werr == nil {
 		werr = cerr
@@ -231,10 +355,10 @@ func appendFile(root, name string, data []byte) error {
 	return werr
 }
 
-// Write takes logger output. Complete lines are normalised and passed through
-// the redacting stream; a trailing partial line is held for the next write or
-// Close. It never fails, so it can sit behind io.MultiWriter beside the
-// terminal without cutting the terminal's copy short.
+// Write takes logger output. Each write that follows a newline begins an
+// entry; text is held to line boundaries, normalised and passed through the
+// redacting stream. It never fails, so it can sit behind io.MultiWriter beside
+// the terminal without cutting the terminal's copy short.
 func (w *Writer) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -244,7 +368,7 @@ func (w *Writer) Write(p []byte) (int, error) {
 		cut = len(w.held)
 	}
 	if cut > 0 {
-		w.releaseLocked(w.stream.Write(normalize(string(w.held[:cut]))))
+		w.feedLocked(w.held[:cut])
 		w.held = append(w.held[:0], w.held[cut:]...)
 	}
 	return len(p), nil
@@ -255,61 +379,92 @@ func (w *Writer) Write(p []byte) (int, error) {
 func (w *Writer) Close() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	tail := ""
 	if len(w.held) > 0 {
-		tail = w.stream.Write(normalize(string(w.held)))
+		w.feedLocked(w.held)
 		w.held = w.held[:0]
 	}
-	w.releaseLocked(tail + w.stream.Flush())
+	w.releaseLocked(w.stream.Flush())
 	if w.released != "" {
-		w.routeLocked(w.released)
+		w.lineLocked(w.released, w.nextStart)
 		w.released = ""
 	}
+	w.nextStart = false
 	return nil
 }
 
-// releaseLocked files each complete line of the stream's redacted output.
+// feedLocked passes raw logger output through the redacting stream, marking
+// where an entry begins.
+func (w *Writer) feedLocked(raw []byte) {
+	text := normalize(string(raw))
+	if w.atStart {
+		text = entryMark + text
+	}
+	w.atStart = bytes.HasSuffix(raw, []byte{'\n'})
+	w.releaseLocked(w.stream.Write(text))
+}
+
+// releaseLocked files each complete line of the stream's redacted output. An
+// entry mark ends the line before it and begins an entry.
 func (w *Writer) releaseLocked(redacted string) {
 	w.released += redacted
 	for {
-		i := strings.IndexByte(w.released, '\n')
+		i := strings.IndexAny(w.released, "\n"+entryMark)
 		if i < 0 {
 			return
 		}
-		line := w.released[:i]
+		line, sep := w.released[:i], w.released[i]
 		w.released = w.released[i+1:]
-		w.routeLocked(line)
+		if line != "" || sep == '\n' {
+			w.lineLocked(line, w.nextStart)
+			w.nextStart = false
+		}
+		if sep == entryMark[0] {
+			w.nextStart = true
+		}
 	}
 }
 
-// logPrefixRE is the standard logger's date and time prefix, which opens
-// every entry; a line without one continues the entry before it.
+// logPrefixRE is the standard logger's date and time prefix.
 var logPrefixRE = regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)? `)
 
 // issueLineRE is the scheduler's per-issue entry: "#N: message".
 var issueLineRE = regexp.MustCompile(`^#(\d+): ?(.*)$`)
 
-// routeLocked files one redacted line of logger output. An entry that names
-// no issue goes to the only active run, when exactly one is active, and is
-// dropped otherwise; its continuation lines follow it.
-func (w *Writer) routeLocked(line string) {
-	prefixed := logPrefixRE.MatchString(line)
-	line = logPrefixRE.ReplaceAllString(line, "")
-	if m := issueLineRE.FindStringSubmatch(line); m != nil {
-		w.entry, _ = strconv.Atoi(m[1])
-		line = m[2]
-	} else if prefixed || w.entry <= 0 {
+// lineLocked files one redacted line of logger output. An entry names its
+// issue with "#N:" when this process runs N; one that names no such issue
+// goes to the only active run, when exactly one is active, and is dropped
+// otherwise. Its continuation lines follow it.
+func (w *Writer) lineLocked(line string, start bool) {
+	if strings.TrimSpace(line) == "" {
+		return
+	}
+	if start {
+		line = logPrefixRE.ReplaceAllString(line, "")
 		w.entry = 0
-		if len(w.active) == 1 {
+		if m := issueLineRE.FindStringSubmatch(line); m != nil {
+			if n, err := strconv.Atoi(m[1]); err == nil && w.runningLocked(n) {
+				w.entry, line = n, m[2]
+			}
+		}
+		if w.entry == 0 && len(w.active) == 1 {
 			for n := range w.active {
 				w.entry = n
 			}
 		}
+		w.entryLevel = levelOf(line)
+	} else {
+		line = ContinuationPrefix + line
 	}
 	if w.entry <= 0 {
 		return
 	}
-	w.appendLocked(w.entry, levelOf(line), w.stages[w.entry], line)
+	w.recordLocked(w.entry, w.entryLevel, w.tagLocked(w.entry), []string{line})
+}
+
+// runningLocked reports whether this process runs issue.
+func (w *Writer) runningLocked(issue int) bool {
+	_, tracked := w.roots[issue]
+	return tracked || w.active[issue]
 }
 
 // levelOf classifies a scheduler log line the way an operator reads it.
@@ -324,17 +479,20 @@ func levelOf(line string) string {
 	return LevelInfo
 }
 
-// escapeSeqRE matches terminal escape sequences: CSI (colours, cursor moves),
-// OSC (titles, hyperlinks) ended by BEL or ST, and two-byte escapes.
-var escapeSeqRE = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[@-Z\\-_]`)
+// escapeSeqRE matches complete terminal escape sequences: CSI (colours,
+// cursor moves), OSC (titles, hyperlinks) ended by BEL or ST, and two-byte
+// escapes. An incomplete one keeps its text; only its ESC is removed, by
+// normalize's control strip, so nothing after it is hidden.
+var escapeSeqRE = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b\n]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]`)
 
 // jsonEscapeRE matches a JSON \u escape of an ASCII character.
 var jsonEscapeRE = regexp.MustCompile(`\\u00[0-7][0-9a-fA-F]`)
 
-// normalize removes what could split a credential out of its shape while a
-// reader still joins it: terminal escape sequences and every other control
-// character but tab and newline (a carriage return included), and a JSON \u
-// escape of a character a credential is made of, which is decoded.
+// normalize removes what could split a credential out of its shape, or hide
+// or overwrite text, while a reader still joins or shows it: terminal escape
+// sequences and every control character but tab and newline (carriage
+// return and NUL included), and a JSON \u escape of a character a credential
+// is made of, which is decoded.
 func normalize(s string) string {
 	s = escapeSeqRE.ReplaceAllString(s, "")
 	s = jsonEscapeRE.ReplaceAllStringFunc(s, func(esc string) string {

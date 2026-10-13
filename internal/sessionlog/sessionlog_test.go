@@ -45,7 +45,7 @@ func TestCLIRunLogReadsBackThroughTheExistingReaders(t *testing.T) {
 	token := "gh" + "p_" + strings.Repeat("A1b2", 9)
 
 	w.Track(1903, root)
-	_, _ = w.Write([]byte(`2026/09/20 14:03:07 #1903: run "01a0bea9-1669-745e-8be0-4dc1a7ccb83c" started for nightgauge/nightgauge` + "\n"))
+	w.RunStarted(1903, "01a0bea9-1669-745e-8be0-4dc1a7ccb83c", "nightgauge/nightgauge")
 	w.StageStarted(1903, "issue-pickup")
 	_, _ = w.Write([]byte("2026/09/20 14:03:07.123456 #1903: push rejected for https://x:" + token + "@github.com/o/r\n"))
 	w.Append(1903, LevelError, "issue-pickup", "stage issue-pickup FAILED: exit 1\nsecond line of the reason")
@@ -56,8 +56,16 @@ func TestCLIRunLogReadsBackThroughTheExistingReaders(t *testing.T) {
 		t.Fatalf("file name = %q, want LogFileWriter's YYYY-MM-DD_<issue>_session.log", name)
 	}
 	lines := readLog(t, root, 1903)
-	if len(lines) != 6 {
-		t.Fatalf("got %d lines, want 6:\n%s", len(lines), strings.Join(lines, "\n"))
+	want := []string{
+		"[2026-09-20T14:03:07.123Z] [INFO] [session] run 01a0bea9-1669-745e-8be0-4dc1a7ccb83c started for nightgauge/nightgauge",
+		"[2026-09-20T14:03:07.123Z] [INFO] [issue-pickup] stage issue-pickup started",
+		"[2026-09-20T14:03:07.123Z] [INFO] [issue-pickup] push rejected for https://x:" + credshape.Marker + "@github.com/o/r",
+		"[2026-09-20T14:03:07.123Z] [ERROR] [issue-pickup] stage issue-pickup FAILED: exit 1",
+		"[2026-09-20T14:03:07.123Z] [ERROR] [issue-pickup] | second line of the reason",
+		"[2026-09-20T14:03:07.123Z] [ERROR] [session] run 01a0bea9-1669-745e-8be0-4dc1a7ccb83c finished: failed",
+	}
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("session log =\n%s\nwant\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
 	}
 	for i, line := range lines {
 		m := extensionLineRE.FindStringSubmatch(line)
@@ -67,18 +75,6 @@ func TestCLIRunLogReadsBackThroughTheExistingReaders(t *testing.T) {
 		if _, err := time.Parse(time.RFC3339Nano, m[1]); err != nil {
 			t.Errorf("line %d timestamp %q: %v", i+1, m[1], err)
 		}
-		if strings.Contains(line, token) || strings.Contains(line, "A1b2A1b2") {
-			t.Errorf("line %d carries the token: %q", i+1, line)
-		}
-	}
-	if !strings.Contains(lines[0], `run "01a0bea9-1669-745e-8be0-4dc1a7ccb83c" started`) || strings.Contains(lines[0], "2026/09/20") {
-		t.Errorf("first line = %q, want the run's start without the logger's own prefix", lines[0])
-	}
-	if !strings.Contains(lines[2], "[issue-pickup] push rejected") {
-		t.Errorf("a logged line is not tagged with the current stage: %q", lines[2])
-	}
-	if !strings.HasSuffix(lines[5], "[ERROR] run 01a0bea9-1669-745e-8be0-4dc1a7ccb83c finished: failed") {
-		t.Errorf("last line = %q, want the run's closing entry", lines[5])
 	}
 
 	res, err := scanfailures.Scan(scanfailures.Options{Workdir: root, Issue: 1903})
@@ -100,17 +96,21 @@ func TestRetriedDispatchAppendsADistinctRecord(t *testing.T) {
 	w, root := newTestWriter(t)
 	for _, id := range []string{"run-a", "run-b"} {
 		w.Track(1901, root)
-		_, _ = w.Write([]byte(`#1901: run "` + id + `" started for o/r` + "\n"))
+		w.RunStarted(1901, id, "o/r")
+		w.RunStarted(1901, id, "o/r") // every state change reports it; one record
 		w.StageStarted(1901, "feature-dev")
 		w.RunFinished(1901, id, id == "run-b")
 	}
 	got := strings.Join(readLog(t, root, 1901), "\n")
-	for _, want := range []string{`run "run-a" started`, "run run-a finished: failed", `run "run-b" started`, "run run-b finished: succeeded"} {
+	if n := strings.Count(got, "run run-a started"); n != 1 {
+		t.Errorf("run-a announced %d times, want once", n)
+	}
+	for _, want := range []string{"[session] run run-a started", "run run-a finished: failed", "[session] run run-b started", "run run-b finished: succeeded"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("log lacks %q:\n%s", want, got)
 		}
 	}
-	if strings.Index(got, "run-a finished") > strings.Index(got, `"run-b" started`) {
+	if strings.Index(got, "run-a finished") > strings.Index(got, "run run-b started") {
 		t.Errorf("attempts are out of order:\n%s", got)
 	}
 }

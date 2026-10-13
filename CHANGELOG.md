@@ -59,8 +59,11 @@ changelog, and the release workflow refuses a tag that does not.
   the extension's Output window read it unchanged. Everything written first
   passes the core's credential redactor, after terminal escapes and control
   characters are removed, so a credential split across writes, wrapped in
-  colour codes or escaped in JSON is still found. A retried dispatch appends,
-  never overwrites, and each run's lines open with `run "<run-id>" started`.
+  colour codes or escaped in JSON is still found. A run's output cannot forge
+  the writer's records, reach another issue's log or hide text, a cut line
+  and any record that could not be written are reported in the log, and the
+  file is opened append-only without following a symlink. A retried dispatch
+  appends, and each run's records open with `run <run-id> started`.
 
 - **Hosted analytics, the trace and a failed stage's record now carry the
   stage's real cost** (#1899). The live per-stage line was fixed by #1934, but

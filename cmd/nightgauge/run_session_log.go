@@ -18,6 +18,7 @@ type runProgressSource interface {
 	OnPhaseDetected(fn func(repo string, issue int, stage, name string, index, total int))
 	OnPhaseSettled(fn func(repo string, issue int, stage, name string, index, total int, status string))
 	OnPipelineComplete(fn func(repo string, issue int, runtime *state.RuntimeState, success bool))
+	OnStateChanged(fn func(repo string, issue int, runtime *state.RuntimeState))
 	RepoRoot(repo string) (string, error)
 }
 
@@ -71,6 +72,16 @@ func wireRunProgress(src runProgressSource, root string, stdout, stderr io.Write
 		line := fmt.Sprintf("%s %d/%d %s — %s", pStage, pIndex+1, pTotal, pName, mark)
 		fmt.Fprintf(stderr, "[#%d]   %s\n", issue, line)
 		p.log.Append(issue, sessionlog.LevelInfo, pStage, "phase "+line)
+	})
+	// The run's opening record carries the run id the scheduler assigned,
+	// read from the runtime itself, never from the run's output. The first
+	// state change of a run comes before its first stage starts.
+	src.OnStateChanged(func(repo string, issue int, rt *state.RuntimeState) {
+		if rt == nil || rt.RunID == "" {
+			return
+		}
+		p.Track(repo, issue)
+		p.log.RunStarted(issue, rt.RunID, repo)
 	})
 	src.OnPipelineComplete(func(repo string, issue int, rt *state.RuntimeState, success bool) {
 		runID := ""

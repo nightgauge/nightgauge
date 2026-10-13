@@ -5102,10 +5102,6 @@ func (s *Scheduler) runPipeline(ctx context.Context, item types.BoardItem) (succ
 
 	runtime := state.NewRuntimeState(item.Repo, item.Number, item.ID, runID)
 	runtime.Title = item.Title
-	// The run's first line names it: a session log appends every run of an
-	// issue on one day to one file (#1903), and this is where each one starts.
-	// An identity-less run is refused by the preflight below.
-	log.Printf("#%d: run %q started for %s", item.Number, runID, item.Repo)
 	// A remote run request's pin (#1656) is a fact of the run from its start.
 	if reqAdapter, reqModel, _ := s.QueueItemRequestedPin(item.Repo, item.Number); reqAdapter != "" {
 		runtime.SetRequestedPin(reqAdapter, reqModel)

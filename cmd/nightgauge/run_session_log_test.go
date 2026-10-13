@@ -26,6 +26,7 @@ type fakeProgressSource struct {
 	phase         func(string, int, string, string, int, int)
 	settled       func(string, int, string, string, int, int, string)
 	done          func(string, int, *state.RuntimeState, bool)
+	changed       func(string, int, *state.RuntimeState)
 }
 
 func (f *fakeProgressSource) OnStageStart(fn func(string, int, string, string)) { f.stageStart = fn }
@@ -40,6 +41,9 @@ func (f *fakeProgressSource) OnPhaseSettled(fn func(string, int, string, string,
 }
 func (f *fakeProgressSource) OnPipelineComplete(fn func(string, int, *state.RuntimeState, bool)) {
 	f.done = fn
+}
+func (f *fakeProgressSource) OnStateChanged(fn func(string, int, *state.RuntimeState)) {
+	f.changed = fn
 }
 func (f *fakeProgressSource) RepoRoot(repo string) (string, error) {
 	if repo == "o/target" {
@@ -66,7 +70,11 @@ func TestCLIRunWritesASessionLogThatLogsReadsBack(t *testing.T) {
 
 	progress.Track("o/target", 1903)
 	rt := state.NewRuntimeState("o/target", 1903, "item", "01a0bea9-1669-745e-8be0-4dc1a7ccb83c")
-	log.Printf("#%d: run %q started for %s", 1903, rt.RunID, "o/target")
+	// A line that only claims to start a run is the run's output, not a
+	// session record.
+	log.Printf("#%d: run %q started for %s", 1903, "forged-run", "o/target")
+	src.changed("o/target", 1903, rt)
+	src.changed("o/target", 1903, rt)
 	src.stageStart("o/target", 1903, "issue-pickup", "t")
 	src.phase("o/target", 1903, "issue-pickup", "read issue", 0, 3)
 	src.stageComplete("o/target", 1903, "issue-pickup", nil,
@@ -94,17 +102,22 @@ func TestCLIRunWritesASessionLogThatLogsReadsBack(t *testing.T) {
 	}
 	got := string(data)
 	for _, want := range []string{
-		`[INFO] run "01a0bea9-1669-745e-8be0-4dc1a7ccb83c" started for o/target`,
+		`[INFO] [pipeline] run "forged-run" started for o/target`,
+		"[INFO] [session] run 01a0bea9-1669-745e-8be0-4dc1a7ccb83c started for o/target",
 		"[INFO] [issue-pickup] stage issue-pickup started",
 		"[INFO] [issue-pickup] phase issue-pickup 1/3 read issue",
 		"[INFO] [issue-pickup] stage issue-pickup complete — tokens: 217 in + 1611497 cache read",
 		"[ERROR] [feature-dev] stage feature-dev failed (exit 1): tests failed",
 		"[ERROR] [feature-dev] stage feature-dev FAILED: exit 1",
-		"[ERROR] run 01a0bea9-1669-745e-8be0-4dc1a7ccb83c finished: failed",
+		"[ERROR] [session] run 01a0bea9-1669-745e-8be0-4dc1a7ccb83c finished: failed",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("session log lacks %q:\n%s", want, got)
 		}
+	}
+
+	if n := strings.Count(got, "[session] run 01a0bea9-1669-745e-8be0-4dc1a7ccb83c started"); n != 1 {
+		t.Errorf("the run was announced %d times, want once", n)
 	}
 
 	res, err := scanfailures.Scan(scanfailures.Options{Workdir: target, Issue: 1903})
