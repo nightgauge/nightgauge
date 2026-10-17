@@ -557,7 +557,11 @@ PY
 # ---------------------------------------------------------------------------
 
 # schema_top_level_diff <old> <new>: added/removed/deprecated top-level
-# property names, one JSON object.
+# property names, one JSON object. A property is deprecated by either form
+# schema_contract_test.go's schemaDeprecated accepts, on the property or on
+# the definition it $refs: the draft 2020-12 `deprecated` keyword, or a
+# description starting "@deprecated". OpenCode's published schema used only
+# the second until 2026-10-15, and mostly the first since (#2465).
 schema_top_level_diff() {
   python3 - "$1" "$2" <<'PY'
 import json, sys
@@ -579,10 +583,23 @@ old_props = top_level(sys.argv[1])
 new_props = top_level(sys.argv[2])
 added = sorted(set(new_props) - set(old_props))
 removed = sorted(set(old_props) - set(new_props))
-deprecated = sorted(
-    name for name, schema in new_props.items()
-    if isinstance(schema, dict) and "@deprecated" in (schema.get("description") or "")
-)
+new_doc = json.load(open(sys.argv[2]))
+
+def marked(schema):
+    if not isinstance(schema, dict):
+        return False
+    if schema.get("deprecated") is True:
+        return True
+    return (schema.get("description") or "").strip().startswith("@deprecated")
+
+def deprecated_property(schema):
+    if not isinstance(schema, dict):
+        return False
+    ref = schema.get("$ref") or ""
+    target = new_doc.get("$defs", {}).get(ref[len("#/$defs/"):]) if ref.startswith("#/$defs/") else None
+    return marked(schema) or marked(target)
+
+deprecated = sorted(name for name, schema in new_props.items() if deprecated_property(schema))
 print(json.dumps({"added": added, "removed": removed, "deprecated": deprecated}))
 PY
 }

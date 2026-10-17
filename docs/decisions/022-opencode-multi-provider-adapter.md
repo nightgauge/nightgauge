@@ -3400,6 +3400,46 @@ session's steps, tokens and cost counted against the same ceilings as the
 stage's own, live. The hook result above is what makes that possible (the
 plugin sees every child tool call); the accounting itself is not built.
 
+## A published schema ahead of the releases (amendment 2026-10-16, #2465, #2468)
+
+On 2026-10-15 the schema OpenCode publishes at `https://opencode.ai/config.json`
+changed for the first time since the 1.18.30 pin (#1634). It adds plural
+top-level keys (`agents`, `providers`, `permissions`, `commands`, `plugins`,
+`snapshots`, `update` and others) and marks 19 top-level keys deprecated, most
+with the draft 2020-12 `deprecated` keyword rather than an `@deprecated`
+description. The per-run config sets 14 of them, among them `agent`,
+`provider`, `permission`, `small_model`, `snapshot` and `autoupdate`. Every
+one is still a property the schema accepts, and every generated config still
+validates against it.
+
+That document is not any release's schema. 11 of its 102 description
+strings are in none of the 1.18.30, 1.19.0, 1.19.2 and 1.19.3 binaries, nor in
+the newest development build on npm, so `capture.sh`'s provenance check
+refuses it for each of those versions. The daily canary labels its row with the version it
+installed, which is why the drift issues named 1.19.0 and 1.19.2. On the same
+runs the flag contract and the stub run passed at both versions, including
+the permission leg and the bad-model leg.
+
+Decided:
+
+- **The builder keeps the keys it sets.** Their replacements are not part of
+  the pinned 1.18.30 contract (§ 20, floor and max-tested). OpenCode drops a
+  top-level key it does not know without a word (§ 20), and § 8's ordering of
+  `mode` over `agent` and the permission map's matching were observed on the
+  keys the builder writes, not on their replacements. Moving to the
+  replacements means raising the floor and observing them again. That is a
+  change of its own, not a drift fix.
+- **A deprecation newer than the pin is information, not a canary failure.**
+  `TestNoDeprecatedKeys`, run against a schema other than the pinned one,
+  logs a property that schema marks deprecated and the pinned schema does
+  not. A deprecation the pinned schema already carries still fails, as do a
+  rejected config and a missing or changed safety key, so a live schema that
+  stops accepting a key the builder sets still files a drift issue. Re-pinning to
+  a schema that marks a key deprecated turns that key into a failure in
+  ordinary CI.
+- **The canary's top-level diff reads both deprecation forms**, as the Go
+  walker always did. Before this, the drift issues listed 4 of the 19.
+
 ## Consequences
 
 - The model layer's one-adapter-one-provider assumption becomes a special

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -84,9 +85,11 @@ func readPinnedSchema(t *testing.T) []byte {
 // TestSecurityKeysPresentAndKnown at a schema other than the pinned one, so
 // the release canary's schema-diff leg (#1639) can re-run this suite against
 // a freshly fetched live schema when it differs from the manifest's
-// config_schema_sha256, with no code change. TestManifestSchemaHash ignores
-// it: its whole point is comparing the PINNED schema's own hash against the
-// manifest, which an override would defeat.
+// config_schema_sha256, with no code change. TestNoDeprecatedKeys still reads
+// the pinned schema too, to tell a deprecation newer than the pin from one it
+// already carries. TestManifestSchemaHash ignores it: its whole point is
+// comparing the PINNED schema's own hash against the manifest, which an
+// override would defeat.
 const schemaContractSchemaPathEnv = "NIGHTGAUGE_OPENCODE_SCHEMA_PATH"
 
 // schemaContractSchema reads the schema the four suites above validate the
@@ -325,30 +328,65 @@ var schemaContractAllowedDeprecated = map[string]string{
 
 // TestNoDeprecatedKeys: no generated config uses a property the pinned schema
 // marks deprecated, found by walking each config against the schema, so a
-// future deprecation is caught without a hand-kept list. The renames are
-// asserted by name as well: steps and share, never maxSteps or autoshare.
-// Each finding is printed as the JSON pointer of the property.
+// deprecation is caught without a hand-kept list. The renames are asserted by
+// name as well: steps and share, never maxSteps or autoshare. Each finding is
+// printed as the JSON pointer of the property.
+//
+// Run against another schema (schemaContractSchemaPathEnv, the release
+// canary's live one), a property that schema marks deprecated and the pinned
+// schema does not is a deprecation newer than the pin, and is logged, not
+// failed. Its replacement is not part of the config contract of the release
+// the schema is pinned to, and OpenCode drops a top-level key it does not know
+// without a word (ADR-022 § 20), so moving to it early would silently lose the
+// setting on that release. The property is still one the newer schema
+// accepts, or TestGeneratedConfigsValidate fails, and re-pinning to a schema
+// that marks it makes it a failure here (#2465).
 func TestNoDeprecatedKeys(t *testing.T) {
+	pinned := decodeSchemaDoc(t, readPinnedSchema(t))
 	schema := decodeSchemaDoc(t, schemaContractSchema(t))
 
 	// The walker is not vacuous: it finds each deprecated property the
-	// renames left behind, and not their replacements.
+	// renames left behind, and not their replacements. A newer schema may
+	// deprecate more of the probe (OpenCode's published schema of 2026-10-15
+	// deprecates agent itself), but it must still see the renames.
 	probe := map[string]any{
 		"autoshare": false, "share": "disabled",
 		"reference": map[string]any{}, "references": map[string]any{},
 		"agent": map[string]any{"build": map[string]any{"maxSteps": 20, "steps": 20}},
 	}
 	want := []string{"/agent/build/maxSteps", "/autoshare", "/reference"}
-	if got := schema.deprecatedIn(probe); !slices.Equal(got, want) {
+	replacements := []string{"/agent/build/steps", "/references", "/share"}
+	if got := pinned.deprecatedIn(probe); !slices.Equal(got, want) {
 		t.Fatalf("the walker found deprecated properties %q in the probe, want %q: it no longer sees the pinned schema's renames", got, want)
+	}
+	got := schema.deprecatedIn(probe)
+	for _, ptr := range want {
+		if !slices.Contains(got, ptr) {
+			t.Fatalf("against the schema under test the walker found deprecated properties %q in the probe, without %s: it no longer sees the renames", got, ptr)
+		}
+	}
+	for _, ptr := range replacements {
+		if slices.Contains(got, ptr) {
+			t.Fatalf("against the schema under test the walker found deprecated properties %q in the probe, including the replacement %s", got, ptr)
+		}
 	}
 
 	used := map[string]bool{}
+	newer := map[string]bool{}
 	for _, c := range schemaContractConfigs(t) {
 		doc := decodeOpenCodeConfig(t, c.content)
-		for _, ptr := range schema.deprecatedIn(doc) {
+		pinnedDeprecated := pinned.deprecatedIn(doc)
+		for _, ptr := range pinnedDeprecated {
 			if _, ok := schemaContractAllowedDeprecated[ptr]; ok {
 				used[ptr] = true
+			}
+		}
+		for _, ptr := range schema.deprecatedIn(doc) {
+			if _, ok := schemaContractAllowedDeprecated[ptr]; ok {
+				continue
+			}
+			if !slices.Contains(pinnedDeprecated, ptr) {
+				newer[ptr] = true
 				continue
 			}
 			t.Errorf("%s: the config sets %s, a property the pinned OpenCode schema marks deprecated", c.name, ptr)
@@ -368,8 +406,12 @@ func TestNoDeprecatedKeys(t *testing.T) {
 	}
 	for ptr, why := range schemaContractAllowedDeprecated {
 		if !used[ptr] {
-			t.Errorf("%s is allowed as deprecated (%s), but no generated config sets it as a deprecated property: remove the exception", ptr, why)
+			t.Errorf("%s is allowed as deprecated (%s), but no generated config sets it as a property the pinned schema marks deprecated: remove the exception", ptr, why)
 		}
+	}
+	if len(newer) > 0 {
+		ptrs := slices.Sorted(maps.Keys(newer))
+		t.Logf("the schema under test marks %d properties the configs set deprecated that the pinned schema does not, kept until a re-pin: %q", len(ptrs), ptrs)
 	}
 }
 
