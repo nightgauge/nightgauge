@@ -30,8 +30,8 @@ const (
 	maxLineChars = 300
 )
 
-// skippedDirs are not searched: .git is secret, and dependency trees are
-// read directly when needed rather than scanned.
+// skippedDirs are not searched: .git is secret, and a dependency tree git
+// tracks is read directly when needed rather than scanned.
 var skippedDirs = map[string]bool{".git": true, "node_modules": true}
 
 // readText reads a resolved file through the root: refused when it is not a
@@ -45,7 +45,7 @@ func (s *Toolset) readText(rel string) (string, *Error) {
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
-		return "", errMissing
+		return "", errNotServed
 	}
 	if !info.Mode().IsRegular() {
 		return "", fail(CodeNotText, "the path is not a regular file")
@@ -82,16 +82,9 @@ func (s *Toolset) readFile(raw json.RawMessage) (string, *Error) {
 	if err := decode(raw, &a); err != nil {
 		return "", err
 	}
-	w, err := s.workspace()
+	_, rel, err := s.locate(a.Path)
 	if err != nil {
 		return "", err
-	}
-	rel, err := w.resolve(a.Path)
-	if err != nil {
-		return "", err
-	}
-	if !s.canReadPath(w.abs(rel)) {
-		return "", errRepoNotReadable
 	}
 	text, err := s.readText(rel)
 	if err != nil {
@@ -127,16 +120,9 @@ func (s *Toolset) listDirectory(raw json.RawMessage) (string, *Error) {
 	if err := decode(raw, &a); err != nil {
 		return "", err
 	}
-	w, err := s.workspace()
+	w, rel, err := s.locate(a.Path)
 	if err != nil {
 		return "", err
-	}
-	rel, err := w.resolve(a.Path)
-	if err != nil {
-		return "", err
-	}
-	if !s.canReadPath(w.abs(rel)) {
-		return "", errRepoNotReadable
 	}
 	f, oerr := w.open(rel)
 	if oerr != nil {
@@ -154,8 +140,10 @@ func (s *Toolset) listDirectory(raw json.RawMessage) (string, *Error) {
 	}
 	var out []entry
 	for _, e := range entries {
-		if secretPath(filepath.Join(rel, e.Name())) {
-			continue // never named: a listing is no way around the deny list
+		// Never named: a listing is no way around the deny list, or the
+		// rule that only what every participant could read is served.
+		if secretPath(filepath.Join(rel, e.Name())) || s.served(filepath.Join(w.abs(rel), e.Name())) != nil {
+			continue
 		}
 		kind := "file"
 		switch {
@@ -197,11 +185,7 @@ func (s *Toolset) searchFiles(ctx context.Context, raw json.RawMessage) (string,
 		limit = 50
 	}
 	limit = min(limit, maxSearchResults)
-	w, err := s.workspace()
-	if err != nil {
-		return "", err
-	}
-	start, err := w.resolve(a.Path)
+	w, start, err := s.locate(a.Path)
 	if err != nil {
 		return "", err
 	}
@@ -220,14 +204,15 @@ func (s *Toolset) searchFiles(ctx context.Context, raw json.RawMessage) (string,
 			return filepath.SkipDir
 		}
 		if d.IsDir() {
-			if rel != "." && (skippedDirs[strings.ToLower(d.Name())] || secretPath(rel)) {
+			if rel != "." && (skippedDirs[strings.ToLower(d.Name())] || secretPath(rel) || s.served(path) != nil) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 		// Symlinks are not followed: a search never leaves the tree it
-		// walks. read_file resolves one that stays inside.
-		if !d.Type().IsRegular() || secretPath(rel) || !s.canReadPath(path) {
+		// walks, so every path it reaches is judged as named. read_file
+		// resolves a tracked symlink to a served target.
+		if !d.Type().IsRegular() || secretPath(rel) || s.served(path) != nil {
 			return nil
 		}
 		if scanned++; scanned > maxSearchFiles || len(matches) >= limit {

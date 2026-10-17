@@ -55,15 +55,13 @@ func (w *workspaceFS) close() {
 var (
 	errOutside = fail(CodeOutsideWorkspace, "the path is outside the workspace root; give a path relative to it, with no '..' that leaves it")
 	errSecret  = fail(CodeSecretPath, "the path is a secret-bearing file, which a conversation never reads")
-	errMissing = fail(CodeNotFound, "nothing exists at that path in the workspace")
 	errChanged = fail(CodeOutsideWorkspace, "the path changed while it was being read; it is not read")
 )
 
-// resolve returns where p lands inside the root, relative to it, once every
-// symlink is followed. It refuses an absolute path, a path that climbs out,
-// a symlink that resolves outside, and a secret-bearing path, whether the
-// path names it or a symlink leads to it.
-func (w *workspaceFS) resolve(p string) (string, *Error) {
+// lexical returns p cleaned and relative to the root, judged by its name
+// alone: an absolute path, a path that climbs out and a secret-bearing path
+// are refused before anything on disk is consulted.
+func (w *workspaceFS) lexical(p string) (string, *Error) {
 	p = strings.TrimSpace(p)
 	if p == "" || p == "." || p == "./" {
 		return ".", nil
@@ -75,10 +73,21 @@ func (w *workspaceFS) resolve(p string) (string, *Error) {
 	if secretPath(clean) {
 		return "", errSecret
 	}
+	return clean, nil
+}
+
+// resolve returns where p lands inside the root, relative to it, once every
+// symlink is followed. It refuses what lexical refuses, a symlink that
+// resolves outside, and a secret-bearing path a symlink leads to.
+func (w *workspaceFS) resolve(p string) (string, *Error) {
+	clean, lerr := w.lexical(p)
+	if lerr != nil || clean == "." {
+		return clean, lerr
+	}
 	real, err := filepath.EvalSymlinks(filepath.Join(w.dir, clean))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return "", errMissing
+			return "", errNotServed
 		}
 		return "", errOutside
 	}
@@ -125,7 +134,7 @@ func (w *workspaceFS) open(rel string) (*os.File, *Error) {
 		}
 		if err != nil {
 			if errors.Is(err, unix.ENOENT) {
-				return nil, errMissing
+				return nil, errNotServed
 			}
 			return nil, errChanged // ELOOP or ENOTDIR: a symlink where the check saw none
 		}

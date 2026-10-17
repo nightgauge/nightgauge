@@ -92,7 +92,10 @@ func TestTurn_RunsUnderTheConversationsToolCeiling(t *testing.T) {
 	rec := installFakeAdapters(t)
 	toolCalls(t, map[string]any{"name": "read_file", "arguments": map[string]any{"path": ".nightgauge/config.yaml"}})
 	fp := newFakePlatform(t)
-	startDaemon(t, fp, workspace(t, toolWorkspace), withForge(&recordingForge{}))
+	root := workspace(t, toolWorkspace)
+	// The file tools serve only files git tracks, and a team's config is.
+	gittest.Run(t, root, "add", ".nightgauge/config.yaml")
+	startDaemon(t, fp, root, withForge(&recordingForge{}))
 
 	fp.deliver(fp.postTurn("conv-1", "turn-1", "cmd-1", "What is this repository's owner?", nil))
 	waitFor(t, "the terminal report", 20*time.Second, func() bool { return fp.endFrame("turn-1") != nil })
@@ -388,8 +391,10 @@ func TestTurnCalls_UnionOfTheServerAndTheStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, terr := set.Call(t.Context(), tools.ToolReadFile, []byte(`{"path":"notes.txt"}`)); terr != nil {
-		t.Fatal(terr)
+	// notes.txt is in no repository, so the read is refused; refused or not,
+	// the call is in the server's record.
+	if _, terr := set.Call(t.Context(), tools.ToolReadFile, []byte(`{"path":"notes.txt"}`)); terr == nil {
+		t.Fatal("a file in no repository was read")
 	}
 	got := turnCalls(stream, &turnTools{set: set, server: server})
 	want := []ToolCall{{Name: "mcp__nightgauge__read_file"}, {Name: "mcp__nightgauge__create_issue", Mutating: true}}

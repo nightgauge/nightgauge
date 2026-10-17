@@ -11,9 +11,10 @@ import (
 	"github.com/nightgauge/nightgauge/pkg/types"
 )
 
-// Every forge read is confined to the repositories the turn command lists
-// for the poster, the operator's turns included; the file tools skip the
-// check only for the operator reading their own checkout (#1570).
+// Every forge and file read is confined to the repositories the turn command
+// lists for the poster, the operator's turns included (#1570). The file
+// tools once let the operator read their own checkout without the check;
+// the reply goes to the whole conversation, so they no longer do.
 func TestReads_FollowThePostersReadableRepos(t *testing.T) {
 	root := gitRepo(t)
 	forge := newFakeForge()
@@ -41,14 +42,15 @@ func TestReads_FollowThePostersReadableRepos(t *testing.T) {
 		}
 	}
 
-	// Files: a teammate reads only the checkout of a repository listed for
-	// them; the operator reads their own checkout.
+	// Files: every poster reads only the checkout of a repository the turn
+	// command lists, the operator too.
 	cases := []struct {
 		name string
 		turn Turn
 		ok   bool
 	}{
-		{"operator", Turn{PosterAccountID: "acct-op", PosterIsOperator: true}, true},
+		{"operator who may read it", operatorTurn("hi"), true},
+		{"operator with no repositories", Turn{PosterAccountID: "acct-op", PosterIsOperator: true}, false},
 		{"teammate who may read it", teammateTurn("acct-bob", "bob", "hi", Repo{"ACME", "Api"}), true},
 		{"teammate who may not", teammateTurn("acct-carol", "carol", "hi", Repo{"acme", "billing"}), false},
 		{"teammate with no repositories", teammateTurn("acct-dan", "dan", "hi"), false},
@@ -62,14 +64,16 @@ func TestReads_FollowThePostersReadableRepos(t *testing.T) {
 			{ToolReadFile, map[string]any{"path": "README.md"}},
 			{ToolListDirectory, map[string]any{"path": "src"}},
 		} {
+			// A path is refused as a missing one is: repo_not_readable
+			// would show where an unreadable repository's clone is.
 			_, err := call(t, s, tc.tool, tc.args)
-			if c.ok && err != nil || !c.ok && code(err) != CodeRepoNotReadable {
+			if c.ok && err != nil || !c.ok && (err == nil || *err != *errNotServed) {
 				t.Errorf("%s: %s: %v", c.name, tc.tool, err)
 			}
 		}
 		out, err := call(t, s, ToolSearchFiles, map[string]any{"pattern": "API service"})
-		if err != nil || strings.Contains(out, "README.md") != c.ok {
-			t.Errorf("%s: search found README.md = %v, want %v (%v)", c.name, strings.Contains(out, "README.md"), c.ok, err)
+		if c.ok && (err != nil || !strings.Contains(out, "README.md")) || !c.ok && (err == nil || *err != *errNotServed) {
+			t.Errorf("%s: search: %v %s", c.name, err, out)
 		}
 	}
 }

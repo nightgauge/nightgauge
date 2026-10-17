@@ -184,8 +184,8 @@ var boundaryPrompt = `You are answering one message in a team conversation about
 	`for the person who posted it (the poster).
 
 What you can do:
-- Read files under the workspace root, and the issues and pull requests of the repositories ` +
-	`the poster may read, with the conversation tools.
+- Read the files git tracks under the workspace root, and the issues and pull requests, of the ` +
+	`repositories the poster may read, with the conversation tools.
 - Report the pipeline's runs and the jobs running now, from this machine's state, with ` +
 	tools.ToolPipelineStatus + ` and ` + tools.ToolListRunningJobs + `, and list this workspace's Needs ` +
 	`Attention cards with ` + tools.ToolListAttention + `.

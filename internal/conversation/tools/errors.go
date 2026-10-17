@@ -13,16 +13,21 @@ func (e *Error) Error() string { return e.Code + ": " + e.Message }
 const (
 	// CodeInvalidArguments: the arguments did not parse or are out of bounds.
 	CodeInvalidArguments = "invalid_arguments"
-	// CodeOutsideWorkspace: the path is absolute, climbs out of the
-	// workspace root, or resolves outside it through a symlink.
+	// CodeOutsideWorkspace: the path is absolute or climbs out of the
+	// workspace root. A symlink that resolves outside it is refused as
+	// CodeNotFound, which says nothing of what it leads to.
 	CodeOutsideWorkspace = "path_outside_workspace"
 	// CodeSecretPath: the path names a secret-bearing file.
 	CodeSecretPath = "path_secret"
-	// CodeNotFound: nothing exists at the path.
+	// CodeNotFound: nothing the turn may read is at the path: it is missing,
+	// untracked or ignored, in a repository the turn may not read or in
+	// none, or a symlink leads to something not served. One refusal for all
+	// of them, so it never shows that an excluded file exists.
 	CodeNotFound = "path_not_found"
 	// CodeNotText: the file is not text, or too large to read.
 	CodeNotText = "not_text"
-	// CodeRepoNotReadable: the poster may not read the repository.
+	// CodeRepoNotReadable: the poster may not read the repository a forge or
+	// run tool names. A file path in one is refused as CodeNotFound.
 	CodeRepoNotReadable = "repo_not_readable"
 	// CodeNotRequested: the poster's own message in this turn does not ask
 	// for the action.

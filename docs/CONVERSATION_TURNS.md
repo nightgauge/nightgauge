@@ -138,9 +138,9 @@ removes one, or makes one mutating, fails CI.
 
 | Tool                    | Mutates | What it does                                                                              |
 | ----------------------- | ------- | ----------------------------------------------------------------------------------------- |
-| `read_file`             | no      | Reads a text file under the workspace root                                                |
-| `list_directory`        | no      | Lists a directory under the workspace root                                                |
-| `search_files`          | no      | Searches the workspace's text files for an RE2 pattern                                    |
+| `read_file`             | no      | Reads a text file git tracks in a readable repository                                     |
+| `list_directory`        | no      | Lists what git tracks in a directory of a readable repository                             |
+| `search_files`          | no      | Searches the tracked text files of the readable repositories for an RE2 pattern           |
 | `get_issue`             | no      | Reads an issue of a repository the poster may read                                        |
 | `search_issues`         | no      | Searches a readable repository's open issues; qualifiers are removed                      |
 | `get_pull_request`      | no      | Reads a pull request of a repository the poster may read                                  |
@@ -175,30 +175,56 @@ without a prompt.
 
 **Reads.**
 
-- Paths are relative to the workspace root. An absolute path, a `..` that
-  leaves the root, and a symlink that resolves outside it are refused
-  (`path_outside_workspace`). A path is resolved once, lexically and then
-  through its symlinks, and checked; the file opened is that exact resolved
-  path, one component at a time with `O_NOFOLLOW` from a descriptor on the
-  root, so a symlink swapped in after the check fails the open instead of
-  leading somewhere unchecked. A FIFO never blocks a read.
+- The file tools serve only what every participant could read. The reply
+  goes to the whole conversation and the turn command does not name its
+  participants, so, as with the run tools, every turn, the host operator's
+  own included, is served only the files git tracks (the files its index
+  lists) in the checkout of a repository in the turn command's
+  `readable_repos`, judged by the innermost checkout that holds the path. A
+  tracked file the checkout's own ignore rules exclude is not served either:
+  someone force-added it, and under `.nightgauge/`, whose rules ignore
+  everything but the team's committed files, it is runtime state. An
+  untracked or ignored file, such as a local `.env` or credential,
+  `.nightgauge/` runtime state or a scratch file, is never read, named in a
+  listing or matched by a search, and neither is a file in an unlisted
+  repository's checkout (a nested clone's included), in no checkout, or in a
+  checkout git cannot list. A directory on the way to a readable checkout
+  lists only the entries that lead there. A tracked file is read as the
+  working tree holds it.
+- The tracked files of every readable checkout under the root are listed
+  once per turn, before the first path is judged, with `git ls-files`. No
+  path is ever passed to git, so a name is matched exactly, never as an
+  option, a glob or pathspec magic, and git never runs in a repository the
+  turn may not read.
+- Paths are relative to the workspace root. A path is judged by its name
+  before anything on disk is consulted: an absolute path or a `..` that
+  leaves the root (`path_outside_workspace`), a secret-bearing name
+  (`path_secret`), and a path that is not a served file of a readable
+  repository. Then its symlinks are resolved, and the target must stay
+  inside the root, name no secret, and be a served file of a readable
+  repository. The file opened is that exact resolved path, one component at
+  a time with `O_NOFOLLOW` from a descriptor on the root, so a symlink
+  swapped in after the check fails the open instead of leading somewhere
+  unchecked. A FIFO never blocks a read.
+- A refusal never says what is on the machine. A missing path, an
+  untracked or ignored one, a path in an unlisted repository or in none, and
+  a symlink whose target is not served all get the same `path_not_found`
+  refusal: a reason of their own would show that a file exists, or where an
+  unlisted repository's clone is. No refusal names a local path.
 - Secret-bearing paths are refused anywhere in the root, in every component,
-  whether named or reached through a symlink (`path_secret`). Names are
-  compared as a case-insensitive filesystem may compare them: Unicode case
-  folding (so `ſ` is `s` and the Kelvin sign is `k`), invisible format
-  characters ignored, and trailing dots and spaces trimmed. The list: `.env*`,
-  `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, anything inside
-  `.git`, `.netrc`, `.npmrc`, `.pypirc`, `.git-credentials` and SSH private
-  keys (`id_rsa` and the like). A listing omits them, and a search skips
-  them.
-- `.nightgauge/config*.yaml` (and the legacy `config.json`) is read with
-  every credential field's value (tokens, private keys and their paths,
+  tracked or not (`path_secret`). Names are compared as a case-insensitive
+  filesystem may compare them: Unicode case folding (so `ſ` is `s` and the
+  Kelvin sign is `k`), invisible format characters ignored, and trailing
+  dots and spaces trimmed. The list: `.env*`, `*.pem`, `*.key`, `*.p12`,
+  `*.pfx`, `*.jks`, `*.keystore`, anything inside `.git`, `.netrc`, `.npmrc`,
+  `.pypirc`, `.git-credentials` and SSH private keys (`id_rsa` and the like).
+  A listing omits them, and a search skips them.
+- A tracked `.nightgauge/config*.yaml` (or the legacy `config.json`) is read
+  with every credential field's value (tokens, private keys and their paths,
   license and API keys, secrets, passwords) replaced by `[REDACTED]`. A
   config file that does not parse is not shown at all.
 - The forge tools read only the repositories in the turn command's
-  `readable_repos`. The file tools do too, judged by the checkout that holds
-  the path, except for a turn posted by the host's operator, which reads its
-  own checkout without the check.
+  `readable_repos`, whoever posted the turn.
 - Every credential-shaped string in a tool result is redacted before the
   model sees it.
 

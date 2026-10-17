@@ -31,12 +31,13 @@ type Turn struct {
 	PosterAccountID string
 	PosterLogin     string
 	// PosterIsOperator marks a turn posted by the host's own operator: their
-	// own checkout reads without the readable-repository check, and their
-	// issue may carry their own credential.
+	// issue may carry their own credential. It widens no read: the reply
+	// goes to the whole conversation, so the operator's turn reads what
+	// every participant could.
 	PosterIsOperator bool
 	// ReadableRepos are the target workspace's repositories the poster may
-	// read. The forge tools, and the file tools for anyone but the operator,
-	// refuse every other.
+	// read. The forge, file and run tools refuse every other, whoever
+	// posted the turn.
 	ReadableRepos []Repo
 	// Message is the poster's own message in this turn, verbatim, from the
 	// hosted service's record of the turn and bound to the poster's account.
@@ -60,7 +61,7 @@ type Env struct {
 	Root string
 	// RepoRoots maps "owner/repo" to the checkout of each repository the
 	// workspace knows, so a file read can be checked against the
-	// poster's readable repositories.
+	// poster's readable repositories and that checkout's tracked files.
 	RepoRoots map[string]string
 	Forge     Forge
 	// Runs reads the workspace's pipeline runs from this machine's state.
@@ -95,6 +96,10 @@ type Toolset struct {
 	// checkouts are the repositories' checkout roots with symlinks
 	// resolved, for the readable-repository check of a file path.
 	checkouts map[string]string
+	// tracked is the served files of each readable checkout, by slug,
+	// listed once, before the first path is judged (listReadable).
+	listOnce sync.Once
+	tracked  map[string]*trackedFiles
 
 	mu     sync.Mutex
 	calls  []Invocation
@@ -109,7 +114,7 @@ type Toolset struct {
 // NewToolset returns the tools of one turn. A root that cannot be opened
 // leaves the file tools refusing every path; the forge tools still work.
 func NewToolset(env Env, turn Turn) *Toolset {
-	s := &Toolset{env: env, turn: turn, checkouts: map[string]string{}}
+	s := &Toolset{env: env, turn: turn, checkouts: map[string]string{}, tracked: map[string]*trackedFiles{}}
 	if w, err := openWorkspace(env.Root); err == nil {
 		s.fs = w
 	}
@@ -285,27 +290,6 @@ func (s *Toolset) canReadRepo(owner, repo string) bool {
 		}
 	}
 	return false
-}
-
-// canReadPath reports whether the poster may read a file at an absolute,
-// symlink-resolved path: always for the host's operator reading their own
-// checkout; otherwise only inside the checkout of a repository the turn
-// command lists, judged by the innermost checkout that holds the path.
-func (s *Toolset) canReadPath(abs string) bool {
-	if s.turn.PosterIsOperator {
-		return true
-	}
-	best, bestLen := "", -1
-	for slug, dir := range s.checkouts {
-		if (abs == dir || strings.HasPrefix(abs, dir+string(filepath.Separator))) && len(dir) > bestLen {
-			best, bestLen = slug, len(dir)
-		}
-	}
-	if best == "" {
-		return false
-	}
-	owner, repo, _ := strings.Cut(best, "/")
-	return s.canReadRepo(owner, repo)
 }
 
 var errRepoNotReadable = fail(CodeRepoNotReadable,
