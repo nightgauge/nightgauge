@@ -201,9 +201,41 @@ async function pickUpIssue(issueNumber) {
   assert("pickupIssue accepted the issue number", outcome === "resolved", outcome);
 }
 
+/**
+ * Where the product keeps this clone's run records, asked of the VSIX's own
+ * binary. Per-clone pipeline state (runtime-<issue>-<runId>.json, history/,
+ * survival-records.jsonl) lives in the clone's git common dir and
+ * current-run.json in the checkout's git dir (ADR-024 § 7). A path composed
+ * here went stale when that move landed: the driver polled the old in-tree
+ * directory for the whole wall clock while the run merged its PR.
+ */
+function resolveRunRecordLocations(root) {
+  const layoutPath = (...args) =>
+    execFileSync(report.binary.path, ["layout", "--workdir", root, "path", ...args], {
+      encoding: "utf8",
+      timeout: 20_000,
+    }).trim();
+  let pipelineDir = "";
+  let currentRunFile = "";
+  try {
+    pipelineDir = layoutPath("pipeline");
+    currentRunFile = layoutPath("checkout", "current-run.json");
+  } catch (err) {
+    assert("product resolves its run-record locations", false, String(err.stderr || err.message));
+  }
+  const single = (p) => path.isAbsolute(p) && !p.includes("\n");
+  assert(
+    "product resolves its run-record locations",
+    single(pipelineDir) && single(currentRunFile),
+    `pipeline ${pipelineDir}; current run ${currentRunFile}`
+  );
+  report.layout = { pipelineDir, currentRunFile };
+  return { pipelineDir, currentRunFile };
+}
+
 /** README step 6 (Watch it run) — poll the run records until terminal. */
-async function watchRun(root, issueNumber, wallClockMs, costCapUsd) {
-  const pipelineDir = path.join(root, ".nightgauge", "pipeline");
+async function watchRun(locations, issueNumber, wallClockMs, costCapUsd) {
+  const { pipelineDir, currentRunFile } = locations;
   const historyDir = path.join(pipelineDir, "history");
   const deadline = Date.now() + wallClockMs;
   let lastStage = "";
@@ -232,7 +264,7 @@ async function watchRun(root, issueNumber, wallClockMs, costCapUsd) {
         sawRuntime = true;
       }
     }
-    const sidecar = readJson(path.join(pipelineDir, "current-run.json"));
+    const sidecar = readJson(currentRunFile);
     const stage = (sidecar && sidecar.stage) || (runtime && runtime.stage) || "";
     if (stage && stage !== lastStage) {
       lastStage = stage;
@@ -280,7 +312,11 @@ async function watchRun(root, issueNumber, wallClockMs, costCapUsd) {
   } else {
     log("history record: none");
   }
-  assert("a run record was created for the issue", sawRuntime, runtimeFile || "no runtime-*.json");
+  assert(
+    "a run record was created for the issue",
+    sawRuntime,
+    runtimeFile || `no runtime-${issueNumber}-*.json in ${pipelineDir}`
+  );
   const terminal = (runtime && runtime.terminal === true) || Boolean(history);
   assert(
     "run reached a terminal state within the wall clock",
@@ -433,8 +469,10 @@ async function run() {
       return;
     }
     await assertInitialized(root);
+    // Resolved before the pickup, so a run the driver cannot observe never starts.
+    const locations = resolveRunRecordLocations(root);
     await pickUpIssue(issueNumber);
-    await watchRun(root, issueNumber, wallClockMs, costCapUsd);
+    await watchRun(locations, issueNumber, wallClockMs, costCapUsd);
     report.status = "pass";
     writeReport();
   } catch (err) {
