@@ -97,6 +97,20 @@ changelog, and the release workflow refuses a tag that does not.
   repositories the turn lists as readable, and no private run. See
   `docs/CONVERSATION_TURNS.md` § Tools and permissions.
 
+- **A conversation's file tools show only what everyone in it could read**
+  (follow-up to #2472). A reply goes to the whole conversation, yet the
+  operator's own turn could read anything in their checkout, so a prompt
+  injection could post an untracked or ignored file (a local env file,
+  `.nightgauge/` runtime state, a nested clone of another repository) to
+  every participant. Teammates' turns could read untracked files too.
+  `read_file`, `list_directory` and `search_files` now serve every turn,
+  the operator's included, only the files git tracks in a repository the
+  turn lists as readable, whether the path is named directly or reached
+  through a symlink. A missing file, an untracked one and a symlink to
+  something not served all get the same refusal, so a refusal never shows
+  that a file exists. See `docs/CONVERSATION_TURNS.md` § Tools and
+  permissions.
+
 - **A run started with `nightgauge run` now leaves a session log** (#1903).
   Its output used to exist only in the launching terminal. The run now
   appends its stage and phase lines and the scheduler's log lines to

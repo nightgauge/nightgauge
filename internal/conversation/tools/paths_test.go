@@ -12,11 +12,21 @@ import (
 
 func unixMkfifo(path string) error { return unix.Mkfifo(path, 0o644) }
 
+// commitAll tracks everything in root that is not ignored.
+func commitAll(t *testing.T, root string) {
+	t.Helper()
+	git(t, root, "add", "-A")
+	git(t, root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "more")
+}
+
 // File reads are contained to the workspace root (#1570): a path that climbs
-// out with "..", an absolute path, and a symlink planted in the workspace
-// that resolves outside it are all refused, by every file tool, and the
-// outside file's content never reaches a result. Removing the containment
-// makes every case red.
+// out with "..", an absolute path, and a symlink in the workspace that
+// resolves outside it are all refused, by every file tool, and the outside
+// file's content never reaches a result. The symlinks are tracked, so the
+// containment is what refuses them, not the tracked-files rule; a turn is
+// told only that nothing it may read is there, since the containment's own
+// refusal would say the target exists. Removing the containment makes every
+// case red.
 func TestContainment_RefusesTraversalAndEscapingSymlinks(t *testing.T) {
 	root := gitRepo(t)
 	outside := t.TempDir()
@@ -34,6 +44,7 @@ func TestContainment_RefusesTraversalAndEscapingSymlinks(t *testing.T) {
 	if err := os.Symlink("README.md", filepath.Join(root, "readme-link")); err != nil {
 		t.Fatal(err)
 	}
+	commitAll(t, root)
 	s := toolset(t, root, newFakeForge(), operatorTurn("read"))
 	rel, _ := filepath.Rel(root, filepath.Join(outside, "secret.txt"))
 
@@ -52,9 +63,17 @@ func TestContainment_RefusesTraversalAndEscapingSymlinks(t *testing.T) {
 			t.Errorf("search_files %q reached outside: %s", p, out)
 		}
 	}
-	for _, p := range []string{"escape", "escape-dir/secret.txt", "../" + filepath.Base(outside) + "/secret.txt"} {
+	for _, p := range []string{"../" + filepath.Base(outside) + "/secret.txt", "src/../../x", "/etc/passwd"} {
 		if _, err := call(t, s, ToolReadFile, map[string]any{"path": p}); code(err) != CodeOutsideWorkspace {
 			t.Errorf("read_file %q: %v, want %s", p, err, CodeOutsideWorkspace)
+		}
+	}
+	for _, p := range []string{"escape", "escape-dir", "src/relative-escape"} {
+		if _, err := s.fs.resolve(p); code(err) != CodeOutsideWorkspace {
+			t.Errorf("resolve %q: %v, want %s", p, err, CodeOutsideWorkspace)
+		}
+		if _, err := call(t, s, ToolReadFile, map[string]any{"path": p}); err == nil || *err != *errNotServed {
+			t.Errorf("read_file %q: %v, want the refusal a missing file gets", p, err)
 		}
 	}
 	// A search of the whole root never follows the planted symlinks out.
@@ -71,8 +90,8 @@ func TestContainment_RefusesTraversalAndEscapingSymlinks(t *testing.T) {
 // Inside the root, secret-bearing paths are refused (#1570): .env*, *.pem,
 // *.key, .git internals, whether named directly, in another case, or reached
 // through a symlink, and a listing never names them. The credential fields
-// of .nightgauge/config.yaml are redacted and the rest of the file is read.
-// Removing the deny list makes it red.
+// of a tracked .nightgauge config file are redacted and the rest of the file
+// is read. Removing the deny list makes it red.
 func TestSecretPaths_AreRefusedAndConfigCredentialsRedacted(t *testing.T) {
 	root := gitRepo(t)
 	write(t, root, ".env", "API_KEY=env-secret-value\n")
@@ -86,13 +105,25 @@ func TestSecretPaths_AreRefusedAndConfigCredentialsRedacted(t *testing.T) {
 	if err := os.Symlink(".env", filepath.Join(root, "notes.txt")); err != nil {
 		t.Fatal(err)
 	}
+	// Tracked, every one, so the deny list is what refuses them: a secret
+	// is refused even when it is committed.
+	commitAll(t, root)
 	s := toolset(t, root, newFakeForge(), operatorTurn("read"))
 
 	for _, p := range []string{".env", ".env.local", "deploy/server.pem", "deploy/tls.KEY", ".git/config",
-		".git/HEAD", ".GIT/config", ".Env", "notes.txt", "src/../.env"} {
+		".git/HEAD", ".GIT/config", ".Env", "src/../.env"} {
 		if _, err := call(t, s, ToolReadFile, map[string]any{"path": p}); code(err) != CodeSecretPath {
 			t.Errorf("read_file %q: %v, want %s", p, err, CodeSecretPath)
 		}
+	}
+	// A tracked symlink to a secret is refused by the deny list too; the
+	// turn is told only that nothing it may read is there.
+	if _, err := s.fs.resolve("notes.txt"); code(err) != CodeSecretPath {
+		t.Errorf("resolve notes.txt, a symlink to .env: %v, want %s", err, CodeSecretPath)
+	}
+	if out, err := call(t, s, ToolReadFile, map[string]any{"path": "notes.txt"}); err == nil || *err != *errNotServed ||
+		strings.Contains(out, "env-secret-value") {
+		t.Errorf("read_file notes.txt, a symlink to .env: %v %s", err, out)
 	}
 	if _, err := call(t, s, ToolListDirectory, map[string]any{"path": ".git"}); code(err) != CodeSecretPath {
 		t.Errorf("list_directory .git: %v", err)
@@ -133,8 +164,8 @@ func TestSecretPaths_AreRefusedAndConfigCredentialsRedacted(t *testing.T) {
 		}
 	}
 	out, err = call(t, s, ToolReadFile, map[string]any{"path": ".nightgauge/config.local.yaml"})
-	if err != nil || strings.Contains(out, "local-secret-token") {
-		t.Errorf("the local config showed its token: %v %s", err, out)
+	if err != nil || strings.Contains(out, "local-secret-token") || !strings.Contains(out, redactedValue) {
+		t.Errorf("the tracked local config showed its token: %v %s", err, out)
 	}
 }
 
@@ -185,9 +216,12 @@ func TestSecretPaths_FoldedSpellingsAreRefused(t *testing.T) {
 			}
 		}
 	}
-	// A listing never names them, under any spelling the directory holds.
+	// A listing never names them, under any spelling the directory holds,
+	// tracked though they are.
 	write(t, root, "keys/ID_RSA", "x\n")
 	write(t, root, "keys/.Git-Credentials", "x\n")
+	write(t, root, "keys/README.md", "x\n")
+	commitAll(t, root)
 	out, err := call(t, s, ToolListDirectory, map[string]any{"path": "keys"})
 	if err != nil || strings.Contains(out, "ID_RSA") || strings.Contains(out, "Credentials") {
 		t.Errorf("listing named a secret: %v %s", err, out)
@@ -262,9 +296,15 @@ func TestOpen_NeverFollowsASymlinkTheCheckDidNotSee(t *testing.T) {
 	}
 }
 
-// A FIFO in the workspace does not hang a read.
+// A FIFO in the workspace does not hang a read. git does not track one, so
+// it stands where a tracked file was.
 func TestReadFile_AFIFODoesNotBlock(t *testing.T) {
 	root := gitRepo(t)
+	write(t, root, "pipe", "tracked\n")
+	commitAll(t, root)
+	if err := os.Remove(filepath.Join(root, "pipe")); err != nil {
+		t.Fatal(err)
+	}
 	if err := unixMkfifo(filepath.Join(root, "pipe")); err != nil {
 		t.Skip("mkfifo:", err)
 	}
