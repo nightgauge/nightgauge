@@ -12,7 +12,10 @@ generates against it, across a matrix of dispatches, and fails when:
 
 - a generated config does not validate (`TestGeneratedConfigsValidate`);
 - a generated config sets a property the schema marks deprecated
-  (`TestNoDeprecatedKeys`), or `maxSteps` or `autoshare` by name;
+  (`TestNoDeprecatedKeys`), or `maxSteps` or `autoshare` by name. Run
+  against another schema (the canary's live one), a property only that schema
+  marks deprecated is logged, not failed: see
+  [Deprecations newer than the pin](#deprecations-newer-than-the-pin);
 - a config with an unknown top-level key validates, which would mean the
   validator enforces nothing (`TestValidatorRejectsUnknownKey`);
 - a safety key is missing, has another value, or is not a property the
@@ -51,6 +54,22 @@ The builder sets `mode` on purpose: 1.18.30 merges every `mode.<agent>` over
 entry of each built-in primary agent (ADR-022 § 8). It is the one exception the
 deprecation test allows, and the test refuses the exception once no generated
 config needs it.
+
+## Deprecations newer than the pin
+
+The release canary (#1639) re-runs the suite against the live schema when its
+hash differs from this file's. A property the live schema marks deprecated and
+this file does not is newer than the pin. The builder keeps setting it, because
+its replacement is not part of the pinned release's config contract and
+OpenCode drops a top-level key it does not know without a word, so
+`TestNoDeprecatedKeys` logs it instead of failing. Re-pinning to a schema that
+marks it makes it a failure in ordinary CI.
+
+The schema published on 2026-10-15 is such a schema, and is not any release's:
+11 of its description strings are in none of the 1.18.30, 1.19.0, 1.19.2 and
+1.19.3 binaries, so `capture.sh` refuses it. It marks 19 top-level properties
+deprecated, most with the `deprecated` keyword, 14 of them set by the per-run
+config, and still accepts every one (ADR-022, amendment of 2026-10-16).
 
 ## The one external reference
 
