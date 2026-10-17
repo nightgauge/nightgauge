@@ -76,6 +76,14 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **The OpenCode canary no longer reports a deprecation as drift** (#2465,
+  #2468). Since 2026-10-15 OpenCode's published config schema marks most of
+  the keys Nightgauge writes as deprecated, though it still accepts them, and
+  the daily canary filed that as a 1.19.x drift. OpenCode 1.19.x runs
+  unchanged. A deprecation newer than the pinned schema is now reported, not
+  failed; the canary still fails when the live schema rejects a generated
+  config or a safety key. Its report lists every deprecation, not just some.
+
 - **A run started with `nightgauge run` now leaves a session log** (#1903).
   Its output used to exist only in the launching terminal. The run now
   appends its stage and phase lines and the scheduler's log lines to

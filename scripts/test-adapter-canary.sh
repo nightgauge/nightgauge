@@ -7,7 +7,10 @@
 # run itself, scripts/ci-local.sh's job):
 #   1. schema-diff reports "unchanged" against an identical copy of the
 #      pinned schema, and "changed", listing an added property and invoking
-#      the #1634 suite, against a copy with one extra property.
+#      the #1634 suite, against a copy with one extra property; and
+#      "changed", not "fail", with the suite passing, against a copy that
+#      newly deprecates (draft 2020-12 `deprecated` keyword) a key the
+#      builder sets, listing it as deprecated (#2465).
 #   2. report, with gh stubbed, files exactly one issue for the first failing
 #      summary and comments on the second, for the same adapter+version.
 #   3. A stub-provider that never prints its base_url (a hang) is killed at
@@ -99,6 +102,32 @@ OUT="$(bash "$SCRIPT" schema-diff --live-file "$TMP/changed.json")"
 check "changed: result is changed" sh -c "echo '$OUT' | jq -e '.result == \"changed\"' >/dev/null"
 check "changed: lists the added property" sh -c "echo '$OUT' | jq -r '.detail' | jq -e '.added == [\"nightgaugeCanaryFixtureProp\"]' >/dev/null"
 check "changed: invoked the #1634 suite (config_suite present)" sh -c "echo '$OUT' | jq -r '.detail' | jq -e '.config_suite == \"pass\" or .config_suite == \"fail\"' >/dev/null"
+
+# 1c. newly deprecated: the same schema with the draft 2020-12 deprecated
+# keyword on snapshot, a key every generated config sets. OpenCode's
+# published schema did this to most of the builder's keys on 2026-10-15
+# while still accepting them (#2465): a deprecation newer than the pin is
+# "changed", not a "fail" that files a drift issue, and the diff lists it.
+python3 - "$SCHEMA" "$TMP/deprecated.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+node = doc
+for _ in range(8):
+    if "properties" in node:
+        break
+    if "$ref" in node and "$defs" in doc:
+        node = doc["$defs"][node["$ref"].split("/")[-1]]
+        continue
+    break
+node["properties"]["snapshot"]["deprecated"] = True
+json.dump(doc, open(sys.argv[2], "w"))
+PY
+OUT="$(bash "$SCRIPT" schema-diff --live-file "$TMP/deprecated.json")"
+RC=$?
+check "newly deprecated: exits 0" [ "$RC" -eq 0 ]
+check "newly deprecated: result is changed, not fail" sh -c "echo '$OUT' | jq -e '.result == \"changed\"' >/dev/null"
+check "newly deprecated: the #1634 suite passes" sh -c "echo '$OUT' | jq -r '.detail' | jq -e '.config_suite == \"pass\"' >/dev/null"
+check "newly deprecated: lists the keyword-deprecated property" sh -c "echo '$OUT' | jq -r '.detail' | jq -e '.deprecated | index(\"snapshot\")' >/dev/null"
 
 echo ""
 echo "=== 2. report (gh stubbed) ==="
