@@ -84,6 +84,19 @@ changelog, and the release workflow refuses a tag that does not.
   failed; the canary still fails when the live schema rejects a generated
   config or a safety key. Its report lists every deprecation, not just some.
 
+- **A conversation acts on a Needs Attention card only through the words
+  the poster bound to it** (#1587). A request now binds the card and option
+  right after it, so a comma-joined sibling ("approve dr_1 with wait, leave
+  dr_2 alone") never lends its request or option to another card, and a
+  list ("approve dr_1 with wait, dr_2 with abort") allows each entry's own
+  pair, never a cross-pairing. A request with a condition ("if the build
+  passes"), a later retraction ("Hmm, no.") or a speaker's label ("Bob:
+  approve dr_1") acts on nothing, and a bare "yes" confirms only a reply
+  that offers exactly one act, plainly. The run tools now give the host's
+  operator the same view as everyone else in the conversation: only the
+  repositories the turn lists as readable, and no private run. See
+  `docs/CONVERSATION_TURNS.md` § Tools and permissions.
+
 - **A run started with `nightgauge run` now leaves a session log** (#1903).
   Its output used to exist only in the launching terminal. The run now
   appends its stage and phase lines and the scheduler's log lines to

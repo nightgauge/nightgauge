@@ -276,17 +276,19 @@ and no model provider, need no inference key, and write nothing. A run is
 `running` only when the snapshot scan has evidence that it executes now (its
 stage process, its orchestrator's sidecar, or a snapshot written within the
 liveness window), and the result names that evidence; otherwise it is
-`paused`, `abandoned`, `stalled` or its finished outcome. The host's
-operator sees every run of their own workspace, a private one marked
-`private`. A teammate sees only the runs of the repositories the turn
-command lists as readable, including when one checkout's state holds
-another repository's run, and never a private run: a private run is its
-creator's alone, and every private run on a machine is its operator's. A
-run the state names without its repository or visibility (an
-orchestrator's sidecar with no snapshot yet) is shown only to the operator.
-Nothing the tools return names a local path or a process id: an unreadable
-state file is counted, not described. Titles are returned as untrusted
-data.
+`paused`, `abandoned`, `stalled` or its finished outcome. The reply goes to
+every participant of the conversation, and the turn command does not name
+them, so the daemon treats every conversation as shared: every turn, the
+host operator's own included, sees only the runs of the repositories the
+turn command lists as readable, including when one checkout's state holds
+another repository's run, and never a private run. A private run is its
+creator's alone, and every private run on a machine is its operator's; the
+operator still sees theirs in their own tools, never in a conversation. A
+live issue the state names without a snapshot (an orchestrator's sidecar
+that has not written one yet) has no repository or visibility to judge, and
+is not shown. Nothing the tools return names a local path or a process id:
+an unreadable state file is counted, not described. Titles are returned as
+untrusted data.
 
 **Needs Attention cards.** A turn reaches the cards only through the hosted
 service's turn-scoped routes, on the turn's execution lease:
@@ -321,33 +323,56 @@ in order:
 3. **The poster's own request, for this act on this card.** As for an
    issue, the poster's message in this turn must ask for an act of that kind
    ("approve", "comment on", "acknowledge", "mute") inside the words the
-   model quotes (`request_quote`), with no negation in its sentence and no
-   later sentence taking it back. The request is an imperative in the
-   verb's base form, opening its clause after at most a courtesy ("please",
-   "OK"): a report or description ("Alice muted dr_1", "Bob is approving
-   it"), another person's act ("Alice will approve"), a question ("should I
-   approve dr_1?") and someone else's words ("the card says: approve dr_1",
-   a quotation) ask for nothing. The request's own clause must name the
-   card by its exact id, and for `resolve` the option by its exact id:
-   "approve dr_... with wait". Case and the whole id count: `DR_1`, `dr_12`
-   and `dr_1-b` do not name `dr_1`, and in "approve dr_1 with wait and mute
-   dr_2" neither clause lends its card to the other. A card's own text,
-   such as an option's label, never names anything, and a function word
-   ("with", "it") is never taken as an option. Steer and comment text must
-   occur in the poster's message exactly as it is written to the card.
-   Otherwise the whole message must be a confirmation ("yes", "go ahead") of
-   the completed reply just before this turn, which must answer the
-   poster's own previous turn, so one teammate cannot have the model propose
-   an act that another's unrelated "yes" makes; and that reply must propose
-   exactly one act, this one, named the same way, with any text in its own
-   words. A reply that only mentions a card, or offers two acts, confirms
-   nothing. So a model that follows a card's text, or prefers another card
-   or option, cannot act under the poster's words on anything the poster did
-   not name. The gate is the conjunction of this decision and a plain floor
-   (a quote in the message; the exact card and option ids and a request word
-   in the message, or in the proposal it wholly confirms), and a property
-   test over 6,000 generated cases holds them to each other. Refused:
-   `not_requested_by_poster`.
+   model quotes (`request_quote`), with no negation and no condition in its
+   sentence and nothing after it taking it back. A condition ("if the build
+   passes", "once CI is green", "after the deploy") makes the act wait, so it
+   refuses rather than acts now; one inside the poster's own steer or
+   comment text later in the sentence does not count. A retraction counts
+   wherever it opens a later clause, after at most an interjection ("Approve
+   dr_1 with wait. Hmm, no."), and a phrase that only retracts ("scratch
+   that", "never mind") counts anywhere after the request. The request is an
+   imperative in the verb's base form, opening its clause after at most a
+   courtesy ("please", "OK"): a report or description ("Alice muted dr_1",
+   "Bob is approving it"), another person's act ("Alice will approve"), a
+   question ("should I approve dr_1?") and someone else's words ("the card
+   says: approve dr_1", a quotation, or a speaker's label such as "Bob:
+   approve dr_1") ask for nothing. The request binds the words right after
+   it: the first words other than fillers ("the", "card", "with", "option")
+   must be the card's exact id and, for `resolve`, the option's exact id,
+   with nothing else between them, another card's id included: "approve
+   dr_... with wait". Case and the whole id count: `DR_1`, `dr_12` and
+   `dr_1-b` do not name `dr_1`. A clause, and each comma-separated part of
+   one, binds only its own words, so in "approve dr_1 with wait and mute
+   dr_2" or "approve dr_1 with wait, leave dr_2 alone" nothing is lent from
+   one card to another. A bare list entry joined to a request by commas
+   takes the request's verb and its own ids: "mute dr_1, dr_2" mutes both,
+   and "approve dr_1 with wait, dr_2 with abort" allows exactly those two
+   acts, never `dr_1` with `abort`. An entry that is not bare ("leave dr_2
+   alone", "ignore dr_2", "keep dr_2") ends the list, and is never acted
+   on. A card's own text, such as an option's label, never names anything,
+   and a function word ("with", "it") is never taken as an option. Steer
+   and comment text must occur in the poster's message exactly as it is
+   written to the card. Otherwise the whole message must be a confirmation
+   ("yes", "go ahead") of the completed reply just before this turn, which
+   must answer the poster's own previous turn, so one teammate cannot have
+   the model propose an act that another's unrelated "yes" makes; and that
+   reply must offer exactly one act, this one, plainly, named the same way,
+   with any text in its own words. Every request word in the reply is an
+   act, and so is every list entry after one, so "I will approve dr_1 with
+   wait, acknowledge dr_1" offers two. The offer is a question that offers
+   ("Shall I approve card dr_1 with option wait?", "Do you want me to ...?")
+   or a statement of intent ("I will ...", "I can ..."), with no hedge
+   ("I would ...?", "Not sure."), condition (other than "if you confirm"),
+   negation or retraction. A reply that only mentions a card, offers two
+   acts or offers one tentatively confirms nothing. So a model that follows
+   a card's text, or prefers another card or option, cannot act under the
+   poster's words on anything the poster did not name. The gate is the
+   conjunction of this decision and a plain floor (a quote in the message;
+   the exact card and option ids, as written, and a request word in the
+   message, or in the proposal it wholly confirms). A test pins the floor
+   with a case only it refuses (an id with an invisible character inside
+   it), and a property test over 6,000 generated cases holds the two to
+   each other. Refused: `not_requested_by_poster`.
 4. **Bounds.** Each act on a card at most once a turn, whatever became of
    it, so a retry after a timeout cannot repeat one that landed
    (`duplicate_act`); at most five acts a turn (`limit_reached`).

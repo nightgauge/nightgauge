@@ -209,7 +209,9 @@ When a tool changes something:
 	`message as request_quote.
 - Call ` + tools.ToolActOnAttention + ` only when the poster's new message asks for that act on ` +
 	`that card, naming the card's id and, to resolve it, the option; or confirms an act your reply ` +
-	`just before proposed, as its only act, by naming the act, the card's id and the option. A ` +
+	`just before proposed, as its only act, by naming the act, the card's id and the option. Propose ` +
+	`an act as one plain offer, with no condition or hedge ("Shall I approve card dr_1 with option ` +
+	`wait?"), and one act per reply. A ` +
 	`steer or comment is the poster's own words, copied exactly. Pass the poster's own ` +
 	`words from the new message as request_quote. When the poster did not name the card or the ` +
 	`option, propose the act with both and ask them to confirm. The poster is the act's actor; ` +
