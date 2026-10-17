@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -113,9 +114,9 @@ func (s *Toolset) authorizeCardAct(req cardActRequest) (platform.TurnCardAct, *E
 	if !ActRequested(s.turn.Message, req.Quote, s.turn.Proposal, act) {
 		return platform.TurnCardAct{}, fail(CodeNotRequested,
 			"the poster's own message in this turn does not ask for this act on this card, naming the card (and to "+
-				"resolve it, the option) in the same clause and giving any steer or comment text in their own words, "+
-				"or confirm a reply that proposed exactly this one act, so nothing is done; propose it that way and "+
-				"ask the poster to confirm")
+				"resolve it, the option) right after the request, with no condition or later retraction, and giving "+
+				"any steer or comment text in their own words, or confirm a reply that offered exactly this one act, "+
+				"plainly, so nothing is done; propose it that way and ask the poster to confirm")
 	}
 	key := req.CardID + "\x00" + req.Verb
 	s.mu.Lock()
@@ -205,20 +206,36 @@ var requestLeadIn = regexp.MustCompile(`^(?:(?:please|pls|kindly|now|just|ok|oka
 
 // actNegation turns an act request around. It is the issue gate's
 // negation without "wait", which names a card option as often as it
-// retracts; a sentence that opens with "wait" still retracts (retraction).
+// retracts; a segment that opens with "wait" still retracts (retractionOpens).
 var actNegation = regexp.MustCompile(`\b(?:not|no|nope|never|don't|dont|doesn't|didn't|won't|wouldn't|shouldn't|` +
 	`can't|cannot|isn't|aren't|without|stop|avoid|instead|rather|nor|neither|hold off|cancel|unless|later)\b|n't\b`)
 
-// clauseEnd separates the clauses an act's card and option must share with
-// its request: "approve dr_1 with wait and mute dr_2" is two acts, and
-// neither lends its card to the other.
+// clauseEnd separates the clauses a request's lead-in is read in. A comma
+// does not end one, so "Alice, approve dr_1" opens its clause with Alice
+// and asks her, not this turn.
 var clauseEnd = regexp.MustCompile(`\.(?:\s|$)|[!?;:\n]|\b(?:and|or|but|then|also|plus)\b`)
+
+// segmentEnd separates the segments a request binds its card and option in:
+// the clauses, and their comma-separated parts. "approve dr_1 with wait and
+// mute dr_2" is two acts, and in "approve dr_1 with wait, leave dr_2 alone"
+// the request's own segment names dr_1 and wait and lends neither to dr_2.
+var segmentEnd = regexp.MustCompile(`\.(?:\s|$)|[!?;:,\n]|\b(?:and|or|but|then|also|plus)\b`)
 
 // actSentenceEnd separates the sentences a negation is looked for in. A "."
 // ends a sentence only before a space or the end, so an id such as
 // "queue.add" is never split and a negation after it is still in its
 // sentence.
 var actSentenceEnd = regexp.MustCompile(`\.(?:\s|$)|[!?;:\n]|\bbut\b`)
+
+// bindFillers are the only words that may stand between a request and the
+// card and option it binds, or between the two: "resolve the dr_1 card with
+// the wait option". Any other word there, another card's id included,
+// leaves the act unbound. Matched on lower case; an option whose id is one
+// of them is never taken as named.
+var bindFillers = map[string]bool{"the": true, "a": true, "an": true, "card": true, "cards": true, "request": true,
+	"item": true, "gate": true, "decision": true, "on": true, "for": true, "of": true, "to": true, "with": true,
+	"using": true, "via": true, "by": true, "as": true, "option": true, "choice": true, "answer": true, "s": true,
+	"please": true, "choosing": true, "picking": true, "selecting": true}
 
 // unnameableOptions are words a message holds for their own sake, so an
 // option with one of them as its id is never taken as named.
@@ -227,12 +244,48 @@ var unnameableOptions = map[string]bool{"a": true, "an": true, "the": true, "it"
 	"on": true, "in": true, "of": true, "for": true, "by": true, "as": true, "at": true, "card": true,
 	"option": true, "please": true, "yes": true, "no": true}
 
+// bindToken is one word as binding reads it: a run of letters, marks,
+// digits, "_" and "-", with a "." inside it ("queue.add") but not one that
+// ends it. Every other character separates words, an apostrophe included
+// ("dr_1's" is "dr_1" and "s"), and a word in any script is a word.
+var bindToken = regexp.MustCompile(`[\p{L}\p{M}\p{N}_-]+(?:\.[\p{L}\p{M}\p{N}_-]+)*`)
+
+// actCondition makes an act wait on something: "approve dr_1 with wait if
+// the build passes" asks for nothing now ("unless" is a negation already).
+// It counts before the request in its sentence and in the request's own
+// segment, and where it opens a later segment of the sentence ("..., once
+// CI is green"); inside a later segment it is a steer's or comment's own
+// words ("steering it to after the deploy").
+var (
+	actCondition   = regexp.MustCompile(`\b(?:` + conditionWords + `)\b`)
+	conditionOpens = regexp.MustCompile(`^[\s\p{P}]*(?:(?:only|just|but|right) )?(?:` + conditionWords + `)\b`)
+)
+
+const conditionWords = `if|once|when|whenever|provided|providing|assuming|supposing|as soon as|in case|` +
+	`depending on|after|before`
+
+// interjections may open a segment before a retraction or a hedge: "Hmm,
+// no.", "Oh, wait."
+const interjections = `(?:(?:hmm*|hm+|um+|uh+|erm?|oh|ah|well|ok|okay|oops|ugh|so|i mean)\b[\s\p{P}]*)*`
+
+// retractionOpens is a later segment that takes a request back as it
+// opens, after at most an interjection: the issue gate's retraction
+// vocabulary, "wait" included. "Approve dr_1 with wait. Hmm, no." acts on
+// nothing, and "Mute dr_1. It's not urgent." still mutes.
+var retractionOpens = regexp.MustCompile(`^[\s\p{P}]*` + interjections +
+	`(?:no|nope|not|never|don't|dont|do not|wait|hold on|hold off|cancel|actually|never ?mind|scratch that|forget (?:it|that)|ignore (?:it|that)|` +
+	`on second thought)\b`)
+
+// retractionAnywhere takes a request back wherever it stands after it:
+// phrases that say nothing else.
+var retractionAnywhere = regexp.MustCompile(`\b(?:never ?mind|scratch that|forget (?:it|that)|ignore (?:it|that)|` +
+	`hold on|cancel (?:it|that)|on second thought)\b`)
+
 // ActRequested reports whether the poster's message in this turn asks for
 // act: the conjunction of actRequestedFloor, a simple check of what any act
 // needs, and actRequestedOnMessage, the decision on the poster's message, so
 // a defect in either refuses rather than acts. It reuses the issue gate's
-// pieces (#1570): its retraction, its confirmations and its word
-// boundaries.
+// pieces (#1570): its confirmations and its word boundaries.
 func ActRequested(message, quote, proposal string, act CardAct) bool {
 	return actRequestedFloor(message, quote, proposal, act) && actRequestedOnMessage(message, quote, proposal, act)
 }
@@ -241,7 +294,9 @@ func ActRequested(message, quote, proposal string, act CardAct) bool {
 // well-formed card id, a quote that occurs in the poster's message, and
 // either a message that holds the exact card id (and, to resolve, the exact
 // option id) and a request word of the verb's kind, or a message that is
-// wholly a confirmation and a proposal that holds them.
+// wholly a confirmation and a proposal that holds them. It reads the
+// message as written, so an id with an invisible character inside it is not
+// the id.
 func actRequestedFloor(message, quote, proposal string, act CardAct) bool {
 	request, ok := actRequests[act.Verb]
 	if !ok || !cardIDPattern.MatchString(act.CardID) {
@@ -258,30 +313,32 @@ func actRequestedFloor(message, quote, proposal string, act CardAct) bool {
 	return holds(message) || (confirmationOnly.MatchString(m) && holds(proposal))
 }
 
-// actRequestedOnMessage is the decision on the poster's message. message is the poster's own message, from the hosted service's record
-// and bound to the poster's account; an empty message refuses everything.
-// quote is the model's pointer to the words. proposal is the completed reply
-// just before this turn, or "".
+// actRequestedOnMessage is the decision on the poster's message. message is
+// the poster's own message, from the hosted service's record and bound to
+// the poster's account; an empty message refuses everything. quote is the
+// model's pointer to the words. proposal is the completed reply just before
+// this turn, or "".
 //
 // Either a request of the verb's kind lies inside the quoted words, on word
-// boundaries, with no negation in its sentence and no later sentence taking
-// it back, and its own clause names the card by its exact id and, for
-// resolve, the option by its exact id; or the whole message is a
-// confirmation, and the proposal it confirms proposes exactly one act, this
-// one, named the same way. Steer or comment text must occur exactly, byte
-// for byte, in the poster's message (or, when they confirm, in the proposal
-// they confirm). Nothing a tool returned takes part, so text from anyone
-// else (an earlier message, a card, any tool result) can never satisfy it.
-// A request is an imperative: its verb opens its clause, after at most a
-// courtesy ("please"), and its sentence is not a question. It understands
-// English requests only and refuses what it does not recognize.
+// boundaries, and stands unqualified (standsAsAsked), and it binds the act
+// (requestBinds): the first words after it, fillers aside, are the card's
+// exact id and, for resolve, the option's; or a bare list entry joined to it
+// by commas names them ("mute dr_1, dr_2"). Or the whole message is a
+// confirmation, and the proposal it confirms offers exactly one act, this
+// one (proposesOnly). Steer or comment text must occur exactly, byte for
+// byte, in the poster's message (or, when they confirm, in the proposal they
+// confirm). Nothing a tool returned takes part, so text from anyone else (an
+// earlier message, a card, any tool result) can never satisfy it. A request
+// is an imperative: its verb opens its clause, after at most a courtesy
+// ("please"). It understands English requests only and refuses what it does
+// not recognize.
 func actRequestedOnMessage(message, quote, proposal string, act CardAct) bool {
 	request, ok := actRequests[act.Verb]
 	if !ok || !cardIDPattern.MatchString(act.CardID) {
 		return false
 	}
-	if act.Verb == platform.TurnCardResolve &&
-		(!optionIDPattern.MatchString(act.Option) || unnameableOptions[strings.ToLower(act.Option)]) {
+	if act.Verb == platform.TurnCardResolve && (!optionIDPattern.MatchString(act.Option) ||
+		unnameableOptions[strings.ToLower(act.Option)] || bindFillers[strings.ToLower(act.Option)]) {
 		return false
 	}
 	n := gateNormalize(message)
@@ -300,18 +357,10 @@ func actRequestedOnMessage(message, quote, proposal string, act CardAct) bool {
 			continue
 		}
 		for _, loc := range request.FindAllStringIndex(low, -1) {
-			if loc[0] < start || loc[1] > end {
+			if loc[0] < start || loc[1] > end || !standsAsAsked(low, n, loc[0], loc[1]) {
 				continue
 			}
-			if actNegation.MatchString(actSentence(low, loc[0], loc[1])) || actRetractedAfter(low, loc[1]) ||
-				isQuestion(low, loc[1]) {
-				continue
-			}
-			cf, ct := clauseBounds(low, loc[0], loc[1])
-			if !requestLeadIn.MatchString(strings.TrimSpace(low[cf:loc[0]])) || reported(low, loc[0]) {
-				continue
-			}
-			if namesAct(n[cf:ct], act) && (act.Text == "" || containsExact(message, act.Text)) {
+			if requestBinds(n, low, loc[1], act) && (act.Text == "" || containsExact(message, act.Text)) {
 				return true
 			}
 		}
@@ -323,42 +372,202 @@ func actRequestedOnMessage(message, quote, proposal string, act CardAct) bool {
 	return false
 }
 
-// proposesOnly reports whether proposal, normalized, proposes exactly one
-// act on a card, and that act: one clause holds any act request at all, it
-// is not negated, and it asks for act's verb and names act's card and
-// option. A proposal of two acts, or of none, confirms nothing.
-func proposesOnly(p string, act CardAct) bool {
-	low := gateLower(p)
-	if low == "" {
-		return false
-	}
-	clauses := map[[2]int]bool{}
-	for _, re := range actRequests {
-		for _, loc := range re.FindAllStringIndex(low, -1) {
-			from, to := clauseBounds(low, loc[0], loc[1])
-			clauses[[2]int{from, to}] = true
+// standsAsAsked reports whether the request at [start, end) of low (n's
+// lower-cased form) is the poster's own, unqualified: its verb opens its
+// clause after at most a courtesy; its sentence holds no negation and no
+// condition and is not a question; nothing after it takes it back; and it
+// is not someone else's words.
+func standsAsAsked(low, n string, start, end int) bool {
+	cf, _ := clauseBounds(low, start, end)
+	return requestLeadIn.MatchString(strings.TrimSpace(low[cf:start])) &&
+		!actNegation.MatchString(actSentence(low, start, end)) && !conditional(low, start, end) &&
+		!isQuestion(low, end) && !actRetractedAfter(low, end) && !reported(low, n, start)
+}
+
+// requestSegments are the segments a request that ends at i governs: its
+// own, up to the next segment end, then each bare list entry joined after
+// it by a comma ("mute dr_1, dr_2, dr_3"). The first segment that is not a
+// bare entry, or a join that is not a comma, ends the list.
+func requestSegments(low string, i int) [][2]int {
+	var segs [][2]int
+	for from := i; ; {
+		to, next, comma := len(low), len(low), false
+		if loc := segmentEnd.FindStringIndex(low[from:]); loc != nil {
+			to, next, comma = from+loc[0], from+loc[1], low[from+loc[0]] == ','
 		}
+		if len(segs) > 0 && !listEntry(low[from:to]) {
+			return segs
+		}
+		segs = append(segs, [2]int{from, to})
+		if !comma {
+			return segs
+		}
+		from = next
 	}
-	if len(clauses) != 1 {
-		return false
-	}
-	for c := range clauses {
-		if actNegation.MatchString(actSentence(low, c[0], c[1])) || !actRequests[act.Verb].MatchString(low[c[0]:c[1]]) {
+}
+
+// listEntry reports whether seg is a bare entry of a list after a request:
+// an id-shaped word ("dr_2"), alone or with one word after a filler ("dr_2
+// with abort"), and no request of its own. "leave dr_2 alone", "ignore
+// dr_2" and "mute dr_3" are not entries, so no act is lent across them.
+func listEntry(seg string) bool {
+	for _, re := range actRequests {
+		if re.MatchString(seg) {
 			return false
 		}
-		return namesAct(p[c[0]:c[1]], act)
+	}
+	words, joined := bindWords(seg)
+	if len(words) == 0 || len(words) > 2 || !strings.ContainsAny(words[0], "0123456789_-") {
+		return false
+	}
+	return len(words) == 1 || joined[1]
+}
+
+// requestBinds reports whether the request that ends at i of low (n's
+// lower-cased form) binds act: its own segment names act's card and option
+// first, or one of the bare list entries after it names exactly them.
+func requestBinds(n, low string, i int, act CardAct) bool {
+	for k, seg := range requestSegments(low, i) {
+		if binds(n[seg[0]:seg[1]], act, k > 0) {
+			return true
+		}
 	}
 	return false
 }
 
-// namesAct reports whether text names act's card and, for resolve, its
-// option, each by its exact id.
-func namesAct(text string, act CardAct) bool {
-	if !namesID(text, act.CardID) {
+// binds reports whether seg names act's card and, for resolve, its option,
+// each by its exact id, as its first words other than fillers: the card,
+// or for resolve the card and the option in either order ("pick wait for
+// dr_1"), with a filler between them. In a list entry the card comes first
+// and nothing follows the act's words.
+func binds(seg string, act CardAct, entry bool) bool {
+	words, joined := bindWords(seg)
+	if act.Verb != platform.TurnCardResolve {
+		return len(words) > 0 && (!entry || len(words) == 1) && words[0] == act.CardID
+	}
+	if len(words) < 2 || (entry && len(words) != 2) || !joined[1] {
 		return false
 	}
-	return act.Verb != platform.TurnCardResolve || namesID(text, act.Option)
+	return (words[0] == act.CardID && words[1] == act.Option) ||
+		(!entry && words[0] == act.Option && words[1] == act.CardID)
 }
+
+// bindWords are seg's words other than fillers, in order, and for each
+// whether a filler stood between it and the word before.
+func bindWords(seg string) (words []string, joined []bool) {
+	filler := false
+	for _, w := range bindToken.FindAllString(seg, -1) {
+		if bindFillers[strings.ToLower(w)] {
+			filler = true
+			continue
+		}
+		words, joined = append(words, w), append(joined, filler)
+		filler = false
+	}
+	return words, joined
+}
+
+// conditional reports whether the request at [start, end) of s waits on
+// something (actCondition).
+func conditional(s string, start, end int) bool {
+	from, to := sentenceBounds(s, start, end)
+	head := requestSegments(s, end)[0]
+	return actCondition.MatchString(s[from:head[1]]) || opensLater(s[:to], head[1], conditionOpens)
+}
+
+// opensLater reports whether a segment of s that starts after i opens with
+// re.
+func opensLater(s string, i int, re *regexp.Regexp) bool {
+	for _, loc := range segmentEnd.FindAllStringIndex(s[i:], -1) {
+		if re.MatchString(s[i+loc[1]:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// The confirmation path. A bare "yes" confirms an act only when the reply it
+// answers offers exactly that one act, plainly: as an offer ("Shall I mute
+// dr_1?") or a statement of intent ("I will mute dr_1."), with no hedge,
+// condition, negation or retraction.
+var (
+	offerCourtesy = `(?:(?:so|ok|okay|now|next|alright|great|sure)[\s,]*)*`
+	offerQuestion = regexp.MustCompile(`^` + offerCourtesy + `(?:shall i|should i|can i|may i|` +
+		`do you want me to|would you like me to|want me to)$`)
+	offerStatement = regexp.MustCompile(`^` + offerCourtesy +
+		`(?:i will|i'll|i can|let me|i am going to|i'm going to)$`)
+	// proposalHedge makes an offer tentative in its own sentence ("I would
+	// approve dr_1 with wait?"), and hedgeOpens where it opens a later
+	// segment ("Not sure.", "Maybe not.").
+	proposalHedge = regexp.MustCompile(`\b(?:maybe|perhaps|possibly|probably|might|not sure|unsure|not certain|` +
+		`uncertain|i think|i guess|i suppose|i would|i'd)\b`)
+	hedgeOpens = regexp.MustCompile(`^[\s\p{P}]*` + interjections + `(?:maybe|perhaps|possibly|probably|unsure|` +
+		`uncertain|not sure|i'm not sure|i think|i guess|i suppose)\b`)
+	// confirmCondition waits only on the confirmation itself ("if you
+	// confirm"), so it is no condition on an offer.
+	confirmCondition = regexp.MustCompile(`\bif you(?: would|'d)? (?:like|want|prefer|agree|confirm)\b|` +
+		`\bif you say so\b|\bif that works\b|\bif that's (?:ok|okay|fine|alright)\b`)
+)
+
+// proposesOnly reports whether proposal, normalized, offers exactly one act
+// on a card, and that act. Every request word is an act (overlapping words
+// of two verbs are one), and so is every bare list entry after one, so "I
+// will approve dr_1 with wait, acknowledge dr_1" and "approve dr_1 with
+// wait, dr_2 with abort" offer two and confirm nothing. The one act must be
+// act's verb, offered plainly, and bind act's card and option.
+func proposesOnly(p string, act CardAct) bool {
+	low := gateLower(p)
+	acts := statedActs(low)
+	if len(acts) != 1 || len(requestSegments(low, acts[0][1])) != 1 {
+		return false
+	}
+	start, end := acts[0][0], acts[0][1]
+	if !matchesWithin(actRequests[act.Verb], low, start, end) {
+		return false
+	}
+	cf, _ := clauseBounds(low, start, end)
+	lead := strings.TrimSpace(low[cf:start])
+	offered := offerQuestion.MatchString(lead) || (offerStatement.MatchString(lead) && !isQuestion(low, end))
+	unconditional := !conditional(confirmCondition.ReplaceAllStringFunc(low, blank), start, end)
+	sentence := actSentence(low, start, end)
+	tentative := proposalHedge.MatchString(sentence) || opensLater(low, end, hedgeOpens)
+	return offered && unconditional && !tentative && !actNegation.MatchString(sentence) &&
+		!actRetractedAfter(low, end) && requestBinds(p, low, end, act)
+}
+
+// statedActs are the request words of every verb in low, as spans; spans
+// that overlap (resolve's and comment's "steer") are one.
+func statedActs(low string) [][2]int {
+	var spans [][2]int
+	for _, re := range actRequests {
+		for _, loc := range re.FindAllStringIndex(low, -1) {
+			spans = append(spans, [2]int{loc[0], loc[1]})
+		}
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i][0] < spans[j][0] })
+	var merged [][2]int
+	for _, s := range spans {
+		if k := len(merged) - 1; k >= 0 && s[0] < merged[k][1] {
+			merged[k][1] = max(merged[k][1], s[1])
+			continue
+		}
+		merged = append(merged, s)
+	}
+	return merged
+}
+
+// matchesWithin reports whether re matches somewhere inside [start, end) of s.
+func matchesWithin(re *regexp.Regexp, s string, start, end int) bool {
+	for _, loc := range re.FindAllStringIndex(s, -1) {
+		if loc[0] >= start && loc[1] <= end {
+			return true
+		}
+	}
+	return false
+}
+
+// blank replaces a match with spaces, keeping every offset of the text.
+func blank(m string) string { return strings.Repeat(" ", len(m)) }
 
 // namesID reports whether text holds id exactly, case included, with no id
 // character on either side: "dr_1" is not named by "dr_12", "dr_1-b" or
@@ -456,10 +665,25 @@ func gateLower(s string) string {
 var reportingWord = regexp.MustCompile(`\b(?:says?|said|asks?|asked|wants?|wanted|suggests?|suggested|tells?|told|` +
 	`writes?|wrote|reads|claims?|claimed|thinks?|thought|recommends?|recommended|proposes?|proposed|quote[sd]?)\b`)
 
-// reported reports whether the request at start is someone else's words:
-// its sentence names a reporting word before it, or it stands inside
-// quotation marks.
-func reported(s string, start int) bool {
+// speakerLabel is a name and nothing else before a colon, as a chat log or
+// a pasted exchange writes it: one word ("Bob", "bob", "@bob") or two
+// capitalized ones ("Bob Smith"). "Two things:" is not one.
+var speakerLabel = regexp.MustCompile(`^\s*(@?[\p{L}\p{N}_.'-]+|\p{Lu}[\p{L}'.-]*\s+\p{Lu}[\p{L}'.-]*)\s*$`)
+
+// notSpeakers are the one-word labels that head a poster's own words.
+var notSpeakers = map[string]bool{"note": true, "notes": true, "ps": true, "fyi": true, "update": true,
+	"request": true, "todo": true, "action": true, "next": true, "also": true, "ok": true, "okay": true, "so": true,
+	"then": true, "now": true, "please": true, "first": true, "second": true, "third": true, "finally": true,
+	"summary": true, "decision": true, "plan": true, "answer": true, "reply": true, "response": true, "task": true,
+	"step": true, "steps": true, "hi": true, "hey": true, "hello": true, "thanks": true, "edit": true,
+	"context": true, "reminder": true, "important": true, "urgent": true, "question": true, "re": true,
+	"status": true, "yes": true, "sure": true, "ask": true}
+
+// reported reports whether the request at start of s (orig's lower-cased
+// form) is someone else's words: its sentence names a reporting word before
+// it, a speaker's label heads one of the sentence's colon-separated parts
+// before it ("Bob: approve dr_1"), or it stands inside quotation marks.
+func reported(s, orig string, start int) bool {
 	from := 0
 	for _, loc := range actSentenceEnd.FindAllStringIndex(s[:start], -1) {
 		if s[loc[0]] != ':' {
@@ -467,8 +691,17 @@ func reported(s string, start int) bool {
 		}
 	}
 	before := s[from:start]
-	return reportingWord.MatchString(before) || strings.Count(before, `"`)%2 == 1 ||
-		strings.Count(before, "\u201c") > strings.Count(before, "\u201d")
+	if reportingWord.MatchString(before) || strings.Count(before, `"`)%2 == 1 ||
+		strings.Count(before, "“") > strings.Count(before, "”") {
+		return true
+	}
+	parts := strings.Split(orig[from:start], ":")
+	for _, label := range parts[:len(parts)-1] {
+		if m := speakerLabel.FindStringSubmatch(label); m != nil && !notSpeakers[strings.ToLower(m[1])] {
+			return true
+		}
+	}
+	return false
 }
 
 // isQuestion reports whether the sentence of s that goes on from end is a
@@ -479,8 +712,9 @@ func isQuestion(s string, end int) bool {
 	return loc != nil && s[end+loc[0]] == '?'
 }
 
-// actSentence is the sentence of s that holds [start, end).
-func actSentence(s string, start, end int) string {
+// sentenceBounds are the bounds of the sentence of s that holds [start,
+// end).
+func sentenceBounds(s string, start, end int) (int, int) {
 	from := 0
 	for _, loc := range actSentenceEnd.FindAllStringIndex(s[:start], -1) {
 		from = loc[1]
@@ -489,18 +723,20 @@ func actSentence(s string, start, end int) string {
 	if loc := actSentenceEnd.FindStringIndex(s[end:]); loc != nil {
 		to = end + loc[0]
 	}
+	return from, to
+}
+
+// actSentence is the sentence of s that holds [start, end).
+func actSentence(s string, start, end int) string {
+	from, to := sentenceBounds(s, start, end)
 	return s[from:to]
 }
 
-// actRetractedAfter reports whether a sentence after i opens by taking a
-// request back.
+// actRetractedAfter reports whether anything after i takes a request back:
+// a later segment that opens with a retraction, or a phrase that only
+// retracts, wherever it stands.
 func actRetractedAfter(s string, i int) bool {
-	for _, loc := range actSentenceEnd.FindAllStringIndex(s[i:], -1) {
-		if retraction.MatchString(s[i+loc[1]:]) {
-			return true
-		}
-	}
-	return false
+	return retractionAnywhere.MatchString(s[i:]) || opensLater(s, i, retractionOpens)
 }
 
 // clauseBounds are the bounds of the clause of s that holds [start, end).

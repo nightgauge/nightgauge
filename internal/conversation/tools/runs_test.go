@@ -187,8 +187,11 @@ func TestPipelineStatus_ShowsCurrentAndRecentRuns(t *testing.T) {
 			t.Errorf("%v: %v, want %s", bad, err, CodeInvalidArguments)
 		}
 	}
-	if _, err := call(t, s, ToolPipelineStatus, map[string]any{"owner": "acme", "repo": "web"}); code(err) != CodeRepoNotInWorkspace {
-		t.Errorf("a repository with no checkout: %v", err)
+	web := operatorTurn("How is the pipeline doing?")
+	web.ReadableRepos = append(web.ReadableRepos, Repo{"acme", "web"})
+	_, err = call(t, runToolset(t, f.root, web), ToolPipelineStatus, map[string]any{"owner": "acme", "repo": "web"})
+	if code(err) != CodeRepoNotInWorkspace {
+		t.Errorf("a readable repository with no checkout: %v", err)
 	}
 }
 
@@ -251,10 +254,12 @@ func listing(t *testing.T, dir string) string {
 }
 
 // A private run is its creator's alone (#2400), and every private run on
-// this machine is the operator's: the operator is shown it, marked; a
-// teammate who may read the repository is shown neither the private run in
-// flight nor the private finished one (#1587, security review).
-func TestRunTools_NeverShowATeammateAPrivateRun(t *testing.T) {
+// this machine is the operator's. A reply goes to the whole conversation,
+// whose participants the turn command does not name, so no turn is shown
+// the private run in flight or the private finished one, nor a run of a
+// repository the turn command does not list: not a teammate's turn, and not
+// the operator's own (#1587, security review and follow-up).
+func TestRunTools_NeverShowAPrivateOrUnlistedRun(t *testing.T) {
 	f := newRunFixture(t)
 	dir, _ := state.PipelineStateDir(f.root)
 	privateID, err := runstate.NewRunID()
@@ -277,29 +282,28 @@ func TestRunTools_NeverShowATeammateAPrivateRun(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	operator := runToolset(t, f.root, operatorTurn("How is the pipeline doing?"))
-	text, callErr := call(t, operator, ToolPipelineStatus, map[string]any{})
-	if callErr != nil {
-		t.Fatal(callErr)
-	}
-	if !strings.Contains(text, privateID) || !strings.Contains(text, doneID) || !strings.Contains(text, `"private":true`) {
-		t.Errorf("the operator does not see their own private runs: %s", text)
-	}
-
-	bob := teammateTurn("acct-bob", "bob", "How is the pipeline doing?", Repo{"acme", "api"})
-	for _, name := range []string{ToolPipelineStatus, ToolListRunningJobs} {
-		text, err := call(t, runToolset(t, f.root, bob), name, map[string]any{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, leaked := range []string{privateID, doneID, "Private spike", "Private finished"} {
-			if strings.Contains(text, leaked) {
-				t.Errorf("%s shows a teammate the operator's private run (%s): %s", name, leaked, text)
+	for who, turn := range map[string]Turn{
+		"the operator": operatorTurn("How is the pipeline doing?"),
+		"a teammate":   teammateTurn("acct-bob", "bob", "How is the pipeline doing?", Repo{"acme", "api"}),
+	} {
+		for _, name := range []string{ToolPipelineStatus, ToolListRunningJobs} {
+			text, err := call(t, runToolset(t, f.root, turn), name, map[string]any{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, leaked := range []string{privateID, doneID, "Private spike", "Private finished", `"private"`, "acme/secret"} {
+				if strings.Contains(text, leaked) {
+					t.Errorf("%s shows %s's conversation a private or unlisted run (%s): %s", name, who, leaked, text)
+				}
+			}
+			if !strings.Contains(text, f.running) {
+				t.Errorf("%s hides the team run from %s too: %s", name, who, text)
 			}
 		}
-		if !strings.Contains(text, f.running) {
-			t.Errorf("%s hides the team run too: %s", name, text)
-		}
+	}
+	if _, err := call(t, runToolset(t, f.root, operatorTurn("How is acme/secret doing?")), ToolPipelineStatus,
+		map[string]any{"owner": "acme", "repo": "secret"}); code(err) != CodeRepoNotReadable {
+		t.Errorf("the operator named an unlisted repository: %v, want %s", err, CodeRepoNotReadable)
 	}
 }
 

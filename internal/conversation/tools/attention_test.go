@@ -339,10 +339,10 @@ func TestActOnAttentionCard_ParsesItsArgumentsOnceStrictly(t *testing.T) {
 	}
 }
 
-// The act is bound to what the poster named, in the same clause as their
-// request, matched exactly as it is sent (#1587, security review): another
-// card, another option, an id in another case or one that only begins the
-// same, a card that another clause names, an option named only by a card's
+// The act is bound to what the poster named, right after their request,
+// matched exactly as it is sent (#1587, security review): another card,
+// another option, an id in another case or one that only begins the same,
+// a card that another clause names, an option named only by a card's
 // own label, a function word taken as an option id, and steer or comment
 // text other than the poster's own words are all refused.
 func TestActOnAttentionCard_ActsOnlyOnWhatThePosterNamed(t *testing.T) {
@@ -536,6 +536,154 @@ func TestActRequested(t *testing.T) {
 	for _, c := range cases {
 		if got := ActRequested(c.message, c.quote, c.proposal, c.act); got != c.want {
 			t.Errorf("ActRequested(%q, %q, %q, %+v) = %v, want %v", c.message, c.quote, c.proposal, c.act, got, c.want)
+		}
+	}
+}
+
+// A request binds the card and option that follow it, fillers aside, in its
+// own comma-separated segment, or in a bare list entry joined to it by
+// commas: a comma-joined sibling never lends one card's request or option to
+// another card, a negated or left-alone sibling is never acted on, and two
+// entries never cross-pair (#1587 follow-up).
+func TestActRequested_BindsEachCardToItsOwnWords(t *testing.T) {
+	resolve := func(card, option string) CardAct { return CardAct{Verb: "resolve", CardID: card, Option: option} }
+	mute := func(card string) CardAct { return CardAct{Verb: "mute", CardID: card} }
+	cases := []struct {
+		message string
+		act     CardAct
+		want    bool
+	}{
+		{"approve dr_1 with wait, leave dr_2 alone", resolve("dr_2", "wait"), false},
+		{"approve dr_1 with wait, leave dr_2 alone", resolve("dr_1", "wait"), true},
+		{"approve dr_1 with wait, ignore dr_2", resolve("dr_2", "wait"), false},
+		{"approve dr_1 with wait, ignore dr_2", resolve("dr_1", "wait"), true},
+		{"mute dr_1, keep dr_2", mute("dr_2"), false},
+		{"mute dr_1, keep dr_2", mute("dr_1"), true},
+		{"mute dr_1, skip dr_2", mute("dr_2"), false},
+		{"mute dr_1, dismiss dr_2", mute("dr_2"), false},
+		{"approve dr_1 with wait, dr_2 with abort", resolve("dr_1", "abort"), false},
+		{"approve dr_1 with wait, dr_2 with abort", resolve("dr_2", "wait"), false},
+		{"approve dr_1 with wait, dr_2 with abort", resolve("dr_1", "wait"), true},
+		{"approve dr_1 with wait, dr_2 with abort", resolve("dr_2", "abort"), true},
+		{"approve dr_1 with wait, dr_2 with abort, leave dr_3 alone, dr_4 with wait", resolve("dr_4", "wait"), false},
+		{"approve dr_1 dr_2 with wait", resolve("dr_1", "wait"), false},
+		{"approve dr_1 dr_2 with wait", resolve("dr_2", "wait"), false},
+		{"approve dr_1, dr_2 with wait", resolve("dr_1", "wait"), false},
+		{"approve dr_1 with wait abort", resolve("dr_1", "abort"), false},
+		{"approve dr_1 wait", resolve("dr_1", "wait"), false},
+		{"mute dr_1, dr_2, dr_3", mute("dr_3"), true},
+		{"mute dr_1, dr_2 alone", mute("dr_2"), false},
+		{"mute dr_1, it's noise, dr_2", mute("dr_2"), false},
+		{"pick wait for dr_1", resolve("dr_1", "wait"), true},
+		{"approve the gate on dr_1's card with the wait option", resolve("dr_1", "wait"), true},
+		{"approve dr_1 with gate", resolve("dr_1", "gate"), false},
+	}
+	for _, c := range cases {
+		if got := ActRequested(c.message, c.message, "", c.act); got != c.want {
+			t.Errorf("ActRequested(%q, %+v) = %v, want %v", c.message, c.act, got, c.want)
+		}
+	}
+}
+
+// A request that is taken back after it, wherever the retraction stands, that
+// waits on a condition, or that a speaker's label attributes to someone else
+// acts on nothing (#1587 follow-up).
+func TestActRequested_RefusesRetractedConditionalAndAttributedRequests(t *testing.T) {
+	resolve := CardAct{Verb: "resolve", CardID: "dr_1", Option: "wait"}
+	cases := []struct {
+		message string
+		want    bool
+	}{
+		{"Approve dr_1 with wait. Hmm, no.", false},
+		{"Approve dr_1 with wait. Hmm, wait.", false},
+		{"Approve dr_1 with wait. Oh, actually, don't.", false},
+		{"Approve dr_1 with wait, scratch that.", false},
+		{"Approve dr_1 with wait. I'll do it myself, never mind.", false},
+		{"Approve dr_1 with wait if the build passes.", false},
+		{"Approve dr_1 with wait, if the build passes.", false},
+		{"Approve dr_1 with wait once CI is green.", false},
+		{"Approve dr_1 with wait when the deploy ends.", false},
+		{"Approve dr_1 with wait after the build passes.", false},
+		{"Approve dr_1 with wait, after the build passes.", false},
+		{"If the build passes, approve dr_1 with wait.", false},
+		{"Bob: approve dr_1 with wait.", false},
+		{"bob: approve dr_1 with wait.", false},
+		{"@bob: approve dr_1 with wait.", false},
+		{"Bob Smith: approve dr_1 with wait.", false},
+		{"Context: Bob: approve dr_1 with wait.", false},
+		{"Note: approve dr_1 with wait.", true},
+		{"Two things: approve dr_1 with wait.", true},
+		{"Approve dr_1 with wait. It's not urgent.", true},
+		{"Approve dr_1 with wait until Friday.", true},
+	}
+	for _, c := range cases {
+		quote := "approve dr_1 with wait"
+		if got := ActRequested(c.message, quote, "", resolve); got != c.want {
+			t.Errorf("ActRequested(%q) = %v, want %v", c.message, got, c.want)
+		}
+	}
+	steer := CardAct{Verb: "resolve", CardID: "dr_1", Option: "wait", Text: "after the deploy"}
+	msg := "Resolve dr_1 with wait, steering it to after the deploy."
+	if !ActRequested(msg, "Resolve dr_1 with wait", "", steer) {
+		t.Errorf("a timing word inside the poster's own steer text refused %q", msg)
+	}
+}
+
+// A bare "yes" confirms an act only when the reply before offers exactly
+// that one act, plainly: a reply that offers two (in one clause, or as a
+// list), or offers one tentatively, conditionally or as a question that is
+// not an offer, confirms nothing (#1587 follow-up).
+func TestActRequested_AYesConfirmsOnlyOnePlainOffer(t *testing.T) {
+	resolve := func(card, option string) CardAct { return CardAct{Verb: "resolve", CardID: card, Option: option} }
+	ack := CardAct{Verb: "acknowledge", CardID: "dr_1"}
+	cases := []struct {
+		proposal string
+		act      CardAct
+		want     bool
+	}{
+		{"I will approve dr_1 with wait, acknowledge dr_1.", resolve("dr_1", "wait"), false},
+		{"I will approve dr_1 with wait, acknowledge dr_1.", ack, false},
+		{"I will approve dr_1 with wait, dr_2 with abort.", resolve("dr_2", "abort"), false},
+		{"I will approve dr_1 with wait, dr_2 with abort.", resolve("dr_1", "wait"), false},
+		{"I would approve dr_1 with wait? Not sure.", resolve("dr_1", "wait"), false},
+		{"I will approve dr_1 with wait? Not sure.", resolve("dr_1", "wait"), false},
+		{"Shall I approve dr_1 with wait? Not sure.", resolve("dr_1", "wait"), false},
+		{"Shall I approve dr_1 with wait? Maybe not.", resolve("dr_1", "wait"), false},
+		{"Maybe I can approve dr_1 with wait.", resolve("dr_1", "wait"), false},
+		{"Approve dr_1 with wait?", resolve("dr_1", "wait"), false},
+		{"Approve dr_1 with wait.", resolve("dr_1", "wait"), false},
+		{"Carol asked me to approve dr_1 with wait. Shall I?", resolve("dr_1", "wait"), false},
+		{"I'll approve dr_1 with wait once the build passes.", resolve("dr_1", "wait"), false},
+		{"Shall I approve dr_1 with wait? Hmm, actually no.", resolve("dr_1", "wait"), false},
+		{"I will approve dr_1 with wait.", resolve("dr_1", "wait"), true},
+		{"I can approve dr_1 with wait if you'd like.", resolve("dr_1", "wait"), true},
+		{"Do you want me to approve dr_1 with wait?", resolve("dr_1", "wait"), true},
+		{"Shall I acknowledge dr_1? It is not blocking anything.", ack, true},
+	}
+	for _, c := range cases {
+		if got := ActRequested("Yes.", "Yes.", c.proposal, c.act); got != c.want {
+			t.Errorf("yes after %q for %+v = %v, want %v", c.proposal, c.act, got, c.want)
+		}
+	}
+}
+
+// ActRequested is the conjunction of its floor and its decision, so where the
+// two disagree the act is refused. The floor reads the message as written: a
+// card id with an invisible character inside it is not the id, even though
+// the decision, which reads the normalized message, takes it as named.
+// Leaving only the decision in ActRequested makes this red (#1587 follow-up).
+func TestActRequested_TheFloorRefusesWhatOnlyTheDecisionAccepts(t *testing.T) {
+	act := CardAct{Verb: "resolve", CardID: "dr_1", Option: "wait"}
+	for _, msg := range []string{"Approve dr​_1 with wait.", "Approve dr_1 with wa​it."} {
+		quote := strings.TrimSuffix(msg, ".")
+		if !actRequestedOnMessage(msg, quote, "", act) {
+			t.Fatalf("%q no longer separates the floor from the decision; pin the floor with a case that does", msg)
+		}
+		if actRequestedFloor(msg, quote, "", act) {
+			t.Errorf("the floor accepts %q", msg)
+		}
+		if ActRequested(msg, quote, "", act) {
+			t.Errorf("ActRequested accepts %q, which only the decision accepts", msg)
 		}
 	}
 }

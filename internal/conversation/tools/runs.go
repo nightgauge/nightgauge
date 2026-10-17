@@ -16,12 +16,13 @@ import (
 // from this machine's own state (#1587): the runtime snapshots and the
 // execution history the daemon writes for each repository of the workspace.
 // They reach no forge, no hosted service and no model provider, and they
-// start, approve, cancel or edit nothing. The host's operator sees every run
-// of their own workspace. A teammate sees only runs of the repositories the
-// turn command lists as readable, never a private run (#2400: a private run
-// is its creator's alone, and every private run on this machine is the
-// operator's), and never a run the state cannot attribute to a repository.
-// Nothing they return names a local path or a process id.
+// start, approve, cancel or edit nothing. A reply goes to every participant
+// of the conversation, and the turn command names none of them, so every
+// turn, the host operator's own included, sees only runs of the repositories
+// the turn command lists as readable, and never a private run (#2400: a
+// private run is its creator's alone, and every private run on this machine
+// is the operator's). Nothing they return names a local path or a process
+// id.
 
 const (
 	// defaultRunLimit and maxRunLimit bound pipeline_status's recent runs per
@@ -56,12 +57,9 @@ type RunRecord struct {
 	// (stage-child), the orchestrator's sidecar (live-sidecar), or a
 	// snapshot written within the liveness window (timestamp-lease).
 	Evidence string `json:"evidence,omitempty"`
-	// Private marks a run its creator chose private (#2400). Only the host's
-	// operator, its creator, is ever shown one.
-	Private bool `json:"private,omitempty"`
-	// unattributed marks a run the state names without its repository or
-	// visibility: only the operator is shown one.
-	unattributed bool
+	// private marks a run its creator chose private (#2400): no turn is
+	// shown one.
+	private bool
 }
 
 // RepoRuns is one repository's runs.
@@ -107,7 +105,6 @@ func (l LocalRuns) Runs(slug, root string, recent int) (RepoRuns, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return out, err
 	}
-	seen := map[int]bool{}
 	for _, e := range entries {
 		issue, runID, ok := state.ParseSnapshotFilename(e.Name())
 		if e.IsDir() || !ok {
@@ -122,7 +119,7 @@ func (l LocalRuns) Runs(slug, root string, recent int) (RepoRuns, error) {
 			Repo: firstNonEmpty(rs.Repo, slug), Issue: rs.IssueNumber, Title: clip(rs.Title, maxRunTitleChars),
 			RunID: rs.RunID, Stage: string(rs.Stage), Branch: rs.Branch, PullRequest: rs.PrUrl,
 			StartedAt: stamp(rs.StartedAt), StageStartedAt: stamp(rs.StageStart),
-			Private: rs.Visibility == state.VisibilityPrivate,
+			private: rs.Visibility == state.VisibilityPrivate,
 		}
 		arm := active.Protected[issue]
 		switch {
@@ -137,7 +134,6 @@ func (l LocalRuns) Runs(slug, root string, recent int) (RepoRuns, error) {
 			rec.State = "paused"
 		case isLive(arm):
 			rec.State, rec.Evidence = "running", armName(arm)
-			seen[issue] = true
 		default:
 			rec.State = "stalled"
 		}
@@ -145,15 +141,6 @@ func (l LocalRuns) Runs(slug, root string, recent int) (RepoRuns, error) {
 	}
 	if unreadable > 0 {
 		out.Warnings = append(out.Warnings, fmt.Sprintf("%d run snapshot(s) could not be read", unreadable))
-	}
-	// An orchestrator's sidecar names a live issue whose snapshot is not on
-	// disk yet: it is running all the same. The sidecar names neither the
-	// run's repository nor its visibility, so only the operator sees it.
-	for issue, arm := range active.Protected {
-		if !seen[issue] && strings.HasPrefix(arm, "live-sidecar") && !hasIssue(out.Current, issue) {
-			out.Current = append(out.Current, RunRecord{Repo: slug, Issue: issue, State: "running",
-				Evidence: armName(arm), unattributed: true})
-		}
 	}
 	sort.SliceStable(out.Current, func(i, j int) bool {
 		if out.Current[i].StartedAt != out.Current[j].StartedAt {
@@ -170,7 +157,7 @@ func (l LocalRuns) Runs(slug, root string, recent int) (RepoRuns, error) {
 			Repo: firstNonEmpty(e.Repo, slug), Issue: e.IssueNumber, Title: clip(e.Title, maxRunTitleChars), RunID: e.RunID,
 			State: firstNonEmpty(e.Outcome, "finished"), StartedAt: e.StartedAt,
 			FinishedAt: firstNonEmpty(e.CompletedAt, e.RecordedAt), Branch: e.Branch,
-			Private: e.Visibility == state.VisibilityPrivate,
+			private: e.Visibility == state.VisibilityPrivate,
 		})
 	}
 	return out, nil
@@ -186,15 +173,6 @@ func armName(arm string) string {
 func isLive(arm string) bool {
 	for _, a := range liveArms {
 		if arm == a || strings.HasPrefix(arm, a+",") {
-			return true
-		}
-	}
-	return false
-}
-
-func hasIssue(runs []RunRecord, issue int) bool {
-	for _, r := range runs {
-		if r.Issue == issue {
 			return true
 		}
 	}
@@ -236,13 +214,13 @@ func (s *Toolset) readableRepoRoots(owner, repo string) ([][2]string, *Error) {
 		if owner != "" && !(strings.EqualFold(o, owner) && strings.EqualFold(r, repo)) {
 			continue
 		}
-		if !s.turn.PosterIsOperator && !s.canReadRepo(o, r) {
+		if !s.canReadRepo(o, r) {
 			continue
 		}
 		out = append(out, [2]string{slug, root})
 	}
 	if owner != "" && len(out) == 0 {
-		if !s.turn.PosterIsOperator && !s.canReadRepo(owner, repo) {
+		if !s.canReadRepo(owner, repo) {
 			return nil, errRepoNotReadable
 		}
 		return nil, fail(CodeRepoNotInWorkspace, "this workspace has no checkout of that repository")
@@ -331,7 +309,7 @@ func (s *Toolset) listRunningJobs(raw json.RawMessage) (string, *Error) {
 }
 
 // readRuns reads the runs of every readable repository, keeping only the
-// runs a teammate may read when a checkout's state holds another
+// runs the poster may read when a checkout's state holds another
 // repository's run.
 func (s *Toolset) readRuns(owner, repo string, recent int) ([]RepoRuns, *Error) {
 	if s.env.Runs == nil {
@@ -355,9 +333,9 @@ func (s *Toolset) readRuns(owner, repo string, recent int) ([]RepoRuns, *Error) 
 }
 
 // keepReadable drops, when owner and repo name one, every other
-// repository's runs; and for anyone but the host's operator, the runs of a
-// repository the poster may not read, every private run and every run the
-// state does not attribute.
+// repository's runs; and, whoever posted the turn, the host's operator
+// included, the runs of a repository the poster may not read and every
+// private run, since the reply is shown to the whole conversation.
 func (s *Toolset) keepReadable(runs []RunRecord, owner, repo string) []RunRecord {
 	kept := runs[:0]
 	for _, r := range runs {
@@ -365,7 +343,7 @@ func (s *Toolset) keepReadable(runs []RunRecord, owner, repo string) []RunRecord
 		if owner != "" && !(strings.EqualFold(o, owner) && strings.EqualFold(n, repo)) {
 			continue
 		}
-		if s.turn.PosterIsOperator || (s.canReadRepo(o, n) && !r.Private && !r.unattributed) {
+		if s.canReadRepo(o, n) && !r.private {
 			kept = append(kept, r)
 		}
 	}
