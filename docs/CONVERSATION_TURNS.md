@@ -181,27 +181,36 @@ without a prompt.
   own included, is served only the files git tracks (the files its index
   lists) in the checkout of a repository in the turn command's
   `readable_repos`, judged by the innermost checkout that holds the path. A
-  path in an unlisted repository's checkout, a nested clone's included, or
-  in no checkout is refused (`repo_not_readable`). An untracked or ignored
-  file, such as a local `.env` or credential, `.nightgauge/` runtime state or
-  a scratch file, is never read, named in a listing or matched by a search,
-  and neither is any file of a checkout git cannot list. A directory on the
-  way to a readable checkout lists only the entries that lead there. A
-  tracked file is read as the working tree holds it.
+  tracked file the checkout's own ignore rules exclude is not served either:
+  someone force-added it, and under `.nightgauge/`, whose rules ignore
+  everything but the team's committed files, it is runtime state. An
+  untracked or ignored file, such as a local `.env` or credential,
+  `.nightgauge/` runtime state or a scratch file, is never read, named in a
+  listing or matched by a search, and neither is a file in an unlisted
+  repository's checkout (a nested clone's included), in no checkout, or in a
+  checkout git cannot list. A directory on the way to a readable checkout
+  lists only the entries that lead there. A tracked file is read as the
+  working tree holds it.
+- The tracked files of every readable checkout under the root are listed
+  once per turn, before the first path is judged, with `git ls-files`. No
+  path is ever passed to git, so a name is matched exactly, never as an
+  option, a glob or pathspec magic, and git never runs in a repository the
+  turn may not read.
 - Paths are relative to the workspace root. A path is judged by its name
   before anything on disk is consulted: an absolute path or a `..` that
   leaves the root (`path_outside_workspace`), a secret-bearing name
-  (`path_secret`), an unlisted repository (`repo_not_readable`), and an
-  untracked path. Then its symlinks are resolved, and the target must stay
-  inside the root, name no secret, and be a tracked file of a readable
+  (`path_secret`), and a path that is not a served file of a readable
+  repository. Then its symlinks are resolved, and the target must stay
+  inside the root, name no secret, and be a served file of a readable
   repository. The file opened is that exact resolved path, one component at
   a time with `O_NOFOLLOW` from a descriptor on the root, so a symlink
   swapped in after the check fails the open instead of leading somewhere
   unchecked. A FIFO never blocks a read.
-- A refusal never tells an excluded file from a missing one. A missing
-  path, an untracked or ignored one, and a symlink whose target is not
-  served all get the same `path_not_found` refusal, since a target's own
-  reason would show that it exists. No refusal names a local path.
+- A refusal never says what is on the machine. A missing path, an
+  untracked or ignored one, a path in an unlisted repository or in none, and
+  a symlink whose target is not served all get the same `path_not_found`
+  refusal: a reason of their own would show that a file exists, or where an
+  unlisted repository's clone is. No refusal names a local path.
 - Secret-bearing paths are refused anywhere in the root, in every component,
   tracked or not (`path_secret`). Names are compared as a case-insensitive
   filesystem may compare them: Unicode case folding (so `ſ` is `s` and the

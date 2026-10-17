@@ -9,9 +9,9 @@ import (
 
 // sharedScope is a workspace whose root is the acme/api checkout, holding
 // what an operator's machine holds besides the tracked tree: ignored and
-// untracked files, .nightgauge runtime state, a bare repository, a nested
-// clone of another repository (acme/secret), and symlinks, tracked and not,
-// that lead out of the repository.
+// untracked files, .nightgauge runtime state (one file of it force-added), a
+// bare repository, a nested clone of another repository (acme/secret), and
+// symlinks, tracked and not, that lead out of the repository.
 type sharedScope struct {
 	root, nested string
 	// leaks are the contents no turn may be shown unless acme/secret is
@@ -32,11 +32,19 @@ func newSharedScope(t *testing.T) sharedScope {
 		"docs/to-local":   "../local/notes.txt",
 		"docs/to-vendor":  "../vendor/secret/PLAN.md",
 		"docs/to-outside": filepath.Join(outside, "secret.txt"),
+		"docs/to-git":     "../.git/config",
+		"docs/to-handoff": "../.nightgauge/session-handoff.md",
+		"docs/to-nowhere": "../vendor/secret/no-such-file.md",
 	} {
 		if err := os.Symlink(target, filepath.Join(root, link)); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// Tracked although the repository's own rules ignore them: runtime state
+	// and a local file someone force-added.
+	write(t, root, ".nightgauge/run-state.json", `{"FORCED-RUNTIME-STATE":1}`+"\n")
+	write(t, root, "local/forced.txt", "FORCED-IGNORED-FILE\n")
+	git(t, root, "add", "-f", ".nightgauge/run-state.json", "local/forced.txt")
 	git(t, root, "add", "-A")
 	git(t, root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "tracked")
 
@@ -63,6 +71,7 @@ func newSharedScope(t *testing.T) sharedScope {
 	return sharedScope{root: root, nested: nested, leaks: []string{
 		"ENV-SECRET-VALUE", "PROD-ENV-VALUE", "IGNORED-LOCAL-NOTES", "UNTRACKED-SCRATCH", "UNTRACKED-DRAFT",
 		"RUNTIME-HANDOFF", "LOCAL-CONFIG-NOTE", "BARE-REPO-CONFIG", "UNREADABLE-REPO-PLAN", "OUTSIDE-ROOT-CONTENT",
+		"FORCED-RUNTIME-STATE", "FORCED-IGNORED-FILE",
 	}}
 }
 
@@ -81,9 +90,12 @@ func (w sharedScope) toolset(t *testing.T, turn Turn) *Toolset {
 // #2472 gave the run tools). An operator's untracked or ignored files, their
 // .nightgauge runtime state and a nested clone of a repository the turn may
 // not read are never shown, named in a listing or matched by a search, and a
-// symlink cannot reach them. A refusal of a file the turn may not see is the
-// refusal a file that does not exist gets, so it tells the model nothing
-// about what is on the machine. Before the fix the operator's turn read
+// symlink cannot reach them. A file the repository's own rules ignore is not
+// served even when someone force-added it. A refusal of a file the turn may
+// not see is the refusal a file that does not exist gets, whether the file is
+// untracked, behind a symlink or in a repository the turn may not read, so it
+// tells the model nothing about what is on the machine, not even where an
+// unreadable repository's clone is. Before the fix the operator's turn read
 // every one of them.
 func TestFileTools_ServeEveryTurnOnlyTrackedFilesOfReadableRepos(t *testing.T) {
 	w := newSharedScope(t)
@@ -97,7 +109,6 @@ func TestFileTools_ServeEveryTurnOnlyTrackedFilesOfReadableRepos(t *testing.T) {
 		if code(missing) != CodeNotFound {
 			t.Fatalf("%s: a missing file: %v, want %s", who, missing, CodeNotFound)
 		}
-		_, missingNested := call(t, s, ToolReadFile, map[string]any{"path": "vendor/secret/no-such-file.md"})
 
 		for _, c := range []struct {
 			name, path string
@@ -119,7 +130,17 @@ func TestFileTools_ServeEveryTurnOnlyTrackedFilesOfReadableRepos(t *testing.T) {
 			{"a tracked symlink out of the root", "docs/to-outside", "missing"},
 			{"an untracked symlink into an unreadable repository", "peek", "missing"},
 			{"an untracked symlink out of the root", "escape", "missing"},
-			{"a file in an unreadable repository", "vendor/secret/PLAN.md", CodeRepoNotReadable},
+			{"a tracked symlink into .git", "docs/to-git", "missing"},
+			{"a tracked symlink to runtime state", "docs/to-handoff", "missing"},
+			{"force-added runtime state", ".nightgauge/run-state.json", "missing"},
+			{"a force-added ignored file", "local/forced.txt", "missing"},
+			{"a file in an unreadable repository", "vendor/secret/PLAN.md", "missing"},
+			{"a missing file in an unreadable repository", "vendor/secret/no-such-file.md", "missing"},
+			// No path reaches git: a name is matched exactly, never as an
+			// option, a glob or pathspec magic.
+			{"a glob", "*.md", "missing"},
+			{"pathspec magic", ":(glob)**/README.md", "missing"},
+			{"an option", "--output=x", "missing"},
 		} {
 			out, err := call(t, s, ToolReadFile, map[string]any{"path": c.path})
 			switch {
@@ -134,14 +155,10 @@ func TestFileTools_ServeEveryTurnOnlyTrackedFilesOfReadableRepos(t *testing.T) {
 				}
 			}
 		}
-		if missingNested == nil || code(missingNested) != CodeRepoNotReadable {
-			t.Errorf("%s: a missing file in an unreadable repository: %v, want %s, as for one that exists",
-				who, missingNested, CodeRepoNotReadable)
-		}
 
 		for _, c := range []struct{ path, want string }{
 			{"local", "missing"}, {"deploy", "missing"}, {"backup.git", "missing"},
-			{"vendor", "missing"}, {"vendor/secret", CodeRepoNotReadable},
+			{"vendor", "missing"}, {"vendor/secret", "missing"},
 		} {
 			out, err := call(t, s, ToolListDirectory, map[string]any{"path": c.path})
 			if c.want == "missing" && (err == nil || *err != *missing) || c.want != "missing" && code(err) != c.want {
@@ -151,7 +168,7 @@ func TestFileTools_ServeEveryTurnOnlyTrackedFilesOfReadableRepos(t *testing.T) {
 		for dir, hidden := range map[string][]string{
 			".":           {"scratch.txt", "local", "deploy", "vendor", "backup.git", "peek", "escape", ".env"},
 			"docs":        {"draft.md"},
-			".nightgauge": {"session-handoff.md", "config.local.yaml"},
+			".nightgauge": {"session-handoff.md", "config.local.yaml", "run-state.json"},
 		} {
 			out, err := call(t, s, ToolListDirectory, map[string]any{"path": dir})
 			if err != nil {
@@ -171,8 +188,8 @@ func TestFileTools_ServeEveryTurnOnlyTrackedFilesOfReadableRepos(t *testing.T) {
 		if _, content := envelope(t, out); len(content["matches"].([]any)) != 0 {
 			t.Errorf("%s: a search found files the conversation may not read: %v", who, content["matches"])
 		}
-		if _, err := call(t, s, ToolSearchFiles, map[string]any{"pattern": "PLAN", "path": "vendor/secret"}); code(err) != CodeRepoNotReadable {
-			t.Errorf("%s: a search of an unreadable repository: %v, want %s", who, err, CodeRepoNotReadable)
+		if _, err := call(t, s, ToolSearchFiles, map[string]any{"pattern": "PLAN", "path": "vendor/secret"}); err == nil || *err != *missing {
+			t.Errorf("%s: a search of an unreadable repository: %v, want exactly the missing file's %v", who, err, missing)
 		}
 		if _, err := call(t, s, ToolSearchFiles, map[string]any{"pattern": "NOTES", "path": "local"}); err == nil || *err != *missing {
 			t.Errorf("%s: a search of an ignored directory: %v, want exactly the missing file's %v", who, err, missing)
@@ -229,5 +246,58 @@ func TestFileTools_ACheckoutGitCannotListServesNothing(t *testing.T) {
 	}
 	if strings.Contains(out, "notes.txt") {
 		t.Errorf("the listing names a file git cannot show tracked: %s", out)
+	}
+}
+
+// The tracked files of every readable checkout under the root are listed
+// before the first path is judged, and an unreadable checkout's never are
+// (security review): git is never run because of what a path names, so how
+// long a refusal takes cannot show that a symlink's target exists, and no
+// repository the turn may not read is ever probed.
+func TestFileTools_ListEveryReadableCheckoutBeforeAnyPath(t *testing.T) {
+	w := newSharedScope(t)
+	var listed []string
+	real := trackedLister
+	trackedLister = func(dir string) *trackedFiles {
+		listed = append(listed, dir)
+		return real(dir)
+	}
+	t.Cleanup(func() { trackedLister = real })
+	canon := func(p string) string {
+		r, err := filepath.EvalSymlinks(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r
+	}
+	both := []Repo{{"acme", "api"}, {"acme", "secret"}}
+	for _, c := range []struct {
+		name, path string
+		readable   []Repo
+		want       []string
+	}{
+		{"a missing path, both readable", "no-such-file.txt", both, []string{w.root, w.nested}},
+		{"a tracked symlink to a missing file, both readable", "docs/to-nowhere", both, []string{w.root, w.nested}},
+		{"a tracked symlink to an existing file, both readable", "docs/to-vendor", both, []string{w.root, w.nested}},
+		{"a tracked symlink into acme/secret, only acme/api readable", "docs/to-vendor", []Repo{{"acme", "api"}},
+			[]string{w.root}},
+		{"a path in acme/secret, only it readable", "vendor/secret/PLAN.md", []Repo{{"acme", "secret"}}, []string{w.nested}},
+	} {
+		listed = nil
+		s := w.toolset(t, teammateTurn("acct-bob", "bob", "read", c.readable...))
+		_, _ = call(t, s, ToolReadFile, map[string]any{"path": c.path})
+		got := map[string]bool{}
+		for _, d := range listed {
+			got[canon(d)] = true
+		}
+		if len(listed) != len(c.want) || len(got) != len(c.want) {
+			t.Errorf("%s: listed %v, want each of %v once", c.name, listed, c.want)
+			continue
+		}
+		for _, d := range c.want {
+			if !got[canon(d)] {
+				t.Errorf("%s: listed %v, want %v", c.name, listed, c.want)
+			}
+		}
 	}
 }

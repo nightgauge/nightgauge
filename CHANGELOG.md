@@ -106,10 +106,12 @@ changelog, and the release workflow refuses a tag that does not.
   `read_file`, `list_directory` and `search_files` now serve every turn,
   the operator's included, only the files git tracks in a repository the
   turn lists as readable, whether the path is named directly or reached
-  through a symlink. A missing file, an untracked one and a symlink to
-  something not served all get the same refusal, so a refusal never shows
-  that a file exists. See `docs/CONVERSATION_TURNS.md` § Tools and
-  permissions.
+  through a symlink. A tracked file the repository's ignore rules exclude
+  (force-added runtime state) is not served either. A missing file, an
+  untracked one, one in an unlisted repository and a symlink to something
+  not served all get the same refusal, so a refusal never shows that a file
+  exists or where another repository's clone is. See
+  `docs/CONVERSATION_TURNS.md` § Tools and permissions.
 
 - **A run started with `nightgauge run` now leaves a session log** (#1903).
   Its output used to exist only in the launching terminal. The run now

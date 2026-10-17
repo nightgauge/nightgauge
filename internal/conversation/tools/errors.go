@@ -20,13 +20,14 @@ const (
 	// CodeSecretPath: the path names a secret-bearing file.
 	CodeSecretPath = "path_secret"
 	// CodeNotFound: nothing the turn may read is at the path: it is missing,
-	// untracked or ignored, or a symlink leads to something not served. One
-	// refusal for all of them, so it never shows that an excluded file
-	// exists.
+	// untracked or ignored, in a repository the turn may not read or in
+	// none, or a symlink leads to something not served. One refusal for all
+	// of them, so it never shows that an excluded file exists.
 	CodeNotFound = "path_not_found"
 	// CodeNotText: the file is not text, or too large to read.
 	CodeNotText = "not_text"
-	// CodeRepoNotReadable: the poster may not read the repository.
+	// CodeRepoNotReadable: the poster may not read the repository a forge or
+	// run tool names. A file path in one is refused as CodeNotFound.
 	CodeRepoNotReadable = "repo_not_readable"
 	// CodeNotRequested: the poster's own message in this turn does not ask
 	// for the action.

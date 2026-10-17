@@ -64,13 +64,15 @@ func TestReads_FollowThePostersReadableRepos(t *testing.T) {
 			{ToolReadFile, map[string]any{"path": "README.md"}},
 			{ToolListDirectory, map[string]any{"path": "src"}},
 		} {
+			// A path is refused as a missing one is: repo_not_readable
+			// would show where an unreadable repository's clone is.
 			_, err := call(t, s, tc.tool, tc.args)
-			if c.ok && err != nil || !c.ok && code(err) != CodeRepoNotReadable {
+			if c.ok && err != nil || !c.ok && (err == nil || *err != *errNotServed) {
 				t.Errorf("%s: %s: %v", c.name, tc.tool, err)
 			}
 		}
 		out, err := call(t, s, ToolSearchFiles, map[string]any{"pattern": "API service"})
-		if c.ok && (err != nil || !strings.Contains(out, "README.md")) || !c.ok && code(err) != CodeRepoNotReadable {
+		if c.ok && (err != nil || !strings.Contains(out, "README.md")) || !c.ok && (err == nil || *err != *errNotServed) {
 			t.Errorf("%s: search: %v %s", c.name, err, out)
 		}
 	}

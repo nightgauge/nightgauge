@@ -96,10 +96,10 @@ type Toolset struct {
 	// checkouts are the repositories' checkout roots with symlinks
 	// resolved, for the readable-repository check of a file path.
 	checkouts map[string]string
-	// tracked is each checkout's tracked files, by slug, listed the first
-	// time a file tool needs them.
-	trackedMu sync.Mutex
-	tracked   map[string]*trackedFiles
+	// tracked is the served files of each readable checkout, by slug,
+	// listed once, before the first path is judged (listReadable).
+	listOnce sync.Once
+	tracked  map[string]*trackedFiles
 
 	mu     sync.Mutex
 	calls  []Invocation
