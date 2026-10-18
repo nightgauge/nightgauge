@@ -9,6 +9,7 @@
  * @see docs/ARCHITECTURE.md for WebView patterns
  */
 
+import { getNonce } from "../../utils/webviewNonce";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type { PipelineState, ExtendedStageState } from "../../services/PipelineStateService";
@@ -23,18 +24,6 @@ import { getStageBudget } from "../../utils/nightgaugeConfig";
  * status) rather than throwing after the panel has been created (#767).
  */
 const NOT_STARTED_STAGE: ExtendedStageState = { status: "pending" };
-
-/**
- * Generate nonce for script security
- */
-function getNonce(): string {
-  let text = "";
-  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
-}
 
 /**
  * Escape HTML special characters

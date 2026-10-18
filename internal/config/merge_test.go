@@ -21,9 +21,7 @@ func withMachineConfig(t *testing.T, contents string) {
 			t.Fatalf("write machine config: %v", err)
 		}
 	}
-	prev := machineConfigPathFn
-	machineConfigPathFn = func() (string, error) { return path, nil }
-	t.Cleanup(func() { machineConfigPathFn = prev })
+	t.Cleanup(swapMachineConfigPath(func() (string, error) { return path, nil }))
 }
 
 // withNoMachineConfig points machineConfigPathFn at a non-existent path
@@ -32,9 +30,7 @@ func withNoMachineConfig(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "definitely-not-present.yaml")
-	prev := machineConfigPathFn
-	machineConfigPathFn = func() (string, error) { return path, nil }
-	t.Cleanup(func() { machineConfigPathFn = prev })
+	t.Cleanup(swapMachineConfigPath(func() (string, error) { return path, nil }))
 }
 
 func writeProjectYAML(t *testing.T, dir, contents string) string {
@@ -658,9 +654,7 @@ func TestReadMachineConfigBytesNeverReadsTheLegacyLinuxPath(t *testing.T) {
 	oldGOOS := machineGOOSFn
 	machineGOOSFn = func() string { return "linux" }
 	t.Cleanup(func() { machineGOOSFn = oldGOOS })
-	oldPathFn := machineConfigPathFn
-	machineConfigPathFn = defaultMachineConfigPath
-	t.Cleanup(func() { machineConfigPathFn = oldPathFn })
+	t.Cleanup(swapMachineConfigPath(defaultMachineConfigPath))
 
 	legacy := filepath.Join(home, ".nightgauge", "config.yaml")
 	writeTierFile(t, legacy, "github_user: legacy-user\n")
@@ -683,9 +677,8 @@ func TestReadMachineConfigBytesNeverReadsTheLegacyLinuxPath(t *testing.T) {
 // (ADR-024 § 15).
 func TestMachineConfigDirIsTheDirectoryLoadReads(t *testing.T) {
 	oldGOOS := machineGOOSFn
-	oldPathFn := machineConfigPathFn
-	machineConfigPathFn = defaultMachineConfigPath
-	t.Cleanup(func() { machineGOOSFn = oldGOOS; machineConfigPathFn = oldPathFn })
+	t.Cleanup(swapMachineConfigPath(defaultMachineConfigPath))
+	t.Cleanup(func() { machineGOOSFn = oldGOOS })
 
 	for _, tc := range []struct {
 		name, goos string
@@ -1184,9 +1177,7 @@ func TestHomeDirProjectIsMachineTier(t *testing.T) {
 	t.Run("canonical", func(t *testing.T) {
 		home := t.TempDir()
 		machine := filepath.Join(home, ".nightgauge", "config.yaml")
-		prev := machineConfigPathFn
-		machineConfigPathFn = func() (string, error) { return machine, nil }
-		t.Cleanup(func() { machineConfigPathFn = prev })
+		t.Cleanup(swapMachineConfigPath(func() (string, error) { return machine, nil }))
 		writeProjectYAML(t, home, "owner: acme\ngithub_auth:\n  token: literal-home-token\n")
 		cfg, err := LoadMerged(home)
 		if err != nil {

@@ -334,6 +334,9 @@ re-run just that check.
 The check timed out (each has a deadline, 10s unless it declares its own),
 was cancelled, or failed internally. Its condition is unknown, so it is never
 reported as passing. Re-run doctor; if it repeats, the evidence names the reason.
+A timed-out check is cancelled, and doctor waits for it to stop before it
+returns, so a check slow to honour its deadline delays the end of the run but
+is never left running behind it.
 
 ### Binary, skills and GitHub
 

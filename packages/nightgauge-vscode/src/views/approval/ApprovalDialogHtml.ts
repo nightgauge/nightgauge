@@ -5,6 +5,7 @@
  * with syntax highlighting and action buttons.
  */
 
+import { getNonce } from "../../utils/webviewNonce";
 import * as vscode from "vscode";
 import { type PipelineStage } from "@nightgauge/sdk";
 import { marked } from "marked";
@@ -440,16 +441,4 @@ function formatStageName(stage: PipelineStage): string {
     "pipeline-finish": "Completion",
   };
   return labels[stage] ?? stage;
-}
-
-/**
- * Generate a nonce for script security
- */
-function getNonce(): string {
-  let text = "";
-  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
 }

@@ -11,6 +11,7 @@
  * @see Issue #3239
  */
 
+import { getNonce } from "../../utils/webviewNonce";
 import * as vscode from "vscode";
 import type { RecoveryAction, RecoveryRequiredPayload } from "@nightgauge/sdk";
 
@@ -332,13 +333,4 @@ function escapeHtml(text: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function getNonce(): string {
-  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  let text = "";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
 }

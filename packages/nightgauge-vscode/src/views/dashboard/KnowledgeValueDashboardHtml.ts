@@ -4,6 +4,7 @@
  * chart library (ADR-003).
  */
 
+import { getNonce } from "../../utils/webviewNonce";
 import { PIPELINE_STATE_DISPLAY } from "../../utils/cloneLayout";
 import type { KnowledgeMetricsResult } from "../../services/IpcClientBase";
 import {
@@ -20,13 +21,6 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-function getNonce(): string {
-  let text = "";
-  const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) text += chars.charAt(Math.floor(Math.random() * chars.length));
-  return text;
 }
 
 function bandColor(band: "green" | "yellow" | "red" | "neutral"): string {

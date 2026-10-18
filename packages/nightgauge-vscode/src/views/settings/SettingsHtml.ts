@@ -9,6 +9,7 @@
  * @see Issue #440 - Multi-tier config GUI support
  */
 
+import { getNonce } from "../../utils/webviewNonce";
 import * as vscode from "vscode";
 import { TIER_BANDS, type TierBand } from "@nightgauge/sdk";
 import type { NightgaugeConfig, ViewTier, TierViewState } from "./types";
@@ -151,18 +152,6 @@ const STAGE_LABELS: Record<string, string> = {
   "pr-create": "PR Create",
   "pr-merge": "PR Merge",
 };
-
-/**
- * Generate nonce for script security
- */
-function getNonce(): string {
-  let text = "";
-  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
-}
 
 /**
  * Escape HTML special characters

@@ -8,6 +8,7 @@
  * @see Issue #1163 - Brownfield Modernization Progress Dashboard
  */
 
+import { getNonce } from "../../utils/webviewNonce";
 import * as vscode from "vscode";
 import type {
   BrownfieldDashboardData,
@@ -27,18 +28,6 @@ import {
   getTrendIndicatorHtml,
 } from "./BrownfieldCharts";
 import { BrownfieldDashboardState } from "./BrownfieldDashboardState";
-
-/**
- * Generate nonce for CSP
- */
-function getNonce(): string {
-  let text = "";
-  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
-}
 
 /**
  * Escape HTML special characters

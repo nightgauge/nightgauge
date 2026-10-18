@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	yaml "gopkg.in/yaml.v3"
 
@@ -69,9 +70,26 @@ var MachineTierKeys = []string{
 	"pipeline.logs.max_age_days",
 }
 
-// machineConfigPathFn lets tests override the resolved machine-tier
-// path. Production code uses defaultMachineConfigPath.
-var machineConfigPathFn = defaultMachineConfigPath
+// machineConfigPathHook lets tests override the resolved machine-tier path;
+// nil means defaultMachineConfigPath. It is atomic because a reader can run
+// on another goroutine (a doctor check, a watcher) while a test swaps it.
+var machineConfigPathHook atomic.Pointer[func() (string, error)]
+
+// machineConfigPathFn resolves the machine-tier path through the hook.
+func machineConfigPathFn() (string, error) {
+	if fn := machineConfigPathHook.Load(); fn != nil {
+		return (*fn)()
+	}
+	return defaultMachineConfigPath()
+}
+
+// swapMachineConfigPath installs fn as the resolver and returns a cleanup
+// that restores the previous one.
+func swapMachineConfigPath(fn func() (string, error)) func() {
+	prev := machineConfigPathHook.Swap(&fn)
+	return func() { machineConfigPathHook.Store(prev) }
+}
+
 var machineGOOSFn = func() string { return runtime.GOOS }
 
 func defaultMachineConfigPath() (string, error) {
@@ -121,12 +139,9 @@ func MachineConfigFile() string {
 // SwapMachineConfigPathForTest replaces the resolver used by Load and
 // MachineConfigPath with the supplied function. Returns a cleanup that
 // restores the previous resolver. Intended only for tests in external
-// packages (the in-package merge_test.go reaches machineConfigPathFn
-// directly).
+// packages; in-package tests call swapMachineConfigPath.
 func SwapMachineConfigPathForTest(fn func() (string, error)) func() {
-	prev := machineConfigPathFn
-	machineConfigPathFn = fn
-	return func() { machineConfigPathFn = prev }
+	return swapMachineConfigPath(fn)
 }
 
 // readMachineConfigBytes returns the raw bytes of the machine-tier YAML
