@@ -16,6 +16,18 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **A conversation can start work** (#1894). When you ask, in your own
+  message, to start work on an issue ("start a run on api#12"), or confirm a
+  run the reply offered, the turn dispatches a pipeline run through the hosted
+  service and keeps only its handle. The run executes in its own context on
+  the host; later turns see its handle and status, and a failed run's evidence
+  link, never its transcript, stage output or diffs. Only the host's operator
+  starts a run, on their own credentials. A teammate's request becomes a Needs
+  Attention card on the operator's machine, and the run starts only when the
+  operator approves it there; approving it from the dashboard or a
+  conversation does not start it. With no VS Code extension attached to run
+  it, the dispatch is refused with the reason, and nothing starts.
+
 - **A chat panel in the VS Code extension** (#1571). **Nightgauge: Open
   Conversation** lists your team's conversations, the same threads the
   dashboard and the app show, and opens one to read and post. Replies stream

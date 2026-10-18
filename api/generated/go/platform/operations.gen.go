@@ -87,6 +87,15 @@ var OpAgentsActOnTurnCard = Operation{
 	Upstream: UpstreamDeclared,
 }
 
+// OpAgentsDispatchTurnRun is POST /v1/agents/{agentId}/turns/{turnId}/runs.
+var OpAgentsDispatchTurnRun = Operation{
+	ID:       "agents.dispatchTurnRun",
+	Method:   "POST",
+	Path:     "/v1/agents/{agentId}/turns/{turnId}/runs",
+	Security: SecurityPipeline,
+	Upstream: UpstreamDeclared,
+}
+
 // OpAgentsHeartbeat is PUT /v1/agents/{agentId}/heartbeat.
 var OpAgentsHeartbeat = Operation{
 	ID:       "agents.heartbeat",
@@ -318,6 +327,7 @@ var OpTelemetryIngestPipelineRun = Operation{
 var Operations = []Operation{
 	OpAgentsAckCommand,
 	OpAgentsActOnTurnCard,
+	OpAgentsDispatchTurnRun,
 	OpAgentsHeartbeat,
 	OpAgentsIngestTurnFrames,
 	OpAgentsListTurnCards,

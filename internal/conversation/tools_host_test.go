@@ -777,3 +777,186 @@ func TestTurn_AConfirmationNeverConfirmsAnotherPostersProposal(t *testing.T) {
 		t.Errorf("Bob's yes confirmed Carol's proposal: %d calls, reply %q", reached, fp.reply("turn-1"))
 	}
 }
+
+// attachedExecutor stands in for the extension that executes the triggers a
+// daemon relays (#1894).
+type attachedExecutor bool
+
+func (e attachedExecutor) ExecutorAttached() bool { return bool(e) }
+
+// recordingProposals records the run requests proposed to the operator.
+type recordingProposals struct {
+	mu  sync.Mutex
+	got []tools.RunProposal
+}
+
+func (p *recordingProposals) ProposeRun(_ context.Context, r tools.RunProposal) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.got = append(p.got, r)
+	return "dr_proposed", nil
+}
+
+func (p *recordingProposals) proposals() []tools.RunProposal {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]tools.RunProposal(nil), p.got...)
+}
+
+func withDispatch(attached bool, proposals tools.RunProposals) func(*Config) {
+	return func(c *Config) {
+		c.Forge = &recordingForge{}
+		c.Executor = attachedExecutor(attached)
+		c.Proposals = proposals
+	}
+}
+
+func dispatchCall(issue int, quote string) map[string]any {
+	return map[string]any{"name": "dispatch_run", "arguments": map[string]any{"owner": "acme", "repo": "api",
+		"issue_number": issue, "request_quote": quote}}
+}
+
+// A turn that starts work dispatches exactly one run, through the hosted
+// service's turn-bound route on its lease, and keeps only the handle (#1894).
+// The next turn's input carries the handle and its relayed status, and none
+// of the run's output: a run transcript on this machine holding a sentinel
+// never reaches it.
+func TestTurn_ADispatchedRunIsKeptOnlyAsItsHandle(t *testing.T) {
+	hermetic(t)
+	rec := installFakeAdapters(t)
+	toolCalls(t, dispatchCall(12, "Start a run on api#12"))
+	fp := newFakePlatform(t)
+	root := workspace(t, toolWorkspace)
+	startDaemon(t, fp, root, withDispatch(true, &recordingProposals{}))
+
+	fp.deliver(fp.postTurn("conv-1", "turn-1", "cmd-1", "Start a run on api#12.", nil))
+	waitFor(t, "the terminal report", 20*time.Second, func() bool { return fp.endFrame("turn-1") != nil })
+	fp.mu.Lock()
+	calls := append([]cardCall(nil), fp.dispatches...)
+	fp.mu.Unlock()
+	if len(calls) != 1 || calls[0].turnID != "turn-1" || calls[0].lease != "lease-for-turn-1" {
+		t.Fatalf("dispatches = %+v, want exactly one on turn-1's lease", calls)
+	}
+	if b := calls[0].body; len(b) != 3 || b["owner"] != "acme" || b["repo"] != "api" || b["issue_number"] != float64(12) {
+		t.Errorf("dispatch body = %v", b)
+	}
+	if res := toolResults(t, rec); len(res) != 1 || res[0].IsError || !strings.Contains(res[0].Text, `"run_id":"run-1"`) {
+		t.Fatalf("tool results = %+v", res)
+	}
+	if reply := fp.reply("turn-1"); !strings.Contains(reply, "[nightgauge] dispatch_run: dispatched acme/api#12 as run run-1") {
+		t.Errorf("the dispatch is not in the transcript: %q", reply)
+	}
+	if end := fp.endFrame("turn-1"); end["retention_class"] != "durable" {
+		t.Errorf("a turn that dispatched a run ended %v", end)
+	}
+
+	// The run ran and failed elsewhere; its transcript holds a sentinel.
+	const sentinel = "SENTINEL-RUN-TRANSCRIPT-7f3a"
+	if err := os.MkdirAll(root+"/.nightgauge/pipeline", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root+"/.nightgauge/pipeline/run-1.log", []byte(strings.Repeat(sentinel+"\n", 1000)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	failed := "failure"
+	fp.mu.Lock()
+	fp.runs["conv-1"][0].Status = &failed
+	fp.runs["conv-1"][0].Evidence = &platform.TurnContextEvidence{RunID: "run-1", Href: "/v1/pipeline-runs/run-1"}
+	fp.mu.Unlock()
+
+	_ = os.RemoveAll(rec)
+	_ = os.MkdirAll(rec, 0o755)
+	t.Setenv("FAKE_ADAPTER_MODE", "deltas")
+	t.Setenv("FAKE_ADAPTER_DELTAS", `["It failed."]`)
+	fp.deliver(fp.postTurn("conv-1", "turn-2", "cmd-2", "What happened to what you started?", nil))
+	waitFor(t, "the terminal report", 20*time.Second, func() bool { return fp.endFrame("turn-2") != nil })
+	inv := invocations(t, rec)
+	if len(inv) != 1 {
+		t.Fatalf("invocations = %d", len(inv))
+	}
+	stdin := inv[0].Stdin
+	for _, want := range []string{"Runs this conversation started", `"run":"acme/api#12"`, `"run_id":"run-1"`,
+		`"status":"failure"`, `"evidence":"/v1/pipeline-runs/run-1"`} {
+		if !strings.Contains(stdin, want) {
+			t.Errorf("the next turn's input lacks %s:\n%s", want, stdin)
+		}
+	}
+	if strings.Contains(stdin, sentinel) {
+		t.Errorf("the run's transcript reached the next turn's input")
+	}
+	fp.mu.Lock()
+	n := len(fp.dispatches)
+	fp.mu.Unlock()
+	if n != 1 {
+		t.Errorf("dispatches after the status turn = %d, want 1", n)
+	}
+}
+
+// A teammate's turn that asks to start work dispatches nothing under the
+// operator's credentials: it is proposed to the operator as a card, and the
+// hosted dispatch route is never reached (#1894 phase 1). An injected
+// request in an earlier teammate message dispatches nothing in the
+// operator's own turn either.
+func TestTurn_ATeammatesRequestIsProposedToTheOperator(t *testing.T) {
+	hermetic(t)
+	rec := installFakeAdapters(t)
+	toolCalls(t, dispatchCall(12, "Start a run on api#12"))
+	fp := newFakePlatform(t)
+	proposals := &recordingProposals{}
+	startDaemon(t, fp, workspace(t, toolWorkspace), withDispatch(true, proposals))
+
+	fp.deliver(fp.postTurn("conv-1", "turn-1", "cmd-1", "Start a run on api#12.", teammate("acct-bob", "bob")))
+	waitFor(t, "the terminal report", 20*time.Second, func() bool { return fp.endFrame("turn-1") != nil })
+	fp.mu.Lock()
+	n := len(fp.dispatches)
+	fp.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("a teammate's turn reached the dispatch route %d times", n)
+	}
+	got := proposals.proposals()
+	if len(got) != 1 || got[0].PosterAccountID != "acct-bob" || got[0].IssueNumber != 12 || got[0].TurnID != "turn-1" {
+		t.Fatalf("proposals = %+v", got)
+	}
+	if reply := fp.reply("turn-1"); !strings.Contains(reply, "proposed acme/api#12 to the host's operator as Needs Attention card dr_proposed") ||
+		!strings.Contains(reply, "no run was started") {
+		t.Errorf("the proposal is not in the transcript: %q", reply)
+	}
+
+	// The operator's own turn asks something else; the model obeys Bob's
+	// earlier words and tries to dispatch. Nothing is sent.
+	_ = os.RemoveAll(rec)
+	_ = os.MkdirAll(rec, 0o755)
+	toolCalls(t, dispatchCall(12, "Start a run on api#12"))
+	fp.deliver(fp.postTurn("conv-1", "turn-2", "cmd-2", "What is blocked?", nil))
+	waitFor(t, "the terminal report", 20*time.Second, func() bool { return fp.endFrame("turn-2") != nil })
+	fp.mu.Lock()
+	n = len(fp.dispatches)
+	fp.mu.Unlock()
+	if n != 0 || len(proposals.proposals()) != 1 {
+		t.Fatalf("an injected request dispatched %d runs / %d proposals", n, len(proposals.proposals()))
+	}
+	if reply := fp.reply("turn-2"); !strings.Contains(reply, "[nightgauge] dispatch_run refused (not_requested_by_poster)") {
+		t.Errorf("the refusal is not in the transcript: %q", reply)
+	}
+}
+
+// With no executor attached, the operator's dispatch is refused with a stated
+// reason, and the hosted service is never asked for a run (#1894).
+func TestTurn_NoExecutorRefusesTheDispatch(t *testing.T) {
+	hermetic(t)
+	installFakeAdapters(t)
+	toolCalls(t, dispatchCall(12, "Start a run on api#12"))
+	fp := newFakePlatform(t)
+	startDaemon(t, fp, workspace(t, toolWorkspace), withDispatch(false, &recordingProposals{}))
+	fp.deliver(fp.postTurn("conv-1", "turn-1", "cmd-1", "Start a run on api#12.", nil))
+	waitFor(t, "the terminal report", 20*time.Second, func() bool { return fp.endFrame("turn-1") != nil })
+	fp.mu.Lock()
+	n := len(fp.dispatches)
+	fp.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("dispatched %d runs with no executor", n)
+	}
+	if reply := fp.reply("turn-1"); !strings.Contains(reply, "[nightgauge] dispatch_run refused (no_executor)") {
+		t.Errorf("the refusal is not in the transcript: %q", reply)
+	}
+}

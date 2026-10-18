@@ -34,6 +34,7 @@ import (
 	runstatecmd "github.com/nightgauge/nightgauge/internal/cmd/runstate"
 	"github.com/nightgauge/nightgauge/internal/config"
 	"github.com/nightgauge/nightgauge/internal/conversation"
+	"github.com/nightgauge/nightgauge/internal/conversation/tools"
 	"github.com/nightgauge/nightgauge/internal/depgraph"
 	docspkg "github.com/nightgauge/nightgauge/internal/docs"
 	"github.com/nightgauge/nightgauge/internal/doctor"
@@ -357,6 +358,24 @@ type daemonAgentIPC interface {
 	// signed-in session, which tells the workspace throttle read the served
 	// workspace's team (#2352).
 	OnSessionToken(fn func())
+	// ExecutorAttached and RaiseConversationRunProposal bound a run a
+	// conversation turn dispatches (#1894): the extension that executes
+	// relayed triggers, and the card a teammate's request becomes.
+	ExecutorAttached() bool
+	RaiseConversationRunProposal(p ipc.ConversationRunProposal) (string, error)
+}
+
+// conversationRunProposals raises a teammate's request for a run as a card
+// in this daemon's attention store, for its operator alone to approve
+// (#1894).
+type conversationRunProposals struct{ ext daemonAgentIPC }
+
+func (p conversationRunProposals) ProposeRun(_ context.Context, r tools.RunProposal) (string, error) {
+	return p.ext.RaiseConversationRunProposal(ipc.ConversationRunProposal{
+		Owner: r.Owner, Repo: r.Repo, IssueNumber: r.IssueNumber,
+		PosterAccountID: r.PosterAccountID, PosterLogin: r.PosterLogin,
+		ConversationID: r.ConversationID, TurnID: r.TurnID,
+	})
 }
 
 // reportRefusedWorkspaceWrites surfaces the workspace writes a registration
@@ -423,6 +442,8 @@ func runDaemonPlatformAgent(
 	turns := newDaemonTurnHost(ctx, conversation.Config{
 		WorkspaceRoot: workspaceRoot,
 		Platform:      conversation.NewPlatform(platformClient),
+		Executor:      ext,
+		Proposals:     conversationRunProposals{ext: ext},
 		Owner: conversation.ServedWorkspaceOwner(platformClient.ReadAgentWorkspaceThrottles, func() (string, error) {
 			decl, err := served()
 			if err != nil || decl.Workspace == nil {

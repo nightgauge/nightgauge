@@ -6,10 +6,10 @@ own execution adapter, performance mode and effort, streams the reply back,
 and reports how the turn ended (#1569). This document states the daemon's
 side of the conversation contract (ADR-017); the hosted service's OpenAPI
 document is the authority on the wire. It covers the turn host (#1569), the
-tool and permission boundary (#1570), retention classification (#1893) and
-the pipeline status, running-jobs and Needs Attention tools (#1587), and the
-VS Code extension's chat panel (#1571). Later issues add the acts a turn may
-take on runs (#1894, #1895).
+tool and permission boundary (#1570), retention classification (#1893),
+the pipeline status, running-jobs and Needs Attention tools (#1587), the
+VS Code extension's chat panel (#1571), and dispatching a run from a turn
+(#1894). A later issue adds the other acts a turn may take on runs (#1895).
 
 Code: `internal/conversation` (the turn host), `internal/conversation/tools`
 (the tool boundary), `internal/platform/conversation_turn.go` and
@@ -94,7 +94,8 @@ turn it names, and never logs it.
    `{role, author, text}` (`author` is the posting account, or `assistant`
    for a reply; `by_poster` marks the new message's poster, `redacted` a
    redacted message and `turn_state` one from a turn that failed or was
-   cancelled), then the new message. The context goes into the user message,
+   cancelled), then the runs the conversation dispatched, then the new
+   message (see [Dispatching a run](#dispatching-a-run)). The context goes into the user message,
    never into a system prompt. A context read that attributes the turn's own
    message to an account other than its poster fails the turn.
 2. **Profile.** The adapter, performance mode and effort are the ones the
@@ -150,10 +151,13 @@ removes one, or makes one mutating, fails CI.
 | `list_attention_cards`  | no      | Lists the Needs Attention cards of the turn's workspace, from the hosted service          |
 | `create_issue`          | yes     | Files an issue the poster asked for in their own message                                  |
 | `act_on_attention_card` | yes     | Resolves, comments on, acknowledges or mutes a card the poster asked about, as the poster |
+| `dispatch_run`          | yes     | Starts a run on an issue the operator asked for; proposes a teammate's request to them    |
 
 No tool writes the working tree, creates a branch, commits, pushes or opens a
-pull request, and none starts, pauses, approves or cancels a run: those stay
-on the existing command bus. When a conversation concludes that code should
+pull request, and none pauses, approves or cancels a run: those stay on the
+existing command bus. `dispatch_run` starts a run only through the hosted
+service, to run in its own context (see
+[Dispatching a run](#dispatching-a-run)). When a conversation concludes that code should
 change, its output is an issue, not an edit. `tools.IsMutating` reports a
 tool's class, and treats a name it does not know as mutating.
 
@@ -238,7 +242,7 @@ the daemon appends (`--append-system-prompt`, fixed text, never message text)
 states both rules and the tool ceiling. No message text reaches argv, a
 shell string or a path the daemon builds.
 
-**Filing an issue.** `create_issue` is the only mutation, and every check
+**Filing an issue.** For `create_issue`, every check
 runs before the forge is reached:
 
 1. **The poster's own request.** It runs only when the poster's message in
@@ -416,6 +420,94 @@ receipt names what was done and the actor the hosted service recorded:
 resolved at the request of account ...; the hosted service recorded actor
 ...`. A turn that calls `act_on_attention_card`, even one that is refused, is
 `durable` (below); a turn that only read is `ephemeral`.
+
+## Dispatching a run
+
+A turn that starts work dispatches a pipeline run and keeps only its handle
+(#1894). The run executes in its own context, on this host's executor; its
+transcript, stage output and diffs never enter the conversation, its stored
+record or a later turn's input. "What happened to what you started?" is
+answered from the handle.
+
+**Who may start one: the host's operator only (phase 1).** This is the
+decision recorded for #1894 under the conversation contract (ADR-017,
+private), made in place of an App-only credential mode for a whole run. Such
+a mode would change the credential chain every pipeline stage uses, so it is
+not built now.
+
+- A turn the turn command marks as posted by the host's operator
+  (`poster_is_operator`) dispatches the run directly. The run uses the
+  operator's ordinary credential chain, unchanged.
+- A teammate's turn never dispatches. Its request becomes a Needs Attention
+  card on the host, `Start a run on owner/repo#N?`, naming the poster and
+  nothing they wrote. Its options are `start`, which queues the issue on the
+  operator's machine through the trusted `queue.add` verb, and `dismiss`.
+  It dismisses itself on expiry, and one card stays open per issue. The run
+  starts only when the operator resolves the card on their own machine
+  (VS Code or the CLI). A resolution the hosted service relays, from the
+  dashboard or a conversation, never starts it, because the relay cannot
+  tell the operator from a teammate who may act on cards: the daemon refuses
+  it and the card stays open. Dismissing the card is allowed from anywhere.
+- Three layers enforce this: the tool, the hosted service (which refuses a
+  teammate's dispatch with `OPERATOR_REQUIRED` and creates no run) and the
+  extension, which acknowledges `rejected` (`operator-required:`) any trigger
+  that names a conversation turn or a poster without `posterIsOperator`
+  exactly `true`.
+
+**The checks, in order, before anything is sent:**
+
+1. **The arguments.** `owner`, `repo`, `issue_number` and `request_quote`,
+   parsed strictly as every conversation tool's are (`invalid_arguments`).
+2. **A posting account** (`poster_unknown`), a repository the poster may read
+   (`repo_not_readable`) and one this workspace has a checkout of
+   (`repo_not_in_workspace`).
+3. **The poster's own request**, for this issue, in this turn's message. A
+   start word (`start`, `run`, `dispatch`, `kick off`, `launch`, `build`,
+   `implement`, `work on`, `pick up`, `begin`) opens its clause after at most
+   a courtesy. Its sentence carries no negation, condition or question, nothing
+   later takes it back, and the words are not someone else's ("Bob: start
+   api#12"). The first words after the start word, fillers aside, must name the
+   issue exactly: `owner/repo#N`, `repo#N`, `issue N`, or `#N` only when the
+   poster may read exactly one repository. `#120` and `#12-b` do not name
+   `#12`. Otherwise the whole message is a confirmation of the reply just
+   before, which answered the poster's own previous turn and offered exactly
+   this run, plainly ("Shall I start a run on api#12?"). Text in an earlier
+   message, an issue, a card or any tool result never satisfies it.
+   Refused: `not_requested_by_poster`.
+4. **Bounds.** Each issue at most once a turn (`duplicate_act`), and at most
+   three runs or proposals a turn (`limit_reached`), each counted before the
+   request so a retry after a timeout cannot repeat one that landed.
+5. **For the operator, an attached executor.** The daemon hands a dispatched
+   run's trigger to the extension on its stdio transport, which runs the
+   workspace's pipelines. The extension says it does with the
+   `agent.attachExecutor` IPC method each time it connects, and a socket
+   client cannot. With none attached the dispatch is refused with
+   `no_executor` and nothing reaches the hosted service.
+
+Then the daemon calls `POST /v1/agents/{agentId}/turns/{turnId}/runs`
+(`agents.dispatchTurnRun`) on the turn's lease, with exactly `{owner, repo,
+issue_number}`. The hosted service checks the thread's run bound, the
+workspace throttle and the poster's GitHub write permission, records the
+poster as the run's requester, and addresses a trigger to this same host,
+which relays it to the extension as any trigger. The reply's handle is kept
+only when it names the run asked for. A refusal comes back with the hosted
+service's code, lower-cased (`operator_required`, `thread_run_limit`,
+`workspace_throttled`, `github_permission_denied`, ...), and says that no run
+was started. A failure the hosted service did not answer says that a run may
+exist. The receipt is `[nightgauge] dispatch_run: dispatched owner/repo#N as
+run <id> ...`, or `... proposed owner/repo#N to the host's operator as Needs
+Attention card <id> ...; no run was started`. A turn that dispatched or
+proposed a run is `durable`.
+
+**What a later turn sees.** The context read carries the thread's runs,
+newest first: each run's handle, the last status the hosted service relayed
+as `run.status` (null until one is) and, for a failed run, the path of its
+evidence. The daemon renders them into the turn's input as a JSON array of
+`{run, run_id, status, evidence}` between the earlier messages and the new
+one. Each field is held to its shape (a repository and issue, a run id, a
+lower-case status word, `/v1/pipeline-runs/<id>`), so no text reaches the
+model through them; at most 50 are carried. Nothing of a run is read from
+this machine's state for a turn's input.
 
 ## Frames
 

@@ -382,7 +382,11 @@ to its own queue (below, #2440). It relays every other
 command to the extension over the `agent.command` IPC event, `{agentId, frame}`, and the
 extension carries it out and acknowledges it under `agentId`, the agent the
 platform addressed. A daemon with no extension attached has nobody to relay
-to, and such a command expires on the platform.
+to, and such a command expires on the platform. The extension says it is
+attached with the `agent.attachExecutor` IPC method, on the daemon's stdio
+transport only, each time it connects; until then a conversation turn
+dispatches no run to this host (#1894,
+[CONVERSATION_TURNS.md § Dispatching a run](CONVERSATION_TURNS.md#dispatching-a-run)).
 
 #### A queue item added in the cloud
 
@@ -442,7 +446,10 @@ window's agent id. A daemon with no platform configured refuses the hand-over,
 and the window leaves the command unacknowledged.
 
 The extension acknowledges every command it consumes exactly once (#2334): a
-trigger with the run it starts; a run verb (`cancel`, `pause`, `resume`) as
+trigger with the run it starts, except that a trigger naming a conversation
+turn (`conversationTurnId`) or a poster (`posterIsOperator`) is acknowledged
+`rejected` with `operator-required:` unless `posterIsOperator` is exactly
+`true` (#1894); a run verb (`cancel`, `pause`, `resume`) as
 `applied`, as `already_resolved` when the run was already in the state the
 verb asks for (a pause of a paused run, a resume of a run that is not paused,
 #2341), or as `rejected` with the reason it could not act; an `approve` or

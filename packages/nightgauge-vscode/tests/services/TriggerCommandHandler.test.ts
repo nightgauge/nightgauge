@@ -116,6 +116,52 @@ describe("TriggerCommandHandler", () => {
     handler = build();
   });
 
+  // #1894: a run a conversation turn dispatched runs on this machine's own
+  // credential chain, so only for a turn this host's operator posted.
+  describe("a run a conversation dispatched", () => {
+    function conversationCmd(extra: Record<string, unknown>): ReceivedCommand {
+      const cmd = makeTriggerCmd(42, "cmd-conv");
+      return {
+        ...cmd,
+        payload: { ...(cmd.payload as object), conversationTurnId: "turn-1", ...extra },
+      };
+    }
+
+    for (const [label, extra] of [
+      ["a teammate's turn", { posterIsOperator: false }],
+      ["no posterIsOperator", {}],
+      ["a truthy non-boolean", { posterIsOperator: "true" }],
+    ] as const) {
+      it(`refuses ${label}, acked rejected, and queues nothing`, async () => {
+        handler.handle(conversationCmd(extra));
+        await vi.waitFor(() => expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledTimes(1));
+        expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledWith(
+          "agent-1",
+          "cmd-conv",
+          "rejected",
+          expect.stringMatching(/^operator-required: /)
+        );
+        expect(ipcClient.issueView).not.toHaveBeenCalled();
+        expect(queueService.enqueue).not.toHaveBeenCalled();
+        expect(concurrentManager.fillSlots).not.toHaveBeenCalled();
+      });
+    }
+
+    it("refuses a poster flag without a turn id too", async () => {
+      const cmd = makeTriggerCmd(42, "cmd-flag");
+      handler.handle({ ...cmd, payload: { ...(cmd.payload as object), posterIsOperator: false } });
+      await vi.waitFor(() => expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledTimes(1));
+      expect(ipcClient.agentAcknowledgeCommand.mock.calls[0]?.[2]).toBe("rejected");
+      expect(queueService.enqueue).not.toHaveBeenCalled();
+    });
+
+    it("runs the operator's own turn's run as any trigger", async () => {
+      handler.handle(conversationCmd({ posterIsOperator: true }));
+      await vi.waitFor(() => expect(queueService.enqueue).toHaveBeenCalledTimes(1));
+      expect(ipcClient.agentAcknowledgeCommand).toHaveBeenCalledWith("agent-1", "cmd-conv");
+    });
+  });
+
   it("ignores non-trigger commands", () => {
     const cmd: ReceivedCommand = { id: "c", type: "heartbeat", payload: {}, createdAt: "" };
     handler.handle(cmd);

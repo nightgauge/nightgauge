@@ -72,6 +72,31 @@ export function subscribeToDaemonRelay(
 }
 
 /**
+ * Tell the daemon this window executes the triggers it relays (#1894), now
+ * and each time the daemon (re)connects: a restarted daemon starts with no
+ * executor. Until it is told, the daemon refuses to dispatch a run from a
+ * conversation turn, because nobody would run it. A daemon that predates the
+ * call refuses it, and is left alone. Returns the subscription, for the
+ * extension to dispose.
+ */
+export function attachAsDaemonExecutor(
+  ipcClient: Pick<IpcClient, "agentAttachExecutor" | "onDidChangeStatus">,
+  logger: Pick<Logger, "warn">
+): { dispose(): void } {
+  const attach = (): void => {
+    ipcClient.agentAttachExecutor().catch((err: unknown) => {
+      logger.warn("AgentCommandDispatcher: the daemon did not take this window as its executor", {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    });
+  };
+  attach();
+  return ipcClient.onDidChangeStatus((connected) => {
+    if (connected) attach();
+  });
+}
+
+/**
  * The conversation turn command types (#1569). The Go daemon handles both on
  * its own agent command stream and never relays them; this dispatcher leaves
  * one that reaches it unacknowledged, because whichever acknowledgement

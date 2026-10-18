@@ -1473,6 +1473,13 @@ type AgentQueueAddResult struct {
 	Accepted bool `json:"accepted"`
 }
 
+// AgentAttachExecutorResult is the result for agent.attachExecutor (#1894):
+// the daemon now hands a run a conversation dispatches to the extension that
+// called it.
+type AgentAttachExecutorResult struct {
+	Attached bool `json:"attached"`
+}
+
 // EventAgentCommand is the event carrying an AgentCommandEvent.
 const EventAgentCommand = "agent.command"
 

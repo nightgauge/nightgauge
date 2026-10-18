@@ -17,6 +17,7 @@
 import { IpcClientBase } from './IpcClientBase';
 import type {
   AgentAcknowledgeCommandResult,
+  AgentAttachExecutorResult,
   AgentExecutionProfileResult,
   AgentQueueAddResult,
   AnalyticsHealthResult,
@@ -566,6 +567,10 @@ export class IpcClientGenerated extends IpcClientBase {
 
   async agentQueueAdd(agentId: string, commandId: string, payload: unknown): Promise<AgentQueueAddResult> {
     return this.call<AgentQueueAddResult>('agent.queueAdd', { agentId, commandId, payload });
+  }
+
+  async agentAttachExecutor(): Promise<AgentAttachExecutorResult> {
+    return this.call<AgentAttachExecutorResult>('agent.attachExecutor');
   }
 
   async agentExecutionProfile(): Promise<AgentExecutionProfileResult> {

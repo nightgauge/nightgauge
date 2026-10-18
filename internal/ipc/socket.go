@@ -278,7 +278,7 @@ func (s *Server) handleRequestOnWriter(ctx context.Context, req Request, w write
 		return
 	}
 
-	result, err := handler(ctx, req.Params)
+	result, err := handler(withSocketTransport(ctx), req.Params)
 	if err != nil {
 		s.sendErrorOnWriter(w, req.ID, rpcCodeFor(err), err.Error())
 		return

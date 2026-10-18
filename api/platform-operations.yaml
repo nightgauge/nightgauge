@@ -80,6 +80,17 @@ operations:
     security: pipeline
     upstream: declared
 
+  # A conversation turn's run dispatch (#1894, ADR-017 Decision 12), on the
+  # turn's lease. The hosted service checks the run bound, the throttle and
+  # the poster's GitHub write permission, refuses a turn its host's operator
+  # did not post, and addresses the trigger to this same host.
+  - id: agents.dispatchTurnRun
+    go_name: OpAgentsDispatchTurnRun
+    method: POST
+    path: /v1/agents/{agentId}/turns/{turnId}/runs
+    security: pipeline
+    upstream: declared
+
   - id: agents.register
     go_name: OpAgentsRegister
     method: POST

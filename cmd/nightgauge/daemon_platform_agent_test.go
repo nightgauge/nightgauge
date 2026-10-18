@@ -51,6 +51,13 @@ func (e *extensionSide) recordedRefusals() [][]platform.RefusedWorkspaceWrite {
 
 // OnSessionToken records the daemon's session listener (#2352); a test calls
 // sessionChanged to play the extension pushing a session.
+// ExecutorAttached: no extension in these tests executes relayed triggers.
+func (e *extensionSide) ExecutorAttached() bool { return false }
+
+func (e *extensionSide) RaiseConversationRunProposal(ipc.ConversationRunProposal) (string, error) {
+	return "", errors.New("no attention store in this test")
+}
+
 func (e *extensionSide) OnSessionToken(fn func()) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
