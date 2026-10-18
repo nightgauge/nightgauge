@@ -7,8 +7,9 @@ and reports how the turn ended (#1569). This document states the daemon's
 side of the conversation contract (ADR-017); the hosted service's OpenAPI
 document is the authority on the wire. It covers the turn host (#1569), the
 tool and permission boundary (#1570), retention classification (#1893) and
-the pipeline status, running-jobs and Needs Attention tools (#1587). Later
-issues add the acts a turn may take on runs (#1894, #1895).
+the pipeline status, running-jobs and Needs Attention tools (#1587), and the
+VS Code extension's chat panel (#1571). Later issues add the acts a turn may
+take on runs (#1894, #1895).
 
 Code: `internal/conversation` (the turn host), `internal/conversation/tools`
 (the tool boundary), `internal/platform/conversation_turn.go` and
@@ -544,3 +545,65 @@ to its footer.
 
 A frame that still matches a credential shape is refused by the hosted
 service, and the turn ends `secret_detected`.
+
+## The extension's chat panel
+
+**Nightgauge: Open Conversation** opens the VS Code extension's chat panel
+(#1571). It is a client of the hosted conversation, like the dashboard and the
+app, not a second local chat: a conversation started in the editor is the one
+the others resume. Code: `packages/nightgauge-vscode/src/services/conversation`
+(the client, the stream and the transcript) and
+`packages/nightgauge-vscode/src/views/conversation` (the panel and its page).
+
+- **Which threads.** The panel lists one team's conversations, never filtered
+  by creator or by workspace: the team that owns the window's workspace, else
+  the account's default team. It names the team it lists, and an account on
+  two teams can switch. Any developer, admin or owner of the team can open a
+  thread someone else started and post to it; a viewer can read but not post.
+- **The record.** The panel reads the thread (`GET /v1/conversations/{id}`)
+  and follows its stream (`GET /v1/conversations/{id}/stream`). Messages keep
+  the service's ids and are ordered by its positions; a frame the panel
+  already applied is a no-op, and a `stream.reset` refetches the thread. A
+  human message shows the teammate who posted it. A 404, or a redaction,
+  removes the text from the panel.
+- **Streaming.** A reply renders chunk by chunk as `turn.delta` frames
+  arrive, with the turn's state (queued, sent to the host, answering) and a
+  cancel that reaches the running turn
+  (`POST .../turns/{turnId}/cancel`). Once a turn is terminal no later chunk
+  is appended. The panel never runs a model or spawns a process; the
+  stage-scoped interactive mode is not its transport, and message text only
+  ever travels as the `content` field of a JSON body.
+- **The next turn's profile.** The panel shows the provider, mode and effort
+  the hosted picker (`GET /v1/workspaces?conversation_id=`) reports for the
+  host that would answer you, which may be another teammate's machine, and
+  never this machine's own resolvers. It re-reads the picker every 15
+  seconds, so an adapter or mode change on the host shows within one
+  heartbeat. The provider is the adapter's display name and the mode is the
+  performance mode: `frontier` is a mode and never appears as a provider. A
+  mode or effort the panel does not recognize is shown as received.
+- **The target.** The composer sends a target workspace only when you pick
+  one. Otherwise the turn goes where the service routes it (the thread's
+  previous target) and the panel shows that target. When an untargeted post
+  is refused as ambiguous, or because the previous target can no longer
+  answer, the panel offers the workspaces the refusal lists.
+- **Failures.** Workspace offline, not included in your plan, allowance used
+  up, a failed turn and a disconnected stream each render as their own
+  state, as do a role that cannot post, rate limiting, a full transcript and
+  a full turn queue.
+- **Needs Attention cards.** A card a read tool referenced in a turn
+  (`turn.reference`) shows in the transcript. A developer, admin or owner can
+  act on it, which calls the attention routes as the clicking account and
+  creates no turn; a viewer sees it read only. The control is built from the
+  reference frame, never from model text.
+- **Private.** When the panel creates a conversation it offers a private
+  choice, off by default and never carried over, beside what private does
+  and does not hide (see
+  [TELEMETRY_PRIVACY.md § Private runs](TELEMETRY_PRIVACY.md#private-runs)).
+  The create request sends `visibility`. The panel shows a _Private_ badge
+  only when the service returns the conversation as private, and says so
+  when it does not.
+- **The page.** The webview renders every message, reply and name as text,
+  never as markup or links, under a content security policy that allows only
+  its own script and style and no network access; the extension host makes
+  every request and checks every message the page sends against its own
+  state.

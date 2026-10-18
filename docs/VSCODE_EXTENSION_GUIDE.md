@@ -601,6 +601,7 @@ Commands are organized by function. Access via Command Palette (Cmd+Shift+P / Ct
 | `Nightgauge: Show Settings`            | Cmd+, (in Nightgauge sidebar) | Open extension settings             |
 | `Nightgauge: Show Pipeline Summary`    |                               | Show statistics and metrics         |
 | `Nightgauge: View Context File`        |                               | Display context for current stage   |
+| `Nightgauge: Open Conversation`        |                               | Open the team's conversations       |
 
 ### Configuration & Setup
 

@@ -192,6 +192,7 @@ import { PipelineConnectivityStatusItem } from "../views/PipelineConnectivitySta
 import { DoctorService } from "../views/doctor/DoctorService";
 import { DoctorStatusBarItem } from "../views/doctor/DoctorStatusBarItem";
 import { registerRunDoctorCommand, resolveDoctorAdapters } from "../commands/doctor";
+import { registerOpenConversationCommand } from "../commands/openConversation";
 import { getRepoIdentity } from "../utils/configPathResolver";
 
 import {
@@ -4324,6 +4325,18 @@ export async function initializeServices(
   // command, a (re)connected stream and every session event read it again.
   // The applied throttle is kept per workspace and restored only once the
   // session is authenticated; signing out lifts it.
+  // The chat panel (#1571): the team's hosted conversations, as the
+  // signed-in account. Its team is the one that owns this window's workspace.
+  context.subscriptions.push(
+    registerOpenConversationCommand({
+      getPlatformUrl,
+      tokenRefresher: onDemandTokenRefresher,
+      getWorkspaceSlug: () =>
+        WorkspaceRegistrationPayloadBuilder.build(workspaceManager?.getWorkspaceConfig() ?? null)
+          ?.slug ?? null,
+      logger,
+    })
+  );
   let workspaceThrottleSync: WorkspaceThrottleSync | null = null;
   if (concurrentPipelineManager && agentCommandStreamTokenStorage) {
     workspaceThrottleSync = new WorkspaceThrottleSync(

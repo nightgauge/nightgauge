@@ -9,6 +9,15 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- **A chat panel** (#1571). **Nightgauge: Open Conversation** lists your
+  team's conversations and opens one to read and post, with replies streamed
+  as they are written, a cancel, the profile of the machine that would answer
+  you, a distinct state for each failure, actionable Needs Attention cards for
+  developers and above, and a private choice, off by default, when you create
+  a conversation.
+
 ## [0.7.0] - 2026-10-12
 
 ### Added

@@ -16,6 +16,23 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Added
 
+- **A chat panel in the VS Code extension** (#1571). **Nightgauge: Open
+  Conversation** lists your team's conversations, the same threads the
+  dashboard and the app show, and opens one to read and post. Replies stream
+  in as they are written, with the turn's state and a cancel that reaches the
+  running turn. Each message shows the teammate who posted it, and each turn
+  the workspace it went to. Before you post, the panel shows the provider,
+  mode and effort of the machine that would answer you, which may be a
+  teammate's, and follows a change on that machine within one heartbeat.
+  Workspace offline, not included in your plan, allowance used up, a failed
+  turn and a disconnected stream each show as their own state. A Needs
+  Attention card a turn referenced can be acted on from the transcript by a
+  developer, admin or owner, as themselves; a viewer sees it read only. A new
+  conversation can be made private, off by default; the _Private_ badge shows
+  only when the hosted service confirms it. Everything in the panel is shown
+  as text, never as markup. See
+  [docs/CONVERSATION_TURNS.md § The extension's chat panel](docs/CONVERSATION_TURNS.md#the-extensions-chat-panel).
+
 - **A conversation turn can read the workspace and file an issue, and
   nothing more** (#1570). A turn's model gets the conversation's own tools,
   served to it for that turn alone: it reads files under the workspace root,

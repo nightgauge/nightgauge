@@ -601,6 +601,11 @@ export const MANIFEST_CONTRIBUTES: ManifestContributes = {
       icon: "$(pulse)",
     },
     {
+      command: "nightgauge.openConversation",
+      title: "Nightgauge: Open Conversation",
+      icon: "$(comment-discussion)",
+    },
+    {
       command: "nightgauge.runPipelineHealth",
       title: "Nightgauge: Run Pipeline Health Check",
       icon: "$(heart-filled)",

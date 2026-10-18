@@ -222,6 +222,10 @@ otherwise.
   _Team_ or _Private_, with _Team_ selected. Dismissing the choice cancels the
   start. When the window is not signed in, nothing reaches the hosted service,
   so no choice is offered. From the CLI, `nightgauge run <issue> --private`.
+- **Conversations.** The extension's chat panel offers the same choice when it
+  creates a conversation, off by default and never remembered, and shows its
+  _Private_ badge only when the hosted service confirms it
+  ([CONVERSATION_TURNS.md § The extension's chat panel](CONVERSATION_TURNS.md#the-extensions-chat-panel)).
 - **What owners and admins still see.** That the private run exists and what
   it cost (who started it, when, the model, tokens and cost), for billing and
   audit. Never its content.
