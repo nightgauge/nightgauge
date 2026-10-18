@@ -105,6 +105,11 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- A conversation turn addressed to a workspace this daemon does not serve is
+  now logged ("targets workspace …, which this daemon does not serve")
+  instead of dropped without a trace, so a turn that ends
+  `target_unavailable` can be explained from the daemon's log.
+
 - **`nightgauge doctor` no longer leaves a timed-out check running after
   it returns.** A check that overran its deadline was reported as timed out
   and abandoned, but its work went on in the background: on a machine with

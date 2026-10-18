@@ -2,8 +2,10 @@ package conversation
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"os"
 	"slices"
@@ -577,6 +579,7 @@ func TestTurn_AnotherDaemonsWorkspaceIsLeftAlone(t *testing.T) {
 	hermetic(t)
 	rec := installFakeAdapters(t)
 	fp := newFakePlatform(t)
+	logs := captureLog(t)
 	asked := make(chan string, 1)
 	startDaemon(t, fp, workspace(t, claudeWorkspace), func(c *Config) {
 		c.Owner = func(_ context.Context, agentID, target string) (bool, error) {
@@ -595,6 +598,38 @@ func TestTurn_AnotherDaemonsWorkspaceIsLeftAlone(t *testing.T) {
 	if runs := invocations(t, rec); len(runs) != 0 {
 		t.Errorf("a turn for another workspace ran: %+v", runs)
 	}
+	// Left alone, but said: the only local trace when no daemon serves it.
+	if got := logs.String(); !strings.Contains(got, "turn turn-1 targets workspace ws-1, which this daemon does not serve") {
+		t.Errorf("the unowned turn left no log line; log was:\n%s", got)
+	}
+}
+
+// lockedBuffer is a log destination safe for the daemon's goroutines.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// captureLog sends the standard logger to a buffer for the test's life.
+func captureLog(t *testing.T) *lockedBuffer {
+	t.Helper()
+	b := &lockedBuffer{}
+	prev := log.Writer()
+	log.SetOutput(b)
+	t.Cleanup(func() { log.SetOutput(prev) })
+	return b
 }
 
 func TestServedWorkspaceOwner(t *testing.T) {

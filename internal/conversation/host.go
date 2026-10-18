@@ -388,6 +388,11 @@ func (h *Host) handleTurn(agentID string, pc platform.PendingCommand) {
 		if err != nil || !owned {
 			if err != nil {
 				log.Printf("conversation: turn %s: could not tell whether this daemon serves its workspace — left alone: %v", tc.TurnID, err)
+			} else {
+				// Said, not silent: when no other daemon on the agent serves
+				// the workspace, the hosted service ends the turn at its ack
+				// deadline, and this line is the only local trace of why.
+				log.Printf("conversation: turn %s targets workspace %s, which this daemon does not serve — left for the daemon that does", tc.TurnID, tc.TargetWorkspaceID)
 			}
 			h.release(pc.ID)
 			return
