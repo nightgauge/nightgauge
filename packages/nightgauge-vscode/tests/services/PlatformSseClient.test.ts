@@ -506,6 +506,36 @@ describe("PlatformSseClient", () => {
     });
   });
 
+  describe("404 with onNotFound (#1571)", () => {
+    it("ends the stream for good instead of reconnecting", async () => {
+      vi.useFakeTimers();
+      mockFetch.mockResolvedValue(makeErrorResponse(404));
+      const onNotFound = vi.fn();
+      const { client, onStatusChanged } = makeClient({ onNotFound });
+      client.connect(TEST_URL, TOKEN);
+      await flushMicrotasks(6);
+      expect(onNotFound).toHaveBeenCalledTimes(1);
+      expect(onStatusChanged).toHaveBeenCalledWith("disconnected", "✕ not found");
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      client.dispose();
+    });
+
+    it("still reconnects on 404 when no onNotFound is given", async () => {
+      vi.useFakeTimers();
+      mockFetch
+        .mockResolvedValueOnce(makeErrorResponse(404))
+        .mockResolvedValueOnce(makeOkSseResponse(makeNeverEndingStream()));
+      const { client } = makeClient();
+      client.connect(TEST_URL, TOKEN);
+      await flushMicrotasks(6);
+      await vi.advanceTimersByTimeAsync(1300);
+      await flushMicrotasks(4);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+      client.dispose();
+    });
+  });
+
   describe("reconnect()", () => {
     it("cancels a pending retry timer and immediately reconnects with new token", async () => {
       vi.useFakeTimers();

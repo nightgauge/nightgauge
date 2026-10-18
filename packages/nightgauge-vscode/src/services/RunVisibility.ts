@@ -32,6 +32,15 @@ export const PRIVATE_RUN_DETAIL =
   "that it exists and what it cost, never its content. Work on GitHub (branches, " +
   "pull requests, issues, comments, board moves) follows the repository's permissions.";
 
+/**
+ * The same three facts for a conversation (#1571): the chat panel shows this
+ * beside its private choice when it creates a conversation.
+ */
+export const PRIVATE_CONVERSATION_DETAIL =
+  "Only you can read this conversation on the hosted service. Owners and admins still " +
+  "see that it exists and what it cost, never its content. Work on GitHub (branches, " +
+  "pull requests, issues, comments, board moves) follows the repository's permissions.";
+
 const TEAM_RUN_DETAIL = "Your team can read this run on the hosted service.";
 
 interface VisibilityPickItem extends vscode.QuickPickItem {

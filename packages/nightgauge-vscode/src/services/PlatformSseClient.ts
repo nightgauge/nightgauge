@@ -20,7 +20,8 @@ const JITTER_RATIO = 0.2;
 export type SseStreamStatus = "connected" | "reconnecting" | "disconnected";
 
 export interface PlatformSseClientOptions {
-  context: vscode.ExtensionContext;
+  /** Where the Last-Event-ID cursor is kept: the extension's globalState, or any memento. */
+  context: { globalState: Pick<vscode.Memento, "get" | "update"> };
   logger: Logger;
   /** globalState key for Last-Event-ID cursor persistence */
   lastEventIdKey: string;
@@ -41,9 +42,16 @@ export interface PlatformSseClientOptions {
    * Callers should invoke the platform sign-in command to start device flow.
    */
   onSignInRequired?: () => void;
+  /**
+   * Called when the server answers a connect with 404. When set, a 404 ends
+   * the stream for good instead of reconnecting: the resource is gone or the
+   * caller lost access to it, and retrying would only ask again (#1571).
+   */
+  onNotFound?: () => void;
 }
 
 class SseAuthError extends Error {}
+class SseNotFoundError extends Error {}
 class SseConnectionLimitError extends Error {}
 
 export class PlatformSseClient implements vscode.Disposable {
@@ -77,7 +85,12 @@ export class PlatformSseClient implements vscode.Disposable {
       })
       .catch((err) => {
         if (signal.aborted) return;
-        if (err instanceof SseAuthError) {
+        if (err instanceof SseNotFoundError) {
+          this._abortController = null;
+          this._connected = false;
+          this._opts.onStatusChanged("disconnected", "✕ not found");
+          this._opts.onNotFound?.();
+        } else if (err instanceof SseAuthError) {
           void this._handleAuthError();
         } else if (err instanceof SseConnectionLimitError) {
           this._handleConnectionLimit();
@@ -142,6 +155,10 @@ export class PlatformSseClient implements vscode.Disposable {
 
     if (response.status === 401 || response.status === 403) {
       throw new SseAuthError(`SSE auth failed: ${response.status} ${response.statusText}`);
+    }
+
+    if (response.status === 404 && this._opts.onNotFound) {
+      throw new SseNotFoundError("SSE connect failed: 404");
     }
 
     if (response.status === 429) {

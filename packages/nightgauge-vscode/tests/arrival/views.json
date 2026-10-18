@@ -162,6 +162,13 @@
       "pending": "#746 slice 2 \u2014 non-dashboard webview panels"
     },
     {
+      "id": "src/views/conversation/ConversationPanel.ts",
+      "kind": "webview-panel",
+      "transport": "the hosted conversation routes and stream, through ConversationApi",
+      "arrivalTest": "tests/views/conversation/ConversationPanel.test.ts",
+      "failureFidelity": true
+    },
+    {
       "id": "src/views/notifier/NotifierSettingsPanel.ts",
       "kind": "webview-panel",
       "transport": "ConfigBridge notifier config",
