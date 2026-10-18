@@ -3,6 +3,8 @@
  * AgentCommandStreamService.
  *
  * Flow:
+ *   0. Refuse, acked rejected, a run a conversation turn dispatched unless
+ *      its poster is this host's operator (#1894)
  *   1. Reject if issueNumber is already running (concurrent guard)
  *   2. Fetch the issue's title + labels (best-effort) so the run has a real
  *      branch name and pipeline state
@@ -74,7 +76,26 @@ interface TriggerPayload {
    * requester's own agents.
    */
   visibility?: unknown;
+  /**
+   * Set on a run a conversation turn dispatched (#1894): the turn's id.
+   */
+  conversationTurnId?: unknown;
+  /**
+   * Whether the poster of the dispatching turn is this host's operator
+   * (#1894). A conversation's run runs on this machine's own credential
+   * chain, so it runs only when this is exactly `true`.
+   */
+  posterIsOperator?: unknown;
 }
+
+/**
+ * The public reason a conversation's run is refused when the turn that
+ * dispatched it was not posted by this host's operator (#1894): it would
+ * write to GitHub with the operator's credentials, and no App-only
+ * credential mode for a whole run exists.
+ */
+const OPERATOR_REQUIRED_DETAIL =
+  "operator-required: only this host's operator may start a run from a conversation";
 
 export class TriggerCommandHandler implements CommandHandler {
   private agentId: string | null = null;
@@ -132,6 +153,34 @@ export class TriggerCommandHandler implements CommandHandler {
         "TriggerCommandHandler: invalid trigger payload — need owner, repo, issueNumber",
         { commandId: cmd.id, payload }
       );
+      return;
+    }
+
+    // A run a conversation dispatched runs only for its host's operator
+    // (#1894): checked before anything is fetched or queued, and refused,
+    // acked rejected, on any payload that names a conversation turn or a
+    // poster without saying exactly that the poster is the operator.
+    if (
+      (payload.conversationTurnId !== undefined || payload.posterIsOperator !== undefined) &&
+      payload.posterIsOperator !== true
+    ) {
+      this.logger.warn(
+        "TriggerCommandHandler: a conversation's run not posted by this host's operator — acking as rejected",
+        { commandId: cmd.id, issueNumber: payload.issueNumber }
+      );
+      try {
+        await this.ipcClient.agentAcknowledgeCommand(
+          agentId,
+          cmd.id,
+          "rejected",
+          OPERATOR_REQUIRED_DETAIL
+        );
+      } catch (err) {
+        this.logger.error("TriggerCommandHandler: rejected ack failed", {
+          commandId: cmd.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
       return;
     }
 

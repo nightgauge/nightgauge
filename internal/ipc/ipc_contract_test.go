@@ -229,6 +229,7 @@ var contractTestedMethods = map[string]bool{
 	// Agent
 	"agent.acknowledgeCommand": true, // Issue #3551
 	"agent.queueAdd":           true, // Issue #2440
+	"agent.attachExecutor":     true, // Issue #1894
 	"agent.executionProfile":   true, // Issue #1567
 	// Workflow
 	"workflow.quotaState": true, // Issue #3909
@@ -1850,5 +1851,13 @@ func TestContract_Agent(t *testing.T) {
 		payload := json.RawMessage(`{"agentId":"test-agent","commandId":"test-cmd","payload":{}}`)
 		id := h.sendRequest("agent.queueAdd", payload)
 		assertMethodRegistered(t, h.readResponseFor(id, nil), "agent.queueAdd")
+	})
+
+	t.Run("agent.attachExecutor/registered", func(t *testing.T) {
+		h.bind(t)
+		// The harness speaks the stdio transport, so the attach succeeds
+		// (#1894).
+		id := h.sendRequest("agent.attachExecutor", nil)
+		assertMethodRegistered(t, h.readResponseFor(id, nil), "agent.attachExecutor")
 	})
 }

@@ -32,6 +32,9 @@ type Platform interface {
 	// (#1587): a turn reads and acts on cards only through them.
 	ListTurnCards(ctx context.Context, lease platform.TurnLease, q platform.TurnCardQuery) (platform.TurnCardList, error)
 	ActOnTurnCard(ctx context.Context, lease platform.TurnLease, cardID string, act platform.TurnCardAct) (platform.TurnCardActResult, error)
+	// DispatchTurnRun is the turn-bound run dispatch (#1894): a turn starts
+	// work only through it, and keeps only the handle it returns.
+	DispatchTurnRun(ctx context.Context, lease platform.TurnLease, run platform.TurnRunRequest) (platform.TurnRunHandle, error)
 }
 
 type clientPlatform struct {
@@ -62,6 +65,10 @@ func (p clientPlatform) ReadTurnContext(ctx context.Context, lease platform.Turn
 
 func (p clientPlatform) PostTurnFrames(ctx context.Context, lease platform.TurnLease, frames []platform.TurnFrame) (platform.TurnFramesResult, error) {
 	return p.client.PostTurnFrames(ctx, lease, frames)
+}
+
+func (p clientPlatform) DispatchTurnRun(ctx context.Context, lease platform.TurnLease, run platform.TurnRunRequest) (platform.TurnRunHandle, error) {
+	return p.client.DispatchTurnRun(ctx, lease, run)
 }
 
 func (p clientPlatform) ListTurnCards(ctx context.Context, lease platform.TurnLease, q platform.TurnCardQuery) (platform.TurnCardList, error) {
@@ -104,6 +111,13 @@ type Config struct {
 	// Runs reads the workspace's pipeline runs for the run tools (#1587).
 	// Nil is this machine's own state (tools.LocalRuns).
 	Runs tools.RunSource
+	// Executor reports whether a pipeline executor is attached to this
+	// host, which a dispatched run's trigger is handed to (#1894). Nil is
+	// none, and the operator's dispatch is refused.
+	Executor tools.Executor
+	// Proposals raises a teammate's request for a run as a card for the
+	// host's operator (#1894). Nil refuses a teammate's request.
+	Proposals tools.RunProposals
 }
 
 const (

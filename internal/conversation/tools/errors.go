@@ -57,8 +57,17 @@ const (
 	// carries its code (act_not_permitted, card_outside_target, ...).
 	CodeHostedRefused = "hosted_refused"
 	// CodeDuplicateAct: the turn already made, or tried, this act on this
-	// card.
+	// card, or already asked to start work on this issue.
 	CodeDuplicateAct = "duplicate_act"
+	// CodeNoExecutor: no pipeline executor is attached to this host, so no
+	// run is dispatched (#1894).
+	CodeNoExecutor = "no_executor"
+	// CodeOperatorRequired: only the host's operator may start a run from a
+	// turn, and a teammate's request could not be proposed to them (#1894).
+	CodeOperatorRequired = "operator_required"
+	// CodeProposalFailed: a teammate's request for a run could not be
+	// raised as a card for the host's operator; nothing was started.
+	CodeProposalFailed = "proposal_failed"
 )
 
 func fail(code, msg string) *Error { return &Error{Code: code, Message: msg} }

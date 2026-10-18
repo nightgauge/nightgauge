@@ -115,7 +115,16 @@ func TestBackgroundGitProcessCanOutliveItsParent(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not on PATH")
 	}
-	dir := t.TempDir()
+	// Not t.TempDir(): its cleanup is one RemoveAll, which loses the same
+	// race to the detached gc this test starts, and then fails the test.
+	// gc.Wait() below waits only for the parent; the detached child can keep
+	// writing .git for seconds on a loaded machine. So the cleanup retries the
+	// removal until that child is done, bounded, and never fails the build.
+	dir, err := os.MkdirTemp("", "gittest-background-gc-")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { removeAfterBackgroundGit(t, dir) })
 	Run(t, dir, "init", "-q", "-b", "main")
 	Run(t, dir, "config", "user.email", "race@example.invalid")
 	Run(t, dir, "config", "user.name", "Race")
@@ -162,13 +171,31 @@ func TestBackgroundGitProcessCanOutliveItsParent(t *testing.T) {
 
 	// Caught it alive: race a removal against it right now, the same way
 	// t.TempDir()'s deferred cleanup would.
-	err := os.RemoveAll(dir)
+	err = os.RemoveAll(dir)
 	if err != nil {
 		t.Logf("reproduced #680's failure mode: RemoveAll raced the still-running background gc and lost: %v", err)
 		return
 	}
 	t.Log("RemoveAll happened to win the race this run (gc finished between the poll and the removal) — " +
 		"the mechanism was still observed (gc.pid was present), this is just timing, not a failure")
+}
+
+// removeAfterBackgroundGit removes dir once a detached git child stops
+// writing it: it retries RemoveAll for up to a minute, and only logs a
+// directory it could not remove.
+func removeAfterBackgroundGit(t *testing.T, dir string) {
+	deadline := time.Now().Add(time.Minute)
+	for {
+		err := os.RemoveAll(dir)
+		if err == nil {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Logf("left %s behind: a background git process still held it after a minute: %v", dir, err)
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // TestIsolateProcessDisarmsBackgroundWritersForInheritedGit is the #1293 proof:

@@ -27,6 +27,12 @@ describe("platform agent command wiring in bootstrap/services.ts", () => {
     );
   });
 
+  it("tells the daemon this window executes what it relays (#1894)", () => {
+    expect(servicesSource).toContain(
+      "context.subscriptions.push(attachAsDaemonExecutor(ipcClient, logger))"
+    );
+  });
+
   it("feeds the window's own command stream to the same dispatcher", () => {
     expect(servicesSource).toMatch(
       /new AgentCommandStreamService\([^)]*agentCommandDispatcher,\s*\(\) => void throttleSync\.refresh\(\)\s*\)/

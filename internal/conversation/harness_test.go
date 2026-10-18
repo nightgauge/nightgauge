@@ -365,6 +365,11 @@ type fakePlatform struct {
 	cardCalls []cardCall
 	viewers   map[string]bool
 	other     []string
+	// dispatches are the calls on the turn-bound run dispatch (#1894), and
+	// runs the handles each conversation holds, as the context read
+	// returns them.
+	dispatches []cardCall
+	runs       map[string][]platform.TurnContextRun
 }
 
 // cardCall is one call on a turn-scoped attention route.
@@ -417,6 +422,8 @@ func (fp *fakePlatform) serve(w http.ResponseWriter, r *http.Request) {
 		fp.context(w, r, parts[4])
 	case len(parts) == 6 && parts[3] == "turns" && parts[5] == "frames":
 		fp.frames(w, r, parts[4])
+	case r.Method == http.MethodPost && len(parts) == 6 && parts[3] == "turns" && parts[5] == "runs":
+		fp.dispatch(w, r, parts[4])
 	case r.Method == http.MethodGet && len(parts) == 6 && parts[3] == "turns" && parts[5] == "attention":
 		fp.cards(w, r, parts[4], "")
 	case r.Method == http.MethodPost && len(parts) == 7 && parts[3] == "turns" && parts[5] == "attention":
@@ -460,6 +467,37 @@ func (fp *fakePlatform) cards(w http.ResponseWriter, r *http.Request, turnID, ca
 	card["lifecycle"] = map[string]any{"state": "resolved"}
 	writeJSON(w, http.StatusOK, map[string]any{"request_id": cardID, "verb": body["verb"], "outcome": "resolved",
 		"actor_account_id": t.poster, "executor_agent_id": testAgent, "executor_account_id": "acct-1", "card": card})
+}
+
+// dispatch serves the turn-bound run dispatch on the turn's lease, as the
+// hosted service does: only the turn of the host's operator ("acct-1" here)
+// dispatches; the handle is stored on the conversation.
+func (fp *fakePlatform) dispatch(w http.ResponseWriter, r *http.Request, turnID string) {
+	var body map[string]any
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	fp.mu.Lock()
+	defer fp.mu.Unlock()
+	fp.dispatches = append(fp.dispatches, cardCall{method: r.Method, turnID: turnID,
+		lease: r.Header.Get(platform.TurnLeaseHeader), body: body})
+	t, status, code := fp.leaseFor(r, turnID)
+	if t == nil {
+		writeJSON(w, status, map[string]any{"error": map[string]string{"code": code, "message": "x"}})
+		return
+	}
+	if t.poster != "acct-1" {
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": map[string]string{"code": "OPERATOR_REQUIRED", "message": "x"}})
+		return
+	}
+	issue := int(body["issue_number"].(float64))
+	repo := fmt.Sprintf("%s/%s", body["owner"], body["repo"])
+	runID := fmt.Sprintf("run-%d", len(fp.dispatches))
+	if fp.runs == nil {
+		fp.runs = map[string][]platform.TurnContextRun{}
+	}
+	fp.runs[t.conversation] = append([]platform.TurnContextRun{{RunID: runID, RepoFullName: repo, IssueNumber: &issue}},
+		fp.runs[t.conversation]...)
+	writeJSON(w, http.StatusCreated, map[string]any{"run_id": runID, "command_id": "cmd-run", "repo_full_name": repo,
+		"issue_number": issue})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -544,6 +582,7 @@ func (fp *fakePlatform) context(w http.ResponseWriter, r *http.Request, turnID s
 	writeJSON(w, http.StatusOK, platform.TurnContext{
 		ConversationID: t.conversation, TurnID: t.id,
 		Messages: append([]platform.TurnContextMessage(nil), fp.history[t.conversation]...),
+		Runs:     append([]platform.TurnContextRun(nil), fp.runs[t.conversation]...),
 	})
 }
 

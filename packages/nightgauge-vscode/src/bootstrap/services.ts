@@ -138,7 +138,11 @@ import {
   WorkspaceThrottleSync,
 } from "../services/WorkspaceThrottleSync";
 import { WorkspaceRegistrationPayloadBuilder } from "../services/WorkspaceRegistrationPayloadBuilder";
-import { AgentCommandDispatcher, subscribeToDaemonRelay } from "../services/AgentCommandDispatcher";
+import {
+  AgentCommandDispatcher,
+  attachAsDaemonExecutor,
+  subscribeToDaemonRelay,
+} from "../services/AgentCommandDispatcher";
 import { createRemotePauseUi } from "../utils/pauseUi";
 import { AgentRegistrationService } from "../services/AgentRegistrationService";
 import { IpcClient } from "../services/IpcClient";
@@ -4412,6 +4416,9 @@ export async function initializeServices(
     // platform may place a trigger or verb on the daemon's agent; the daemon
     // relays it here, where pipelines run (#2335).
     context.subscriptions.push(subscribeToDaemonRelay(ipcClient, agentCommandDispatcher));
+    // This window runs what the daemon relays, so the daemon may dispatch a
+    // run a conversation turn starts (#1894).
+    context.subscriptions.push(attachAsDaemonExecutor(ipcClient, logger));
     // A (re)connected stream reads the workspace throttle again: a change
     // another window acknowledged while this one was disconnected is not
     // replayed to it (#2337).

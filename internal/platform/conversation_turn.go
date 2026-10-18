@@ -252,6 +252,9 @@ type TurnContext struct {
 	TurnID         string               `json:"turn_id"`
 	Messages       []TurnContextMessage `json:"messages"`
 	OmittedByClass int                  `json:"omitted_by_class"`
+	// Runs are the runs the thread dispatched (#1894), newest first: each
+	// handle and its last relayed status, never the run's output.
+	Runs []TurnContextRun `json:"runs"`
 }
 
 // TurnContextMessage is one message of the context read, in transcript order.

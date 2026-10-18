@@ -205,6 +205,11 @@ func (s *Server) ApplyRelayedResolve(ctx context.Context, requestID, optionID, a
 	// Bounded like the local path (#1539). This one arrives on the command
 	// consumer's long-lived context, so without a deadline a wedged store would
 	// stall the whole relay stream rather than one card.
+	// A run a teammate proposed in a conversation starts only on this
+	// machine (#1894): the relay cannot tell the operator from a teammate.
+	if err := refuseRelayedRunProposal(store, requestID, optionID); err != nil {
+		return platform.AttentionResolveOutcome{}, err
+	}
 	ctx, cancel := withAttentionDeadline(ctx)
 	defer cancel()
 	res, err := store.Resolve(ctx, requestID, optionID, ipcAttentionActor(actor, actorSurfacePlatform), steerText, "", s)

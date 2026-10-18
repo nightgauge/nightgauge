@@ -984,6 +984,15 @@ export interface AgentQueueAddResult {
 }
 
 /**
+ * Result from agent.attachExecutor (#1894): the daemon now hands a run a
+ * conversation dispatches to this extension, which executes the triggers the
+ * daemon relays.
+ */
+export interface AgentAttachExecutorResult {
+  attached: boolean;
+}
+
+/**
  * Result from agent.executionProfile (#1567): the profile the agent
  * advertises, and whether its adapter can host a conversational turn (false
  * for every adapter until the daemon's turn runner, #1569, serves one that

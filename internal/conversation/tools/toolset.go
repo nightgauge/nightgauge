@@ -70,6 +70,15 @@ type Env struct {
 	// Attention is the hosted service's turn-scoped attention routes, on
 	// this turn's lease. Nil leaves the card tools refusing.
 	Attention Attention
+	// Dispatch is the hosted service's turn-bound run dispatch, on this
+	// turn's lease (#1894). Nil leaves the operator's dispatch refusing.
+	Dispatch RunDispatcher
+	// Executor reports whether a pipeline executor is attached to this
+	// host. Nil is none: the operator's dispatch is refused no_executor.
+	Executor Executor
+	// Proposals raises a teammate's request for a run as a card for the
+	// host's operator. Nil leaves a teammate's request refused.
+	Proposals RunProposals
 }
 
 // Invocation is one tool call the turn made, as the server saw it: the
@@ -109,6 +118,10 @@ type Toolset struct {
 	// card and verb: each is made at most once, so a retry after a timeout
 	// cannot repeat one that landed.
 	actsMade map[string]bool
+	// dispatches counts the runs this turn dispatched or proposed, and
+	// dispatched names their issues: each at most once a turn (#1894).
+	dispatches int
+	dispatched map[string]bool
 }
 
 // NewToolset returns the tools of one turn. A root that cannot be opened
@@ -177,6 +190,8 @@ func (s *Toolset) Call(ctx context.Context, name string, args json.RawMessage) (
 		text, err = s.listAttentionCards(ctx, args)
 	case ToolActOnAttention:
 		text, detail, err = s.actOnAttentionCard(ctx, args)
+	case ToolDispatchRun:
+		text, detail, err = s.dispatchRun(ctx, args)
 	default:
 		err = fail(CodeUnknownTool, "no conversation tool is named "+quoteName(name))
 	}

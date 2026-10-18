@@ -21,6 +21,7 @@ import {
   CONVERSATION_TURN_COMMAND_TYPES,
   QUEUE_ADD_COMMAND_TYPE,
   ROUTER_DELIVERED_COMMAND_TYPES,
+  attachAsDaemonExecutor,
   subscribeToDaemonRelay,
 } from "../../src/services/AgentCommandDispatcher";
 import { TriggerCommandHandler } from "../../src/services/TriggerCommandHandler";
@@ -366,6 +367,33 @@ describe("AgentCommandDispatcher", () => {
       "applied",
       undefined,
     ]);
+  });
+
+  // #1894: the daemon dispatches a conversation's run only once a window
+  // said it executes relayed triggers, and a restarted daemon forgets it.
+  it("tells the daemon it executes relayed triggers, now and on every reconnect", async () => {
+    let onStatus: ((connected: boolean) => void) | undefined;
+    const client = {
+      agentAttachExecutor: vi.fn().mockResolvedValue({ attached: true }),
+      onDidChangeStatus: vi.fn((fn: (connected: boolean) => void) => {
+        onStatus = fn;
+        return { dispose: vi.fn() };
+      }),
+    };
+    const logger = { warn: vi.fn() };
+    const sub = attachAsDaemonExecutor(client as never, logger);
+    expect(client.agentAttachExecutor).toHaveBeenCalledTimes(1);
+    onStatus?.(false);
+    expect(client.agentAttachExecutor).toHaveBeenCalledTimes(1);
+    onStatus?.(true);
+    expect(client.agentAttachExecutor).toHaveBeenCalledTimes(2);
+    expect(typeof sub.dispose).toBe("function");
+
+    // A daemon that predates the call refuses it: logged, nothing thrown.
+    client.agentAttachExecutor.mockRejectedValueOnce(new Error("unknown method"));
+    onStatus?.(true);
+    await settle();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
   it("drops a malformed relay event without acknowledging anything", async () => {

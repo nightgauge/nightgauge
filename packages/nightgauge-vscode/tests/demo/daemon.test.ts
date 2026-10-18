@@ -11,6 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it } from "vitest";
 import type {
+  AgentAttachExecutorResult,
   AnalyticsHealthResult,
   AnalyticsRunsResult,
   AnalyticsTrendsResult,
@@ -156,6 +157,7 @@ const isRecallHit = (h: unknown): boolean =>
   });
 
 const guards: Record<string, (v: unknown) => boolean> = {
+  "agent.attachExecutor": (v): v is AgentAttachExecutorResult => has(v, { attached: bool }),
   "doctor.run": (v): v is DoctorRunResult =>
     has(v, {
       v: (x) => x === 2,

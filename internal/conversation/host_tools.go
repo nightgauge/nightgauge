@@ -60,6 +60,9 @@ func (h *Host) startTools(t *turn, lease platform.TurnLease, p plan, dir string,
 		Forge:     forge,
 		Runs:      runs,
 		Attention: turnAttention{platform: h.cfg.Platform, lease: lease},
+		Dispatch:  turnDispatch{platform: h.cfg.Platform, lease: lease},
+		Executor:  h.cfg.Executor,
+		Proposals: h.cfg.Proposals,
 	}, tools.Turn{
 		ConversationID:   t.cmd.ConversationID,
 		TurnID:           t.cmd.TurnID,
@@ -102,6 +105,18 @@ func (a turnAttention) ListCards(ctx context.Context, q platform.TurnCardQuery) 
 
 func (a turnAttention) ActOnCard(ctx context.Context, cardID string, act platform.TurnCardAct) (platform.TurnCardActResult, error) {
 	return a.platform.ActOnTurnCard(ctx, a.lease, cardID, act)
+}
+
+// turnDispatch is the hosted service's turn-bound run dispatch bound to one
+// turn's lease (#1894): the only way a turn starts work. The lease never
+// leaves the daemon.
+type turnDispatch struct {
+	platform Platform
+	lease    platform.TurnLease
+}
+
+func (d turnDispatch) DispatchRun(ctx context.Context, run platform.TurnRunRequest) (platform.TurnRunHandle, error) {
+	return d.platform.DispatchTurnRun(ctx, d.lease, run)
 }
 
 // close ends the calls in flight, waits for the server to stop, releases

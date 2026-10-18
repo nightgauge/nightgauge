@@ -228,6 +228,9 @@ type Server struct {
 	// from its own agent's stream (agent.queueAdd, #2440). Set by serve when
 	// a platform is configured; nil leaves agent.queueAdd refusing the hand-over.
 	queueAddHandler atomic.Pointer[platform.AgentCommandHandler]
+	// executorAttached is set once the extension on the stdio transport
+	// says it executes the triggers this daemon relays (#1894).
+	executorAttached atomic.Bool
 
 	// readCloudIssue reads an issue added to the queue in the cloud (#2440).
 	// nil reads it from GitHub; tests replace it.
@@ -5905,6 +5908,11 @@ func (s *Server) registerMethods() {
 	// The daemon handles it as it handles one on its own stream.
 	//ipc:method agentQueueAdd params:AgentQueueAddParams result:AgentQueueAddResult
 	s.methods["agent.queueAdd"] = s.handleAgentQueueAdd
+
+	// The extension says it executes the triggers this daemon relays (#1894),
+	// so a conversation may dispatch a run to this host.
+	//ipc:method agentAttachExecutor params:none result:AgentAttachExecutorResult
+	s.methods["agent.attachExecutor"] = s.handleAgentAttachExecutor
 
 	// The execution profile the extension advertises on agent registration and
 	// every heartbeat (#1567). Resolved fresh on each call through the Go

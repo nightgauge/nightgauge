@@ -11,6 +11,12 @@ and this project adheres to
 
 ### Added
 
+- **Runs started from a conversation** (#1894). The extension tells its
+  daemon that it runs the pipelines the daemon relays, so a conversation turn
+  can dispatch a run to this machine. It refuses such a run unless the turn
+  was posted by you, this machine's operator, so a teammate's request never
+  runs on your credentials.
+
 - **A chat panel** (#1571). **Nightgauge: Open Conversation** lists your
   team's conversations and opens one to read and post, with replies streamed
   as they are written, a cancel, the profile of the machine that would answer
