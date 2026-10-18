@@ -3,6 +3,17 @@
   "protocolVersion": 2,
   "methods": [
     {
+      "method": "agent.attachExecutor",
+      "resultType": "AgentAttachExecutorResult",
+      "client": "generated",
+      "surfaces": [
+        "activation > activate() resolves against the fixture workspace",
+        "demo workspace > each file-backed dashboard tab renders a populated row"
+      ],
+      "sampleParams": null,
+      "paramsShape": null
+    },
+    {
       "method": "attention.list",
       "resultType": "AttentionListResult",
       "client": "generated",
@@ -75,7 +86,7 @@
         "repos": [
           "lanternworks/harbor-api"
         ],
-        "since": "2026-10-03T03:27:49.531Z"
+        "since": "2026-10-18T14:21:11.176Z"
       },
       "paramsShape": {
         "repos": [
@@ -349,8 +360,8 @@
         "demo mode > the Runs, Cost and Trends tabs render the daemon's platform data"
       ],
       "sampleParams": {
-        "startDate": "2026-09-26",
-        "endDate": "2026-10-03"
+        "startDate": "2026-10-11",
+        "endDate": "2026-10-18"
       },
       "paramsShape": {
         "endDate": "string",

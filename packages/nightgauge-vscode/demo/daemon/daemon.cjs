@@ -228,6 +228,10 @@ function buildHandlers(state) {
   const totalCost = () => state.history.reduce((sum, h) => sum + Number(h.costUsd || 0), 0);
 
   return {
+    // The extension attaches itself as the executor of conversation
+    // dispatches (#1894) at activation and on reconnect. The demo never
+    // dispatches a run, so taking the window is all there is to answer.
+    "agent.attachExecutor": () => ({ attached: true }),
     "attention.list": (p) => ({
       requests: state.attention
         .filter((a) => !p || !p.repo || a.repo === p.repo)
