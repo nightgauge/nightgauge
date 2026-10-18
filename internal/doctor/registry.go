@@ -217,7 +217,9 @@ type completion struct {
 }
 
 // Run executes every check in reg and returns one result per check, in
-// registration order. Every check context is cancelled before Run returns.
+// registration order. Every check context is cancelled before Run returns,
+// and Run waits for every check goroutine, including one reported as timed
+// out, so no check outlives the call and races whatever runs next.
 func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult {
 	workers := r.Workers
 	if workers <= 0 {
@@ -246,6 +248,7 @@ func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult 
 
 	jobs := make(chan int, n)
 	done := make(chan completion, n)
+	var running sync.WaitGroup // check goroutines, including timed-out ones
 	var wg sync.WaitGroup
 	for w := 0; w < workers && w < n; w++ {
 		wg.Add(1)
@@ -254,7 +257,7 @@ func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult 
 			for idx := range jobs {
 				order.start(idx)
 				r.observe(checks[idx], nil)
-				done <- completion{idx: idx, result: r.runOne(ctx, checks[idx], env)}
+				done <- completion{idx: idx, result: r.runOne(ctx, checks[idx], env, &running)}
 			}
 		}()
 	}
@@ -292,6 +295,8 @@ func (r Runner) Run(ctx context.Context, reg *Registry, env *Env) []CheckResult 
 	}
 	close(jobs)
 	wg.Wait()
+	cancel()
+	running.Wait()
 	return results
 }
 
@@ -326,8 +331,11 @@ func skippedResult(c Check, dep string) CheckResult {
 }
 
 // runOne runs c under its own deadline. A check that overruns it, or panics,
-// yields an NGD000 warning instead of hanging or crashing the command.
-func (r Runner) runOne(ctx context.Context, c Check, env *Env) CheckResult {
+// yields an NGD000 warning instead of hanging or crashing the command. On
+// timeout runOne returns at once and cancels the check's context, but the
+// check's goroutine is counted in running: the caller must wait on it before
+// returning, so a check that ignores its deadline never leaks past the run.
+func (r Runner) runOne(ctx context.Context, c Check, env *Env, running *sync.WaitGroup) CheckResult {
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = r.DefaultTimeout
@@ -343,7 +351,9 @@ func (r Runner) runOne(ctx context.Context, c Check, env *Env) CheckResult {
 		panicked any
 	}
 	ch := make(chan outcome, 1)
+	running.Add(1)
 	go func() {
+		defer running.Done()
 		defer func() {
 			if p := recover(); p != nil {
 				ch <- outcome{panicked: p}

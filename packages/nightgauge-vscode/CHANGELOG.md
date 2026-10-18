@@ -18,6 +18,12 @@ and this project adheres to
   developers and above, and a private choice, off by default, when you create
   a conversation.
 
+### Fixed
+
+- **Webview nonces are cryptographically random.** Every panel's
+  Content-Security-Policy nonce now comes from one `crypto.randomBytes`
+  helper instead of `Math.random`.
+
 ## [0.7.0] - 2026-10-12
 
 ### Added

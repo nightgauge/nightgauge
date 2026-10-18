@@ -15,7 +15,7 @@
 
 import * as vscode from "vscode";
 import { renderGettingStartedHtml } from "./GettingStartedHtml.js";
-import { getNonce } from "../dashboard/DashboardComponents.js";
+import { getNonce } from "../../utils/webviewNonce.js";
 
 /** The onboarding steps a user can trigger from the webview. */
 export type GettingStartedAction = "init" | "pickup" | "docs";

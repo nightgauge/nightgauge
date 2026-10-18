@@ -13,7 +13,7 @@
  */
 
 import * as vscode from "vscode";
-import { getNonce } from "../dashboard/DashboardComponents.js";
+import { getNonce } from "../../utils/webviewNonce.js";
 import type {
   DoctorApplyRemedyResult,
   DoctorFinding,

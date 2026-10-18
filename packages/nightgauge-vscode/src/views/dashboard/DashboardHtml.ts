@@ -37,8 +37,8 @@ import type { HealthCheckReport } from "../../types/pipelineHealth";
 import type { BacktrackRecord, ModelEscalationRecord } from "../../schemas/pipelineState";
 import type { IssueCostAggregation } from "../../utils/executionHistoryReader";
 import type { StageAverageMetrics, StageOutlier } from "./DashboardState";
+import { getNonce } from "../../utils/webviewNonce";
 import {
-  getNonce,
   formatFullDateTime,
   formatRelativeTime,
   formatStageName,

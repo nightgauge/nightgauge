@@ -68,7 +68,5 @@ func TestReadWorktreeBaseSetting_TeamTierIsAnError(t *testing.T) {
 // withMachineConfigPath points the machine tier at path for one test.
 func withMachineConfigPath(t *testing.T, path string) {
 	t.Helper()
-	prev := machineConfigPathFn
-	machineConfigPathFn = func() (string, error) { return path, nil }
-	t.Cleanup(func() { machineConfigPathFn = prev })
+	t.Cleanup(swapMachineConfigPath(func() (string, error) { return path, nil }))
 }

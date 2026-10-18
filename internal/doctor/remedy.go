@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nightgauge/nightgauge/internal/config"
@@ -497,7 +498,9 @@ func (fx *Fixer) Recheck(ctx context.Context, checkID string) (CheckResult, bool
 	if !ok {
 		return CheckResult{}, false
 	}
-	res := fx.Runner.runOne(ctx, fx.Registry.checks[idx], fx.verifyEnv())
+	var running sync.WaitGroup
+	res := fx.Runner.runOne(ctx, fx.Registry.checks[idx], fx.verifyEnv(), &running)
+	running.Wait() // runOne cancelled a timed-out check; do not leak it
 	if fx.latest == nil {
 		fx.latest = map[string]CheckResult{}
 	}

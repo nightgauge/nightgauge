@@ -11,6 +11,7 @@
  * @see docs/ARCHITECTURE.md for WebView patterns
  */
 
+import { getNonce } from "../../utils/webviewNonce";
 import * as vscode from "vscode";
 import type { PipelineStage } from "@nightgauge/sdk";
 import type {
@@ -21,18 +22,6 @@ import type {
   SlotInfo,
 } from "./OutputWindowState";
 import type { ContentType } from "./contentFormatter";
-
-/**
- * Generate nonce for script security
- */
-function getNonce(): string {
-  let text = "";
-  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
-}
 
 /**
  * Escape HTML special characters for security

@@ -251,3 +251,55 @@ func TestRegistryFingerprintIsStable(t *testing.T) {
 		t.Fatal("distinct objects share a fingerprint")
 	}
 }
+
+// leakProbeHook stands in for a package-level test hook such as
+// config.machineConfigPathFn: a check reads it, a later test swaps it.
+var leakProbeHook = func() string { return "original" }
+
+// TestRunnerDoesNotLeakTimedOutChecks: a check that ignores its deadline is
+// reported as timed out, yet Run does not return while it is still running.
+// A check goroutine outliving Run raced every later test that swapped a hook
+// it reads (the orphaned-process scan against config.machineConfigPathFn);
+// under -race the write after Run below is that race.
+func TestRunnerDoesNotLeakTimedOutChecks(t *testing.T) {
+	var returned atomic.Bool
+	reg := NewRegistry()
+	reg.MustRegister(Check{ID: "deaf", Code: "NGD999", Timeout: 20 * time.Millisecond,
+		Run: func(context.Context, *Env) []Finding {
+			time.Sleep(200 * time.Millisecond) // ignores ctx on purpose
+			_ = leakProbeHook()
+			returned.Store(true)
+			return nil
+		}})
+	results := Runner{}.Run(context.Background(), reg, &Env{})
+	if !returned.Load() {
+		t.Error("Run returned while a timed-out check was still running")
+	}
+	prev := leakProbeHook
+	leakProbeHook = func() string { return "swapped" }
+	t.Cleanup(func() { leakProbeHook = prev })
+	if results[0].Status != StatusTimeout {
+		t.Errorf("status = %s, want %s", results[0].Status, StatusTimeout)
+	}
+}
+
+// TestRecheckDoesNotLeakTimedOutCheck: Fixer.Recheck runs one check through
+// the same path and must not leave it running either.
+func TestRecheckDoesNotLeakTimedOutCheck(t *testing.T) {
+	var returned atomic.Bool
+	reg := NewRegistry()
+	reg.MustRegister(Check{ID: "deaf", Code: "NGD999", Timeout: 20 * time.Millisecond,
+		Run: func(context.Context, *Env) []Finding {
+			time.Sleep(200 * time.Millisecond)
+			returned.Store(true)
+			return nil
+		}})
+	fx := &Fixer{Registry: reg, Env: &Env{}}
+	res, ok := fx.Recheck(context.Background(), "deaf")
+	if !ok || res.Status != StatusTimeout {
+		t.Fatalf("Recheck = %+v, %v; want a timeout result", res, ok)
+	}
+	if !returned.Load() {
+		t.Error("Recheck returned while the timed-out check was still running")
+	}
+}

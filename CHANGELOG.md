@@ -93,6 +93,21 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`nightgauge doctor` no longer leaves a timed-out check running after
+  it returns.** A check that overran its deadline was reported as timed out
+  and abandoned, but its work went on in the background: on a machine with
+  a large process table the orphaned-process scan outlived the doctor run
+  and raced whatever ran next, which made `go test -race` under
+  `cmd/nightgauge` fail on a busy machine. The runner now cancels every
+  check and waits for it before returning; the timeout is still reported as
+  NGD000 at its deadline. The machine-config path override tests use is now
+  safe to swap while another goroutine reads it.
+
+- **Every VS Code webview nonce is now cryptographically random.** Eight
+  views built their Content-Security-Policy nonce from `Math.random`, which
+  is predictable; they and the chat panel now share one helper backed by
+  `crypto.randomBytes` (128 bits).
+
 - **The OpenCode canary no longer reports a deprecation as drift** (#2465,
   #2468). Since 2026-10-15 OpenCode's published config schema marks most of
   the keys Nightgauge writes as deprecated, though it still accepts them, and

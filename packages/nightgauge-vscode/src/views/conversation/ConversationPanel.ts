@@ -22,7 +22,8 @@
  * transcript, a target is one the picker or a refusal offered.
  */
 
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { getNonce } from "../../utils/webviewNonce.js";
 import * as vscode from "vscode";
 import type {
   ConversationApi,
@@ -207,7 +208,7 @@ export class ConversationPanel implements vscode.Disposable {
     );
     this.panel.webview.html = renderConversationHtml({
       cspSource: this.panel.webview.cspSource,
-      nonce: randomBytes(16).toString("base64"),
+      nonce: getNonce(),
     });
     this.panel.webview.onDidReceiveMessage(
       (msg) => this.handleMessage(msg),

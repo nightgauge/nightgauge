@@ -12,18 +12,6 @@ import type { BacktrackRecord, ModelEscalationRecord } from "../../schemas/pipel
 import { ORCHESTRATOR_CRASH_TERMINAL_KIND } from "../../utils/orchestratorCrashRecord";
 
 /**
- * Generate nonce for script security
- */
-export function getNonce(): string {
-  let text = "";
-  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-  for (let i = 0; i < 32; i++) {
-    text += possible.charAt(Math.floor(Math.random() * possible.length));
-  }
-  return text;
-}
-
-/**
  * Escape HTML special characters
  */
 export function escapeHtml(text: string): string {
