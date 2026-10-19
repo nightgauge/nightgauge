@@ -305,6 +305,7 @@ fi
 REQUIRED_FILES=(
   go.mod
   scripts/test-ci-local-inventory.sh
+  packages/nightgauge-vscode/tests/vscode-host/launch.ts
   scripts/opencode-integration.sh
   scripts/adapter-cli-pin.sh
   scripts/ci-local-steps.txt
@@ -1710,6 +1711,20 @@ if [ "$GO_SCOPE_RUN" -eq 0 ]; then
 else
   run_step "OpenCode integration (opencode_integration tag)" \
     bash scripts/opencode-integration.sh
+fi
+
+# ci.yml's `vscode-host` job: a real VSCode activates the built extension and
+# plays the demo scenario. `npm run test` is vitest against a mocked `vscode`
+# and can never answer "does the extension come up", so before this step a
+# change could pass the gate and fail that job (#2476, #2478). It loads `dist/`, which
+# step 7 built. Alone, after the groups drain, for the OpenCode step's reason:
+# the demo window plays a timed scenario. Linux needs an X server, as in CI;
+# macOS and Windows open their own windows.
+if [ "$(uname -s)" = "Linux" ] && [ -z "${DISPLAY:-}" ]; then
+  run_step "VSCode host smoke tests" \
+    xvfb-run --auto-servernum npm run -w nightgauge-vscode test:host
+else
+  run_step "VSCode host smoke tests" npm run -w nightgauge-vscode test:host
 fi
 
 # LAST: nothing above changed the developer's machine state (#2311). The
