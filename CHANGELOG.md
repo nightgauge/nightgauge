@@ -105,6 +105,13 @@ changelog, and the release workflow refuses a tag that does not.
 
 ### Fixed
 
+- **`ci-local.sh` runs the VS Code host smoke tests** (#2478). The local gate
+  ran only vitest against a mocked `vscode`, so a change that broke the
+  extension's activation in a real VS Code passed it and failed CI's
+  "VSCode host smoke tests" job. The gate now runs
+  `npm run -w nightgauge-vscode test:host` after the build, alone, under
+  `xvfb-run` on a Linux machine with no display.
+
 - A conversation turn addressed to a workspace this daemon does not serve is
   now logged ("targets workspace …, which this daemon does not serve")
   instead of dropped without a trace, so a turn that ends
