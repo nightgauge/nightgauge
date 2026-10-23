@@ -251,6 +251,18 @@ changelog, and the release workflow refuses a tag that does not.
   be a commit SHA. The check caches each resolved pin, and reports one it
   cannot reach GitHub to check as an infrastructure error, not a pass.
 
+### Security
+
+- **The Go toolchain is 1.26.10** (#2484). It carries the fix for GO-2026-6809
+  (CVE-2026-111943), compromised intermediate certificates no longer
+  distrusted in `crypto/x509`, which govulncheck found reachable from the
+  stub provider's TLS server.
+- **`vite` is 8.3.5** (#2484). 8.0.16 carried a high-severity
+  `launch-editor` command-injection advisory (GHSA-587h-7wmj-h5pm) that the
+  `npm audit` gate blocks on, plus two lower-severity `launch-editor` and
+  two Vite server advisories. All five are fixed in 8.3.5; Dependabot alerts
+  #21–#23 tracked the first three.
+
 ## [0.7.0] - 2026-10-12
 
 ### Added
