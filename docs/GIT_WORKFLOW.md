@@ -1056,9 +1056,11 @@ done
 #     key comes from the release session's environment, never a file or log:
 curl -s https://www.virustotal.com/api/v3/files -H "x-apikey: $VT_API_KEY" -F file=@/tmp/rel/extension.cjs
 
-#     The owner's part: opening a report can demand a reCAPTCHA, which only a
-#     human completes, and an automated session may be refused permission to
-#     submit to VirusTotal. Either way the release owner does that part; the
+#     Who submits: the owner has authorized the release session to submit
+#     the release URLs to VirusTotal itself (browser automation) and read the
+#     reports, so it does that rather than handing the URLs over. The owner's
+#     part is only what a session cannot do: a reCAPTCHA, which only a human
+#     completes, or a refused permission. Then the owner does that part; the
 #     session neither works around it nor skips the file.
 
 #     Record three things from EVERY report (each VSIX, each binary, each
