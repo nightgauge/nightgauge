@@ -1246,7 +1246,7 @@ surface at all. The observed report was "I restarted autonomous and everything
 stopped."
 
 **Exactly one layer tells, and it is `HeadlessOrchestrator`'s pre-flight gate**
-(`packages/nightgauge-vscode/src/utils/adapterAuthNotice.ts`), not
+(`packages/nightgauge/src/utils/adapterAuthNotice.ts`), not
 `ConcurrentPipelineManager`. The gate has the structured failures — adapter name
 and the SDK's per-adapter `suggestedFix` — where the halt path has only a
 composed error string; it covers manual runs as well as queued ones; and it is

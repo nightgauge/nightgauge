@@ -878,7 +878,7 @@ they share one version.
 
 ### Version Rules
 
-- **NEVER set different versions** across `nightgauge-vscode` and
+- **NEVER set different versions** across `nightgauge` and
   `nightgauge-sdk` — they must match
 - Version is always derived from the git tag — never hardcode release versions
   in package.json (the base version `0.1.0` is a placeholder)
@@ -1011,7 +1011,7 @@ gh run list --workflow=release.yml --limit 1
 #    afterwards that the release carries every asset and its attestations verify:
 gh release view v0.2.0 --json assets --jq '.assets[].name'
 gh release download v0.2.0 -p 'nightgauge-darwin-arm64-*.vsix' -D /tmp/rel
-gh attestation verify /tmp/rel/nightgauge-vscode-darwin-arm64-*.vsix --owner nightgauge
+gh attestation verify /tmp/rel/nightgauge-darwin-arm64-*.vsix --owner nightgauge
 
 # 9a. Multi-engine scan BEFORE any registry sees the files. release.yml's
 #     ClamAV step is one engine; a registry reviewer reads VirusTotal, where
@@ -1091,7 +1091,7 @@ gh run watch
 #     Open VSX can take minutes to serve a new version after the publish
 #     workflow reports success, so wait and re-check; never re-publish.
 npx --yes @vscode/vsce@3.9.2 show nightgauge.nightgauge --json | jq '.versions[]|{version,targetPlatform}'
-curl -s https://open-vsx.org/api/nightgauge/nightgauge-vscode | jq '{version,preRelease}'
+curl -s https://open-vsx.org/api/nightgauge/nightgauge | jq '{version,preRelease}'
 
 # 12. Bring every other channel to the same version the same day. release.yml
 #     opened the Homebrew cask pull request: check its sha256s against the
@@ -1103,7 +1103,7 @@ bash scripts/verify-release-channels.sh --channel homebrew
 #     confirm the page shows the new version, the demo the repository README
 #     shows (tests/listingParity.test.ts holds the two together), and the
 #     changelog. The website's demo is checked the same way.
-open https://open-vsx.org/extension/nightgauge/nightgauge-vscode
+open https://open-vsx.org/extension/nightgauge/nightgauge
 ```
 
 A release is finished when steps 9a to 13 are done, not when the tag is
@@ -1170,7 +1170,7 @@ Benefits of environments even without upper-tier infrastructure:
 source of truth for what a release contains. It follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/): one `## [Unreleased]`
 section at the top, then one `## [X.Y.Z] - YYYY-MM-DD` section per released
-tag, newest first, with compare links at the bottom. `packages/nightgauge-vscode/CHANGELOG.md`
+tag, newest first, with compare links at the bottom. `packages/nightgauge/CHANGELOG.md`
 is the extension-facing excerpt the Marketplace renders; it names every
 version the root names and carries the subset an extension user can see.
 
@@ -1340,13 +1340,13 @@ go test ./...
 
 # 2. Generated files must be in sync (pre-commit hook checks this; CI is the backstop)
 make generate-ipc-client
-git diff --exit-code packages/nightgauge-vscode/src/services/IpcClient.generated.ts
+git diff --exit-code packages/nightgauge/src/services/IpcClient.generated.ts
 
 # 3. TypeScript build (catches type errors)
-npm run -w packages/nightgauge-vscode build
+npm run -w packages/nightgauge build
 
 # 4. TypeScript tests (use `vitest run`, NOT bare `vitest` which hangs in watch mode)
-npx -w packages/nightgauge-vscode vitest run
+npx -w packages/nightgauge vitest run
 
 # 5. SDK tests (if SDK changes were made)
 npx -w @nightgauge/sdk vitest run
@@ -1382,13 +1382,13 @@ minutes, most of it re-verifying code you did not touch.
 
 Climb the cheapest rung that can answer the question in front of you:
 
-| Rung         | Command                                               | Use it when                             |
-| ------------ | ----------------------------------------------------- | --------------------------------------- |
-| **Targeted** | `npx -w packages/nightgauge-vscode vitest run <file>` | Fixing a failure you can already name   |
-|              | `go test ./internal/<pkg>/`                           | Same, on the Go side                    |
-| **Package**  | `npm run test -w packages/nightgauge-vscode`          | Discovering what a batch of edits broke |
-|              | `go test ./internal/...`                              | Same, when the edits were in Go         |
-| **Gate**     | `bash scripts/ci-local.sh`                            | Once, immediately before `git push`     |
+| Rung         | Command                                        | Use it when                             |
+| ------------ | ---------------------------------------------- | --------------------------------------- |
+| **Targeted** | `npx -w packages/nightgauge vitest run <file>` | Fixing a failure you can already name   |
+|              | `go test ./internal/<pkg>/`                    | Same, on the Go side                    |
+| **Package**  | `npm run test -w packages/nightgauge`          | Discovering what a batch of edits broke |
+|              | `go test ./internal/...`                       | Same, when the edits were in Go         |
+| **Gate**     | `bash scripts/ci-local.sh`                     | Once, immediately before `git push`     |
 
 **Discovery needs breadth, but rarely the whole repo.** Some checks are
 repo-wide by design and will not fire from the test file you edited —

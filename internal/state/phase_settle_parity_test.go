@@ -9,7 +9,7 @@ import (
 // Parity tests (#1885 AC5): the Go/CLI path (this package's BeginPhase /
 // CompleteStage / CompleteStageWithCost) must produce the same status
 // sequence for a replayed marker stream that
-// packages/nightgauge-vscode/src/utils/phaseTracker.ts's onPhaseDetected /
+// packages/nightgauge/src/utils/phaseTracker.ts's onPhaseDetected /
 // completeStagePhases produce on the extension/IPC path for the equivalent
 // scenario, so the two paths cannot silently drift apart again:
 //

@@ -162,7 +162,7 @@ func parseMode(s string) PerformanceMode {
 // Registry tier BANDS, and their capability order strongest → weakest. This is
 // the Go side's one tier ladder: internal/orchestrator's downgradeLadder and
 // NormalizeModelTier are defined from it, and it mirrors
-// TIER_BANDS_STRONGEST_FIRST in packages/nightgauge-vscode/src/utils/skillRunner.ts.
+// TIER_BANDS_STRONGEST_FIRST in packages/nightgauge/src/utils/skillRunner.ts.
 // The NAME spellings derive from models.Band* (#582) — the ORDER declared
 // below remains this file's authority.
 const (
@@ -228,7 +228,7 @@ func TierRank(model string) int {
 // within, plus the mode's EFFORT bounds and THINKING policy (spike #568
 // §4.1.3: envelopes are `(rung floor, rung ceiling, effort ceiling, thinking
 // policy)`). Mirrors ModeEnvelope in
-// packages/nightgauge-vscode/src/utils/modeProfiles.ts, INCLUDING the effort
+// packages/nightgauge/src/utils/modeProfiles.ts, INCLUDING the effort
 // fields that table already declared (`effortCeiling` on efficiency,
 // `effortFloor` on maximum) — before #581 the Go mirror silently dropped
 // them, so the wire-effort resolution (dispatch_envelope.go) had no clamp to
@@ -268,7 +268,7 @@ type modeProfile struct {
 }
 
 // modeProfiles is the ONE performance-mode table on the Go side, and a mirror
-// of MODE_PROFILES (packages/nightgauge-vscode/src/utils/modeProfiles.ts) —
+// of MODE_PROFILES (packages/nightgauge/src/utils/modeProfiles.ts) —
 // including the part that is easy to get wrong: **only `maximum` pins.**
 //
 // #19 converted `efficiency` and `frontier` from per-stage pins to `[floor,

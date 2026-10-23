@@ -125,7 +125,7 @@ func onDemandPlatformEndpoint(flagURL string, cfg *config.Config) string {
 // true: a stored credential is not an opt-in on its own.
 //
 // There is no config-file source for the API key: the VSCode extension's
-// PlatformConfigSchema (packages/nightgauge-vscode/src/config/schema.ts)
+// PlatformConfigSchema (packages/nightgauge/src/config/schema.ts)
 // has no platform.api_key field, only platform.api_url and
 // platform.license_key — so the API key comes from NIGHTGAUGE_API_KEY only;
 // the --api-key flag was removed because it put the key on argv (ADR-024 § 5).

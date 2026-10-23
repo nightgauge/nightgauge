@@ -31,7 +31,7 @@
     "backfill-model:dry-run": "tsx scripts/backfill-complexity-model.ts --dry-run",
     "estimate-epic": "tsx scripts/estimate-epic.ts",
     "generate:ipc": "make generate-ipc-client",
-    "mock-server": "npm run mock-server -w packages/nightgauge-vscode"
+    "mock-server": "npm run mock-server -w packages/nightgauge"
   },
   "author": {
     "name": "nightgauge"

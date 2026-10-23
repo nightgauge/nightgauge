@@ -21,7 +21,7 @@ Each file under `.claude/rules/` loads when Claude reads a matching path:
   `internal/**`, `.nightgauge/**`
 - `.claude/rules/sdk.md`: `packages/nightgauge-sdk/**`
 - `.claude/rules/skills.md`: `skills/**`
-- `.claude/rules/vscode-extension.md`: `packages/nightgauge-vscode/**`
+- `.claude/rules/vscode-extension.md`: `packages/nightgauge/**`
 
 ## Claude Code: subagent models
 

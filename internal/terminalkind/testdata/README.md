@@ -40,7 +40,7 @@ first:
 
 - `internal/terminalkind/corpus_test.go`
 - `packages/nightgauge-sdk/tests/analysis/health/terminalKind.corpusParity.test.ts`
-- `packages/nightgauge-vscode/tests/services/terminalKindSignal.corpusParity.test.ts`
+- `packages/nightgauge/tests/services/terminalKindSignal.corpusParity.test.ts`
 
 ### What is actually pinned
 

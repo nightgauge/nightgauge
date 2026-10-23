@@ -135,7 +135,7 @@ capabilities:
     surfaces: [vscode]
     docs: [docs/VSCODE_EXTENSION_GUIDE.md]
     owns:
-      - packages/nightgauge-vscode/src/**
+      - packages/nightgauge/src/**
     depends_on: [issue-to-pr-pipeline, attention-action-center]
 
   - id: sdk-embedding

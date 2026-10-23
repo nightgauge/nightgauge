@@ -25,7 +25,7 @@ const RemotePinMaxModelBytes = 200
 
 // remotePinAdapters is the allow-list: the adapter ids the extension
 // dispatches (its ExecutionAdapter enum, AdapterEnumSchema in
-// packages/nightgauge-vscode/src/config/schema.ts), because a requested pin is
+// packages/nightgauge/src/config/schema.ts), because a requested pin is
 // executed there. `claude` is the id, not the Go registry's `claude-headless`.
 // Each one also resolves in adapters.NewRegistry(), which supplies Agentic and
 // ValidateModel. TestRemotePinAllowListMatchesTheExtension fails when the two

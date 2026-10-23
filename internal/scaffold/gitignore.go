@@ -5,7 +5,7 @@
 //
 // nightgauge.gitignore is the canonical .nightgauge/.gitignore. The binary
 // embeds it; the VS Code extension carries the same text as GITIGNORE_CONTENT
-// in packages/nightgauge-vscode/src/utils/ensureGitignore.ts. They cannot
+// in packages/nightgauge/src/utils/ensureGitignore.ts. They cannot
 // drift silently: TestGitignoreTemplateMatchesCommittedCopy pins this file to
 // the repository's own committed .nightgauge/.gitignore, and the extension's
 // ensureGitignore.test.ts pins GITIGNORE_CONTENT to both. Change the rules in

@@ -3156,7 +3156,7 @@ What that leaves, and it is deliberate:
   reason about, so it is not one Go acts on.
 - **The extension's activation sweep is still the only thing that touches a
   legacy name**, gated by name first in `runtimeSweepVerdict`
-  (`packages/nightgauge-vscode/src/utils/runtimeStubSweep.ts`):
+  (`packages/nightgauge/src/utils/runtimeStubSweep.ts`):
   `LEGACY_RUNTIME_FILE` is the only pattern it may delete, and a new-scheme name
   is kept whatever its body says. The ADR's claim that this filter was "narrowed
   to the new-scheme regex" describes the plan, not the tree.
@@ -4733,7 +4733,7 @@ older bundle, silently, because that is what is installed.
 
 Neither of these two implementations orders versions at all. Versions survive
 only as opaque display strings inside diagnostics. (A third selector still
-does: `packages/nightgauge-vscode/src/utils/extensionBundle.ts` ranks surviving
+does: `packages/nightgauge/src/utils/extensionBundle.ts` ranks surviving
 sibling bundles by the last dotted component when the running `extensionPath`
 has been garbage-collected. It answers a different question, inside the
 extension process, and is outside the #277 parity contract — but it is not
@@ -8066,7 +8066,7 @@ distinguished after the fact; no migration is offered.
   and `TestSynthesizeOrchestratorCrashRecord_NeverFabricatesABranch`
   (`internal/orchestrator/`).
 - Real captured records live in
-  `packages/nightgauge-vscode/tests/fixtures/undetermined-branch/`, regenerated
+  `packages/nightgauge/tests/fixtures/undetermined-branch/`, regenerated
   by `scripts/capture-undetermined-branch-fixture.sh`.
 
 ### Modernize — Assessment Aggregation

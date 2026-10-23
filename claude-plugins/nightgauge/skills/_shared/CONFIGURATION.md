@@ -5,7 +5,7 @@ Pipeline skills read configuration from `.nightgauge/config.yaml`.
 **Full reference**: See `docs/CONFIGURATION.md` for the complete configuration
 guide including the 6-tier precedence chain, all config options, and examples.
 
-**Schema definition**: `packages/nightgauge-vscode/src/config/schema.ts`
+**Schema definition**: `packages/nightgauge/src/config/schema.ts`
 
 **Key config sections by stage**:
 

@@ -279,8 +279,8 @@ trigger, not an override.
 
 The run-record schema is spelled out in exactly one place —
 `scripts/discovery-run-record.py` — and read in exactly one place,
-`packages/nightgauge-vscode/src/services/DiscoveryActivityService.ts`. The
-arrival test at `packages/nightgauge-vscode/tests/arrival/dashboardDiscoveryTab.test.ts`
+`packages/nightgauge/src/services/DiscoveryActivityService.ts`. The
+arrival test at `packages/nightgauge/tests/arrival/dashboardDiscoveryTab.test.ts`
 runs the real script, publishes the result through the real state branch, syncs
 it into a second checkout and asserts the values reach the rendered tab, so a
 field renamed on either side turns red rather than silently emptying the tab.

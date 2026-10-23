@@ -628,7 +628,7 @@ type jsNode struct {
 
 func loadTSDefaultConfig(t *testing.T, root string) map[string]*jsNode {
 	t.Helper()
-	rel := filepath.Join("packages", "nightgauge-vscode", "src", "config", "schema.ts")
+	rel := filepath.Join("packages", "nightgauge", "src", "config", "schema.ts")
 	src := readRepoFile(t, root, rel)
 
 	const marker = "export const DEFAULT_CONFIG"

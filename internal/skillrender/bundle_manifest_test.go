@@ -13,7 +13,7 @@ import (
 // TestGoAndTypeScriptAgreeOnSkillRootOrder already uses to pin the root order
 // against skillRunner.ts — the two halves of a contract live in two languages,
 // so the guard has to reach across.
-const bundleScript = "../../packages/nightgauge-vscode/scripts/bundle-marketplace.sh"
+const bundleScript = "../../packages/nightgauge/scripts/bundle-marketplace.sh"
 
 // TestBundleShipsEverySkillTheGoDirectPathRenders is the guard #1029 needed and
 // did not have.

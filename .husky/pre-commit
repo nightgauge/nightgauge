@@ -9,10 +9,10 @@ echo "🔍 Pre-commit: Validating generated files..."
 # 1. Check IPC client
 echo "  ⚡ Checking IPC client..."
 make generate-ipc-client
-if ! git diff --exit-code packages/nightgauge-vscode/src/services/IpcClient.generated.ts > /dev/null 2>&1; then
+if ! git diff --exit-code packages/nightgauge/src/services/IpcClient.generated.ts > /dev/null 2>&1; then
   echo "  ❌ ERROR: IpcClient.generated.ts is out of sync"
   echo "     Run: make generate-ipc-client"
-  echo "     Then: git add packages/nightgauge-vscode/src/services/IpcClient.generated.ts"
+  echo "     Then: git add packages/nightgauge/src/services/IpcClient.generated.ts"
   exit 1
 fi
 
@@ -35,10 +35,10 @@ fi
 
 # 4. Check VSCode package contributions
 echo "  🎨 Checking VSCode package contributions..."
-if ! npx -w packages/nightgauge-vscode tsx scripts/generate-package-contributions.ts --check; then
+if ! npx -w packages/nightgauge tsx scripts/generate-package-contributions.ts --check; then
   echo "  ❌ ERROR: package.json contributions are out of sync"
-  echo "     Run: npx -w packages/nightgauge-vscode tsx scripts/generate-package-contributions.ts"
-  echo "     Then: git add packages/nightgauge-vscode/package.json"
+  echo "     Run: npx -w packages/nightgauge tsx scripts/generate-package-contributions.ts"
+  echo "     Then: git add packages/nightgauge/package.json"
   exit 1
 fi
 

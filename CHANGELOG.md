@@ -112,6 +112,10 @@ changelog, and the release workflow refuses a tag that does not.
   new ID; a leftover `nightgauge.nightgauge-vscode-*` directory is ignored by
   binary resolution, `nightgauge doctor` and the hooks.
 
+- **The extension source moved to `packages/nightgauge`.** It was
+  `packages/nightgauge-vscode`; run its scripts with
+  `npm run -w packages/nightgauge <script>`.
+
 ### Fixed
 
 - **A Marketplace name collision fails the VSIX publish.** The publish step
@@ -122,7 +126,7 @@ changelog, and the release workflow refuses a tag that does not.
   ran only vitest against a mocked `vscode`, so a change that broke the
   extension's activation in a real VS Code passed it and failed CI's
   "VSCode host smoke tests" job. The gate now runs
-  `npm run -w nightgauge-vscode test:host` after the build, alone, under
+  `npm run -w packages/nightgauge test:host` after the build, alone, under
   `xvfb-run` on a Linux machine with no display.
 
 - A conversation turn addressed to a workspace this daemon does not serve is

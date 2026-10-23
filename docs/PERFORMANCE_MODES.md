@@ -3,7 +3,7 @@
 A performance mode is the envelope that every stage's model and effort are
 chosen within. Each implementation holds one table of modes: `modeProfiles` in
 `internal/intelligence/routing/performance_mode.go` for the Go scheduler, and
-`MODE_PROFILES` in `packages/nightgauge-vscode/src/utils/modeProfiles.ts` for
+`MODE_PROFILES` in `packages/nightgauge/src/utils/modeProfiles.ts` for
 the extension. The two tables mirror each other.
 
 ## Modes

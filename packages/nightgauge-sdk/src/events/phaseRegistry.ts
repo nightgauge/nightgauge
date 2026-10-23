@@ -18,7 +18,7 @@
  * | --- | --- | --- |
  * | **Skill markers** | `<!-- phase:start … -->` in skill output, parsed by the extension's `streamOutputHandler` → `PhaseTracker` | every stage on its LLM path |
  * | **Go deterministic reporter** | `internal/orchestrator/deterministic_phases.go` (`newDeterministicPhaseReporter`), passed to the runners via `stages.WithPhaseReporter` | `pr-merge`, `pr-create` on their deterministic Go paths (#1247 / PR #1398), and the `pr-stage` CLI route (PR #1408) |
- * | **TS deterministic reporter** | `packages/nightgauge-vscode/src/utils/deterministicPhases.ts` (`createDeterministicPhaseReporter`), writing through `PipelineStateService` | `issue-pickup` on the extension's deterministic-first path, `ContextAssembler.generateDeterministicContext` (#1534) |
+ * | **TS deterministic reporter** | `packages/nightgauge/src/utils/deterministicPhases.ts` (`createDeterministicPhaseReporter`), writing through `PipelineStateService` | `issue-pickup` on the extension's deterministic-first path, `ContextAssembler.generateDeterministicContext` (#1534) |
  * | **Phase inference** | `phaseInference.ts` `STAGE_RULES` and its Go mirror `internal/execution/phase_inference.go` | `feature-dev`, `feature-planning`, and `feature-validate` (#1850) — LLM stages whose markers the model routinely skips |
  *
  * A path that reports NOTHING is not neutral: the tree seeds this registry's

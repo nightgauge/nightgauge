@@ -12,7 +12,7 @@ import "strings"
 // Source of truth: evals/variants/behavioral-preamble.json (.prepend),
 // pinned by preamble_test.go. The TS mirrors carry the same text
 // (packages/nightgauge-sdk/src/orchestrator/behavioralPreamble.ts,
-// packages/nightgauge-vscode/src/utils/behavioralPreamble.ts), each with
+// packages/nightgauge/src/utils/behavioralPreamble.ts), each with
 // its own sync test.
 const BehavioralPreamble = "When you have enough information to act, act — do not re-derive established facts or survey options you will not pursue. If you are weighing a choice, give a recommendation, not an exhaustive survey. Lead with the outcome: state what you did or found first, with supporting detail after. Before finishing, verify your work against the stated requirements, and report outcomes faithfully — if a build or test fails, say so with the output rather than smoothing it over; when something is done and verified, state it plainly without hedging."
 

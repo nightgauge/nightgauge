@@ -98,7 +98,7 @@ a cheap infinite loop is stopped quickly.
 
 ### How It Works
 
-`ProgressMonitor` (in `packages/nightgauge-vscode/src/utils/progressMonitor.ts`)
+`ProgressMonitor` (in `packages/nightgauge/src/utils/progressMonitor.ts`)
 tracks five signal types:
 
 | Signal type     | When recorded                                          |
@@ -276,7 +276,7 @@ path as stall-kill (30m backoff, board→Ready, no lifetime-failure-cap incremen
 exists only as uncommitted changes in the worktree, and **every** guard kill
 lands on work nothing downstream can see.
 
-`preserveWorkInProgress` (`packages/nightgauge-vscode/src/utils/`) closes that
+`preserveWorkInProgress` (`packages/nightgauge/src/utils/`) closes that
 hole. Every kill path — progress-runaway, idle-stall, hard-cap, quota fast-fail,
 autonomous abort — funnels through skillRunner's single process-close handler,
 which calls it whenever the stage was killed by a guard (`shouldPreserveWorkOnExit`)

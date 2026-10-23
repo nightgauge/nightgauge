@@ -21,7 +21,7 @@ import (
 
 // reInvocation finds `nightgauge` in command position: at the start of a
 // line or after a shell operator, `$(`, or a backtick. A `nightgauge` inside a
-// word (`nightgauge-vscode`, `nightgauge:baseline`) is not an invocation.
+// word (`nightgauge`, `nightgauge:baseline`) is not an invocation.
 var reInvocation = regexp.MustCompile("(?:^|[\\s;|&(`]|\\$\\()nightgauge[ \\t]+")
 
 // reSubcommandWord is a word shaped like a subcommand name; a placeholder or

@@ -148,7 +148,7 @@ if [[ "$SMOKE" == "0" ]]; then
   fi
 fi
 
-PKG="$ROOT/packages/nightgauge-vscode"
+PKG="$ROOT/packages/nightgauge"
 if [[ -n "${CLEAN_INSTALL_VSIX:-}" ]]; then
   step "using the supplied VSIX (CLEAN_INSTALL_VSIX)"
   VSIX="$CLEAN_INSTALL_VSIX"
@@ -174,9 +174,9 @@ cat > "$PKG/dist/build-info.json" <<JSON
 }
 JSON
 bash "$PKG/scripts/check-runtime-assets.sh" "$PKG/dist"
-rm -f "$PKG"/nightgauge-vscode-*"$VSCE_TARGET"*.vsix
+rm -f "$PKG"/nightgauge-*"$VSCE_TARGET"*.vsix
 (cd "$PKG" && npx @vscode/vsce package --no-dependencies --target "$VSCE_TARGET" >/dev/null)
-VSIX="$(ls -t "$PKG"/nightgauge-vscode-*"$VSCE_TARGET"*.vsix | sed -n 1p)"
+VSIX="$(ls -t "$PKG"/nightgauge-*"$VSCE_TARGET"*.vsix | sed -n 1p)"
 fi
 bash "$PKG/scripts/check-runtime-assets.sh" "$VSIX"
 cp "$VSIX" "$RUN_DIR/vsix/"

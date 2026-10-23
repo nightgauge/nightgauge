@@ -238,7 +238,7 @@ jobs:
         run: npm run test -- --run
 
       - name: Inject release version
-        working-directory: packages/nightgauge-vscode
+        working-directory: packages/nightgauge
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: npm version "$VERSION" --no-git-tag-version --allow-same-version
@@ -251,7 +251,7 @@ jobs:
       # ExtensionStalenessService stuck in `state: "unknown"` on the
       # installed extension. legacy issue 3650 (Part B).
       - name: Build extension (pre-package)
-        working-directory: packages/nightgauge-vscode
+        working-directory: packages/nightgauge
         run: npm run build
 
       # Legacy issues 3300 / 3650: stamp build provenance so ExtensionStalenessService
@@ -264,7 +264,7 @@ jobs:
         env:
           BUILD_BRANCH: ${{ github.ref_name }}
         run: |
-          DIST=packages/nightgauge-vscode/dist
+          DIST=packages/nightgauge/dist
           BUILD_SHA=$(git rev-parse HEAD)
           COMMIT_TIMESTAMP=$(git log -1 --format=%cI HEAD)
           BUILD_TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -278,7 +278,7 @@ jobs:
           }
           EOF_BUILD_INFO
           echo "Stamped: $BUILD_SHA ($BUILD_BRANCH @ $COMMIT_TIMESTAMP)"
-          bash packages/nightgauge-vscode/scripts/check-build-info.sh \
+          bash packages/nightgauge/scripts/check-build-info.sh \
             "$DIST/build-info.json"
 
       # Package one .vsix PER VS Code target, each bundling the matching binary
@@ -287,7 +287,7 @@ jobs:
       # correct one per user automatically. A single universal .vsix would ship
       # one arch and fail to launch the backend on every other platform.
       - name: Package per-target VSIXs
-        working-directory: packages/nightgauge-vscode
+        working-directory: packages/nightgauge
         run: |
           set -euo pipefail
           # vsce target -> Makefile binary suffix (GOOS-GOARCH)
@@ -330,7 +330,7 @@ jobs:
       # bundled binary before GoReleaser hands them to consumers — and must NOT
       # ship source maps or type declarations (.vscodeignore drift).
       - name: Verify VSIX contents
-        working-directory: packages/nightgauge-vscode
+        working-directory: packages/nightgauge
         env:
           # Non-empty only when a signing certificate is configured, so the
           # assertion is strict on a real release and informational otherwise.
@@ -404,7 +404,7 @@ jobs:
           freshclam --quiet
           bash scripts/malware-scan.sh \
             --report "$RUNNER_TEMP/clamav-report.json" \
-            packages/nightgauge-vscode/*.vsix bin/
+            packages/nightgauge/*.vsix bin/
 
       - name: Upload malware scan report
         if: always()
@@ -423,7 +423,7 @@ jobs:
       - name: Restore working tree for GoReleaser
         run: |
           set -euo pipefail
-          git checkout -- package-lock.json packages/nightgauge-vscode/package.json
+          git checkout -- package-lock.json packages/nightgauge/package.json
           DIRTY="$(git status --porcelain --untracked-files=no)"
           if [ -n "$DIRTY" ]; then
             echo "::error::Working tree still dirty before GoReleaser — it refuses to release. Modified:"
@@ -486,8 +486,8 @@ jobs:
       - name: Add VSIX checksums
         run: |
           set -euo pipefail
-          for vsix in packages/nightgauge-vscode/*.vsix; do
-            sha256sum "$vsix" | sed 's#  packages/nightgauge-vscode/#  #'
+          for vsix in packages/nightgauge/*.vsix; do
+            sha256sum "$vsix" | sed 's#  packages/nightgauge/#  #'
           done >> dist/checksums.txt
           sort -k2,2 -o dist/checksums.txt dist/checksums.txt
 
@@ -510,7 +510,7 @@ jobs:
           echo "Attached combined checksums.txt and CLI archive manifest.json"
 
       - name: Attach VSIXs to GitHub Release
-        working-directory: packages/nightgauge-vscode
+        working-directory: packages/nightgauge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.version.outputs.tag }}
@@ -538,7 +538,7 @@ jobs:
         if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: packages/nightgauge-vscode/*.vsix
+          subject-path: packages/nightgauge/*.vsix
 
       # FINAL STEP. GoReleaser only PROPOSES the cask (a pull request on the
       # tap, .goreleaser.yml), so the release is not complete until that pull

@@ -460,7 +460,7 @@ func TestScheduler_RecordV2History_WorktreeIsolatedRun_PersistsRealBranch(t *tes
 //     value ("") that is supposed to mean something specific. Note what this
 //     reason is NOT: both TypeScript readers tolerate an absent key as of #397
 //     (`branch: z.string().default("")` on the V1/V2 schemas in
-//     packages/nightgauge-vscode/src/schemas/executionHistory.ts, V3 extends
+//     packages/nightgauge/src/schemas/executionHistory.ts, V3 extends
 //     V2; and DashboardState.importParsedRunRecord's
 //     `typeof parsed.branch === "string" ? parsed.branch : ""` coercion), which
 //     is precisely why the WRITER has to keep the two shapes apart. Every

@@ -237,7 +237,7 @@ const sampleDecisionsForEnumerate = `# Decisions: #42
 
 **Status**: Proposed
 **Context**: Lives in packages/foo/bar.ts.
-**Decision**: Mutate the file at packages/nightgauge-vscode/src/x.ts.
+**Decision**: Mutate the file at packages/nightgauge/src/x.ts.
 **Consequences**: replace this placeholder
 **Tags**: vscode, extension
 

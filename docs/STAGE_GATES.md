@@ -419,5 +419,5 @@ local gate (`scripts/ci-local.sh`) enforce the isolation with
   gates after `RunStage` returns success
 - `internal/state/history.go` — `StageGateResult` and `V2StageDetail.GateResults`
 - `cmd/nightgauge/gate.go` — the CLI subcommand
-- `packages/nightgauge-vscode/src/services/HeadlessOrchestrator.ts`
+- `packages/nightgauge/src/services/HeadlessOrchestrator.ts`
   (`verifyPostMergeState`) — the TS shim that delegates to the binary

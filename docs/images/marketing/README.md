@@ -4,12 +4,12 @@ Every file in this directory is produced by one command and is safe to delete
 and regenerate:
 
 ```bash
-npm run -w packages/nightgauge-vscode marketing:screenshots            # everything
-npm run -w packages/nightgauge-vscode marketing:screenshots -- cards   # Discord + Slack only
-npm run -w packages/nightgauge-vscode marketing:screenshots -- dashboard
+npm run -w packages/nightgauge marketing:screenshots            # everything
+npm run -w packages/nightgauge marketing:screenshots -- cards   # Discord + Slack only
+npm run -w packages/nightgauge marketing:screenshots -- dashboard
 ```
 
-The generator lives in `packages/nightgauge-vscode/scripts/marketing/`.
+The generator lives in `packages/nightgauge/scripts/marketing/`.
 Commit the regenerated PNGs alongside the change that altered them, the same
 way the Marketplace README screenshots are committed — the marketing site
 copies from here and never renders at build time.

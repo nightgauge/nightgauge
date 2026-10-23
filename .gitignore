@@ -38,7 +38,7 @@ bin/
 # committed — it is a pure function of the installed dependency tree.
 /THIRD_PARTY_NOTICES
 packages/nightgauge-sdk/THIRD_PARTY_NOTICES
-packages/nightgauge-vscode/THIRD_PARTY_NOTICES
+packages/nightgauge/THIRD_PARTY_NOTICES
 
 # NOT ignored on purpose: a stray `nightgauge` or `seed` binary built into the
 # repo ROOT is a mistake, not build output. `make build-cli` writes
@@ -123,7 +123,7 @@ answer-log-*.md
 # Nested .nightgauge directories (should never exist in packages/)
 packages/**/.nightgauge/
 # ...except the committed demo workspace fixture (#2107).
-!packages/nightgauge-vscode/demo/workspace/.nightgauge/
+!packages/nightgauge/demo/workspace/.nightgauge/
 # ...nor in Go package directories, where `go test` runs with the package
 # as its cwd: a committed internal/orchestrator/.nightgauge/ let the GitHub API
 # ledger write into the source tree on every run (#2171).
@@ -132,7 +132,7 @@ cmd/**/.nightgauge/
 # ...except the VSCode host smoke tier's committed fixture (#745). It is inert
 # test data, copied into a throwaway temp workspace mid-run — never runtime
 # state, and never read from this location by the extension.
-!packages/nightgauge-vscode/tests/fixtures/vscode-host/populated/.nightgauge/
+!packages/nightgauge/tests/fixtures/vscode-host/populated/.nightgauge/
 
 # Pipeline debug logs (may be large)
 nightgauge-output-*.json

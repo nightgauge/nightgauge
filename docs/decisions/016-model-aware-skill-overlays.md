@@ -60,7 +60,7 @@ Meanwhile the tree says:
 - [`model-registry.json`](../../packages/nightgauge-sdk/src/eval/model-registry.json)
   has no `claude-opus-5` entry, so `claude-opus-4-8` still holds the
   `anthropic/opus` band and every opus-routed stage selects the previous model.
-- [`stageResolver.ts`](../../packages/nightgauge-vscode/src/utils/resolvers/stageResolver.ts)
+- [`stageResolver.ts`](../../packages/nightgauge/src/utils/resolvers/stageResolver.ts)
   defines `ClaudeEffort = "low" | "medium" | "high" | "xhigh"`. The `max` tier
   does not exist in our type, our config validators, or `supported_efforts`.
 - There is no thinking/effort interlock anywhere, so an `xhigh` + thinking-disabled
@@ -206,7 +206,7 @@ expansion (existing behavior), overlay resolution, and emits the composed skill.
 
 Both consumers call it rather than reimplementing it:
 
-- the extension's [`skillRunner.ts`](../../packages/nightgauge-vscode/src/utils/skillRunner.ts)
+- the extension's [`skillRunner.ts`](../../packages/nightgauge/src/utils/skillRunner.ts)
   (replacing its local `findSkillFile` + include-expansion path), and
 - the `claude-plugins/nightgauge` slash-command wrappers, which today read
   `SKILL.md` directly and would otherwise be permanently overlay-blind.

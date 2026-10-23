@@ -131,7 +131,7 @@ Checklist:
 
 - [ ] Go binary (`cmd/nightgauge/`) — New commands or flags?
 - [ ] SDK (`packages/nightgauge-sdk/`) — New modules or changes to existing?
-- [ ] VSCode extension (`packages/nightgauge-vscode/`) — UI changes?
+- [ ] VSCode extension (`packages/nightgauge/`) — UI changes?
 - [ ] Skills (`skills/`) — Updates to SKILL.md frontmatter, config, or logic?
 - [ ] Config (`docs/CONFIGURATION.md`) — New config options?
 - [ ] Tests — New test files or extensive test rewrites?

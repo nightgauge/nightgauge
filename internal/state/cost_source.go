@@ -3,7 +3,7 @@ package state
 // Cost-source vocabulary for V2StageTokens.CostSource / StageResult.CostSource
 // (Issue #682, extended by #890). Mirrors the TypeScript
 // `cost_source: z.enum([...]).optional()` in
-// packages/nightgauge-vscode/src/schemas/executionHistory.ts — Go is the sole
+// packages/nightgauge/src/schemas/executionHistory.ts — Go is the sole
 // writer of this field, TypeScript is the only validator, so the two
 // vocabularies must never drift. TestHistorySchemaParity_StageTokens (in
 // history_schema_parity_test.go) pins the FIELD NAME across both languages;

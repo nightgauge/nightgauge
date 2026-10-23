@@ -399,7 +399,7 @@ func TestWriteStageExitRecord_ForwardsRecentBash(t *testing.T) {
 		LastBashCommand: "true",
 		LastBashExit:    &ok,
 		RecentBash: []diagnostics.RecentBashEntry{
-			{Cmd: "npm run -w nightgauge-vscode vitest run", Exit: &failed},
+			{Cmd: "npm run -w packages/nightgauge vitest run", Exit: &failed},
 			{Cmd: "true", Exit: &ok},
 		},
 	}
@@ -425,7 +425,7 @@ func TestWriteStageExitRecord_ForwardsRecentBash(t *testing.T) {
 		t.Fatalf("len(RecentBash) = %d, want 2", len(got.RecentBash))
 	}
 	// The evidence the single slot could not carry.
-	if got.RecentBash[0].Cmd != "npm run -w nightgauge-vscode vitest run" {
+	if got.RecentBash[0].Cmd != "npm run -w packages/nightgauge vitest run" {
 		t.Errorf("RecentBash[0].Cmd = %q", got.RecentBash[0].Cmd)
 	}
 	if got.RecentBash[0].Exit == nil || *got.RecentBash[0].Exit != 1 {

@@ -91,7 +91,7 @@ func setupCleanBranchMock() *mockCmdRunner {
 	m.set("gitleaks detect --source . --log-opts origin/main..HEAD --no-banner", "", fmt.Errorf("not found"))
 	m.set("git diff --unified=0 origin/main...HEAD", "no secrets here", nil)
 	// Static checks: IPC file doesn't exist (no error from git diff --exit-code)
-	m.set("git diff --exit-code packages/nightgauge-vscode/src/services/IpcClient.generated.ts", "", nil)
+	m.set("git diff --exit-code packages/nightgauge/src/services/IpcClient.generated.ts", "", nil)
 	return m
 }
 

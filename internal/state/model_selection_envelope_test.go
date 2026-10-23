@@ -97,7 +97,7 @@ func TestBuildV2Record_ModelSelectionEnvelopeWireKeys(t *testing.T) {
 	keys := slices.Sorted(maps.Keys(got))
 	if !reflect.DeepEqual(keys, want) {
 		t.Errorf("model_selection wire keys = %q, want %q.\n"+
-			"packages/nightgauge-vscode/src/schemas/executionHistory.ts "+
+			"packages/nightgauge/src/schemas/executionHistory.ts "+
 			"(HistoryStageDetailSchema.model_selection) must declare exactly these keys; a "+
 			"renamed or dropped json tag on V2ModelSelect (internal/state/history.go) costs "+
 			"every record with a populated envelope its strict parse.",
@@ -114,7 +114,7 @@ func TestBuildV2Record_ModelSelectionEnvelopeWireKeys(t *testing.T) {
 // model_selection, relative to this package directory (go test runs with
 // cwd = the package dir).
 var tsExecutionHistorySchemaPath = filepath.Join(
-	"..", "..", "packages", "nightgauge-vscode", "src", "schemas", "executionHistory.ts",
+	"..", "..", "packages", "nightgauge", "src", "schemas", "executionHistory.ts",
 )
 
 // tsModelSelectionEffortFieldRegexp requires the model_selection.effort field
@@ -252,7 +252,7 @@ func TestModelSelectionThinkingPinnedToExecutionHistorySchema(t *testing.T) {
 //
 // Unlike thinking, mode has a pre-existing cross-language authority to derive
 // from: ModelRoutingModeSchema in
-// packages/nightgauge-vscode/src/config/schema.ts, the same enum
+// packages/nightgauge/src/config/schema.ts, the same enum
 // `model_routing.mode` config validation already uses. executionHistory.ts's
 // model_selection.mode field derives from it directly (see the `mode` field
 // comment there), so the only remaining hand-listed copy on the Go side is
@@ -265,7 +265,7 @@ func TestModelSelectionThinkingPinnedToExecutionHistorySchema(t *testing.T) {
 // ModelRoutingModeSchema, relative to this package directory (go test runs
 // with cwd = the package dir).
 var tsModelRoutingModeSchemaPath = filepath.Join(
-	"..", "..", "packages", "nightgauge-vscode", "src", "config", "schema.ts",
+	"..", "..", "packages", "nightgauge", "src", "config", "schema.ts",
 )
 
 // tsModelRoutingModeLiteralRegexp lifts `export const ModelRoutingModeSchema

@@ -306,16 +306,16 @@ maintainer only runs it and attaches what it writes.
   `scripts/doctor-guided-repair.tape`, a GIF and an MP4, or with asciinema when
   vhs is not installed.
 - **Doctor panel themes and keyboard (#2099).** After
-  `npm run -w packages/nightgauge-vscode build`:
+  `npm run -w packages/nightgauge build`:
 
   ```bash
-  npm run -w packages/nightgauge-vscode demo:doctor-screenshots
+  npm run -w packages/nightgauge demo:doctor-screenshots
   ```
 
   It opens a demo window (its own profile and the demo daemon's fictional
   findings) in the light, dark and high-contrast themes in turn, and prompts for
   each capture, including a keyboard-only fix of a housekeeping item in the
-  first. `npm run -w packages/nightgauge-vscode demo -- --theme <name>` opens one demo
+  first. `npm run -w packages/nightgauge demo -- --theme <name>` opens one demo
   window in a theme by hand.
 
 ## Finding codes

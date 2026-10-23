@@ -371,8 +371,8 @@ the buffered items are dropped, not sent. The extension asks before every
 upload cycle.
 
 See
-[`RedactionService`](../packages/nightgauge-vscode/src/services/RedactionService.ts),
-[`pipelineRunV4Mapper`](../packages/nightgauge-vscode/src/services/telemetry/pipelineRunV4Mapper.ts)
+[`RedactionService`](../packages/nightgauge/src/services/RedactionService.ts),
+[`pipelineRunV4Mapper`](../packages/nightgauge/src/services/telemetry/pipelineRunV4Mapper.ts)
 and
 [`execution_history_mapper.go`](../internal/platform/execution_history_mapper.go).
 

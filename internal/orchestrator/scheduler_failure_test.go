@@ -691,7 +691,7 @@ func TestDequeueIndependentSkipsPaused(t *testing.T) {
 // The sidecar has no branch field at all, so this writer never knows one; "" is
 // the record saying exactly that. Asserted here rather than only through the
 // committed capture in
-// packages/nightgauge-vscode/tests/fixtures/undetermined-branch/crash-record.jsonl:
+// packages/nightgauge/tests/fixtures/undetermined-branch/crash-record.jsonl:
 // a static fixture cannot fail when the Go writer regresses, it only goes stale.
 func TestSynthesizeOrchestratorCrashRecord_NeverFabricatesABranch(t *testing.T) {
 	now := time.Now().UTC()

@@ -102,8 +102,8 @@
         ],
         "platform": ["POST /v1/pipelines/trigger"]
       },
-      "implementation_guide": "packages/nightgauge-vscode/src/services/PipelineService.ts",
-      "test_guide": "packages/nightgauge-vscode/tests/services/PipelineService.test.ts"
+      "implementation_guide": "packages/nightgauge/src/services/PipelineService.ts",
+      "test_guide": "packages/nightgauge/tests/services/PipelineService.test.ts"
     },
     {
       "id": "pipelines.async",
@@ -160,8 +160,8 @@
         "flutter": ["EpicScreen", "EpicService"],
         "platform": ["GET /v1/github/epics", "GET /v1/github/board/items"]
       },
-      "implementation_guide": "packages/nightgauge-vscode/src/views/",
-      "test_guide": "packages/nightgauge-vscode/tests/views/"
+      "implementation_guide": "packages/nightgauge/src/views/",
+      "test_guide": "packages/nightgauge/tests/views/"
     },
     {
       "id": "queue.manage",
@@ -181,8 +181,8 @@
           "POST /v1/queue/reorder"
         ]
       },
-      "implementation_guide": "packages/nightgauge-vscode/src/services/QueueService.ts",
-      "test_guide": "packages/nightgauge-vscode/tests/services/QueueService.test.ts"
+      "implementation_guide": "packages/nightgauge/src/services/QueueService.ts",
+      "test_guide": "packages/nightgauge/tests/services/QueueService.test.ts"
     },
     {
       "id": "team.view_members",

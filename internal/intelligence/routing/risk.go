@@ -7,7 +7,7 @@
 // dangerous — and exactly where the downstream verification gates (#4097,
 // #4098, #4099) must still run. isHighRisk is the single source of truth shared
 // by derive.go and coercion.go; the TypeScript mirror lives in
-// packages/nightgauge-vscode/src/utils/changeAnalyzer.ts (isHighRisk).
+// packages/nightgauge/src/utils/changeAnalyzer.ts (isHighRisk).
 //
 // The signal is LABEL-based only — no diff/blast-radius information is plumbed
 // into the Derive path. Over-classification is intentionally safe: it only adds
@@ -22,7 +22,7 @@ import (
 
 // riskKeywords are matched as case-insensitive substrings against each raw
 // label slug. MUST stay byte-identical to RISK_KEYWORDS in
-// packages/nightgauge-vscode/src/utils/changeAnalyzer.ts.
+// packages/nightgauge/src/utils/changeAnalyzer.ts.
 var riskKeywords = []string{
 	"security",
 	"auth",

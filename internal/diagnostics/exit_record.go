@@ -63,7 +63,7 @@ type RecentBashEntry struct {
 // ToolCallRecord is one observed tool_use/tool_result pair, as captured by
 // the TS SkillRunner's stream parser for every tool (not just Bash). It
 // mirrors the TS ToolCallRecordSchema wire shape
-// (packages/nightgauge-vscode/src/schemas/executionHistory.ts) minus the
+// (packages/nightgauge/src/schemas/executionHistory.ts) minus the
 // `args`/`caller` fields, which no reader consumes yet and which would add
 // unnecessary wire surface. Issue #144.
 //

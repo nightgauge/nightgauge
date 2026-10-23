@@ -79,7 +79,7 @@ SCAN_PREFIXES = (
     "internal/",
     "cmd/",
     "packages/nightgauge-sdk/src/",
-    "packages/nightgauge-vscode/src/",
+    "packages/nightgauge/src/",
     "scripts/",
 )
 SCAN_SUFFIXES = (".go", ".ts")
@@ -128,7 +128,7 @@ ALLOWLIST: dict[str, str] = {
     # User-facing picker labels for the SURVIVING band config vocabulary
     # (`pipeline.stage_models` values): per-band prose in an exhaustive switch
     # typed against StageModelChoice, which derives from TIER_BANDS.
-    "packages/nightgauge-vscode/src/commands/selectPerformanceMode.ts": (
+    "packages/nightgauge/src/commands/selectPerformanceMode.ts": (
         "user-facing band labels, type-anchored"
     ),
 }

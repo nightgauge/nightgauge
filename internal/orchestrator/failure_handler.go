@@ -39,7 +39,7 @@ const OutcomeTypeDeferred = "deferred"
 // stopped the run", failure_category = "who is to blame for reliability".
 //
 // Mirrors TS TerminalFailureKindSchema in
-// packages/nightgauge-vscode/src/schemas/executionHistory.ts.
+// packages/nightgauge/src/schemas/executionHistory.ts.
 const (
 	TerminalKindStallKill = "stall_kill"
 	// TerminalKindOperatorStop is set when the SCHEDULER killed the stage —

@@ -32,8 +32,8 @@ operations, and silently overwrites teammate-shared values with single-developer
 preferences.
 
 This document classifies every settings key from three orthogonal sources
-(`packages/nightgauge-vscode/package.json` `contributes.configuration`,
-`packages/nightgauge-vscode/src/config/schema.ts` Zod schema, and
+(`packages/nightgauge/package.json` `contributes.configuration`,
+`packages/nightgauge/src/config/schema.ts` Zod schema, and
 `.nightgauge/config.yaml` at HEAD) into exactly one of three tiers:
 
 | Tier        | Storage location                                     | Committed? | One-line rule                                                                                                                                                                                              |
@@ -72,7 +72,7 @@ will consume.
 > gitignored), which the original chain omitted entirely. The chain below is
 > the implemented one; both the Go loader (`internal/config/merge.go`
 > `LoadMerged`) and the TS engine
-> (`packages/nightgauge-vscode/src/config/configMergeEngine.ts`
+> (`packages/nightgauge/src/config/configMergeEngine.ts`
 > `mergeConfigs`) enforce it, and `docs/CONFIGURATION.md` documents it as the
 > canonical 7-tier model.
 
@@ -104,7 +104,7 @@ The remedies shipped since: runtime tier + `RuntimeStateStore` (phase 2),
 machine-tier routing for identity/credential keys (phase 4), and — completing
 the epic — the settings UI's default write target is now the **local tier**,
 and all synchronous resolver reads go through the tier-merged view
-(`packages/nightgauge-vscode/src/utils/mergedConfigReader.ts`), so
+(`packages/nightgauge/src/utils/mergedConfigReader.ts`), so
 machine/local values apply uniformly to every key, including inside pipeline
 worktrees (the TS `WorktreeManager` copies `config.local.yaml` into each new
 worktree, mirroring the Go path).
@@ -469,7 +469,7 @@ Every key whose **Current Location** differs from **Target Tier**. Phase 5 of
 | `nightgauge.readyItems.showDependencies`        | VSCode user/workspace settings  | Runtime | Same.                                                                                                                                                                                                                                           |
 
 **Deprecation marker**: phase 5 also marks the migrated keys as deprecated in
-`packages/nightgauge-vscode/src/config/schema.ts` with a one-or-two minor
+`packages/nightgauge/src/config/schema.ts` with a one-or-two minor
 version warn-on-load grace period before removal (epic #3313, "Technical
 Notes").
 

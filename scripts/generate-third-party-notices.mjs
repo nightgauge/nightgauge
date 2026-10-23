@@ -27,14 +27,14 @@ const ROOT_NODE_MODULES = path.join(REPO_ROOT, "node_modules");
 // Packages whose runtime (production) dependencies are actually shipped.
 const SHIPPED_PACKAGES = [
   path.join(REPO_ROOT, "packages", "nightgauge-sdk"),
-  path.join(REPO_ROOT, "packages", "nightgauge-vscode"),
+  path.join(REPO_ROOT, "packages", "nightgauge"),
 ];
 
 // Where to write the generated notice.
 const OUTPUT_TARGETS = [
   path.join(REPO_ROOT, "THIRD_PARTY_NOTICES"),
   path.join(REPO_ROOT, "packages", "nightgauge-sdk", "THIRD_PARTY_NOTICES"),
-  path.join(REPO_ROOT, "packages", "nightgauge-vscode", "THIRD_PARTY_NOTICES"),
+  path.join(REPO_ROOT, "packages", "nightgauge", "THIRD_PARTY_NOTICES"),
 ];
 
 const LICENSE_FILENAMES = [
@@ -128,7 +128,7 @@ while (queue.length) {
   const { name, from } = queue.shift();
   // Skip our own workspace packages — their deps are seeded directly above and
   // their source is first-party (covered by the repo LICENSE/NOTICE).
-  if (name.startsWith("@nightgauge/") || name === "nightgauge-vscode") {
+  if (name.startsWith("@nightgauge/") || name === "nightgauge") {
     const dir = resolvePackageDir(name, from);
     if (dir) {
       const pkg = readJson(path.join(dir, "package.json"));

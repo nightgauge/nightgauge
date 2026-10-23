@@ -123,7 +123,7 @@ jobs:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
         run: |
           set -euo pipefail
-          PUBLISHER=$(node -p "require('./packages/nightgauge-vscode/package.json').publisher")
+          PUBLISHER=$(node -p "require('./packages/nightgauge/package.json').publisher")
           [[ -n "${VSCE_PAT:-}" ]] || { echo "::error::VSCE_PAT secret is not set"; exit 1; }
           # Azure DevOps intermittently times out /_apis/securityroles (seen on
           # the v0.4.0 publish, #1599). A transient timeout is not a bad PAT,
@@ -144,7 +144,7 @@ jobs:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
           set -euo pipefail
-          NAMESPACE=$(node -p "require('./packages/nightgauge-vscode/package.json').publisher")
+          NAMESPACE=$(node -p "require('./packages/nightgauge/package.json').publisher")
           [[ -n "${OVSX_PAT:-}" ]] || { echo "::error::OVSX_PAT secret is not set"; exit 1; }
           # Same transient-timeout retry as the Marketplace step above.
           for attempt in 1 2 3 4 5; do
@@ -163,7 +163,7 @@ jobs:
       # packages with the same channel resolver (marketplace-channel.sh), so
       # the pre-release flag vsce bakes in at package time is already right.
       - name: Download the release's VSIXs and checksums
-        working-directory: packages/nightgauge-vscode
+        working-directory: packages/nightgauge
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
@@ -182,7 +182,7 @@ jobs:
       # the tag's version and channel in its manifest. Any mismatch stops the
       # run before a single registry call.
       - name: Verify digest, provenance and channel of each VSIX
-        working-directory: packages/nightgauge-vscode
+        working-directory: packages/nightgauge
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
@@ -227,7 +227,7 @@ jobs:
       # `secrets.VSCE_PAT`.
       - name: Publish per-target VSIXs to VS Code Marketplace
         if: ${{ inputs.registries == 'marketplace' || inputs.registries == 'both' }}
-        working-directory: packages/nightgauge-vscode
+        working-directory: packages/nightgauge
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
           VERSION: ${{ steps.version.outputs.version }}
@@ -254,7 +254,7 @@ jobs:
 
       - name: Publish per-target VSIXs to Open VSX
         if: ${{ inputs.registries == 'open-vsx' || inputs.registries == 'both' }}
-        working-directory: packages/nightgauge-vscode
+        working-directory: packages/nightgauge
         env:
           OVSX_PAT: ${{ secrets.OVSX_PAT }}
           VERSION: ${{ steps.version.outputs.version }}

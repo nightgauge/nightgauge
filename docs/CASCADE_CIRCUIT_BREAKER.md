@@ -120,7 +120,7 @@ unify both onto a single Discord notifier so an operator who's set up
 the webhook gets pinged for either trigger.
 
 The allowlist of safety triggers that fan out to Discord lives in
-`packages/nightgauge-vscode/src/commands/autonomousCommands.ts` as
+`packages/nightgauge/src/commands/autonomousCommands.ts` as
 `CASCADE_PAUSE_TRIGGERS`:
 
 ```ts
@@ -172,11 +172,11 @@ When you see a `safety:cascading-failures` pause:
 - `internal/orchestrator/autonomous.go` — wiring at onPipelineComplete +
   Resume + struct field
 - `internal/orchestrator/autonomous_cascade_test.go` — 7 integration tests
-- `packages/nightgauge-vscode/src/services/DiscordService.ts` —
+- `packages/nightgauge/src/services/DiscordService.ts` —
   `notifySafetyPause` method
-- `packages/nightgauge-vscode/src/commands/autonomousCommands.ts` —
+- `packages/nightgauge/src/commands/autonomousCommands.ts` —
   `CASCADE_PAUSE_TRIGGERS`, `setAutonomousSafetyNotifier`
-- `packages/nightgauge-vscode/src/bootstrap/services.ts` — bootstrap
+- `packages/nightgauge/src/bootstrap/services.ts` — bootstrap
   wiring
 
 ---

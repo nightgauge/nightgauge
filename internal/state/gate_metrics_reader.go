@@ -11,7 +11,7 @@ import (
 
 // gateMetricRecord is the raw JSONL record format written by the TypeScript
 // feature-validate stage. Mirrors GateMetricRecordSchema from
-// packages/nightgauge-vscode/src/schemas/gateMetrics.ts.
+// packages/nightgauge/src/schemas/gateMetrics.ts.
 type gateMetricRecord struct {
 	SchemaVersion   string  `json:"schema_version"`
 	Timestamp       string  `json:"timestamp"`

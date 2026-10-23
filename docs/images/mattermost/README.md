@@ -11,7 +11,7 @@ follow-up PR.
 1. **Mattermost prerequisites**: a Mattermost v9+ server with system-admin
    access and one notification channel (e.g. `town-square`).
 2. **Extension prerequisites**: install the local build via
-   `./packages/nightgauge-vscode/scripts/dev-install.sh` and reload the
+   `./packages/nightgauge/scripts/dev-install.sh` and reload the
    VSCode window. The extension reads SecretStorage at startup, so an
    un-configured fresh state is required for the wizard screenshots.
 3. **Tool**: native macOS screenshot (`Cmd+Shift+4` → space → click window)

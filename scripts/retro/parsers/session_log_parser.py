@@ -2,7 +2,7 @@
 session_log_parser.py — Parser for per-issue pipeline session log files.
 
 Log format (canonical source):
-    packages/nightgauge-vscode/src/utils/log-file-writer.ts
+    packages/nightgauge/src/utils/log-file-writer.ts
 
 Each line follows the pattern:
     [ISO-8601] [LEVEL] [STAGE] [#N] MESSAGE
@@ -148,7 +148,7 @@ class SessionLogParser:
     Parser for Nightgauge pipeline session log files.
 
     Canonical log format is defined in:
-        packages/nightgauge-vscode/src/utils/log-file-writer.ts
+        packages/nightgauge/src/utils/log-file-writer.ts
 
     Log line format:
         [ISO-8601] [LEVEL] [STAGE] [#N] MESSAGE

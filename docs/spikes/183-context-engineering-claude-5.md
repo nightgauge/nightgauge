@@ -173,7 +173,7 @@ interface and does not need restating.
 **Important correction to the naive assumption that splitting a skill into
 `_includes/` reduces injected-token cost.** Both runtimes'
 `<!-- include: path -->` mechanism (`internal/execution/skill.go`
-`expandIncludes`, line 156–162; `packages/nightgauge-vscode/src/utils/skillRunner.ts`
+`expandIncludes`, line 156–162; `packages/nightgauge/src/utils/skillRunner.ts`
 `expandIncludes`, line 1720) inlines the referenced file's full content into
 the prompt **at read time**, unconditionally — this comment-directive form
 is expanded eagerly regardless of which phase eventually fires. Content

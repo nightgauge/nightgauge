@@ -354,12 +354,12 @@ Binding per surface:
   `on("attention.event")` channel `IpcClientBase` already dispatches, the same
   channel that streams pipeline progress). They enter the typed client via the
   mandatory `make generate-ipc-client` step →
-  `packages/nightgauge-vscode/src/services/IpcClient.generated.ts`. The UI is a
+  `packages/nightgauge/src/services/IpcClient.generated.ts`. The UI is a
   new `nightgauge.attentionView` (contributed in `package.json`
   `contributes.views`, constructed with `createTreeView` in
-  `packages/nightgauge-vscode/src/bootstrap/services.ts`) backed by a new
+  `packages/nightgauge/src/bootstrap/services.ts`) backed by a new
   `AttentionTreeProvider.ts` alongside the existing providers in
-  `packages/nightgauge-vscode/src/views/` — the live-updating
+  `packages/nightgauge/src/views/` — the live-updating
   `WorkflowTreeProvider` is the closest model. A count badge via the
   `TreeView.badge` API, toasts via `NotificationService`, and actions via
   `showQuickPick` (options) + `showInputBox` (steer).

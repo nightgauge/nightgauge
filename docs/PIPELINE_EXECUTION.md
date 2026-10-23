@@ -267,7 +267,7 @@ Go callers — the router's recommendation at pickup and this per-stage
 resolution — read one table, `routing.modeProfiles`
 ([`internal/intelligence/routing/performance_mode.go`](../internal/intelligence/routing/performance_mode.go)),
 which mirrors `MODE_PROFILES`
-(`packages/nightgauge-vscode/src/utils/modeProfiles.ts`) including the part that
+(`packages/nightgauge/src/utils/modeProfiles.ts`) including the part that
 is easy to get wrong: **only `maximum` pins.** Since #19, `efficiency` and
 `frontier` carry empty `stages` maps and express themselves as `[floor,
 ceiling]` envelopes instead.
@@ -487,7 +487,7 @@ runs and would mint a second, competing runtime for a Go-scheduled one.
 
 Every Claude CLI spawn — the Go adapters (`internal/execution/adapters/claude.go`,
 `claude_sdk.go`) and the TypeScript `SkillRunner`
-(`packages/nightgauge-vscode/src/utils/skillRunner.ts`) — builds its explicit
+(`packages/nightgauge/src/utils/skillRunner.ts`) — builds its explicit
 environment map on top of the **parent process's own environment**: the Go
 adapters spawn via `os.Environ()` plus their explicit `NIGHTGAUGE_*` overrides
 (`internal/execution/manager.go`), and the TS path spreads `...process.env`

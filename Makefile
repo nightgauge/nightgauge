@@ -68,7 +68,7 @@ generate-ipc-client:
 	go run ./cmd/ipc-codegen \
 		--server internal/ipc/server.go \
 		--protocol internal/ipc/protocol.go \
-		--out packages/nightgauge-vscode/src/services/IpcClient.generated.ts
+		--out packages/nightgauge/src/services/IpcClient.generated.ts
 
 # Generate the TypeScript view of the canonical terminal-kind rule table (#306)
 # plus its behaviour golden. The table itself is hand-maintained at
@@ -136,7 +136,7 @@ lint-go:
 # Run platform integration tests (mock server mode, no Docker required)
 test-platform-integration:
 	go test ./internal/ipc/... -run TestIPCPlatform -v -count=1
-	npx -w packages/nightgauge-vscode vitest run tests/integration/authFlowsIntegration.test.ts
+	npx -w packages/nightgauge vitest run tests/integration/authFlowsIntegration.test.ts
 
 # Run E2E tests against real Docker Compose platform
 test-e2e-docker:

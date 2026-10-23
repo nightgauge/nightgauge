@@ -5,7 +5,7 @@
  * WorkItem types in the VSCode extension's services/types/WorkItemProvider.ts
  * but use a generic event type so SDK consumers don't need a vscode install.
  *
- * @see packages/nightgauge-vscode/src/services/types/WorkItemProvider.ts
+ * @see packages/nightgauge/src/services/types/WorkItemProvider.ts
  * @see Issue #2565
  */
 
@@ -109,7 +109,7 @@ export type WorkItemEvent = (
  * SDK variant — uses WorkItemEvent instead of vscode.Event<void>.
  * Structurally compatible with the VSCode extension's IWorkItemProvider.
  *
- * @see packages/nightgauge-vscode/src/services/types/WorkItemProvider.ts
+ * @see packages/nightgauge/src/services/types/WorkItemProvider.ts
  */
 export interface IWorkItemProvider {
   /** Fetch work items for a given board status */

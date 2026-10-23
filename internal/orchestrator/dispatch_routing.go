@@ -46,7 +46,7 @@ import (
 // defaultStageModels is the `manual` routing mode's built-in table — the
 // answer when the operator asked for explicit routing but named no model for
 // this stage. Mirrors DEFAULT_STAGE_MODELS in
-// packages/nightgauge-vscode/src/utils/resolvers/stageResolver.ts.
+// packages/nightgauge/src/utils/resolvers/stageResolver.ts.
 //
 // Consulted ONLY in manual mode. In automatic/hybrid a stage with no explicit
 // entry defers to the router, exactly as `getStageModel` returns undefined.
@@ -64,7 +64,7 @@ var defaultStageModels = map[state.PipelineStage]string{
 
 // lightweightStageDefaults is the automatic/hybrid base for stages whose LLM
 // role is structured and shallow. Mirrors LIGHTWEIGHT_STAGE_DEFAULTS in
-// packages/nightgauge-vscode/src/utils/skillRunner.ts.
+// packages/nightgauge/src/utils/skillRunner.ts.
 //
 // These are BASES, not caps: the pr-create large-diff escalation, the
 // minimum_model floor and post-failure escalation all still raise them. pr-merge
@@ -195,7 +195,7 @@ func workspaceDefaultModel(workspaceRoot string) string {
 // stageBaseModel resolves the tier a stage STARTS from, before escalation, the
 // minimum_model floor, sticky downgrades and the stage-specific haiku
 // exclusions (#340). Mirrors `resolveModel`
-// (packages/nightgauge-vscode/src/utils/skillRunner.ts) step for step:
+// (packages/nightgauge/src/utils/skillRunner.ts) step for step:
 //
 //	Step 0   performance-mode pin        — ONLY `maximum` pins (Opus, every
 //	                                       stage). efficiency/frontier are

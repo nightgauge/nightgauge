@@ -5,7 +5,7 @@
  * constants and `packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts`
  * declares the mirrored `TerminalFailureKind` union (also mirrored into the
  * Zod `TerminalFailureKindSchema` in
- * `packages/nightgauge-vscode/src/schemas/executionHistory.ts`). These three
+ * `packages/nightgauge/src/schemas/executionHistory.ts`). These three
  * places have drifted independently before (#229) — this test reads Go's
  * source directly and diffs its constant values against the SDK's runtime
  * `ALL_TERMINAL_FAILURE_KINDS` array so the next kind added to one side and

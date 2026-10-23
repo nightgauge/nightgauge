@@ -84,7 +84,6 @@ const out = {
 };
 
 const dest =
-  process.argv[3] ??
-  path.join("packages/nightgauge-vscode/tests/fixtures/terminal/run-outcomes.json");
+  process.argv[3] ?? path.join("packages/nightgauge/tests/fixtures/terminal/run-outcomes.json");
 writeFileSync(dest, `${JSON.stringify(out, null, 2)}\n`);
 console.log(`wrote ${dest} from ${entries.length} records in ${source}`);

@@ -92,7 +92,7 @@ func LocalExcludePath(dir string) (string, error) {
 
 // excludeBlockBegin and excludeBlockEnd delimit a block this package owns in
 // info/exclude. The text is byte-identical to the extension's
-// writeLocalExcludeBlock (packages/nightgauge-vscode/src/utils/
+// writeLocalExcludeBlock (packages/nightgauge/src/utils/
 // localGitExclude.ts), so either writer recognises and replaces the other's
 // block instead of appending a second copy.
 func excludeBlockBegin(id string) string {

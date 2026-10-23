@@ -53,7 +53,7 @@ updates:
           - minor
           - patch
     # `@types/vscode` is NOT a dependency chore. It is capped by
-    # `engines.vscode` in packages/nightgauge-vscode/package.json, and
+    # `engines.vscode` in packages/nightgauge/package.json, and
     # scripts/check-engine-types.mjs fails the build when it exceeds that cap --
     # a guard that exists because this exact bump regressed once already (#165).
     # Raising the ceiling drops support for older VSCode, which is a product

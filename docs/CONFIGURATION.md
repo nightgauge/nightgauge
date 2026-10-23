@@ -2143,9 +2143,9 @@ pipeline:
 
 **Used by:**
 
-- `packages/nightgauge-vscode/src/utils/nightgaugeConfig.ts` —
+- `packages/nightgauge/src/utils/nightgaugeConfig.ts` —
   `getStageMcpTools()`
-- `packages/nightgauge-vscode/src/utils/skillRunner.ts` —
+- `packages/nightgauge/src/utils/skillRunner.ts` —
   `runStageSkillHeadless()`, `runStageSkillInteractive()`
 
 **See also:**
@@ -7212,7 +7212,7 @@ existing configurations.
 
 ## Usage Limits and Budget Tracking (UsageLimitsService)
 
-**File**: `packages/nightgauge-vscode/src/services/UsageLimitsService.ts`
+**File**: `packages/nightgauge/src/services/UsageLimitsService.ts`
 
 UsageLimitsService tracks cumulative pipeline cost against a user-configured
 monthly budget. It polls `DashboardState.getAggregates()` on a configurable

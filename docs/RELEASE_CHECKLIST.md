@@ -258,7 +258,7 @@ not a GO to cut a stable `v0.2.0`.
 ## Known-issues baseline
 
 File:
-[`packages/nightgauge-vscode/tests/vscode-host/known-issues.ts`](../packages/nightgauge-vscode/tests/vscode-host/known-issues.ts).
+[`packages/nightgauge/tests/vscode-host/known-issues.ts`](../packages/nightgauge/tests/vscode-host/known-issues.ts).
 
 This is a shrinking smoke-tier baseline, not a list of acknowledged product
 failures.
@@ -356,12 +356,12 @@ install (`scripts/dev-install.sh` is explicitly not a release-validation path).
 
 ```bash
 # 1. Package from a clean tree at the release commit.
-npm run package -w packages/nightgauge-vscode
-#    → packages/nightgauge-vscode/nightgauge-vscode-<version>.vsix
+npm run package -w packages/nightgauge
+#    → packages/nightgauge/nightgauge-<version>.vsix
 
 # 2. Install into a profile that shares nothing with your dev setup.
 code --extensions-dir /tmp/ng-clean/ext --user-data-dir /tmp/ng-clean/user \
-     --install-extension packages/nightgauge-vscode/nightgauge-vscode-<version>.vsix
+     --install-extension packages/nightgauge/nightgauge-<version>.vsix
 
 # 3. Point it at a repository with no Nightgauge state.
 # 4. Follow the Marketplace README's Quick Start EXACTLY — no shortcuts an

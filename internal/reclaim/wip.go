@@ -35,7 +35,7 @@ import (
 
 // WipRefNamespace is the ref namespace `preserveWorkInProgress` writes to.
 // It must stay in lockstep with WIP_REF_NAMESPACE in
-// packages/nightgauge-vscode/src/utils/preserveWorkInProgress.ts.
+// packages/nightgauge/src/utils/preserveWorkInProgress.ts.
 const WipRefNamespace = "refs/nightgauge/wip"
 
 // wipCommitTrailer marks a commit as machine-authored WIP preservation. Same

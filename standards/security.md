@@ -318,8 +318,8 @@ execSync(`gh issue create --title "${escapeShell(title)}"`, { ... });
 
 ### Reference
 
-- `packages/nightgauge-vscode/src/utils/BranchNameValidator.ts` — allowlist validator
-- `packages/nightgauge-vscode/src/utils/WorktreeManager.ts` — safe pattern example
+- `packages/nightgauge/src/utils/BranchNameValidator.ts` — allowlist validator
+- `packages/nightgauge/src/utils/WorktreeManager.ts` — safe pattern example
 - Issue #2491 — original vulnerability report and fix
 
 **Source:** [Nightgauge](https://github.com/nightgauge/nightgauge)

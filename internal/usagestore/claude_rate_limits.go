@@ -45,7 +45,7 @@ import (
 
 // StoreVersion is the on-disk schema version, and must stay in lockstep with
 // STORE_VERSION in
-// packages/nightgauge-vscode/src/services/usage/ClaudeRateLimitStore.ts. A
+// packages/nightgauge/src/services/usage/ClaudeRateLimitStore.ts. A
 // file carrying any other version is discarded rather than migrated: this is a
 // cache of a figure that will be re-observed within minutes, not user data.
 const StoreVersion = 1

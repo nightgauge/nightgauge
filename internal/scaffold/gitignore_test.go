@@ -329,7 +329,7 @@ func TestReplaceBlock(t *testing.T) {
 // Both writers must delimit the info/exclude block identically, or each
 // would append its own copy beside the other's.
 func TestExcludeBlockDelimitersMatchExtension(t *testing.T) {
-	src := read(t, filepath.Join("..", "..", "packages", "nightgauge-vscode", "src", "utils", "localGitExclude.ts"))
+	src := read(t, filepath.Join("..", "..", "packages", "nightgauge", "src", "utils", "localGitExclude.ts"))
 	for _, want := range []string{
 		"`" + strings.Replace(excludeBlockBegin("X"), "X", "${id}", 1) + "`",
 		"`" + strings.Replace(excludeBlockEnd("X"), "X", "${id}", 1) + "`",

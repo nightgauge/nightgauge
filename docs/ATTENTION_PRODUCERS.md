@@ -379,7 +379,7 @@ producer, and a producer should count on both rather than reimplement them.
 URL. It no longer requires `Context.URL`: when the producer left it empty and
 the context names `repo` plus `issue` (or `pr`), the extension derives
 `https://github.com/<repo>/issues/<n>` in one place —
-`packages/nightgauge-vscode/src/views/attention/attentionLinks.ts` — which the
+`packages/nightgauge/src/views/attention/attentionLinks.ts` — which the
 quick pick, the tree item's `.link` context value and the tooltip all read. Set
 `Context.URL` only when you have a **better** link than the issue: the exact
 failing check run, the blocked PR, a comment permalink. An explicit URL always

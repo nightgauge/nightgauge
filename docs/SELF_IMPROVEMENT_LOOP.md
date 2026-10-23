@@ -18,7 +18,7 @@ the dashboard for human review, not automatically applied to configuration.
 
 ### PostPipelineAnalyzer
 
-**File**: `packages/nightgauge-vscode/src/services/PostPipelineAnalyzer.ts`
+**File**: `packages/nightgauge/src/services/PostPipelineAnalyzer.ts`
 
 Runs after every successful pipeline completion:
 
@@ -247,7 +247,7 @@ size estimates.
 ### Per-(Stage, Model) Cost Calibration (Issues #142, #1213)
 
 **Files**: `packages/nightgauge-sdk/src/services/StageModelCalibrationService.ts`,
-`internal/state/history.go` (the writer), `packages/nightgauge-vscode/src/services/PostPipelineAnalyzer.ts`
+`internal/state/history.go` (the writer), `packages/nightgauge/src/services/PostPipelineAnalyzer.ts`
 
 > **This loop was dead from #142 until #1213.** Everything below the next
 > paragraph describes behaviour that is now real; before #1213 it described

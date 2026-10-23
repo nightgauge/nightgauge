@@ -99,11 +99,11 @@
 #   scripts/capture-undetermined-branch-fixture.sh [OUT_DIR]
 #
 # Default OUT_DIR:
-#   packages/nightgauge-vscode/tests/fixtures/undetermined-branch/
+#   packages/nightgauge/tests/fixtures/undetermined-branch/
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OUT_DIR="${1:-$REPO_ROOT/packages/nightgauge-vscode/tests/fixtures/undetermined-branch}"
+OUT_DIR="${1:-$REPO_ROOT/packages/nightgauge/tests/fixtures/undetermined-branch}"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/ng-undetermined-branch-capture.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT

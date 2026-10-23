@@ -6,7 +6,7 @@
 **Issue:** #2104 (epic #2102)
 **Implemented by:** #2105 (daemon), #2106 (scenario and player), #2107 (fixture workspace),
 #2108 (demo badge and UI-step hook), #2109 (drift guard), #2110 (one command)
-**Builds on:** #2103 (`packages/nightgauge-vscode/demo/ipc-stub.cjs` and
+**Builds on:** #2103 (`packages/nightgauge/demo/ipc-stub.cjs` and
 `demo/ipc-inventory.json`)
 
 ---
@@ -25,7 +25,7 @@ Decisions, each with the alternative rejected:
 | #   | Topic                 | Decision                                                                 | Rejected                                                    |
 | --- | --------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------- |
 | 1   | Where the fake lives  | A demo daemon in the `binaryPath` seam                                   | Extension-side mock; real daemon against a fake GitHub      |
-| 2   | Language and location | Node, grown from the #2103 stub under `packages/nightgauge-vscode/demo/` | Go under `cmd/`                                             |
+| 2   | Language and location | Node, grown from the #2103 stub under `packages/nightgauge/demo/`        | Go under `cmd/`                                             |
 | 3   | Scenario format       | JSON: seed state plus a timeline of steps on a scenario clock            | Recorded real-run IPC logs replayed verbatim                |
 | 4   | Announcing demo mode  | `ipc.ready` carries `demo: true`; the extension shows a persistent badge | A VS Code setting or environment flag read by the extension |
 | 5   | Driving views         | A `demo.uiStep` event naming a command from a fixed allowlist            | Arbitrary `executeCommand` from the scenario                |
@@ -52,7 +52,7 @@ checks calls, and is not deterministic in its timing.
 
 ## 2. Node beside the extension
 
-**Decision.** The daemon is CommonJS Node under `packages/nightgauge-vscode/demo/`, grown from
+**Decision.** The daemon is CommonJS Node under `packages/nightgauge/demo/`, grown from
 `ipc-stub.cjs`. Result shapes are checked against the extension's own types
 (`src/services/IpcClient.generated.ts` and `tests/mocks/*`) by type-guard tests, and the
 existing `tests/demo/ipc-stub.test.ts` module-graph test (no `net`, `http`, `https`,

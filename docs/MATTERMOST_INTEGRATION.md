@@ -36,7 +36,7 @@ workspace to a self-hosted Nightgauge deployment.
 | Time sync         | NTP-synced clocks within the 5-minute replay window (see §6)                     |
 
 **Why v9+?** The outbound notifier's live-edit feature
-([packages/nightgauge-vscode/src/services/notifications/MattermostService.ts](../packages/nightgauge-vscode/src/services/notifications/MattermostService.ts))
+([packages/nightgauge/src/services/notifications/MattermostService.ts](../packages/nightgauge/src/services/notifications/MattermostService.ts))
 relies on the webhook response carrying a post id so the service can edit the
 in-flight post via `PUT /api/v4/posts/{id}` as stages progress. Older servers
 return an empty body; the notifier auto-detects this and downgrades to
@@ -86,7 +86,7 @@ signing token** (HMAC-style compare against the in-memory token store).
 When OAuth/SSO is needed (e.g. for ephemeral responses via
 `/api/v4/posts/ephemeral` instead of channel posts), this section will be
 expanded in a follow-up epic. The
-[`setEphemeral()`](../packages/nightgauge-vscode/src/services/notifications/MattermostService.ts)
+[`setEphemeral()`](../packages/nightgauge/src/services/notifications/MattermostService.ts)
 notifier surface is wired as a forward-compatible no-op today, exactly so
 upgrading to bot-token auth later does not require API changes.
 
@@ -114,7 +114,7 @@ In **Integrations → Incoming Webhooks → Add Incoming Webhook**:
 
 In VSCode, run **Command Palette → Nightgauge: Configure Mattermost
 Workspace**. This launches a 4-step wizard
-([`configureMattermostWorkspace.ts`](../packages/nightgauge-vscode/src/commands/configureMattermostWorkspace.ts)):
+([`configureMattermostWorkspace.ts`](../packages/nightgauge/src/commands/configureMattermostWorkspace.ts)):
 
 | Step | Prompt                                         | Stored in                                         |
 | ---- | ---------------------------------------------- | ------------------------------------------------- |
@@ -136,7 +136,7 @@ save credentials.
 The wizard writes the `notifications.mattermost.enabled: true` block via the
 typed YAML service and the `notifiers.mattermost.channels.*` block via the raw
 YAML Document API (see ADR-001 in
-[`configureMattermostWorkspace.ts`](../packages/nightgauge-vscode/src/commands/configureMattermostWorkspace.ts)
+[`configureMattermostWorkspace.ts`](../packages/nightgauge/src/commands/configureMattermostWorkspace.ts)
 for why two paths). All credentials live in the OS keychain via
 SecretStorage — **never** in `config.yaml`.
 

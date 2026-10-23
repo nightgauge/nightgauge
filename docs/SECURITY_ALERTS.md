@@ -265,7 +265,7 @@ instead and is never fabricated into the severity field.
 these cards — do not work the list top-down.** Both surfaces sort by attention
 severity band first, then newest-first within the band (`sortInbox` in
 `internal/attention/store.go`; `compareRequests` in
-`packages/nightgauge-vscode/src/views/attention/attentionTreeItems.ts`), and
+`packages/nightgauge/src/views/attention/attentionTreeItems.ts`), and
 every alert card shares the one `fyi` band. Their relative order is therefore
 pure recency — and recency of _first observation_ at that, since `created_at`
 is stamped when a sweep first raises the card and preserved across every later

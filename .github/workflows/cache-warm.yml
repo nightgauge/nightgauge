@@ -82,7 +82,7 @@ jobs:
       # downloads nothing.
       - name: Get Playwright version
         id: playwright-version
-        run: echo "version=$(node -p "require('./packages/nightgauge-vscode/package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(node -p "require('./packages/nightgauge/package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
       - name: Look up the Playwright browser cache
         id: playwright-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -95,7 +95,7 @@ jobs:
         run: |
           set -euo pipefail
           [ -d node_modules ] || npm ci
-          npx -w packages/nightgauge-vscode playwright install chromium
+          npx -w packages/nightgauge playwright install chromium
       - name: Save the Playwright browser cache (cache miss)
         if: ${{ steps.playwright-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

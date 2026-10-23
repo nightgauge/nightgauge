@@ -4035,7 +4035,7 @@ const haltTagSlotFailure = "haltQueueOnSlotFailure"
 // than "anything not tagged user": the two self-clearing breaker tags the
 // extension pauses with — "rate-limit-circuit-breaker" and
 // "network-outage-circuit-breaker" (see
-// packages/nightgauge-vscode/src/utils/autonomousAutoResume.ts). Those pauses
+// packages/nightgauge/src/utils/autonomousAutoResume.ts). Those pauses
 // are machine-raised too, but the machine also detects their recovery and
 // auto-resumes; latching them would turn a transient outage into a pause that
 // waits for a human who was never needed.

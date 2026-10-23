@@ -635,14 +635,14 @@ PLANTED=""
 
 # Synthetic fixtures are arbitrary identifiers, not citations. ~2,977 of them
 # live above the mark today and every one of them is legitimate.
-mkdir -p packages/nightgauge-vscode/tests/_boundary_probe
-PLANTED="packages/nightgauge-vscode/tests/_boundary_probe/issueRef.test.ts"
+mkdir -p packages/nightgauge/tests/_boundary_probe
+PLANTED="packages/nightgauge/tests/_boundary_probe/issueRef.test.ts"
 printf '// #4500 — a synthetic run identifier, not a citation.\nexport const probe = "nightgauge/nightgauge#4501";\n' > "$PLANTED"
 git add -f "$PLANTED" 2>/dev/null
 expect_exit 0 "synthetic identifiers under a tests/ path are exempt"
 git rm --cached -q "$PLANTED" 2>/dev/null
 rm -f "$PLANTED"
-rmdir packages/nightgauge-vscode/tests/_boundary_probe 2>/dev/null
+rmdir packages/nightgauge/tests/_boundary_probe 2>/dev/null
 PLANTED=""
 
 # ── The rule must fail closed when it cannot trust its own ceiling ──────────

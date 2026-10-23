@@ -1,6 +1,6 @@
 ---
 paths:
-  - "packages/nightgauge-vscode/**"
+  - "packages/nightgauge/**"
 ---
 
 # VSCode Extension Rules
@@ -22,7 +22,7 @@ binary changes while autonomous mode is running (operator rule, 2026-07-18):
    `current-run.json` (which carries the live `run_id` and pid; each checkout
    has its own, at `nightgauge layout path checkout current-run.json`) as the
    authority on what is actually running.
-3. Then rebuild + install (`packages/nightgauge-vscode/scripts/dev-install.sh`)
+3. Then rebuild + install (`packages/nightgauge/scripts/dev-install.sh`)
    and reload the window.
 
 Never reload over a live run — the swept run records no terminal outcome and

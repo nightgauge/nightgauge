@@ -11,7 +11,7 @@
  * file or directory, rename '...calibration.json.tmp' ->
  * '...calibration.json'`.
  *
- * `PostPipelineAnalyzer` (nightgauge-vscode) calls `CalibrationService.save`
+ * `PostPipelineAnalyzer` (nightgauge) calls `CalibrationService.save`
  * from a `try/catch` that only logs at debug level on failure, so this race
  * was invisible in practice — the calibration table silently stopped
  * updating rather than surfacing an error.

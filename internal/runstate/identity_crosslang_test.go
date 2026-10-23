@@ -145,7 +145,7 @@ func TestIdentityPatternPinnedToTypeScriptTwin(t *testing.T) {
 
 // tsWalkRoots are the TypeScript source trees the exactly-one check walks,
 // relative to this package directory. `src` is where every module lives; `tests`
-// is included because nightgauge-vscode keeps its suites OUTSIDE src (the SDK
+// is included because nightgauge keeps its suites OUTSIDE src (the SDK
 // keeps them in src/__tests__), and a transcription in a test file rots exactly
 // like one in a module — it is what the next reader copies.
 //

@@ -19,7 +19,7 @@ export interface Dimension4Options {
 
 /** Client names and their source subdirectories within the repo. */
 const CLIENT_SOURCE_DIRS: Record<string, string[]> = {
-  vscode: ["packages/nightgauge-vscode/src"],
+  vscode: ["packages/nightgauge/src"],
   angular: ["src", "src/app"],
   flutter: ["lib"],
 };

@@ -347,7 +347,7 @@ describe("the interpreter module", () => {
     // beside it. The generated module is the only way to reach the rules, so
     // this bounds the whole matching surface of both TypeScript packages to the
     // file the allowlist above covers.
-    const roots = ["packages/nightgauge-sdk/src", "packages/nightgauge-vscode/src"];
+    const roots = ["packages/nightgauge-sdk/src", "packages/nightgauge/src"];
     const readers: string[] = [];
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {

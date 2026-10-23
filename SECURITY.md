@@ -77,7 +77,7 @@ report because you want the software to be safe, not for a reward.
 
 This policy covers the `nightgauge/nightgauge` repository, including:
 
-- VSCode extension (`packages/nightgauge-vscode/`)
+- VSCode extension (`packages/nightgauge/`)
 - SDK (`packages/nightgauge-sdk/`)
 - Go binary (`cmd/nightgauge/`, `internal/`)
 - Pipeline skills (`skills/`)

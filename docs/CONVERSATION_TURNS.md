@@ -643,9 +643,9 @@ service, and the turn ends `secret_detected`.
 **Nightgauge: Open Conversation** opens the VS Code extension's chat panel
 (#1571). It is a client of the hosted conversation, like the dashboard and the
 app, not a second local chat: a conversation started in the editor is the one
-the others resume. Code: `packages/nightgauge-vscode/src/services/conversation`
+the others resume. Code: `packages/nightgauge/src/services/conversation`
 (the client, the stream and the transcript) and
-`packages/nightgauge-vscode/src/views/conversation` (the panel and its page).
+`packages/nightgauge/src/views/conversation` (the panel and its page).
 
 - **Which threads.** The panel lists one team's conversations, never filtered
   by creator or by workspace: the team that owns the window's workspace, else

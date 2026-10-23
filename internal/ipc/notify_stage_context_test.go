@@ -257,7 +257,7 @@ func TestResolveStageBudgetsRequiresStageAndAdapter(t *testing.T) {
 
 // TestExtensionStageBudgetBreachClassifiesAsBudgetExceeded pins the text the
 // extension's skillRunner sends on a breach's "failed" transition
-// (stageBudgetErrorMessage in packages/nightgauge-vscode/src/utils/stageBudget.ts)
+// (stageBudgetErrorMessage in packages/nightgauge/src/utils/stageBudget.ts)
 // to the budget_exceeded terminal kind, which is not retried (#1668).
 func TestExtensionStageBudgetBreachClassifiesAsBudgetExceeded(t *testing.T) {
 	for _, text := range []string{

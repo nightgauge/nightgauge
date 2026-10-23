@@ -21,7 +21,7 @@
 //
 // See: internal/ipc/server_integration_test.go — ipcTestHarness definition
 // See: internal/ipc/protocol.go — protocol types and constants
-// See: packages/nightgauge-vscode/src/services/IpcClientBase.ts — TS side
+// See: packages/nightgauge/src/services/IpcClientBase.ts — TS side
 package ipc
 
 import (

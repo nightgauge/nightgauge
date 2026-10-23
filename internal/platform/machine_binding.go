@@ -15,7 +15,7 @@ import (
 // (community 1 / pro 3 / team+enterprise unlimited).
 //
 // The three fields mirror, in order, the arguments the extension already sends
-// over IPC on every pipeline preflight (packages/nightgauge-vscode/src/platform/
+// over IPC on every pipeline preflight (packages/nightgauge/src/platform/
 // LicensePreflight.ts: MachineFingerprint.getMachineId(), os.hostname(),
 // process.platform). Before #1334 the IPC layer unmarshalled them and dropped
 // them on the floor: every validate request reached the platform carrying only

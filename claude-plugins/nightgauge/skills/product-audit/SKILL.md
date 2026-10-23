@@ -429,7 +429,7 @@ message. Each subagent writes its findings to
 2. If `--quick` and coverage reports exist and are fresh (< 24h), use cached.
    Otherwise run coverage (with timeout):
    ```bash
-   timeout 90 npx -w packages/nightgauge-vscode vitest run --coverage --reporter=json 2>/dev/null
+   timeout 90 npx -w packages/nightgauge vitest run --coverage --reporter=json 2>/dev/null
    timeout 90 npx -w @nightgauge/sdk vitest run --coverage --reporter=json 2>/dev/null
    ```
 3. Parse coverage reports for files below threshold:

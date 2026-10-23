@@ -17,12 +17,12 @@ package state
 // new axis this issue introduces (spike #568 §3, "the canonical thinking
 // axis is on|off"). ThinkingStates is therefore Go's declaration of it,
 // pinned against the TypeScript literal in
-// packages/nightgauge-vscode/src/schemas/executionHistory.ts
+// packages/nightgauge/src/schemas/executionHistory.ts
 // (model_selection.thinking) by
 // TestModelSelectionThinkingPinnedToExecutionHistorySchema.
 //
 // Mode DOES have an existing cross-language authority to derive from:
-// ModelRoutingModeSchema in packages/nightgauge-vscode/src/config/schema.ts,
+// ModelRoutingModeSchema in packages/nightgauge/src/config/schema.ts,
 // the same enum `model_routing.mode` config validation already uses.
 // ModelRoutingModes mirrors it, pinned by
 // TestModelSelectionModePinnedToModelRoutingModeSchema. dispatch_routing.go's

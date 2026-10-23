@@ -1,7 +1,7 @@
 # Current-tree false positives and synthetic credential fixtures.
-packages/nightgauge-vscode/package.json:generic-api-key:1181
-packages/nightgauge-vscode/src/manifest/index.ts:generic-api-key:1217
-packages/nightgauge-vscode/src/platform/TrialState.ts:generic-api-key:18
+packages/nightgauge/package.json:generic-api-key:1181
+packages/nightgauge/src/manifest/index.ts:generic-api-key:1217
+packages/nightgauge/src/platform/TrialState.ts:generic-api-key:18
 standards/security.md:generic-api-key:85
 internal/notifications/inbound/tokens_test.go:generic-api-key:25
 internal/scan/secrets_test.go:aws-access-token:185
@@ -17,6 +17,32 @@ packages/nightgauge-sdk/tests/analysis/product-audit/dimensions/dimension-6.test
 packages/nightgauge-sdk/tests/analysis/product-audit/dimensions/dimension-6.test.ts:stripe-access-token:170
 packages/nightgauge-sdk/tests/analysis/product-audit/dimensions/dimension-6.test.ts:stripe-access-token:42
 packages/nightgauge-sdk/tests/analysis/product-audit/dimensions/dimension-6.test.ts:stripe-access-token:96
+packages/nightgauge/tests/mocks/fixtures/platform/oauth-token-response.json:generic-api-key:3
+packages/nightgauge/tests/mocks/fixtures/platform/oauth-token-response.json:github-oauth:2
+packages/nightgauge/tests/mocks/fixtures/platform/oauth-token-response.json:github-refresh-token:3
+packages/nightgauge/tests/mocks/fixtures/platform/session-create-response.json:generic-api-key:2
+packages/nightgauge/tests/services/DiscordService.test.ts:jwt:900
+packages/nightgauge/tests/services/DiscordService.test.ts:private-key:864
+packages/nightgauge/tests/services/DiscordService.test.ts:stripe-access-token:913
+packages/nightgauge/tests/services/RedactionService.test.ts:generic-api-key:245
+packages/nightgauge/tests/services/notifications/MattermostService.redact.test.ts:generic-api-key:147
+packages/nightgauge/tests/services/notifications/MattermostService.redact.test.ts:jwt:172
+packages/nightgauge/tests/services/notifications/MattermostService.redact.test.ts:jwt:64
+packages/nightgauge/tests/services/notifications/MattermostService.redact.test.ts:stripe-access-token:101
+packages/nightgauge/tests/services/notifications/MattermostService.redact.test.ts:stripe-access-token:108
+packages/nightgauge/tests/services/notifications/MattermostService.test.ts:generic-api-key:37
+packages/nightgauge/tests/services/notifications/transport.test.ts:jwt:132
+# Branch history of #1955 (PR #2073): a synthetic, truncated PEM fixture, since replaced.
+2f6213626d439136688c12eaf07705acd27e49cf:internal/config/github_app_test.go:private-key:10
+# Branch history of #1569/#2444: synthetic license-key test values in a table,
+# since assembled at run time.
+7e5157ae64d6093b5ed10cfba99de9b4a79f3194:internal/platform/contract_conformance_test.go:generic-api-key:538
+7e5157ae64d6093b5ed10cfba99de9b4a79f3194:internal/platform/contract_conformance_test.go:generic-api-key:540
+
+# Pre-rename paths of the fixtures above, still present in history.
+packages/nightgauge-vscode/package.json:generic-api-key:1181
+packages/nightgauge-vscode/src/manifest/index.ts:generic-api-key:1217
+packages/nightgauge-vscode/src/platform/TrialState.ts:generic-api-key:18
 packages/nightgauge-vscode/tests/mocks/fixtures/platform/oauth-token-response.json:generic-api-key:3
 packages/nightgauge-vscode/tests/mocks/fixtures/platform/oauth-token-response.json:github-oauth:2
 packages/nightgauge-vscode/tests/mocks/fixtures/platform/oauth-token-response.json:github-refresh-token:3
@@ -32,9 +58,3 @@ packages/nightgauge-vscode/tests/services/notifications/MattermostService.redact
 packages/nightgauge-vscode/tests/services/notifications/MattermostService.redact.test.ts:stripe-access-token:108
 packages/nightgauge-vscode/tests/services/notifications/MattermostService.test.ts:generic-api-key:37
 packages/nightgauge-vscode/tests/services/notifications/transport.test.ts:jwt:132
-# Branch history of #1955 (PR #2073): a synthetic, truncated PEM fixture, since replaced.
-2f6213626d439136688c12eaf07705acd27e49cf:internal/config/github_app_test.go:private-key:10
-# Branch history of #1569/#2444: synthetic license-key test values in a table,
-# since assembled at run time.
-7e5157ae64d6093b5ed10cfba99de9b4a79f3194:internal/platform/contract_conformance_test.go:generic-api-key:538
-7e5157ae64d6093b5ed10cfba99de9b4a79f3194:internal/platform/contract_conformance_test.go:generic-api-key:540

@@ -38,7 +38,7 @@ func LookupByStageName(name string) (StageGate, bool) {
 //	<git-common-dir>/nightgauge/pipeline/{type}-{issue}.json
 //
 // Type strings match the ContextFileType union in
-// `packages/nightgauge-vscode/src/services/RepositoryContextLoader.ts`
+// `packages/nightgauge/src/services/RepositoryContextLoader.ts`
 // (`issue`, `planning`, `dev`, `validate`, `pr`).
 //
 // For an empty or relative workspace, or one outside a git repository, it

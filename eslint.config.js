@@ -232,8 +232,8 @@ export default [
   // Strict no-explicit-any for entire VSCode extension src/ — Part 3 of tech-debt elimination (#2776)
   // Supersedes the per-file rules added in Parts 1 (#2774) and 2 (#2775).
   {
-    files: ["packages/nightgauge-vscode/src/**/*.ts"],
-    ignores: ["packages/nightgauge-vscode/src/**/*.test.ts"],
+    files: ["packages/nightgauge/src/**/*.ts"],
+    ignores: ["packages/nightgauge/src/**/*.test.ts"],
     rules: {
       "@typescript-eslint/no-explicit-any": "error",
     },
@@ -249,16 +249,16 @@ export default [
   // original #2884 fix scoped the rule to src/services/ only and missed
   // the worst offenders (npm build / vitest run) in src/orchestrator/context/.
   {
-    files: ["packages/nightgauge-vscode/src/**/*.ts"],
+    files: ["packages/nightgauge/src/**/*.ts"],
     ignores: [
-      "packages/nightgauge-vscode/src/**/*.test.ts",
-      "packages/nightgauge-vscode/src/services/IpcClient*.ts",
+      "packages/nightgauge/src/**/*.test.ts",
+      "packages/nightgauge/src/services/IpcClient*.ts",
       // Cold-path leaf files where converting cascades widely and the call
       // is bounded by a short (≤5s) timeout. Tracked for follow-up.
-      "packages/nightgauge-vscode/src/utils/skillRunner.ts",
-      "packages/nightgauge-vscode/src/bootstrap/services.ts",
-      "packages/nightgauge-vscode/src/commands/checkEpicCompletion.ts",
-      "packages/nightgauge-vscode/src/commands/fixAutoMergeSetting.ts",
+      "packages/nightgauge/src/utils/skillRunner.ts",
+      "packages/nightgauge/src/bootstrap/services.ts",
+      "packages/nightgauge/src/commands/checkEpicCompletion.ts",
+      "packages/nightgauge/src/commands/fixAutoMergeSetting.ts",
     ],
     rules: {
       "no-restricted-syntax": [
@@ -293,7 +293,7 @@ export default [
   // sync-subprocess-ban substr/execFileSync/execSync selectors these files
   // already inherit, rather than silently dropping them for just this glob.
   {
-    files: ["packages/nightgauge-vscode/src/services/Platform*Service.ts"],
+    files: ["packages/nightgauge/src/services/Platform*Service.ts"],
     rules: {
       "no-restricted-syntax": [
         "error",

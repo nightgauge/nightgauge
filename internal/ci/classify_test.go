@@ -20,7 +20,7 @@ func TestClassifyForCI(t *testing.T) {
 		{"package.json runs full", []string{"package.json"}, "config_only", true},
 		// The vscode-host job carries the demo drift guard (#2109): it must run
 		// whenever the extension or the IPC protocol changes.
-		{"extension change runs full", []string{"packages/nightgauge-vscode/src/services/IpcClient.ts"}, "source", true},
+		{"extension change runs full", []string{"packages/nightgauge/src/services/IpcClient.ts"}, "source", true},
 		{"IPC protocol change runs full", []string{"internal/ipc/server.go"}, "source", true},
 	}
 	for _, tt := range tests {

@@ -240,7 +240,7 @@ Multi-repo workspace support is implemented across several components:
 #### WorkspaceManager
 
 The `WorkspaceManager` service
-(`packages/nightgauge-vscode/src/services/WorkspaceManager.ts`) is a
+(`packages/nightgauge/src/services/WorkspaceManager.ts`) is a
 singleton that:
 
 - Detects workspace mode on initialization
@@ -274,7 +274,7 @@ manager.onRepositoryChanged((repo) => {
 #### RepositoryContextLoader
 
 The `RepositoryContextLoader` service
-(`packages/nightgauge-vscode/src/services/RepositoryContextLoader.ts`)
+(`packages/nightgauge/src/services/RepositoryContextLoader.ts`)
 provides repository-scoped paths for:
 
 - Pipeline context files (the repository's pipeline state directory,
@@ -303,7 +303,7 @@ const claudeMd = await loader.loadClaudeMd();
 #### Repository Model
 
 The `Repository` model
-(`packages/nightgauge-vscode/src/models/Repository.ts`) represents a single
+(`packages/nightgauge/src/models/Repository.ts`) represents a single
 repository:
 
 ```typescript
@@ -392,7 +392,7 @@ Switch between repositories using:
 3. **Keyboard shortcut** — Configurable in keybindings
 
 The repository switcher
-(`packages/nightgauge-vscode/src/views/RepositorySwitcher.ts`) displays:
+(`packages/nightgauge/src/views/RepositorySwitcher.ts`) displays:
 
 - Current repository name
 - Repository role

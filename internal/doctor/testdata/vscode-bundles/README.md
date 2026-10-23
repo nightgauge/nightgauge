@@ -97,7 +97,7 @@ to get wrong in an invented fixture:
 
 This capture is from a **maintainer dev install**, so its bundle versions are
 the dev scheme: an unsuffixed, epoch-derived `0.1.<seconds>`.
-`packages/nightgauge-vscode/scripts/dev-install.sh` runs `vsce package`
+`packages/nightgauge/scripts/dev-install.sh` runs `vsce package`
 **without** `--target`, so its directory names carry no target platform.
 
 **Released and RC installs do not look like this.** VSCode names

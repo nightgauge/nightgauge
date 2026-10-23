@@ -212,7 +212,7 @@ acceptable per the epic's "bounded blast radius" goal.
   failure-handling block before model escalation
 - `internal/state/history.go` — `FailureCategory` field on `V2StageDetail`,
   `StageFailureCategories` on `V2RunInput`
-- `packages/nightgauge-vscode/src/config/schema.ts` —
+- `packages/nightgauge/src/config/schema.ts` —
   `pipeline.adaptive_stall_recovery` Zod field
 - `packages/nightgauge-sdk/src/analysis/health/failureClassifier.ts` —
   `stall-killed-after-retry` substring in `agent` bucket

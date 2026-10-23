@@ -220,7 +220,7 @@ func TestAdviseBandPrefersExactBackoffOverModelAggregates(t *testing.T) {
 // already trimmed; the TS twin did not, so " type:bug" attributed as bugfix
 // here and as nothing there — the two routing paths disagreeing about the
 // same issue. The twin is
-// packages/nightgauge-vscode/tests/utils/skillRunner.evalAdvice.test.ts,
+// packages/nightgauge/tests/utils/skillRunner.evalAdvice.test.ts,
 // "attributes a job class from a label padded with surrounding whitespace".
 // Keep the two in step: a label that differs ONLY by surrounding whitespace
 // must attribute identically on both paths.
